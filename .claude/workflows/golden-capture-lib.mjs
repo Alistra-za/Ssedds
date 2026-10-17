@@ -2,15 +2,18 @@
 // Deterministic half of the golden-capture workflow (golden-capture.js). Workflow scripts have no filesystem, so
 // every file read/write/hash the workflow needs is a command here; its agents only run these and relay the JSON.
 // Commands (all print one JSON object on stdout; exit 1 with {"ok":false,"reason":...} on refusal):
-//   preflight --plan P --mo2 M --run-dir D [--profile X] [--cell C] [--fixtures F] [--cs-mod NAME] [--dry-run]
-//       W1/W7/W8: validate the plan, resolve the profile, record the CS version, check disk, plan the settings
-//       edits; without --dry-run also back up SettingsUser.json and apply the edits. Writes D/resolved.json and
-//       D/plan.txt (every settings edit, placement, command and capture, human-readable).
+//   preflight --plan P --mo2 M --run-dir D [--journal J] [--profile X] [--cell C] [--keep-root K] [--cs-mod NAME] [--dry-run]
+//       W1/W7/W8/W10: validate the plan, resolve the profile, record the CS version, check disk, plan the settings
+//       edits; without --dry-run also back up SettingsUser.json, record it in the recovery journal J and apply the
+//       edits atomically. Writes D/resolved.json and D/plan.txt (every edit, placement, command and capture).
 //   steps --run-dir D --group L --origin x,y,z      W3/W4: the exact DevBench requests for one group.
-//   restore --run-dir D                             W1: byte-copy the backup back, verify sha256.
-//   keep --run-dir D --file F [--keep-source] [--group L --label X --frame N]
-//       W6: copy F into the fixture folder, verify sha256, then delete F (unless --keep-source).
-// Env: GOLDEN_GAME_PROCESS overrides the process name checked for "game running" (default SkyrimSE.exe; tests).
+//   restore --mo2 M [--journal J]                   W1: atomic byte-copy of the journal's backup, verify sha256.
+//   keep --run-dir D --file F [--group L --label X --frame N]
+//       W6: copy a Captures .rdc to keep_dir, verify sha256, then delete the Captures copy.
+//   copy --run-dir D --file F                       copy (never delete) e.g. the CS log into keep_dir.
+//   map-draws --run-dir D --group G --draws F [--label X]   W9: draw -> placed ref, writes D/drawmap_<X>.json.
+// Env (tests only): GOLDEN_GAME_PROCESS = process name checked for "game running" (default SkyrimSE.exe);
+//   GOLDEN_FAIL_RENAME = basename substring whose atomic replace fails (simulated interruption).
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -21,8 +24,23 @@ const GB = 1024 ** 3
 export const CAPTURE_GB = 1.9 // largest .rdc seen (guide §4: 1.3-1.9 GB)
 export const LIGHT_DEFAULTS = { anchor: '0009DA9C', fallback_ligh: '000E2174', fallback_pos: [0, 250, 120] }
 const DEFAULT_CAMERA = { rel: [0, -150, 120], pitch: 0.15, yaw: 0.0 }
-// Always on for a capture run (base workflow behaviour), whatever the profile says.
-const CAPTURE_KEYS = { RenderDoc: { 'Enable RenderDoc Capture': true }, Advanced: { 'Frame Annotations': true } }
+// Always on for a capture run, whatever the profile says: RenderDoc + Frame Annotations (base workflow), and the
+// debug log (spdlog 1 = debug; the owner's file has 2 = info) because W2 needs the "Compilation completed" line and
+// X6 the "Compiling ... to <defines>" lines. Restore puts the owner's file back, so this is temporary for profile B.
+const CAPTURE_KEYS = { RenderDoc: { 'Enable RenderDoc Capture': true }, Advanced: { 'Frame Annotations': true, 'Log Level': 1 } }
+// x_extract stage names -> scripts, in run order (GOLDEN-EXTRACTORS.md "Run order"). X4 (stage D) is not built.
+export const EXTRACT_STAGES = [
+  { stage: 'A', script: 'p04_stageA_enumerate.py', runner: 'qrenderdoc' },
+  { stage: 'B', script: 'p04_stageB_state.py', runner: 'qrenderdoc' },
+  { stage: 'dispatch', script: 'p04_dispatch.py', runner: 'qrenderdoc' },
+  { stage: 'B', script: 'p04_stageB_extra.py', runner: 'qrenderdoc' },
+  { stage: 'C', script: 'p04_stageC_dump.py', runner: 'qrenderdoc' },
+  { stage: 'shader_id', script: 'p04_shader_id.py', runner: 'qrenderdoc' },
+  { stage: 'defines', script: 'cslog_defines.py', runner: 'python' },
+  { stage: 'fixture', script: 'golden_fixture.py', runner: 'python' },
+]
+export const DEFAULT_JOURNAL = 'F:\\ai\\dds\\tools\\rdc-fixtures\\.golden-recovery.json'
+export const EXTRACTOR_ROOT = 'F:\\ai\\dds\\tools\\rdc-out\\golden' // fixed in golden_common.GOLDEN_ROOT
 
 // ---------- JSON text scanner: positions of every object member, so edits touch only value bytes ----------
 function scan(text) {
@@ -78,9 +96,11 @@ export function planSettingsEdits(text, overlay) {
   const nl = body.includes('\r\n') ? '\r\n' : '\n'
   const firstMember = root.members[0]
   const unit = firstMember ? lineIndent(body, firstMember.keyStart) || ' ' : ' '
-  const edits = []
+  const edits = [] // one per changed key (for the plan printout)
+  const ops = [] // text operations; never overlapping
   const fmt = (v, indent) => JSON.stringify(v, null, unit).split('\n').join(nl + indent)
   function walk(obj, ov, keyPath, depthIndent) {
+    const missing = []
     for (const [k, v] of Object.entries(ov)) {
       const p = [...keyPath, k]
       const m = obj.members.find(x => x.key === k)
@@ -93,22 +113,26 @@ export function planSettingsEdits(text, overlay) {
           if (m.node.type !== 'scalar') throw new Error(`${p.join('.')}: file has a section/array, overlay a value`)
           const before = body.slice(m.valueStart, m.valueEnd)
           const after = JSON.stringify(v)
-          if (JSON.stringify(JSON.parse(before)) !== after) edits.push({ pos: m.valueStart, end: m.valueEnd, insert: after, line: lineOf(body, m.valueStart), path: p.join('.'), before, after })
+          if (JSON.stringify(JSON.parse(before)) !== after) {
+            ops.push({ pos: m.valueStart, end: m.valueEnd, insert: after })
+            edits.push({ line: lineOf(body, m.valueStart), path: p.join('.'), before, after })
+          }
         }
-      } else {
-        const last = obj.members[obj.members.length - 1]
-        const indent = last ? lineIndent(body, last.keyStart) : depthIndent
-        const member = `"${k}": ${fmt(v, indent)}`
-        if (last) edits.push({ pos: last.valueEnd, end: last.valueEnd, insert: `,${nl}${indent}${member}`, line: lineOf(body, last.valueEnd), path: p.join('.'), before: null, after: JSON.stringify(v) })
-        else edits.push({ pos: obj.start + 1, end: obj.end, insert: `${nl}${indent}${member}${nl}${indent.slice(unit.length)}`, line: lineOf(body, obj.start), path: p.join('.'), before: null, after: JSON.stringify(v) })
-      }
+      } else missing.push([k, v, p])
     }
+    if (!missing.length) return
+    // All missing members of one object go in one operation, so an empty object gets valid commas.
+    const last = obj.members[obj.members.length - 1]
+    const indent = last ? lineIndent(body, last.keyStart) : depthIndent
+    const members = missing.map(([k, v]) => `${JSON.stringify(k)}: ${fmt(v, indent)}`).join(`,${nl}${indent}`)
+    const at = last ? last.valueEnd : obj.start
+    if (last) ops.push({ pos: last.valueEnd, end: last.valueEnd, insert: `,${nl}${indent}${members}` })
+    else ops.push({ pos: obj.start + 1, end: obj.end, insert: `${nl}${indent}${members}${nl}${indent.slice(unit.length)}` })
+    for (const [, v, p] of missing) edits.push({ line: lineOf(body, at), path: p.join('.'), before: null, after: JSON.stringify(v) })
   }
   walk(root, overlay, [], unit)
-  // Several inserts may share a position (appending to one section): keep their order, apply from the end.
   let result = body
-  const ordered = edits.map((e, n) => ({ e, n })).sort((a, b) => b.e.pos - a.e.pos || b.n - a.n)
-  for (const { e } of ordered) result = result.slice(0, e.pos) + e.insert + result.slice(e.end)
+  for (const o of [...ops].sort((a, b) => b.pos - a.pos)) result = result.slice(0, o.pos) + o.insert + result.slice(o.end)
   return { edits, result }
 }
 
@@ -240,10 +264,32 @@ function gameRunning() {
   catch { return null } // unknown -> callers refuse
 }
 const sha256 = p => new Promise((res, rej) => { const h = crypto.createHash('sha256'); fs.createReadStream(p).on('data', d => h.update(d)).on('end', () => res(h.digest('hex'))).on('error', rej) })
+const sha256Buf = b => crypto.createHash('sha256').update(b).digest('hex')
 const freeGb = p => { const s = fs.statfsSync(p); return s.bavail * s.bsize / GB }
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''))
-const writeJson = (p, v) => fs.writeFileSync(p, JSON.stringify(v, null, 2) + '\n')
 const existingAncestor = p => { while (!fs.existsSync(p)) { const up = path.dirname(p); if (up === p) break; p = up } return p }
+const canonPath = p => fs.realpathSync.native(p).toLowerCase()
+const inside = (child, parent) => { const rel = path.relative(parent, child); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
+
+// Atomic replace: a temp file in the same folder, flushed, then renamed over the target. An interruption leaves
+// either the old file or the new one, never a truncated one.
+export function writeAtomic(target, data) {
+  const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data // JS string -> UTF-8 without BOM
+  const tmp = `${target}.golden-tmp-${process.pid}`
+  const fd = fs.openSync(tmp, 'w')
+  try { let off = 0; while (off < buf.length) off += fs.writeSync(fd, buf, off); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  try {
+    const fail = process.env.GOLDEN_FAIL_RENAME // test hook: simulate an interrupted replace of a matching file
+    if (fail && path.basename(target).includes(fail)) throw new Error(`simulated rename failure for ${target}`)
+    fs.renameSync(tmp, target)
+  } catch (e) { try { fs.unlinkSync(tmp) } catch { /* already gone */ } throw e }
+}
+const writeJson = (p, v) => writeAtomic(p, JSON.stringify(v, null, 2) + '\n')
+
+// Recovery journal (one per machine, outside run dirs): entries keyed by the canonical SettingsUser.json path.
+// state "applied" = settings edited and not yet restored; every run refuses to start while one is pending.
+const journalLoad = j => (fs.existsSync(j) ? readJson(j) : { entries: {} })
+function journalSet(j, key, entry) { const d = journalLoad(j); d.entries[key] = entry; fs.mkdirSync(path.dirname(j), { recursive: true }); writeJson(j, d) }
 
 function mo2Facts(mo2, csModArg) {
   const ini = fs.readFileSync(path.join(mo2, 'ModOrganizer.ini'), 'utf8')
@@ -258,9 +304,21 @@ function mo2Facts(mo2, csModArg) {
     if (cands.length !== 1) throw new Error(`cannot pick the CS mod (enabled CommunityShaders_AIO*: ${cands.join(', ') || 'none'}); pass --cs-mod`)
     csMod = cands[0]
   }
-  const meta = fs.readFileSync(path.join(mo2, 'mods', csMod, 'meta.ini'), 'utf8')
-  const vm = /^version=(.*)$/m.exec(meta)
-  return { profile, enabled, csMod, csMeta: vm ? vm[1].trim() : '' }
+  const metaPath = path.join(mo2, 'mods', csMod, 'meta.ini')
+  const vm = /^version=(.*)$/m.exec(fs.readFileSync(metaPath, 'utf8'))
+  return { profile, enabled, csMod, csMeta: vm ? vm[1].trim() : '', metaPath }
+}
+const settingsPathOf = mo2 => path.join(mo2, 'overwrite', 'SKSE', 'Plugins', 'CommunityShaders', 'SettingsUser.json')
+
+// W5/W10: the plan's x_extract (default: every stage), validated; returns the scripts in run order.
+export function extractScripts(names) {
+  const list = names || ['A', 'B', 'dispatch', 'C', 'shader_id', 'defines', 'fixture']
+  const known = new Set(EXTRACT_STAGES.map(s => s.stage))
+  const bad = list.filter(n => !known.has(n))
+  if (bad.length) throw new Error(`x_extract: unsupported stage(s) ${bad.join(', ')} (known: ${[...known].join(', ')}; D/X4 is not built)`)
+  if (list.some(n => ['B', 'C', 'shader_id'].includes(n)) && !list.includes('dispatch')) throw new Error('x_extract: B, C and shader_id need "dispatch" (X1 runs before X2/X3/X5)')
+  if (list.some(n => n !== 'A') && !list.includes('A')) throw new Error('x_extract: every stage needs "A" (drawmap.json)')
+  return EXTRACT_STAGES.filter(s => list.includes(s.stage))
 }
 
 // ---------- commands ----------
@@ -268,26 +326,32 @@ async function preflight(o) {
   const plan = readJson(o.plan)
   const { profile, overlay, groups: rawGroups } = resolveProfile(plan, o.profile)
   const errs = validatePlan(plan, rawGroups)
+  let scripts = []
+  try { scripts = extractScripts(plan.x_extract) } catch (e) { errs.push(e.message) }
   if (errs.length) return { ok: false, reason: `plan: ${errs.join('; ')}` }
-  const settingsPath = path.join(o.mo2, 'overwrite', 'SKSE', 'Plugins', 'CommunityShaders', 'SettingsUser.json')
+  const journal = o.journal || DEFAULT_JOURNAL
+  const settingsPath = settingsPathOf(o.mo2)
   const capturesDir = path.join(path.dirname(settingsPath), 'Captures')
   const mo = mo2Facts(o.mo2, o['cs-mod'])
-  const settingsText = fs.readFileSync(settingsPath, 'utf8')
-  const csSettingsVersion = readJson(settingsPath).Version || ''
+  const origBuf = fs.readFileSync(settingsPath)
+  const settingsText = origBuf.toString('utf8')
+  const csSettingsVersion = JSON.parse(settingsText.replace(/^\uFEFF/, '')).Version || ''
   if (!csSettingsVersion || !mo.csMeta) return { ok: false, reason: `CS version unknown (SettingsUser Version "${csSettingsVersion}", meta "${mo.csMeta}")` }
   const csKey = `cs-${csSettingsVersion.split('-').slice(0, 3).join('.')}-${mo.csMeta}`
+  // x_fixture_out can only name where the extractors already write (golden_common.GOLDEN_ROOT\<cs-version>).
+  const extractOut = path.join(EXTRACTOR_ROOT, csKey)
+  if (plan.x_fixture_out && path.resolve(plan.x_fixture_out).toLowerCase() !== path.resolve(extractOut).toLowerCase()) return { ok: false, reason: `plan: x_fixture_out ${plan.x_fixture_out} differs from the extractors' fixed output ${extractOut}` }
   const s6 = (plan.x_s6_files || []).map(f => {
     const p = f.path.startsWith('G:\\Acherus') ? path.join(o.mo2, f.path.slice('G:\\Acherus'.length)) : f.path
-    const exists = fs.existsSync(p)
-    return { path: p, copy_of: f.copy_of || null, exists, sha256_want: f.sha256 || null, ok: false }
+    return { path: p, copy_of: f.copy_of || null, exists: fs.existsSync(p), sha256_want: f.sha256 || null, ok: false }
   })
   for (const f of s6) f.ok = f.exists && (!f.sha256_want || (await sha256(f.path)) === f.sha256_want)
   const groups = resolveGroups(plan, rawGroups, s6)
   const planned = groups.reduce((n, g) => n + g.captures.length, 0)
-  const fixturesRoot = o.fixtures || 'F:\\ai\\dds\\tools\\rdc-fixtures'
-  const fixtureDir = path.join(fixturesRoot, csKey, profile)
-  const extractOut = plan.x_fixture_out || path.join('F:\\ai\\dds\\tools\\rdc-out\\golden', csKey)
-  const needF = planned * CAPTURE_GB + 20, freeF = freeGb(existingAncestor(fixturesRoot))
+  // W6/W10: the plan's x_keep_rdc wins (per profile below it); --keep-root overrides both (tests).
+  const keepRoot = o['keep-root'] || plan.x_keep_rdc || path.join('F:\\ai\\dds\\tools\\rdc-fixtures', csKey)
+  const keepDir = path.join(keepRoot, profile)
+  const needF = planned * CAPTURE_GB + 20, freeF = freeGb(existingAncestor(keepRoot))
   const needG = planned * CAPTURE_GB + 10, freeG = freeGb(existingAncestor(capturesDir))
   const missingMods = ['DevBench'].filter(m => !mo.enabled.has(m))
   let port = 8920
@@ -296,48 +360,58 @@ async function preflight(o) {
   // The edited text must parse to exactly the original merged with the overlay: no other key may change.
   if (canon(JSON.parse(result)) !== canon(deepMerge(JSON.parse(settingsText.replace(/^\uFEFF/, '')), overlay))) return { ok: false, reason: 'settings edit self-check failed (result != original + overlay)' }
   const running = gameRunning()
+  const key = canonPath(settingsPath)
+  const pendingEntry = journalLoad(journal).entries[key]
   fs.mkdirSync(o['run-dir'], { recursive: true })
-  const backup = path.join(o['run-dir'], `SettingsUser.backup.${profile}.json`)
   const cell = o.cell || plan.cell || ''
+  const appliedCopy = path.join(o['run-dir'], 'SettingsUser.applied.json')
   const resolved = {
-    profile, cell, cell_fallback: plan.x_cell_fallback || [], cs_version: { settings: csSettingsVersion, meta: mo.csMeta, key: csKey, mod: mo.csMod },
-    mo2_profile: mo.profile, settings_path: settingsPath, captures_dir: capturesDir, backup, overlay,
-    edits: edits.map(({ line, path: p, before, after }) => ({ line, path: p, before, after })),
-    fixture_dir: fixtureDir, extract_out: extractOut, extract: plan.x_extract || ['A', 'B'], wait_shadercache: plan.x_wait_shadercache !== false,
+    profile, cell, cell_fallback: plan.x_cell_fallback || [], cs_version: { settings: csSettingsVersion, meta: mo.csMeta, key: csKey, mod: mo.csMod, meta_path: mo.metaPath },
+    mo2_profile: mo.profile, settings_path: settingsPath, settings_applied_copy: appliedCopy, captures_dir: capturesDir, journal, overlay,
+    edits, keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts,
+    shape_offsets: plan.x_shape_offsets || {}, match_tol: plan.x_match_tol || 60,
     s6, groups, planned_captures: planned, port, setup_console: SETUP_CONSOLE,
   }
   writeJson(path.join(o['run-dir'], 'resolved.json'), resolved)
-  fs.writeFileSync(path.join(o['run-dir'], 'plan.txt'), planText(resolved, o['dry-run']))
+  writeAtomic(path.join(o['run-dir'], 'plan.txt'), planText(resolved, o['dry-run']))
   const summary = {
-    run_dir: o['run-dir'], profile, cell, cs_key: csKey, settings_version: csSettingsVersion, meta_version: mo.csMeta, planned_captures: planned,
+    run_dir: o['run-dir'], profile, cell, cs_key: csKey, settings_version: csSettingsVersion, meta_version: mo.csMeta, cs_meta_path: mo.metaPath, planned_captures: planned,
     free_gb_fixtures: +freeF.toFixed(1), need_gb_fixtures: +needF.toFixed(1), free_gb_captures: +freeG.toFixed(1), need_gb_captures: +needG.toFixed(1),
-    fixture_dir: fixtureDir, extract_out: extractOut, group_tags: Object.fromEntries(groups.map(g => [g.label, g.tags.join(',') || '*'])), port, edits: edits.length, game_running: running, backup: null, applied: false,
+    keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts, settings_applied_copy: appliedCopy, journal,
+    group_tags: Object.fromEntries(groups.map(g => [g.label, g.tags.join(',') || '*'])),
+    port, edits: edits.length, game_running: running, backup: null, applied: false,
     s6: s6.map(f => `${f.path}: ${f.ok ? 'ok' : f.exists ? 'sha256 differs' : 'missing'}`),
   }
   const stop = []
   if (!cell) stop.push('no cell: set plan.cell or --cell')
+  if (pendingEntry && pendingEntry.state === 'applied') stop.push(`recovery journal ${journal}: profile ${pendingEntry.profile} (run dir ${pendingEntry.run_dir}) applied settings and never restored them; run with restore_only first`)
   if (freeF < needF) stop.push(`fixture drive has ${freeF.toFixed(1)} GB free, needs ${needF.toFixed(1)} (captures + 20 GB)`)
   if (freeG < needG) stop.push(`captures drive has ${freeG.toFixed(1)} GB free, needs ${needG.toFixed(1)}`)
   if (missingMods.length) stop.push(`not enabled in MO2 profile ${mo.profile}: ${missingMods.join(', ')}`)
   if (running !== false) stop.push(running ? 'the game is running' : 'cannot tell whether the game is running')
   if (o['dry-run']) return { ok: true, dry_run: true, would_stop: stop, ...summary }
   if (stop.length) return { ok: false, reason: stop.join('; '), ...summary }
-  // Backup. A backup left by a run that was never restored holds the owner's real file: never overwrite it.
-  // shortcut: the guard only sees this run_dir; a failed restore in another run_dir (other profile) is not caught.
-  // Upgrade: a shared state file next to SettingsUser.json if runs are ever chained without reading the report.
-  const statePath = path.join(o['run-dir'], 'settings-state.json')
-  if (fs.existsSync(statePath)) {
-    const st = readJson(statePath)
-    if (st.applied && !st.restored) return { ok: false, reason: `an earlier run in ${o['run-dir']} applied settings and never restored them: run "restore" first`, ...summary }
+  // Backup next to the journal (outside run dirs), then journal "applied" BEFORE the live file changes.
+  const backupSha = sha256Buf(origBuf)
+  const backupDir = path.join(path.dirname(journal), 'settings-backups')
+  fs.mkdirSync(backupDir, { recursive: true })
+  const backup = path.join(backupDir, `SettingsUser.${profile}.${backupSha.slice(0, 12)}.json`)
+  writeAtomic(backup, origBuf)
+  if (await sha256(backup) !== backupSha) return { ok: false, reason: 'backup copy does not match the live file', ...summary }
+  const entry = { state: 'applied', settings_path: settingsPath, backup, backup_sha256: backupSha, profile, run_dir: o['run-dir'] }
+  journalSet(journal, key, entry)
+  const unchanged = async why => {
+    if (await sha256(settingsPath) === backupSha) { journalSet(journal, key, { ...entry, state: 'restored', note: why }); return true }
+    return false
   }
-  fs.copyFileSync(settingsPath, backup)
-  const backupSha = await sha256(backup)
-  if (backupSha !== await sha256(settingsPath)) return { ok: false, reason: 'backup copy does not match the live file', ...summary }
-  writeJson(statePath, { settings_path: settingsPath, backup, backup_sha256: backupSha, applied: true, restored: false })
-  if (gameRunning() !== false) return { ok: false, reason: 'the game started during preflight; nothing edited', ...summary, backup }
-  fs.writeFileSync(settingsPath, result, { encoding: 'utf8' }) // Buffer from a JS string: UTF-8, no BOM
+  if (gameRunning() !== false) { await unchanged('game started during preflight'); return { ok: false, reason: 'the game started during preflight; nothing edited', ...summary, backup } }
+  try { writeAtomic(settingsPath, result) } catch (e) {
+    const clean = await unchanged(`apply failed: ${e.message}`)
+    return { ok: false, reason: `writing settings failed (${e.message}); ${clean ? 'live file unchanged' : 'live file changed: run restore_only'}`, ...summary, backup }
+  }
+  writeAtomic(appliedCopy, result)
   const reread = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-  if (canon(deepMerge(reread, overlay)) !== canon(reread)) return { ok: false, reason: 'live file lacks overlay values after writing; run restore', ...summary, backup }
+  if (canon(deepMerge(reread, overlay)) !== canon(reread)) return { ok: false, reason: 'live file lacks overlay values after writing; run restore_only', ...summary, backup }
   return { ok: true, ...summary, backup, backup_sha256: backupSha, applied: true }
 }
 
@@ -345,56 +419,118 @@ function planText(r, dry) {
   const L = []
   L.push(`golden-capture plan${dry ? ' (DRY RUN: nothing written outside the run dir, game not launched)' : ''}`)
   L.push(`profile ${r.profile}; cell ${r.cell} (fallbacks ${r.cell_fallback.join(', ') || 'none'}); CS ${r.cs_version.key} (mod ${r.cs_version.mod})`)
-  L.push(`settings: ${r.settings_path}; backup -> ${r.backup}`)
+  L.push(`settings: ${r.settings_path}; backup + recovery journal: ${r.journal}`)
   for (const e of r.edits) L.push(`  line ${e.line}: ${e.path}: ${e.before === null ? 'INSERT' : e.before} -> ${e.after}`)
   if (!r.edits.length) L.push('  (no settings edits)')
-  L.push(`captures: ${r.planned_captures}, kept in ${r.fixture_dir}; extractor output ${r.extract_out}`)
+  L.push(`captures: ${r.planned_captures}, kept in ${r.keep_dir}; extractor output ${r.extract_out}`)
+  L.push(`extract: ${r.extract_scripts.map(s => s.script).join(', ')}`)
   for (const f of r.s6) L.push(`s6 file ${f.path}: ${f.ok ? 'present' : f.exists ? 'sha256 differs' : 'missing'} (never written by this workflow)`)
   L.push(`session: launch MO2 SKSE, wait DevBench :${r.port}, coc ${r.cell}, origin = player position after coc (dry run shows origin 0,0,0)`)
+  L.push('shader compiles (W2): positive signal required before the first capture, else the run stops ("compile readiness unknown")')
   L.push(`setup console: ${r.setup_console.join(' | ')}`)
   for (const g of r.groups) {
     L.push(`group ${g.label}${g.probe ? ' (probe)' : ''}${g.risky ? ' (risky, last)' : ''}: tags ${g.tags.join(', ') || '-'}`)
     if (g.optional) L.push(`  optional ${g.optional.form}: ${g.optional.used ? 'used' : 'skipped'} (${g.optional.why})`)
     for (const s of groupSteps(g, [0, 0, 0])) L.push(`  ${s.only_if ? `[if ${s.only_if}] ` : ''}${s.tool ? `${s.tool} ${JSON.stringify(s.body)}` : `wait ${s.wait_s}s`}${s.save ? ` => $${s.save}` : ''}${s.note ? `  # ${s.note}` : ''}`)
   }
-  L.push('quit: console qqq; then restore settings (byte copy of the backup, sha256 checked), keep each .rdc (copy, sha256, then delete the Captures copy)')
+  L.push('quit: console qqq; then restore settings (atomic byte copy of the backup, sha256 checked), keep each .rdc (copy, sha256, then delete the Captures copy)')
   return L.join('\n') + '\n'
 }
 
 async function restore(o) {
-  const statePath = path.join(o['run-dir'], 'settings-state.json')
-  if (!fs.existsSync(statePath)) return { ok: true, restored: false, nothing_to_restore: true, reason: 'no settings were applied in this run dir' }
-  const st = readJson(statePath)
-  if (st.restored) return { ok: true, restored: true, already: true, sha256: st.backup_sha256 }
+  const journal = o.journal || DEFAULT_JOURNAL
+  const settingsPath = settingsPathOf(o.mo2)
+  const key = canonPath(settingsPath)
+  const st = journalLoad(journal).entries[key]
+  if (!st || st.state !== 'applied') return { ok: true, restored: false, nothing_to_restore: true, reason: 'no pending settings in the recovery journal' }
   const running = gameRunning()
-  if (running !== false) return { ok: false, restored: false, game_running: running, reason: 'game running (or unknown): CS may rewrite the file on exit; not touching it' }
-  if (await sha256(st.backup) !== st.backup_sha256) return { ok: false, restored: false, reason: `backup ${st.backup} changed since preflight; restore by hand` }
-  fs.copyFileSync(st.backup, st.settings_path)
-  const live = await sha256(st.settings_path)
-  if (live !== st.backup_sha256) return { ok: false, restored: false, reason: 'live file sha256 differs from the backup after copying' }
-  writeJson(statePath, { ...st, restored: true })
-  return { ok: true, restored: true, game_running: false, sha256: live }
+  if (running !== false) return { ok: false, restored: false, game_running: running, reason: 'game running (or unknown): CS may rewrite the file on exit; not touching it; journal stays pending' }
+  const backupBuf = fs.readFileSync(st.backup)
+  if (sha256Buf(backupBuf) !== st.backup_sha256) return { ok: false, restored: false, reason: `backup ${st.backup} changed since preflight; restore by hand; journal stays pending` }
+  if (await sha256(settingsPath) !== st.backup_sha256) writeAtomic(settingsPath, backupBuf)
+  const live = await sha256(settingsPath)
+  if (live !== st.backup_sha256) return { ok: false, restored: false, reason: 'live file sha256 differs from the backup after the replace; journal stays pending' }
+  journalSet(journal, key, { ...st, state: 'restored' })
+  return { ok: true, restored: true, game_running: false, sha256: live, backup: st.backup }
 }
 
+async function copyInto(src, dir, name) {
+  fs.mkdirSync(dir, { recursive: true })
+  const dst = path.join(dir, name)
+  const srcSha = await sha256(src)
+  if (fs.existsSync(dst)) {
+    if (await sha256(dst) !== srcSha) return { ok: false, reason: `${dst} exists with different content; nothing changed` }
+  } else {
+    const tmp = `${dst}.golden-tmp-${process.pid}`
+    fs.copyFileSync(src, tmp)
+    fs.renameSync(tmp, dst)
+  }
+  const dstSha = await sha256(dst)
+  if (dstSha !== srcSha) return { ok: false, reason: 'copy sha256 differs; source kept', dst }
+  return { ok: true, dst, sha256: dstSha }
+}
+
+// W6: only .rdc files inside the Captures folder; the destination must be another file under keep_dir; the source
+// is deleted only after the destination hash matches. No other command deletes anything.
 async function keep(o) {
   const r = readJson(path.join(o['run-dir'], 'resolved.json'))
   const src = o.file
+  if (!/\.rdc$/i.test(src || '')) return { ok: false, reason: `${src}: only .rdc files are kept` }
   if (!fs.existsSync(src)) return { ok: false, reason: `${src} not found` }
-  fs.mkdirSync(r.fixture_dir, { recursive: true })
-  const dst = path.join(r.fixture_dir, path.basename(src))
-  const srcSha = await sha256(src)
-  if (fs.existsSync(dst) && await sha256(dst) !== srcSha) return { ok: false, reason: `${dst} exists with different content; kept both` }
-  if (!fs.existsSync(dst)) fs.copyFileSync(src, dst)
-  const dstSha = await sha256(dst)
-  if (dstSha !== srcSha) return { ok: false, reason: 'copy sha256 differs; source kept', dst }
-  fs.writeFileSync(`${dst}.sha256`, `${dstSha}  ${path.basename(dst)}\n`)
-  const manifest = path.join(r.fixture_dir, 'captures.json')
+  if (!fs.existsSync(r.captures_dir)) return { ok: false, reason: `captures folder ${r.captures_dir} not found` }
+  const srcC = canonPath(src), capC = canonPath(r.captures_dir)
+  if (!inside(srcC, capC)) return { ok: false, reason: `${src} is not inside ${r.captures_dir}; refused` }
+  fs.mkdirSync(r.keep_dir, { recursive: true })
+  const keepC = canonPath(r.keep_dir)
+  if (keepC === capC || inside(keepC, capC)) return { ok: false, reason: `keep folder ${r.keep_dir} is inside the Captures folder; refused` }
+  if (path.join(keepC, path.basename(srcC)) === srcC) return { ok: false, reason: 'destination is the source; refused' }
+  const c = await copyInto(src, r.keep_dir, path.basename(src))
+  if (!c.ok) return c
+  writeAtomic(`${c.dst}.sha256`, `${c.sha256}  ${path.basename(c.dst)}\n`)
+  const manifest = path.join(r.keep_dir, 'captures.json')
   const list = fs.existsSync(manifest) ? readJson(manifest) : []
-  if (!list.some(x => x.file === path.basename(dst))) list.push({ file: path.basename(dst), sha256: dstSha, bytes: fs.statSync(dst).size, profile: r.profile, cell: r.cell, cs: r.cs_version, group: o.group || null, label: o.label || null, frame: o.frame ? +o.frame : null })
+  if (!list.some(x => x.file === path.basename(c.dst))) list.push({ file: path.basename(c.dst), sha256: c.sha256, bytes: fs.statSync(c.dst).size, profile: r.profile, cell: r.cell, cs: r.cs_version, group: o.group || null, label: o.label || null, frame: o.frame ? +o.frame : null })
   writeJson(manifest, list)
-  let deleted = false
-  if (!o['keep-source']) { fs.unlinkSync(src); deleted = true }
-  return { ok: true, dst, sha256: dstSha, source_deleted: deleted }
+  if (await sha256(src) !== c.sha256) return { ok: false, reason: 'source changed during the copy; source kept', dst: c.dst }
+  fs.unlinkSync(src)
+  return { ok: true, dst: c.dst, sha256: c.sha256, source_deleted: true }
+}
+
+// Copy any file (the CS log) into keep_dir under a content-addressed name. Never deletes.
+async function copy(o) {
+  const r = readJson(path.join(o['run-dir'], 'resolved.json'))
+  if (!o.file || !fs.existsSync(o.file)) return { ok: false, reason: `${o.file} not found` }
+  const ext = path.extname(o.file), stem = path.basename(o.file, ext)
+  const c = await copyInto(o.file, r.keep_dir, `${stem}.${(await sha256(o.file)).slice(0, 12)}${ext}`)
+  return { ...c, source_deleted: false }
+}
+
+// W9: map draws to placed refs. Expected position = ref position, plus the shape's model offset rotated by the
+// ref's Z angle when the plan gives one (x_shape_offsets {form: {shapePrefix: [x,y,z]}}): then 3D distance;
+// otherwise XY distance (model offsets are mostly height). Nothing is dropped: ambiguous and unmatched draws are
+// listed with their nearest candidates.
+const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] } // shortcut: sign convention only checked for 0/180 degrees
+export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
+  return draws.map(d => {
+    const c = refs.map(r => {
+      const off = Object.entries(offsets[r.form] || {}).find(([p]) => d.shape.startsWith(p))
+      const exp = off ? vadd(r.pos, rotZ(off[1], (r.angle || [0, 0, 0])[2])) : r.pos
+      const dist = off ? Math.hypot(d.world[0] - exp[0], d.world[1] - exp[1], d.world[2] - exp[2]) : Math.hypot(d.world[0] - exp[0], d.world[1] - exp[1])
+      return { form: r.form, ref: r.ref, dist: +dist.toFixed(1), mode: off ? '3d+offset' : 'xy' }
+    }).sort((x, y) => x.dist - y.dist)
+    const [a, b] = c
+    const status = !a || a.dist > tol ? 'unmatched' : b && b.dist < Math.max(a.dist * 1.5, a.dist + 10) ? 'ambiguous' : 'matched'
+    return { ...d, status, form: status === 'matched' ? a.form : null, ref: status === 'matched' ? a.ref : null, candidates: c.slice(0, 3) }
+  })
+}
+function mapDrawsCmd(o) {
+  const r = readJson(path.join(o['run-dir'], 'resolved.json'))
+  const refs = readJson(path.join(o['run-dir'], `refs_${o.group}.json`))
+  const out = mapDraws(readJson(o.draws), refs, { tol: r.match_tol, offsets: r.shape_offsets })
+  const file = path.join(o['run-dir'], `drawmap_${o.label || o.group}.json`)
+  writeJson(file, out)
+  const n = s => out.filter(x => x.status === s).length
+  return { ok: true, file, matched: n('matched'), ambiguous: n('ambiguous'), unmatched: n('unmatched') }
 }
 
 function parseArgs(argv) {
@@ -403,7 +539,7 @@ function parseArgs(argv) {
     const a = argv[i]
     if (!a.startsWith('--')) { o._.push(a); continue }
     const k = a.slice(2)
-    if (['dry-run', 'keep-source'].includes(k)) o[k] = true
+    if (k === 'dry-run') o[k] = true
     else o[k] = argv[++i]
   }
   return o
@@ -424,7 +560,9 @@ async function main() {
       out = { ok: true, group: g.label, origin, steps: groupSteps(g, origin) }
     } else if (cmd === 'restore') out = await restore(o)
     else if (cmd === 'keep') out = await keep(o)
-    else throw new Error(`unknown command ${cmd}; use preflight | steps | restore | keep`)
+    else if (cmd === 'copy') out = await copy(o)
+    else if (cmd === 'map-draws') out = mapDrawsCmd(o)
+    else throw new Error(`unknown command ${cmd}; use preflight | steps | restore | keep | copy | map-draws`)
   } catch (e) { out = { ok: false, reason: e.message } }
   process.stdout.write(JSON.stringify(out, null, 2) + '\n')
   process.exitCode = out.ok ? 0 : 1

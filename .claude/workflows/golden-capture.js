@@ -1,13 +1,14 @@
 export const meta = {
   name: 'golden-capture',
   description: 'Phase D golden captures: apply a CS settings profile, launch Skyrim via MO2 + DevBench, place subjects and camera relative to the coc marker, take RenderDoc captures, quit, restore settings byte-exact, keep the .rdc files as fixtures and run the golden extractors',
-  whenToUse: 'NIF team Phase D golden RenderDoc captures (one profile per run: A, B, A_DC). Args: {plan: "<phase-d plan .json>", profile: "A"|"B"|"A_DC" (default plan x_profile), mo2: "G:\\\\Acherus", tools: "F:\\\\ai\\\\dds\\\\tools", owner_ok: true, dry_run: false, cell: "<override plan cell>", fixtures: "<root, default F:\\\\ai\\\\dds\\\\tools\\\\rdc-fixtures>", run_dir: "<default .superpowers/sdd/captures/golden-<profile>>", out: "<results .md>"}. dry_run runs only Preflight and returns the full plan without touching settings or launching the game.',
+  whenToUse: 'NIF team Phase D golden RenderDoc captures (one profile per run: A, B, A_DC). Args: {plan: "<phase-d plan .json>", profile: "A"|"B"|"A_DC" (default plan x_profile), mo2: "G:\\\\Acherus", tools: "F:\\\\ai\\\\dds\\\\tools", owner_ok: true, dry_run: false, restore_only: false, cell: "<override plan cell>", journal: "<recovery journal, default F:\\\\ai\\\\dds\\\\tools\\\\rdc-fixtures\\\\.golden-recovery.json>", run_dir: "<default .superpowers/sdd/captures/golden-<profile>>", out: "<results .md>"}. dry_run runs only Preflight and returns the full plan without touching settings or launching the game; restore_only only restores pending settings from the journal.',
   phases: [
-    { title: 'Preflight', detail: 'plan checks, CS version, disk, game not running; back up SettingsUser.json and apply the profile (dry_run: plan only)' },
-    { title: 'Session', detail: 'launch via MO2, wait DevBench + shader compiles, coc, per group: place, frame, draw check, capture; qqq' },
-    { title: 'Restore', detail: 'always: wait for exit, byte-restore settings (sha256), keep each .rdc as a fixture, copy the CS log' },
-    { title: 'Analyse', detail: 'per capture, one at a time: p04 stage A/B + golden extractors, draws mapped to forms by position' },
-    { title: 'Report', detail: 'fixture completeness per subject, probe/light answers, retests, restore status' },
+    { title: 'Preflight', detail: 'plan checks, CS version, disk, journal, game not running; back up SettingsUser.json and apply the profile atomically (dry_run: plan only)' },
+    { title: 'Session', detail: 'launch via MO2, wait DevBench + a positive shader-compile signal, coc, per group: place, frame, draw check, capture; qqq' },
+    { title: 'Keep', detail: 'copy each .rdc to the fixture folder (sha256), delete the Captures copy, copy the CS log' },
+    { title: 'Restore', detail: 'always: wait for exit (up to 30 min), atomic byte-restore of settings from the journal backup (sha256)' },
+    { title: 'Analyse', detail: 'per capture, one at a time: the x_extract stages, then draws mapped to placed refs' },
+    { title: 'Report', detail: 'fixture completeness per subject, draw mapping, probe/light answers, retests, restore status' },
   ],
 }
 
@@ -22,12 +23,13 @@ export const meta = {
 //   Always do a dry run first: add dry_run: true. It runs Preflight read-only and returns <run_dir>/plan.txt:
 //   every settings edit (line, old -> new), every DevBench request per group (origin shown as 0,0,0), every capture.
 //   If run 1's P0 probe shows no directional light, pass cell: "<x_cell_fallback[0]>" to every run.
+//   If a run ends with settings_restored: false, run {mo2, restore_only: true} once the game has exited.
 //
 // PLAN FORMAT (in-game-capture.js keys plus these x_ keys)
 //   x_profile          name of the top-level profile (default "A")
 //   x_cs_settings      overlay of SettingsUser.json sections/keys (nested objects); only listed keys are edited,
-//                      missing keys are inserted. RenderDoc."Enable RenderDoc Capture" and Advanced."Frame Annotations"
-//                      are always set true on top.
+//                      missing keys are inserted. Always added on top: RenderDoc."Enable RenderDoc Capture",
+//                      Advanced."Frame Annotations" = true and Advanced."Log Level" = 1 (debug; W2 and X6 need it).
 //   x_profiles_other_runs  {<profile>: {x_cs_settings: {...} | "<base> without <Feature> in Disable at Boot", groups: [labels]}}
 //   x_cell_fallback    cells to use instead if the P0 probe finds no directional light (manual: args.cell)
 //   groups[].x_pos / x_angle   per form, [x,y,z] relative to the coc marker / SetAngle degrees (default row at y+400)
@@ -36,160 +38,200 @@ export const meta = {
 //   groups[].x_optional_if_s6_ok {form, tags, pos, angle}: added only when the x_s6_files mesh is on disk with its sha256
 //   x_light            {anchor, fallback_ligh, fallback_pos}; default anchor 0009DA9C, LIGH 000E2174 at [0,250,120]
 //   x_s6_files         files the owner places in mods\s6; checked, never written
-//   x_extract, x_fixture_out, x_wait_shadercache: extractor list, extractor output root, W2 on/off
+//   x_keep_rdc         where kept .rdc go (per profile below it); default F:\ai\dds\tools\rdc-fixtures\<cs-version>
+//   x_extract          stages to run: A, B, dispatch, C, shader_id, defines, fixture (default all; others rejected)
+//   x_fixture_out      must equal the extractors' fixed output root rdc-out\golden\<cs-version> (checked)
+//   x_shape_offsets    optional {form: {shapePrefix: [x,y,z]}} model offsets for W9; x_match_tol (default 60 units)
 //   A group with empty forms and tags is a probe (W8); a question without "outcomes" is a fixture goal (W8).
 //
 // RESTORE GUARANTEES
-//   - Preflight backs SettingsUser.json up to <run_dir> and records its sha256 before any edit; it refuses to
-//     edit while the game runs, and refuses to start if an earlier run in the same run_dir never restored.
-//   - Restore runs after the Session whatever happened (crash, agent death, thrown error). It never edits while
-//     the game runs; it copies the backup back byte for byte and checks the sha256. Anything CS wrote to the file
-//     during the run is discarded on purpose. Result: settings_restored.
-//   - .rdc files are copied to <fixtures>\<cs-version>\<profile>\ (sha256 sidecar + captures.json); the Captures
-//     copy is deleted only after the copy's sha256 matches.
+//   - Preflight backs SettingsUser.json up next to the recovery journal (outside run dirs) and marks the journal
+//     "applied" before the first edit. Every run, whatever its profile or run_dir, refuses to start while the
+//     journal has a pending entry for the same SettingsUser.json. Settings, backup and journal are written
+//     atomically (temp file, flush, rename).
+//   - Restore runs in a finally block after Preflight, Session and Keep, whatever happened (agent failure, thrown
+//     error, crash). It waits up to 30 min for the game to exit, never edits while it runs, copies the backup back
+//     byte for byte and checks the sha256. If it cannot, the journal stays pending and settings_restored is false.
+//     Anything CS wrote to the file during the run is discarded on purpose.
+//   - Only .rdc files inside the Captures folder are kept; each is copied to the keep folder and the Captures copy
+//     is deleted only after the copy's sha256 matches. Nothing else is ever deleted.
 // All file work is done by golden-capture-lib.mjs (same folder; workflow scripts have no filesystem).
 
 const a = args || {}
-if (!a.plan) throw new Error('golden-capture needs args.plan (path to the phase-d capture plan JSON)')
-if (!a.mo2 || !a.tools) throw new Error('golden-capture needs args.mo2 (MO2 instance folder) and args.tools (tools folder with rdc-scripts and RenderDoc)')
+if (!a.mo2) throw new Error('golden-capture needs args.mo2 (MO2 instance folder)')
+const RESTORE_ONLY = a.restore_only === true
+if (!RESTORE_ONLY && !a.plan) throw new Error('golden-capture needs args.plan (path to the phase-d capture plan JSON)')
+if (!RESTORE_ONLY && !a.tools) throw new Error('golden-capture needs args.tools (tools folder with rdc-scripts and RenderDoc)')
 const DRY = a.dry_run === true
-if (!DRY && a.owner_ok !== true) throw new Error('golden-capture needs args.owner_ok: true (owner permission to edit CS settings for this run and enable RenderDoc capture)')
+if (!DRY && !RESTORE_ONLY && a.owner_ok !== true) throw new Error('golden-capture needs args.owner_ok: true (owner permission to edit CS settings for this run and enable RenderDoc capture)')
 const PROFILE_ARG = a.profile || ''
 const RUN_DIR = a.run_dir || `.superpowers/sdd/captures/golden-${PROFILE_ARG || 'default'}`
 const OUT = a.out || `${RUN_DIR}/results.md`
 const LIB = a.lib || '.claude/workflows/golden-capture-lib.mjs'
+const JOURNAL = a.journal || 'F:\\ai\\dds\\tools\\rdc-fixtures\\.golden-recovery.json'
 const MO2 = a.mo2
 const TOOLS = a.tools
-const node = (cmd) => `node ${LIB} ${cmd} --run-dir "${RUN_DIR}"`
+const node = (cmd) => `node ${LIB} ${cmd}`
 
-const RULES = `Owner data under ${MO2} is read-only except what golden-capture-lib.mjs writes (SettingsUser.json via preflight/restore, Captures .rdc deletion via keep). Do not edit SettingsUser.json or touch the Captures folder any other way. Never write into ${MO2}\\mods. Never run \`python -\` heredocs (write a script file, run \`python -I file\`). Never send DevBench console \`help ... 4\` (stalls the main thread), \`tm\` (hides the overlay markers the scripts need), \`save\`/\`savegame\`, \`set timescale to 0\` or DevBench game setTimeScale/freeze. Never kill processes you did not start. A DevBench 504 is not fatal: poll GET /api/health until "frame" advances, then continue.`
+const RULES = `Owner data under ${MO2} is read-only except what golden-capture-lib.mjs writes (SettingsUser.json via preflight/restore, deletion of kept Captures .rdc via keep). Do not edit SettingsUser.json or delete anything yourself. Never write into ${MO2}\\mods. Never run \`python -\` heredocs (write a script file, run \`python -I file\`). Never send DevBench console \`help ... 4\` (stalls the main thread), \`tm\` (hides the overlay markers the scripts need), \`save\`/\`savegame\`, \`set timescale to 0\` or DevBench game setTimeScale/freeze. Never kill processes you did not start. A DevBench 504 is not fatal: poll GET /api/health until "frame" advances, then continue.`
 
-// ---------------- Preflight (W1, W7, W8) ----------------
-phase('Preflight')
-const PRE_SCHEMA = {
-  type: 'object',
-  properties: {
-    ok: { type: 'boolean' }, reason: { type: 'string' }, exit_code: { type: 'integer' },
-    stdout_json: { type: 'string', description: 'the command stdout, verbatim' },
-  },
-  required: ['ok', 'reason', 'exit_code', 'stdout_json'],
+// Restore of the CS settings from the recovery journal. Safe when nothing is pending (nothing_to_restore).
+async function restoreSettings() {
+  const R_SCHEMA = { type: 'object', properties: { game_running: { type: 'boolean' }, stdout_json: { type: 'string', description: 'the command stdout verbatim, or "" if not run' } }, required: ['game_running', 'stdout_json'] }
+  let r = null
+  try {
+    r = await agent(
+      `Restore the CS settings after a golden capture run. ${RULES}
+1. Wait until Get-Process SkyrimSE is not running: poll every 15 s for up to 30 minutes. Never kill it. If it still runs after 30 minutes, return game_running=true and stdout_json "" without running anything else.
+2. Run this once from the repository root:
+${node(`restore --mo2 "${MO2}" --journal "${JOURNAL}"`)}
+Return game_running=false and its stdout verbatim. Do not edit any file yourself.`,
+      { label: 'restore settings', phase: 'Restore', schema: R_SCHEMA })
+  } catch (e) { return { restored: false, reason: `restore agent failed: ${e && e.message}` } }
+  if (!r) return { restored: false, reason: 'restore agent returned nothing' }
+  let j = null
+  try { j = JSON.parse(r.stdout_json) } catch (e) { j = null }
+  if (!j) return { restored: false, game_running: r.game_running, reason: r.game_running ? 'game still running after 30 min; journal stays pending' : 'restore output unreadable' }
+  return { ...j, restored: !!j.restored || !!j.nothing_to_restore }
 }
-const preCmd = `${node('preflight')} --plan "${a.plan}" --mo2 "${MO2}"${PROFILE_ARG ? ` --profile ${PROFILE_ARG}` : ''}${a.cell ? ` --cell "${a.cell}"` : ''}${a.fixtures ? ` --fixtures "${a.fixtures}"` : ''}${a.cs_mod ? ` --cs-mod "${a.cs_mod}"` : ''}${DRY ? ' --dry-run' : ''}`
-const preRun = await agent(
-  `Preflight for a golden capture run. ${RULES}
+const warnRestore = r => { if (!r || !r.restored) log(`WARNING: SettingsUser.json was NOT restored (${r ? r.reason : 'no result'}). The journal ${JOURNAL} keeps it pending: run golden-capture with {mo2, restore_only: true} after the game exits, before any launch.`) }
+
+if (RESTORE_ONLY) {
+  phase('Restore')
+  const r = await restoreSettings()
+  warnRestore(r)
+  return { restore_only: true, restore: r, settings_restored: !!(r && r.restored) }
+}
+
+let pre = null, session = null, keepRes = null, restore = null, stopped = null
+try {
+  // ---------------- Preflight (W1, W7, W8, W10) ----------------
+  phase('Preflight')
+  const PRE_SCHEMA = {
+    type: 'object',
+    properties: { exit_code: { type: 'integer' }, stdout_json: { type: 'string', description: 'the command stdout, verbatim' } },
+    required: ['exit_code', 'stdout_json'],
+  }
+  const preCmd = node(`preflight --run-dir "${RUN_DIR}" --journal "${JOURNAL}" --plan "${a.plan}" --mo2 "${MO2}"${PROFILE_ARG ? ` --profile ${PROFILE_ARG}` : ''}${a.cell ? ` --cell "${a.cell}"` : ''}${a.keep_root ? ` --keep-root "${a.keep_root}"` : ''}${a.cs_mod ? ` --cs-mod "${a.cs_mod}"` : ''}${DRY ? ' --dry-run' : ''}`)
+  const preRun = await agent(
+    `Preflight for a golden capture run. ${RULES}
 Run exactly this one command from the repository root (PowerShell or bash), once:
 ${preCmd}
-It prints one JSON object. Return ok = that object's "ok", reason = its "reason" (or ""), exit_code, and stdout_json = the stdout verbatim. Do not retry, edit files or run anything else.`,
-  { label: DRY ? 'preflight (dry run)' : 'preflight', phase: 'Preflight', schema: PRE_SCHEMA })
-let pre = null
-try { pre = preRun && JSON.parse(preRun.stdout_json) } catch (e) { pre = null }
-if (!pre) {
-  // Could have died after applying settings: Restore is a no-op when nothing was applied.
-  const r = DRY ? null : await restoreSettingsOnly()
-  return { stopped: 'preflight', reason: 'preflight agent returned nothing parseable', settings_restored: r ? !!r.restored : null }
-}
-if (DRY) {
-  log(`Dry run: profile ${pre.profile}, cell ${pre.cell}, CS ${pre.cs_key}, ${pre.edits} settings edits, ${pre.planned_captures} captures; F: ${pre.free_gb_fixtures}/${pre.need_gb_fixtures} GB, captures drive ${pre.free_gb_captures}/${pre.need_gb_captures} GB`)
-  if (pre.would_stop && pre.would_stop.length) log(`A real run would stop: ${pre.would_stop.join('; ')}`)
-  log(`Full plan (settings edits, placements, commands, captures): ${RUN_DIR}/plan.txt; resolved: ${RUN_DIR}/resolved.json`)
-  return { dry_run: true, plan_txt: `${RUN_DIR}/plan.txt`, resolved: `${RUN_DIR}/resolved.json`, preflight: pre }
-}
-if (!pre.ok) {
-  const r = await restoreSettingsOnly()
-  return { stopped: 'preflight', reason: pre.reason, preflight: pre, settings_restored: r ? !!r.restored : null }
-}
-log(`Preflight ok: profile ${pre.profile}, CS ${pre.cs_key}, ${pre.planned_captures} captures, ${pre.edits} settings edits applied, backup ${pre.backup}`)
+It prints one JSON object. Return exit_code and stdout_json = the stdout verbatim. Do not retry, edit files or run anything else.`,
+    { label: DRY ? 'preflight (dry run)' : 'preflight', phase: 'Preflight', schema: PRE_SCHEMA })
+  try { pre = preRun && JSON.parse(preRun.stdout_json) } catch (e) { pre = null }
+  if (pre && pre.extract_scripts && !pre.extract_scripts.some(s => s.stage === 'fixture')) log(`Note: x_extract (${pre.extract_scripts.map(s => s.stage).join(', ')}) has no "fixture" stage, so golden_fixture.py will not write state.json/manifest.json/completeness.json`)
+  if (!pre) stopped = { stopped: 'preflight', reason: 'preflight agent returned nothing parseable' }
+  else if (DRY) {
+    log(`Dry run: profile ${pre.profile}, cell ${pre.cell}, CS ${pre.cs_key}, ${pre.edits} settings edits, ${pre.planned_captures} captures; keep ${pre.keep_dir}; F: ${pre.free_gb_fixtures}/${pre.need_gb_fixtures} GB, captures drive ${pre.free_gb_captures}/${pre.need_gb_captures} GB`)
+    if (pre.would_stop && pre.would_stop.length) log(`A real run would stop: ${pre.would_stop.join('; ')}`)
+    if (!pre.ok) log(`Dry run refused: ${pre.reason}`)
+    log(`Full plan (settings edits, placements, commands, captures): ${RUN_DIR}/plan.txt; resolved: ${RUN_DIR}/resolved.json`)
+    return { dry_run: true, plan_txt: `${RUN_DIR}/plan.txt`, resolved: `${RUN_DIR}/resolved.json`, preflight: pre }
+  } else if (!pre.ok) stopped = { stopped: 'preflight', reason: pre.reason, preflight: pre }
+  else {
+    log(`Preflight ok: profile ${pre.profile}, CS ${pre.cs_key}, ${pre.planned_captures} captures, ${pre.edits} settings edits applied, backup ${pre.backup}`)
 
-// ---------------- Session (W2, W3, W4) ----------------
-phase('Session')
-const SESSION_SCHEMA = {
-  type: 'object',
-  properties: {
-    launched: { type: 'boolean' }, game_exited: { type: 'boolean' }, crashed: { type: 'boolean' },
-    cell: { type: 'string' }, origin: { type: 'array', items: { type: 'number' }, description: 'player position right after coc (the marker)' },
-    shader_wait: { type: 'string', description: 'signal used for W2 and what it showed (tool fields, failedTasks, or log/frame-time settling)' },
-    groups: { type: 'array', items: { type: 'object', properties: {
-      label: { type: 'string' },
-      refs: { type: 'array', items: { type: 'object', properties: { form: { type: 'string' }, ref: { type: 'string' }, model: { type: 'string' }, pos: { type: 'array', items: { type: 'number' } } }, required: ['form', 'ref', 'model', 'pos'] } },
-      camera: { type: 'string', description: 'camera get result, compact' },
-      light: { type: 'string', description: 'light anchor: logLP result and whether the LIGH fallback was used; empty if none' },
-      draw_check: { type: 'string' },
-    }, required: ['label', 'refs', 'camera', 'light', 'draw_check'] } },
-    captures: { type: 'array', items: { type: 'object', properties: {
-      group: { type: 'string' }, label: { type: 'string' }, file: { type: 'string', description: 'full path of the .rdc' }, frame: { type: 'integer' },
-    }, required: ['group', 'label', 'file', 'frame'] } },
-    notes: { type: 'string' },
-  },
-  required: ['launched', 'game_exited', 'crashed', 'cell', 'origin', 'shader_wait', 'groups', 'captures', 'notes'],
-}
-let session = null
-try {
-  // One agent drives the whole session: the steps share live game state (refs, camera, timing).
-  session = await agent(
-    `Drive one Skyrim golden-capture session (profile ${pre.profile}). ${RULES}
+    // ---------------- Session (W2, W3, W4) ----------------
+    phase('Session')
+    const SESSION_SCHEMA = {
+      type: 'object',
+      properties: {
+        launched: { type: 'boolean' }, game_exited: { type: 'boolean' }, crashed: { type: 'boolean' },
+        compile_ready: { type: 'boolean', description: 'a positive shader-compile completion signal was seen before the first capture' },
+        stop_reason: { type: 'string', description: '"" or why the session stopped early, e.g. "compile readiness unknown"' },
+        cell: { type: 'string' }, origin: { type: 'array', items: { type: 'number' }, description: 'player position right after coc (the marker)' },
+        shader_wait: { type: 'string', description: 'signal used for W2 and what it showed' },
+        groups: { type: 'array', items: { type: 'object', properties: {
+          label: { type: 'string' },
+          refs: { type: 'array', items: { type: 'object', properties: { form: { type: 'string' }, ref: { type: 'string' }, model: { type: 'string' }, pos: { type: 'array', items: { type: 'number' } } }, required: ['form', 'ref', 'model', 'pos'] } },
+          camera: { type: 'string', description: 'camera get result, compact JSON' },
+          light: { type: 'string', description: 'light anchor: logLP result and whether the LIGH fallback was used; empty if none' },
+          draw_check: { type: 'string' },
+        }, required: ['label', 'refs', 'camera', 'light', 'draw_check'] } },
+        captures: { type: 'array', items: { type: 'object', properties: {
+          group: { type: 'string' }, label: { type: 'string' }, file: { type: 'string', description: 'full path of the .rdc' }, frame: { type: 'integer' },
+        }, required: ['group', 'label', 'file', 'frame'] } },
+        notes: { type: 'string' },
+      },
+      required: ['launched', 'game_exited', 'crashed', 'compile_ready', 'stop_reason', 'cell', 'origin', 'shader_wait', 'groups', 'captures', 'notes'],
+    }
+    // One agent drives the whole session: the steps share live game state (refs, camera, timing).
+    session = await agent(
+      `Drive one Skyrim golden-capture session (profile ${pre.profile}). ${RULES}
 Read ${RUN_DIR}/resolved.json (groups, cell, captures_dir, port, setup_console) and ${RUN_DIR}/plan.txt first.
 DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSON bodies. Fetch GET /api/tools once, save it to ${RUN_DIR}/devbench_tools.json, and confirm the parameter names used below.
 1. Launch: \`Start-Process "${MO2}\\ModOrganizer.exe" -ArgumentList '"moshortcut://:SKSE"' -WorkingDirectory "${MO2}"\`. The game takes about 5 minutes and starts into a save. Poll /api/health until "frame" advances, then menu {"action":"list"} until "Loading Menu" is gone and inspect {"kind":"state"} says playerLoaded true. Accept (and describe) any messageBox.
-2. W2 shader compiles: CS settings changed at boot, so shaders recompile. Before the first capture of every group wait until compiling is done. Signal, in order: (a) if devbench_tools.json has communityshaders.inspect with a shadercache kind, poll it until compiling is false and completedTasks == totalTasks (record failedTasks); (b) otherwise use both the CS log (CommunityShaders.log under Documents\\My Games\\Skyrim Special Edition*\\SKSE or ${MO2}\\overwrite; find it) not growing with "Compiling" lines for 20 s AND /api/health frame rate settled (three 5 s windows within 10% of each other). Record which signal you used and what it showed in shader_wait.
+2. W2 shader compiles need a POSITIVE completion signal; silence or a stable frame rate is not one. Accept either:
+   (a) devbench_tools.json lists communityshaders.inspect with a shadercache kind: poll it until compiling is false and completedTasks + failedTasks == totalTasks (record failedTasks);
+   (b) the CS log (CommunityShaders.log under Documents\\My Games\\Skyrim Special Edition*\\SKSE; this run forces Log Level debug): a line "Compilation completed in" written after this launch and after the last "Compiling " line.
+   Wait up to 20 minutes. Before each group's first capture check again: if new "Compiling " lines appeared after the last "Compilation completed", wait for the next one (or the tool to report done). If no positive signal is available or it never comes, do not capture: set compile_ready=false and stop_reason "compile readiness unknown", go to step 5. Record the signal and what it showed in shader_wait.
 3. W3 origin: ALWAYS console "coc ${pre.cell}" (even if already in that cell: a save does not stand on the marker), wait for playerLoaded, then before anything else read the player position (inspect {"kind":"player"} or scene): that is the origin. Then console exec each of setup_console in order.
 4. Groups in resolved.json order (risky ones are already last). For each group run:
-   node ${LIB} steps --run-dir "${RUN_DIR}" --group <label> --origin <ox>,<oy>,<oz>
-   and send its steps in order: "tool" = POST /api/tool/<tool> with "body", "$refN"/"$lightref" = the ref saved by the step with that "save", "wait_s" = sleep, "only_if" = only when that condition holds. Notes in the steps:
+   ${node(`steps --run-dir "${RUN_DIR}" --group <label> --origin <ox>,<oy>,<oz>`)}
+   and send its steps in order: "tool" = POST /api/tool/<tool> with "body", "$refN"/"$lightref" = the ref saved by the step with that "save", "wait_s" = sleep, "only_if" = only when that condition holds. Notes:
    - inspect refs after each placement: model must be the expected mesh; record the actual position. If the ref is an Actor, also papyrus Actor.SetDontMove [true].
+   - Write ${RUN_DIR}/refs_<label>.json = [{"form","ref","pos":[x,y,z],"angle":[ax,ay,az]}] for the placed refs (actual positions) and ${RUN_DIR}/camera_<label>.json = the camera get result (JSON).
    - Light anchor (W4): the logLP output (console read) must list a light on the anchor; also check po3_LightPlacer.log. If none, run the [if ...] LIGH fallback steps and record that in light.
    - Draw check: find the native png under ${MO2}\\overwrite, downscale it, look at it, and confirm every subject is on screen (objects outside the view only show up as shadow draws). If not, adjust the camera drive (record the change) and retry up to 3 times. A probe group (no forms) is just the empty view.
    - Captures: one communityshaders.capture request per capture. Wait until the new .rdc in the captures_dir appears and its size is stable for 5 s before the next request, except a capture marked consecutive, which is sent right after the previous request. Record each file's full path and the DevBench frame at request time. Label captures <group>_cap<n>.
    - Risky group: after placing, poll /api/health for 10 s; if the game died set crashed and stop (no retry).
 5. Quit without saving: console exec "qqq". Wait until Get-Process SkyrimSE is gone (up to 3 min). If the game crashed at any point, stop driving, set crashed, and return what you have.
-Return the cell, origin, per-group refs/camera/light/draw check, and every capture.`,
-    { label: `session ${pre.profile}`, phase: 'Session', schema: SESSION_SCHEMA })
-} catch (e) {
-  log(`Session failed: ${e && e.message}`)
-}
+Return the cell, origin, compile_ready, per-group refs/camera/light/draw check, and every capture.`,
+      { label: `session ${pre.profile}`, phase: 'Session', schema: SESSION_SCHEMA })
+    if (session && session.stop_reason) log(`Session stopped early: ${session.stop_reason}`)
 
-// ---------------- Restore (W1 restore, W6, W7 log copy) ----------------
-phase('Restore')
-const restore = await restoreSettingsOnly()
-if (!restore || !restore.restored) log('WARNING: SettingsUser.json was NOT restored; restore it from the backup before the next launch')
-const kept = []
-const files = session && session.captures ? session.captures : []
-const KEEP_SCHEMA = { type: 'object', properties: { results: { type: 'array', items: { type: 'object', properties: {
-  file: { type: 'string' }, ok: { type: 'boolean' }, dst: { type: 'string' }, sha256: { type: 'string' }, source_deleted: { type: 'boolean' }, reason: { type: 'string' },
-}, required: ['file', 'ok', 'dst', 'sha256', 'source_deleted', 'reason'] } }, cs_log: { type: 'string' }, other_rdc: { type: 'array', items: { type: 'string' } } }, required: ['results', 'cs_log', 'other_rdc'] }
-const keepRes = await agent(
-  `Keep the capture files of a golden run as fixtures. ${RULES}
-First make sure Get-Process SkyrimSE is not running (poll up to 5 min; never kill it; if it still runs, return ok=false for every file with reason "game running").
-For each capture below, run once and return its JSON fields (dst, sha256, source_deleted, ok, reason):
-${files.map(c => `node ${LIB} keep --run-dir "${RUN_DIR}" --file "${c.file}" --group ${c.group} --label ${c.label} --frame ${c.frame}`).join('\n') || '(no captures)'}
-Then find CommunityShaders.log (Documents\\My Games\\Skyrim Special Edition*\\SKSE or under ${MO2}\\overwrite) and run node ${LIB} keep --run-dir "${RUN_DIR}" --file "<log path>" --keep-source; return its dst as cs_log ("" if not found).
-Finally list any other .rdc in the captures folder (${MO2}\\overwrite\\SKSE\\Plugins\\CommunityShaders\\Captures) not handled above (do not touch them).`,
-  { label: 'keep captures', phase: 'Restore', schema: KEEP_SCHEMA })
-for (const c of files) {
-  const r = keepRes && keepRes.results.find(x => x.file === c.file)
-  kept.push({ capture: c, keep: r || { ok: false, reason: 'no keep result' } })
-  if (!r || !r.ok) log(`${c.label}: NOT kept (${r ? r.reason : 'no result'}); the original stays in Captures`)
+    // ---------------- Keep (W6, W7 log copy) ----------------
+    const files = session && session.captures ? session.captures : []
+    if (files.length) {
+      phase('Keep')
+      const KEEP_SCHEMA = { type: 'object', properties: { results: { type: 'array', items: { type: 'object', properties: {
+        file: { type: 'string' }, stdout_json: { type: 'string', description: 'the keep command stdout verbatim' },
+      }, required: ['file', 'stdout_json'] } }, cs_log: { type: 'string', description: 'dst of the copied CS log, or ""' }, other_rdc: { type: 'array', items: { type: 'string' } } }, required: ['results', 'cs_log', 'other_rdc'] }
+      keepRes = await agent(
+        `Keep the capture files of a golden run as fixtures. ${RULES}
+First make sure Get-Process SkyrimSE is not running (poll every 15 s, up to 30 min; never kill it; if it still runs, return no results).
+For each capture below run its command once and return the stdout verbatim:
+${files.map(c => node(`keep --run-dir "${RUN_DIR}" --file "${c.file}" --group ${c.group} --label ${c.label} --frame ${c.frame}`)).join('\n')}
+Then find CommunityShaders.log (Documents\\My Games\\Skyrim Special Edition*\\SKSE, or under ${MO2}\\overwrite) and run once:
+${node(`copy --run-dir "${RUN_DIR}" --file "<log path>"`)}
+and return its "dst" as cs_log ("" if not found). Finally list any other .rdc in ${MO2}\\overwrite\\SKSE\\Plugins\\CommunityShaders\\Captures not handled above (do not touch them).`,
+        { label: 'keep captures', phase: 'Keep', schema: KEEP_SCHEMA })
+    }
+  }
+} finally {
+  // Runs after any outcome above (agent failure or throw included), except the dry run.
+  // Only when this run may have applied settings (preflight unknown, or it made a backup). A preflight that refused
+  // before backing up leaves another run's pending journal entry alone: that run, or restore_only, owns it.
+  if (!DRY && (!pre || pre.backup)) { phase('Restore'); restore = await restoreSettings(); warnRestore(restore) }
 }
-if (!session || !session.launched) return { stopped: 'session', session, restore, kept, settings_restored: !!(restore && restore.restored) }
+const settings_restored = restore ? !!restore.restored : null // null: this run never touched the settings
+if (stopped) {
+  if (!restore && /never restored/.test(stopped.reason || '')) log(`Settings of an earlier run are still pending in ${JOURNAL}: run golden-capture with {mo2, restore_only: true} after the game exits.`)
+  return { ...stopped, restore, settings_restored }
+}
+if (!session || !session.launched) return { stopped: 'session', session, restore, settings_restored }
+
+const kept = (session.captures || []).map(c => {
+  const r = keepRes && keepRes.results.find(x => x.file === c.file)
+  let k = null
+  try { k = r && JSON.parse(r.stdout_json) } catch (e) { k = null }
+  if (!k || !k.ok) log(`${c.label}: NOT kept (${k ? k.reason : 'no result'}); the original stays in Captures`)
+  return { capture: c, keep: k || { ok: false, reason: 'no keep result' } }
+})
 
 // ---------------- Analyse (W5, W9) ----------------
 phase('Analyse')
-// Env vars per golden_common.py (P04_CAPTURE, P04_CS_VERSION, P04_TAGS); it refuses G: paths, so the kept F: copy is read.
-// shortcut: runner per script (qrenderdoc vs plain python) and golden_fixture/cslog_defines inputs are assumed until
-// GOLDEN-EXTRACTORS.md (tools rdc-scripts folder) exists; the agent is told to prefer that file. Fix here only.
-function extractorCommands(rdc, c, csLog) {
+// Env vars and run order per F:\ai\dds\tools\rdc-scripts\GOLDEN-EXTRACTORS.md; stages from the plan's x_extract.
+function extractorCommands(rdc, c) {
   const S = `${TOOLS}\\rdc-scripts`
-  const QRD = `& '${TOOLS}\\RenderDoc_1.43_64\\qrenderdoc.exe' --python`
+  const camFile = `${RUN_DIR}\\camera_${c.group}.json`
   return [
-    `$env:P04_CAPTURE = '${rdc}'; $env:P04_CS_VERSION = '${pre.cs_key}'; $env:P04_TAGS = '${(pre.group_tags || {})[c.group] || '*'}'`,
-    `$env:GOLDEN_PROFILE = '${pre.profile}'; $env:GOLDEN_GROUP = '${c.group}'; $env:GOLDEN_LABEL = '${c.label}'; $env:GOLDEN_REFS = '${RUN_DIR}\\refs_${c.group}.json'; $env:GOLDEN_CSLOG = '${csLog}'`,
-    `${QRD} ${S}\\p04_stageA_enumerate.py`,
-    `${QRD} ${S}\\p04_stageB_state.py`,
-    `${QRD} ${S}\\p04_dispatch.py`,
-    `${QRD} ${S}\\p04_stageB_extra.py`,
-    `${QRD} ${S}\\p04_stageC_dump.py`,
-    `${QRD} ${S}\\p04_shader_id.py`,
-    `python -I ${S}\\cslog_defines.py`,
-    `python -I ${S}\\golden_fixture.py`,
+    `$env:P04_CAPTURE = '${rdc}'; $env:P04_TAGS = '${(pre.group_tags || {})[c.group] || '*'}'; $env:P04_CS_VERSION = '${pre.cs_key}'`,
+    `$env:P04_PROFILE = '${pre.profile}'; $env:P04_CELL = '${session.cell}'; $env:P04_CAMERA = (Test-Path '${camFile}') ? (Get-Content -Raw '${camFile}') : ''`,
+    `$env:P04_CS_LOG = '${keepRes && keepRes.cs_log ? keepRes.cs_log : ''}'; $env:P04_SETTINGS = '${pre.settings_applied_copy}'; $env:P04_CS_META = '${pre.cs_meta_path}'`,
+    `$rd = '${TOOLS}\\RenderDoc_1.43_64\\qrenderdoc.exe'`,
+    ...pre.extract_scripts.map(s => (s.runner === 'qrenderdoc' ? `Start-Process -Wait $rd -ArgumentList '--python','${S}\\${s.script}'` : `python -I ${S}\\${s.script}`)),
   ]
 }
 const ANALYSE_SCHEMA = {
@@ -201,25 +243,25 @@ const ANALYSE_SCHEMA = {
       tag: { type: 'string' }, form: { type: 'string' }, draw: { type: 'string', description: 'event, class, pass, hint, shape:index; or "missing" / "shadow-only"' },
       fixture_complete: { type: 'boolean' }, missing_files: { type: 'array', items: { type: 'string' } },
     }, required: ['tag', 'form', 'draw', 'fixture_complete', 'missing_files'] } },
+    drawmap: { type: 'string', description: 'map-draws stdout verbatim (file, matched/ambiguous/unmatched counts)' },
     frame_facts: { type: 'string', description: 'SharedData Timer, FrameCount, InInterior, DirLightColor, DirectionalAmbient, NumLightNumShadowLight, PointLightColor[0], BufferDim' },
   },
-  required: ['file', 'out_dir', 'scripts', 'subjects', 'frame_facts'],
+  required: ['file', 'out_dir', 'scripts', 'subjects', 'drawmap', 'frame_facts'],
 }
-const groupInfo = Object.fromEntries((session.groups || []).map(g => [g.label, g]))
 const analysed = []
 // Strictly one capture at a time: each is 1.2-1.9 GB and qrenderdoc needs several GB of RAM.
 for (const k of kept) {
   const c = k.capture
   const rdc = k.keep.ok ? k.keep.dst : c.file
-  const g = groupInfo[c.group] || { refs: [] }
   const r = await agent(
     `Turn one golden RenderDoc capture into fixtures. ${RULES}
-Capture: ${rdc} (profile ${pre.profile}, group ${c.group}, label ${c.label}). Read-only input: never write next to it.
-If F:\\ai\\dds\\tools\\rdc-scripts\\GOLDEN-EXTRACTORS.md exists, read it first and use its env vars/runners for these scripts; otherwise run as below. First write the placed refs of this group to ${RUN_DIR}\\refs_${c.group}.json: ${JSON.stringify(g.refs)} (origin ${JSON.stringify(session.origin)}).
-Run in order in PowerShell, waiting for each qrenderdoc log to end with "done" (a missing script: record ok=false "not present" and go on):
-${extractorCommands(rdc, c, keepRes && keepRes.cs_log ? keepRes.cs_log : '').join('\n')}
-W9 tag -> form mapping: tags come from resolved.json group ${c.group}. When a tag matches draws of several forms (or cell furniture with the same shape name), map each draw by its World translation: world position = World matrix translation + the camera position (CS World is camera-relative; take the eye/PosAdjust from the same capture's cbuffers). Pick the placed ref within ~30 units; draws near no placed ref are cell clutter and are ignored. A tag found only in shadow/prepass draws is "shadow-only" (subject was off screen). If golden_fixture.py takes a mapping, give it ${RUN_DIR}\\refs_${c.group}.json.
-Per tag report the main Lighting (or forward, hint 1) draw, whether its fixture folder is complete (state, tex, mesh, mrt crops, mask non-empty, composite), and the missing files. Report the frame facts too.`,
+Capture: ${rdc} (profile ${pre.profile}, group ${c.group}, label ${c.label}). Read-only input. Extractor output: ${pre.extract_out}\\<capture stem>\\.
+Run in PowerShell, in order, one at a time; each qrenderdoc script writes <name>.log in the output folder ending in "done" (errors: ERROR + traceback). A missing script: record ok=false "not present" and go on.
+${extractorCommands(rdc, c).join('\n')}
+W9 draw -> form mapping (golden_fixture.py has no input for it, so it is a separate file): for every Lighting or forward draw whose shape matches a tag of this group (P04_TAGS), take its world position = state.json World translation + the camera position of this capture (CS World is camera-relative; the eye/PosAdjust is in the same capture's cbuffers). Skinned draws have World null: use the root bone translation from cb_vs_b10.bin if you can, else leave the draw out and say so. Write ${RUN_DIR}\\draws_${c.label}.json = [{"event","shape","world":[x,y,z]}] and run:
+${node(`map-draws --run-dir "${RUN_DIR}" --group ${c.group} --draws "${RUN_DIR}\\draws_${c.label}.json" --label ${c.label}`)}
+Use its matches to fill "form" per subject. Ambiguous or unmatched draws are not discarded: list them in the subject's draw text. A tag found only in shadow/prepass draws is "shadow-only" (subject was off screen).
+Per tag report the main Lighting (or forward, hint 1) draw, whether its fixture is complete (completeness.json from golden_fixture.py, mask non-empty), and the missing files. Report the frame facts too.`,
     { label: `analyse:${c.label}`, phase: 'Analyse', schema: ANALYSE_SCHEMA })
   analysed.push({ capture: c, kept: k.keep, result: r })
   if (r) { const bad = r.subjects.filter(s => !s.fixture_complete); if (bad.length) log(`${c.label}: incomplete: ${bad.map(s => `${s.tag} (${s.draw})`).join(', ')}`) }
@@ -229,33 +271,17 @@ Per tag report the main Lighting (or forward, hint 1) draw, whether its fixture 
 phase('Report')
 const report = await agent(
   `Write the golden capture results to ${OUT}. Plain English, short sentences. Plan: ${a.plan}; resolved: ${RUN_DIR}/resolved.json.
-Run: profile ${pre.profile}, CS ${pre.cs_key}, cell ${session.cell}, origin ${JSON.stringify(session.origin)}, settings edits ${pre.edits}, shader wait: ${session.shader_wait}.
+Run: profile ${pre.profile}, CS ${pre.cs_key}, cell ${session.cell}, origin ${JSON.stringify(session.origin)}, settings edits ${pre.edits}, shader wait: ${session.shader_wait} (compile_ready ${session.compile_ready}${session.stop_reason ? `, stopped: ${session.stop_reason}` : ''}).
 Session: ${JSON.stringify({ crashed: session.crashed, notes: session.notes, groups: session.groups })}
 Kept captures: ${JSON.stringify(kept.map(k => ({ label: k.capture.label, ...k.keep })))}
 Per-capture results: ${JSON.stringify(analysed.map(x => ({ label: x.capture.label, group: x.capture.group, frame: x.capture.frame, ...(x.result || { error: 'analysis returned nothing' }) })))}
 Sections:
 1. Summary: per subject (tag, form, group) fixture complete yes/no; per capture the kept path and sha256.
-2. Questions from the plan: fixture goals (no "outcomes") list missing tags/files per subject; questions with outcomes (P0 cell probe, point light) get the outcome per the plan. For P0: if DirLightColor is 0, say the next runs must pass args.cell = the plan's x_cell_fallback[0] (P0 is not analysed in-session). Time gaps use SharedData Timer, not the wall clock (the game stalls while an .rdc is written).
-3. Retests: subjects missing, shadow-only, or incomplete, with what to change (camera, position, NPC instead of static).
-4. Restore status: ${JSON.stringify(restore)}; any captures not kept: ${JSON.stringify(kept.filter(k => !k.keep.ok).map(k => k.capture.file))}; other .rdc left in Captures: ${JSON.stringify(keepRes ? keepRes.other_rdc : [])}.
+2. Draw mapping: per capture the ${RUN_DIR}/drawmap_<label>.json counts, and every ambiguous or unmatched draw with its nearest candidates (the fixture writer does not record this mapping; this report and those files do).
+3. Questions from the plan: fixture goals (no "outcomes") list missing tags/files per subject; questions with outcomes (P0 cell probe, point light) get the outcome per the plan. For P0: if DirLightColor is 0, say the next runs must pass args.cell = the plan's x_cell_fallback[0] (P0 is not analysed in-session). Time gaps use SharedData Timer, not the wall clock (the game stalls while an .rdc is written).
+4. Retests: subjects missing, shadow-only, ambiguous or incomplete, with what to change (camera, position, NPC instead of static, x_shape_offsets).
+5. Restore status: ${JSON.stringify(restore)}; captures not kept: ${JSON.stringify(kept.filter(k => !k.keep.ok).map(k => k.capture.file))}; other .rdc left in Captures: ${JSON.stringify(keepRes ? keepRes.other_rdc : [])}.
 Return the report path and one line per question.`,
   { label: 'report', phase: 'Report' })
 
-return { report, profile: pre.profile, captures: files.length, kept: kept.filter(k => k.keep.ok).length, crashed: !!session.crashed, settings_restored: !!(restore && restore.restored) }
-
-// Restore of the CS settings only; safe to call when nothing was applied (the lib then reports nothing_to_restore).
-async function restoreSettingsOnly() {
-  const R_SCHEMA = { type: 'object', properties: { game_running: { type: 'boolean' }, stdout_json: { type: 'string', description: 'the command stdout verbatim, or "" if not run' } }, required: ['game_running', 'stdout_json'] }
-  const r = await agent(
-    `Restore the CS settings after a golden capture run. ${RULES}
-1. Wait until Get-Process SkyrimSE is not running (poll every 10 s, up to 5 min). Never kill it. If it still runs, return game_running=true and stdout_json "" without running anything else.
-2. Run this once from the repository root:
-${node('restore')}
-Return game_running=false and its stdout verbatim. Do not edit any file yourself.`,
-    { label: 'restore settings', phase: 'Restore', schema: R_SCHEMA })
-  if (!r) return null
-  let j = null
-  try { j = JSON.parse(r.stdout_json) } catch (e) { j = null }
-  if (!j) return { restored: false, game_running: r.game_running, reason: r.game_running ? 'game still running' : 'restore output unreadable' }
-  return { ...j, restored: !!j.restored || !!j.nothing_to_restore }
-}
+return { report, profile: pre.profile, captures: kept.length, kept: kept.filter(k => k.keep.ok).length, crashed: !!session.crashed, compile_ready: !!session.compile_ready, settings_restored }
