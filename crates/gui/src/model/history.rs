@@ -101,3 +101,9 @@ pub fn sha256_of(p: &std::path::Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     Some(hex::encode(Sha256::digest(std::fs::read(p).ok()?)))
 }
+
+/// `ours` for `engine::dds::may_replace`: the bytes on disk are the ones whose hash is recorded (`last`).
+pub fn recorded(last: Option<&str>) -> impl FnOnce(&[u8]) -> bool + '_ {
+    use sha2::{Digest, Sha256};
+    move |b| last == Some(hex::encode(Sha256::digest(b)).as_str())
+}

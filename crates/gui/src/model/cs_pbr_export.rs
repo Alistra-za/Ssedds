@@ -50,8 +50,8 @@ pub fn to_text(kind: Kind, values: &Map<String, Json>) -> String {
 }
 
 use super::cs_pbr::{valid_value, CsBlock, StaticsStatus};
-use super::history::sha256_of;
-use super::pbr_export::{file_name_problem, hand_edited, json_entries};
+use super::history::{recorded, sha256_of};
+use super::pbr_export::{file_name_problem, json_entries};
 use super::AppModel;
 use crate::sets_doc::SetEntry;
 use engine::config::Target;
@@ -215,11 +215,8 @@ pub fn finish(
             }
         }
         let last = shas.get(rel).map(String::as_str);
-        if hand_edited(&path, text, last) {
-            notes.push(format!(
-                "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
-                path.display()
-            ));
+        if let Err(k) = engine::dds::may_replace(&path, text.as_bytes(), recorded(last)) {
+            notes.push(k.note(&path));
             if let Some(s) = last {
                 out.insert(rel.clone(), s.to_string());
             }

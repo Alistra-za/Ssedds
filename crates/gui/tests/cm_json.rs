@@ -694,9 +694,10 @@ fn a_read_only_document_records_no_hash() {
     assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
 }
 
-/// Fix round 1 (1): a file sdc did not write is never adopted, even with the same bytes.
+/// Fix round 1 (1), amended by Note BV3: a file with exactly the bytes sdc would write is adopted and recorded, so
+/// the next change replaces it.
 #[test]
-fn an_identical_unrecorded_file_is_never_overwritten() {
+fn an_identical_unrecorded_file_is_adopted_and_recorded() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path(), Target::Cs);
     let iron = set_id(&m, "m/iron");
@@ -707,27 +708,28 @@ fn an_identical_unrecorded_file_is_never_overwritten() {
     std::fs::write(&f, &mine).unwrap();
     export_and_wait(&mut m);
     assert!(
-        notes(&m).contains("kept as edited outside Tessalith"),
+        !notes(&m).contains("kept as edited outside Tessalith"),
         "{}",
         notes(&m)
     );
+    assert!(!m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
     m.set_cm_value(&iron, "glossiness", Some(json!(50.0)));
     export_and_wait(&mut m);
-    assert_eq!(std::fs::read_to_string(&f).unwrap(), mine);
-    assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
+    assert_ne!(std::fs::read_to_string(&f).unwrap(), mine);
 }
 
 /// Fix round 1 (2): something at the path that cannot be read as a file is kept, never treated as absent.
 #[test]
 fn an_unreadable_file_is_kept() {
+    use engine::dds::may_replace;
     let d = tempfile::tempdir().unwrap();
     let dir = d.path().join("m/x_m.json");
     std::fs::create_dir_all(&dir).unwrap();
-    assert!(may_replace(&dir, None)
+    assert!(may_replace(&dir, b"{}", |_| true)
         .unwrap_err()
+        .note(&dir)
         .contains("could not be read"));
-    assert!(may_replace(&dir, Some("00")).is_err());
-    assert_eq!(may_replace(&d.path().join("absent.json"), None), Ok(()));
+    assert!(may_replace(&d.path().join("absent.json"), b"{}", |_| false).is_ok());
 }
 
 /// Fix round 1 (3): an export with a failed job writes no JSON, even where an older `_m` .dds is on disk.

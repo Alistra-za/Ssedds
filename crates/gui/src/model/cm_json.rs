@@ -296,7 +296,8 @@ pub fn refuse_clashes(out: &mut [CmTarget], exporting: impl Fn(&str) -> bool) {
     }
 }
 
-use super::history::sha256_of;
+use super::history::{recorded, sha256_of};
+use engine::dds::may_replace;
 
 use std::path::PathBuf;
 
@@ -396,8 +397,8 @@ pub fn finish(
                 path.display(),
                 dds.file_name().unwrap_or_default().to_string_lossy()
             ))
-        } else if let Err(why) = may_replace(&path, last) {
-            Some(why)
+        } else if let Err(k) = may_replace(&path, text.as_bytes(), recorded(last)) {
+            Some(k.note(&path))
         } else {
             match engine::dds::write_atomic(&path, text.as_bytes()) {
                 Ok(()) => {
@@ -441,25 +442,6 @@ pub fn finish(
         }
     }
     out
-}
-
-/// Whether sdc may write `path`: only when it is absent or is exactly what sdc last wrote there (its recorded hash
-/// `last`). An existing file with no record (even with identical bytes), a changed one or one that cannot be read is
-/// kept; `Err` is the note.
-pub fn may_replace(path: &std::path::Path, last: Option<&str>) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
-    match std::fs::read(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!(
-            "{} kept: it could not be read ({e})",
-            path.display()
-        )),
-        Ok(b) if last == Some(hex::encode(Sha256::digest(&b)).as_str()) => Ok(()),
-        Ok(_) => Err(format!(
-            "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
-            path.display()
-        )),
-    }
 }
 
 impl AppModel {

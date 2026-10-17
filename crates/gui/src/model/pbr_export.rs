@@ -1,6 +1,6 @@
 //! Export of PBR sets (M3b spec §6): the checks that block or ask, and the JSON entries. No egui types.
 use super::export::{Row, RowState};
-use super::history::sha256_of;
+use super::history::{recorded, sha256_of};
 use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
@@ -599,15 +599,6 @@ fn exported(rows: &[Row], key: &str) -> Result<(), String> {
     }
 }
 
-/// The file was edited outside sdc since sdc last wrote it (DECISIONS Note P21): it exists, its hash is not the
-/// recorded one, and its bytes are not `text` (identical bytes need no question, even with no record).
-pub(crate) fn hand_edited(path: &std::path::Path, text: &str, last_sha: Option<&str>) -> bool {
-    let on_disk = sha256_of(path);
-    on_disk.is_some()
-        && on_disk.as_deref() != last_sha
-        && !std::fs::read_to_string(path).is_ok_and(|t| t == text)
-}
-
 /// After a successful export: the copies, then the JSON of the sets that fully exported (spec §6.1, §6.4).
 pub fn finish(
     p: &PendingJson,
@@ -663,8 +654,14 @@ pub fn finish(
         return Finish::Nothing;
     }
     let text = to_text(&doc);
-    if hand_edited(&p.path, &text, last_sha) {
-        return Finish::Overwrite(text);
+    // Note BV3: a file edited outside Tessalith asks (P21); one that cannot be read is kept.
+    match engine::dds::may_replace(&p.path, text.as_bytes(), recorded(last_sha)) {
+        Ok(()) => {}
+        Err(engine::dds::Kept::Foreign) => return Finish::Overwrite(text),
+        Err(k) => {
+            notes.push(format!("PGPatcher JSON not written: {}", k.note(&p.path)));
+            return Finish::Nothing;
+        }
     }
     match engine::dds::write_atomic(&p.path, text.as_bytes()) {
         Ok(()) => {

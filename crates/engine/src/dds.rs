@@ -383,6 +383,40 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Why [`may_replace`] keeps an existing file.
+#[derive(Debug)]
+pub enum Kept {
+    /// Something is there but it cannot be read (never treated as absent).
+    Unreadable(std::io::Error),
+    /// Its bytes are neither the new ones nor ones the caller knows as its own.
+    Foreign,
+}
+
+impl Kept {
+    /// The note a writer shows for the kept file.
+    pub fn note(&self, path: &Path) -> String {
+        match self {
+            Kept::Unreadable(e) => format!("{} kept: it could not be read ({e})", path.display()),
+            Kept::Foreign => format!(
+                "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
+                path.display()
+            ),
+        }
+    }
+}
+
+/// The one rule for replacing an existing file Tessalith may not have written (DECISIONS Note BV3): absent → yes;
+/// unreadable → kept; bytes equal to `new` → yes (the caller records it as its own); `ours(bytes)` → yes (the
+/// caller's record says it wrote them); anything else → kept. DDS outputs keep their manifest check in `run`.
+pub fn may_replace(path: &Path, new: &[u8], ours: impl FnOnce(&[u8]) -> bool) -> Result<(), Kept> {
+    match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Kept::Unreadable(e)),
+        Ok(b) if b == new || ours(&b) => Ok(()),
+        Ok(_) => Err(Kept::Foreign),
+    }
+}
+
 /// Pixel format of a DDS file as the reader understands it (the formats spec §2 lists as inputs, plus BC2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum DdsPixelFormat {
