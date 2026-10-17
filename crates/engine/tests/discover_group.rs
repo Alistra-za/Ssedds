@@ -322,8 +322,9 @@ fn overlapping_inputs_yield_one_entry_per_file() {
     assert_eq!(rels(&files), ["rock.png", "sub/moss.png"]);
 }
 
-/// Trace-debug #24 (Note BQ): a `textures` folder nested under the mod's own `textures` stays in the game path, as
-/// `nif::path::canon_texture` keeps it; the cut is at the first `textures` at or below the input root.
+/// Trace-debug #24 (Note BQ8): a `textures` folder nested under the mod's own `textures` stays in the game path, as
+/// `nif::path::canon_texture` keeps it; the cut is at the first `textures` below the input root, and the root's own
+/// `textures` counts only when none lies below it (owner, 2026-10-16).
 #[test]
 fn game_path_keeps_a_nested_textures_folder() {
     let abs = Path::new("C:/mods/Data/textures/armor/textures/foo_d.dds");
@@ -331,9 +332,26 @@ fn game_path_keeps_a_nested_textures_folder() {
         game_path(abs, Path::new("textures/armor/textures/foo_d.dds")),
         "textures/armor/textures/foo_d.dds"
     );
-    // The input root is itself a `textures` folder.
+    // The input root is itself a `textures` folder: the one below it wins (BQ8, the container layout).
     assert_eq!(
         game_path(abs, Path::new("armor/textures/foo_d.dds")),
-        "textures/armor/textures/foo_d.dds"
+        "textures/foo_d.dds"
+    );
+}
+
+/// Owner, 2026-10-16 (Note BQ8): an input root named `textures` that holds mod folders keys each file from the mod's
+/// own `textures`, as before #24.
+#[test]
+fn game_path_of_a_textures_root_holding_mods_starts_at_the_mods_textures() {
+    let abs = Path::new("D:/Textures/MyMod/textures/landscape/rock.png");
+    assert_eq!(
+        game_path(abs, Path::new("MyMod/textures/landscape/rock.png")),
+        "textures/landscape/rock.png"
+    );
+    // No `textures` below the root: the root's own is the textures root.
+    let abs = Path::new("D:/Textures/landscape/rock.png");
+    assert_eq!(
+        game_path(abs, Path::new("landscape/rock.png")),
+        "textures/landscape/rock.png"
     );
 }

@@ -50,14 +50,14 @@ pub fn game_path(abs: &Path, rel: &Path) -> String {
         .components()
         .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect();
-    // Trace-debug #24 (Note BQ): the first `textures` at or below the input root (its last component), as
-    // `nif::path::canon_texture` keeps a nested one; else the last anywhere.
+    // Trace-debug #24 (Note BQ8): the first `textures` below the input root, as `nif::path::canon_texture` keeps a
+    // nested one; else the last anywhere (none lies below, so it is the root itself or above it; owner, 2026-10-16).
     let root = comps.len().saturating_sub(rel.components().count() + 1);
-    let first = comps[root..]
+    let below = comps[(root + 1).min(comps.len())..]
         .iter()
         .position(|c| c == "textures")
-        .map(|i| root + i);
-    match first.or_else(|| comps.iter().rposition(|c| c == "textures")) {
+        .map(|i| root + 1 + i);
+    match below.or_else(|| comps.iter().rposition(|c| c == "textures")) {
         Some(i) => comps[i..].join("/"),
         None => rel
             .to_string_lossy()
