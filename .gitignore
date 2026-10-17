@@ -9,3 +9,7 @@ _sdc/
 /dist/Tessalith-*/
 /dist/*.zip
 /dist/SHA256SUMS.txt
+
+# Working docs kept locally, not shipped (owner 2026-10-16)
+/docs/superpowers/
+/docs/spikes/
