@@ -306,3 +306,18 @@ fn an_output_root_at_or_above_the_input_skips_nothing() {
     let files = discover(&[src.join("sub")], &src, true).unwrap();
     assert_eq!(rels(&files), ["b.png"]);
 }
+
+/// Trace-debug #13 (Note BQ): a file reached through two inputs (a folder and a file in it, or a folder and its
+/// subfolder) is discovered once, through the first input that reaches it.
+#[test]
+fn overlapping_inputs_yield_one_entry_per_file() {
+    let d = tempfile::tempdir().unwrap();
+    let tex = d.path().join("tex");
+    touch(&tex.join("rock.png"));
+    touch(&tex.join("sub/moss.png"));
+    let out = d.path().join("out");
+    let files = discover(&[tex.clone(), tex.join("rock.png")], &out, false).unwrap();
+    assert_eq!(rels(&files), ["rock.png"]);
+    let files = discover(&[tex.clone(), tex.join("sub")], &out, true).unwrap();
+    assert_eq!(rels(&files), ["rock.png", "sub/moss.png"]);
+}

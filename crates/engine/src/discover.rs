@@ -108,6 +108,15 @@ pub fn discover_reporting(
     let out_abs = std::path::absolute(output_root)?;
     let mut files = vec![];
     let mut skipped = vec![];
+    // Trace-debug #13 (Note BQ): a file reached through two inputs is kept once, through the first.
+    let mut seen = std::collections::HashSet::new();
+    let mut first_sight = |p: &Path| {
+        seen.insert(
+            std::fs::canonicalize(p)
+                .or_else(|_| std::path::absolute(p))
+                .unwrap_or_else(|_| p.to_path_buf()),
+        )
+    };
     for input in inputs {
         if input.is_dir() {
             // Note BC (audit #3): only an output root strictly inside this folder is skipped; in place skips nothing.
@@ -145,7 +154,7 @@ pub fn discover_reporting(
                     continue;
                 }
                 let ext = ext_lower(p);
-                if ext == "dds" || IMAGE_EXTS.contains(&ext.as_str()) {
+                if (ext == "dds" || IMAGE_EXTS.contains(&ext.as_str())) && first_sight(p) {
                     let rel = p
                         .strip_prefix(input)
                         .map_err(std::io::Error::other)?
@@ -157,6 +166,9 @@ pub fn discover_reporting(
             let name = input
                 .file_name()
                 .ok_or_else(|| std::io::Error::other("input has no file name"))?;
+            if !first_sight(input) {
+                continue;
+            }
             files.push(make(input.clone(), PathBuf::from(name), output_root));
         }
     }
