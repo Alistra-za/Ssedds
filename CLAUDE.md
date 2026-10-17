@@ -77,4 +77,5 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 - `docs/research/`: the measurements behind encoder, mip-filter and coverage choices.
 - `.claude/workflows/trace-debug.js`: a whole-repo bug hunt with skeptical review.
 - `.claude/workflows/in-game-capture.js`: launch the game through MO2, take RenderDoc captures of test meshes without a keyboard, restore settings, and turn the captures into numbers.
+- `.claude/workflows/golden-capture.js` (NIF team): Phase D golden captures with a CS settings profile (A, B, A_DC). Usage and plan format are in its header comment. File work lives in `golden-capture-lib.mjs`; run `node .claude/workflows/golden-capture.test.mjs` for the offline test (no game launch).
 - `tools/package-release.ps1`: builds the release zip and SHA256SUMS.
