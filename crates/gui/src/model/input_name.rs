@@ -190,7 +190,7 @@ impl AppModel {
         self.note_kept_entries(plan.retarget.as_slice());
         self.batch_edit(&label, |m| {
             for r in &plan.rows {
-                let alias = (lower(&r.new) != lower(&r.key)).then_some(r.new.as_str());
+                let alias = (r.new != r.key).then_some(r.new.as_str());
                 m.edit_docs(&label, None, true, |p, _| p.set_read_as(&r.key, alias));
             }
             if let Some((from, to)) = &plan.retarget {

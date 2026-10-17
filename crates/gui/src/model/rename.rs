@@ -611,7 +611,7 @@ impl AppModel {
                 match d.mode {
                     RenameMode::Inputs => {
                         // Back to its own name: the alias goes.
-                        let alias = (lower(&r.new) != lower(&r.key)).then_some(r.new.as_str());
+                        let alias = (r.new != r.key).then_some(r.new.as_str());
                         m.edit_docs(&label, None, true, |p, _| p.set_read_as(&r.key, alias));
                     }
                     RenameMode::Outputs => {
