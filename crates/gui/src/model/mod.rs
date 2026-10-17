@@ -724,11 +724,13 @@ impl AppModel {
         self.sets_root.clone().unwrap_or_else(|| self.export_root())
     }
 
-    /// `<export folder>` from the settings, else `<root>/sdc-out`.
+    /// The project's export folder (`sdc-project.toml`, Note BV6), else the app-wide one from `gui.toml` (the
+    /// value from before per-project folders, now only a default), else `<root>/sdc-out`.
     pub fn export_root(&self) -> PathBuf {
-        self.settings
-            .export_folder
-            .clone()
+        self.sets_doc
+            .as_ref()
+            .and_then(|d| d.export_folder())
+            .or_else(|| self.settings.export_folder.clone())
             .unwrap_or_else(|| self.root.clone().unwrap_or_default().join("sdc-out"))
     }
 

@@ -167,7 +167,7 @@ The GUI runs the same engine and reads and writes the same `sdc.toml`, so you ca
 5. For an amber tile, answer the question shown in the centre column: the sub-type buttons, the alpha buttons (*Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*), *DirectX* or *OpenGL* for a normal map's green channel, or **Acknowledge for this texture** for a blocking warning. Each answer is written to `sdc.toml` as a `[files]` entry.
 6. Click the `ironplate` set in the Sets column on the right. The set editor shows a card for each slot (Diffuse, Normal, RMAOS and so on) and the set's **Shader**, which should read `pbr` (auto). On the RMAOS card you can set fills for missing channels; for this example set Specular to 128 to match the `sdc.toml` from Part 1.
 7. Fill in the TruePBR settings for the set (Material, Features and the rest) if you want values other than the defaults. Leave **Matching** on the diffuse path.
-8. Set the **Export folder** in the header. By default it is `sdc-out` inside the opened folder. Set the **JSON:** name; by default it is the folder name.
+8. Set the **Export folder** in the header. By default it is `sdc-out` inside the opened folder. Each project remembers its own export folder. Set the **JSON:** name; by default it is the folder name.
 9. Press **Export**. The GUI saves `sdc.toml` and `sdc-project.toml` first, then converts. A drawer opens at the bottom with a Files tab and a Warnings tab.
 10. When the export finishes, the GUI writes `<export folder>\PBRNIFPatcher\<name>.json` for every PBR set that exported fully.
 

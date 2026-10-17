@@ -240,10 +240,28 @@ impl AppModel {
         self.picker.request(ctx, purpose, scope, spec)
     }
 
-    /// The export folder chosen in the picker.
+    /// The export folder chosen in the picker, for this project (owner ruling, Note BV6): saved in
+    /// `sdc-project.toml` at once, or with the next Save when it holds unsaved edits (those are the user's to save,
+    /// Note BD2). With no usable project file (none open, or one that does not parse) it is the app-wide default in
+    /// `gui.toml`, as before.
     pub fn set_export_folder(&mut self, path: std::path::PathBuf) {
-        self.settings.export_folder = Some(path);
-        self.save_settings();
+        match self.sets_doc.as_mut().filter(|d| !d.read_only()) {
+            Some(d) => {
+                let was_dirty = d.is_dirty();
+                d.set_export_folder(&path);
+                if was_dirty {
+                    self.status_line =
+                        "Export folder set; it is saved in sdc-project.toml with the next Save"
+                            .into();
+                } else if let Err(e) = d.save(false) {
+                    self.save_failed(super::DocKind::Project, &e);
+                }
+            }
+            None => {
+                self.settings.export_folder = Some(path);
+                self.save_settings();
+            }
+        }
         // Existing outputs decide which textures are up to date.
         self.replan();
     }

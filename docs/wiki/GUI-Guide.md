@@ -20,7 +20,7 @@ The window has two views, picked in the header: the Textures view (converter and
 | **Messages** (Ctrl+M) | The last 500 notices, newest first; the button counts the ones you have not seen. |
 | **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
 | **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Under **Messages**, left of Export. |
-| **Export folder: …** | Where converted textures go. By default `sdc-out` inside the opened folder. At the right end of the top row. |
+| **Export folder: …** | Where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. By default `sdc-out` inside the opened folder (or the export folder older versions saved for every project). At the right end of the top row. |
 | **PG JSON Editor** | Open the TruePBR JSON editor window (cs mode, with a folder open). The JSON's file name is its top field. At the right end of the bottom row. |
 
 The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). The **MO2…** header button opens the scan source popup: the MO2 instance with **Choose…**, its profiles, **Scan a folder…** and **Scan** / **Cancel**; the button's hover text names the instance and profile. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
@@ -354,7 +354,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 |---|---|
 | `<folder>\sdc.toml` | Target and per-file decisions. Shared with the CLI. |
 | `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections. GUI only. |
-| `%APPDATA%\sdc\gui.toml` | Window and app settings: export folder, recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
+| `%APPDATA%\sdc\gui.toml` | Window and app settings: the default export folder (a project's own is in its `sdc-project.toml`), recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
 | `%APPDATA%\sdc\config.toml` | The user config, also read by the CLI. |
 | `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |
 | `%LOCALAPPDATA%\sdc\scan.db` | The mod scan database. |
