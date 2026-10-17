@@ -274,8 +274,7 @@ pub fn draw(
                 }
             }
             Act::Reorder(id, to) => {
-                model.reorder_set(&id, to);
-                if editable {
+                if model.reorder_set(&id, to) {
                     st.flash = Some((id, now));
                     ctx.request_repaint();
                 }

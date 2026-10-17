@@ -9,7 +9,7 @@ use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{
-    active_matches, json_rename, match_toggle, stored_match, NOT_WRITTEN,
+    active_matches, json_rename, match_toggle, stored_set_match, NOT_WRITTEN,
     PATH_CONTAINS_NOT_WRITTEN, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
 use crate::pgp::schema::{grass_ignores, spec, KeyKind, KeySpec, NumRange, KEYS};
@@ -81,6 +81,8 @@ enum Act {
     /// Fold or unfold a set's entry.
     Fold(String),
     Edit(Owner, String, Option<Value>),
+    /// Several keys as one undo step (trace-debug #56).
+    Edits(Owner, Vec<(String, Option<Value>)>),
     AddSection,
     RemoveSection(usize),
     Select(String),
@@ -156,7 +158,10 @@ fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
         }
         if r.lost_focus() {
             ui.data_mut(|d| d.remove::<String>(id));
-            model.set_json_name(&t);
+            // Esc cancels (AG10/AG11, trace-debug #57): egui drops the focus on it.
+            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                model.set_json_name(&t);
+            }
         }
     });
 }
@@ -254,6 +259,8 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
         match a {
             Act::Edit(Owner::Set(id), k, v) => model.set_json_value(&id, &k, v),
             Act::Edit(Owner::Section(i), k, v) => model.set_section_value(i, &k, v),
+            Act::Edits(Owner::Set(id), e) => model.set_json_values(&id, e),
+            Act::Edits(Owner::Section(i), e) => model.set_section_values(i, e),
             Act::AddSection => model.add_section(""),
             Act::RemoveSection(i) => model.remove_section(i),
             Act::Select(key) => model.select_set(&key),
@@ -345,7 +352,8 @@ fn text_box(ui: &mut egui::Ui, id: egui::Id, current: &str, width: f32) -> Optio
     }
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(id));
-        if t.trim() != current.trim() {
+        // Esc cancels (AG10/AG11, trace-debug #57).
+        if t.trim() != current.trim() && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return Some(t.trim().to_string());
         }
     }
@@ -366,13 +374,9 @@ fn known(
 /// The edits that store `path` under `mode` for `owner` (a set's `match1` of its derived path stays derived).
 fn store(owner: &Owner, mode: Mode, path: &str, derived: &str) -> (String, Option<Value>) {
     match (owner, mode) {
-        (Owner::Set(_), Mode::Exact(1))
-            if crate::pgp::prefix::match_value(path)
-                == crate::pgp::prefix::match_value(derived) =>
-        {
-            ("match1".into(), None)
+        (Owner::Set(_), Mode::Exact(n)) => {
+            (format!("match{n}"), stored_set_match(n, path, derived))
         }
-        (Owner::Set(_), Mode::Exact(n)) => (format!("match{n}"), stored_match(n, path)),
         (_, m) => {
             let t = path.trim().replace('/', "\\");
             (m.key(), (!t.is_empty()).then(|| json!(t)))
@@ -416,10 +420,11 @@ fn match_pill(
             .response
             .on_hover_text("Exact: a mesh's texture in this slot is exactly this path. Path contains: the diffuse path contains this text.");
         if picked_mode != mode {
-            let (k, v) = unstore(owner, mode);
-            acts.push(Act::Edit(owner.clone(), k, v));
-            let (k, v) = store(owner, picked_mode, path, derived);
-            acts.push(Act::Edit(owner.clone(), k, v));
+            let edits = vec![
+                unstore(owner, mode),
+                store(owner, picked_mode, path, derived),
+            ];
+            acts.push(Act::Edits(owner.clone(), edits));
         }
         let id = egui::Id::new(("json-match", owner.salt(), mode.key()));
         if let Some(t) = text_box(ui, id, path, 260.0) {

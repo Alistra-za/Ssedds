@@ -253,6 +253,8 @@ pub struct AppModel {
     recovery_key: Option<RecoveryKey>,
     /// Bumped by `open_folder` and a new export: the drawer then forgets its cached file checks.
     pub drawer_epoch: u64,
+    /// Bumped by `open_folder`: the UI then drops its Sets column modal and Slot commands (trace-debug #52).
+    pub folder_epoch: u64,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
     /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
@@ -470,6 +472,7 @@ impl AppModel {
             settings_error: None,
             recovery_key: None,
             drawer_epoch: 0,
+            folder_epoch: 0,
             user_config: None,
             user_presets: None,
             loaded_user_presets: vec![],
@@ -646,6 +649,7 @@ impl AppModel {
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
         self.drawer_epoch += 1;
+        self.folder_epoch += 1;
         self.dropped_fills.clear();
         // Audit GM-6: the previous folder's header-patch result, tag choices and open confirmation.
         self.dds_patch = Default::default();
@@ -1003,9 +1007,6 @@ impl AppModel {
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => self.export_ended(Err(format!("internal error: {message}"))),
-                    "preview" => self.preview_panicked(&message),
-                    "heatmap" => self.heatmap_panicked(),
-                    "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
@@ -2719,6 +2720,19 @@ pub fn export_finished_text(s: &engine::api::BatchSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn bare_model() -> AppModel {
+        let session =
+            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
+        AppModel::new(GuiSettings::default(), None, session)
+    }
+
+    pub(super) fn panicked(what: &'static str) -> WorkerMsg {
+        WorkerMsg::Panicked {
+            what,
+            message: "boom".into(),
+        }
+    }
 
     /// Audit GM-10: mesh evidence that differs on every read never settles; `auto_replans` stops the re-plans
     /// after two rounds, and Export then refuses with "the sets changed while planning".

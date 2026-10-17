@@ -218,6 +218,20 @@ pub fn stored_match(n: u8, typed: &str) -> Option<Value> {
     }
 }
 
+/// A set's `match{n}` as typed: slot 1 typed as the derived path stays derived (no key), so it follows a re-sourced
+/// diffuse; otherwise [`stored_match`]. The TruePBR card and the JSON editor both store through this (trace-debug #59).
+pub fn stored_set_match(n: u8, typed: &str, derived: &str) -> Option<Value> {
+    let derives = n == 1
+        && !strip_lead(typed).is_empty()
+        && !derived.trim().is_empty()
+        && match_value(strip_lead(typed)) == match_value(derived);
+    if derives {
+        None
+    } else {
+        stored_match(n, typed)
+    }
+}
+
 /// The edit that turns slot match `n` on or off, as (key, value for `set_json_value`) (F1 spec §3.2). Slot 1 on
 /// removes the key (the derived default applies) and off stores `""`; other slots store `path` when on and lose the
 /// key when off.

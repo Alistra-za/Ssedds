@@ -176,6 +176,19 @@ pub fn spawn_guarded(
         .expect("spawn a worker thread");
 }
 
+/// Run `f`; a panic first sends `failed(message)`, the job's own failure tagged with its id, so a stale job's
+/// panic never ends a newer job (as AF3 does for the NVTT probe), then unwinds on to `spawn_guarded`'s dialog.
+pub(crate) fn or_send<T>(
+    tx: &Sender<WorkerMsg>,
+    f: impl FnOnce() -> T,
+    failed: impl FnOnce(String) -> WorkerMsg,
+) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
+        let _ = tx.send(failed(panic_text(&*p)));
+        std::panic::resume_unwind(p)
+    })
+}
+
 /// Plan (through the session's cache) and run, streaming every event into the channel, then send `ExportDone`.
 pub fn spawn_export(
     tx: Sender<WorkerMsg>,
@@ -249,10 +262,19 @@ pub fn spawn_source(
     token: u64,
 ) {
     spawn_guarded(tx, "preview", move |tx| {
-        let result = session
-            .preview_source_stored(&job, max, &cancel)
-            .map(Arc::new)
-            .map_err(|e| format!("{e:?}"));
+        let result = or_send(
+            tx,
+            || {
+                session
+                    .preview_source_stored(&job, max, &cancel)
+                    .map(Arc::new)
+                    .map_err(|e| format!("{e:?}"))
+            },
+            |e| WorkerMsg::Source {
+                token,
+                result: Err(e),
+            },
+        );
         let _ = tx.send(WorkerMsg::Source { token, result });
     });
 }
@@ -268,15 +290,24 @@ pub fn spawn_encode(
 ) {
     spawn_guarded(tx, "preview", move |tx| {
         let bc1 = session.bc1_model();
-        let result = session
-            .preview(&job, max, &cancel)
-            .map(|r| {
-                Arc::new(PreviewOut {
-                    decoded: decode_levels(&r, bc1),
-                    result: r,
-                })
-            })
-            .map_err(|e| format!("{e:?}"));
+        let result = or_send(
+            tx,
+            || {
+                session
+                    .preview(&job, max, &cancel)
+                    .map(|r| {
+                        Arc::new(PreviewOut {
+                            decoded: decode_levels(&r, bc1),
+                            result: r,
+                        })
+                    })
+                    .map_err(|e| format!("{e:?}"))
+            },
+            |e| WorkerMsg::Encoded {
+                token,
+                result: Err(e),
+            },
+        );
         let _ = tx.send(WorkerMsg::Encoded { token, result });
     });
 }
@@ -284,7 +315,14 @@ pub fn spawn_encode(
 /// A DDS input shows only its own bytes: read the file, keep the mips within `max`, decode them.
 pub fn spawn_dds(tx: Sender<WorkerMsg>, path: PathBuf, max: u32, bc1: Bc1Model, token: u64) {
     spawn_guarded(tx, "preview", move |tx| {
-        let result = dds_preview(&path, max, bc1).map(Arc::new);
+        let result = or_send(
+            tx,
+            || dds_preview(&path, max, bc1).map(Arc::new),
+            |e| WorkerMsg::Encoded {
+                token,
+                result: Err(e),
+            },
+        );
         let _ = tx.send(WorkerMsg::Encoded { token, result });
     });
 }
