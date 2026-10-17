@@ -7,7 +7,7 @@ pub const BC45_RADIUS_DEFAULT: u32 = 5;
 /// Spec value `max` (bench `-hr10`).
 pub const BC45_RADIUS_MAX: u32 = 10;
 /// Spec value `fast` (M6 Track D, DECISIONS Note T11): the smallest radius within 0.1 dB of `default` on the bench
-/// corpus (docs/spikes/bc45-search-radius.md).
+/// corpus (docs/research/encoder-benchmark.md, "BC4/BC5 search radius").
 pub const BC45_RADIUS_FAST: u32 = 4;
 
 fn bytes(px: &[[u8; 4]; 16]) -> [u8; 64] {
