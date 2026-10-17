@@ -260,3 +260,29 @@ fn a_gui_toml_locked_at_launch_is_merged_by_the_first_save() {
     assert_eq!(back.jobs, 12, "the file's value is kept");
     assert!(back.live_encode, "the app's change is written");
 }
+
+/// Review M3 (#45, Note BR): when the broken gui.toml cannot be moved aside (held open by another program), the
+/// earlier `gui.toml.bad` is not deleted; the save fails and both files stay.
+#[cfg(windows)]
+#[test]
+fn a_locked_broken_gui_toml_keeps_the_earlier_bad_copy() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("gui.toml");
+    let bad = p.with_extension("toml.bad");
+    std::fs::write(&p, "preview_max = [").unwrap();
+    std::fs::write(&bad, "earlier hand edit").unwrap();
+    // FILE_SHARE_READ only: readable, but it cannot be renamed while this handle is open.
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&p)
+        .unwrap();
+    assert!(GuiSettings::default().save(&p).is_err());
+    drop(hold);
+    assert_eq!(std::fs::read_to_string(&bad).unwrap(), "earlier hand edit");
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), "preview_max = [");
+    // Unlocked, the next save replaces the earlier copy.
+    assert_eq!(GuiSettings::default().save(&p).unwrap(), Some(bad.clone()));
+    assert_eq!(std::fs::read_to_string(&bad).unwrap(), "preview_max = [");
+}

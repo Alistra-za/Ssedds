@@ -178,7 +178,7 @@ impl GuiSettings {
         let unreadable = path.exists() && GuiSettings::load(path).1.is_some();
         let kept = path.with_extension("toml.bad");
         if unreadable {
-            let _ = std::fs::remove_file(&kept);
+            // Review M3: `rename` replaces an earlier `.bad` only once the move succeeds; a locked file keeps it.
             std::fs::rename(path, &kept)?;
         }
         let text = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
