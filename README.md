@@ -77,7 +77,7 @@ BC7E vs only cpu encoders at maximum settings (besides ISPC)
 | Opaque input decoded with alpha 254 | 28%*  | 0% | 1.1% | 15% | 2.4% |
 | Time per megapixel | 0.22 s | ~14 s | ~33 s | 0.30 s | ~20 s |
 
-* Optional patch for when that's not acceptable (mode 6 pbit override, exact opaque)
+  Optional patch for when that's not acceptable (mode 6 pbit override, exact opaque)
 † Compressonator q1.0 was not re-measured on the wider set; its values come from the original 4–7 images. On those images it was 0.15 dB behind NVTT on packed data and 0.27° behind on normals. 
 The alpha-254 and timing rows are also from the original run.
 
@@ -111,7 +111,7 @@ What Tessalith does (`crates/engine/src/rnm/`):
 - **Order and strength:** `bent` 0.35, `bump` 0.4, `bump2` 0.4, `detail` 0.6, `detail2` 0.3, in that order; `rnm.order` moves listed layers to the front. Strength scales the layer's slope (0 flat, 1 as authored); a mask's R channel scales it per texel.
 - **Where:** into the set's `_n` or `_cnr`, after decode and green flip, before mips. Layers are resampled to the base size. Alpha is untouched, so `_cnr` coat roughness passes through. The TruePBR roughness bake reads the blended normal.
 
-Defaults assume _Bent is a high to low mesh only bake from the same normal source (It contains all detail the normal has, used to reduce the ao strengh) use RMM mixing for when that is not the case
+Defaults assume _Bent is a high to low mesh only bake from the same normal source (It contains all detail the normal has, mask is used to reduce the ao strengh) use RMM mixing for when that is not the case.
 ## Quick start
 
 Build with Rust stable and the MSVC Build Tools ([Installation](docs/wiki/Installation.md)). This writes `sdc.exe` and `tessalith.exe` to `target\x86_64-pc-windows-msvc\release\`:
