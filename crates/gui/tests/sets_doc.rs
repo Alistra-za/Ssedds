@@ -410,3 +410,21 @@ fn removing_a_file_moved_in_by_extensionless_key_drops_the_add() {
     let e = e.iter().find(|e| e.id == "landscape/new").unwrap();
     assert!(e.add.is_empty() && e.remove.is_empty(), "{e:?}");
 }
+
+/// Review M4 (#37, Note BR4): an extension-less `add` key that also names a sibling (`foo` for `foo.png` and
+/// `foo.tga`) is not dropped when one of them is removed; the removed file gets its own `remove`, so the sibling
+/// stays in the set.
+#[test]
+fn removing_one_of_two_same_stem_files_keeps_the_shared_add_key() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nadd = [\"a/foo\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/foo.png", "a/foo.tga"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.remove_member("a/new", "a/foo.tga");
+    let e = &s.entries()[0];
+    assert_eq!(e.add, ["a/foo"], "{e:?}");
+    assert_eq!(e.remove, ["a/foo.tga"], "{e:?}");
+}

@@ -650,9 +650,9 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
+        let mut items = strings(self.table_mut(id).get(key));
+        items.retain(|f| !self.names_only(f, file));
         let t = self.table_mut(id);
-        let mut items = strings(t.get(key));
-        items.retain(|f| !names_file(f, file));
         if add {
             items.push(file.to_string());
         }
@@ -672,10 +672,10 @@ impl SetsDoc {
     pub fn add_member(&mut self, id: &str, file: &str) {
         for e in self.parse_entries() {
             if !same_id(&e.id, id) {
-                if e.add.iter().any(|f| names_file(f, file)) {
+                if e.add.iter().any(|f| self.names_only(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
                 }
-                if e.remove.iter().any(|f| names_file(f, file)) {
+                if e.remove.iter().any(|f| self.names_only(f, file)) {
                     self.list_edit(&e.id, "remove", file, false);
                 }
             }
@@ -685,7 +685,7 @@ impl SetsDoc {
         let removed_here = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| names_file(f, file)));
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| self.names_only(f, file)));
         if removed_here {
             self.list_edit(id, "remove", file, false);
         } else {
@@ -698,12 +698,47 @@ impl SetsDoc {
         let moved_in = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| names_file(f, file)));
+            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| self.names_only(f, file)));
         if moved_in {
             self.list_edit(id, "add", file, false);
         } else {
             self.list_edit(id, "remove", file, true);
         }
+    }
+
+    /// Review M4: `key` names `file` (`names_file`) and no other file: an extension-less key also names every file
+    /// with that stem, so it is dropped for one of them only when no sibling of another extension is on disk. A key
+    /// kept that way gets an exact `remove` instead (`remove_member`), which the engine applies after the moves.
+    /// shortcut: a kept key in another set's `add` still moves its first match there (`add_member`); upgrade if a
+    /// user reports a same-stem pair split across sets.
+    fn names_only(&self, key: &str, file: &str) -> bool {
+        if same_id(key, file) {
+            return true;
+        }
+        if !names_file(key, file) {
+            return false;
+        }
+        let rel = Path::new(file);
+        let (Some(root), Some(name), Some(stem)) =
+            (self.f.path.parent(), rel.file_name(), rel.file_stem())
+        else {
+            return true;
+        };
+        let dir = root.join(rel.parent().unwrap_or(Path::new("")));
+        let (name, stem) = (
+            name.to_string_lossy().to_lowercase(),
+            stem.to_string_lossy().to_lowercase(),
+        );
+        !std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| {
+                let p = e.path();
+                p.file_stem()
+                    .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
+                    && e.file_name().to_string_lossy().to_lowercase() != name
+            })
     }
 
     pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {
