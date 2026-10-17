@@ -1650,7 +1650,7 @@ impl Engine {
             .iter()
             .any(|s| s.code == Some(Code::InDdsSkipped))
         {
-            Manifest::at(&req.output_root).load().unwrap_or_default()
+            Manifest::at(&req.output_root).read().unwrap_or_default()
         } else {
             Default::default()
         };
