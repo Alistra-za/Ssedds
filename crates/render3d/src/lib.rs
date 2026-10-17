@@ -1142,10 +1142,20 @@ impl Renderer {
     }
 
     /// Runs every queued job on this thread and applies it: the synchronous mode (tests, the Meshes view's
-    /// `load`).
+    /// `load`). A key the host's pool already took (in flight) is compiled here too, so no shape stays `Pending`.
     pub fn settle(&mut self) {
         loop {
-            let jobs = self.take_jobs();
+            let mut jobs = self.take_jobs();
+            if jobs.is_empty() {
+                let mut seen = HashSet::new();
+                jobs = self
+                    .shapes
+                    .values()
+                    .filter_map(|s| s.wanted.as_ref())
+                    .filter(|w| seen.insert(w.key.clone()))
+                    .map(|w| w.job(&self.cache_dir))
+                    .collect();
+            }
             if jobs.is_empty() {
                 break;
             }
