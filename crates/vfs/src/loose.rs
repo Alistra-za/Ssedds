@@ -32,8 +32,17 @@ pub fn walk(root: &Path, top: &[&str], ext: &[&str]) -> (Vec<LooseFile>, Vec<(St
             }
         };
         let name = d.file_name().to_string_lossy().to_ascii_lowercase();
-        if !top.contains(&name.as_str()) || !d.path().is_dir() {
+        if !top.contains(&name.as_str()) {
             continue;
+        }
+        // metadata follows links: a broken link or inaccessible entry is reported, a plain file is skipped
+        match std::fs::metadata(d.path()) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => continue,
+            Err(e) => {
+                errs.push((d.path().display().to_string(), e.to_string()));
+                continue;
+            }
         }
         // MO2/Vortex deploys use junctions and symlinks: follow them wherever they point; the
         // path stays the link path. walkdir's ancestor check reports cycles as Err (reported below).

@@ -58,8 +58,10 @@ fn walk_survives_a_link_cycle() {
     std::fs::write(root.join("meshes/a/x.nif"), b"x").unwrap();
     link_dir(&root.join("meshes"), &root.join("meshes/a/loop"));
     let (files, errs) = vfs::loose::walk(root, &["meshes"], &["nif"]);
-    // the cycle may be reported (walkdir loop error); the real file must survive either way
-    assert!(errs.len() <= 1, "{errs:?}");
+
+    // walkdir reports the loop as exactly one "File system loop" error naming the link
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].0.ends_with("loop"), "{errs:?}");
     let norms: Vec<_> = files.into_iter().map(|f| f.norm).collect();
     assert_eq!(norms, ["meshes/a/x.nif"]);
 }
@@ -95,5 +97,19 @@ fn walk_reports_a_broken_link_and_keeps_the_files() {
     std::fs::remove_dir(&target).unwrap();
     let (files, errs) = vfs::loose::walk(&root, &["meshes"], &["nif"]);
     assert_eq!(files.len(), 1);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+}
+
+#[test]
+fn walk_reports_a_broken_top_level_link() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("root");
+    let target = d.path().join("gone");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&target).unwrap();
+    link_dir(&target, &root.join("meshes"));
+    std::fs::remove_dir(&target).unwrap();
+    let (files, errs) = vfs::loose::walk(&root, &["meshes"], &["nif"]);
+    assert!(files.is_empty());
     assert_eq!(errs.len(), 1, "{errs:?}");
 }
