@@ -379,6 +379,40 @@ fn a_pasted_full_path_drops_the_locked_part() {
     assert_eq!(free(&h), "rock02");
 }
 
+/// Trace-debug #11: a click on another set in the Sets column commits the typed name first (AO1). Move, press and
+/// release land in separate frames, as a real click does.
+#[test]
+fn a_click_on_another_set_commits_the_typed_name_first() {
+    let (_d, mut h) = harness();
+    let steps = h.state().0.history.undo.len();
+    let rock = h.state().0.selection.clone();
+    focus(&mut h);
+    clear_and_type(&mut h, "rock02");
+    let p = h.get_by_label("landscape/leaf").rect().center();
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    settle(&mut h);
+    let now = &h.state().0.selection;
+    assert!(
+        matches!(now, sdc_gui::model::Selection::Set(_)) && *now != rock,
+        "the click selected leaf: {now:?}"
+    );
+    assert_eq!(h.state().0.history.undo.len(), steps + 1, "one undo step");
+    assert_eq!(
+        h.state().0.input_name_of("landscape/rock02").as_deref(),
+        Some("textures/landscape/rock02")
+    );
+}
+
 /// Review fix: a row commits only when the press and the release are both on it.
 #[test]
 fn a_press_dragged_off_a_live_row_commits_nothing() {
