@@ -1,6 +1,6 @@
 # Research behind the defaults
 
-The defaults come from a literature review of BCn encoders, mip filtering and Skyrim's shaders, a local benchmark of about 1,770 encodes, and a set of measured spikes. The per-decision record is [DECISIONS.md](../DECISIONS.md); the design is summarised in [How Tessalith came about](../research/design-overview.md). The full research pages, with their tables, are in [docs/research](../research/README.md).
+The defaults come from a literature review of BCn encoders, mip filtering and Skyrim's shaders, a local benchmark of about 12,500 encodes over three rounds, and a set of measured spikes. The per-decision record is [DECISIONS.md](../DECISIONS.md); the design is summarised in [How Tessalith came about](../research/design-overview.md). The full research pages, with their tables, are in [docs/research](../research/README.md).
 
 ## What matters most
 
@@ -28,7 +28,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 - Stray alpha in a source costs about 1 dB on real images and up to 17 dB on smooth ones. Drove: the `remove` policy drops the alpha channel before any mip or encode step.
 - Even with alpha removed, bc7e decoded 254 instead of 255 on 28% of pixels of RGB-only input (ISPC 15%, texconv 2.4%, NVTT 0%), because its mode 6 picks the shared p-bit for RGB alone. Forcing 255 costs 0.5 to 1.0 dB RGB on average (spike S5). On 28 real `_m` files encoded without the fix, 7 had 40% or more of their alpha off 255 (spike S6). Drove: exact-opaque alpha is on by default only for `_m` and env masks, where CS, ENB and PGPatcher read the alpha, and turning it off on a BC7 `_m` needs an explicit acknowledgement.
 - A RenderDoc read of the Community Shaders lighting shader (spike S8) showed the complex-material gate exactly: the smallest mip's alpha must be below 251/255, with a separate rule for grey env masks. Drove: the `_m` margin check warns at 247 and applies the shader's own grey rule; near-opaque source alpha uses the same 251 cut-off.
-- Box-filtered alpha thins out alpha-tested foliage at distance. Castaño's coverage-preserving mips and AlphaBloom's Auto Coverage fix this, but uniform scaling over- or under-shoots on sparse, tied alpha. Drove: Tessalith's own solver passes exactly mip 0's share at every level, splits ties in a Bayer order and keeps remapped texels two codes clear of the threshold so BC7 cannot flip them. Default threshold 127.
+- Box-filtered alpha thins out alpha-tested foliage at distance. Coverage-preserving mips (Castaño's method, also the idea behind AlphaBloom's Auto Coverage) keep the share of texels that pass the alpha test the same at every level. Drove: Tessalith's own solver passes exactly mip 0's share at every level, splits ties in a Bayer order and keeps remapped texels two codes clear of the threshold so BC7 cannot flip them. Default threshold 127.
 
 ## Mips
 
