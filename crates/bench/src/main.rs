@@ -5,7 +5,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(
     name = "sdc-bench",
-    about = "sdc regression harness over F:/ai/dds/bench (SDC_BENCH_ROOT)"
+    about = "sdc regression harness over the bench corpus (SDC_BENCH_ROOT)"
 )]
 struct Cli {
     /// Run every gate (same as `gate all`).

@@ -1,4 +1,4 @@
-//! Metrics computed exactly as F:/ai/dds/bench/scripts/run_bench.py and run_bench2.py (float64).
+//! Metrics computed exactly as the bench scripts run_bench.py and run_bench2.py (float64).
 
 /// The engine's rule (validation and the engine-parity gate must agree, audit left-out).
 pub use engine::validate::psnr_from_mse;

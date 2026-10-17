@@ -136,7 +136,7 @@ fn point_light_pixels_match_the_by_name_writer() {
 
 /// The same light on the user's real Community Shaders `Lighting.hlsl` (forward permutation, no
 /// LIGHT_LIMIT_FIX, so the vanilla `PointLightPosition` loop): a point light must brighten the sphere.
-/// `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p render3d --test lights -- --ignored`
+/// `$env:SDC_ACHERUS='<your MO2 instance>'; cargo test -p render3d --test lights -- --ignored`
 #[test]
 #[ignore = "needs SDC_ACHERUS (MO2 instance root) with the CS 2026-10-03 mod"]
 fn point_light_brightens_the_real_cs_lighting() {

@@ -49,9 +49,10 @@ fn include_cycle_is_capped() {
 #[test]
 #[ignore]
 fn real_cs_lighting_expands() {
-    let root = std::path::PathBuf::from(
-        r"C:\_mount\moddingvol\Acherus\mods\CommunityShaders_AIO-2026-10-03T06-46Z\Shaders",
-    );
+    let Some(root) = std::env::var_os("SDC_CS_SHADERS").map(std::path::PathBuf::from) else {
+        eprintln!("skipped: set SDC_CS_SHADERS");
+        return;
+    };
     let f = root.join("Lighting.hlsl");
     if !f.is_file() {
         eprintln!("skip: CS not present");

@@ -1,7 +1,7 @@
 //! 01 §5.2 golden cases: source NIF + the winning PGPatcher JSON → `simulate_file` → compare with the shape in
 //! `ParallaxGen_Output` on the 01 §5.1 field list. Opt-in and read-only on owner data; without
 //! SDC_ACHERUS the (ignored) tests panic rather than pass silently:
-//! `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p pgpsim --test golden -- --ignored`
+//! `$env:SDC_ACHERUS='<your MO2 instance>'; cargo test -p pgpsim --test golden -- --ignored`
 use nif::material::MaterialState;
 use nif::props::LightingTrailer;
 use nif::scan::{scan, Shader};

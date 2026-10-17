@@ -1,6 +1,6 @@
-//! PGPatcher 2.2's logged 3D indices (owner logs `C:\_mount\moddingvol\Acherus\tools\ParallaxGen\log\`, 2026-10-14,
+//! PGPatcher 2.2's logged 3D indices (owner's PGPatcher logs in the MO2 instance's tools\ParallaxGen\log, 2026-10-14,
 //! `[block/name/index]` line prefixes) reproduced from the exact copies PGPatcher read (plan ruling R3). Read-only.
-//! `SDC_ACHERUS='C:\_mount\moddingvol\Acherus' cargo test -p modscan --release --test index3d -- --ignored`
+//! `SDC_ACHERUS='<your MO2 instance>' cargo test -p modscan --release --test index3d -- --ignored`
 
 fn check(bytes: &[u8], logged: &[(u32, u32)], what: &str) {
     let scan = nif::scan::scan(bytes).unwrap_or_else(|e| panic!("{what}: {e}"));

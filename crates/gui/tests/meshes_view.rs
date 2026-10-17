@@ -524,7 +524,10 @@ fn meshes_settings_round_trip_in_gui_toml() {
 #[test]
 #[ignore]
 fn owner_meshes_view() {
-    let root = PathBuf::from(r"C:\_mount\moddingvol\Acherus");
+    let Some(root) = std::env::var_os("SDC_ACHERUS").map(PathBuf::from) else {
+        println!("skipped: set SDC_ACHERUS");
+        return;
+    };
     if !root.join("ModOrganizer.ini").is_file() {
         println!("owner_meshes_view: {} not found, skipping", root.display());
         return;

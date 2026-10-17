@@ -22,7 +22,10 @@ fn text(b: &[u8]) -> String {
 
 /// A bench DDS (BC7, decoded alpha 254 on ~21 % of mip 0), or `None` when the bench is not on this machine.
 fn bench_dds(encoder: &str) -> Option<PathBuf> {
-    let root = std::env::var("SDC_BENCH_ROOT").unwrap_or(r"F:\ai\dds\bench".into());
+    let Ok(root) = std::env::var("SDC_BENCH_ROOT") else {
+        eprintln!("skipped: set SDC_BENCH_ROOT");
+        return None;
+    };
     let p = PathBuf::from(root).join(format!("out/{encoder}/rgb_real/Bricks104.dds"));
     if p.exists() {
         Some(p)

@@ -35,7 +35,7 @@ fn floats_turn_every_number_into_a_float() {
 }
 
 /// Every resource JSON's values equal its template's values (design §9). Reads the resource folder, read-only.
-/// `$env:SDC_PBR_RESOURCE='F:\ai\dds\PBR landscape modders resource'; cargo test -p sdc-gui --release --test cs_pbr -- --ignored`
+/// `$env:SDC_PBR_RESOURCE='<PBR resource folder>'; cargo test -p sdc-gui --release --test cs_pbr -- --ignored`
 #[test]
 #[ignore]
 fn every_resource_file_equals_its_template() {

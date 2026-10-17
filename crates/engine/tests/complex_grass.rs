@@ -1,4 +1,4 @@
-//! Complex grass sub-type (design `F:\ai\dds\nifparseref\plan\esp\2026-10-12-complex-grass-design.md`).
+//! Complex grass sub-type (NIF team design notes, complex grass, 2026-10-12).
 use engine::analyse::code8;
 use engine::api::*;
 use engine::codes::Code;
@@ -376,15 +376,15 @@ fn an_rgb_grass_source_encodes_opaque_and_passes() {
 
 /// Design §6: the owner's example (2048 x 4096, bottom-left texel (127, 126, 255, 10)) encodes, the guard passes and the
 /// decoded bottom-left texel passes CS's 0.03 test. Owner data, read only (copied into a temp dir):
-/// `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p engine --test complex_grass -- --ignored`
+/// `$env:SDC_COMPLEX_GRASS_PNG='<grassfieldtundra.png>'; cargo test -p engine --test complex_grass -- --ignored`
 #[test]
 #[ignore]
 fn owner_example_encodes_and_stays_complex() {
-    std::env::var("SDC_ACHERUS")
-        .expect("owner-data test: set SDC_ACHERUS (it marks the owner's machine)");
-    let src = std::path::Path::new(
-        r"F:\ai\dds\complexgrass\textures\landscape\grass\grassfieldtundra.png",
-    );
+    let Some(src) = std::env::var_os("SDC_COMPLEX_GRASS_PNG").map(std::path::PathBuf::from) else {
+        eprintln!("skipped: set SDC_COMPLEX_GRASS_PNG");
+        return;
+    };
+    let src = src.as_path();
     assert!(src.is_file(), "{} is missing", src.display());
     let d = tempfile::tempdir().unwrap();
     let dst = d.path().join("in/textures/plants/g.png");

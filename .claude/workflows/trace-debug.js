@@ -131,7 +131,7 @@ const pick = a.sections ? SECTIONS.filter(s => a.sections.includes(s.id)) : SECT
 const OUT = a.out || '.superpowers/sdd/trace-debug'
 const DATE = a.date || 'undated'
 
-const RULES = `Read-only: do not edit, commit, push or spawn subagents. Never run \`python -\` heredocs. Never touch %LOCALAPPDATA%\\sdc, G:\\ or C:\\_mount. If you run cargo, use --offline, CARGO_BUILD_JOBS=4, \`-- --test-threads=4\`, and CARGO_TARGET_DIR=F:\\ai\\dds\\trace-target-<your label> (delete it when done); targeted test binaries only.`
+const RULES = `Read-only: do not edit, commit, push or spawn subagents. Never run \`python -\` heredocs. Never touch %LOCALAPPDATA%\\sdc or the owner's game and mod folders. If you run cargo, use --offline, CARGO_BUILD_JOBS=4, \`-- --test-threads=4\`, and CARGO_TARGET_DIR=target/trace-<your label> (delete it when done); targeted test binaries only.`
 
 phase('Scout')
 const scout = await agent(
@@ -215,7 +215,7 @@ phase('Handoff')
 const order = { critical: 0, important: 1, minor: 2 }
 confirmed.sort((x, y) => order[x.severity] - order[y.severity])
 const report = await agent(
-  `Write the trace-debug report to ${OUT}/${DATE}-report.md in F:\\ai\\dds\\converter (create the folder; this path is gitignored scratch). Plain English, short sentences.
+  `Write the trace-debug report to ${OUT}/${DATE}-report.md in the repo root (create the folder; this path is gitignored scratch). Plain English, short sentences.
 Sections: Summary (counts by severity, sections traced, rounds), Confirmed (one block per bug, most severe first: title, file:line, failing case, reviewer's reason, reproduced yes/no, then the fix brief: RED test, fix, risk, owner), Refuted (one line each with the reviewer's reason), Not covered (per section, from the tracers).
 Data: ${JSON.stringify({ notCovered, confirmed, refuted: refuted.map(r => ({ s: r.s, title: r.f.title, at: `${r.f.file}:${r.f.line}`, why: r.v ? (r.v.duplicate_of ? 'duplicate of ' + r.v.duplicate_of : r.v.reason) : 'reviewer returned nothing' })) })}
 Do not edit anything else. Return the report path.`,

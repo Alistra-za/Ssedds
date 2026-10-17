@@ -256,18 +256,22 @@ fn orbit_starts_at_the_auto_camera_and_double_click_resets() {
 
 // ---- real render (owner's machine) ----
 
-const CS_SHADERS: &str =
-    r"C:\_mount\moddingvol\Acherus\mods\CommunityShaders_AIO-2026-10-03T06-46Z\Shaders";
-const INSTANCE: &str = r"C:\_mount\moddingvol\Acherus";
 const BODY: &str = r"meshes\actors\character\character assets\femalebody_1.nif";
-const PNG_OUT: &str = r"F:\ai\dds\nifparseref\plan\b7-renders\b8_femalebody_1600x900.png";
+const PNG_NAME: &str = "b8_femalebody_1600x900.png";
 
 /// Renders the winning femalebody_1.nif through the viewport's worker at 1600×900, prints the frame times and
-/// writes the sRGB-encoded frame. `cargo test -p sdc-gui --release --test viewport3d -- --ignored --nocapture`.
+/// writes the sRGB-encoded frame to %TEMP%. Needs SDC_ACHERUS and SDC_CS_SHADERS. `cargo test -p sdc-gui --release --test viewport3d -- --ignored --nocapture`.
 #[test]
 #[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
 fn femalebody_1600x900_frame_times() {
-    let inst = modscan::mo2::Instance::load(Path::new(INSTANCE), None).unwrap();
+    let (Some(instance), Some(cs_shaders)) = (
+        std::env::var_os("SDC_ACHERUS"),
+        std::env::var_os("SDC_CS_SHADERS"),
+    ) else {
+        eprintln!("skipped: set SDC_ACHERUS and SDC_CS_SHADERS");
+        return;
+    };
+    let inst = modscan::mo2::Instance::load(Path::new(&instance), None).unwrap();
     let (mut origins, _) = modscan::mo2::loose_origins(&inst).unwrap();
     origins.sort_by_key(|o| std::cmp::Reverse(o.priority));
     let winner = origins
@@ -288,7 +292,7 @@ fn femalebody_1600x900_frame_times() {
             }
         }
     }
-    let shaders = render3d::locate::fingerprint(Path::new(CS_SHADERS), None).unwrap();
+    let shaders = render3d::locate::fingerprint(Path::new(&cs_shaders), None).unwrap();
     let mut v = Viewport3d::new(Some(shaders.clone()));
     v.on_located(Ok(Some(shaders)));
     v.cache_dir = Some(std::env::temp_dir().join("sdc_b8_shader_cache"));
@@ -352,7 +356,7 @@ fn femalebody_1600x900_frame_times() {
     v.request_frame(1600, 900);
     wait(&mut v);
     let f = v.frame.clone().unwrap();
-    let out = PathBuf::from(PNG_OUT);
+    let out = std::env::temp_dir().join(PNG_NAME);
     image::save_buffer(&out, &f.rgba, f.width, f.height, image::ColorType::Rgba8).unwrap();
     println!("wrote {}", out.display());
     // Features off: no ENABLE_LL, gamma-space output, no display encode (for a by-eye check). No reload (P1-C):

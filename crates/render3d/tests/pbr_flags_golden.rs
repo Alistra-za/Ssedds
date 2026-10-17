@@ -1,5 +1,5 @@
 //! `pbr_flags` on real PGPatcher output NIFs (read-only owner data). Ignored: needs the MO2 instance.
-//! `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p render3d --test pbr_flags_golden -- --ignored`
+//! `$env:SDC_ACHERUS='<your MO2 instance>'; cargo test -p render3d --test pbr_flags_golden -- --ignored`
 //! Without SDC_ACHERUS it panics rather than passing silently. Only the class bits of 01 §3.4 are asserted.
 use render3d::material::{
     PBR_FUZZ, PBR_GLINT, PBR_HAS_DISPLACEMENT, PBR_HAS_EMISSIVE, PBR_TWO_LAYER,

@@ -653,7 +653,7 @@ fn cancel_during_the_plugin_pass_is_a_noted_ok() {
 }
 
 /// The owner's full load order (spec §1, §6). Read-only; the store is a temp file.
-/// `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p modscan --release --test plugins owner_load_order -- --ignored --nocapture`
+/// `$env:SDC_ACHERUS='<your MO2 instance>'; cargo test -p modscan --release --test plugins owner_load_order -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn owner_load_order() {
