@@ -1463,17 +1463,23 @@ impl AppModel {
     }
 
     /// Move set `id` to display position `to` (the order decides ownership, so output paths: plan again, P7).
-    pub fn reorder_set(&mut self, id: &str, to: usize) {
+    /// Move set `id` to position `to`; false when nothing moved (trace-debug #55: no step, no dirty document).
+    pub fn reorder_set(&mut self, id: &str, to: usize) -> bool {
         if !self.sets_editable() {
-            return;
+            return false;
         }
         let mut ids: Vec<String> = set_views(self).into_iter().map(|v| v.id).collect();
         let Some(from) = ids.iter().position(|i| same_id(i, id)) else {
-            return;
+            return false;
         };
         let moved = ids.remove(from);
-        ids.insert(to.min(ids.len()), moved);
+        let to = to.min(ids.len());
+        if to == from {
+            return false;
+        }
+        ids.insert(to, moved);
         self.edit_docs("Reorder sets", None, true, move |_, s| s.set_order(&ids));
+        true
     }
 
     /// Rename set `id` to `new_id`; refused (returns the reason) when the name is unusable or taken.

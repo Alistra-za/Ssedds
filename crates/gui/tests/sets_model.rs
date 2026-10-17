@@ -1874,3 +1874,19 @@ fn redo_of_a_duplicate_refuses_an_occupied_path_and_records_the_new_hash() {
     assert!(m.dialog.is_none(), "{:?}", m.dialog);
     assert!(!copy.exists(), "the copy made by redo is deleted by undo");
 }
+
+/// Trace-debug #55: Move down on the last set (no `[project].order` yet) is no edit at all.
+#[test]
+fn move_down_on_last_set_changes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let views = set_views(&m);
+    let last = views.last().unwrap().id.clone();
+    let sets_dirty = |m: &sdc_gui::model::AppModel| m.sets_doc.as_ref().unwrap().is_dirty();
+    let (undo, dirty) = (m.history.undo.len(), sets_dirty(&m));
+    assert!(!m.reorder_set(&last, views.len()));
+    assert_eq!((m.history.undo.len(), sets_dirty(&m)), (undo, dirty));
+    assert!(!dirty, "sdc-project.toml is untouched");
+    assert!(m.reorder_set(&last, 0), "a real move still moves");
+}
