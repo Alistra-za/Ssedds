@@ -495,6 +495,9 @@ pub struct MeshesModel {
     pub dialog: Option<MeshesDialog>,
     /// The latest finished scan's report (this session only).
     pub report: Option<Report>,
+    /// The latest scan to end returned a result (`report`). False after a pause, cancel, failure or panic: the
+    /// store's origins may be outside the readable run, so the app does not re-read its mesh evidence.
+    pub scan_completed: bool,
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
     /// The running scan phase's rate (Task 5's `Pace`); a new phase starts a new one.
@@ -587,6 +590,7 @@ impl MeshesModel {
             error: None,
             dialog: None,
             report: None,
+            scan_completed: false,
             progress: None,
             scan_pace: None,
             status: String::new(),
@@ -863,6 +867,7 @@ impl MeshesModel {
                 }
                 WorkerMsg::Scanned(r) => self.finished(r),
                 WorkerMsg::Panicked { message, .. } => {
+                    self.scan_completed = false;
                     self.cancel = None;
                     self.progress = None;
                     self.status.clear();
@@ -877,6 +882,7 @@ impl MeshesModel {
     fn finished(&mut self, r: Result<Report, ScanError>) {
         self.cancel = None;
         self.progress = None;
+        self.scan_completed = r.is_ok();
         match r {
             Ok(report) => {
                 self.status = report_summary(&report);

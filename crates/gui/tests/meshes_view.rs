@@ -1695,3 +1695,18 @@ fn reload_closes_a_mod_that_became_derived() {
     assert!(m.nifs.is_empty());
     assert_eq!(m.selected_nif, None);
 }
+
+/// Trace-debug #41: only a scan that returned a result counts as completed (the app re-reads the Textures view's
+/// mesh evidence then); a paused, cancelled or failed one leaves the store unreadable or unchanged.
+#[test]
+fn cancelled_or_failed_scan_does_not_mark_a_completed_scan() {
+    let (_d, mut m) = scanned();
+    assert!(m.scan_completed);
+    m.procs = || vec!["pgpatcher.exe".to_string()];
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    wait(&mut m);
+    assert_eq!(m.banner, Some(Banner::PgpRunning));
+    assert!(!m.scan_completed);
+}
