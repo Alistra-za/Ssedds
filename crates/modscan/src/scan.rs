@@ -338,12 +338,13 @@ fn scan_body(
     }
     let mut sep_ids = vec![];
     if let Source::Mo2(inst) = src {
-        for (name, prio) in &seps {
+        for (line, (name, prio)) in seps.iter().enumerate() {
             sep_ids.push(store.upsert_origin_staged(&OriginSpec {
                 kind: KIND_SEPARATOR,
                 name: name.clone(),
                 root: inst.mods.join(name).display().to_string(),
-                parent: None,
+                // Separators only: modlist.txt order (no parent), the tie-break of adjacent separators in `mods`.
+                parent: Some(line as i64),
                 priority: *prio,
                 derived_by: None,
                 derived_state: None,

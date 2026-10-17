@@ -883,3 +883,26 @@ fn tainted_run_does_not_keep_previous_winners() {
     assert_eq!(nifs.len(), 1);
     assert_eq!(nifs[0].overridden_by, None, "{:?}", nifs[0]);
 }
+
+/// Trace-debug #38: adjacent separators share a priority; they follow modlist order, not row id, after a swap.
+#[test]
+fn tied_separators_follow_modlist_order_after_a_reorder() {
+    let d = instance_fixture("+B\n-X_separator\n-Y_separator\n+A\n");
+    let order = |d: &tempfile::TempDir| -> Vec<String> {
+        let (store, _) = go(d, vec![]);
+        store
+            .mods()
+            .unwrap()
+            .into_iter()
+            .map(|m| m.name)
+            .filter(|n| n.ends_with("_separator"))
+            .collect()
+    };
+    assert_eq!(order(&d), ["X_separator", "Y_separator"]);
+    std::fs::write(
+        d.path().join("profiles/Default/modlist.txt"),
+        "+B\n-Y_separator\n-X_separator\n+A\n",
+    )
+    .unwrap();
+    assert_eq!(order(&d), ["Y_separator", "X_separator"]);
+}
