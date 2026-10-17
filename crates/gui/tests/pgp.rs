@@ -1467,3 +1467,29 @@ fn colours_write_floats_as_stored_and_old_integers_as_before() {
     assert_eq!(rgb_of(&json!([20, 255, 0])), Some([20.0 / 255.0, 1.0, 0.0]));
     assert_eq!(rgb_of(&json!([1.0, 0.5, 0.25])), Some([1.0, 0.5, 0.25]));
 }
+
+/// Trace-debug #59: a set's match typed as its derived path stays derived (no key), on the card as in the JSON editor.
+#[test]
+fn set_match_of_derived_stays_derived() {
+    let d = r"landscape\rock01";
+    assert_eq!(
+        stored_set_match(1, r"textures\landscape\rock01.dds", d),
+        None
+    );
+    assert_eq!(stored_set_match(1, d, d), None);
+    assert_eq!(
+        stored_set_match(1, r"landscape\other", d),
+        Some(json!(r"landscape\other"))
+    );
+    assert_eq!(stored_set_match(1, "", d), Some(json!("")), "off");
+    assert_eq!(
+        stored_set_match(2, d, d),
+        Some(json!(d)),
+        "only slot 1 derives"
+    );
+    assert_eq!(
+        stored_set_match(1, "", ""),
+        Some(json!("")),
+        "no derived path"
+    );
+}

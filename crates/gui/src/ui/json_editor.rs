@@ -9,7 +9,7 @@ use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{
-    active_matches, json_rename, match_toggle, stored_match, NOT_WRITTEN,
+    active_matches, json_rename, match_toggle, stored_set_match, NOT_WRITTEN,
     PATH_CONTAINS_NOT_WRITTEN, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
 use crate::pgp::schema::{grass_ignores, spec, KeyKind, KeySpec, NumRange, KEYS};
@@ -374,13 +374,9 @@ fn known(
 /// The edits that store `path` under `mode` for `owner` (a set's `match1` of its derived path stays derived).
 fn store(owner: &Owner, mode: Mode, path: &str, derived: &str) -> (String, Option<Value>) {
     match (owner, mode) {
-        (Owner::Set(_), Mode::Exact(1))
-            if crate::pgp::prefix::match_value(path)
-                == crate::pgp::prefix::match_value(derived) =>
-        {
-            ("match1".into(), None)
+        (Owner::Set(_), Mode::Exact(n)) => {
+            (format!("match{n}"), stored_set_match(n, path, derived))
         }
-        (Owner::Set(_), Mode::Exact(n)) => (format!("match{n}"), stored_match(n, path)),
         (_, m) => {
             let t = path.trim().replace('/', "\\");
             (m.key(), (!t.is_empty()).then(|| json!(t)))
