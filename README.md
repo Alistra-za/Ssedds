@@ -14,29 +14,30 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 - Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster
 - SRGB / UNORM (Linear) tag chosen per map type and target shader
 - Cutout alpha: coverage-preserving mips, on by default
-- Optional Exact-opaque alpha 255 for where it's needed (Forces mode 6's pbit to 1, off by default)
+- Optional exact-opaque alpha 255 where it's needed (forces BC7 mode 6's p-bit to 1; off by default)
 - Normal mips renormalised
 - Normal-mip variance baked into TruePBR roughness
-- RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent` with optional masks '_bumpmask' '_detailnormmask' '_bentmask')
-- Multiple layers accepted and duplicate types 'bump2' just works
+- RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent`, with optional masks `_bumpmask`, `_detailnormmask`, `_bentmask`)
+- Multiple layers and duplicate types (`_bump2`) just work
 - Loose maps automatically picked up and packed into `_rmaos` / `_rfaos` / complex `_m`
-- Suffix based channel remapping; ORM > RMAOS is instant
+- Suffix-based channel remapping; ORM → RMAOS is instant
 - Complex-material `_m` gate checked
 - Complex grass (1:2 image, halves mipped apart)
 - Mod scan: meshes decide alpha meaning and set shader
 - Decode-and-check after every encode, with Skyrim rules
 - Validate DDS files made by other tools
 - GUI with encoded-mip preview, pixel readout, pin and compare
-- TruePBR: PGPatcher JSON written per set, Validated, with every option exposed including recent
-- NiAlphaProperty (alpha blend/test) set in a familiar format, Easy context menu options for slots and lock commands,
-- Interactive color picker with hex and rgb 255 inputs, outputs are converted to decimal
-- PBR Landscape, PBRTextureSets and PBRMaterialObjects Jsons built from actual the EDID's in your loadorder no need to cross reference
-- Pg Patcher _m sidecard .json
+- TruePBR: PGPatcher JSON written per set, validated, with every option exposed, including the recent ones
+- NiAlphaProperty (alpha blend/test) set in a familiar format
+- Easy context-menu options for slots and lock commands
+- Interactive colour picker with hex and RGB (0–255) inputs; outputs are converted to decimal
+- PBR Landscape: PBRTextureSets and PBRMaterialObjects JSONs built from the actual EDIDs in your load order, no cross-referencing needed
+- PGPatcher `_m` sidecar `.json`
 - Batch / command line
-- Fast Scanning - 100 000 nifs scanned in 14 seconds, 1500 plugins scanned in less than 3
-- Does not need to be launched from mo2, can be.
-- It will fill in your mo2 location for the first time if it is. It does not rely on it's launched file system, it skips the middleman
-- Optional NVTT backend for BC7 BC6H encoding
+- Fast scanning: 100,000 NIFs in 14 seconds, 1,500 plugins in under 3
+- Doesn't need to be launched from MO2, but can be
+- When launched from MO2, it fills in your MO2 location the first time; it doesn't rely on MO2's virtual file system, so it skips the middleman
+- Optional NVTT backend for BC7 / BC6H encoding
 
 ## What it does differently
 
