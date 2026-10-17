@@ -369,7 +369,10 @@ fn skip_of(
             .flatten()
             .map(|t| (job.profile.format, t));
         if let Some(e) = encoding_of(field, v).or(tag) {
-            if !engine::policy::allowed_encodings(job.profile.subtype, target).contains(&e) {
+            let grey = job.profile.category == engine::config::Category::Grayscale;
+            if !engine::policy::allowed_encodings_for(job.profile.subtype, target, grey)
+                .contains(&e)
+            {
                 return Some(NOT_ALLOWED.into());
             }
         }
