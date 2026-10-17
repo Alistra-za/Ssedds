@@ -134,6 +134,33 @@ impl AppModel {
         Ok(InputNamePlan { rows, retarget })
     }
 
+    /// Review M1: tell the user about each retarget `retarget_auto` will not do because the new id already has an
+    /// entry (the old entry stays where it is).
+    // shortcut: checked against the entries before the batch, so a chain (x→y while y→z) in one Apply is not
+    // reported or ordered; upgrade if recipes that map one set onto another's name turn up.
+    pub(crate) fn note_kept_entries(&mut self, retargets: &[(String, String)]) {
+        let Some(d) = self.sets_doc.as_ref() else {
+            return;
+        };
+        let e = d.entries();
+        let kept: Vec<String> = retargets
+            .iter()
+            .filter(|(from, to)| {
+                e.iter()
+                    .any(|x| same_id(&x.id, from) && !x.created && x.renamed_from.is_none())
+                    && e.iter().any(|x| same_id(&x.id, to))
+            })
+            .map(|(from, to)| {
+                format!(
+                    "{from}: its sdc-project.toml entry was kept under the old id, because {to} already has one"
+                )
+            })
+            .collect();
+        for k in kept {
+            self.messages.notify(super::messages::Severity::Warning, k);
+        }
+    }
+
     /// The automatic set id follows the diffuse's output (when the id is that output under the export folder): the
     /// (old, new) id of set `set_key` when its own diffuse `diffuse` is read as `new` instead of its current name.
     pub(crate) fn auto_retarget(
@@ -160,6 +187,7 @@ impl AppModel {
         }
         let plan = self.input_name_plan(set_id, chosen)?;
         let label = format!("Input name of {set_id}");
+        self.note_kept_entries(plan.retarget.as_slice());
         self.batch_edit(&label, |m| {
             for r in &plan.rows {
                 let alias = (lower(&r.new) != lower(&r.key)).then_some(r.new.as_str());

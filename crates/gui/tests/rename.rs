@@ -379,3 +379,53 @@ fn rename_inputs_moves_set_entry_with_automatic_id() {
         .iter()
         .all(|v| v.id != "landscape/steel_rock01"));
 }
+
+/// Review I1: with a read-only sdc.toml the aliases cannot be written, so the set entry must not move either.
+#[test]
+fn rename_inputs_on_a_read_only_sdc_toml_moves_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let set = set_id_of(&m, ROCK);
+    m.set_json_value(&set, "specular_level", Some(serde_json::json!(0.5)));
+    idle(&mut m);
+    m.click_set(&set_key_of(&m, ROCK), false, false);
+    m.open_rename(RenameMode::Inputs);
+    dialog(&mut m).recipe.prefix = "steel_".into();
+    let bad = d.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::write(bad.join("sdc.toml"), "this is = = not toml\n").unwrap();
+    m.project = Some(sdc_gui::project::ProjectDoc::open(&bad));
+    let before = m.sets_doc.as_ref().unwrap().text();
+    assert!(!m.apply_rename());
+    assert_eq!(m.sets_doc.as_ref().unwrap().text(), before);
+}
+
+/// Review M1: when the new id already has an entry, the old one stays where it is and the user is told.
+#[test]
+fn rename_inputs_onto_an_existing_entry_says_the_entry_was_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let set = set_id_of(&m, ROCK);
+    m.set_json_value(&set, "specular_level", Some(serde_json::json!(0.5)));
+    m.set_json_value(
+        "landscape/steel_rock01",
+        "specular_level",
+        Some(serde_json::json!(0.25)),
+    );
+    idle(&mut m);
+    m.click_set(&set_key_of(&m, ROCK), false, false);
+    m.open_rename(RenameMode::Inputs);
+    dialog(&mut m).recipe.prefix = "steel_".into();
+    assert!(m.apply_rename());
+    idle(&mut m);
+    assert!(
+        m.messages
+            .entries()
+            .any(|e| e.text.contains("landscape/rock01") && e.text.contains("kept")),
+        "{:?}",
+        m.messages
+            .entries()
+            .map(|e| e.text.clone())
+            .collect::<Vec<_>>()
+    );
+}

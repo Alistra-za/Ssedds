@@ -559,6 +559,10 @@ impl AppModel {
         let Some(Dialog::Rename(d)) = self.dialog.clone() else {
             return false;
         };
+        // Review I1: the aliases cannot be written, so nothing (not even the set entries) may move.
+        if d.mode == RenameMode::Inputs && self.project.as_ref().is_some_and(|p| p.read_only()) {
+            return false;
+        }
         let plan = plan_rename(self, &d);
         if !plan.can_apply() {
             return false;
@@ -589,6 +593,7 @@ impl AppModel {
             RenameMode::Outputs => vec![],
         };
         self.dialog = None;
+        self.note_kept_entries(&retargets);
         self.batch_edit(&label, |m| {
             for (from, to) in &retargets {
                 m.edit_docs(&label, None, true, |_, d| d.retarget_auto(from, to));
