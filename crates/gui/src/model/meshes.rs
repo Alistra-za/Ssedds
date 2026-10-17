@@ -925,7 +925,7 @@ impl MeshesModel {
         }
     }
 
-    /// Reads the mod list again and keeps the selection when the mod is still there.
+    /// Reads the mod list again and keeps the selection when the mod is still there and not PGPatcher-derived.
     pub fn reload(&mut self) {
         let Some(store) = &self.store else {
             return;
@@ -943,7 +943,7 @@ impl MeshesModel {
         self.all_pending = None;
         let keep = self
             .selected_mod
-            .filter(|id| self.mods.iter().any(|m| m.id == *id));
+            .filter(|id| self.mods.iter().any(|m| m.id == *id && !m.derived));
         let nif = self.selected_nif;
         match keep {
             Some(id) => {
