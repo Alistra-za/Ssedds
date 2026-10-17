@@ -10,10 +10,6 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 
 ## Features
 
-What each tool does for a Skyrim texture without extra scripting.
-
-| Capability | Tessalith | texconv (DirectXTex) | NVIDIA Texture Tools Exporter | Compressonator | Cathedral Assets Optimizer |
-|---|---|---|---|---|---|
 BC1, BC3, BC4, BC5, BC6H, BC7 output
 Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster 
 SRGB / UNORM (Linear) tag chosen per map type and target shader
