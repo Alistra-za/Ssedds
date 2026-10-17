@@ -1,6 +1,6 @@
 # Research behind the defaults
 
-The defaults come from a literature review of BCn encoders, mip filtering and Skyrim's shaders, a local benchmark of about 1,770 encodes, and a set of measured spikes. The per-decision record is [DECISIONS.md](../DECISIONS.md); the design is in [the design spec](../superpowers/specs/2026-10-08-skyrim-dds-converter-design.md).
+The defaults come from a literature review of BCn encoders, mip filtering and Skyrim's shaders, a local benchmark of about 1,770 encodes, and a set of measured spikes. The per-decision record is [DECISIONS.md](../DECISIONS.md); the design is summarised in [How Tessalith came about](../research/design-overview.md). The full research pages, with their tables, are in [docs/research](../research/README.md).
 
 ## What matters most
 
@@ -42,7 +42,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 
 ## BC4/BC5 search radius
 
-- Upstream rgbcx modelled BC4 decoding with floored interpolants while the GPU and bcdec round to nearest, so a wider search could make results worse (BC5 at radius 10 scored 47.9 dB against 58.0 dB at radius 5). Patching rgbcx to round like the decoder fixed this and raised the default-radius result by 3.07 dB (BC4) and 2.61 dB (BC5). After the patch, radius 10 gained only 0.12 dB (BC4) and 0.06 dB (BC5) at about 3× the time, and radius 4 lost under 0.06 dB at 0.7× the time. Drove: radius 5 stays the default, radius 4 is the `fast` setting used by the compact and preview presets. Full tables: [docs/spikes/bc45-search-radius.md](../spikes/bc45-search-radius.md).
+- Upstream rgbcx modelled BC4 decoding with floored interpolants while the GPU and bcdec round to nearest, so a wider search could make results worse (BC5 at radius 10 scored 47.9 dB against 58.0 dB at radius 5). Patching rgbcx to round like the decoder fixed this and raised the default-radius result by 3.07 dB (BC4) and 2.61 dB (BC5). After the patch, radius 10 gained only 0.12 dB (BC4) and 0.06 dB (BC5) at about 3× the time, and radius 4 lost under 0.06 dB at 0.7× the time. Drove: radius 5 stays the default, radius 4 is the `fast` setting used by the compact and preview presets. Full tables: [BC4/BC5 search radius](../research/encoder-benchmark.md#bc4bc5-search-radius).
 
 ## NVTT 3
 
