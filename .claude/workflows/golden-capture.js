@@ -173,14 +173,15 @@ if (!session || !session.launched) return { stopped: 'session', session, restore
 
 // ---------------- Analyse (W5, W9) ----------------
 phase('Analyse')
-// shortcut: env vars and runner per script are assumed (P04_CAPTURE + GOLDEN_* below) until
-// F:\ai\dds\tools\rdc-scripts\GOLDEN-EXTRACTORS.md exists; the agent is told to prefer that file. Fix here only.
-function extractorCommands(rdc, c) {
+// Env vars per golden_common.py (P04_CAPTURE, P04_CS_VERSION, P04_TAGS); it refuses G: paths, so the kept F: copy is read.
+// shortcut: runner per script (qrenderdoc vs plain python) and golden_fixture/cslog_defines inputs are assumed until
+// GOLDEN-EXTRACTORS.md (tools rdc-scripts folder) exists; the agent is told to prefer that file. Fix here only.
+function extractorCommands(rdc, c, csLog) {
   const S = `${TOOLS}\\rdc-scripts`
   const QRD = `& '${TOOLS}\\RenderDoc_1.43_64\\qrenderdoc.exe' --python`
   return [
-    `$env:P04_CAPTURE = '${rdc}'`,
-    `$env:GOLDEN_OUT = '${pre.extract_out}'; $env:GOLDEN_PROFILE = '${pre.profile}'; $env:GOLDEN_CS_VERSION = '${pre.cs_key}'; $env:GOLDEN_GROUP = '${c.group}'; $env:GOLDEN_LABEL = '${c.label}'; $env:GOLDEN_REFS = '${RUN_DIR}\\refs_${c.group}.json'; $env:GOLDEN_CSLOG = '<cs_log>'`,
+    `$env:P04_CAPTURE = '${rdc}'; $env:P04_CS_VERSION = '${pre.cs_key}'; $env:P04_TAGS = '${(pre.group_tags || {})[c.group] || '*'}'`,
+    `$env:GOLDEN_PROFILE = '${pre.profile}'; $env:GOLDEN_GROUP = '${c.group}'; $env:GOLDEN_LABEL = '${c.label}'; $env:GOLDEN_REFS = '${RUN_DIR}\\refs_${c.group}.json'; $env:GOLDEN_CSLOG = '${csLog}'`,
     `${QRD} ${S}\\p04_stageA_enumerate.py`,
     `${QRD} ${S}\\p04_stageB_state.py`,
     `${QRD} ${S}\\p04_dispatch.py`,
@@ -214,9 +215,9 @@ for (const k of kept) {
   const r = await agent(
     `Turn one golden RenderDoc capture into fixtures. ${RULES}
 Capture: ${rdc} (profile ${pre.profile}, group ${c.group}, label ${c.label}). Read-only input: never write next to it.
-If F:\\ai\\dds\\tools\\rdc-scripts\\GOLDEN-EXTRACTORS.md exists, read it first and use its env vars/runners for these scripts; otherwise run as below. First write the placed refs of this group to ${RUN_DIR}\\refs_${c.group}.json: ${JSON.stringify(g.refs)} (origin ${JSON.stringify(session.origin)}). CS log copy: ${keepRes && keepRes.cs_log ? keepRes.cs_log : 'none'} (use it for <cs_log>).
+If F:\\ai\\dds\\tools\\rdc-scripts\\GOLDEN-EXTRACTORS.md exists, read it first and use its env vars/runners for these scripts; otherwise run as below. First write the placed refs of this group to ${RUN_DIR}\\refs_${c.group}.json: ${JSON.stringify(g.refs)} (origin ${JSON.stringify(session.origin)}).
 Run in order in PowerShell, waiting for each qrenderdoc log to end with "done" (a missing script: record ok=false "not present" and go on):
-${extractorCommands(rdc, c).join('\n')}
+${extractorCommands(rdc, c, keepRes && keepRes.cs_log ? keepRes.cs_log : '').join('\n')}
 W9 tag -> form mapping: tags come from resolved.json group ${c.group}. When a tag matches draws of several forms (or cell furniture with the same shape name), map each draw by its World translation: world position = World matrix translation + the camera position (CS World is camera-relative; take the eye/PosAdjust from the same capture's cbuffers). Pick the placed ref within ~30 units; draws near no placed ref are cell clutter and are ignored. A tag found only in shadow/prepass draws is "shadow-only" (subject was off screen). If golden_fixture.py takes a mapping, give it ${RUN_DIR}\\refs_${c.group}.json.
 Per tag report the main Lighting (or forward, hint 1) draw, whether its fixture folder is complete (state, tex, mesh, mrt crops, mask non-empty, composite), and the missing files. Report the frame facts too.`,
     { label: `analyse:${c.label}`, phase: 'Analyse', schema: ANALYSE_SCHEMA })

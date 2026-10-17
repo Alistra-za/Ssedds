@@ -311,7 +311,7 @@ async function preflight(o) {
   const summary = {
     run_dir: o['run-dir'], profile, cell, cs_key: csKey, settings_version: csSettingsVersion, meta_version: mo.csMeta, planned_captures: planned,
     free_gb_fixtures: +freeF.toFixed(1), need_gb_fixtures: +needF.toFixed(1), free_gb_captures: +freeG.toFixed(1), need_gb_captures: +needG.toFixed(1),
-    fixture_dir: fixtureDir, extract_out: extractOut, port, edits: edits.length, game_running: running, backup: null, applied: false,
+    fixture_dir: fixtureDir, extract_out: extractOut, group_tags: Object.fromEntries(groups.map(g => [g.label, g.tags.join(',') || '*'])), port, edits: edits.length, game_running: running, backup: null, applied: false,
     s6: s6.map(f => `${f.path}: ${f.ok ? 'ok' : f.exists ? 'sha256 differs' : 'missing'}`),
   }
   const stop = []
@@ -323,6 +323,8 @@ async function preflight(o) {
   if (o['dry-run']) return { ok: true, dry_run: true, would_stop: stop, ...summary }
   if (stop.length) return { ok: false, reason: stop.join('; '), ...summary }
   // Backup. A backup left by a run that was never restored holds the owner's real file: never overwrite it.
+  // shortcut: the guard only sees this run_dir; a failed restore in another run_dir (other profile) is not caught.
+  // Upgrade: a shared state file next to SettingsUser.json if runs are ever chained without reading the report.
   const statePath = path.join(o['run-dir'], 'settings-state.json')
   if (fs.existsSync(statePath)) {
     const st = readJson(statePath)
