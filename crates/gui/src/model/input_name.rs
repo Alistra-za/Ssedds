@@ -127,16 +127,57 @@ impl AppModel {
         if rows.is_empty() {
             return Err("the set already has this name".into());
         }
-        // The automatic set id follows the diffuse's output (when the id is that output under the export folder).
-        let retarget = rows.iter().find(|r| r.key == *diffuse).and_then(|r| {
-            let old_out = lower(no_ext(&input_output(&d_cur)));
-            let new_out = lower(no_ext(&input_output(&r.new)));
-            let old_auto = fold_id(&engine::sets::set_id(&self.export_root(), &v.key));
-            let head = old_auto.strip_suffix(&old_out)?;
-            let new_auto = format!("{head}{new_out}");
-            (new_auto != old_auto).then_some((old_auto, new_auto))
-        });
+        let retarget = rows
+            .iter()
+            .find(|r| r.key == *diffuse)
+            .and_then(|r| self.auto_retarget(&v.key, diffuse, &r.new));
         Ok(InputNamePlan { rows, retarget })
+    }
+
+    /// Review M1: tell the user about each retarget `retarget_auto` will not do because the new id already has an
+    /// entry (the old entry stays where it is).
+    // shortcut: checked against the entries before the batch, so a chain (x→y while y→z) in one Apply is not
+    // reported or ordered; upgrade if recipes that map one set onto another's name turn up.
+    pub(crate) fn note_kept_entries(&mut self, retargets: &[(String, String)]) {
+        let Some(d) = self.sets_doc.as_ref() else {
+            return;
+        };
+        let e = d.entries();
+        let kept: Vec<String> = retargets
+            .iter()
+            .filter(|(from, to)| {
+                e.iter()
+                    .any(|x| same_id(&x.id, from) && !x.created && x.renamed_from.is_none())
+                    && e.iter().any(|x| same_id(&x.id, to))
+            })
+            .map(|(from, to)| {
+                format!(
+                    "{from}: its sdc-project.toml entry was kept under the old id, because {to} already has one"
+                )
+            })
+            .collect();
+        for k in kept {
+            self.messages.notify(super::messages::Severity::Warning, k);
+        }
+    }
+
+    /// The automatic set id follows the diffuse's output (when the id is that output under the export folder): the
+    /// (old, new) id of set `set_key` when its own diffuse `diffuse` is read as `new` instead of its current name.
+    pub(crate) fn auto_retarget(
+        &self,
+        set_key: &str,
+        diffuse: &str,
+        new: &str,
+    ) -> Option<(String, String)> {
+        let cur = self
+            .read_as_of(diffuse)
+            .map_or_else(|| diffuse.to_string(), |a| a.replace('\\', "/"));
+        let old_out = lower(no_ext(&input_output(&cur)));
+        let new_out = lower(no_ext(&input_output(new)));
+        let old_auto = fold_id(&engine::sets::set_id(&self.export_root(), set_key));
+        let head = old_auto.strip_suffix(&old_out)?;
+        let new_auto = format!("{head}{new_out}");
+        (new_auto != old_auto).then_some((old_auto, new_auto))
     }
 
     /// Give set `set_id` the input name `chosen` (see `input_name_plan`): one undo step and one plan.
@@ -146,6 +187,7 @@ impl AppModel {
         }
         let plan = self.input_name_plan(set_id, chosen)?;
         let label = format!("Input name of {set_id}");
+        self.note_kept_entries(plan.retarget.as_slice());
         self.batch_edit(&label, |m| {
             for r in &plan.rows {
                 let alias = (lower(&r.new) != lower(&r.key)).then_some(r.new.as_str());

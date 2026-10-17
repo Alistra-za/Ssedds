@@ -532,3 +532,21 @@ fn reload_of_a_preset_file_that_no_longer_loads_keeps_the_edits() {
     let e = pm.error.clone().unwrap();
     assert!(e.ends_with("no longer loads: kept your edits"), "{e}");
 }
+
+/// Trace-debug 2026-10-16 #7: a preset edited on disk after the last rescan and then picked shows the edit, and a
+/// save keeps it instead of writing the old value back.
+#[test]
+fn select_after_outside_edit_does_not_revert_it() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("hand.toml");
+    let text = "schema_version = 1\nid = \"hand\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n";
+    std::fs::write(&path, text).unwrap();
+    let mut pm = PresetsModel::new(Some(d.path().to_path_buf()), Target::Cs);
+    std::fs::write(&path, text.replace("1.0.0", "2.0.0")).unwrap();
+    pm.select("hand");
+    pm.set_field(Subtype::Normal, "resize", json!("half"));
+    pm.save().unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("2.0.0"), "{saved}");
+    assert!(saved.contains("half"), "{saved}");
+}
