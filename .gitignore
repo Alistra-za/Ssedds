@@ -9,3 +9,6 @@ _sdc/
 /dist/Tessalith-*/
 /dist/*.zip
 /dist/SHA256SUMS.txt
+
+# Machine-local agent notes
+CLAUDE.local.md
