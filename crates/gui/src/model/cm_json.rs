@@ -378,8 +378,18 @@ pub fn finish(
     let mut written = 0;
     for (rel, text) in &p.files {
         let path = p.root.join(rel);
-        let last = shas.get(rel).map(String::as_str);
+        // O6 (as in cs_pbr_export): a case-only rename drops sdc's own unchanged file under the old name; a hand
+        // edit stays, and so does its record (the orphan pass below skips a case-insensitive match).
+        let renamed = shas
+            .iter()
+            .find(|(r, _)| r.as_str() != rel.as_str() && r.eq_ignore_ascii_case(rel));
         let dds = path.with_extension("dds");
+        if let Some((old, old_sha)) = renamed.filter(|_| dds.is_file()) {
+            if sha256_of(&p.root.join(old)).as_deref() == Some(old_sha.as_str()) {
+                let _ = std::fs::remove_file(p.root.join(old));
+            }
+        }
+        let last = shas.get(rel).map(String::as_str);
         let skip = if !dds.is_file() {
             Some(format!(
                 "{}: {} was not exported; JSON not written",
@@ -404,6 +414,8 @@ pub fn finish(
             notes.push(n);
             if let Some(s) = last {
                 out.insert(rel.clone(), s.to_string());
+            } else if let Some((old, s)) = renamed.filter(|(o, _)| p.root.join(o).is_file()) {
+                out.insert(old.clone(), s.clone());
             }
         }
     }
