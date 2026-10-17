@@ -1536,6 +1536,31 @@ impl Engine {
                 );
             }
         }
+        // Audits 08d-1 / 08e-3 (Note BV2): the last word on output paths, whatever made two jobs meet (default
+        // packed names, moved raw maps, re-encoded DDS). Both would write the path (the last rename wins) and append
+        // two manifest records; the first in plan order keeps it and every later one is IN-DUPLICATE.
+        let mut writers: BTreeMap<String, PathBuf> = BTreeMap::new();
+        jobs.retain(|j: &ResolvedJob| {
+            if !matches!(j.status, JobStatus::Ready) {
+                return true;
+            }
+            let Some(first) = writers.get(&output_key(&req.output_root, &j.output)) else {
+                writers.insert(output_key(&req.output_root, &j.output), j.input.clone());
+                return true;
+            };
+            skipped.push(SkippedFile {
+                path: j.input.clone(),
+                output: j.output.clone(),
+                set: Some(j.set_key.clone()),
+                code: Some(Code::InDuplicate),
+                reason: format!(
+                    "two outputs map to one path ({} is also written from {}); change an output path or move a file",
+                    slash(&j.output),
+                    slash(first)
+                ),
+            });
+            false
+        });
         let index = crate::shader::JobIndex::new(&jobs);
         for set in &sets {
             let Some(&first) = set
