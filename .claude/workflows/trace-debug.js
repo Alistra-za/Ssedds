@@ -1,7 +1,7 @@
 export const meta = {
   name: 'trace-debug',
   description: 'Systematic trace debugging: per-section tracers find bugs, each finding gets its own skeptical reviewer, confirmed ones become fix briefs',
-  whenToUse: 'Whole-repo or multi-crate bug hunt in Tessalith. Args (all optional): {sections: ["E1",...], rounds: 1, out: "<dir for the report>", date: "YYYY-MM-DD"}',
+  whenToUse: 'Whole-repo or multi-crate bug hunt in Tessalith. Args (all optional): {date: "YYYY-MM-DD", repo: "<checkout path>", sections: ["E1",...], rounds: 1, maxReviews: 80, minorBriefs: false, out: "<report dir>"}',
   phases: [
     { title: 'Scout', detail: 'map every crates/*/src file to a section; flag unassigned files' },
     { title: 'Trace', detail: 'one tracer per section, entry point to sink' },
@@ -129,31 +129,49 @@ const a = args || {}
 const ROUNDS = a.rounds || 1
 const pick = a.sections ? SECTIONS.filter(s => a.sections.includes(s.id)) : SECTIONS
 const OUT = a.out || '.superpowers/sdd/trace-debug'
+// Scripts can't read the clock (Date is unavailable for resume), so pass {date: "YYYY-MM-DD"}.
 const DATE = a.date || 'undated'
+// The checkout to trace: a repo root or a worktree path. Default: the session's working directory.
+const REPO = a.repo || 'the current working directory (the repo root)'
+// Fan-out caps: reviewers are high-effort, so bound them; minor findings get no fix brief unless asked.
+const MAX_REVIEWS = a.maxReviews || 80
+const MINOR_BRIEFS = !!a.minorBriefs
+let reviewsStarted = 0
+let reviewsSkipped = 0
 
-const RULES = `Read-only: do not edit, commit, push or spawn subagents. Never run \`python -\` heredocs. Never touch %LOCALAPPDATA%\\sdc or the owner's game and mod folders. If you run cargo, use --offline, CARGO_BUILD_JOBS=4, \`-- --test-threads=4\`, and CARGO_TARGET_DIR=target/trace-<your label> (delete it when done); targeted test binaries only.`
+// One shared build dir for the whole run (cargo serialises on its lock); tracers never build.
+const TARGET = 'target/trace-shared'
+const BASE = `Read-only: do not edit, commit, push or spawn subagents. Never run \`python -\` heredocs. Never touch %LOCALAPPDATA%\\sdc or the owner's game and mod folders. Work in ${REPO}.`
+const RULES_TRACE = `${BASE} Do not run cargo: read, grep and reason. Existing evidence beats a build.`
+const RULES = `${BASE} If you must run a test, run one targeted existing test binary with --offline, CARGO_BUILD_JOBS=4, CARGO_TARGET_DIR=${TARGET} (shared; never delete it yourself), \`-- --skip render_ --test-threads=4\` (GPU render_ tests can hang). Capture output to a file; never pipe it through head.`
+log(`Planned: 1 scout + ${pick.length * ROUNDS} tracers + up to ${MAX_REVIEWS} reviewers + briefs for ${MINOR_BRIEFS ? 'all' : 'critical/important'} confirmed findings + 1 report`)
 
 phase('Scout')
 const scout = await agent(
-  `List every .rs file under crates/*/src with \`git ls-files 'crates/*/src/*.rs' 'crates/*/src/**/*.rs'\`. Here is the section table (a path ending in / means the whole folder; a bare file name belongs to the folder of the previous full path in the same list):\n${JSON.stringify(SECTIONS.map(s => ({ id: s.id, paths: s.paths })), null, 1)}\nReport files that match no section (ignore crates/bench), and for each the section it fits best by subsystem. Also report each section's real line count today (wc -l of its files). ${RULES}`,
+  `List every .rs file under crates/*/src with \`git ls-files 'crates/*/src/*.rs' 'crates/*/src/**/*.rs'\`. Here is the section table (a path ending in / means the whole folder; a bare file name belongs to the folder of the previous full path in the same list):\n${JSON.stringify(SECTIONS.map(s => ({ id: s.id, paths: s.paths })), null, 1)}\nReport files that match no section (ignore crates/bench), and for each the section it fits best by subsystem. Report every section path that no longer exists (renamed or deleted). Also report each section's real line count today (wc -l of its files). ${RULES_TRACE}`,
   { label: 'scout:coverage', schema: {
     type: 'object',
     properties: {
       unassigned: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, section: { type: 'string' } }, required: ['file', 'section'] } },
+      missing: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, section: { type: 'string' } }, required: ['path', 'section'] } },
       lines: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, lines: { type: 'integer' } }, required: ['id', 'lines'] } },
     },
-    required: ['unassigned', 'lines'],
+    required: ['unassigned', 'missing', 'lines'],
   } })
 const extra = {}
 for (const u of (scout && scout.unassigned) || []) (extra[u.section] = extra[u.section] || []).push(u.file)
 if (scout && scout.unassigned.length) log(`Scout: ${scout.unassigned.length} unassigned files added to their nearest section`)
+if (scout && scout.missing.length) log(`STALE SECTION TABLE: ${scout.missing.length} paths no longer exist (${scout.missing.map(m => m.section + ':' + m.path).join(', ')}). Update SECTIONS in trace-debug.js.`)
 for (const l of (scout && scout.lines) || []) {
   if (l.lines > 9000) log(`Section ${l.id} is ${l.lines} lines: over one agent's comfortable budget; split it in SECTIONS`)
 }
 
-// Dedup across sections and rounds: same file within 6 lines and same title stem counts as seen.
+// Dedup across sections and rounds: same file within 6 lines AND overlapping titles (half the words) counts as seen.
+// Different bugs close together survive; the reviewer's duplicate_of catches the rest.
+const words = t => new Set(t.toLowerCase().split(/[^a-z0-9_]+/).filter(w => w.length > 2))
+const similar = (x, y) => { const A = words(x), B = words(y); let n = 0; A.forEach(w => { if (B.has(w)) n++ }); return n >= Math.min(A.size, B.size) / 2 }
 const seen = []
-const isSeen = f => seen.some(s => s.file === f.file && Math.abs(s.line - f.line) <= 6)
+const isSeen = f => seen.some(s => s.file === f.file && Math.abs(s.line - f.line) <= 6 && similar(s.title, f.title))
 const confirmed = []
 const refuted = []
 const notCovered = {}
@@ -162,7 +180,7 @@ for (let round = 1; round <= ROUNDS; round++) {
   const prior = seen.map(s => `${s.file}:${s.line} ${s.title}`).join('\n') || '(none)'
   await pipeline(pick,
     s => agent(
-      `You are a trace debugger for section ${s.id} — ${s.name} — of the Tessalith repo (F:\\ai\\dds\\converter, Rust).
+      `You are a trace debugger for section ${s.id} — ${s.name} — of the Tessalith repo (Rust) in ${REPO}.${round > 1 && notCovered[s.id] ? `\nThis is round ${round}. Focus on what the previous round did not cover: ${notCovered[s.id]}` : ''}
 ${skillLine(['superpowers:systematic-debugging'], SECTION_SKILLS[s.id] || [])} You are finding bugs, not fixing them: stop at root cause and evidence.
 Your files: ${JSON.stringify(s.paths.concat(extra[s.id] || []))} (a bare file name is in the folder of the previous full path).
 Size: about ${s.lines} lines of source. Context budget: read the files on the main paths in full; for the rest read signatures and skim. Do not read test files wholesale — grep them for what you need. You may follow a call into another section, but only read the called function, not its file.
@@ -172,14 +190,21 @@ Method — systematic tracing, not browsing:
 3. Record only bugs with a concrete failing case (input/state -> wrong result, crash, data loss, hang). Shortcuts marked \`shortcut:\` are decisions, not bugs, unless the stated limit is already crossed. Behaviour recorded in docs/DECISIONS.md as a ruling is intended — cite it if you think it's wrong rather than reporting it as a bug.
 4. Prefer evidence you can show: quote the condition, or run one targeted existing test / a tiny probe. Max 8 findings; most severe first.
 Already reported (do not repeat):\n${prior}
-${RULES}`,
+${RULES_TRACE}`,
       { label: `trace:${s.id}${ROUNDS > 1 ? ':r' + round : ''}`, phase: 'Trace', schema: FINDINGS }),
     (res, s) => {
       if (!res) { log(`${s.id}: tracer returned nothing`); return [] }
       log(`${s.id}: ${res.findings.length} findings; not covered: ${res.not_covered.slice(0, 120)}`)
       notCovered[s.id] = (notCovered[s.id] ? notCovered[s.id] + ' | ' : '') + res.not_covered
-      const fresh = res.findings.filter(f => !isSeen(f))
+      let fresh = res.findings.filter(f => !isSeen(f))
       fresh.forEach(f => seen.push(f))
+      const room = Math.max(0, MAX_REVIEWS - reviewsStarted)
+      if (fresh.length > room) {
+        reviewsSkipped += fresh.length - room
+        log(`${s.id}: review cap reached; ${fresh.length - room} findings not reviewed (raise args.maxReviews)`)
+        fresh = fresh.slice(0, room) // tracers list most severe first
+      }
+      reviewsStarted += fresh.length
       return parallel(fresh.map(f => () =>
         agent(
           `Skeptically review this bug report from section ${s.id}. Your job is to REFUTE it. Default to refuted=true unless the code clearly shows the failure.
@@ -197,6 +222,10 @@ ${RULES}`,
     async reviews => {
       for (const r of (reviews || []).filter(Boolean)) {
         if (!r.v || r.v.refuted || r.v.duplicate_of) { refuted.push(r); continue }
+        if (r.v.severity === 'minor' && !MINOR_BRIEFS) {
+          confirmed.push({ section: r.s, severity: r.v.severity, reproduced: r.v.reproduced, finding: r.f, review: r.v.reason, brief: null })
+          continue
+        }
         const brief = await agent(
           `Turn this confirmed bug into a self-contained fix brief for an implementer who has not seen this conversation.
 ${skillLine(['superpowers:test-driven-development', 'ponytail:ponytail'], [])} Write the brief only; do not implement.
@@ -215,8 +244,9 @@ phase('Handoff')
 const order = { critical: 0, important: 1, minor: 2 }
 confirmed.sort((x, y) => order[x.severity] - order[y.severity])
 const report = await agent(
-  `Write the trace-debug report to ${OUT}/${DATE}-report.md in the repo root (create the folder; this path is gitignored scratch). Plain English, short sentences.
-Sections: Summary (counts by severity, sections traced, rounds), Confirmed (one block per bug, most severe first: title, file:line, failing case, reviewer's reason, reproduced yes/no, then the fix brief: RED test, fix, risk, owner), Refuted (one line each with the reviewer's reason), Not covered (per section, from the tracers).
+  `Write the trace-debug report to ${OUT}/${DATE}-report.md under ${REPO} (create the folder; this path is gitignored scratch). Plain English, short sentences.
+Sections: Summary (counts by severity, sections traced, rounds, findings not reviewed because of the cap: ${reviewsSkipped}), Confirmed (one block per bug, most severe first: title, file:line, failing case, reviewer's reason, reproduced yes/no, then the fix brief when there is one: RED test, fix, risk, owner; minor findings without a brief get "brief: write at fix time"), Refuted (one line each with the reviewer's reason), Not covered (per section, from the tracers).
+After writing the report, delete the shared build folder ${TARGET} under ${REPO} if it exists (it is this run's scratch).
 Data: ${JSON.stringify({ notCovered, confirmed, refuted: refuted.map(r => ({ s: r.s, title: r.f.title, at: `${r.f.file}:${r.f.line}`, why: r.v ? (r.v.duplicate_of ? 'duplicate of ' + r.v.duplicate_of : r.v.reason) : 'reviewer returned nothing' })) })}
 Do not edit anything else. Return the report path.`,
   { label: 'report', phase: 'Handoff' })
