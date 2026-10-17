@@ -550,7 +550,8 @@ fn card(
     });
     slot_menu(&scoped.response, model, v, slot, acts);
     // Item 17: a file from Explorer dropped on this card.
-    if drop_at.is_some_and(|p| scoped.response.rect.contains(p)) {
+    // The clipped rect: a card scrolled out of view takes no drop (trace-debug #51).
+    if drop_at.is_some_and(|p| scoped.response.interact_rect.contains(p)) {
         acts.push(Act::FileDrop(v.id.clone(), slot));
     }
 }
