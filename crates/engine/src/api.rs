@@ -1584,7 +1584,14 @@ impl Engine {
             let mut warnings = vec![];
             if let Some(p) = &pick {
                 warnings = crate::shader::pick_notes(p, target);
-                let maps = map_members(set, &files, &index, &skipped, registry.alias_table());
+                let maps = map_members(
+                    set,
+                    &files,
+                    &index,
+                    &skipped,
+                    registry.alias_table(),
+                    target,
+                );
                 warnings.extend(crate::shader::check_maps(p, &maps));
             }
             rep.emit(
@@ -2119,8 +2126,9 @@ fn explicit_shaders(
     (out, stale)
 }
 
-/// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a skipped DDS
-/// input, without a sub-type), then each packed output of the set. Raw maps are left out by role, because
+/// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a kept DDS
+/// input with the sub-type its suffix suggests, not the set's own earlier output), then each packed output of the
+/// set. Raw maps are left out by role, because
 /// `plan_packing` re-tags an unused one; duplicates and failed files are left out.
 fn map_members(
     set: &TextureSet,
@@ -2128,6 +2136,7 @@ fn map_members(
     jobs: &crate::shader::JobIndex,
     skipped: &[SkippedFile],
     aliases: &BTreeMap<String, String>,
+    target: Target,
 ) -> Vec<crate::shader::MemberMap> {
     let name = |p: &Path| {
         p.file_name()
@@ -2159,10 +2168,30 @@ fn map_members(
             .iter()
             .find(|s| s.path == f.path && s.code == Some(Code::InDdsSkipped))
         {
+            // Audit 08b-2: an in-place run's own earlier output is not a member map; any other kept DDS fills the
+            // slot its suffix suggests (`_n.dds` fills `_n`).
+            if jobs
+                .in_set(&set.key)
+                .any(|j| crate::dds::same_file(&f.path, &j.output))
+            {
+                continue;
+            }
+            let sfx = suffix(f);
+            let subtype = crate::suggest::suggest(&SuggestContext {
+                target,
+                suffix: sfx.as_deref(),
+                game_path: &f.game_path,
+                set_suffixes: &set.suffixes,
+                alpha: AlphaContent::None,
+                is_float: false,
+                advanced_skin: false,
+            })
+            .first()
+            .map(|s| s.subtype);
             out.push(crate::shader::MemberMap {
                 name: name(&s.output),
-                suffix: suffix(f),
-                subtype: None,
+                suffix: sfx,
+                subtype,
             });
         }
     }
