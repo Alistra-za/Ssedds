@@ -535,3 +535,40 @@ fn alpha_rules_cannot_change_the_recipe() {
         assert_eq!(j.profile.mips.levels, expected, "{alpha}");
     }
 }
+
+/// Audit 08b-1 (Note BV1, amending M9): a re-encoded pre-packed DDS conflicts with the recipe like an image does,
+/// so only one job writes `iron_rmaos.dds`.
+#[test]
+fn a_reencoded_prepacked_dds_follows_packing_prefer() {
+    use engine::dds::{dds_bytes, level_size, DdsDesc, ResolvedHeader};
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("in/textures/a/iron_rmaos.dds");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let desc = DdsDesc {
+        width: 64,
+        height: 64,
+        format: Format::Bc7,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    let levels = vec![vec![0x11; level_size(Format::Bc7, 64, 64)]];
+    std::fs::write(&p, dds_bytes(&desc, &levels).unwrap()).unwrap();
+    put(d.path(), "iron_roughness.png", 64, |x, _| x as u8 * 4);
+    let (p, _) = plan(
+        d.path(),
+        Target::Cs,
+        &["file:**/iron_rmaos.dds.reencode=true"],
+    );
+    let writers = p
+        .jobs
+        .iter()
+        .filter(|j| j.output.ends_with("textures/a/iron_rmaos.dds"))
+        .count();
+    assert_eq!(
+        writers,
+        1,
+        "{:#?}",
+        p.jobs.iter().map(|j| &j.output).collect::<Vec<_>>()
+    );
+    assert!(codes(job(&p, "iron_rmaos.dds")).contains(&Code::PackConflict));
+}

@@ -181,8 +181,8 @@ fn retag(jobs: &mut [ResolvedJob], path: &Path, code: Code, message: String) {
     }
 }
 
-/// A planned non-raw image member that already provides `kind`'s output (spec §6.4 "Pre-packed conflict",
-/// DECISIONS Note M9).
+/// A planned non-raw member that already provides `kind`'s output (spec §6.4 "Pre-packed conflict", DECISIONS
+/// Note M9). A DDS counts once it is planned (re-encoded, S6; Note BV1); a skipped DDS has no job.
 fn prepacked_member<'a>(
     ctx: &ResolveCtx,
     set: &TextureSet,
@@ -197,8 +197,7 @@ fn prepacked_member<'a>(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        f.kind == InputKind::Image
-            && raw_role(f).is_none()
+        raw_role(f).is_none()
             && split_suffix_with(&stem, ctx.registry.alias_table())
                 .suffix
                 .as_deref()
