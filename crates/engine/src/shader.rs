@@ -337,6 +337,7 @@ impl Shader {
                 | Shader::Envmap
                 | Shader::Parallax
                 | Shader::ComplexGrass
+                | Shader::PbrGrass
         )
     }
 
@@ -916,6 +917,13 @@ pub fn member_subtype(shader: Shader, suggested: Subtype) -> Option<(Subtype, &'
             Subtype::LandscapeDiffuse,
             "landscape diffuse (alpha = snow mask)",
         )),
+        // Audit 08e-1, owner ruling (b) (Note BV5): PBR grass under `textures/landscape/` is PBR, not landscape.
+        (Shader::PbrGrass, Subtype::LandscapeDiffuse) => {
+            Some((Subtype::PbrAlbedo, "PBR grass albedo (sRGB)"))
+        }
+        (Shader::PbrGrass, Subtype::LandscapeNormal) => {
+            Some((Subtype::PbrNormal, "PBR grass normal"))
+        }
         (
             Shader::ComplexGrass,
             Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::PbrAlbedo,
@@ -1078,6 +1086,7 @@ mod tests {
         assert_eq!(
             with,
             vec![
+                Shader::PbrGrass,
                 Shader::Envmap,
                 Shader::Parallax,
                 Shader::Hair,
