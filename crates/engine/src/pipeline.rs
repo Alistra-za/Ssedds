@@ -556,9 +556,20 @@ pub fn process_file(
         let text =
             serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
         // Audit 08d-6 (Note BV3): a file sdc did not write is kept, as OUT-SIDECAR-KEPT; the DDS stays.
+        // Audit 08d-5 (Note BV4): the new DDS already replaced the old one, so a failed sidecar write is a warning,
+        // as in BQ10, and the DDS stays; the next `if-changed` run finds no current sidecar and re-encodes.
         match crate::dds::may_replace(&side, text.as_bytes(), ours) {
-            Ok(()) => write_atomic(&side, text.as_bytes())
-                .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?,
+            Ok(()) => {
+                if let Err(e) = write_atomic(&side, text.as_bytes()) {
+                    report.warnings.push(crate::codes::Warning::new(
+                        crate::codes::Code::OutSidecarKept,
+                        format!(
+                            "{}: the sidecar could not be written ({e}); a sidecar left there describes the                              previous output",
+                            side.display()
+                        ),
+                    ));
+                }
+            }
             Err(k) => report.warnings.push(crate::codes::Warning::new(
                 crate::codes::Code::OutSidecarKept,
                 format!("{}; the sidecar was not written", k.note(&side)),

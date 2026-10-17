@@ -1185,3 +1185,32 @@ fn sidecar_keeps_a_foreign_dds_json() {
         .iter()
         .any(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutSidecarKept)));
 }
+
+/// Audit 08d-5 (Note BV4): a sidecar that cannot be written (held open without delete sharing here) is a warning,
+/// OUT-SIDECAR-KEPT; the new DDS, already in place of the old one, is kept and recorded.
+#[cfg(windows)]
+#[test]
+fn a_sidecar_write_failure_keeps_the_dds() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let side = d.path().join("out/armor/iron.dds.json");
+    let mut with = request(d.path());
+    with.sidecar = true;
+    run(with.clone());
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&side)
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([y as u8 * 4, x as u8 * 4, 9]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let (s, ev) = run(with);
+    drop(hold);
+    assert_eq!(s.failed, 0, "{ev:?}");
+    assert!(d.path().join("out/armor/iron.dds").exists());
+    assert!(ev
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutSidecarKept)));
+}

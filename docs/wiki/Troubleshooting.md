@@ -235,7 +235,7 @@ Every warning has a code and a severity:
 | `ENC-NVTT-VERSION` | blocking | NVTT version other than 3.2.5. | Acknowledge. |
 | `ENC-NVTT-FAILED` | error | `nvcompress` failed; no fallback. | Check NVTT, or use the built-in encoder. |
 | `OUT-UNKNOWN-EXISTING` | warning | An existing output with no manifest record was kept. | `--on-existing overwrite`. |
-| `OUT-SIDECAR-KEPT` | warning | An old `.dds.json` sdc wrote for the previous output could not be removed (locked or protected); the new DDS was written. | Delete the old `.dds.json`, or run with `--sidecar` to rewrite it. |
+| `OUT-SIDECAR-KEPT` | warning | The `.dds.json` next to the output was not changed, and the new DDS was written. Either an old sidecar sdc wrote for the previous output could not be removed or replaced (locked or protected), or with `--sidecar` the file there is not one sdc wrote, so it was kept. | Unlock or delete the old `.dds.json` and run again (with `--sidecar` to write a new one). A file that is not sdc's is yours: move it away if you want the sidecar. |
 | `DDS-HEADER-PATCHED` | info | `patch-header` (or the GUI) rewrote a header; the payload is byte-identical. | |
 | `DDS-HEADER-UNPATCHABLE` | warning | The header cannot be fixed without re-encoding (unreadable, cubemap or array, a format Tessalith does not write, missing mips, BC1 with transparent texels, wrong block format). | Re-encode from the source. |
 
