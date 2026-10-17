@@ -1,7 +1,7 @@
 export const meta = {
   name: 'in-game-capture',
   description: 'Drive Skyrim through MO2 + DevBench to place test meshes, take RenderDoc captures without a keyboard, quit, restore settings, and turn the captures into numbers',
-  whenToUse: 'Answering engine-behaviour questions with real frames (shader/alpha/controller checks, preview golden values). Args: {plan: "<path to a capture-plan .json>", out: "<results .md path>", owner_ok: true}. owner_ok must be true: it records that the owner allowed enabling CS RenderDoc capture for this run.',
+  whenToUse: 'Answering engine-behaviour questions with real frames (shader/alpha/controller checks, preview golden values). Args: {plan: "<capture-plan .json>", mo2: "<MO2 instance folder>", tools: "<tools folder with the RenderDoc/DevBench guide>", out: "<results .md path>", owner_ok: true}. owner_ok must be true: it records that the owner allowed enabling CS RenderDoc capture for this run.',
   phases: [
     { title: 'Preflight', detail: 'plan sanity, game not running, mods enabled, disk, back up and enable CS capture settings' },
     { title: 'Session', detail: 'launch via MO2, wait for DevBench, per group: place, frame, check draws, capture; quit without saving' },
@@ -11,8 +11,8 @@ export const meta = {
   ],
 }
 
-// Learned in the 2026-10-16 NIF-team session (nifparseref\plan\nif-edit-v2\G-session-runbook.md, G1-G8-results.md) and
-// F:\ai\dds\tools\AGENT-GUIDE-renderdoc-devbench.md. The plan file is JSON:
+// Learned in the 2026-10-16 NIF-team session (its capture runbook and results) and the RenderDoc/DevBench agent guide in the
+// tools folder (args.tools). The plan file is JSON:
 // { "cell": "anse2StudioV2",                       // optional; coc there if the save starts elsewhere
 //   "groups": [ { "label": "P1",
 //                 "forms": ["000CC79E", "0200B3ED"], // load-order FormIDs of base forms whose mesh path holds the test NIF
@@ -22,16 +22,17 @@ export const meta = {
 //                 "captures": [ { "after_s": 0 }, { "after_s": 0, "consecutive": true }, { "after_s": 6 } ],
 //                 "risky": false } ],               // risky groups (may crash the game) run last, alone
 //   "questions": [ { "id": "G1", "groups": ["P1"], "read": "EmitColor of G1SCLR vs G1SSET between captures 1 and 3", "outcomes": "..." } ] }
-// Test NIFs live in an enabled MO2 test mod (owner: G:\Acherus\mods\s6) at the mesh path of an otherwise unused form.
+// Test NIFs live in an enabled MO2 test mod at the mesh path of an otherwise unused form.
 
 const a = args || {}
 if (!a.plan) throw new Error('in-game-capture needs args.plan (path to the capture-plan JSON)')
 if (a.owner_ok !== true) throw new Error('in-game-capture needs args.owner_ok: true (owner permission to enable CS RenderDoc capture for this run)')
-const OUT = a.out || 'F:\\ai\\dds\\nifparseref\\plan\\capture-results.md'
-const MO2 = a.mo2 || 'G:\\Acherus'
+const OUT = a.out || '.superpowers/sdd/captures/results.md'
+if (!a.mo2 || !a.tools) throw new Error('in-game-capture needs args.mo2 (MO2 instance folder) and args.tools (folder with the RenderDoc/DevBench guide and p04 scripts)')
+const MO2 = a.mo2
 const CS_SETTINGS = `${MO2}\\overwrite\\SKSE\\Plugins\\CommunityShaders\\SettingsUser.json`
 const CAPTURES = `${MO2}\\overwrite\\SKSE\\Plugins\\CommunityShaders\\Captures`
-const TOOLS = 'F:\\ai\\dds\\tools'
+const TOOLS = a.tools
 
 const RULES = `Owner data under ${MO2} is read-only except: the CS settings file (only the two RenderDoc keys, after a backup) and nothing else. Never write into ${CAPTURES}. Never run \`python -\` heredocs (write a script file, run \`python -I file\`). Never send DevBench console \`help ... 4\` (stalls the main thread), \`tm\` (hides the overlay markers the scripts need), \`save\`/\`savegame\`, \`set timescale to 0\` or DevBench game setTimeScale/freeze (controllers would stop). Never kill processes you did not start. A DevBench 504 is not fatal: poll GET /api/health until "frame" advances, then continue.`
 
