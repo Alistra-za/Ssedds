@@ -81,6 +81,8 @@ enum Act {
     /// Fold or unfold a set's entry.
     Fold(String),
     Edit(Owner, String, Option<Value>),
+    /// Several keys as one undo step (trace-debug #56).
+    Edits(Owner, Vec<(String, Option<Value>)>),
     AddSection,
     RemoveSection(usize),
     Select(String),
@@ -254,6 +256,8 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
         match a {
             Act::Edit(Owner::Set(id), k, v) => model.set_json_value(&id, &k, v),
             Act::Edit(Owner::Section(i), k, v) => model.set_section_value(i, &k, v),
+            Act::Edits(Owner::Set(id), e) => model.set_json_values(&id, e),
+            Act::Edits(Owner::Section(i), e) => model.set_section_values(i, e),
             Act::AddSection => model.add_section(""),
             Act::RemoveSection(i) => model.remove_section(i),
             Act::Select(key) => model.select_set(&key),
@@ -416,10 +420,11 @@ fn match_pill(
             .response
             .on_hover_text("Exact: a mesh's texture in this slot is exactly this path. Path contains: the diffuse path contains this text.");
         if picked_mode != mode {
-            let (k, v) = unstore(owner, mode);
-            acts.push(Act::Edit(owner.clone(), k, v));
-            let (k, v) = store(owner, picked_mode, path, derived);
-            acts.push(Act::Edit(owner.clone(), k, v));
+            let edits = vec![
+                unstore(owner, mode),
+                store(owner, picked_mode, path, derived),
+            ];
+            acts.push(Act::Edits(owner.clone(), edits));
         }
         let id = egui::Id::new(("json-match", owner.salt(), mode.key()));
         if let Some(t) = text_box(ui, id, path, 260.0) {
