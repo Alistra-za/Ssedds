@@ -370,7 +370,7 @@ pub const PGP_MAP: [(&str, &str); 14] = [
     ),
 ];
 
-/// The PGPatcher settings a texture-set block stands for: colours as 0–255 ints (DECISIONS P10), numbers as floats.
+/// The PGPatcher settings a texture-set block stands for: every number as a float, colours too (AG133).
 pub fn cs_to_pgp(values: &Map<String, Json>) -> Settings {
     let mut out = Settings::new();
     for (cs, pgp) in PGP_MAP {
@@ -379,22 +379,7 @@ pub fn cs_to_pgp(values: &Map<String, Json>) -> Settings {
             None => values.get(cs),
         };
         let Some(v) = v else { continue };
-        let v = if cs.ends_with("Color") {
-            Json::Array(
-                v.as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|c| {
-                        json!((c.as_f64().unwrap_or(0.0) * 255.0)
-                            .round()
-                            .clamp(0.0, 255.0) as i64)
-                    })
-                    .collect(),
-            )
-        } else {
-            floats(v)
-        };
-        out.insert(pgp.to_string(), v);
+        out.insert(pgp.to_string(), floats(v));
     }
     out
 }
@@ -403,7 +388,8 @@ pub fn cs_to_pgp(values: &Map<String, Json>) -> Settings {
 pub fn pgp_to_cs(key: &str, v: Option<&Json>) -> Option<(&'static str, Option<Json>)> {
     let &(cs, _) = PGP_MAP.iter().find(|(_, p)| *p == key)?;
     let v = v.map(|v| {
-        if cs.ends_with("Color") {
+        // Only the pre-AG133 0-255 int form is scaled; float colours are already the block's form.
+        if cs.ends_with("Color") && crate::pgp::settings::rgb_is_legacy(v) {
             Json::Array(
                 v.as_array()
                     .into_iter()
