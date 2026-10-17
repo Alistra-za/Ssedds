@@ -1573,7 +1573,7 @@ impl AppModel {
                     .is_some_and(|d| !matches!(d, Dialog::ExportRunning(_))) =>
             {
                 self.export.notes.push(format!(
-                    "PGPatcher JSON not written: {} was edited outside Tessalith and is kept (another question was                      open); export again to choose",
+                    "PGPatcher JSON not written: {} was edited outside Tessalith and is kept (another question was open); export again to choose",
                     p.path.display()
                 ));
             }

@@ -564,7 +564,7 @@ pub fn process_file(
                     report.warnings.push(crate::codes::Warning::new(
                         crate::codes::Code::OutSidecarKept,
                         format!(
-                            "{}: the sidecar could not be written ({e}); a sidecar left there describes the                              previous output",
+                            "{}: the sidecar could not be written ({e}); a sidecar left there describes the previous output",
                             side.display()
                         ),
                     ));
