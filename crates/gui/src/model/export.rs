@@ -295,6 +295,14 @@ impl ExportModel {
                 b.converted, b.up_to_date, b.skipped, b.failed, b.validation_failed
             );
         }
+        // Audit 08c-4: what the export did besides converting (a JSON not written or kept, the copies).
+        if !self.notes.is_empty() {
+            s += "## Notes\n\n";
+            for n in &self.notes {
+                s += &format!("- {n}\n");
+            }
+            s += "\n";
+        }
         s += "## Warnings by code\n\n";
         for (code, keys) in self.by_code() {
             s += &format!(

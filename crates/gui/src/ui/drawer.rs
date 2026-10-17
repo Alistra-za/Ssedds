@@ -109,10 +109,24 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         if let Some(e) = &model.export.error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
-        for n in &model.export.notes {
-            ui.label(egui::RichText::new(n).small());
-        }
     });
+    // Audit 08c-4: notes can run to hundreds of lines ("not in JSON: …"), so they scroll inside a capped area.
+    if !model.export.notes.is_empty() {
+        egui::CollapsingHeader::new(format!("Notes ({})", model.export.notes.len()))
+            .id_salt("export_notes")
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("export_notes_scroll")
+                    .max_height(96.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for n in &model.export.notes {
+                            ui.label(egui::RichText::new(n).small());
+                        }
+                    });
+            });
+    }
     let exists = stats.is_dir(&model.export_root(), Instant::now());
     let folder = model.export_folder_check(exists);
     ui.horizontal(|ui| {
