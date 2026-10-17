@@ -391,6 +391,15 @@ pub fn colour_mesh_key(
     colour.then(|| mesh_key(game_path, stem))
 }
 
+/// The GRAS key of a member (audit 08b-3): the folder of `game_path` and the stem of `output`, the name the NIF
+/// references (`fieldgrass_basecolor.png` is written as `fieldgrass.dds`). Folded as `grass::path_key`.
+pub fn gras_key(game_path: &str, output: &std::path::Path) -> String {
+    mesh_key(
+        game_path,
+        &output.file_stem().unwrap_or_default().to_string_lossy(),
+    )
+}
+
 /// The alpha property of one scanned lighting shape that uses a colour member in slot 0 (M6 Track E spec §4.1,
 /// DECISIONS Note U5): the NiAlphaProperty blend and test enables and the test threshold. A shape without the
 /// property is all false.
@@ -768,10 +777,14 @@ pub fn pick_for_set(
             is_float: false,
             advanced_skin: false,
         }),
-        gras: set
-            .members
-            .iter()
-            .any(|&m| gras.contains(&crate::grass::path_key(&files[m].game_path))),
+        gras: set.members.iter().any(|&m| {
+            let f = &files[m];
+            let output = jobs
+                .by_input(&f.path)
+                .next()
+                .map_or(f.output.as_path(), |j| j.output.as_path());
+            gras.contains(&gras_key(&f.game_path, output))
+        }),
         cs_txst,
         suffixes: &set.suffixes,
         subtypes: &subtypes,

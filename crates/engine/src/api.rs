@@ -1105,7 +1105,7 @@ impl Engine {
                 analysis: &a,
                 info: &info,
             };
-            let gras_diffuse = gras.contains(&crate::grass::path_key(&f.game_path));
+            let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
             let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
             job.provenance.insert("target".into(), target_src.clone());
             job.source = source;
@@ -1255,7 +1255,10 @@ impl Engine {
                 })
             };
             // An explicit set shader also re-resolves a GRAS diffuse: it suppresses the auto-detect (`suggest_grass`).
-            let is_gras = gras.contains(&crate::grass::path_key(&work[wi].1.game_path));
+            let is_gras = gras.contains(&crate::shader::gras_key(
+                &work[wi].1.game_path,
+                &work[wi].1.output,
+            ));
             if !picks.get(&old.set_key).is_some_and(|p| {
                 p.shader.has_member_defaults()
                     || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
@@ -1278,7 +1281,7 @@ impl Engine {
                 resolve_file_with(
                     &ctx,
                     &facts,
-                    gras.contains(&crate::grass::path_key(&f.game_path)),
+                    gras.contains(&crate::shader::gras_key(&f.game_path, &f.output)),
                 )
             }));
             match r {

@@ -266,3 +266,15 @@ fn pbr_grass_under_landscape_is_typed_pbr() {
         .collect();
     assert!(map_codes.is_empty(), "{map_codes:?}");
 }
+
+/// Audit 08b-3: GRAS evidence is matched by the output name the NIF uses (`g.dds`), so a vocabulary-named albedo
+/// (`g_basecolor.png`) still makes the set PBR grass.
+#[test]
+fn a_vocabulary_named_albedo_matches_gras_evidence() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/plants/g_basecolor.png", BROWN);
+    put(d.path(), "textures/plants/g_n.png", [128, 128, 255]);
+    put(d.path(), "textures/plants/g_rmaos.png", [128, 0, 255]);
+    let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
+    assert_eq!(picked(&p).0, Shader::PbrGrass);
+}
