@@ -1356,8 +1356,8 @@ impl Renderer {
     ///
     /// A shape that is not `Drawing` (pending, failed, hidden) is always rebuilt. On any build error the
     /// previous draw stays on screen and the status is `Failed { showing_previous: true }`; the result is still
-    /// `Ok(kind)`. A hidden material stops drawing the shape and keeps its draw for later. Paths the resolver
-    /// did not return before are asked for again. `Err` only for an id that is not loaded.
+    /// `Ok(kind)`. A hidden material stops drawing the shape and keeps its draw for later. Slot paths the
+    /// resolver did not return before are asked for again (bytes that did not decode are not). `Err` only for an id that is not loaded.
     pub fn set_material(
         &mut self,
         id: ShapeId,
