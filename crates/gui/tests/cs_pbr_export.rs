@@ -327,6 +327,7 @@ fn a_hand_edited_old_case_file_survives_the_rename() {
         root: d.path().to_path_buf(),
         files: vec![("PBRTextureSets/LandscapeRock01.json".into(), "{}".into())],
         notes: vec![],
+        refused: vec![],
     };
     let mut notes = vec![];
     finish(&p, &shas, &mut notes);
@@ -408,4 +409,37 @@ fn an_unreadable_scan_database_is_one_report_note() {
         "{}",
         n[0]
     );
+}
+
+/// Trace-debug 2026-10-16 #49: an EDID refused because two sets bind it is not also reported as "no set binds this
+/// EDID", and its file keeps its record.
+#[test]
+fn a_refused_recorded_file_is_not_reported_as_unbound() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_blocks(d.path());
+    export_and_wait(&mut m);
+    m.add_cs_block("landscape/leaf", Kind::Mato);
+    m.set_cs_edids(
+        "landscape/leaf",
+        Kind::Mato,
+        &["SnowMaterialObject1P".into()],
+    );
+    export_and_wait(&mut m);
+    let notes = &m.export.notes;
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("SnowMaterialObject1P not written")),
+        "{notes:?}"
+    );
+    assert!(
+        !notes.iter().any(|n| n.contains("no set binds")),
+        "{notes:?}"
+    );
+    assert!(m
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .cs_pbr_shas()
+        .contains_key("PBRMaterialObjects/SnowMaterialObject1P.json"));
 }

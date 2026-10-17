@@ -517,3 +517,92 @@ fn the_lock_icon_drags_to_a_separator() {
     h.run();
     assert_eq!(free(&h), "textures/landscape/rock01");
 }
+
+/// Trace-debug #54: Save clicked while the input name box has focus saves nothing and says why (as Ctrl+S, AG23);
+/// the name commits on the focus loss.
+#[test]
+fn header_save_click_with_focused_field_does_not_save_stale_value() {
+    let (_d, mut h) = harness();
+    // Another unsaved edit, so Save is enabled.
+    h.state_mut()
+        .0
+        .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
+    h.run();
+    let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
+    focus(&mut h);
+    clear_and_type(&mut h, "rock02");
+    let p = h.query_all_by_label("Save").next().unwrap().rect().center();
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    settle(&mut h);
+    let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
+    assert!(!on_disk.contains("specular_level"), "nothing was saved");
+    assert!(
+        h.state()
+            .0
+            .messages
+            .entries()
+            .any(|e| e.text == "Save: leave the text field first"),
+        "the log says why"
+    );
+    assert_eq!(
+        h.state().0.input_name_of("landscape/rock02").as_deref(),
+        Some("textures/landscape/rock02")
+    );
+}
+
+/// Export clicked while the input name box has focus saves nothing and says why, as the header Save does (#54,
+/// Note BS14): Export saves first, and the focused value commits only on the focus loss.
+#[test]
+fn header_export_click_with_focused_field_does_not_save_stale_value() {
+    let (_d, mut h) = harness();
+    h.state_mut()
+        .0
+        .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
+    h.run();
+    let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
+    focus(&mut h);
+    clear_and_type(&mut h, "rock02");
+    let p = h
+        .query_all_by_label("Export")
+        .next()
+        .unwrap()
+        .rect()
+        .center();
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    settle(&mut h);
+    let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
+    assert!(!on_disk.contains("specular_level"), "nothing was saved");
+    assert!(h.state().0.export.running.is_none(), "no export started");
+    assert!(
+        h.state()
+            .0
+            .messages
+            .entries()
+            .any(|e| e.text == "Export: leave the text field first"),
+        "the log says why"
+    );
+    assert_eq!(
+        h.state().0.input_name_of("landscape/rock02").as_deref(),
+        Some("textures/landscape/rock02")
+    );
+}

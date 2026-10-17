@@ -185,12 +185,16 @@ impl AppModel {
         if self.project.as_ref().is_some_and(|p| p.read_only()) {
             return Err("sdc.toml is read-only".into());
         }
+        // #33: the set entry must follow the aliases (AB1), so a read-only sdc-project.toml refuses too.
+        if self.sets_doc.as_ref().is_some_and(|d| d.read_only()) {
+            return Err("sdc-project.toml is read-only".into());
+        }
         let plan = self.input_name_plan(set_id, chosen)?;
         let label = format!("Input name of {set_id}");
         self.note_kept_entries(plan.retarget.as_slice());
         self.batch_edit(&label, |m| {
             for r in &plan.rows {
-                let alias = (lower(&r.new) != lower(&r.key)).then_some(r.new.as_str());
+                let alias = (r.new != r.key).then_some(r.new.as_str());
                 m.edit_docs(&label, None, true, |p, _| p.set_read_as(&r.key, alias));
             }
             if let Some((from, to)) = &plan.retarget {

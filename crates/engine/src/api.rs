@@ -1650,7 +1650,7 @@ impl Engine {
             .iter()
             .any(|s| s.code == Some(Code::InDdsSkipped))
         {
-            Manifest::at(&req.output_root).load().unwrap_or_default()
+            Manifest::at(&req.output_root).read().unwrap_or_default()
         } else {
             Default::default()
         };
@@ -2120,7 +2120,11 @@ fn map_members(
         if pack::plan::raw_role(f).is_some() {
             continue;
         }
+        // Trace-debug #25 (Note BQ): an RNM layer or mask is never converted on its own, as the shader pick knows.
         if let Some(j) = jobs.by_input(&f.path).find(|j| j.pack.is_none()) {
+            if matches!(j.status, JobStatus::NormalLayer { .. }) {
+                continue;
+            }
             out.push(crate::shader::MemberMap {
                 name: name(&j.output),
                 suffix: suffix(f),

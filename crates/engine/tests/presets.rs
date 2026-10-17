@@ -948,3 +948,57 @@ fn a_rule_override_of_the_subtype_fails_check_preset() {
     let e = r.check_preset("stover").unwrap_err().to_string();
     assert!(e.contains("not in overrides"), "{e}");
 }
+
+/// Trace-debug #15 (Note BQ): a file refused because a preset loaded before it claimed its alias or id is retried
+/// once that preset is skipped as broken, so the valid one loads.
+#[test]
+fn user_dir_retries_file_refused_by_a_skipped_preset() {
+    for (a, b, id) in [
+        (
+            "schema_version = 1\nid = \"mine-old\"\nversion = \"1\"\nbase = \"cs-qualty\"\n[suffix_aliases]\nfoo = \"s\"\n",
+            "schema_version = 1\nid = \"mine\"\nversion = \"1\"\nbase = \"cs-quality\"\n[suffix_aliases]\nfoo = \"s\"\n",
+            "mine",
+        ),
+        (
+            "schema_version = 1\nid = \"same\"\nversion = \"1\"\nbase = \"cs-qualty\"\n",
+            "schema_version = 1\nid = \"same\"\nversion = \"2\"\nbase = \"cs-quality\"\n",
+            "same",
+        ),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.toml"), a).unwrap();
+        std::fs::write(d.path().join("b.toml"), b).unwrap();
+        let mut r = PresetRegistry::builtin().unwrap();
+        let w = r.add_dir(d.path());
+        assert!(
+            r.source(id).is_some_and(|s| s.ends_with("b.toml")),
+            "{id} not loaded from b.toml: {w:?}"
+        );
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].message.contains("a.toml"), "{}", w[0].message);
+    }
+}
+
+/// Trace-debug #20 (Note BQ): `[subtypes.rfaos]` (the deprecated id) and `[subtypes.skin_rfaos]` in one file would
+/// fold into one table with one silently lost, so such a config or preset is refused; `rfaos` alone still loads.
+#[test]
+fn config_with_rfaos_and_skin_rfaos_is_refused() {
+    let both = "[subtypes.rfaos]\nformat = \"bc3\"\n[subtypes.skin_rfaos]\nresize = \"half\"\n";
+    let e = engine::presets::ConfigFile::parse(both, "sdc.toml")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("rfaos") && e.contains("skin_rfaos"), "{e}");
+    let c = engine::presets::ConfigFile::parse("[subtypes.rfaos]\nformat = \"bc3\"\n", "sdc.toml")
+        .unwrap();
+    assert!(c.subtypes.contains_key(&Subtype::SkinRfaos));
+
+    let head = "schema_version = 1\nid = \"twin\"\nversion = \"1\"\nbase = \"cs-quality\"\n";
+    let mut r = PresetRegistry::builtin().unwrap();
+    let e = r
+        .add_toml(&format!("{head}{both}"))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("skin_rfaos"), "{e}");
+    r.add_toml(&format!("{head}[subtypes.rfaos]\nformat = \"bc3\"\n"))
+        .unwrap();
+}

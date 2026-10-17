@@ -331,6 +331,10 @@ fn chosen_recipe(
             .iter()
             .any(|r| r.kind == RecipeKind::Rfaos)
     {
+        // Trace-debug #34 (Note BQ): when `auto` builds the `_rfaos` anyway (a fuzz source), nothing was refused.
+        if base.kind == RecipeKind::Rfaos {
+            return (PackRecipe::Auto, None);
+        }
         return (
             PackRecipe::Auto,
             Some((Code::PackRecipeUnbuildable, format!(

@@ -783,6 +783,13 @@ impl PresetsModel {
         }
         let id = r.add_toml(&text).map_err(|e| e.to_string())?;
         r.check_preset(&id).map_err(|e| e.to_string())?;
+        // #46: every other user preset must still load (one may build on this preset's old id).
+        for (other, _) in r.user_presets() {
+            if other != id {
+                r.check_preset(other)
+                    .map_err(|e| format!("preset '{other}' would no longer load: {e}"))?;
+            }
+        }
         Ok(text)
     }
 

@@ -385,7 +385,14 @@ pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
         // Spec §10 SET-MISSING-COMPANION, the two triggers that are not about the bake (any target).
         for &i in idx {
             let lacking = match jobs[i].profile.subtype {
-                Subtype::Msn if !set.suffixes.contains("s") => {
+                // Trace-debug #32 (Note BQ): the eye shader re-types an eye's `_n` to msn, and eyes have no `_s`.
+                Subtype::Msn
+                    if !set.suffixes.contains("s")
+                        && jobs[i]
+                            .shader
+                            .as_ref()
+                            .is_none_or(|p| p.shader != crate::shader::Shader::Eye) =>
+                {
                     Some("_msn without an _s (specular) in its set")
                 }
                 Subtype::Flow if !set.suffixes.contains("n") => {

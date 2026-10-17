@@ -1375,3 +1375,79 @@ fn a_pbr_grass_panel_shows_only_the_grass_keys() {
     h.run();
     assert!(!rock_settings(&h).contains_key("subsurface"));
 }
+
+/// Trace-debug #53: a 60 fps harness on the rock set, the set keys of rock and leaf.
+fn click_harness() -> (
+    tempfile::TempDir,
+    Harness<'static, AppModel>,
+    String,
+    String,
+) {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = |m: &AppModel, id: &str| {
+        sdc_gui::model::sets::set_views(m)
+            .into_iter()
+            .find(|v| v.id == id)
+            .unwrap()
+            .key
+    };
+    let (rock, leaf) = (key(&m, "landscape/rock01"), key(&m, "landscape/leaf"));
+    m.select_set(&rock);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    (d, h, rock, leaf)
+}
+
+/// A single click on the Diffuse card's thumbnail (just under the card title).
+fn click_diffuse_thumb(h: &mut Harness<'static, AppModel>) {
+    let t = h.query_all_by_label("Diffuse").next().unwrap().rect();
+    let p = eframe::egui::pos2(t.left() + 30.0, t.bottom() + 40.0);
+    h.hover_at(p);
+    h.drag_at(p);
+    h.drop_at(p);
+    h.step();
+}
+
+#[test]
+fn pending_click_does_not_follow_a_set_switch() {
+    let (_d, mut h, _rock, leaf) = click_harness();
+    click_diffuse_thumb(&mut h);
+    h.state_mut().select_set(&leaf);
+    for _ in 0..90 {
+        h.step();
+    }
+    assert_eq!(h.state().selection, sdc_gui::model::Selection::Set(leaf));
+}
+
+#[test]
+fn pending_click_dropped_when_view_skipped_a_pass() {
+    let (_d, mut h, rock, leaf) = click_harness();
+    click_diffuse_thumb(&mut h);
+    h.state_mut().select_set(&leaf);
+    h.step();
+    h.step();
+    h.state_mut().select_set(&rock);
+    for _ in 0..90 {
+        h.step();
+    }
+    assert_eq!(h.state().selection, sdc_gui::model::Selection::Set(rock));
+}
+
+/// The probe of the two tests above: without a set switch the click does select the texture.
+#[test]
+fn a_single_click_on_a_thumbnail_selects_its_texture() {
+    let (_d, mut h, _rock, _leaf) = click_harness();
+    click_diffuse_thumb(&mut h);
+    for _ in 0..90 {
+        h.step();
+    }
+    assert!(matches!(
+        h.state().selection,
+        sdc_gui::model::Selection::Item(_)
+    ));
+}

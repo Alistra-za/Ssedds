@@ -11,12 +11,17 @@ fn u(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(b[off..off + 4].try_into().unwrap())
 }
 
-/// A valid full-chain 64x64 file; level `i` is filled with byte `0x10 + i`.
+/// A valid full-chain 64x64 file; level `i` is filled with byte `0x10 + i`, except that a BC1 block's second byte
+/// is 0xff (colour0 > colour1: four-colour mode, so every level is opaque).
 fn good(format: Format, srgb: bool, header: ResolvedHeader) -> Vec<u8> {
     let mut levels = vec![];
     let (mut w, mut h) = (64u32, 64u32);
     loop {
-        levels.push(vec![0x10 + levels.len() as u8; level_size(format, w, h)]);
+        let mut l = vec![0x10 + levels.len() as u8; level_size(format, w, h)];
+        if format == Format::Bc1 {
+            l.chunks_mut(8).for_each(|b| b[1] = 0xff);
+        }
+        levels.push(l);
         if w == 1 && h == 1 {
             break;
         }
@@ -272,4 +277,16 @@ fn complex_grass_chain_one_level_short_is_accepted_two_short_is_refused() {
         ..req
     };
     assert!(refused(&file(7), &plain).contains("missing mips"));
+}
+
+/// Trace-debug #23 (Note BQ): the BC1 transparency check reads every stored level, not only mip 0.
+#[test]
+fn bc1_transparent_texels_below_mip_0_are_refused() {
+    let mut bc1 = undeclared_mips(good(Format::Bc1, false, ResolvedHeader::Dx10));
+    // Level 1 (32x32, after mip 0's 2048 bytes) in 3-colour mode with index 3 everywhere.
+    let l1 = 148 + level_size(Format::Bc1, 64, 64);
+    for blk in bc1[l1..l1 + level_size(Format::Bc1, 32, 32)].chunks_mut(8) {
+        blk.copy_from_slice(&[0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    }
+    assert!(refused(&bc1, &PatchRequest::default()).contains("BC1 with 1-bit alpha"));
 }

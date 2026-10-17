@@ -606,7 +606,7 @@ fn json_line(v: &DdsValidation) -> String {
 /// Result-verb output: stdout, or stderr when stdout is reserved for JSON.
 fn say(json: bool, line: String) {
     if json {
-        eprintln!("{line}");
+        err!("{line}");
     } else {
         out!("{line}");
     }
@@ -794,7 +794,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
     let mut reg = engine.registry().clone();
     if let Some(dir) = user_presets_dir() {
         for w in reg.add_dir(&dir) {
-            eprintln!("{}: {}", w.code.as_str(), w.message);
+            err!("{}: {}", w.code.as_str(), w.message);
         }
     }
     for f in &args.preset_file {

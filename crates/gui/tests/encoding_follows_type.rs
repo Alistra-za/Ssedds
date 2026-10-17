@@ -238,15 +238,22 @@ fn a_field_locked_format_is_kept_and_reported() {
     use sdc_gui::model::encoding_follow::{verdict, Verdict};
     let t = Target::Cs;
     assert_eq!(
-        verdict(t, Subtype::PbrAlbedo, LINEAR, true, None),
+        verdict(t, Subtype::PbrAlbedo, false, LINEAR, true, None),
         Verdict::Clear
     );
     assert_eq!(
-        verdict(t, Subtype::PbrAlbedo, LINEAR, true, Some("locked here")),
+        verdict(
+            t,
+            Subtype::PbrAlbedo,
+            false,
+            LINEAR,
+            true,
+            Some("locked here")
+        ),
         Verdict::Kept("locked here".into())
     );
     assert_eq!(
-        verdict(t, Subtype::PbrAlbedo, LINEAR, false, None),
+        verdict(t, Subtype::PbrAlbedo, false, LINEAR, false, None),
         Verdict::Keep,
         "nothing explicit"
     );
@@ -254,6 +261,7 @@ fn a_field_locked_format_is_kept_and_reported() {
         verdict(
             t,
             Subtype::PbrAlbedo,
+            false,
             (Format::Bc7, ColorTag::Srgb),
             true,
             None
@@ -277,5 +285,22 @@ fn undo_after_the_encoding_cleanup_names_the_step_that_caused_it() {
         m.status_line.starts_with("Undid: Shader."),
         "{}",
         m.status_line
+    );
+}
+
+/// Trace-debug #31 (Note BS13): an explicit R8 on a texture re-typed to a grey `skin_wet` is allowed and kept; on a
+/// colour one it is cleared.
+#[test]
+fn a_grey_skin_wet_keeps_an_explicit_r8() {
+    use sdc_gui::model::encoding_follow::{verdict, Verdict};
+    let r8 = *engine::policy::allowed_encodings_for(Subtype::SkinWet, Target::Cs, true)
+        .iter()
+        .find(|(f, _)| *f == Format::R8)
+        .unwrap();
+    let st = Subtype::SkinWet;
+    assert_eq!(verdict(Target::Cs, st, true, r8, true, None), Verdict::Keep);
+    assert_eq!(
+        verdict(Target::Cs, st, false, r8, true, None),
+        Verdict::Clear
     );
 }

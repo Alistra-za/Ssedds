@@ -1218,3 +1218,34 @@ fn a_project_file_changed_during_the_export_asks_about_it() {
         Some(Dialog::ExternalChange(sdc_gui::model::DocKind::Project))
     );
 }
+
+/// Trace-debug 2026-10-16 #43: renaming the PGPatcher JSON leaves the old file with a note (PGPatcher still reads
+/// it), and renaming back finds sdc's own file, so it is not asked about as edited outside.
+#[test]
+fn renamed_json_notes_old_file_and_rename_back_is_not_hand_edited() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    export_and_wait(&mut m);
+    let a = json_path(&m);
+    assert!(a.is_file());
+    m.set_json_name("renamed");
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    export_and_wait(&mut m);
+    let b = json_path(&m);
+    assert!(b.is_file() && a.is_file(), "the old file is left in place");
+    let old_name = a.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.contains(&old_name) && n.contains("left in place")),
+        "{:?}",
+        m.export.notes
+    );
+    m.set_json_name("");
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.07)));
+    export_and_wait(&mut m);
+    assert_eq!(json_path(&m), a);
+    assert_eq!(m.dialog, None);
+    assert!(std::fs::read_to_string(&a).unwrap().contains("0.07"));
+}

@@ -360,9 +360,19 @@ impl Manifest {
     /// The latest entry per canonical output key. Lines that are not a manifest record (torn, foreign, not UTF-8)
     /// are skipped; records of a newer schema are kept (see [`ManifestEntry::is_newer_schema`]).
     pub fn load(&self) -> io::Result<BTreeMap<String, ManifestEntry>> {
+        self.scan(true)
+    }
+
+    /// [`Manifest::load`] without the compaction rewrite: for a reader that writes nothing (a dry run, `inspect`),
+    /// which must not rewrite a manifest another process may be appending to (trace-debug #22, Note BQ).
+    pub fn read(&self) -> io::Result<BTreeMap<String, ManifestEntry>> {
+        self.scan(false)
+    }
+
+    fn scan(&self, compact: bool) -> io::Result<BTreeMap<String, ManifestEntry>> {
         let mut map = BTreeMap::new();
         let big = match std::fs::metadata(&self.path) {
-            Ok(m) => m.len() > COMPACT_MIN_BYTES,
+            Ok(m) => compact && m.len() > COMPACT_MIN_BYTES,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(map),
             Err(e) => return Err(e),
         };

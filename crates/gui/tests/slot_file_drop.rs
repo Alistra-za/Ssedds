@@ -196,3 +196,87 @@ fn a_replace_asked_by_a_drop_shows_its_prompt_with_the_sets_column_hidden() {
     h.run();
     assert!(h.state().1.drops.pending.is_none());
 }
+
+/// Trace-debug #51: a drop above the set editor's scroll area, over a card scrolled out of view, opens the folder.
+#[test]
+fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = set_views(&m)
+        .into_iter()
+        .find(|v| v.id == LEAF)
+        .unwrap()
+        .key;
+    m.select_set(&key);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 300.0))
+        .build_ui_state(
+            |ui, (model, state): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, model, state),
+            (m, State::default()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let card = h.query_all_by_label("Diffuse").next().unwrap().rect();
+    // The set's header row, above the scroll area that holds the cards.
+    let header = h
+        .get(
+            egui_kittest::kittest::by()
+                .role(eframe::egui::accesskit::Role::TextInput)
+                .label(sdc_gui::ui::input_name::HINT),
+        )
+        .rect();
+    let y = header.center().y;
+    h.hover_at(eframe::egui::pos2(card.center().x, card.bottom() + 40.0));
+    h.event(eframe::egui::Event::MouseWheel {
+        unit: eframe::egui::MouseWheelUnit::Point,
+        delta: eframe::egui::vec2(0.0, -(card.top() - y + 30.0)),
+        phase: eframe::egui::TouchPhase::Move,
+        modifiers: eframe::egui::Modifiers::NONE,
+    });
+    for _ in 0..30 {
+        h.step();
+    }
+    let moved = h.query_all_by_label("Diffuse").next().unwrap().rect();
+    assert!(
+        moved.top() < y,
+        "the Diffuse card scrolled up under the header row: {card:?} -> {moved:?}, header {header:?}"
+    );
+    let other = tempfile::tempdir().unwrap();
+    let outside = other.path().join("brick.png");
+    std::fs::write(&outside, b"x").unwrap();
+    h.hover_at(eframe::egui::pos2(moved.center().x, y));
+    h.run();
+    h.input_mut()
+        .dropped_files
+        .push(std::sync::Arc::new(Dropped(outside)));
+    h.run();
+    assert_eq!(h.state().1.drops.slot_note, None, "no slot card took it");
+    // The fixture has unsaved edits, so opening the file's folder asks first.
+    assert!(
+        matches!(&h.state().0.dialog, Some(sdc_gui::model::Dialog::OpenUnsaved(p)) if p == other.path()),
+        "{:?}",
+        h.state().0.dialog
+    );
+}
+
+/// Trace-debug #52: a folder change closes the Sets column's modal and the Slot commands window.
+#[test]
+fn a_folder_change_closes_the_sets_modals_and_slot_commands() {
+    use sdc_gui::ui::sets_column::Pending;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let mut h = harness(m);
+    h.run();
+    h.state_mut().1.drops.pending = Some(Pending::ConfirmDelete {
+        id: LEAF.into(),
+        members: 1,
+    });
+    h.state_mut().1.slot_cmds.open = Some(LEAF.into());
+    h.run();
+    let root = h.state().0.root.clone().unwrap();
+    h.state_mut().0.open_folder(root);
+    idle(&mut h.state_mut().0);
+    h.run();
+    assert!(h.state().1.drops.pending.is_none());
+    assert!(h.state().1.slot_cmds.open.is_none());
+}

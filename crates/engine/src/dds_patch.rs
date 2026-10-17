@@ -127,16 +127,19 @@ pub fn plan_patch(bytes: &[u8], req: &PatchRequest) -> Result<Option<HeaderPatch
             "missing mips: {stored} of {full} levels stored: it needs re-encoding"
         ));
     }
-    if format == Format::Bc1 {
-        let (w, h, r) = f.levels[0].clone();
-        if let Ok(Decoded::Ldr(px)) = decode_level(f.format, w, h, &f.data[r], None) {
-            if px.iter().any(|p| p[3] < 255) {
-                return refuse(
-                    "BC1 with 1-bit alpha: sdc writes BC1 opaque only; re-encode as BC7 or BC3"
-                        .into(),
-                );
-            }
-        }
+    // Trace-debug #23 (Note BQ): every stored level, since `f.levels` may hold only mip 0.
+    let transparent = |i: usize| {
+        let (w, h) = ((f.width >> i).max(1), (f.height >> i).max(1));
+        let (Some(a), Some(b)) = (cum(i), cum(i + 1)) else {
+            return false;
+        };
+        matches!(decode_level(f.format, w, h, &f.data[a..b], None),
+            Ok(Decoded::Ldr(px)) if px.iter().any(|p| p[3] < 255))
+    };
+    if format == Format::Bc1 && (0..stored).any(transparent) {
+        return refuse(
+            "BC1 with 1-bit alpha: sdc writes BC1 opaque only; re-encode as BC7 or BC3".into(),
+        );
     }
     let ati = matches!(&f.fourcc, b"ATI1" | b"ATI2");
     let keep_legacy = f.header_kind == HeaderKind::Legacy

@@ -338,12 +338,13 @@ fn scan_body(
     }
     let mut sep_ids = vec![];
     if let Source::Mo2(inst) = src {
-        for (name, prio) in &seps {
+        for (line, (name, prio)) in seps.iter().enumerate() {
             sep_ids.push(store.upsert_origin_staged(&OriginSpec {
                 kind: KIND_SEPARATOR,
                 name: name.clone(),
                 root: inst.mods.join(name).display().to_string(),
-                parent: None,
+                // Separators only: modlist.txt order (no parent), the tie-break of adjacent separators in `mods`.
+                parent: Some(line as i64),
                 priority: *prio,
                 derived_by: None,
                 derived_state: None,
@@ -551,6 +552,10 @@ fn scan_body(
     if !skip_derived && pgp::running(&procs()) {
         report.tainted = true;
         store.discard_pending()?;
+        // No resolve ran: the old winners would name origins of the previous run, so the lists stay empty until a
+        // clean rescan (begin_scan: reads never mix old winners in).
+        store.set_winners(&HashMap::new(), &HashMap::new())?;
+        store.set_textures(&HashMap::new())?;
         // A tainted run still returns a (flagged) result: its origins are listed, as before.
         enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
@@ -762,7 +767,14 @@ fn walk(
             done: i,
             total,
         });
-        for f in vfs::loose::walk(&o.root, &["meshes"], &["nif"]) {
+        let (files, errs) = vfs::loose::walk(&o.root, &["meshes"], &["nif"]);
+        for e in errs {
+            // the mesh and texture walks of one root report the same root failure
+            if !report.problems.contains(&e) {
+                report.problems.push(e);
+            }
+        }
+        for f in files {
             let origin = OriginRef::Loose(i);
             if is_lod_path(&f.norm) || !seen.insert((f.norm.clone(), origin)) {
                 continue;
@@ -776,7 +788,14 @@ fn walk(
             locs.push(Loc::Loose(f.abs));
         }
         // Textures: directory-entry stat only, never the bytes. Distinct paths per origin by construction.
-        for f in vfs::loose::walk(&o.root, &["textures"], &["dds"]) {
+        let (files, errs) = vfs::loose::walk(&o.root, &["textures"], &["dds"]);
+        for e in errs {
+            // the mesh and texture walks of one root report the same root failure
+            if !report.problems.contains(&e) {
+                report.problems.push(e);
+            }
+        }
+        for f in files {
             tex.push(Copy {
                 path: f.norm,
                 origin: OriginRef::Loose(i),

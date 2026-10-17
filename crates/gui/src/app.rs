@@ -310,10 +310,13 @@ impl eframe::App for SdcApp {
         let scanning = self.meshes.scanning();
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).
+        // Trace-debug #41: after a cancel or failure the store reads empty; keep the evidence on screen.
         if scanning && !self.meshes.scanning() {
             self.scan_ended();
-            self.model.refresh_mesh_votes(false);
-            self.model.refresh_known_paths();
+            if self.meshes.scan_completed {
+                self.model.refresh_mesh_votes(false);
+                self.model.refresh_known_paths();
+            }
         }
         self.state.set3d.poll(&self.model);
         // Both views offer the scan (the Textures view has its row under the header).

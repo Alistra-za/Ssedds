@@ -139,12 +139,18 @@ fn exr_and_hdr_load_as_float_rgb() {
     }
 }
 
+/// Trace-debug #30 (owner, 2026-10-16; Note BQ15): OpenEXR stores premultiplied colour, so an EXR with alpha is
+/// un-premultiplied on load: RGB / A where A > 0, no clamp; A = 0 texels are left as stored.
 #[test]
-fn exr_with_alpha_loads_rgba_float() {
+fn exr_alpha_is_unpremultiplied_on_load() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("a.exr");
-    image::DynamicImage::ImageRgba32F(ImageBuffer::from_fn(2, 2, |_, _| {
-        Rgba([4.0f32, 0.5, 0.25, 0.5])
+    image::DynamicImage::ImageRgba32F(ImageBuffer::from_fn(2, 2, |x, _| {
+        if x == 0 {
+            Rgba([0.5f32, 0.5, 0.5, 0.5])
+        } else {
+            Rgba([0.25f32, 2.0, 0.0, 0.0])
+        }
     }))
     .save(&p)
     .unwrap();
@@ -153,7 +159,25 @@ fn exr_with_alpha_loads_rgba_float() {
         (info.channels, info.has_alpha, info.is_float),
         (4, true, true)
     );
+    assert_eq!(img.at(0, 1), [1.0, 1.0, 1.0, 0.5]);
+    assert_eq!(img.at(1, 1), [0.25, 2.0, 0.0, 0.0], "A = 0 is unchanged");
+}
+
+/// Trace-debug #30 (Note BQ15): `alpha.exr_straight` reads a straight-alpha EXR as stored.
+#[test]
+fn exr_straight_alpha_loads_as_stored() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.exr");
+    image::DynamicImage::ImageRgba32F(ImageBuffer::from_fn(2, 2, |_, _| {
+        Rgba([4.0f32, 0.5, 0.25, 0.5])
+    }))
+    .save(&p)
+    .unwrap();
+    let (img, _) = load_image_as(&p, true).unwrap();
     assert_eq!(img.at(1, 1), [4.0, 0.5, 0.25, 0.5]);
+    // The per-file switch the pipeline reads (`profile.alpha.exr_straight`).
+    assert!(engine::overrides::FIELD_PATHS.contains(&"alpha.exr_straight"));
+    assert!(engine::overrides::parse_set("file:**/a.exr.alpha.exr_straight=true").is_ok());
 }
 
 #[test]

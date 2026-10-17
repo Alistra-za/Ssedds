@@ -243,3 +243,14 @@ fn rfaos_on_a_metallic_only_set_says_why_it_builds_rmaos() {
         "{c:?}"
     );
 }
+
+/// Trace-debug #34 (Note BQ): forced `rfaos` on a metallic + fuzz set builds the `_rfaos` that `auto` builds too,
+/// so it carries no PACK-RECIPE-UNBUILDABLE "built _rfaos instead".
+#[test]
+fn rfaos_on_a_metallic_and_fuzz_set_builds_rfaos_without_warning() {
+    let d = fixture(&["iron_metallic.png", "iron_fuzz.png"], RFAOS);
+    let p = plan(&d);
+    let j = packed(&p, "iron_rfaos.dds").expect("builds _rfaos");
+    let c = conflicts(j, Code::PackRecipeUnbuildable);
+    assert!(c.is_empty(), "{c:?}");
+}

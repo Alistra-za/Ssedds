@@ -253,6 +253,8 @@ pub struct AppModel {
     recovery_key: Option<RecoveryKey>,
     /// Bumped by `open_folder` and a new export: the drawer then forgets its cached file checks.
     pub drawer_epoch: u64,
+    /// Bumped by `open_folder`: the UI then drops its Sets column modal and Slot commands (trace-debug #52).
+    pub folder_epoch: u64,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
     /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
@@ -448,7 +450,11 @@ impl AppModel {
         let mut m = AppModel::placeholder(settings);
         m.settings_base = settings_path
             .as_deref()
-            .map(|p| (m.settings.clone(), SourceStamp::of(p)));
+            // #45: no stamp when the file could not be read (locked at launch), so the first save merges it.
+            .map(|p| {
+                let read = GuiSettings::load(p).1.is_none();
+                (m.settings.clone(), SourceStamp::of(p).filter(|_| read))
+            });
         m.settings_path = settings_path;
         m.session = Some(session);
         m
@@ -466,6 +472,7 @@ impl AppModel {
             settings_error: None,
             recovery_key: None,
             drawer_epoch: 0,
+            folder_epoch: 0,
             user_config: None,
             user_presets: None,
             loaded_user_presets: vec![],
@@ -642,6 +649,7 @@ impl AppModel {
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
         self.drawer_epoch += 1;
+        self.folder_epoch += 1;
         self.dropped_fills.clear();
         // Audit GM-6: the previous folder's header-patch result, tag choices and open confirmation.
         self.dds_patch = Default::default();
@@ -999,18 +1007,13 @@ impl AppModel {
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => self.export_ended(Err(format!("internal error: {message}"))),
-                    "preview" => self.preview_panicked(&message),
-                    "heatmap" => self.heatmap_panicked(),
-                    "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
                     "save-report" => self.report_saving = false,
                     _ => {}
                 }
-                self.dialog = Some(Dialog::Error(format!(
-                    "internal error in {what}: {message}"
-                )));
+                self.raise_error(format!("internal error in {what}: {message}"));
             }
             other => self.handle_more(other),
         }
@@ -1049,7 +1052,17 @@ impl AppModel {
             }
         }
         self.status_line = format!("Planning failed: {}", f.message);
-        self.dialog = Some(Dialog::Error(f.message));
+        self.raise_error(f.message);
+    }
+
+    /// An error dialog, unless the PGPatcher overwrite question is open (#48): an answer is pending there, so the
+    /// error goes to the export notes and the question stays.
+    fn raise_error(&mut self, msg: String) {
+        if matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
+            self.export.notes.push(msg);
+        } else {
+            self.dialog = Some(Dialog::Error(msg));
+        }
     }
 
     /// Messages the export and the preview handle.
@@ -1492,14 +1505,38 @@ impl AppModel {
             }
             return;
         }
-        let last = self.sets_doc.as_ref().and_then(|d| d.last_json_sha256());
+        let rel = self.json_rel(&p.path);
+        let shas = self
+            .sets_doc
+            .as_ref()
+            .map(|d| d.pgp_json_shas())
+            .unwrap_or_default();
+        // #43: the record of this name; a project from before per-name records has only the legacy one.
+        let last = if shas.is_empty() {
+            self.sets_doc.as_ref().and_then(|d| d.last_json_sha256())
+        } else {
+            shas.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(&rel))
+                .map(|(_, s)| s.clone())
+        };
+        let root = self.export_root();
+        for k in shas.keys().filter(|k| !k.eq_ignore_ascii_case(&rel)) {
+            let old = root.join(k);
+            if old.is_file() {
+                self.export.notes.push(format!(
+                    "{}: the PGPatcher JSON is now {}; the old file was left in place and PGPatcher still reads it",
+                    old.display(),
+                    p.path.display()
+                ));
+            }
+        }
         match pbr_export::finish(
             &p,
             &self.export.rows,
             last.as_deref(),
             &mut self.export.notes,
         ) {
-            pbr_export::Finish::Written(sha) => self.record_json_sha(&sha),
+            pbr_export::Finish::Written(sha) => self.record_json_sha(&rel, &sha),
             pbr_export::Finish::Overwrite(text) => {
                 self.pending_text = Some(text);
                 self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
@@ -1509,10 +1546,17 @@ impl AppModel {
         }
     }
 
+    /// The PGPatcher JSON's path under the export root, `/`-separated (the key of its hash record).
+    fn json_rel(&self, path: &std::path::Path) -> String {
+        let rel = path.strip_prefix(self.export_root()).unwrap_or(path);
+        rel.to_string_lossy().replace('\\', "/")
+    }
+
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
     /// the project file is read-only (a bad `sdc-project.toml`, ruling P8) the JSON is still written but no hash is
     /// recorded: the next export then asks before overwriting it.
-    fn record_json_sha(&mut self, sha: &str) {
+    fn record_json_sha(&mut self, rel: &str, sha: &str) {
+        let root = self.export_root();
         let Some(d) = self.sets_doc.as_mut() else {
             return;
         };
@@ -1523,7 +1567,12 @@ impl AppModel {
             return;
         }
         let was_dirty = d.is_dirty();
+        // #43: one record per name; a name whose file is gone is dropped.
+        let mut shas = d.pgp_json_shas();
+        shas.retain(|k, _| !k.eq_ignore_ascii_case(rel) && root.join(k).is_file());
+        shas.insert(rel.to_string(), sha.to_string());
         d.set_last_json_sha256(sha);
+        d.set_pgp_json_shas(&shas);
         self.save_hash_record(was_dirty);
     }
 
@@ -1567,7 +1616,8 @@ impl AppModel {
         };
         if overwrite {
             if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
-                self.record_json_sha(&sha);
+                let rel = self.json_rel(&p.path);
+                self.record_json_sha(&rel, &sha);
             }
         } else {
             self.export.notes.push(format!(
@@ -1585,6 +1635,15 @@ impl AppModel {
         if matches!(self.dialog, Some(Dialog::ExportRunning(_))) {
             self.dialog = None;
             return false;
+        }
+        // #44: the export finished before the cancel was seen and asked about the PGPatcher JSON; leaving answers
+        // "keep" (with its note) rather than dropping the question. Opening another folder clears the export notes, so
+        // the note is also a message.
+        if self.after_export.is_some() && matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
+            self.resolve_overwrite_json(false);
+            if let Some(n) = self.export.notes.last().cloned() {
+                self.messages.notify(messages::Severity::Warning, n);
+            }
         }
         let action = self.after_export.take();
         match action {
@@ -2662,6 +2721,19 @@ pub fn export_finished_text(s: &engine::api::BatchSummary) -> String {
 mod tests {
     use super::*;
 
+    pub(super) fn bare_model() -> AppModel {
+        let session =
+            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
+        AppModel::new(GuiSettings::default(), None, session)
+    }
+
+    pub(super) fn panicked(what: &'static str) -> WorkerMsg {
+        WorkerMsg::Panicked {
+            what,
+            message: "boom".into(),
+        }
+    }
+
     /// Audit GM-10: mesh evidence that differs on every read never settles; `auto_replans` stops the re-plans
     /// after two rounds, and Export then refuses with "the sets changed while planning".
     #[test]
@@ -2717,5 +2789,124 @@ mod tests {
             "{:?}",
             m.dialog
         );
+    }
+
+    /// A TruePBR rock set exported once, its PGPatcher JSON edited by hand, a setting changed and a second export
+    /// started: the returned model is mid-export; `run_export` drives it.
+    fn hand_edited_json_and_a_second_export(d: &std::path::Path) -> (AppModel, PathBuf) {
+        let root = d.join("textures/landscape");
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbImage::from_fn(64, 64, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+        })
+        .save(root.join("rock01.png"))
+        .unwrap();
+        image::RgbImage::from_pixel(64, 64, image::Rgb([128, 128, 255]))
+            .save(root.join("rock01_normal.png"))
+            .unwrap();
+        let settings = GuiSettings {
+            export_folder: Some(d.join("export")),
+            ..GuiSettings::default()
+        };
+        let session =
+            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
+        let mut m = AppModel::new(settings, None, session);
+        m.accept = AcceptSuggestions::None;
+        m.open_folder(d.join("textures"));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
+        m.decide(
+            "landscape/rock01_normal.png",
+            Answer::Subtype(Subtype::PbrNormal),
+        );
+        m.decide(
+            "landscape/rock01_normal.png",
+            Answer::Green(GreenConvention::Directx),
+        );
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let export = |m: &mut AppModel| {
+            m.export_clicked();
+            if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+                m.proceed_anyway();
+            }
+        };
+        export(&mut m);
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        let p = m
+            .export_root()
+            .join("PBRNIFPatcher")
+            .join(format!("{}.json", pbr_export::json_name(&m)));
+        assert!(p.exists(), "{p:?}: {:?}", m.export.notes);
+        std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+        m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        export(&mut m);
+        assert!(m.export.running.is_some(), "{:?}", m.dialog);
+        (m, p)
+    }
+
+    /// Handle worker messages until the export has ended; `before_done` runs just before `ExportDone` is handled.
+    fn run_export(m: &mut AppModel, before_done: impl FnOnce(&mut AppModel)) {
+        let end = Instant::now() + Duration::from_secs(120);
+        let mut before_done = Some(before_done);
+        while m.export.running.is_some() {
+            assert!(Instant::now() < end, "the export never ended");
+            let Ok(msg) = m.rx.recv_timeout(Duration::from_millis(50)) else {
+                continue;
+            };
+            if matches!(msg, WorkerMsg::ExportDone(_)) {
+                if let Some(f) = before_done.take() {
+                    f(m);
+                }
+            }
+            m.handle(msg);
+        }
+    }
+
+    /// Trace-debug 2026-10-16 #44: "Cancel and close" answered as the export finishes (the cancel is not seen): the
+    /// overwrite question it raises is answered "keep" with a note, not dropped by the close.
+    #[test]
+    fn cancel_and_close_after_finished_export_keeps_edited_json_with_note() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
+        run_export(&mut m, |m| m.after_export = Some(AfterExport::Close));
+        assert!(m.take_close_ready());
+        assert!(m.dialog.is_none(), "{:?}", m.dialog);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+        assert!(
+            m.export.notes.iter().any(|n| n.contains("kept as edited")),
+            "{:?}",
+            m.export.notes
+        );
+        assert!(m
+            .messages
+            .entries()
+            .any(|e| e.text.contains("kept as edited")));
+    }
+
+    /// Trace-debug 2026-10-16 #48: a plan failure or a worker panic while the overwrite question is open goes to
+    /// the export notes; the question stays.
+    #[test]
+    fn plan_failure_and_worker_panic_keep_open_overwrite_json_question() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
+        run_export(&mut m, |_| {});
+        assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+        m.plan_failed(PlanFailure {
+            message: "plan broke".into(),
+            config: false,
+        });
+        m.handle(WorkerMsg::Panicked {
+            what: "preview",
+            message: "preview broke".into(),
+        });
+        assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p)));
+        for e in ["plan broke", "preview broke"] {
+            assert!(
+                m.export.notes.iter().any(|n| n.contains(e)),
+                "{e}: {:?}",
+                m.export.notes
+            );
+        }
     }
 }

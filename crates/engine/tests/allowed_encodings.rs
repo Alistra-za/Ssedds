@@ -109,3 +109,22 @@ fn owner_rules_hold() {
         }
     }
 }
+
+/// Trace-debug #31 (Note BQ): a grey `skin_wet` is judged as a greyscale map by `check_profile`, which accepts
+/// R8, RG8 and BC5; the picker offers them when told the map is grey, and nothing changes when it is not.
+#[test]
+fn grey_skin_wet_allows_what_check_profile_accepts() {
+    use engine::policy::allowed_encodings_for;
+    let grey = allowed_encodings_for(Subtype::SkinWet, Target::Cs, true);
+    for f in [Format::R8, Format::Rg8, Format::Bc5, Format::Bc4] {
+        assert!(grey.iter().any(|(g, _)| *g == f), "{f:?}: {}", pairs(&grey));
+    }
+    for t in [Target::Cs, Target::Vanilla] {
+        for st in Subtype::ALL {
+            assert_eq!(
+                allowed_encodings_for(st, t, false),
+                allowed_encodings(st, t)
+            );
+        }
+    }
+}

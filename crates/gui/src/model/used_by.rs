@@ -252,8 +252,16 @@ impl AppModel {
     }
 }
 
+/// SQL condition on texture set `ts.id`: a lighting shape in a non-derived copy of an enabled origin uses it (the
+/// filters of `meshes::SLOT0_SOURCE_SHAPES`, without the TruePBR one).
+pub(super) const LIVE_LIGHTING_TEXSET: &str = "EXISTS (SELECT 1 FROM shape s
+         JOIN nif_copy c ON c.id = s.copy_id AND c.is_derived = 0
+         JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
+         WHERE s.texset_id = ts.id AND s.shader_kind = 1)";
+
 /// Note AN: the textures the scanned meshes that use `tex` as their diffuse have in slot `n` (1-based), at most
-/// eight, sorted. These are what a PGPatcher lock on that slot keeps.
+/// eight, sorted. These are what a PGPatcher lock on that slot keeps. Only lighting shapes of enabled, non-derived
+/// copies count (trace-debug #42).
 pub fn slot_textures(db: &Path, tex: &str, n: u8) -> Result<Vec<String>, String> {
     if !(1..=9).contains(&n) {
         return Ok(vec![]);
@@ -266,7 +274,7 @@ pub fn slot_textures(db: &Path, tex: &str, n: u8) -> Result<Vec<String>, String>
          JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = 0
          JOIN texset ts ON ts.id = tu.texset_id
          JOIN path p2 ON p2.id = ts.t{}
-         WHERE tp.p = ?1 ORDER BY p2.p LIMIT 8",
+         WHERE tp.p = ?1 AND {LIVE_LIGHTING_TEXSET} ORDER BY p2.p LIMIT 8",
         n - 1
     );
     let mut st = store.conn().prepare(&sql).map_err(|e| e.to_string())?;

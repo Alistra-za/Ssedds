@@ -10,37 +10,34 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 
 ## Features
 
-What each tool does for a Skyrim texture without extra scripting.
-
-| Capability | Tessalith | texconv (DirectXTex) | NVIDIA Texture Tools Exporter | Compressonator | Cathedral Assets Optimizer |
-|---|---|---|---|---|---|
-BC1, BC3, BC4, BC5, BC6H, BC7 output
-Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster 
-SRGB / UNORM (Linear) tag chosen per map type and target shader
-Cutout alpha: coverage-preserving mips, on by default 
-Optional Exact-opaque alpha 255 for where it's needed (Forces mode 6's pbit to 1, off by default)
-Normal mips renormalised 
-Normal-mip variance baked into TruePBR roughness 
-RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent` with optional masks '_bumpmask' '_detailnormmask' '_bentmask') 
-Multiple layers accepted and duplicate types 'bump2' just works
-Loose maps automatically picked up and packed into `_rmaos` / `_rfaos` / complex `_m` 
-Suffix based channel remapping; ORM > RMAOS is instant 
-Complex-material `_m` gate checked 
-Complex grass (1:2 image, halves mipped apart) 
-Mod scan: meshes decide alpha meaning and set shader 
-Decode-and-check after every encode, with Skyrim rules 
-Validate DDS files made by other tools 
-GUI with encoded-mip preview, pixel readout, pin and compare
-TruePBR: PGPatcher JSON written per set, Validated, with every option exposed including recent
-NiAlphaProperty (alpha blend/test) set in a familiar format, Easy context menu options for slots and lock commands,
-Interactive color picker with hex and rgb 255 inputs, outputs are converted to decimal
-PBR Landscape, PBRTextureSets and PBRMaterialObjects Jsons built from actual the EDID's in your loadorder no need to cross reference
-Pg Patcher _m sidecard .json
-Batch / command line
-Fast Scanning - 100 000 nifs scanned in 14 seconds, 1500 plugins scanned in less than 3
-Does not need to be launched from mo2, can be. 
-It will fill in your mo2 location for the first time if it is. It does not rely on it's launched file system, it skips the middleman 
-Optional NVTT backend for BC7 BC6H encoding
+- BC1, BC3, BC4, BC5, BC6H, BC7 output
+- Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster
+- SRGB / UNORM (Linear) tag chosen per map type and target shader
+- Cutout alpha: coverage-preserving mips, on by default
+- Optional exact-opaque alpha 255 where it's needed (forces BC7 mode 6's p-bit to 1; off by default)
+- Normal mips renormalised
+- Normal-mip variance baked into TruePBR roughness
+- RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent`, with optional masks `_bumpmask`, `_detailnormmask`, `_bentmask`)
+- Multiple layers and duplicate types (`_bump2`) just work
+- Loose maps automatically picked up and packed into `_rmaos` / `_rfaos` / complex `_m`
+- Suffix-based channel remapping; ORM → RMAOS is instant
+- Complex-material `_m` gate checked
+- Complex grass (1:2 image, halves mipped apart)
+- Mod scan: meshes decide alpha meaning and set shader
+- Decode-and-check after every encode, with Skyrim rules
+- Validate DDS files made by other tools
+- GUI with encoded-mip preview, pixel readout, pin and compare
+- TruePBR: PGPatcher JSON written per set, validated, with every option exposed, including the recent ones
+- NiAlphaProperty (alpha blend/test) set in a familiar format
+- Easy context-menu options for slots and lock commands
+- Interactive colour picker with hex and RGB (0–255) inputs; outputs are converted to decimal
+- PBR Landscape: PBRTextureSets and PBRMaterialObjects JSONs built from the actual EDIDs in your load order, no cross-referencing needed
+- PGPatcher `_m` sidecar `.json`
+- Batch / command line
+- Fast scanning: 100,000 NIFs in 14 seconds, 1,500 plugins in under 3
+- Doesn't need to be launched from MO2, but can be
+- When launched from MO2, it fills in your MO2 location the first time; it doesn't rely on MO2's virtual file system, so it skips the middleman
+- Optional NVTT backend for BC7 / BC6H encoding
 
 ## What it does differently
 
@@ -77,7 +74,7 @@ BC7E vs only cpu encoders at maximum settings (besides ISPC)
 | Opaque input decoded with alpha 254 | 28%*  | 0% | 1.1% | 15% | 2.4% |
 | Time per megapixel | 0.22 s | ~14 s | ~33 s | 0.30 s | ~20 s |
 
-* Optional patch for when that's not acceptable (mode 6 pbit override, exact opaque)
+  Optional patch for when that's not acceptable (mode 6 pbit override, exact opaque)
 † Compressonator q1.0 was not re-measured on the wider set; its values come from the original 4–7 images. On those images it was 0.15 dB behind NVTT on packed data and 0.27° behind on normals. 
 The alpha-254 and timing rows are also from the original run.
 
@@ -111,7 +108,7 @@ What Tessalith does (`crates/engine/src/rnm/`):
 - **Order and strength:** `bent` 0.35, `bump` 0.4, `bump2` 0.4, `detail` 0.6, `detail2` 0.3, in that order; `rnm.order` moves listed layers to the front. Strength scales the layer's slope (0 flat, 1 as authored); a mask's R channel scales it per texel.
 - **Where:** into the set's `_n` or `_cnr`, after decode and green flip, before mips. Layers are resampled to the base size. Alpha is untouched, so `_cnr` coat roughness passes through. The TruePBR roughness bake reads the blended normal.
 
-Defaults assume _Bent is a high to low mesh only bake from the same normal source (It contains all detail the normal has, used to reduce the ao strengh) use RMM mixing for when that is not the case
+Defaults assume _Bent is a high to low mesh only bake from the same normal source (It contains all detail the normal has, mask is used to reduce the ao strengh) use RMM mixing for when that is not the case.
 ## Quick start
 
 Build with Rust stable and the MSVC Build Tools ([Installation](docs/wiki/Installation.md)). This writes `sdc.exe` and `tessalith.exe` to `target\x86_64-pc-windows-msvc\release\`:

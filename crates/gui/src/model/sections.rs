@@ -205,6 +205,15 @@ impl AppModel {
         });
     }
 
+    /// Several keys of section `i` as one undo step (a match pill's mode switch, trace-debug #56).
+    pub fn set_section_values(&mut self, i: usize, edits: Vec<(String, Option<Value>)>) {
+        self.batch_edit("Change match", |m| {
+            for (k, v) in edits {
+                m.set_section_value(i, &k, v);
+            }
+        });
+    }
+
     /// Set (or with `None` remove) key `key` of section `i`. Edits of one key merge into one undo step.
     pub fn set_section_value(&mut self, i: usize, key: &str, v: Option<Value>) {
         if !self.sets_editable() || !SECTION_KEYS.contains(&key) {

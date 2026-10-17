@@ -5,7 +5,7 @@ use crate::model::cm_json::{block_of as cm_block_of, CmBlock};
 use crate::model::cs_pbr::{self, block_of, field, fields, CsBlock, Kind, Template};
 use crate::pgp::settings::Settings;
 use crate::project::{
-    dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError, TomlFile,
+    dotted_table, item_json, json_to_toml, set_value, sub_table, toml_to_json, SaveError, TomlFile,
 };
 use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
@@ -24,6 +24,9 @@ const CS_SHA: &str = "cs_pbr_sha256";
 /// Complex material design §3: `[project] cm_json_sha256`, path under the export root → hash of the
 /// `<texture>.json` sdc last wrote there.
 const CM_SHA: &str = "cm_json_sha256";
+/// #43: `[project] pgp_json_sha256`, path under the export root → hash of the PGPatcher JSON sdc last wrote there (one
+/// per name it has had). `last_json_sha256` stays the current name's hash, for older builds.
+const PGP_SHA: &str = "pgp_json_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
 const RESERVED: [&str; 13] = [
     "id",
@@ -235,10 +238,15 @@ impl SetsDoc {
         let (doc, dirty, sha) = (self.f.doc.clone(), self.f.dirty, self.last_json_sha256());
         let cs = self.cs_pbr_shas();
         let cm = self.cm_json_shas();
+        let pgp = self.pgp_json_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
             self.set_project("last_json_sha256", sha.map(Value::from));
+        }
+        // In the order an export writes them, so a restore that only puts them back leaves the text as it was.
+        if self.pgp_json_shas() != pgp {
+            self.set_pgp_json_shas(&pgp);
         }
         if self.cs_pbr_shas() != cs {
             self.set_cs_pbr_shas(&cs);
@@ -266,8 +274,18 @@ impl SetsDoc {
     }
 
     fn set_project(&mut self, key: &str, v: Option<Value>) {
-        let absent = self.f.doc.get("project").and_then(|p| p.get(key)).is_none();
-        if self.read_only() || (v.is_none() && absent) {
+        // Removing an absent key or writing the stored value is no edit (trace-debug #58).
+        let now = self
+            .f
+            .doc
+            .get("project")
+            .and_then(|p| p.get(key))
+            .and_then(item_json); // review M7: a hand-written `[project.<key>]` table too
+        let same = match &v {
+            None => now.is_none(),
+            Some(x) => now.is_some() && toml_to_json(&Item::Value(x.clone())) == now,
+        };
+        if self.read_only() || same {
             return;
         }
         let Some(p) = sub_table(self.f.doc.as_table_mut(), "project", || {
@@ -325,6 +343,14 @@ impl SetsDoc {
 
     pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
         self.set_shas(CS_SHA, shas)
+    }
+
+    pub fn pgp_json_shas(&self) -> BTreeMap<String, String> {
+        self.shas(PGP_SHA)
+    }
+
+    pub fn set_pgp_json_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.set_shas(PGP_SHA, shas)
     }
 
     pub fn cm_json_shas(&self) -> BTreeMap<String, String> {
@@ -624,9 +650,9 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
+        let mut items = strings(self.table_mut(id).get(key));
+        items.retain(|f| !self.names_only(f, file));
         let t = self.table_mut(id);
-        let mut items = strings(t.get(key));
-        items.retain(|f| !same_id(f, file));
         if add {
             items.push(file.to_string());
         }
@@ -646,10 +672,10 @@ impl SetsDoc {
     pub fn add_member(&mut self, id: &str, file: &str) {
         for e in self.parse_entries() {
             if !same_id(&e.id, id) {
-                if e.add.iter().any(|f| same_id(f, file)) {
+                if e.add.iter().any(|f| self.names_only(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
                 }
-                if e.remove.iter().any(|f| same_id(f, file)) {
+                if e.remove.iter().any(|f| self.names_only(f, file)) {
                     self.list_edit(&e.id, "remove", file, false);
                 }
             }
@@ -659,7 +685,7 @@ impl SetsDoc {
         let removed_here = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| self.names_only(f, file)));
         if removed_here {
             self.list_edit(id, "remove", file, false);
         } else {
@@ -672,12 +698,47 @@ impl SetsDoc {
         let moved_in = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| same_id(f, file)));
+            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| self.names_only(f, file)));
         if moved_in {
             self.list_edit(id, "add", file, false);
         } else {
             self.list_edit(id, "remove", file, true);
         }
+    }
+
+    /// Review M4: `key` names `file` (`names_file`) and no other file: an extension-less key also names every file
+    /// with that stem, so it is dropped for one of them only when no sibling of another extension is on disk. A key
+    /// kept that way gets an exact `remove` instead (`remove_member`), which the engine applies after the moves.
+    /// shortcut: a kept key in another set's `add` still moves its first match there (`add_member`); upgrade if a
+    /// user reports a same-stem pair split across sets.
+    fn names_only(&self, key: &str, file: &str) -> bool {
+        if same_id(key, file) {
+            return true;
+        }
+        if !names_file(key, file) {
+            return false;
+        }
+        let rel = Path::new(file);
+        let (Some(root), Some(name), Some(stem)) =
+            (self.f.path.parent(), rel.file_name(), rel.file_stem())
+        else {
+            return true;
+        };
+        let dir = root.join(rel.parent().unwrap_or(Path::new("")));
+        let (name, stem) = (
+            name.to_string_lossy().to_lowercase(),
+            stem.to_string_lossy().to_lowercase(),
+        );
+        !std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| {
+                let p = e.path();
+                p.file_stem()
+                    .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
+                    && e.file_name().to_string_lossy().to_lowercase() != name
+            })
     }
 
     pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {
@@ -787,14 +848,16 @@ impl SetsDoc {
         let t = self.table_mut(id);
         if t.get(Kind::Txst.key()).is_some_and(Item::is_table_like) {
             if let Some((cs, cv)) = cs_pbr::pgp_to_cs(key, v.as_ref()) {
-                write_path(t, key, None);
+                let mut hit = write_path(t, key, None);
                 if let Some(b) = sub_table(t, Kind::Txst.key(), || Item::Table(Table::new())) {
-                    match &cv {
+                    hit |= match &cv {
                         Some(x) => write_json(b, cs, x),
                         None => write_path(b, cs, None),
                     };
                 }
-                self.f.touch();
+                if hit {
+                    self.f.touch();
+                }
                 return;
             }
         }
@@ -948,8 +1011,8 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
     let parts: Vec<&str> = path.split('.').collect();
     let (last, dirs) = parts.split_last().expect("one part at least");
     match v {
-        Some(v) => {
-            let Some(v) = json_to_toml(&v) else {
+        Some(json_v) => {
+            let Some(v) = json_to_toml(&json_v) else {
                 return false;
             };
             let mut cur: &mut dyn TableLike = t;
@@ -958,6 +1021,14 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
                     Some(next) => cur = next,
                     None => return false,
                 }
+            }
+            // The stored value already: no edit (trace-debug #58).
+            if cur
+                .get(last)
+                .and_then(toml_to_json)
+                .is_some_and(|now| now == json_v)
+            {
+                return false;
             }
             set_value(cur, last, v);
             true
@@ -993,10 +1064,58 @@ fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
     }
 }
 
+/// #37: whether an `add`/`remove` key names file `file` as the engine reads it (`path_key_matches`: case-folded, the
+/// extension optional).
+pub(crate) fn names_file(key: &str, file: &str) -> bool {
+    same_id(key, file) || engine::overrides::path_key_matches(key, file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Review M7 (#58, Note BS11): a hash record written by hand as a standard `[project.cs_pbr_sha256]` table is
+    /// compared like the inline form: an equal rewrite is no edit, and clearing it removes the table.
+    #[test]
+    fn a_standard_table_hash_record_compares_and_clears() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join(FILE_NAME),
+            "[project.cs_pbr_sha256]\n\"a.json\" = \"x\"\n",
+        )
+        .unwrap();
+        let mut s = SetsDoc::open(d.path());
+        let shas = s.cs_pbr_shas();
+        assert_eq!(shas.len(), 1);
+        s.set_cs_pbr_shas(&shas);
+        assert!(!s.is_dirty(), "an equal map is no edit");
+        s.set_cs_pbr_shas(&BTreeMap::new());
+        assert!(s.cs_pbr_shas().is_empty(), "the table is removed");
+        assert!(s.is_dirty());
+    }
+
+    /// Trace-debug #58: writing what is already stored (a focused field left unchanged) is no edit.
+    #[test]
+    fn writing_an_equal_value_does_not_dirty() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = SetsDoc::open(d.path());
+        s.create_set("a/x");
+        s.set_value("a/x", "rename", Some(json!("n")));
+        s.set_json_name(Some("mine"));
+        s.create_set("a/y");
+        s.add_cs_block("a/y", Kind::Txst);
+        s.set_value("a/y", "specular_level", Some(json!(0.5)));
+        s.save(false).unwrap();
+        s.set_value("a/x", "rename", Some(json!("n")));
+        assert!(!s.is_dirty(), "set_value");
+        s.set_json_name(Some("mine"));
+        assert!(!s.is_dirty(), "set_project");
+        s.set_value("a/y", "specular_level", Some(json!(0.5)));
+        assert!(!s.is_dirty(), "a key mapped into the texture-set block");
+        s.set_value("a/x", "rename", Some(json!("m")));
+        assert!(s.is_dirty(), "a change still dirties");
+    }
 
     /// REPORT #9: after every mutator the cached `entries()` is what the document holds.
     #[test]

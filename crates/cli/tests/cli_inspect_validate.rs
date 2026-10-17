@@ -1142,3 +1142,33 @@ fn a_closed_stdout_pipe_is_not_an_internal_error() {
         text(&o.stderr)
     );
 }
+
+/// Trace-debug #18 (Note BQ): a closed stderr is not a crash. `validate --json` still checks every file and exits 1
+/// for the unreadable ones, not Rust's 101.
+#[test]
+fn validate_json_with_closed_stderr_exits_1_and_checks_all_files() {
+    use std::io::Read as _;
+    let d = tempfile::tempdir().unwrap();
+    let (a, b) = (d.path().join("a.dds"), d.path().join("b.dds"));
+    std::fs::write(&a, b"not a dds").unwrap();
+    std::fs::write(&b, b"not a dds").unwrap();
+    let mut child = sdc()
+        .args(["validate", "--json"])
+        .arg(&a)
+        .arg(&b)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stderr.take());
+    let mut out = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    let st = child.wait().unwrap();
+    assert_eq!(st.code(), Some(1), "{out}");
+    assert_eq!(out.lines().count(), 2, "{out}");
+}

@@ -2010,7 +2010,8 @@ impl TexState {
     }
 
     /// Swaps first, then flips (the order the set preview sends them). A failure here would have failed the
-    /// original swap too, which was reported then.
+    /// original swap too, which was reported then, unless the original failed only because the device was gone
+    /// ([`log_for_replay`]).
     fn replay(&self, r: &mut Renderer) {
         for ((path, v), bytes) in &self.swaps {
             let _ = r.replace_texture(path, bytes, *v);
@@ -2044,6 +2045,15 @@ fn load_all(
     let rep = load(r, c, edits);
     tex.replay(r);
     rep
+}
+
+/// Whether a swap or material edit goes in the replay log: on success, and on a lost device, since the rebuild
+/// that follows replays the log onto the new device (trace-debug #14).
+fn log_for_replay<T>(r: &Result<T, String>) -> bool {
+    r.as_ref().map_or_else(
+        |e| e.starts_with(render3d::device::DEVICE_REMOVED),
+        |_| true,
+    )
 }
 
 /// One material edit on the loaded content.
@@ -2307,7 +2317,7 @@ fn render_loop(
                     }
                     let t0 = std::time::Instant::now();
                     let result = edit(&mut r, c, id, m.clone());
-                    if result.is_ok() {
+                    if log_for_replay(&result) {
                         edits.insert(id, m);
                     }
                     send(V3Reply::MaterialSet {
@@ -2331,7 +2341,7 @@ fn render_loop(
                             variant,
                         } => {
                             let result = r.replace_texture(&path, &bytes, variant).map(|_| ());
-                            if result.is_ok() {
+                            if log_for_replay(&result) {
                                 tex.swaps.insert((path.clone(), variant), bytes);
                             }
                             send(V3Reply::TextureSwap {
@@ -2434,6 +2444,15 @@ fn render_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Trace-debug #14: a swap or edit that fails because the device is gone is replayed by the rebuild.
+    #[test]
+    fn a_device_removed_failure_is_still_logged_for_replay() {
+        assert!(log_for_replay::<()>(&Ok(())));
+        let lost = format!("{}: present", render3d::device::DEVICE_REMOVED);
+        assert!(log_for_replay::<()>(&Err(lost)));
+        assert!(!log_for_replay::<()>(&Err("bad dds".into())));
+    }
 
     /// P1-C Task 8 fix 1: an RFAOS candidate whose file is gone is quiet (no load-report error) and the other
     /// candidate is served; an ordinary source that fails is still an error.

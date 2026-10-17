@@ -3,8 +3,8 @@
 use super::fields::{field_view, format_label};
 use super::sets::locked_items;
 use super::{history, AppModel};
-use engine::config::{ColorTag, Format, Subtype, Target};
-use engine::policy::allowed_encodings;
+use engine::config::{Category, ColorTag, Format, Subtype, Target};
+use engine::policy::allowed_encodings_for;
 use std::collections::HashMap;
 
 /// What a cleanup did, waiting for the plan that shows the new defaults: the cleared textures as (key, "name: old →
@@ -27,15 +27,16 @@ pub enum Verdict {
 }
 
 /// The rule for a texture now of sub-type `st` resolving to `pair`: `explicit` when its `[files]` entry sets the
-/// format or tag; `lock` is a slot lock or a Format field lock.
+/// format or tag; `lock` is a slot lock or a Format field lock; `grayscale` when its category is Grayscale (#31).
 pub fn verdict(
     target: Target,
     st: Subtype,
+    grayscale: bool,
     pair: (Format, ColorTag),
     explicit: bool,
     lock: Option<&str>,
 ) -> Verdict {
-    if !explicit || allowed_encodings(st, target).contains(&pair) {
+    if !explicit || allowed_encodings_for(st, target, grayscale).contains(&pair) {
         return Verdict::Keep;
     }
     match lock {
@@ -115,7 +116,8 @@ impl AppModel {
                     .map(str::to_string)
             });
             let head = format!("{}: {} → {}", i.name, type_name(old), type_name(st));
-            match verdict(self.target, st, e, explicit, lock.as_deref()) {
+            let grey = j.profile.category == Category::Grayscale;
+            match verdict(self.target, st, grey, e, explicit, lock.as_deref()) {
                 Verdict::Keep => {}
                 Verdict::Clear => pending.cleared.push((i.key.clone(), head)),
                 Verdict::Kept(why) => pending

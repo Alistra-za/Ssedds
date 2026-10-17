@@ -31,11 +31,24 @@ pub struct SourceMeta {
 /// Decode `path` to float RGBA. The dimension limit is checked from the header before the float pixel buffer is
 /// decoded or allocated; a DDS input is first read whole into memory (its file bytes), then checked.
 pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
-    load_image_meta(path).map(|(img, info, _)| (img, info))
+    load_image_as(path, false)
+}
+
+/// `load_image`; `exr_straight` reads an OpenEXR with alpha as straight alpha (as stored) instead of
+/// un-premultiplying it (`alpha.exr_straight`, Note BQ15).
+pub fn load_image_as(path: &Path, exr_straight: bool) -> Result<(Rgba32F, SourceInfo), LoadError> {
+    load_meta(path, exr_straight).map(|(img, info, _)| (img, info))
 }
 
 /// `load_image`, with the ICC flag and a DDS input's DXGI format. A `.dds` path is read as a DDS (mip 0).
 pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError> {
+    load_meta(path, false)
+}
+
+fn load_meta(
+    path: &Path,
+    exr_straight: bool,
+) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError> {
     if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
@@ -58,7 +71,7 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
             .map_err(bad)?;
         let reader =
             image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
-        return decode(reader, path);
+        return decode(reader, path, exr_straight);
     }
     let reader = image::ImageReader::open(path)
         .and_then(image::ImageReader::with_guessed_format)
@@ -66,7 +79,7 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
             path: path.to_path_buf(),
             msg: e.to_string(),
         })?;
-    decode(reader, path)
+    decode(reader, path, exr_straight)
 }
 
 /// What the png crate may allocate besides the image (DECISIONS AV1): its line buffer and ancillary chunks, the
@@ -85,14 +98,18 @@ pub(crate) fn lift_limits<R: std::io::BufRead + std::io::Seek>(reader: &mut imag
 }
 
 /// Decode with the `image` decoder `reader` picked, MAX_DIM-checked from its header first.
+/// An OpenEXR with alpha is un-premultiplied (OpenEXR stores premultiplied colour; trace-debug #30, Note BQ15):
+/// RGB / A where A > 0, unclamped; A = 0 texels stay as stored. `exr_straight` skips it.
 fn decode<R: std::io::BufRead + std::io::Seek>(
     mut reader: image::ImageReader<R>,
     path: &Path,
+    exr_straight: bool,
 ) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError> {
     let err = |e: image::ImageError| LoadError::Decode {
         path: path.to_path_buf(),
         msg: e.to_string(),
     };
+    let exr = reader.format() == Some(image::ImageFormat::OpenExr);
     lift_limits(&mut reader);
     let mut decoder = reader.into_decoder().map_err(err)?;
     // Checked on the decoder chosen by content (the one that allocates), not one chosen by extension.
@@ -118,7 +135,15 @@ fn decode<R: std::io::BufRead + std::io::Seek>(
         has_alpha: ct.has_alpha(),
         is_float: matches!(ct, image::ColorType::Rgb32F | image::ColorType::Rgba32F),
     };
-    let px = img.to_rgba32f().pixels().map(|p| p.0).collect();
+    let mut px: Vec<[f32; 4]> = img.to_rgba32f().pixels().map(|p| p.0).collect();
+    if exr && info.has_alpha && !exr_straight {
+        for p in px.iter_mut().filter(|p| p[3] > 0.0) {
+            let a = p[3];
+            for c in &mut p[..3] {
+                *c /= a;
+            }
+        }
+    }
     Ok((
         Rgba32F {
             width: img.width(),
