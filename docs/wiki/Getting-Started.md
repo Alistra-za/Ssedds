@@ -171,7 +171,7 @@ The GUI runs the same engine and reads and writes the same `sdc.toml`, so you ca
 9. Press **Export**. The GUI saves `sdc.toml` and `sdc-project.toml` first, then converts. A drawer opens at the bottom with a Files tab and a Warnings tab.
 10. When the export finishes, the GUI writes `<export folder>\PBRNIFPatcher\<name>.json` for every PBR set that exported fully.
 
-To get an equivalent command line, press **Copy CLI command** in the bottom drawer. Add `--accept-suggestions high` to the copied command, because the GUI accepts High-confidence suggestions and the CLI does not by default. Add `--nvtt <path>` if you use NVTT. Set edits made in the Sets column live in `sdc-project.toml`, which the CLI does not read; see [GUI guide](GUI-Guide.md#export).
+To get an equivalent command line, press **Copy CLI command** in the bottom drawer. The copied command already has `--accept-suggestions high`, because the GUI accepts High-confidence suggestions and the CLI does not by default. Add `--nvtt <path>` if you use NVTT. Set edits made in the Sets column live in `sdc-project.toml`, which the CLI does not read; see [GUI guide](GUI-Guide.md#export).
 
 ## Where to go next
 
