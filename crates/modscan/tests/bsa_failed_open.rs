@@ -75,6 +75,26 @@ fn unwalkable_loose_folder_is_reported() {
     );
 }
 
+/// Removes the read-deny from the mod folder when dropped, so a panic cannot leave an undeletable temp dir.
+#[cfg(windows)]
+struct Undeny(std::path::PathBuf, String);
+#[cfg(windows)]
+impl Undeny {
+    fn run(&self) -> bool {
+        std::process::Command::new("icacls")
+            .arg(&self.0)
+            .args(["/remove:d", &self.1])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+}
+#[cfg(windows)]
+impl Drop for Undeny {
+    fn drop(&mut self) {
+        self.run(); // idempotent; never panics
+    }
+}
+
 /// One unwalkable root is one problem line, though the mesh and texture walks both see it.
 #[test]
 #[cfg(windows)]
@@ -85,20 +105,18 @@ fn failed_loose_root_is_reported_once() {
     common::put(r, "profiles/Default/plugins.txt", b"*A.esp\n");
     // Deny list-directory on the mod folder: is_dir still works, read_dir fails (not NotFound).
     let a = r.join("mods/A");
-    let acl = |arg: &str| {
-        std::process::Command::new("icacls")
-            .arg(&a)
-            .args(arg.split(' '))
-            .output()
-            .unwrap()
-    };
     let me = std::env::var("USERNAME").unwrap();
-    let st = acl(&format!("/deny {me}:(RD)"));
+    let st = std::process::Command::new("icacls")
+        .arg(&a)
+        .args(["/deny", &format!("{me}:(RD)")])
+        .output()
+        .unwrap();
     assert!(st.status.success(), "{st:?}");
+    let undeny = Undeny(a, me);
     let mut s = Store::open(&r.join("scan.db")).unwrap();
     let src = Source::Mo2(Instance::load(r, None).unwrap());
     let rep = run(&src, &mut s, &AtomicBool::new(false), &|_| {}, &|| vec![]).unwrap();
-    acl("/remove:d");
+    assert!(undeny.run(), "restoring the folder's ACL failed");
     let n = rep
         .problems
         .iter()
