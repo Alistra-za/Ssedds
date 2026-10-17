@@ -569,7 +569,10 @@ impl AppModel {
             return false;
         };
         // Review I1: the aliases cannot be written, so nothing (not even the set entries) may move.
-        if d.mode == RenameMode::Inputs && self.project.as_ref().is_some_and(|p| p.read_only()) {
+        if d.mode == RenameMode::Inputs
+            && (self.project.as_ref().is_some_and(|p| p.read_only())
+                || self.sets_doc.as_ref().is_some_and(|s| s.read_only()))
+        {
             return false;
         }
         let plan = plan_rename(self, &d);
