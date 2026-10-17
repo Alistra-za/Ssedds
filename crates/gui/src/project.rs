@@ -225,6 +225,14 @@ impl ProjectDoc {
         self.check();
     }
 
+    /// The text of the stashed document when it held unsaved edits.
+    pub fn stashed_edits(&self) -> Option<String> {
+        self.stash
+            .as_ref()
+            .filter(|(_, dirty)| *dirty)
+            .map(|(doc, _)| doc.to_string())
+    }
+
     /// Undo a `set_error` that blamed the file wrongly: its document and unsaved edits come back (or, with nothing
     /// stashed, the file is re-read).
     pub fn unblame(&mut self) {
