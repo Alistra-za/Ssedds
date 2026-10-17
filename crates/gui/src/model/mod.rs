@@ -1022,11 +1022,11 @@ impl AppModel {
             WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    // Audit 08f-9: one error dialog. `export_ended` shows it unless the user was leaving; then the
-                    // panic arm shows its own (Note BI6).
+                    // Audit 08f-9: one error dialog. `export_ended` shows it unless the user was leaving (then the
+                    // panic arm shows its own, Note BI6) or a dialog is open, which stays (review m1, 08f-6).
                     "export" => {
                         self.export_ended(Err(format!("internal error: {message}")));
-                        if matches!(self.dialog, Some(Dialog::Error(_))) {
+                        if self.dialog.is_some() {
                             return;
                         }
                     }
@@ -3000,6 +3000,20 @@ mod tests {
             message: "boom".into(),
         });
         assert_eq!(m.dialog, Some(Dialog::Error("internal error: boom".into())));
+        assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
+    }
+
+    /// Review m1: an export-thread panic never replaces a dialog that is open (here the banner's Reload question).
+    #[test]
+    fn an_export_panic_keeps_an_open_dialog() {
+        let mut m = bare_model();
+        m.export.running = Some(CancelToken::default());
+        m.dialog = Some(Dialog::ReloadUnsaved);
+        m.handle(WorkerMsg::Panicked {
+            what: "export",
+            message: "boom".into(),
+        });
+        assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
         assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
     }
 }
