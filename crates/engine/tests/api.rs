@@ -1165,3 +1165,23 @@ fn an_unremovable_stale_sidecar_is_a_warning_not_a_failure() {
         .iter()
         .any(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutSidecarKept)));
 }
+
+/// Audit 08d-6 (Note BV3): `--sidecar` never replaces a `.dds.json` sdc did not write; it is kept with
+/// OUT-SIDECAR-KEPT and the DDS stays.
+#[test]
+fn sidecar_keeps_a_foreign_dds_json() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let side = d.path().join("out/armor/iron.dds.json");
+    std::fs::create_dir_all(side.parent().unwrap()).unwrap();
+    std::fs::write(&side, "{\"mine\": true}").unwrap();
+    let mut with = request(d.path());
+    with.sidecar = true;
+    let (s, ev) = run(with);
+    assert_eq!(s.failed, 0, "{ev:?}");
+    assert!(d.path().join("out/armor/iron.dds").exists());
+    assert_eq!(std::fs::read_to_string(&side).unwrap(), "{\"mine\": true}");
+    assert!(ev
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutSidecarKept)));
+}
