@@ -1335,3 +1335,25 @@ fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
         Some("borrowed-slot copies not made: the export failed")
     );
 }
+
+/// Audit 08f-2: "Proceed anyway" continues as the other answers do: it waits for a plan in flight and runs the
+/// export guards again before the undecided question.
+#[test]
+fn proceeding_with_warnings_waits_for_a_plan_in_flight() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
+    idle(&mut m);
+    m.export_clicked();
+    assert!(matches!(m.dialog, Some(Dialog::ExportWarnings(_))));
+    m.replan();
+    m.proceed_with_warnings();
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(m.export_queued());
+    idle(&mut m);
+    assert!(
+        matches!(m.dialog, Some(Dialog::ProceedAnyway(_))),
+        "{:?}",
+        m.dialog
+    );
+}

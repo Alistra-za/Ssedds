@@ -1393,10 +1393,11 @@ impl AppModel {
         }
     }
 
-    /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export.
+    /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export. Like
+    /// the other answers it waits for a plan in flight and runs the guards again (audit 08f-2).
     pub fn proceed_with_warnings(&mut self) {
         self.dialog = None;
-        self.undecided_check();
+        self.continue_export(Continue::Recheck);
     }
 
     /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
