@@ -1598,6 +1598,11 @@ impl AppModel {
             self.dialog = None;
             return false;
         }
+        // #44: the export finished before the cancel was seen and asked about the PGPatcher JSON; leaving answers
+        // "keep" (with its note) rather than dropping the question.
+        if self.after_export.is_some() && matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
+            self.resolve_overwrite_json(false);
+        }
         let action = self.after_export.take();
         match action {
             None => false,
@@ -2801,6 +2806,23 @@ mod tests {
             }
             m.handle(msg);
         }
+    }
+
+    /// Trace-debug 2026-10-16 #44: "Cancel and close" answered as the export finishes (the cancel is not seen): the
+    /// overwrite question it raises is answered "keep" with a note, not dropped by the close.
+    #[test]
+    fn cancel_and_close_after_finished_export_keeps_edited_json_with_note() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
+        run_export(&mut m, |m| m.after_export = Some(AfterExport::Close));
+        assert!(m.take_close_ready());
+        assert!(m.dialog.is_none(), "{:?}", m.dialog);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+        assert!(
+            m.export.notes.iter().any(|n| n.contains("kept as edited")),
+            "{:?}",
+            m.export.notes
+        );
     }
 
     /// Trace-debug 2026-10-16 #48: a plan failure or a worker panic while the overwrite question is open goes to
