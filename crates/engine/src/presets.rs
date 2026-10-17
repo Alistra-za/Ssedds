@@ -683,7 +683,8 @@ impl PresetRegistry {
     /// The user presets folder (spec §3, Note T6): every `*.toml` directly in `dir`, in file-name order. Every file is
     /// loaded first, then each loaded preset must pass [`PresetRegistry::check_preset`], so a preset may base on one
     /// later in the order (Review Focus 2). A file that fails is skipped with CFG-PRESET-SKIPPED, and so is a preset
-    /// based on a skipped one. A missing folder loads nothing.
+    /// based on a skipped one. A file refused while a preset skipped later held its id or an alias is tried again.
+    /// A missing folder loads nothing.
     pub fn add_dir(&mut self, dir: &Path) -> Vec<Warning> {
         let skip = |file: &Path, reason: String| {
             Warning::new(
@@ -723,23 +724,35 @@ impl PresetRegistry {
         }
         files.sort();
         let mut loaded = vec![];
-        for f in files {
-            match self.add_file(&f) {
-                Ok(id) => loaded.push((id, f)),
-                Err(e) => warnings.push(skip(&f, e.to_string())),
+        let mut pending = files;
+        loop {
+            let mut refused = vec![];
+            for f in pending {
+                match self.add_file(&f) {
+                    Ok(id) => loaded.push((id, f)),
+                    Err(e) => refused.push((f, e)),
+                }
             }
+            // Removing a preset can orphan one based on it, so check again until nothing fails.
+            let mut removed = false;
+            while let Some((i, e)) = loaded
+                .iter()
+                .enumerate()
+                .find_map(|(i, (id, _))| self.check_preset(id).err().map(|e| (i, e)))
+            {
+                let (id, f) = loaded.remove(i);
+                self.remove(&id);
+                warnings.push(skip(&f, e.to_string()));
+                removed = true;
+            }
+            // Trace-debug #15 (Note BQ): a removed preset frees its id and aliases, so a file refused for claiming
+            // them is tried again. Each pass removes a preset that never comes back, so this ends.
+            if !removed || refused.is_empty() {
+                warnings.extend(refused.into_iter().map(|(f, e)| skip(&f, e.to_string())));
+                return warnings;
+            }
+            pending = refused.into_iter().map(|(f, _)| f).collect();
         }
-        // Removing a preset can orphan one based on it, so check again until nothing fails.
-        while let Some((i, e)) = loaded
-            .iter()
-            .enumerate()
-            .find_map(|(i, (id, _))| self.check_preset(id).err().map(|e| (i, e)))
-        {
-            let (id, f) = loaded.remove(i);
-            self.remove(&id);
-            warnings.push(skip(&f, e.to_string()));
-        }
-        warnings
     }
 
     /// The id of the preset loaded from the file `path` (compared canonically), if any.
