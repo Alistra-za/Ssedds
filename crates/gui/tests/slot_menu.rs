@@ -279,3 +279,18 @@ fn a_member_outside_a_textures_folder_is_offered_disabled() {
     assert_eq!(m.run_menu(link.action.clone()), Some(NO_PATH.to_string()));
     assert_eq!(slot_value(&m, "m/leaf", 1), None);
 }
+
+/// Audit 08f-8: a menu pick that is refused says why in the status line (and Messages), wherever the menu was.
+#[test]
+fn a_refused_menu_pick_says_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    m.menu_picked(sdc_gui::model::bulk::MenuAction::ShowInExplorer(
+        "no/such.png".into(),
+    ));
+    assert!(
+        m.status_line.contains("no such texture"),
+        "{}",
+        m.status_line
+    );
+}

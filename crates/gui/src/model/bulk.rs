@@ -1276,4 +1276,13 @@ impl AppModel {
         }
         None
     }
+
+    /// A menu pick from a context menu: `run_menu`, with a refusal shown in the status line and Messages (audit
+    /// 08f-8: it was dropped).
+    pub fn menu_picked(&mut self, a: MenuAction) {
+        if let Some(e) = self.run_menu(a) {
+            self.status_line = e.clone();
+            self.messages.notify(super::messages::Severity::Warning, e);
+        }
+    }
 }
