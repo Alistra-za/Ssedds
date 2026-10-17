@@ -550,3 +550,25 @@ fn select_after_outside_edit_does_not_revert_it() {
     assert!(saved.contains("2.0.0"), "{saved}");
     assert!(saved.contains("half"), "{saved}");
 }
+
+/// Trace-debug 2026-10-16 #46: saving a preset under a new id is refused while another user preset builds on the
+/// old id (that preset would be skipped on the next load).
+#[test]
+fn renaming_a_preset_others_build_on_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut pm = copy_of_quality(d.path());
+    pm.set_id("a");
+    pm.save().unwrap();
+    pm.new_preset(Target::Cs);
+    pm.set_id("b");
+    pm.set_base("a");
+    pm.save().unwrap();
+    pm.select("a");
+    pm.set_id("a2");
+    let e = pm.status().clone().unwrap_err();
+    assert!(e.contains("'b'"), "{e}");
+    assert!(pm.save().is_err());
+    let mut names = files(d.path());
+    names.sort();
+    assert_eq!(names, ["a.toml", "b.toml"]);
+}

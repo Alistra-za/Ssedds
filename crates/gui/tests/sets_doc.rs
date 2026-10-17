@@ -375,3 +375,38 @@ fn moving_a_file_back_lifts_its_own_remove() {
     let e = &s.entries()[0];
     assert!(e.remove.is_empty() && e.add.is_empty(), "{e:?}");
 }
+
+/// Trace-debug 2026-10-16 #37: an `add` key without the extension names the file as the engine reads it
+/// (`path_key_matches`), so removing that file drops the key instead of refusing or writing a `remove`.
+#[test]
+fn removing_a_file_moved_in_by_extensionless_key_drops_the_add() {
+    let (_d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nadd = [\"a/wall\"]\n",
+    ));
+    s.remove_member("a/new", "a/wall.png");
+    let e = &s.entries()[0];
+    assert!(e.add.is_empty() && e.remove.is_empty(), "{e:?}");
+
+    let d = tempfile::tempdir().unwrap();
+    let root = support::mod_folder(d.path());
+    std::fs::write(
+        root.join("sdc-project.toml"),
+        "[[sets]]\nid = \"landscape/new\"\ncreated = true\nadd = [\"landscape/odd\"]\n",
+    )
+    .unwrap();
+    let mut m = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..Default::default()
+        },
+        None,
+        support::session(),
+    );
+    m.open_folder(root);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.remove_member("landscape/new", "landscape/odd.png")
+        .unwrap();
+    let e = m.sets_doc.as_ref().unwrap().entries();
+    let e = e.iter().find(|e| e.id == "landscape/new").unwrap();
+    assert!(e.add.is_empty() && e.remove.is_empty(), "{e:?}");
+}

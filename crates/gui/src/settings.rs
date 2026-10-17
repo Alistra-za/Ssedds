@@ -174,8 +174,8 @@ impl GuiSettings {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let unreadable = std::fs::read_to_string(path)
-            .is_ok_and(|text| toml::from_str::<GuiSettings>(&text).is_err());
+        // #45: anything `load` could not read (not UTF-8, unparsable) is kept, not only a parse error.
+        let unreadable = path.exists() && GuiSettings::load(path).1.is_some();
         let kept = path.with_extension("toml.bad");
         if unreadable {
             let _ = std::fs::remove_file(&kept);

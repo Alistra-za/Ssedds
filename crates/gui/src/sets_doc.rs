@@ -24,6 +24,9 @@ const CS_SHA: &str = "cs_pbr_sha256";
 /// Complex material design §3: `[project] cm_json_sha256`, path under the export root → hash of the
 /// `<texture>.json` sdc last wrote there.
 const CM_SHA: &str = "cm_json_sha256";
+/// #43: `[project] pgp_json_sha256`, path under the export root → hash of the PGPatcher JSON sdc last wrote there (one
+/// per name it has had). `last_json_sha256` stays the current name's hash, for older builds.
+const PGP_SHA: &str = "pgp_json_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
 const RESERVED: [&str; 13] = [
     "id",
@@ -235,10 +238,15 @@ impl SetsDoc {
         let (doc, dirty, sha) = (self.f.doc.clone(), self.f.dirty, self.last_json_sha256());
         let cs = self.cs_pbr_shas();
         let cm = self.cm_json_shas();
+        let pgp = self.pgp_json_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
             self.set_project("last_json_sha256", sha.map(Value::from));
+        }
+        // In the order an export writes them, so a restore that only puts them back leaves the text as it was.
+        if self.pgp_json_shas() != pgp {
+            self.set_pgp_json_shas(&pgp);
         }
         if self.cs_pbr_shas() != cs {
             self.set_cs_pbr_shas(&cs);
@@ -325,6 +333,14 @@ impl SetsDoc {
 
     pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
         self.set_shas(CS_SHA, shas)
+    }
+
+    pub fn pgp_json_shas(&self) -> BTreeMap<String, String> {
+        self.shas(PGP_SHA)
+    }
+
+    pub fn set_pgp_json_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.set_shas(PGP_SHA, shas)
     }
 
     pub fn cm_json_shas(&self) -> BTreeMap<String, String> {
@@ -626,7 +642,7 @@ impl SetsDoc {
         }
         let t = self.table_mut(id);
         let mut items = strings(t.get(key));
-        items.retain(|f| !same_id(f, file));
+        items.retain(|f| !names_file(f, file));
         if add {
             items.push(file.to_string());
         }
@@ -646,10 +662,10 @@ impl SetsDoc {
     pub fn add_member(&mut self, id: &str, file: &str) {
         for e in self.parse_entries() {
             if !same_id(&e.id, id) {
-                if e.add.iter().any(|f| same_id(f, file)) {
+                if e.add.iter().any(|f| names_file(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
                 }
-                if e.remove.iter().any(|f| same_id(f, file)) {
+                if e.remove.iter().any(|f| names_file(f, file)) {
                     self.list_edit(&e.id, "remove", file, false);
                 }
             }
@@ -659,7 +675,7 @@ impl SetsDoc {
         let removed_here = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| names_file(f, file)));
         if removed_here {
             self.list_edit(id, "remove", file, false);
         } else {
@@ -672,7 +688,7 @@ impl SetsDoc {
         let moved_in = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| same_id(f, file)));
+            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| names_file(f, file)));
         if moved_in {
             self.list_edit(id, "add", file, false);
         } else {
@@ -991,6 +1007,12 @@ fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
         }),
         _ => write_path(t, path, Some(v.clone())),
     }
+}
+
+/// #37: whether an `add`/`remove` key names file `file` as the engine reads it (`path_key_matches`: case-folded, the
+/// extension optional).
+pub(crate) fn names_file(key: &str, file: &str) -> bool {
+    same_id(key, file) || engine::overrides::path_key_matches(key, file)
 }
 
 #[cfg(test)]
