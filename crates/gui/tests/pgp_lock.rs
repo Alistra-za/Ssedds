@@ -543,7 +543,11 @@ fn slot_textures_skip_disabled_effect_and_derived_shapes() {
     );
     let known = sdc_gui::model::known_paths::read(&db).unwrap();
     assert_eq!(
-        known.textures.keys().map(String::as_str).collect::<Vec<_>>(),
+        known
+            .textures
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         ["textures/d.dds", "textures/ok_n.dds"]
     );
 }
