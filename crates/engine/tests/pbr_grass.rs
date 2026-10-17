@@ -1,4 +1,4 @@
-//! PBR grass (design `F:\ai\dds\nifparseref\plan\pbr-grass\2026-10-14-pbr-grass-design.md`): the auto-pick from
+//! PBR grass (NIF team design notes, PBR grass, 2026-10-14): the auto-pick from
 //! GRAS evidence and the PBR grass warnings, at plan level.
 use engine::api::*;
 use engine::codes::Code;

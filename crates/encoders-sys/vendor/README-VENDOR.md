@@ -15,7 +15,7 @@ machine is byte-identical. Run `tools/regen-ispc.ps1` to check (exit 0 = all MAT
 run `tools/hash-vendor.ps1`.
 
 Provenance of the first objects: the bc7e objects are byte-identical to the ones the bench measured
-(`F:/ai/dds/bench/build/bc7enc_rdo`). The ISPC TC objects were rebuilt from `ispctc/kernel.ispc`
+(`<bench>/build/bc7enc_rdo`). The ISPC TC objects were rebuilt from `ispctc/kernel.ispc`
 because the bench's copies embed the bench's absolute source path; same source and flags,
 but the files differ from the bench's.
 

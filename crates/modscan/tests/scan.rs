@@ -377,7 +377,11 @@ fn folder_source_scans_one_origin() {
 #[test]
 #[ignore]
 fn owner_smoke() {
-    let root = std::path::Path::new(r"C:\_mount\moddingvol\Acherus");
+    let Some(root) = std::env::var_os("SDC_ACHERUS").map(std::path::PathBuf::from) else {
+        println!("skipped: set SDC_ACHERUS");
+        return;
+    };
+    let root = root.as_path();
     if !root.join("ModOrganizer.ini").is_file() {
         println!("owner_smoke: {} not found, skipping", root.display());
         return;
@@ -596,7 +600,7 @@ fn skip_derived_ignores_pgp_and_running_process() {
 
 /// Scan speed spec §2 step 1: cold then warm scan of the owner instance, with phase and sub-timers. Read-only on the
 /// instance; the store is a temp file, never the real scan.db.
-/// `SDC_ACHERUS='C:\_mount\moddingvol\Acherus' cargo test -p modscan --release --test scan owner_timing -- --ignored --nocapture`
+/// `SDC_ACHERUS='<your MO2 instance>' cargo test -p modscan --release --test scan owner_timing -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn owner_timing() {

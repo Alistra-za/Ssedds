@@ -149,11 +149,11 @@ mod tests {
 
     #[test]
     fn the_output_must_be_outside_the_bench_root() {
-        let root = Path::new("F:/ai/dds/bench");
-        assert!(check_out(root, Path::new("F:/ai/dds/bench/out3/x")).is_err());
-        assert!(check_out(root, Path::new("F:/AI/dds/Bench/images3")).is_err());
-        assert!(check_out(root, Path::new("F:/ai/dds/bench2/x")).is_ok());
-        assert!(check_out(root, Path::new("F:/ai/dds/converter/target/bench/radius45")).is_ok());
+        let root = Path::new("X:/bench");
+        assert!(check_out(root, Path::new("X:/bench/out3/x")).is_err());
+        assert!(check_out(root, Path::new("X:/BENCH/images3")).is_err());
+        assert!(check_out(root, Path::new("X:/bench2/x")).is_ok());
+        assert!(check_out(root, Path::new("X:/elsewhere/target/bench/radius45")).is_ok());
     }
 
     fn both(v: &[(u32, f64, f64)]) -> Vec<(&'static str, u32, f64, f64)> {

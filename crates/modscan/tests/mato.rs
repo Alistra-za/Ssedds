@@ -74,7 +74,7 @@ fn winning_matos_carry_the_winners_data_flags() {
 }
 
 /// Owner data (design §9): the MATO query and single-pass flags on the owner's load order. Read-only; the store is
-/// a temp file. `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p modscan --release --test mato -- --ignored --nocapture`
+/// a temp file. `$env:SDC_ACHERUS='<your MO2 instance>'; cargo test -p modscan --release --test mato -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn owner_matos_and_single_pass_flags() {

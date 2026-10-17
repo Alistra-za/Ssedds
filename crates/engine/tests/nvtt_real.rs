@@ -1,5 +1,5 @@
 //! M5 Task 9 (DECISIONS Note NV): the NVTT backend against the real NVTT 3.2.5 at the default install path and the
-//! bench corpus (`SDC_BENCH_ROOT`, default `F:\ai\dds\bench`). Owner's machine only:
+//! bench corpus (`SDC_BENCH_ROOT`, required). Owner's machine only:
 //! `cargo test --release -p engine --test nvtt_real -- --ignored --nocapture --test-threads 1`.
 use encoders_sys::Bc1Model;
 use engine::api::*;
@@ -18,7 +18,7 @@ use std::time::Instant;
 fn bench_root() -> PathBuf {
     std::env::var_os("SDC_BENCH_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"F:\ai\dds\bench"))
+        .expect("set SDC_BENCH_ROOT to the bench corpus")
 }
 
 /// `column` of the bench results row `variant,<format>,<set>,<image>,...`.
