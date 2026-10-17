@@ -241,7 +241,8 @@ fn key_base(key: &str) -> &str {
 /// The skin `_wet` member split of `stem` when it belongs to the set `set_key` as one (it was moved there by
 /// [`join_skin_wet`]): `x_wet` in set `x`. `None` for every other file.
 fn wet_split(stem: &str, set_key: &str) -> Option<SuffixSplit> {
-    wet_tail_split(stem).filter(|s| s.base.eq_ignore_ascii_case(key_base(set_key)))
+    // Audit 08e-10: Unicode folding, as set keys are built (Note BF).
+    wet_tail_split(stem).filter(|s| s.base.to_lowercase() == key_base(set_key).to_lowercase())
 }
 
 /// `x_wet` -> base `x`, suffix `wet`, whatever set it is in.
@@ -342,4 +343,14 @@ pub fn duplicate_outputs_with(
 /// `duplicate_outputs_with` over every image input (DDS inputs are skipped, not written).
 pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
     duplicate_outputs_with(files, |f| f.kind != InputKind::Dds)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Audit 08e-10: set keys fold Unicode (Note BF), so the skin `_wet` join must too.
+    #[test]
+    fn wet_split_folds_like_set_keys() {
+        assert!(super::wet_split("Ärmel_wet", "textures/a/ärmel").is_some());
+        assert!(super::wet_split("Ärmel_wet", "textures/a/other").is_none());
+    }
 }
