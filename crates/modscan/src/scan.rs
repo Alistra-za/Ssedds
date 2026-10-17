@@ -551,6 +551,10 @@ fn scan_body(
     if !skip_derived && pgp::running(&procs()) {
         report.tainted = true;
         store.discard_pending()?;
+        // No resolve ran: the old winners would name origins of the previous run, so the lists stay empty until a
+        // clean rescan (begin_scan: reads never mix old winners in).
+        store.set_winners(&HashMap::new(), &HashMap::new())?;
+        store.set_textures(&HashMap::new())?;
         // A tainted run still returns a (flagged) result: its origins are listed, as before.
         enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
