@@ -215,3 +215,48 @@ fn recent_folders_merge_per_folder() {
     m.save_settings();
     assert_eq!(GuiSettings::load(&p).0.recent, [f("d"), f("a"), f("c")]);
 }
+
+/// Trace-debug 2026-10-16 #45: a gui.toml that `load` could not read (not UTF-8) is kept as `.bad` by the first
+/// save, as one that does not parse is.
+#[test]
+fn saving_keeps_a_non_utf8_gui_toml_as_bad() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc/gui.toml");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let bytes = b"jobs = 12\n# caf\xe9\n".to_vec();
+    std::fs::write(&p, &bytes).unwrap();
+    let (s, err) = GuiSettings::load(&p);
+    assert!(err.is_some());
+    let kept = s.save(&p).unwrap();
+    assert_eq!(kept, Some(p.with_extension("toml.bad")));
+    assert_eq!(std::fs::read(p.with_extension("toml.bad")).unwrap(), bytes);
+}
+
+/// #45: a gui.toml locked at launch (load failed, defaults used) is merged by the first save, not replaced.
+#[cfg(windows)]
+#[test]
+fn a_gui_toml_locked_at_launch_is_merged_by_the_first_save() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc/gui.toml");
+    GuiSettings {
+        jobs: 12,
+        ..GuiSettings::default()
+    }
+    .save(&p)
+    .unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&p)
+        .unwrap();
+    let (s, err) = GuiSettings::load(&p);
+    assert!(err.is_some(), "the lock makes load fail");
+    let mut m = sdc_gui::model::AppModel::new(s, Some(p.clone()), support::session());
+    drop(lock);
+    m.settings.live_encode = true;
+    m.save_settings();
+    let back = GuiSettings::load(&p).0;
+    assert_eq!(back.jobs, 12, "the file's value is kept");
+    assert!(back.live_encode, "the app's change is written");
+}

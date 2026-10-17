@@ -448,7 +448,11 @@ impl AppModel {
         let mut m = AppModel::placeholder(settings);
         m.settings_base = settings_path
             .as_deref()
-            .map(|p| (m.settings.clone(), SourceStamp::of(p)));
+            // #45: no stamp when the file could not be read (locked at launch), so the first save merges it.
+            .map(|p| {
+                let read = GuiSettings::load(p).1.is_none();
+                (m.settings.clone(), SourceStamp::of(p).filter(|_| read))
+            });
         m.settings_path = settings_path;
         m.session = Some(session);
         m
