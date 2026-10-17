@@ -999,9 +999,6 @@ impl AppModel {
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => self.export_ended(Err(format!("internal error: {message}"))),
-                    "preview" => self.preview_panicked(&message),
-                    "heatmap" => self.heatmap_panicked(),
-                    "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
@@ -2661,6 +2658,19 @@ pub fn export_finished_text(s: &engine::api::BatchSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn bare_model() -> AppModel {
+        let session =
+            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
+        AppModel::new(GuiSettings::default(), None, session)
+    }
+
+    pub(super) fn panicked(what: &'static str) -> WorkerMsg {
+        WorkerMsg::Panicked {
+            what,
+            message: "boom".into(),
+        }
+    }
 
     /// Audit GM-10: mesh evidence that differs on every read never settles; `auto_replans` stops the re-plans
     /// after two rounds, and Export then refuses with "the sets changed while planning".

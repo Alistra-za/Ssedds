@@ -3,7 +3,7 @@
 //! heatmap's pattern, `model::heatmap`): a result whose key is no longer the wanted one is dropped, and the one on
 //! show stays until the new one lands.
 use crate::model::AppModel;
-use crate::worker::{spawn_guarded, WorkerMsg};
+use crate::worker::{or_send, spawn_guarded, WorkerMsg};
 use engine::policy::ResolvedJob;
 use std::sync::Arc;
 
@@ -118,7 +118,12 @@ impl AppModel {
         let id = p.next_id;
         p.running = Some((id, want));
         spawn_guarded(self.tx.clone(), "rnm-preview", move |tx| {
-            let image = render(&job).ok().map(Arc::new);
+            // A panic is this job's "no picture" (trace-debug #26), so its key is not retried every frame.
+            let image = or_send(
+                tx,
+                || render(&job).ok().map(Arc::new),
+                |_| WorkerMsg::RnmPreview { id, image: None },
+            );
             let _ = tx.send(WorkerMsg::RnmPreview { id, image });
         });
     }
@@ -136,15 +141,6 @@ impl AppModel {
         if now.as_deref() == Some(key.as_str()) {
             let item = key.split('|').next().unwrap_or_default().to_string();
             p.shown = Some((item, key, image));
-        }
-    }
-
-    /// A panicked job: its key shows no picture, so it is not retried every frame.
-    pub(super) fn rnm_preview_panicked(&mut self) {
-        let p = &mut self.rnm_preview;
-        if let Some((_, key)) = p.running.take() {
-            let item = key.split('|').next().unwrap_or_default().to_string();
-            p.shown = Some((item, key, None));
         }
     }
 

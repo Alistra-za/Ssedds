@@ -625,16 +625,44 @@ impl AppModel {
             Err(e) => EncodedState::Failed(e),
         };
     }
+}
 
-    /// A preview worker panicked: nothing it was making will arrive.
-    pub(super) fn preview_panicked(&mut self, message: &str) {
-        self.preview.inflight_source = None;
-        self.preview.inflight_encode = None;
-        if matches!(self.preview.source, SourceState::Loading) {
-            self.preview.source = SourceState::Failed(message.to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::tests::bare_model;
+    use crate::model::{preview, Dialog};
+    use crate::worker::WorkerMsg;
+
+    /// Trace-debug #26: a panicking encode fails only the encode; the source read in flight still lands.
+    #[test]
+    fn an_encode_panic_keeps_the_source_read_in_flight() {
+        let mut m = bare_model();
+        m.preview.inflight_source = Some((7, CancelToken::default()));
+        m.preview.inflight_encode = Some((8, CancelToken::default()));
+        m.preview.encoded = preview::EncodedState::Encoding { previous: None };
+        let (tx, rx) = std::sync::mpsc::channel();
+        crate::worker::spawn_guarded(tx, "preview", |tx| {
+            let _ = crate::worker::or_send(
+                tx,
+                || -> Result<Arc<preview::PreviewOut>, String> { panic!("boom") },
+                |e| WorkerMsg::Encoded {
+                    token: 8,
+                    result: Err(e),
+                },
+            );
+        });
+        for msg in rx.iter() {
+            m.handle(msg);
         }
-        if matches!(self.preview.encoded, EncodedState::Encoding { .. }) {
-            self.preview.encoded = EncodedState::Failed(message.to_string());
-        }
+        assert!(
+            m.preview.inflight_source.is_some(),
+            "the source read is still awaited"
+        );
+        assert!(m.preview.inflight_encode.is_none());
+        assert!(
+            matches!(&m.preview.encoded, preview::EncodedState::Failed(e) if e.contains("boom"))
+        );
+        assert!(matches!(m.dialog, Some(Dialog::Error(_))));
     }
 }
