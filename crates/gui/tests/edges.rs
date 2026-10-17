@@ -424,6 +424,99 @@ fn a_user_config_the_engine_rejects_is_not_blamed_on_sdc_toml() {
     assert!(!m.project.as_ref().unwrap().read_only());
 }
 
+/// Trace-debug #9: the user config goes bad while `sdc.toml` has unsaved edits. The first failure is tentatively
+/// blamed on `sdc.toml`; when the retry without it fails too, its unsaved edits must come back.
+#[test]
+fn a_rejected_user_config_keeps_unsaved_sdc_toml_edits() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let user = d.path().join("config.toml");
+    std::fs::write(&user, "# fine\n").unwrap();
+    std::fs::write(root.join("sdc.toml"), "# fine\n").unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.user_config = Some(user.clone());
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.dialog, None);
+    m.set_target(engine::config::Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let edited = m.project.as_ref().unwrap().text();
+    assert!(m.project.as_ref().unwrap().is_dirty());
+    std::fs::write(&user, "[defaults]\nalpha.threshold = 1000\n").unwrap();
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(matches!(m.dialog, Some(Dialog::Error(ref e)) if e.contains("1000")));
+    let p = m.project.as_ref().unwrap();
+    assert!(!p.read_only());
+    assert!(p.is_dirty(), "the unsaved edit must survive");
+    assert_eq!(p.text(), edited);
+}
+
+/// Review I1 of #9: once the plan without a rejected `sdc.toml` succeeds, the blame is settled. A later failure of the
+/// user config must not bring the rejected document back as live and editable.
+#[test]
+fn a_settled_blame_is_not_undone_by_a_later_user_config_error() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let user = d.path().join("config.toml");
+    std::fs::write(&user, "# fine\n").unwrap();
+    std::fs::write(
+        root.join("sdc.toml"),
+        "[defaults]\nalpha.threshold = 1000\n",
+    )
+    .unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.user_config = Some(user.clone());
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.project.as_ref().unwrap().read_only(), "sdc.toml blamed");
+    assert!(m.banner.is_some());
+    std::fs::write(&user, "[defaults]\nalpha.threshold = 2000\n").unwrap();
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(
+        m.project.as_ref().unwrap().read_only(),
+        "the rejected sdc.toml stays ignored"
+    );
+    assert!(!m.is_dirty());
+}
+
+/// Review M1 of #9: while the blame is tentative, the stashed edits still count as unsaved (prompts, recovery).
+#[test]
+fn stashed_edits_count_as_unsaved_while_the_blame_is_tentative() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let user = d.path().join("config.toml");
+    std::fs::write(&user, "# fine\n").unwrap();
+    std::fs::write(root.join("sdc.toml"), "# fine\n").unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.user_config = Some(user.clone());
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_target(engine::config::Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let edited = m.project.as_ref().unwrap().text();
+    std::fs::write(&user, "[defaults]\nalpha.threshold = 1000\n").unwrap();
+    m.replan();
+    // Only the first failure: the retry has not landed yet.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !m.project.as_ref().unwrap().read_only() {
+        assert!(std::time::Instant::now() < deadline, "never blamed");
+        m.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(m.is_dirty(), "the stashed edit is still unsaved");
+    m.request_reload();
+    assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
+    let snap = m.recovery_snapshot();
+    assert!(snap.iter().any(|(_, t)| *t == edited), "{snap:?}");
+    m.dialog = None;
+    assert!(m.wait_idle(Duration::from_secs(60)));
+}
+
 /// Pretend an export is running: a token the model treats as the running export (no engine work starts).
 fn fake_running(m: &mut sdc_gui::model::AppModel) {
     m.export.running = Some(engine::api::CancelToken::default());

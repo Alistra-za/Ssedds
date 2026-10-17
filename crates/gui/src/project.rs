@@ -127,6 +127,8 @@ impl TomlFile {
 
 pub struct ProjectDoc {
     f: TomlFile,
+    /// The document and dirty flag `set_error` dropped, kept until `unblame` or `reload` (trace-debug #9).
+    stash: Option<(DocumentMut, bool)>,
 }
 
 pub(crate) fn json_to_toml(v: &Json) -> Option<Value> {
@@ -210,6 +212,7 @@ impl ProjectDoc {
     pub fn open(root: &Path) -> ProjectDoc {
         let mut d = ProjectDoc {
             f: TomlFile::open(root.join("sdc.toml")),
+            stash: None,
         };
         d.check();
         d
@@ -217,8 +220,31 @@ impl ProjectDoc {
 
     /// Re-read the file, dropping unsaved edits.
     pub fn reload(&mut self) {
+        self.stash = None;
         self.f.reload();
         self.check();
+    }
+
+    /// The text of the stashed document when it held unsaved edits.
+    pub fn stashed_edits(&self) -> Option<String> {
+        self.stash
+            .as_ref()
+            .filter(|(_, dirty)| *dirty)
+            .map(|(doc, _)| doc.to_string())
+    }
+
+    /// Undo a `set_error` that blamed the file wrongly: its document and unsaved edits come back (or, with nothing
+    /// stashed, the file is re-read).
+    pub fn unblame(&mut self) {
+        match self.stash.take() {
+            Some((doc, dirty)) => {
+                self.f.doc = doc;
+                self.f.dirty = dirty;
+                self.f.error = None;
+                self.f.rev = crate::sets_doc::next_rev();
+            }
+            None => self.reload(),
+        }
     }
 
     /// The engine's own up-front checks on `[files]` (unknown field or code) are parse errors too.
@@ -235,11 +261,11 @@ impl ProjectDoc {
     }
 
     /// Mark the file unusable (M3a spec §7.4): read-only with `message`, its contents and unsaved edits dropped. Used
-    /// when the engine rejects a config that parsed; `reload` clears it.
+    /// when the engine rejects a config that parsed; `reload` clears it. The dropped document is stashed for `unblame`.
     pub fn set_error(&mut self, message: &str) {
         self.f.error = Some(format!("{}: {message}", self.f.path.display()));
-        self.f.doc = DocumentMut::new();
-        self.f.dirty = false;
+        let doc = std::mem::take(&mut self.f.doc);
+        self.stash = Some((doc, std::mem::take(&mut self.f.dirty)));
         self.f.rev = crate::sets_doc::next_rev();
     }
 

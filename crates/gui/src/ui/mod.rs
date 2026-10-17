@@ -312,6 +312,14 @@ fn column_panel(
             .show(ui, |ui| {
                 // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                // Trace-debug #11: blur text fields on the press, while the old set is still drawn, so its
+                // commit-on-focus-loss runs before the release changes the selection (AO1).
+                // shortcut: a press and release in one frame still loses the edit; defer the selection a frame if seen.
+                if ui.input(|i| i.pointer.primary_pressed())
+                    && ui.rect_contains_pointer(ui.max_rect())
+                {
+                    ui.memory_mut(|m| m.stop_text_input());
+                }
                 content(ui, model)
             });
         // egui stores the released width during `show`.

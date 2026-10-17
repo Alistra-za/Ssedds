@@ -247,6 +247,9 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
             });
         });
     nav.scroll = None;
+    // Trace-debug #12: sections are addressed by index, so removals run last (a stable sort keeps the rest in order);
+    // otherwise a focus-loss edit pushed after a Remove lands on the shifted neighbour.
+    acts.sort_by_key(|a| matches!(a, Act::RemoveSection(_)));
     for a in acts {
         match a {
             Act::Edit(Owner::Set(id), k, v) => model.set_json_value(&id, &k, v),

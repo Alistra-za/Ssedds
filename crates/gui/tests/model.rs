@@ -190,6 +190,36 @@ fn closing_with_unsaved_edits_asks_first() {
     assert_eq!(m.dialog, Some(Dialog::CloseUnsaved));
 }
 
+/// Trace-debug #10: the banner's Reload drops unsaved edits and undo; with edits it asks first.
+#[test]
+fn banner_reload_with_unsaved_edits_asks_first() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    assert!(m.is_dirty());
+    m.request_reload();
+    assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
+    assert!(m.is_dirty(), "nothing dropped before the answer");
+    assert!(m.can_undo());
+    m.dialog = None; // Cancel
+    assert!(m.is_dirty());
+    m.request_reload();
+    m.reload_documents(); // Discard and reload
+    assert!(!m.is_dirty());
+    assert_eq!(m.dialog, None);
+}
+
+#[test]
+fn banner_reload_when_clean_reloads_at_once() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let p = m.root.clone().unwrap().join("sdc.toml");
+    std::fs::write(&p, "target = \"vanilla\"\n").unwrap();
+    m.request_reload();
+    assert_eq!(m.dialog, None);
+    assert_eq!(m.project.as_ref().unwrap().text(), "target = \"vanilla\"\n");
+}
+
 #[test]
 fn an_external_edit_is_not_overwritten_silently() {
     let d = tempfile::tempdir().unwrap();

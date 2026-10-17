@@ -13,6 +13,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     match dialog {
         Dialog::CloseUnsaved => close_unsaved(ctx, model),
         Dialog::OpenUnsaved(root) => open_unsaved(ctx, model, root),
+        Dialog::ReloadUnsaved => reload_unsaved(ctx, model),
         Dialog::ExportRunning(action) => export_running(ctx, model, action),
         Dialog::ExternalChange(which) => external_change(ctx, model, which),
         Dialog::OverwriteJson(path) => overwrite_json(ctx, model, &path),
@@ -347,6 +348,24 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         model.refresh_banner();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     } else if cancel {
+        model.dialog = None;
+    }
+}
+
+/// Trace-debug #10: Enter and Esc cancel; only the button drops the edits.
+fn reload_unsaved(ctx: &egui::Context, model: &mut AppModel) {
+    let (mut reload, mut cancel) = (false, false);
+    let k = modal_keys(ctx, "reload-unsaved", true, |ui| {
+        ui.heading("Unsaved changes");
+        ui.label("Reload drops the unsaved changes to sdc.toml and sdc-project.toml, and Undo.");
+        ui.horizontal(|ui| {
+            reload = ui.button("Discard and reload").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if reload {
+        model.reload_documents();
+    } else if cancel || k.cancel || k.enter {
         model.dialog = None;
     }
 }

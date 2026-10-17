@@ -351,3 +351,49 @@ fn the_json_editor_add_menu_hides_grass_ignored_keys_on_a_pbr_grass_set() {
     assert!(offers_emissive(false), "a pbr set offers emissive");
     assert!(!offers_emissive(true), "a pbr_grass set does not");
 }
+
+/// Trace-debug #12: three delete sections; type into section `typed`'s match1, then click section `removed`'s Remove.
+/// Returns the match1 values left. The focus loss must edit the typed section, never a shifted neighbour.
+fn remove_while_typing(typed: usize, removed: usize) -> Vec<String> {
+    use egui_kittest::kittest::by;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    for p in ["aaa_one", "bbb_two", "ccc_three"] {
+        m.add_section(p);
+    }
+    m.json_editor_open = true;
+    let mut h = harness(m, false);
+    h.run();
+    let was = ["aaa_one", "bbb_two", "ccc_three"][typed];
+    h.get(by().role(egui::accesskit::Role::TextInput).value(was))
+        .click();
+    h.run();
+    h.key_press(egui::Key::End);
+    h.run();
+    h.input_mut().events.push(egui::Event::Text("X".into()));
+    h.run();
+    h.query_all_by_label("Remove").nth(removed).unwrap().click();
+    h.run();
+    h.run();
+    h.state()
+        .0
+        .sections()
+        .iter()
+        .map(|s| {
+            s.get("match1")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn remove_section_with_focused_match_does_not_edit_next_section() {
+    assert_eq!(remove_while_typing(1, 1), ["aaa_one", "ccc_three"]);
+}
+
+#[test]
+fn remove_earlier_section_while_typing_in_a_later_one_edits_the_typed_section() {
+    assert_eq!(remove_while_typing(2, 0), ["bbb_two", "ccc_threeX"]);
+}

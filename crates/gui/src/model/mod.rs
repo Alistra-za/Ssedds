@@ -136,6 +136,8 @@ pub enum Dialog {
     CloseUnsaved,
     /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
     OpenUnsaved(PathBuf),
+    /// The banner's Reload would drop unsaved edits and undo (trace-debug #10).
+    ReloadUnsaved,
     /// An export is running; closing or opening would have to cancel it first (M3a spec §2.6).
     ExportRunning(AfterExport),
     /// The PGPatcher JSON was edited outside sdc since the last export; the new text waits for the answer.
@@ -1036,10 +1038,10 @@ impl AppModel {
                 return;
             }
             // The plan without `sdc.toml` failed too: the config is not the project's (the user config, say).
-            // Put the project back as the file has it, and raise the error.
+            // Put the project back as it was, unsaved edits included (trace-debug #9), and raise the error.
             if std::mem::take(&mut self.ignored_by_plan) {
                 if let Some(p) = self.project.as_mut() {
-                    p.reload();
+                    p.unblame();
                     self.drop_undo_note();
                     self.history.clear();
                     self.refresh_banner();
@@ -1642,6 +1644,8 @@ impl AppModel {
     }
 
     fn apply_plan(&mut self, view: PlanView) {
+        // A plan landed: any blame on `sdc.toml` is settled, so a later failure must not unblame it (review I1 of #9).
+        self.ignored_by_plan = false;
         // Task 9 (Z11): the sub-types before this plan chain, compared when it settles.
         if self.type_base.is_none() {
             self.type_base = Some(self.subtypes());
@@ -2325,10 +2329,20 @@ impl AppModel {
 
     pub fn is_dirty(&self) -> bool {
         self.project.as_ref().is_some_and(ProjectDoc::is_dirty)
+            || self.tentative_edits().is_some()
             || self
                 .sets_doc
                 .as_ref()
                 .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
+    }
+
+    /// The unsaved `sdc.toml` edits stashed by a blame that is still tentative (the retry plan has not landed), so
+    /// prompts and recovery still see them (review M1 of #9).
+    fn tentative_edits(&self) -> Option<String> {
+        self.project
+            .as_ref()
+            .filter(|_| self.ignored_by_plan)
+            .and_then(ProjectDoc::stashed_edits)
     }
 
     /// The unsaved documents as `(file, text)`, for the panic hook's recovery files (Note AR).
@@ -2336,6 +2350,9 @@ impl AppModel {
         let mut out = vec![];
         if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty()) {
             out.push((p.path().to_path_buf(), p.text()));
+        }
+        if let (Some(p), Some(text)) = (self.project.as_ref(), self.tentative_edits()) {
+            out.push((p.path().to_path_buf(), text));
         }
         if let Some(s) = self
             .sets_doc
@@ -2422,6 +2439,15 @@ impl AppModel {
     }
 
     /// Reload both documents from disk (the banner's Reload), then plan once.
+    /// The banner's Reload: at once when nothing is unsaved, else ask first (`Dialog::ReloadUnsaved`).
+    pub fn request_reload(&mut self) {
+        if self.is_dirty() {
+            self.dialog = Some(Dialog::ReloadUnsaved);
+        } else {
+            self.reload_documents();
+        }
+    }
+
     pub fn reload_documents(&mut self) {
         self.dialog = None;
         self.reset_type_follow();
