@@ -459,3 +459,27 @@ fn the_unlabelled_controls_have_hover_text() {
     h.run();
     h.get_by_label_contains("still need a decision");
 }
+
+/// Trace-debug #10 (review M6): Enter on the Reload question cancels and keeps the edits; only the button reloads.
+#[test]
+fn reload_unsaved_enter_cancels_and_the_button_discards() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    assert!(m.is_dirty());
+    m.dialog = Some(Dialog::ReloadUnsaved);
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().dialog, None, "Enter cancels");
+    assert!(h.state().is_dirty(), "the edits are kept");
+    assert!(h.state().can_undo());
+    h.state_mut().request_reload();
+    h.run();
+    h.get_by_label("Discard and reload").click();
+    h.run();
+    assert_eq!(h.state().dialog, None);
+    assert!(!h.state().is_dirty(), "the edits are dropped");
+    assert!(!h.state().can_undo());
+}
