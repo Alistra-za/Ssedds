@@ -123,7 +123,7 @@ Every warning has a code and a severity:
 
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
-| `IN-DUPLICATE` | blocking | Two inputs would write one output. | Exclude or rename one. |
+| `IN-DUPLICATE` | blocking | Two inputs would write one output, or two outputs land on one path (for example two packed outputs after a raw map moved to another set). The first keeps the path. | Exclude or rename one, or change an output path. |
 | `IN-DDS-SKIPPED` | info | A DDS input is not re-encoded by default. | Use the source, or set `reencode = true`. |
 | `IN-PACKING-INPUT` | warning | A raw map is not packed because its recipe is off (`packing.enabled = false`). | Enable packing, or give the file a sub-type. |
 | `IN-GREEN-UNSTATED` | info | A plain `_normal`/`_nrm`/`_norm` does not state its green convention; it was converted as DirectX. | Set `channels.green_convention = "opengl"` if it is an OpenGL map. |
