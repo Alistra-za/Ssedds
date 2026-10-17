@@ -266,8 +266,18 @@ impl SetsDoc {
     }
 
     fn set_project(&mut self, key: &str, v: Option<Value>) {
-        let absent = self.f.doc.get("project").and_then(|p| p.get(key)).is_none();
-        if self.read_only() || (v.is_none() && absent) {
+        // Removing an absent key or writing the stored value is no edit (trace-debug #58).
+        let now = self
+            .f
+            .doc
+            .get("project")
+            .and_then(|p| p.get(key))
+            .and_then(toml_to_json);
+        let same = match &v {
+            None => now.is_none(),
+            Some(x) => now.is_some() && toml_to_json(&Item::Value(x.clone())) == now,
+        };
+        if self.read_only() || same {
             return;
         }
         let Some(p) = sub_table(self.f.doc.as_table_mut(), "project", || {
@@ -787,14 +797,16 @@ impl SetsDoc {
         let t = self.table_mut(id);
         if t.get(Kind::Txst.key()).is_some_and(Item::is_table_like) {
             if let Some((cs, cv)) = cs_pbr::pgp_to_cs(key, v.as_ref()) {
-                write_path(t, key, None);
+                let mut hit = write_path(t, key, None);
                 if let Some(b) = sub_table(t, Kind::Txst.key(), || Item::Table(Table::new())) {
-                    match &cv {
+                    hit |= match &cv {
                         Some(x) => write_json(b, cs, x),
                         None => write_path(b, cs, None),
                     };
                 }
-                self.f.touch();
+                if hit {
+                    self.f.touch();
+                }
                 return;
             }
         }
@@ -948,8 +960,8 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
     let parts: Vec<&str> = path.split('.').collect();
     let (last, dirs) = parts.split_last().expect("one part at least");
     match v {
-        Some(v) => {
-            let Some(v) = json_to_toml(&v) else {
+        Some(json_v) => {
+            let Some(v) = json_to_toml(&json_v) else {
                 return false;
             };
             let mut cur: &mut dyn TableLike = t;
@@ -958,6 +970,14 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
                     Some(next) => cur = next,
                     None => return false,
                 }
+            }
+            // The stored value already: no edit (trace-debug #58).
+            if cur
+                .get(last)
+                .and_then(toml_to_json)
+                .is_some_and(|now| now == json_v)
+            {
+                return false;
             }
             set_value(cur, last, v);
             true
@@ -997,6 +1017,28 @@ fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Trace-debug #58: writing what is already stored (a focused field left unchanged) is no edit.
+    #[test]
+    fn writing_an_equal_value_does_not_dirty() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = SetsDoc::open(d.path());
+        s.create_set("a/x");
+        s.set_value("a/x", "rename", Some(json!("n")));
+        s.set_json_name(Some("mine"));
+        s.create_set("a/y");
+        s.add_cs_block("a/y", Kind::Txst);
+        s.set_value("a/y", "specular_level", Some(json!(0.5)));
+        s.save(false).unwrap();
+        s.set_value("a/x", "rename", Some(json!("n")));
+        assert!(!s.is_dirty(), "set_value");
+        s.set_json_name(Some("mine"));
+        assert!(!s.is_dirty(), "set_project");
+        s.set_value("a/y", "specular_level", Some(json!(0.5)));
+        assert!(!s.is_dirty(), "a key mapped into the texture-set block");
+        s.set_value("a/x", "rename", Some(json!("m")));
+        assert!(s.is_dirty(), "a change still dirties");
+    }
 
     /// REPORT #9: after every mutator the cached `entries()` is what the document holds.
     #[test]
