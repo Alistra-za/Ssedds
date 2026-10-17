@@ -1357,3 +1357,33 @@ fn proceeding_with_warnings_waits_for_a_plan_in_flight() {
         m.dialog
     );
 }
+
+/// Audit 08f-6: an end-of-export question never replaces a dialog that is already open; the hand-edited JSON is
+/// kept and a note says so.
+#[test]
+fn the_overwrite_question_does_not_replace_an_open_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    export_and_wait(&mut m);
+    let p = json_path(&m);
+    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(m.export.running.is_some(), "{:?}", m.dialog);
+    // A question that came up while the export ran (here the banner's Reload over unsaved edits).
+    m.dialog = Some(Dialog::ReloadUnsaved);
+    idle(&mut m);
+    assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.contains("edited outside Tessalith")),
+        "{:?}",
+        m.export.notes
+    );
+}

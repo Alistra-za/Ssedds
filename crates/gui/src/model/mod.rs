@@ -1126,7 +1126,8 @@ impl AppModel {
         self.finish_cm_json(cm);
         // A user who cancelled the export to leave does not need its error as a dialog.
         if !self.run_after_export() {
-            if let Some(e) = failure {
+            // Audit 08f-6: an open dialog stays; the error is in the drawer and the Messages log.
+            if let Some(e) = failure.filter(|_| self.dialog.is_none()) {
                 self.dialog = Some(Dialog::Error(e));
             }
         }
@@ -1554,6 +1555,19 @@ impl AppModel {
             &mut self.export.notes,
         ) {
             pbr_export::Finish::Written(sha) => self.record_json_sha(&key, &sha),
+            // Audit 08f-6: an end-of-export question never replaces an open dialog; the file is kept, with a note.
+            // `ExportRunning` is not in the way: the export it asks about has ended (`run_after_export`).
+            pbr_export::Finish::Overwrite(_)
+                if self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|d| !matches!(d, Dialog::ExportRunning(_))) =>
+            {
+                self.export.notes.push(format!(
+                    "PGPatcher JSON not written: {} was edited outside Tessalith and is kept (another question was                      open); export again to choose",
+                    p.path.display()
+                ));
+            }
             pbr_export::Finish::Overwrite(text) => {
                 self.pending_text = Some(text);
                 self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
