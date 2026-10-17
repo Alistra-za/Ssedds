@@ -112,10 +112,10 @@ pub(crate) fn write_patch(src: &Path, dest: &Path, tag: Option<bool>) -> Result<
             let payload = &bytes[p.old_header_len..];
             match engine::dds::may_replace(dest, &p.bytes, |b| b.ends_with(payload)) {
                 Ok(()) => {}
-                Err(engine::dds::Kept::Foreign) => return Err(format!(
-                    "{} exists and is not a patched copy of this DDS; delete or rename it first",
-                    dest.display()
-                )),
+                Err(engine::dds::Kept::Foreign) => {
+                    let d = dest.display();
+                    return Err(format!("{d} exists and is not a patched copy of this DDS; delete or rename it first"));
+                }
                 Err(k) => return Err(k.note(dest)),
             }
             engine::dds::write_atomic(dest, &p.bytes).map_err(|e| e.to_string())?;
