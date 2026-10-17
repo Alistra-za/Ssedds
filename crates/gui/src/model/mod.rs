@@ -1505,6 +1505,7 @@ impl AppModel {
             }
             return;
         }
+        self.copy_files(&p);
         let rel = self.json_rel(&p.path);
         let shas = self
             .sets_doc
@@ -1544,6 +1545,37 @@ impl AppModel {
             }
             pbr_export::Finish::Nothing => {}
         }
+    }
+
+    /// The vanilla borrowed-slot copies, and their hash records (Note BV3).
+    fn copy_files(&mut self, p: &pbr_export::PendingJson) {
+        let Some(d) = self.sets_doc.as_ref() else {
+            pbr_export::copy_files(
+                p,
+                &self.export.rows,
+                &mut Default::default(),
+                &mut self.export.notes,
+            );
+            return;
+        };
+        let old = d.copy_shas();
+        let mut shas = old.clone();
+        pbr_export::copy_files(p, &self.export.rows, &mut shas, &mut self.export.notes);
+        if shas == old {
+            return;
+        }
+        let Some(d) = self.sets_doc.as_mut() else {
+            return;
+        };
+        if d.read_only() {
+            self.export
+                .notes
+                .push("the copies' hashes were not recorded: sdc-project.toml is read-only".into());
+            return;
+        }
+        let was_dirty = d.is_dirty();
+        d.set_copy_shas(&shas);
+        self.save_hash_record(was_dirty);
     }
 
     /// The PGPatcher JSON's path under the export root, `/`-separated (the key of its hash record).

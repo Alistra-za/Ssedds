@@ -599,13 +599,15 @@ fn exported(rows: &[Row], key: &str) -> Result<(), String> {
     }
 }
 
-/// After a successful export: the copies, then the JSON of the sets that fully exported (spec §6.1, §6.4).
-pub fn finish(
+/// After a successful export, the vanilla borrowed-slot copies (P4, P22). A copy replaces only a file it wrote
+/// before (its hash is in `shas`, keyed by `history::record_key`) or one with the same bytes; any other file is
+/// kept with a note (Note BV3). `shas` gets the hash of each copy written.
+pub fn copy_files(
     p: &PendingJson,
     rows: &[Row],
-    last_sha: Option<&str>,
+    shas: &mut std::collections::BTreeMap<String, String>,
     notes: &mut Vec<String>,
-) -> Finish {
+) {
     for (src, dst, owner_key) in &p.copies {
         if !owner_key.is_empty() {
             if let Err(why) = exported(rows, owner_key) {
@@ -613,14 +615,41 @@ pub fn finish(
                 continue;
             }
         }
-        match std::fs::copy(src, dst) {
-            Ok(_) => notes.push(format!("copied {} → {}", src.display(), dst.display())),
-            Err(e) => notes.push(format!(
-                "could not copy {} ({e}; not exported?)",
-                src.display()
-            )),
+        let bytes = match std::fs::read(src) {
+            Ok(b) => b,
+            Err(e) => {
+                notes.push(format!(
+                    "could not copy {} ({e}; not exported?)",
+                    src.display()
+                ));
+                continue;
+            }
+        };
+        let key = super::history::record_key(dst);
+        if let Err(k) =
+            engine::dds::may_replace(dst, &bytes, recorded(shas.get(&key).map(String::as_str)))
+        {
+            notes.push(k.note(dst));
+            continue;
+        }
+        match engine::dds::write_atomic(dst, &bytes) {
+            Ok(()) => {
+                use sha2::{Digest, Sha256};
+                shas.insert(key, hex::encode(Sha256::digest(&bytes)));
+                notes.push(format!("copied {} → {}", src.display(), dst.display()));
+            }
+            Err(e) => notes.push(format!("could not copy {} ({e})", src.display())),
         }
     }
+}
+
+/// After a successful export: the JSON of the sets that fully exported (spec §6.1, §6.4).
+pub fn finish(
+    p: &PendingJson,
+    rows: &[Row],
+    last_sha: Option<&str>,
+    notes: &mut Vec<String>,
+) -> Finish {
     if p.entries.is_empty() {
         return Finish::Nothing;
     }
@@ -693,14 +722,18 @@ pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) ->
     }
 }
 
-/// The note for an export that did not end cleanly: nothing is written then. A vanilla export has no JSON, so
-/// it gets no note.
+/// The note for an export that did not end cleanly: nothing is written then, neither the JSON nor the vanilla
+/// copies (audit 08f-3).
 pub fn unfinished_note(p: &PendingJson, failed: bool) -> Option<String> {
-    if p.entries.is_empty() {
+    let what = if !p.entries.is_empty() {
+        "PGPatcher JSON not written"
+    } else if !p.copies.is_empty() {
+        "borrowed-slot copies not made"
+    } else {
         return None;
-    }
+    };
     let why = if failed { "failed" } else { "was cancelled" };
-    Some(format!("PGPatcher JSON not written: the export {why}"))
+    Some(format!("{what}: the export {why}"))
 }
 
 /// What the PGPatcher JSON editor shows (DECISIONS AG106): the export blocks (errors) and the pitfalls the export

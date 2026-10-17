@@ -700,6 +700,7 @@ fn finish_copies_borrowed_slots_and_skips_what_did_not_export() {
         row("o/stale.dds", RowState::Failed("boom".into())),
     ];
     let mut notes = vec![];
+    copy_files(&p, &rows, &mut Default::default(), &mut notes);
     assert_eq!(finish(&p, &rows, None, &mut notes), Finish::Nothing);
     assert_eq!(
         std::fs::read(dir.path().join("borrower_n.dds")).unwrap(),
@@ -727,10 +728,15 @@ fn finish_copies_borrowed_slots_and_skips_what_did_not_export() {
     );
 }
 
-#[test]
-fn prepare_on_vanilla_plans_the_borrowed_slot_copy_with_the_borrowers_name() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+/// A vanilla project where a new set `leaf` borrows rock01's normal: (model, owner output, the copy's path).
+fn vanilla_borrow(
+    d: &std::path::Path,
+) -> (
+    sdc_gui::model::AppModel,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let mut m = ready(d);
     let leaf = m
         .items
         .iter()
@@ -758,6 +764,9 @@ fn prepare_on_vanilla_plans_the_borrowed_slot_copy_with_the_borrowers_name() {
         DropOutcome::Joined
     ));
     idle(&mut m);
+    // Decided, so the owner exports on vanilla and the copy is made.
+    m.set_field(&normal, "subtype", json!("landscape_normal"));
+    idle(&mut m);
     let views = set_views(&m);
     let borrower = views.iter().find(|v| v.id == id).unwrap();
     let Some(SlotFill::Own { item: d_item }) = borrower.slots.get(&SlotKind::Diffuse) else {
@@ -769,10 +778,17 @@ fn prepare_on_vanilla_plans_the_borrowed_slot_copy_with_the_borrowers_name() {
     };
     let dout = m.item(d_item).unwrap().job.as_ref().unwrap().output.clone();
     let src = m.item(b_item).unwrap().job.as_ref().unwrap().output.clone();
-    let p = prepare(&m).expect("a borrowed slot on vanilla plans a copy");
-    assert!(p.entries.is_empty() && p.path.as_os_str().is_empty());
     let stem = dout.file_stem().unwrap().to_string_lossy().into_owned();
     let want = dout.with_file_name(format!("{stem}_n.dds"));
+    (m, src, want)
+}
+
+#[test]
+fn prepare_on_vanilla_plans_the_borrowed_slot_copy_with_the_borrowers_name() {
+    let d = tempfile::tempdir().unwrap();
+    let (m, src, want) = vanilla_borrow(d.path());
+    let p = prepare(&m).expect("a borrowed slot on vanilla plans a copy");
+    assert!(p.entries.is_empty() && p.path.as_os_str().is_empty());
     assert!(
         p.copies.iter().any(|(s, t, _)| *s == src && *t == want),
         "want {src:?} -> {want:?}, got {:?}",
@@ -1248,4 +1264,74 @@ fn renamed_json_notes_old_file_and_rename_back_is_not_hand_edited() {
     assert_eq!(json_path(&m), a);
     assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&a).unwrap().contains("0.07"));
+}
+
+/// Audit 08-1 (Note BV3): a borrowed-slot copy never replaces a file Tessalith did not write.
+#[test]
+fn a_borrowed_slot_copy_keeps_a_foreign_file() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _src, want) = vanilla_borrow(d.path());
+    std::fs::create_dir_all(want.parent().unwrap()).unwrap();
+    std::fs::write(&want, b"hand made").unwrap();
+    export_and_wait(&mut m);
+    assert_eq!(std::fs::read(&want).unwrap(), b"hand made");
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.contains("kept as edited outside Tessalith")),
+        "{:?}",
+        m.export.notes
+    );
+}
+
+/// Note BV3: a copy Tessalith made is recorded, so it follows its owner on the next export.
+#[test]
+fn a_recorded_copy_follows_its_owner() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, src, want) = vanilla_borrow(d.path());
+    export_and_wait(&mut m);
+    assert_eq!(
+        std::fs::read(&want).unwrap(),
+        std::fs::read(&src).unwrap(),
+        "{:?}",
+        m.export.notes
+    );
+    let mut shas = m.sets_doc.as_ref().unwrap().copy_shas();
+    assert_eq!(shas.len(), 1, "{shas:?}");
+    // The owner was re-encoded since: the recorded copy is replaced.
+    std::fs::write(&src, b"new owner bytes").unwrap();
+    let p = prepare(&m).unwrap();
+    use sdc_gui::model::export::{Row, RowState};
+    let rows: Vec<Row> = p
+        .copies
+        .iter()
+        .map(|(_, _, k)| Row {
+            job_key: k.clone(),
+            path: String::new(),
+            state: RowState::UpToDate,
+            warnings: vec![],
+        })
+        .collect();
+    let mut notes = vec![];
+    copy_files(&p, &rows, &mut shas, &mut notes);
+    assert_eq!(
+        std::fs::read(&want).unwrap(),
+        b"new owner bytes",
+        "{notes:?}"
+    );
+}
+
+/// Audit 08f-3: a vanilla export that did not end cleanly says its copies were not made.
+#[test]
+fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
+    let p = PendingJson {
+        path: std::path::PathBuf::new(),
+        entries: vec![],
+        copies: vec![("a.dds".into(), "b_n.dds".into(), "a.dds".into())],
+    };
+    assert_eq!(
+        unfinished_note(&p, true).as_deref(),
+        Some("borrowed-slot copies not made: the export failed")
+    );
 }

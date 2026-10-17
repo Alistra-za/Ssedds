@@ -27,6 +27,9 @@ const CM_SHA: &str = "cm_json_sha256";
 /// #43: `[project] pgp_json_sha256`, path under the export root → hash of the PGPatcher JSON sdc last wrote there (one
 /// per name it has had). `last_json_sha256` stays the current name's hash, for older builds.
 const PGP_SHA: &str = "pgp_json_sha256";
+/// Note BV3: `[project] copy_sha256`, absolute lower-case path → hash of the vanilla borrowed-slot copy sdc last
+/// wrote there.
+const COPY_SHA: &str = "copy_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
 const RESERVED: [&str; 13] = [
     "id",
@@ -239,6 +242,7 @@ impl SetsDoc {
         let cs = self.cs_pbr_shas();
         let cm = self.cm_json_shas();
         let pgp = self.pgp_json_shas();
+        let copies = self.copy_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
@@ -253,6 +257,9 @@ impl SetsDoc {
         }
         if self.cm_json_shas() != cm {
             self.set_cm_json_shas(&cm);
+        }
+        if self.copy_shas() != copies {
+            self.set_copy_shas(&copies);
         }
         if self.text() == old {
             self.f.doc = doc;
@@ -359,6 +366,14 @@ impl SetsDoc {
 
     pub fn set_cm_json_shas(&mut self, shas: &BTreeMap<String, String>) {
         self.set_shas(CM_SHA, shas)
+    }
+
+    pub fn copy_shas(&self) -> BTreeMap<String, String> {
+        self.shas(COPY_SHA)
+    }
+
+    pub fn set_copy_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.set_shas(COPY_SHA, shas)
     }
 
     pub fn order(&self) -> Vec<String> {

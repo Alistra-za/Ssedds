@@ -102,6 +102,15 @@ pub fn sha256_of(p: &std::path::Path) -> Option<String> {
     Some(hex::encode(Sha256::digest(std::fs::read(p).ok()?)))
 }
 
+/// The key of a hash record for an exported file: its absolute path, `/`-separated and lower-cased.
+pub fn record_key(p: &std::path::Path) -> String {
+    std::path::absolute(p)
+        .unwrap_or_else(|_| p.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase()
+}
+
 /// `ours` for `engine::dds::may_replace`: the bytes on disk are the ones whose hash is recorded (`last`).
 pub fn recorded(last: Option<&str>) -> impl FnOnce(&[u8]) -> bool + '_ {
     use sha2::{Digest, Sha256};
