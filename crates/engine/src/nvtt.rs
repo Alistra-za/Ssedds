@@ -405,9 +405,12 @@ pub fn encode_level_nvtt(
         std::fs::File::create(&log).map_err(|e| failed(format!("{}: {e}", log.display())))?;
     let logf2 = logf.try_clone().map_err(|e| failed(e.to_string()))?;
     let mut cmd = Command::new(&tool.path);
+    // Trace-debug #17 (Note BQ): nvcompress reads argv in the ANSI code page, so the temp folder goes as the working
+    // folder and the files by their bare (ASCII) names.
     cmd.args(level_args(p))
-        .arg(&feed)
-        .arg(&out)
+        .arg(feed.file_name().unwrap_or_default())
+        .arg(out.file_name().unwrap_or_default())
+        .current_dir(tmp.path())
         .stdin(Stdio::null())
         .stdout(logf)
         .stderr(logf2);
