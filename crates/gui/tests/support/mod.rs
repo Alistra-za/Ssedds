@@ -139,3 +139,10 @@ pub fn decide_all(m: &mut AppModel) {
     );
     assert!(m.wait_idle(Duration::from_secs(60)));
 }
+
+/// `pbr_opened`, planned and idle (was pbr_export.rs::ready).
+pub fn pbr_ready(dir: &Path) -> AppModel {
+    let mut m = pbr_opened(dir);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m
+}

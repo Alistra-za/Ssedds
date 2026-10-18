@@ -218,6 +218,9 @@ fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
+/// `(evidence_rev, export.revision, export running)`.
+type ProblemsKey = (u64, u64, bool);
+
 /// The cached set views, export blocks and delete-section hits, valid for `key` only.
 #[derive(Default)]
 pub(crate) struct ViewCache {
@@ -225,6 +228,8 @@ pub(crate) struct ViewCache {
     pub views: Option<Arc<Vec<sets::SetView>>>,
     pub blocks: Option<Arc<Vec<pbr_export::ExportIssue>>>,
     pub hits: Option<Arc<Vec<sections::DeleteHit>>>,
+    /// Keyed by (evidence_rev, export.revision, export running) inside the view_key cell (K9).
+    pub problems: Option<(ProblemsKey, Arc<Vec<bottom::Problem>>)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -348,6 +353,7 @@ pub struct AppModel {
     pub messages: messages::Messages,
     /// The bottom panel: open or collapsed, and its tab (layout v2 A1).
     pub bottom: bottom::BottomPanel,
+    pub(crate) problem_builds: std::cell::Cell<u64>,
     /// Item 22: per-item DDS sizes by plan revision.
     pub sizes: out_size::SizeCache,
     /// Item 21: the RNM blended thumbnail job.
@@ -531,6 +537,7 @@ impl AppModel {
             status_line: String::new(),
             messages: Default::default(),
             bottom: Default::default(),
+            problem_builds: Default::default(),
             sizes: Default::default(),
             rnm_preview: Default::default(),
             status_note: None,
