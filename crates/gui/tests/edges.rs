@@ -93,9 +93,9 @@ fn export_after_a_change_plans_again_and_then_exports() {
     assert!(m.export.running.is_none());
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert!(!m.item("landscape/rock01.png").unwrap().changed_on_disk);
-    // Other textures are undecided, so the export asks first; proceeding exports the fresh plan.
-    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided_keys())));
-    m.proceed_anyway();
+    // Other textures are undecided, so Review opens first; its Export exports the fresh plan.
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
+    m.export_from_review();
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert_eq!(m.export.summary.as_ref().unwrap().failed, 0);
     let out = std::fs::read(d.path().join("export/landscape/rock01.dds")).unwrap();
@@ -109,8 +109,7 @@ fn a_dds_input_changed_on_disk_is_flagged_and_its_preview_read_again() {
     let mut m = opened(d.path());
     m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
     assert!(m.wait_idle(Duration::from_secs(60)));
-    m.export_clicked();
-    m.proceed_anyway();
+    export_through(&mut m);
     assert!(m.wait_idle(Duration::from_secs(120)));
     let root = m.root.clone().unwrap();
     let dds = d.path().join("export/landscape/rock01.dds");
@@ -129,8 +128,7 @@ fn a_dds_input_changed_on_disk_is_flagged_and_its_preview_read_again() {
     assert!(m.wait_idle(Duration::from_secs(60)));
     m.decide("landscape/small.png", Answer::Subtype(Subtype::Diffuse));
     assert!(m.wait_idle(Duration::from_secs(60)));
-    m.export_clicked();
-    m.proceed_anyway();
+    export_through(&mut m);
     assert!(m.wait_idle(Duration::from_secs(120)));
     m.expand("landscape/stored.dds");
     assert!(m.wait_idle(Duration::from_secs(60)));
@@ -183,7 +181,7 @@ fn export_during_a_plan_waits_for_it_and_then_asks_about_undecided_textures() {
     assert_eq!(m.dialog, None);
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert!(m.export.running.is_none());
-    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided_keys())));
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
     assert!(m.undecided() > 0);
 }
 
@@ -279,8 +277,7 @@ fn an_unknown_sub_type_in_a_files_entry_makes_the_project_read_only() {
 /// A model whose export has been started but not polled, so it is still running.
 fn exporting(d: &std::path::Path) -> AppModel {
     let mut m = opened(d);
-    m.export_clicked();
-    m.proceed_anyway();
+    export_through(&mut m);
     assert!(m.export.running.is_some());
     m
 }

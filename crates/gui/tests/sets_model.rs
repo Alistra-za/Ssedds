@@ -1564,7 +1564,10 @@ fn pending_read(d: &std::path::Path) -> (sdc_gui::model::AppModel, tempfile::Tem
 }
 
 fn export_started_or_asked(m: &sdc_gui::model::AppModel) -> bool {
-    m.dialog.is_some() || m.export.running.is_some() || m.export.summary.is_some()
+    m.dialog.is_some()
+        || m.review.is_some()
+        || m.export.running.is_some()
+        || m.export.summary.is_some()
 }
 
 #[test]

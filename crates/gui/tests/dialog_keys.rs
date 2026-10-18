@@ -273,9 +273,6 @@ fn esc_closes_the_dialogs_that_use_the_shared_modal() {
         Dialog::CloseUnsaved,
         Dialog::ReloadUnsaved,
         Dialog::ConfirmResetAll(vec![]),
-        Dialog::ExportBlocked(vec![]),
-        Dialog::ExportWarnings(vec![]),
-        Dialog::ProceedAnyway(vec![]),
         Dialog::CopySettings {
             from: "a".into(),
             to: vec![],
@@ -292,18 +289,19 @@ fn esc_closes_the_dialogs_that_use_the_shared_modal() {
 #[test]
 fn enter_never_decides_a_decision_dialog() {
     let d = tempfile::tempdir().unwrap();
-    for dialog in [
-        Dialog::ProceedAnyway(vec![]),
-        Dialog::ExportWarnings(vec![]),
-    ] {
-        let mut m = opened(d.path());
-        m.dialog = Some(dialog.clone());
-        assert_eq!(
-            dialog_after(m, Key::Enter, true),
-            Some(dialog.clone()),
-            "Enter did something in {dialog:?}"
-        );
-    }
+    // K7: Copy settings is the decision dialog where Enter does nothing (R18); Review's Enter is Task 1.4's test.
+    let dialog = Dialog::CopySettings {
+        from: "a".into(),
+        to: vec![],
+        fields: vec![],
+    };
+    let mut m = opened(d.path());
+    m.dialog = Some(dialog.clone());
+    assert_eq!(
+        dialog_after(m, Key::Enter, true),
+        Some(dialog.clone()),
+        "Enter did something in {dialog:?}"
+    );
 }
 
 #[test]

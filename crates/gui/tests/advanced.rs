@@ -180,8 +180,7 @@ fn the_16k_toggle_restarts_only_when_the_effective_limit_changes() {
 fn changing_the_preview_limit_reopens_an_expanded_dds() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    m.export_clicked();
-    m.proceed_anyway();
+    export_through(&mut m);
     assert!(m.wait_idle(Duration::from_secs(120)));
     let dds = walk(&d.path().join("export"))
         .into_iter()

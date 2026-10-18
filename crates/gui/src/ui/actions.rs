@@ -541,7 +541,7 @@ pub static ACTIONS: &[Action] = &[
     // Dialogs
     listed(
         "dialog-enter",
-        "Press the dialog's safe default (never Proceed anyway)",
+        "Press the dialog's safe default",
         Dialogs,
         &[key(Key::Enter)],
     ),

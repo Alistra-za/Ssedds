@@ -9,16 +9,16 @@ use std::time::Duration;
 use support::*;
 
 #[test]
-fn undecided_textures_ask_first_and_proceed_anyway_skips_them() {
+fn undecided_textures_open_review_first_and_its_export_skips_them() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     let n = m.undecided();
     assert!(n > 0);
     m.export_clicked();
-    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided_keys())));
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
     assert_eq!(m.undecided_keys().len(), n);
     assert!(m.export.running.is_none(), "nothing runs before the answer");
-    m.proceed_anyway();
+    m.export_from_review();
     assert!(m.wait_idle(Duration::from_secs(120)));
     let s = m.export.summary.clone().unwrap();
     assert!(
@@ -347,10 +347,7 @@ fn answering_open_unsaved_during_an_export_waits_for_it() {
         "specular_level",
         Some(serde_json::json!(0.05)),
     );
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(&mut m);
     assert!(m.export.running.is_some(), "{:?}", m.dialog);
     let root = m.root.clone();
     let other = d.path().join("other");

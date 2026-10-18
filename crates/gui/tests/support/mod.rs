@@ -146,3 +146,12 @@ pub fn pbr_ready(dir: &Path) -> AppModel {
     assert!(m.wait_idle(Duration::from_secs(60)));
     m
 }
+
+/// Export as a user would: Export, then, if Review opened, acknowledge its pitfalls and press its Export.
+pub fn export_through(m: &mut AppModel) {
+    m.export_clicked();
+    if m.review.is_some() {
+        m.acknowledge_all_asks();
+        m.export_from_review();
+    }
+}

@@ -345,7 +345,7 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
 | JSON editor | F8 | Next error in the PGPatcher JSON editor |
 | JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
-| Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
+| Dialogs | Enter | Press the dialog's safe default |
 | Dialogs | Esc | Cancel the dialog |
 
 ## Presets

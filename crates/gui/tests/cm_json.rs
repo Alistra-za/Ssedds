@@ -482,14 +482,11 @@ fn exporting_targets_on_one_path_are_refused_and_the_first_duplicate_entry_decid
     );
 }
 
-use sdc_gui::model::Dialog;
 use std::path::PathBuf;
+use support::export_through;
 
 fn export_and_wait(m: &mut AppModel) {
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(
         m.wait_idle(Duration::from_secs(120)),
         "export did not finish"

@@ -401,11 +401,7 @@ fn accept_all_keeps_the_pbr_follow_for_a_member_decided_on_a_stale_plan() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path());
     m.export_clicked();
-    assert!(
-        matches!(m.dialog, Some(sdc_gui::model::Dialog::ProceedAnyway(_))),
-        "{:?}",
-        m.dialog
-    );
+    assert!(m.review.is_some(), "{:?}", m.dialog);
     // The row's decision re-plans; Accept all runs before that plan lands, so `N` still shows `normal`.
     m.decide_undecided_row(DIFFUSE, Subtype::PbrAlbedo);
     m.accept_all_suggestions();

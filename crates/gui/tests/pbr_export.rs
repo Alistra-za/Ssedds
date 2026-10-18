@@ -29,7 +29,8 @@ fn a_feature_without_its_texture_blocks() {
         "{b:?}"
     );
     m.export_clicked();
-    assert!(matches!(m.dialog, Some(Dialog::ExportBlocked(_))));
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(m.review_gate().unwrap_err().starts_with("Fix "));
 }
 
 #[test]
@@ -114,28 +115,6 @@ fn an_owned_output_on_a_mirrored_path_blocks() {
     assert!(export_blocks(&m)
         .iter()
         .any(|i| i.text.contains("leaf.png")));
-}
-
-#[test]
-fn pitfalls_ask_and_proceeding_continues_to_the_undecided_check() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_ready(d.path());
-    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
-    idle(&mut m);
-    assert!(!export_asks(&m).is_empty());
-    m.export_clicked();
-    assert!(
-        matches!(m.dialog, Some(Dialog::ExportWarnings(_))),
-        "{:?}",
-        m.dialog
-    );
-    m.proceed_with_warnings();
-    // The fixture has undecided textures: the M3a question comes next.
-    assert!(
-        matches!(m.dialog, Some(Dialog::ProceedAnyway(_))),
-        "{:?}",
-        m.dialog
-    );
 }
 
 #[test]
@@ -311,23 +290,6 @@ fn non_pbr_sets_and_vanilla_skip_the_pbr_checks() {
 }
 
 #[test]
-fn blocks_never_offer_proceed_anyway() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_ready(d.path());
-    // Both a block and a pitfall: the block wins and the dialog is the blocked one.
-    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
-    m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
-    idle(&mut m);
-    assert!(!export_asks(&m).is_empty());
-    m.export_clicked();
-    assert!(
-        matches!(m.dialog, Some(Dialog::ExportBlocked(_))),
-        "{:?}",
-        m.dialog
-    );
-}
-
-#[test]
 fn the_json_name_must_be_one_usable_file_name() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
@@ -462,10 +424,7 @@ fn fuzz_texture_without_an_f_map_blocks_through_the_normal_path() {
 }
 
 fn export_and_wait(m: &mut sdc_gui::model::AppModel) {
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(
         m.wait_idle(Duration::from_secs(120)),
         "export did not finish"
@@ -941,14 +900,14 @@ fn an_owned_path_on_a_mirrored_output_settles_and_blocks_by_name() {
     m.set_field(other, "subtype", json!("diffuse"));
     idle(&mut m);
     m.export_clicked();
-    match &m.dialog {
-        Some(Dialog::ExportBlocked(b)) => assert!(
-            b.iter()
-                .any(|i| i.text.contains("landscape/rock01") && i.text.contains(other)),
-            "{b:?}"
-        ),
-        d => panic!("expected ExportBlocked naming the clash, got {d:?}"),
-    }
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(m.review_gate().unwrap_err().starts_with("Fix "));
+    let b = export_blocks(&m);
+    assert!(
+        b.iter()
+            .any(|i| i.text.contains("landscape/rock01") && i.text.contains(other)),
+        "{b:?}"
+    );
 }
 
 /// Final re-review (5d regression): a source DDS on a PBR output path is skipped (IN-DDS-SKIPPED) and writes
@@ -1214,10 +1173,7 @@ fn a_project_file_changed_during_the_export_asks_about_it() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(&mut m);
     let pf = m.sets_doc.as_ref().unwrap().path().to_path_buf();
     let mut text = std::fs::read_to_string(&pf).unwrap();
     text.push_str("\n# a hand edit\n");
@@ -1330,28 +1286,6 @@ fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
     );
 }
 
-/// Audit 08f-2: "Proceed anyway" continues as the other answers do: it waits for a plan in flight and runs the
-/// export guards again before the undecided question.
-#[test]
-fn proceeding_with_warnings_waits_for_a_plan_in_flight() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_ready(d.path());
-    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
-    idle(&mut m);
-    m.export_clicked();
-    assert!(matches!(m.dialog, Some(Dialog::ExportWarnings(_))));
-    m.replan();
-    m.proceed_with_warnings();
-    assert!(m.dialog.is_none(), "{:?}", m.dialog);
-    assert!(m.export_queued());
-    idle(&mut m);
-    assert!(
-        matches!(m.dialog, Some(Dialog::ProceedAnyway(_))),
-        "{:?}",
-        m.dialog
-    );
-}
-
 /// Audit 08f-6: an end-of-export question never replaces a dialog that is already open; the hand-edited JSON is
 /// kept and a note says so.
 #[test]
@@ -1362,10 +1296,7 @@ fn the_overwrite_question_does_not_replace_an_open_dialog() {
     let p = json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(&mut m);
     assert!(m.export.running.is_some(), "{:?}", m.dialog);
     // A question that came up while the export ran (here the banner's Reload over unsaved edits).
     m.dialog = Some(Dialog::ReloadUnsaved);

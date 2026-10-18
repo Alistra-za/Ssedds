@@ -392,8 +392,7 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
 /// Export can start: a folder is open, no export runs, and `sdc.toml` is not ignored (M3a spec §7.4: an export would
 /// not be the project's settings).
 pub fn can_export(model: &AppModel) -> bool {
-    let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
-    model.root.is_some() && model.export.running.is_none() && !read_only
+    model.can_export()
 }
 
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.

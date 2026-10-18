@@ -219,10 +219,7 @@ fn a_plan_rejection_clears_the_history() {
 }
 
 fn export_and_wait(m: &mut sdc_gui::model::AppModel) {
-    m.export_clicked();
-    if matches!(m.dialog, Some(sdc_gui::model::Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(m.wait_idle(std::time::Duration::from_secs(120)));
 }
 
@@ -308,10 +305,7 @@ fn an_edit_during_an_export_is_not_saved_by_the_hash_record() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
-    m.export_clicked();
-    if matches!(m.dialog, Some(sdc_gui::model::Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(&mut m);
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.37)));
     assert!(m.wait_idle(std::time::Duration::from_secs(120)));
     let doc = m.sets_doc.as_ref().unwrap();

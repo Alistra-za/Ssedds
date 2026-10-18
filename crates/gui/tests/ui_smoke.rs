@@ -426,16 +426,10 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     let mut h = harness(opened(d.path()));
     h.run();
     press(&mut h, "Export");
-    h.get_by_label_contains("still need a decision");
-    h.get_by_label("Accept all suggestions");
-    h.get_by_label("Proceed anyway");
-    assert!(h.query_all_by_label("\u{2713}").count() >= 1);
-    // Cancel closes the question and starts nothing.
-    press(&mut h, "Cancel");
-    assert!(h.state().dialog.is_none());
-    assert!(!h.state().bottom.open);
-    press(&mut h, "Export");
-    press(&mut h, "Proceed anyway");
+    // Task 1.3: Export opens Review (no modal) and starts nothing; Task 1.4 draws the tab and its labels here.
+    assert!(h.state().review.is_some() && h.state().dialog.is_none());
+    assert!(h.state().export.running.is_none());
+    export_through(h.state_mut());
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
     h.run();
     for label in ["Files", "Save report…", "Copy CLI command", "Close"] {
@@ -626,8 +620,7 @@ fn without_a_gpu_the_preview_says_so_and_cannot_encode() {
 fn closing_during_an_export_asks_and_keep_running_leaves_it_alone() {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened(d.path());
-    model.export_clicked();
-    model.proceed_anyway();
+    export_through(&mut model);
     assert!(!model.request_close());
     let mut h = harness(model);
     h.run();
