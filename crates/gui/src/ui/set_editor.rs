@@ -247,49 +247,53 @@ fn set_panel(
     ui.separator();
     // A3: the tab scrolls on its own, so the slot rows stay in view. Sideways too: a card wider than the panel (the
     // PBR Landscape card is ~390) would otherwise widen it past its size range and under the rows' minimum.
-    egui::ScrollArea::both()
-        .id_salt(("set-panel-tab", open))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if open {
-                super::advanced::body(ui, model, advanced);
-                return;
-            }
-            if json {
-                ui.horizontal(|ui| {
-                    ui.strong(&v.label);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // G3: the whole file, every set and the delete sections, in its own window.
-                        if ui
-                            .small_button("TruePBR JSON editor…")
-                            .on_hover_text("Every set's entry and the delete sections of the PGPatcher JSON, in one window")
-                            .clicked()
-                        {
-                            model.json_editor_open = true;
-                        }
+    // I2: the default floating bar is invisible until hovered (dormant opacity 0); thin is always drawn.
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+        egui::ScrollArea::both()
+            .id_salt(("set-panel-tab", open))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if open {
+                    super::advanced::body(ui, model, advanced);
+                    return;
+                }
+                if json {
+                    ui.horizontal(|ui| {
+                        ui.strong(&v.label);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // G3: the whole file, every set and the delete sections, in its own window.
+                            if ui
+                                .small_button("TruePBR JSON editor…")
+                                .on_hover_text("Every set's entry and the delete sections of the PGPatcher JSON, in one window")
+                                .clicked()
+                            {
+                                model.json_editor_open = true;
+                            }
+                        });
                     });
-                });
-            }
-            super::cs_pbr::card(ui, model, v);
-            // K12: on a JSON set that is not PBR Landscape the CS PBR records sit between Matching and Advanced
-            // TruePBR settings; `pgp_panel` (a PBR Landscape set's) draws both halves itself.
-            let split = json && !(model.target == Target::Cs && crate::model::sets::is_pbr_landscape(v));
-            if split {
-                super::pgp_fields::panel_main(ui, model, &v.id);
-                super::cs_pbr::section(ui, model, v);
-                super::pgp_fields::panel_advanced(ui, model, &v.id);
-            } else if json {
-                super::cs_pbr::pgp_panel(ui, model, v);
-            }
-            if v.skin {
-                super::skin_card::card(ui, model, v);
-            }
-            super::cm_card::section(ui, model, v);
-            if !split {
-                super::cs_pbr::section(ui, model, v);
-            }
-            super::plugin_refs::set_section(ui, model, v);
-        });
+                }
+                super::cs_pbr::card(ui, model, v);
+                // K12: on a JSON set that is not PBR Landscape the CS PBR records sit between Matching and Advanced
+                // TruePBR settings; `pgp_panel` (a PBR Landscape set's) draws both halves itself.
+                let split = json && !(model.target == Target::Cs && crate::model::sets::is_pbr_landscape(v));
+                if split {
+                    super::pgp_fields::panel_main(ui, model, &v.id);
+                    super::cs_pbr::section(ui, model, v);
+                    super::pgp_fields::panel_advanced(ui, model, &v.id);
+                } else if json {
+                    super::cs_pbr::pgp_panel(ui, model, v);
+                }
+                if v.skin {
+                    super::skin_card::card(ui, model, v);
+                }
+                super::cm_card::section(ui, model, v);
+                if !split {
+                    super::cs_pbr::section(ui, model, v);
+                }
+                super::plugin_refs::set_section(ui, model, v);
+            });
+    });
 }
 
 /// Item 17: a file from Explorer dropped on slot `slot` of `set`. The drop is taken (its folder is not opened); a
@@ -414,36 +418,40 @@ fn rows(
     };
     let mut reveal = None;
     // Never drawn under the panel beside it: a column narrower than the rows scrolls them sideways.
-    egui::ScrollArea::horizontal()
-        .id_salt(("slot-rows-scroll", &v.id))
-        .show(ui, |ui| {
-            egui::Grid::new(("slot-rows", &v.id))
-                .num_columns(6)
-                .striped(true)
-                .spacing([SPACING, 4.0])
-                .min_col_width(0.0)
-                .show(ui, |ui| {
-                    // The row takes the right-click; its labels are not selectable, so they do not take it.
-                    ui.style_mut().interaction.selectable_labels = false;
-                    for cell in slot_row(v.shader.as_ref(), &v.slots) {
-                        let size = match &cell.fill {
-                            SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
-                                sizes.get(item)
+    // I2: the default floating bar is invisible until hovered (dormant opacity 0); thin is always drawn.
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+        egui::ScrollArea::horizontal()
+            .id_salt(("slot-rows-scroll", &v.id))
+            .show(ui, |ui| {
+                egui::Grid::new(("slot-rows", &v.id))
+                    .num_columns(6)
+                    .striped(true)
+                    .spacing([SPACING, 4.0])
+                    .min_col_width(0.0)
+                    .show(ui, |ui| {
+                        // The row takes the right-click; its labels are not selectable, so they do not take it.
+                        ui.style_mut().interaction.selectable_labels = false;
+                        for cell in slot_row(v.shader.as_ref(), &v.slots) {
+                            let size = match &cell.fill {
+                                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
+                                    sizes.get(item)
+                                }
+                                SlotFill::Empty => None,
+                            };
+                            let before = asks(ui);
+                            let (w, rect) =
+                                row(ui, model, v, &cell, thumbs, acts, drop_at, size, file_w);
+                            if asks(ui) < before {
+                                reveal = Some(rect);
                             }
-                            SlotFill::Empty => None,
-                        };
-                        let before = asks(ui);
-                        let (w, rect) =
-                            row(ui, model, v, &cell, thumbs, acts, drop_at, size, file_w);
-                        if asks(ui) < before {
-                            reveal = Some(rect);
+                            for (a, b) in widths.iter_mut().zip(w) {
+                                *a = a.max(b);
+                            }
                         }
-                        for (a, b) in widths.iter_mut().zip(w) {
-                            *a = a.max(b);
-                        }
-                    }
-                });
-        });
+                    });
+            });
+    });
     ui.data_mut(|d| d.insert_temp(others_id, widths));
     if let Some(r) = reveal {
         ui.scroll_to_rect(r, Some(egui::Align::Center));
