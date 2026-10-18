@@ -105,7 +105,16 @@ const RECORDED: [[[[&str; 2]; 2]; 8]; 4] = [
                 "578bbf28b4b7dd3b3daf847870a176fb123e0262d9f9cddcf76f34c30907e446",
             ],
         ],
-        [["", ""], ["", ""]],
+        [
+            [
+                "5c05f11849786ea5eb2ee6d5ca0703ef5c0faeede8b51ca8ab4ba936dd19e994",
+                "9ce71331e668547146fb31cf2d847c0bd797a01fd52d70142ee6a1d533e557fb",
+            ],
+            [
+                "6165095a8fbb9e9bde5758ab5915f15c97ce1f6ec86f020e9c107af9b6ede49b",
+                "d86fda4542902c772670656ec580f371108b419c6b4cb7771f3a3673a2d06547",
+            ],
+        ],
     ],
     [
         [
@@ -178,7 +187,16 @@ const RECORDED: [[[[&str; 2]; 2]; 8]; 4] = [
                 "578bbf28b4b7dd3b3daf847870a176fb123e0262d9f9cddcf76f34c30907e446",
             ],
         ],
-        [["", ""], ["", ""]],
+        [
+            [
+                "5c05f11849786ea5eb2ee6d5ca0703ef5c0faeede8b51ca8ab4ba936dd19e994",
+                "9ce71331e668547146fb31cf2d847c0bd797a01fd52d70142ee6a1d533e557fb",
+            ],
+            [
+                "6165095a8fbb9e9bde5758ab5915f15c97ce1f6ec86f020e9c107af9b6ede49b",
+                "d86fda4542902c772670656ec580f371108b419c6b4cb7771f3a3673a2d06547",
+            ],
+        ],
     ],
     [
         [
@@ -251,7 +269,16 @@ const RECORDED: [[[[&str; 2]; 2]; 8]; 4] = [
                 "578bbf28b4b7dd3b3daf847870a176fb123e0262d9f9cddcf76f34c30907e446",
             ],
         ],
-        [["", ""], ["", ""]],
+        [
+            [
+                "5c05f11849786ea5eb2ee6d5ca0703ef5c0faeede8b51ca8ab4ba936dd19e994",
+                "9ce71331e668547146fb31cf2d847c0bd797a01fd52d70142ee6a1d533e557fb",
+            ],
+            [
+                "6165095a8fbb9e9bde5758ab5915f15c97ce1f6ec86f020e9c107af9b6ede49b",
+                "d86fda4542902c772670656ec580f371108b419c6b4cb7771f3a3673a2d06547",
+            ],
+        ],
     ],
     [
         [
@@ -324,7 +351,16 @@ const RECORDED: [[[[&str; 2]; 2]; 8]; 4] = [
                 "7450d671550279e69ea0895a277f10e622edd6d6eec6b2d7276ac55d1ab9e5e7",
             ],
         ],
-        [["", ""], ["", ""]],
+        [
+            [
+                "6e661bdcd647c645e8b7367f8320fe01641656836207155726589c7c78bf5832",
+                "8ac31e9a5337452968183097e40563151965138ec1b7dafd9e7094b775c8b5c8",
+            ],
+            [
+                "254735476eb0a3136ecc223ace5960f14b676547cf498abbb47b6fe693860924",
+                "52e839a33c8d84589a7ffec047869ea9d55425b615c3ca0571db8991fffd3f40",
+            ],
+        ],
     ],
 ];
 

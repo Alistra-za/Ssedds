@@ -5,7 +5,7 @@
 | bc7enc_rdo/ (rgbcx.* with the rgbcx BC4 round-to-nearest patch, bc7e.ispc pristine) | https://github.com/richgel999/bc7enc_rdo | b9438627eef73a1157e84201b6fa6eb2ffd6d9f0 | rgbcx: MIT or Unlicense; bc7e.ispc: Apache-2.0 |
 | ispctc/ | https://github.com/GameTechDev/ISPCTextureCompressor | 79ddbc9 | MIT |
 | bc7e/ (bc7e.ispc, patches/0001-exact-opaque-alpha.patch, patches/0002-sdc-max-level.patch) | bc7enc_rdo/bc7e.ispc + sdc patches 0001 and 0002 | b9438627eef73a1157e84201b6fa6eb2ffd6d9f0 + patches 0001, 0002 | Apache-2.0 (modified; change notices at the top of the file) |
-| ispc-objs/bc7e/ | built from bc7e/bc7e.ispc (pristine + patch 0001; **not yet rebuilt for patch 0002**, see below) with ISPC 1.31.0: `-O2 --target=sse2,sse4,avx,avx2 --opt=fast-math --opt=disable-assertions` | — | Apache-2.0 |
+| ispc-objs/bc7e/ | built from bc7e/bc7e.ispc (pristine + patches 0001 and 0002, rebuilt on Windows 2026-10-18) with ISPC 1.31.0: `-O2 --target=sse2,sse4,avx,avx2 --opt=fast-math --opt=disable-assertions` | — | Apache-2.0 |
 | ispc-objs/ispctc/ | built from ispctc/kernel.ispc with ISPC 1.31.0: `-O2 --target=sse2,sse4,avx,avx2 --opt=fast-math` | — | MIT |
 
 All objects are produced by `tools/regen-ispc.ps1` (ISPC 1.31.0, which also passes
@@ -43,11 +43,12 @@ output of every shipped level for both perceptual and both exact-opaque settings
 from the patched source. The patch file is `git diff --no-index --text <patch-0001 bc7e.ispc> crates/encoders-sys/vendor/bc7e/bc7e.ispc`.
 Measurements: docs/research/bc7e-tuning.md.
 
-**Objects.** The vendored `ispc-objs/bc7e/*.obj` and `bc7e_ispc.h` are still the patch-0001 build: the Linux ISPC 1.31.0
-binary cannot emit Windows COFF objects, so the rebuild is an owner step on Windows: `tools/regen-ispc.ps1 -Update -Bc7eOnly`,
-then `tools/hash-vendor.ps1`, then `cargo test -p encoders-sys` (level_identity must pass; the `Max` row is then checked too)
-and `cargo test -p engine --test golden`. Until then `build.rs` sees no `m_endpoint_search` in the header, the shim compiles
-without level 7, `encoders_sys::BC7E_MAX_NATIVE` is false and the engine refuses `effort = "max"` with `CFG-INVALID`.
+**Objects.** The vendored `ispc-objs/bc7e/*.obj` and `bc7e_ispc.h` were rebuilt from the patch-0002 source on Windows
+(2026-10-18) with `tools/regen-ispc.ps1 -Update -Bc7eOnly` and `tools/hash-vendor.ps1`; a second `regen-ispc.ps1` run
+matches 12/12. `build.rs` finds `m_endpoint_search` in the header, so `encoders_sys::BC7E_MAX_NATIVE` is true and
+`effort = "max"` works. Levels 0 to 6 encode byte-identically to the patch-0001 objects on each of the four ISPC
+targets (`tests/level_identity.rs`, which pins every level per target because ISPC's sse2/sse4/avx paths and its avx2
+path encode differently; engine goldens 95/95).
 
 Patch "rgbcx BC4 round-to-nearest" (M6 Track D, 2026-10-12) edits `bc7enc_rdo/rgbcx.h` in place, marked
 `sdc patch (M6 Track D): round to nearest to match hardware/bcdec`. `bc4_block::get_block_values6/8`, the BC4 palette

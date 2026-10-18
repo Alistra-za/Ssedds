@@ -83,6 +83,10 @@ struct bc7e_compress_block_params {
     bool m_exact_opaque_alpha;
     struct $anon0 m_opaque_settings;
     struct $anon1 m_alpha_settings;
+    bool m_endpoint_search;
+    bool m_refine_partitions;
+    bool m_unused4;
+    bool m_unused5;
 };
 #endif
 
@@ -97,6 +101,7 @@ extern "C" {
     extern void bc7e_compress_block_params_init(struct bc7e_compress_block_params * p, bool perceptual);
     extern void bc7e_compress_block_params_init_basic(struct bc7e_compress_block_params * p, bool perceptual);
     extern void bc7e_compress_block_params_init_fast(struct bc7e_compress_block_params * p, bool perceptual);
+    extern void bc7e_compress_block_params_init_sdc_max(struct bc7e_compress_block_params * p, bool perceptual);
     extern void bc7e_compress_block_params_init_slow(struct bc7e_compress_block_params * p, bool perceptual);
     extern void bc7e_compress_block_params_init_slowest(struct bc7e_compress_block_params * p, bool perceptual);
     extern void bc7e_compress_block_params_init_ultrafast(struct bc7e_compress_block_params * p, bool perceptual);
