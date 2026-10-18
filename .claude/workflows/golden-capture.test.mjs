@@ -144,6 +144,32 @@ const lib = (cmd, env = {}) => {
   assert.equal(gs.filter(x => x.probe).every(x => groupSteps(x, [0, 0, 0]).filter(s => s.tool === 'communityshaders.capture').length === x.captures.length), true)
   ok('steps: identical framing for any origin, keyframed before positioning, logLP on the light anchor, probe captures')
 }
+{
+  // Layout transform, player move, primary LIGH lights.
+  const p = { x_layout_yaw_deg: 90, x_origin_shift: [1000, 0, 5], x_player_pos: [0, -600, 0], groups: [
+    { label: 'G', forms: ['000EB09A', '0009DA9C'], tags: ['coffin'], x_pos: [[0, 400, 0], [100, 0, 120]], x_angle: [[0, 0, 180], [0, 0, 300]],
+      x_camera: { rel: [0, -150, 120], pitch: 0.15, yaw: 0 }, x_light_pos: [[-50, 330, 100], [50, 330, 100]], captures: [{ after_s: 0 }] },
+    { label: 'H', forms: ['0009DA9C'], tags: ['x'], captures: [{ after_s: 0 }] }] }
+  const [g, h] = resolveGroups(p, p.groups, [])
+  // yaw 90 clockwise: plan +Y (north) -> world +X (east), plan +X -> world -Y.
+  assert.deepEqual(g.forms[0].rel, [1400, 0, 5]); assert.deepEqual(g.forms[1].rel, [1000, -100, 125])
+  assert.deepEqual(g.forms[0].angle, [0, 0, 270]); assert.deepEqual(g.forms[1].angle, [0, 0, 30])
+  assert.deepEqual(g.camera.rel, [850, 0, 125]); assert.equal(g.camera.yaw, 1.5708); assert.equal(g.camera.pitch, 0.15)
+  assert.deepEqual(g.player, [400, 0, 5]); assert.deepEqual(g.lights, [[1330, 50, 105], [1330, -50, 105]])
+  assert.deepEqual(h.lights, [[1250, 0, 125]], 'anchor without x_light_pos: one light at fallback_pos')
+  assert.deepEqual(resolveGroups({ groups: [] }, [{ label: 'P', forms: [], tags: [], captures: [{}] }], [])[0].lights, [], 'probe: no lights')
+  const s = groupSteps(g, [10, 20, 30])
+  assert.deepEqual(s[0].body.self, { form: '0x14' }); assert.equal(s[0].body.function, 'SetPosition'); assert.deepEqual(s[0].body.args, [410, 20, 35])
+  const placed = s.filter(x => x.save && x.save.startsWith('light'))
+  assert.equal(placed.length, 2); assert.ok(placed.every(x => !x.only_if), 'lights are primary, not conditional')
+  assert.ok(s.some(x => x.body && x.body.function === 'SetPosition' && x.body.self.form === '$light1' && x.body.args.join() === '1340,-30,135'))
+  assert.equal(s.filter(x => x.body && x.body.function === 'Delete' && /^\$light/.test(x.body.self.form)).length, 2, 'every light deleted')
+  assert.ok(s.some(x => x.body && x.body.kind === 'lights'), 'inspect lights recorded')
+  assert.ok(!s.some(x => x.body && /ReloadLP/.test(x.body.command || '') ), 'never ReloadLP')
+  const iCam = s.findIndex(x => x.body && x.body.action === 'drive')
+  assert.ok(iCam > 0 && s.findIndex(x => x.save === 'light0') < iCam, 'player first, lights before the camera')
+  ok('layout yaw/shift turns positions, angles, camera, player and lights; player moved first; LIGH lights primary and cleaned up')
+}
 
 // ---------- 4. preflight dry run writes nothing to the settings ----------
 const RUN = path.join(T, 'run')

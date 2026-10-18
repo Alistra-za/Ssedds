@@ -26,6 +26,20 @@ const GB = 1024 ** 3
 export const CAPTURE_GB = 1.9 // largest .rdc seen (guide §4: 1.3-1.9 GB)
 export const LIGHT_DEFAULTS = { anchor: '0009DA9C', fallback_ligh: '000E2174', fallback_pos: [0, 250, 120] }
 const DEFAULT_CAMERA = { rel: [0, -150, 120], pitch: 0.15, yaw: 0.0 }
+const DEFAULT_PLAYER_POS = [0, -600, 0] // plan frame: 450 behind the default camera, out of its view
+
+// Plan frame -> marker-relative world offsets. x_layout_yaw_deg turns the whole layout clockwise (heading sense, as
+// SetAngle Z and camera yaw), then x_origin_shift (world units) moves it. Without both keys this is the identity.
+// shortcut: Z is added to SetAngle as is, exact only while X/Y angles are 0 (all plan angles); compose properly if not.
+export function layoutOf(plan) {
+  const deg = plan.x_layout_yaw_deg || 0, sh = plan.x_origin_shift || [0, 0, 0]
+  const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), r1 = v => Math.round(v * 10) / 10 || 0 // no -0 in plan.txt
+  return {
+    pos: p => [r1(sh[0] + p[0] * c + p[1] * s), r1(sh[1] - p[0] * s + p[1] * c), r1((sh[2] || 0) + (p[2] || 0))],
+    angle: g => [g[0], g[1], (((g[2] + deg) % 360) + 360) % 360],
+    yaw: y => Math.round((y + a) * 1e4) / 1e4,
+  }
+}
 // Always on for a capture run, whatever the profile says: RenderDoc + Frame Annotations (base workflow), and the
 // debug log (spdlog 1 = debug; the owner's file has 2 = info) because W2 needs the "Compilation completed" line and
 // X6 the "Compiling ... to <defines>" lines. Restore puts the owner's file back, so this is temporary for profile B.
@@ -196,6 +210,9 @@ const vadd = (a, b) => a.map((x, i) => x + (b[i] || 0))
 
 export function resolveGroups(plan, groups, s6) {
   const light = { ...LIGHT_DEFAULTS, ...(plan.x_light || {}) }
+  const L = layoutOf(plan)
+  const player = L.pos(plan.x_player_pos || DEFAULT_PLAYER_POS)
+  const fallback = Array.isArray(light.fallback_pos[0]) ? light.fallback_pos : [light.fallback_pos]
   const formTags = Object.fromEntries(Object.entries(plan.x_form_tags || {}).map(([k, v]) => [k.toUpperCase(), v]))
   const out = groups.map(g => {
     // W9 expected shapes per form: x_form_tags; else tags paired with the non-anchor forms by index when the counts
@@ -211,8 +228,8 @@ export function resolveGroups(plan, groups, s6) {
     const forms = (g.forms || []).map((form, i) => ({
       shapes: shapesFor(form),
       form: form.toUpperCase(),
-      rel: g.x_pos ? g.x_pos[i] : [((i - ((g.forms.length - 1) / 2)) * (g.spacing || 120)), 400, 0], // legacy row
-      angle: g.x_angle ? g.x_angle[i] : [0, 0, 180],
+      rel: L.pos(g.x_pos ? g.x_pos[i] : [((i - ((g.forms.length - 1) / 2)) * (g.spacing || 120)), 400, 0]), // legacy row
+      angle: L.angle(g.x_angle ? g.x_angle[i] : [0, 0, 180]),
       keyframed: (g.x_motion_keyframed || []).map(x => x.toUpperCase()).includes(form.toUpperCase()),
       light_anchor: form.toUpperCase() === light.anchor.toUpperCase(),
     }))
@@ -222,11 +239,15 @@ export function resolveGroups(plan, groups, s6) {
       // Only when the s6 mesh the plan names is on disk with the planned sha256 (never written here).
       const f = s6.find(x => x.copy_of && x.ok)
       optional = { form: opt.form, used: !!f, why: f ? `s6 file ${f.path} present` : 's6 file missing or sha256 differs' }
-      if (f) forms.push({ shapes: formTags[opt.form.toUpperCase()] || opt.tags || [], form: opt.form.toUpperCase(), rel: opt.pos, angle: opt.angle || [0, 0, 180], keyframed: false, light_anchor: false })
+      if (f) forms.push({ shapes: formTags[opt.form.toUpperCase()] || opt.tags || [], form: opt.form.toUpperCase(), rel: L.pos(opt.pos), angle: L.angle(opt.angle || [0, 0, 180]), keyframed: false, light_anchor: false })
     }
+    const cam = g.x_camera || DEFAULT_CAMERA
+    // Point lights (W4): the PlaceAtMe LIGH is the primary method; LightPlacer on the anchor is only a diagnostic.
+    // x_light_pos lists one light per subject (pair); a group with only the anchor gets the single default position.
+    const lights = (g.x_light_pos || (forms.some(f => f.light_anchor) ? fallback : [])).map(L.pos)
     return {
       label: g.label, forms, tags: [...(g.tags || []), ...(optional && optional.used ? opt.tags || [] : [])],
-      probe: !forms.length, camera: g.x_camera || DEFAULT_CAMERA, settle_s: g.settle_s ?? 3,
+      probe: !forms.length, camera: { ...cam, rel: L.pos(cam.rel), yaw: L.yaw(cam.yaw || 0) }, settle_s: g.settle_s ?? 3, player, lights,
       captures: g.captures, risky: !!g.risky, note: g.x_note || '', optional,
     }
   })
@@ -238,6 +259,8 @@ export function resolveGroups(plan, groups, s6) {
 export function groupSteps(g, origin) {
   const S = []
   const papyrus = (fn, self, args, script = 'ObjectReference') => ({ tool: 'papyrus', body: { action: 'call', script, function: fn, self, args } })
+  // The free camera does not hide the player, so move the player out of view first (P0 probe was mostly the body).
+  if (g.player) S.push({ ...papyrus('SetPosition', { form: '0x14' }, vadd(origin, g.player)), note: `player out of view, rel ${JSON.stringify(g.player)}` })
   g.forms.forEach((f, i) => {
     const ref = { form: `$ref${i}` }
     S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${f.form}` }, 1, false, false]), save: `ref${i}`, note: `place ${f.form}${f.light_anchor ? ' (Light Placer anchor)' : ''}` })
@@ -247,11 +270,15 @@ export function groupSteps(g, origin) {
     S.push({ tool: 'inspect', body: { kind: 'refs', formId: `$ref${i}` }, note: 'record model path and position; if it is an Actor also call Actor.SetDontMove [true]' })
     if (f.light_anchor) {
       S.push({ tool: 'console', body: { action: 'exec', command: `prid $ref${i}` }, note: 'ref id as 8 hex digits without 0x' })
-      S.push({ tool: 'console', body: { action: 'exec', command: 'logLP', capture: true }, note: 'Light Placer must list a light on the anchor (also po3_LightPlacer.log); if not, once: console ReloadLP, Disable/Enable the anchor, logLP again' })
-      S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${g.light.fallback_ligh}` }, 1, false, false]), save: 'lightref', only_if: 'logLP shows no light on the anchor', note: 'fallback LIGH' })
-      S.push({ ...papyrus('SetPosition', { form: '$lightref' }, vadd(origin, g.light.fallback_pos)), only_if: 'fallback LIGH placed' })
+      S.push({ tool: 'console', body: { action: 'exec', command: 'logLP', capture: true }, note: 'LightPlacer diagnostic only: record whether it lists a light on the anchor (also po3_LightPlacer.log). Never ReloadLP or Disable/Enable the anchor' })
     }
   })
+  const lights = g.lights || []
+  lights.forEach((p, k) => {
+    S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${g.light.fallback_ligh}` }, 1, false, false]), save: `light${k}`, note: `point light ${k + 1}/${lights.length} (primary method)` })
+    S.push({ ...papyrus('SetPosition', { form: `$light${k}` }, vadd(origin, p)), note: `rel ${JSON.stringify(p)}` })
+  })
+  if (lights.length) S.push({ tool: 'inspect', body: { kind: 'lights', scope: 'scene' }, note: 'record: every placed light listed (owner, position); each subject has one within ~100 units' })
   const cam = g.camera
   S.push({ tool: 'camera', body: { action: 'freecam', on: true } })
   const [x, y, z] = vadd(origin, cam.rel)
@@ -264,7 +291,7 @@ export function groupSteps(g, origin) {
     S.push({ tool: 'communityshaders.capture', body: { kind: 'renderdoc', frames: 1 }, note: `${g.label}_cap${n}${c.consecutive ? ' (consecutive: send right after the previous request)' : ' (wait for the previous .rdc to be complete first)'}` })
   })
   g.forms.forEach((f, i) => { S.push(papyrus('Disable', { form: `$ref${i}` }, [false])); S.push(papyrus('Delete', { form: `$ref${i}` }, [])) })
-  if (g.forms.some(f => f.light_anchor)) S.push({ ...papyrus('Disable', { form: '$lightref' }, [false]), only_if: 'fallback LIGH placed' }, { ...papyrus('Delete', { form: '$lightref' }, []), only_if: 'fallback LIGH placed' })
+  lights.forEach((p, k) => { S.push(papyrus('Disable', { form: `$light${k}` }, [false])); S.push(papyrus('Delete', { form: `$light${k}` }, [])) })
   S.push({ tool: 'camera', body: { action: 'freecam', on: false } })
   return S
 }
@@ -492,7 +519,7 @@ function planText(r, dry) {
   L.push('shader compiles (W2): positive signal required before the first capture, else the run stops ("compile readiness unknown")')
   L.push(`setup console: ${r.setup_console.join(' | ')}`)
   for (const g of r.groups) {
-    L.push(`group ${g.label}${g.probe ? ' (probe)' : ''}${g.risky ? ' (risky, last)' : ''}: tags ${g.tags.join(', ') || '-'}`)
+    L.push(`group ${g.label}${g.probe ? ' (probe)' : ''}${g.risky ? ' (risky, last)' : ''}: tags ${g.tags.join(', ') || '-'}${g.note ? `  # ${g.note}` : ''}`)
     if (g.optional) L.push(`  optional ${g.optional.form}: ${g.optional.used ? 'used' : 'skipped'} (${g.optional.why})`)
     for (const s of groupSteps(g, [0, 0, 0])) L.push(`  ${s.only_if ? `[if ${s.only_if}] ` : ''}${s.tool ? `${s.tool} ${JSON.stringify(s.body)}` : `wait ${s.wait_s}s`}${s.save ? ` => $${s.save}` : ''}${s.note ? `  # ${s.note}` : ''}`)
   }

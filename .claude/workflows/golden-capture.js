@@ -37,6 +37,11 @@ export const meta = {
 //   groups[].x_motion_keyframed  forms to SetMotionType 4 (keyframed) before positioning (MISC/Havok)
 //   groups[].x_optional_if_s6_ok {form, tags, pos, angle}: added only when the x_s6_files mesh is on disk with its sha256
 //   x_light            {anchor, fallback_ligh, fallback_pos}; default anchor 0009DA9C, LIGH 000E2174 at [0,250,120]
+//   groups[].x_light_pos  [[x,y,z], ...] one PlaceAtMe LIGH each (the primary point-light method, placed every run);
+//                      a group with the anchor but no x_light_pos gets fallback_pos. LightPlacer (logLP) is a diagnostic.
+//   x_player_pos       [x,y,z] where the player is moved before each group, out of the camera's view (default [0,-600,0])
+//   x_layout_yaw_deg / x_origin_shift  turn the whole plan frame (x_pos, x_angle Z, x_camera rel/yaw, light and player
+//                      positions) clockwise by the heading, then shift it by [dx,dy,dz] world units from the marker
 //   x_s6_files         files the owner places in mods\s6; checked, never written
 //   x_keep_rdc         where kept .rdc go (per profile below it); default F:\ai\dds\tools\rdc-fixtures\<cs-version>
 //   x_extract          stages to run: A, B, dispatch, C, shader_id, defines, fixture (default all; others rejected)
@@ -158,7 +163,7 @@ It prints one JSON object. Return exit_code and stdout_json = the stdout verbati
           label: { type: 'string' },
           refs: { type: 'array', items: { type: 'object', properties: { form: { type: 'string' }, ref: { type: 'string' }, model: { type: 'string' }, pos: { type: 'array', items: { type: 'number' } } }, required: ['form', 'ref', 'model', 'pos'] } },
           camera: { type: 'string', description: 'camera get result, compact JSON' },
-          light: { type: 'string', description: 'light anchor: logLP result and whether the LIGH fallback was used; empty if none' },
+          light: { type: 'string', description: 'placed LIGH refs and the inspect lights result (each subject has one within ~100 units?); anchor logLP result; empty if none' },
           draw_check: { type: 'string' },
         }, required: ['label', 'refs', 'camera', 'light', 'draw_check'] } },
         captures: { type: 'array', items: { type: 'object', properties: {
@@ -184,7 +189,8 @@ DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSO
    and send its steps in order: "tool" = POST /api/tool/<tool> with "body", "$refN"/"$lightref" = the ref saved by the step with that "save", "wait_s" = sleep, "only_if" = only when that condition holds. Notes:
    - inspect refs after each placement: model must be the expected mesh; record the actual position. If the ref is an Actor, also papyrus Actor.SetDontMove [true].
    - Write ${RUN_DIR}/refs_<label>.json = [{"form","ref","pos":[x,y,z],"angle":[ax,ay,az]}] for the placed refs (actual positions) and ${RUN_DIR}/camera_<label>.json = the camera get result (JSON).
-   - Light anchor (W4): the logLP output (console read) must list a light on the anchor; also check po3_LightPlacer.log. If none, run the [if ...] LIGH fallback steps and record that in light.
+   - Point lights (W4): the LIGH steps run every time (primary method). Record the inspect lights result in light: every placed light listed, and each subject within ~100 units of one. The anchor's logLP is a LightPlacer diagnostic only: record what it shows; never ReloadLP or Disable/Enable the anchor.
+   - The first step moves the player out of the camera's view; the draw check must show no player body.
    - Draw check: find the native png under ${MO2}\\overwrite, downscale it, look at it, and confirm every subject is on screen (objects outside the view only show up as shadow draws). If not, adjust the camera drive (record the change) and retry up to 3 times. A probe group (no forms) is just the empty view.
    - Captures: one communityshaders.capture request per capture. Wait until the new .rdc in the captures_dir appears and its size is stable for 5 s before the next request, except a capture marked consecutive, which is sent right after the previous request. Record each file's full path and the DevBench frame at request time. Label captures <group>_cap<n>.
    - Risky group: after placing, poll /api/health for 10 s; if the game died set crashed and stop (no retry).
