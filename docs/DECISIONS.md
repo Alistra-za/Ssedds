@@ -1719,3 +1719,31 @@ Branch `feat/layout-v2-bottom`: the bottom panel (Problems, Review, Messages, Fi
 - **CA23 The screenshot test is not committed (R20).** `ui_shots.rs` needs the removed `Dialog` variants and the drawer's old fields, so it lives on `scratch/ui-shots` and is copied, adapted and run per branch. This branch's adapted copy and its shots are in `.superpowers/ui-shots-after-1/` (untracked). `SdcApp::new` no longer reads `%LOCALAPPDATA%` (Note BX), so only `%APPDATA%` still needs redirecting to a temp folder.
 - **CA24 Docs.** `docs/gui.md` has a new "The bottom panel" section (Problems, Review, Messages, Files); its Sets/Textures column statement now matches `ui/mod.rs` (two left panels, Textures then Sets, then the centre; Advanced at the right edge). `docs/wiki/GUI-Guide.md` and `Getting-Started.md` follow.
 - **CA25 Review's columns stay above its footer (final review I1).** In egui 0.36.2 `ui.columns` sizes every column to the bottom of the whole panel, ignoring the footer (What will be written, the JSON choice, Close, Export), so column widgets drew over the footer and took its clicks. The columns now sit in `ui.allocate_ui(ui.available_size(), ...)`, so each column's scroll area ends at the footer's top and scrolls inside that space. A button low in a long column (for example **Accept all suggestions**) may need a scroll to reach. Test: `review_tab::the_columns_stay_above_the_footer`.
+
+## Note CB — bc7e: patch-0002 objects on Windows, per-target level pins, `ep` re-check on Skyrim textures (main team, 2026-10-18)
+
+Branch `feat/bc7e-max`. Follows Note BZ.
+
+- **CB1 `effort = "max"` works.** The vendored `ispc-objs/bc7e` objects and header are rebuilt from the patch-0002 source with ISPC 1.31.0 on Windows (`tools/regen-ispc.ps1 -Update -Bc7eOnly`, `tools/hash-vendor.ps1`). A second regen run matches 12/12. `BC7E_MAX_NATIVE` is now true, and `policy_checks::effort_max_needs_the_patch_0002_objects` passes on the plan-cleanly side. This supersedes BZ5's "objects still carry only patch 0001".
+- **CB2 Level hashes are pinned per ISPC target (coordinator's ruling, 2026-10-18).**
+  - The problem: `level_identity.rs` failed on `main` 1cc91a3 for every row with the shipped patch-0001 objects, while the goldens passed. BZ's pins came from the cloud agent's Linux objects, and none of the 32 matches any Windows code path.
+  - What differs: ISPC dispatches per CPU. On this machine sse2, sse4 and avx encode alike, and avx2 (FMA) encodes differently.
+  - The fix: the shim's `sdc_bc7e_compress` takes a target (−1 = dispatch). A forced target runs its own table init once. `encoders_sys::bc7e_compress_blocks_on(…, Bc7Target)` routes the best supported target through the dispatcher, so the dispatcher's tables are never re-initialised under a running encode.
+  - The test pins `[target][level][perceptual][exact]` and skips only the targets the CPU lacks.
+  - The order was: re-pin from the patch-0001 objects first (commit `6ef3bbf`, goldens 95/95), then rebuild. Levels 0 to 6 kept every per-target hash; only level 7 was newly pinned.
+- **CB3 Correction to BZ5 and the study.** BZ5 and the study say the Linux objects reproduce the vendored objects' output byte for byte. That is not true on Windows (CB2). bc7e output depends on the CPU's ISPC target, so two machines (avx2 against older) can write different BC7 bytes for the same input. This is a pre-existing property and nothing here changes it. The goldens pass on avx2 machines.
+- **CB4 The endpoint search is not adopted in `veryslow` (owner's acceptance rule, Skyrim re-check).**
+  - The sample: 60 diffuse, 60 normal (`_n`), 16 cutout and 14 smooth from the owner's 10k Skyrim PNG set, drawn by a seeded shuffle and listed in `docs/research/bc7e-tuning/skyrim-sample.tsv`. Measured with `sdc-bench bc7-tune`, `base` against `ep`, on the CB1 objects.
+  - The results:
+
+    | Class | Δ [95% CI] | Wins |
+    |---|---|---|
+    | diffuse | RGB +0.645 [±0.784] | 60/60 |
+    | normal | angle +0.0285° [±0.0048] | 59/60, 1 tie |
+    | cutout | RGB +0.133 [±0.142] | 16/16 |
+    | smooth | premul +0.204 [±0.088] | 12/14, 2 ties |
+
+    Time is 1.37 to 1.50×.
+  - The rule needs four things: diffuse Δ RGB > 0 with a CI that excludes 0 and at least +0.025 dB; normal Δ angle > 0 with a CI that excludes 0 and at least +0.03°; no class significantly worse; and time at most 1.7×. The diffuse CI includes 0, because two near-flat images gain +11 and +21 dB. The normal Δ is 0.0015° short. So the claim does not hold.
+  - Context for a re-ruling: with base PSNR over 60 dB excluded, diffuse is +0.079 [±0.019] and normal +0.0313° [±0.0049]. No image got worse on its class's primary metric. Details are in `docs/research/bc7e-tuning.md`, "Windows re-check on Skyrim textures (2026-10-18)".
+- **CB5 Nothing else changes.** The default output, goldens and workspace version are unchanged, and no re-encode follows.
