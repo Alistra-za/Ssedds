@@ -9,7 +9,7 @@ This is the first public alpha. These are the things you may run into, and what 
 Sometimes the app closes with a message about failing to create a "staging buffer". It means the graphics device was lost first. The cause is not proven. It often happens after a long session, around alt-tab or screen capture.
 
 - Unsaved edits to `sdc.toml` and `sdc-project.toml` are kept beside the original as `<file>.recovery`. The original is not touched.
-- The next time you open the folder, a banner tells you a recovery file exists. To restore, rename the `.recovery` file over the original. Or delete it.
+- The next time you open the folder, a banner tells you a recovery file exists. To restore, rename the `.recovery` file over the original. Or delete it. Clicking Save also deletes it; the saves Tessalith makes on its own (an export folder, an export's JSON record) keep it.
 - The crash log is in `%LOCALAPPDATA%\sdc\logs`, one `crash-<date>-<time>.log` per run. Attach it if you report the crash.
 
 ## Speed
