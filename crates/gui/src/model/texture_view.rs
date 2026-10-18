@@ -135,11 +135,21 @@ pub struct FilterOptions {
     pub encoders: Vec<String>,
 }
 
+/// What each filter pill would show, over all items (A6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FilterCounts {
+    pub needs_decision: usize,
+    pub warnings: usize,
+    pub failed: usize,
+    pub not_in_set: usize,
+}
+
 /// The cached option lists and index list, by what they were built from.
 #[derive(Default)]
 pub(crate) struct TextureViewCache {
     options: Option<(u64, Arc<FilterOptions>)>,
     list: Option<(ListKey, Arc<Vec<usize>>)>,
+    counts: Option<(u64, FilterCounts)>,
     builds: u64,
 }
 
@@ -215,6 +225,29 @@ impl AppModel {
         });
         c.options = Some((self.items_rev(), o.clone()));
         o
+    }
+
+    /// The pill counts over all items, cached by the items revision.
+    pub fn filter_counts(&self) -> FilterCounts {
+        if let Some((rev, c)) = self.texture_cache.borrow().counts {
+            if rev == self.items_rev() {
+                return c;
+            }
+        }
+        let mut c = FilterCounts {
+            not_in_set: self.not_in_set_count(),
+            ..FilterCounts::default()
+        };
+        for i in &self.items {
+            c.needs_decision += usize::from(i.status == ItemStatus::NeedsDecision);
+            c.warnings += usize::from(i.warnings.iter().any(counts_toward_badge));
+            c.failed += usize::from(matches!(
+                i.status,
+                ItemStatus::Failed(_) | ItemStatus::Error(_)
+            ));
+        }
+        self.texture_cache.borrow_mut().counts = Some((self.items_rev(), c));
+        c
     }
 
     /// How many times the index list was built (tests: once per change, not per frame).

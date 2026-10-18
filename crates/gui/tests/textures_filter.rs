@@ -1,13 +1,13 @@
 //! Task 7 (item 8, AG4, AG46-AG55): Textures column filters, sort and tile size.
 mod support;
 use eframe::egui::{self, Key, Modifiers};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use engine::codes::Code;
 use engine::config::{Backend, Format, Subtype};
 use engine::policy::SourceStamp;
 use sdc_gui::model::items::{ItemStatus, SetItem};
-use sdc_gui::model::texture_view::{SetFilter, SortKey};
+use sdc_gui::model::texture_view::{ColumnPrefs, SetFilter, SortKey};
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::*;
 use std::sync::Arc;
@@ -284,17 +284,188 @@ fn no_filter_no_message() {
     assert_eq!(h.query_all_by_label("Clear filters").count(), 0);
 }
 
+/// The Textures panel's rect: the mips "Filter" field and Task 3.4's Sets button also match "Filter" (K15).
+fn textures_rect(h: &Harness<'static, AppModel>) -> egui::Rect {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("textures"))
+        .expect("the Textures panel is drawn")
+        .outer_rect
+}
+
+fn in_textures<'a>(
+    h: &'a Harness<'static, AppModel>,
+    label: &'a str,
+) -> Vec<egui_kittest::Node<'a>> {
+    let r = textures_rect(h);
+    h.query_all_by_label_contains(label)
+        .filter(|n| r.contains_rect(n.rect()))
+        .collect()
+}
+
+fn filter_button<'a>(h: &'a Harness<'static, AppModel>) -> egui_kittest::Node<'a> {
+    let mut v: Vec<_> = in_textures(h, "Filter")
+        .into_iter()
+        .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+        .collect();
+    assert_eq!(v.len(), 1, "one Filter button in the Textures column");
+    v.remove(0)
+}
+
+/// The filter combos drawn now: a combo's accessible text is its value ("Sub-type: Any").
+fn filter_combos(h: &Harness<'static, AppModel>) -> Vec<String> {
+    let names = [
+        "Sub-type",
+        "Output format",
+        "Encoder",
+        "Set membership",
+        "Sort",
+    ];
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .filter_map(|n| n.accesskit_node().value())
+        .filter(|v| names.iter().any(|c| v.starts_with(c)))
+        .collect()
+}
+
 #[test]
-fn the_filter_combos_and_the_tile_slider_are_drawn() {
+fn the_filter_pills_show_their_counts() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = mixed(d.path());
+    m.items[3].status = ItemStatus::Failed("x".into());
+    m.items[4].status = ItemStatus::NeedsDecision;
+    m.items[5].status = ItemStatus::NeedsDecision;
+    m.items[6].warnings = vec![engine::codes::Warning::new(
+        Code::LossReencode,
+        "re-encoded",
+    )];
+    m.invalidate_views();
+    let c = m.filter_counts();
+    assert_eq!((c.needs_decision, c.failed, c.not_in_set), (2, 1, 6));
+    assert_eq!(c.warnings, 1, "{c:?}");
+    let mut h = app_harness(m);
+    h.run();
+    h.run();
+    for l in [
+        "Needs decision 2",
+        "Warnings 1",
+        "Failed 1",
+        "Not in a set 6",
+    ] {
+        h.get_by_label(l);
+    }
+    // A pill toggles its filter and hides, never deselects.
+    h.get_by_label("Failed 1").click();
+    h.run();
+    assert!(h.state().filter.failed);
+    assert_eq!(h.state().visible_items().len(), 1);
+    h.get_by_label("Failed 1").click();
+    h.run();
+    assert!(!h.state().filter.failed);
+}
+
+#[test]
+fn the_filter_popup_holds_the_combos_and_the_tile_buttons_step_by_16() {
     let d = tempfile::tempdir().unwrap();
     let mut h = app_harness(mixed(d.path()));
     h.run();
-    let combos = h.get_all_by_role(egui::accesskit::Role::ComboBox).count();
-    assert!(
-        combos >= 5,
-        "sub-type, format, encoder, set membership, sort: {combos}"
+    h.run();
+    assert!(filter_combos(&h).is_empty(), "the combos are folded away");
+    assert_eq!(
+        filter_button(&h).accesskit_node().label().as_deref(),
+        Some("Filter ▾")
     );
-    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Tile size");
+    filter_button(&h).hover();
+    h.run();
+    filter_button(&h).click();
+    h.run();
+    h.run();
+    let combos = filter_combos(&h);
+    for c in [
+        "Sub-type",
+        "Output format",
+        "Encoder",
+        "Set membership",
+        "Sort",
+    ] {
+        assert!(combos.iter().any(|v| v.starts_with(c)), "{c} in {combos:?}");
+    }
+    h.get_by_label("Larger tiles").click();
+    h.run();
+    assert_eq!(h.state().prefs.tile, ColumnPrefs::TILE_DEFAULT + 16.0);
+    h.get_by_label("Smaller tiles").click();
+    h.run();
+    assert_eq!(h.state().prefs.tile, ColumnPrefs::TILE_DEFAULT);
+    // Each button is disabled at its end of the range.
+    let (lo, hi) = ColumnPrefs::TILE_RANGE;
+    h.state_mut().prefs.tile = hi;
+    h.run();
+    assert!(h
+        .get_by_label("Larger tiles")
+        .accesskit_node()
+        .is_disabled());
+    assert!(!h
+        .get_by_label("Smaller tiles")
+        .accesskit_node()
+        .is_disabled());
+    h.state_mut().prefs.tile = lo;
+    h.run();
+    assert!(h
+        .get_by_label("Smaller tiles")
+        .accesskit_node()
+        .is_disabled());
+    // A saved size off the grid loads as it is and steps from there, clamped.
+    h.state_mut().prefs.tile = 100.0;
+    h.run();
+    h.get_by_label("Larger tiles").click();
+    h.run();
+    assert_eq!(h.state().prefs.tile, 116.0);
+    h.state_mut().prefs.tile = 185.0;
+    h.run();
+    h.get_by_label("Larger tiles").click();
+    h.run();
+    assert_eq!(h.state().prefs.tile, hi);
+}
+
+#[test]
+fn the_filter_button_counts_the_combo_filters_but_not_the_sort() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = mixed(d.path());
+    m.prefs.sort = SortKey::Size;
+    m.filter.format = Some("bc7".into());
+    m.filter.set = SetFilter::In;
+    let mut h = app_harness(m);
+    h.run();
+    h.run();
+    assert_eq!(
+        filter_button(&h).accesskit_node().label().as_deref(),
+        Some("Filter (2) ▾")
+    );
+}
+
+#[test]
+fn the_filter_rows_take_at_most_two_lines_at_the_default_width() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = mixed(d.path());
+    m.filter.format = Some("bc7".into());
+    let mut h = app_harness(m);
+    h.run();
+    h.run();
+    let r = textures_rect(&h);
+    assert!(
+        (r.width() - 380.0).abs() < 2.0,
+        "default column width {}",
+        r.width()
+    );
+    let pill = h.get_by_label_contains("Needs decision").rect();
+    let search = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| r.contains_rect(n.rect()))
+        .expect("the search box")
+        .rect();
+    let sp = h.ctx.global_style().spacing.clone();
+    let span = search.top() - pill.top();
+    assert!(
+        span < 3.0 * sp.interact_size.y + sp.item_spacing.y,
+        "pills to search box span {span}"
+    );
 }
 
 #[test]

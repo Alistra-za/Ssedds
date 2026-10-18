@@ -73,7 +73,7 @@ fn clicking_a_tile_selects_it_and_the_needs_decision_filter_narrows_the_grid() {
         "selection was {:?}",
         h.state().selection
     );
-    h.get_by_label("Needs decision").click();
+    h.get_by_label_contains("Needs decision").click();
     h.run();
     assert!(h.state().filter.needs_decision);
     h.get_by_label_contains("leaf.png");

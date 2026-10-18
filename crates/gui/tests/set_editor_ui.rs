@@ -40,7 +40,7 @@ fn the_textures_header_offers_the_not_in_a_set_filter() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(pbr_opened(d.path()));
     h.run();
-    h.get_by_label_contains("not in a set");
+    h.get_by_label_contains("Not in a set");
 }
 
 #[test]
