@@ -29,8 +29,11 @@ fn settle(h: &mut Harness<'static, AppModel>) {
     h.run();
 }
 
-/// Click `label` the way a pointer does: settle on it first, because egui hit-tests against the previous frame.
+/// Click `label` the way a pointer does: scroll it into view and settle on it first, because egui hit-tests against
+/// the previous frame and a column scrolls inside the space above the footer.
 fn press(h: &mut Harness<'static, AppModel>, label: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run();
     h.get_by_label(label).hover();
     h.run();
     h.get_by_label(label).click();
@@ -281,4 +284,48 @@ fn the_edited_json_offers_keep_and_overwrite() {
     press(&mut h, "Overwrite it");
     let a = h.state().review.as_ref().unwrap().json_answer.clone();
     assert!(a.is_some_and(|a| a.overwrite));
+}
+
+/// The clipped (clickable) rect of the widget labelled `label`, from the last pass.
+fn hit_rect(h: &Harness<'static, AppModel>, label: &str) -> egui::Rect {
+    let rect = h.get_by_label(label).rect();
+    h.ctx.viewport(|v| {
+        v.this_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, ws)| ws)
+            .find(|w| w.rect == rect)
+            .unwrap()
+            .interact_rect
+    })
+}
+
+/// Final review I1: the columns scroll inside the space above the footer, so no column widget can take a click
+/// meant for Close, Export or the JSON choice.
+#[test]
+fn the_columns_stay_above_the_footer() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing(
+        d.path(),
+        &[
+            ("match8", json!(r"x\leaf_s.dds")),
+            ("alphaprop_thresh", json!(128)),
+        ],
+    );
+    h.set_size(egui::vec2(1400.0, 700.0));
+    h.run();
+    let footer = h.get_by_label("What will be written").rect().top();
+    let mut labels: Vec<String> = pbr_export::export_asks(h.state())
+        .into_iter()
+        .map(|a| a.text)
+        .collect();
+    labels.push("Acknowledge all".into());
+    for l in &labels {
+        let r = hit_rect(&h, l);
+        assert!(
+            !r.is_positive() || r.bottom() <= footer,
+            "{l}: clickable to {} under the footer at {footer}",
+            r.bottom()
+        );
+    }
 }

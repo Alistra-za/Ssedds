@@ -291,74 +291,79 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 });
             });
         });
-    ui.columns(3, |cols| {
-        column(&mut cols[0], "Blockers", |ui| {
-            if blocks.is_empty() {
-                ui.weak("None");
-            }
-            for b in &blocks {
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(RED, &b.text);
-                    // A project-wide issue has no set to go to.
-                    if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
-                        act = Some(Act::GoTo(b.set_key.clone()));
+    // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
+    ui.allocate_ui(ui.available_size(), |ui| {
+        ui.columns(3, |cols| {
+            column(&mut cols[0], "Blockers", |ui| {
+                if blocks.is_empty() {
+                    ui.weak("None");
+                }
+                for b in &blocks {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(RED, &b.text);
+                        // A project-wide issue has no set to go to.
+                        if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
+                            act = Some(Act::GoTo(b.set_key.clone()));
+                        }
+                    });
+                }
+            });
+            column(&mut cols[1], "Undecided", |ui| {
+                if undecided.is_empty() {
+                    ui.weak("None");
+                }
+                for k in &undecided {
+                    if let Some(p) = undecided_row(ui, m, k, off.as_deref()) {
+                        act = Some(Act::Row(p));
                     }
-                });
-            }
-        });
-        column(&mut cols[1], "Undecided", |ui| {
-            if undecided.is_empty() {
-                ui.weak("None");
-            }
-            for k in &undecided {
-                if let Some(p) = undecided_row(ui, m, k, off.as_deref()) {
-                    act = Some(Act::Row(p));
                 }
-            }
-            let accept = ui
-                .add_enabled(
-                    any_suggestion && off.is_none(),
-                    egui::Button::new("Accept all suggestions"),
-                )
-                .on_hover_text("Decide every texture that has a suggestion; the others stay listed")
-                .on_disabled_hover_text(
-                    off.as_deref()
-                        .unwrap_or("No undecided texture has a suggestion"),
-                );
-            if accept.clicked() {
-                act = Some(Act::AcceptAll);
-            }
-        });
-        column(&mut cols[2], "Warnings", |ui| {
-            if asks.is_empty() {
-                ui.weak("None");
-            }
-            let mut set = None;
-            for a in &asks {
-                // Grouped by set: `export_asks` lists each set's pitfalls together.
-                if set != Some(&a.set_id) {
-                    set = Some(&a.set_id);
-                    ui.colored_label(AMBER, &a.set_id);
+                let accept = ui
+                    .add_enabled(
+                        any_suggestion && off.is_none(),
+                        egui::Button::new("Accept all suggestions"),
+                    )
+                    .on_hover_text(
+                        "Decide every texture that has a suggestion; the others stay listed",
+                    )
+                    .on_disabled_hover_text(
+                        off.as_deref()
+                            .unwrap_or("No undecided texture has a suggestion"),
+                    );
+                if accept.clicked() {
+                    act = Some(Act::AcceptAll);
                 }
-                let mut on = review.acknowledged.contains(&a.text);
-                if ui.checkbox(&mut on, &a.text).changed() {
-                    act = Some(Act::Tick(a.text.clone(), on));
+            });
+            column(&mut cols[2], "Warnings", |ui| {
+                if asks.is_empty() {
+                    ui.weak("None");
                 }
-            }
-            if !asks.is_empty() && ui.button("Acknowledge all").clicked() {
-                act = Some(Act::AckAll);
-            }
-            if others > 0
-                && ui
-                    .link(format!(
-                        "{others} other warning{} — see Problems",
-                        plural(others)
-                    ))
-                    .clicked()
-            {
-                act = Some(Act::Others);
-            }
-        });
+                let mut set = None;
+                for a in &asks {
+                    // Grouped by set: `export_asks` lists each set's pitfalls together.
+                    if set != Some(&a.set_id) {
+                        set = Some(&a.set_id);
+                        ui.colored_label(AMBER, &a.set_id);
+                    }
+                    let mut on = review.acknowledged.contains(&a.text);
+                    if ui.checkbox(&mut on, &a.text).changed() {
+                        act = Some(Act::Tick(a.text.clone(), on));
+                    }
+                }
+                if !asks.is_empty() && ui.button("Acknowledge all").clicked() {
+                    act = Some(Act::AckAll);
+                }
+                if others > 0
+                    && ui
+                        .link(format!(
+                            "{others} other warning{} — see Problems",
+                            plural(others)
+                        ))
+                        .clicked()
+                {
+                    act = Some(Act::Others);
+                }
+            });
+        })
     });
     match act {
         Some(Act::GoTo(k)) => {
