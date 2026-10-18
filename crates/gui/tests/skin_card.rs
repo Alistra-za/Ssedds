@@ -155,9 +155,14 @@ fn the_set_button_stores_the_default_and_the_reset_clears_it() {
     m.select_set(&k);
     let mut h = harness(m);
     h.run();
+    // Layout v2 A3: the card scrolls sideways in the set panel at its default width; bring the button into view.
+    h.query_all_by_label("set").next().unwrap().scroll_to_me();
+    h.run();
     h.query_all_by_label("set").next().unwrap().click();
     h.run();
     assert_eq!(h.state().skin_values(SKIN)["SkinMainRoughness"], json!(0.7));
+    h.get_by_label("↺").scroll_to_me();
+    h.run();
     h.get_by_label("↺").click();
     h.run();
     assert!(h.state().skin_values(SKIN).is_empty());

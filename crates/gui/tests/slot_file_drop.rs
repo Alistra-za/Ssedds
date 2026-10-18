@@ -139,8 +139,8 @@ fn harness(m: AppModel) -> Harness<'static, (AppModel, State)> {
 }
 
 fn drop_on(h: &mut Harness<'static, (AppModel, State)>, card: &str, path: PathBuf) {
-    // The card title comes first (the TruePBR panel on the right may name the slot too).
-    h.query_all_by_label(card).next().expect("the card").hover();
+    // K5: the slot row, not the set panel's Matching row of the same name.
+    h.hover_at(slot_rect(h, card).center());
     h.run();
     h.input_mut()
         .dropped_files
@@ -209,14 +209,15 @@ fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
         .key;
     m.select_set(&key);
     let mut h = Harness::builder()
-        .with_size(eframe::egui::vec2(1400.0, 300.0))
+        // Layout v2 A3: the rows scroll alone (the material cards are in the panel), so a lower window.
+        .with_size(eframe::egui::vec2(1400.0, 240.0))
         .build_ui_state(
             |ui, (model, state): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, model, state),
             (m, State::default()),
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    let card = h.query_all_by_label("Diffuse").next().unwrap().rect();
+    let card = slot_rect(&h, "Diffuse");
     // The set's header row, above the scroll area that holds the cards.
     let header = h
         .get(
@@ -236,7 +237,7 @@ fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
     for _ in 0..30 {
         h.step();
     }
-    let moved = h.query_all_by_label("Diffuse").next().unwrap().rect();
+    let moved = slot_rect(&h, "Diffuse");
     assert!(
         moved.top() < y,
         "the Diffuse card scrolled up under the header row: {card:?} -> {moved:?}, header {header:?}"

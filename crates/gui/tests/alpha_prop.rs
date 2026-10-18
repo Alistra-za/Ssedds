@@ -164,13 +164,16 @@ fn both_pitfalls_fire() {
 }
 
 fn panel(m: AppModel) -> Harness<'static, AppModel> {
-    let h = Harness::builder()
+    let mut h = Harness::builder()
         .with_size(eframe::egui::vec2(800.0, 1400.0))
         .build_ui_state(
             |ui, m: &mut AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, SET),
             m,
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    // Layout v2 A3: the group starts collapsed, set or not.
+    h.run();
+    h.get_by_label("NiAlphaProperty").click();
     h
 }
 
@@ -341,9 +344,9 @@ fn the_blend_and_function_dropdowns_edit_their_fields() {
     let d = tempfile::tempdir().unwrap();
     let mut h = with_flags(d.path(), json!(4844));
     let role = eframe::egui::accesskit::Role::ComboBox;
-    // The Subsurface selector is the first combo box (AG101); then source blend, destination blend and test function.
+    // Source blend, destination blend and test function (the Subsurface selector sits in its closed group, A3).
     for (n, pick) in [(0, "One"), (1, "Zero"), (2, "Less")] {
-        h.query_all_by_role(role).nth(n + 1).unwrap().click();
+        h.query_all_by_role(role).nth(n).unwrap().click();
         h.run();
         h.get_by_label(pick).click();
         h.run();

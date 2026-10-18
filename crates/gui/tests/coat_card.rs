@@ -62,14 +62,14 @@ fn hex_box(h: &Harness<'static, AppModel>, shown: &str) -> bool {
 fn the_coat_group_shows_under_multilayer_and_not_in_advanced() {
     let d = tempfile::tempdir().unwrap();
     let mut h = panel(model(d.path(), &[("multilayer", json!(true))]));
-    for l in ["Coat settings", "Coat colour", "Inner UV scale"] {
+    for l in ["Coat", "Coat colour", "Inner UV scale"] {
         h.get_by_label(l);
     }
     h.get_by_label("Advanced TruePBR settings").click();
     h.run();
     assert_eq!(h.get_all_by_label("Coat colour").count(), 1);
     assert_eq!(h.get_all_by_label("Inner UV scale").count(), 1);
-    assert_eq!(h.get_all_by_label("Coat settings").count(), 1);
+    assert_eq!(h.get_all_by_label("Coat").count(), 1);
 }
 
 #[test]
@@ -85,8 +85,11 @@ fn the_coat_group_is_hidden_and_values_are_kept_while_multilayer_is_off() {
     ));
     h.get_by_label("Multilayer (coat)").click();
     h.run();
-    assert!(h.query_by_label("Coat settings").is_none());
+    // Layout v2 A13: Coat stays listed, closed and "off"; the kept note is in its body.
+    assert!(h.query_by_label("Coat colour").is_none());
     assert!(h.query_by_label("Inner UV scale").is_none());
+    h.get_by_label("Coat").click();
+    h.run();
     h.get_by_label("2 coat values kept, unused while Multilayer is off");
     assert_eq!(stored(&h, "coat_color"), Some(json!([10, 20, 30])));
     assert_eq!(stored(&h, "inner_uv_scale"), Some(json!(2.0)));
@@ -153,13 +156,13 @@ fn a_cnr_member_shows_multilayer_auto_and_unticking_stores_an_explicit_off() {
         .save(d.path().join("textures/landscape/rock01_cnr.png"))
         .unwrap();
     let mut h = panel(model(d.path(), &[]));
-    h.get_by_label("Coat settings");
+    h.get_by_label("Coat colour");
     assert!(h.query_all_by_label("(auto)").count() >= 2);
     assert_eq!(stored(&h, "multilayer"), None, "nothing is stored");
     h.get_by_label("Multilayer (coat)").click();
     h.run();
     assert_eq!(stored(&h, "multilayer"), Some(json!(false)));
-    assert!(h.query_by_label("Coat settings").is_none());
+    assert!(h.query_by_label("Coat colour").is_none());
 }
 
 /// The swatch beside the hex box that shows `shown`.

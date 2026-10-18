@@ -9,6 +9,7 @@ pub mod columns;
 pub mod cs_pbr;
 pub mod dialogs;
 pub mod drawer;
+pub mod group;
 pub mod header;
 pub mod input_name;
 pub mod json_editor;
@@ -114,7 +115,16 @@ pub fn draw_with_scan(
     }
     // Under the header and the scan row, before the columns (R7).
     bottom::draw(ui, model, &mut state.drawer);
-    advanced::draw(ui, model, &mut state.advanced);
+    // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
+    let three_d = state.set3d.enabled && set_preview::wanted(model);
+    // C6: a set editor in 2D has Advanced as its panel's last tab; everything else keeps the window-edge drawer.
+    if !three_d && set_editor_shown(model, three_d) {
+        // The drawer is one panel: keep the columns' widget ids (a set pill's open menu) as if it were drawn, as egui
+        // does for a collapsed panel.
+        ui.skip_ahead_auto_ids(1);
+    } else {
+        advanced::draw(ui, model, &mut state.advanced);
+    }
     let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
     // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
     let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
@@ -138,8 +148,6 @@ pub fn draw_with_scan(
             sets_column::draw(ui, model, thumbs, drops, cmds);
         },
     );
-    // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
-    let three_d = state.set3d.enabled && set_preview::wanted(model);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
     // (spec §5.1).
@@ -154,8 +162,20 @@ pub fn draw_with_scan(
     json_editor::draw(ui.ctx(), model);
     presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
-    let shows_3d = three_d && model.root.is_some() && model.expanded.is_none() && !model.in_bulk();
-    set_preview::settings_window(ui.ctx(), model, shows_3d);
+    set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+}
+
+/// Mirrors `centre`'s and `set_editor::draw`'s routing: true when the centre shows a set's editor (2D: a set still in
+/// the plan; 3D: the followed set's 3D view, also for a member texture, AG87) rather than the preview, the bulk panel
+/// or a hint. Callers add the 2D/3D side (`!three_d` = the set panel, `three_d` = the 3D settings window). Keep it in
+/// step with those two; `set_panel.rs::drawer_and_panel_never_both_or_neither` pins it.
+fn set_editor_shown(model: &AppModel, three_d: bool) -> bool {
+    model.root.is_some()
+        && model.expanded.is_none()
+        && !model.in_bulk()
+        && (three_d
+            || matches!(&model.selection, Selection::Set(key)
+                if crate::model::sets::set_views(model).iter().any(|v| v.key == *key)))
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
@@ -208,6 +228,7 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
                 &mut state.slot_cmds,
                 &mut state.drops,
                 view,
+                &mut state.advanced,
             );
             if three_d {
                 set_preview::draw(ui, model, &mut state.set3d);

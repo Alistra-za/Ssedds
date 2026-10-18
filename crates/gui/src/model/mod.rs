@@ -15,6 +15,7 @@ pub mod input_name;
 pub mod inspector;
 pub mod items;
 pub mod known_paths;
+pub mod labels;
 pub mod meshes;
 pub mod messages;
 pub mod nav;

@@ -162,3 +162,12 @@ pub fn pgp_json_path(m: &AppModel) -> PathBuf {
         .join("PBRNIFPatcher")
         .join(format!("{}.json", sdc_gui::model::pbr_export::json_name(m)))
 }
+
+/// Layout v2 K5: a slot row's label, the leftmost match (the Matching header repeats "Diffuse" and "Normal _n").
+pub fn slot_rect<S>(h: &egui_kittest::Harness<'_, S>, label: &str) -> eframe::egui::Rect {
+    use egui_kittest::kittest::Queryable;
+    h.query_all_by_label(label)
+        .map(|n| n.rect())
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .unwrap_or_else(|| panic!("no slot row {label:?}"))
+}

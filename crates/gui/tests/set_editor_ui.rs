@@ -87,7 +87,7 @@ fn the_rename_dialog_shows_a_collision_and_renames_on_a_free_name() {
 }
 
 #[test]
-fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
+fn the_set_editor_shows_slot_rows_opaque_and_slot_commands() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened_plain(d.path());
     let key = m
@@ -543,20 +543,24 @@ fn rock_with(keys: &[(&str, serde_json::Value)]) -> Harness<'static, AppModel> {
     }
     let mut h = harness(m);
     h.run();
+    // Layout v2 A3: the selector is the first row of the Subsurface group, which is closed while Subsurface is off.
+    if subsurface_combo(&h).is_none() {
+        h.get_by_label("Subsurface").click();
+        h.run();
+    }
     h
+}
+
+/// The Subsurface selector (AG101): a combo box named by its value.
+fn subsurface_combo<'a>(h: &'a Harness<'static, AppModel>) -> Option<egui_kittest::Node<'a>> {
+    let names = ["Off", "Standard", "Foliage"];
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().is_some_and(|v| names.contains(&v.as_str())))
 }
 
 fn disabled(h: &Harness<'static, AppModel>, label: &str) -> bool {
     if label == "Subsurface" {
-        // The Subsurface selector (AG101) is a combo box named by its value.
-        let role = eframe::egui::accesskit::Role::ComboBox;
-        let names = ["Off", "Standard", "Foliage"];
-        return h
-            .query_all_by_role(role)
-            .find(|n| n.value().is_some_and(|v| names.contains(&v.as_str())))
-            .unwrap()
-            .accesskit_node()
-            .is_disabled();
+        return subsurface_combo(h).unwrap().accesskit_node().is_disabled();
     }
     h.get_by_label(label).accesskit_node().is_disabled()
 }
@@ -605,16 +609,24 @@ fn the_tri_buttons_write_true_false_and_remove() {
     h.run();
     h.get_by_label("Advanced TruePBR settings").click();
     h.run();
-    h.query_all_by_label("on").next().unwrap().scroll_to_me();
-    // The first Tri row under Advanced TruePBR settings is vertex_colors.
-    let nth = |h: &Harness<'static, AppModel>, l: &str| {
-        h.query_all_by_label(l).next().map(|n| n.rect()).is_some()
-    };
-    assert!(nth(&h, "on"));
-    h.query_all_by_label("on").next().unwrap().click();
+    // The first Tri row under Advanced TruePBR settings is vertex_colors. Layout v2 A3: group headers show "on" and
+    // "off" as plain labels, so the Tri buttons are the first that are not.
+    let label = eframe::egui::accesskit::Role::Label;
+    h.query_all_by_label("on")
+        .find(|n| n.accesskit_node().role() != label)
+        .unwrap()
+        .scroll_to_me();
+    h.run();
+    h.query_all_by_label("on")
+        .find(|n| n.accesskit_node().role() != label)
+        .unwrap()
+        .click();
     h.run();
     assert_eq!(rock_settings(&h)["vertex_colors"], serde_json::json!(true));
-    h.query_all_by_label("off").next().unwrap().click();
+    h.query_all_by_label("off")
+        .find(|n| n.accesskit_node().role() != label)
+        .unwrap()
+        .click();
     h.run();
     assert_eq!(rock_settings(&h)["vertex_colors"], serde_json::json!(false));
     h.query_all_by_label("not set").next().unwrap().click();
@@ -816,7 +828,12 @@ fn the_header_has_the_json_editor_and_the_drawer_has_no_pgpatcher_keys() {
     let mut h = harness(m);
     h.run();
     h.get_by_label(sdc_gui::ui::header::JSON_EDITOR);
+    // Layout v2 C6: with a set, Advanced is the set panel's tab (open here); the TruePBR box is on its Material tab.
+    h.get_by_label_contains("Preset inspector");
     assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "Material")
+        .click();
+    h.run();
     h.get_by_label("Advanced TruePBR settings");
 }
 
@@ -1403,10 +1420,9 @@ fn click_harness() -> (
     (d, h, rock, leaf)
 }
 
-/// A single click on the Diffuse card's thumbnail (just under the card title).
+/// A single click on the Diffuse row's thumbnail.
 fn click_diffuse_thumb(h: &mut Harness<'static, AppModel>) {
-    let t = h.query_all_by_label("Diffuse").next().unwrap().rect();
-    let p = eframe::egui::pos2(t.left() + 30.0, t.bottom() + 40.0);
+    let p = h.get_by_label("Diffuse thumbnail").rect().center();
     h.hover_at(p);
     h.drag_at(p);
     h.drop_at(p);
@@ -1450,4 +1466,85 @@ fn a_single_click_on_a_thumbnail_selects_its_texture() {
         h.state().selection,
         sdc_gui::model::Selection::Item(_)
     ));
+}
+
+/// Layout v2 A2: rock01 (plain PBR) at 1400 wide with its slot rows drawn.
+fn rows_harness(d: &std::path::Path, height: f32) -> Harness<'static, AppModel> {
+    let mut m = pbr_opened_plain(d);
+    rock_selected(&mut m);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, height))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+#[test]
+fn slot_rows_line_up_label_thumb_file_and_format() {
+    let d = tempfile::tempdir().unwrap();
+    let h = rows_harness(d.path(), 900.0);
+    let diffuse = slot_rect(&h, "Diffuse");
+    let normal = slot_rect(&h, "Normal _n");
+    assert!(
+        normal.min.y > diffuse.max.y - 1.0,
+        "one row per slot, top to bottom: {diffuse:?} {normal:?}"
+    );
+    assert!(
+        (normal.min.x - diffuse.min.x).abs() < 1.0,
+        "labels in one column"
+    );
+    let combos: Vec<_> = h
+        .query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .filter(|n| n.value().as_deref().is_some_and(|v| v.contains("BC")))
+        .map(|n| n.rect())
+        .collect();
+    assert!(combos.len() >= 2, "{combos:?}");
+    assert!(
+        combos
+            .windows(2)
+            .all(|w| (w[0].min.x - w[1].min.x).abs() < 1.0),
+        "formats in one column: {combos:?}"
+    );
+}
+
+#[test]
+fn an_empty_slot_is_one_dim_row_with_assign() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = rows_harness(d.path(), 1200.0);
+    // Height _p, slot 3, slot 7 and Subsurface _s are empty in the fixture (K6).
+    assert_eq!(h.query_all_by_label("Assign…").count(), 4);
+    let height = slot_rect(&h, "Height _p");
+    h.query_all_by_label("Assign…")
+        .find(|n| (n.rect().center().y - height.center().y).abs() < 20.0)
+        .expect("Assign… on the Height _p row")
+        .click();
+    h.run();
+    h.get_by_label_contains("Slot 4: Height");
+}
+
+#[test]
+fn a_row_shows_the_size_of_its_texture() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = rows_harness(d.path(), 900.0);
+    // The size needs the dims worker (K7).
+    for _ in 0..200 {
+        if h.state_mut().size_of("landscape/rock01.png").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run();
+    }
+    h.run();
+    assert!(h.query_all_by_label_contains("64×64 · ").count() >= 1);
+}
+
+/// K8: a regression pin (Slot commands… is already a plain button): it stays one, after the last row.
+#[test]
+fn slot_commands_is_a_normal_button_after_the_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let h = rows_harness(d.path(), 1200.0);
+    let b = h.get_by_label("Slot commands…").rect();
+    assert!(b.width() < 200.0, "not a full-width bar");
+    assert!(b.min.y > slot_rect(&h, "Subsurface _s").max.y);
 }

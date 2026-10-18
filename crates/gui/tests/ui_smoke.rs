@@ -707,13 +707,19 @@ fn a_double_click_on_a_set_member_expands_it() {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    // The member name sits under its thumbnail; the same name is also a tile in the Textures column to the left.
+    // The member name is in its slot row; the same name is also a tile in the Textures column to the left.
     let label = h
         .query_all_by_label_contains("rock01_normal.png")
         .map(|n| n.rect())
         .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
         .expect("the member in the set view");
-    let at = label.center() - eframe::egui::vec2(0.0, 30.0);
+    // Layout v2 A2: the thumbnail sits left of the name, on the same slot row.
+    let at = h
+        .query_all_by_label_contains(" thumbnail")
+        .map(|n| n.rect())
+        .find(|r| r.y_range().contains(label.center().y))
+        .expect("the member's thumbnail")
+        .center();
     h.hover_at(at);
     h.run();
     assert!(h.state().expanded.is_none());
@@ -760,7 +766,13 @@ fn a_single_click_on_a_set_member_selects_it_after_the_double_click_delay() {
         .map(|n| n.rect())
         .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
         .expect("the member in the set view");
-    let at = label.center() - eframe::egui::vec2(0.0, 30.0);
+    // Layout v2 A2: the thumbnail sits left of the name, on the same slot row.
+    let at = h
+        .query_all_by_label_contains(" thumbnail")
+        .map(|n| n.rect())
+        .find(|r| r.y_range().contains(label.center().y))
+        .expect("the member's thumbnail")
+        .center();
     h.hover_at(at);
     h.run();
     for pressed in [true, false] {
@@ -809,7 +821,13 @@ fn a_stale_pending_member_click_does_not_replace_a_set_opened_later() {
         .map(|n| n.rect())
         .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
         .expect("the member in the set view");
-    let at = label.center() - eframe::egui::vec2(0.0, 30.0);
+    // Layout v2 A2: the thumbnail sits left of the name, on the same slot row.
+    let at = h
+        .query_all_by_label_contains(" thumbnail")
+        .map(|n| n.rect())
+        .find(|r| r.y_range().contains(label.center().y))
+        .expect("the member's thumbnail")
+        .center();
     h.hover_at(at);
     h.run();
     for pressed in [true, false] {

@@ -1,7 +1,8 @@
 //! The Advanced skin card (Task 10b, DECISIONS AG79-AG86): Community Shaders `SkinProfile` values of a skin set.
 //! Drawing only; edits go through `AppModel::set_skin_value`.
+use crate::model::labels::readable;
 use crate::model::sets::SetView;
-use crate::model::skin::{Kind, FIELDS, GROUPS};
+use crate::model::skin::{Kind, SkinField, FIELDS, GROUPS};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Subtype;
@@ -48,54 +49,14 @@ pub fn card(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             ui.add_enabled_ui(editable, |ui| {
                 for g in GROUPS {
                     ui.label(egui::RichText::new(g).strong());
-                    for f in FIELDS.iter().filter(|f| f.group == g) {
-                        ui.horizontal(|ui| {
-                            ui.label(f.key);
-                            let cur = own.get(f.key);
-                            match (f.kind, cur) {
-                                (Kind::Num { default, lo, hi }, Some(c)) => {
-                                    let mut x = c.as_f64().unwrap_or(default);
-                                    let r = ui.add(
-                                        egui::DragValue::new(&mut x)
-                                            .range(lo..=hi)
-                                            .speed(0.01)
-                                            .max_decimals(4),
-                                    );
-                                    if r.changed() && c.as_f64() != Some(x) {
-                                        edits.push((f.key, Some(json!(x))));
-                                    }
-                                }
-                                (Kind::Flag { default }, Some(c)) => {
-                                    let mut on = c.as_bool().unwrap_or(default);
-                                    if ui.checkbox(&mut on, "").changed() {
-                                        edits.push((f.key, Some(json!(on))));
-                                    }
-                                }
-                                (kind, None) => {
-                                    let (value, hint) = match kind {
-                                        Kind::Num { default, .. } => {
-                                            (json!(default), format!("default {default:?}"))
-                                        }
-                                        Kind::Flag { default } => {
-                                            (json!(default), format!("default {default}"))
-                                        }
-                                    };
-                                    if ui.small_button("set").clicked() {
-                                        edits.push((f.key, Some(value)));
-                                    }
-                                    ui.weak(hint);
-                                }
-                            }
-                            if cur.is_some()
-                                && ui
-                                    .small_button("↺")
-                                    .on_hover_text("Back to not set")
-                                    .clicked()
-                            {
-                                edits.push((f.key, None));
+                    egui::Grid::new(("skin-grid", &v.id, g))
+                        .num_columns(3)
+                        .show(ui, |ui| {
+                            for f in FIELDS.iter().filter(|f| f.group == g) {
+                                field_row(ui, f, own.get(f.key), &mut edits);
+                                ui.end_row();
                             }
                         });
-                    }
                 }
             });
             // AG90: the skin set gets no PGPatcher JSON; its own export is still to be specified.
@@ -106,5 +67,53 @@ pub fn card(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         });
     for (k, v2) in edits {
         model.set_skin_value(&v.id, k, v2);
+    }
+}
+
+/// A8: `label · value (or the weak default) · set / ↺`, one grid row; the key is the label's hover.
+fn field_row(
+    ui: &mut egui::Ui,
+    f: &SkinField,
+    cur: Option<&Value>,
+    edits: &mut Vec<(&'static str, Option<Value>)>,
+) {
+    ui.label(readable(f.key)).on_hover_text(f.key);
+    match (f.kind, cur) {
+        (Kind::Num { default, lo, hi }, Some(c)) => {
+            let mut x = c.as_f64().unwrap_or(default);
+            let r = ui.add(
+                egui::DragValue::new(&mut x)
+                    .range(lo..=hi)
+                    .speed(0.01)
+                    .max_decimals(4),
+            );
+            if r.changed() && c.as_f64() != Some(x) {
+                edits.push((f.key, Some(json!(x))));
+            }
+        }
+        (Kind::Flag { default }, Some(c)) => {
+            let mut on = c.as_bool().unwrap_or(default);
+            if ui.checkbox(&mut on, "").changed() {
+                edits.push((f.key, Some(json!(on))));
+            }
+        }
+        (kind, None) => {
+            let (value, hint) = match kind {
+                Kind::Num { default, .. } => (json!(default), format!("default {default:?}")),
+                Kind::Flag { default } => (json!(default), format!("default {default}")),
+            };
+            ui.weak(hint);
+            if ui.small_button("set").clicked() {
+                edits.push((f.key, Some(value)));
+            }
+            return;
+        }
+    }
+    if ui
+        .small_button("↺")
+        .on_hover_text("Back to not set")
+        .clicked()
+    {
+        edits.push((f.key, None));
     }
 }

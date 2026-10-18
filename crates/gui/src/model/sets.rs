@@ -1781,7 +1781,7 @@ impl AppModel {
             }
             None => {
                 return refused(format!(
-                    "{name} fills no slot card; drag it onto the set in the Sets column"
+                    "{name} fills no slot row; drag it onto the set in the Sets column"
                 ))
             }
         }

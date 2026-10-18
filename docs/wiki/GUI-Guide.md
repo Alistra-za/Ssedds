@@ -31,7 +31,7 @@ While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" wi
 
 ## The three columns
 
-From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer. Under all of them runs the [bottom panel](#the-bottom-panel).
+From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab of the set editor's own right-hand panel. Under all of them runs the [bottom panel](#the-bottom-panel).
 
 ### Textures (left)
 
@@ -206,7 +206,7 @@ If an export is blocked, Review's *Blockers* column lists what to fix; **Go to s
 - **≡** drags a set to reorder.
 - **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up** and **Move down**. **Delete set** asks first, naming the set and its member count. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Fill from names…** (set menu) lists files in the set's folder named like its diffuse plus a known suffix, and moves the ticked ones in as one undo step.
-- Dropping a file from Explorer on a slot card fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
+- Dropping a file from Explorer on a slot row fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
 - Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON"; a PBR Landscape set says which JSON it writes ("PBR Landscape → CS + PGPatcher JSON", "→ CS JSON", "→ PGPatcher JSON (no CS records yet)" or "PBR Landscape (no JSON yet)").
 
 Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot pins and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
@@ -215,11 +215,15 @@ Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created
 
 Select a set to edit it. The heading has the input name box and a **2D | 3D** switch (remembered in `gui.toml`, default 2D) that swaps the centre pane in place; in 3D the settings fold in sections above the view.
 
-A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR box: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
+A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR groups in the Material tab: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
 
-In 2D, each PGPatcher slot is one card (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that card, with both files listed and a ✕ beside each to take one out of the set, and export warns about it. The cubemap slot has no card; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
+In 2D the editor has slot rows in the middle and a **right-hand panel** (default and minimum width 300 px; drag its edge to widen it; it scrolls both ways). The panel has a **Material** tab (**Set** on a vanilla set) with the set's material settings and a last **Advanced** tab with the same sections as the Advanced drawer. While the panel is shown the drawer is not; in 3D, with a texture selected, or with several sets selected, the drawer is back.
 
-| Card control | What it does |
+Each PGPatcher slot is one row (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that row, with both files listed and a ✕ beside each to take one out of the set, and export warns about it. The cubemap slot has no row; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
+
+A row has these columns: Slot (title; weak when empty; a lock when pinned), the thumbnail (click selects, double-click expands), File (the name cut to fit; full name and size on hover; the dimensions and file size under it), Format (the dropdown; an empty slot shows **Assign...**, which opens the slot menu), Flags (Match on this and Opaque, each with a hover) and Status (a dot: green ready, amber a warning or decision, red blocks; the reason is on hover). The columns are compact so the rows fit beside the panel at the default width. In a narrower centre the rows scroll sideways; they are never drawn under the panel.
+
+| Row control | What it does |
 |---|---|
 | **Slot commands…** | *From this set*, *Path*, *Clear*, and *Pin slot N* (the sdc pin). Each is one undo step. |
 | Right-click | The slot commands plus *From another set*, which links the slot to another set's map, *Pin slot (sdc)* / *Unpin slot (sdc)*, and *Keep original texture (PGPatcher lock)*. |
@@ -239,20 +243,21 @@ A `_coat` map fills the Subsurface card, which then reads "Coat colour + strengt
 
 ## TruePBR settings
 
-A PBR set under `cs` has a TruePBR box with the settings PGPatcher reads. **Open the TruePBR JSON editor…** at its top opens the editor window.
+A PBR set under `cs` has the settings PGPatcher reads in the Material tab of the set panel, as framed groups in the order below. Each header shows the title and, on the right, its value (for example Features "3 on", Subsurface "Standard", Coat "off", Matching "2 matches", CS PBR records "1 record"). Click a title to open or close the group. The feature groups are always listed; they read "off" and stay closed while the feature is off, and open when it turns on. A small **TruePBR JSON editor…** button at the top right of the tab opens the editor window. Skin and complex-material keys show readable names ("SSS width"); hover one for its exact key.
 
 | Group | Settings |
 |---|---|
 | Material | Specular level, Roughness scale. |
-| Features | Emissive, Parallax, Hair, Multilayer (coat), Glint, Fuzz, and a **Subsurface** selector: Off, Standard or Foliage. |
+| Features | Emissive, Parallax, Hair, Multilayer (coat), Glint, Fuzz. |
 | Emissive settings | Emissive scale, Emissive colour. |
 | Parallax settings | Displacement scale. |
-| Subsurface settings | Subsurface colour and opacity, for Standard and Foliage. |
-| Coat settings | Under the Multilayer checkbox while it is on: coat colour, specular level, roughness, strength, diffuse, normal, parallax and inner UV scale. With Multilayer off the values are kept but not written. |
+| Subsurface | The Off / Standard / Foliage selector, then colour and opacity for Standard and Foliage. |
+| Coat | Under the Multilayer checkbox: coat colour, specular level, roughness, strength, diffuse, normal, parallax and inner UV scale. With Multilayer off the group reads "off" and stays closed; the values are kept but not written. |
 | Glint settings, Fuzz settings | The glint parameters; Fuzz colour and weight. |
 | Matching | The exact texture paths the entry matches (PGPatcher's `match1` to `match8`). |
+| CS PBR records | Community Shaders' PBR texture set and material object blocks (collapsed; "N records"). |
 | Advanced TruePBR settings | Path contains, Mesh path contains, Rename; UV and cubemap (Smooth angle, Auto UV, UV scale, Cubemap path); Vertex colours and depth; Texture locks. |
-| NiAlphaProperty | The schema's `alphaprop_*` keys: override flags (blending, blend modes, testing, test function, no sorter, or a raw number), alpha test threshold, create if missing, delete. A key that is off is not written. |
+| NiAlphaProperty (starts closed) | The schema's `alphaprop_*` keys: override flags (blending, blend modes, testing, test function, no sorter, or a raw number), alpha test threshold, create if missing, delete. A key that is off is not written. |
 
 Rules:
 
@@ -272,9 +277,9 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 
 ### The TruePBR JSON editor
 
-Open it with **PG JSON Editor** in the header or from a set's TruePBR box. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
+Open it with **PG JSON Editor** in the header or from the **TruePBR JSON editor…** button in a set's Material tab. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
 
-- Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set in the main window), then its keys as small pills with the same controls as the TruePBR box.
+- Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set in the main window), then its keys as small pills with the same controls as the Material tab's groups.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
 - A texture match pill picks how it matches: *exact · slot N* (`matchN`) or *path contains*. The **▾** picker lists the scan's textures for that slot, or every known texture path. The *mesh path contains* pill (`nif_filter`) has a picker of folders that hold scanned meshes. Without a scan, the pickers list only the project's own paths.
 - **+ Delete section** adds an entry that belongs to no set and makes PGPatcher delete the shapes it matches, for example a vanilla glow shape the PBR base shape replaces. Sections are saved as `[[pgp_sections]]` in `sdc-project.toml` (keys `match1` to `match8`, `path_contains`, `nif_filter`) and written with `delete: true` after every set's entry. A section with no texture match is not written.
@@ -282,7 +287,7 @@ Open it with **PG JSON Editor** in the header or from a set's TruePBR box. It is
 - The header reads "N errors, M warnings". Errors block Export and show as a red line under their entry; warnings are what Export asks about. **Next error** / **Prev** (F8 / Shift+F8) jump between entries with errors, and a search box filters entries by set name or path.
 - **JSON text** shows the file as it would be written now, with **Copy**.
 
-Edits in the window and in the TruePBR box are the same edits; each shows the other's at once, and undo is shared.
+Edits in the window and in the Material tab are the same edits; each shows the other's at once, and undo is shared.
 
 ## Set preview (3D)
 
@@ -320,7 +325,7 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 
 ## Advanced drawer
 
-The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields.
+The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the **Advanced** tab of the set panel instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.
 
 | Section | Contents |
 |---|---|

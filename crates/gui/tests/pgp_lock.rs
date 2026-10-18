@@ -282,8 +282,7 @@ fn a_locked_slot_card_shows_the_cross_and_one_tooltip() {
     h.run();
     assert_eq!(h.query_all_by_label(CAPTION).count(), 0);
     let hover_thumb = |h: &mut Harness<'static, AppModel>| {
-        let title = h.get_by_label("RMAOS").rect();
-        let thumb = eframe::egui::pos2(title.left() + 36.0, title.bottom() + 40.0);
+        let thumb = h.get_by_label("RMAOS thumbnail").rect().center();
         h.input_mut()
             .events
             .push(eframe::egui::Event::PointerMoved(thumb));
