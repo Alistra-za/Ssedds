@@ -50,7 +50,7 @@ pub fn to_text(kind: Kind, values: &Map<String, Json>) -> String {
 }
 
 use super::cs_pbr::{valid_value, CsBlock, StaticsStatus};
-use super::history::{case_twin, orphans, record_key, recorded, records_at, sha256_of};
+use super::history::{orphans, record_key, recorded, records_at, remove_own_case_twin, sha256_of};
 use super::pbr_export::{file_name_problem, json_entries};
 use super::AppModel;
 use crate::sets_doc::SetEntry;
@@ -210,11 +210,7 @@ pub fn finish(
         let last = out.get(&key).cloned();
         let last = last.as_deref();
         // O6: an EDID whose case changed renames sdc's own (unchanged) file; a replace may keep the old name's case.
-        if let Some(old) = case_twin(&path) {
-            if sha256_of(&old).as_deref() == last {
-                let _ = std::fs::remove_file(old);
-            }
-        }
+        remove_own_case_twin(&path, last);
         if let Err(k) = engine::dds::may_replace(&path, text.as_bytes(), recorded(last)) {
             notes.push(k.note(&path));
             continue;

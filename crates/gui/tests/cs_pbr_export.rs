@@ -491,3 +491,36 @@ fn a_relative_record_is_read_under_the_export_folder() {
     let text = std::fs::read_to_string(&f).unwrap();
     assert!(text.contains("0.05"), "{text}; notes {:?}", m.export.notes);
 }
+
+/// Trace-debug wave 2 #48: with no record, an old-case twin this process cannot read is not sdc's file: the
+/// case-change rename keeps it (an unread hash is no match for an absent record).
+#[cfg(windows)]
+#[test]
+fn an_unrecorded_unreadable_old_case_file_survives_the_rename() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let old = d.path().join("PBRTextureSets/foo.json");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "{\"hand\": 1}").unwrap();
+    // FILE_SHARE_DELETE only: other opens for reading fail while this handle is held, a delete does not.
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(4)
+        .open(&old)
+        .unwrap();
+    assert!(sdc_gui::model::history::sha256_of(&old).is_none());
+    let p = PendingCs {
+        root: d.path().to_path_buf(),
+        files: vec![("PBRTextureSets/Foo.json".into(), "{}".into())],
+        notes: vec![],
+        refused: vec![],
+    };
+    let mut notes = vec![];
+    finish(&p, &Default::default(), &mut notes);
+    drop(held);
+    assert_eq!(
+        std::fs::read_to_string(&old).ok().as_deref(),
+        Some("{\"hand\": 1}"),
+        "{notes:?}"
+    );
+}

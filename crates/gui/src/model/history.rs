@@ -142,6 +142,17 @@ pub fn case_twin(path: &std::path::Path) -> Option<std::path::PathBuf> {
         .map(|n| path.with_file_name(n))
 }
 
+/// O6: a case-only rename drops sdc's own unchanged file under the old name: `path`'s case twin is removed only when
+/// a record `last` exists and the twin still hashes to it. No record, or a twin that cannot be read, is not sdc's
+/// file and stays (wave 2 #48).
+pub fn remove_own_case_twin(path: &std::path::Path, last: Option<&str>) {
+    if let (Some(old), Some(last)) = (case_twin(path), last) {
+        if sha256_of(&old).as_deref() == Some(last) {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+}
+
 /// The recorded files under `root` this run did not write (`this_run`, relative to `root`) that are still on disk,
 /// spelled as on disk. They are reported, never deleted, and their records stay.
 pub fn orphans<'a>(
