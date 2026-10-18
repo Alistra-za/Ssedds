@@ -244,7 +244,7 @@ Every field below can be set in `[defaults]`, `[subtypes.<id>]`, a rule's `overr
 | Field | Values | Default | Notes |
 |---|---|---|---|
 | `encoder.backend` | `bc7e`, `rgbcx`, `ispc_bc6h`, `nvtt`, `uncompressed` | follows the format | `nvtt` works for BC7 and BC6H only. See [NVTT backend](NVTT-Backend.md). |
-| `encoder.effort` | `ultrafast`, `veryfast`, `fast`, `basic`, `veryslow`, `slowest` | `veryslow` | bc7e quality level. For BC6H, `ultrafast` and `veryfast` map to veryfast, and `veryslow` and `slowest` to veryslow. |
+| `encoder.effort` | `ultrafast`, `veryfast`, `fast`, `basic`, `veryslow`, `slowest`, `max` | `veryslow` | bc7e quality level. `max` is the sdc patch-0002 level from the [bc7e tuning study](../research/bc7e-tuning.md): it needs a build whose bc7e objects carry that patch and is refused with `CFG-INVALID` otherwise. For BC6H, `ultrafast` and `veryfast` map to veryfast, and `veryslow`, `slowest` and `max` to veryslow. |
 | `encoder.rgbcx_level` | 0 to 18 | 18 | rgbcx quality level. Checked and used only where rgbcx is the backend (BC1, BC3, BC4, BC5). |
 | `encoder.perceptual` | `true`, `false` | `false` | Perceptual error metric for BC7. Allowed only on colour sub-types whose alpha policy is not `data`; anywhere else it is an error (`FMT-PERCEPTUAL-DATA`). |
 | `encoder.bc1_transparent_black` | `true`, `false` | `false` | BC1 output is opaque-only in this version, so `true` together with `format = "bc1"` is `CFG-INVALID`. |

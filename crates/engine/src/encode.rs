@@ -37,6 +37,7 @@ pub fn bc7_level(e: Effort) -> Bc7Level {
         Effort::Basic => Bc7Level::Basic,
         Effort::Veryslow => Bc7Level::Veryslow,
         Effort::Slowest => Bc7Level::Slowest,
+        Effort::Max => Bc7Level::Max,
     }
 }
 
@@ -45,7 +46,7 @@ pub fn bc6h_level(e: Effort) -> Bc6hLevel {
         Effort::Ultrafast | Effort::Veryfast => Bc6hLevel::Veryfast,
         Effort::Fast => Bc6hLevel::Fast,
         Effort::Basic => Bc6hLevel::Basic,
-        Effort::Veryslow | Effort::Slowest => Bc6hLevel::Veryslow,
+        Effort::Veryslow | Effort::Slowest | Effort::Max => Bc6hLevel::Veryslow,
     }
 }
 

@@ -1636,6 +1636,17 @@ pub fn check_profile(
             ),
         );
     }
+    // The `max` level is bc7e patch 0002 (docs/research/bc7e-tuning.md): without the patch-0002 objects the level
+    // does not exist in the encoder, so refuse it here rather than inside an encode task.
+    if p.encoder.backend == Backend::Bc7e
+        && p.encoder.effort == Effort::Max
+        && !encoders_sys::BC7E_MAX_NATIVE
+    {
+        add(
+            CfgInvalid,
+            "encoder.effort max needs the bc7e patch-0002 objects (tools/regen-ispc.ps1); use slowest".to_string(),
+        );
+    }
     // An explicit `legacy` header needs a legacy FourCC: BC1/BC3/BC4/BC5 UNORM only. `auto` falls back to DX10.
     if p.header == HeaderForm::Legacy
         && resolve_header(p.format, p.srgb_tag(), HeaderForm::Legacy) != ResolvedHeader::Legacy
