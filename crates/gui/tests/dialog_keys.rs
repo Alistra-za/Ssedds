@@ -512,7 +512,7 @@ fn the_rename_dialog_ignores_enter_on_the_frame_it_opens() {
     );
 }
 
-/// N3, R11: Review is not a dialog; Enter never presses its Export.
+/// N3, R11: the Review tab adds no Enter handler, so Enter with Review open never starts an export.
 #[test]
 fn enter_with_review_open_never_exports() {
     let d = tempfile::tempdir().unwrap();

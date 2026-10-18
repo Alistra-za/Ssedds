@@ -167,7 +167,7 @@ fn push_right(ui: &mut egui::Ui, w: f32) {
 
 /// True when a text field has the keyboard focus: `what` (Save, Export) then does nothing and says why, so the
 /// field commits its typed value on the focus loss first (AG23, trace-debug #54).
-fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
+pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
     if !ui.ctx().egui_wants_keyboard_input() {
         return false;
     }

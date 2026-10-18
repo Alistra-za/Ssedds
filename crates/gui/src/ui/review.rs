@@ -262,7 +262,12 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::Tick(t, on)) => model.acknowledge_ask(&t, on),
         Some(Act::AckAll) => model.acknowledge_all_asks(),
         Some(Act::Others) => model.open_problems(None),
-        Some(Act::Export) => model.export_from_review(),
+        // Export saves first: wait for a focused field to commit, as the header Export does (Note BS14).
+        Some(Act::Export) => {
+            if !super::header::field_focused(ui, model, "Export") {
+                model.export_from_review();
+            }
+        }
         Some(Act::Close) => model.close_review(),
         None => {}
     }

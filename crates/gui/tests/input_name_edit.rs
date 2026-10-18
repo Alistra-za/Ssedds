@@ -607,6 +607,48 @@ fn header_export_click_with_focused_field_does_not_save_stale_value() {
     );
 }
 
+/// The Review counterpart (layout v2 Task 1.4 fix 1): Review's Export clicked while the input name box has focus
+/// saves nothing and says why, as the header Export does (#54, Note BS14).
+#[test]
+fn review_export_click_with_focused_field_does_not_save_stale_value() {
+    let (_d, mut h) = harness();
+    h.state_mut()
+        .0
+        .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
+    h.state_mut().0.open_review();
+    h.run();
+    let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
+    let text = h.state().0.review_button_text();
+    assert!(h.state().0.review_gate().is_ok());
+    focus(&mut h);
+    clear_and_type(&mut h, "rock02");
+    let p = h.get_by_label(&text).rect().center();
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    settle(&mut h);
+    let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
+    assert!(!on_disk.contains("specular_level"), "nothing was saved");
+    assert!(h.state().0.export.running.is_none(), "no export started");
+    assert!(h.state().0.export.summary.is_none(), "no export ran");
+    assert!(
+        h.state()
+            .0
+            .messages
+            .entries()
+            .any(|e| e.text == "Export: leave the text field first"),
+        "the log says why"
+    );
+}
+
 /// Trace-debug wave 2 #5: the project's own rows name outputs, so they carry no source extension (`leaf.png` is
 /// offered as `textures/landscape/leaf`, never `textures/landscape/leaf.png`).
 #[test]

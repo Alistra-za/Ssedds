@@ -280,7 +280,8 @@ pub struct AppModel {
     /// the colour member; sent as `BatchRequest::mesh_alpha`.
     pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     /// Scan evidence for the Subsurface auto mode (DECISIONS AG102): `shader::colour_mesh_key` → whether any scanned
-    /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine.
+    /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine. Written only
+    /// through `set_tree_anim`: the cached `export_asks` is keyed on the `evidence_rev` it bumps.
     pub mesh_tree_anim: std::collections::BTreeMap<String, bool>,
     /// Bumped whenever `mesh_tree_anim` or `known` is replaced (DECISIONS AG109); part of `json_key`.
     pub evidence_rev: u64,
@@ -290,7 +291,8 @@ pub struct AppModel {
     /// PBR grass design §4.2: every GRAS diffuse of the scan, TruePBR shapes kept, read with the mesh evidence; sent
     /// as `BatchRequest::gras_all_diffuses`.
     pub gras_all_diffuses: std::collections::BTreeSet<String>,
-    /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
+    /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers. Written only through
+    /// `set_known`: the cached `export_asks` is keyed on the `evidence_rev` it bumps.
     pub known: Arc<known_paths::KnownPaths>,
     /// Item 9: the selected texture's "Used by meshes" read (`used_by_for`).
     pub used_by: used_by::UsedByState,
