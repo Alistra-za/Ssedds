@@ -112,6 +112,24 @@ pub const VARIANTS: &[Variant] = &[
         },
     },
     Variant {
+        name: "parts4_uber4",
+        level: V,
+        tune: Bc7Tune {
+            partitions_to_try: Some(4),
+            uber_level: Some(4),
+            ..T
+        },
+    },
+    Variant {
+        name: "parts64_uber4",
+        level: V,
+        tune: Bc7Tune {
+            partitions_to_try: Some(64),
+            uber_level: Some(4),
+            ..T
+        },
+    },
+    Variant {
         name: "parts8_uber4",
         level: V,
         tune: Bc7Tune {
@@ -357,6 +375,22 @@ pub fn run(
                         "  attribution: {} blocks, ref better on {} ({} with the same mode+partition), worse on {}; gain from endpoints {:.0}, from structure {:.0}; modes base {:?} ref {:?}",
                         a.blocks, a.ref_better, a.same_better, a.ref_worse, a.gain_same, a.gain_structure, a.base_modes, a.ref_modes
                     );
+                    let trans = out.with_extension("trans.csv");
+                    let fresh = !trans.exists();
+                    let mut h = std::fs::OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(&trans)?;
+                    if fresh {
+                        writeln!(h, "class,image,base_mode,ref_mode,blocks,gain")?;
+                    }
+                    for (bm, row) in a.transitions.iter().enumerate() {
+                        for (rm, (n, gain)) in row.iter().enumerate() {
+                            if *n > 0 {
+                                writeln!(h, "{class},{name},{bm},{rm},{n},{gain:.0}")?;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -378,6 +412,8 @@ pub struct Attribution {
     pub gain_structure: f64,
     pub base_modes: [usize; 8],
     pub ref_modes: [usize; 8],
+    /// `[base mode][reference mode]` → (blocks, summed squared-error reduction) where the reference won.
+    pub transitions: [[(usize, f64); 8]; 8],
 }
 
 /// (mode, partition, rotation) read from a block's leading bits.
@@ -436,6 +472,9 @@ fn attribute(img: &Rgba8, base: &[u8], reference: &[u8]) -> Attribution {
         a.ref_modes[sr.0 as usize] += 1;
         if er < eb {
             a.ref_better += 1;
+            let t = &mut a.transitions[sb.0 as usize][sr.0 as usize];
+            t.0 += 1;
+            t.1 += eb - er;
             if sb == sr {
                 a.same_better += 1;
                 a.gain_same += eb - er;
