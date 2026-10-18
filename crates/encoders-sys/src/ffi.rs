@@ -8,6 +8,7 @@ extern "C" {
         level: i32,
         perceptual: i32,
         exact: i32,
+        target: i32,
     );
     pub fn sdc_bc7e_compress_tuned(
         n: u32,
