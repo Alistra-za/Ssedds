@@ -301,10 +301,10 @@ fn the_cap_setting_defaults_to_2048_and_round_trips() {
     let d = tempfile::tempdir().unwrap();
     let mut s = sdc_gui::settings::GuiSettings::default();
     assert_eq!(s.render3d.set_preview_max, 0);
-    assert_eq!(SetPreview::from_settings(&s).enc.cap, DEFAULT_CAP);
+    assert_eq!(SetPreview::from_settings(&s, None).enc.cap, DEFAULT_CAP);
     s.render3d.set_preview_max = 1024;
-    assert_eq!(SetPreview::from_settings(&s).enc.cap, 1024);
-    assert!(SetPreview::from_settings(&s).enabled);
+    assert_eq!(SetPreview::from_settings(&s, None).enc.cap, 1024);
+    assert!(SetPreview::from_settings(&s, None).enabled);
     let p = d.path().join("gui.toml");
     s.save(&p).unwrap();
     assert_eq!(sdc_gui::settings::GuiSettings::load(&p), (s, None));
@@ -422,11 +422,11 @@ fn an_old_gui_toml_without_the_cap_gives_the_default_and_out_of_range_values_cla
     .unwrap();
     let (s, _) = sdc_gui::settings::GuiSettings::load(&p);
     assert_eq!(s.render3d.set_preview_max, 0);
-    assert_eq!(SetPreview::from_settings(&s).enc.cap, DEFAULT_CAP);
+    assert_eq!(SetPreview::from_settings(&s, None).enc.cap, DEFAULT_CAP);
     let cap = |n: u32| {
         let mut s = sdc_gui::settings::GuiSettings::default();
         s.render3d.set_preview_max = n;
-        SetPreview::from_settings(&s).enc.cap
+        SetPreview::from_settings(&s, None).enc.cap
     };
     assert_eq!((cap(1), cap(255), cap(256)), (256, 256, 256));
     assert_eq!((cap(8192), cap(8193), cap(u32::MAX)), (8192, 8192, 8192));
