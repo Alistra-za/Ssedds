@@ -44,12 +44,15 @@ impl SdcApp {
     pub fn new(mut model: AppModel) -> SdcApp {
         model.refresh_known_paths();
         let mut meshes = crate::model::meshes::MeshesModel::new(
-            crate::model::meshes::default_store_path(),
+            model.scan_db.clone(),
             model.settings.meshes.clone(),
         );
         meshes.v3 =
             crate::model::viewport3d::Viewport3d::new(model.settings.render3d.shaders.clone());
-        let mut set3d = crate::model::set_preview::SetPreview::from_settings(&model.settings);
+        let mut set3d = crate::model::set_preview::SetPreview::from_settings(
+            &model.settings,
+            model.scan_db.clone(),
+        );
         // The saved arrangement: filters, preview channel and layout, and both 3D looks (AG17).
         let layout = model.settings.layout.clone();
         crate::layout::restore_model(
