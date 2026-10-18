@@ -19,6 +19,7 @@ pub mod pgp_fields;
 pub mod plugin_refs;
 pub mod presets;
 pub mod preview;
+pub mod problems;
 pub mod rename_dialog;
 pub mod review;
 pub mod rnm_section;

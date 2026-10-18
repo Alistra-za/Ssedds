@@ -189,10 +189,16 @@ fn tile(
                 if let Some(a) = &read_as {
                     badges.push(format!("read as {a}"));
                 }
-                ui.add(
-                    egui::Label::new(egui::RichText::new(badges.join("  ")).small().weak())
-                        .truncate(),
-                );
+                let ready = crate::model::bottom::tile_ready(item);
+                ui.horizontal(|ui| {
+                    if ready {
+                        super::status::dot(ui, super::status::Status::Ready);
+                    }
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(badges.join("  ")).small().weak())
+                            .truncate(),
+                    );
+                });
             });
         })
         .response
@@ -269,8 +275,9 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
             ui.label(egui::RichText::new(s).strong());
         }
         let n = model.undecided();
-        if n > 0 {
-            ui.colored_label(AMBER, format!("{n} need a decision"));
+        let link = egui::RichText::new(format!("{n} need a decision")).color(AMBER);
+        if n > 0 && ui.link(link).clicked() {
+            model.open_problems(Some(crate::model::bottom::ProblemsFilter::Undecided));
         }
         let not_in = column_stats(ui.ctx(), model).not_in_set;
         if not_in > 0

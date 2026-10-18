@@ -197,7 +197,18 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     }
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
-        if ui.add_enabled(can_export, export).clicked() && !field_focused(ui, model, "Export") {
+        // A12: the hover counts the files and the problems; a green dot says there are none.
+        let n = crate::model::bottom::problems(model).len();
+        let hover = format!("{} files, {n} problems", model.export_files());
+        let r = ui
+            .add_enabled(can_export, export)
+            .on_hover_text(&hover)
+            .on_disabled_hover_text(&hover);
+        if n == 0 {
+            let at = r.rect.left_center() + egui::vec2(10.0, 0.0);
+            ui.painter().circle_filled(at, 4.0, super::status::GREEN);
+        }
+        if r.clicked() && !field_focused(ui, model, "Export") {
             model.export_clicked();
         }
         if running {

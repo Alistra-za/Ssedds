@@ -250,7 +250,7 @@ fn slot_note(ui: &mut egui::Ui, drops: &DropState, set: &str) {
 }
 
 /// The recipe lines, the set's warnings (each member's, each once) and what matches nothing.
-fn under_grid(ui: &mut egui::Ui, model: &AppModel, v: &SetView) {
+fn under_grid(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     let Some(set) = model.sets.iter().find(|s| s.key == v.key) else {
         return;
     };
@@ -261,19 +261,18 @@ fn under_grid(ui: &mut egui::Ui, model: &AppModel, v: &SetView) {
     for w in model.rnm_notes.get(&v.key).into_iter().flatten() {
         ui.colored_label(AMBER, format!("{}: {}", w.code.as_str(), w.message));
     }
-    let mut seen = std::collections::BTreeSet::new();
-    let warnings: Vec<_> = set
-        .members
-        .iter()
-        .filter_map(|m| model.item(m))
-        .flat_map(|i| i.warnings.iter())
-        .filter(|w| seen.insert((w.code, w.message.clone())))
-        .collect();
-    if !warnings.is_empty() {
+    // R10: the codes live in Problems; one line points there.
+    let n = crate::model::bottom::set_problem_count(model, &v.key);
+    if n > 0 {
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Warnings").strong());
-        for w in warnings {
-            ui.label(egui::RichText::new(format!("{}: {}", w.code.as_str(), w.message)).small());
+        let text = format!(
+            "{n} problem{} in this set — Show in Problems",
+            if n == 1 { "" } else { "s" }
+        );
+        if ui.link(text).clicked() {
+            model.open_problems(Some(crate::model::bottom::ProblemsFilter::Set(
+                v.key.clone(),
+            )));
         }
     }
     for m in &v.missing {

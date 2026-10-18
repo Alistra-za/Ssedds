@@ -225,6 +225,8 @@ pub(crate) struct ViewCache {
     pub problems: Option<(ProblemsKey, Arc<Vec<bottom::Problem>>)>,
     /// `export_asks`, keyed by `evidence_rev` inside the view_key cell (R-b: Review reads them every frame).
     pub asks: Option<(u64, Arc<Vec<pbr_export::ExportIssue>>)>,
+    /// The keys `bottom::set_ready` looks up; reset with every `problems` build.
+    pub flagged: Option<Arc<std::collections::HashSet<String>>>,
 }
 
 #[derive(Clone, PartialEq)]

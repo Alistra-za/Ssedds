@@ -88,6 +88,8 @@ const TIP_LINES: usize = 10;
 
 enum Act {
     Select(String),
+    /// The warning badge: open Problems filtered to this set key.
+    Problems(String),
     SelectItem(String),
     Expand(String),
     Drop(String, String),
@@ -248,6 +250,9 @@ pub fn draw(
             Act::Click(k, ctrl, shift) => model.click_set(&k, ctrl, shift),
             Act::RightClick(k) => model.right_click_set(&k),
             Act::Bulk(a) => model.menu_picked(a),
+            Act::Problems(k) => {
+                model.open_problems(Some(crate::model::bottom::ProblemsFilter::Set(k)))
+            }
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
             Act::Expand(k) => model.expand(&k),
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
@@ -441,6 +446,9 @@ fn pill(
                     ui.label(egui::RichText::new(&v.label).strong());
                 });
                 ui.horizontal_wrapped(|ui| {
+                    if crate::model::bottom::set_ready(model, v) {
+                        super::status::dot(ui, super::status::Status::Ready);
+                    }
                     badge(ui, crate::model::sets::badge_text(model, v), None);
                     let rows: Vec<(&str, &Warning)> = v
                         .members
@@ -463,8 +471,16 @@ fn pill(
                         shader_combo(ui, model, v, editing, acts);
                     }
                     if !rows.is_empty() {
-                        badge(ui, &format!("⚠ {}", rows.len()), Some(AMBER))
+                        let warn = ui
+                            .add(egui::Button::new(
+                                egui::RichText::new(format!("⚠ {}", rows.len()))
+                                    .small()
+                                    .color(AMBER),
+                            ))
                             .on_hover_text(warning_tooltip(&rows));
+                        if warn.clicked() {
+                            acts.push(Act::Problems(v.key.clone()));
+                        }
                     }
                     if blocked {
                         badge(ui, "blocked", Some(RED));

@@ -1,6 +1,7 @@
 //! The bottom panel's state (layout v2 A1, A9; R7, R8): which tab shows, and whether the panel is open.
 use super::items::Decision;
 use super::{counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -129,7 +130,41 @@ pub fn problems(m: &AppModel) -> Arc<Vec<Problem>> {
         };
     }
     c.problems = Some((inner, p.clone()));
+    c.flagged = None;
     p
+}
+
+/// The set keys and texture keys that carry a problem, built once per `problems` build (R-a: a set card asks every
+/// frame). Sets are prefixed `s:`, textures `t:`.
+fn flagged(m: &AppModel) -> Arc<HashSet<String>> {
+    let all = problems(m);
+    if let Some(f) = &m.views.borrow().flagged {
+        return f.clone();
+    }
+    let f: HashSet<String> = all
+        .iter()
+        .filter_map(|p| match &p.at {
+            At::Set { key, .. } => Some(format!("s:{key}")),
+            At::Texture(t) => Some(format!("t:{t}")),
+            _ => None,
+        })
+        .collect();
+    let f = Arc::new(f);
+    m.views.borrow_mut().flagged = Some(f.clone());
+    f
+}
+
+/// A set card shows a green dot: a real set whose own rows and members' rows are all absent from Problems.
+pub fn set_ready(m: &AppModel, v: &sets::SetView) -> bool {
+    let f = flagged(m);
+    !v.key.is_empty()
+        && !f.contains(&format!("s:{}", v.key))
+        && !v.members.iter().any(|t| f.contains(&format!("t:{t}")))
+}
+
+/// A tile shows a green dot: ready, with nothing that counts toward its badge.
+pub fn tile_ready(item: &super::items::TextureItem) -> bool {
+    item.status == ItemStatus::Ready && !item.warnings.iter().any(counts_toward_badge)
 }
 
 #[doc(hidden)]
@@ -239,19 +274,36 @@ pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Vec<Problem> {
             .cloned()
             .collect(),
         Some(ProblemsFilter::Set(k)) => {
-            let members = sets::views(m)
-                .iter()
-                .find(|v| v.key == *k)
-                .map(|v| v.members.clone())
-                .unwrap_or_default();
+            let members = set_members(m, k);
             all.iter()
-                .filter(|p| match &p.at {
-                    At::Set { key, .. } => key == k,
-                    At::Texture(t) => members.contains(t),
-                    _ => false,
-                })
+                .filter(|p| in_set(p, k, &members))
                 .cloned()
                 .collect()
         }
     }
+}
+
+fn set_members(m: &AppModel, key: &str) -> HashSet<String> {
+    sets::views(m)
+        .iter()
+        .find(|v| v.key == key)
+        .map(|v| v.members.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn in_set(p: &Problem, key: &str, members: &HashSet<String>) -> bool {
+    match &p.at {
+        At::Set { key: k, .. } => k == key,
+        At::Texture(t) => members.contains(t),
+        _ => false,
+    }
+}
+
+/// How many problems `filtered(m, Some(Set(key)))` lists, without cloning them.
+pub fn set_problem_count(m: &AppModel, key: &str) -> usize {
+    let members = set_members(m, key);
+    problems(m)
+        .iter()
+        .filter(|p| in_set(p, key, &members))
+        .count()
 }

@@ -105,6 +105,76 @@ pub fn undecided_row(
     pick
 }
 
+/// A Problems row's fix buttons (A1), one set per open question of the texture `key`: Set type… (the suggestion
+/// first), Decide… (the alpha options), Acknowledge. All disabled with `off` as hover.
+pub fn fix_buttons(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    key: &str,
+    off: Option<&str>,
+) -> Option<RowPick> {
+    let item = model.item(key)?;
+    let why = off.unwrap_or_default();
+    let mut pick = None;
+    ui.add_enabled_ui(off.is_none(), |ui| {
+        for d in &item.decisions {
+            match d {
+                Decision::Subtype { suggested } => {
+                    ui.menu_button("Set type…", |ui| {
+                        if let Some(st) = suggested {
+                            if ui
+                                .button(format!("{} (suggested)", subtype_label(*st)))
+                                .clicked()
+                            {
+                                pick = Some(RowPick::Decide(key.to_string(), *st));
+                                ui.close();
+                            }
+                            ui.separator();
+                        }
+                        for (heading, members) in offered_groups(model.target) {
+                            ui.label(egui::RichText::new(heading).weak());
+                            for st in members {
+                                if ui.button(subtype_label(st)).clicked() {
+                                    pick = Some(RowPick::Decide(key.to_string(), st));
+                                    ui.close();
+                                }
+                            }
+                        }
+                    })
+                    .response
+                    .on_disabled_hover_text(why);
+                }
+                Decision::AlphaMeaning => {
+                    ui.menu_button("Decide…", |ui| {
+                        for (v, label) in alpha_options() {
+                            let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
+                                continue;
+                            };
+                            if ui.button(label).clicked() {
+                                let a = Answer::Alpha(policy);
+                                pick = Some(RowPick::Answer(key.to_string(), a));
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_disabled_hover_text(why);
+                }
+                Decision::Acknowledge(code) => {
+                    if ui
+                        .button("Acknowledge")
+                        .on_disabled_hover_text(why)
+                        .clicked()
+                    {
+                        pick = Some(RowPick::Answer(key.to_string(), Answer::Acknowledge(*code)));
+                    }
+                }
+            }
+        }
+    });
+    pick
+}
+
 enum Act {
     GoTo(String),
     Row(RowPick),
