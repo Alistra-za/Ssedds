@@ -224,6 +224,7 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   assert.ok(!(live[0] === 0xef && live[1] === 0xbb), 'no BOM')
   const ov = resolveProfile(plan, 'A').overlay
   assert.equal(ov.Advanced['Log Level'], 1)
+  assert.ok(!('Log Level' in (resolveProfile({ ...plan, x_cs_settings: {} }, 'A').overlay.Advanced || {})), 'capture keys do not force Log Level')
   assert.deepEqual(JSON.parse(live.toString('utf8')), deepMerge(JSON.parse(ORIG_TEXT.replace(/^\uFEFF/, '')), ov), 'only overlay keys changed')
   const before = ORIG_TEXT.split('\n'), after = live.toString('utf8').split('\n')
   const { edits } = planSettingsEdits(ORIG_TEXT, ov)

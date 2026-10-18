@@ -40,10 +40,10 @@ export function layoutOf(plan) {
     yaw: y => Math.round((y + a) * 1e4) / 1e4,
   }
 }
-// Always on for a capture run, whatever the profile says: RenderDoc + Frame Annotations (base workflow), and the
-// debug log (spdlog 1 = debug; the owner's file has 2 = info) because W2 needs the "Compilation completed" line and
-// X6 the "Compiling ... to <defines>" lines. Restore puts the owner's file back, so this is temporary for profile B.
-const CAPTURE_KEYS = { RenderDoc: { 'Enable RenderDoc Capture': true }, Advanced: { 'Frame Annotations': true, 'Log Level': 1 } }
+// Always on for a capture run, whatever the profile says: RenderDoc + Frame Annotations (base workflow). Log Level is NOT
+// forced (owner 2026-10-18): Log Level <= 1 turns on CS developer mode, which compiles D3DCOMPILE_DEBUG shaders into the
+// owner's disk cache. W2 uses the DevBench shadercache tool; X6 decodes descriptors offline (cslog_defines.py).
+const CAPTURE_KEYS = { RenderDoc: { 'Enable RenderDoc Capture': true }, Advanced: { 'Frame Annotations': true } }
 // x_extract stage names -> scripts, in run order (GOLDEN-EXTRACTORS.md "Run order"). X4 (stage D) is not built.
 export const EXTRACT_STAGES = [
   { stage: 'A', script: 'p04_stageA_enumerate.py', runner: 'qrenderdoc' },

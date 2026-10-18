@@ -29,7 +29,7 @@ export const meta = {
 //   x_profile          name of the top-level profile (default "A")
 //   x_cs_settings      overlay of SettingsUser.json sections/keys (nested objects); only listed keys are edited,
 //                      missing keys are inserted. Always added on top: RenderDoc."Enable RenderDoc Capture",
-//                      Advanced."Frame Annotations" = true and Advanced."Log Level" = 1 (debug; W2 and X6 need it).
+//                      Advanced."Frame Annotations" = true. Log Level is not forced (debug level = CS developer mode = debug shaders).
 //   x_profiles_other_runs  {<profile>: {x_cs_settings: {...} | "<base> without <Feature> in Disable at Boot", groups: [labels]}}
 //   x_cell_fallback    cells to use instead if the P0 probe finds no directional light (manual: args.cell)
 //   groups[].x_pos / x_angle   per form, [x,y,z] relative to the coc marker / SetAngle degrees (default row at y+400)
@@ -182,8 +182,8 @@ DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSO
 1. Launch: \`Start-Process "${MO2}\\ModOrganizer.exe" -ArgumentList '"moshortcut://:SKSE"' -WorkingDirectory "${MO2}"\`. The game takes about 5 minutes and starts into a save. Poll /api/health until "frame" advances, then menu {"action":"list"} until "Loading Menu" is gone and inspect {"kind":"state"} says playerLoaded true. Accept (and describe) any messageBox.
 2. W2 shader compiles need a POSITIVE completion signal; silence or a stable frame rate is not one. Accept either:
    (a) devbench_tools.json lists communityshaders.inspect with a shadercache kind: poll it until compiling is false and completedTasks + failedTasks == totalTasks (record failedTasks);
-   (b) the CS log (CommunityShaders.log under Documents\\My Games\\Skyrim Special Edition*\\SKSE; this run forces Log Level debug): a line "Compilation completed in" written after this launch and after the last "Compiling " line.
-   Wait up to 20 minutes. Before each group's first capture check again: if new "Compiling " lines appeared after the last "Compilation completed", wait for the next one (or the tool to report done). If no positive signal is available or it never comes, do not capture: set compile_ready=false and stop_reason "compile readiness unknown", go to step 5. Record the signal and what it showed in shader_wait.
+   (b) the CS log (CommunityShaders.log under Documents\\My Games\\Skyrim Special Edition*\\SKSE; only if the owner log level is debug, which this run no longer forces, so normally use (a)): a line "Compilation completed in" written after this launch and after the last "Compiling " line.
+   Wait up to 45 minutes (a cleared shader cache recompiles everything). Before each group's first capture check again: if new "Compiling " lines appeared after the last "Compilation completed", wait for the next one (or the tool to report done). If no positive signal is available or it never comes, do not capture: set compile_ready=false and stop_reason "compile readiness unknown", go to step 5. Record the signal and what it showed in shader_wait.
 3. W3 origin: ALWAYS console "coc ${pre.cell}" (even if already in that cell: a save does not stand on the marker), wait for playerLoaded, then before anything else read the player position (inspect {"kind":"player"} or scene): that is the origin. Then console exec each of setup_console in order.
 4. Groups in resolved.json order (risky ones are already last). For each group run:
    ${node(`steps --run-dir "${RUN_DIR}" --group <label> --origin <ox>,<oy>,<oz>`)}
