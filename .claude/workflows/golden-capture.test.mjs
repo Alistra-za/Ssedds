@@ -370,6 +370,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   assert.deepEqual(c.calls, ['preflight', 'session A', 'restore settings'])
   assert.equal(sha(LIVE), ORIG_SHA, 'settings byte-identical after a crashed session'); assert.ok(!pending())
   assert.match(c.prompts['restore settings'], /"command":"qqq"/, 'failed session: restore quits the game without saving first')
+  assert.match(c.prompts['restore settings'], /game_pid\.txt exists AND Get-Process -Id/, 'qqq only for the process this run launched')
   ok('workflow: owner_ok required; session throws -> Restore quits the game (qqq) and still runs (finally), settings byte-identical')
 
   // The preflight agent dies after the lib applied the settings: output lost, so no automatic restore.

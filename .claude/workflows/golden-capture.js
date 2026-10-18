@@ -93,13 +93,13 @@ const RULES = `Owner data under ${MO2} is read-only except what golden-capture-l
 
 // Restore of the CS settings from the recovery journal. With a run id only that run's pending entry is restored
 // (automatic cleanup); without one (restore_only) any pending entry. Safe when nothing is pending.
-async function restoreSettings(runId, quitPort) {
+async function restoreSettings(runId, quitPort, pidFile) {
   const R_SCHEMA = { type: 'object', properties: { game_running: { type: 'boolean' }, stdout_json: { type: 'string', description: 'the command stdout verbatim, or "" if not run' } }, required: ['game_running', 'stdout_json'] }
   let r = null
   try {
     r = await agent(
       `Restore the CS settings after a golden capture run. ${RULES}
-${quitPort ? `0. This run launched the game and its session did not finish, so the game may still run with placed test refs and lights (never saved). If Get-Process SkyrimSE is running, send once POST http://127.0.0.1:${quitPort}/api/tool/console with body {"action":"exec","command":"qqq"} (quit without saving; never save). If DevBench does not answer, leave the game alone and go on.
+${quitPort && pidFile ? `0. This run's session did not finish, so a game it launched may still run with placed test refs and lights (never saved). Only if ${pidFile} exists AND Get-Process -Id <the id in it> is a running SkyrimSE (the process this run launched), send once POST http://127.0.0.1:${quitPort}/api/tool/console with body {"action":"exec","command":"qqq"} (quit without saving; never save). Otherwise (no file, another id, or not running) send nothing: a Skyrim this run did not launch is the owner's. If DevBench does not answer, leave the game alone and go on.
 ` : ""}1. Wait until Get-Process SkyrimSE is not running: poll every 15 s for up to 30 minutes. Never kill it. If it still runs after 30 minutes, return game_running=true and stdout_json "" without running anything else.
 2. Run this once from the repository root:
 ${node(`restore --mo2 "${MO2}" --journal "${JOURNAL}"${runId ? ` --run-id ${runId}` : ''}`)}
@@ -181,7 +181,7 @@ It prints one JSON object. Return exit_code and stdout_json = the stdout verbati
       `Drive one Skyrim golden-capture session (profile ${pre.profile}). ${RULES}
 Read ${RUN_DIR}/resolved.json (groups, cell, captures_dir, port, setup_console) and ${RUN_DIR}/plan.txt first.
 DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSON bodies. Fetch GET /api/tools once, save it to ${RUN_DIR}/devbench_tools.json, and confirm the parameter names used below.
-1. Launch: \`Start-Process "${MO2}\\ModOrganizer.exe" -ArgumentList '"moshortcut://:SKSE"' -WorkingDirectory "${MO2}"\`. The game takes about 5 minutes and starts into a save. Poll /api/health until "frame" advances, then menu {"action":"list"} until "Loading Menu" is gone and inspect {"kind":"state"} says playerLoaded true. Accept (and describe) any messageBox.
+1. Launch: as soon as a new SkyrimSE process appears after the launch below, write its Id (digits only) to ${RUN_DIR}\\game_pid.txt (failure cleanup quits only that process). \`Start-Process "${MO2}\\ModOrganizer.exe" -ArgumentList '"moshortcut://:SKSE"' -WorkingDirectory "${MO2}"\`. The game takes about 5 minutes and starts into a save. Poll /api/health until "frame" advances, then menu {"action":"list"} until "Loading Menu" is gone and inspect {"kind":"state"} says playerLoaded true. Accept (and describe) any messageBox.
 2. W2 shader compiles need a POSITIVE completion signal; silence or a stable frame rate is not one. Accept either:
    (a) devbench_tools.json lists communityshaders.inspect with a shadercache kind: poll it until compiling is false and completedTasks + failedTasks == totalTasks (record failedTasks);
    (b) the CS log (CommunityShaders.log under Documents\\My Games\\Skyrim Special Edition*\\SKSE; only if the owner log level is debug, which this run no longer forces, so normally use (a)): a line "Compilation completed in" written after this launch and after the last "Compiling " line.
@@ -223,7 +223,7 @@ and return its "dst" as cs_log ("" if not found). Finally list any other .rdc in
 } finally {
   // Runs after any outcome above (agent failure or throw included), except the dry run, and only for the run id
   // this run's preflight reported (also on {ok:false} after applying). No run id = this run owns nothing.
-  if (!DRY && pre && pre.run_id) { phase('Restore'); restore = await restoreSettings(pre.run_id, session && session.game_exited ? null : (launchTried ? pre.port : null)); warnRestore(restore) }
+  if (!DRY && pre && pre.run_id) { phase('Restore'); restore = await restoreSettings(pre.run_id, session && session.game_exited ? null : (launchTried ? pre.port : null), RUN_DIR && `${RUN_DIR}\\game_pid.txt`); warnRestore(restore) }
   else if (!DRY && !pre) log(`WARNING: preflight output was lost. If it applied settings, the journal ${JOURNAL} holds them pending: run golden-capture with {mo2, restore_only: true} after the game exits.`)
 }
 const settings_restored = restore ? !!restore.restored : null // null: this run never touched the settings
