@@ -2,6 +2,11 @@
 // bc7e_compress_block_params::m_exact_opaque_alpha (formerly m_unused0) makes mode-6 encodes of opaque
 // blocks use p-bits = 1, so alpha decodes to exactly 255. With the flag false the output is bit-identical
 // to bc7enc_rdo b943862.
+// MODIFIED by the sdc project (patch 0002-sdc-max-level, 2026-10-18), per Apache-2.0 section 4(b): adds the trailing
+// fields bc7e_compress_block_params::m_endpoint_search (a greedy +-1 search over the quantised endpoints after the
+// least-squares and uber stages) and m_refine_partitions (full refinement while ranking partitions), plus the level
+// bc7e_compress_block_params_init_sdc_max that turns them on. With both flags false every level is bit-identical to
+// the patch-0001 source.
 // bc7e.ispc - Fast high quality SIMD BC7 encoder
 // Copyright (C) 2018-2020 Binomial LLC, All rights reserved. Apache 2.0 license - see LICENSE.
 // Typically compiled as: ispc -g -O2 "%(Filename).ispc" -o "$(TargetDir)%(Filename).obj" -h "$(ProjectDir)%(Filename)_ispc.h" --target=sse2,sse4,avx,avx2 --opt=fast-math --opt=disable-assertions
@@ -86,6 +91,11 @@ struct bc7e_compress_block_params
 		bool m_unused3;
 	} m_alpha_settings;
 
+	// sdc patch 0002: both off in every upstream level.
+	bool m_endpoint_search;
+	bool m_refine_partitions;
+	bool m_unused4;
+	bool m_unused5;
 };
 
 static inline uniform int32_t clampi(uniform int32_t value, uniform int32_t low, uniform int32_t high) { return clamp(value, low, high); }
@@ -2395,6 +2405,46 @@ static uint64_t color_cell_compression(uniform uint32_t mode, const uniform colo
 		}
 	}
 
+	// sdc patch 0002: greedy +-1 search over the quantised endpoints (one channel of one endpoint at a time, selectors
+	// re-assigned by evaluate_solution), repeated while it still improves. The least-squares fit rounds each channel on
+	// its own; at 4 to 6 bits a neighbouring code is often better for the block as a whole.
+	if (pComp_params->m_endpoint_search)
+	{
+		const uniform int32_t maxv = (1 << pParams->m_comp_bits) - 1;
+		const uniform uint32_t nc = pParams->m_has_alpha ? 4 : 3;
+		for (uniform uint32_t pass = 0; pass < 4; pass++)
+		{
+			bool improved = false;
+			for (uniform uint32_t e = 0; e < 2; e++)
+			{
+				for (uniform uint32_t c = 0; c < nc; c++)
+				{
+					for (uniform int32_t d = -1; d <= 1; d += 2)
+					{
+						color_quad_i lo = pResults->m_low_endpoint;
+						color_quad_i hi = pResults->m_high_endpoint;
+						int32_t v = (e ? hi.m_c[c] : lo.m_c[c]) + d;
+						if ((v < 0) || (v > maxv))
+							continue;
+						if (e)
+							hi.m_c[c] = v;
+						else
+							lo.m_c[c] = v;
+						uint32_t pbits[2];
+						pbits[0] = pResults->m_pbits[0];
+						pbits[1] = pResults->m_pbits[1];
+						const uint64_t prev_err = pResults->m_best_overall_err;
+						evaluate_solution(&lo, &hi, pbits, pParams, pResults, num_pixels, pPixels);
+						if (pResults->m_best_overall_err < prev_err)
+							improved = true;
+					}
+				}
+			}
+			if (!any(improved))
+				break;
+		}
+	}
+
 	if ((mode <= 2) || (mode == 4) || (mode >= 6))
 	{
 		color_cell_compressor_results avg_results;
@@ -3763,7 +3813,7 @@ static void handle_alpha_block(void *varying pBlock, const varying color_quad_i 
 
 		int selectors_temp[16];
 
-		const uniform bool disable_faster_part_selection = false;
+		const uniform bool disable_faster_part_selection = pComp_params->m_refine_partitions;
 
 		for (uniform uint32_t solution_index = 0; solution_index < num_solutions; solution_index++)
 		{
@@ -3971,7 +4021,7 @@ static void handle_opaque_block(void *varying pBlock, const varying color_quad_i
 		}
 	}
 		
-	const uniform bool disable_faster_part_selection = false;
+	const uniform bool disable_faster_part_selection = pComp_params->m_refine_partitions;
 								
 	// Mode 1
 	if (pComp_params->m_opaque_settings.m_use_mode[1])
@@ -4814,6 +4864,29 @@ export void bc7e_compress_block_params_init(bc7e_compress_block_params * uniform
 	p->m_alpha_settings.m_mode67_error_weight_mul[2] = 1;
 	p->m_alpha_settings.m_mode67_error_weight_mul[3] = 1;
 	p->m_uber_level = 0;
+
+	p->m_endpoint_search = false;
+	p->m_refine_partitions = false;
+	p->m_unused4 = false;
+	p->m_unused5 = false;
+}
+
+// sdc patch 0002: the sdc_max level. veryslow's search, a wider partition ranking with full refinement, uber 4, two
+// least-squares passes and the quantised endpoint search. Off by default in sdc; see docs/research/bc7e-tuning.md.
+export void bc7e_compress_block_params_init_sdc_max(bc7e_compress_block_params * uniform p, uniform bool perceptual)
+{
+	bc7e_compress_block_params_init(p, perceptual);
+
+	p->m_opaque_settings.m_max_mode13_partitions_to_try = 4;
+	p->m_opaque_settings.m_max_mode0_partitions_to_try = 4;
+	p->m_opaque_settings.m_max_mode2_partitions_to_try = 4;
+	p->m_alpha_settings.m_max_mode7_partitions_to_try = 4;
+
+	p->m_pbit_search = true;
+	p->m_uber_level = 4;
+	p->m_refinement_passes = 2;
+	p->m_endpoint_search = true;
+	p->m_refine_partitions = true;
 }
 
 export void bc7e_compress_block_params_init_slowest(bc7e_compress_block_params * uniform p, uniform bool perceptual)

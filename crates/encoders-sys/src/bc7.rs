@@ -9,6 +9,9 @@ pub enum Bc7Level {
     Slow = 4,
     Veryslow = 5,
     Slowest = 6,
+    /// sdc patch 0002: veryslow's search plus a wider, fully refined partition ranking, uber 4, two least-squares
+    /// passes and a quantised endpoint search (docs/research/bc7e-tuning.md). Needs the patch-0002 objects.
+    Max = 7,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +24,8 @@ pub struct Bc7Params {
 
 /// True once the vendored bc7e objects carry patch 0001 (exact opaque alpha).
 pub const BC7E_EXACT_OPAQUE_NATIVE: bool = cfg!(sdc_bc7e_patched);
+/// True once the vendored bc7e objects carry patch 0002 (the `Max` level).
+pub const BC7E_MAX_NATIVE: bool = cfg!(sdc_bc7e_patch2);
 
 /// Compress `pixels.len() / 16` blocks. `pixels` holds 16 texels per block (see `gather_blocks`).
 pub fn bc7e_compress_blocks(pixels: &[[u8; 4]], out: &mut [u8], p: Bc7Params) {
@@ -30,6 +35,10 @@ pub fn bc7e_compress_blocks(pixels: &[[u8; 4]], out: &mut [u8], p: Bc7Params) {
     assert!(
         !p.exact_opaque || BC7E_EXACT_OPAQUE_NATIVE,
         "exact_opaque needs the patched bc7e objects; use bc7_fixup::force_opaque_mode6 instead"
+    );
+    assert!(
+        p.level != Bc7Level::Max || BC7E_MAX_NATIVE,
+        "Bc7Level::Max needs the patch-0002 bc7e objects"
     );
     if n == 0 {
         return;
@@ -73,6 +82,10 @@ pub struct Bc7Tune {
     pub max_partitions_2subset: Option<u32>,
     /// Partitions the cheap estimate ranks for mode 0 (max 16) and mode 2 (max 64).
     pub max_partitions_3subset: Option<(u32, u32)>,
+    /// Patch 0002: greedy ±1 search over the quantised endpoints after the least-squares and uber stages.
+    pub endpoint_search: Option<bool>,
+    /// Patch 0002: full refinement while ranking partitions (upstream refines only the winner past two).
+    pub refine_partitions: Option<bool>,
 }
 
 /// `bc7e_compress_blocks` with `tune` applied over the level's parameters.
@@ -84,6 +97,14 @@ pub fn bc7e_compress_blocks_tuned(pixels: &[[u8; 4]], out: &mut [u8], p: Bc7Para
         !p.exact_opaque || BC7E_EXACT_OPAQUE_NATIVE,
         "exact_opaque needs the patched bc7e objects"
     );
+    assert!(
+        p.level != Bc7Level::Max || BC7E_MAX_NATIVE,
+        "Bc7Level::Max needs the patch-0002 bc7e objects"
+    );
+    assert!(
+        (tune.endpoint_search.is_none() && tune.refine_partitions.is_none()) || BC7E_MAX_NATIVE,
+        "the patch-0002 overrides need the patch-0002 bc7e objects"
+    );
     if n == 0 {
         return;
     }
@@ -91,7 +112,7 @@ pub fn bc7e_compress_blocks_tuned(pixels: &[[u8; 4]], out: &mut [u8], p: Bc7Para
     let o = |v: Option<u32>| v.map_or(-1, |x| x as i32);
     let w = tune.weights;
     let m3 = tune.max_partitions_3subset;
-    let t: [i32; 12] = [
+    let t: [i32; 14] = [
         o(tune.partitions_to_try),
         o(tune.uber_level),
         o(tune.refinement_passes),
@@ -103,11 +124,13 @@ pub fn bc7e_compress_blocks_tuned(pixels: &[[u8; 4]], out: &mut [u8], p: Bc7Para
         o(tune.max_partitions_2subset),
         o(m3.map(|m| m.0)),
         o(m3.map(|m| m.1)),
+        tune.endpoint_search.map_or(-1, |b| b as i32),
+        tune.refine_partitions.map_or(-1, |b| b as i32),
         -1,
     ];
     let src: Vec<u32> = pixels.iter().map(|c| u32::from_le_bytes(*c)).collect();
     let mut dst = vec![0u64; n * 2];
-    // SAFETY: as in `bc7e_compress_blocks`; `t` is 12 ints, which is what the shim reads.
+    // SAFETY: as in `bc7e_compress_blocks`; `t` is 14 ints, which is what the shim reads.
     unsafe {
         ffi::sdc_bc7e_compress_tuned(
             n as u32,
