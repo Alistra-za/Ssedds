@@ -295,6 +295,14 @@ impl ExportModel {
                 b.converted, b.up_to_date, b.skipped, b.failed, b.validation_failed
             );
         }
+        // Audit 08c-4: what the export did besides converting (a JSON not written or kept, the copies).
+        if !self.notes.is_empty() {
+            s += "## Notes\n\n";
+            for n in &self.notes {
+                s += &format!("- {n}\n");
+            }
+            s += "\n";
+        }
         s += "## Warnings by code\n\n";
         for (code, keys) in self.by_code() {
             s += &format!(
@@ -332,11 +340,13 @@ pub fn export_folder_problem(root: &Path, export: &Path) -> Option<String> {
     })
 }
 
-/// The `sdc convert` command that reproduces the export from the saved `sdc.toml` (M3a spec §2.5).
+/// The `sdc convert` command that reproduces the export from the saved `sdc.toml` (M3a spec §2.5). The GUI plans
+/// with High suggestions accepted (Note U3), so the command does too (audit 08c-2). Set edits in
+/// `sdc-project.toml` and mesh evidence are not carried: the CLI reads neither.
 pub fn cli_command(root: &Path, export: &Path, bc1: Bc1Choice, jobs: usize) -> String {
     let q = |p: &Path| format!("\"{}\"", p.to_string_lossy().replace('\\', "/"));
     let mut c = format!(
-        "sdc convert {} --recursive -o {} --bc1-decoder {}",
+        "sdc convert {} --recursive -o {} --accept-suggestions high --bc1-decoder {}",
         q(root),
         q(export),
         bc1.cli()

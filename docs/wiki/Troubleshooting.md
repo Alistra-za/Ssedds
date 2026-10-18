@@ -123,7 +123,7 @@ Every warning has a code and a severity:
 
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
-| `IN-DUPLICATE` | blocking | Two inputs would write one output. | Exclude or rename one. |
+| `IN-DUPLICATE` | blocking | Two inputs would write one output, or two outputs land on one path (for example two packed outputs after a raw map moved to another set). The first keeps the path. | Exclude or rename one, or change an output path. |
 | `IN-DDS-SKIPPED` | info | A DDS input is not re-encoded by default. | Use the source, or set `reencode = true`. |
 | `IN-PACKING-INPUT` | warning | A raw map is not packed because its recipe is off (`packing.enabled = false`). | Enable packing, or give the file a sub-type. |
 | `IN-GREEN-UNSTATED` | info | A plain `_normal`/`_nrm`/`_norm` does not state its green convention; it was converted as DirectX. | Set `channels.green_convention = "opengl"` if it is an OpenGL map. |
@@ -235,7 +235,7 @@ Every warning has a code and a severity:
 | `ENC-NVTT-VERSION` | blocking | NVTT version other than 3.2.5. | Acknowledge. |
 | `ENC-NVTT-FAILED` | error | `nvcompress` failed; no fallback. | Check NVTT, or use the built-in encoder. |
 | `OUT-UNKNOWN-EXISTING` | warning | An existing output with no manifest record was kept. | `--on-existing overwrite`. |
-| `OUT-SIDECAR-KEPT` | warning | An old `.dds.json` sdc wrote for the previous output could not be removed (locked or protected); the new DDS was written. | Delete the old `.dds.json`, or run with `--sidecar` to rewrite it. |
+| `OUT-SIDECAR-KEPT` | warning | The `.dds.json` next to the output was not changed, and the new DDS was written. Either an old sidecar sdc wrote for the previous output could not be removed or replaced (locked or protected), or with `--sidecar` the file there is not one sdc wrote, so it was kept. | Unlock or delete the old `.dds.json` and run again (with `--sidecar` to write a new one). A file that is not sdc's is yours: move it away if you want the sidecar. |
 | `DDS-HEADER-PATCHED` | info | `patch-header` (or the GUI) rewrote a header; the payload is byte-identical. | |
 | `DDS-HEADER-UNPATCHABLE` | warning | The header cannot be fixed without re-encoding (unreadable, cubemap or array, a format Tessalith does not write, missing mips, BC1 with transparent texels, wrong block format). | Re-encode from the source. |
 

@@ -530,3 +530,31 @@ fn header_bytes_is_the_head_of_dds_bytes() {
         b[..148].to_vec()
     );
 }
+
+/// Note BV3: the one "may this file be replaced" rule every writer shares.
+#[test]
+fn may_replace_keeps_unreadable_and_foreign_files() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("x.json");
+    assert!(may_replace(&p, b"new", |_| false).is_ok(), "absent");
+    std::fs::write(&p, b"new").unwrap();
+    assert!(
+        may_replace(&p, b"new", |_| false).is_ok(),
+        "identical bytes"
+    );
+    std::fs::write(&p, b"old").unwrap();
+    assert!(matches!(
+        may_replace(&p, b"new", |_| false),
+        Err(Kept::Foreign)
+    ));
+    assert!(may_replace(&p, b"new", |b| b == b"old").is_ok(), "ours");
+    let dir = d.path().join("dir.json");
+    std::fs::create_dir(&dir).unwrap();
+    let k = may_replace(&dir, b"new", |_| true).unwrap_err();
+    assert!(matches!(k, Kept::Unreadable(_)));
+    assert!(
+        k.note(&dir).contains("could not be read"),
+        "{}",
+        k.note(&dir)
+    );
+}

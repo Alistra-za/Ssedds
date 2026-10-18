@@ -504,3 +504,23 @@ fn vanilla_packs_the_complex_m_only_for_a_complex_material_set() {
         [RecipeKind::Rmaos, RecipeKind::Parallax]
     );
 }
+
+/// Audit 08a-4: a packed output is `<base>_<suffix>` whether its first source is a vocabulary-named raw map or
+/// already carries a §6.1 suffix (a pre-packed `_rmaos` used as a channel source).
+#[test]
+fn virtual_stem_strips_a_vocabulary_term_or_a_suffix() {
+    use engine::pack::plan::virtual_stem;
+    use std::path::Path;
+    assert_eq!(
+        virtual_stem(Path::new("rock_roughness.png"), RecipeKind::Rmaos),
+        "rock_rmaos"
+    );
+    assert_eq!(
+        virtual_stem(Path::new("a/rock_rmaos.png"), RecipeKind::Rmaos),
+        "rock_rmaos"
+    );
+    assert_eq!(
+        virtual_stem(Path::new("rock.png"), RecipeKind::Rmaos),
+        "rock_rmaos"
+    );
+}

@@ -378,3 +378,34 @@ fn save_report_writes_on_a_worker_and_says_so() {
     );
     assert!(m.dialog.is_none());
 }
+
+/// Owner ruling (Note BV6): the export folder is per project. It is saved in that project's sdc-project.toml; another
+/// project keeps the app-wide default from gui.toml, which picking no longer changes.
+#[test]
+fn the_export_folder_is_per_project() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(&d.path().join("a"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let default = m.settings.export_folder.clone();
+    let root_a = m.root.clone().unwrap();
+    let out_a = d.path().join("out-a");
+    m.set_export_folder(out_a.clone());
+    assert_eq!(m.export_root(), out_a);
+    assert_eq!(m.settings.export_folder, default, "gui.toml is not changed");
+    let saved = std::fs::read_to_string(root_a.join("sdc-project.toml")).unwrap();
+    assert!(saved.contains("export_folder"), "{saved}");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+
+    let root_b = mod_folder(&d.path().join("b"));
+    m.open_folder(root_b);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(
+        Some(m.export_root()),
+        default,
+        "project b has none: the default"
+    );
+
+    m.open_folder(root_a);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.export_root(), out_a);
+}

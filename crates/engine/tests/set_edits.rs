@@ -541,3 +541,34 @@ fn a_recipe_that_writes_nothing_is_not_a_duplicate_of_an_explicit_path() {
         );
     }
 }
+
+/// Audits 08d-1 / 08e-3 (Note BV2): two recipes on one default packed path (a raw map moved to another set keeps
+/// its first source's name) never both write it: the second is IN-DUPLICATE.
+#[test]
+fn two_recipes_on_one_default_packed_path_are_duplicates() {
+    let d = fixture();
+    let mut r = req(&d);
+    r.set_edits = vec![SetEdit::Move {
+        file: "stone/stone_roughness.png".into(),
+        to: "landscape/rock02".into(),
+    }];
+    let (p, _) = plan_events(r);
+    let packed = packed_outputs_of(&p);
+    assert_eq!(
+        packed
+            .iter()
+            .filter(|o| o.ends_with("stone/stone_rmaos.dds"))
+            .count(),
+        1,
+        "{packed:?}"
+    );
+    assert_eq!(
+        p.skipped
+            .iter()
+            .filter(|s| s.code == Some(Code::InDuplicate))
+            .count(),
+        1,
+        "{:?}",
+        p.skipped
+    );
+}

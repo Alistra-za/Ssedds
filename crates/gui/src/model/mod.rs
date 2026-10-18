@@ -309,6 +309,9 @@ pub struct AppModel {
     pub target: Target,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
+    /// The export folder `sets` were planned with (audit 08c-3): set ids strip it, also while a re-plan for a new
+    /// export folder runs. `None` before the first plan.
+    sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
     /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
@@ -505,6 +508,7 @@ impl AppModel {
             item_index: Default::default(),
             views: Default::default(),
             sets: vec![],
+            sets_root: None,
             unmatched_keys: vec![],
             rnm_notes: Default::default(),
             rnm_keys: Default::default(),
@@ -673,6 +677,7 @@ impl AppModel {
         self.items.clear();
         self.invalidate_views();
         self.sets.clear();
+        self.sets_root = None;
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -714,11 +719,18 @@ impl AppModel {
         }
     }
 
-    /// `<export folder>` from the settings, else `<root>/sdc-out`.
+    /// The export folder the current sets were planned with (their keys are under it), else `export_root`.
+    pub fn sets_root(&self) -> PathBuf {
+        self.sets_root.clone().unwrap_or_else(|| self.export_root())
+    }
+
+    /// The project's export folder (`sdc-project.toml`, Note BV6), else the app-wide one from `gui.toml` (the
+    /// value from before per-project folders, now only a default), else `<root>/sdc-out`.
     pub fn export_root(&self) -> PathBuf {
-        self.settings
-            .export_folder
-            .clone()
+        self.sets_doc
+            .as_ref()
+            .and_then(|d| d.export_folder())
+            .or_else(|| self.settings.export_folder.clone())
             .unwrap_or_else(|| self.root.clone().unwrap_or_default().join("sdc-out"))
     }
 
@@ -846,7 +858,11 @@ impl AppModel {
             self.replan();
         } else if std::mem::take(&mut self.export_after_plan) {
             // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
-            self.export_clicked();
+            if self.dialog.is_some() {
+                self.queued_export_dropped();
+            } else {
+                self.export_clicked();
+            }
         }
     }
 
@@ -1006,7 +1022,14 @@ impl AppModel {
             WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    "export" => self.export_ended(Err(format!("internal error: {message}"))),
+                    // Audit 08f-9: one error dialog. `export_ended` shows it unless the user was leaving (then the
+                    // panic arm shows its own, Note BI6) or a dialog is open, which stays (review m1, 08f-6).
+                    "export" => {
+                        self.export_ended(Err(format!("internal error: {message}")));
+                        if self.dialog.is_some() {
+                            return;
+                        }
+                    }
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
@@ -1112,7 +1135,8 @@ impl AppModel {
         self.finish_cm_json(cm);
         // A user who cancelled the export to leave does not need its error as a dialog.
         if !self.run_after_export() {
-            if let Some(e) = failure {
+            // Audit 08f-6: an open dialog stays; the error is in the drawer and the Messages log.
+            if let Some(e) = failure.filter(|_| self.dialog.is_none()) {
                 self.dialog = Some(Dialog::Error(e));
             }
         }
@@ -1379,10 +1403,11 @@ impl AppModel {
         }
     }
 
-    /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export.
+    /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export. Like
+    /// the other answers it waits for a plan in flight and runs the guards again (audit 08f-2).
     pub fn proceed_with_warnings(&mut self) {
         self.dialog = None;
-        self.undecided_check();
+        self.continue_export(Continue::Recheck);
     }
 
     /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
@@ -1505,30 +1530,32 @@ impl AppModel {
             }
             return;
         }
-        let rel = self.json_rel(&p.path);
+        self.copy_files(&p);
+        let root = self.export_root();
+        let key = history::record_key(&p.path);
         let shas = self
             .sets_doc
             .as_ref()
-            .map(|d| d.pgp_json_shas())
+            .map(|d| history::records_at(&d.pgp_json_shas(), &root))
             .unwrap_or_default();
         // #43: the record of this name; a project from before per-name records has only the legacy one.
         let last = if shas.is_empty() {
             self.sets_doc.as_ref().and_then(|d| d.last_json_sha256())
         } else {
-            shas.iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(&rel))
-                .map(|(_, s)| s.clone())
+            shas.get(&key).cloned()
         };
-        let root = self.export_root();
-        for k in shas.keys().filter(|k| !k.eq_ignore_ascii_case(&rel)) {
-            let old = root.join(k);
-            if old.is_file() {
-                self.export.notes.push(format!(
-                    "{}: the PGPatcher JSON is now {}; the old file was left in place and PGPatcher still reads it",
-                    old.display(),
-                    p.path.display()
-                ));
-            }
+        let named: Vec<String> = vec![p
+            .path
+            .strip_prefix(&root)
+            .unwrap_or(&p.path)
+            .to_string_lossy()
+            .into_owned()];
+        for old in history::orphans(&shas, &root, named.iter()) {
+            self.export.notes.push(format!(
+                "{}: the PGPatcher JSON is now {}; the old file was left in place and PGPatcher still reads it",
+                old.display(),
+                p.path.display()
+            ));
         }
         match pbr_export::finish(
             &p,
@@ -1536,7 +1563,20 @@ impl AppModel {
             last.as_deref(),
             &mut self.export.notes,
         ) {
-            pbr_export::Finish::Written(sha) => self.record_json_sha(&rel, &sha),
+            pbr_export::Finish::Written(sha) => self.record_json_sha(&key, &sha),
+            // Audit 08f-6: an end-of-export question never replaces an open dialog; the file is kept, with a note.
+            // `ExportRunning` is not in the way: the export it asks about has ended (`run_after_export`).
+            pbr_export::Finish::Overwrite(_)
+                if self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|d| !matches!(d, Dialog::ExportRunning(_))) =>
+            {
+                self.export.notes.push(format!(
+                    "PGPatcher JSON not written: {} was edited outside Tessalith and is kept (another question was open); export again to choose",
+                    p.path.display()
+                ));
+            }
             pbr_export::Finish::Overwrite(text) => {
                 self.pending_text = Some(text);
                 self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
@@ -1546,16 +1586,41 @@ impl AppModel {
         }
     }
 
-    /// The PGPatcher JSON's path under the export root, `/`-separated (the key of its hash record).
-    fn json_rel(&self, path: &std::path::Path) -> String {
-        let rel = path.strip_prefix(self.export_root()).unwrap_or(path);
-        rel.to_string_lossy().replace('\\', "/")
+    /// The vanilla borrowed-slot copies, and their hash records (Note BV3).
+    fn copy_files(&mut self, p: &pbr_export::PendingJson) {
+        let Some(d) = self.sets_doc.as_ref() else {
+            pbr_export::copy_files(
+                p,
+                &self.export.rows,
+                &mut Default::default(),
+                &mut self.export.notes,
+            );
+            return;
+        };
+        let old = d.copy_shas();
+        let mut shas = old.clone();
+        pbr_export::copy_files(p, &self.export.rows, &mut shas, &mut self.export.notes);
+        if shas == old {
+            return;
+        }
+        let Some(d) = self.sets_doc.as_mut() else {
+            return;
+        };
+        if d.read_only() {
+            self.export
+                .notes
+                .push("the copies' hashes were not recorded: sdc-project.toml is read-only".into());
+            return;
+        }
+        let was_dirty = d.is_dirty();
+        d.set_copy_shas(&shas);
+        self.save_hash_record(was_dirty);
     }
 
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
     /// the project file is read-only (a bad `sdc-project.toml`, ruling P8) the JSON is still written but no hash is
     /// recorded: the next export then asks before overwriting it.
-    fn record_json_sha(&mut self, rel: &str, sha: &str) {
+    fn record_json_sha(&mut self, key: &str, sha: &str) {
         let root = self.export_root();
         let Some(d) = self.sets_doc.as_mut() else {
             return;
@@ -1567,10 +1632,9 @@ impl AppModel {
             return;
         }
         let was_dirty = d.is_dirty();
-        // #43: one record per name; a name whose file is gone is dropped.
-        let mut shas = d.pgp_json_shas();
-        shas.retain(|k, _| !k.eq_ignore_ascii_case(rel) && root.join(k).is_file());
-        shas.insert(rel.to_string(), sha.to_string());
+        // #43: one record per name; audit 08c-1: keyed by `record_key`, and kept when its file is gone.
+        let mut shas = history::records_at(&d.pgp_json_shas(), &root);
+        shas.insert(key.to_string(), sha.to_string());
         d.set_last_json_sha256(sha);
         d.set_pgp_json_shas(&shas);
         self.save_hash_record(was_dirty);
@@ -1616,8 +1680,7 @@ impl AppModel {
         };
         if overwrite {
             if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
-                let rel = self.json_rel(&p.path);
-                self.record_json_sha(&rel, &sha);
+                self.record_json_sha(&history::record_key(&p.path), &sha);
             }
         } else {
             self.export.notes.push(format!(
@@ -1722,6 +1785,7 @@ impl AppModel {
         self.items = view.items;
         self.invalidate_views();
         self.sets = view.sets;
+        self.sets_root = Some(view.output_root);
         self.unmatched_keys = view.unmatched;
         self.rnm_notes = view.rnm_notes;
         self.rnm_keys = view.rnm_keys;
@@ -1789,13 +1853,23 @@ impl AppModel {
             std::mem::take(&mut self.export_after_plan),
             self.continue_after_plan.take(),
         );
-        if clicked {
+        if clicked && self.dialog.is_some() {
+            self.queued_export_dropped();
+        } else if clicked {
             self.export_checks();
         } else if let Some(how) = continued {
             self.run_continue(how);
         } else {
             self.refresh_undecided_dialog();
         }
+    }
+
+    /// Audit 08f-1: an export queued behind a plan never starts over an open question (its answer could open
+    /// another folder mid-export); the user clicks Export again after answering.
+    fn queued_export_dropped(&mut self) {
+        let note = "Export not started: answer the open dialog, then click Export again";
+        self.status_line = note.into();
+        self.messages.notify(messages::Severity::Warning, note);
     }
 
     pub fn wait_idle(&mut self, timeout: Duration) -> bool {
@@ -2632,6 +2706,12 @@ impl AppModel {
     /// The answer to `Dialog::OpenUnsaved`: save (opening only if that succeeded) or drop the edits, then open.
     pub fn resolve_open_unsaved(&mut self, root: PathBuf, save: bool) {
         self.dialog = None;
+        // Audit 08f-1: an export started while the question was up; opening now would drop its JSON. Ask to stop
+        // it first, as Open does; the question comes back once it has ended.
+        if self.export.running.is_some() {
+            self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
+            return;
+        }
         if save {
             if self.save().is_err() {
                 return;
@@ -2908,5 +2988,32 @@ mod tests {
                 m.export.notes
             );
         }
+    }
+
+    /// Audit 08f-9: an export-thread panic sets the error dialog once (`export_ended`'s), not twice.
+    #[test]
+    fn an_export_panic_is_handled_once() {
+        let mut m = bare_model();
+        m.export.running = Some(CancelToken::default());
+        m.handle(WorkerMsg::Panicked {
+            what: "export",
+            message: "boom".into(),
+        });
+        assert_eq!(m.dialog, Some(Dialog::Error("internal error: boom".into())));
+        assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
+    }
+
+    /// Review m1: an export-thread panic never replaces a dialog that is open (here the banner's Reload question).
+    #[test]
+    fn an_export_panic_keeps_an_open_dialog() {
+        let mut m = bare_model();
+        m.export.running = Some(CancelToken::default());
+        m.dialog = Some(Dialog::ReloadUnsaved);
+        m.handle(WorkerMsg::Panicked {
+            what: "export",
+            message: "boom".into(),
+        });
+        assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
+        assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
     }
 }

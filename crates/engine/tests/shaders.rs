@@ -677,3 +677,57 @@ fn pbr_landscape_is_auto_picked_and_resolves_exactly_like_pbr() {
     let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
     assert_eq!(p.shaders.values().next().unwrap().wanted, Some(Shader::Pbr));
 }
+
+fn put_dds(dir: &Path, rel: &str) {
+    use engine::config::Format;
+    use engine::dds::{dds_bytes, level_size, DdsDesc, ResolvedHeader};
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let desc = DdsDesc {
+        width: 16,
+        height: 16,
+        format: Format::Bc7,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    let levels = vec![vec![0x11; level_size(Format::Bc7, 16, 16)]];
+    std::fs::write(p, dds_bytes(&desc, &levels).unwrap()).unwrap();
+}
+
+fn map_codes(ev: &[EngineEvent]) -> Vec<Code> {
+    ev.iter()
+        .flat_map(|e| match &e.kind {
+            EventKind::SetResolved { warnings, .. } => warnings.iter().map(|w| w.code).collect(),
+            _ => vec![],
+        })
+        .filter(|c| matches!(c, Code::ShaderMissingMap | Code::ShaderExtraMap))
+        .collect()
+}
+
+/// Audit 08b-2: a kept (skipped) DDS `_n` fills the `_n` slot, and an in-place run's own earlier outputs raise no
+/// map warnings.
+#[test]
+fn a_kept_dds_normal_fills_n_and_earlier_outputs_raise_no_map_warnings() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "textures/a/wall.png", [120, 90, 60]);
+    put_dds(&d.path().join("in"), "textures/a/wall_n.dds");
+    let (_, ev) = plan(d.path(), Target::Cs, &[], &[]);
+    assert!(map_codes(&ev).is_empty(), "{:?}", map_codes(&ev));
+
+    // In place (Note BC2): the output root is the input folder, which holds the earlier outputs.
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    put_dds(&d.path().join("in"), "textures/a/wall.dds");
+    put_dds(&d.path().join("in"), "textures/a/wall_n.dds");
+    let mut req = BatchRequest::new(vec![d.path().join("in")], d.path().join("in"), Target::Cs);
+    req.recursive = true;
+    req.accept = AcceptSuggestions::High;
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "shaders");
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    let ev = sink.take();
+    assert!(map_codes(&ev).is_empty(), "{:?}", map_codes(&ev));
+}

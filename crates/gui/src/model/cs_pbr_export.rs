@@ -50,8 +50,8 @@ pub fn to_text(kind: Kind, values: &Map<String, Json>) -> String {
 }
 
 use super::cs_pbr::{valid_value, CsBlock, StaticsStatus};
-use super::history::sha256_of;
-use super::pbr_export::{file_name_problem, hand_edited, json_entries};
+use super::history::{case_twin, orphans, record_key, recorded, records_at, sha256_of};
+use super::pbr_export::{file_name_problem, json_entries};
 use super::AppModel;
 use crate::sets_doc::SetEntry;
 use engine::config::Target;
@@ -201,43 +201,32 @@ pub fn finish(
     notes: &mut Vec<String>,
 ) -> BTreeMap<String, String> {
     notes.extend(p.notes.iter().cloned());
-    let mut out = BTreeMap::new();
+    // Audit 08c-1: every record is kept, whatever folder it names and whether its file is there.
+    let mut out = records_at(shas, &p.root);
     let mut written = 0;
     for (rel, text) in &p.files {
         let path = p.root.join(rel);
+        let key = record_key(&path);
+        let last = out.get(&key).cloned();
+        let last = last.as_deref();
         // O6: an EDID whose case changed renames sdc's own (unchanged) file; a replace may keep the old name's case.
-        if let Some((old, old_sha)) = shas
-            .iter()
-            .find(|(r, _)| r.as_str() != rel.as_str() && r.eq_ignore_ascii_case(rel))
-        {
-            if sha256_of(&p.root.join(old)).as_deref() == Some(old_sha.as_str()) {
-                let _ = std::fs::remove_file(p.root.join(old));
+        if let Some(old) = case_twin(&path) {
+            if sha256_of(&old).as_deref() == last {
+                let _ = std::fs::remove_file(old);
             }
         }
-        let last = shas.get(rel).map(String::as_str);
-        if hand_edited(&path, text, last) {
-            notes.push(format!(
-                "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
-                path.display()
-            ));
-            if let Some(s) = last {
-                out.insert(rel.clone(), s.to_string());
-            }
+        if let Err(k) = engine::dds::may_replace(&path, text.as_bytes(), recorded(last)) {
+            notes.push(k.note(&path));
             continue;
         }
         match engine::dds::write_atomic(&path, text.as_bytes()) {
             Ok(()) => {
                 written += 1;
                 if let Some(s) = sha256_of(&path) {
-                    out.insert(rel.clone(), s);
+                    out.insert(key, s);
                 }
             }
-            Err(e) => {
-                notes.push(format!("{} not written: {e}", path.display()));
-                if let Some(s) = last {
-                    out.insert(rel.clone(), s.to_string());
-                }
-            }
+            Err(e) => notes.push(format!("{} not written: {e}", path.display())),
         }
     }
     if written > 0 {
@@ -246,22 +235,12 @@ pub fn finish(
             p.root.display()
         ));
     }
-    for (rel, sha) in shas {
-        if p.files.iter().any(|(r, _)| r.eq_ignore_ascii_case(rel)) {
-            continue;
-        }
-        if p.refused.iter().any(|r| r.eq_ignore_ascii_case(rel)) {
-            out.insert(rel.clone(), sha.clone());
-            continue;
-        }
-        let path = p.root.join(rel);
-        if path.is_file() {
-            notes.push(format!(
-                "{}: no set binds this EDID any more; the file was left in place",
-                path.display()
-            ));
-            out.insert(rel.clone(), sha.clone());
-        }
+    let this_run = p.files.iter().map(|(r, _)| r).chain(&p.refused);
+    for path in orphans(&out, &p.root, this_run) {
+        notes.push(format!(
+            "{}: no set binds this EDID any more; the file was left in place",
+            path.display()
+        ));
     }
     out
 }

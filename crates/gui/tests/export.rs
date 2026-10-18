@@ -137,7 +137,7 @@ fn the_cli_command_reproduces_the_export() {
     );
     assert_eq!(
         c,
-        r#"sdc convert "C:/mods/x/textures" --recursive -o "D:/out dir" --bc1-decoder nvidia"#
+        r#"sdc convert "C:/mods/x/textures" --recursive -o "D:/out dir" --accept-suggestions high --bc1-decoder nvidia"#
     );
     let c = cli_command(Path::new("C:/a"), Path::new("C:/b"), Bc1Choice::Ideal, 6);
     assert!(c.ends_with("--bc1-decoder ideal --jobs 6"));
@@ -313,4 +313,72 @@ fn rows_stay_keyed_after_a_packed_source_drop() {
     assert_eq!(state("a/c.dds"), RowState::Running);
     assert_eq!(state("a/b.dds"), RowState::Queued);
     assert_eq!(x.rows.len(), 2, "no duplicate row from a stale index");
+}
+
+/// Audit 08c-4: the export notes (JSON not written, kept files, copies) are in the Markdown report.
+#[test]
+fn the_markdown_report_lists_the_export_notes() {
+    let mut x = ExportModel::default();
+    x.notes = vec!["PGPatcher JSON not written: the export failed".into()];
+    let md = x.to_markdown();
+    assert!(
+        md.contains("## Notes\n\n- PGPatcher JSON not written: the export failed\n"),
+        "{md}"
+    );
+}
+
+/// Audit 08f-1: an export queued behind a plan does not start while the Open-unsaved question is up; the user's
+/// answer would otherwise open the other folder in the middle of the export and drop its JSON.
+#[test]
+fn a_queued_export_waits_out_an_open_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_json_value(
+        "landscape/rock01",
+        "specular_level",
+        Some(serde_json::json!(0.05)),
+    );
+    m.replan();
+    m.export_clicked();
+    assert!(m.export_queued());
+    let other = d.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    assert!(!m.request_open(other.clone()));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(
+        m.export.running.is_none() && m.export.rows.is_empty(),
+        "the export started"
+    );
+    assert_eq!(m.dialog, Some(Dialog::OpenUnsaved(other)));
+    assert!(m.status_line.contains("Export"), "{}", m.status_line);
+}
+
+/// Audit 08f-1: answering Open-unsaved while an export runs asks to stop the export first, as Open does.
+#[test]
+fn answering_open_unsaved_during_an_export_waits_for_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_json_value(
+        "landscape/rock01",
+        "specular_level",
+        Some(serde_json::json!(0.05)),
+    );
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(m.export.running.is_some(), "{:?}", m.dialog);
+    let root = m.root.clone();
+    let other = d.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    m.resolve_open_unsaved(other.clone(), false);
+    assert_eq!(m.root, root, "not opened during the export");
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::ExportRunning(AfterExport::Open(other)))
+    );
+    m.cancel_export();
+    assert!(m.wait_idle(Duration::from_secs(120)));
 }

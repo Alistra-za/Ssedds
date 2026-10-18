@@ -209,7 +209,7 @@ fn tile(
         picked = bulk_menu(ui, &model.menu_title(false), &model.item_menu());
     });
     if let Some(a) = picked {
-        model.run_menu(a);
+        model.menu_picked(a);
     } else if resp.double_clicked() {
         model.expand(&key);
     } else if resp.clicked() {
@@ -580,7 +580,7 @@ pub fn export_prefix(model: &AppModel) -> String {
     format!(
         "{}/",
         model
-            .export_root()
+            .sets_root()
             .to_string_lossy()
             .replace('\\', "/")
             .trim_end_matches('/')

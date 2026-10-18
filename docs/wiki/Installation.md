@@ -132,7 +132,7 @@ Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-
 |---|---|---|
 | `%APPDATA%\sdc\config.toml` | User config: default target, preset and overrides for every project. | You |
 | `%APPDATA%\sdc\presets\*.toml` | Your own presets. Loaded by the CLI and the GUI on every run. | You |
-| `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, export folder, preview limits, threads, NVTT path, window layout. | `tessalith.exe` |
+| `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, the default export folder, preview limits, threads, NVTT path, window layout. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. | `tessalith.exe` |
 | `<project>\sdc.toml` | Project config. | You or `tessalith.exe` |
 | `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `tessalith.exe` |

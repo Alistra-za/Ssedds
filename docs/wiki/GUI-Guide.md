@@ -20,7 +20,7 @@ The window has two views, picked in the header: the Textures view (converter and
 | **Messages** (Ctrl+M) | The last 500 notices, newest first; the button counts the ones you have not seen. |
 | **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
 | **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Under **Messages**, left of Export. |
-| **Export folder: …** | Where converted textures go. By default `sdc-out` inside the opened folder. At the right end of the top row. |
+| **Export folder: …** | Where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. By default `sdc-out` inside the opened folder (or the export folder older versions saved for every project). At the right end of the top row. |
 | **PG JSON Editor** | Open the TruePBR JSON editor window (cs mode, with a folder open). The JSON's file name is its top field. At the right end of the bottom row. |
 
 The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). The **MO2…** header button opens the scan source popup: the MO2 instance with **Choose…**, its profiles, **Scan a folder…** and **Scan** / **Cancel**; the button's hover text names the instance and profile. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
@@ -190,9 +190,8 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 4. The bottom drawer opens with a *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled) and a *Warnings* tab grouped by code. Click a row to select that texture.
 5. After a complete export, the TruePBR JSON is written (see below).
 
-While it runs the drawer shows done/total, elapsed time, files per second and an ETA. The *Files* tab handles thousands of rows, with **Failed only** and **Has warnings** filters; the *Warnings* tab can group **By code**; **Show in Explorer** on a row selects the output. Drawer buttons: **Cancel** stops the batch. **Open export folder** opens it in Explorer. **Save report…** writes the report as JSON Lines or Markdown. **Close** hides the drawer. **Copy CLI command** copies an `sdc convert` command for this export: the same folder (with `--recursive`), output, BC1 decoder and thread count. Before you run it, check three things it does not carry over:
+While it runs the drawer shows done/total, elapsed time, files per second and an ETA. The *Files* tab handles thousands of rows, with **Failed only** and **Has warnings** filters; the *Warnings* tab can group **By code**; **Show in Explorer** on a row selects the output. Drawer buttons: **Cancel** stops the batch. **Open export folder** opens it in Explorer. **Save report…** writes the report as JSON Lines or Markdown. **Close** hides the drawer. **Copy CLI command** copies an `sdc convert` command for this export: the same folder (with `--recursive`), output, BC1 decoder and thread count, plus `--accept-suggestions high`, because the GUI accepts High-confidence suggestions. Before you run it, check two things it does not carry over:
 
-- It has no `--accept-suggestions high`, while the GUI accepts High-confidence suggestions. Add the flag, or files decided only by a suggestion are reported as unresolved.
 - It has no `--nvtt`. If you chose an NVTT path in Advanced, add `--nvtt <path>`.
 - The CLI does not read `sdc-project.toml` or the scan. Set edits from the Sets column (moves, borrows, created sets, shader choices, output names), alpha taken from scanned meshes and the complex-grass auto-tag do not apply to `sdc convert`. Decisions written to `sdc.toml` do.
 
@@ -354,8 +353,8 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | File | Contents |
 |---|---|
 | `<folder>\sdc.toml` | Target and per-file decisions. Shared with the CLI. |
-| `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections. GUI only. |
-| `%APPDATA%\sdc\gui.toml` | Window and app settings: export folder, recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
+| `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections, the export folder, and the hashes of the JSON files and borrowed-slot copies Tessalith wrote. GUI only. |
+| `%APPDATA%\sdc\gui.toml` | Window and app settings: the default export folder (a project's own is in its `sdc-project.toml`), recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
 | `%APPDATA%\sdc\config.toml` | The user config, also read by the CLI. |
 | `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |
 | `%LOCALAPPDATA%\sdc\scan.db` | The mod scan database. |

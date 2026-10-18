@@ -169,7 +169,7 @@ pub fn run(model: &mut AppModel, st: &mut SlotCmdState, a: MenuAction) {
         | MenuAction::SlotLink { set, n, .. }
         | MenuAction::SlotLock { set, n, .. } => (set.clone(), *n),
         _ => {
-            model.run_menu(a);
+            model.menu_picked(a);
             return;
         }
     };

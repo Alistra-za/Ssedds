@@ -1,6 +1,6 @@
 //! Export of PBR sets (M3b spec §6): the checks that block or ask, and the JSON entries. No egui types.
 use super::export::{Row, RowState};
-use super::history::sha256_of;
+use super::history::{recorded, sha256_of};
 use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
@@ -599,22 +599,15 @@ fn exported(rows: &[Row], key: &str) -> Result<(), String> {
     }
 }
 
-/// The file was edited outside sdc since sdc last wrote it (DECISIONS Note P21): it exists, its hash is not the
-/// recorded one, and its bytes are not `text` (identical bytes need no question, even with no record).
-pub(crate) fn hand_edited(path: &std::path::Path, text: &str, last_sha: Option<&str>) -> bool {
-    let on_disk = sha256_of(path);
-    on_disk.is_some()
-        && on_disk.as_deref() != last_sha
-        && !std::fs::read_to_string(path).is_ok_and(|t| t == text)
-}
-
-/// After a successful export: the copies, then the JSON of the sets that fully exported (spec §6.1, §6.4).
-pub fn finish(
+/// After a successful export, the vanilla borrowed-slot copies (P4, P22). A copy replaces only a file it wrote
+/// before (its hash is in `shas`, keyed by `history::record_key`) or one with the same bytes; any other file is
+/// kept with a note (Note BV3). `shas` gets the hash of each copy written.
+pub fn copy_files(
     p: &PendingJson,
     rows: &[Row],
-    last_sha: Option<&str>,
+    shas: &mut std::collections::BTreeMap<String, String>,
     notes: &mut Vec<String>,
-) -> Finish {
+) {
     for (src, dst, owner_key) in &p.copies {
         if !owner_key.is_empty() {
             if let Err(why) = exported(rows, owner_key) {
@@ -622,14 +615,41 @@ pub fn finish(
                 continue;
             }
         }
-        match std::fs::copy(src, dst) {
-            Ok(_) => notes.push(format!("copied {} → {}", src.display(), dst.display())),
-            Err(e) => notes.push(format!(
-                "could not copy {} ({e}; not exported?)",
-                src.display()
-            )),
+        let bytes = match std::fs::read(src) {
+            Ok(b) => b,
+            Err(e) => {
+                notes.push(format!(
+                    "could not copy {} ({e}; not exported?)",
+                    src.display()
+                ));
+                continue;
+            }
+        };
+        let key = super::history::record_key(dst);
+        if let Err(k) =
+            engine::dds::may_replace(dst, &bytes, recorded(shas.get(&key).map(String::as_str)))
+        {
+            notes.push(k.note(dst));
+            continue;
+        }
+        match engine::dds::write_atomic(dst, &bytes) {
+            Ok(()) => {
+                use sha2::{Digest, Sha256};
+                shas.insert(key, hex::encode(Sha256::digest(&bytes)));
+                notes.push(format!("copied {} → {}", src.display(), dst.display()));
+            }
+            Err(e) => notes.push(format!("could not copy {} ({e})", src.display())),
         }
     }
+}
+
+/// After a successful export: the JSON of the sets that fully exported (spec §6.1, §6.4).
+pub fn finish(
+    p: &PendingJson,
+    rows: &[Row],
+    last_sha: Option<&str>,
+    notes: &mut Vec<String>,
+) -> Finish {
     if p.entries.is_empty() {
         return Finish::Nothing;
     }
@@ -663,8 +683,14 @@ pub fn finish(
         return Finish::Nothing;
     }
     let text = to_text(&doc);
-    if hand_edited(&p.path, &text, last_sha) {
-        return Finish::Overwrite(text);
+    // Note BV3: a file edited outside Tessalith asks (P21); one that cannot be read is kept.
+    match engine::dds::may_replace(&p.path, text.as_bytes(), recorded(last_sha)) {
+        Ok(()) => {}
+        Err(engine::dds::Kept::Foreign) => return Finish::Overwrite(text),
+        Err(k) => {
+            notes.push(format!("PGPatcher JSON not written: {}", k.note(&p.path)));
+            return Finish::Nothing;
+        }
     }
     match engine::dds::write_atomic(&p.path, text.as_bytes()) {
         Ok(()) => {
@@ -696,14 +722,18 @@ pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) ->
     }
 }
 
-/// The note for an export that did not end cleanly: nothing is written then. A vanilla export has no JSON, so
-/// it gets no note.
+/// The note for an export that did not end cleanly: nothing is written then, neither the JSON nor the vanilla
+/// copies (audit 08f-3).
 pub fn unfinished_note(p: &PendingJson, failed: bool) -> Option<String> {
-    if p.entries.is_empty() {
+    let what = if !p.entries.is_empty() {
+        "PGPatcher JSON not written"
+    } else if !p.copies.is_empty() {
+        "borrowed-slot copies not made"
+    } else {
         return None;
-    }
+    };
     let why = if failed { "failed" } else { "was cancelled" };
-    Some(format!("PGPatcher JSON not written: the export {why}"))
+    Some(format!("{what}: the export {why}"))
 }
 
 /// What the PGPatcher JSON editor shows (DECISIONS AG106): the export blocks (errors) and the pitfalls the export

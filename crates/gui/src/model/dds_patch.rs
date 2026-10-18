@@ -107,6 +107,17 @@ pub(crate) fn write_patch(src: &Path, dest: &Path, tag: Option<bool>) -> Result<
         },
     ) {
         Ok(Some(p)) => {
+            // Audit 08a-1 (Note BV3): an earlier patched copy of this DDS has its payload after any header; any
+            // other file at `dest` is kept.
+            let payload = &bytes[p.old_header_len..];
+            match engine::dds::may_replace(dest, &p.bytes, |b| b.ends_with(payload)) {
+                Ok(()) => {}
+                Err(engine::dds::Kept::Foreign) => {
+                    let d = dest.display();
+                    return Err(format!("{d} exists and is not a patched copy of this DDS; delete or rename it first"));
+                }
+                Err(k) => return Err(k.note(dest)),
+            }
             engine::dds::write_atomic(dest, &p.bytes).map_err(|e| e.to_string())?;
             let w = p.warning();
             Ok(format!("{}: {}", w.code.as_str(), w.message))
@@ -139,5 +150,37 @@ mod tests {
             assert!(!e.starts_with("DDS-HEADER-UNPATCHABLE"), "{e}");
         }
         assert_eq!(std::fs::read(&src).unwrap(), b"not read");
+    }
+
+    /// Audit 08a-1 (Note BV3): a file at the export path that is not a patched copy of this DDS is kept; an earlier
+    /// patched copy (same payload, any header) is replaced.
+    #[test]
+    fn write_patch_keeps_a_foreign_file_and_replaces_its_own_copy() {
+        use engine::config::Format;
+        use engine::dds::{dds_bytes, level_size, DdsDesc, ResolvedHeader};
+        let d = tempfile::tempdir().unwrap();
+        let levels = vec![vec![0x11; level_size(Format::Bc7, 4, 4)]];
+        let desc = DdsDesc {
+            width: 4,
+            height: 4,
+            format: Format::Bc7,
+            srgb: false,
+            header: ResolvedHeader::Dx10,
+        };
+        let src = d.path().join("in/a.dds");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, dds_bytes(&desc, &levels).unwrap()).unwrap();
+        let dest = d.path().join("out/a.dds");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"hand made").unwrap();
+        let e = write_patch(&src, &dest, Some(true)).unwrap_err();
+        assert!(e.contains("not a patched copy"), "{e}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hand made");
+        // An earlier copy of this DDS (its payload after another header) is this DDS's own.
+        let mut earlier = std::fs::read(&src).unwrap();
+        earlier[20] ^= 0xff;
+        std::fs::write(&dest, &earlier).unwrap();
+        write_patch(&src, &dest, Some(true)).unwrap();
+        assert_ne!(std::fs::read(&dest).unwrap(), earlier);
     }
 }

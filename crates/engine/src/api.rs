@@ -583,12 +583,26 @@ fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
 }
 
 /// `--sidecar` on an up-to-date output (audit 15, DECISIONS Note Y2): write the stored record when the sidecar is
-/// missing. `false` when it cannot be written, so the file re-encodes and the encode reports the error.
+/// missing, or when it is sdc's record of an earlier output (a failed write left it, review m10 / Note BV4). A file
+/// sdc did not write is left alone (BV3). `false` when the record cannot be written, so the file re-encodes and the
+/// encode reports the error.
 fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
     let side = output.with_extension("dds.json");
-    side.exists()
-        || serde_json::to_string_pretty(&e.raw)
-            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
+    match std::fs::read(&side) {
+        Ok(b) => {
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) else {
+                return true;
+            };
+            let stale_ours =
+                v != e.raw && v["output"] == e.raw["output"] && v.get("profile_sha256").is_some();
+            !stale_ours
+                || serde_json::to_string_pretty(&e.raw)
+                    .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
+        }
+        Err(e2) if e2.kind() != std::io::ErrorKind::NotFound => true,
+        Err(_) => serde_json::to_string_pretty(&e.raw)
+            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok()),
+    }
 }
 
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
@@ -1105,7 +1119,7 @@ impl Engine {
                 analysis: &a,
                 info: &info,
             };
-            let gras_diffuse = gras.contains(&crate::grass::path_key(&f.game_path));
+            let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
             let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
             job.provenance.insert("target".into(), target_src.clone());
             job.source = source;
@@ -1255,7 +1269,10 @@ impl Engine {
                 })
             };
             // An explicit set shader also re-resolves a GRAS diffuse: it suppresses the auto-detect (`suggest_grass`).
-            let is_gras = gras.contains(&crate::grass::path_key(&work[wi].1.game_path));
+            let is_gras = gras.contains(&crate::shader::gras_key(
+                &work[wi].1.game_path,
+                &work[wi].1.output,
+            ));
             if !picks.get(&old.set_key).is_some_and(|p| {
                 p.shader.has_member_defaults()
                     || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
@@ -1278,7 +1295,7 @@ impl Engine {
                 resolve_file_with(
                     &ctx,
                     &facts,
-                    gras.contains(&crate::grass::path_key(&f.game_path)),
+                    gras.contains(&crate::shader::gras_key(&f.game_path, &f.output)),
                 )
             }));
             match r {
@@ -1536,6 +1553,31 @@ impl Engine {
                 );
             }
         }
+        // Audits 08d-1 / 08e-3 (Note BV2): the last word on output paths, whatever made two jobs meet (default
+        // packed names, moved raw maps, re-encoded DDS). Both would write the path (the last rename wins) and append
+        // two manifest records; the first in plan order keeps it and every later one is IN-DUPLICATE.
+        let mut writers: BTreeMap<String, PathBuf> = BTreeMap::new();
+        jobs.retain(|j: &ResolvedJob| {
+            if !matches!(j.status, JobStatus::Ready) {
+                return true;
+            }
+            let Some(first) = writers.get(&output_key(&req.output_root, &j.output)) else {
+                writers.insert(output_key(&req.output_root, &j.output), j.input.clone());
+                return true;
+            };
+            skipped.push(SkippedFile {
+                path: j.input.clone(),
+                output: j.output.clone(),
+                set: Some(j.set_key.clone()),
+                code: Some(Code::InDuplicate),
+                reason: format!(
+                    "two outputs map to one path ({} is also written from {}); change an output path or move a file",
+                    slash(&j.output),
+                    slash(first)
+                ),
+            });
+            false
+        });
         let index = crate::shader::JobIndex::new(&jobs);
         for set in &sets {
             let Some(&first) = set
@@ -1559,7 +1601,14 @@ impl Engine {
             let mut warnings = vec![];
             if let Some(p) = &pick {
                 warnings = crate::shader::pick_notes(p, target);
-                let maps = map_members(set, &files, &index, &skipped, registry.alias_table());
+                let maps = map_members(
+                    set,
+                    &files,
+                    &index,
+                    &skipped,
+                    registry.alias_table(),
+                    target,
+                );
                 warnings.extend(crate::shader::check_maps(p, &maps));
             }
             rep.emit(
@@ -1997,7 +2046,7 @@ impl Engine {
 }
 
 /// Convert one admitted file under `catch_unwind` and report its outcome. A file that fails or panics after its
-/// output was written (sidecar write or manifest append) has that output removed, best effort, so no output is
+/// output was written (manifest append; a sidecar failure is only a warning, Note BV4) has that output removed, best effort, so no output is
 /// left on disk without a record (review I1). A panic is reported at the last stage the file entered (review M10).
 #[allow(clippy::too_many_arguments)]
 fn run_one(
@@ -2094,8 +2143,9 @@ fn explicit_shaders(
     (out, stale)
 }
 
-/// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a skipped DDS
-/// input, without a sub-type), then each packed output of the set. Raw maps are left out by role, because
+/// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a kept DDS
+/// input with the sub-type its suffix suggests, not the set's own earlier output), then each packed output of the
+/// set. Raw maps are left out by role, because
 /// `plan_packing` re-tags an unused one; duplicates and failed files are left out.
 fn map_members(
     set: &TextureSet,
@@ -2103,6 +2153,7 @@ fn map_members(
     jobs: &crate::shader::JobIndex,
     skipped: &[SkippedFile],
     aliases: &BTreeMap<String, String>,
+    target: Target,
 ) -> Vec<crate::shader::MemberMap> {
     let name = |p: &Path| {
         p.file_name()
@@ -2134,10 +2185,30 @@ fn map_members(
             .iter()
             .find(|s| s.path == f.path && s.code == Some(Code::InDdsSkipped))
         {
+            // Audit 08b-2: an in-place run's own earlier output is not a member map; any other kept DDS fills the
+            // slot its suffix suggests (`_n.dds` fills `_n`).
+            if jobs
+                .in_set(&set.key)
+                .any(|j| crate::dds::same_file(&f.path, &j.output))
+            {
+                continue;
+            }
+            let sfx = suffix(f);
+            let subtype = crate::suggest::suggest(&SuggestContext {
+                target,
+                suffix: sfx.as_deref(),
+                game_path: &f.game_path,
+                set_suffixes: &set.suffixes,
+                alpha: AlphaContent::None,
+                is_float: false,
+                advanced_skin: false,
+            })
+            .first()
+            .map(|s| s.subtype);
             out.push(crate::shader::MemberMap {
                 name: name(&s.output),
-                suffix: suffix(f),
-                subtype: None,
+                suffix: sfx,
+                subtype,
             });
         }
     }

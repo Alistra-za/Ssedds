@@ -544,23 +544,41 @@ pub fn process_file(
     // Note Y1: taken after the rename, so `if-changed` notices a replaced output. Any failure from here on removes
     // the output (`run_one`, `tracker.written`).
     record.output_stamp = SourceStamp::of(&job.output);
+    let side = job.output.with_extension("dds.json");
+    // A `.dds.json` that reads as sdc's record for this output; any other file there is not sdc's.
+    let ours = |b: &[u8]| {
+        serde_json::from_slice::<serde_json::Value>(b).is_ok_and(|v| {
+            v["output"].as_str() == Some(record.output.as_str())
+                && v.get("profile_sha256").is_some()
+        })
+    };
     if req.sidecar {
         let text =
             serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
-        write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
-            .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
+        // Audit 08d-6 (Note BV3): a file sdc did not write is kept, as OUT-SIDECAR-KEPT; the DDS stays.
+        // Audit 08d-5 (Note BV4): the new DDS already replaced the old one, so a failed sidecar write is a warning,
+        // as in BQ10, and the DDS stays; the next `if-changed --sidecar` run rewrites a stale sdc sidecar from the record (`sidecar_present`).
+        match crate::dds::may_replace(&side, text.as_bytes(), ours) {
+            Ok(()) => {
+                if let Err(e) = write_atomic(&side, text.as_bytes()) {
+                    report.warnings.push(crate::codes::Warning::new(
+                        crate::codes::Code::OutSidecarKept,
+                        format!(
+                            "{}: the sidecar could not be written ({e}); a sidecar left there describes the previous output",
+                            side.display()
+                        ),
+                    ));
+                }
+            }
+            Err(k) => report.warnings.push(crate::codes::Warning::new(
+                crate::codes::Code::OutSidecarKept,
+                format!("{}; the sidecar was not written", k.note(&side)),
+            )),
+        }
     } else {
         // Trace-debug #27 (Note BQ): an earlier run's sidecar describes the bytes just replaced. Only a file that
         // reads as sdc's record for this output is removed: never a file sdc did not write.
-        let side = job.output.with_extension("dds.json");
-        let ours = std::fs::read(&side)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .is_some_and(|v| {
-                v["output"].as_str() == Some(record.output.as_str())
-                    && v.get("profile_sha256").is_some()
-            });
-        if ours {
+        if std::fs::read(&side).is_ok_and(|b| ours(&b)) {
             match std::fs::remove_file(&side) {
                 // Owner, 2026-10-16 (Note BQ10): a warning; the new DDS stays.
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {

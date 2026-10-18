@@ -235,3 +235,46 @@ fn a_gras_diffuse_re_resolved_by_an_explicit_pbr_grass_is_noted_once() {
         "{codes:?}"
     );
 }
+
+/// Audit 08e-1, owner ruling (b) (Note BV5): PBR grass under `textures/landscape/` is typed as PBR, not landscape:
+/// the albedo is `pbr_albedo` (sRGB) and the `_n` `pbr_normal`, so the PBR grass map check finds them.
+#[test]
+fn pbr_grass_under_landscape_is_typed_pbr() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/landscape/g.png", BROWN);
+    put(d.path(), "textures/landscape/g_n.png", [128, 128, 255]);
+    put(d.path(), "textures/landscape/g_rmaos.png", [128, 0, 255]);
+    let (p, ev) = plan(d.path(), Target::Cs, &["textures/landscape/g"], &[], &[]);
+    assert_eq!(picked(&p).0, Shader::PbrGrass);
+    let st = |name: &str| {
+        p.jobs
+            .iter()
+            .find(|j| j.input.file_name().is_some_and(|n| n == name))
+            .unwrap_or_else(|| panic!("no job for {name}"))
+            .profile
+            .subtype
+    };
+    assert_eq!(st("g.png"), Subtype::PbrAlbedo);
+    assert_eq!(st("g_n.png"), Subtype::PbrNormal);
+    let map_codes: Vec<_> = ev
+        .iter()
+        .flat_map(|e| match &e.kind {
+            EventKind::SetResolved { warnings, .. } => warnings.iter().map(|w| w.code).collect(),
+            _ => vec![],
+        })
+        .filter(|c| matches!(c, Code::ShaderMissingMap | Code::ShaderExtraMap))
+        .collect();
+    assert!(map_codes.is_empty(), "{map_codes:?}");
+}
+
+/// Audit 08b-3: GRAS evidence is matched by the output name the NIF uses (`g.dds`), so a vocabulary-named albedo
+/// (`g_basecolor.png`) still makes the set PBR grass.
+#[test]
+fn a_vocabulary_named_albedo_matches_gras_evidence() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/plants/g_basecolor.png", BROWN);
+    put(d.path(), "textures/plants/g_n.png", [128, 128, 255]);
+    put(d.path(), "textures/plants/g_rmaos.png", [128, 0, 255]);
+    let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
+    assert_eq!(picked(&p).0, Shader::PbrGrass);
+}

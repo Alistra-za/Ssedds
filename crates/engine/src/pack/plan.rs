@@ -105,15 +105,18 @@ pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
     }
 }
 
-/// The packed output's stem, from its first source's name: `<base>_<suffix>` (`rock01_roughness` → `rock01_rmaos`).
-/// Its `[files]` key is this stem in the first source's folder, wherever an output path puts the file.
+/// The packed output's stem, from its first source's name: `<base>_<suffix>` (`rock01_roughness` → `rock01_rmaos`,
+/// and `rock01_rmaos` → `rock01_rmaos` for a source that already carries a §6.1 suffix, audit 08a-4). Its `[files]`
+/// key is this stem in the first source's folder, wherever an output path puts the file.
+/// shortcut: only the built-in §6.1 suffixes are cut, not preset aliases (the GUI calls this without a registry);
+/// pass the alias table when a recipe can take an aliased pre-packed source.
 pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
     let stem = first_source
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let base = split_vocab(&stem).map_or(stem.clone(), |(b, _)| b);
+    let base = split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b);
     format!("{base}_{}", kind.suffix())
 }
 
@@ -181,8 +184,8 @@ fn retag(jobs: &mut [ResolvedJob], path: &Path, code: Code, message: String) {
     }
 }
 
-/// A planned non-raw image member that already provides `kind`'s output (spec §6.4 "Pre-packed conflict",
-/// DECISIONS Note M9).
+/// A planned non-raw member that already provides `kind`'s output (spec §6.4 "Pre-packed conflict", DECISIONS
+/// Note M9). A DDS counts once it is planned (re-encoded, S6; Note BV1); a skipped DDS has no job.
 fn prepacked_member<'a>(
     ctx: &ResolveCtx,
     set: &TextureSet,
@@ -197,8 +200,7 @@ fn prepacked_member<'a>(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        f.kind == InputKind::Image
-            && raw_role(f).is_none()
+        raw_role(f).is_none()
             && split_suffix_with(&stem, ctx.registry.alias_table())
                 .suffix
                 .as_deref()
