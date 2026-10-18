@@ -120,7 +120,8 @@ impl AppModel {
     }
 
     /// Texture paths for a picker, without `.dds`: the scan's paths used in lighting slot `slot` (0-based; `None`
-    /// for any slot), then this project's own outputs' game paths. Sorted, no duplicates.
+    /// for any slot), then this project's own outputs' game paths without their source extension. Sorted, no
+    /// duplicates.
     pub fn known_textures(&self, slot: Option<u8>) -> Vec<String> {
         let mut out: BTreeSet<String> = self
             .known
@@ -137,7 +138,8 @@ impl AppModel {
                 if let SlotFill::Own { item } = fill {
                     if let Some(j) = self.item(item).and_then(|i| i.job.as_ref()) {
                         if j.game_path.starts_with("textures/") {
-                            out.insert(strip_dds(&j.game_path).to_string());
+                            // Wave 2 #5: an output row has no source extension (`leaf.png` → `leaf`).
+                            out.insert(super::input_name::no_ext(&j.game_path).to_string());
                         }
                     }
                 }

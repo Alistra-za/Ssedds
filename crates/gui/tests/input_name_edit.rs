@@ -606,3 +606,20 @@ fn header_export_click_with_focused_field_does_not_save_stale_value() {
         Some("textures/landscape/rock02")
     );
 }
+
+/// Trace-debug wave 2 #5: the project's own rows name outputs, so they carry no source extension (`leaf.png` is
+/// offered as `textures/landscape/leaf`, never `textures/landscape/leaf.png`).
+#[test]
+fn own_output_rows_have_no_source_extension() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let known = m.known_textures(None);
+    let names = m.input_name_candidates();
+    for list in [&known, &names] {
+        assert!(!list.iter().any(|p| p.ends_with(".png")), "{list:?}");
+    }
+    assert!(
+        names.iter().any(|p| p == "textures/landscape/leaf"),
+        "{names:?}"
+    );
+}
