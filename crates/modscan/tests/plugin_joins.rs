@@ -472,3 +472,27 @@ fn a_cancelled_scan_leaves_missing_and_unused_empty() {
     assert!(s.plugin_missing_with_inert().unwrap().1.is_empty());
     assert!(s.unused_textures().unwrap().is_empty());
 }
+
+/// Trace-debug wave 2 #7: a tainted scan (PGPatcher started mid-scan) empties the winners; Missing and Unused are
+/// then empty, not "every path a winning record names".
+#[test]
+fn a_tainted_scan_leaves_missing_and_unused_empty() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    assert!(!s.plugin_missing_files().unwrap().is_empty());
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let src = Source::Mo2(Instance::load(d.path(), None).unwrap());
+    let r = run(&src, &mut s, &AtomicBool::new(false), &|_| {}, &|| {
+        if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            vec![]
+        } else {
+            vec!["pgtools.exe".into()]
+        }
+    })
+    .unwrap();
+    assert!(r.tainted);
+    assert!(s.plugin_missing_files().unwrap().is_empty());
+    assert!(s.plugin_missing_with_inert().unwrap().1.is_empty());
+    assert!(s.unused_textures().unwrap().is_empty());
+}
