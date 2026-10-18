@@ -223,11 +223,7 @@ pub fn modal_keys(
         ui.set_max_width(420.0);
         add(ui);
     });
-    let (seen, frame) = (egui::Id::new(("modal-seen", id)), ctx.cumulative_frame_nr());
-    let was_open = ctx
-        .data(|d| d.get_temp::<u64>(seen))
-        .is_some_and(|f| f + 1 >= frame);
-    ctx.data_mut(|d| d.insert_temp(seen, frame));
+    let was_open = opened_before(ctx, id);
     let outside_click = shown.backdrop_response.clicked();
     Keys {
         cancel: shown.should_close() && (outside || !outside_click),
@@ -235,6 +231,17 @@ pub fn modal_keys(
             && ctx.memory(|m| m.focused().is_none())
             && ctx.input(|i| i.key_pressed(egui::Key::Enter)),
     }
+}
+
+/// Whether dialog `id` was drawn the frame before this one; call once per frame it is drawn. False on the frame it
+/// opens, so the Enter that opened it (a palette pick) is not also the dialog's Enter.
+pub fn opened_before(ctx: &egui::Context, id: &str) -> bool {
+    let (seen, frame) = (egui::Id::new(("modal-seen", id)), ctx.cumulative_frame_nr());
+    let was_open = ctx
+        .data(|d| d.get_temp::<u64>(seen))
+        .is_some_and(|f| f + 1 >= frame);
+    ctx.data_mut(|d| d.insert_temp(seen, frame));
+    was_open
 }
 
 /// F3a D4: the copy checklist, every field ticked to start. The ticks live in the dialog itself.
