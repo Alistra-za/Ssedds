@@ -68,44 +68,59 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .auto_shrink([false, false])
         .show_rows(ui, row_h, list.len(), |ui, range| {
             for p in &list[range] {
-                ui.horizontal(|ui| {
-                    dot(ui, status_of(p.level));
-                    match &p.at {
-                        At::Texture(k) => {
-                            if ui.link(k).clicked() {
-                                act = Some(Act::Texture(k.clone()));
+                // The fix buttons are laid out first, so the sentence is cut to the room left (I2).
+                let (l, r) = egui::Sides::new().shrink_left().truncate().show(
+                    ui,
+                    |ui| {
+                        let mut a = None;
+                        dot(ui, status_of(p.level));
+                        match &p.at {
+                            At::Texture(k) => {
+                                if ui.link(k).clicked() {
+                                    a = Some(Act::Texture(k.clone()));
+                                }
+                            }
+                            At::Set { key, id } => {
+                                if ui.link(id).clicked() {
+                                    a = Some(Act::Set(key.clone()));
+                                }
+                            }
+                            At::File(k) => {
+                                if ui.link(k).clicked() {
+                                    a = Some(Act::File(k.clone()));
+                                }
+                            }
+                            At::Project => {
+                                ui.label("Project");
                             }
                         }
-                        At::Set { key, id } => {
-                            if ui.link(id).clicked() {
-                                act = Some(Act::Set(key.clone()));
+                        ui.add(egui::Label::new(&p.text).truncate())
+                            .on_hover_text(&p.text);
+                        a
+                    },
+                    |ui| {
+                        let mut a = None;
+                        // Right to left: the last widget added is the leftmost.
+                        match &p.at {
+                            At::Texture(k) if p.level == Level::Decide => {
+                                if let Some(r) = fix_buttons(ui, m, k, off.as_deref()) {
+                                    a = Some(Act::Fix(r));
+                                }
                             }
-                        }
-                        At::File(k) => {
-                            if ui.link(k).clicked() {
-                                act = Some(Act::File(k.clone()));
+                            At::Set { key, .. } if ui.button("Go to set").clicked() => {
+                                a = Some(Act::Set(key.clone()));
                             }
+                            _ => {}
                         }
-                        At::Project => {
-                            ui.label("Project");
+                        if let Some(c) = p.code {
+                            ui.label(egui::RichText::new(c.as_str()).small().weak());
                         }
-                    }
-                    ui.label(&p.text);
-                    if let Some(c) = p.code {
-                        ui.label(egui::RichText::new(c.as_str()).small().weak());
-                    }
-                    match &p.at {
-                        At::Texture(k) if p.level == Level::Decide => {
-                            if let Some(r) = fix_buttons(ui, m, k, off.as_deref()) {
-                                act = Some(Act::Fix(r));
-                            }
-                        }
-                        At::Set { key, .. } if ui.button("Go to set").clicked() => {
-                            act = Some(Act::Set(key.clone()));
-                        }
-                        _ => {}
-                    }
-                });
+                        a
+                    },
+                );
+                if let Some(a) = l.or(r) {
+                    act = Some(a);
+                }
             }
         });
     // Every click-through lands in the Textures view.

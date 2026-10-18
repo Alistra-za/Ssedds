@@ -116,8 +116,13 @@ pub fn fix_buttons(
     let item = model.item(key)?;
     let why = off.unwrap_or_default();
     let mut pick = None;
+    let mut decisions: Vec<_> = item.decisions.iter().collect();
+    // A Problems row adds its buttons right to left; keep them in reading order.
+    if ui.layout().prefer_right_to_left() {
+        decisions.reverse();
+    }
     ui.add_enabled_ui(off.is_none(), |ui| {
-        for d in &item.decisions {
+        for d in decisions {
             match d {
                 Decision::Subtype { suggested } => {
                     ui.menu_button("Set type…", |ui| {

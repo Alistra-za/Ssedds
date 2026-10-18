@@ -375,3 +375,43 @@ fn the_status_dot_names_its_state() {
         h.get_by_label(l);
     }
 }
+
+/// Final review I2: at 1280x800 a long pitfall row cuts its sentence (full text on hover) and keeps its buttons
+/// inside the panel.
+#[test]
+fn at_1280x800_a_long_problems_row_keeps_its_buttons_on_screen() {
+    use serde_json::json;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
+    m.set_json_value("landscape/rock01", "alphaprop_thresh", Some(json!(128)));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.open_problems(None);
+    let mut h = harness_at(m, egui::vec2(1280.0, 800.0));
+    idle(&mut h);
+    let panel = outer(&h, "bottom");
+    let mut seen = 0;
+    for label in ["Go to set", "Set type…", "Decide…", "Acknowledge"] {
+        for n in h.query_all_by_label(label) {
+            seen += 1;
+            assert!(
+                panel.contains_rect(n.rect()),
+                "{label} at {:?} is outside the panel {panel:?}",
+                n.rect()
+            );
+        }
+    }
+    assert!(seen >= 3, "only {seen} buttons");
+    let long = sdc_gui::model::pbr_export::export_asks(h.state())
+        .into_iter()
+        .map(|a| a.text)
+        .max_by_key(|t| t.len())
+        .unwrap();
+    h.get_by_label(&long).hover();
+    h.run();
+    // The row is the only node with the sentence until the hover adds the tooltip.
+    assert!(
+        h.query_all_by_label(&long).count() > 1,
+        "the hover shows the sentence"
+    );
+}
