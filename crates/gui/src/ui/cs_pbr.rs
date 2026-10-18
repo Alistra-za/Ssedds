@@ -489,8 +489,10 @@ fn statics(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut
 
 /// Note BM (review 7): the TruePBR panel's header on a PBR Landscape set.
 pub const PGP_PANEL: &str = "PGPatcher JSON settings";
-pub const PGP_PANEL_OFF: &str =
-    "PGPatcher JSON settings (not written: tick 'Also write into the PGPatcher JSON' above)";
+/// Kept short: an Extend-wrapped title wider than the 300 px panel widens every group below it.
+pub const PGP_PANEL_OFF: &str = "PGPatcher JSON settings (not written)";
+pub const PGP_PANEL_OFF_NOTE: &str =
+    "Not written: tick 'Also write into the PGPatcher JSON' above.";
 pub const PGP_PANEL_NOTE: &str =
     "Roughness, specular, displacement, subsurface, coat and glint are the texture set's values above.";
 
@@ -510,9 +512,11 @@ pub fn pgp_panel(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         None,
         on,
         |ui| {
-            if on {
-                ui.weak(PGP_PANEL_NOTE);
-            }
+            ui.weak(if on {
+                PGP_PANEL_NOTE
+            } else {
+                PGP_PANEL_OFF_NOTE
+            });
             super::pgp_fields::panel(ui, model, &v.id);
         },
     );
