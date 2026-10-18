@@ -119,7 +119,7 @@ impl TomlFile {
         engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
             .map_err(|e| write_error(&self.path, e))?;
         self.disk = SourceStamp::of(&self.path);
-        crate::crash_log::discard_recovery(&self.path);
+        // The `.recovery` file stays: only a user's Save holds the recovered edits (`AppModel::save`, wave 2 #3).
         self.dirty = false;
         Ok(())
     }

@@ -2607,6 +2607,8 @@ impl AppModel {
                 self.save_failed(DocKind::SdcToml, &e);
                 return Err(e);
             }
+            // Wave 2 #3: only a user's save holds the recovered edits, so only it drops the `.recovery` file.
+            crate::crash_log::discard_recovery(p.path());
             wrote = true;
         }
         // A clean sdc-project.toml is not written (no empty file, no spurious conflict); a read-only one never has edits.
@@ -2619,10 +2621,11 @@ impl AppModel {
                 self.save_failed(DocKind::Project, &e);
                 return Err(e);
             }
+            crate::crash_log::discard_recovery(s.path());
             wrote = true;
         }
         if wrote {
-            self.refresh_banner(); // the save removed any recovery file
+            self.refresh_banner(); // the save removed the saved documents' recovery files
             self.messages.notify(messages::Severity::Info, "Saved");
         }
         Ok(())
@@ -2636,8 +2639,9 @@ impl AppModel {
                     return;
                 };
                 if overwrite {
-                    if let Err(e) = p.save(true) {
-                        self.save_failed(which, &e);
+                    match p.save(true) {
+                        Ok(()) => crate::crash_log::discard_recovery(p.path()),
+                        Err(e) => self.save_failed(which, &e),
                     }
                 } else {
                     p.reload();
@@ -2653,8 +2657,9 @@ impl AppModel {
                     return;
                 };
                 if overwrite {
-                    if let Err(e) = s.save(true) {
-                        self.save_failed(which, &e);
+                    match s.save(true) {
+                        Ok(()) => crate::crash_log::discard_recovery(s.path()),
+                        Err(e) => self.save_failed(which, &e),
                     }
                 } else {
                     s.reload();

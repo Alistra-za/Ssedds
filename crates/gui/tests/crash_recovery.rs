@@ -76,3 +76,27 @@ fn a_main_thread_panic_keeps_unsaved_edits_beside_the_untouched_original() {
     m.save().unwrap();
     assert!(!rec.exists(), "a save removes the recovery file");
 }
+
+/// Trace-debug wave 2 #3: an automatic save (the export folder, a JSON hash record) of a document the user never
+/// saved does not hold the recovered edits, so it keeps the unrestored `.recovery` file.
+#[test]
+fn an_automatic_save_keeps_an_unrestored_recovery_file() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let path = m.sets_doc.as_ref().unwrap().path().to_path_buf();
+    let rec = crash_log::recovery_path(&path);
+    std::fs::write(&rec, "# edits from a crash\n").unwrap();
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    m.set_export_folder(d.path().join("elsewhere"));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("elsewhere"),
+        "the export folder was saved"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&rec).unwrap(),
+        "# edits from a crash\n",
+        "the recovery file is kept"
+    );
+}
