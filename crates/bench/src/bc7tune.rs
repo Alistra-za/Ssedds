@@ -25,6 +25,8 @@ const T: Bc7Tune = Bc7Tune {
     weights: None,
     max_partitions_2subset: None,
     max_partitions_3subset: None,
+    endpoint_search: None,
+    refine_partitions: None,
 };
 
 /// Every bc7e variant the study measures. `base` is Tessalith's default (veryslow, linear weights).
@@ -157,6 +159,80 @@ pub const VARIANTS: &[Variant] = &[
             refinement_passes: Some(2),
             ..T
         },
+    },
+    // Patch 0002 (need the patch-0002 objects): the quantised endpoint search, full refinement while ranking
+    // partitions, their combinations, and the sdc_max level itself.
+    Variant {
+        name: "ep",
+        level: V,
+        tune: Bc7Tune {
+            endpoint_search: Some(true),
+            ..T
+        },
+    },
+    Variant {
+        name: "rp",
+        level: V,
+        tune: Bc7Tune {
+            refine_partitions: Some(true),
+            ..T
+        },
+    },
+    Variant {
+        name: "rp_parts4",
+        level: V,
+        tune: Bc7Tune {
+            refine_partitions: Some(true),
+            partitions_to_try: Some(4),
+            ..T
+        },
+    },
+    Variant {
+        name: "rp_parts8",
+        level: V,
+        tune: Bc7Tune {
+            refine_partitions: Some(true),
+            partitions_to_try: Some(8),
+            ..T
+        },
+    },
+    Variant {
+        name: "ep_uber4",
+        level: V,
+        tune: Bc7Tune {
+            endpoint_search: Some(true),
+            uber_level: Some(4),
+            ..T
+        },
+    },
+    Variant {
+        name: "ep_rp_parts4_uber4_refine2",
+        level: V,
+        tune: Bc7Tune {
+            endpoint_search: Some(true),
+            refine_partitions: Some(true),
+            partitions_to_try: Some(4),
+            uber_level: Some(4),
+            refinement_passes: Some(2),
+            ..T
+        },
+    },
+    Variant {
+        name: "ep_rp_parts8_uber4_refine2",
+        level: V,
+        tune: Bc7Tune {
+            endpoint_search: Some(true),
+            refine_partitions: Some(true),
+            partitions_to_try: Some(8),
+            uber_level: Some(4),
+            refinement_passes: Some(2),
+            ..T
+        },
+    },
+    Variant {
+        name: "max",
+        level: Bc7Level::Max,
+        tune: T,
     },
     // Normal-map weighting: more weight on X and Y than Z (the stored Z carries little information in a
     // unit normal), and the plain bc7e perceptual weights for comparison on colour.
