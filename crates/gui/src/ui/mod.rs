@@ -115,7 +115,21 @@ pub fn draw_with_scan(
     }
     // Under the header and the scan row, before the columns (R7).
     bottom::draw(ui, model, &mut state.drawer);
-    advanced::draw(ui, model, &mut state.advanced);
+    // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
+    let three_d = state.set3d.enabled && set_preview::wanted(model);
+    // C6: a set editor in 2D has Advanced as its panel's last tab; everything else keeps the window-edge drawer.
+    let set_panel = model.root.is_some()
+        && matches!(model.selection, Selection::Set(_))
+        && model.expanded.is_none()
+        && !model.in_bulk()
+        && !three_d;
+    if set_panel {
+        // The drawer is one panel: keep the columns' widget ids (a set pill's open menu) as if it were drawn, as egui
+        // does for a collapsed panel.
+        ui.skip_ahead_auto_ids(1);
+    } else {
+        advanced::draw(ui, model, &mut state.advanced);
+    }
     let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
     // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
     let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
@@ -139,8 +153,6 @@ pub fn draw_with_scan(
             sets_column::draw(ui, model, thumbs, drops, cmds);
         },
     );
-    // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
-    let three_d = state.set3d.enabled && set_preview::wanted(model);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
     // (spec §5.1).
@@ -209,6 +221,7 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
                 &mut state.slot_cmds,
                 &mut state.drops,
                 view,
+                &mut state.advanced,
             );
             if three_d {
                 set_preview::draw(ui, model, &mut state.set3d);

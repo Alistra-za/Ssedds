@@ -48,7 +48,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             });
         return;
     }
-    let mut actions = vec![];
     let mut close = false;
     egui::Panel::right("advanced")
         .default_size(380.0)
@@ -61,21 +60,25 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    inspector(ui, model, state);
-                    batch(ui, model, &mut actions);
-                    nvtt(ui, model, &mut actions);
-                    legacy_fills(ui, model, &mut actions);
-                    preview_settings(ui, model, &mut actions);
-                    mipmaps(ui, model, &mut actions);
-                    texture_fields(ui, model, &mut actions);
-                    unmatched(ui, model, &mut actions);
-                });
+                .show(ui, |ui| body(ui, model, state));
         });
     if close {
         model.settings.advanced_open = false;
         model.save_settings();
     }
+}
+
+/// The drawer's sections (also the set panel's Advanced tab, layout v2 C6); applies its edits once they are drawn.
+pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) {
+    let mut actions = vec![];
+    inspector(ui, model, state);
+    batch(ui, model, &mut actions);
+    nvtt(ui, model, &mut actions);
+    legacy_fills(ui, model, &mut actions);
+    preview_settings(ui, model, &mut actions);
+    mipmaps(ui, model, &mut actions);
+    texture_fields(ui, model, &mut actions);
+    unmatched(ui, model, &mut actions);
     for a in actions {
         match a {
             Action::SetField(k, f, v) => model.set_field(&k, f, v),

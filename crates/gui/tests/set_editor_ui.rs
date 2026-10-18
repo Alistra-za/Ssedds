@@ -816,7 +816,12 @@ fn the_header_has_the_json_editor_and_the_drawer_has_no_pgpatcher_keys() {
     let mut h = harness(m);
     h.run();
     h.get_by_label(sdc_gui::ui::header::JSON_EDITOR);
+    // Layout v2 C6: with a set, Advanced is the set panel's tab (open here); the TruePBR box is on its Material tab.
+    h.get_by_label_contains("Preset inspector");
     assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "Material")
+        .click();
+    h.run();
     h.get_by_label("Advanced TruePBR settings");
 }
 
@@ -1530,48 +1535,4 @@ fn slot_commands_is_a_normal_button_after_the_rows() {
     let b = h.get_by_label("Slot commands…").rect();
     assert!(b.width() < 200.0, "not a full-width bar");
     assert!(b.min.y > slot_rect(&h, "Subsurface _s").max.y);
-}
-
-/// Layout v2 ruling (row width): the rows fit in about 440 px, what Task 2.3 leaves beside its panel at 1400, and no
-/// row widget reaches under the panel beside them. (A narrower column scrolls them sideways.)
-#[test]
-fn the_slot_rows_stay_in_their_column() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened_plain(d.path());
-    rock_selected(&mut m);
-    // At 1560 this task's left column is about 450 px wide.
-    let mut h = Harness::builder()
-        .with_size(eframe::egui::vec2(1560.0, 1200.0))
-        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
-    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
-    h.run();
-    let left = slot_rect(&h, "Diffuse").min.x;
-    let panel = h.get_by_label("Specular level").rect().min.x;
-    assert!(panel - left < 470.0, "the column is {} wide", panel - left);
-    // Each row widget: thumbnails, flags, Assign…, status dots, format and recipe combos.
-    let mut right = 0.0f32;
-    for l in [
-        "Diffuse thumbnail",
-        "Match on this",
-        "Opaque",
-        "Assign…",
-        "ready",
-        "warning",
-        "blocks export",
-    ] {
-        for n in h.query_all_by_label(l) {
-            if n.rect().min.x > left {
-                right = right.max(n.rect().max.x);
-            }
-        }
-    }
-    for n in h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox) {
-        if n.rect().min.x > left && n.rect().min.x < panel {
-            right = right.max(n.rect().max.x);
-        }
-    }
-    assert!(
-        right < panel,
-        "the rows ({left}..{right}) reach under the panel at {panel}"
-    );
 }

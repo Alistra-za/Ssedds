@@ -35,6 +35,9 @@ use std::collections::HashMap;
 /// Review M2: a lock key on a set that writes no JSON.
 pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
+/// The right-hand panel's default width (layout v2 A3); resizable, at least 300. Not the plan's 420: at 1400 the
+/// centre's content is 736 px and the slot rows need about 424 (Task 2.2), so only the minimum leaves them room.
+pub const SET_PANEL_WIDTH: f32 = 300.0;
 const THUMB: f32 = 56.0;
 /// The format and recipe combos (A5).
 const COMBO_W: f32 = 96.0;
@@ -79,6 +82,7 @@ pub struct View {
     pub three_d: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     ui: &mut egui::Ui,
     model: &mut AppModel,
@@ -87,6 +91,7 @@ pub fn draw(
     cmds: &mut SlotCmdState,
     drops: &mut DropState,
     view: View,
+    advanced: &mut super::advanced::AdvancedState,
 ) {
     let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
         ui.weak("This set is no longer in the plan.");
@@ -153,49 +158,43 @@ pub fn draw(
     let drop_at = drops.file.as_ref().and_then(|f| f.pos);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
-    // `size_of` needs the model mutably, which the drawing below does not have.
-    let sizes: HashMap<String, SizeEst> = v
-        .members
-        .iter()
-        .filter_map(|k| model.size_of(k).map(|e| (k.clone(), e)))
-        .collect();
     if view.three_d {
         // 3D (AG132): the set's 3D view takes the rest of this pane (`ui::centre`); the TruePBR settings and the skin
         // card are in the TruePBR settings… window, as are the CS PBR section and the complex material card, so an edit
         // still shows live in 3D.
         return;
     }
+    // `size_of` needs the model mutably, which the drawing below does not have.
+    let sizes: HashMap<String, SizeEst> = v
+        .members
+        .iter()
+        .filter_map(|k| model.size_of(k).map(|e| (k.clone(), e)))
+        .collect();
+    // A3: the panel first, so the rows get what it leaves; each side scrolls on its own. K20: the minimum wins.
+    let max = (ui.available_width() - super::set_preview::CENTRE_MIN / 2.0).max(300.0);
+    egui::Panel::right(egui::Id::new("set-panel"))
+        .resizable(true)
+        .default_size(SET_PANEL_WIDTH)
+        .size_range(300.0..=max)
+        .show(ui, |ui| set_panel(ui, model, &v, advanced));
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.columns(2, |cols| {
-                let ui = &mut cols[0];
-                rows(ui, model, &v, thumbs, &mut acts, drop_at, &sizes);
-                slot_note(ui, drops, &v.id);
-                unslotted_packed(ui, model, &v, &mut acts);
-                ui.add_space(6.0);
-                // A2: a normal button, not stretched across the justified column.
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(editable, |ui| {
-                        if ui.button("Slot commands…").clicked() {
-                            cmds.open = Some(v.id.clone());
-                        }
-                    })
-                    .response
-                    .on_disabled_hover_text(&why);
-                });
-                under_grid(ui, model, &v);
-                super::plugin_refs::set_section(ui, model, &v);
-                super::cs_pbr::section(ui, model, &v);
-                super::cs_pbr::card(&mut cols[1], model, &v);
-                if shows_json_panel(&v, model.target) {
-                    super::cs_pbr::pgp_panel(&mut cols[1], model, &v);
-                }
-                if v.skin {
-                    super::skin_card::card(&mut cols[1], model, &v);
-                }
-                super::cm_card::section(&mut cols[1], model, &v);
+            rows(ui, model, &v, thumbs, &mut acts, drop_at, &sizes);
+            slot_note(ui, drops, &v.id);
+            unslotted_packed(ui, model, &v, &mut acts);
+            ui.add_space(6.0);
+            // A2: a normal button, not stretched across the justified column.
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(editable, |ui| {
+                    if ui.button("Slot commands…").clicked() {
+                        cmds.open = Some(v.id.clone());
+                    }
+                })
+                .response
+                .on_disabled_hover_text(&why);
             });
+            under_grid(ui, model, &v);
         });
     let (mut select, mut expand) = (None, None);
     for a in acts {
@@ -226,6 +225,47 @@ pub fn draw(
         }
     }
     select_or_expand(ui, model, &v.id, select, expand);
+}
+
+/// The set panel (C6, R12): Material on a JSON set or Set on any other, then Advanced; `advanced_open` picks the tab.
+fn set_panel(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    v: &SetView,
+    advanced: &mut super::advanced::AdvancedState,
+) {
+    let json = shows_json_panel(v, model.target);
+    let mut open = model.settings.advanced_open;
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut open, false, if json { "Material" } else { "Set" });
+        ui.selectable_value(&mut open, true, "Advanced");
+    });
+    if open != model.settings.advanced_open {
+        model.settings.advanced_open = open;
+        model.save_settings();
+    }
+    ui.separator();
+    // A3: the tab scrolls on its own, so the slot rows stay in view. Sideways too: a card wider than the panel (the
+    // PBR Landscape card is ~390) would otherwise widen it past its size range and under the rows' minimum.
+    egui::ScrollArea::both()
+        .id_salt(("set-panel-tab", open))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if open {
+                super::advanced::body(ui, model, advanced);
+                return;
+            }
+            super::cs_pbr::card(ui, model, v);
+            if json {
+                super::cs_pbr::pgp_panel(ui, model, v);
+            }
+            if v.skin {
+                super::skin_card::card(ui, model, v);
+            }
+            super::cm_card::section(ui, model, v);
+            super::cs_pbr::section(ui, model, v);
+            super::plugin_refs::set_section(ui, model, v);
+        });
 }
 
 /// Item 17: a file from Explorer dropped on slot `slot` of `set`. The drop is taken (its folder is not opened); a
