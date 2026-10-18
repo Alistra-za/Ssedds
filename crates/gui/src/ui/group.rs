@@ -19,11 +19,17 @@ pub fn group<R>(
             let state = CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
             let mut clicked = false;
             let mut h = state.show_header(ui, |ui| {
+                // The visible edge: a wider row above widens max_rect (egui unions it into the content), not the panel.
+                let right = ui.max_rect().right().min(ui.clip_rect().right());
+                ui.set_min_width((right - ui.min_rect().left()).max(0.0));
                 let label = egui::Label::new(egui::RichText::new(title).strong())
                     .sense(egui::Sense::click());
                 clicked = ui.add(label).clicked();
                 if let Some(v) = value {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut r = ui.available_rect_before_wrap();
+                    r.max.x = right.max(r.min.x);
+                    let layout = egui::Layout::right_to_left(egui::Align::Center);
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(layout), |ui| {
                         ui.label(v)
                     });
                 }

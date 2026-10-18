@@ -383,3 +383,41 @@ fn a_set_no_longer_in_the_plan_keeps_the_window_edge_advanced_strip() {
     assert!(drawer_drawn(&h), "the strip at the window edge");
     assert!(PanelState::load(&h.ctx, Id::new("set-panel")).is_none());
 }
+
+/// I1 (final review): a group wider than the panel (the Coat colour row) widens the scroll content, and egui unions
+/// that into every later header row; each header value must still sit inside the panel's visible rect.
+#[test]
+fn header_values_stay_inside_the_panel_with_coat_on() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Multilayer (coat)").click();
+    h.run();
+    let p = panel(&h);
+    for t in [
+        "Coat",
+        "Subsurface",
+        "Emissive settings",
+        "Parallax settings",
+        "NiAlphaProperty",
+        "Matching",
+        "CS PBR records",
+    ] {
+        let r = title(&h, t).rect();
+        let v = h
+            .query_all_by_role(Role::Label)
+            .find(|n| {
+                n.rect().min.x > r.max.x
+                    && (n.rect().center().y - r.center().y).abs() < 2.0
+                    && n.value().is_some()
+            })
+            .unwrap_or_else(|| panic!("no header value beside {t}"));
+        assert!(
+            v.rect().max.x <= p.max.x,
+            "{t}: value at {:?}, panel {p:?}",
+            v.rect()
+        );
+    }
+}
