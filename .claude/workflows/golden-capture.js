@@ -93,13 +93,14 @@ const RULES = `Owner data under ${MO2} is read-only except what golden-capture-l
 
 // Restore of the CS settings from the recovery journal. With a run id only that run's pending entry is restored
 // (automatic cleanup); without one (restore_only) any pending entry. Safe when nothing is pending.
-async function restoreSettings(runId) {
+async function restoreSettings(runId, quitPort) {
   const R_SCHEMA = { type: 'object', properties: { game_running: { type: 'boolean' }, stdout_json: { type: 'string', description: 'the command stdout verbatim, or "" if not run' } }, required: ['game_running', 'stdout_json'] }
   let r = null
   try {
     r = await agent(
       `Restore the CS settings after a golden capture run. ${RULES}
-1. Wait until Get-Process SkyrimSE is not running: poll every 15 s for up to 30 minutes. Never kill it. If it still runs after 30 minutes, return game_running=true and stdout_json "" without running anything else.
+${quitPort ? `0. This run launched the game and its session did not finish, so the game may still run with placed test refs and lights (never saved). If Get-Process SkyrimSE is running, send once POST http://127.0.0.1:${quitPort}/api/tool/console with body {"action":"exec","command":"qqq"} (quit without saving; never save). If DevBench does not answer, leave the game alone and go on.
+` : ""}1. Wait until Get-Process SkyrimSE is not running: poll every 15 s for up to 30 minutes. Never kill it. If it still runs after 30 minutes, return game_running=true and stdout_json "" without running anything else.
 2. Run this once from the repository root:
 ${node(`restore --mo2 "${MO2}" --journal "${JOURNAL}"${runId ? ` --run-id ${runId}` : ''}`)}
 Return game_running=false and its stdout verbatim. Do not edit any file yourself.`,
@@ -120,7 +121,7 @@ if (RESTORE_ONLY) {
   return { restore_only: true, restore: r, settings_restored: !!(r && r.restored) }
 }
 
-let pre = null, session = null, keepRes = null, restore = null, stopped = null
+let pre = null, session = null, keepRes = null, restore = null, stopped = null, launchTried = false // launchTried: the Session agent (which launches the game) was started
 try {
   // ---------------- Preflight (W1, W7, W8, W10) ----------------
   phase('Preflight')
@@ -175,6 +176,7 @@ It prints one JSON object. Return exit_code and stdout_json = the stdout verbati
       required: ['launched', 'game_exited', 'crashed', 'compile_ready', 'stop_reason', 'cell', 'origin', 'shader_wait', 'groups', 'captures', 'notes'],
     }
     // One agent drives the whole session: the steps share live game state (refs, camera, timing).
+    launchTried = true
     session = await agent(
       `Drive one Skyrim golden-capture session (profile ${pre.profile}). ${RULES}
 Read ${RUN_DIR}/resolved.json (groups, cell, captures_dir, port, setup_console) and ${RUN_DIR}/plan.txt first.
@@ -221,7 +223,7 @@ and return its "dst" as cs_log ("" if not found). Finally list any other .rdc in
 } finally {
   // Runs after any outcome above (agent failure or throw included), except the dry run, and only for the run id
   // this run's preflight reported (also on {ok:false} after applying). No run id = this run owns nothing.
-  if (!DRY && pre && pre.run_id) { phase('Restore'); restore = await restoreSettings(pre.run_id); warnRestore(restore) }
+  if (!DRY && pre && pre.run_id) { phase('Restore'); restore = await restoreSettings(pre.run_id, session && session.game_exited ? null : (launchTried ? pre.port : null)); warnRestore(restore) }
   else if (!DRY && !pre) log(`WARNING: preflight output was lost. If it applied settings, the journal ${JOURNAL} holds them pending: run golden-capture with {mo2, restore_only: true} after the game exits.`)
 }
 const settings_restored = restore ? !!restore.restored : null // null: this run never touched the settings

@@ -105,6 +105,12 @@ const lib = (cmd, env = {}) => {
   ], refs, { tol: 60 })
   assert.deepEqual(m.map(x => [x.status, x.by, x.form]), [['matched', 'name', 'F1'], ['ambiguous', null, null], ['ambiguous', null, null], ['ambiguous', null, null], ['unmatched', null, null]])
   assert.ok(m.slice(1).every(x => x.candidates.length), 'ambiguous/unmatched keep their candidates')
+  {
+    // Codex 4b4c02f P2: offsets turn clockwise like the layout. Refs at x 0 and 200, both Z 90, offset +Y 100 -> +X 100.
+    const r90 = [{ form: 'R1', ref: 'a', pos: [0, 0, 0], angle: [0, 0, 90], shapes: ['S'] }, { form: 'R2', ref: 'b', pos: [200, 0, 0], angle: [0, 0, 90], shapes: ['S'] }]
+    const m90 = mapDraws([{ event: 1, shape: 'S', world: [100, 0, 0] }], r90, { tol: 60, offsets: { R1: { S: [0, 100, 0] }, R2: { S: [0, 100, 0] } } })
+    assert.deepEqual([m90[0].status, m90[0].form], ['matched', 'R1'], JSON.stringify(m90))
+  }
   const mo = mapDraws([{ event: 6, shape: 'EyesMale', world: [-35, 315, 120] }], refs, { tol: 60, offsets: { F1: { EyesMale: [0, 0, 120] }, F2: { EyesMale: [35, 85, 120] } } })
   assert.deepEqual([mo[0].status, mo[0].by, mo[0].form], ['matched', 'offset', 'F2'])
   ok('mapDraws (W9): unique name matched by name; shared names and duplicate draws ambiguous; unexpected shape unmatched; collision resolved only with offsets')
@@ -328,7 +334,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   const body = src.replace(/^export const meta/m, 'const meta')
   const AsyncFunction = (async () => {}).constructor
   const fn = new AsyncFunction('args', 'agent', 'log', 'phase', 'parallel', 'pipeline', 'budget', 'workflow', body)
-  const calls = []
+  const calls = [], prompts = {}
   const runCmd = (prompt) => {
     const line = prompt.split('\n').find(l => l.startsWith('node '))
     let stdout
@@ -336,7 +342,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
     return stdout
   }
   const agent = async (prompt, opts) => {
-    calls.push(opts.label)
+    calls.push(opts.label); prompts[opts.label] = prompt
     if (opts.label.startsWith('preflight')) {
       const out = runCmd(prompt)
       if (preflightThrowsAfterApply) throw new Error('preflight agent died after applying (stub)')
@@ -350,7 +356,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   const logs = []
   let res, err
   try { res = await fn(args, agent, m => logs.push(m), () => {}, null, null, { total: null }, null) } catch (e) { err = e }
-  return { res, err, calls, logs }
+  return { res, err, calls, logs, prompts }
 }
 {
   const base = { plan: PLAN, mo2: MO2, tools: 'F:\\ai\\dds\\tools', lib: LIB, keep_root: FIX, journal: JOURNAL, profile: 'A' }
@@ -363,7 +369,8 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   assert.ok(c.err, 'session error propagates after the finally')
   assert.deepEqual(c.calls, ['preflight', 'session A', 'restore settings'])
   assert.equal(sha(LIVE), ORIG_SHA, 'settings byte-identical after a crashed session'); assert.ok(!pending())
-  ok('workflow: owner_ok required; session throws -> Restore still runs (finally), settings byte-identical')
+  assert.match(c.prompts['restore settings'], /"command":"qqq"/, 'failed session: restore quits the game without saving first')
+  ok('workflow: owner_ok required; session throws -> Restore quits the game (qqq) and still runs (finally), settings byte-identical')
 
   // The preflight agent dies after the lib applied the settings: output lost, so no automatic restore.
   const p = await runWorkflow({ ...base, owner_ok: true, run_root: path.join(T, 'wf-prefail') }, { preflightThrowsAfterApply: true })

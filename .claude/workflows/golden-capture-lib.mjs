@@ -618,7 +618,8 @@ async function copy(o) {
 //   3D distance within tol and clearly nearer than the next candidate.
 // - Everything else is "ambiguous" (collision without offsets) or "unmatched" (no ref expects the shape), always with
 //   the candidates and their distances (XY when no offset) for the report.
-const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] } // shortcut: sign convention only checked for 0/180 degrees
+// Clockwise like SetAngle Z and layoutOf().pos: +90 deg maps +Y to +X.
+const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) + v[1] * Math.sin(a), -v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] }
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
   const offsetOf = (form, shape) => Object.entries(offsets[form] || {}).find(([p]) => shape.startsWith(p))
   const nameCount = {}
