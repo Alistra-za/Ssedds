@@ -736,7 +736,11 @@ fn scan_body(
                     report.sub_ms.extend(p.sub_ms.iter().copied());
                     report.plugins = Some(p);
                 }
-                Err(ScanError::Cancelled) => report.notes.push(PLUGINS_CANCELLED.into()),
+                Err(ScanError::Cancelled) => {
+                    // Winners were replaced above; the old rec_winner rows would make Missing list the old load order.
+                    store.unload_plugins()?;
+                    report.notes.push(PLUGINS_CANCELLED.into());
+                }
                 Err(e) => return Err(e),
             }
         }
