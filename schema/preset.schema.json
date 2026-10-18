@@ -214,7 +214,8 @@
         "fast",
         "basic",
         "veryslow",
-        "slowest"
+        "slowest",
+        "max"
       ],
       "type": "string"
     },
