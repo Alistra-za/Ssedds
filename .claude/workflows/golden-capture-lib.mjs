@@ -296,7 +296,13 @@ export function groupSteps(g, origin) {
   return S
 }
 
-export const SETUP_CONSOLE = ['tai', 'tcai', 'tgm', 'set gamehour to 12', 'set timescale to 1', 'fw 81a'] // fw 81a = SkyrimClear: pins exterior weather (no effect indoors)
+// fw 81a = SkyrimClear: pins exterior weather (no effect indoors). plan.x_gamehour (0-24, default 12) sets the sun position.
+export function setupConsole(plan = {}) {
+  const h = plan.x_gamehour ?? 12
+  if (typeof h !== 'number' || !(h >= 0 && h < 24)) throw new Error(`x_gamehour must be a number in [0, 24), got ${JSON.stringify(h)}`)
+  return ['tai', 'tcai', 'tgm', `set gamehour to ${h}`, 'set timescale to 1', 'fw 81a']
+}
+export const SETUP_CONSOLE = setupConsole()
 
 // ---------- machine facts ----------
 function gameRunning() {
@@ -447,6 +453,8 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
   const cell = o.cell || plan.cell || ''
   const stop = []
   if (!cell) stop.push('no cell: set plan.cell or --cell')
+  let setup = SETUP_CONSOLE
+  try { setup = setupConsole(plan) } catch (e) { stop.push(e.message) }
   if (pendingMsg) stop.push(pendingMsg)
   if (freeF < needF) stop.push(`fixture drive has ${freeF.toFixed(1)} GB free, needs ${needF.toFixed(1)} (captures + 20 GB)`)
   if (freeG < needG) stop.push(`captures drive has ${freeG.toFixed(1)} GB free, needs ${needG.toFixed(1)}`)
@@ -460,7 +468,7 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
     mo2_profile: mo.profile, settings_path: settingsPath, settings_applied_copy: appliedCopy, captures_dir: capturesDir, journal, overlay,
     edits, keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts,
     shape_offsets: plan.x_shape_offsets || {}, match_tol: plan.x_match_tol || 60,
-    s6, groups, planned_captures: planned, port, setup_console: SETUP_CONSOLE,
+    s6, groups, planned_captures: planned, port, setup_console: setup, gamehour_alternatives: plan.x_gamehour_alternatives || [],
   }
   writeJson(path.join(runDir, 'resolved.json'), resolved)
   writeAtomic(path.join(runDir, 'plan.txt'), planText(resolved, dry))

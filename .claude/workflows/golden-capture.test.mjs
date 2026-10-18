@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { planSettingsEdits, resolveProfile, validatePlan, groupSteps, resolveGroups, deepMerge, extractScripts, mapDraws } from './golden-capture-lib.mjs'
+import { planSettingsEdits, resolveProfile, validatePlan, groupSteps, resolveGroups, deepMerge, extractScripts, mapDraws, setupConsole } from './golden-capture-lib.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const LIB = path.join(HERE, 'golden-capture-lib.mjs')
@@ -86,6 +86,10 @@ const lib = (cmd, env = {}) => {
   assert.throws(() => extractScripts(['A', 'C']), /dispatch/)
   assert.deepEqual(extractScripts(['A']).map(s => s.stage), ['A'])
   ok('x_extract: stages map to scripts in run order; D and missing dispatch rejected')
+  assert.ok(setupConsole().includes('set gamehour to 12'))
+  assert.ok(setupConsole({ x_gamehour: 7.5 }).includes('set gamehour to 7.5'))
+  for (const bad of [24, -1, '8', NaN]) assert.throws(() => setupConsole({ x_gamehour: bad }), /x_gamehour/)
+  ok('x_gamehour: default 12, plan hour used, out-of-range or non-number rejected')
   // W9: identity by shape name; collisions need offsets.
   const refs = [
     { form: 'F1', ref: '0xFF1', pos: [-120, 400, 0], angle: [0, 0, 180], shapes: ['EyesMale', 'MaleHeadIMF'] },

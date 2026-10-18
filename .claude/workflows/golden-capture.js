@@ -40,6 +40,7 @@ export const meta = {
 //   groups[].x_light_pos  [[x,y,z], ...] one PlaceAtMe LIGH each (the primary point-light method, placed every run);
 //                      a group with the anchor but no x_light_pos gets fallback_pos. LightPlacer (logLP) is a diagnostic.
 //   x_player_pos       [x,y,z] where the player is moved before each group, out of the camera's view (default [0,-600,0])
+//   x_gamehour / x_gamehour_alternatives  sun hour for the setup console (default 12) and hours to try when subjects are in shadow
 //   x_layout_yaw_deg / x_origin_shift  turn the whole plan frame (x_pos, x_angle Z, x_camera rel/yaw, light and player
 //                      positions) clockwise by the heading, then shift it by [dx,dy,dz] world units from the marker
 //   x_s6_files         files the owner places in mods\s6; checked, never written
@@ -191,7 +192,7 @@ DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSO
    - Write ${RUN_DIR}/refs_<label>.json = [{"form","ref","pos":[x,y,z],"angle":[ax,ay,az]}] for the placed refs (actual positions) and ${RUN_DIR}/camera_<label>.json = the camera get result (JSON).
    - Point lights (W4): the LIGH steps run every time (primary method). Record the inspect lights result in light: every placed light listed, and each subject within ~100 units of one. The anchor's logLP is a LightPlacer diagnostic only: record what it shows; never ReloadLP or Disable/Enable the anchor.
    - The first step moves the player out of the camera's view; the draw check must show no player body.
-   - Draw check: find the native png under ${MO2}\\overwrite, downscale it, look at it, and confirm every subject is on screen (objects outside the view only show up as shadow draws). If not, adjust the camera drive (record the change) and retry up to 3 times. A probe group (no forms) is just the empty view.
+   - Draw check: find the native png under ${MO2}\\overwrite, downscale it, look at it, and confirm every subject is on screen (objects outside the view only show up as shadow draws). If not, adjust the camera drive (record the change) and retry up to 3 times. A probe group (no forms) is just the empty view. Sun check (exterior cells): if the subjects stand in shadow (no direct sun on them or the floor around them), try each resolved.gamehour_alternatives hour in order with console "set gamehour to H", wait 5 s, re-check; keep the first lit hour for this and all later groups and record it. If none is lit, keep the plan hour and say so.
    - Captures: one communityshaders.capture request per capture. Wait until the new .rdc in the captures_dir appears and its size is stable for 5 s before the next request, except a capture marked consecutive, which is sent right after the previous request. Record each file's full path and the DevBench frame at request time. Label captures <group>_cap<n>.
    - Risky group: after placing, poll /api/health for 10 s; if the game died set crashed and stop (no retry).
 5. Quit without saving: console exec "qqq". Wait until Get-Process SkyrimSE is gone (up to 3 min). If the game crashed at any point, stop driving, set crashed, and return what you have.
