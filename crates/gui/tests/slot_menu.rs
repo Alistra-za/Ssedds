@@ -294,3 +294,41 @@ fn a_refused_menu_pick_says_why() {
         m.status_line
     );
 }
+
+/// Trace-debug wave 2 #4: a vanilla member's link names the file its export writes (folder from the game path, name
+/// from the output), so `moss_normal.png` links as `moss_n.dds` and `moss_albedo.png` as `moss.dds` (Note R9).
+#[test]
+fn a_vanilla_member_links_to_its_written_output_name() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([128u8, 128, 255]))
+        .save(r.join("moss_normal.png"))
+        .unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Rgb([x as u8 * 4, 90, 40]))
+        .save(r.join("moss_albedo.png"))
+        .unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let normal = "landscape/moss_normal.png";
+    assert_eq!(
+        member_game_path(&m, normal).as_deref(),
+        Ok(r"textures\landscape\moss_n.dds")
+    );
+    assert_eq!(
+        member_game_path(&m, "landscape/moss_albedo.png").as_deref(),
+        Ok(r"textures\landscape\moss.dds")
+    );
+    assert_eq!(
+        m.run_menu(MenuAction::SlotLink {
+            set: ROCK_SET.into(),
+            n: 2,
+            item: normal.into()
+        }),
+        None
+    );
+    assert_eq!(
+        slot_value(&m, ROCK_SET, 2),
+        Some(json!(r"textures\landscape\moss_n.dds"))
+    );
+}
