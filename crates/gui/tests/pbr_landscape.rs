@@ -44,6 +44,24 @@ fn has(h: &Harness<'static, AppModel>, s: &str) -> bool {
     h.query_all_by_label_contains(s).next().is_some()
 }
 
+/// Layout v2 A5: the card's pill shows the kind; the badge is its hover.
+fn pill_says(h: &mut Harness<'static, AppModel>, s: &str) -> bool {
+    h.ctx.global_style_mut(|st| {
+        st.interaction.tooltip_delay = 0.0;
+        st.interaction.show_tooltips_only_when_still = false;
+    });
+    let pill = h
+        .query_all_by_label("PBR Landscape")
+        .find(|n| support::in_sets_column(h, n.rect()))
+        .expect("the card's pill")
+        .rect()
+        .center();
+    h.hover_at(pill);
+    h.run();
+    h.run();
+    has(h, s)
+}
+
 /// The fixture's rock01 is a PBR set under `textures/landscape/`: auto PBR Landscape, card shown, records panel not.
 /// The first card edit creates the block and, with no scan, changes neither the box nor the badge (Note BM6).
 #[test]
@@ -115,7 +133,7 @@ fn the_pgpatcher_box_stores_statics_and_drives_the_badge() {
     h.run();
     assert_eq!(st(&h), Statics::Never);
     assert_eq!(badge_text(h.state(), &view(h.state())), BADGE_PBR_LANDSCAPE);
-    assert!(has(&h, BADGE_PBR_LANDSCAPE));
+    assert!(pill_says(&mut h, BADGE_PBR_LANDSCAPE));
     h.get_by_label(PGP_BOX).click();
     h.run();
     assert_eq!(st(&h), Statics::Always);

@@ -633,7 +633,8 @@ fn picking_rfaos_takes_the_set_out_of_the_json() {
     let mut h = editor(m);
     h.run();
     h.run();
-    h.get_by_label("Advanced skin (no JSON)");
+    // Layout v2 A5 (K14): the card's pill says "skin" (its hover the long "Advanced skin (no JSON)").
+    h.get_by_label("skin");
 }
 
 /// A metallic-only cs set: `_rmaos` from a metallic map, which `_rfaos` (no metallic channel) cannot be built from.
@@ -737,8 +738,12 @@ fn picking_rmaos_clears_a_stale_rfaos() {
         .click();
     h.run();
     h.run();
+    // K11: the Sets column's "RMAOS" chip is a button too.
     h.query_all_by_label("RMAOS")
-        .find(|n| n.accesskit_node().role() == eframe::egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node().role() == eframe::egui::accesskit::Role::Button
+                && !support::in_sets_column(&h, n.rect())
+        })
         .expect("the RMAOS option")
         .click();
     settle(&mut h);
@@ -762,8 +767,12 @@ fn re_picking_the_auto_recipe_writes_nothing() {
         .click();
     h.run();
     h.run();
+    // K11: the Sets column's "RMAOS" chip is a button too.
     h.query_all_by_label("RMAOS")
-        .find(|n| n.accesskit_node().role() == eframe::egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node().role() == eframe::egui::accesskit::Role::Button
+                && !support::in_sets_column(&h, n.rect())
+        })
         .expect("the RMAOS option")
         .click();
     settle(&mut h);

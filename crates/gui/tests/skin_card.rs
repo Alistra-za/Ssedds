@@ -287,7 +287,8 @@ fn a_skin_set_has_no_json_entry_no_truepbr_card_and_an_export_placeholder() {
         h.query_by_label("Specular level").is_none(),
         "no TruePBR card"
     );
-    h.get_by_label("Advanced skin (no JSON)");
+    // Layout v2 A5 (K14): the card's pill says "skin" (its hover the long "Advanced skin (no JSON)").
+    h.get_by_label("skin");
     {
         use egui_kittest::kittest::NodeT;
         assert!(h
