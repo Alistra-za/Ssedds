@@ -73,6 +73,8 @@ fn row(
     model: &mut AppModel,
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
+    // Save and Export's height from the start, so every control centres on one line (not lower after the taller tabs).
+    ui.set_row_height(2.0 * ui.spacing().interact_size.y);
     open_menu(ui, model);
     undo_redo(ui, model);
     ui.separator();

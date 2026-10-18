@@ -156,6 +156,10 @@ fn the_header_is_one_row_in_the_spec_order() {
             r.min.y <= y && y <= r.max.y,
             "{name} {r:?} is off the row at y {y}"
         );
+        // K2: the single-height controls share the centre line (the tabs are 6 pt taller, Save/Export two rows).
+        if !matches!(name, "Textures view" | "Meshes view" | "Save" | "Export") {
+            assert!((r.center().y - y).abs() < 2.0, "{name} {r:?} vs y {y}");
+        }
     }
     for pair in order.windows(2) {
         assert!(
