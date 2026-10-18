@@ -27,6 +27,8 @@ impl AppModel {
     /// Close Review and its ticks; the panel collapses when it showed Review (R7: the tab is listed only while open).
     pub fn close_review(&mut self) {
         self.review = None;
+        // Its queued export goes with it (Task 1.4's Close).
+        self.continue_after_plan = None;
         if self.bottom.tab == BottomTab::Review {
             self.collapse_bottom();
         }
@@ -124,10 +126,15 @@ impl AppModel {
     /// Review's Export (R3): `export_clicked`'s front half (a plan in flight → wait; changed sources → plan again and
     /// wait), then `Continue::Review`: the guards and the gate again before the export. Never on a stale plan.
     pub fn export_from_review(&mut self) {
-        if self.root.is_none() {
+        if self.root.is_none() || self.review.is_none() {
             return;
         }
         self.status_note = None;
+        self.continue_review();
+    }
+
+    /// The front half of Review's Export, also run when a scan-finished read it waited for lands.
+    pub(super) fn continue_review(&mut self) {
         if self.planning.is_some() || self.votes_pending.is_some() {
             self.continue_after_plan = Some(Continue::Review);
             return;

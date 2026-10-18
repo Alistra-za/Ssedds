@@ -379,3 +379,54 @@ fn a_texture_without_a_sub_type_suggestion_stays_listed_and_undecided() {
     assert!(m.undecided_keys().contains(&LEAF.to_string()));
     assert!(!m.undecided_keys().contains(&ROCK.to_string()));
 }
+
+// ---- fix round 1
+
+/// A scan read that lands before the plan in flight (no scan DB: it lands at once, unchanged) never starts a queued
+/// Review export on the stale plan; the export waits for the plan.
+#[test]
+fn a_scan_read_landing_before_the_plan_never_starts_a_queued_review_export() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    assert!(m.review.is_some());
+    m.replan();
+    m.export_from_review();
+    assert!(m.export_queued());
+    m.refresh_mesh_votes(false);
+    assert!(
+        m.export.running.is_none(),
+        "started while a plan was in flight"
+    );
+    assert!(m.export_queued());
+    idle(&mut m);
+    assert!(m.export.summary.is_some(), "exported on the settled plan");
+}
+
+/// Closing Review (Task 1.4's Close) drops its queued export.
+#[test]
+fn closing_review_drops_its_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    m.replan();
+    m.export_from_review();
+    assert!(m.export_queued());
+    m.close_review();
+    assert!(!m.export_queued());
+    idle(&mut m);
+    assert!(m.export.summary.is_none() && m.export.running.is_none());
+}
+
+/// Review's Export does nothing while Review is closed.
+#[test]
+fn export_from_review_needs_review_open() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert!(m.review.is_none());
+    m.replan();
+    m.export_from_review();
+    assert!(!m.export_queued());
+    idle(&mut m);
+    assert!(m.export.summary.is_none() && m.export.running.is_none());
+}

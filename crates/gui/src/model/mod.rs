@@ -891,8 +891,9 @@ impl AppModel {
                 self.queued_export_dropped();
             } else if clicked {
                 self.export_clicked();
-            } else if let Some(how) = continued {
-                self.run_continue(how);
+            } else if continued.is_some() {
+                // A plan may still be in flight, or sources changed: the same front half as Review's Export.
+                self.continue_review();
             }
         }
     }
@@ -1375,6 +1376,11 @@ impl AppModel {
             Continue::Review => {
                 // K4: Review closed (another folder, Reload) drops its queued export.
                 if self.review.is_none() {
+                    return;
+                }
+                // Never on a stale plan, whoever calls: wait again for the plan or the scan read in flight.
+                if self.planning.is_some() || self.votes_pending.is_some() {
+                    self.continue_after_plan = Some(how);
                     return;
                 }
                 // The decisions made in Review can change the blocks (a diffuse decided as PBR switches the set's

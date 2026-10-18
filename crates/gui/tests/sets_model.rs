@@ -1956,3 +1956,24 @@ fn both_exports_queued_behind_a_scan_finished_read_are_taken_when_it_lands() {
         "a later plan started the stranded Review export"
     );
 }
+
+/// Fix round 1 (Task 1.3): only Review's Export queued behind a scan-finished read starts when the read lands, once.
+#[test]
+fn review_export_queued_behind_a_scan_finished_read_starts_when_it_lands() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.export_clicked();
+    assert!(m.review.is_some());
+    m.refresh_mesh_votes(false);
+    assert!(m.votes_pending());
+    m.export_from_review();
+    assert!(m.export_queued() && m.export.running.is_none());
+    idle(&mut m);
+    assert!(!m.export_queued());
+    assert!(m.export.summary.is_some(), "started when the read landed");
+    m.export.summary = None;
+    m.set_field("landscape/rock01.png", "mipmaps.count", json!(3));
+    idle(&mut m);
+    assert!(m.export.summary.is_none() && m.export.running.is_none());
+}
