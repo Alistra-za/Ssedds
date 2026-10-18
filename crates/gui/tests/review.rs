@@ -566,3 +566,28 @@ fn an_edited_pgpatcher_json_opens_review_with_the_choice() {
     assert!(m.review.is_some() && m.export.running.is_none());
     assert!(m.review_gate().is_ok(), "the choice never disables Export");
 }
+
+/// C2 with a PBR set: Tessalith's own JSON reads as Ours, so the second export starts without Review or a question.
+#[test]
+fn our_own_pgpatcher_json_does_not_open_review() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    m.decide(LEAF, Answer::Subtype(Subtype::Diffuse));
+    m.decide(LEAF, Answer::Alpha(AlphaPolicy::Cutout));
+    m.decide(ODD, Answer::Subtype(Subtype::Diffuse));
+    m.decide(ODD, Answer::Acknowledge(Code::DimNpot));
+    idle(&mut m);
+    m.export_clicked();
+    idle(&mut m);
+    let p = pgp_json_path(&m);
+    let l = m
+        .review_json()
+        .into_iter()
+        .find(|l| l.kind == JsonKind::PgPatcher)
+        .unwrap();
+    assert_eq!((l.path, l.state), (p, DiskState::Ours));
+    m.export_clicked();
+    assert!(m.review.is_none() && m.export.running.is_some());
+    idle(&mut m);
+    assert_eq!(m.dialog, None);
+}
