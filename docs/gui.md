@@ -311,7 +311,7 @@ A green dot marks what is ready: a texture tile, a set with nothing to decide, a
 
 If a source changed on disk or a plan is still running, a click on Export waits for the plan and then checks again; a new pitfall in the meantime stops the export and says why in Review. Opening another folder or reloading closes Review and exports nothing. If the plan fails, Review stays open with its blockers.
 
-**Messages.** The last 500 entries, newest first, with the time, the severity and the text; **Clear** empties the list. **Ctrl+M**, or **Messages** in the header, opens this tab, or collapses the panel when it is already showing it. Toasts still appear at the bottom right, above the panel.
+**Messages.** The last 500 entries, newest first, with the time, the severity and the text; **Clear** empties the list. **Ctrl+M**, or **Messages** in the header, opens this tab, or collapses the panel when it is already showing it. Toasts still appear at the bottom right of the window, so with the panel open they cover its bottom-right corner for a few seconds; they take no clicks, so the buttons under them still work.
 
 **Files.** The export's progress, counts and files (see Export).
 
