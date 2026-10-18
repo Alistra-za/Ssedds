@@ -269,7 +269,7 @@ export function groupSteps(g, origin) {
   return S
 }
 
-export const SETUP_CONSOLE = ['tai', 'tcai', 'tgm', 'set gamehour to 12', 'set timescale to 1']
+export const SETUP_CONSOLE = ['tai', 'tcai', 'tgm', 'set gamehour to 12', 'set timescale to 1', 'fw 81a'] // fw 81a = SkyrimClear: pins exterior weather (no effect indoors)
 
 // ---------- machine facts ----------
 function gameRunning() {
