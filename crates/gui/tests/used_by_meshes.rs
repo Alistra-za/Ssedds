@@ -313,3 +313,46 @@ fn a_wanted_read_keeps_frames_coming_only_while_it_is_asked_for() {
     std::thread::sleep(std::time::Duration::from_millis(600));
     assert!(!m.used_by_pending());
 }
+
+/// Trace-debug wave 2 #6: while a scan runs, or after one was cancelled or failed, the store has every origin
+/// disabled and reads empty. A plan then keeps the mesh evidence it has, and "Used by meshes" starts no read.
+#[test]
+fn a_plan_while_the_scan_store_is_unsettled_keeps_the_mesh_evidence() {
+    let settle = |m: &mut AppModel| {
+        let t = Instant::now();
+        while !m.wait_idle(Duration::from_secs(60)) || m.votes_pending() {
+            assert!(t.elapsed() < Duration::from_secs(60), "never idle");
+        }
+    };
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    let tex = tex_of(&m, "landscape/leaf.png");
+    db_with(&db, &tex, &[("meshes/a.nif", "A", 1, 1, Some(1), Some(0))]);
+    m.scan_db = Some(db.clone());
+    m.refresh_mesh_votes(false);
+    settle(&mut m);
+    let alpha = m.mesh_alpha.clone();
+    assert!(!alpha.is_empty(), "the evidence was read");
+    let votes = m.mesh_votes.clone();
+    // What `begin_scan` does to the store, and what the app records when a scan starts.
+    modscan::store::Store::open(&db)
+        .unwrap()
+        .conn()
+        .execute("UPDATE origin SET enabled = 0", [])
+        .unwrap();
+    m.scan_store_unsettled = true;
+    m.replan();
+    settle(&mut m);
+    assert_eq!(m.mesh_alpha, alpha);
+    assert_eq!(m.mesh_votes, votes);
+    let key = "landscape/rock01.png";
+    let _ = m.used_by_for(key);
+    std::thread::sleep(sdc_gui::model::used_by::USED_BY_SETTLE * 2);
+    let _ = m.used_by_for(key);
+    assert!(
+        m.used_by.pending.is_none(),
+        "no read of the unsettled store"
+    );
+}

@@ -313,6 +313,8 @@ impl eframe::App for SdcApp {
         // Trace-debug #41: after a cancel or failure the store reads empty; keep the evidence on screen.
         if scanning && !self.meshes.scanning() {
             self.scan_ended();
+            // Wave 2 #6: a cancelled or failed scan leaves every origin disabled, so plans keep the evidence too.
+            self.model.scan_store_unsettled = !self.meshes.scan_completed;
             if self.meshes.scan_completed {
                 self.model.refresh_mesh_votes(false);
                 self.model.refresh_known_paths();
@@ -323,6 +325,8 @@ impl eframe::App for SdcApp {
         self.meshes.activate();
         if let Some(req) = self.meshes.take_request() {
             self.meshes.start(req);
+            // `begin_scan` disables every origin until the scan ends.
+            self.model.scan_store_unsettled |= self.meshes.scanning();
         }
         self.route_3d(&ctx);
         if crate::ui::header::meshes_view_active(&ctx) {
