@@ -483,3 +483,33 @@ fn reload_unsaved_enter_cancels_and_the_button_discards() {
     assert!(!h.state().is_dirty(), "the edits are dropped");
     assert!(!h.state().can_undo());
 }
+
+/// Trace-debug wave 2 #2: the Enter that picks "Rename" in the Ctrl+K palette must not also apply the rename the
+/// dialog opens with (the last recipe). A later Enter applies it.
+#[test]
+fn the_rename_dialog_ignores_enter_on_the_frame_it_opens() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item("landscape/leaf.png", false, false);
+    m.last_recipe.prefix = "new_".into();
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.state_mut()
+        .open_rename(sdc_gui::model::rename::RenameMode::Inputs);
+    h.key_press(Key::Enter);
+    h.step();
+    assert!(
+        matches!(h.state().dialog, Some(Dialog::Rename(_))),
+        "Enter on the opening frame is ignored"
+    );
+    assert_eq!(h.state().read_as_of("landscape/leaf.png"), None);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().dialog.is_none(), "a later Enter applies");
+    assert_eq!(
+        h.state().read_as_of("landscape/leaf.png").as_deref(),
+        Some("landscape/new_leaf.png")
+    );
+}

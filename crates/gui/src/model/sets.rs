@@ -1042,10 +1042,18 @@ pub(crate) fn game_path_in(
     if !job.game_path.starts_with("textures/") {
         return Err(NO_GAME_PATH.into());
     }
-    Ok(Path::new(&job.game_path)
-        .with_extension("dds")
-        .to_string_lossy()
-        .replace('/', "\\"))
+    Ok(written_game_path(job).replace('/', "\\"))
+}
+
+/// The game path a member's export writes (wave 2 #4, Note R9): the folder of `game_path` and the file name of
+/// `output`, as the engine's `colour_mesh_key` and `gras_key` take them (`leaf_normal.png` writes `leaf_n.dds`).
+/// `/`-separated.
+pub(crate) fn written_game_path(job: &engine::policy::ResolvedJob) -> String {
+    let name = job.output.file_name().unwrap_or_default().to_string_lossy();
+    match job.game_path.rsplit_once('/') {
+        Some((dir, _)) => format!("{dir}/{name}"),
+        None => name.into_owned(),
+    }
 }
 
 /// Empty `slot` of set `id` in the document: its own occupant leaves the set, a borrow is dropped. Part of a replace.

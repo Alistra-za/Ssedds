@@ -22,7 +22,7 @@ fn lower(p: &str) -> String {
 }
 
 /// `p` without the extension of its last component.
-fn no_ext(p: &str) -> &str {
+pub(super) fn no_ext(p: &str) -> &str {
     let (dir, name) = split_path(p);
     &p[..dir.len() + split_ext(name).0.len()]
 }

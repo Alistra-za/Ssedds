@@ -389,6 +389,41 @@ fn a_failed_manifest_append_removes_the_output() {
     assert_eq!((s.converted, s.failed), (2, 0));
 }
 
+/// Trace-debug wave 2 #15: the cleanup after a failed manifest append removes only a sidecar this run wrote; a
+/// hand-made `.dds.json` kept by Note BV3 stays.
+#[test]
+fn a_failed_manifest_append_keeps_a_foreign_sidecar() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let foreign = d.path().join("out/armor/iron.dds.json");
+    std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+    std::fs::write(&foreign, "{\"mine\": true}").unwrap();
+    let manifest = Manifest::at(&d.path().join("out"));
+    std::fs::create_dir_all(manifest.path().parent().unwrap()).unwrap();
+    std::fs::write(manifest.path(), b"").unwrap();
+    let set_readonly = |ro: bool| {
+        let mut perm = std::fs::metadata(manifest.path()).unwrap().permissions();
+        perm.set_readonly(ro);
+        std::fs::set_permissions(manifest.path(), perm).unwrap();
+    };
+    set_readonly(true);
+    let mut req = request(d.path());
+    req.sidecar = true;
+    let (s, ev) = run(req);
+    set_readonly(false);
+    assert_eq!((s.converted, s.failed), (0, 2), "{ev:#?}");
+    assert_eq!(
+        std::fs::read_to_string(&foreign).unwrap(),
+        "{\"mine\": true}",
+        "the foreign sidecar is kept"
+    );
+    assert_eq!(
+        files_with_ext(&d.path().join("out"), "json").len(),
+        1,
+        "only the foreign sidecar is left"
+    );
+}
+
 /// Audit 5 (DECISIONS Note Y1): an output replaced after it was recorded is re-encoded, not kept as up to date.
 #[test]
 fn a_replaced_output_is_reencoded() {

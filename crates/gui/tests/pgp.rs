@@ -1493,3 +1493,20 @@ fn set_match_of_derived_stays_derived() {
         "no derived path"
     );
 }
+
+/// Trace-debug wave 2 #9: PGPatcher never converts `/`, so a set's `path_contains` and `nif_filter` are written with
+/// `\`, as a delete section's are.
+#[test]
+fn set_path_contains_and_nif_filter_write_backslashes() {
+    let e = entry(
+        &[
+            ("match1", json!("")),
+            ("path_contains", json!("landscape/rocks")),
+            ("nif_filter", json!("architecture/whiterun")),
+        ],
+        r"landscape\rock01",
+    );
+    let w = written(&e);
+    assert_eq!(w["path_contains"], json!(r"landscape\rocks"));
+    assert_eq!(w["nif_filter"], json!(r"architecture\whiterun"));
+}

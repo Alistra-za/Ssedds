@@ -764,7 +764,7 @@ fn layered_profile_with(
     // The skin_wet height form is a grayscale map: R is taken and copied to RGB in Preprocess.
     profile.category = category_of(st, profile.format, f.analysis.grayscale);
     backend_follows_format(&mut profile, &mut prov, &sources);
-    emissive_hdr_choice(ctx, &mut profile, &mut prov, f);
+    emissive_hdr_choice(ctx, &mut profile, &mut prov, &sources, f);
     float_source_is_linear(&mut profile, &mut prov, f);
     // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green). An
     // explicit `flip_green` wins; `resolve_decided` reports a contradiction as CFG-GREEN-CONFLICT (carried fix 4).
@@ -994,11 +994,14 @@ fn hdr_name(f: Format) -> String {
 /// DECISIONS O2/S3, the fact `analysis:hdr-source`: a `pbr_emissive` whose BC6H format no layer chose explicitly
 /// becomes BC7 unless the source is HDR; then, on every `pbr_emissive`, `color.tag` follows the final format
 /// (`n/a` for BC6H, else `srgb`) unless a layer set it. Runs after every layer, so an explicit `format` or tag from
-/// a user/project preset, config, rule, `[files]` or `--set` is kept.
+/// a user/project preset, config, rule, `[files]` or `--set` is kept. On the switch to BC7 an explicit backend is
+/// kept when it can write BC7 or was pinned (`backend_follows_format`'s rule; trace-debug wave 2 #1): a preset or
+/// config table's `ispc_bc6h` follows the fact to bc7e, a file-scoped `--set` still reports CFG-INVALID.
 fn emissive_hdr_choice(
     ctx: &ResolveCtx,
     p: &mut Profile,
     prov: &mut BTreeMap<String, Provenance>,
+    sources: &FormatSources,
     f: &FileFacts,
 ) {
     if p.subtype != Subtype::PbrEmissive {
@@ -1008,7 +1011,10 @@ fn emissive_hdr_choice(
     if p.format == Format::Bc6hUf16 && !field_explicit(ctx, prov, "format") && !is_hdr_source(f) {
         p.format = Format::Bc7;
         prov.insert("format".into(), fact());
-        if !field_explicit(ctx, prov, "encoder.backend") {
+        let keep = field_explicit(ctx, prov, "encoder.backend")
+            && (backend_fits(p.encoder.backend, p.format)
+                || sources.backend.is_some_and(|(r, _)| r.pins));
+        if !keep {
             p.encoder.backend = default_backend(p.format);
             prov.insert("encoder.backend".into(), fact());
         }

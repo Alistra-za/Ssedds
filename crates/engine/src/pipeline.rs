@@ -52,6 +52,8 @@ pub struct FileOutcome {
 pub struct FileTracker {
     pub stage: Cell<Stage>,
     pub written: Cell<bool>,
+    /// Whether this run wrote the `.dds.json` sidecar: only then may a failure remove it (a foreign one stays, BV3).
+    pub sidecar_written: Cell<bool>,
 }
 
 impl Default for FileTracker {
@@ -59,6 +61,7 @@ impl Default for FileTracker {
         FileTracker {
             stage: Cell::new(Stage::Load),
             written: Cell::new(false),
+            sidecar_written: Cell::new(false),
         }
     }
 }
@@ -560,7 +563,9 @@ pub fn process_file(
         // as in BQ10, and the DDS stays; the next `if-changed --sidecar` run rewrites a stale sdc sidecar from the record (`sidecar_present`).
         match crate::dds::may_replace(&side, text.as_bytes(), ours) {
             Ok(()) => {
-                if let Err(e) = write_atomic(&side, text.as_bytes()) {
+                let wrote = write_atomic(&side, text.as_bytes());
+                tracker.sidecar_written.set(wrote.is_ok());
+                if let Err(e) = wrote {
                     report.warnings.push(crate::codes::Warning::new(
                         crate::codes::Code::OutSidecarKept,
                         format!(

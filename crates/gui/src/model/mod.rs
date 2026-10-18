@@ -266,6 +266,9 @@ pub struct AppModel {
     /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
     /// developer's scan cannot leak in.
     pub scan_db: Option<PathBuf>,
+    /// Trace-debug wave 2 #6: a Meshes scan is running, or the last one was cancelled or failed, so the store has every
+    /// origin disabled and reads empty; the mesh evidence and "Used by meshes" keep what they have. Set by the app.
+    pub scan_store_unsettled: bool,
     /// `scan_db`'s stamp, taken once per frame in `poll` (REPORT #9: `view_key` does not stat it per call).
     scan_stamp: cs_pbr::Stamp,
     /// The last scan-database read error logged (audit GM-5: each distinct error once).
@@ -481,6 +484,7 @@ impl AppModel {
             loaded_user_presets: vec![],
             skipped_user_presets: vec![],
             scan_db: None,
+            scan_store_unsettled: false,
             scan_stamp: None,
             scan_db_error: None,
             mesh_votes: Default::default(),
@@ -795,6 +799,17 @@ impl AppModel {
         self.votes_gen += 1;
         let generation = self.votes_gen;
         self.votes_pending = Some((generation, after_plan));
+        // Wave 2 #6: the store reads empty while a scan runs or after one was cancelled; keep what we have.
+        if self.scan_store_unsettled {
+            let kept = MeshEvidence {
+                votes: self.mesh_votes.clone(),
+                alpha: self.mesh_alpha.clone(),
+                tree_anim: self.mesh_tree_anim.clone(),
+                gras: self.gras_diffuses.clone(),
+                gras_all: self.gras_all_diffuses.clone(),
+            };
+            return self.votes_landed(generation, Ok(kept));
+        }
         let Some(db) = self.scan_db.clone().filter(|d| d.is_file()) else {
             return self.votes_landed(generation, Ok(Default::default()));
         };
@@ -2607,6 +2622,8 @@ impl AppModel {
                 self.save_failed(DocKind::SdcToml, &e);
                 return Err(e);
             }
+            // Wave 2 #3: only a user's save holds the recovered edits, so only it drops the `.recovery` file.
+            crate::crash_log::discard_recovery(p.path());
             wrote = true;
         }
         // A clean sdc-project.toml is not written (no empty file, no spurious conflict); a read-only one never has edits.
@@ -2619,10 +2636,11 @@ impl AppModel {
                 self.save_failed(DocKind::Project, &e);
                 return Err(e);
             }
+            crate::crash_log::discard_recovery(s.path());
             wrote = true;
         }
         if wrote {
-            self.refresh_banner(); // the save removed any recovery file
+            self.refresh_banner(); // the save removed the saved documents' recovery files
             self.messages.notify(messages::Severity::Info, "Saved");
         }
         Ok(())
@@ -2636,8 +2654,9 @@ impl AppModel {
                     return;
                 };
                 if overwrite {
-                    if let Err(e) = p.save(true) {
-                        self.save_failed(which, &e);
+                    match p.save(true) {
+                        Ok(()) => crate::crash_log::discard_recovery(p.path()),
+                        Err(e) => self.save_failed(which, &e),
                     }
                 } else {
                     p.reload();
@@ -2653,8 +2672,9 @@ impl AppModel {
                     return;
                 };
                 if overwrite {
-                    if let Err(e) = s.save(true) {
-                        self.save_failed(which, &e);
+                    match s.save(true) {
+                        Ok(()) => crate::crash_log::discard_recovery(s.path()),
+                        Err(e) => self.save_failed(which, &e),
                     }
                 } else {
                     s.reload();

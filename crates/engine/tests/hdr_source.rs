@@ -195,3 +195,35 @@ fn an_explicit_rgba16f_emissive_gets_tag_na() {
     );
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
 }
+
+/// Trace-debug wave 2 #1: preset and config tables never pin a backend, so a `pbr_emissive` table that names the
+/// BC6H-only encoder follows the BC7 switch instead of failing CFG-INVALID. A file-scoped `--set` still pins it.
+#[test]
+fn a_preset_or_config_subtype_backend_that_cannot_write_bc7_follows_the_fact() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in")).unwrap();
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[subtypes.pbr_emissive]\nencoder = { backend = \"ispc_bc6h\" }\n",
+    )
+    .unwrap();
+    let j = plan_one(d.path(), "lamp_g.png", eight_bit_g(), &[]);
+    assert_eq!(
+        shape(&j),
+        (
+            Format::Bc7,
+            ColorTag::Srgb,
+            Backend::Bc7e,
+            "analysis:hdr-source".into()
+        )
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    let d = tempfile::tempdir().unwrap();
+    let j = plan_one(
+        d.path(),
+        "lamp_g.png",
+        eight_bit_g(),
+        &["file:**/lamp_g.png.encoder.backend=ispc_bc6h"],
+    );
+    assert!(j.warnings.iter().any(|w| w.code == Code::CfgInvalid));
+}

@@ -296,7 +296,7 @@ pub fn refuse_clashes(out: &mut [CmTarget], exporting: impl Fn(&str) -> bool) {
     }
 }
 
-use super::history::{case_twin, orphans, record_key, recorded, records_at, sha256_of};
+use super::history::{orphans, record_key, recorded, records_at, remove_own_case_twin, sha256_of};
 use engine::dds::may_replace;
 
 use std::path::PathBuf;
@@ -386,10 +386,8 @@ pub fn finish(
         let dds = path.with_extension("dds");
         // O6 (as in cs_pbr_export): a case-only rename drops sdc's own unchanged file under the old name; a hand
         // edit stays.
-        if let Some(old) = case_twin(&path).filter(|_| dds.is_file()) {
-            if sha256_of(&old).as_deref() == last {
-                let _ = std::fs::remove_file(old);
-            }
+        if dds.is_file() {
+            remove_own_case_twin(&path, last);
         }
         let skip = if !dds.is_file() {
             Some(format!(

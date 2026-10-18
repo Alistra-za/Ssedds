@@ -174,6 +174,10 @@ impl AppModel {
             .is_some_and(|p| p.to_string() == "mesh:alpha");
         let st = &self.used_by;
         let have = st.current.clone().filter(|c| c.item == key);
+        // Wave 2 #6: no read of a store a running or cancelled scan left empty; a list already read stays.
+        if self.scan_store_unsettled {
+            return have.map(Some);
+        }
         let fresh = have.is_some() && !st.stale;
         if !fresh && st.pending.as_deref() != Some(key) {
             let now = Instant::now();

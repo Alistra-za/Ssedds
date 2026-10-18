@@ -8,6 +8,7 @@ use eframe::egui;
 pub fn draw(ctx: &egui::Context, model: &mut AppModel, mut d: RenameDialog) {
     let plan = crate::model::rename::plan_rename(model, &d);
     let (mut apply, mut close, mut mode) = (false, false, d.mode);
+    let was_open = super::dialogs::opened_before(ctx, "rename");
     egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
         ui.set_max_width(860.0);
         let n = d.keys.len();
@@ -127,7 +128,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, mut d: RenameDialog) {
             close = ui.button("Cancel").clicked();
         });
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-        apply |= enter && can;
+        apply |= enter && can && was_open;
         close |= ui.input(|i| i.key_pressed(egui::Key::Escape));
     });
     if close {
