@@ -14,8 +14,10 @@ pub fn group<R>(
 ) -> Option<R> {
     egui::Frame::group(ui.style())
         .show(ui, |ui| {
-            // shortcut: the Debug bound of egui ids is dodged by hashing to a u64 first.
-            let id = ui.make_persistent_id(std::hash::BuildHasher::hash_one(&std::hash::BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default(), id));
+            // shortcut: the Debug bound of egui ids is dodged by hashing to a u64 first; upgrade to `make_persistent_id(id)`
+            // if egui drops the Debug bound or every caller's id type derives Debug.
+            let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+            let id = ui.make_persistent_id(std::hash::BuildHasher::hash_one(&hasher, id));
             let state = CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
             let mut clicked = false;
             let mut h = state.show_header(ui, |ui| {
