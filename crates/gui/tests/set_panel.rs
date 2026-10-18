@@ -294,6 +294,83 @@ fn the_json_editor_button_is_small_and_in_the_panel_header() {
     assert!(h.state().0.json_editor_open);
 }
 
+/// `set_editor_shown` mirrors `centre`'s and `set_editor::draw`'s routing: in every centre state exactly one of the
+/// window-edge drawer and the set panel is drawn (3D: the drawer). Each case is a fresh harness, so the persisted
+/// panel states are this case's own.
+#[test]
+fn drawer_and_panel_never_both_or_neither() {
+    type Setup = fn(&mut AppModel);
+    let cases: [(&str, Setup, bool, bool); 7] = [
+        (
+            "expanded texture over a set",
+            |m| {
+                rock_selected(m);
+                m.expanded = Some("landscape/rock01.png".into());
+            },
+            false,
+            false,
+        ),
+        (
+            "two sets",
+            |m| {
+                let keys: Vec<String> = m.sets.iter().map(|s| s.key.clone()).collect();
+                m.click_set(&keys[0], false, false);
+                m.click_set(&keys[1], true, false);
+                assert!(m.in_bulk());
+            },
+            false,
+            false,
+        ),
+        (
+            "nothing",
+            |m| m.selection = sdc_gui::model::Selection::None,
+            false,
+            false,
+        ),
+        (
+            "a texture",
+            |m| m.select_item("landscape/leaf.png"),
+            false,
+            false,
+        ),
+        ("a set in 2D", rock_selected, false, true),
+        (
+            "a set in 3D",
+            |m| {
+                rock_selected(m);
+                m.settings.set_view_3d = true;
+            },
+            true,
+            false,
+        ),
+        (
+            "a stale set",
+            |m| m.selection = sdc_gui::model::Selection::Set("landscape/gone".into()),
+            false,
+            false,
+        ),
+    ];
+    for (name, setup, three_d, want_panel) in cases {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = pbr_opened_plain(d.path());
+        setup(&mut m);
+        let mut h = harness_with(m, 1400.0, 900.0, three_d);
+        if three_d {
+            // The 3D view never goes idle.
+            for _ in 0..6 {
+                h.run_steps(3);
+                let (m, s) = h.state_mut();
+                s.set3d.poll(&*m);
+            }
+        } else {
+            h.run();
+        }
+        let panel = PanelState::load(&h.ctx, Id::new("set-panel")).is_some();
+        assert_eq!(panel, want_panel, "{name}: the set panel");
+        assert_eq!(drawer_drawn(&h), !want_panel, "{name}: the drawer");
+    }
+}
+
 /// A selection whose set left the plan shows the editor's message, and Advanced stays reachable through the strip.
 #[test]
 fn a_set_no_longer_in_the_plan_keeps_the_window_edge_advanced_strip() {

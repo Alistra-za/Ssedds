@@ -2,7 +2,8 @@
 use eframe::egui;
 use egui::collapsing_header::CollapsingState;
 
-/// `value` sits right-aligned in the header, styled by the caller (weak, or AMBER for a warning). K15: egui toggles on the icon only, so the title toggles too.
+/// `value` sits right-aligned in the header, styled by the caller (weak, or AMBER for a warning). K15: egui toggles
+/// on the icon only, so the title toggles too.
 pub fn group<R>(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash,

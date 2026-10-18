@@ -165,9 +165,10 @@ pub fn draw_with_scan(
     set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
 }
 
-/// `centre`'s routing in one place: it shows a set's editor (2D: a set still in the plan, with the set panel; 3D: the
-/// followed set's 3D view, also for a member texture, AG87) rather than the preview, the bulk panel or a hint. A set
-/// that left the plan gets no panel, so Advanced stays reachable through the window-edge strip.
+/// Mirrors `centre`'s and `set_editor::draw`'s routing: true when the centre shows a set's editor (2D: a set still in
+/// the plan; 3D: the followed set's 3D view, also for a member texture, AG87) rather than the preview, the bulk panel
+/// or a hint. Callers add the 2D/3D side (`!three_d` = the set panel, `three_d` = the 3D settings window). Keep it in
+/// step with those two; `set_panel.rs::drawer_and_panel_never_both_or_neither` pins it.
 fn set_editor_shown(model: &AppModel, three_d: bool) -> bool {
     model.root.is_some()
         && model.expanded.is_none()
