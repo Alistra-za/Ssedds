@@ -201,6 +201,11 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                 }),
                 // A renamed entry writes no `path_contains` (AN1).
                 None if k.key == "path_contains" && renamed.is_some() => None,
+                // Wave 2 #9: PGPatcher never converts `/`, so these path texts are written with `\` (as in a section).
+                None if matches!(k.key, "path_contains" | "nif_filter") => v
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Node::Scalar(json!(s.replace('/', "\\")))),
                 None => v
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
