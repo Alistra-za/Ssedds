@@ -22,7 +22,8 @@ pub fn group<R>(
             let mut clicked = false;
             let mut h = state.show_header(ui, |ui| {
                 // The visible edge: a wider row above widens max_rect (egui unions it into the content), not the panel.
-                let right = ui.max_rect().right().min(ui.clip_rect().right());
+                let inset = ui.spacing().item_spacing.x; // the clip edge cuts the last glyph otherwise
+                let right = ui.max_rect().right().min(ui.clip_rect().right() - inset);
                 ui.set_min_width((right - ui.min_rect().left()).max(0.0));
                 let label = egui::Label::new(egui::RichText::new(title).strong())
                     .sense(egui::Sense::click());
