@@ -41,17 +41,27 @@ fn shapes(h: &Harness<'static, AppModel>) -> Vec<egui::Shape> {
     out
 }
 
-/// rock01's name on its card: the leftmost label (the Sets column is left of the set editor).
+/// rock01's name on its card.
 fn name_rect(h: &Harness<'static, AppModel>) -> egui::Rect {
-    h.query_all_by_label(ROCK)
-        .map(|n| n.rect())
-        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
-        .expect("rock01's card name")
+    name_of(h, ROCK)
 }
 
-/// The card: the smallest painted rect holding rock01's name and the chip row below it.
+/// Set `id`'s name on its card: the leftmost label (the Sets column is left of the set editor).
+fn name_of(h: &Harness<'static, AppModel>, id: &str) -> egui::Rect {
+    h.query_all_by_label(id)
+        .map(|n| n.rect())
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .unwrap_or_else(|| panic!("{id}'s card name"))
+}
+
+/// rock01's card.
 fn card_rect(h: &Harness<'static, AppModel>) -> egui::Rect {
-    let name = name_rect(h);
+    card_of(h, ROCK)
+}
+
+/// A card: the smallest painted rect holding the set's name and the chip row below it.
+fn card_of(h: &Harness<'static, AppModel>, id: &str) -> egui::Rect {
+    let name = name_of(h, id);
     shapes(h)
         .iter()
         .filter_map(|s| match s {
@@ -65,7 +75,15 @@ fn card_rect(h: &Harness<'static, AppModel>) -> egui::Rect {
 
 /// The nodes labelled `label` inside rock01's card (K11: every card has a "D").
 fn on_card<'a>(h: &'a Harness<'static, AppModel>, label: &'a str) -> Vec<egui_kittest::Node<'a>> {
-    let card = card_rect(h);
+    on_card_of(h, ROCK, label)
+}
+
+fn on_card_of<'a>(
+    h: &'a Harness<'static, AppModel>,
+    id: &str,
+    label: &'a str,
+) -> Vec<egui_kittest::Node<'a>> {
+    let card = card_of(h, id);
     h.query_all_by_label(label)
         .filter(|n| card.contains_rect(n.rect()))
         .collect()
@@ -251,4 +269,110 @@ fn a_missing_entry_is_a_question_mark_chip() {
     h.run();
     h.run();
     h.get_by_label("no file matches landscape/gone.png");
+}
+
+/// Press on `at` and move past the drag threshold: whether a texture is now in flight. The payload is cleared before
+/// the release, so nothing is dropped.
+fn drags_a_texture(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> bool {
+    use sdc_gui::ui::sets_column::DragItem;
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    h.hover_at(at);
+    h.run();
+    h.event(press(true));
+    h.run();
+    for step in 1..=4 {
+        h.event(egui::Event::PointerMoved(
+            at + egui::vec2(6.0 * step as f32, 0.0),
+        ));
+        h.run();
+    }
+    let dragging = egui::DragAndDrop::payload::<DragItem>(&h.ctx).is_some();
+    egui::DragAndDrop::clear_payload(&h.ctx);
+    h.event(press(false));
+    h.run();
+    dragging
+}
+
+/// K13: a borrowed chip is outlined amber, says where it is from in its one hover, and is never offered for
+/// dragging (dragging it would move another set's member). An own chip still drags.
+#[test]
+fn a_borrowed_chip_is_amber_and_offers_no_drag() {
+    use sdc_gui::model::sets::DropChoice;
+    use sdc_gui::model::sets::DropOutcome;
+    let d = tempfile::tempdir().unwrap();
+    // pbr_export.rs::vanilla_borrow: a new set from leaf borrows rock01's normal.
+    let mut m = pbr_ready(d.path());
+    let leaf = m
+        .items
+        .iter()
+        .find(|i| i.name == "leaf.png")
+        .unwrap()
+        .key
+        .clone();
+    m.set_field(&leaf, "subtype", serde_json::json!("pbr_albedo"));
+    idle(&mut m);
+    let id = m.drop_new_set(&leaf).unwrap();
+    idle(&mut m);
+    m.set_target(engine::config::Target::Vanilla);
+    idle(&mut m);
+    let normal = m
+        .items
+        .iter()
+        .find(|i| i.name == "rock01_normal.png")
+        .unwrap()
+        .key
+        .clone();
+    assert!(matches!(
+        m.drop_choice(&normal, &id, DropChoice::Share),
+        DropOutcome::Joined
+    ));
+    idle(&mut m);
+    let v = set_views(&m).into_iter().find(|v| v.id == id).unwrap();
+    assert!(
+        matches!(
+            v.slots.get(&SlotKind::Normal),
+            Some(SlotFill::Borrowed { .. })
+        ),
+        "{:?}",
+        v.slots
+    );
+    let mut h = harness(m);
+    h.run();
+    let chip = on_card_of(&h, &id, "N");
+    assert_eq!(chip.len(), 1, "the borrower's N chip");
+    let at = chip[0].rect();
+    let amber = |h: &Harness<'static, AppModel>, r: egui::Rect| {
+        shapes(h).iter().any(|s| {
+            matches!(s, egui::Shape::Rect(x) if x.rect == r
+                && x.stroke.width == 2.0
+                && x.stroke.color == sdc_gui::ui::status::AMBER)
+        })
+    };
+    assert!(amber(&h, at), "the borrowed chip is outlined amber");
+    let own = on_card(&h, "N")[0].rect();
+    assert!(!amber(&h, own), "rock01's own N chip is not");
+    h.hover_at(at.center());
+    h.run();
+    h.run();
+    assert_eq!(
+        h.query_all_by_label_contains("borrowed from landscape/rock01")
+            .count(),
+        1,
+        "one hover"
+    );
+    // The member's name and the borrowed line are the same hover.
+    h.get_by_label_contains("rock01_normal.png\nborrowed from landscape/rock01");
+    assert!(
+        !drags_a_texture(&mut h, at.center()),
+        "a borrowed chip offers no drag"
+    );
+    assert!(
+        drags_a_texture(&mut h, own.center()),
+        "an own chip still drags"
+    );
 }

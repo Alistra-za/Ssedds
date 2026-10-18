@@ -111,6 +111,9 @@ enum Act {
     Slot(MenuAction),
 }
 
+/// Below this inner card width the pill and the ⚠ button go under the name, so the header row never holds the
+/// Sets column open past `SETS_MIN`.
+const WIDE_CARD: f32 = 150.0;
 /// The size of a member thumbnail (`columns::member`), which an empty chip matches.
 const CHIP: f32 = 32.0;
 
@@ -226,7 +229,8 @@ fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, blocked: bool) 
 }
 
 /// A member's thumbnail on the card with today's behaviours: click selects, double-click expands, a slot member has
-/// the slot menu, and `drag` offers it for dragging. `None` when the item is not in the model.
+/// the slot menu, and `drag` offers it for dragging; `note` is a line added to its hover. `None` when the item is
+/// not in the model.
 #[allow(clippy::too_many_arguments)]
 fn member_chip(
     ui: &mut egui::Ui,
@@ -236,6 +240,7 @@ fn member_chip(
     mk: &str,
     kind: Option<SlotKind>,
     drag: bool,
+    note: Option<&str>,
     sel_items: &HashSet<String>,
     acts: &mut Vec<Act>,
     member_menu: &mut bool,
@@ -243,7 +248,7 @@ fn member_chip(
     let item = model.item(mk)?;
     let locked = kind.is_some_and(|k| v.locks.contains(&k.slot_number()));
     let pgp = kind.is_some_and(|k| crate::pgp::prefix::pgp_locked(&v.settings, k.slot_number()));
-    let r = member(ui, item, sel_items.contains(mk), locked, pgp, thumbs);
+    let r = member(ui, item, sel_items.contains(mk), locked, pgp, thumbs, note);
     if let Some(k) = kind {
         *member_menu |= r.secondary_clicked();
         let open = r.context_menu(|ui| {
@@ -606,9 +611,7 @@ fn pill(
                                 .map(|w| (v.label.as_str(), w)),
                         )
                         .collect();
-                    // Below this the pill and the ⚠ button go under the name, so the row never holds the column
-                    // open past `SETS_MIN`.
-                    let wide = ui.available_width() >= 150.0;
+                    let wide = ui.available_width() >= WIDE_CARD;
                     let name = |ui: &mut egui::Ui| {
                         ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
                     };
@@ -667,6 +670,7 @@ fn pill(
                                 }
                             };
                             chipped.insert(mk);
+                            let note = from.map(|f| format!("borrowed from {f}"));
                             // K13: a borrowed item belongs to another set: no drag payload from here.
                             let Some(r) = member_chip(
                                 ui,
@@ -676,6 +680,7 @@ fn pill(
                                 mk,
                                 Some(k),
                                 from.is_none(),
+                                note.as_deref(),
                                 sel_items,
                                 acts,
                                 &mut member_menu,
@@ -684,14 +689,13 @@ fn pill(
                                 continue;
                             };
                             paint_letter(ui, r.rect, &letter);
-                            if let Some(from) = from {
+                            if from.is_some() {
                                 ui.painter().rect_stroke(
                                     r.rect,
                                     2.0,
                                     egui::Stroke::new(2.0, AMBER),
                                     egui::StrokeKind::Inside,
                                 );
-                                r.clone().on_hover_text(format!("borrowed from {from}"));
                             }
                             r.widget_info(|| {
                                 egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &letter)
@@ -721,6 +725,7 @@ fn pill(
                                 mk,
                                 kind,
                                 true,
+                                None,
                                 sel_items,
                                 acts,
                                 &mut member_menu,

@@ -523,6 +523,8 @@ pub(super) fn member(
     locked: bool,
     pgp_locked: bool,
     thumbs: &mut ThumbCache,
+    // A line added to the one hover (a set card's "borrowed from …").
+    note: Option<&str>,
 ) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(MEMBER, MEMBER), egui::Sense::click_and_drag());
@@ -577,6 +579,10 @@ pub(super) fn member(
     }
     if pgp_locked {
         hover.push_str(" (PGPatcher lock: the mesh's original texture is used)");
+    }
+    if let Some(n) = note {
+        hover.push('\n');
+        hover.push_str(n);
     }
     response.on_hover_text(hover)
 }
