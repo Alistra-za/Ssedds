@@ -269,7 +269,7 @@ fn a_selector_change_is_one_undo_step() {
 
 #[test]
 fn choosing_the_auto_mode_pins_it() {
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
     const SET: &str = "landscape/rock01";
     let d = tempfile::tempdir().unwrap();
     let dir = support::mod_folder(d.path()).join("landscape");
@@ -314,7 +314,11 @@ fn choosing_the_auto_mode_pins_it() {
         .unwrap()
         .click();
     h.run();
-    h.get_by_label("Standard").click();
+    // Layout v2 A3: the group header also reads "Standard"; the menu entry is not a plain label.
+    h.query_all_by_label("Standard")
+        .find(|n| n.accesskit_node().role() != eframe::egui::accesskit::Role::Label)
+        .unwrap()
+        .click();
     h.run();
     assert_eq!(
         stored(&h),

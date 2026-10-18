@@ -255,15 +255,39 @@ fn set_panel(
                 super::advanced::body(ui, model, advanced);
                 return;
             }
-            super::cs_pbr::card(ui, model, v);
             if json {
+                ui.horizontal(|ui| {
+                    ui.strong(&v.label);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // G3: the whole file, every set and the delete sections, in its own window.
+                        if ui
+                            .small_button("TruePBR JSON editor…")
+                            .on_hover_text("Every set's entry and the delete sections of the PGPatcher JSON, in one window")
+                            .clicked()
+                        {
+                            model.json_editor_open = true;
+                        }
+                    });
+                });
+            }
+            super::cs_pbr::card(ui, model, v);
+            // K12: on a JSON set that is not PBR Landscape the CS PBR records sit between Matching and Advanced
+            // TruePBR settings; `pgp_panel` (a PBR Landscape set's) draws both halves itself.
+            let split = json && !(model.target == Target::Cs && crate::model::sets::is_pbr_landscape(v));
+            if split {
+                super::pgp_fields::panel_main(ui, model, &v.id);
+                super::cs_pbr::section(ui, model, v);
+                super::pgp_fields::panel_advanced(ui, model, &v.id);
+            } else if json {
                 super::cs_pbr::pgp_panel(ui, model, v);
             }
             if v.skin {
                 super::skin_card::card(ui, model, v);
             }
             super::cm_card::section(ui, model, v);
-            super::cs_pbr::section(ui, model, v);
+            if !split {
+                super::cs_pbr::section(ui, model, v);
+            }
             super::plugin_refs::set_section(ui, model, v);
         });
 }

@@ -2,12 +2,12 @@
 use eframe::egui;
 use egui::collapsing_header::CollapsingState;
 
-/// `value` sits right-aligned in the header. K15: egui toggles on the icon only, so the title toggles too.
+/// `value` sits right-aligned in the header, styled by the caller (weak, or AMBER for a warning). K15: egui toggles on the icon only, so the title toggles too.
 pub fn group<R>(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash,
     title: &str,
-    value: Option<&str>,
+    value: Option<egui::RichText>,
     default_open: bool,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
@@ -23,7 +23,7 @@ pub fn group<R>(
                 clicked = ui.add(label).clicked();
                 if let Some(v) = value {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.weak(v)
+                        ui.label(v)
                     });
                 }
             });

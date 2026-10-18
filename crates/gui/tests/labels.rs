@@ -116,7 +116,9 @@ fn a_group_shows_its_value_in_the_header_and_folds() {
     let mut h = Harness::builder()
         .with_size(egui::vec2(400.0, 300.0))
         .build_ui(|ui| {
-            sdc_gui::ui::group::group(ui, "g", "Coat", Some("on"), false, |ui| ui.label("inside"));
+            sdc_gui::ui::group::group(ui, "g", "Coat", Some("on".into()), false, |ui| {
+                ui.label("inside")
+            });
         });
     h.run();
     h.get_by_label("Coat");

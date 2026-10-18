@@ -73,8 +73,8 @@ fn group_title(g: Group) -> &'static str {
         Group::Features => "Features",
         Group::Emissive => "Emissive settings",
         Group::Parallax => "Parallax settings",
-        Group::Subsurface => "Subsurface settings",
-        Group::Multilayer => "Coat settings",
+        Group::Subsurface => "Subsurface",
+        Group::Multilayer => "Coat",
         Group::Glint => "Glint settings",
         Group::Fuzz => "Fuzz settings",
         Group::Vertex => "Vertex colours and depth",
@@ -85,14 +85,15 @@ fn group_title(g: Group) -> &'static str {
     }
 }
 
-/// The visual settings (F1 spec §4 header 1). Matching and the advanced keys have their own headers.
+/// The visual settings (F1 spec §4 header 1), in layout v2 A3's order. Matching and the advanced keys have their own
+/// groups.
 const MAIN: [Group; 8] = [
     Group::Material,
     Group::Features,
     Group::Multilayer,
+    Group::Subsurface,
     Group::Emissive,
     Group::Parallax,
-    Group::Subsurface,
     Group::Glint,
     Group::Fuzz,
 ];
@@ -169,24 +170,23 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
     }
 }
 
-/// The TruePBR box of set `set` (F1 spec §4): the visual settings, Matching, and Advanced TruePBR settings.
+/// The TruePBR box of set `set` (F1 spec §4): the visual settings, Matching, and Advanced TruePBR settings. The set
+/// panel draws the two halves itself, with the CS PBR records between them (layout v2 A3, K12).
 pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
+    panel_main(ui, model, set);
+    panel_advanced(ui, model, set);
+}
+
+/// A group header's value (layout v2 A3).
+fn value(s: impl Into<String>) -> Option<egui::RichText> {
+    Some(egui::RichText::new(s).weak())
+}
+
+/// The visual settings to Matching, each a framed group with its value in the header (layout v2 A3).
+pub fn panel_main(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
-    // G3: the whole file, every set and the delete sections, in its own window; both edit the same settings.
-    if ui
-        .small_button("Open the TruePBR JSON editor…")
-        .on_hover_text(
-            "Every set's entry and the delete sections of the PGPatcher JSON, in one window",
-        )
-        .clicked()
-    {
-        model.json_editor_open = true;
-    }
     for g in MAIN {
-        if !group_open(g, &c.eff) {
-            continue;
-        }
         let keys: Vec<&KeySpec> = KEYS
             .iter()
             .filter(|k| {
@@ -194,18 +194,64 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
             })
             .filter(|k| !(c.grass && grass_ignores(k.key)))
             .collect();
-        group(ui, &c, "pgp", g, &keys, &mut edits);
-        if g == Group::Features {
-            subsurface_selector(ui, &c, &mut edits);
-            coat_kept_note(ui, &c);
+        // The selector keeps Subsurface even when grass leaves it no rows.
+        if keys.is_empty() && g != Group::Subsurface {
+            continue;
         }
+        // Material and Features are always "open"; a feature group is open while on and not blocked.
+        let on = group_open(g, &c.eff);
+        let head = match g {
+            Group::Material => None,
+            Group::Features => {
+                let n = FEATURE_KEYS
+                    .iter()
+                    .filter(|(f, _)| feature_on(&c.eff, *f))
+                    .count();
+                value(if n == 0 {
+                    "none".to_string()
+                } else {
+                    format!("{n} on")
+                })
+            }
+            Group::Subsurface => value(sub_text(sub_mode(&c.eff))),
+            _ => value(if on { "on" } else { "off" }),
+        };
+        // K16: the id carries the state, so a group opens when its feature turns on and closes when it turns off.
+        super::group::group(
+            ui,
+            ("pgp", g as u8, on, &c.set),
+            group_title(g),
+            head,
+            on,
+            |ui| {
+                if g == Group::Subsurface {
+                    subsurface_selector(ui, &c, &mut edits);
+                }
+                if on {
+                    key_grid(ui, &c, "pgp", g, &keys, &mut edits);
+                }
+                if g == Group::Multilayer {
+                    coat_kept_note(ui, &c);
+                }
+            },
+        );
     }
     alpha_section(ui, &c, &mut edits);
     matching(ui, &c, &mut edits);
-    egui::CollapsingHeader::new(egui::RichText::new("Advanced TruePBR settings").strong())
-        .id_salt(("pgp-advanced", &c.set))
-        .default_open(false)
-        .show(ui, |ui| {
+    model.set_json_values(set, edits);
+}
+
+/// Advanced TruePBR settings: the keys most sets never need, collapsed.
+pub fn panel_advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
+    let c = context(model, set);
+    let mut edits: Vec<Edit> = vec![];
+    super::group::group(
+        ui,
+        ("pgp-advanced", &c.set),
+        "Advanced TruePBR settings",
+        None,
+        false,
+        |ui| {
             for g in ADVANCED {
                 if !group_open(g, &c.eff) {
                     continue;
@@ -217,13 +263,23 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
                     .collect();
                 group(ui, &c, "pgp-adv", g, &keys, &mut edits);
             }
-        });
+        },
+    );
     model.set_json_values(set, edits);
 }
 
 /// Subsurface keys the selector owns instead of the generic rows.
 fn is_sub_key(k: &str) -> bool {
     k == "subsurface" || k == FOLIAGE_KEY
+}
+
+fn sub_text(mode: SubMode) -> &'static str {
+    match mode {
+        SubMode::Off => "Off",
+        SubMode::Standard => "Standard",
+        SubMode::Foliage => "Foliage",
+        SubMode::Conflict => "Standard + Foliage (conflict)",
+    }
 }
 
 /// "Subsurface: Off / Standard / Foliage" (owner, 2026-10-14; DECISIONS AG101): one choice, one key. Auto (AG102) and
@@ -242,17 +298,11 @@ fn subsurface_selector(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
             .filter(|_| mode == SubMode::Off)
             .map(|b| format!("off: {} is on", feature_name(b)))
     });
+    // The group's title names the row (layout v2 A3), so the combo has no label of its own.
     ui.horizontal(|ui| {
-        ui.label("Subsurface");
         let r = ui.add_enabled_ui(reason.is_none(), |ui| {
-            let text = match mode {
-                SubMode::Off => "Off",
-                SubMode::Standard => "Standard",
-                SubMode::Foliage => "Foliage",
-                SubMode::Conflict => "Standard + Foliage (conflict)",
-            };
             egui::ComboBox::from_id_salt(("pgp-subsurface", &c.set))
-                .selected_text(text)
+                .selected_text(sub_text(mode))
                 .show_ui(ui, |ui| {
                     for (m, l) in [
                         (SubMode::Off, "Off"),
@@ -331,6 +381,18 @@ fn group(
         return;
     }
     ui.label(egui::RichText::new(group_title(g)).strong());
+    key_grid(ui, c, salt, g, keys, edits);
+}
+
+/// A group's rows: label, control, reset.
+fn key_grid(
+    ui: &mut egui::Ui,
+    c: &Ctx,
+    salt: &str,
+    g: Group,
+    keys: &[&KeySpec],
+    edits: &mut Vec<Edit>,
+) {
     egui::Grid::new((salt, g as u8, &c.set))
         .num_columns(3)
         .show(ui, |ui| {
@@ -349,7 +411,23 @@ fn group(
 /// The Matching header (F1 spec §3.2): one row per slot match (slot, exact path, ×), a + menu for filled slots 3–8,
 /// and the warning when nothing matches. The slot 1 and 2 rows are the card toggles' state.
 fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
-    ui.label(egui::RichText::new("Matching").strong());
+    let n = c.matches.len();
+    let head = if c.no_match {
+        Some(egui::RichText::new("matches nothing").color(AMBER))
+    } else {
+        value(format!("{n} match{}", if n == 1 { "" } else { "es" }))
+    };
+    super::group::group(
+        ui,
+        ("pgp-matching-group", &c.set),
+        "Matching",
+        head,
+        true,
+        |ui| matching_body(ui, c, edits),
+    );
+}
+
+fn matching_body(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
     ui.label(
         egui::RichText::new("The entry applies when any of these matches.")
             .small()
@@ -733,11 +811,15 @@ fn alpha_invalid_note(ui: &mut egui::Ui, c: &Ctx, key: &str, max: u32, valid: bo
 /// The NiAlphaProperty section (Task 4b, DECISIONS AG27-AG31): NifSkope-style flag controls composed into
 /// `alphaprop_flags`, the test threshold, and the create and delete switches. Every change is one edit of the key.
 fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
-    let open = ALPHA_KEYS.iter().any(|k| c.own.contains_key(*k));
-    egui::CollapsingHeader::new(egui::RichText::new("NiAlphaProperty").strong())
-        .id_salt(("pgp-alpha", &c.set))
-        .default_open(open)
-        .show(ui, |ui| {
+    let set = ALPHA_KEYS.iter().any(|k| c.own.contains_key(*k));
+    let head = value(if set { "set" } else { "off" });
+    super::group::group(
+        ui,
+        ("pgp-alpha", &c.set),
+        "NiAlphaProperty",
+        head,
+        false,
+        |ui| {
             let flag = |k: &str| c.own.get(k).and_then(Value::as_bool) == Some(true);
             let (deleting, editable) = (flag("alphaprop_delete"), c.read_only.is_none());
             // A float read: a hand-edited 4844.0 is 4844. A key that is set but not a whole number in range is
@@ -837,7 +919,8 @@ fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                 });
             });
             ui.add_space(6.0);
-        });
+        },
+    );
 }
 
 /// The decoded flag controls and the raw value. One edit of `alphaprop_flags` per change.

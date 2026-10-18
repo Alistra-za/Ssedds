@@ -173,7 +173,7 @@ fn the_3d_layout_truepbr_settings_show_the_coat_group() {
     h.get_by_label(sdc_gui::ui::set_preview::SETTINGS_BUTTON)
         .click();
     h.run_steps(3);
-    h.get_by_label("Coat settings");
+    h.get_by_label("Coat");
     h.get_by_label("Coat colour");
     h.get_by_label(FRAME_LABEL);
 }

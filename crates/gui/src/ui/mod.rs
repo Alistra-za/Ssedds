@@ -118,12 +118,7 @@ pub fn draw_with_scan(
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
     let three_d = state.set3d.enabled && set_preview::wanted(model);
     // C6: a set editor in 2D has Advanced as its panel's last tab; everything else keeps the window-edge drawer.
-    let set_panel = model.root.is_some()
-        && matches!(model.selection, Selection::Set(_))
-        && model.expanded.is_none()
-        && !model.in_bulk()
-        && !three_d;
-    if set_panel {
+    if !three_d && set_editor_shown(model, three_d) {
         // The drawer is one panel: keep the columns' widget ids (a set pill's open menu) as if it were drawn, as egui
         // does for a collapsed panel.
         ui.skip_ahead_auto_ids(1);
@@ -167,8 +162,19 @@ pub fn draw_with_scan(
     json_editor::draw(ui.ctx(), model);
     presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
-    let shows_3d = three_d && model.root.is_some() && model.expanded.is_none() && !model.in_bulk();
-    set_preview::settings_window(ui.ctx(), model, shows_3d);
+    set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+}
+
+/// `centre`'s routing in one place: it shows a set's editor (2D: a set still in the plan, with the set panel; 3D: the
+/// followed set's 3D view, also for a member texture, AG87) rather than the preview, the bulk panel or a hint. A set
+/// that left the plan gets no panel, so Advanced stays reachable through the window-edge strip.
+fn set_editor_shown(model: &AppModel, three_d: bool) -> bool {
+    model.root.is_some()
+        && model.expanded.is_none()
+        && !model.in_bulk()
+        && (three_d
+            || matches!(&model.selection, Selection::Set(key)
+                if crate::model::sets::set_views(model).iter().any(|v| v.key == *key)))
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.

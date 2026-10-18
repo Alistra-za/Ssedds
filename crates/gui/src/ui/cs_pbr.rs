@@ -1,5 +1,5 @@
 //! The set editor's Community Shaders PBR records (design §4, §6): the PBR Landscape card and the generic
-//! "Advanced: CS PBR records" panel (Note BM). Per kind a block with its template picker, fields, EDID list, warnings
+//! "CS PBR records" panel (Note BM). Per kind a block with its template picker, fields, EDID list, warnings
 //! and (texture sets) the statics line or the PGPatcher box. Drawing only: every change is a model call made after
 //! drawing.
 use super::columns::{AMBER, RED};
@@ -16,7 +16,7 @@ use crate::model::AppModel;
 use eframe::egui;
 use serde_json::{json, Value as Json};
 
-pub const SECTION: &str = "Advanced: CS PBR records";
+pub const SECTION: &str = "CS PBR records";
 /// Note BM: the PBR Landscape card's title.
 pub const CARD: &str = "PBR Landscape";
 /// Note BM: after the count of texture-set rows the card hides.
@@ -60,10 +60,20 @@ pub const SHARED: &str = "Shared (texture set, material object and PGPatcher JSO
 fn draw(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, card: bool) {
     let mut acts = vec![];
     let m: &AppModel = model;
-    egui::CollapsingHeader::new(if card { CARD } else { SECTION })
-        .id_salt(("cs-pbr", card, v.id.as_str()))
-        .default_open(card)
-        .show(ui, |ui| {
+    // Layout v2 A3 (A12): the records panel counts its blocks in the header; the card has no header value.
+    let n = [Kind::Txst, Kind::Mato]
+        .into_iter()
+        .filter(|k| m.cs_block(&v.id, *k).is_some())
+        .count();
+    let head = (!card).then(|| egui::RichText::new(format!("{n} records")).weak());
+    let title = if card { CARD } else { SECTION };
+    super::group::group(
+        ui,
+        ("cs-pbr", card, v.id.as_str()),
+        title,
+        head,
+        card,
+        |ui| {
             if ui.small_button("Refresh scan").clicked() {
                 acts.push(Act::Refresh);
             }
@@ -82,7 +92,8 @@ fn draw(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, card: bool) {
                     b => block(ui, m, v, kind, &b.unwrap_or_default(), card, &mut acts),
                 }
             }
-        });
+        },
+    );
     for a in acts {
         match a {
             Act::Add(k) => model.add_cs_block(&v.id, k),
@@ -491,13 +502,18 @@ pub fn pgp_panel(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         return super::pgp_fields::panel(ui, model, &v.id);
     }
     let on = model.pgp_written(v);
-    egui::CollapsingHeader::new(if on { PGP_PANEL } else { PGP_PANEL_OFF })
-        .id_salt(("pgp-panel", on, v.id.as_str()))
-        .default_open(on)
-        .show(ui, |ui| {
+    let title = if on { PGP_PANEL } else { PGP_PANEL_OFF };
+    super::group::group(
+        ui,
+        ("pgp-panel", on, v.id.as_str()),
+        title,
+        None,
+        on,
+        |ui| {
             if on {
                 ui.weak(PGP_PANEL_NOTE);
             }
             super::pgp_fields::panel(ui, model, &v.id);
-        });
+        },
+    );
 }

@@ -2,7 +2,7 @@
 //! tab; the window-edge Advanced strip stays for a texture, the preview, a bulk selection, nothing selected and 3D.
 mod support;
 use eframe::egui::{self, accesskit::Role, containers::panel::PanelState, Id};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
 use sdc_gui::model::AppModel;
@@ -218,4 +218,91 @@ fn the_rows_keep_their_minimum_beside_a_wide_panel() {
     );
     // The panel never sits over the rows: the first cell (the slot label) ends left of it; the rest scroll sideways.
     assert!(slot_rect(&h, "Diffuse").max.x < edge);
+}
+
+/// A group's title (K11: not the tab, which is a Button).
+fn title<'a>(h: &'a H, t: &'a str) -> egui_kittest::Node<'a> {
+    h.query_all_by_label(t)
+        .find(|n| n.accesskit_node().role() != Role::Button)
+        .unwrap_or_else(|| panic!("no group {t}"))
+}
+
+/// The value right-aligned in a group's header row ("on"/"off" repeat, so it is found beside its title).
+fn header_value(h: &H, t: &str) -> String {
+    let r = title(h, t).rect();
+    h.query_all_by_role(Role::Label)
+        .filter(|n| n.rect().min.x > r.max.x && (n.rect().center().y - r.center().y).abs() < 2.0)
+        .find_map(|n| n.value())
+        .unwrap_or_else(|| panic!("no header value beside {t}"))
+}
+
+#[test]
+fn the_material_groups_are_framed_in_order_with_values() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    let ys: Vec<f32> = [
+        "Material",
+        "Features",
+        "Coat",
+        "Subsurface",
+        "NiAlphaProperty",
+        "Matching",
+        "CS PBR records",
+        "Advanced TruePBR settings",
+    ]
+    .iter()
+    .map(|t| title(&h, t).rect().min.y)
+    .collect();
+    assert!(ys.windows(2).all(|w| w[0] < w[1]), "{ys:?}");
+    assert_eq!(header_value(&h, "Subsurface"), "Off");
+    assert_eq!(header_value(&h, "Matching"), "1 match");
+    assert_eq!(header_value(&h, "Coat"), "off");
+    assert_eq!(header_value(&h, "NiAlphaProperty"), "off");
+    assert_eq!(header_value(&h, "CS PBR records"), "0 records");
+}
+
+#[test]
+fn turning_multilayer_on_opens_the_coat_group() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    assert!(h.query_by_label("Coat colour").is_none());
+    // K21: the checkbox's label.
+    h.get_by_label("Multilayer (coat)").click();
+    h.run();
+    assert_eq!(header_value(&h, "Coat"), "on");
+    h.get_by_label("Coat colour");
+}
+
+#[test]
+fn the_json_editor_button_is_small_and_in_the_panel_header() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    let b = h.get_by_label("TruePBR JSON editor…");
+    assert!(b.rect().width() < 220.0);
+    assert!(b.rect().min.x > panel(&h).min.x, "in the panel");
+    b.click();
+    h.run();
+    assert!(h.state().0.json_editor_open);
+}
+
+/// A selection whose set left the plan shows the editor's message, and Advanced stays reachable through the strip.
+#[test]
+fn a_set_no_longer_in_the_plan_keeps_the_window_edge_advanced_strip() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    m.selection = sdc_gui::model::Selection::Set("landscape/gone".into());
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("This set is no longer in the plan.");
+    assert!(drawer_drawn(&h), "the strip at the window edge");
+    assert!(PanelState::load(&h.ctx, Id::new("set-panel")).is_none());
 }

@@ -543,20 +543,24 @@ fn rock_with(keys: &[(&str, serde_json::Value)]) -> Harness<'static, AppModel> {
     }
     let mut h = harness(m);
     h.run();
+    // Layout v2 A3: the selector is the first row of the Subsurface group, which is closed while Subsurface is off.
+    if subsurface_combo(&h).is_none() {
+        h.get_by_label("Subsurface").click();
+        h.run();
+    }
     h
+}
+
+/// The Subsurface selector (AG101): a combo box named by its value.
+fn subsurface_combo<'a>(h: &'a Harness<'static, AppModel>) -> Option<egui_kittest::Node<'a>> {
+    let names = ["Off", "Standard", "Foliage"];
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().is_some_and(|v| names.contains(&v.as_str())))
 }
 
 fn disabled(h: &Harness<'static, AppModel>, label: &str) -> bool {
     if label == "Subsurface" {
-        // The Subsurface selector (AG101) is a combo box named by its value.
-        let role = eframe::egui::accesskit::Role::ComboBox;
-        let names = ["Off", "Standard", "Foliage"];
-        return h
-            .query_all_by_role(role)
-            .find(|n| n.value().is_some_and(|v| names.contains(&v.as_str())))
-            .unwrap()
-            .accesskit_node()
-            .is_disabled();
+        return subsurface_combo(h).unwrap().accesskit_node().is_disabled();
     }
     h.get_by_label(label).accesskit_node().is_disabled()
 }
@@ -605,16 +609,24 @@ fn the_tri_buttons_write_true_false_and_remove() {
     h.run();
     h.get_by_label("Advanced TruePBR settings").click();
     h.run();
-    h.query_all_by_label("on").next().unwrap().scroll_to_me();
-    // The first Tri row under Advanced TruePBR settings is vertex_colors.
-    let nth = |h: &Harness<'static, AppModel>, l: &str| {
-        h.query_all_by_label(l).next().map(|n| n.rect()).is_some()
-    };
-    assert!(nth(&h, "on"));
-    h.query_all_by_label("on").next().unwrap().click();
+    // The first Tri row under Advanced TruePBR settings is vertex_colors. Layout v2 A3: group headers show "on" and
+    // "off" as plain labels, so the Tri buttons are the first that are not.
+    let label = eframe::egui::accesskit::Role::Label;
+    h.query_all_by_label("on")
+        .find(|n| n.accesskit_node().role() != label)
+        .unwrap()
+        .scroll_to_me();
+    h.run();
+    h.query_all_by_label("on")
+        .find(|n| n.accesskit_node().role() != label)
+        .unwrap()
+        .click();
     h.run();
     assert_eq!(rock_settings(&h)["vertex_colors"], serde_json::json!(true));
-    h.query_all_by_label("off").next().unwrap().click();
+    h.query_all_by_label("off")
+        .find(|n| n.accesskit_node().role() != label)
+        .unwrap()
+        .click();
     h.run();
     assert_eq!(rock_settings(&h)["vertex_colors"], serde_json::json!(false));
     h.query_all_by_label("not set").next().unwrap().click();
