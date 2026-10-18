@@ -1,16 +1,19 @@
-//! The set editor, layout A (M3b spec §4): slot cards on the left, PGPatcher settings on the right (Task 15).
+//! The set editor, layout A (M3b spec §4): slot rows (layout v2 A2) on the left, PGPatcher settings on the right (Task 15).
 //! Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
 use super::sets_column::{DropState, Pending, SlotNote};
 use super::slot_commands::SlotCmdState;
+use super::status::{dot, Status};
 use super::thumbs::ThumbCache;
+use crate::model::bottom::tile_ready;
 use crate::model::bulk::MenuAction;
 use crate::model::fields::{
     channel_text, encoding_options, field_hidden, field_lock, field_view, format_label,
     PARALLAX_HOVER,
 };
-use crate::model::items::{ItemKind, TextureItem};
+use crate::model::items::{ItemKind, ItemStatus, TextureItem};
+use crate::model::out_size::{human, SizeEst};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
@@ -26,15 +29,21 @@ use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
 use engine::events::RecipeReport;
 use engine::pack::RecipeKind;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Note AN: the caption across a PGPatcher-locked slot card.
 /// Review M2: a lock key on a set that writes no JSON.
 pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
-const CARD: f32 = 150.0;
-const THUMB: f32 = 72.0;
-/// The frame, its margins and the grid spacing around a card.
-const CARD_CHROME: f32 = 24.0;
+const THUMB: f32 = 56.0;
+/// The format and recipe combos (A5).
+const COMBO_W: f32 = 96.0;
+/// The File cell is the stretchy one (it truncates); a Grid column sizes itself from its content, so it gets a width
+/// between these: what the row's other cells leave of the column.
+const FILE_MIN: f32 = 60.0;
+const FILE_MAX: f32 = 240.0;
+/// Between the row cells.
+const SPACING: f32 = 4.0;
 /// Seconds a single click waits for its second click (a little over egui's double-click delay).
 const DOUBLE_CLICK_WAIT: f64 = 0.35;
 
@@ -66,7 +75,7 @@ enum Act {
 pub struct View {
     /// The 2D | 3D switch is offered (the app has a 3D preview).
     pub switch: bool,
-    /// The 3D panel shows this set: the slot cards are left out, the TruePBR settings stay.
+    /// The 3D panel shows this set: the slot rows are left out, the TruePBR settings stay.
     pub three_d: bool,
 }
 
@@ -144,6 +153,12 @@ pub fn draw(
     let drop_at = drops.file.as_ref().and_then(|f| f.pos);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
+    // `size_of` needs the model mutably, which the drawing below does not have.
+    let sizes: HashMap<String, SizeEst> = v
+        .members
+        .iter()
+        .filter_map(|k| model.size_of(k).map(|e| (k.clone(), e)))
+        .collect();
     if view.three_d {
         // 3D (AG132): the set's 3D view takes the rest of this pane (`ui::centre`); the TruePBR settings and the skin
         // card are in the TruePBR settings… window, as are the CS PBR section and the complex material card, so an edit
@@ -155,17 +170,20 @@ pub fn draw(
         .show(ui, |ui| {
             ui.columns(2, |cols| {
                 let ui = &mut cols[0];
-                cards(ui, model, &v, thumbs, &mut acts, drop_at);
+                rows(ui, model, &v, thumbs, &mut acts, drop_at, &sizes);
                 slot_note(ui, drops, &v.id);
                 unslotted_packed(ui, model, &v, &mut acts);
                 ui.add_space(6.0);
-                ui.add_enabled_ui(editable, |ui| {
-                    if ui.button("Slot commands…").clicked() {
-                        cmds.open = Some(v.id.clone());
-                    }
-                })
-                .response
-                .on_disabled_hover_text(&why);
+                // A2: a normal button, not stretched across the justified column.
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(editable, |ui| {
+                        if ui.button("Slot commands…").clicked() {
+                            cmds.open = Some(v.id.clone());
+                        }
+                    })
+                    .response
+                    .on_disabled_hover_text(&why);
+                });
                 under_grid(ui, model, &v);
                 super::plugin_refs::set_section(ui, model, &v);
                 super::cs_pbr::section(ui, model, &v);
@@ -298,30 +316,97 @@ fn recipe(ui: &mut egui::Ui, r: &RecipeReport) {
     }
 }
 
-fn cards(
+/// Layout v2 A2: one row per slot, in PGPatcher slot order: Slot · thumbnail · File · Format · Flags · Status.
+fn rows(
     ui: &mut egui::Ui,
     model: &AppModel,
     v: &SetView,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
     drop_at: Option<egui::Pos2>,
+    sizes: &HashMap<String, SizeEst>,
 ) {
-    // Four per row when they fit; fewer in a narrow column, so no card ends up outside the panel.
-    let per_row = ((ui.available_width() / (CARD + CARD_CHROME)) as usize).clamp(1, 4);
-    egui::Grid::new(("slot-cards", &v.id, per_row))
-        .num_columns(per_row)
-        .spacing([8.0, 8.0])
+    // The File cell takes what the other columns leave: their widest content last frame, plus the spacing.
+    let others_id = egui::Id::new(("slot-rows-others", &v.id));
+    let others = ui.data(|d| d.get_temp::<[f32; 5]>(others_id));
+    // A few pixels short of the column: rows exactly as wide as it would flip the sideways scroll bar on and off.
+    let file_w = others.map_or(FILE_MIN, |w| {
+        (ui.available_width() - w.iter().sum::<f32>() - 5.0 * SPACING - 8.0)
+            .clamp(FILE_MIN, FILE_MAX)
+    });
+    let mut widths = [0.0f32; 5];
+    // A ScrollArea takes every scroll target set inside it, the vertical one too, so a row widget asked to scroll into
+    // view (ScrollIntoView) would not move the set editor's vertical scroll: its row is asked again after.
+    let asks = |ui: &egui::Ui| {
+        ui.input(|i| {
+            i.events
+                .iter()
+                .filter(|e| {
+                    matches!(e, egui::Event::AccessKitActionRequest(r)
+                        if r.action == egui::accesskit::Action::ScrollIntoView)
+                })
+                .count()
+        })
+    };
+    let mut reveal = None;
+    // Never drawn under the panel beside it: a column narrower than the rows scrolls them sideways.
+    egui::ScrollArea::horizontal()
+        .id_salt(("slot-rows-scroll", &v.id))
         .show(ui, |ui| {
-            for (i, cell) in slot_row(v.shader.as_ref(), &v.slots).iter().enumerate() {
-                card(ui, model, v, cell, thumbs, acts, drop_at);
-                if i % per_row == per_row - 1 {
-                    ui.end_row();
-                }
-            }
+            egui::Grid::new(("slot-rows", &v.id))
+                .num_columns(6)
+                .striped(true)
+                .spacing([SPACING, 4.0])
+                .min_col_width(0.0)
+                .show(ui, |ui| {
+                    // The row takes the right-click; its labels are not selectable, so they do not take it.
+                    ui.style_mut().interaction.selectable_labels = false;
+                    for cell in slot_row(v.shader.as_ref(), &v.slots) {
+                        let size = match &cell.fill {
+                            SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
+                                sizes.get(item)
+                            }
+                            SlotFill::Empty => None,
+                        };
+                        let before = asks(ui);
+                        let (w, rect) =
+                            row(ui, model, v, &cell, thumbs, acts, drop_at, size, file_w);
+                        if asks(ui) < before {
+                            reveal = Some(rect);
+                        }
+                        for (a, b) in widths.iter_mut().zip(w) {
+                            *a = a.max(b);
+                        }
+                    }
+                });
         });
+    ui.data_mut(|d| d.insert_temp(others_id, widths));
+    if let Some(r) = reveal {
+        ui.scroll_to_rect(r, Some(egui::Align::Center));
+    }
 }
 
-fn card(
+/// A Flags icon toggle: its accessible name is the full `label`, which also leads its hover. True when clicked.
+fn flag(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    on: bool,
+    icon: &str,
+    label: &str,
+    hover: &str,
+    why: &str,
+) -> bool {
+    let r = ui
+        .add_enabled(enabled, egui::Button::selectable(on, icon))
+        .on_hover_text(format!("{label}. {hover}"))
+        .on_disabled_hover_text(why);
+    ui.ctx()
+        .accesskit_node_builder(r.id, |b| b.set_label(label));
+    r.clicked()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn row(
     ui: &mut egui::Ui,
     model: &AppModel,
     v: &SetView,
@@ -329,18 +414,25 @@ fn card(
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
     drop_at: Option<egui::Pos2>,
-) {
+    size: Option<&SizeEst>,
+    file_w: f32,
+) -> ([f32; 5], egui::Rect) {
     let slot = cell.kind;
-    let fill = cell.fill.clone();
-    let frame = egui::Frame::group(ui.style());
-    // A filled slot the shader cannot use stays at its place, outlined, and says why on hover (F1 spec §5).
-    let frame = if cell.usable {
-        frame
-    } else {
-        frame.stroke(egui::Stroke::new(2.0, AMBER))
-    };
+    let fill = &cell.fill;
+    // K1: a Grid cell cannot hold the whole row, so last frame's row rect takes the right-click (F3a Task 8) and the
+    // Explorer drop (item 17). It is registered before the cells, so they keep their own clicks.
+    let row_id = egui::Id::new(("slot-row", &v.id, slot.slot_number()));
+    if let Some(r) = ui.data(|d| d.get_temp::<egui::Rect>(row_id)) {
+        let resp = ui.interact(r, row_id, egui::Sense::click());
+        slot_menu(&resp, model, v, slot, acts);
+        // The clipped rect: a row scrolled out of view takes no drop (trace-debug #51).
+        if drop_at.is_some_and(|p| resp.interact_rect.contains(p)) {
+            acts.push(Act::FileDrop(v.id.clone(), slot));
+        }
+    }
+    let top = ui.cursor().min;
     // The blue outline: this normal blends RNM layers (F2 spec §5.2). The amber one wins.
-    let rnm_layers: Vec<&str> = match (&cell.fill, cell.kind) {
+    let rnm_layers: Vec<&str> = match (fill, slot) {
         (
             SlotFill::Own { item } | SlotFill::Borrowed { item, .. },
             SlotKind::Normal | SlotKind::Coat,
@@ -357,200 +449,293 @@ fn card(
             .unwrap_or_default(),
         _ => vec![],
     };
-    let frame = if cell.usable && !rnm_layers.is_empty() {
-        frame.stroke(egui::Stroke::new(2.0, RNM_OUTLINE))
-    } else {
-        frame
-    };
     let locked = v.locks.contains(&slot.slot_number());
-    // F3a Task 8: the whole card takes the right-click; its labels are not selectable, so they do not take it.
-    let scoped = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
-        frame.show(ui, |ui| {
-            ui.style_mut().interaction.selectable_labels = false;
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.set_width(CARD);
-                ui.set_min_width(CARD);
-                let title = match &fill {
-                    SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
-                        card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
-                    }
-                    SlotFill::Empty => slot_label(slot, ""),
+    let title = match fill {
+        SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
+            card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
+        }
+        SlotFill::Empty => slot_label(slot, ""),
+    };
+    let (item_key, borrowed) = match fill {
+        SlotFill::Own { item } => (Some(item.clone()), None),
+        SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),
+        SlotFill::Empty => (None, None),
+    };
+    let item = item_key.as_deref().and_then(|k| model.item(k));
+
+    // Slot: the title, dim when empty.
+    let text = if locked {
+        format!("🔒 {title}")
+    } else {
+        title.to_string()
+    };
+    let text = egui::RichText::new(text);
+    let t = ui.label(if item.is_some() {
+        text.strong()
+    } else {
+        text.weak()
+    });
+    let slot_w = t.rect.width();
+    let t = if locked {
+        t.on_hover_text("Slot pinned (sdc): right-click to unpin")
+    } else {
+        t
+    };
+    if cell.usable && !rnm_layers.is_empty() {
+        t.clone()
+            .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
+    }
+    if let (false, Some(p)) = (cell.usable, &v.shader) {
+        t.on_hover_text(format!(
+            "{title}: the {} shader does not use slot {}",
+            p.shader.label(),
+            slot.slot_number()
+        ));
+    }
+
+    // Thumbnail.
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Image, true, format!("{title} thumbnail"))
+    });
+    slot_menu(&resp, model, v, slot, acts);
+    // A PGPatcher-locked slot has one hover, the lock's, in place of the thumbnail's path.
+    let lock_cross = pgp_locked(&v.settings, slot.slot_number()) && is_json_set(v, model.target);
+    let resp = if lock_cross {
+        pgp_lock_hover(resp, model, v, slot, acts)
+    } else {
+        resp
+    };
+    if ui.is_rect_visible(rect) {
+        match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
+            Some(t) => egui::Image::new(&t)
+                .fit_to_exact_size(rect.size())
+                .paint_at(ui, rect),
+            None => {
+                ui.painter().rect_filled(
+                    rect,
+                    2.0,
+                    ui.visuals().widgets.noninteractive.weak_bg_fill,
+                );
+            }
+        }
+        if let Some(i) = item {
+            ui.painter().rect_stroke(
+                rect,
+                2.0,
+                egui::Stroke::new(1.0, border_of(ui, &i.status)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if lock_cross {
+            pgp_lock_cross(ui, rect);
+        }
+    }
+    if let Some(i) = item.filter(|_| borrowed.is_none()) {
+        let resp = if lock_cross {
+            resp
+        } else {
+            resp.on_hover_text(&i.key)
+        };
+        if resp.double_clicked() {
+            acts.push(Act::Expand(i.key.clone()));
+        } else if resp.clicked() {
+            acts.push(Act::Select(i.key.clone()));
+        }
+    }
+
+    // File: the name (truncated; full name and size on hover) and a weak size line, or "empty"; a clashing slot lists
+    // both members under it.
+    ui.vertical(|ui| {
+        ui.set_width(file_w);
+        match item {
+            Some(i) => {
+                let size =
+                    size.map(|e| format!("{}×{} · {}", e.width, e.height, human(e.file_bytes())));
+                let hover = match &size {
+                    Some(s) => format!("{}\n{s}", i.name),
+                    None => i.name.clone(),
                 };
-                let t = if locked {
-                    ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
-                        .on_hover_text("Slot pinned (sdc): right-click to unpin")
-                } else {
-                    ui.label(egui::RichText::new(title).strong())
-                };
-                // Note AO7: both kinds of a shared slot (slot 7: `_cnr` and `_f`) are a conflict, not a silent pick: the card
-                // names and shows both, and either can be taken out of the set here.
-                if slot_clash_text(cell).is_some() {
-                    clash_rows(ui, model, v, cell, thumbs, acts);
+                ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate())
+                    .on_hover_text(hover);
+                if let Some(s) = size {
+                    ui.add(egui::Label::new(egui::RichText::new(s).small().weak()).truncate());
                 }
-                if cell.usable && !rnm_layers.is_empty() {
-                    t.clone()
-                        .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
+            }
+            None => {
+                ui.weak("empty");
+            }
+        }
+        // Note AO7: both kinds of a shared slot (slot 7: `_cnr` and `_f`) are a conflict, not a silent pick: the row
+        // names and shows both, and either can be taken out of the set here.
+        if slot_clash_text(cell).is_some() {
+            clash_rows(ui, model, v, cell, thumbs, acts);
+        }
+    });
+
+    // Format, or Assign… on an empty slot (R13: the slot's own menu); a packed output's recipe and fills under it.
+    let toml_read_only = model
+        .project
+        .as_ref()
+        .and_then(|p| p.error())
+        .map(|e| format!("sdc.toml is read-only: {e}"));
+    let own = item.filter(|_| borrowed.is_none());
+    let own_job = own.and_then(|i| i.job.as_ref().map(|j| (i, j)));
+    let format_w = ui
+        .vertical(|ui| {
+            if item.is_none() {
+                let menu = ui.menu_button("Assign…", |ui| {
+                    let title = format!("Slot {}: {}", slot.slot_number(), slot_label(slot, ""));
+                    bulk_menu(ui, &title, &model.slot_menu(&v.id, slot))
+                });
+                if let Some(Some(a)) = menu.inner {
+                    acts.push(Act::Slot(a));
                 }
-                if let (false, Some(p)) = (cell.usable, &v.shader) {
-                    t.on_hover_text(format!(
-                        "{title}: the {} shader does not use slot {}",
-                        p.shader.label(),
-                        slot.slot_number()
-                    ));
-                }
-                let (item_key, borrowed) = match &fill {
-                    SlotFill::Own { item } => (Some(item.clone()), None),
-                    SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),
-                    SlotFill::Empty => (None, None),
-                };
-                let item = item_key.as_deref().and_then(|k| model.item(k));
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::click());
-                slot_menu(&resp, model, v, slot, acts);
-                // A PGPatcher-locked card has one hover, the lock's, in place of the thumbnail's path.
-                let lock_cross =
-                    pgp_locked(&v.settings, slot.slot_number()) && is_json_set(v, model.target);
-                let resp = if lock_cross {
-                    pgp_lock_hover(resp, model, v, slot, acts)
-                } else {
-                    resp
-                };
-                if ui.is_rect_visible(rect) {
-                    match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
-                        Some(t) => egui::Image::new(&t)
-                            .fit_to_exact_size(rect.size())
-                            .paint_at(ui, rect),
-                        None => {
-                            ui.painter().rect_filled(
-                                rect,
-                                2.0,
-                                ui.visuals().widgets.noninteractive.weak_bg_fill,
-                            );
+            }
+            let Some((i, job)) = own_job else { return };
+            let (cur_f, cur_t) = (job.profile.format, job.profile.color.tag);
+            // Format and Opaque write `sdc.toml`: a read-only one would drop the edit silently.
+            let lock = toml_read_only
+                .clone()
+                .or(field_lock(model.target, &job.profile, "format").map(str::to_string));
+            let mut choice = (cur_f, cur_t);
+            ui.add_enabled_ui(lock.is_none(), |ui| {
+                egui::ComboBox::from_id_salt(("slot-format", &v.id, slot.label()))
+                    .selected_text(format_label(cur_f, cur_t))
+                    .width(COMBO_W)
+                    .show_ui(ui, |ui| {
+                        for (e, label) in encoding_options(model.target, &job.profile) {
+                            ui.selectable_value(&mut choice, e, label);
                         }
-                    }
-                    if let Some(i) = item {
-                        ui.painter().rect_stroke(
-                            rect,
-                            2.0,
-                            egui::Stroke::new(1.0, border_of(ui, &i.status)),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                }
-                if pgp_locked(&v.settings, slot.slot_number()) {
-                    // Only a set that writes JSON gives PGPatcher the lock (review M2).
-                    if lock_cross {
-                        pgp_lock_cross(ui, rect);
-                    } else {
-                        ui.weak(PGP_LOCK_UNWRITTEN);
-                    }
-                }
-                let Some(i) = item else {
-                    ui.weak("empty");
-                    return;
-                };
-                ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
-                if let Some(n) = match slot {
+                    });
+            })
+            .response
+            .on_disabled_hover_text(lock.unwrap_or_default());
+            if choice != (cur_f, cur_t) {
+                acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
+            }
+            if i.kind == ItemKind::Packed {
+                packed_controls(ui, model, i, toml_read_only.as_deref(), acts);
+            }
+        })
+        .response
+        .rect
+        .width();
+
+    // Flags: small icon toggles, Match on this (slots 1/2 of a JSON set) and Opaque (the diffuse). Each keeps its
+    // full label as its accessible name and leads its hover with it.
+    let flags_w = ui
+        .vertical(|ui| {
+            if let (Some(n), Some(_)) = (
+                match slot {
                     _ if !shows_json_panel(v, model.target) => None,
                     SlotKind::Diffuse => Some(1),
                     SlotKind::Normal => Some(2),
                     _ => None,
-                } {
-                    // F1 spec §3.2: the card's switch is the Matching header's slot 1/2 row.
-                    let derived = v.derived_match.as_deref().unwrap_or("");
-                    let on = active_matches(&v.settings, derived)
-                        .iter()
-                        .any(|(m, _)| *m == n);
-                    let mut want = on;
-                    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
-                    let path = slot_match_path(derived, slot.suffix());
-                    // AN2: a renamed set takes no second match.
-                    let (k, val) = match_toggle(n, true, &path);
-                    let refused = (!on)
-                        .then(|| extra_match_refusal(&v.settings, derived, &k, val.as_ref()))
-                        .flatten();
-                    if ui
-                        .add_enabled(
-                            editable && refused.is_none(),
-                            egui::Checkbox::new(&mut want, "Match on this"),
-                        )
-                        .on_hover_text(
-                            "PGPatcher applies the entry to meshes with this exact texture in this slot",
-                        )
-                        .on_disabled_hover_text(refused.unwrap_or_default())
-                        .changed()
-                    {
-                        let (k, val) = match_toggle(n, want, &path);
-                        acts.push(Act::Json(v.id.clone(), k, val));
-                    }
+                },
+                item,
+            ) {
+                // F1 spec §3.2: the row's switch is the Matching header's slot 1/2 row.
+                let derived = v.derived_match.as_deref().unwrap_or("");
+                let on = active_matches(&v.settings, derived)
+                    .iter()
+                    .any(|(m, _)| *m == n);
+                let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+                let path = slot_match_path(derived, slot.suffix());
+                // AN2: a renamed set takes no second match.
+                let (k, val) = match_toggle(n, true, &path);
+                let refused = (!on)
+                    .then(|| extra_match_refusal(&v.settings, derived, &k, val.as_ref()))
+                    .flatten();
+                if flag(
+                    ui,
+                    editable && refused.is_none(),
+                    on,
+                    "🔗",
+                    "Match on this",
+                    "PGPatcher applies the entry to meshes with this exact texture in this slot",
+                    refused.unwrap_or_default(),
+                ) {
+                    let (k, val) = match_toggle(n, !on, &path);
+                    acts.push(Act::Json(v.id.clone(), k, val));
                 }
-                if let Some(from) = &borrowed {
-                    ui.colored_label(AMBER, format!("borrowed from {from}"));
-                    return;
-                }
-                let resp = if lock_cross {
-                    resp
-                } else {
-                    resp.on_hover_text(&i.key)
-                };
-                if resp.double_clicked() {
-                    acts.push(Act::Expand(i.key.clone()));
-                } else if resp.clicked() {
-                    acts.push(Act::Select(i.key.clone()));
-                }
-                let Some(job) = &i.job else { return };
-                let (cur_f, cur_t) = (job.profile.format, job.profile.color.tag);
-                // Format and Opaque write `sdc.toml`: a read-only one would drop the edit silently.
-                let toml_read_only = model
-                    .project
-                    .as_ref()
-                    .and_then(|p| p.error())
-                    .map(|e| format!("sdc.toml is read-only: {e}"));
-                let lock = toml_read_only
-                    .clone()
-                    .or(field_lock(model.target, &job.profile, "format").map(str::to_string));
-                let mut choice = (cur_f, cur_t);
-                ui.add_enabled_ui(lock.is_none(), |ui| {
-                    egui::ComboBox::from_id_salt(("slot-format", &v.id, slot.label()))
-                        .selected_text(format_label(cur_f, cur_t))
-                        .width(CARD - 24.0)
-                        .show_ui(ui, |ui| {
-                            for (e, label) in encoding_options(model.target, &job.profile) {
-                                ui.selectable_value(&mut choice, e, label);
-                            }
-                        });
-                })
-                .response
-                .on_disabled_hover_text(lock.unwrap_or_default());
-                if choice != (cur_f, cur_t) {
-                    acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
-                }
-                if i.kind == ItemKind::Packed {
-                    packed_controls(ui, model, i, toml_read_only.as_deref(), acts);
-                }
-                if slot == SlotKind::Diffuse {
-                    let mut on = model.is_opaque(&i.key);
-                    if ui
-                        .add_enabled(
-                            toml_read_only.is_none(),
-                            egui::Checkbox::new(&mut on, "Opaque"),
-                        )
-                        .on_hover_text("Strips alpha: the diffuse is fully opaque")
-                        .on_disabled_hover_text(toml_read_only.unwrap_or_default())
-                        .changed()
-                    {
-                        acts.push(Act::Opaque(i.key.clone(), on));
-                    }
-                }
-            })
+            }
+            let Some(i) = own.filter(|i| i.job.is_some() && slot == SlotKind::Diffuse) else {
+                return;
+            };
+            let on = model.is_opaque(&i.key);
+            if flag(
+                ui,
+                toml_read_only.is_none(),
+                on,
+                "◼",
+                "Opaque",
+                "Strips alpha: the diffuse is fully opaque",
+                toml_read_only.as_deref().unwrap_or_default(),
+            ) {
+                acts.push(Act::Opaque(i.key.clone(), !on));
+            }
         })
-    });
-    slot_menu(&scoped.response, model, v, slot, acts);
-    // Item 17: a file from Explorer dropped on this card.
-    // The clipped rect: a card scrolled out of view takes no drop (trace-debug #51).
-    if drop_at.is_some_and(|p| scoped.response.interact_rect.contains(p)) {
-        acts.push(Act::FileDrop(v.id.clone(), slot));
+        .response
+        .rect
+        .width();
+
+    // Status: the texture's dot (K3), with the short lines (K4: the title's hovers keep the long forms) on its hover.
+    let status_w = ui
+        .horizontal(|ui| {
+            let mut lines = vec![];
+            if let Some(from) = &borrowed {
+                lines.push(format!("borrowed from {from}"));
+            }
+            if let (false, Some(p)) = (cell.usable, &v.shader) {
+                lines.push(format!("not used by {}", p.shader.label()));
+            } else if !rnm_layers.is_empty() {
+                lines.push(format!("RNM, {} layers", rnm_layers.len()));
+            }
+            if let Some(i) = item {
+                let s = match i.status {
+                    ItemStatus::Failed(_) | ItemStatus::Error(_) => Status::Blocks,
+                    _ if tile_ready(i) => Status::Ready,
+                    _ => Status::Warning,
+                };
+                let r = dot(ui, s);
+                if !lines.is_empty() {
+                    r.on_hover_text(lines.join("\n"));
+                }
+            }
+            // A4: only a set that writes JSON gives PGPatcher the lock (review M2); otherwise a note.
+            if pgp_locked(&v.settings, slot.slot_number()) && !lock_cross {
+                let r = ui
+                    .add(egui::Label::new(egui::RichText::new("ⓘ").weak()))
+                    .on_hover_text(PGP_LOCK_UNWRITTEN);
+                ui.ctx()
+                    .accesskit_node_builder(r.id, |b| b.set_value(PGP_LOCK_UNWRITTEN));
+            }
+        })
+        .response
+        .rect
+        .width();
+    let rect = egui::Rect::from_min_max(top, ui.min_rect().max);
+    ui.end_row();
+    ui.data_mut(|d| d.insert_temp(row_id, rect));
+    // A filled slot the shader cannot use stays at its place, outlined, and says why (F1 spec §5); a normal blending RNM
+    // layers is outlined blue.
+    let outline = if !cell.usable {
+        Some(AMBER)
+    } else if !rnm_layers.is_empty() {
+        Some(RNM_OUTLINE)
+    } else {
+        None
+    };
+    if let Some(c) = outline {
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(2.0, c),
+            egui::StrokeKind::Outside,
+        );
     }
+    ([slot_w, THUMB, format_w, flags_w, status_w], rect)
 }
 
 /// Note AN: a PGPatcher-locked slot: a big red ✕ over the thumbnail.
@@ -693,7 +878,7 @@ fn packed_controls(
                     label(pk.kind),
                     if auto { " (auto)" } else { "" }
                 ))
-                .width(CARD - 24.0)
+                .width(COMBO_W)
                 .show_ui(ui, |ui| {
                     for k in [RecipeKind::Rmaos, RecipeKind::Rfaos] {
                         // Final review I2: RFAOS is offered only where the set can build it.
@@ -818,8 +1003,8 @@ fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut
     }
 }
 
-/// Note AO7: a card whose PGPatcher slot holds two members: a red line naming both files, then a row per member with
-/// its thumbnail and file name (click selects, double-click expands) and ✕, which takes it out of the set.
+/// Note AO7: a row whose PGPatcher slot holds two members: a red line naming both files, then a line per member with
+/// ✕, which takes it out of the set, its thumbnail and its file name (click selects, double-click expands).
 fn clash_rows(
     ui: &mut egui::Ui,
     model: &AppModel,
@@ -846,7 +1031,17 @@ fn clash_rows(
         ),
     );
     for i in both {
+        // The remove button first: the File cell is narrow, and the name truncates after it.
         ui.horizontal(|ui| {
+            let x = ui
+                .small_button("✕")
+                .on_hover_text("Take it out of this set");
+            let label = format!("Remove {}", i.name);
+            ui.ctx()
+                .accesskit_node_builder(x.id, |b| b.set_label(label));
+            if x.clicked() {
+                acts.push(Act::RemoveMember(v.id.clone(), i.key.clone()));
+            }
             if let Some(t) = thumbs.get(ui.ctx(), i) {
                 ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(20.0, 20.0)));
             }
@@ -861,15 +1056,6 @@ fn clash_rows(
                 acts.push(Act::Expand(i.key.clone()));
             } else if r.clicked() {
                 acts.push(Act::Select(i.key.clone()));
-            }
-            let x = ui
-                .small_button("✕")
-                .on_hover_text("Take it out of this set");
-            let label = format!("Remove {}", i.name);
-            ui.ctx()
-                .accesskit_node_builder(x.id, |b| b.set_label(label));
-            if x.clicked() {
-                acts.push(Act::RemoveMember(v.id.clone(), i.key.clone()));
             }
         });
     }

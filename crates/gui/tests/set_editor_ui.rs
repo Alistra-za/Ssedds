@@ -87,7 +87,7 @@ fn the_rename_dialog_shows_a_collision_and_renames_on_a_free_name() {
 }
 
 #[test]
-fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
+fn the_set_editor_shows_slot_rows_opaque_and_slot_commands() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened_plain(d.path());
     let key = m
@@ -1403,10 +1403,9 @@ fn click_harness() -> (
     (d, h, rock, leaf)
 }
 
-/// A single click on the Diffuse card's thumbnail (just under the card title).
+/// A single click on the Diffuse row's thumbnail.
 fn click_diffuse_thumb(h: &mut Harness<'static, AppModel>) {
-    let t = h.query_all_by_label("Diffuse").next().unwrap().rect();
-    let p = eframe::egui::pos2(t.left() + 30.0, t.bottom() + 40.0);
+    let p = h.get_by_label("Diffuse thumbnail").rect().center();
     h.hover_at(p);
     h.drag_at(p);
     h.drop_at(p);
@@ -1450,4 +1449,129 @@ fn a_single_click_on_a_thumbnail_selects_its_texture() {
         h.state().selection,
         sdc_gui::model::Selection::Item(_)
     ));
+}
+
+/// Layout v2 A2: rock01 (plain PBR) at 1400 wide with its slot rows drawn.
+fn rows_harness(d: &std::path::Path, height: f32) -> Harness<'static, AppModel> {
+    let mut m = pbr_opened_plain(d);
+    rock_selected(&mut m);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, height))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+#[test]
+fn slot_rows_line_up_label_thumb_file_and_format() {
+    let d = tempfile::tempdir().unwrap();
+    let h = rows_harness(d.path(), 900.0);
+    let diffuse = slot_rect(&h, "Diffuse");
+    let normal = slot_rect(&h, "Normal _n");
+    assert!(
+        normal.min.y > diffuse.max.y - 1.0,
+        "one row per slot, top to bottom: {diffuse:?} {normal:?}"
+    );
+    assert!(
+        (normal.min.x - diffuse.min.x).abs() < 1.0,
+        "labels in one column"
+    );
+    let combos: Vec<_> = h
+        .query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .filter(|n| n.value().as_deref().is_some_and(|v| v.contains("BC")))
+        .map(|n| n.rect())
+        .collect();
+    assert!(combos.len() >= 2, "{combos:?}");
+    assert!(
+        combos
+            .windows(2)
+            .all(|w| (w[0].min.x - w[1].min.x).abs() < 1.0),
+        "formats in one column: {combos:?}"
+    );
+}
+
+#[test]
+fn an_empty_slot_is_one_dim_row_with_assign() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = rows_harness(d.path(), 1200.0);
+    // Height _p, slot 3, slot 7 and Subsurface _s are empty in the fixture (K6).
+    assert_eq!(h.query_all_by_label("Assign…").count(), 4);
+    let height = slot_rect(&h, "Height _p");
+    h.query_all_by_label("Assign…")
+        .find(|n| (n.rect().center().y - height.center().y).abs() < 20.0)
+        .expect("Assign… on the Height _p row")
+        .click();
+    h.run();
+    h.get_by_label_contains("Slot 4: Height");
+}
+
+#[test]
+fn a_row_shows_the_size_of_its_texture() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = rows_harness(d.path(), 900.0);
+    // The size needs the dims worker (K7).
+    for _ in 0..200 {
+        if h.state_mut().size_of("landscape/rock01.png").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run();
+    }
+    h.run();
+    assert!(h.query_all_by_label_contains("64×64 · ").count() >= 1);
+}
+
+/// K8: a regression pin (Slot commands… is already a plain button): it stays one, after the last row.
+#[test]
+fn slot_commands_is_a_normal_button_after_the_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let h = rows_harness(d.path(), 1200.0);
+    let b = h.get_by_label("Slot commands…").rect();
+    assert!(b.width() < 200.0, "not a full-width bar");
+    assert!(b.min.y > slot_rect(&h, "Subsurface _s").max.y);
+}
+
+/// Layout v2 ruling (row width): the rows fit in about 440 px, what Task 2.3 leaves beside its panel at 1400, and no
+/// row widget reaches under the panel beside them. (A narrower column scrolls them sideways.)
+#[test]
+fn the_slot_rows_stay_in_their_column() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    // At 1560 this task's left column is about 450 px wide.
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1560.0, 1200.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let left = slot_rect(&h, "Diffuse").min.x;
+    let panel = h.get_by_label("Specular level").rect().min.x;
+    assert!(panel - left < 470.0, "the column is {} wide", panel - left);
+    // Each row widget: thumbnails, flags, Assign…, status dots, format and recipe combos.
+    let mut right = 0.0f32;
+    for l in [
+        "Diffuse thumbnail",
+        "Match on this",
+        "Opaque",
+        "Assign…",
+        "ready",
+        "warning",
+        "blocks export",
+    ] {
+        for n in h.query_all_by_label(l) {
+            if n.rect().min.x > left {
+                right = right.max(n.rect().max.x);
+            }
+        }
+    }
+    for n in h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox) {
+        if n.rect().min.x > left && n.rect().min.x < panel {
+            right = right.max(n.rect().max.x);
+        }
+    }
+    assert!(
+        right < panel,
+        "the rows ({left}..{right}) reach under the panel at {panel}"
+    );
 }
