@@ -33,8 +33,8 @@ fn the_panel_starts_collapsed_with_its_tabs_and_toggling_messages_opens_and_clos
     let mut h = harness(opened(d.path()));
     h.run();
     h.get_by_label("Files");
-    // The header's Messages button (until branch 3) and the panel's Messages tab.
-    assert_eq!(h.query_all_by_label("Messages").count(), 2);
+    // R14: only the panel's Messages tab (the header's button is gone).
+    assert_eq!(h.query_all_by_label("Messages").count(), 1);
     assert!(!h.state().bottom.open);
     h.state_mut().toggle_tab(BottomTab::Messages);
     h.run();

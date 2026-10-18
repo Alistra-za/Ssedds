@@ -22,13 +22,8 @@ fn the_empty_window_shows_its_regions() {
     let mut h = harness(AppModel::placeholder(GuiSettings::default()));
     h.run();
     for label in [
-        "Open folder…",
-        "Mode",
-        "Export",
-        "Save",
-        "Textures",
-        "Sets",
-        "Advanced",
+        // R14: Open folder… is inside Open ▾.
+        "Open", "Mode", "Export", "Save", "Textures", "Sets", "Advanced",
     ] {
         h.get_by_label(label);
     }
@@ -657,7 +652,8 @@ fn the_header_shows_the_effective_export_folder() {
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
     h.run();
-    let want = format!("Export folder: {}", root.join("sdc-out").display());
+    // K8: the accessible name keeps the whole path; the button text may cut it.
+    let want = format!("Export to: {}", root.join("sdc-out").display());
     h.get_by_label(&want);
     assert!(h.query_by_label_contains("not set").is_none());
 }

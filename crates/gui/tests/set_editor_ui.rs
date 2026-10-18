@@ -827,7 +827,13 @@ fn the_header_has_the_json_editor_and_the_drawer_has_no_pgpatcher_keys() {
     m.settings.advanced_open = true;
     let mut h = harness(m);
     h.run();
+    // R14: the editor is an entry of Export to ▾.
+    h.get_by_label_contains("Export to: ").click();
+    h.run();
     h.get_by_label(sdc_gui::ui::header::JSON_EDITOR);
+    // Close the menu again before the drawer checks.
+    h.key_press(eframe::egui::Key::Escape);
+    h.run();
     // Layout v2 C6: with a set, Advanced is the set panel's tab (open here); the TruePBR box is on its Material tab.
     h.get_by_label_contains("Preset inspector");
     assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());

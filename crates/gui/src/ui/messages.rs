@@ -90,24 +90,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     });
 }
 
-/// The Messages button's text: "Messages", plus the unread count.
+/// The Messages tab's text: "Messages", plus the unread count.
 pub fn button_text(model: &AppModel) -> String {
     match model.messages.unread() {
         0 => "Messages".to_string(),
         n => format!("Messages ({n})"),
-    }
-}
-
-/// The header's Messages button, `size` big (Note BH: as wide as Save, stacked on it).
-pub fn button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
-    if ui
-        .add_sized(size, egui::Button::new(button_text(model)))
-        .on_hover_text(format!(
-            "Notes and results of this session ({})",
-            super::actions::keys_text("messages")
-        ))
-        .clicked()
-    {
-        model.toggle_tab(crate::model::bottom::BottomTab::Messages);
     }
 }

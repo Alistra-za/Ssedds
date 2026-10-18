@@ -1,4 +1,5 @@
-//! AG126: the header rows never overlap themselves at any window width, and every control stays in the row.
+//! AG126: the header row never overlaps itself at any window width, and every control stays in the row. Layout v2 A4:
+//! one row, Export to ▾ · Save · Export at the right edge; the header is the same in the Meshes view (C7).
 mod support;
 use eframe::egui::{self, accesskit::Role, containers::panel::PanelState, Id};
 use egui_kittest::kittest::{by, NodeT as _, Queryable};
@@ -6,6 +7,7 @@ use egui_kittest::Harness;
 use sdc_gui::model::meshes::MeshesModel;
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::MeshesSettings;
+use sdc_gui::ui::header::elide_middle;
 use sdc_gui::ui::State;
 use support::*;
 
@@ -13,41 +15,43 @@ type H = Harness<'static, (AppModel, State, MeshesModel)>;
 
 const WIDTHS: [f32; 4] = [1440.0, 1024.0, 800.0, 640.0];
 
-/// The controls every Textures header must show.
-const CONTROLS: [&str; 15] = [
-    "Presets…",
-    "Preset",
-    "MO2…",
-    "Open folder…",
-    "Recent",
+/// The controls every Textures header must show (plus "Export to: …", matched by its start).
+const CONTROLS: [&str; 12] = [
+    "Open",
     "Undo",
     "Redo",
+    "MO2…",
+    "Mode",
+    "Preset",
     "Textures view",
     "Meshes view",
     "Textures column",
     "Sets column",
     "Save",
-    "PG JSON Editor",
     "Export",
-    "Messages",
 ];
 
 fn harness(m: AppModel, w: f32, meshes_view: bool) -> H {
+    harness_sized(m, egui::vec2(w, 800.0), meshes_view)
+}
+
+fn harness_sized(m: AppModel, size: egui::Vec2, meshes_view: bool) -> H {
     let mut meshes = MeshesModel::new(None, MeshesSettings::default());
     meshes.procs = sdc_gui::model::meshes::no_procs;
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(w, 800.0))
-        .build_ui_state(
-            move |ui, (m, s, me): &mut (AppModel, State, MeshesModel)| {
-                sdc_gui::ui::header::set_meshes_view(ui.ctx(), meshes_view);
-                if meshes_view {
-                    sdc_gui::ui::meshes::page(ui, me);
-                } else {
-                    sdc_gui::ui::draw_with_scan(ui, m, s, Some(me));
-                }
-            },
-            (m, State::default(), meshes),
-        );
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        move |ui, (m, s, me): &mut (AppModel, State, MeshesModel)| {
+            sdc_gui::ui::header::set_meshes_view(ui.ctx(), meshes_view);
+            if meshes_view {
+                // K6: the app's Meshes branch (K3): the header, the bottom panel, then the view.
+                sdc_gui::ui::header::draw(ui, m, Some(&mut *me));
+                sdc_gui::ui::bottom::draw(ui, m, &mut s.drawer);
+                sdc_gui::ui::meshes::show(ui, me);
+            } else {
+                sdc_gui::ui::draw_with_scan(ui, m, s, Some(me));
+            }
+        },
+        (m, State::default(), meshes),
+    );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run_steps(4);
     h
@@ -95,15 +99,19 @@ fn the_textures_header_never_overlaps() {
         // Note AM: an idle scan row is not drawn (the source moved to MO2…).
         assert!(PanelState::load(&h.ctx, Id::new("textures-scan")).is_none());
         for c in CONTROLS {
-            if c == "Messages" {
-                messages_button(&h);
-            } else {
-                h.get_by_label(c);
-            }
+            h.get_by_label(c);
         }
-        h.get_by_label_contains("Export folder");
-        // Note BH7: the JSON name field moved into the editor window.
+        h.get_by_label_contains("Export to: ");
+        // R14: Messages, Presets…, Recent and PG JSON Editor left the header.
         let header = outer(&h, "header");
+        for gone in ["Messages", "Presets…", "Recent", "PG JSON Editor"] {
+            assert!(
+                !h.query_all_by_label(gone)
+                    .any(|n| header.contains_rect(n.rect())),
+                "at {w} the header still has {gone}"
+            );
+        }
+        // Note BH7: the JSON name field moved into the editor window.
         assert!(
             !h.query_all_by_role(Role::TextInput)
                 .any(|n| header.contains_rect(n.rect())),
@@ -112,95 +120,125 @@ fn the_textures_header_never_overlaps() {
     }
 }
 
-/// The header's Messages button: the panel's Messages tab carries the same label, at the bottom of the window.
-fn messages_button(h: &H) -> egui::Rect {
-    h.query_all_by_label("Messages")
-        .map(|n| n.rect())
-        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
-        .expect("the header has a Messages button")
-}
-
 fn outer(h: &H, id: &str) -> egui::Rect {
     PanelState::load(&h.ctx, Id::new(id)).unwrap().outer_rect
 }
 
-/// Note BH3/BH4: Export spans both rows at the right edge; Messages sits on Save, both as wide, together as tall.
 #[test]
-fn export_spans_two_rows_at_the_right_with_messages_over_save() {
+fn elide_middle_keeps_the_drive_and_the_tail() {
+    let p = r"C:\Users\Curti\AppData\Local\Temp\mods\My Mod";
+    assert_eq!(elide_middle(p, 100), p);
+    assert_eq!(elide_middle(p, 20), r"C:\…\mods\My Mod");
+    assert_eq!(elide_middle(p, 24), r"C:\…\Temp\mods\My Mod");
+    assert_eq!(elide_middle(r"C:\a\VeryLongFolderName", 10), "…olderName");
+}
+
+/// A4 (K2): one row: every control's rect holds Open's centre line, and they run left to right in the spec's order.
+#[test]
+fn the_header_is_one_row_in_the_spec_order() {
     let d = tempfile::tempdir().unwrap();
-    for w in [1440.0, 1024.0] {
+    let h = harness_sized(pbr_opened(d.path()), egui::vec2(1600.0, 1000.0), false);
+    let order = [
+        ("Open", h.get_by_label("Open").rect()),
+        ("Undo", h.get_by_label("Undo").rect()),
+        ("Redo", h.get_by_label("Redo").rect()),
+        ("Mode", h.get_by_label("Mode").rect()),
+        ("Preset", h.get_by_label("Preset").rect()),
+        ("Textures view", h.get_by_label("Textures view").rect()),
+        ("Meshes view", h.get_by_label("Meshes view").rect()),
+        ("Export to", h.get_by_label_contains("Export to: ").rect()),
+        ("Save", h.get_by_label("Save").rect()),
+        ("Export", h.get_by_label("Export").rect()),
+    ];
+    let y = order[0].1.center().y;
+    for (name, r) in order {
+        assert!(
+            r.min.y <= y && y <= r.max.y,
+            "{name} {r:?} is off the row at y {y}"
+        );
+    }
+    for pair in order.windows(2) {
+        assert!(
+            pair[0].1.center().x < pair[1].1.center().x,
+            "{} {:?} is not left of {} {:?}",
+            pair[0].0,
+            pair[0].1,
+            pair[1].0,
+            pair[1].1
+        );
+    }
+    // Export ends the row at the right edge, only the panel margin past it.
+    assert!(1600.0 - order[9].1.right() <= 16.5, "{:?}", order[9].1);
+}
+
+/// A4: Save sits right before Export, as tall as it (two rows).
+#[test]
+fn save_sits_next_to_export_at_its_height() {
+    let d = tempfile::tempdir().unwrap();
+    for w in [1600.0, 1024.0] {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, false);
-        let export = h.get_by_label("Export").rect();
-        let save = h.get_by_label("Save").rect();
-        let msgs = messages_button(&h);
-        let open = h.get_by_label("Open folder…").rect();
-        let cols = h.get_by_label("Textures column").rect();
-        // Right-anchored: right of every other header widget, only the panel margin past it.
-        assert!(widgets(&h, "header")
-            .iter()
-            .all(|(_, _, r)| r.right() <= export.right() + 0.5));
-        assert!(w - export.right() <= 16.5, "at {w}: {export:?}");
-        assert!(export.width() >= 230.0, "at {w}: {export:?}");
-        // Two rows: from the top row's top to the bottom row's bottom.
+        let (s, e) = (
+            h.get_by_label("Save").rect(),
+            h.get_by_label("Export").rect(),
+        );
+        assert!((s.height() - e.height()).abs() < 1.0, "at {w}: {s:?} {e:?}");
         assert!(
-            export.top() <= open.top() + 1.0,
-            "at {w}: {export:?} vs {open:?}"
+            s.right() <= e.left() && e.left() - s.right() < 12.0,
+            "at {w}: {s:?} {e:?}"
         );
         assert!(
-            export.bottom() >= cols.bottom() - 1.0,
-            "at {w}: {export:?} vs {cols:?}"
+            (s.center().y - e.center().y).abs() < 1.0,
+            "at {w}: {s:?} {e:?}"
         );
-        assert!(export.height() >= 2.0 * open.height(), "at {w}: {export:?}");
-        // The stack: Messages over Save, directly left of Export.
+        let open = h.get_by_label("Open").rect();
         assert!(
-            (save.width() - msgs.width()).abs() < 0.5,
-            "{save:?} {msgs:?}"
+            e.height() > 1.5 * open.height(),
+            "at {w}: {e:?} vs {open:?}"
         );
-        assert!(msgs.bottom() <= save.top() + 0.5, "{msgs:?} {save:?}");
-        assert!((save.left() - msgs.left()).abs() < 0.5);
-        assert!(save.right() < export.left() && export.left() - save.right() < 12.0);
-        assert!(
-            (msgs.top() - export.top()).abs() < 1.0
-                && (save.bottom() - export.bottom()).abs() < 1.0
-        );
-        // Note BH5: the column checkboxes start the bottom row.
-        assert!((cols.left() - open.left()).abs() < 1.0 && cols.top() > open.bottom());
+        assert!(e.width() >= 230.0, "at {w}: {e:?}");
     }
 }
 
-/// Note BH12/BH14: the export folder ends the top row and PG JSON Editor the bottom row, both against the
-/// Messages/Save stack; the view tabs sit centred between the eye toggles and PG JSON Editor.
+/// A4, K1, K8: a long export folder is cut in the middle so Export to, Save and Export stay on one row; the hover and
+/// the accessible name keep the whole path.
 #[test]
-fn export_folder_and_json_editor_sit_against_the_stack_and_the_tabs_are_centred() {
+fn the_export_folder_shows_its_tail_and_the_whole_path_on_hover() {
     let d = tempfile::tempdir().unwrap();
-    let h = harness(pbr_opened(d.path()), 1440.0, false);
-    let msgs = messages_button(&h);
-    let open = h.get_by_label("Open folder…").rect();
-    let folder = h.get_by_label_contains("Export folder").rect();
-    let json = h.get_by_label(sdc_gui::ui::header::JSON_EDITOR).rect();
-    let sets = h.get_by_label("Sets column").rect();
-    let tabs = h
-        .get_by_label("Textures view")
-        .rect()
-        .union(h.get_by_label("Meshes view").rect());
-    let gap = msgs.left() - folder.right();
-    assert!((0.0..12.0).contains(&gap), "{folder:?} vs {msgs:?}");
-    assert!(
-        (msgs.left() - json.right() - gap).abs() < 1.0,
-        "{json:?} vs {msgs:?}"
+    let mut m = pbr_opened(d.path());
+    // Far longer than the window is wide (300+ characters): uncut, the button would run off it.
+    let mut deep = d.path().to_path_buf();
+    for i in 0..8 {
+        deep = deep.join(format!("a rather long folder name number {i}"));
+    }
+    let deep = deep.join("mods").join("My Mod");
+    m.settings.export_folder = Some(deep.clone());
+    let full = deep.display().to_string();
+    let mut h = harness(m, 1024.0, false);
+    let b = h.get_by_label_contains(r"\mods\My Mod");
+    assert_eq!(
+        b.accesskit_node().label().unwrap_or_default(),
+        format!("Export to: {full}")
     );
-    // Rows: the folder on the top row, the editor button on the bottom row.
-    assert!(
-        (folder.center().y - open.center().y).abs() < 4.0,
-        "{folder:?}"
+    // Cut: the button shares Export's row and ends before Save and Export, inside the window.
+    assert!(full.chars().count() > 300);
+    let r = b.rect();
+    let (save, export) = (
+        h.get_by_label("Save").rect(),
+        h.get_by_label("Export").rect(),
     );
-    assert!(json.top() > open.bottom(), "{json:?}");
-    // Centred: the space before the tabs and after them differ by less than a few points.
-    let (before, after) = (tabs.left() - sets.right(), json.left() - tabs.right());
     assert!(
-        (before - after).abs() < 12.0,
-        "before {before}, after {after}"
+        r.min.y <= export.center().y && export.center().y <= r.max.y,
+        "{r:?} {export:?}"
     );
+    assert!(
+        r.right() <= save.left() && export.right() <= 1024.0,
+        "{r:?} {save:?} {export:?}"
+    );
+    assert!(h.query_by_label(&full).is_none());
+    h.get_by_label_contains(r"\mods\My Mod").hover();
+    h.run();
+    // The tooltip: the whole path, alone.
+    h.get_by_label(&full);
 }
 
 /// Note BH15: the columns' eye toggles keep their accessible names and say whether the column shows.
@@ -214,6 +252,15 @@ fn the_column_toggles_are_eyes_named_for_their_columns() {
         Role::CheckBox
     );
     assert_eq!(toggled(&h), Some(egui::accesskit::Toggled::True));
+    // R14: the eyes follow the view tabs.
+    let (meshes, eye) = (
+        h.get_by_label("Meshes view").rect(),
+        h.get_by_label("Textures column").rect(),
+    );
+    assert!(
+        eye.left() >= meshes.right() && eye.left() - meshes.right() < 24.0,
+        "{meshes:?} {eye:?}"
+    );
     h.get_by_label("Textures column").click();
     h.run_steps(2);
     assert!(h.state().0.settings.textures_hidden);
@@ -249,7 +296,7 @@ fn a_running_export_shows_progress_in_the_header() {
     assert!(p.top() >= export.bottom() - 0.5 && (p.left() - export.left()).abs() < 1.0);
 }
 
-/// Note BH7: PG JSON Editor opens the editor, whose top field renames the JSON.
+/// Note BH7, R14: Export to ▾ → PGPatcher JSON editor… opens the editor, whose top field renames the JSON.
 #[test]
 fn pg_json_editor_opens_the_editor_with_the_name_field() {
     let d = tempfile::tempdir().unwrap();
@@ -257,6 +304,8 @@ fn pg_json_editor_opens_the_editor_with_the_name_field() {
     assert!(h
         .query_by_label(sdc_gui::ui::json_editor::NAME_LABEL)
         .is_none());
+    h.get_by_label_contains("Export to: ").click();
+    h.run_steps(2);
     h.get_by_label(sdc_gui::ui::header::JSON_EDITOR).click();
     h.run_steps(2);
     assert!(h.state().0.json_editor_open);
@@ -288,13 +337,26 @@ fn pg_json_editor_opens_the_editor_with_the_name_field() {
     );
 }
 
+/// C7: the Meshes view draws the same header (no eyes: they hide Textures-view columns).
 #[test]
 fn the_meshes_header_never_overlaps() {
     let d = tempfile::tempdir().unwrap();
     for w in WIDTHS {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, true);
-        assert_no_overlap(&h, "meshes-header", w);
-        h.get_by_label("MO2…");
+        assert_no_overlap(&h, "header", w);
+        for c in [
+            "Open",
+            "Undo",
+            "MO2…",
+            "Mode",
+            "Meshes view",
+            "Save",
+            "Export",
+        ] {
+            h.get_by_label(c);
+        }
+        assert!(h.query_by_label("Textures column").is_none());
+        assert!(PanelState::load(&h.ctx, Id::new("meshes-header")).is_none());
         // Note AM: an idle bar with no status holds nothing.
         if !widgets(&h, "meshes-bar").is_empty() {
             assert_no_overlap(&h, "meshes-bar", w);

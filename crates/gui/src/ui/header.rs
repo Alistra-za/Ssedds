@@ -1,18 +1,16 @@
-//! The header (M3a spec §2.1, Note BH): two rows of controls, then Messages over Save and the two-row Export at the
-//! right edge; then the status line and banner.
+//! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the column eyes,
+//! then Export to ▾ · Save · Export at the right edge; then the status line and banner. Drawn in both views (C7).
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Target;
 
-/// The button that opens the PGPatcher JSON editor (Note BH7).
-pub const JSON_EDITOR: &str = "PG JSON Editor";
+/// The Export to ▾ entry that opens the PGPatcher JSON editor (R14; was the header's PG JSON Editor, Note BH7).
+pub const JSON_EDITOR: &str = "PGPatcher JSON editor…";
 /// Export's width: twice what it was (Note BH3).
 const EXPORT_WIDTH: f32 = 240.0;
-/// The widest the Export folder button gets; a longer path is cut with "…".
-const EXPORT_FOLDER_MAX: f32 = 280.0;
-/// The narrowest the Export folder button is cut to before it starts a line of its own.
-const EXPORT_FOLDER_MIN: f32 = 120.0;
+/// The fewest path characters Export to ▾ shows (K1).
+const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
 pub const EXPORT_RUNNING_HOVER: &str = "An export is running: change the folder after it ends";
 
@@ -61,95 +59,114 @@ pub fn draw(
 ) {
     set_title(ui.ctx(), window_title(model));
     egui::Panel::top("header").show(ui, |ui| {
-        // Note BH: two rows on the left; Messages over Save, then Export, anchored right at the rows' full height.
-        let gap = ui.spacing().item_spacing;
-        let stack_w =
-            button_width(ui, &super::messages::button_text(model)).max(button_width(ui, "Save"));
-        let right_w = stack_w + gap.x + EXPORT_WIDTH;
-        ui.horizontal_top(|ui| {
-            let left_w = (ui.available_width() - right_w - gap.x).max(0.0);
-            let left = ui.allocate_ui_with_layout(
-                egui::vec2(left_w, 0.0),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_width(left_w);
-                    // AG126: each row wraps in a narrow window instead of drawing controls on top of each other. A
-                    // group that is one nested layout (a combo, a disabled scope) is moved whole by `fit`.
-                    ui.horizontal_wrapped(|ui| top_row(ui, model, scan));
-                    ui.horizontal_wrapped(|ui| bottom_row(ui, model));
-                },
-            );
-            // Two rows tall at least; as tall as the rows when a narrow window wraps them.
-            let h = left
-                .response
-                .rect
-                .height()
-                .max(2.0 * ui.spacing().interact_size.y + gap.y);
-            ui.allocate_ui_with_layout(
-                egui::vec2(stack_w, h),
-                egui::Layout::top_down(egui::Align::Center),
-                |ui| {
-                    let size = egui::vec2(stack_w, (h - gap.y) / 2.0);
-                    super::messages::button(ui, model, size);
-                    if ui
-                        .add_enabled(model.is_dirty(), egui::Button::new("Save").min_size(size))
-                        .clicked()
-                    {
-                        // AG23, trace-debug #54: as Ctrl+S, wait for a focused field to commit.
-                        if !field_focused(ui, model, "Save") {
-                            // A failed save raises its own dialog.
-                            let _ = model.save();
-                        }
-                    }
-                },
-            );
-            export_button(ui, model, egui::vec2(EXPORT_WIDTH, h));
-        });
+        // AG126: the row wraps in a narrow window instead of drawing controls on top of each other. A group that is one
+        // nested layout (a combo, a disabled scope) is moved whole by `fit`.
+        ui.horizontal_wrapped(|ui| row(ui, model, scan));
     });
     status(ui, model);
 }
 
-/// Open folder…, Recent, Undo, Redo, MO2… with Mode, Preset, Presets…, then the export folder at the right (BH12).
-fn top_row(
+/// A4, left to right: Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the eyes (Textures view only),
+/// then Export to ▾ · Save · Export pushed to the right edge.
+fn row(
     ui: &mut egui::Ui,
     model: &mut AppModel,
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
-    if picker::button(ui, &model.picker, egui::Button::new("Open folder…")) {
-        model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
-    }
-    recent_menu(ui, model);
+    open_menu(ui, model);
     undo_redo(ui, model);
     ui.separator();
     mode_combo(ui, model, scan);
     preset_combo(ui, model);
-    fit(ui, button_width(ui, "Presets…"));
-    if ui
-        .button("Presets…")
-        .on_hover_text("Make and edit your own presets (saved in %APPDATA%\\sdc\\presets)")
-        .clicked()
-    {
-        model.open_presets();
+    ui.separator();
+    view_toggle(ui);
+    if !meshes_view_active(ui.ctx()) {
+        column_toggles(ui, model);
     }
-    export_folder_button(ui, model);
+    right_end(ui, model);
 }
 
-/// The column eye toggles at the far left, the view tabs centred in the space left (BH14), then PG JSON Editor at the
-/// right (BH12).
-fn bottom_row(ui: &mut egui::Ui, model: &mut AppModel) {
-    column_toggles(ui, model);
-    let right = if shows_json_editor(model) {
-        button_width(ui, JSON_EDITOR) + ui.spacing().item_spacing.x
-    } else {
-        0.0
+/// Export to ▾, Save and Export against the row's right edge; Save and Export two rows tall (A4).
+fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
+    let gap = ui.spacing().item_spacing.x;
+    let h = 2.0 * ui.spacing().interact_size.y;
+    let save_w = button_width(ui, "Save");
+    let glyph = button_width(ui, "0") - 2.0 * ui.spacing().button_padding.x;
+    // K1: what Export to's path may take is the room left after the button's own text, Save and Export.
+    let fixed = button_width(ui, "Export to:  ▾") + gap + save_w + gap + EXPORT_WIDTH;
+    fit(ui, fixed + PATH_MIN_CHARS as f32 * glyph);
+    let mut chars =
+        (((room(ui) - fixed - gap) / glyph).floor().max(0.0) as usize).max(PATH_MIN_CHARS);
+    let full = export_folder_shown(model);
+    let others = gap + save_w + gap + EXPORT_WIDTH;
+    let text = loop {
+        let shown = match &full {
+            Some(p) => elide_middle(p, chars),
+            None => "not set".to_string(),
+        };
+        let text = format!("Export to: {shown} ▾");
+        // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
+        if full.is_none()
+            || chars <= PATH_MIN_CHARS
+            || button_width(ui, &text) + others <= room(ui) - 0.5
+        {
+            break text;
+        }
+        chars -= 1;
     };
-    let tabs = view_tabs_width(ui);
-    let free = room(ui) - right;
-    if free > tabs {
-        ui.add_space((free - tabs) / 2.0);
+    push_right(ui, button_width(ui, &text) + others);
+    export_to_menu(ui, model, text, full);
+    if ui
+        .add_enabled(
+            model.is_dirty(),
+            egui::Button::new("Save").min_size(egui::vec2(save_w, h)),
+        )
+        .clicked()
+    {
+        // AG23, trace-debug #54: as Ctrl+S, wait for a focused field to commit.
+        if !field_focused(ui, model, "Save") {
+            // A failed save raises its own dialog.
+            let _ = model.save();
+        }
     }
-    view_toggle(ui);
-    json_editor_button(ui, model);
+    export_button(ui, model, egui::vec2(EXPORT_WIDTH, h));
+}
+
+/// `path` cut in the middle to at most `max_chars` characters: the first component (`C:`), `…`, then as many whole
+/// trailing components as fit. A path that fits is returned as it is; when even the last component does not fit,
+/// `…` and its last `max_chars - 1` characters.
+pub fn elide_middle(path: &str, max_chars: usize) -> String {
+    let len = |s: &str| s.chars().count();
+    if len(path) <= max_chars {
+        return path.to_string();
+    }
+    let parts: Vec<&str> = path.split(['\\', '/']).collect();
+    let sep = path
+        .chars()
+        .find(|c| *c == '\\' || *c == '/')
+        .unwrap_or('\\');
+    let last = parts.last().copied().unwrap_or(path);
+    let head = format!("{}{sep}…", parts[0]);
+    let mut tail = String::new();
+    for p in parts[1..].iter().rev() {
+        let next = format!("{sep}{p}{tail}");
+        if len(&head) + len(&next) > max_chars {
+            break;
+        }
+        tail = next;
+    }
+    if tail.is_empty() {
+        let keep = max_chars.saturating_sub(1);
+        let skip = len(last).saturating_sub(keep);
+        return format!("…{}", last.chars().skip(skip).collect::<String>());
+    }
+    format!("{head}{tail}")
+}
+
+/// The folder an export would write to: the setting, else `<root>/sdc-out`; None with neither.
+fn export_folder_shown(model: &AppModel) -> Option<String> {
+    (model.settings.export_folder.is_some() || model.root.is_some())
+        .then(|| model.export_root().display().to_string())
 }
 
 /// What is left of this line of a wrapped row.
@@ -157,7 +174,7 @@ fn room(ui: &egui::Ui) -> f32 {
     ui.max_rect().right() - ui.cursor().min.x
 }
 
-/// Moves the cursor so a `w`-wide widget ends at the row's right edge, against the Messages/Save stack (BH12).
+/// Moves the cursor so a `w`-wide widget ends at the row's right edge.
 fn push_right(ui: &mut egui::Ui, w: f32) {
     let s = room(ui) - w - 0.5;
     if s > 0.0 {
@@ -247,28 +264,9 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     });
 }
 
-/// PG JSON Editor is offered: cs mode, a folder open and its `sdc-project.toml` loaded.
+/// The PGPatcher JSON editor is offered: cs mode, a folder open and its `sdc-project.toml` loaded.
 fn shows_json_editor(model: &AppModel) -> bool {
     model.target == Target::Cs && model.root.is_some() && model.sets_doc.is_some()
-}
-
-/// The PGPatcher JSON editor (CS only, with a folder open); the JSON name is its top field (Note BH7).
-fn json_editor_button(ui: &mut egui::Ui, model: &mut AppModel) {
-    if !shows_json_editor(model) {
-        return;
-    }
-    let w = button_width(ui, JSON_EDITOR);
-    fit(ui, w);
-    push_right(ui, w);
-    if ui
-        .button(JSON_EDITOR)
-        .on_hover_text(
-            "Edit the whole TruePBR JSON: its file name, every set's entry and the delete sections",
-        )
-        .clicked()
-    {
-        model.json_editor_open = true;
-    }
 }
 
 /// Starts a new line of a wrapped row unless `width` fits in what is left of this one. A nested layout (a combo, a
@@ -392,19 +390,29 @@ fn paint_eye(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32, open:
     }
 }
 
-fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
+/// Open ▾ (R14): Open folder… (off while a file dialog is open), then the recent folders.
+fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut open = None;
-    fit(ui, button_width(ui, "Recent"));
-    ui.add_enabled_ui(!model.settings.recent.is_empty(), |ui| {
-        ui.menu_button("Recent", |ui| {
-            for p in &model.settings.recent {
-                if ui.button(p.display().to_string()).clicked() {
-                    open = Some(p.clone());
-                    ui.close();
-                }
+    let mut pick = false;
+    ui.menu_button("Open", |ui| {
+        if picker::button(ui, &model.picker, egui::Button::new("Open folder…")) {
+            pick = true;
+            ui.close();
+        }
+        ui.separator();
+        if model.settings.recent.is_empty() {
+            ui.add_enabled(false, egui::Button::new("No recent folders"));
+        }
+        for p in &model.settings.recent {
+            if ui.button(p.display().to_string()).clicked() {
+                open = Some(p.clone());
+                ui.close();
             }
-        });
+        }
     });
+    if pick {
+        model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
+    }
     if let Some(p) = open {
         model.request_open(p);
     }
@@ -505,40 +513,57 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     );
     ui.label("Preset");
     let mut picked = None;
-    ui.add_enabled_ui(model.project.is_some(), |ui| {
-        egui::ComboBox::from_id_salt("preset")
-            .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
-            .show_ui(ui, |ui| {
-                if ui.selectable_label(cur.is_none(), &default).clicked() {
+    let mut presets = false;
+    let has_project = model.project.is_some();
+    // K5: the popup always opens, so Presets… is reachable with no folder; only the presets need a project.
+    egui::ComboBox::from_id_salt("preset")
+        .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
+        .show_ui(ui, |ui| {
+            ui.add_enabled_ui(has_project, |ui| {
+                let entry = |ui: &mut egui::Ui, on: bool, text: &str| {
+                    ui.selectable_label(on, text)
+                        .on_disabled_hover_text("Open a folder first")
+                        .clicked()
+                };
+                if entry(ui, cur.is_none(), &default) {
                     picked = Some(None);
                 }
                 for id in model.preset_choices() {
-                    if ui
-                        .selectable_label(cur.as_deref() == Some(id.as_str()), &id)
-                        .clicked()
-                    {
+                    if entry(ui, cur.as_deref() == Some(id.as_str()), &id) {
                         picked = Some(Some(id));
                     }
                 }
-            })
-            .response
-            .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
-    });
+            });
+            ui.separator();
+            if ui
+                .button("Presets…")
+                .on_hover_text("Make and edit your own presets (saved in %APPDATA%\\sdc\\presets)")
+                .clicked()
+            {
+                presets = true;
+            }
+        })
+        .response
+        .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
+    if presets {
+        model.open_presets();
+    }
     if let Some(p) = picked.filter(|p| *p != cur) {
         model.set_preset(p);
     }
 }
 
-/// Top-level view toggle (plan A Task 12): "Textures | Meshes", kept in egui memory for the session. Note BH8: two
-/// tabs, taller than the row, rounded on top only and set apart by space; the selected one is filled and bold.
+/// Top-level view toggle (plan A Task 12), kept in egui memory for the session. Note BH8: two tabs, taller than the
+/// row, rounded on top only; the selected one is filled and bold. R21: they show "Textures" / "Meshes" and keep the
+/// accessible names "Textures view" / "Meshes view".
 pub fn view_toggle(ui: &mut egui::Ui) {
     let mut meshes = meshes_view_active(ui.ctx());
-    let tab = |ui: &mut egui::Ui, on: bool, text: &str| {
-        let text = egui::RichText::new(text);
-        let w = button_width(ui, "Textures view") + 12.0;
+    let tab = |ui: &mut egui::Ui, on: bool, text: &str, name: &str| {
+        let rich = egui::RichText::new(text);
+        let w = button_width(ui, "Textures") + 12.0;
         let h = ui.spacing().interact_size.y + 6.0;
-        ui.add(
-            egui::Button::selectable(on, if on { text.strong() } else { text })
+        let r = ui.add(
+            egui::Button::selectable(on, if on { rich.strong() } else { rich })
                 .frame_when_inactive(true)
                 .corner_radius(egui::CornerRadius {
                     nw: 6,
@@ -547,26 +572,27 @@ pub fn view_toggle(ui: &mut egui::Ui) {
                     se: 0,
                 })
                 .min_size(egui::vec2(w, h)),
-        )
+        );
+        let enabled = ui.is_enabled();
+        r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, name));
+        r
     };
     fit(ui, view_tabs_width(ui));
-    ui.add_space(16.0);
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if tab(ui, !meshes, "Textures view").clicked() {
+        if tab(ui, !meshes, "Textures", "Textures view").clicked() {
             meshes = false;
         }
-        if tab(ui, meshes, "Meshes view").clicked() {
+        if tab(ui, meshes, "Meshes", "Meshes view").clicked() {
             meshes = true;
         }
     });
-    ui.add_space(16.0);
     set_meshes_view(ui.ctx(), meshes);
 }
 
-/// The width `view_toggle` takes: two tabs, their 16 pt margins and the spacing after them.
+/// The width `view_toggle` takes: two tabs and the spacing after them.
 fn view_tabs_width(ui: &egui::Ui) -> f32 {
-    2.0 * (button_width(ui, "Textures view") + 12.0) + 2.0 + 32.0 + ui.spacing().item_spacing.x
+    2.0 * (button_width(ui, "Textures") + 12.0) + 2.0 + ui.spacing().item_spacing.x
 }
 
 /// Switch the view (also the saved one coming back at start, AG17).
@@ -580,45 +606,62 @@ pub fn meshes_view_active(ctx: &egui::Context) -> bool {
         .unwrap_or(false)
 }
 
-fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
-    // The folder an export would write to: the setting, else `<root>/sdc-out`.
-    let shown = if model.settings.export_folder.is_some() || model.root.is_some() {
-        model.export_root().display().to_string()
-    } else {
-        "not set".to_string()
-    };
-    let text = format!("Export folder: {shown}");
-    // A long path is cut to EXPORT_FOLDER_MAX, or to what is left of the row but at least EXPORT_FOLDER_MIN (the
-    // hover and the accessible name keep all of it), so a narrow window keeps its row one line.
-    let w = button_width(ui, &text)
-        .min(EXPORT_FOLDER_MAX)
-        .min(room(ui).max(EXPORT_FOLDER_MIN));
-    fit(ui, w);
-    push_right(ui, w);
-    let height = ui.spacing().interact_size.y;
-    // Exactly `w` wide, so its right edge is the row's (BH12).
-    let b = egui::Button::new(text)
-        .truncate()
-        .min_size(egui::vec2(w, height));
-    // AG129: the drawer's links point at the export folder, so it stays put while an export runs.
-    let off = if model.picker.busy() {
-        Some(picker::BUSY_HOVER)
-    } else if model.export.running.is_some() {
-        Some(EXPORT_RUNNING_HOVER)
-    } else {
-        None
-    };
-    let r = ui
-        .allocate_ui(egui::vec2(w, height), |ui| ui.add_enabled(off.is_none(), b))
-        .inner;
-    let r = match off {
-        Some(why) => r.on_disabled_hover_text(why),
-        None => r.on_hover_text(format!(
-            "Choose where converted textures are written (now {shown})"
-        )),
-    };
-    if r.clicked() {
+/// Export to ▾ (A4): `text` shows the folder cut in the middle; the hover and the accessible name keep all of it (K8).
+/// Entries: Choose export folder…, Open export folder and, in cs mode, the PGPatcher JSON editor (R14).
+fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: Option<String>) {
+    let full = full.unwrap_or_else(|| "not set".to_string());
+    let mut choose = false;
+    let mut open = false;
+    let mut json = false;
+    let r = ui.menu_button(text, |ui| {
+        // AG129: the drawer's links point at the export folder, so it stays put while an export runs.
+        let off = if model.picker.busy() {
+            Some(picker::BUSY_HOVER)
+        } else if model.export.running.is_some() {
+            Some(EXPORT_RUNNING_HOVER)
+        } else {
+            None
+        };
+        let r = ui.add_enabled(off.is_none(), egui::Button::new("Choose export folder…"));
+        let r = match off {
+            Some(why) => r.on_disabled_hover_text(why),
+            None => r.on_hover_text("Choose where converted textures are written"),
+        };
+        choose = r.clicked();
+        // A2: stat only while the menu is open.
+        let state = model.export_folder_state();
+        let r = ui.add_enabled(state.is_ok(), egui::Button::new("Open export folder"));
+        open = match &state {
+            Ok(p) => r.on_hover_text(format!("Show {} in Explorer", p.display())),
+            Err(why) => r.on_disabled_hover_text(why),
+        }
+        .clicked();
+        if shows_json_editor(model) {
+            json = ui
+                .button(JSON_EDITOR)
+                .on_hover_text(
+                    "Edit the whole TruePBR JSON: its file name, every set's entry and the delete sections",
+                )
+                .clicked();
+        }
+        if choose || open || json {
+            ui.close();
+        }
+    });
+    let name = format!("Export to: {full}");
+    let enabled = ui.is_enabled();
+    r.response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    r.response.on_hover_text(full);
+    if choose {
         model.pick(ui.ctx(), PickerPurpose::ExportFolder, PickerSpec::folder());
+    }
+    if open {
+        // As the Files tab's: the entry is enabled only when the folder is there.
+        let _ = model.open_export_folder();
+    }
+    if json {
+        model.json_editor_open = true;
     }
 }
 
