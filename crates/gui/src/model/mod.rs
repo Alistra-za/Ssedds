@@ -405,7 +405,7 @@ pub struct AppModel {
     pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
-    /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
+    /// Review's Export was clicked while a plan or scan read was in flight: the export continues when it lands.
     continue_after_plan: Option<Continue>,
     /// The user chose to cancel the running export and then close or open: done when the export has ended.
     after_export: Option<AfterExport>,
@@ -880,18 +880,18 @@ impl AppModel {
         } else if changed {
             // The plan this starts carries a queued export to its end (`finish_plan`).
             self.replan();
-        } else if std::mem::take(&mut self.export_after_plan) {
-            // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
-            if self.dialog.is_some() {
+        } else {
+            // DECISIONS AF4: an Export (the header's or Review's) clicked during this scan-finished read starts now,
+            // never on a later plan. Both are taken together, as in `finish_plan`; the export the user clicked wins.
+            let (clicked, continued) = (
+                std::mem::take(&mut self.export_after_plan),
+                self.continue_after_plan.take(),
+            );
+            if (clicked || continued.is_some()) && self.dialog.is_some() {
                 self.queued_export_dropped();
-            } else {
+            } else if clicked {
                 self.export_clicked();
-            }
-        } else if let Some(how) = self.continue_after_plan.take() {
-            // The same for Review's Export queued behind this read: now, never on a later, unrelated plan.
-            if self.dialog.is_some() {
-                self.queued_export_dropped();
-            } else {
+            } else if let Some(how) = continued {
                 self.run_continue(how);
             }
         }

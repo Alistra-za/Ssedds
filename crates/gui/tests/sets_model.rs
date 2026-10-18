@@ -1931,3 +1931,28 @@ fn set_ids_stay_right_while_a_new_export_folder_replans() {
     let after: Vec<String> = set_views(&m).iter().map(|v| v.id.clone()).collect();
     assert_eq!(after, before);
 }
+
+/// Layout v2 Task 1.3: the header's Export and Review's Export, both queued behind one scan-finished read, are taken
+/// together when it lands; neither is left to fire on a later, unrelated plan.
+#[test]
+fn both_exports_queued_behind_a_scan_finished_read_are_taken_when_it_lands() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    // The fixture has undecided textures: Export opens Review.
+    m.export_clicked();
+    assert!(m.review.is_some());
+    m.refresh_mesh_votes(false);
+    assert!(m.votes_pending());
+    m.export_from_review();
+    m.export_clicked();
+    idle(&mut m);
+    assert!(!m.export_queued());
+    assert!(m.export.summary.is_none() && m.export.running.is_none());
+    m.set_field("landscape/rock01.png", "mipmaps.count", json!(3));
+    idle(&mut m);
+    assert!(
+        m.export.summary.is_none() && m.export.running.is_none(),
+        "a later plan started the stranded Review export"
+    );
+}
