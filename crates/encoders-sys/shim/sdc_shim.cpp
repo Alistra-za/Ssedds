@@ -54,6 +54,34 @@ void sdc_bc7e_compress(uint32_t n, uint64_t* blocks, const uint32_t* px, int lev
     ispc::bc7e_compress_blocks(n, blocks, px, &g_bc7[level][perceptual ? 1 : 0][exact ? 1 : 0]);
 }
 
+// Measurement only (sdc-bench bc7 tuning): the level's parameters with some fields overridden. A negative
+// override keeps the level's value. `t` is 12 ints: partitions_to_try (modes 0/1/3, 2 and 7 together),
+// uber_level, refinement_passes, pbit_search, weights r g b a, max_partitions for modes 1/3/7, mode 0, mode 2,
+// and a "use alpha weights also in opaque mode 6" switch that is reserved (ignored today).
+void sdc_bc7e_compress_tuned(uint32_t n, uint64_t* blocks, const uint32_t* px, int level, int perceptual, int exact,
+                             const int32_t* t) {
+    ispc::bc7e_compress_block_params p = g_bc7[level][perceptual ? 1 : 0][exact ? 1 : 0];
+    if (t[0] >= 0) {
+        p.m_opaque_settings.m_max_mode13_partitions_to_try = t[0];
+        p.m_opaque_settings.m_max_mode0_partitions_to_try = t[0];
+        p.m_opaque_settings.m_max_mode2_partitions_to_try = t[0];
+        p.m_alpha_settings.m_max_mode7_partitions_to_try = t[0];
+    }
+    if (t[1] >= 0) p.m_uber_level = t[1];
+    if (t[2] >= 0) p.m_refinement_passes = t[2];
+    if (t[3] >= 0) p.m_pbit_search = t[3] != 0;
+    for (int c = 0; c < 4; c++)
+        if (t[4 + c] >= 0) p.m_weights[c] = t[4 + c];
+    if (t[8] >= 0) {
+        p.m_max_partitions_mode[1] = t[8];
+        p.m_max_partitions_mode[3] = t[8];
+        p.m_max_partitions_mode[7] = t[8];
+    }
+    if (t[9] >= 0) p.m_max_partitions_mode[0] = t[9];
+    if (t[10] >= 0) p.m_max_partitions_mode[2] = t[10];
+    ispc::bc7e_compress_blocks(n, blocks, px, &p);
+}
+
 void sdc_bc1_encode(uint8_t* dst, const uint8_t* px, uint32_t level, int allow3, int black) {
     rgbcx::encode_bc1(level, dst, px, allow3 != 0, black != 0);
 }
