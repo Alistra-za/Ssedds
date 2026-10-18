@@ -465,9 +465,10 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
         ui.label("");
     } else {
         let r = ui.label(k.label);
-        if let Some(t) = label_hover(k.key) {
-            r.on_hover_text(t);
-        }
+        match label_hover(k.key) {
+            Some(t) => r.on_hover_text(t),
+            None => r.on_hover_text(k.key),
+        };
     }
     let reason = disabled_reason(k, c);
     let r = ui.add_enabled_ui(reason.is_none(), |ui| {

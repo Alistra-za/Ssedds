@@ -885,7 +885,7 @@ fn the_card_ticks_export_and_a_key_in_one_undo_step_each() {
         .is_some());
     h.get_by_label(EXPORT).click();
     h.run();
-    h.get_by_label("glossiness").click();
+    h.get_by_label("Glossiness").click();
     h.run();
     let m = h.state_mut();
     let b = m.cm_block(&v.id).unwrap();

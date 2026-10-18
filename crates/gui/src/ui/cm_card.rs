@@ -2,6 +2,7 @@
 //! change is a model call made after drawing (one `sets_doc` edit, one undo step).
 use super::columns::AMBER;
 use crate::model::cm_json::{card_warnings, first_value, shows_card, targets, CmKey, CmKind, KEYS};
+use crate::model::labels::readable;
 use crate::model::sets::SetView;
 use crate::model::AppModel;
 use eframe::egui;
@@ -77,10 +78,12 @@ pub fn section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
 fn key_row(ui: &mut egui::Ui, k: &CmKey, cur: Option<&Json>, acts: &mut Vec<Act>) {
     ui.horizontal_wrapped(|ui| {
         let mut set = cur.is_some();
-        let mut r = ui.checkbox(&mut set, k.name);
-        if k.name == "dynamic_cubemap" {
-            r = r.on_hover_text(CUBEMAP_HOVER);
-        }
+        let mut r = ui.checkbox(&mut set, readable(k.name));
+        r = r.on_hover_text(if k.name == "dynamic_cubemap" {
+            format!("{}. {CUBEMAP_HOVER}", k.name)
+        } else {
+            k.name.to_string()
+        });
         if r.changed() {
             acts.push(Act::Value(k.name.into(), set.then(|| first_value(k))));
         }
