@@ -168,6 +168,11 @@ pub fn tile_ready(item: &super::items::TextureItem) -> bool {
 }
 
 #[doc(hidden)]
+pub fn filtered_builds(m: &AppModel) -> u64 {
+    m.filter_builds.get()
+}
+
+#[doc(hidden)]
 pub fn problems_builds(m: &AppModel) -> u64 {
     m.problem_builds.get()
 }
@@ -265,6 +270,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
 
 /// The list narrowed by `f`: a set keeps its own rows and its members' rows; `Undecided` keeps the Decide rows.
 pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Vec<Problem> {
+    m.filter_builds.set(m.filter_builds.get() + 1);
     let all = problems(m);
     match f {
         None => (*all).clone(),

@@ -357,6 +357,7 @@ pub struct AppModel {
     /// Review (R1): open while `Some`; it holds only what the user answered.
     pub review: Option<review::Review>,
     pub(crate) problem_builds: std::cell::Cell<u64>,
+    pub(crate) filter_builds: std::cell::Cell<u64>,
     /// Item 22: per-item DDS sizes by plan revision.
     pub sizes: out_size::SizeCache,
     /// Item 21: the RNM blended thumbnail job.
@@ -545,6 +546,7 @@ impl AppModel {
             bottom: Default::default(),
             review: None,
             problem_builds: Default::default(),
+            filter_builds: Default::default(),
             sizes: Default::default(),
             rnm_preview: Default::default(),
             status_note: None,

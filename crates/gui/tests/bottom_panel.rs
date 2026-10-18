@@ -259,31 +259,88 @@ fn the_problems_tab_draws_only_the_rows_on_screen() {
     assert!((1..100).contains(&shown), "{shown} problem links");
     // One build, and the filtered list is not rebuilt per frame.
     let builds = sdc_gui::model::bottom::problems_builds(h.state());
+    let filters = sdc_gui::model::bottom::filtered_builds(h.state());
+    assert!(filters >= 1);
     h.run_steps(3);
     assert_eq!(sdc_gui::model::bottom::problems_builds(h.state()), builds);
+    assert_eq!(sdc_gui::model::bottom::filtered_builds(h.state()), filters);
+}
+
+/// What the columns should draw: a dot per ready tile and per ready set.
+fn ready_dots(m: &AppModel) -> (usize, usize) {
+    use sdc_gui::model::bottom::{set_ready, tile_ready};
+    let tiles = m.items.iter().filter(|i| tile_ready(i)).count();
+    let sets = sdc_gui::model::sets::set_views(m)
+        .iter()
+        .filter(|v| set_ready(m, v))
+        .count();
+    (tiles, sets)
 }
 
 #[test]
 fn a_ready_set_and_tile_show_a_green_dot() {
+    use sdc_gui::model::bottom::{set_ready, tile_ready};
     let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
+    let m = opened(d.path());
     let v = rock01(&m);
-    assert!(
-        !sdc_gui::model::bottom::set_ready(&m, &v),
-        "undecided members"
-    );
-    decide_all(&mut m);
+    assert!(!set_ready(&m, &v), "undecided members");
+    assert!(!tile_ready(m.item("landscape/rock01.png").unwrap()));
+    let (tiles, sets) = ready_dots(&m);
     let mut h = harness(m);
     h.run();
-    assert!(h.query_all_by_label("ready").count() > 0);
-    let d2 = tempfile::tempdir().unwrap();
-    let mut h = harness(opened(d2.path()));
+    assert_eq!(h.query_all_by_label("ready").count(), tiles + sets);
+    decide_all(h.state_mut());
+    // The rest of the fixture warns (neutral defaults, shader notes); a clean project is what turns green.
+    for i in h.state_mut().items.iter_mut() {
+        i.warnings.clear();
+    }
+    for st in h.state_mut().sets.iter_mut() {
+        st.warnings.clear();
+    }
+    h.state_mut().invalidate_views();
     h.run();
-    let n = h.state().items.len();
-    assert!(
-        h.query_all_by_label("ready").count() < n,
-        "an undecided folder is not all ready"
-    );
+    let (tiles, sets) = ready_dots(h.state());
+    assert!(set_ready(h.state(), &rock01(h.state())));
+    assert!(tiles > 0 && sets > 0, "tiles {tiles}, sets {sets}");
+    assert_eq!(h.query_all_by_label("ready").count(), tiles + sets);
+}
+
+#[test]
+fn the_other_warnings_link_in_review_opens_the_problems_tab() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.open_review();
+    let mut h = harness(m);
+    h.run();
+    assert_eq!(h.state().bottom.tab, BottomTab::Review);
+    h.get_by_label_contains("other warning").click();
+    h.run();
+    assert!(h.state().bottom.open && h.state().bottom.tab == BottomTab::Problems);
+    assert!(h.state().bottom.filter.is_none());
+}
+
+#[test]
+fn the_export_dot_needs_an_open_folder_with_something_to_export() {
+    let m = AppModel::new(Default::default(), None, session());
+    assert!(!sdc_gui::ui::header::export_dot(&m), "no folder");
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert!(!sdc_gui::ui::header::export_dot(&m), "problems exist");
+    decide_all(&mut m);
+    for i in m.items.iter_mut() {
+        i.warnings.clear();
+    }
+    for st in m.sets.iter_mut() {
+        st.warnings.clear();
+    }
+    m.invalidate_views();
+    {
+        assert!(sdc_gui::model::bottom::problems(&m).is_empty());
+        assert!(sdc_gui::ui::header::export_dot(&m));
+    }
+    m.items.clear();
+    m.invalidate_views();
+    assert!(!sdc_gui::ui::header::export_dot(&m), "nothing to export");
 }
 
 #[test]

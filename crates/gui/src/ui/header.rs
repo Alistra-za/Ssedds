@@ -180,6 +180,13 @@ pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> 
     true
 }
 
+/// A12: the green dot on Export: a folder is open, something would be written and no problem is listed.
+pub fn export_dot(model: &AppModel) -> bool {
+    model.root.is_some()
+        && crate::model::bottom::problems(model).is_empty()
+        && model.export_files() > 0
+}
+
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
 fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     let can_export = can_export(model);
@@ -199,12 +206,15 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
         // A12: the hover counts the files and the problems; a green dot says there are none.
         let n = crate::model::bottom::problems(model).len();
-        let hover = format!("{} files, {n} problems", model.export_files());
+        let hover = |ui: &mut egui::Ui| {
+            ui.label(format!("{} files, {n} problems", model.export_files()));
+        };
         let r = ui
             .add_enabled(can_export, export)
-            .on_hover_text(&hover)
-            .on_disabled_hover_text(&hover);
-        if n == 0 {
+            .on_hover_ui(hover)
+            .on_disabled_hover_ui(hover);
+        // No dot with nothing open or nothing to export: it would say "ready" about an empty project.
+        if export_dot(model) {
             let at = r.rect.left_center() + egui::vec2(10.0, 0.0);
             ui.painter().circle_filled(at, 4.0, super::status::GREEN);
         }
