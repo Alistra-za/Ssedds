@@ -59,8 +59,6 @@ pub struct Row {
 
 #[derive(Default)]
 pub struct ExportModel {
-    /// The drawer.
-    pub open: bool,
     pub running: Option<CancelToken>,
     /// In first-seen order, one per job key.
     pub rows: Vec<Row>,

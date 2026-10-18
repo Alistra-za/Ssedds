@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 //! A folder like a small mod: a diffuse with varying alpha (needs an alpha decision), a normal with no stated green
 //! convention, a 48 px NPOT diffuse (blocked by DIM-NPOT), a plain diffuse, and roughness + AO that pack `_rmaos`.
+use engine::codes::Code;
+use engine::config::{AlphaPolicy, GreenConvention, Subtype};
 use image::{ImageBuffer, Luma, Rgb, Rgba};
-use sdc_gui::model::AppModel;
+use sdc_gui::model::{Answer, AppModel};
 use sdc_gui::settings::GuiSettings;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -118,5 +120,22 @@ pub fn complex_material(m: &mut AppModel, key_end: &str) {
         .id
         .clone();
     m.set_shader(&id, Some(engine::shader::Shader::ComplexMaterial));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+}
+
+pub fn decide_all(m: &mut AppModel) {
+    m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
+    m.decide("landscape/odd.png", Answer::Subtype(Subtype::Diffuse));
+    m.decide("landscape/odd.png", Answer::Acknowledge(Code::DimNpot));
+    m.decide("landscape/leaf.png", Answer::Subtype(Subtype::Diffuse));
+    m.decide("landscape/leaf.png", Answer::Alpha(AlphaPolicy::Cutout));
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Subtype(Subtype::Normal),
+    );
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Green(GreenConvention::Directx),
+    );
     assert!(m.wait_idle(Duration::from_secs(60)));
 }

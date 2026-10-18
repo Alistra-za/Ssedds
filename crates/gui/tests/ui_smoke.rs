@@ -433,18 +433,12 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     // Cancel closes the question and starts nothing.
     press(&mut h, "Cancel");
     assert!(h.state().dialog.is_none());
-    assert!(!h.state().export.open);
+    assert!(!h.state().bottom.open);
     press(&mut h, "Export");
     press(&mut h, "Proceed anyway");
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
     h.run();
-    for label in [
-        "Files",
-        "Warnings",
-        "Save report…",
-        "Copy CLI command",
-        "Close",
-    ] {
+    for label in ["Files", "Save report…", "Copy CLI command", "Close"] {
         h.get_by_label(label);
     }
     h.get_by_label_contains("converted, ");
@@ -453,9 +447,8 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
             .count()
             >= 1
     );
-    press(&mut h, "Warnings");
     press(&mut h, "Close");
-    assert!(!h.state().export.open);
+    assert!(!h.state().bottom.open);
     assert!(h.query_by_label("Copy CLI command").is_none());
 }
 

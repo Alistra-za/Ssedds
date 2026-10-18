@@ -1,6 +1,5 @@
 mod support;
 use engine::codes::{Code, Warning};
-use engine::config::{AlphaPolicy, GreenConvention, Subtype};
 use engine::events::{EngineEvent, EventKind, SkipKind, EVENT_SCHEMA};
 use sdc_gui::model::export::*;
 use sdc_gui::model::*;
@@ -8,23 +7,6 @@ use sdc_gui::settings::Bc1Choice;
 use std::path::Path;
 use std::time::Duration;
 use support::*;
-
-fn decide_all(m: &mut AppModel) {
-    m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
-    m.decide("landscape/odd.png", Answer::Subtype(Subtype::Diffuse));
-    m.decide("landscape/odd.png", Answer::Acknowledge(Code::DimNpot));
-    m.decide("landscape/leaf.png", Answer::Subtype(Subtype::Diffuse));
-    m.decide("landscape/leaf.png", Answer::Alpha(AlphaPolicy::Cutout));
-    m.decide(
-        "landscape/rock01_normal.png",
-        Answer::Subtype(Subtype::Normal),
-    );
-    m.decide(
-        "landscape/rock01_normal.png",
-        Answer::Green(GreenConvention::Directx),
-    );
-    assert!(m.wait_idle(Duration::from_secs(60)));
-}
 
 #[test]
 fn undecided_textures_ask_first_and_proceed_anyway_skips_them() {
@@ -66,7 +48,7 @@ fn a_decided_folder_exports_and_the_report_groups_warnings() {
     decide_all(&mut m);
     m.export_clicked();
     assert_eq!(m.dialog, None);
-    assert!(m.export.open);
+    assert!(m.bottom.open && m.bottom.tab == sdc_gui::model::bottom::BottomTab::Files);
     assert!(m.wait_idle(Duration::from_secs(120)));
     let s = m.export.summary.clone().unwrap();
     assert_eq!(s.failed, 0);

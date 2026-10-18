@@ -5,7 +5,6 @@ use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Target;
 
-const WARNING: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 /// The button that opens the PGPatcher JSON editor (Note BH7).
 pub const JSON_EDITOR: &str = "PG JSON Editor";
 /// Export's width: twice what it was (Note BH3).
@@ -209,8 +208,8 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
                 done as f32 / total as f32
             };
             let hover = match model.export.current_file() {
-                Some(f) => format!("Exporting {f}. Cancel is in the export drawer."),
-                None => "Exporting. Cancel is in the export drawer.".to_string(),
+                Some(f) => format!("Exporting {f}. Cancel is in the Files tab."),
+                None => "Exporting. Cancel is in the Files tab.".to_string(),
             };
             ui.add(
                 egui::ProgressBar::new(frac)
@@ -655,7 +654,7 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
         });
         if let Some(b) = model.banner.clone() {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(WARNING, format!("⚠ {b}"));
+                ui.colored_label(super::status::AMBER, format!("⚠ {b}"));
                 if model.project.is_some() && ui.button("Reload").clicked() {
                     model.request_reload();
                 }

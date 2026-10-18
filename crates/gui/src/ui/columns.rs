@@ -9,8 +9,7 @@ use engine::events::RecipeStatus;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
-pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
+pub(super) use super::status::{AMBER, RED};
 /// Width of a collapsed column.
 pub const STRIP_WIDTH: f32 = 24.0;
 /// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.

@@ -95,7 +95,11 @@ fn the_textures_header_never_overlaps() {
         // Note AM: an idle scan row is not drawn (the source moved to MO2…).
         assert!(PanelState::load(&h.ctx, Id::new("textures-scan")).is_none());
         for c in CONTROLS {
-            h.get_by_label(c);
+            if c == "Messages" {
+                messages_button(&h);
+            } else {
+                h.get_by_label(c);
+            }
         }
         h.get_by_label_contains("Export folder");
         // Note BH7: the JSON name field moved into the editor window.
@@ -106,6 +110,14 @@ fn the_textures_header_never_overlaps() {
             "at {w} the header still has a text field"
         );
     }
+}
+
+/// The header's Messages button: the panel's Messages tab carries the same label, at the bottom of the window.
+fn messages_button(h: &H) -> egui::Rect {
+    h.query_all_by_label("Messages")
+        .map(|n| n.rect())
+        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .expect("the header has a Messages button")
 }
 
 fn outer(h: &H, id: &str) -> egui::Rect {
@@ -120,7 +132,7 @@ fn export_spans_two_rows_at_the_right_with_messages_over_save() {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, false);
         let export = h.get_by_label("Export").rect();
         let save = h.get_by_label("Save").rect();
-        let msgs = h.get_by_label("Messages").rect();
+        let msgs = messages_button(&h);
         let open = h.get_by_label("Open folder…").rect();
         let cols = h.get_by_label("Textures column").rect();
         // Right-anchored: right of every other header widget, only the panel margin past it.
@@ -162,7 +174,7 @@ fn export_spans_two_rows_at_the_right_with_messages_over_save() {
 fn export_folder_and_json_editor_sit_against_the_stack_and_the_tabs_are_centred() {
     let d = tempfile::tempdir().unwrap();
     let h = harness(pbr_opened(d.path()), 1440.0, false);
-    let msgs = h.get_by_label("Messages").rect();
+    let msgs = messages_button(&h);
     let open = h.get_by_label("Open folder…").rect();
     let folder = h.get_by_label_contains("Export folder").rect();
     let json = h.get_by_label(sdc_gui::ui::header::JSON_EDITOR).rect();

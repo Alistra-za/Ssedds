@@ -229,7 +229,7 @@ pub static ACTIONS: &[Action] = &[
         |m, _| m.nav.sheet = true,
     ),
     a("messages", "Messages", Global, &[ctrl(Key::M)], |m, _| {
-        m.messages.toggle();
+        m.toggle_tab(crate::model::bottom::BottomTab::Messages);
     }),
     when(
         a("open", "Open folder…", Global, &[], |m, ctx| {

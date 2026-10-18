@@ -1,5 +1,6 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod auto_flags;
+pub mod bottom;
 pub mod bulk;
 pub mod cm_json;
 pub mod cs_pbr;
@@ -345,6 +346,8 @@ pub struct AppModel {
     pub status_line: String,
     /// Item 20: the toasts and the Messages log (DECISIONS AG112-AG114); every status-line note also lands here.
     pub messages: messages::Messages,
+    /// The bottom panel: open or collapsed, and its tab (layout v2 A1).
+    pub bottom: bottom::BottomPanel,
     /// Item 22: per-item DDS sizes by plan revision.
     pub sizes: out_size::SizeCache,
     /// Item 21: the RNM blended thumbnail job.
@@ -527,6 +530,7 @@ impl AppModel {
             search: String::new(),
             status_line: String::new(),
             messages: Default::default(),
+            bottom: Default::default(),
             sizes: Default::default(),
             rnm_preview: Default::default(),
             status_note: None,
@@ -1516,10 +1520,10 @@ impl AppModel {
         self.pending_cm = cm_json::prepare(self);
         self.pending_text = None;
         self.export = export::ExportModel {
-            open: true,
             pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
         };
+        self.show_tab(bottom::BottomTab::Files);
         self.drawer_epoch += 1;
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
