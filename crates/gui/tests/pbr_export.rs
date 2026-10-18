@@ -431,19 +431,13 @@ fn export_and_wait(m: &mut sdc_gui::model::AppModel) {
     );
 }
 
-fn json_path(m: &sdc_gui::model::AppModel) -> std::path::PathBuf {
-    m.export_root()
-        .join("PBRNIFPatcher")
-        .join(format!("{}.json", json_name(m)))
-}
-
 #[test]
 fn export_writes_a_valid_json_and_records_its_hash() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     let text = std::fs::read_to_string(&p)
         .unwrap_or_else(|e| panic!("{p:?}: {e}; notes {:?}", m.export.notes));
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -469,7 +463,7 @@ fn a_hand_edited_json_asks_before_overwriting() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
     export_and_wait(&mut m);
@@ -488,7 +482,7 @@ fn keeping_a_hand_edited_json_leaves_it_and_the_record() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     let before = m.sets_doc.as_ref().unwrap().last_json_sha256();
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
@@ -1193,12 +1187,12 @@ fn renamed_json_notes_old_file_and_rename_back_is_not_hand_edited() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let a = json_path(&m);
+    let a = pgp_json_path(&m);
     assert!(a.is_file());
     m.set_json_name("renamed");
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
     export_and_wait(&mut m);
-    let b = json_path(&m);
+    let b = pgp_json_path(&m);
     assert!(b.is_file() && a.is_file(), "the old file is left in place");
     let old_name = a.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
@@ -1212,7 +1206,7 @@ fn renamed_json_notes_old_file_and_rename_back_is_not_hand_edited() {
     m.set_json_name("");
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.07)));
     export_and_wait(&mut m);
-    assert_eq!(json_path(&m), a);
+    assert_eq!(pgp_json_path(&m), a);
     assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&a).unwrap().contains("0.07"));
 }
@@ -1294,7 +1288,7 @@ fn the_overwrite_question_does_not_replace_an_open_dialog() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
     export_through(&mut m);

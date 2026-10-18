@@ -1,12 +1,62 @@
 //! Review (layout v2 B2, C2, C5; rulings R1–R4): the pre-export checks as a bottom-panel tab, not a modal. It holds
 //! only what the user answered; blockers, undecided textures and pitfalls are read live from the model.
-use super::{bottom::BottomTab, pbr_export, AppModel, Continue, ItemStatus};
+use super::history::{record_key, records_at, sha256_of};
+use super::{
+    bottom::BottomTab, cm_json, cs_pbr_export, pbr_export, AppModel, Continue, ItemStatus,
+};
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Review {
     /// R4: `export_asks` texts acknowledged for this export.
     pub acknowledged: BTreeSet<String>,
+    /// C4, R6: the answer, given in Review, for the edited PGPatcher JSON.
+    pub json_answer: Option<JsonAnswer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonKind {
+    PgPatcher,
+    CsPbr,
+    ComplexMaterial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskState {
+    New,
+    Ours,
+    Edited,
+    Unreadable,
+}
+
+/// One JSON file the export would write, and what is on disk there now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonLine {
+    pub kind: JsonKind,
+    pub path: PathBuf,
+    pub state: DiskState,
+}
+
+/// Keep or overwrite the edited PGPatcher JSON at `path`, for the file whose hash was `sha` when answered: a file
+/// changed since gets the question again (C4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonAnswer {
+    pub path: PathBuf,
+    pub sha: Option<String>,
+    pub overwrite: bool,
+}
+
+/// What is at `path` against the hash recorded for Tessalith's last write there.
+pub fn disk_state(path: &Path, recorded: Option<&str>) -> DiskState {
+    use sha2::{Digest, Sha256};
+    match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DiskState::New,
+        Err(_) => DiskState::Unreadable,
+        Ok(b) if recorded == Some(hex::encode(Sha256::digest(&b)).as_str()) => DiskState::Ours,
+        Ok(_) => DiskState::Edited,
+    }
 }
 
 fn plural(n: usize) -> &'static str {
@@ -24,9 +74,79 @@ impl AppModel {
         self.show_tab(BottomTab::Review);
     }
 
+    /// C4: the JSON files the export would write and their state on disk. Cached (K3) per view key for 1 s, since
+    /// Review draws it every frame and it reads the files (AG128).
+    pub fn review_json(&self) -> Vec<JsonLine> {
+        let key = self.view_key();
+        if let Some((k, at, lines)) = &*self.review_json_cache.borrow() {
+            if *k == key && at.elapsed() < Duration::from_secs(1) {
+                return lines.clone();
+            }
+        }
+        let mut lines = vec![];
+        // K13: vanilla (and a project without a PBR set) writes no PGPatcher JSON.
+        if let Some(p) = pbr_export::prepare(self).filter(|p| !p.entries.is_empty()) {
+            let state = disk_state(&p.path, self.pgp_record(&p.path).as_deref());
+            lines.push(JsonLine {
+                kind: JsonKind::PgPatcher,
+                path: p.path,
+                state,
+            });
+        }
+        let doc = self.sets_doc.as_ref();
+        let mut files = |kind, root: PathBuf, rels: Vec<String>, shas| {
+            // As the finishers read them: a relative record is under the export folder.
+            let shas = records_at(&shas, &root);
+            for rel in rels {
+                let path = root.join(rel);
+                let state = disk_state(&path, shas.get(&record_key(&path)).map(String::as_str));
+                lines.push(JsonLine { kind, path, state });
+            }
+        };
+        if let (Some(p), Some(d)) = (cs_pbr_export::prepare(self), doc) {
+            let rels = p.files.into_iter().map(|(r, _)| r).collect();
+            files(JsonKind::CsPbr, p.root, rels, d.cs_pbr_shas());
+        }
+        if let (Some(p), Some(d)) = (cm_json::prepare(self), doc) {
+            let rels = p.files.into_iter().map(|(r, _)| r).collect();
+            files(JsonKind::ComplexMaterial, p.root, rels, d.cm_json_shas());
+        }
+        *self.review_json_cache.borrow_mut() = Some((key, Instant::now(), lines.clone()));
+        lines
+    }
+
+    /// C4: Keep (false) or Overwrite (true) the edited PGPatcher JSON, for the file as it is now. No-op while Review
+    /// is closed.
+    pub fn answer_review_json(&mut self, overwrite: bool) {
+        if self.review.is_none() {
+            return;
+        }
+        let Some(p) = pbr_export::prepare(self).filter(|p| !p.entries.is_empty()) else {
+            return;
+        };
+        let sha = sha256_of(&p.path);
+        if let Some(r) = self.review.as_mut() {
+            r.json_answer = Some(JsonAnswer {
+                path: p.path,
+                sha,
+                overwrite,
+            });
+        }
+    }
+
+    /// R6: the PGPatcher JSON this export would write exists and is not Tessalith's (uncached: one read per click).
+    pub fn pgp_json_edited(&self) -> bool {
+        pbr_export::prepare(self)
+            .filter(|p| !p.entries.is_empty())
+            .is_some_and(|p| {
+                disk_state(&p.path, self.pgp_record(&p.path).as_deref()) == DiskState::Edited
+            })
+    }
+
     /// Close Review and its ticks; the panel collapses when it showed Review (R7: the tab is listed only while open).
     pub fn close_review(&mut self) {
         self.review = None;
+        self.review_json_cache.take();
         // Its queued export goes with it (Task 1.4's Close).
         self.continue_after_plan = None;
         if self.bottom.tab == BottomTab::Review {

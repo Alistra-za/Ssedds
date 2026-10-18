@@ -326,6 +326,8 @@ pub struct AppModel {
     item_index: std::collections::HashMap<String, usize>,
     /// The cached set views and export blocks (DECISIONS Note Y7).
     pub(crate) views: std::cell::RefCell<ViewCache>,
+    /// K3: `review_json` for a view key, and when it was read; cleared with `review`.
+    review_json_cache: std::cell::RefCell<Option<(ViewKey, Instant, Vec<review::JsonLine>)>>,
     pub unmatched_keys: Vec<String>,
     /// Per-set RNM-* notes from layer jobs (they have no item).
     pub rnm_notes: std::collections::BTreeMap<String, Vec<engine::codes::Warning>>,
@@ -421,6 +423,8 @@ pub struct AppModel {
     pending_cs: Option<cs_pbr_export::PendingCs>,
     /// Complex material design §6: the `<texture>.json` files the running export writes afterwards.
     pending_cm: Option<cm_json::PendingCm>,
+    /// C4: Review's answer for the edited PGPatcher JSON, for the running export only (K12).
+    pending_json_answer: Option<review::JsonAnswer>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -519,6 +523,7 @@ impl AppModel {
             inputs_rev: 0,
             item_index: Default::default(),
             views: Default::default(),
+            review_json_cache: Default::default(),
             sets: vec![],
             sets_root: None,
             unmatched_keys: vec![],
@@ -563,6 +568,7 @@ impl AppModel {
             pending_text: None,
             pending_cs: None,
             pending_cm: None,
+            pending_json_answer: None,
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -647,6 +653,7 @@ impl AppModel {
         self.pending_text = None;
         self.pending_cs = None;
         self.pending_cm = None;
+        self.pending_json_answer = None;
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
         // were answered to get here).
         self.dialog = None;
@@ -1235,7 +1242,8 @@ impl AppModel {
             return;
         }
         let asks = !pbr_export::export_asks(self).is_empty();
-        if asks || self.undecided() > 0 {
+        // R6: an edited PGPatcher JSON is asked about in Review, before the export (C4).
+        if asks || self.undecided() > 0 || self.pgp_json_edited() {
             self.open_review();
             return;
         }
@@ -1489,8 +1497,9 @@ impl AppModel {
         self.pending_cs = cs_pbr_export::prepare(self);
         self.pending_cm = cm_json::prepare(self);
         self.pending_text = None;
-        // R4: the ticks are for this export only.
-        self.review = None;
+        // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
+        self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
+        self.review_json_cache.take();
         self.export = export::ExportModel {
             pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
@@ -1505,6 +1514,8 @@ impl AppModel {
     /// The export ended: write the copies and the JSON of the sets that exported (spec §6.1). Nothing is written
     /// after a cancelled or failed export.
     fn finish_json(&mut self) {
+        // K12: Review's answer is for this export only, whatever happens below.
+        let answer = self.pending_json_answer.take();
         let Some(p) = self.pending_json.take() else {
             return;
         };
@@ -1529,12 +1540,7 @@ impl AppModel {
             .as_ref()
             .map(|d| history::records_at(&d.pgp_json_shas(), &root))
             .unwrap_or_default();
-        // #43: the record of this name; a project from before per-name records has only the legacy one.
-        let last = if shas.is_empty() {
-            self.sets_doc.as_ref().and_then(|d| d.last_json_sha256())
-        } else {
-            shas.get(&key).cloned()
-        };
+        let last = self.pgp_record(&p.path);
         let named: Vec<String> = vec![p
             .path
             .strip_prefix(&root)
@@ -1555,6 +1561,24 @@ impl AppModel {
             &mut self.export.notes,
         ) {
             pbr_export::Finish::Written(sha) => self.record_json_sha(&key, &sha),
+            // C4: answered in Review for this very file (same path, same bytes); a file changed since asks again.
+            pbr_export::Finish::Overwrite(text)
+                if answer.as_ref().is_some_and(|a| {
+                    a.path == p.path && a.sha.is_some() && history::sha256_of(&p.path) == a.sha
+                }) =>
+            {
+                if answer.is_some_and(|a| a.overwrite) {
+                    if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes)
+                    {
+                        self.record_json_sha(&key, &sha);
+                    }
+                } else {
+                    self.export.notes.push(format!(
+                        "PGPatcher JSON kept as edited: {}",
+                        p.path.display()
+                    ));
+                }
+            }
             // Audit 08f-6: an end-of-export question never replaces an open dialog; the file is kept, with a note.
             // `ExportRunning` is not in the way: the export it asks about has ended (`run_after_export`).
             pbr_export::Finish::Overwrite(_)
@@ -1606,6 +1630,18 @@ impl AppModel {
         let was_dirty = d.is_dirty();
         d.set_copy_shas(&shas);
         self.save_hash_record(was_dirty);
+    }
+
+    /// The hash recorded for Tessalith's last PGPatcher JSON at `path` (#43: per name; a project from before
+    /// per-name records has only the legacy one).
+    fn pgp_record(&self, path: &std::path::Path) -> Option<String> {
+        let d = self.sets_doc.as_ref()?;
+        let shas = history::records_at(&d.pgp_json_shas(), &self.export_root());
+        if shas.is_empty() {
+            d.last_json_sha256()
+        } else {
+            shas.get(&history::record_key(path)).cloned()
+        }
     }
 
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
@@ -2575,6 +2611,8 @@ impl AppModel {
         self.dialog = None;
         // K4, K5: Review and an export queued behind a plan belong to the documents being dropped.
         self.close_review();
+        // Review Focus 2: so does a JSON answer; the running export asks instead (the safe side).
+        self.pending_json_answer = None;
         self.export_after_plan = false;
         self.continue_after_plan = None;
         self.reset_type_follow();

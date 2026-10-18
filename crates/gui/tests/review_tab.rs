@@ -261,3 +261,24 @@ fn ctrl_k_opens_the_palette_while_review_is_open() {
     assert!(h.state().nav.palette.is_none());
     assert!(h.state().review.is_some());
 }
+
+/// C4, R6: an edited PGPatcher JSON is listed under What will be written with Keep / Overwrite, none picked.
+#[test]
+fn the_edited_json_offers_keep_and_overwrite() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    export_through(&mut m);
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    std::fs::write(pgp_json_path(&m), "{ \"edited\": true }\n").unwrap();
+    let mut h = harness(m);
+    h.run();
+    press(&mut h, "Export");
+    assert!(h.state().review.is_some());
+    h.get_by_label_contains(": edited outside Tessalith");
+    h.get_by_label("Keep the edited file");
+    h.get_by_label("Overwrite it");
+    assert_eq!(h.state().review.as_ref().unwrap().json_answer, None);
+    press(&mut h, "Overwrite it");
+    let a = h.state().review.as_ref().unwrap().json_answer.clone();
+    assert!(a.is_some_and(|a| a.overwrite));
+}

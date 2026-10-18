@@ -3,6 +3,7 @@ mod support;
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, Subtype};
 use sdc_gui::model::bottom::BottomTab;
+use sdc_gui::model::review::{DiskState, JsonKind};
 use sdc_gui::model::*;
 use serde_json::json;
 use std::time::Duration;
@@ -429,4 +430,139 @@ fn export_from_review_needs_review_open() {
     assert!(!m.export_queued());
     idle(&mut m);
     assert!(m.export.summary.is_none() && m.export.running.is_none());
+}
+
+/// A8: `pbr_ready` with leaf and odd decided (not `decide_all`, which would make rock01 a plain diffuse), exported once
+/// and settled; then the PGPatcher JSON is edited by hand. Returns the model and the JSON's path.
+fn clean_pbr_with_edited_json(dir: &std::path::Path) -> (AppModel, std::path::PathBuf) {
+    let mut m = pbr_ready(dir);
+    m.decide(LEAF, Answer::Subtype(Subtype::Diffuse));
+    m.decide(LEAF, Answer::Alpha(AlphaPolicy::Cutout));
+    m.decide(ODD, Answer::Subtype(Subtype::Diffuse));
+    m.decide(ODD, Answer::Acknowledge(Code::DimNpot));
+    idle(&mut m);
+    // C2: clean, so the first export starts without Review.
+    m.export_clicked();
+    assert!(m.review.is_none(), "{:?}", m.review_gate());
+    idle(&mut m);
+    let p = pgp_json_path(&m);
+    assert!(p.is_file(), "{:?}", m.export.notes);
+    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+    (m, p)
+}
+
+/// `clean_pbr_with_edited_json`, a JSON edit (so the next export has something to write), Review open.
+fn reviewing_an_edited_json(dir: &std::path::Path) -> (AppModel, std::path::PathBuf) {
+    let (mut m, p) = clean_pbr_with_edited_json(dir);
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    idle(&mut m);
+    m.open_review();
+    (m, p)
+}
+
+fn exported_from_review(m: &mut AppModel) {
+    m.export_from_review();
+    idle(m);
+    assert!(m.export.summary.is_some(), "{:?}", m.review_gate());
+}
+
+#[test]
+fn review_shows_an_edited_pgpatcher_json() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = clean_pbr_with_edited_json(d.path());
+    m.open_review();
+    let l = m
+        .review_json()
+        .into_iter()
+        .find(|l| l.kind == JsonKind::PgPatcher)
+        .unwrap();
+    assert_eq!((l.path, l.state), (p, DiskState::Edited));
+}
+
+#[test]
+fn a_pre_answer_overwrite_writes_without_asking() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = reviewing_an_edited_json(d.path());
+    m.answer_review_json(true);
+    exported_from_review(&mut m);
+    assert_eq!(m.dialog, None);
+    assert!(std::fs::read_to_string(&p).unwrap().contains("0.06"));
+    assert_eq!(
+        m.sets_doc.as_ref().unwrap().last_json_sha256(),
+        history::sha256_of(&p)
+    );
+}
+
+#[test]
+fn a_pre_answer_keep_keeps_the_file_with_a_note() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = reviewing_an_edited_json(d.path());
+    m.answer_review_json(false);
+    exported_from_review(&mut m);
+    assert_eq!(m.dialog, None);
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.starts_with("PGPatcher JSON kept as edited")),
+        "{:?}",
+        m.export.notes
+    );
+}
+
+/// C4 safety net: the answer was for the file as it was; a later edit asks again.
+#[test]
+fn the_overwrite_dialog_still_fires_when_the_json_changed_after_review() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = reviewing_an_edited_json(d.path());
+    m.answer_review_json(true);
+    std::fs::write(&p, "{ \"edited\": 2 }\n").unwrap();
+    exported_from_review(&mut m);
+    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    assert!(std::fs::read_to_string(&p)
+        .unwrap()
+        .contains("\"edited\": 2"));
+}
+
+#[test]
+fn without_an_answer_the_question_comes_after_the_export_as_today() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = clean_pbr_with_edited_json(d.path());
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    idle(&mut m);
+    m.export_clicked();
+    assert!(m.review.is_some());
+    exported_from_review(&mut m);
+    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+}
+
+/// Review Focus 2.
+#[test]
+fn a_pre_answer_does_not_survive_a_reload() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = clean_pbr_with_edited_json(d.path());
+    m.open_review();
+    m.answer_review_json(true);
+    m.reload_documents();
+    assert!(m.review.is_none());
+    idle(&mut m);
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    idle(&mut m);
+    export_through(&mut m);
+    idle(&mut m);
+    assert!(m.export.summary.is_some());
+    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+}
+
+/// R6, A1 (shot 41).
+#[test]
+fn an_edited_pgpatcher_json_opens_review_with_the_choice() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _) = clean_pbr_with_edited_json(d.path());
+    m.export_clicked();
+    assert!(m.review.is_some() && m.export.running.is_none());
+    assert!(m.review_gate().is_ok(), "the choice never disables Export");
 }

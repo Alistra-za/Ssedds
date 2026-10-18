@@ -4,6 +4,7 @@ use super::settings_panel::{alpha_options, offered_groups, subtype_label};
 use super::status::{AMBER, RED};
 use crate::model::bottom::{problems, Level};
 use crate::model::items::Decision;
+use crate::model::review::{DiskState, JsonKind, JsonLine};
 use crate::model::{pbr_export, Answer, AppModel};
 use eframe::egui;
 use engine::config::{AlphaPolicy, Subtype};
@@ -111,6 +112,7 @@ enum Act {
     Tick(String, bool),
     AckAll,
     Others,
+    Json(bool),
     Export,
     Close,
 }
@@ -120,6 +122,18 @@ fn plural(n: usize) -> &'static str {
         ""
     } else {
         "s"
+    }
+}
+
+/// R6: one line per JSON file under What will be written.
+fn json_line_text(l: &JsonLine) -> String {
+    let path = l.path.display();
+    match (l.state, l.kind) {
+        (DiskState::New, _) => format!("{path}: will be written"),
+        (DiskState::Ours, _) => format!("{path}: will be replaced (written by Tessalith)"),
+        (DiskState::Edited, JsonKind::PgPatcher) => format!("{path}: edited outside Tessalith"),
+        (DiskState::Edited, _) => format!("{path}: edited outside Tessalith — kept, with a note"),
+        (DiskState::Unreadable, _) => format!("{path}: cannot be read; kept"),
     }
 }
 
@@ -152,6 +166,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .iter()
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
     let gate = m.review_gate();
+    let json = m.review_json();
     let mut act = None;
     // The footer first, pinned to the bottom, so the columns scroll above it and it is never clipped.
     egui::Panel::bottom("review-footer")
@@ -162,6 +177,29 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 let files = m.export_files();
                 ui.label(format!("{files} DDS file{}", plural(files)));
             });
+            let answer = review.json_answer.as_ref().map(|a| a.overwrite);
+            egui::ScrollArea::vertical()
+                .id_salt("review-json")
+                .max_height(96.0)
+                .show(ui, |ui| {
+                    for l in &json {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(json_line_text(l));
+                            // C4: only the PGPatcher JSON can be answered here; none is picked until clicked.
+                            if l.kind == JsonKind::PgPatcher && l.state == DiskState::Edited {
+                                if ui
+                                    .radio(answer == Some(false), "Keep the edited file")
+                                    .clicked()
+                                {
+                                    act = Some(Act::Json(false));
+                                }
+                                if ui.radio(answer == Some(true), "Overwrite it").clicked() {
+                                    act = Some(Act::Json(true));
+                                }
+                            }
+                        });
+                    }
+                });
             ui.horizontal(|ui| {
                 if ui.button("Close").clicked() {
                     act = Some(Act::Close);
@@ -262,6 +300,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::Tick(t, on)) => model.acknowledge_ask(&t, on),
         Some(Act::AckAll) => model.acknowledge_all_asks(),
         Some(Act::Others) => model.open_problems(None),
+        Some(Act::Json(overwrite)) => model.answer_review_json(overwrite),
         // Export saves first: wait for a focused field to commit, as the header Export does (Note BS14).
         Some(Act::Export) => {
             if !super::header::field_focused(ui, model, "Export") {

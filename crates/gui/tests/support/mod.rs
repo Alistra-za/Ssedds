@@ -155,3 +155,10 @@ pub fn export_through(m: &mut AppModel) {
         m.export_from_review();
     }
 }
+
+/// The PGPatcher JSON an export of `m` writes (was pbr_export.rs::json_path).
+pub fn pgp_json_path(m: &AppModel) -> PathBuf {
+    m.export_root()
+        .join("PBRNIFPatcher")
+        .join(format!("{}.json", sdc_gui::model::pbr_export::json_name(m)))
+}
