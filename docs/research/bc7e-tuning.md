@@ -186,8 +186,91 @@ excludes 0.
   level for both perceptual and both exact-opaque settings; the patch leaves all of them byte-identical, and
   `cargo test -p engine --test golden` passes.
 - **The patch is `crates/encoders-sys/vendor/bc7e/patches/0002-sdc-max-level.patch`**, described in
-  [`README-VENDOR.md`](../../crates/encoders-sys/vendor/README-VENDOR.md). The vendored Windows objects still
-  carry only patch 0001; until the owner rebuilds them with `tools/regen-ispc.ps1 -Update -Bc7eOnly` (then
-  `tools/hash-vendor.ps1`), `encoders_sys::BC7E_MAX_NATIVE` is false and the engine refuses `effort = "max"`
-  with `CFG-INVALID`.
+  [`README-VENDOR.md`](../../crates/encoders-sys/vendor/README-VENDOR.md). The vendored Windows objects were
+  rebuilt with it on 2026-10-18 (`tools/regen-ispc.ps1 -Update -Bc7eOnly`, then `tools/hash-vendor.ps1`), so
+  `encoders_sys::BC7E_MAX_NATIVE` is true and `effort = "max"` works. `level_identity.rs` now pins every level
+  per ISPC target (see the Windows re-check below).
 - **The measurement path stays**: `sdc-bench bc7-tune` and the reference encoder, for the next question.
+
+## Windows re-check on Skyrim textures (2026-10-18)
+
+Question: does the endpoint search (`ep`) hold up as a default-`veryslow` change on real Skyrim textures,
+with the Windows objects? Answer under the owner's acceptance rule: **no, it does not hold**. It wins on
+nearly every image, but two of the four criteria fail. The default stays as it is.
+
+### Setup
+
+- **Objects.** The vendored Windows objects with patch 0002 (commit `79dcbb2`), ISPC dispatch on this
+  machine's CPU (the avx2 path). `sdc-bench bc7-tune --variants base,ep --repeats 5`: the fastest of 5 runs
+  is kept, rayon on all cores, on a machine with other builds running. `base` and `ep` run back to back per
+  image.
+- **Sample.** Drawn from the owner's set of 10,000 PNGs, taken from installed mods and not redistributable.
+  The set is not in the repo, and paths are relative to its root. Every PNG is listed in sorted order, and
+  the list is split into two pools:
+  - **normal:** the stem ends in `_n` or `_normal` (2,515 files);
+  - **colour:** no non-colour suffix (`_n`, `_normal`, `_nrm`, `_norm`, `_msn`, `_rmaos`, `_p`, `_s`, `_f`,
+    `_g`, `_sk`, `_mask`, `_m`, `_e`, `_em`, `_h`, `_coat`, `_b`, `_i`, `_cnr`), 2,823 files.
+
+  Each pool is shuffled with Python's `random.Random(20261018)`, and files are taken in that order. Sizes that
+  are not multiples of 4 are skipped.
+  - **Normal:** the first 60.
+  - **Colour, opaque:** fewer than 1% of texels have alpha below 255. The first 60 go to `diffuse`.
+  - **Colour, alpha-bearing:** the first 30. These go to `cutout` when at least 90% of texels have alpha
+    exactly 0 or 255, and to `smooth` otherwise. That gives 16 cutout and 14 smooth.
+
+  The list is `bc7e-tuning/skyrim-sample.tsv`: class, corpus name, relative path, SHA-256 and alpha
+  statistics. The raw rows are in `.superpowers/bc7e-ep-verify/skyrim-base-ep.csv`, which is gitignored.
+- **Metrics:** as in the study (Metrics above). Δ = `ep` − `base` per image, averaged per class, with a 95%
+  Student-t interval. For angles the sign is flipped, so + is better. Time is the summed `ep` time over the
+  summed `base` time.
+- **Differences from the study's corpus.**
+  - Skyrim `_n` maps keep specular in alpha, while the study's normals had alpha 255. Part of each block's
+    effort goes to alpha.
+  - Many Skyrim diffuse alphas are masks, not decals.
+  - A few textures are near-flat, with a base PSNR above 60 dB. On those a tiny absolute error change shows
+    up as a very large PSNR change. Two diffuse images gain +10.9 and +21.1 dB, and one normal map gains
+    +32.0 dB RGB.
+
+### Results
+
+| Class | n | Primary Δ [95% CI] | Wins | Second Δ [95% CI] | Time | Study (Linux, Poly Haven) |
+|---|---|---|---|---|---|---|
+| diffuse | 60 | RGB +0.645 [±0.784] (−0.139 to +1.429) | 60/60 | luma +0.892 [±1.128] | 1.37× | RGB +0.051 [±0.015] |
+| normal | 60 | angle +0.0285° [±0.0048] (+0.0236 to +0.0333) | 59/60, 1 tie | RGB +1.081 [±1.075] | 1.45× | +0.065° [±0.016], RGB +0.337 [±0.143] |
+| cutout | 16 | RGB +0.133 [±0.142] (−0.009 to +0.275) | 16/16 | alpha +0.102 [±0.064] | 1.39× | RGB +0.140 [±0.070] |
+| smooth | 14 | premul +0.204 [±0.088] | 12/14, 2 ties | alpha +0.216 [±0.144] | 1.50× | premul +0.055 [±0.015] |
+
+No image got worse on its class's primary metric. All four classes together take 1.41× the time.
+
+### Verdict under the owner's rule
+
+| Criterion | Result | |
+|---|---|---|
+| Diffuse Δ RGB > 0, CI excludes 0, at least +0.025 dB | +0.645, CI −0.139 to +1.429 | **fails** (CI includes 0) |
+| Normal Δ angle > 0, CI excludes 0, at least +0.03° | +0.0285°, CI +0.0236 to +0.0333 | **fails** (below +0.03°) |
+| No class with mean Δ < 0 and CI excluding 0 | all means positive | passes |
+| Time ratio at most 1.7× | at most 1.50× | passes |
+
+**The claim does not hold on this sample, so `veryslow` is unchanged.**
+
+Context for a re-ruling (not part of the rule):
+- **The diffuse failure comes from the two near-flat images.** The diffuse median Δ is +0.056 dB and the 10%
+  trimmed mean is +0.083 dB. With images over 60 dB base excluded (n = 54), the mean is +0.079 [±0.019] dB.
+- **The normal shortfall is 0.0015°.** The median is +0.026° and the trimmed mean +0.027°. With images over
+  60 dB base excluded (n = 53), the mean is +0.0313° [±0.0049]. It is about half the study's +0.065°, which
+  fits the alpha (specular) channel taking part of the effort.
+- **Cutout and smooth.** Without the over-60 dB images, cutout gives +0.048 [±0.011] and smooth +0.238
+  [±0.079].
+
+### Correction: the Linux objects do not reproduce the Windows output
+
+"How to read the timings" above says the study's Linux objects reproduce the vendored objects' output byte
+for byte. On Windows they do not.
+- None of the 32 level hashes recorded on Linux matches any of the four Windows ISPC code paths. The level
+  test therefore failed on `main` with the shipped objects, while the goldens passed.
+- On this machine the sse2, sse4 and avx paths encode alike, and the avx2 path (FMA) encodes differently. So
+  bc7e output depends on the CPU the encode runs on.
+- `crates/encoders-sys/tests/level_identity.rs` now pins every level per target (commit `6ef3bbf`).
+  Patch 0002 leaves levels 0 to 6 byte-identical on all four targets (commit `79dcbb2`).
+- The study's quality deltas are unaffected, since each one compares two variants built from the same
+  objects.

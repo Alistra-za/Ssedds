@@ -2,6 +2,7 @@
 // Parameter structs stay on the C++ side, so Rust never mirrors ISPC struct layouts.
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include "rgbcx.h"
 #include "bc7e_ispc.h"
 #include "ispc_texcomp.h"
@@ -38,6 +39,16 @@ void init_bc7_level(ispc::bc7e_compress_block_params* p, int level, bool percept
 
 extern "C" {
 
+// ISPC's per-target entry points behind the dispatcher. Each target has its own lookup tables, which the
+// dispatcher's bc7e_compress_block_init fills only for the target it picks.
+#define SDC_BC7E_TARGET(t) \
+    void bc7e_compress_block_init_##t(); \
+    void bc7e_compress_blocks_##t(uint32_t, uint64_t*, const uint32_t*, const ispc::bc7e_compress_block_params*);
+SDC_BC7E_TARGET(sse2)
+SDC_BC7E_TARGET(sse4)
+SDC_BC7E_TARGET(avx)
+SDC_BC7E_TARGET(avx2)
+
 // Must run exactly once (Rust guards it with OnceLock): rgbcx::init writes global state.
 void sdc_init(int bc1_mode) {
     rgbcx::init(static_cast<rgbcx::bc1_approx_mode>(bc1_mode));
@@ -59,8 +70,20 @@ void sdc_init(int bc1_mode) {
     GetProfile_bc6h_veryslow(&g_bc6[4]);
 }
 
-void sdc_bc7e_compress(uint32_t n, uint64_t* blocks, const uint32_t* px, int level, int perceptual, int exact) {
-    ispc::bc7e_compress_blocks(n, blocks, px, &g_bc7[level][perceptual ? 1 : 0][exact ? 1 : 0]);
+// `target` < 0 lets ISPC dispatch on the CPU; 0..=3 forces the sse2, sse4, avx or avx2 code path (tests only).
+// The caller checks the CPU supports the target and never forces the one the dispatcher uses, so the
+// per-target init below never rewrites tables a dispatched encode is reading.
+void sdc_bc7e_compress(uint32_t n, uint64_t* blocks, const uint32_t* px, int level, int perceptual, int exact,
+                       int target) {
+    static std::once_flag inited[4];
+    const ispc::bc7e_compress_block_params* p = &g_bc7[level][perceptual ? 1 : 0][exact ? 1 : 0];
+    switch (target) {
+    case 0: std::call_once(inited[0], bc7e_compress_block_init_sse2); bc7e_compress_blocks_sse2(n, blocks, px, p); break;
+    case 1: std::call_once(inited[1], bc7e_compress_block_init_sse4); bc7e_compress_blocks_sse4(n, blocks, px, p); break;
+    case 2: std::call_once(inited[2], bc7e_compress_block_init_avx); bc7e_compress_blocks_avx(n, blocks, px, p); break;
+    case 3: std::call_once(inited[3], bc7e_compress_block_init_avx2); bc7e_compress_blocks_avx2(n, blocks, px, p); break;
+    default: ispc::bc7e_compress_blocks(n, blocks, px, p); break;
+    }
 }
 
 // Measurement only (sdc-bench bc7 tuning): the level's parameters with some fields overridden. A negative

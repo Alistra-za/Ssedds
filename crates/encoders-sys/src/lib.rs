@@ -7,8 +7,8 @@ mod rgbcx;
 
 pub use bc6h::*;
 pub use bc7::{
-    bc7e_compress_blocks, bc7e_compress_blocks_tuned, Bc7Level, Bc7Params, Bc7Tune,
-    BC7E_EXACT_OPAQUE_NATIVE, BC7E_MAX_NATIVE,
+    bc7e_compress_blocks, bc7e_compress_blocks_on, bc7e_compress_blocks_tuned, Bc7Level, Bc7Params,
+    Bc7Target, Bc7Tune, BC7E_EXACT_OPAQUE_NATIVE, BC7E_MAX_NATIVE,
 };
 pub use rgbcx::*;
 

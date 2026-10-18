@@ -2,14 +2,21 @@
 //! vendored bc7e source or objects (a new patch, a rebuilt object) must keep every existing level's output
 //! for every flag combination; only a level added behind a new flag may encode differently.
 //!
-//! The hashes were recorded with the vendored objects at ISPC 1.31.0, bc7enc_rdo b943862 + patch 0001, over
-//! four deterministic 64x64 images (opaque colour, cutout, smooth alpha, normal-like) at every level, with
-//! and without perceptual weighting and the exact-opaque flag. Run with `SDC_RECORD_LEVEL_HASHES=1` to print
-//! the current hashes when a recorded change is intended (needs a DECISIONS note).
+//! ISPC builds one code path per target (sse2, sse4, avx, avx2) and dispatches on the CPU at run time, and the
+//! paths do not encode bit-identically (fast-math, FMA). So the hashes are pinned per target: the test drives
+//! every target this CPU can run through `bc7e_compress_blocks_on` (the best one through the dispatcher itself).
+//! A CPU without some target skips only that target's rows.
+//!
+//! The hashes were recorded on Windows with the vendored objects (ISPC 1.31.0, bc7enc_rdo b943862 + patch
+//! 0001; level 7 from the patch-0002 objects), over four deterministic 64x64 images (opaque colour, cutout,
+//! smooth alpha, normal-like) at every level, with and without perceptual weighting and the exact-opaque flag.
+//! The first recording (2026-10-18, one hash per level) came from a Linux CPU's dispatch path and never
+//! matched a Windows machine. Run with `SDC_RECORD_LEVEL_HASHES=1` to print the current hashes when a
+//! recorded change is intended (needs a DECISIONS note).
 
 use encoders_sys::{
-    bc7e_compress_blocks, bc7e_compress_blocks_tuned, gather_blocks, Bc7Level, Bc7Params, Bc7Tune,
-    BC7E_EXACT_OPAQUE_NATIVE, BC7E_MAX_NATIVE,
+    bc7e_compress_blocks, bc7e_compress_blocks_on, bc7e_compress_blocks_tuned, gather_blocks,
+    Bc7Level, Bc7Params, Bc7Target, Bc7Tune, BC7E_EXACT_OPAQUE_NATIVE, BC7E_MAX_NATIVE,
 };
 use sha2::{Digest, Sha256};
 
@@ -24,88 +31,335 @@ const LEVELS: [Bc7Level; 8] = [
     Bc7Level::Max,
 ];
 
-/// [level][perceptual][exact_opaque] over the four images concatenated. Levels 0 to 6 are the shipped
-/// levels; level 7 (`Max`, patch 0002) was recorded from the patch-0002 Linux objects and is checked only
-/// when the vendored objects carry the patch.
-const RECORDED: [[[&str; 2]; 2]; 8] = [
+/// [target][level][perceptual][exact_opaque] over the four images concatenated. Levels 0 to 6 are the shipped
+/// levels; level 7 (`Max`, patch 0002) is checked only when the vendored objects carry the patch.
+const RECORDED: [[[[&str; 2]; 2]; 8]; 4] = [
     [
         [
-            "ebb74007643dac6b2498480949120947d454c6c058503abd9d3324af7ecd497e",
-            "d93524f7a50a201e968cf0b3f6bcbfbdb04a31bff295b25d253ade23dc39802c",
+            [
+                "c81a6efea962a3ed81f33e175dfe1e30c537a1ea241700790c6a0d7a16156f0c",
+                "73dc2ae4f9c1000094368774c321069e818d9dc2dfd484223796d375ae1119c5",
+            ],
+            [
+                "96fccf91f97ce76df22774dafc3f5a22989eff99386f62b8664f0c85ed67d67b",
+                "06361eb2d5b4a5c46d1507049fac1bd958d6cb3883a7aadbe3c537e2b9d9c4af",
+            ],
         ],
         [
-            "e7405c2618ed7fa9e17c83771e1ba299bf7595709dc9a0dbac335a2c275b8b95",
-            "e4eb4593508b03ee50f386a3722ee04d06141c23ec8a5ff16d21872890aef07f",
+            [
+                "8a6a6e1016b1e1ad872e99012f42694323ba9843a6b31dd223fde79c211f328c",
+                "2ad1a21913fd29b5346afe76915af946a7a0819621e145c2a853a2087e778c0e",
+            ],
+            [
+                "47a9e160fd20acfd1990dab3adbf40d01b98c8bf0275377372392732e3d87111",
+                "719e76239739d592e51ad938a9723b114af1bad7e2c0e8d6138fdf8004720b87",
+            ],
+        ],
+        [
+            [
+                "428e0e6d64c1852ceff611b1caeba5fdd3dba990ceb812fdeb76190e7f640b54",
+                "f981547441d1f95352b841ecb134122b7eab544ab079781c65113898449341a3",
+            ],
+            [
+                "47a9e160fd20acfd1990dab3adbf40d01b98c8bf0275377372392732e3d87111",
+                "719e76239739d592e51ad938a9723b114af1bad7e2c0e8d6138fdf8004720b87",
+            ],
+        ],
+        [
+            [
+                "cdc3c24d41640bd9fb02cc61d6f6f68cc6293030d96b95cc6a98f472453e7d89",
+                "19b6af8e7cad3553ec5a3816d09205e9081f887bcd0835cb732a57f3161aeea8",
+            ],
+            [
+                "a0fc5573280b033705fa57f8a0897a00a0ae072b0266c2db43e019fe547222a1",
+                "30be587cc0fd4c833bb4b4c0f7bf102125063709057068ee14403801ab4cd6a2",
+            ],
+        ],
+        [
+            [
+                "21da89672858b7e82085464471fad19370350df9b027bbead0cecf050258e7f6",
+                "da5a4bcaf78c32e08ba089e1a564db4120509c7bcfc09a7606d70d9731af33ca",
+            ],
+            [
+                "6e1902cce00d57ace763aaae8393eb6bbb9081a9e1dc45cbe72af2161876d490",
+                "d0fbccdb0d71f6a9427a7e605c11d5e618edc01bbae4224568deb63e13092ac6",
+            ],
+        ],
+        [
+            [
+                "25dc07cabfe032f52d9b6e9378d87764559a75c68f03c8dc5bc34cd534de6a02",
+                "7201336cdb08d6d0e9ecade5fe65b9dbf51b74a57041856b0c3b057fe9beec31",
+            ],
+            [
+                "6bfb56a78411377afed2dc6ffa3eac1d378c121795006bfdcfcad359bf9eef45",
+                "1767d91481365ae5a95692252d2b6aa0723259e74528485118f4c10b61db5af5",
+            ],
+        ],
+        [
+            [
+                "a2a99d418a25a14430e61a11ee204c3939ce49a8743ac85cb2f8465aa552388c",
+                "350730eafc0804f876940ca95be87031a757ba1d09fabf468b43ca0cc23800f0",
+            ],
+            [
+                "92becf6d248c3838fb068c265819f4c392217d51feadc02c70a01fe33a075f99",
+                "578bbf28b4b7dd3b3daf847870a176fb123e0262d9f9cddcf76f34c30907e446",
+            ],
+        ],
+        [
+            [
+                "5c05f11849786ea5eb2ee6d5ca0703ef5c0faeede8b51ca8ab4ba936dd19e994",
+                "9ce71331e668547146fb31cf2d847c0bd797a01fd52d70142ee6a1d533e557fb",
+            ],
+            [
+                "6165095a8fbb9e9bde5758ab5915f15c97ce1f6ec86f020e9c107af9b6ede49b",
+                "d86fda4542902c772670656ec580f371108b419c6b4cb7771f3a3673a2d06547",
+            ],
         ],
     ],
     [
         [
-            "74e052168167698546f0d589dbfd483f5eded1ac7ac58899d45e4c9408beb23d",
-            "d49f282b040ad97583f5581931703a0d930fde83ff45c6591a3b26631f7eaac2",
+            [
+                "c81a6efea962a3ed81f33e175dfe1e30c537a1ea241700790c6a0d7a16156f0c",
+                "73dc2ae4f9c1000094368774c321069e818d9dc2dfd484223796d375ae1119c5",
+            ],
+            [
+                "96fccf91f97ce76df22774dafc3f5a22989eff99386f62b8664f0c85ed67d67b",
+                "06361eb2d5b4a5c46d1507049fac1bd958d6cb3883a7aadbe3c537e2b9d9c4af",
+            ],
         ],
         [
-            "ab7289e128f395979a66ba17a8aa8d704cef1d5ee12a7b4bcbf714faa94e1442",
-            "d07247904c16e00d3f191b84278f6abb7b76f814c1bd8787c99b83a0795a9703",
+            [
+                "8a6a6e1016b1e1ad872e99012f42694323ba9843a6b31dd223fde79c211f328c",
+                "2ad1a21913fd29b5346afe76915af946a7a0819621e145c2a853a2087e778c0e",
+            ],
+            [
+                "47a9e160fd20acfd1990dab3adbf40d01b98c8bf0275377372392732e3d87111",
+                "719e76239739d592e51ad938a9723b114af1bad7e2c0e8d6138fdf8004720b87",
+            ],
+        ],
+        [
+            [
+                "428e0e6d64c1852ceff611b1caeba5fdd3dba990ceb812fdeb76190e7f640b54",
+                "f981547441d1f95352b841ecb134122b7eab544ab079781c65113898449341a3",
+            ],
+            [
+                "47a9e160fd20acfd1990dab3adbf40d01b98c8bf0275377372392732e3d87111",
+                "719e76239739d592e51ad938a9723b114af1bad7e2c0e8d6138fdf8004720b87",
+            ],
+        ],
+        [
+            [
+                "cdc3c24d41640bd9fb02cc61d6f6f68cc6293030d96b95cc6a98f472453e7d89",
+                "19b6af8e7cad3553ec5a3816d09205e9081f887bcd0835cb732a57f3161aeea8",
+            ],
+            [
+                "a0fc5573280b033705fa57f8a0897a00a0ae072b0266c2db43e019fe547222a1",
+                "30be587cc0fd4c833bb4b4c0f7bf102125063709057068ee14403801ab4cd6a2",
+            ],
+        ],
+        [
+            [
+                "21da89672858b7e82085464471fad19370350df9b027bbead0cecf050258e7f6",
+                "da5a4bcaf78c32e08ba089e1a564db4120509c7bcfc09a7606d70d9731af33ca",
+            ],
+            [
+                "6e1902cce00d57ace763aaae8393eb6bbb9081a9e1dc45cbe72af2161876d490",
+                "d0fbccdb0d71f6a9427a7e605c11d5e618edc01bbae4224568deb63e13092ac6",
+            ],
+        ],
+        [
+            [
+                "25dc07cabfe032f52d9b6e9378d87764559a75c68f03c8dc5bc34cd534de6a02",
+                "7201336cdb08d6d0e9ecade5fe65b9dbf51b74a57041856b0c3b057fe9beec31",
+            ],
+            [
+                "6bfb56a78411377afed2dc6ffa3eac1d378c121795006bfdcfcad359bf9eef45",
+                "1767d91481365ae5a95692252d2b6aa0723259e74528485118f4c10b61db5af5",
+            ],
+        ],
+        [
+            [
+                "a2a99d418a25a14430e61a11ee204c3939ce49a8743ac85cb2f8465aa552388c",
+                "350730eafc0804f876940ca95be87031a757ba1d09fabf468b43ca0cc23800f0",
+            ],
+            [
+                "92becf6d248c3838fb068c265819f4c392217d51feadc02c70a01fe33a075f99",
+                "578bbf28b4b7dd3b3daf847870a176fb123e0262d9f9cddcf76f34c30907e446",
+            ],
+        ],
+        [
+            [
+                "5c05f11849786ea5eb2ee6d5ca0703ef5c0faeede8b51ca8ab4ba936dd19e994",
+                "9ce71331e668547146fb31cf2d847c0bd797a01fd52d70142ee6a1d533e557fb",
+            ],
+            [
+                "6165095a8fbb9e9bde5758ab5915f15c97ce1f6ec86f020e9c107af9b6ede49b",
+                "d86fda4542902c772670656ec580f371108b419c6b4cb7771f3a3673a2d06547",
+            ],
         ],
     ],
     [
         [
-            "5e910681863c7bc3cc8f066cef6abaea3fb5481f1595b85b906506949c67067c",
-            "91c1f1c9c6915eccfed0318012585fadd17ecd6bcc943ece977e7ef7be84c943",
+            [
+                "c81a6efea962a3ed81f33e175dfe1e30c537a1ea241700790c6a0d7a16156f0c",
+                "73dc2ae4f9c1000094368774c321069e818d9dc2dfd484223796d375ae1119c5",
+            ],
+            [
+                "96fccf91f97ce76df22774dafc3f5a22989eff99386f62b8664f0c85ed67d67b",
+                "06361eb2d5b4a5c46d1507049fac1bd958d6cb3883a7aadbe3c537e2b9d9c4af",
+            ],
         ],
         [
-            "ab7289e128f395979a66ba17a8aa8d704cef1d5ee12a7b4bcbf714faa94e1442",
-            "d07247904c16e00d3f191b84278f6abb7b76f814c1bd8787c99b83a0795a9703",
+            [
+                "8a6a6e1016b1e1ad872e99012f42694323ba9843a6b31dd223fde79c211f328c",
+                "2ad1a21913fd29b5346afe76915af946a7a0819621e145c2a853a2087e778c0e",
+            ],
+            [
+                "47a9e160fd20acfd1990dab3adbf40d01b98c8bf0275377372392732e3d87111",
+                "719e76239739d592e51ad938a9723b114af1bad7e2c0e8d6138fdf8004720b87",
+            ],
+        ],
+        [
+            [
+                "428e0e6d64c1852ceff611b1caeba5fdd3dba990ceb812fdeb76190e7f640b54",
+                "f981547441d1f95352b841ecb134122b7eab544ab079781c65113898449341a3",
+            ],
+            [
+                "47a9e160fd20acfd1990dab3adbf40d01b98c8bf0275377372392732e3d87111",
+                "719e76239739d592e51ad938a9723b114af1bad7e2c0e8d6138fdf8004720b87",
+            ],
+        ],
+        [
+            [
+                "cdc3c24d41640bd9fb02cc61d6f6f68cc6293030d96b95cc6a98f472453e7d89",
+                "19b6af8e7cad3553ec5a3816d09205e9081f887bcd0835cb732a57f3161aeea8",
+            ],
+            [
+                "a0fc5573280b033705fa57f8a0897a00a0ae072b0266c2db43e019fe547222a1",
+                "30be587cc0fd4c833bb4b4c0f7bf102125063709057068ee14403801ab4cd6a2",
+            ],
+        ],
+        [
+            [
+                "21da89672858b7e82085464471fad19370350df9b027bbead0cecf050258e7f6",
+                "da5a4bcaf78c32e08ba089e1a564db4120509c7bcfc09a7606d70d9731af33ca",
+            ],
+            [
+                "6e1902cce00d57ace763aaae8393eb6bbb9081a9e1dc45cbe72af2161876d490",
+                "d0fbccdb0d71f6a9427a7e605c11d5e618edc01bbae4224568deb63e13092ac6",
+            ],
+        ],
+        [
+            [
+                "25dc07cabfe032f52d9b6e9378d87764559a75c68f03c8dc5bc34cd534de6a02",
+                "7201336cdb08d6d0e9ecade5fe65b9dbf51b74a57041856b0c3b057fe9beec31",
+            ],
+            [
+                "6bfb56a78411377afed2dc6ffa3eac1d378c121795006bfdcfcad359bf9eef45",
+                "1767d91481365ae5a95692252d2b6aa0723259e74528485118f4c10b61db5af5",
+            ],
+        ],
+        [
+            [
+                "a2a99d418a25a14430e61a11ee204c3939ce49a8743ac85cb2f8465aa552388c",
+                "350730eafc0804f876940ca95be87031a757ba1d09fabf468b43ca0cc23800f0",
+            ],
+            [
+                "92becf6d248c3838fb068c265819f4c392217d51feadc02c70a01fe33a075f99",
+                "578bbf28b4b7dd3b3daf847870a176fb123e0262d9f9cddcf76f34c30907e446",
+            ],
+        ],
+        [
+            [
+                "5c05f11849786ea5eb2ee6d5ca0703ef5c0faeede8b51ca8ab4ba936dd19e994",
+                "9ce71331e668547146fb31cf2d847c0bd797a01fd52d70142ee6a1d533e557fb",
+            ],
+            [
+                "6165095a8fbb9e9bde5758ab5915f15c97ce1f6ec86f020e9c107af9b6ede49b",
+                "d86fda4542902c772670656ec580f371108b419c6b4cb7771f3a3673a2d06547",
+            ],
         ],
     ],
     [
         [
-            "ab2e35326356b88a6d61327ab9e8a59446e02ed97a4d1f52eb1bc9d93e67aa14",
-            "b1016424ca3b33e6fcb08e720cac423dde7656629a4d2a42b9a26b399c63f013",
+            [
+                "f4f881e665d3d0cb6a28be103a4e65d9dfa4ce1a00b9ec96971bbef7c102b521",
+                "f773dcf5079e25acf30dc7eeff7a911e993b113439e21150875f01d05469d872",
+            ],
+            [
+                "15418e10638a57727d6e31730addb23d7bf973d81ea8d41d745bf34a9f574b20",
+                "d67fd028bf8b91de4214063c7371aa71a2379d8c4b808d9fb8679a44e6fcfb52",
+            ],
         ],
         [
-            "8b0eb583854a4111e8f2817ccd2635bf6c42459be85b1d22560cd76661b708a5",
-            "2599c4478144e576973381f21c390ce18d1d84e55f26d08f1325c865bb9ba005",
-        ],
-    ],
-    [
-        [
-            "20ec1ac26bb0dbbaf586a3e579209e74d22116e41e59d6a0e908e71f43c30d33",
-            "eeb64b77317c2b61032b29fc1b47698378109f6730521ce0f73d97e193f7dd76",
-        ],
-        [
-            "b5092b1398e2a0112b962a0aea4d250585aff0249e3bece4c967d887bea89556",
-            "9e81f2e1b73cf856a94644abeba672ad1fefc866d17f402fe483f9dbdfc024a6",
-        ],
-    ],
-    [
-        [
-            "00b79d5499674261f452bfbb992c9d5a59ceca9f48a1f1e806a6e7f3119e5fb5",
-            "9953bb3b4128bd6d7b3783c5102d91f7d93b47d79094b0cf2c406098cc1301fb",
+            [
+                "3ff869de12b06fee3d3ae90fdcdfb3ec1889d7fc1031fe5dc3502de15523cbdf",
+                "7af80a08149b79116d0def7ccd8b72adad5a7e2bdcf01f578df8e6517852a582",
+            ],
+            [
+                "7780d167b53895404aa7613a5b8836c1a61be667128ff0a4d2b59117a77a8d9a",
+                "40f4f566536dc8b50facad435f19f95b6cac9c28070d9ebad78afd63d5cbbd06",
+            ],
         ],
         [
-            "f2416583ef2ec4d328d60214dd02d5b214d43ed38efa84614bb3e4fc6ef88208",
-            "d09f720f6416db003c731fce267e4efcc2cb85ba00e2337b501094ef7b59988c",
-        ],
-    ],
-    [
-        [
-            "cb91d191729b657d7c7441306921894717e963cf3606ac67714930cd9bc6da14",
-            "6080d6797adc5f7336b804e5ed3d5921698695f13e93d875365790ff0b5548c2",
-        ],
-        [
-            "2c7cc21d963a4c9aa54996642a9db55cba88f1fc3a9a97091e8d47a002dbf26f",
-            "9ebe10f76f9211103f8099781d9985708eb49cd3f92f46751ab6bbb28990ba6e",
-        ],
-    ],
-    [
-        [
-            "d8ce9c051f9f7feee8eed94ce0b6844351bfcbc5752fc3c7063a587c1f1cdbf5",
-            "39b4e84de6f75b4347ff72612bbf351d5df8c9a07998df65f045e72c17fe8ca4",
+            [
+                "cc2254b2373ae003321acd7c41c85991e80e41173711b957cc303ae02c2814cf",
+                "a5e9fd09896007b56e574926b0cf1a7be3a0a0785c1f20aacc8fa076d0a7e0b8",
+            ],
+            [
+                "7780d167b53895404aa7613a5b8836c1a61be667128ff0a4d2b59117a77a8d9a",
+                "40f4f566536dc8b50facad435f19f95b6cac9c28070d9ebad78afd63d5cbbd06",
+            ],
         ],
         [
-            "1e2a134168a5cddbbc51cc7bbbebe46cead6bf8b8af9d062dfd4c4b44ee469b1",
-            "0d7715744f073849cd47c9dfaf5fc7d0c8de0fc74e871c174e253c5c9a5ca9b6",
+            [
+                "bb2149c8ce1a4e0ccf1bdd36ec39133128c10734fe91155183564c7c70f6f879",
+                "4a4a47c893f0a17f8260c0dfb873625a02e26ff59b46809f765feacd93d1607a",
+            ],
+            [
+                "5b7c106a2e6ca600d50e6d858697f1cb760503f92b4f894bd1cfa20c754bf60a",
+                "fb856616184236945cebe26e76ebb42a2adb3399f62dfd56b1d5ee0ee3ce712d",
+            ],
+        ],
+        [
+            [
+                "9d16b273c5cf8d588da5fb4ba2c0f39aff1f3c73f21c0310dbb74217173a46b8",
+                "5febe256a2850591c647fc3d01f7efcd6a3443c6087fe8db9153a00fdfaaf256",
+            ],
+            [
+                "ec9628a4d53d61ae265c06baa12398f30ae7aa35aa7b8023c3ab4a50f366a95f",
+                "724c0e894395e9489ba6370bd11b149767301d3afd29249788c6def9db3bd98a",
+            ],
+        ],
+        [
+            [
+                "b068539b97d4bf132561824c97b6bd0d9517e4a8f949ad143b57c9ae47dfc080",
+                "ecfebbf1a859f2cf96a5222c33cadf330d11de74e6002df000a5fb6bd38f92ff",
+            ],
+            [
+                "ee28db2921dea588bb1fd61ff6c7d0c2d9d64f5dea05ee4623cb5ccdaf7981ad",
+                "5fa4bc74f31e80a65ca7e08c3213fcc6ddd4e87747f46b4e3de86a951aa67849",
+            ],
+        ],
+        [
+            [
+                "7c90b6c626c19155b4af29f8d3caee578d80afcd3876419e9fd7f24023e864a5",
+                "0fea99f233037ebb59f1b6a6cd130bcd8e04407d23015d8078319f8c807a9c57",
+            ],
+            [
+                "9af686d9a50887d0d291f3e80c03e107be7cf504c9ad3ebba5736707502defd7",
+                "7450d671550279e69ea0895a277f10e622edd6d6eec6b2d7276ac55d1ab9e5e7",
+            ],
+        ],
+        [
+            [
+                "6e661bdcd647c645e8b7367f8320fe01641656836207155726589c7c78bf5832",
+                "8ac31e9a5337452968183097e40563151965138ec1b7dafd9e7094b775c8b5c8",
+            ],
+            [
+                "254735476eb0a3136ecc223ace5960f14b676547cf498abbb47b6fe693860924",
+                "52e839a33c8d84589a7ffec047869ea9d55425b615c3ca0571db8991fffd3f40",
+            ],
         ],
     ],
 ];
@@ -178,7 +432,7 @@ fn normal() -> Vec<[u8; 4]> {
     })
 }
 
-fn hash(level: Bc7Level, perceptual: bool, exact_opaque: bool) -> String {
+fn hash(level: Bc7Level, perceptual: bool, exact_opaque: bool, target: Bc7Target) -> String {
     let p = Bc7Params {
         level,
         perceptual,
@@ -188,7 +442,7 @@ fn hash(level: Bc7Level, perceptual: bool, exact_opaque: bool) -> String {
     for img in [colour(), cutout(), smooth(), normal()] {
         let blocks = gather_blocks(&img, W, W);
         let mut out = vec![0u8; blocks.len()];
-        bc7e_compress_blocks(&blocks, &mut out, p);
+        bc7e_compress_blocks_on(&blocks, &mut out, p, target);
         h.update(&out);
     }
     hex::encode(h.finalize())
@@ -198,24 +452,26 @@ fn hash(level: Bc7Level, perceptual: bool, exact_opaque: bool) -> String {
 fn every_shipped_level_is_byte_identical_to_the_recorded_objects() {
     let record = std::env::var_os("SDC_RECORD_LEVEL_HASHES").is_some();
     let mut diffs = vec![];
-    for (li, level) in LEVELS.iter().enumerate() {
-        for perceptual in [false, true] {
-            for exact in [false, true] {
-                if exact && !BC7E_EXACT_OPAQUE_NATIVE {
-                    continue;
-                }
-                if *level == Bc7Level::Max && !BC7E_MAX_NATIVE {
-                    continue;
-                }
-                let got = hash(*level, perceptual, exact);
-                if record {
-                    println!("{li} {perceptual} {exact} {got}");
-                }
-                let want = RECORDED[li][perceptual as usize][exact as usize];
-                if got != want {
-                    diffs.push(format!(
-                        "{level:?} perceptual={perceptual} exact={exact}: {got}"
-                    ));
+    for target in Bc7Target::ALL.into_iter().filter(|t| t.supported()) {
+        for (li, level) in LEVELS.iter().enumerate() {
+            for perceptual in [false, true] {
+                for exact in [false, true] {
+                    if exact && !BC7E_EXACT_OPAQUE_NATIVE {
+                        continue;
+                    }
+                    if *level == Bc7Level::Max && !BC7E_MAX_NATIVE {
+                        continue;
+                    }
+                    let got = hash(*level, perceptual, exact, target);
+                    if record {
+                        println!("{} {li} {perceptual} {exact} {got}", target as usize);
+                    }
+                    let want = RECORDED[target as usize][li][perceptual as usize][exact as usize];
+                    if got != want {
+                        diffs.push(format!(
+                            "{target:?} {level:?} perceptual={perceptual} exact={exact}: {got}"
+                        ));
+                    }
                 }
             }
         }
