@@ -384,6 +384,12 @@ fn store(owner: &Owner, mode: Mode, path: &str, derived: &str) -> (String, Optio
     }
 }
 
+/// The edits that store a path picked from a known-paths list. The lists use `/`; the app's own pick is stored in
+/// PGPatcher's `\` (wave 2 #8), while a typed `/` still blocks (P26).
+fn picked(owner: &Owner, mode: Mode, path: &str, derived: &str) -> (String, Option<Value>) {
+    store(owner, mode, &path.replace('/', "\\"), derived)
+}
+
 /// The edit that removes `mode` for `owner` (a set's slot 1 match turns off as `match1 = ""`).
 fn unstore(owner: &Owner, mode: Mode) -> (String, Option<Value>) {
     match (owner, mode) {
@@ -454,7 +460,7 @@ fn match_pill(
             if let Some(p) =
                 path_picker::list(ui, ("json-pick", owner.salt(), mode.key()), &list, false)
             {
-                let (k, v) = store(owner, mode, &p, derived);
+                let (k, v) = picked(owner, mode, &p, derived);
                 acts.push(Act::Edit(owner.clone(), k, v));
                 ui.close();
             }
@@ -1168,5 +1174,26 @@ fn issue_lines<'a>(
     }
     for t in warnings {
         ui.colored_label(AMBER, format!("⚠ {t}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trace-debug wave 2 #8: the picker lists `textures/...` with `/`; a pick stores PGPatcher's `\`, and slot 1's
+    /// own diffuse picked from the list stays derived.
+    #[test]
+    fn exact_pick_on_set_stores_backslashes() {
+        let set = Owner::Set("landscape/rock01".into());
+        let derived = r"landscape\rock01";
+        assert_eq!(
+            picked(&set, Mode::Exact(2), "textures/architecture/x_n", derived),
+            ("match2".into(), Some(json!(r"textures\architecture\x_n")))
+        );
+        assert_eq!(
+            picked(&set, Mode::Exact(1), "textures/landscape/rock01", derived),
+            ("match1".into(), None)
+        );
     }
 }
