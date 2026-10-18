@@ -243,7 +243,7 @@ A `_coat` map fills the Subsurface card, which then reads "Coat colour + strengt
 
 ## TruePBR settings
 
-A PBR set under `cs` has the settings PGPatcher reads in the Material tab of the set panel, as framed groups in the order below. Each header shows the title and, on the right, its value (for example Features "3 on", Subsurface "Standard", Coat "off", Matching "2 matches", CS PBR records "1 records"). Click a title to open or close the group. The feature groups are always listed; they read "off" and stay closed while the feature is off, and open when it turns on. A small **TruePBR JSON editor…** button at the top right of the tab opens the editor window. Skin and complex-material keys show readable names ("SSS width"); hover one for its exact key.
+A PBR set under `cs` has the settings PGPatcher reads in the Material tab of the set panel, as framed groups in the order below. Each header shows the title and, on the right, its value (for example Features "3 on", Subsurface "Standard", Coat "off", Matching "2 matches", CS PBR records "1 record"). Click a title to open or close the group. The feature groups are always listed; they read "off" and stay closed while the feature is off, and open when it turns on. A small **TruePBR JSON editor…** button at the top right of the tab opens the editor window. Skin and complex-material keys show readable names ("SSS width"); hover one for its exact key.
 
 | Group | Settings |
 |---|---|

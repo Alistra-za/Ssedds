@@ -65,7 +65,8 @@ fn draw(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, card: bool) {
         .into_iter()
         .filter(|k| m.cs_block(&v.id, *k).is_some())
         .count();
-    let head = (!card).then(|| egui::RichText::new(format!("{n} records")).weak());
+    let s = if n == 1 { "" } else { "s" };
+    let head = (!card).then(|| egui::RichText::new(format!("{n} record{s}")).weak());
     let title = if card { CARD } else { SECTION };
     super::group::group(
         ui,
