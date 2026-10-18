@@ -2046,7 +2046,7 @@ impl Engine {
 }
 
 /// Convert one admitted file under `catch_unwind` and report its outcome. A file that fails or panics after its
-/// output was written (manifest append; a sidecar failure is only a warning, Note BV4) has that output removed, best effort, so no output is
+/// output was written (manifest append; a sidecar failure is only a warning, Note BV4) has that output, and a sidecar this run wrote, removed, best effort, so no output is
 /// left on disk without a record (review I1). A panic is reported at the last stage the file entered (review M10).
 #[allow(clippy::too_many_arguments)]
 fn run_one(
@@ -2097,7 +2097,7 @@ fn run_one(
     };
     if tracker.written.get() {
         let _ = std::fs::remove_file(&job.output);
-        if req.sidecar {
+        if tracker.sidecar_written.get() {
             let _ = std::fs::remove_file(job.output.with_extension("dds.json"));
         }
     }
