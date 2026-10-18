@@ -9,9 +9,12 @@
 #ifndef SDC_BC7E_PATCHED
 #define SDC_BC7E_PATCHED 0
 #endif
+#ifndef SDC_BC7E_PATCH2
+#define SDC_BC7E_PATCH2 0
+#endif
 
 namespace {
-ispc::bc7e_compress_block_params g_bc7[7][2][2];  // [level u0..u6][perceptual][exact_opaque]
+ispc::bc7e_compress_block_params g_bc7[8][2][2];  // [level u0..u6, 7 = sdc_max][perceptual][exact_opaque]
 bc6h_enc_settings g_bc6[5];                       // veryfast, fast, basic, slow, veryslow
 
 void init_bc7_level(ispc::bc7e_compress_block_params* p, int level, bool perceptual) {
@@ -22,7 +25,13 @@ void init_bc7_level(ispc::bc7e_compress_block_params* p, int level, bool percept
     case 3: ispc::bc7e_compress_block_params_init_basic(p, perceptual); break;
     case 4: ispc::bc7e_compress_block_params_init_slow(p, perceptual); break;
     case 5: ispc::bc7e_compress_block_params_init_veryslow(p, perceptual); break;
+    case 6: ispc::bc7e_compress_block_params_init_slowest(p, perceptual); break;
+#if SDC_BC7E_PATCH2
+    default: ispc::bc7e_compress_block_params_init_sdc_max(p, perceptual); break;
+#else
+    // Without patch 0002 level 7 does not exist; Rust refuses it before it gets here.
     default: ispc::bc7e_compress_block_params_init_slowest(p, perceptual); break;
+#endif
     }
 }
 }  // namespace
@@ -33,7 +42,7 @@ extern "C" {
 void sdc_init(int bc1_mode) {
     rgbcx::init(static_cast<rgbcx::bc1_approx_mode>(bc1_mode));
     ispc::bc7e_compress_block_init();
-    for (int l = 0; l < 7; l++)
+    for (int l = 0; l < 8; l++)
         for (int s = 0; s < 2; s++)
             for (int e = 0; e < 2; e++) {
                 ispc::bc7e_compress_block_params* p = &g_bc7[l][s][e];
@@ -52,6 +61,38 @@ void sdc_init(int bc1_mode) {
 
 void sdc_bc7e_compress(uint32_t n, uint64_t* blocks, const uint32_t* px, int level, int perceptual, int exact) {
     ispc::bc7e_compress_blocks(n, blocks, px, &g_bc7[level][perceptual ? 1 : 0][exact ? 1 : 0]);
+}
+
+// Measurement only (sdc-bench bc7 tuning): the level's parameters with some fields overridden. A negative
+// override keeps the level's value. `t` is 14 ints: partitions_to_try (modes 0/1/3, 2 and 7 together),
+// uber_level, refinement_passes, pbit_search, weights r g b a, max_partitions for modes 1/3/7, mode 0, mode 2,
+// then the patch-0002 flags endpoint_search and refine_partitions (ignored without the patch), and one spare.
+void sdc_bc7e_compress_tuned(uint32_t n, uint64_t* blocks, const uint32_t* px, int level, int perceptual, int exact,
+                             const int32_t* t) {
+    ispc::bc7e_compress_block_params p = g_bc7[level][perceptual ? 1 : 0][exact ? 1 : 0];
+    if (t[0] >= 0) {
+        p.m_opaque_settings.m_max_mode13_partitions_to_try = t[0];
+        p.m_opaque_settings.m_max_mode0_partitions_to_try = t[0];
+        p.m_opaque_settings.m_max_mode2_partitions_to_try = t[0];
+        p.m_alpha_settings.m_max_mode7_partitions_to_try = t[0];
+    }
+    if (t[1] >= 0) p.m_uber_level = t[1];
+    if (t[2] >= 0) p.m_refinement_passes = t[2];
+    if (t[3] >= 0) p.m_pbit_search = t[3] != 0;
+    for (int c = 0; c < 4; c++)
+        if (t[4 + c] >= 0) p.m_weights[c] = t[4 + c];
+    if (t[8] >= 0) {
+        p.m_max_partitions_mode[1] = t[8];
+        p.m_max_partitions_mode[3] = t[8];
+        p.m_max_partitions_mode[7] = t[8];
+    }
+    if (t[9] >= 0) p.m_max_partitions_mode[0] = t[9];
+    if (t[10] >= 0) p.m_max_partitions_mode[2] = t[10];
+#if SDC_BC7E_PATCH2
+    if (t[11] >= 0) p.m_endpoint_search = t[11] != 0;
+    if (t[12] >= 0) p.m_refine_partitions = t[12] != 0;
+#endif
+    ispc::bc7e_compress_blocks(n, blocks, px, &p);
 }
 
 void sdc_bc1_encode(uint8_t* dst, const uint8_t* px, uint32_t level, int allow3, int black) {

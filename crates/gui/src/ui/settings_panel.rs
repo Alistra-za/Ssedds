@@ -203,6 +203,7 @@ pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Opt
             "basic",
             "veryslow",
             "slowest",
+            "max",
         ]
         .into_iter()
         .map(|e| opt(json!(e), &capitalised(e)))

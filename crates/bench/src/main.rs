@@ -42,6 +42,28 @@ enum Cmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
+    /// BC7 tuning study (docs/research/bc7e-tuning.md): bc7e variants and the reference encoder over
+    /// `<corpus>/<class>/*.png`, appending one CSV row per image and variant to --out.
+    Bc7Tune {
+        /// Corpus root with `diffuse`, `normal`, `cutout` and `smooth` folders of PNGs.
+        #[arg(long)]
+        corpus: std::path::PathBuf,
+        /// CSV to append to (created with a header when missing).
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// Variant names (default: all); `--variants none` runs only the reference.
+        #[arg(long, value_delimiter = ',')]
+        variants: Vec<String>,
+        /// At most this many images per class.
+        #[arg(long)]
+        images: Option<usize>,
+        /// Run the reference encoder with this many fully fitted partitions per mode (0 = off).
+        #[arg(long, default_value_t = 0)]
+        reference: usize,
+        /// Timing repeats per variant (the fastest is kept).
+        #[arg(long, default_value_t = 1)]
+        repeats: usize,
+    },
 }
 
 /// S2: 200 varied 16-128 px sources; S8: constant-alpha `_m` variants plus a height-mask gradient.
@@ -183,6 +205,23 @@ fn main() -> ExitCode {
                 ExitCode::from(3)
             }
         },
+        Cmd::Bc7Tune {
+            corpus,
+            out,
+            variants,
+            images,
+            reference,
+            repeats,
+        } => {
+            let variants: Vec<String> = variants.into_iter().filter(|v| v != "none").collect();
+            match sdc_bench::bc7tune::run(&corpus, &out, &variants, images, reference, repeats) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("bc7tune: {e:#}");
+                    ExitCode::from(3)
+                }
+            }
+        }
         Cmd::Radius45 { out } => match sdc_bench::radius::measure(&root, &out) {
             Ok(rows) => {
                 let s = sdc_bench::radius::summary(&rows);

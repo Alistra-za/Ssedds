@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- New bc7e quality level `encoder.effort = "max"` (sdc patch 0002: a quantised endpoint search and a fully refined, wider
+  partition ranking on top of `veryslow`). Off by default; the default output is unchanged. It needs a build whose bc7e
+  objects carry the patch and is refused with `CFG-INVALID` otherwise. Numbers: docs/research/bc7e-tuning.md.
+
 ## 0.8.0-alpha.1 (first public alpha)
 
 Tessalith converts a folder of source images to DDS for Skyrim SE/AE. The GUI (`tessalith.exe`) and the CLI (`sdc.exe`) share one engine and one per-project `sdc.toml`. This is an alpha: back up your mod folders first.

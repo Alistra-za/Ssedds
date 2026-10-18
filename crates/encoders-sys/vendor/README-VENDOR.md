@@ -4,8 +4,8 @@
 |---|---|---|---|
 | bc7enc_rdo/ (rgbcx.* with the rgbcx BC4 round-to-nearest patch, bc7e.ispc pristine) | https://github.com/richgel999/bc7enc_rdo | b9438627eef73a1157e84201b6fa6eb2ffd6d9f0 | rgbcx: MIT or Unlicense; bc7e.ispc: Apache-2.0 |
 | ispctc/ | https://github.com/GameTechDev/ISPCTextureCompressor | 79ddbc9 | MIT |
-| bc7e/ (bc7e.ispc, patches/0001-exact-opaque-alpha.patch) | bc7enc_rdo/bc7e.ispc + sdc patch 0001 | b9438627eef73a1157e84201b6fa6eb2ffd6d9f0 + patch 0001 | Apache-2.0 (modified; change notice at the top of the file) |
-| ispc-objs/bc7e/ | built from bc7e/bc7e.ispc (pristine + patch 0001) with ISPC 1.31.0: `-O2 --target=sse2,sse4,avx,avx2 --opt=fast-math --opt=disable-assertions` | — | Apache-2.0 |
+| bc7e/ (bc7e.ispc, patches/0001-exact-opaque-alpha.patch, patches/0002-sdc-max-level.patch) | bc7enc_rdo/bc7e.ispc + sdc patches 0001 and 0002 | b9438627eef73a1157e84201b6fa6eb2ffd6d9f0 + patches 0001, 0002 | Apache-2.0 (modified; change notices at the top of the file) |
+| ispc-objs/bc7e/ | built from bc7e/bc7e.ispc (pristine + patch 0001; **not yet rebuilt for patch 0002**, see below) with ISPC 1.31.0: `-O2 --target=sse2,sse4,avx,avx2 --opt=fast-math --opt=disable-assertions` | — | Apache-2.0 |
 | ispc-objs/ispctc/ | built from ispctc/kernel.ispc with ISPC 1.31.0: `-O2 --target=sse2,sse4,avx,avx2 --opt=fast-math` | — | MIT |
 
 All objects are produced by `tools/regen-ispc.ps1` (ISPC 1.31.0, which also passes
@@ -19,7 +19,7 @@ Provenance of the first objects: the bc7e objects are byte-identical to the ones
 because the bench's copies embed the bench's absolute source path; same source and flags,
 but the files differ from the bench's.
 
-Two vendored encoders carry sdc patches: bc7e (patch 0001 below) and rgbcx (the BC4 round-to-nearest patch at
+Two vendored encoders carry sdc patches: bc7e (patches 0001 and 0002 below) and rgbcx (the BC4 round-to-nearest patch at
 the end of this file).
 
 Patch 0001 "exact opaque alpha" (`bc7e/patches/0001-exact-opaque-alpha.patch`) changes bc7e. `bc7e/bc7e.ispc` is the pristine `bc7enc_rdo/bc7e.ispc` with that patch applied:
@@ -30,6 +30,24 @@ bit-identical to upstream (gate `sdc-bench gate exact-opaque-native`, reference
 `crates/bench/tests/data/pre-patch-bc7e.sha256`). The patch file is produced with
 `git diff --no-index --text crates/encoders-sys/vendor/bc7enc_rdo/bc7e.ispc crates/encoders-sys/vendor/bc7e/bc7e.ispc`.
 Since patch 0001 the bc7e objects are built from the patched source and no longer match the bench's.
+
+Patch 0002 "sdc_max level" (`bc7e/patches/0002-sdc-max-level.patch`, 2026-10-18) applies on top of patch 0001. It adds
+four trailing `bool` fields to `bc7e_compress_block_params` (`m_endpoint_search`, `m_refine_partitions`, two unused), so
+the struct grows and the generated header changes; `bc7e_compress_block_params_init` clears them. `m_endpoint_search` runs
+a greedy +-1 search over the quantised endpoints (one channel of one endpoint at a time, selectors re-assigned) at the end
+of `color_cell_compression`; `m_refine_partitions` makes the mode 1/3/7 partition ranking refine every candidate instead of
+only the winner once more than two are tried. The new export `bc7e_compress_block_params_init_sdc_max` is veryslow plus
+4 partitions tried, uber 4, 2 least-squares passes and both flags; sdc maps `encoder.effort = "max"` to it. With both flags
+false every existing level is bit-identical to the patch-0001 source: `encoders-sys` `tests/level_identity.rs` pins the
+output of every shipped level for both perceptual and both exact-opaque settings, and passed against Linux objects built
+from the patched source. The patch file is `git diff --no-index --text <patch-0001 bc7e.ispc> crates/encoders-sys/vendor/bc7e/bc7e.ispc`.
+Measurements: docs/research/bc7e-tuning.md.
+
+**Objects.** The vendored `ispc-objs/bc7e/*.obj` and `bc7e_ispc.h` are still the patch-0001 build: the Linux ISPC 1.31.0
+binary cannot emit Windows COFF objects, so the rebuild is an owner step on Windows: `tools/regen-ispc.ps1 -Update -Bc7eOnly`,
+then `tools/hash-vendor.ps1`, then `cargo test -p encoders-sys` (level_identity must pass; the `Max` row is then checked too)
+and `cargo test -p engine --test golden`. Until then `build.rs` sees no `m_endpoint_search` in the header, the shim compiles
+without level 7, `encoders_sys::BC7E_MAX_NATIVE` is false and the engine refuses `effort = "max"` with `CFG-INVALID`.
 
 Patch "rgbcx BC4 round-to-nearest" (M6 Track D, 2026-10-12) edits `bc7enc_rdo/rgbcx.h` in place, marked
 `sdc patch (M6 Track D): round to nearest to match hardware/bcdec`. `bc4_block::get_block_values6/8`, the BC4 palette

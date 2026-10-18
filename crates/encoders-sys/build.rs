@@ -13,6 +13,12 @@ fn main() {
     if patched {
         println!("cargo::rustc-cfg=sdc_bc7e_patched");
     }
+    // Patch 0002 (the sdc_max level): the header grows two trailing fields and an init function.
+    let patch2 = header.contains("m_endpoint_search");
+    println!("cargo::rustc-check-cfg=cfg(sdc_bc7e_patch2)");
+    if patch2 {
+        println!("cargo::rustc-cfg=sdc_bc7e_patch2");
+    }
 
     let mut b = cc::Build::new();
     b.cpp(true)
@@ -21,6 +27,7 @@ fn main() {
         .define("NOMINMAX", None)
         .define("NDEBUG", None)
         .define("SDC_BC7E_PATCHED", if patched { "1" } else { "0" })
+        .define("SDC_BC7E_PATCH2", if patch2 { "1" } else { "0" })
         .include(v.join("bc7enc_rdo"))
         .include(v.join("ispctc"))
         .include(&bc7e)
