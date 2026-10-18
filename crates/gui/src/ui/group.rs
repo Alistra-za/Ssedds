@@ -24,13 +24,15 @@ pub fn group<R>(
                 // The visible edge: a wider row above widens max_rect (egui unions it into the content), not the panel.
                 let inset = ui.spacing().item_spacing.x; // the clip edge cuts the last glyph otherwise
                 let right = ui.max_rect().right().min(ui.clip_rect().right() - inset);
-                ui.set_min_width((right - ui.min_rect().left()).max(0.0));
+                // Placer::set_min_width measures from the cursor, which is past the collapser here.
+                ui.set_min_width((right - ui.cursor().min.x).max(0.0));
                 let label = egui::Label::new(egui::RichText::new(title).strong())
                     .sense(egui::Sense::click());
                 clicked = ui.add(label).clicked();
-                if let Some(v) = value {
+                // A title wider than the visible width leaves no room: skip the value rather than draw it over the title.
+                if let Some(v) = value.filter(|_| ui.cursor().min.x < right) {
                     let mut r = ui.available_rect_before_wrap();
-                    r.max.x = right.max(r.min.x);
+                    r.max.x = right;
                     let layout = egui::Layout::right_to_left(egui::Align::Center);
                     ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(layout), |ui| {
                         ui.label(v)
@@ -43,4 +45,45 @@ pub fn group<R>(
             h.body(body).2.map(|r| r.inner)
         })
         .inner
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui;
+
+    /// (content width, view width) of a 300 px horizontal ScrollArea holding one group, after a few frames.
+    fn widths(value: bool) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        let mut out = (0.0, 0.0);
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            let full = ctx.run_ui(input, |ui| {
+                let o = egui::ScrollArea::horizontal().show(ui, |ui| {
+                    super::group(ui, "g", "Coat", value.then(|| "off".into()), false, |_| {});
+                });
+                out = (o.content_size.x, o.inner_rect.width());
+            });
+            full.drop_without_applying_deltas();
+        }
+        out
+    }
+
+    /// Re-review of I1: the header row filled from the frame's left edge, not from the cursor after the collapser,
+    /// so every group was ~18 px wider than its panel and the panel scrolled sideways.
+    #[test]
+    fn a_group_header_never_widens_its_scroll_area() {
+        for value in [false, true] {
+            let (content, view) = widths(value);
+            assert!(
+                content <= view,
+                "value {value}: content {content} > view {view}"
+            );
+        }
+    }
 }
