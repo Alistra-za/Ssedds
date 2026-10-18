@@ -459,8 +459,34 @@ pub fn path_collisions(m: &AppModel) -> Vec<ExportIssue> {
     out
 }
 
-/// What asks "Proceed anyway / Cancel": the pitfalls of every PBR set.
+/// What Review asks to acknowledge: the pitfalls of every PBR set. Cached like `export_blocks`, plus
+/// `evidence_rev` (the known texture paths and the mesh tree flags it reads).
 pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
+    let key = m.view_key();
+    {
+        let c = m.views.borrow();
+        if c.key.as_ref() == Some(&key) {
+            if let Some((rev, a)) = &c.asks {
+                if *rev == m.evidence_rev {
+                    return (**a).clone();
+                }
+            }
+        }
+    }
+    // No borrow is held here: the build reads the cached views.
+    let a = Arc::new(build_asks(m));
+    let mut c = m.views.borrow_mut();
+    if c.key.as_ref() != Some(&key) {
+        *c = ViewCache {
+            key: Some(key),
+            ..Default::default()
+        };
+    }
+    c.asks = Some((m.evidence_rev, a.clone()));
+    (*a).clone()
+}
+
+fn build_asks(m: &AppModel) -> Vec<ExportIssue> {
     if m.target != Target::Cs {
         return vec![];
     }

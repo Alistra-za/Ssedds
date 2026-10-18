@@ -223,6 +223,8 @@ pub(crate) struct ViewCache {
     pub hits: Option<Arc<Vec<sections::DeleteHit>>>,
     /// Keyed by (evidence_rev, export.revision, export running) inside the view_key cell (K9).
     pub problems: Option<(ProblemsKey, Arc<Vec<bottom::Problem>>)>,
+    /// `export_asks`, keyed by `evidence_rev` inside the view_key cell (R-b: Review reads them every frame).
+    pub asks: Option<(u64, Arc<Vec<pbr_export::ExportIssue>>)>,
 }
 
 #[derive(Clone, PartialEq)]

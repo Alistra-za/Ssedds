@@ -1087,7 +1087,8 @@ fn a_renamed_set_whose_name_the_scan_knows_elsewhere_asks_before_export() {
             .any(|i| i.text.contains("textures/dlc/landscape/rock01"))
     };
     assert!(!asks(&m));
-    m.known = std::sync::Arc::new(sdc_gui::model::known_paths::KnownPaths {
+    // Through the setter, as the scan read does: it moves `evidence_rev`, which the cached asks are keyed on.
+    m.set_known(sdc_gui::model::known_paths::KnownPaths {
         textures: [("textures/dlc/landscape/rock01.dds".to_string(), 1u16)].into(),
         mesh_dirs: vec![],
     });

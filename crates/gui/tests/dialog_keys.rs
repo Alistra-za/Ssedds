@@ -511,3 +511,20 @@ fn the_rename_dialog_ignores_enter_on_the_frame_it_opens() {
         Some("landscape/new_leaf.png")
     );
 }
+
+/// N3, R11: Review is not a dialog; Enter never presses its Export.
+#[test]
+fn enter_with_review_open_never_exports() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened(d.path()));
+    h.run();
+    h.state_mut().export_clicked();
+    h.run();
+    assert!(h.state().review.is_some());
+    for _ in 0..2 {
+        h.key_press(Key::Enter);
+        h.run();
+    }
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
+    assert!(h.state().export.summary.is_none() && h.state().export.running.is_none());
+}

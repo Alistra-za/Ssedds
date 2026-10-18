@@ -426,10 +426,19 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     let mut h = harness(opened(d.path()));
     h.run();
     press(&mut h, "Export");
-    // Task 1.3: Export opens Review (no modal) and starts nothing; Task 1.4 draws the tab and its labels here.
+    // Export opens the Review tab, not a modal, and starts nothing.
     assert!(h.state().review.is_some() && h.state().dialog.is_none());
-    assert!(h.state().export.running.is_none());
-    export_through(h.state_mut());
+    h.get_by_label("Undecided");
+    h.get_by_label("Accept all suggestions");
+    assert!(h.query_all_by_label("\u{2713}").count() >= 1);
+    // Review's Close starts nothing and collapses the panel.
+    press(&mut h, "Close");
+    assert!(h.state().review.is_none() && !h.state().bottom.open);
+    assert!(h.state().export.running.is_none() && h.state().export.summary.is_none());
+    press(&mut h, "Export");
+    let skip = h.state().review_button_text();
+    assert!(skip.ends_with("undecided)"), "{skip}");
+    press(&mut h, &skip);
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
     h.run();
     for label in ["Files", "Save report…", "Copy CLI command", "Close"] {

@@ -20,6 +20,7 @@ pub mod plugin_refs;
 pub mod presets;
 pub mod preview;
 pub mod rename_dialog;
+pub mod review;
 pub mod rnm_section;
 pub mod set_editor;
 pub mod set_preview;
