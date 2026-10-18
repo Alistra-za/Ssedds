@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 pub struct DrawerState {
     /// The Files tab's filters; both on means both must hold.
     pub filter: FileFilter,
-    /// The filtered rows and the warning list, cached by (filter, export revision).
+    /// The filtered rows, cached by (filter, export revision).
     pub index: FilesIndex,
     /// Cached "is the export folder / this file on disk" answers (AG39).
     pub stats: StatCache,

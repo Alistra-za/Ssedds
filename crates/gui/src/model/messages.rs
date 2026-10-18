@@ -3,7 +3,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-/// The Messages panel keeps this many entries; the oldest go first.
+/// The Messages tab keeps this many entries; the oldest go first.
 pub const LOG_CAP: usize = 500;
 /// Toasts on screen at once; the rest wait in a queue.
 pub const MAX_SHOWN: usize = 3;
@@ -170,7 +170,7 @@ impl Messages {
         self.log.is_empty()
     }
 
-    /// Entries logged while the panel was closed.
+    /// Entries logged while the Messages tab was not showing.
     pub fn unread(&self) -> usize {
         self.unread
     }
@@ -185,10 +185,6 @@ impl Messages {
         if open {
             self.unread = 0;
         }
-    }
-
-    pub fn toggle(&mut self) {
-        self.set_open(!self.open);
     }
 
     /// The Clear button: the log goes, a toast on screen finishes on its own.

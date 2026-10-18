@@ -189,7 +189,7 @@ pub fn export_dot(model: &AppModel) -> bool {
 
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
 fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
-    let can_export = can_export(model);
+    let can_export = model.can_export();
     let running = model.export.running.is_some();
     let gap = ui.spacing().item_spacing.y;
     let button_h = if running {
@@ -408,12 +408,6 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     if let Some(p) = open {
         model.request_open(p);
     }
-}
-
-/// Export can start: a folder is open, no export runs, and `sdc.toml` is not ignored (M3a spec §7.4: an export would
-/// not be the project's settings).
-pub fn can_export(model: &AppModel) -> bool {
-    model.can_export()
 }
 
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.

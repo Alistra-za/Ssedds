@@ -1183,7 +1183,7 @@ impl AppModel {
         self.finish_cm_json(cm);
         // A user who cancelled the export to leave does not need its error as a dialog.
         if !self.run_after_export() {
-            // Audit 08f-6: an open dialog stays; the error is in the drawer and the Messages log.
+            // Audit 08f-6: an open dialog stays; the error is in the Files tab and the Messages log.
             if let Some(e) = failure.filter(|_| self.dialog.is_none()) {
                 self.dialog = Some(Dialog::Error(e));
             }

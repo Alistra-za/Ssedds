@@ -271,10 +271,6 @@ fn the_filtered_list_is_computed_once_per_change() {
     assert_eq!(idx.len(&x, warn), 2501);
     assert_eq!(idx.len(&x, FileFilter::default()), 10_000);
     assert_eq!(idx.computed, 3);
-    // The warning list is cached by the revision as well.
-    assert_eq!(idx.warnings(&x).len(), 2501);
-    assert_eq!(idx.warnings(&x).len(), 2501);
-    assert_eq!(idx.computed, 4);
 }
 
 // ---- The drawer ----

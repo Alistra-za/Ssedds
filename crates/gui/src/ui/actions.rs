@@ -246,7 +246,7 @@ pub static ACTIONS: &[Action] = &[
     ),
     when(
         a("export", "Export", Global, &[], |m, _| m.export_clicked()),
-        super::header::can_export,
+        AppModel::can_export,
     ),
     when(
         a("undo", "Undo", Global, &[ctrl(Key::Z)], |m, _| m.undo()),
