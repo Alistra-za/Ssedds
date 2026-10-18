@@ -472,3 +472,59 @@ fn a_cancelled_scan_leaves_missing_and_unused_empty() {
     assert!(s.plugin_missing_with_inert().unwrap().1.is_empty());
     assert!(s.unused_textures().unwrap().is_empty());
 }
+
+/// Trace-debug wave 2 #7: a tainted scan (PGPatcher started mid-scan) empties the winners; Missing and Unused are
+/// then empty, not "every path a winning record names".
+#[test]
+fn a_tainted_scan_leaves_missing_and_unused_empty() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    assert!(!s.plugin_missing_files().unwrap().is_empty());
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let src = Source::Mo2(Instance::load(d.path(), None).unwrap());
+    let r = run(&src, &mut s, &AtomicBool::new(false), &|_| {}, &|| {
+        if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            vec![]
+        } else {
+            vec!["pgtools.exe".into()]
+        }
+    })
+    .unwrap();
+    assert!(r.tainted);
+    assert!(s.plugin_missing_files().unwrap().is_empty());
+    assert!(s.plugin_missing_with_inert().unwrap().1.is_empty());
+    assert!(s.unused_textures().unwrap().is_empty());
+}
+
+/// Codex review of BW: a scan cancelled at the start of the plugin pass has already replaced the asset winners;
+/// the old record winners must not survive, and the next clean scan restores them.
+#[test]
+fn a_scan_cancelled_at_the_plugin_pass_leaves_missing_and_unused_empty() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    assert!(!s.plugin_missing_files().unwrap().is_empty());
+    std::fs::write(d.path().join("profiles/Default/modlist.txt"), "-B\n-A\n").unwrap();
+    let cancel = AtomicBool::new(false);
+    let src = Source::Mo2(Instance::load(d.path(), None).unwrap());
+    let r = run(
+        &src,
+        &mut s,
+        &cancel,
+        &|p| {
+            if p.phase == "resolve" {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        &|| vec![],
+    )
+    .unwrap();
+    assert!(r.plugins.is_none(), "{:?}", r.notes);
+    assert!(s.plugin_missing_files().unwrap().is_empty());
+    assert!(s.plugin_missing_with_inert().unwrap().1.is_empty());
+    assert!(s.unused_textures().unwrap().is_empty());
+    std::fs::write(d.path().join("profiles/Default/modlist.txt"), "+B\n+A\n").unwrap();
+    mo2(&d, &mut s);
+    assert!(!s.plugin_missing_files().unwrap().is_empty());
+}

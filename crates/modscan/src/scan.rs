@@ -556,6 +556,8 @@ fn scan_body(
         // clean rescan (begin_scan: reads never mix old winners in).
         store.set_winners(&HashMap::new(), &HashMap::new())?;
         store.set_textures(&HashMap::new())?;
+        // Old rec_winner rows would make Missing list every path a record names (the texture tables are empty).
+        store.unload_plugins()?;
         // A tainted run still returns a (flagged) result: its origins are listed, as before.
         enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
@@ -734,7 +736,11 @@ fn scan_body(
                     report.sub_ms.extend(p.sub_ms.iter().copied());
                     report.plugins = Some(p);
                 }
-                Err(ScanError::Cancelled) => report.notes.push(PLUGINS_CANCELLED.into()),
+                Err(ScanError::Cancelled) => {
+                    // Winners were replaced above; the old rec_winner rows would make Missing list the old load order.
+                    store.unload_plugins()?;
+                    report.notes.push(PLUGINS_CANCELLED.into());
+                }
                 Err(e) => return Err(e),
             }
         }
