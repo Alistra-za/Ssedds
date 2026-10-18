@@ -206,7 +206,7 @@ If an export is blocked, Review's *Blockers* column lists what to fix; **Go to s
 - **≡** drags a set to reorder.
 - **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up** and **Move down**. **Delete set** asks first, naming the set and its member count. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Fill from names…** (set menu) lists files in the set's folder named like its diffuse plus a known suffix, and moves the ticked ones in as one undo step.
-- Dropping a file from Explorer on a slot card fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
+- Dropping a file from Explorer on a slot row fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
 - Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON"; a PBR Landscape set says which JSON it writes ("PBR Landscape → CS + PGPatcher JSON", "→ CS JSON", "→ PGPatcher JSON (no CS records yet)" or "PBR Landscape (no JSON yet)").
 
 Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot pins and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
@@ -252,7 +252,7 @@ A PBR set under `cs` has the settings PGPatcher reads in the Material tab of the
 | Emissive settings | Emissive scale, Emissive colour. |
 | Parallax settings | Displacement scale. |
 | Subsurface | The Off / Standard / Foliage selector, then colour and opacity for Standard and Foliage. |
-| Coat | Under the Multilayer checkbox while it is on: coat colour, specular level, roughness, strength, diffuse, normal, parallax and inner UV scale. With Multilayer off the values are kept but not written. |
+| Coat | Under the Multilayer checkbox while it is on: coat colour, specular level, roughness, strength, diffuse, normal, parallax and inner UV scale. With Multilayer off the group reads "off" and stays closed; the values are kept but not written. |
 | Glint settings, Fuzz settings | The glint parameters; Fuzz colour and weight. |
 | Matching | The exact texture paths the entry matches (PGPatcher's `match1` to `match8`). |
 | CS PBR records | Community Shaders' PBR texture set and material object blocks (collapsed; "N records"). |
@@ -277,7 +277,7 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 
 ### The TruePBR JSON editor
 
-Open it with **PG JSON Editor** in the header or from a set's TruePBR box. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
+Open it with **PG JSON Editor** in the header or from the **TruePBR JSON editor…** button in a set's Material tab. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
 
 - Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set in the main window), then its keys as small pills with the same controls as the TruePBR box.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
