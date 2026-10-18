@@ -1,6 +1,7 @@
 //! Layout v2 Task 1.4 (B2; R4, R11): the Review tab in the bottom panel.
 mod support;
 use eframe::egui::{self, Key, Modifiers};
+use egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::bottom::BottomTab;
@@ -244,10 +245,17 @@ fn ctrl_k_opens_the_palette_while_review_is_open() {
     let mut h = harness(opened(d.path()));
     h.run();
     press(&mut h, "Export");
+    let fields = |h: &Harness<'static, AppModel>| h.query_all_by_role(Role::TextInput).count();
+    let before = fields(&h);
     h.key_press_modifiers(Modifiers::COMMAND, Key::K);
     h.run();
     assert!(h.state().nav.palette.is_some(), "Ctrl+K opens the palette");
     h.run();
+    assert_eq!(
+        fields(&h),
+        before + 1,
+        "the palette's search field is drawn"
+    );
     h.key_press(Key::Escape);
     h.run();
     assert!(h.state().nav.palette.is_none());
