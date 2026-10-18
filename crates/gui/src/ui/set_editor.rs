@@ -36,7 +36,7 @@ use std::collections::HashMap;
 pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
 /// The right-hand panel's default width (layout v2 A3); resizable, at least 300. Not the plan's 420: at 1400 the
-/// centre's content is 736 px and the slot rows need about 424 (Task 2.2), so only the minimum leaves them room.
+/// centre's content is 728 px and the slot rows need about 424 (Task 2.2), so only the minimum leaves them room.
 pub const SET_PANEL_WIDTH: f32 = 300.0;
 const THUMB: f32 = 56.0;
 /// The format and recipe combos (A5).
