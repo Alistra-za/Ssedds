@@ -497,7 +497,7 @@ fn a_tainted_scan_leaves_missing_and_unused_empty() {
     assert!(s.unused_textures().unwrap().is_empty());
 }
 
-/// Codex review of BV: a scan cancelled at the start of the plugin pass has already replaced the asset winners;
+/// Codex review of BW: a scan cancelled at the start of the plugin pass has already replaced the asset winners;
 /// the old record winners must not survive, and the next clean scan restores them.
 #[test]
 fn a_scan_cancelled_at_the_plugin_pass_leaves_missing_and_unused_empty() {
