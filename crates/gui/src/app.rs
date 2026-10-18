@@ -335,6 +335,7 @@ impl eframe::App for SdcApp {
         if crate::ui::header::meshes_view_active(&ctx) {
             // The Textures view reads its keys in `ui::draw_with_scan`.
             crate::ui::actions::keys(&ctx, &mut self.model, self.state.drops.pending.is_some());
+            crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer);
             crate::ui::meshes::page(ui, &mut self.meshes);
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {
                 self.model.settings.render3d.shaders = Some(fp);

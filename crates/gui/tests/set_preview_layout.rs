@@ -258,7 +258,12 @@ fn in_3d_the_viewport_takes_most_of_the_centre() {
             .filter_map(|i| outer(&h, i))
             .map(|r| r.max.y)
             .fold(0.0f32, f32::max);
-        let bottom = outer(&h, "report").map_or(hh, |r| r.min.y);
+        // The bottom panel (open) or its strip (collapsed) takes the bottom of the window.
+        let bottom = ["bottom", "bottom-strip"]
+            .iter()
+            .filter_map(|i| outer(&h, i))
+            .map(|r| r.min.y)
+            .fold(hh, f32::min);
         let img = h.get_by_label(FRAME_LABEL).rect();
         let centre = bottom - top;
         assert!(

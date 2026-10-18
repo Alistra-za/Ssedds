@@ -6,12 +6,6 @@ use serde_json::json;
 use std::time::Duration;
 use support::*;
 
-fn ready(d: &std::path::Path) -> sdc_gui::model::AppModel {
-    let mut m = pbr_opened(d);
-    assert!(m.wait_idle(Duration::from_secs(60)));
-    m
-}
-
 fn idle(m: &mut sdc_gui::model::AppModel) {
     assert!(m.wait_idle(Duration::from_secs(60)));
 }
@@ -19,14 +13,14 @@ fn idle(m: &mut sdc_gui::model::AppModel) {
 #[test]
 fn a_clean_project_has_no_blocks() {
     let d = tempfile::tempdir().unwrap();
-    let m = ready(d.path());
+    let m = pbr_ready(d.path());
     assert_eq!(export_blocks(&m), vec![]);
 }
 
 #[test]
 fn a_feature_without_its_texture_blocks() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
     let b = export_blocks(&m);
     assert!(
@@ -35,13 +29,14 @@ fn a_feature_without_its_texture_blocks() {
         "{b:?}"
     );
     m.export_clicked();
-    assert!(matches!(m.dialog, Some(Dialog::ExportBlocked(_))));
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(m.review_gate().unwrap_err().starts_with("Fix "));
 }
 
 #[test]
 fn exclusive_features_in_one_set_block() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "hair", Some(json!(true)));
     m.set_json_value("landscape/rock01", "parallax", Some(json!(true)));
     let b = export_blocks(&m);
@@ -55,7 +50,7 @@ fn exclusive_features_in_one_set_block() {
 #[test]
 fn a_bad_rename_blocks_and_names_the_field() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "rename", Some(json!(r"..\escape")));
     idle(&mut m);
     let b = export_blocks(&m);
@@ -69,7 +64,7 @@ fn a_bad_rename_blocks_and_names_the_field() {
 #[test]
 fn a_bad_slot_path_blocks() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "slot3", Some(json!(r"..\g.dds")));
     let b = export_blocks(&m);
     assert!(
@@ -82,7 +77,7 @@ fn a_bad_slot_path_blocks() {
 #[test]
 fn two_sets_deriving_one_prefix_block() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     // Point leaf's set at rock01's match: both diffuse outputs land on rock01.dds.
     let leaf = m
         .items
@@ -104,7 +99,7 @@ fn an_owned_output_on_a_mirrored_path_blocks() {
     // The engine skips most such collisions itself (and the plan then fails to settle); this is the check for the
     // ones it does not re-check. Simulate that plan: leaf.png mirrors to the very file rock01 diffuse is sent to.
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     assert_eq!(path_collisions(&m), vec![]);
     let leaf = m.items.iter_mut().find(|i| i.name == "leaf.png").unwrap();
     assert!(leaf.job.is_some(), "the fixture leaf has a planned job");
@@ -123,31 +118,9 @@ fn an_owned_output_on_a_mirrored_path_blocks() {
 }
 
 #[test]
-fn pitfalls_ask_and_proceeding_continues_to_the_undecided_check() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
-    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
-    idle(&mut m);
-    assert!(!export_asks(&m).is_empty());
-    m.export_clicked();
-    assert!(
-        matches!(m.dialog, Some(Dialog::ExportWarnings(_))),
-        "{:?}",
-        m.dialog
-    );
-    m.proceed_with_warnings();
-    // The fixture has undecided textures: the M3a question comes next.
-    assert!(
-        matches!(m.dialog, Some(Dialog::ProceedAnyway(_))),
-        "{:?}",
-        m.dialog
-    );
-}
-
-#[test]
 fn the_json_of_the_fixture_validates_and_names_the_folder() {
     let d = tempfile::tempdir().unwrap();
-    let m = ready(d.path());
+    let m = pbr_ready(d.path());
     let entries = json_entries(&m);
     assert!(entries.iter().any(|(v, _)| v.id == "landscape/rock01"));
     let doc =
@@ -159,7 +132,7 @@ fn the_json_of_the_fixture_validates_and_names_the_folder() {
 #[test]
 fn a_borrowed_slot_is_written_as_the_owners_output_path() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let leaf = m
         .items
         .iter()
@@ -203,7 +176,7 @@ fn texts(m: &sdc_gui::model::AppModel) -> Vec<String> {
 #[test]
 fn feature_rows_use_the_exact_text() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let id = "landscape/rock01";
     m.set_json_value(id, "emissive", Some(json!(true)));
     assert_eq!(
@@ -288,7 +261,7 @@ fn coat_and_fuzz_clash_on_any_set() {
             .save(r.join(n))
             .unwrap();
     }
-    let m = ready(d.path());
+    let m = pbr_ready(d.path());
     assert!(set_views(&m)
         .iter()
         .any(|v| v.id == "landscape/zed" && !v.pbr));
@@ -301,7 +274,7 @@ fn coat_and_fuzz_clash_on_any_set() {
 #[test]
 fn non_pbr_sets_and_vanilla_skip_the_pbr_checks() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     // leaf is not a PBR set: a feature with no texture is not a block there.
     m.set_json_value("landscape/leaf", "emissive", Some(json!(true)));
     assert_eq!(export_blocks(&m), vec![]);
@@ -317,26 +290,9 @@ fn non_pbr_sets_and_vanilla_skip_the_pbr_checks() {
 }
 
 #[test]
-fn blocks_never_offer_proceed_anyway() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
-    // Both a block and a pitfall: the block wins and the dialog is the blocked one.
-    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
-    m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
-    idle(&mut m);
-    assert!(!export_asks(&m).is_empty());
-    m.export_clicked();
-    assert!(
-        matches!(m.dialog, Some(Dialog::ExportBlocked(_))),
-        "{:?}",
-        m.dialog
-    );
-}
-
-#[test]
 fn the_json_name_must_be_one_usable_file_name() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     for bad in [
         r"a\b", "a/b", "..", "x..y", "name.", "name ", "CON", "nul", "Com1", "lpt9.txt", "a:b",
         "a?b",
@@ -367,7 +323,7 @@ fn the_json_name_is_not_checked_when_there_is_nothing_to_write() {
 #[test]
 fn a_borrow_whose_owner_is_blocked_is_reported_once_by_the_owners_block() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let leaf = m
         .items
         .iter()
@@ -455,7 +411,7 @@ fn glint_and_fuzz_switches_save_with_their_sub_settings_and_reach_the_json() {
 #[test]
 fn fuzz_texture_without_an_f_map_blocks_through_the_normal_path() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let id = "landscape/rock01";
     m.set_json_value(id, "fuzz_on", Some(json!(true)));
     m.set_json_value(id, "fuzz.texture", Some(json!(true)));
@@ -468,29 +424,20 @@ fn fuzz_texture_without_an_f_map_blocks_through_the_normal_path() {
 }
 
 fn export_and_wait(m: &mut sdc_gui::model::AppModel) {
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(
         m.wait_idle(Duration::from_secs(120)),
         "export did not finish"
     );
 }
 
-fn json_path(m: &sdc_gui::model::AppModel) -> std::path::PathBuf {
-    m.export_root()
-        .join("PBRNIFPatcher")
-        .join(format!("{}.json", json_name(m)))
-}
-
 #[test]
 fn export_writes_a_valid_json_and_records_its_hash() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     let text = std::fs::read_to_string(&p)
         .unwrap_or_else(|e| panic!("{p:?}: {e}; notes {:?}", m.export.notes));
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -514,9 +461,9 @@ fn export_writes_a_valid_json_and_records_its_hash() {
 #[test]
 fn a_hand_edited_json_asks_before_overwriting() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
     export_and_wait(&mut m);
@@ -533,9 +480,9 @@ fn a_hand_edited_json_asks_before_overwriting() {
 #[test]
 fn keeping_a_hand_edited_json_leaves_it_and_the_record() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     let before = m.sets_doc.as_ref().unwrap().last_json_sha256();
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
@@ -736,7 +683,7 @@ fn vanilla_borrow(
     std::path::PathBuf,
     std::path::PathBuf,
 ) {
-    let mut m = ready(d);
+    let mut m = pbr_ready(d);
     let leaf = m
         .items
         .iter()
@@ -868,7 +815,7 @@ fn an_identical_file_on_disk_is_not_asked_about() {
 #[test]
 fn a_sharing_set_ordered_first_owns_the_output_and_both_entries_point_at_it() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let leaf = m
         .items
         .iter()
@@ -942,19 +889,19 @@ fn an_owned_path_on_a_mirrored_output_settles_and_blocks_by_name() {
     })
     .save(mirrored.join("rock01.png"))
     .unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let other = "textures/pbr/landscape/rock01.png";
     m.set_field(other, "subtype", json!("diffuse"));
     idle(&mut m);
     m.export_clicked();
-    match &m.dialog {
-        Some(Dialog::ExportBlocked(b)) => assert!(
-            b.iter()
-                .any(|i| i.text.contains("landscape/rock01") && i.text.contains(other)),
-            "{b:?}"
-        ),
-        d => panic!("expected ExportBlocked naming the clash, got {d:?}"),
-    }
+    assert!(m.review.is_some() && m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(m.review_gate().unwrap_err().starts_with("Fix "));
+    let b = export_blocks(&m);
+    assert!(
+        b.iter()
+            .any(|i| i.text.contains("landscape/rock01") && i.text.contains(other)),
+        "{b:?}"
+    );
 }
 
 /// Final re-review (5d regression): a source DDS on a PBR output path is skipped (IN-DDS-SKIPPED) and writes
@@ -964,7 +911,7 @@ fn a_skipped_dds_on_a_pbr_output_path_does_not_hold_it_back() {
     let d = tempfile::tempdir().unwrap();
     // A previous export's file kept in the source tree, at the path rock01's diffuse is written to.
     let ref_dir = tempfile::tempdir().unwrap();
-    let mut first = ready(ref_dir.path());
+    let mut first = pbr_ready(ref_dir.path());
     export_and_wait(&mut first);
     let dds = first
         .export_root()
@@ -973,7 +920,7 @@ fn a_skipped_dds_on_a_pbr_output_path_does_not_hold_it_back() {
     let kept = d.path().join("textures/textures/pbr/landscape");
     std::fs::create_dir_all(&kept).unwrap();
     std::fs::copy(&dds, kept.join("rock01.dds")).unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let it = m
         .items
         .iter()
@@ -1004,7 +951,7 @@ fn emissive_and_skin_sk_clash_on_any_set() {
             .save(r.join(n))
             .unwrap();
     }
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_field("landscape/zed_sk.png", "subtype", json!("skin_sk"));
     m.set_field("landscape/zed_g.png", "subtype", json!("glow"));
     idle(&mut m);
@@ -1023,7 +970,7 @@ fn a_borrowed_skin_sk_is_written_to_slot3() {
     image::ImageBuffer::from_fn(64, 64, |x, _| image::Luma([x as u8]))
         .save(r.join("rock01_sk.png"))
         .unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_field("landscape/rock01_sk.png", "subtype", json!("skin_sk"));
     idle(&mut m);
     m.set_field("landscape/leaf.png", "subtype", json!("pbr_albedo"));
@@ -1047,7 +994,7 @@ fn a_borrowed_skin_sk_is_written_to_slot3() {
 fn an_explicit_shader_does_not_change_which_sets_get_json() {
     use engine::shader::Shader;
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let before: Vec<String> = json_entries(&m).into_iter().map(|(v, _)| v.id).collect();
     m.set_shader("landscape/rock01", Some(Shader::Glow));
     m.set_shader("landscape/leaf", Some(Shader::Pbr));
@@ -1065,7 +1012,7 @@ fn an_explicit_shader_does_not_change_which_sets_get_json() {
 #[test]
 fn a_set_that_matches_nothing_asks_and_is_left_out_of_the_json() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "match1", Some(json!("")));
     idle(&mut m);
     assert_eq!(export_blocks(&m), vec![]);
@@ -1087,7 +1034,7 @@ fn a_set_that_matches_nothing_asks_and_is_left_out_of_the_json() {
 fn a_pbr_grass_set_drops_the_keys_grass_ignores() {
     use engine::shader::Shader;
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
     m.set_json_value("landscape/rock01", "uv_scale", Some(json!(2.0)));
     m.set_json_value("landscape/rock01", "roughness_scale", Some(json!(0.8)));
@@ -1125,7 +1072,7 @@ fn a_pbr_grass_set_drops_the_keys_grass_ignores() {
 #[test]
 fn a_renamed_set_whose_name_the_scan_knows_elsewhere_asks_before_export() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "rename", Some(json!("rock09")));
     idle(&mut m);
     let asks = |m: &sdc_gui::model::AppModel| {
@@ -1134,7 +1081,8 @@ fn a_renamed_set_whose_name_the_scan_knows_elsewhere_asks_before_export() {
             .any(|i| i.text.contains("textures/dlc/landscape/rock01"))
     };
     assert!(!asks(&m));
-    m.known = std::sync::Arc::new(sdc_gui::model::known_paths::KnownPaths {
+    // Through the setter, as the scan read does: it moves `evidence_rev`, which the cached asks are keyed on.
+    m.set_known(sdc_gui::model::known_paths::KnownPaths {
         textures: [("textures/dlc/landscape/rock01.dds".to_string(), 1u16)].into(),
         mesh_dirs: vec![],
     });
@@ -1157,7 +1105,7 @@ fn a_pbr_grass_set_with_a_g_member_exports_no_emissive() {
             .save(r.join(n))
             .unwrap();
     }
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     let rock = |m: &sdc_gui::model::AppModel| {
         json_entries(m)
             .into_iter()
@@ -1218,12 +1166,9 @@ fn a_pbr_grass_set_with_a_g_member_exports_no_emissive() {
 #[test]
 fn a_project_file_changed_during_the_export_asks_about_it() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(&mut m);
     let pf = m.sets_doc.as_ref().unwrap().path().to_path_buf();
     let mut text = std::fs::read_to_string(&pf).unwrap();
     text.push_str("\n# a hand edit\n");
@@ -1240,14 +1185,14 @@ fn a_project_file_changed_during_the_export_asks_about_it() {
 #[test]
 fn renamed_json_notes_old_file_and_rename_back_is_not_hand_edited() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let a = json_path(&m);
+    let a = pgp_json_path(&m);
     assert!(a.is_file());
     m.set_json_name("renamed");
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
     export_and_wait(&mut m);
-    let b = json_path(&m);
+    let b = pgp_json_path(&m);
     assert!(b.is_file() && a.is_file(), "the old file is left in place");
     let old_name = a.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
@@ -1261,7 +1206,7 @@ fn renamed_json_notes_old_file_and_rename_back_is_not_hand_edited() {
     m.set_json_name("");
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.07)));
     export_and_wait(&mut m);
-    assert_eq!(json_path(&m), a);
+    assert_eq!(pgp_json_path(&m), a);
     assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&a).unwrap().contains("0.07"));
 }
@@ -1336,42 +1281,17 @@ fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
     );
 }
 
-/// Audit 08f-2: "Proceed anyway" continues as the other answers do: it waits for a plan in flight and runs the
-/// export guards again before the undecided question.
-#[test]
-fn proceeding_with_warnings_waits_for_a_plan_in_flight() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
-    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
-    idle(&mut m);
-    m.export_clicked();
-    assert!(matches!(m.dialog, Some(Dialog::ExportWarnings(_))));
-    m.replan();
-    m.proceed_with_warnings();
-    assert!(m.dialog.is_none(), "{:?}", m.dialog);
-    assert!(m.export_queued());
-    idle(&mut m);
-    assert!(
-        matches!(m.dialog, Some(Dialog::ProceedAnyway(_))),
-        "{:?}",
-        m.dialog
-    );
-}
-
 /// Audit 08f-6: an end-of-export question never replaces a dialog that is already open; the hand-edited JSON is
 /// kept and a note says so.
 #[test]
 fn the_overwrite_question_does_not_replace_an_open_dialog() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
+    let mut m = pbr_ready(d.path());
     export_and_wait(&mut m);
-    let p = json_path(&m);
+    let p = pgp_json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(&mut m);
     assert!(m.export.running.is_some(), "{:?}", m.dialog);
     // A question that came up while the export ran (here the banner's Reload over unsaved edits).
     m.dialog = Some(Dialog::ReloadUnsaved);

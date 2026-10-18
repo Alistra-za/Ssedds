@@ -1,6 +1,6 @@
-//! The bottom drawer (M3a spec §2.5): progress and the report of the last export, by file and grouped by code.
-//! Task 5 (items 6 and 14): Open export folder, Show in Explorer, the progress line with pace, a virtualised Files
-//! list with filters, and a Warnings tab that shows each message. DECISIONS AG34-AG38.
+//! The Files tab of the bottom panel (M3a spec 2.5, layout v2 A1): progress and the report of the last export, by file.
+//! Open export folder, Show in Explorer, the progress line with pace, and a virtualised Files list with filters.
+//! DECISIONS AG34-AG38. A file's warnings show on hover of its row (R9).
 use crate::model::export::{cli_command, warning_line, FileFilter, FilesIndex, RowState};
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::shell::StatCache;
@@ -9,69 +9,37 @@ use eframe::egui;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Tab {
-    #[default]
-    Files,
-    Warnings,
-}
-
 /// The drawer's own drawing state.
 #[derive(Default)]
 pub struct DrawerState {
-    pub tab: Tab,
     /// The Files tab's filters; both on means both must hold.
     pub filter: FileFilter,
-    /// The filtered rows and the warning list, cached by (filter, export revision).
+    /// The filtered rows, cached by (filter, export revision).
     pub index: FilesIndex,
-    /// The Warnings tab groups by code; the codes whose files are listed.
-    pub by_code: bool,
-    pub expanded: std::collections::BTreeSet<engine::codes::Code>,
     /// Cached "is the export folder / this file on disk" answers (AG39).
     pub stats: StatCache,
     /// The `model.drawer_epoch` `stats` belongs to.
     pub epoch: u64,
 }
 
-/// Draw the drawer while `model.export.open`. Call before the central panel.
-pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut DrawerState) {
-    // Another folder or a new export: the cached file checks are another run's.
-    if state.epoch != model.drawer_epoch {
-        state.stats.clear();
-        state.epoch = model.drawer_epoch;
+/// The Files tab: the toolbar, the two filters and the list of the last export's files.
+pub fn files_tab(ui: &mut egui::Ui, model: &mut AppModel, state: &mut DrawerState) {
+    toolbar(ui, model, &mut state.stats);
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.toggle_value(&mut state.filter.failed_only, "Failed only")
+            .on_hover_text("Only files that failed or failed validation");
+        ui.toggle_value(&mut state.filter.has_warnings, "Has warnings")
+            .on_hover_text("Only files with warnings");
+    });
+    let (mut picked, mut reveal) = (None, None);
+    files(ui, model, state, &mut picked, &mut reveal);
+    if let Some(key) = picked {
+        model.select_job(&key);
     }
-    if !model.export.open {
-        return;
+    if let Some(p) = reveal {
+        let _ = model.reveal(&p);
     }
-    egui::Panel::bottom("report")
-        .resizable(true)
-        .default_size(220.0)
-        .show(ui, |ui| {
-            toolbar(ui, model, &mut state.stats);
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut state.tab, Tab::Files, "Files");
-                ui.selectable_value(&mut state.tab, Tab::Warnings, "Warnings");
-                if state.tab == Tab::Files {
-                    ui.separator();
-                    ui.toggle_value(&mut state.filter.failed_only, "Failed only")
-                        .on_hover_text("Only files that failed or failed validation");
-                    ui.toggle_value(&mut state.filter.has_warnings, "Has warnings")
-                        .on_hover_text("Only files with warnings");
-                }
-            });
-            let (mut picked, mut reveal) = (None, None);
-            match state.tab {
-                Tab::Files => files(ui, model, state, &mut picked, &mut reveal),
-                Tab::Warnings => warnings(ui, model, state, &mut picked),
-            }
-            if let Some(key) = picked {
-                model.select_job(&key);
-            }
-            if let Some(p) = reveal {
-                let _ = model.reveal(&p);
-            }
-        });
 }
 
 /// The header line: counts, then Cancel / Open export folder / Close / Save report / Copy CLI command.
@@ -161,7 +129,7 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         model.cancel_export();
     }
     if close {
-        model.export.open = false;
+        model.collapse_bottom();
     }
     if open {
         let _ = model.open_export_folder();
@@ -239,7 +207,9 @@ fn files(
                     }
                     ui.label(r.state.label());
                     if !r.warnings.is_empty() {
-                        ui.label(format!("{} warnings", r.warnings.len()));
+                        let lines: Vec<String> = r.warnings.iter().map(warning_line).collect();
+                        ui.label(format!("{} warnings", r.warnings.len()))
+                            .on_hover_text(lines.join("\n"));
                     }
                     // The written output once it exists, otherwise the source.
                     let now = Instant::now();
@@ -262,108 +232,4 @@ fn files(
                 });
             }
         });
-}
-
-/// The Warnings tab. Flat (the default): one row per warning, `file` first (so it stays clickable inside the clipped
-/// row), then `CODE severity` and the message; a fixed height of three lines, a longer message shows whole on hover.
-/// "By code": one row per code with its count; expanding it lists that code's files. Both are virtualised.
-fn warnings(
-    ui: &mut egui::Ui,
-    model: &AppModel,
-    state: &mut DrawerState,
-    picked: &mut Option<String>,
-) {
-    if state.index.warnings(&model.export).is_empty() {
-        ui.label("No warnings.");
-        return;
-    }
-    ui.toggle_value(&mut state.by_code, "By code")
-        .on_hover_text("One row per warning code with its count; expand a code to see its files");
-    if state.by_code {
-        by_code(ui, model, state, picked);
-        return;
-    }
-    let list = state.index.warnings(&model.export);
-    let line = ui.text_style_height(&egui::TextStyle::Body);
-    let row_h = 3.0 * line;
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show_rows(ui, row_h, list.len(), |ui, range| {
-            for &(r, w) in &list[range] {
-                let row = &model.export.rows[r];
-                let warning = &row.warnings[w];
-                let size = egui::vec2(ui.available_width(), row_h);
-                ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.link(&row.job_key).clicked() {
-                            *picked = Some(row.job_key.clone());
-                        }
-                        ui.strong(warning.code.as_str());
-                        ui.label(format!("{:?}", warning.severity).to_lowercase());
-                        ui.label(&warning.message)
-                            .on_hover_text(warning_line(warning));
-                    });
-                });
-            }
-        });
-}
-
-/// The by-code view as one flat virtual list: a header row per code, then its files while it is expanded.
-fn by_code(
-    ui: &mut egui::Ui,
-    model: &AppModel,
-    state: &mut DrawerState,
-    picked: &mut Option<String>,
-) {
-    let groups = state.index.groups(&model.export).to_vec();
-    let total: usize = groups
-        .iter()
-        .map(|g| {
-            1 + if state.expanded.contains(&g.0) {
-                g.2 - g.1
-            } else {
-                0
-            }
-        })
-        .sum();
-    let row_h = ui.spacing().interact_size.y;
-    let mut toggle = None;
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show_rows(ui, row_h, total, |ui, range| {
-            let list = state.index.warnings(&model.export);
-            let mut at = 0;
-            for &(code, start, end) in &groups {
-                let open = state.expanded.contains(&code);
-                let len = 1 + if open { end - start } else { 0 };
-                for i in range.start.max(at)..range.end.min(at + len) {
-                    if i == at {
-                        let arrow = if open { "v" } else { ">" };
-                        let text = format!("{arrow} {} ({})", code.as_str(), end - start);
-                        if ui.selectable_label(open, text).clicked() {
-                            toggle = Some(code);
-                        }
-                    } else {
-                        let (r, w) = list[start + i - at - 1];
-                        let row = &model.export.rows[r];
-                        let warning = &row.warnings[w];
-                        ui.horizontal(|ui| {
-                            ui.add_space(16.0);
-                            if ui.link(&row.job_key).clicked() {
-                                *picked = Some(row.job_key.clone());
-                            }
-                            ui.label(&warning.message)
-                                .on_hover_text(warning_line(warning));
-                        });
-                    }
-                }
-                at += len;
-            }
-        });
-    if let Some(c) = toggle {
-        if !state.expanded.remove(&c) {
-            state.expanded.insert(c);
-        }
-    }
 }

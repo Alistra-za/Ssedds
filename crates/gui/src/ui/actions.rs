@@ -229,7 +229,7 @@ pub static ACTIONS: &[Action] = &[
         |m, _| m.nav.sheet = true,
     ),
     a("messages", "Messages", Global, &[ctrl(Key::M)], |m, _| {
-        m.messages.toggle();
+        m.toggle_tab(crate::model::bottom::BottomTab::Messages);
     }),
     when(
         a("open", "Open folder…", Global, &[], |m, ctx| {
@@ -246,7 +246,7 @@ pub static ACTIONS: &[Action] = &[
     ),
     when(
         a("export", "Export", Global, &[], |m, _| m.export_clicked()),
-        super::header::can_export,
+        AppModel::can_export,
     ),
     when(
         a("undo", "Undo", Global, &[ctrl(Key::Z)], |m, _| m.undo()),
@@ -541,7 +541,7 @@ pub static ACTIONS: &[Action] = &[
     // Dialogs
     listed(
         "dialog-enter",
-        "Press the dialog's safe default (never Proceed anyway)",
+        "Press the dialog's safe default",
         Dialogs,
         &[key(Key::Enter)],
     ),

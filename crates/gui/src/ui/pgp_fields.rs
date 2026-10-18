@@ -880,7 +880,7 @@ fn alpha_flag_controls(ui: &mut egui::Ui, c: &Ctx, f: AlphaFlags, edits: &mut Ve
             ui.painter().rect_stroke(
                 r.rect,
                 2.0,
-                egui::Stroke::new(1.5, egui::Color32::from_rgb(210, 60, 60)),
+                egui::Stroke::new(1.5, super::status::RED),
                 egui::StrokeKind::Outside,
             );
         }

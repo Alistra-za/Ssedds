@@ -307,7 +307,8 @@ fn a_block_made_by_an_edit_or_a_template_moves_the_sets_own_mapped_values() {
 
 use sdc_gui::model::plugin_refs::set_key;
 use sdc_gui::model::sets::{set_views, SetView};
-use sdc_gui::model::{AppModel, Dialog};
+use sdc_gui::model::AppModel;
+use support::export_through;
 
 fn row(path: &str) -> modscan::store::MatchRow {
     modscan::store::MatchRow {
@@ -365,10 +366,7 @@ fn export_and_wait(m: &mut AppModel) {
         m.wait_idle(std::time::Duration::from_secs(60)),
         "planning did not finish"
     );
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(
         m.wait_idle(std::time::Duration::from_secs(120)),
         "export did not finish"

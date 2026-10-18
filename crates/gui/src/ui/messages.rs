@@ -1,6 +1,6 @@
-//! Item 20 (DECISIONS AG112-AG114): the toasts at the bottom right and the Messages panel. Drawn once a frame by
-//! `SdcApp` for both views; the store is `model::messages`.
-use super::columns::{AMBER, RED};
+//! Item 20 (DECISIONS AG112-AG114): the toasts at the bottom right and the Messages tab. The toasts are drawn once a
+//! frame by `SdcApp` for both views; the store is `model::messages`.
+use super::status::{AMBER, RED};
 use crate::model::messages::{Severity, Toast};
 use crate::model::AppModel;
 use eframe::egui;
@@ -19,10 +19,9 @@ fn color(s: Severity) -> Option<egui::Color32> {
 #[derive(Clone, Default)]
 struct Rects(Vec<(u64, egui::Rect)>);
 
-/// Advances and draws the toasts, then draws the Messages panel when it is open.
+/// Advances and draws the toasts. The Messages log is the bottom panel's tab (`tab`).
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     draw_at(ctx, model, Instant::now());
-    panel(ctx, model);
 }
 
 /// `draw`'s toast half at clock `now`.
@@ -65,43 +64,30 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
     }
 }
 
-/// The Messages window: time, severity and text of the last entries, newest first, and a Clear button.
-pub fn panel(ctx: &egui::Context, model: &mut AppModel) {
-    let mut open = model.messages.is_open();
-    if !open {
-        return;
-    }
-    let mut clear = false;
-    egui::Window::new("Messages")
-        .open(&mut open)
-        .default_size([460.0, 320.0])
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("{} messages", model.messages.len()));
-                clear = ui
-                    .add_enabled(!model.messages.is_empty(), egui::Button::new("Clear"))
-                    .clicked();
+/// The Messages tab: time, severity and text of the last entries, newest first, and a Clear button.
+pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
+    ui.horizontal(|ui| {
+        ui.label(format!("{} messages", model.messages.len()));
+        if ui
+            .add_enabled(!model.messages.is_empty(), egui::Button::new("Clear"))
+            .clicked()
+        {
+            model.messages.clear();
+        }
+    });
+    ui.separator();
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for e in model.messages.entries().rev() {
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(&e.time);
+                match color(e.severity) {
+                    Some(c) => ui.colored_label(c, e.severity.label()),
+                    None => ui.label(e.severity.label()),
+                };
+                ui.label(&e.text);
             });
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for e in model.messages.entries().rev() {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.weak(&e.time);
-                        match color(e.severity) {
-                            Some(c) => ui.colored_label(c, e.severity.label()),
-                            None => ui.label(e.severity.label()),
-                        };
-                        ui.label(&e.text);
-                    });
-                }
-            });
-        });
-    if clear {
-        model.messages.clear();
-    }
-    if !open {
-        model.messages.set_open(false);
-    }
+        }
+    });
 }
 
 /// The Messages button's text: "Messages", plus the unread count.
@@ -122,6 +108,6 @@ pub fn button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         ))
         .clicked()
     {
-        model.messages.toggle();
+        model.toggle_tab(crate::model::bottom::BottomTab::Messages);
     }
 }

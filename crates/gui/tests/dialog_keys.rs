@@ -273,9 +273,6 @@ fn esc_closes_the_dialogs_that_use_the_shared_modal() {
         Dialog::CloseUnsaved,
         Dialog::ReloadUnsaved,
         Dialog::ConfirmResetAll(vec![]),
-        Dialog::ExportBlocked(vec![]),
-        Dialog::ExportWarnings(vec![]),
-        Dialog::ProceedAnyway(vec![]),
         Dialog::CopySettings {
             from: "a".into(),
             to: vec![],
@@ -292,18 +289,19 @@ fn esc_closes_the_dialogs_that_use_the_shared_modal() {
 #[test]
 fn enter_never_decides_a_decision_dialog() {
     let d = tempfile::tempdir().unwrap();
-    for dialog in [
-        Dialog::ProceedAnyway(vec![]),
-        Dialog::ExportWarnings(vec![]),
-    ] {
-        let mut m = opened(d.path());
-        m.dialog = Some(dialog.clone());
-        assert_eq!(
-            dialog_after(m, Key::Enter, true),
-            Some(dialog.clone()),
-            "Enter did something in {dialog:?}"
-        );
-    }
+    // K7: Copy settings is the decision dialog where Enter does nothing (R18); Review's Enter is Task 1.4's test.
+    let dialog = Dialog::CopySettings {
+        from: "a".into(),
+        to: vec![],
+        fields: vec![],
+    };
+    let mut m = opened(d.path());
+    m.dialog = Some(dialog.clone());
+    assert_eq!(
+        dialog_after(m, Key::Enter, true),
+        Some(dialog.clone()),
+        "Enter did something in {dialog:?}"
+    );
 }
 
 #[test]
@@ -512,4 +510,21 @@ fn the_rename_dialog_ignores_enter_on_the_frame_it_opens() {
         h.state().read_as_of("landscape/leaf.png").as_deref(),
         Some("landscape/new_leaf.png")
     );
+}
+
+/// N3, R11: the Review tab adds no Enter handler, so Enter with Review open never starts an export.
+#[test]
+fn enter_with_review_open_never_exports() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened(d.path()));
+    h.run();
+    h.state_mut().export_clicked();
+    h.run();
+    assert!(h.state().review.is_some());
+    for _ in 0..2 {
+        h.key_press(Key::Enter);
+        h.run();
+    }
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
+    assert!(h.state().export.summary.is_none() && h.state().export.running.is_none());
 }

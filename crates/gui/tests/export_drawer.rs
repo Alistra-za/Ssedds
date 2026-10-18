@@ -1,5 +1,5 @@
 //! Task 5 (items 6 and 14; DECISIONS AG34-AG38): Open export folder, Show in Explorer, the progress line, the
-//! virtualised Files list with its filters, and the Warnings tab's messages.
+//! virtualised Files list with its filters, and a row's warnings on hover.
 mod support;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
@@ -11,7 +11,7 @@ use sdc_gui::model::export::*;
 use sdc_gui::model::shell::{args, select_arg, ShellRequest};
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::GuiSettings;
-use sdc_gui::ui::drawer::{self, DrawerState};
+use sdc_gui::ui::drawer::DrawerState;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -271,10 +271,6 @@ fn the_filtered_list_is_computed_once_per_change() {
     assert_eq!(idx.len(&x, warn), 2501);
     assert_eq!(idx.len(&x, FileFilter::default()), 10_000);
     assert_eq!(idx.computed, 3);
-    // The warning list is cached by the revision as well.
-    assert_eq!(idx.warnings(&x).len(), 2501);
-    assert_eq!(idx.warnings(&x).len(), 2501);
-    assert_eq!(idx.computed, 4);
 }
 
 // ---- The drawer ----
@@ -283,7 +279,7 @@ fn drawer_harness(m: AppModel) -> Harness<'static, (AppModel, DrawerState)> {
     let h = Harness::builder()
         .with_size(eframe::egui::vec2(1100.0, 500.0))
         .build_ui_state(
-            |ui, (m, st): &mut (AppModel, DrawerState)| drawer::draw(ui, m, st),
+            |ui, (m, st): &mut (AppModel, DrawerState)| sdc_gui::ui::bottom::draw(ui, m, st),
             (m, DrawerState::default()),
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
@@ -296,7 +292,7 @@ fn model_with(export: &Path, x: ExportModel) -> AppModel {
         ..GuiSettings::default()
     });
     m.export = x;
-    m.export.open = true;
+    m.show_tab(sdc_gui::model::bottom::BottomTab::Files);
     m
 }
 
@@ -363,7 +359,7 @@ fn the_filter_toggles_narrow_the_files_list() {
 }
 
 #[test]
-fn warning_rows_show_the_message_with_code_and_severity() {
+fn a_files_row_lists_its_warnings_on_hover() {
     let d = tempfile::tempdir().unwrap();
     let mut x = ExportModel::default();
     x.on_event(ev(
@@ -385,11 +381,12 @@ fn warning_rows_show_the_message_with_code_and_severity() {
     ));
     let mut h = drawer_harness(model_with(d.path(), x));
     h.run();
-    h.get_by_label("Warnings").click();
+    h.run();
+    h.get_by_label("1 warnings").hover();
     h.run();
     h.run();
-    h.get_by_label(Code::DimNpot.as_str());
-    h.get_by_label_contains("1000x750 is not a power of two; mips will be uneven");
+    let line = warning_line(&h.state().0.export.rows[0].warnings[0]);
+    h.get_by_label_contains(&line);
     assert_eq!(
         warning_line(&h.state().0.export.rows[0].warnings[0]),
         format!(
@@ -505,59 +502,7 @@ fn the_slot_menu_shows_the_member_that_fills_the_slot() {
     assert!(matches!(&e.action, MenuAction::ShowInExplorer(k) if k == "landscape/rock01.png"));
 }
 
-// ---- Task 6 carry-over: By code, stat cache, pace without skips ----
-
-fn warned(x: &mut ExportModel, key: &str, code: Code, msg: &str) {
-    let png = key.replace(".dds", ".png");
-    x.on_event(ev(
-        0,
-        key,
-        &png,
-        EventKind::FileDiscovered { output: key.into() },
-    ));
-    x.on_event(ev(
-        1,
-        key,
-        &png,
-        EventKind::Warning(Warning::new(code, msg)),
-    ));
-}
-
-#[test]
-fn by_code_lists_a_row_per_code_and_expands_to_its_files() {
-    let d = tempfile::tempdir().unwrap();
-    let mut x = ExportModel::default();
-    warned(&mut x, "t/a.dds", Code::DimNpot, "first npot");
-    warned(&mut x, "t/b.dds", Code::DimNpot, "second npot");
-    warned(&mut x, "t/c.dds", Code::DimNpot, "third npot");
-    let other = Code::PackConflict;
-    warned(&mut x, "t/d.dds", other, "a conflict");
-    let mut idx = FilesIndex::default();
-    let g = idx.groups(&x).to_vec();
-    assert_eq!(g.iter().map(|g| g.2 - g.1).sum::<usize>(), 4);
-    assert_eq!(g.len(), 2);
-    let mut h = drawer_harness(model_with(d.path(), x));
-    h.run();
-    h.get_by_label("Warnings").click();
-    h.run();
-    // The flat list is the default: the file link comes with its message.
-    h.get_by_label("t/a.dds");
-    h.get_by_label("By code").click();
-    h.run();
-    h.run();
-    h.get_by_label(&format!("> {} (3)", Code::DimNpot.as_str()));
-    h.get_by_label(&format!("> {} (1)", other.as_str()));
-    assert!(h.query_by_label("t/a.dds").is_none());
-    h.get_by_label(&format!("> {} (3)", Code::DimNpot.as_str()))
-        .click();
-    h.run();
-    h.run();
-    h.get_by_label(&format!("v {} (3)", Code::DimNpot.as_str()));
-    for f in ["t/a.dds", "t/b.dds", "t/c.dds"] {
-        h.get_by_label(f);
-    }
-    assert!(h.query_by_label("t/d.dds").is_none());
-}
+// ---- Task 6 carry-over: stat cache, pace without skips ----
 
 #[test]
 fn stats_are_made_once_a_second() {

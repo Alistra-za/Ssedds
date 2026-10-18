@@ -482,14 +482,11 @@ fn exporting_targets_on_one_path_are_refused_and_the_first_duplicate_entry_decid
     );
 }
 
-use sdc_gui::model::Dialog;
 use std::path::PathBuf;
+use support::export_through;
 
 fn export_and_wait(m: &mut AppModel) {
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(
         m.wait_idle(Duration::from_secs(120)),
         "export did not finish"
@@ -971,4 +968,53 @@ fn files_in(dir: &Path) -> Vec<String> {
         .collect();
     v.sort();
     v
+}
+
+/// Layout v2 C4: `a_hand_edited_file_is_kept_and_reported` with Review open. The edited complex-material file is
+/// listed with its state only; the PGPatcher pre-answer does not reach it.
+#[test]
+fn cs_pbr_and_complex_material_json_show_their_state_only() {
+    use sdc_gui::model::review::{DiskState, JsonKind};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    let f = out(&m, "m/iron_m.json");
+    std::fs::write(&f, "{}\n").unwrap();
+    m.set_cm_value(&iron, "glossiness", Some(json!(50.0)));
+    idle(&mut m);
+    m.open_review();
+    let l = m
+        .review_json()
+        .into_iter()
+        .find(|l| l.kind == JsonKind::ComplexMaterial && l.path == f)
+        .unwrap_or_else(|| panic!("{:?}", m.review_json()));
+    assert_eq!(l.state, DiskState::Edited);
+    m.answer_review_json(true);
+    m.export_from_review();
+    idle(&mut m);
+    assert!(m.export.summary.is_some());
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "{}\n");
+    assert!(
+        notes(&m).contains("kept as edited outside Tessalith"),
+        "{}",
+        notes(&m)
+    );
+}
+
+/// Layout v2 C4: only an edited PGPatcher JSON opens Review; an edited complex-material file is kept with a note.
+#[test]
+fn an_edited_complex_material_json_alone_does_not_open_review() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    let f = out(&m, "m/iron_m.json");
+    std::fs::write(&f, "{}\n").unwrap();
+    m.set_cm_value(&iron, "glossiness", Some(json!(50.0)));
+    idle(&mut m);
+    m.export_clicked();
+    assert!(m.review.is_none(), "{:?}", m.review_gate());
 }

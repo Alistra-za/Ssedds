@@ -5,7 +5,6 @@ use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Target;
 
-const WARNING: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 /// The button that opens the PGPatcher JSON editor (Note BH7).
 pub const JSON_EDITOR: &str = "PG JSON Editor";
 /// Export's width: twice what it was (Note BH3).
@@ -168,7 +167,7 @@ fn push_right(ui: &mut egui::Ui, w: f32) {
 
 /// True when a text field has the keyboard focus: `what` (Save, Export) then does nothing and says why, so the
 /// field commits its typed value on the focus loss first (AG23, trace-debug #54).
-fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
+pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
     if !ui.ctx().egui_wants_keyboard_input() {
         return false;
     }
@@ -181,9 +180,16 @@ fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
     true
 }
 
+/// A12: the green dot on Export: a folder is open, something would be written and no problem is listed.
+pub fn export_dot(model: &AppModel) -> bool {
+    model.root.is_some()
+        && crate::model::bottom::problems(model).is_empty()
+        && model.export_files() > 0
+}
+
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
 fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
-    let can_export = can_export(model);
+    let can_export = model.can_export();
     let running = model.export.running.is_some();
     let gap = ui.spacing().item_spacing.y;
     let button_h = if running {
@@ -198,7 +204,21 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     }
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
-        if ui.add_enabled(can_export, export).clicked() && !field_focused(ui, model, "Export") {
+        // A12: the hover counts the files and the problems; a green dot says there are none.
+        let n = crate::model::bottom::problems(model).len();
+        let hover = |ui: &mut egui::Ui| {
+            ui.label(format!("{} files, {n} problems", model.export_files()));
+        };
+        let r = ui
+            .add_enabled(can_export, export)
+            .on_hover_ui(hover)
+            .on_disabled_hover_ui(hover);
+        // No dot with nothing open or nothing to export: it would say "ready" about an empty project.
+        if export_dot(model) {
+            let at = r.rect.left_center() + egui::vec2(10.0, 0.0);
+            ui.painter().circle_filled(at, 4.0, super::status::GREEN);
+        }
+        if r.clicked() && !field_focused(ui, model, "Export") {
             model.export_clicked();
         }
         if running {
@@ -209,8 +229,8 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
                 done as f32 / total as f32
             };
             let hover = match model.export.current_file() {
-                Some(f) => format!("Exporting {f}. Cancel is in the export drawer."),
-                None => "Exporting. Cancel is in the export drawer.".to_string(),
+                Some(f) => format!("Exporting {f}. Cancel is in the Files tab."),
+                None => "Exporting. Cancel is in the Files tab.".to_string(),
             };
             ui.add(
                 egui::ProgressBar::new(frac)
@@ -388,13 +408,6 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     if let Some(p) = open {
         model.request_open(p);
     }
-}
-
-/// Export can start: a folder is open, no export runs, and `sdc.toml` is not ignored (M3a spec §7.4: an export would
-/// not be the project's settings).
-pub fn can_export(model: &AppModel) -> bool {
-    let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
-    model.root.is_some() && model.export.running.is_none() && !read_only
 }
 
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
@@ -655,7 +668,7 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
         });
         if let Some(b) = model.banner.clone() {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(WARNING, format!("⚠ {b}"));
+                ui.colored_label(super::status::AMBER, format!("⚠ {b}"));
                 if model.project.is_some() && ui.button("Reload").clicked() {
                     model.request_reload();
                 }

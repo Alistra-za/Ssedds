@@ -120,8 +120,7 @@ fn items_without_a_job_preview_nothing() {
 fn a_dds_input_previews_its_own_bytes() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    m.export_clicked();
-    m.proceed_anyway();
+    export_through(&mut m);
     settle(&mut m);
     let dds = walk(&d.path().join("export"))
         .into_iter()

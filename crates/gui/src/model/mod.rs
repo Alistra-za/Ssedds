@@ -1,5 +1,6 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod auto_flags;
+pub mod bottom;
 pub mod bulk;
 pub mod cm_json;
 pub mod cs_pbr;
@@ -28,6 +29,7 @@ pub mod presets;
 pub mod preview;
 pub mod readout;
 pub mod rename;
+pub mod review;
 pub mod rnm;
 pub mod rnm_preview;
 pub mod sections;
@@ -126,12 +128,6 @@ impl DocKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialog {
-    /// The export asks about these undecided textures (item keys): decide them here, or proceed without.
-    ProceedAnyway(Vec<String>),
-    /// Export cannot start: these must be fixed first (M3b §6.3).
-    ExportBlocked(Vec<pbr_export::ExportIssue>),
-    /// Export can start after a "Proceed anyway" (M3b §6.3: matchN pitfalls).
-    ExportWarnings(Vec<pbr_export::ExportIssue>),
     ExternalChange(DocKind),
     CloseUnsaved,
     /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
@@ -155,13 +151,11 @@ pub enum Dialog {
     Error(String),
 }
 
-/// How the export continues once the plan that follows the undecided-texture dialog has landed.
+/// How the export continues once the plan in flight has landed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Continue {
-    /// Every row was decided: ask the undecided question again (a new plan can raise new ones), then export.
-    Recheck,
-    /// "Proceed anyway" on a plan that was not settled yet: export, skipping what is undecided.
-    Start,
+    /// R3: Review's Export: the guards and the Review gate again, then the export (undecided textures skipped).
+    Review,
 }
 
 /// What was asked while an export ran: it happens when the export has ended.
@@ -217,6 +211,9 @@ fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
+/// `(evidence_rev, export.revision, export running)`.
+type ProblemsKey = (u64, u64, bool);
+
 /// The cached set views, export blocks and delete-section hits, valid for `key` only.
 #[derive(Default)]
 pub(crate) struct ViewCache {
@@ -224,6 +221,12 @@ pub(crate) struct ViewCache {
     pub views: Option<Arc<Vec<sets::SetView>>>,
     pub blocks: Option<Arc<Vec<pbr_export::ExportIssue>>>,
     pub hits: Option<Arc<Vec<sections::DeleteHit>>>,
+    /// Keyed by (evidence_rev, export.revision, export running) inside the view_key cell (K9).
+    pub problems: Option<(ProblemsKey, Arc<Vec<bottom::Problem>>)>,
+    /// `export_asks`, keyed by `evidence_rev` inside the view_key cell (R-b: Review reads them every frame).
+    pub asks: Option<(u64, Arc<Vec<pbr_export::ExportIssue>>)>,
+    /// The keys `bottom::set_ready` looks up; reset with every `problems` build.
+    pub flagged: Option<Arc<std::collections::HashSet<String>>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -279,7 +282,8 @@ pub struct AppModel {
     /// the colour member; sent as `BatchRequest::mesh_alpha`.
     pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     /// Scan evidence for the Subsurface auto mode (DECISIONS AG102): `shader::colour_mesh_key` → whether any scanned
-    /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine.
+    /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine. Written only
+    /// through `set_tree_anim`: the cached `export_asks` is keyed on the `evidence_rev` it bumps.
     pub mesh_tree_anim: std::collections::BTreeMap<String, bool>,
     /// Bumped whenever `mesh_tree_anim` or `known` is replaced (DECISIONS AG109); part of `json_key`.
     pub evidence_rev: u64,
@@ -289,7 +293,8 @@ pub struct AppModel {
     /// PBR grass design §4.2: every GRAS diffuse of the scan, TruePBR shapes kept, read with the mesh evidence; sent
     /// as `BatchRequest::gras_all_diffuses`.
     pub gras_all_diffuses: std::collections::BTreeSet<String>,
-    /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
+    /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers. Written only through
+    /// `set_known`: the cached `export_asks` is keyed on the `evidence_rev` it bumps.
     pub known: Arc<known_paths::KnownPaths>,
     /// Item 9: the selected texture's "Used by meshes" read (`used_by_for`).
     pub used_by: used_by::UsedByState,
@@ -323,6 +328,8 @@ pub struct AppModel {
     item_index: std::collections::HashMap<String, usize>,
     /// The cached set views and export blocks (DECISIONS Note Y7).
     pub(crate) views: std::cell::RefCell<ViewCache>,
+    /// K3: `review_json` for a view key, and when it was read; cleared with `review`.
+    review_json_cache: std::cell::RefCell<Option<(ViewKey, Instant, Vec<review::JsonLine>)>>,
     pub unmatched_keys: Vec<String>,
     /// Per-set RNM-* notes from layer jobs (they have no item).
     pub rnm_notes: std::collections::BTreeMap<String, Vec<engine::codes::Warning>>,
@@ -345,6 +352,12 @@ pub struct AppModel {
     pub status_line: String,
     /// Item 20: the toasts and the Messages log (DECISIONS AG112-AG114); every status-line note also lands here.
     pub messages: messages::Messages,
+    /// The bottom panel: open or collapsed, and its tab (layout v2 A1).
+    pub bottom: bottom::BottomPanel,
+    /// Review (R1): open while `Some`; it holds only what the user answered.
+    pub review: Option<review::Review>,
+    pub(crate) problem_builds: std::cell::Cell<u64>,
+    pub(crate) filter_builds: std::cell::Cell<u64>,
     /// Item 22: per-item DDS sizes by plan revision.
     pub sizes: out_size::SizeCache,
     /// Item 21: the RNM blended thumbnail job.
@@ -401,7 +414,7 @@ pub struct AppModel {
     pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
-    /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
+    /// Review's Export was clicked while a plan or scan read was in flight: the export continues when it lands.
     continue_after_plan: Option<Continue>,
     /// The user chose to cancel the running export and then close or open: done when the export has ended.
     after_export: Option<AfterExport>,
@@ -413,6 +426,8 @@ pub struct AppModel {
     pending_cs: Option<cs_pbr_export::PendingCs>,
     /// Complex material design §6: the `<texture>.json` files the running export writes afterwards.
     pending_cm: Option<cm_json::PendingCm>,
+    /// C4: Review's answer for the edited PGPatcher JSON, for the running export only (K12).
+    pending_json_answer: Option<review::JsonAnswer>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -511,6 +526,7 @@ impl AppModel {
             inputs_rev: 0,
             item_index: Default::default(),
             views: Default::default(),
+            review_json_cache: Default::default(),
             sets: vec![],
             sets_root: None,
             unmatched_keys: vec![],
@@ -527,6 +543,10 @@ impl AppModel {
             search: String::new(),
             status_line: String::new(),
             messages: Default::default(),
+            bottom: Default::default(),
+            review: None,
+            problem_builds: Default::default(),
+            filter_builds: Default::default(),
             sizes: Default::default(),
             rnm_preview: Default::default(),
             status_note: None,
@@ -552,6 +572,7 @@ impl AppModel {
             pending_text: None,
             pending_cs: None,
             pending_cm: None,
+            pending_json_answer: None,
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -636,10 +657,13 @@ impl AppModel {
         self.pending_text = None;
         self.pending_cs = None;
         self.pending_cm = None;
+        self.pending_json_answer = None;
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
-        // were answered to get here). Audit 2026-10-14 finding 2: a `ProceedAnyway` left open would be closed by
-        // the new folder's plan (`refresh_undecided_dialog`) and continue into an export of that folder.
+        // were answered to get here).
         self.dialog = None;
+        // Audit 2026-10-14 finding 2, Review Focus 2: Review and its ticks belong to the previous folder; a queued
+        // Review export (cleared below) must not continue into an export of this one.
+        self.close_review();
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
         self.continue_after_plan = None;
@@ -871,12 +895,20 @@ impl AppModel {
         } else if changed {
             // The plan this starts carries a queued export to its end (`finish_plan`).
             self.replan();
-        } else if std::mem::take(&mut self.export_after_plan) {
-            // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
-            if self.dialog.is_some() {
+        } else {
+            // DECISIONS AF4: an Export (the header's or Review's) clicked during this scan-finished read starts now,
+            // never on a later plan. Both are taken together, as in `finish_plan`; the export the user clicked wins.
+            let (clicked, continued) = (
+                std::mem::take(&mut self.export_after_plan),
+                self.continue_after_plan.take(),
+            );
+            if (clicked || continued.is_some()) && self.dialog.is_some() {
                 self.queued_export_dropped();
-            } else {
+            } else if clicked {
                 self.export_clicked();
+            } else if continued.is_some() {
+                // A plan may still be in flight, or sources changed: the same front half as Review's Export.
+                self.continue_review();
             }
         }
     }
@@ -950,6 +982,7 @@ impl AppModel {
                 // An export queued behind the cancelled plan has no folder to run on (AG129).
                 self.export_after_plan = false;
                 self.continue_after_plan = None;
+                self.close_review();
                 self.refresh_banner();
                 self.status_line.clear();
                 self.open_cancelled = true;
@@ -1150,7 +1183,7 @@ impl AppModel {
         self.finish_cm_json(cm);
         // A user who cancelled the export to leave does not need its error as a dialog.
         if !self.run_after_export() {
-            // Audit 08f-6: an open dialog stays; the error is in the drawer and the Messages log.
+            // Audit 08f-6: an open dialog stays; the error is in the Files tab and the Messages log.
             if let Some(e) = failure.filter(|_| self.dialog.is_none()) {
                 self.dialog = Some(Dialog::Error(e));
             }
@@ -1184,8 +1217,8 @@ impl AppModel {
     }
 
     /// The guards that stop an export outright, in order: the plan on screen is not the one for these sets, the
-    /// export folder is unusable, an `export_blocks` entry. True (with the dialog showing why) when one fired.
-    /// Shared by `export_checks` and the continuation from the undecided dialog, whose decisions can change them.
+    /// export folder is unusable, an `export_blocks` entry. True (with the error dialog, or Review listing the
+    /// blocks) when one fired. Shared by `export_checks` and `Continue::Review`, whose decisions can change them.
     fn export_stopped(&mut self) -> bool {
         let Some(root) = self.root.clone() else {
             return true;
@@ -1199,23 +1232,26 @@ impl AppModel {
         }
         let blocks = pbr_export::export_blocks(self);
         if !blocks.is_empty() {
-            self.dialog = Some(Dialog::ExportBlocked(blocks));
+            self.open_review();
             return true;
         }
         false
     }
 
-    /// The export folder and undecided-texture checks, then the export itself.
+    /// The export checks, then the export itself. C2: a clean project exports without Review; blocks, `export_asks`
+    /// pitfalls or undecided textures open Review instead (R1).
     fn export_checks(&mut self) {
+        // Error dialog, or blocks: Review.
         if self.export_stopped() {
             return;
         }
-        let asks = pbr_export::export_asks(self);
-        if !asks.is_empty() {
-            self.dialog = Some(Dialog::ExportWarnings(asks));
+        let asks = !pbr_export::export_asks(self).is_empty();
+        // R6: an edited PGPatcher JSON is asked about in Review, before the export (C4).
+        if asks || self.undecided() > 0 || self.pgp_json_edited() {
+            self.open_review();
             return;
         }
-        self.undecided_check();
+        self.start_export();
     }
 
     /// True (with an error dialog) when the plan on screen is not the one for these sets.
@@ -1239,16 +1275,6 @@ impl AppModel {
         true
     }
 
-    /// The undecided-texture question, then the export itself.
-    fn undecided_check(&mut self) {
-        let keys = self.undecided_keys();
-        if !keys.is_empty() {
-            self.dialog = Some(Dialog::ProceedAnyway(keys));
-            return;
-        }
-        self.start_export();
-    }
-
     /// Keys of the textures that still need a decision, in list order.
     pub fn undecided_keys(&self) -> Vec<String> {
         self.items
@@ -1267,27 +1293,23 @@ impl AppModel {
         })
     }
 
-    /// One row of the export dialog: decide `key` as `st`. The row leaves the list when the plan that follows shows
-    /// the texture decided (it may ask something else next); when none are left the export continues.
+    /// One undecided row in Review: decide `key` as `st`. The row leaves the list when the plan that follows shows
+    /// the texture decided (it may ask something else next). R2: deciding the last row never exports.
     pub fn decide_undecided_row(&mut self, key: &str, st: Subtype) {
         self.decide(key, Answer::Subtype(st));
-        self.refresh_if_settled();
     }
 
     /// A row's inline answer that is not a sub-type (alpha meaning, an acknowledgement). The row
     /// leaves the list when the plan that follows shows the texture decided.
     pub fn answer_undecided_row(&mut self, key: &str, answer: Answer) {
         self.decide(key, answer);
-        self.refresh_if_settled();
     }
 
     /// "Accept all suggestions": decide every listed texture that has a suggestion as that suggestion, as one undo
     /// step. A texture without a suggestion stays listed and undecided; alpha and acknowledgements are
     /// never answered here.
     pub fn accept_all_suggestions(&mut self) {
-        let Some(Dialog::ProceedAnyway(keys)) = self.dialog.clone() else {
-            return;
-        };
+        let keys = self.undecided_keys();
         let mut picks: Vec<(String, Subtype)> = keys
             .into_iter()
             .filter_map(|k| {
@@ -1314,7 +1336,6 @@ impl AppModel {
                 }
             }
         });
-        self.refresh_if_settled();
     }
 
     /// A user edit recorded a step: re-plan as a change (`replan_changed`).
@@ -1366,63 +1387,34 @@ impl AppModel {
         true
     }
 
-    /// No plan in flight, so the items on screen are current: update the dialog's rows now. Otherwise the plan
-    /// that lands does it.
-    fn refresh_if_settled(&mut self) {
-        if self.planning.is_none() {
-            self.refresh_undecided_dialog();
-        }
-    }
-
-    /// A plan landed while the dialog is open: rows whose texture is decided (or gone) leave the list. With none
-    /// left the dialog closes and the export goes on.
-    fn refresh_undecided_dialog(&mut self) {
-        let Some(Dialog::ProceedAnyway(keys)) = self.dialog.as_ref() else {
-            return;
-        };
-        let live: Vec<String> = keys
-            .iter()
-            .filter(|k| {
-                self.item(k)
-                    .is_some_and(|i| i.status == ItemStatus::NeedsDecision)
-            })
-            .cloned()
-            .collect();
-        if live.is_empty() {
-            self.dialog = None;
-            self.continue_export(Continue::Recheck);
-        } else if let Some(Dialog::ProceedAnyway(keys)) = self.dialog.as_mut() {
-            *keys = live;
-        }
-    }
-
-    /// Continue the export from the undecided-texture dialog. The decisions re-planned: a plan still in flight
-    /// is waited for (never export on a stale plan), then `how` decides what comes next.
-    fn continue_export(&mut self, how: Continue) {
-        if self.planning.is_some() {
-            self.continue_after_plan = Some(how);
-        } else {
-            self.run_continue(how);
-        }
-    }
-
     fn run_continue(&mut self, how: Continue) {
-        // The decisions made in the dialog can change the blocks (a diffuse decided as PBR switches the set's
-        // checks on), so the guards run again. The asks are not repeated: the user already answered them.
-        if self.export_stopped() {
-            return;
-        }
         match how {
-            Continue::Recheck => self.undecided_check(),
-            Continue::Start => self.start_export(),
+            Continue::Review => {
+                // K4: Review closed (another folder, Reload) drops its queued export.
+                if self.review.is_none() {
+                    return;
+                }
+                // Never on a stale plan, whoever calls: wait again for the plan or the scan read in flight.
+                if self.planning.is_some() || self.votes_pending.is_some() {
+                    self.continue_after_plan = Some(how);
+                    return;
+                }
+                // The decisions made in Review can change the blocks (a diffuse decided as PBR switches the set's
+                // checks on), and an edit after the click can add a pitfall, so the guards and the gate run again
+                // on the settled plan (audit 08f-2, Review Focus 1).
+                if self.export_stopped() {
+                    return;
+                }
+                match self.review_gate() {
+                    Ok(_) => self.start_export(),
+                    Err(why) => {
+                        self.status_line = format!("Export not started: {why}");
+                        self.messages
+                            .log(messages::Severity::Info, self.status_line.clone());
+                    }
+                }
+            }
         }
-    }
-
-    /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export. Like
-    /// the other answers it waits for a plan in flight and runs the guards again (audit 08f-2).
-    pub fn proceed_with_warnings(&mut self) {
-        self.dialog = None;
-        self.continue_export(Continue::Recheck);
     }
 
     /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
@@ -1496,12 +1488,6 @@ impl AppModel {
         self.replan();
     }
 
-    /// DECISIONS N3: undecided textures are skipped, never decided here.
-    pub fn proceed_anyway(&mut self) {
-        self.dialog = None;
-        self.continue_export(Continue::Start);
-    }
-
     /// Save first (the CLI command and the next session read `sdc.toml`), then run the export on a worker.
     fn start_export(&mut self) {
         if self.export.running.is_some() || self.save().is_err() {
@@ -1515,11 +1501,14 @@ impl AppModel {
         self.pending_cs = cs_pbr_export::prepare(self);
         self.pending_cm = cm_json::prepare(self);
         self.pending_text = None;
+        // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
+        self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
+        self.review_json_cache.take();
         self.export = export::ExportModel {
-            open: true,
             pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
         };
+        self.show_tab(bottom::BottomTab::Files);
         self.drawer_epoch += 1;
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
@@ -1529,6 +1518,8 @@ impl AppModel {
     /// The export ended: write the copies and the JSON of the sets that exported (spec §6.1). Nothing is written
     /// after a cancelled or failed export.
     fn finish_json(&mut self) {
+        // K12: Review's answer is for this export only, whatever happens below.
+        let answer = self.pending_json_answer.take();
         let Some(p) = self.pending_json.take() else {
             return;
         };
@@ -1553,12 +1544,7 @@ impl AppModel {
             .as_ref()
             .map(|d| history::records_at(&d.pgp_json_shas(), &root))
             .unwrap_or_default();
-        // #43: the record of this name; a project from before per-name records has only the legacy one.
-        let last = if shas.is_empty() {
-            self.sets_doc.as_ref().and_then(|d| d.last_json_sha256())
-        } else {
-            shas.get(&key).cloned()
-        };
+        let last = self.pgp_record(&p.path);
         let named: Vec<String> = vec![p
             .path
             .strip_prefix(&root)
@@ -1579,6 +1565,24 @@ impl AppModel {
             &mut self.export.notes,
         ) {
             pbr_export::Finish::Written(sha) => self.record_json_sha(&key, &sha),
+            // C4: answered in Review for this very file (same path, same bytes); a file changed since asks again.
+            pbr_export::Finish::Overwrite(text)
+                if answer.as_ref().is_some_and(|a| {
+                    a.path == p.path && a.sha.is_some() && history::sha256_of(&p.path) == a.sha
+                }) =>
+            {
+                if answer.is_some_and(|a| a.overwrite) {
+                    if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes)
+                    {
+                        self.record_json_sha(&key, &sha);
+                    }
+                } else {
+                    self.export.notes.push(format!(
+                        "PGPatcher JSON kept as edited: {}",
+                        p.path.display()
+                    ));
+                }
+            }
             // Audit 08f-6: an end-of-export question never replaces an open dialog; the file is kept, with a note.
             // `ExportRunning` is not in the way: the export it asks about has ended (`run_after_export`).
             pbr_export::Finish::Overwrite(_)
@@ -1630,6 +1634,18 @@ impl AppModel {
         let was_dirty = d.is_dirty();
         d.set_copy_shas(&shas);
         self.save_hash_record(was_dirty);
+    }
+
+    /// The hash recorded for Tessalith's last PGPatcher JSON at `path` (#43: per name; a project from before
+    /// per-name records has only the legacy one).
+    fn pgp_record(&self, path: &std::path::Path) -> Option<String> {
+        let d = self.sets_doc.as_ref()?;
+        let shas = history::records_at(&d.pgp_json_shas(), &self.export_root());
+        if shas.is_empty() {
+            d.last_json_sha256()
+        } else {
+            shas.get(&history::record_key(path)).cloned()
+        }
     }
 
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
@@ -1868,14 +1884,13 @@ impl AppModel {
             std::mem::take(&mut self.export_after_plan),
             self.continue_after_plan.take(),
         );
-        if clicked && self.dialog.is_some() {
+        // Audit 08f-1 holds for Review's queued Export too: never over an open question.
+        if (clicked || continued.is_some()) && self.dialog.is_some() {
             self.queued_export_dropped();
         } else if clicked {
             self.export_checks();
         } else if let Some(how) = continued {
             self.run_continue(how);
-        } else {
-            self.refresh_undecided_dialog();
         }
     }
 
@@ -2598,6 +2613,12 @@ impl AppModel {
 
     pub fn reload_documents(&mut self) {
         self.dialog = None;
+        // K4, K5: Review and an export queued behind a plan belong to the documents being dropped.
+        self.close_review();
+        // Review Focus 2: so does a JSON answer; the running export asks instead (the safe side).
+        self.pending_json_answer = None;
+        self.export_after_plan = false;
+        self.continue_after_plan = None;
         self.reset_type_follow();
         if let Some(p) = self.project.as_mut() {
             p.reload();
@@ -2926,8 +2947,9 @@ mod tests {
         assert!(m.wait_idle(Duration::from_secs(60)));
         let export = |m: &mut AppModel| {
             m.export_clicked();
-            if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-                m.proceed_anyway();
+            if m.review.is_some() {
+                m.acknowledge_all_asks();
+                m.export_from_review();
             }
         };
         export(&mut m);

@@ -1,6 +1,7 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
 pub mod actions;
 pub mod advanced;
+pub mod bottom;
 pub mod bulk_panel;
 pub mod cm_card;
 pub mod color;
@@ -18,7 +19,9 @@ pub mod pgp_fields;
 pub mod plugin_refs;
 pub mod presets;
 pub mod preview;
+pub mod problems;
 pub mod rename_dialog;
+pub mod review;
 pub mod rnm_section;
 pub mod set_editor;
 pub mod set_preview;
@@ -26,6 +29,7 @@ pub mod sets_column;
 pub mod settings_panel;
 pub mod skin_card;
 pub mod slot_commands;
+pub mod status;
 pub mod thumbs;
 pub mod viewport3d;
 
@@ -108,6 +112,8 @@ pub fn draw_with_scan(
     } else {
         header::draw(ui, model, None);
     }
+    // Under the header and the scan row, before the columns (R7).
+    bottom::draw(ui, model, &mut state.drawer);
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
     // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
@@ -132,7 +138,6 @@ pub fn draw_with_scan(
             sets_column::draw(ui, model, thumbs, drops, cmds);
         },
     );
-    drawer::draw(ui, model, &mut state.drawer);
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
     let three_d = state.set3d.enabled && set_preview::wanted(model);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));

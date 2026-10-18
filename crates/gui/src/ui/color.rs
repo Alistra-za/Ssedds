@@ -47,7 +47,7 @@ pub fn color_field(ui: &mut egui::Ui, id: egui::Id, rgb: [u8; 3]) -> Option<[u8;
         ui.painter().rect_stroke(
             r.rect,
             2.0,
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(210, 60, 60)),
+            egui::Stroke::new(1.5, super::status::RED),
             egui::StrokeKind::Outside,
         );
     }

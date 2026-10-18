@@ -59,8 +59,6 @@ pub struct Row {
 
 #[derive(Default)]
 pub struct ExportModel {
-    /// The drawer.
-    pub open: bool,
     pub running: Option<CancelToken>,
     /// In first-seen order, one per job key.
     pub rows: Vec<Row>,
@@ -472,16 +470,12 @@ impl FileFilter {
     }
 }
 
-/// The revision, every (row, warning) pair by code, and the per-code ranges over it.
-type Warns = (u64, Vec<(usize, usize)>, Vec<(Code, usize, usize)>);
-
-/// The row indices the Files tab shows and the warnings the Warnings tab lists, cached by what they were computed
-/// from: the filter and the export's `revision`. A frame that changed neither only reads the cache.
+/// The row indices the Files tab shows, cached by what they were computed from: the filter and the export's
+/// `revision`. A frame that changed neither only reads the cache.
 #[derive(Default)]
 pub struct FilesIndex {
     files: Option<(FileFilter, u64, Vec<usize>)>,
-    warns: Option<Warns>,
-    /// How many times the filter / the warning list was computed (tests).
+    /// How many times the filter was computed (tests).
     pub computed: u32,
 }
 
@@ -510,44 +504,9 @@ impl FilesIndex {
         let (_, _, idx) = self.files.as_ref()?;
         m.rows.get(*idx.get(i)?)
     }
-
-    /// Every warning as (row, warning) indices, by code and then by row; cached by the revision.
-    pub fn warnings(&mut self, m: &ExportModel) -> &[(usize, usize)] {
-        self.refresh_warnings(m);
-        self.warns.as_ref().map_or(&[], |(_, v, _)| v)
-    }
-
-    /// One `(code, start, end)` per code over [`Self::warnings`]: `end - start` warnings carry the code.
-    pub fn groups(&mut self, m: &ExportModel) -> &[(Code, usize, usize)] {
-        self.refresh_warnings(m);
-        self.warns.as_ref().map_or(&[], |(_, _, g)| g)
-    }
-
-    fn refresh_warnings(&mut self, m: &ExportModel) {
-        if matches!(&self.warns, Some((rev, ..)) if *rev == m.revision) {
-            return;
-        }
-        self.computed += 1;
-        let mut v: Vec<(usize, usize)> = m
-            .rows
-            .iter()
-            .enumerate()
-            .flat_map(|(r, row)| (0..row.warnings.len()).map(move |w| (r, w)))
-            .collect();
-        v.sort_by_key(|&(r, w)| m.rows[r].warnings[w].code);
-        let mut groups: Vec<(Code, usize, usize)> = vec![];
-        for (i, &(r, w)) in v.iter().enumerate() {
-            let code = m.rows[r].warnings[w].code;
-            match groups.last_mut() {
-                Some(g) if g.0 == code => g.2 = i + 1,
-                _ => groups.push((code, i, i + 1)),
-            }
-        }
-        self.warns = Some((m.revision, v, groups));
-    }
 }
 
-/// A warning in the Warnings tab: `CODE (severity): message`.
+/// A warning as a Files row's hover shows it: `CODE (severity): message`.
 pub fn warning_line(w: &Warning) -> String {
     format!(
         "{} ({}): {}",

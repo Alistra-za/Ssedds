@@ -146,9 +146,9 @@ fn ctrl_m_is_an_action_in_global_and_toggles_the_panel() {
         support::session(),
     );
     actions::run("messages", &mut m, &egui::Context::default());
-    assert!(m.messages.is_open());
+    assert!(m.bottom.open && m.messages.is_open());
     actions::run("messages", &mut m, &egui::Context::default());
-    assert!(!m.messages.is_open());
+    assert!(!m.bottom.open && !m.messages.is_open());
 }
 
 #[test]
@@ -163,10 +163,7 @@ fn the_panel_lists_newest_first_and_clear_empties_it() {
     m.messages.set_open(true);
     let mut h = Harness::builder()
         .with_size(egui::vec2(700.0, 500.0))
-        .build_ui_state(
-            |ui, m: &mut AppModel| sdc_gui::ui::messages::panel(ui.ctx(), m),
-            m,
-        );
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::messages::tab(ui, m), m);
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
     let first = h.get_by_label("first note").rect().min.y;
@@ -199,7 +196,7 @@ fn the_header_button_shows_the_unread_count_and_opens_the_panel() {
     h.run();
     h.get_by_label("Messages (2)").click();
     h.run();
-    assert!(h.state().messages.is_open());
+    assert!(h.state().bottom.open && h.state().messages.is_open());
     assert_eq!(h.state().messages.unread(), 0);
 }
 

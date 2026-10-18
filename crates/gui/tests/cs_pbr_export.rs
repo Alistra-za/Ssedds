@@ -111,10 +111,7 @@ fn export_and_wait(m: &mut AppModel) {
         m.wait_idle(Duration::from_secs(60)),
         "planning did not finish"
     );
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     assert!(
         m.wait_idle(Duration::from_secs(120)),
         "export did not finish"

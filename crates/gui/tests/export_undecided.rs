@@ -1,4 +1,6 @@
-//! Task 3: the export dialog lists the undecided textures and resolves them (owner).
+//! Task 3: the undecided textures are listed and resolved before an export (owner). Layout v2 Task 1.3: the list is
+//! Review's (a bottom-panel tab), no longer a modal; `rows_decided_in_the_dialog_go_back_through_the_export_blocks`
+//! and `a_texture_without_a_sub_type_suggestion_stays_listed_and_undecided` moved to review.rs.
 mod support;
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, Subtype};
@@ -18,11 +20,10 @@ fn idle(m: &mut AppModel) {
     );
 }
 
+/// Review's undecided list (it must be open).
 fn listed(m: &AppModel) -> Vec<String> {
-    match &m.dialog {
-        Some(Dialog::ProceedAnyway(k)) => k.clone(),
-        other => panic!("expected the undecided dialog, got {other:?}"),
-    }
+    assert!(m.review.is_some(), "expected Review, dialog {:?}", m.dialog);
+    m.undecided_keys()
 }
 
 /// Every non-sub-type question answered, so only the sub-types are still undecided.
@@ -34,7 +35,7 @@ fn answer_all_but_subtypes(m: &mut AppModel) {
 }
 
 #[test]
-fn the_dialog_lists_every_undecided_texture_with_its_suggestion() {
+fn review_lists_every_undecided_texture_with_its_suggestion() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     m.export_clicked();
@@ -57,6 +58,10 @@ fn accept_all_decides_the_suggestions_and_the_export_proceeds_on_the_settled_pla
     m.accept_all_suggestions();
     idle(&mut m);
     assert_eq!(m.undecided(), 0);
+    // R2: Review never exports by itself; its Export does.
+    assert!(m.export.summary.is_none());
+    m.export_from_review();
+    idle(&mut m);
     let s = m.export.summary.clone().expect("the export ran");
     assert!(s.converted >= 1);
     // The export used the fresh plan: the landscape diffuse was decided and exported.
@@ -67,25 +72,6 @@ fn accept_all_decides_the_suggestions_and_the_export_proceeds_on_the_settled_pla
             .map(|j| j.profile.subtype),
         Some(Subtype::LandscapeDiffuse)
     );
-}
-
-#[test]
-fn a_texture_without_a_sub_type_suggestion_stays_listed_and_undecided() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
-    // leaf's sub-type is decided; it now waits for its alpha meaning, which Accept all never answers.
-    m.decide(LEAF, Answer::Subtype(Subtype::Diffuse));
-    idle(&mut m);
-    assert_eq!(m.subtype_question(LEAF), None);
-    assert!(m.undecided_keys().contains(&LEAF.to_string()));
-    m.export_clicked();
-    m.accept_all_suggestions();
-    let left = listed(&m);
-    assert!(left.contains(&LEAF.to_string()), "{left:?}");
-    assert!(m.export.running.is_none());
-    idle(&mut m);
-    assert!(m.undecided_keys().contains(&LEAF.to_string()));
-    assert!(!m.undecided_keys().contains(&ROCK.to_string()));
 }
 
 #[test]
@@ -109,12 +95,12 @@ fn deciding_one_row_removes_only_that_row() {
 }
 
 #[test]
-fn proceed_anyway_still_skips_what_is_undecided() {
+fn review_export_still_skips_what_is_undecided() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     m.export_clicked();
     let n = listed(&m).len();
-    m.proceed_anyway();
+    m.export_from_review();
     assert_eq!(m.dialog, None);
     idle(&mut m);
     assert_eq!(m.undecided(), n);
@@ -123,13 +109,13 @@ fn proceed_anyway_still_skips_what_is_undecided() {
 }
 
 #[test]
-fn proceed_anyway_after_a_row_waits_for_the_plan_of_that_decision() {
+fn review_export_after_a_row_waits_for_the_plan_of_that_decision() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     m.export_clicked();
     m.decide_undecided_row(ROCK, Subtype::Diffuse);
-    // The decision's plan is in flight: proceeding does not export on the stale plan.
-    m.proceed_anyway();
+    // The decision's plan is in flight: Export does not export on the stale plan.
+    m.export_from_review();
     assert!(m.export.running.is_none());
     idle(&mut m);
     assert!(m.export.summary.is_some());
@@ -160,13 +146,14 @@ fn a_pending_continuation_does_not_outlive_the_export_the_user_clicked() {
     let mut m = opened(d.path());
     m.export_clicked();
     m.decide_undecided_row(ROCK, Subtype::Diffuse);
-    // "Proceed anyway" waits for the plan in flight; Export is clicked meanwhile and takes over.
-    m.proceed_anyway();
+    // Review's Export waits for the plan in flight; the header's Export is clicked meanwhile and takes over.
+    m.export_from_review();
     m.export_clicked();
     idle(&mut m);
-    // The clicked export asked again (other textures are undecided); answering it exports once.
-    assert!(matches!(m.dialog, Some(Dialog::ProceedAnyway(_))));
-    m.proceed_anyway();
+    // The clicked export opened Review again (other textures are undecided); its Export exports once.
+    assert!(m.export.summary.is_none());
+    listed(&m);
+    m.export_from_review();
     idle(&mut m);
     assert!(m.export.summary.is_some());
     // A later, unrelated plan starts nothing.
@@ -178,17 +165,18 @@ fn a_pending_continuation_does_not_outlive_the_export_the_user_clicked() {
     assert_eq!(m.dialog, None);
 }
 
-/// Audit 2026-10-14 finding 2: a folder opened while the dialog is up closes it and starts nothing in the new folder.
+/// Audit 2026-10-14 finding 2: a folder opened while Review is up closes it and starts nothing in the new folder.
 #[test]
-fn opening_another_folder_closes_the_dialog_without_exporting() {
+fn opening_another_folder_closes_review_and_exports_nothing() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     m.export_clicked();
-    assert!(matches!(m.dialog, Some(Dialog::ProceedAnyway(_))));
+    listed(&m);
     let d2 = tempfile::tempdir().unwrap();
     let root2 = mod_folder(d2.path());
     assert!(m.request_open(root2.clone()));
     idle(&mut m);
+    assert_eq!(m.review, None);
     assert_eq!(m.dialog, None);
     assert!(m.export.summary.is_none(), "no export ran");
     assert!(!root2.join("sdc.toml").exists(), "nothing was written");
@@ -208,37 +196,6 @@ fn rows_waiting_on_alpha_are_answered_inline_and_leave_when_decided() {
     assert!(!listed(&m).contains(&LEAF.to_string()));
 }
 
-#[test]
-fn rows_decided_in_the_dialog_go_back_through_the_export_blocks() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
-    answer_all_but_subtypes(&mut m);
-    // Emissive is on with no emissive texture: a block only once rock01 is a PBR set, which it is not yet.
-    m.set_json_value(
-        "landscape/rock01",
-        "emissive",
-        Some(serde_json::json!(true)),
-    );
-    idle(&mut m);
-    m.export_clicked();
-    assert!(!listed(&m).is_empty());
-    // Rock01 becomes a PBR set; every other row is decided as its suggestion until the dialog empties.
-    m.decide_undecided_row(ROCK, Subtype::PbrAlbedo);
-    idle(&mut m);
-    while let Some(Dialog::ProceedAnyway(keys)) = m.dialog.clone() {
-        let k = keys[0].clone();
-        let st = m.subtype_question(&k).flatten().unwrap_or(Subtype::Diffuse);
-        m.decide_undecided_row(&k, st);
-        idle(&mut m);
-    }
-    assert!(
-        matches!(m.dialog, Some(Dialog::ExportBlocked(_))),
-        "{:?}",
-        m.dialog
-    );
-    assert!(m.export.running.is_none() && m.export.summary.is_none());
-}
-
 /// Audit 11 (Note Y8): more picks than the history keeps are still one step, undone at once.
 #[test]
 fn accept_all_over_the_history_limit_is_one_undo_step() {
@@ -254,7 +211,7 @@ fn accept_all_over_the_history_limit_is_one_undo_step() {
     idle(&mut m);
     let undecided = m.undecided();
     assert!(undecided > History::LIMIT, "{undecided}");
-    m.dialog = Some(Dialog::ProceedAnyway(m.undecided_keys()));
+    m.open_review();
     let steps = m.history.undo.len();
     m.accept_all_suggestions();
     assert_eq!(m.history.undo.len(), steps + 1, "one step");

@@ -4,7 +4,7 @@ use engine::codes::Code;
 use engine::config::Subtype;
 use sdc_gui::model::pbr_export::{export_blocks, json_name};
 use sdc_gui::model::sets::{set_views, DropChoice, DropOutcome, SlotCommand};
-use sdc_gui::model::{Answer, Dialog};
+use sdc_gui::model::Answer;
 use serde_json::{json, Value};
 use std::time::Duration;
 use support::*;
@@ -14,10 +14,7 @@ fn idle(m: &mut sdc_gui::model::AppModel) {
 }
 
 fn export(m: &mut sdc_gui::model::AppModel) {
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
+    export_through(m);
     idle(m);
 }
 

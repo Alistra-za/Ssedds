@@ -9,8 +9,7 @@ use engine::events::RecipeStatus;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
-pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
+pub(super) use super::status::{AMBER, RED};
 /// Width of a collapsed column.
 pub const STRIP_WIDTH: f32 = 24.0;
 /// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.
@@ -190,10 +189,16 @@ fn tile(
                 if let Some(a) = &read_as {
                     badges.push(format!("read as {a}"));
                 }
-                ui.add(
-                    egui::Label::new(egui::RichText::new(badges.join("  ")).small().weak())
-                        .truncate(),
-                );
+                let ready = crate::model::bottom::tile_ready(item);
+                ui.horizontal(|ui| {
+                    if ready {
+                        super::status::dot(ui, super::status::Status::Ready);
+                    }
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(badges.join("  ")).small().weak())
+                            .truncate(),
+                    );
+                });
             });
         })
         .response
@@ -270,8 +275,9 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
             ui.label(egui::RichText::new(s).strong());
         }
         let n = model.undecided();
-        if n > 0 {
-            ui.colored_label(AMBER, format!("{n} need a decision"));
+        let link = egui::RichText::new(format!("{n} need a decision")).color(AMBER);
+        if n > 0 && ui.link(link).clicked() {
+            model.open_problems(Some(crate::model::bottom::ProblemsFilter::Undecided));
         }
         let not_in = column_stats(ui.ctx(), model).not_in_set;
         if not_in > 0

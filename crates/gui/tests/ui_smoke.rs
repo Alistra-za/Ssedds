@@ -426,25 +426,22 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     let mut h = harness(opened(d.path()));
     h.run();
     press(&mut h, "Export");
-    h.get_by_label_contains("still need a decision");
+    // Export opens the Review tab, not a modal, and starts nothing.
+    assert!(h.state().review.is_some() && h.state().dialog.is_none());
+    h.get_by_label("Undecided");
     h.get_by_label("Accept all suggestions");
-    h.get_by_label("Proceed anyway");
     assert!(h.query_all_by_label("\u{2713}").count() >= 1);
-    // Cancel closes the question and starts nothing.
-    press(&mut h, "Cancel");
-    assert!(h.state().dialog.is_none());
-    assert!(!h.state().export.open);
+    // Review's Close starts nothing and collapses the panel.
+    press(&mut h, "Close");
+    assert!(h.state().review.is_none() && !h.state().bottom.open);
+    assert!(h.state().export.running.is_none() && h.state().export.summary.is_none());
     press(&mut h, "Export");
-    press(&mut h, "Proceed anyway");
+    let skip = h.state().review_button_text();
+    assert!(skip.ends_with("undecided)"), "{skip}");
+    press(&mut h, &skip);
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
     h.run();
-    for label in [
-        "Files",
-        "Warnings",
-        "Save report…",
-        "Copy CLI command",
-        "Close",
-    ] {
+    for label in ["Files", "Save report…", "Copy CLI command", "Close"] {
         h.get_by_label(label);
     }
     h.get_by_label_contains("converted, ");
@@ -453,9 +450,8 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
             .count()
             >= 1
     );
-    press(&mut h, "Warnings");
     press(&mut h, "Close");
-    assert!(!h.state().export.open);
+    assert!(!h.state().bottom.open);
     assert!(h.query_by_label("Copy CLI command").is_none());
 }
 
@@ -633,8 +629,7 @@ fn without_a_gpu_the_preview_says_so_and_cannot_encode() {
 fn closing_during_an_export_asks_and_keep_running_leaves_it_alone() {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened(d.path());
-    model.export_clicked();
-    model.proceed_anyway();
+    export_through(&mut model);
     assert!(!model.request_close());
     let mut h = harness(model);
     h.run();

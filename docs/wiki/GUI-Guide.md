@@ -16,8 +16,8 @@ The window has two views, picked in the header: the Textures view (converter and
 | **Presets…** | The preset creator (see [Presets](#presets)). |
 | **Textures view** / **Meshes view** | Switch views. Tabs in the middle of the bottom row; the selected one is filled. |
 | **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. At the far left of the bottom row. |
-| **Export** | Convert the folder. The big button at the right edge, as tall as both rows. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the export drawer). |
-| **Messages** (Ctrl+M) | The last 500 notices, newest first; the button counts the ones you have not seen. |
+| **Export** | Convert the folder. The big button at the right edge, as tall as both rows. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the Files tab). |
+| **Messages** (Ctrl+M) | Opens the Messages tab of the bottom panel: the last 500 notices, newest first; the button counts the ones you have not seen. Ctrl+M again collapses the panel. |
 | **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
 | **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Under **Messages**, left of Export. |
 | **Export folder: …** | Where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. By default `sdc-out` inside the opened folder (or the export folder older versions saved for every project). At the right end of the top row. |
@@ -31,7 +31,7 @@ While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" wi
 
 ## The three columns
 
-From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer.
+From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer. Under all of them runs the [bottom panel](#the-bottom-panel).
 
 ### Textures (left)
 
@@ -185,17 +185,17 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 **Export** converts the folder into the export folder. It cannot write into the folder it reads.
 
 1. Export saves `sdc.toml` and `sdc-project.toml`.
-2. If some textures are undecided, the *Undecided textures* dialog lets you decide them there, **Accept all suggestions**, **Proceed anyway** (export only the decided textures), or **Cancel**. It never decides for you.
+2. If something is blocked, undecided or worth a second look, **Review** opens in the bottom panel instead of exporting (see [The bottom panel](#the-bottom-panel)). Decide the textures there (or **Accept all suggestions**), fix the blockers, tick the warnings, then press Review's **Export**, which exports the decided textures and skips the rest. It never decides for you and never exports by itself.
 3. If a source changed on disk since it was planned, Export plans again first. The Textures column also offers **Reload** for changed files.
-4. The bottom drawer opens with a *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled) and a *Warnings* tab grouped by code. Click a row to select that texture.
+4. The bottom panel opens on its *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled). Click a row to select that texture; hover it for the file's warnings, which *Problems* also lists.
 5. After a complete export, the TruePBR JSON is written (see below).
 
-While it runs the drawer shows done/total, elapsed time, files per second and an ETA. The *Files* tab handles thousands of rows, with **Failed only** and **Has warnings** filters; the *Warnings* tab can group **By code**; **Show in Explorer** on a row selects the output. Drawer buttons: **Cancel** stops the batch. **Open export folder** opens it in Explorer. **Save report…** writes the report as JSON Lines or Markdown. **Close** hides the drawer. **Copy CLI command** copies an `sdc convert` command for this export: the same folder (with `--recursive`), output, BC1 decoder and thread count, plus `--accept-suggestions high`, because the GUI accepts High-confidence suggestions. Before you run it, check two things it does not carry over:
+While it runs the Files tab shows done/total, elapsed time, files per second and an ETA. The *Files* tab handles thousands of rows, with **Failed only** and **Has warnings** filters; **Show in Explorer** on a row selects the output. Buttons: **Cancel** stops the batch. **Open export folder** opens it in Explorer. **Save report…** writes the report as JSON Lines or Markdown. **Close** collapses the panel. **Copy CLI command** copies an `sdc convert` command for this export: the same folder (with `--recursive`), output, BC1 decoder and thread count, plus `--accept-suggestions high`, because the GUI accepts High-confidence suggestions. Before you run it, check two things it does not carry over:
 
 - It has no `--nvtt`. If you chose an NVTT path in Advanced, add `--nvtt <path>`.
 - The CLI does not read `sdc-project.toml` or the scan. Set edits from the Sets column (moves, borrows, created sets, shader choices, output names), alpha taken from scanned meshes and the complex-grass auto-tag do not apply to `sdc convert`. Decisions written to `sdc.toml` do.
 
-If an export is blocked, the *Export is blocked* dialog lists what to fix; click an entry to select its set.
+If an export is blocked, Review's *Blockers* column lists what to fix; **Go to set** selects the set.
 
 ## Sets and the set editor
 
