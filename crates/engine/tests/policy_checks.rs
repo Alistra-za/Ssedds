@@ -285,6 +285,36 @@ fn rgbcx_level_above_max_is_cfg_invalid() {
     assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
 }
 
+/// DECISIONS Note BZ: `encoder.effort = "max"` is bc7e patch 0002. It plans cleanly when the vendored objects
+/// carry the patch and is refused with CFG-INVALID (naming the level) when they do not.
+#[test]
+fn effort_max_needs_the_patch_0002_objects() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=diffuse", "encoder.effort=max"],
+        &[],
+    );
+    assert_eq!(j.profile.encoder.effort, Effort::Max);
+    let refused = j
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::CfgInvalid && w.message.contains("encoder.effort max"));
+    assert_eq!(refused, !encoders_sys::BC7E_MAX_NATIVE, "{:?}", j.warnings);
+    // The level maps to bc7e's level 7 and keeps BC6H on ISPC veryslow, as `slowest` does.
+    assert_eq!(
+        engine::encode::bc7_level(Effort::Max),
+        encoders_sys::Bc7Level::Max
+    );
+    assert_eq!(
+        engine::encode::bc6h_level(Effort::Max),
+        engine::encode::bc6h_level(Effort::Slowest)
+    );
+}
+
 #[test]
 fn availability_table() {
     assert_eq!(
