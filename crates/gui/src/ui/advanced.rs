@@ -1,7 +1,7 @@
 //! The right-hand Advanced drawer (M3a spec §2.5): the preset inspector, batch, legacy project-wide fills and preview settings,
 //! the rarely changed texture fields, and the `[files]` entries that match nothing. Drawing only: every edit is a
 //! call on the model, applied once the drawing is over.
-use super::columns::{strip_button, AMBER, STRIP_WIDTH};
+use super::columns::{strip_button, AMBER, SETS_MIN, STRIP_WIDTH, TEXTURES_MIN};
 use super::settings_panel::{field_row, toml_read_only_reason, Ctx, RowEdit};
 use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
@@ -11,6 +11,9 @@ use crate::settings::{Bc1Choice, PREVIEW_SIZES};
 use eframe::egui;
 use engine::policy::ResolvedJob;
 use serde_json::Value;
+
+/// The drawer's narrowest width.
+const ADV_MIN: f32 = 260.0;
 
 #[derive(Debug, Default)]
 pub struct AdvancedState {
@@ -49,8 +52,11 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
         return;
     }
     let mut close = false;
+    // Drawn before the columns: it leaves them their minimums and the centre its floor (K8, rule §2.3).
+    let max = ui.available_width() - TEXTURES_MIN - SETS_MIN - super::centre_floor(model);
     egui::Panel::right("advanced")
         .default_size(380.0)
+        .size_range(ADV_MIN..=max.max(ADV_MIN))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Advanced");

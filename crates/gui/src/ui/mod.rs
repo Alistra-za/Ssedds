@@ -160,8 +160,9 @@ pub fn draw_with_scan(
     // A11: no columns until a folder is open.
     if model.root.is_some() {
         let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
-        // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
-        let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
+        // Each column stops at its minimum and leaves the columns after it theirs and the centre its floor.
+        let floor = centre_floor(model);
+        let textures_max = ui.available_width() - columns::SETS_MIN - floor;
         column_panel(
             ui,
             Column::Textures,
@@ -176,7 +177,7 @@ pub fn draw_with_scan(
             ui,
             Column::Sets,
             260.0,
-            columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
+            columns::SETS_MIN..=ui.available_width() - floor,
             model,
             |ui, model| {
                 sets_column::draw(ui, model, thumbs, drops, cmds);
@@ -200,6 +201,16 @@ pub fn draw_with_scan(
     presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
     set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+}
+
+/// The narrowest the centre gets: `CENTRE_MIN`, and while a texture is expanded enough for `PREVIEW_MIN` beside the
+/// collapsed settings strip (K8). The 16 is `Frame::central_panel`'s 8 px margin a side.
+pub(crate) fn centre_floor(model: &AppModel) -> f32 {
+    if model.expanded.is_some() {
+        set_preview::CENTRE_MIN.max(preview::PREVIEW_MIN + columns::STRIP_WIDTH + 16.0)
+    } else {
+        set_preview::CENTRE_MIN
+    }
 }
 
 /// Mirrors `centre`'s and `set_editor::draw`'s routing: true when the centre shows a set's editor (2D: a set still in

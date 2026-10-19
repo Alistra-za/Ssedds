@@ -607,11 +607,219 @@ fn the_settings_strip_is_compact() {
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
     h.run();
+    // At 1280×800 the settings start behind their strip (A10, A12).
+    press(&mut h, "Settings");
     for group in ["Alpha", "Mipmaps", "Compression"] {
         assert!(h.query_all_by_label_contains(group).count() > 0, "{group}");
     }
     assert!(h.query_by_label_contains("Colour").is_none());
     assert_eq!(h.query_all_by_label_contains("built-in default").count(), 0);
+}
+
+/// The preview's toolbar panel rect (A7: every toolbar lookup is scoped to it).
+fn toolbar_rect(h: &Harness<'static, AppModel>) -> eframe::egui::Rect {
+    use eframe::egui::containers::panel::PanelState;
+    PanelState::load(&h.ctx, eframe::egui::Id::new("preview-toolbar"))
+        .expect("the toolbar is drawn")
+        .outer_rect
+}
+
+/// The topmost node labelled `label` (or containing it, with `contains`) that starts within the toolbar's x range, at or
+/// below its top: the toolbar's control, or one that leaked out of it.
+fn toolbar_node(h: &Harness<'static, AppModel>, label: &str, contains: bool) -> eframe::egui::Rect {
+    let bar = toolbar_rect(h);
+    let nodes: Vec<_> = if contains {
+        h.query_all_by_label_contains(label).collect()
+    } else {
+        h.query_all_by_label(label).collect()
+    };
+    nodes
+        .iter()
+        .map(|n| n.rect())
+        .filter(|r| r.min.y >= bar.min.y - 1.0 && (bar.min.x - 1.0..bar.max.x).contains(&r.min.x))
+        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .unwrap_or_else(|| panic!("{label} is not in the toolbar"))
+}
+
+/// K9/K10: the toolbar's controls in reading order (row, then x).
+const TOOLBAR_ORDER: [(&str, bool); 12] = [
+    ("Channels", false),
+    ("RGBA", false),
+    ("α-mask", false),
+    ("View", false),
+    ("Side by side", false),
+    ("1:1", false),
+    ("Encode", false),
+    ("Live encode", false),
+    ("Encode now", false),
+    ("sRGB", false),
+    ("UNORM", false),
+    ("mip 0", true),
+];
+
+/// `a` comes before `b` reading the toolbar: on an earlier row, or on the same row and to the left.
+fn reads_before(a: eframe::egui::Rect, b: eframe::egui::Rect) -> bool {
+    a.center().y < b.min.y || (b.y_range().contains(a.center().y) && a.max.x <= b.min.x)
+}
+
+fn expanded_at_1280(advanced: bool) -> (Harness<'static, AppModel>, tempfile::TempDir) {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.settings.advanced_open = advanced;
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    (h, d)
+}
+
+fn assert_toolbar_layout(h: &Harness<'static, AppModel>) {
+    let bar = toolbar_rect(h);
+    let rects: Vec<_> = TOOLBAR_ORDER
+        .iter()
+        .map(|(l, c)| (*l, toolbar_node(h, l, *c)))
+        .collect();
+    for w in rects.windows(2) {
+        assert!(
+            reads_before(w[0].1, w[1].1),
+            "{} {:?} should read before {} {:?}",
+            w[0].0,
+            w[0].1,
+            w[1].0,
+            w[1].1
+        );
+    }
+    // ✕ Close stays on the right of the first row.
+    let close = toolbar_node(h, "✕ Close", false);
+    let first = rects[0].1;
+    assert!(
+        close.y_range().contains(first.center().y),
+        "Close {close:?}"
+    );
+    for (l, r) in &rects {
+        assert!(
+            r.max.x <= close.min.x || r.min.y > close.max.y,
+            "{l} {r:?} under Close {close:?}"
+        );
+    }
+    // Every control lies inside the toolbar panel and is not clipped by it (skill §10.2-10.3).
+    let widgets: Vec<_> = h.ctx.viewport(|v| {
+        v.this_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, ws)| ws)
+            .map(|w| (w.rect, w.interact_rect))
+            .collect()
+    });
+    for (l, r) in rects.iter().chain([("✕ Close", close)].iter()) {
+        assert!(
+            bar.contains_rect(*r),
+            "{l} {r:?} outside the toolbar {bar:?}"
+        );
+        let hit = widgets.iter().find(|(w, _)| w == r).map(|(_, i)| *i);
+        if let Some(hit) = hit {
+            assert!(
+                hit.expand(0.5).contains_rect(*r),
+                "{l} {r:?} clipped to {hit:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_toolbar_groups_channels_view_and_encode() {
+    let (h, _d) = expanded_at_1280(false);
+    assert_toolbar_layout(&h);
+}
+
+/// K8, K10 (shots 15/16/17): with Advanced open at 1280×800 the viewport keeps PREVIEW_MIN and the settings collapse.
+#[test]
+fn at_1280x800_with_advanced_open_the_preview_keeps_its_width_and_the_toolbar_fits() {
+    use eframe::egui::containers::panel::PanelState;
+    let (mut h, _d) = expanded_at_1280(true);
+    assert!(PanelState::load(&h.ctx, eframe::egui::Id::new("advanced")).is_some());
+    // The wrapped rows settle: centring them in last frame's height grew the toolbar every frame.
+    let settled = toolbar_rect(&h);
+    h.run_steps(5);
+    assert_eq!(toolbar_rect(&h), settled);
+    // The toolbar spans the viewport's width (the settings or their strip are drawn first, on the right).
+    let bar = toolbar_rect(&h);
+    assert!(
+        bar.width() >= sdc_gui::ui::preview::PREVIEW_MIN,
+        "viewport {} < {}",
+        bar.width(),
+        sdc_gui::ui::preview::PREVIEW_MIN
+    );
+    h.get_by_label("Settings");
+    assert_toolbar_layout(&h);
+}
+
+/// A6, A7, A10: the strip opens the settings, and they stay open for this preview.
+#[test]
+fn the_collapsed_settings_strip_opens_the_settings() {
+    use eframe::egui::containers::panel::PanelState;
+    let (mut h, _d) = expanded_at_1280(true);
+    assert!(PanelState::load(&h.ctx, eframe::egui::Id::new("preview-settings-strip")).is_some());
+    assert!(h.query_by_label_contains("Compression").is_none());
+    h.get_by_label("Settings").hover();
+    h.run();
+    h.get_by_label("Settings").click();
+    h.run();
+    h.run();
+    assert!(h.query_all_by_label_contains("Compression").count() > 0);
+    assert!(h.query_by_label("Settings").is_none());
+    // Collapsing and expanding again starts collapsed (a fresh PreviewUi per expansion).
+    h.state_mut().collapse();
+    h.run();
+    h.state_mut().expand("landscape/rock01_rmaos");
+    h.run();
+    h.get_by_label("Settings");
+}
+
+/// K8, S7: at 1100 px the Advanced drawer gives way (down to its 260 px minimum) so the preview keeps PREVIEW_MIN, and
+/// it gets its width back once the preview closes.
+#[test]
+fn at_1100_wide_the_advanced_drawer_leaves_the_preview_its_width() {
+    use eframe::egui::containers::panel::PanelState;
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.settings.advanced_open = true;
+    model.select_item("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1100.0, 800.0))
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let width = |h: &Harness<'static, AppModel>| {
+        PanelState::load(&h.ctx, eframe::egui::Id::new("advanced"))
+            .unwrap()
+            .outer_rect
+            .width()
+    };
+    let before = width(&h);
+    assert!(before > 370.0, "Advanced {before}");
+    h.state_mut().expand("landscape/rock01_rmaos");
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert!(
+        (260.0..=330.0).contains(&width(&h)),
+        "Advanced {}",
+        width(&h)
+    );
+    let bar = toolbar_rect(&h);
+    assert!(
+        bar.width() >= sdc_gui::ui::preview::PREVIEW_MIN,
+        "viewport {}",
+        bar.width()
+    );
+    assert_toolbar_layout(&h);
+    h.state_mut().collapse();
+    h.run();
+    assert_eq!(width(&h), before);
 }
 
 #[test]
