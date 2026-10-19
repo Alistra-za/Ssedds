@@ -50,6 +50,8 @@ export const meta = {
 //   x_layout_yaw_deg / x_origin_shift  turn the whole plan frame (x_pos, x_angle Z, x_camera rel/yaw, light and player
 //                      positions) clockwise by the heading, then shift it by [dx,dy,dz] world units from the marker
 //   x_s6_files         files the owner places in mods\s6; checked, never written
+//   x_cs_feature_log   optional {profile: path} debug CS log of the same feature set, passed as P04_CS_FEATURE_LOG so an
+//                      info-level profile gets its defines in this run (the shader cache loses its bytecode later)
 //   x_keep_rdc         where kept .rdc go (per profile below it); default F:\ai\dds\tools\rdc-fixtures\<cs-version>
 //   x_extract          stages to run: A, B, dispatch, C, shader_id, defines, fixture (default all; others rejected)
 //   x_fixture_out      must equal the extractors' fixed output root rdc-out\golden\<cs-version> (checked)
@@ -196,7 +198,7 @@ DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSO
 4. Groups in resolved.json order (risky ones are already last). For each group run:
    ${node(`steps --run-dir "${RUN_DIR}" --group <label> --origin <ox>,<oy>,<oz>`)}
    and send its steps in order, each after the previous one returned: "tool" = POST /api/tool/<tool> with "body"; when a step has "body_raw", send that text verbatim as the body instead (it writes whole-number Float args as 225.0: DevBench drops whole-number Floats, so SetAngle 225 left runs b40e2215/58f625f1/e718aa1a at 43.5 deg); "$refN"/"$lightN" = the ref saved by the step with that "save" (substitute it in body_raw too); "until" = repeat that request every 0.5 s (up to 10 s) until it returns that value; "wait_s" = sleep; "wait_rdc": N = wait until N new .rdc files (one per capture request since the previous wait_rdc; a consecutive pair is 2) exist in captures_dir and every one has a size stable for 5 s, and send nothing (no freecam off, no Disable) before that; "only_if" = only when that condition holds. Notes:
-   - The inspect refs formType Actor step lists NPCs: disable (console "<formId>.disable") every listed actor that is not the player and not placed by this run within 2000 units of a subject or the camera, so none stands in frame (run e718aa1a: a guard over the A1 coffin). Never kill, moveto or save; the disable lasts only this session.
+   - The inspect refs formType Actor step lists NPCs: disable (console "<formId>.disable", the reference formId of the entry, never its "base" id) every listed actor that is not the player and not placed by this run within 2000 units of a subject or the camera, so none stands in frame (run e718aa1a: a guard over the A1 coffin). Never kill, moveto or save; the disable lasts only this session.
    - inspect refs after each placement: model must be the expected mesh; record the actual position. If the ref is an Actor, also papyrus Actor.SetDontMove [true].
    - Write ${RUN_DIR}/refs_<label>.json = [{"form","ref","pos":[x,y,z],"angle":[ax,ay,az]}] for the placed refs (actual positions) and ${RUN_DIR}/camera_<label>.json = the camera get result (JSON).
    - Point lights (W4): the LIGH steps run every time (primary method). Record the inspect lights result in light: every placed light listed, and each subject within ~100 units of one. The anchor's logLP is a LightPlacer diagnostic only: record what it shows; never ReloadLP or Disable/Enable the anchor.
@@ -258,7 +260,7 @@ function extractorCommands(rdc, c) {
   return [
     `$env:P04_CAPTURE = '${rdc}'; $env:P04_TAGS = '${(pre.group_tags || {})[c.group] || '*'}'; $env:P04_CS_VERSION = '${pre.cs_key}'`,
     `$env:P04_PROFILE = '${pre.profile}'; $env:P04_CELL = '${session.cell}'; $env:P04_CAMERA = (Test-Path '${camFile}') ? (Get-Content -Raw '${camFile}') : ''`,
-    `$env:P04_CS_LOG = '${keepRes && keepRes.cs_log ? keepRes.cs_log : ''}'; $env:P04_SETTINGS = '${pre.settings_applied_copy}'; $env:P04_CS_META = '${pre.cs_meta_path}'`,
+    `$env:P04_CS_LOG = '${keepRes && keepRes.cs_log ? keepRes.cs_log : ''}'; $env:P04_SETTINGS = '${pre.settings_applied_copy}'; $env:P04_CS_META = '${pre.cs_meta_path}'; $env:P04_CS_FEATURE_LOG = '${pre.cs_feature_log || ''}'`,
     `$rd = '${TOOLS}\\RenderDoc_1.43_64\\qrenderdoc.exe'`,
     ...pre.extract_scripts.map(s => (s.runner === 'qrenderdoc' ? `Start-Process -Wait $rd -ArgumentList '--python','${S}\\${s.script}'` : `python -I ${S}\\${s.script}`)),
   ]

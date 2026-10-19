@@ -283,7 +283,7 @@ export function groupSteps(g, origin) {
   // The free camera does not hide the player, so move the player out of view first (P0 probe was mostly the body).
   if (g.player) S.push({ ...papyrus('SetPosition', { form: '0x14' }, vadd(origin, g.player)), note: `player out of view, rel ${JSON.stringify(g.player)}` })
   // Run e718aa1a: a guard (AI off from tai) stood over the A1 coffin. Session only: the game is never saved.
-  S.push({ tool: 'inspect', body: { kind: 'refs', formType: 'Actor', radius: 3000, limit: 200 }, note: 'NPCs out of frame: console exec "<formId>.disable" for every listed actor that is not the player (0x14) and not placed by this run, within 2000 units of any subject position or the camera; record them in notes. They stay disabled for the session (never saved; no kill, no moveto)' })
+  S.push({ tool: 'inspect', body: { kind: 'refs', formType: 'Actor', radius: 3000, limit: 200 }, note: 'NPCs out of frame: console exec "<formId>.disable" with the entry reference formId (never its "base" id: a base id fails with "Script command not found", run 6732949d) for every listed actor that is not the player (0x14) and not placed by this run, within 2000 units of any subject position or the camera; record them in notes. They stay disabled for the session (never saved; no kill, no moveto)' })
   g.forms.forEach((f, i) => {
     const ref = { form: `$ref${i}` }
     S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${f.form}` }, 1, false, false]), save: `ref${i}`, note: `place ${f.form}${f.light_anchor ? ' (Light Placer anchor)' : ''}` })
@@ -477,6 +477,8 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
   for (const f of s6) f.ok = f.exists && (!f.sha256_want || (await sha256(f.path)) === f.sha256_want)
   const groups = resolveGroups(plan, rawGroups, s6)
   const planned = groups.reduce((n, g) => n + g.captures.length, 0)
+  const featureLog = (plan.x_cs_feature_log || {})[profile] || ''
+  if (featureLog && !fs.existsSync(featureLog)) return { ok: false, reason: `plan: x_cs_feature_log for ${profile} ${featureLog} does not exist` }
   // W6/W10: the plan's x_keep_rdc wins (per profile below it); --keep-root overrides both (tests).
   const keepRoot = o['keep-root'] || plan.x_keep_rdc || path.join('F:\\ai\\dds\\tools\\rdc-fixtures', csKey)
   const keepDir = path.join(keepRoot, profile)
@@ -514,6 +516,8 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
   writeAtomic(path.join(runDir, 'plan.txt'), planText(resolved, dry))
   const summary = {
     run_dir: runDir, profile, cell, cs_key: csKey, settings_version: csSettingsVersion, meta_version: mo.csMeta, cs_meta_path: mo.metaPath, planned_captures: planned,
+    // A debug CS log of the same feature set for an info-level profile: defines are filled while the shader cache still holds this run's bytecode.
+    cs_feature_log: featureLog,
     free_gb_fixtures: +freeF.toFixed(1), need_gb_fixtures: +needF.toFixed(1), free_gb_captures: +freeG.toFixed(1), need_gb_captures: +needG.toFixed(1),
     keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts, settings_applied_copy: appliedCopy, journal,
     group_tags: Object.fromEntries(groups.map(g => [g.label, g.tags.join(',') || '*'])),

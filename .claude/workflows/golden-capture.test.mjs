@@ -231,7 +231,7 @@ const lib = (cmd, env = {}) => {
   assert.ok(s[iPos + 1].wait_s && /tumbles/.test(s[iPos + 1].note), 'position re-checked after keyframing')
   // NPC sweep before placing; cell lights off for the group and back on after.
   const iNpc = at(x => x.body && x.body.formType === 'Actor')
-  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /disable/.test(s[iNpc].note), 'NPCs listed for disabling before placement')
+  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /reference formId (never its "base" id/.test(s[iNpc].note), 'NPCs listed for disabling (by reference id, not base id) before placement')
   const iOff = at(x => x.body && x.body.command === '0008287F.disable'), iOn = at(x => x.body && x.body.command === '0008287F.enable')
   assert.ok(iOff > 0 && iOff < at(x => x.body && x.body.action === 'drive') && iOn > at(x => x.tool === 'communityshaders.capture'), 'disable before the camera, enable after the captures')
   // Nothing changes the scene before the capture is on disk; consecutive captures stay back to back.
@@ -268,6 +268,15 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   assert.notEqual(r2.run_dir, r.run_dir, 'every invocation gets a fresh run dir, dry runs too')
   assert.throws(() => execSync(`node "${LIB}" preflight --plan "${PLAN}" --mo2 "${MO2}" --run-dir "${r.run_dir}" --dry-run`, { stdio: 'pipe' }))
   ok(`preflight --dry-run: ${r.edits} edits planned, ${r.planned_captures} captures, settings untouched, plan.txt written`)
+}
+{
+  // x_cs_feature_log: the profile's debug log reaches the Analyse env; a missing file is refused before anything runs.
+  const withLog = (log) => { const p = path.join(T, `plan-featlog-${path.basename(log)}.json`); fs.writeFileSync(p, JSON.stringify({ ...JSON.parse(fs.readFileSync(PLAN, 'utf8')), x_cs_feature_log: { A: log } })); return p }
+  const r = lib(`preflight ${preArgs().replace(PLAN, withLog(PLAN))} --dry-run`)
+  assert.equal(r.ok, true, r.reason); assert.equal(r.cs_feature_log, PLAN)
+  const bad = lib(`preflight ${preArgs().replace(PLAN, withLog(path.join(T, 'no-such.log')))} --dry-run`)
+  assert.equal(bad.ok, false); assert.match(bad.reason, /x_cs_feature_log/)
+  ok('preflight: x_cs_feature_log passed through; a missing log refused')
 }
 
 // ---------- 5. game running: preflight refuses ----------
