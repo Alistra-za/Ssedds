@@ -203,6 +203,8 @@ pub fn draw_with_scan(
     presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
     set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+    // T7 K10: last, so it is over everything and survives a virtualised source.
+    columns::drag_ghost(ui.ctx(), model, &mut state.thumbs);
 }
 
 /// The narrowest the centre gets: `CENTRE_MIN`, and while a texture is expanded enough for `PREVIEW_MIN` beside the

@@ -436,3 +436,145 @@ fn a_texture_dragged_over_a_card_outlines_it() {
     h.run();
     assert!(!top_is_outline(&h), "the outline goes with the drag");
 }
+
+/// Press `at` and move it 30 pt in 3 steps (the button stays down); returns where the pointer ends.
+fn start_drag(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> egui::Pos2 {
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.run();
+    for step in 1..=3 {
+        h.event(egui::Event::PointerMoved(
+            at + egui::vec2(10.0 * step as f32, 0.0),
+        ));
+        h.run();
+    }
+    at + egui::vec2(30.0, 0.0)
+}
+
+/// T7 K10: a 40 x 40 ghost 12 pt below and right of the pointer, and the Grabbing cursor (R5, green from the start).
+fn assert_ghost(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
+    assert!(egui::DragAndDrop::has_payload_of_type::<
+        sdc_gui::ui::sets_column::DragItem,
+    >(&h.ctx));
+    let want = pointer + egui::vec2(12.0, 12.0);
+    let bounds = |s: &egui::Shape| match s {
+        egui::Shape::Rect(r) => Some(r.rect),
+        egui::Shape::Mesh(m) => Some(m.calc_bounds()),
+        _ => None,
+    };
+    assert!(
+        shapes(h)
+            .iter()
+            .filter_map(bounds)
+            .any(|r| (r.min - want).length() < 1.0 && (r.width() - 40.0).abs() < 0.5),
+        "a 40 wide ghost at {want:?}"
+    );
+    assert_eq!(
+        h.output().platform_output.cursor_icon,
+        egui::CursorIcon::Grabbing
+    );
+}
+
+#[test]
+fn a_dragged_tile_shows_a_ghost_under_the_pointer_and_dims_its_source() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()));
+    h.run();
+    let label = outside_sets(&h, "rock01_normal.png").rect();
+    let at = label.center();
+    let p = start_drag(&mut h, at);
+    assert_ghost(&h, p);
+    // The source tile is dimmed: its 2 pt frame stroke is half transparent.
+    let faded = shapes(&h).iter().any(|s| matches!(s,
+        egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 && r.stroke.color.a() < 200));
+    assert!(faded, "the dragged source is dimmed");
+    egui::DragAndDrop::clear_payload(&h.ctx);
+}
+
+#[test]
+fn a_dragged_member_chip_shows_the_same_ghost() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()));
+    h.run();
+    let at = on_card(&h, "N")[0].rect().center();
+    let p = start_drag(&mut h, at);
+    assert_ghost(&h, p);
+    egui::DragAndDrop::clear_payload(&h.ctx);
+}
+
+#[test]
+fn a_hovered_tile_takes_the_hover_stroke_and_an_amber_tile_keeps_amber() {
+    use sdc_gui::model::items::ItemStatus;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let amber_name = m.items[0].name.clone();
+    m.items[0].status = ItemStatus::NeedsDecision;
+    let ready_name = m.items[1].name.clone();
+    m.items[1].status = ItemStatus::Ready;
+    let mut h = harness(m);
+    h.run();
+    let hov = h.ctx.global_style().visuals.widgets.hovered.bg_stroke.color;
+    // The last 2 pt stroke around the tile that holds `name`.
+    let top = |h: &Harness<'static, AppModel>, name: &str| {
+        let label = outside_sets(h, name).rect();
+        shapes(h)
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 => {
+                    Some(r.stroke.color)
+                }
+                _ => None,
+            })
+            .next_back()
+    };
+    let at = outside_sets(&h, &ready_name).rect().center();
+    h.hover_at(at);
+    h.run();
+    assert_eq!(
+        top(&h, &ready_name),
+        Some(hov),
+        "hover stroke on a Ready tile"
+    );
+    let at = outside_sets(&h, &amber_name).rect().center();
+    h.hover_at(at);
+    h.run();
+    assert_eq!(
+        top(&h, &amber_name),
+        Some(sdc_gui::ui::status::AMBER),
+        "status wins over hover"
+    );
+}
+
+#[test]
+fn a_pressed_strip_fills() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.settings.textures_collapsed = true;
+    let mut h = harness(m);
+    h.run();
+    let at = h.get_by_label("Textures").rect().center();
+    let fill = h.ctx.global_style().visuals.widgets.active.weak_bg_fill;
+    let covers = |h: &Harness<'static, AppModel>| {
+        shapes(h).iter().any(|s| {
+            matches!(s,
+            egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(at) && r.rect.width() < 60.0)
+        })
+    };
+    h.hover_at(at);
+    h.run();
+    assert!(!covers(&h), "no fill before the press");
+    h.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.run();
+    assert!(covers(&h), "the pressed strip is filled");
+}

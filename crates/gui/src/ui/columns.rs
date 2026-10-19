@@ -62,6 +62,11 @@ fn strip_sensing(ui: &mut egui::Ui, name: &str, sense: egui::Sense) -> egui::Res
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(STRIP_WIDTH, ui.available_height()), sense);
     response.widget_info(|| egui::WidgetInfo::labeled(widget, ui.is_enabled(), name));
+    // T7: an instant press look, under the text.
+    if response.is_pointer_button_down_on() {
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().widgets.active.weak_bg_fill);
+    }
     let color = if response.hovered() && sense.senses_click() {
         ui.visuals().strong_text_color()
     } else {
@@ -152,6 +157,13 @@ fn tile(
         egui::Color32::TRANSPARENT
     };
     let key = item.key.clone();
+    // T7: the tile being dragged is dimmed; the ghost follows the pointer (`drag_ghost`).
+    let dim = egui::DragAndDrop::payload::<crate::ui::sets_column::DragItem>(ui.ctx())
+        .is_some_and(|p| p.0 == key);
+    let opacity = ui.opacity();
+    if dim {
+        ui.set_opacity(opacity * 0.5);
+    }
     // F3b: an `[inputs]` alias shows, so it never looks like the file was renamed on disk.
     let read_as = model
         .read_as_of(&key)
@@ -202,6 +214,18 @@ fn tile(
         .response
         .interact(egui::Sense::click_and_drag())
         .on_hover_text(tile_tooltip(item));
+    ui.set_opacity(opacity);
+    // T7: hover and press show instantly; the frame's stroke was chosen before `interact`, so paint over it.
+    let base = border_of(ui, &item.status);
+    let stroke = interact_stroke(ui, &resp, base);
+    if stroke != base {
+        ui.painter().rect_stroke(
+            resp.rect,
+            ui.visuals().widgets.noninteractive.corner_radius,
+            egui::Stroke::new(TILE_STROKE, stroke),
+            egui::StrokeKind::Inside,
+        );
+    }
     resp.dnd_set_drag_payload(crate::ui::sets_column::DragItem(key.clone()));
     // F3a D4: a right-click on an unselected tile selects it alone first.
     if resp.secondary_clicked() {
@@ -605,6 +629,58 @@ pub(super) fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color3
     }
 }
 
+/// T7: the stroke of a tile or chip: `base` for a status colour (AMBER, RED), else the widget visuals' press or hover
+/// stroke. Instant, no animation.
+pub(super) fn interact_stroke(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    base: egui::Color32,
+) -> egui::Color32 {
+    let w = &ui.visuals().widgets;
+    if base == AMBER || base == RED {
+        base
+    } else if resp.is_pointer_button_down_on() {
+        w.active.bg_stroke.color
+    } else if resp.hovered() {
+        w.hovered.bg_stroke.color
+    } else {
+        base
+    }
+}
+
+/// T7 K10: the dragged texture's ghost, a 40 x 40 thumbnail beside the pointer. Painted once per frame from the
+/// payload, not from the source widget, so it survives a source that scrolled out of a virtualised list.
+pub(super) fn drag_ghost(ctx: &egui::Context, model: &AppModel, thumbs: &mut ThumbCache) {
+    let Some(p) = egui::DragAndDrop::payload::<crate::ui::sets_column::DragItem>(ctx) else {
+        return;
+    };
+    let (Some(pos), Some(item)) = (ctx.pointer_interact_pos(), model.item(&p.0)) else {
+        return;
+    };
+    let rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 12.0), egui::Vec2::splat(40.0));
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("drag-ghost"),
+    ));
+    match thumbs.get(ctx, item) {
+        Some(t) => painter.image(
+            t.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE.gamma_multiply(0.75),
+        ),
+        None => painter.rect_filled(
+            rect,
+            2.0,
+            ctx.global_style()
+                .visuals
+                .widgets
+                .noninteractive
+                .weak_bg_fill,
+        ),
+    };
+}
+
 pub(super) fn member(
     ui: &mut egui::Ui,
     item: &TextureItem,
@@ -633,7 +709,7 @@ pub(super) fn member(
         let color = if selected {
             ui.visuals().selection.stroke.color
         } else {
-            border_of(ui, &item.status)
+            interact_stroke(ui, &response, border_of(ui, &item.status))
         };
         ui.painter().rect_stroke(
             rect,
