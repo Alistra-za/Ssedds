@@ -102,9 +102,11 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
             });
     }
     ctx.data_mut(|d| d.insert_temp(id, rects));
-    // A resting toast wakes once, when its fade is due; the animate call above repaints while anything moves.
+    // A resting toast wakes once, when its fade is due; the animate call above repaints while anything moves. A
+    // hovered toast's clock is stopped, so it needs no timer: the pointer leaving is an input event.
     let next = toasts
         .iter()
+        .filter(|t| !hovered.contains(&t.id))
         .map(|t| if t.left > fade { t.left - fade } else { t.left })
         .min();
     if let Some(d) = next {

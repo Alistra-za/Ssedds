@@ -88,10 +88,11 @@ fn hovering_a_toast_pauses_its_fade() {
     m.tick(secs(t0, 10.0), &held);
     let texts: Vec<&str> = m.toasts().iter().map(|t| t.text.as_str()).collect();
     assert_eq!(texts, ["one"], "the other one went; the held one waits");
-    // Leaving it: the 4 s count on from where it stopped.
+    // Leaving it (final review I2): the leave tick charges nothing, then the 4 s count on from there.
     m.tick(secs(t0, 13.0), &none());
+    m.tick(secs(t0, 16.9), &none());
     assert_eq!(m.toasts().len(), 1);
-    m.tick(secs(t0, 14.1), &none());
+    m.tick(secs(t0, 17.1), &none());
     assert!(m.toasts().is_empty());
 }
 
@@ -512,4 +513,36 @@ fn reduce_motion_during_an_exit_never_brightens_the_toast() {
     h.step();
     let after = paint(&h, "Saved").map_or(0.0, |p| p.frame);
     assert!(after <= before, "{after} > {before}");
+}
+
+/// Final review I2a: a pointer resting on a toast sends no frames. The frame it leaves on must not charge the rest
+/// period, or the hover pause is lost.
+#[test]
+fn a_toast_rested_on_with_no_frames_keeps_its_time_after_the_pointer_leaves() {
+    let mut h = toast_harness("Saved");
+    settle(&mut h);
+    let rest = paint(&h, "Saved").unwrap();
+    h.hover_at(rest.rect.center());
+    h.step();
+    // 2.9 s later (more than the 3 s left minus the fade), with no frame in between, the pointer leaves.
+    h.state_mut().1 = 3.9;
+    h.hover_at(egui::pos2(5.0, 5.0));
+    h.step();
+    steps(&mut h, 5);
+    assert_eq!(paint(&h, "Saved").expect("still shown").frame, rest.frame);
+}
+
+/// Final review I2b: a hovered toast's clock is stopped, so it asks for no timer, not even one inside its fade.
+#[test]
+fn a_hovered_toast_near_its_fade_asks_for_no_short_timer() {
+    let mut h = toast_harness("Saved");
+    settle(&mut h);
+    let rest = paint(&h, "Saved").unwrap();
+    h.state_mut().1 = 3.95;
+    h.step();
+    h.hover_at(rest.rect.center());
+    steps(&mut h, 10);
+    assert_eq!(paint(&h, "Saved").expect("held").frame, rest.frame);
+    let d = h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+    assert!(d >= Duration::from_secs(1), "{d:?}");
 }
