@@ -269,8 +269,9 @@ export function rawBody(body) { return JSON.stringify({ ...body, args: '@ARGS@' 
 // settled, so every subject floated 10 units). Only when the plan names the expected marker position for its cell.
 export function checkOrigin(origin, expected, tol = 2) {
   if (!expected) return null
-  const off = origin.map((v, i) => +(v - expected[i]).toFixed(2))
-  return off.some(d => Math.abs(d) > tol) ? `origin ${origin.join(',')} is ${off.join(',')} from the expected marker ${expected.join(',')} (tolerance ${tol}): the player had not settled; re-read the position until z is stable for 2 s` : null
+  const off = origin.map((v, i) => v - expected[i])
+  // 3D distance on unrounded values (Codex 70673ec P2: rounding let 2.004 pass); rounding is for the message only.
+  return Math.hypot(...off) > tol ? `origin ${origin.join(',')} is ${off.map(d => d.toFixed(2)).join(',')} from the expected marker ${expected.join(',')} (tolerance ${tol}): the player had not settled; re-read the position until z is stable for 2 s` : null
 }
 
 export function groupSteps(g, origin) {
@@ -317,12 +318,14 @@ export function groupSteps(g, origin) {
   S.push({ tool: 'camera', body: { action: 'get' }, note: 'record the pose' })
   S.push({ tool: 'capture', body: { kind: 'native', allowNative: true, checkpointId: `${g.label}_check`, cleanup: true }, note: 'draw check: every subject on screen' })
   S.push({ wait_s: g.settle_s, note: 'settle; W2 shader-compile check before the first capture' })
+  let pending = 0 // capture requests since the last wait_rdc (a consecutive pair makes 2)
   g.captures.forEach((c, n) => {
     if (c.after_s) S.push({ wait_s: c.after_s })
+    pending++
     S.push({ tool: 'communityshaders.capture', body: { kind: 'renderdoc', frames: 1 }, note: `${g.label}_cap${n}${c.consecutive ? ' (consecutive: send right after the previous request)' : ''}` })
     // Run b40e2215 P0: freecam off went out before the capture frame, so P0 shows the player's view. Nothing may change
     // the scene until the capture is on disk.
-    if (!(g.captures[n + 1] || {}).consecutive) S.push({ wait_rdc: true, note: 'wait until the new .rdc in captures_dir exists and its size is stable for 5 s before the next step' })
+    if (!(g.captures[n + 1] || {}).consecutive) { S.push({ wait_rdc: pending, note: `wait until ${pending} new .rdc file(s) (one per capture request since the last wait) exist in captures_dir and each size is stable for 5 s before the next step` }); pending = 0 }
   })
   g.forms.forEach((f, i) => { S.push(papyrus('Disable', { form: `$ref${i}` }, [false])); S.push(papyrus('Delete', { form: `$ref${i}` }, [])) })
   lights.forEach((p, k) => { S.push(papyrus('Disable', { form: `$light${k}` }, [false])); S.push(papyrus('Delete', { form: `$light${k}` }, [])) })

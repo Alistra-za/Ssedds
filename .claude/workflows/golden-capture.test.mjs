@@ -236,12 +236,14 @@ const lib = (cmd, env = {}) => {
   assert.ok(iOff > 0 && iOff < at(x => x.body && x.body.action === 'drive') && iOn > at(x => x.tool === 'communityshaders.capture'), 'disable before the camera, enable after the captures')
   // Nothing changes the scene before the capture is on disk; consecutive captures stay back to back.
   const caps = s.map((x, i) => [x, i]).filter(([x]) => x.tool === 'communityshaders.capture').map(([, i]) => i)
-  assert.equal(caps[1], caps[0] + 1, 'consecutive pair has no wait between'); assert.ok(s[caps[1] + 1].wait_rdc, 'wait_rdc after the pair')
+  assert.equal(caps[1], caps[0] + 1, 'consecutive pair has no wait between'); assert.equal(s[caps[1] + 1].wait_rdc, 2, 'one wait_rdc for both files of the pair')
   const ps = groupSteps(pr, [0, 0, 0]), pc = ps.findIndex(x => x.tool === 'communityshaders.capture')
   assert.ok(ps[pc + 1].wait_rdc && ps.findIndex(x => x.body && x.body.action === 'freecam' && x.body.on === false) > pc + 1, 'P0: freecam off only after the .rdc is complete')
   // Unsettled origin refused (run e718aa1a read z -198.3 for a -208 marker).
   assert.match(checkOrigin([29288.988, 2687.362, -198.315], [29288.99, 2687.36, -208]), /not settled/)
   assert.equal(checkOrigin([29288.99, 2687.36, -207.99996], [29288.99, 2687.36, -208]), null); assert.equal(checkOrigin([1, 2, 3], null), null)
+  assert.match(checkOrigin([29288.99, 2687.36, -205.996], [29288.99, 2687.36, -208]), /not settled/, '2.004 off is refused (no rounding)')
+  assert.match(checkOrigin([29290.5, 2688.87, -208], [29288.99, 2687.36, -208]), /not settled/, '1.5 + 1.5 on two axes is 2.1 in 3D')
   // Shape names the engine gives skin parts start with a space; tags match them trimmed.
   const md = mapDraws([{ shape: ' (FE4CD828)[1]/ (FE4CD82E) [100%]', world: [0, 0, 0] }], [{ form: '000A2C8F', ref: 'r', pos: [0, 0, 0], shapes: ['(FE4CD828)'] }])
   assert.equal(md[0].status, 'matched')
