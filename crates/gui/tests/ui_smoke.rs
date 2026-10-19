@@ -642,12 +642,22 @@ fn toolbar_node(h: &Harness<'static, AppModel>, label: &str, contains: bool) -> 
 }
 
 /// K9/K10: the toolbar's controls in reading order (row, then x).
-const TOOLBAR_ORDER: [(&str, bool); 12] = [
+const TOOLBAR_ORDER: [(&str, bool); 22] = [
     ("Channels", false),
     ("RGBA", false),
+    ("R", false),
+    ("G", false),
+    ("B", false),
+    ("A", false),
     ("α-mask", false),
     ("View", false),
     ("Side by side", false),
+    ("Split", false),
+    ("Pin this result", false),
+    ("Heatmap", false),
+    ("Lens", false),
+    ("Tile 3×3", false),
+    ("Fit", false),
     ("1:1", false),
     ("Encode", false),
     ("Live encode", false),
