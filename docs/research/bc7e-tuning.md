@@ -274,3 +274,32 @@ for byte. On Windows they do not.
   Patch 0002 leaves levels 0 to 6 byte-identical on all four targets (commit `79dcbb2`).
 - The study's quality deltas are unaffected, since each one compares two variants built from the same
   objects.
+
+### `max` against `veryslow` and `slowest` on the same sample
+
+Same objects, sample and metrics as above, avx2 path, rayon on all 16 threads. Two timing methods:
+- **Alternating:** `--variants base,max,slowest` repeated three times with `--repeats 1`, so each image runs
+  base, max, slowest, base, max, slowest, and so on. The fastest of the three is kept.
+- **Separate:** one run per variant over the whole sample, `--repeats 3`, fastest kept, run back to back.
+
+Per-image rows: `bc7e-tuning/skyrim-max.csv` (scores, fastest alternating time, fastest separate time).
+Δ is `max` − `base` on the class's primary metric (angle sign flipped), 95% t interval.
+
+| Class | n | Δ [95% CI] | Wins | `max` s/Mpix (alt / sep) | Ratio to `veryslow` (alt / sep) | `slowest` ratio (alt / sep) |
+|---|---|---|---|---|---|---|
+| diffuse | 60 | RGB +0.762 [±0.783]; +0.178 [±0.026] without images over 60 dB | 60/60 | 0.421 / 0.379 | 2.68× / 2.70× | 1.61× / 1.61× |
+| normal | 60 | angle +0.0338° [±0.0050] | 59/60, 1 tie | 0.517 / 0.476 | 2.84× / 3.18× | 1.64× / 1.62× |
+| cutout | 16 | RGB +0.287 [±0.268] | 16/16 | 0.399 / 0.464 | 2.54× / 3.03× | 1.50× / 1.51× |
+| smooth | 14 | premul +0.227 [±0.093] | 12/14, 2 ties | 0.212 / 0.243 | 2.43× / 2.81× | 1.33× / 1.38× |
+| all | 150 | | | 0.438 / 0.414 | **2.73× / 2.95×** | 1.59× / 1.59× |
+
+- `veryslow` ran at 0.161 s/Mpix alternating and 0.141 s/Mpix separate. These are kernel times on all
+  cores, not the file-to-file times of the [encoder benchmark](encoder-benchmark.md).
+- **Load.** The machine was in use. A cargo build ran during about half of the alternating run (up to 6
+  rustc processes; CPU 14% busy just before the run). The separate runs had no cargo or rustc running
+  (CPU 2 to 10% busy before each). Under that build both `base` and `max` slowed, and the ratio came out
+  lower. Both ratios are within 15% of the expected ~3×, and the alternating one is inside the study's 2.4 to
+  2.9×. The separate ratio is just above it. Expect roughly 3× the `veryslow` time; yours may differ under load.
+- On this sample `slowest` is worse than `veryslow` on diffuse (RGB −0.175 [±0.098], 7/60 wins) and slightly
+  better on normals (+0.0072°). `max` beats `slowest` on every class: diffuse RGB +0.323 [±0.122] without
+  images over 60 dB, normals +0.0266° [±0.0043], alpha PSNR +0.320 [±0.125] over the 30 alpha textures.
