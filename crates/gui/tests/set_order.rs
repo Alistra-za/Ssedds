@@ -304,9 +304,15 @@ fn a_number_past_the_end_never_picks_a_set_named_with_it() {
 fn the_number_slot_has_one_width_for_one_and_two_digits() {
     // M2: N = 12, so "1" and "12" share a slot and the names line up.
     let d = tempfile::tempdir().unwrap();
-    let mut h = harness(twelve_sets(d.path()));
+    // CF7: only cards on screen are laid out, so the window is tall enough to show all 12.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1500.0, 1600.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m),
+            twelve_sets(d.path()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    // Every card, also those scrolled below the panel (AccessKit rects are not clipped).
     let widths: Vec<f32> = h
         .query_all_by_label_contains("Position ")
         .map(|n| n.rect().width())
@@ -391,4 +397,200 @@ fn move_to_is_off_on_a_read_only_project() {
         .click_secondary();
     h.run();
     assert!(h.get_by_label("Move to…").accesskit_node().is_disabled());
+}
+
+// Task 5 (Note CF7): virtualisation (R4) and the drop detected on the target card (R1).
+
+/// K8: the height catch-up takes a frame per newly exposed card, so `run` gets more steps.
+fn big_harness(m: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(egui::vec2(1500.0, 900.0))
+        .with_max_steps(16)
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// The rect of the "Position {n} of {total}" label in the Sets column, if that card is laid out.
+fn pos_rect(h: &Harness<'static, AppModel>, n: usize, total: usize) -> Option<egui::Rect> {
+    h.query_all_by_label(&format!("Position {n} of {total}"))
+        .map(|n| n.rect())
+        .find(|r| in_sets_column(h, *r))
+}
+
+fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    }
+}
+
+/// Press the ≡ of the card at position `n` and move 10 pt, so a set is in flight. Returns the pointer.
+fn start_drag(h: &mut Harness<'static, AppModel>, n: usize, total: usize) -> egui::Pos2 {
+    let p = pos_rect(h, n, total).unwrap_or_else(|| panic!("position {n} is on screen"));
+    let at = h
+        .query_all_by_label("≡")
+        .map(|n| n.rect())
+        .find(|r| (r.center().y - p.center().y).abs() < 4.0)
+        .expect("the card's handle")
+        .center();
+    h.hover_at(at);
+    h.step();
+    h.event(press(at, true));
+    h.step();
+    let to = at + egui::vec2(0.0, 10.0);
+    h.event(egui::Event::PointerMoved(to));
+    h.step();
+    assert!(
+        egui::DragAndDrop::has_payload_of_type::<sdc_gui::ui::sets_column::DragSet>(&h.ctx),
+        "a set is in flight"
+    );
+    to
+}
+
+fn wheel(h: &mut Harness<'static, AppModel>) {
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -300.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    });
+}
+
+#[test]
+fn the_sets_column_lays_out_only_the_cards_on_screen() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = big_harness(many_sets(d.path(), 500));
+    // K2: `run` panicking past `max_steps` is the pin that the height catch-up settles.
+    h.run();
+    let n = sdc_gui::model::sets_filter::set_cards_drawn(h.state());
+    h.step();
+    let drawn = sdc_gui::model::sets_filter::set_cards_drawn(h.state()) - n;
+    assert!(
+        (1..60).contains(&drawn),
+        "{drawn} cards laid out in one frame"
+    );
+    let shown = positions(&h);
+    assert!(
+        (1..60).contains(&shown.len()),
+        "{} position labels in the Sets column",
+        shown.len()
+    );
+    assert!(shown.iter().all(|p| p.ends_with(" of 500")), "{shown:?}");
+}
+
+#[test]
+fn a_palette_pick_scrolls_an_undrawn_set_into_view() {
+    let d = tempfile::tempdir().unwrap();
+    let m = many_sets(d.path(), 500);
+    let key = views(&m)[449].key.clone();
+    let mut h = big_harness(m);
+    h.run();
+    h.state_mut()
+        .palette_pick(&sdc_gui::model::nav::Pick::Set(key));
+    h.run_steps(4);
+    assert!(
+        positions(&h).iter().any(|p| p == "Position 450 of 500"),
+        "{:?}",
+        positions(&h)
+    );
+}
+
+#[test]
+fn a_drag_released_after_the_source_scrolled_away_still_reorders() {
+    // Review Focus 1.
+    let d = tempfile::tempdir().unwrap();
+    let m = many_sets(d.path(), 60);
+    let before = ids(&m);
+    let target_key = views(&m)[39].key.clone();
+    let mut h = big_harness(m);
+    h.run();
+    start_drag(&mut h, 1, 60);
+    // K7: the wheel is ignored during a drag (R1), so shift the content as a reveal does.
+    h.state_mut().nav.reveal_set = Some(target_key);
+    for _ in 0..12 {
+        h.step();
+        if pos_rect(&h, 1, 60).is_none() {
+            break;
+        }
+    }
+    assert!(
+        pos_rect(&h, 1, 60).is_none(),
+        "the source card is no longer laid out"
+    );
+    // `scroll_to_rect` glides, and `contains_pointer` reads the previous frame's rects: wait until they stand still.
+    let mut last = None;
+    for _ in 0..12 {
+        let r = pos_rect(&h, 40, 60);
+        if r.is_some() && r == last {
+            break;
+        }
+        last = r;
+        h.step();
+    }
+    let to = h
+        .query_all_by_label(&before[39])
+        .map(|n| n.rect())
+        .find(|r| in_sets_column(&h, *r))
+        .expect("position 40's name is on screen")
+        .center();
+    h.event(egui::Event::PointerMoved(to));
+    h.step();
+    h.step();
+    h.event(press(to, false));
+    h.run_steps(3);
+    // The doc's order, not `views`: the reorder re-plans, which brings back the fixture's own sets.
+    let order = h.state().sets_doc.as_ref().unwrap().order();
+    assert_eq!(order.get(39), Some(&before[0]), "{order:?}");
+}
+
+#[test]
+fn the_wheel_does_not_scroll_the_sets_during_a_drag() {
+    // R1's limit (egui 0.36.2 `scroll_area.rs:1215-1217`).
+    let d = tempfile::tempdir().unwrap();
+    let mut h = big_harness(many_sets(d.path(), 60));
+    h.run();
+    let at = start_drag(&mut h, 1, 60);
+    let y = pos_rect(&h, 2, 60).unwrap().top();
+    wheel(&mut h);
+    h.run_steps(3);
+    assert_eq!(pos_rect(&h, 2, 60).map(|r| r.top()), Some(y));
+    // The control: dropped on its own card (nothing moves), the same wheel scrolls.
+    h.event(press(at, false));
+    h.run_steps(3);
+    wheel(&mut h);
+    h.run_steps(5);
+    assert!(
+        pos_rect(&h, 2, 60).is_none_or(|r| r.top() < y - 1.0),
+        "with no drag the wheel scrolls"
+    );
+}
+
+#[test]
+fn a_drop_outside_any_card_moves_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened_checked(d.path()));
+    h.run();
+    let before = order_text(&h);
+    start_drag(&mut h, 2, 3);
+    let to = h
+        .query_all_by_label("Sets")
+        .map(|n| n.rect())
+        .find(|r| in_sets_column(&h, *r))
+        .expect("the Sets heading")
+        .center();
+    for s in 1..=4 {
+        h.event(egui::Event::PointerMoved(to + egui::vec2(0.0, s as f32)));
+        h.step();
+    }
+    h.event(press(to, false));
+    h.run_steps(3);
+    assert_eq!(order_text(&h), before);
+    assert!(!h.state().is_dirty());
+    assert!(
+        !egui::DragAndDrop::has_any_payload(&h.ctx),
+        "the payload is gone"
+    );
 }

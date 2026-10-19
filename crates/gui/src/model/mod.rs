@@ -363,6 +363,8 @@ pub struct AppModel {
     pub review: Option<review::Review>,
     pub(crate) problem_builds: std::cell::Cell<u64>,
     pub(crate) filter_builds: std::cell::Cell<u64>,
+    /// Task 5: set cards laid out (`sets_column::pill` calls); see `sets_filter::set_cards_drawn`.
+    pub(crate) set_cards_drawn: std::cell::Cell<u64>,
     /// Item 22: per-item DDS sizes by plan revision.
     pub sizes: out_size::SizeCache,
     /// Item 21: the RNM blended thumbnail job.
@@ -554,6 +556,7 @@ impl AppModel {
             review: None,
             problem_builds: Default::default(),
             filter_builds: Default::default(),
+            set_cards_drawn: Default::default(),
             sizes: Default::default(),
             rnm_preview: Default::default(),
             status_note: None,

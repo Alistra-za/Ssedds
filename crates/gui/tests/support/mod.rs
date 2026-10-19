@@ -60,6 +60,23 @@ pub fn opened(dir: &Path) -> AppModel {
     m
 }
 
+/// Task 5: `opened` with `m.sets` replaced by `n` clones of the first set, each under its own key, members unchanged.
+pub fn many_sets(dir: &Path, n: usize) -> AppModel {
+    let mut m = opened(dir);
+    let first = m.sets[0].clone();
+    m.sets = (0..n)
+        .map(|i| {
+            let mut s = first.clone();
+            s.key = format!("{}{i:04}", first.key);
+            s
+        })
+        .collect();
+    m.invalidate_views();
+    // A10: a doc-created set or a dedupe must not change N.
+    assert_eq!(sdc_gui::model::sets::views(&m).len(), n);
+    m
+}
+
 /// The M3a fixture with rock01 decided as a TruePBR set: `pbr_albedo` diffuse, `pbr_normal` normal (DirectX green).
 /// leaf.png and odd.png stay undecided, as in M3a.
 pub fn pbr_opened(dir: &Path) -> AppModel {

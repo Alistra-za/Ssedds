@@ -158,3 +158,9 @@ impl AppModel {
         self.sets_filter = SetsFilter::default();
     }
 }
+
+/// Task 5: how many set cards have been laid out, for the virtualisation pin.
+#[doc(hidden)]
+pub fn set_cards_drawn(m: &AppModel) -> u64 {
+    m.set_cards_drawn.get()
+}

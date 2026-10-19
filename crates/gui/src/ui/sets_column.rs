@@ -14,7 +14,7 @@ use crate::model::AppModel;
 use eframe::egui;
 use engine::codes::Warning;
 use engine::shader::{Shader, ShaderOrigin};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Drag payload: a texture, by item key.
 #[derive(Debug, Clone)]
@@ -86,7 +86,12 @@ pub struct DropState {
     /// Item 17: a file drop not yet taken by a slot card this frame (`ui::draw_with_scan` opens its folder after).
     pub file: Option<FileDrop>,
     pub slot_note: Option<SlotNote>,
+    /// R4: each set card's height when last laid out, by set id; a card off screen allocates this instead.
+    pub card_h: HashMap<String, f32>,
 }
+
+/// R4: the height of a card never laid out, until any card has been measured (then their mean).
+const CARD_EST: f32 = 110.0;
 
 /// How long the moved pill flashes after a reorder.
 const FLASH_SECS: f64 = 1.0;
@@ -411,7 +416,8 @@ pub fn draw(
     let blocked: std::collections::HashSet<String> =
         export_blocks(model).into_iter().map(|i| i.set_id).collect();
     let mut acts = vec![];
-    let (mut released, mut hovered) = (None, None);
+    // `dropped`: the set let go over a card this frame, with that card's index (R1).
+    let (mut dropped, mut hovered) = (None, None);
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
     // The set being dragged (a peek: the payload stays for the reorder).
@@ -433,51 +439,70 @@ pub fn draw(
         .flash
         .as_ref()
         .map(|(id, t)| (id.as_str(), (now - t) / FLASH_SECS));
-    let mut rects = vec![];
+    // Laid-out cards by full index, for the insertion line.
+    let mut rects: HashMap<usize, egui::Rect> = HashMap::new();
     // A set the palette picked scrolls into view (item 19).
     let reveal = model.nav.reveal_set.take();
+    let est = if st.card_h.is_empty() {
+        CARD_EST
+    } else {
+        st.card_h.values().sum::<f32>() / st.card_h.len() as f32
+    };
+    let mut resized = false;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             // `index` is the set's place among all sets: the reorder and Move up / Move down use it (K19).
             for &index in visible.iter() {
                 let v = &views[index];
-                let is_blocked = blocked.contains(&v.id);
-                let look = PillLook {
-                    dragging: dragged.as_deref() == Some(v.id.as_str()),
-                    flash: flash.filter(|(id, _)| *id == v.id).map(|(_, f)| f),
-                    selected: !v.key.is_empty() && sel_sets.contains(&v.key),
-                    bulk: sel_sets.len() >= 2,
+                // R4: a card outside the clip rect allocates its last height instead of being laid out.
+                // shortcut: heights of off-screen cards go stale when the column width changes (the scroll bar length is off until they are drawn); measure on resize if it shows.
+                let h = st.card_h.get(&v.id).copied().unwrap_or(est);
+                let probe =
+                    egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), h));
+                let rect = if ui.is_rect_visible(probe) {
+                    let look = PillLook {
+                        dragging: dragged.as_deref() == Some(v.id.as_str()),
+                        flash: flash.filter(|(id, _)| *id == v.id).map(|(_, f)| f),
+                        selected: !v.key.is_empty() && sel_sets.contains(&v.key),
+                        bulk: sel_sets.len() >= 2,
+                    };
+                    let out = pill(
+                        ui,
+                        model,
+                        thumbs,
+                        v,
+                        (index, views.len()),
+                        &editing,
+                        blocked.contains(&v.id),
+                        look,
+                        &sel_items,
+                        &mut acts,
+                    );
+                    resized |= (out.rect.height() - h).abs() > 0.5;
+                    st.card_h.insert(v.id.clone(), out.rect.height());
+                    if let Some(d) = out.dropped_set {
+                        dropped = Some((d, index));
+                    }
+                    if out.hovered_by_set {
+                        hovered = Some(index);
+                    }
+                    rects.insert(index, out.rect);
+                    out.rect
+                } else {
+                    // K9: `allocate_space` takes one auto id, as the card's scope does, so later cards keep their ids.
+                    ui.allocate_space(probe.size()).1
                 };
-                let out = pill(
-                    ui,
-                    model,
-                    thumbs,
-                    v,
-                    (index, views.len()),
-                    &editing,
-                    is_blocked,
-                    look,
-                    &sel_items,
-                    &mut acts,
-                );
                 if reveal
                     .as_deref()
                     .is_some_and(|k| !v.key.is_empty() && k == v.key)
                 {
-                    ui.scroll_to_rect(out.rect, None);
-                }
-                rects.push(out.rect);
-                if out.handle_released {
-                    released = Some(v.id.clone());
-                }
-                if out.hovered_by_set {
-                    hovered = Some(index);
+                    ui.scroll_to_rect(rect, None);
                 }
             }
             if let (Some(from), Some(to)) = (dragged_index, hovered) {
                 if let Some((r, y)) = rects
-                    .get(to)
+                    .get(&to)
                     .and_then(|r| insertion_y(from, to, *r).map(|y| (*r, y)))
                 {
                     let accent = ui.visuals().selection.stroke.color;
@@ -491,9 +516,14 @@ pub fn draw(
                 new_set_area(ui, &editing, &mut acts);
             }
         });
+    // A measured height moved the cards below it: one more frame lays them out where they now are (settles).
+    if resized {
+        ctx.request_repaint();
+    }
     let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
     if editing.reorder {
-        if let Some((id, to)) = reorder_target(released.as_deref(), hovered, &ids) {
+        let (dropped, target) = dropped.unzip();
+        if let Some((id, to)) = reorder_target(dropped.as_deref(), target, &ids) {
             acts.push(Act::Reorder(id, to));
         }
     }
@@ -690,8 +720,8 @@ fn item_zone(
     }
 }
 
-/// Where a dragged set goes: `released` is the set whose handle was let go this frame, `hovered` the index of
-/// the pill under the pointer. Nothing happens when there is no target or the set is dropped on itself.
+/// Where a dragged set goes: `released` is the set let go this frame, `hovered` the index of the pill it was let go
+/// on. Nothing happens when there is no target or the set is dropped on itself.
 fn reorder_target(
     released: Option<&str>,
     hovered: Option<usize>,
@@ -701,9 +731,10 @@ fn reorder_target(
     (*ids.get(to)? != id).then(|| (id.to_string(), to))
 }
 
-/// What a pill reports back: its handle was let go, and a dragged set is over it.
+/// What a pill reports back: the set dropped on it this frame (R1: detected on the target, since the source card
+/// may not be laid out when the drag ends), and whether a dragged set is over it.
 struct PillOut {
-    handle_released: bool,
+    dropped_set: Option<String>,
     hovered_by_set: bool,
     rect: egui::Rect,
 }
@@ -741,7 +772,7 @@ fn pill(
     sel_items: &HashSet<String>,
     acts: &mut Vec<Act>,
 ) -> PillOut {
-    let mut handle_released = false;
+    model.set_cards_drawn.set(model.set_cards_drawn.get() + 1);
     // A member's slot menu, not the pill's, answers a right-click on that member.
     let mut member_menu = false;
     let selected = look.selected;
@@ -809,7 +840,6 @@ fn pill(
                         let handle = ui.add(egui::Label::new("≡").sense(sense));
                         if editing.reorder {
                             handle.dnd_set_drag_payload(DragSet(v.id.clone()));
-                            handle_released = handle.drag_stopped();
                         } else if editing.on {
                             handle.on_hover_text(CLEAR_TO_REORDER);
                         }
@@ -950,8 +980,12 @@ fn pill(
             acts.push(Act::Drop(p.0.clone(), v.id.clone()));
         }
     }
-    // Not consuming: the handle's release (in `draw`) applies the move.
     let hovered_by_set = editing.reorder && resp.dnd_hover_payload::<DragSet>().is_some();
+    // K9: only while a set hovers, since `take_payload` would take a dragged texture too.
+    let dropped_set = hovered_by_set
+        .then(|| resp.dnd_release_payload::<DragSet>())
+        .flatten()
+        .map(|p| p.0.clone());
     // F3a D4: a right-click on an unselected pill selects it alone first; among two or more selected sets the pill
     // shows the bulk menu, otherwise its own.
     if resp.secondary_clicked() && !v.key.is_empty() && !member_menu {
@@ -970,7 +1004,7 @@ fn pill(
         });
     }
     PillOut {
-        handle_released,
+        dropped_set,
         hovered_by_set,
         rect: resp.rect,
     }
