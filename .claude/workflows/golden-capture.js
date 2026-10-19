@@ -233,8 +233,9 @@ if (stopped) {
 }
 if (!session || !session.launched) return { stopped: 'session', session, restore, settings_restored }
 
+const base = f => String(f).split(/[\\/]/).pop().toLowerCase()
 const kept = (session.captures || []).map(c => {
-  const r = keepRes && keepRes.results.find(x => x.file === c.file)
+  const r = keepRes && keepRes.results.find(x => base(x.file) === base(c.file)) // the agent may return the basename
   let k = null
   try { k = r && JSON.parse(r.stdout_json) } catch (e) { k = null }
   if (!k || !k.ok) log(`${c.label}: NOT kept (${k ? k.reason : 'no result'}); the original stays in Captures`)
