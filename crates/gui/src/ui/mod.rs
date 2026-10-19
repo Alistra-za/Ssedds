@@ -15,6 +15,7 @@ pub mod input_name;
 pub mod json_editor;
 pub mod meshes;
 pub mod messages;
+pub mod motion;
 pub mod path_picker;
 pub mod pgp_fields;
 pub mod plugin_refs;
@@ -106,6 +107,7 @@ pub fn draw_with_scan(
     state: &mut State,
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
+    motion::set_reduce_motion(ui.ctx(), model.settings.reduce_motion);
     state.thumbs.sweep(model.items_rev());
     // Trace-debug #52: a modal or Slot commands left open would act on the new folder's set of the same id.
     if state
@@ -157,6 +159,21 @@ pub fn draw_with_scan(
     } else if folder {
         advanced::draw(ui, model, &mut state.advanced);
     }
+    // CF16: the columns and centre fade in when a folder opens; closing snaps. Called every frame, so a folder
+    // restored at launch starts at 1. Not `ui.scope` (an auto id). K1: the start screen is never faded.
+    let open = model.root.is_some();
+    let t = ui.ctx().animate_bool_with_time_and_easing(
+        egui::Id::new("folder-in"),
+        open,
+        if open {
+            motion::fade_dur(ui.ctx(), 0.25)
+        } else {
+            0.0
+        },
+        egui::emath::easing::quadratic_out,
+    );
+    let opacity = ui.opacity();
+    ui.multiply_opacity(if open { t } else { 1.0 });
     // A11: no columns until a folder is open.
     if model.root.is_some() {
         let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
@@ -185,6 +202,12 @@ pub fn draw_with_scan(
         );
     }
     let c = egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    ui.set_opacity(opacity);
+    // Review M2: with the set editor not drawn, its next frame only records the slots, so a change made meanwhile
+    // does not flash (CF14).
+    if !set_editor_shown(model, three_d) {
+        state.drops.slot_seen = None;
+    }
     ui.ctx()
         .data_mut(|d| d.insert_temp(centre_id(), c.response.rect));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
@@ -201,6 +224,8 @@ pub fn draw_with_scan(
     presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
     set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+    // T7 K10: last, so it is over everything and survives a virtualised source.
+    columns::drag_ghost(ui.ctx(), model, &mut state.thumbs);
 }
 
 /// The narrowest the centre gets: `CENTRE_MIN`, and while a texture is expanded enough for `PREVIEW_MIN` beside the

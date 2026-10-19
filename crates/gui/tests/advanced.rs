@@ -418,3 +418,17 @@ fn the_inspector_lists_skipped_user_presets_with_their_reason() {
     h.get_by_label_contains("bad.toml");
     h.get_by_label_contains("unknown preset 'nope'");
 }
+
+#[test]
+fn the_reduce_motion_box_saves_and_reaches_the_ui() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.settings.advanced_open = true;
+    let mut h = harness(model);
+    h.run();
+    assert!(!sdc_gui::ui::motion::reduce_motion(&h.ctx));
+    h.get_by_label("Reduce motion").click();
+    h.run();
+    assert!(h.state().settings.reduce_motion);
+    assert!(sdc_gui::ui::motion::reduce_motion(&h.ctx));
+}

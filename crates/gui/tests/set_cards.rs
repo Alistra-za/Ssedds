@@ -289,7 +289,7 @@ fn drags_a_texture(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> bool {
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(6.0 * step as f32, 0.0),
         ));
-        h.run();
+        h.run_steps(2); // the payload pass, then the painted one
     }
     let dragging = egui::DragAndDrop::payload::<DragItem>(&h.ctx).is_some();
     egui::DragAndDrop::clear_payload(&h.ctx);
@@ -421,7 +421,7 @@ fn a_texture_dragged_over_a_card_outlines_it() {
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(2.0 * step as f32, 0.0),
         ));
-        h.run();
+        h.run_steps(2); // the payload pass, then the painted one
     }
     assert!(
         egui::DragAndDrop::has_payload_of_type::<DragItem>(&h.ctx),
@@ -435,4 +435,231 @@ fn a_texture_dragged_over_a_card_outlines_it() {
     h.event(press(false));
     h.run();
     assert!(!top_is_outline(&h), "the outline goes with the drag");
+}
+
+/// Press `at` and move it 30 pt in 3 steps (the button stays down); returns where the pointer ends.
+fn start_drag(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> egui::Pos2 {
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.run();
+    for step in 1..=3 {
+        h.event(egui::Event::PointerMoved(
+            at + egui::vec2(10.0 * step as f32, 0.0),
+        ));
+        h.run_steps(2); // the payload pass, then the painted one
+    }
+    at + egui::vec2(30.0, 0.0)
+}
+
+/// T7 K10: a 40 x 40 ghost 12 pt below and right of the pointer.
+fn assert_ghost_rect(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
+    assert!(egui::DragAndDrop::has_payload_of_type::<
+        sdc_gui::ui::sets_column::DragItem,
+    >(&h.ctx));
+    let want = pointer + egui::vec2(12.0, 12.0);
+    let bounds = |s: &egui::Shape| match s {
+        egui::Shape::Rect(r) => Some(r.rect),
+        egui::Shape::Mesh(m) => Some(m.calc_bounds()),
+        _ => None,
+    };
+    assert!(
+        shapes(h)
+            .iter()
+            .filter_map(bounds)
+            .any(|r| (r.min - want).length() < 1.0 && (r.width() - 40.0).abs() < 0.5),
+        "a 40 wide ghost at {want:?}"
+    );
+}
+
+/// The ghost plus the Grabbing cursor (R5, green from the start; the drag plugin sets it for a dragged widget).
+fn assert_ghost(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
+    assert_ghost_rect(h, pointer);
+    assert_eq!(
+        h.output().platform_output.cursor_icon,
+        egui::CursorIcon::Grabbing
+    );
+}
+
+#[test]
+fn a_dragged_tile_shows_a_ghost_under_the_pointer_and_dims_its_source() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()));
+    h.run();
+    let label = outside_sets(&h, "rock01_normal.png").rect();
+    let at = label.center();
+    let p = start_drag(&mut h, at);
+    assert_ghost(&h, p);
+    // The source tile is dimmed: its 2 pt frame stroke is half transparent.
+    let faded = shapes(&h).iter().any(|s| matches!(s,
+        egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 && r.stroke.color.a() < 200));
+    assert!(faded, "the dragged source is dimmed");
+    // Review I1: no full-opacity hover or press stroke over the dimmed source.
+    let lit = shapes(&h).iter().any(|s| matches!(s,
+        egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 && r.stroke.color.a() == 255));
+    assert!(!lit, "the dimmed source shows no full-opacity stroke");
+    egui::DragAndDrop::clear_payload(&h.ctx);
+}
+
+/// Review M3: the ghost needs no source widget, and goes with the payload.
+#[test]
+fn the_ghost_is_painted_from_the_payload_alone_and_goes_with_it() {
+    use sdc_gui::ui::sets_column::DragItem;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let key = m.items[0].key.clone();
+    let mut h = harness(m);
+    h.run();
+    let at = egui::pos2(900.0, 500.0);
+    egui::DragAndDrop::set_payload(&h.ctx, DragItem(key));
+    h.hover_at(at);
+    h.run_steps(2); // the payload pass, then the painted one
+    assert_ghost_rect(&h, at);
+    egui::DragAndDrop::clear_payload(&h.ctx);
+    h.run();
+    let want = at + egui::vec2(12.0, 12.0);
+    assert!(
+        !shapes(&h).iter().any(|s| match s {
+            egui::Shape::Rect(r) => (r.rect.min - want).length() < 1.0,
+            egui::Shape::Mesh(m) => (m.calc_bounds().min - want).length() < 1.0,
+            _ => false,
+        }),
+        "the ghost is gone with the payload"
+    );
+    assert!(
+        !shapes(&h).iter().any(|s| matches!(s,
+            egui::Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color.a() < 200)),
+        "no tile is dimmed"
+    );
+}
+
+#[test]
+fn a_dragged_member_chip_shows_the_same_ghost() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()));
+    h.run();
+    let at = on_card(&h, "N")[0].rect().center();
+    let p = start_drag(&mut h, at);
+    assert_ghost(&h, p);
+    egui::DragAndDrop::clear_payload(&h.ctx);
+}
+
+#[test]
+fn a_hovered_tile_takes_the_hover_stroke_and_an_amber_tile_keeps_amber() {
+    use sdc_gui::model::items::ItemStatus;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let amber_name = m.items[0].name.clone();
+    m.items[0].status = ItemStatus::NeedsDecision;
+    let ready_name = m.items[1].name.clone();
+    m.items[1].status = ItemStatus::Ready;
+    let mut h = harness(m);
+    h.run();
+    let hov = h.ctx.global_style().visuals.widgets.hovered.bg_stroke.color;
+    // The last 2 pt stroke around the tile that holds `name`.
+    let top = |h: &Harness<'static, AppModel>, name: &str| {
+        let label = outside_sets(h, name).rect();
+        shapes(h)
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 => {
+                    Some(r.stroke.color)
+                }
+                _ => None,
+            })
+            .next_back()
+    };
+    let at = outside_sets(&h, &ready_name).rect().center();
+    h.hover_at(at);
+    h.run();
+    assert_eq!(
+        top(&h, &ready_name),
+        Some(hov),
+        "hover stroke on a Ready tile"
+    );
+    let at = outside_sets(&h, &amber_name).rect().center();
+    h.hover_at(at);
+    h.run();
+    assert_eq!(
+        top(&h, &amber_name),
+        Some(sdc_gui::ui::status::AMBER),
+        "status wins over hover"
+    );
+}
+
+#[test]
+fn a_pressed_strip_fills() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.settings.textures_collapsed = true;
+    let mut h = harness(m);
+    h.run();
+    let at = h.get_by_label("Textures").rect().center();
+    let fill = h.ctx.global_style().visuals.widgets.active.weak_bg_fill;
+    let covers = |h: &Harness<'static, AppModel>| {
+        shapes(h).iter().any(|s| {
+            matches!(s,
+            egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(at) && r.rect.width() < 60.0)
+        })
+    };
+    h.hover_at(at);
+    h.run();
+    assert!(!covers(&h), "no fill before the press");
+    h.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.run();
+    assert!(covers(&h), "the pressed strip is filled");
+}
+
+/// Final review D1: a drag held still asks for no frames (the ghost moves only with pointer events), and egui's own
+/// repaint after the release frame takes the ghost and the dim away one frame after release.
+#[test]
+fn a_still_drag_asks_for_no_frames_and_the_ghost_goes_one_frame_after_release() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()));
+    h.run();
+    let label = outside_sets(&h, "rock01_normal.png").rect();
+    let p = start_drag(&mut h, label.center());
+    let delay = |h: &Harness<'static, AppModel>| {
+        h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    };
+    h.run();
+    assert_ghost_rect(&h, p);
+    assert!(delay(&h) > std::time::Duration::ZERO, "a still drag idles");
+    h.event(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.step();
+    assert_eq!(
+        delay(&h),
+        std::time::Duration::ZERO,
+        "the release frame asks for one more"
+    );
+    h.step();
+    let want = p + egui::vec2(12.0, 12.0);
+    assert!(
+        !shapes(&h).iter().any(|s| match s {
+            egui::Shape::Rect(r) => (r.rect.min - want).length() < 1.0,
+            egui::Shape::Mesh(m) => (m.calc_bounds().min - want).length() < 1.0,
+            _ => false,
+        }),
+        "the ghost is gone"
+    );
+    assert!(
+        !shapes(&h).iter().any(|s| matches!(s,
+            egui::Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color.a() < 200)),
+        "no tile is dimmed"
+    );
 }

@@ -433,3 +433,129 @@ fn at_1280x800_a_long_problems_row_keeps_its_buttons_on_screen() {
         "the hover shows the sentence"
     );
 }
+
+/// `problems()` calls over one settled frame, the bottom panel closed (Problems' rows would add their own).
+fn lookups_per_frame(m: AppModel) -> u64 {
+    use sdc_gui::model::bottom::problem_lookups;
+    // K8: the height catch-up takes a frame per newly exposed card.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_max_steps(16)
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    assert!(!h.state().bottom.open);
+    let before = problem_lookups(h.state());
+    h.step();
+    problem_lookups(h.state()) - before
+}
+
+#[test]
+fn set_cards_do_not_look_up_problems_per_card() {
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let small = lookups_per_frame(opened(a.path()));
+    let big = lookups_per_frame(many_sets(b.path(), 500));
+    assert_eq!(
+        small, big,
+        "3 sets: {small} lookups a frame, 500 sets: {big}"
+    );
+}
+
+/// What `export_files` counts, without the cache.
+fn uncached_export_files(m: &AppModel) -> usize {
+    use sdc_gui::model::items::ItemStatus;
+    m.items
+        .iter()
+        .filter(|i| {
+            i.job.is_some()
+                && !matches!(
+                    i.status,
+                    ItemStatus::NeedsDecision | ItemStatus::PackedInto(_) | ItemStatus::Skipped(_)
+                )
+        })
+        .count()
+}
+
+#[test]
+fn export_files_follows_a_decision_without_a_frame_of_lag() {
+    use sdc_gui::model::bottom::{export_files_builds, problems};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert!(m.undecided() > 0);
+    // Review reads `export_files` every frame (its button text and gate).
+    m.open_review();
+    let mut h = harness(m);
+    h.run();
+    let builds = export_files_builds(h.state());
+    assert!(builds >= 1);
+    h.run_steps(3);
+    assert_eq!(
+        export_files_builds(h.state()),
+        builds,
+        "cached across frames"
+    );
+    let before = h.state().export_files();
+    decide_all(h.state_mut());
+    h.run();
+    assert_eq!(export_files_builds(h.state()), builds + 1);
+    let m = h.state();
+    let files = uncached_export_files(m);
+    assert!(
+        files > before,
+        "the decisions add files ({before} -> {files})"
+    );
+    assert_eq!(m.export_files(), files);
+    assert_eq!(
+        sdc_gui::ui::header::export_dot(m),
+        problems(m).is_empty() && files > 0
+    );
+    // Undo until a texture is undecided again: the count drops on the next frame too.
+    for _ in 0..7 {
+        h.state_mut().undo();
+        assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+        if uncached_export_files(h.state()) < files {
+            break;
+        }
+    }
+    h.run();
+    let m = h.state();
+    assert_eq!(m.export_files(), uncached_export_files(m));
+    assert!(m.export_files() < files, "undo removes a file");
+    // Directly, with no frame between: `export_files` must notice the new view key itself.
+    h.state_mut().items.clear();
+    h.state_mut().invalidate_views();
+    assert_eq!(h.state().export_files(), 0);
+}
+
+#[test]
+fn a_ready_set_that_gains_a_warning_loses_its_green_dot() {
+    use sdc_gui::model::bottom::set_ready;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    decide_all(&mut m);
+    for i in m.items.iter_mut() {
+        i.warnings.clear();
+    }
+    for st in m.sets.iter_mut() {
+        st.warnings.clear();
+    }
+    m.invalidate_views();
+    let mut h = harness(m);
+    h.run();
+    let ready = h.query_all_by_label("ready").count();
+    assert!(set_ready(h.state(), &rock01(h.state())));
+    // A warning on a member: the cached flagged keys must follow the new problems build.
+    let w = engine::codes::Warning::new(engine::codes::Code::LossReencode, "re-encoded");
+    let key = rock01(h.state()).members[0].clone();
+    h.state_mut()
+        .items
+        .iter_mut()
+        .find(|i| i.key == key)
+        .unwrap()
+        .warnings
+        .push(w);
+    h.state_mut().invalidate_views();
+    h.run();
+    assert!(!set_ready(h.state(), &rock01(h.state())));
+    assert!(h.query_all_by_label("ready").count() < ready);
+}

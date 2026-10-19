@@ -95,8 +95,10 @@ pub fn draw(
 ) {
     let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
         ui.weak("This set is no longer in the plan.");
+        drops.slot_seen = None;
         return;
     };
+    slot_changes(ui.ctx(), drops, &v);
     ui.horizontal_wrapped(|ui| {
         if view.switch {
             super::set_preview::view_switch(ui, model);
@@ -177,10 +179,32 @@ pub fn draw(
         .default_size(SET_PANEL_WIDTH)
         .size_range(300.0..=max)
         .show(ui, |ui| set_panel(ui, model, &v, advanced));
+    let flash = drops
+        .slot_flash
+        .as_ref()
+        .filter(|(id, ..)| *id == v.id)
+        .and_then(|&(_, n, began)| Some((n, super::sets_column::flash_now(ui.ctx(), began)?)));
+    if flash.is_none() {
+        drops.slot_flash = None;
+    }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             rows(ui, model, &v, thumbs, &mut acts, drop_at, &sizes);
+            // R9: the changed slot's row (its rect as `row` stored it this frame), outlined in the accent.
+            if let Some((n, a)) = flash {
+                let id = egui::Id::new(("slot-row", &v.id, n));
+                if let Some(r) = ui.data(|d| d.get_temp::<egui::Rect>(id)) {
+                    let c = ui.visuals().selection.stroke.color.gamma_multiply(a);
+                    ui.painter().rect_stroke(
+                        r,
+                        2.0,
+                        egui::Stroke::new(2.0, c),
+                        // Inside: the first row's top is the scroll area's clip edge (final review M1).
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
             slot_note(ui, drops, &v.id);
             unslotted_packed(ui, model, &v, &mut acts);
             ui.add_space(6.0);
@@ -225,6 +249,34 @@ pub fn draw(
         }
     }
     select_or_expand(ui, model, &v.id, select, expand);
+}
+
+/// R9 (CF14): a slot that got a new member since last frame, in the same set, flashes; drop, Replace, Assign…, an
+/// Explorer drop and undo/redo all land here. Another set drawn (a switch), or the first frame after the editor was
+/// hidden (`ui::draw_with_scan` clears `slot_seen`), only records its slots.
+fn slot_changes(ctx: &egui::Context, drops: &mut DropState, v: &SetView) {
+    let mut slots: Vec<Option<String>> = vec![];
+    for (k, f) in &v.slots {
+        let n = k.slot_number() as usize;
+        if slots.len() <= n {
+            slots.resize(n + 1, None);
+        }
+        slots[n] = match f {
+            SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => Some(item.clone()),
+            SlotFill::Empty => None,
+        };
+    }
+    if let Some((id, seen)) = drops.slot_seen.as_ref().filter(|(id, _)| *id == v.id) {
+        fn key(s: &[Option<String>], i: usize) -> Option<&str> {
+            s.get(i).and_then(|k| k.as_deref())
+        }
+        // Review M1: the slot that got a member; an emptied slot (the texture moved away, an undone drop) does not.
+        let got = |i: &usize| key(&slots, *i).is_some() && key(seen, *i) != key(&slots, *i);
+        if let Some(n) = (0..slots.len()).find(got) {
+            drops.slot_flash = Some((id.clone(), n as u8, ctx.input(|i| i.time)));
+        }
+    }
+    drops.slot_seen = Some((v.id.clone(), slots));
 }
 
 /// The set panel (C6, R12): Material on a JSON set or Set on any other, then Advanced; `advanced_open` picks the tab.
@@ -571,6 +623,21 @@ fn row(
         egui::WidgetInfo::labeled(egui::WidgetType::Image, true, format!("{title} thumbnail"))
     });
     slot_menu(&resp, model, v, slot, acts);
+    // CF15: pressed, the thumbnail is drawn at 0.97 about its centre; the hit rect keeps its size. A scaled rect, not
+    // `with_visual_transform`: its scope would take a Grid cell. Reduce motion: no scale.
+    let ctx = ui.ctx();
+    let press = ctx.animate_bool_with_time_and_easing(
+        resp.id.with("press"),
+        resp.is_pointer_button_down_on(),
+        super::motion::move_dur(ctx, 0.1),
+        egui::emath::easing::cubic_out,
+    );
+    let scale = if super::motion::reduce_motion(ctx) {
+        1.0
+    } else {
+        egui::lerp(1.0..=0.97, press)
+    };
+    let shown = egui::Rect::from_center_size(rect.center(), rect.size() * scale);
     // A PGPatcher-locked slot has one hover, the lock's, in place of the thumbnail's path.
     let lock_cross = pgp_locked(&v.settings, slot.slot_number()) && is_json_set(v, model.target);
     let resp = if lock_cross {
@@ -581,11 +648,11 @@ fn row(
     if ui.is_rect_visible(rect) {
         match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
             Some(t) => egui::Image::new(&t)
-                .fit_to_exact_size(rect.size())
-                .paint_at(ui, rect),
+                .fit_to_exact_size(shown.size())
+                .paint_at(ui, shown),
             None => {
                 ui.painter().rect_filled(
-                    rect,
+                    shown,
                     2.0,
                     ui.visuals().widgets.noninteractive.weak_bg_fill,
                 );
@@ -593,14 +660,14 @@ fn row(
         }
         if let Some(i) = item {
             ui.painter().rect_stroke(
-                rect,
+                shown,
                 2.0,
                 egui::Stroke::new(1.0, border_of(ui, &i.status)),
                 egui::StrokeKind::Inside,
             );
         }
         if lock_cross {
-            pgp_lock_cross(ui, rect);
+            pgp_lock_cross(ui, shown);
         }
     }
     if let Some(i) = item.filter(|_| borrowed.is_none()) {

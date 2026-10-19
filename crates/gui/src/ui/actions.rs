@@ -668,7 +668,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
 /// The F1 sheet: every action with a key, by area.
 fn sheet(ctx: &egui::Context, model: &mut AppModel) {
     let mut close = false;
-    let k = super::dialogs::modal_keys(ctx, "keys-sheet", true, |ui| {
+    let k = super::dialogs::modal_keys(ctx, "keys-sheet", true, false, |ui| {
         ui.heading("Keyboard shortcuts");
         egui::ScrollArea::vertical()
             .max_height(520.0)
@@ -720,7 +720,7 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
     let meshes = super::header::meshes_view_active(ctx);
     let offered = palette_actions(model, meshes);
     let mut chosen = None;
-    let k = super::dialogs::modal_keys(ctx, "palette", true, |ui| {
+    let k = super::dialogs::modal_keys(ctx, "palette", true, false, |ui| {
         ui.set_min_width(420.0);
         // Before the field, so it does not move its cursor with them; a second Ctrl+K must not reach it either (egui's
         // Ctrl+K deletes to the end of the line).

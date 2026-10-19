@@ -104,12 +104,9 @@ impl AppModel {
 /// Every problem of the project: blocks, then decisions, then warnings. Cached (K9) under the views key plus
 /// what the asks and the File rows read; the build holds no `RefCell` borrow.
 pub fn problems(m: &AppModel) -> Arc<Vec<Problem>> {
+    m.problem_lookups.set(m.problem_lookups.get() + 1);
     let key = m.view_key();
-    let inner = (
-        m.evidence_rev,
-        m.export.revision,
-        m.export.running.is_some(),
-    );
+    let inner = problems_inner(m);
     {
         let c = m.views.borrow();
         if c.key.as_ref() == Some(&key) {
@@ -134,32 +131,52 @@ pub fn problems(m: &AppModel) -> Arc<Vec<Problem>> {
     p
 }
 
-/// The set keys and texture keys that carry a problem, built once per `problems` build (R-a: a set card asks every
-/// frame). Sets are prefixed `s:`, textures `t:`.
-fn flagged(m: &AppModel) -> Arc<HashSet<String>> {
+/// What `problems` is keyed on inside the view-key cell; `export_files` shares it.
+pub(super) fn problems_inner(m: &AppModel) -> super::ProblemsKey {
+    (
+        m.evidence_rev,
+        m.export.revision,
+        m.export.running.is_some(),
+    )
+}
+
+/// The set keys and texture keys that carry a problem.
+#[derive(Debug, Default)]
+pub struct Flagged {
+    pub sets: HashSet<String>,
+    pub textures: HashSet<String>,
+}
+
+/// `Flagged`, built once per `problems` build (R-a: a set card asks every frame). Fetch it once per frame and ask
+/// `set_ready_in` per card (Task 6).
+pub fn flagged(m: &AppModel) -> Arc<Flagged> {
     let all = problems(m);
     if let Some(f) = &m.views.borrow().flagged {
         return f.clone();
     }
-    let f: HashSet<String> = all
-        .iter()
-        .filter_map(|p| match &p.at {
-            At::Set { key, .. } => Some(format!("s:{key}")),
-            At::Texture(t) => Some(format!("t:{t}")),
-            _ => None,
-        })
-        .collect();
+    let mut f = Flagged::default();
+    for p in all.iter() {
+        match &p.at {
+            At::Set { key, .. } => f.sets.insert(key.clone()),
+            At::Texture(t) => f.textures.insert(t.clone()),
+            _ => false,
+        };
+    }
     let f = Arc::new(f);
     m.views.borrow_mut().flagged = Some(f.clone());
     f
 }
 
 /// A set card shows a green dot: a real set whose own rows and members' rows are all absent from Problems.
-pub fn set_ready(m: &AppModel, v: &sets::SetView) -> bool {
-    let f = flagged(m);
+pub fn set_ready_in(f: &Flagged, v: &sets::SetView) -> bool {
     !v.key.is_empty()
-        && !f.contains(&format!("s:{}", v.key))
-        && !v.members.iter().any(|t| f.contains(&format!("t:{t}")))
+        && !f.sets.contains(&v.key)
+        && !v.members.iter().any(|t| f.textures.contains(t))
+}
+
+/// `set_ready_in` with its own `flagged` fetch; a loop over sets fetches once and calls `set_ready_in`.
+pub fn set_ready(m: &AppModel, v: &sets::SetView) -> bool {
+    set_ready_in(&flagged(m), v)
 }
 
 /// A tile shows a green dot: ready, with nothing that counts toward its badge.
@@ -175,6 +192,18 @@ pub fn filtered_builds(m: &AppModel) -> u64 {
 #[doc(hidden)]
 pub fn problems_builds(m: &AppModel) -> u64 {
     m.problem_builds.get()
+}
+
+/// Every call to `problems()`, cached or not (A6).
+#[doc(hidden)]
+pub fn problem_lookups(m: &AppModel) -> u64 {
+    m.problem_lookups.get()
+}
+
+/// `AppModel::export_files` counts that were not served from the cache.
+#[doc(hidden)]
+pub fn export_files_builds(m: &AppModel) -> u64 {
+    m.export_files_builds.get()
 }
 
 fn build_problems(m: &AppModel) -> Vec<Problem> {
@@ -269,11 +298,12 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
 }
 
 /// The list narrowed by `f`: a set keeps its own rows and its members' rows; `Undecided` keeps the Decide rows.
-pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Vec<Problem> {
+/// `None` is `problems(m)` itself, not a copy.
+pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Arc<Vec<Problem>> {
     m.filter_builds.set(m.filter_builds.get() + 1);
     let all = problems(m);
-    match f {
-        None => (*all).clone(),
+    Arc::new(match f {
+        None => return all,
         Some(ProblemsFilter::Undecided) => all
             .iter()
             .filter(|p| p.level == Level::Decide)
@@ -286,7 +316,7 @@ pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Vec<Problem> {
                 .cloned()
                 .collect()
         }
-    }
+    })
 }
 
 fn set_members(m: &AppModel, key: &str) -> HashSet<String> {

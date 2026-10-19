@@ -239,7 +239,7 @@ pub struct SetView {
 }
 
 impl SetView {
-    fn new(key: String, id: String, members: Vec<String>) -> SetView {
+    pub(crate) fn new(key: String, id: String, members: Vec<String>) -> SetView {
         SetView {
             key,
             label: id.clone(),

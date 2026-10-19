@@ -9,6 +9,14 @@ use engine::config::Target;
 pub const JSON_EDITOR: &str = "PGPatcher JSON editor…";
 /// Export's width: twice what it was (Note BH3).
 const EXPORT_WIDTH: f32 = 240.0;
+/// CF12: the export bar's fraction as drawn: it glides linearly to `frac` over 0.3 s (at once under reduce motion). A
+/// new export (a new `drawer_epoch`) is a new animation, whose first frame is its own value, so it never sweeps back.
+#[doc(hidden)]
+pub fn shown_progress(ctx: &egui::Context, epoch: u64, frac: f32) -> f32 {
+    let id = egui::Id::new(("export-progress", epoch));
+    ctx.animate_value_with_time(id, frac, super::motion::move_dur(ctx, 0.3))
+}
+
 /// The fewest path characters Export to ▾ shows (K1).
 const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
@@ -218,8 +226,31 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     };
     let mut export = egui::Button::new(egui::RichText::new("Export").strong())
         .min_size(egui::vec2(size.x, button_h));
-    if can_export {
-        export = export.fill(ui.visuals().selection.bg_fill);
+    // CF11: the accent and the dot fade in (0.15 s) and snap out. Asked every frame, so losing readiness resets them.
+    let ctx = ui.ctx().clone();
+    let fade = |id: &str, on: bool| {
+        let secs = if on {
+            super::motion::fade_dur(&ctx, 0.15)
+        } else {
+            0.0
+        };
+        ctx.animate_bool_with_time_and_easing(
+            egui::Id::new(id),
+            on,
+            secs,
+            egui::emath::easing::cubic_out,
+        )
+    };
+    let t = fade("header-export-ready", can_export);
+    let t_dot = fade("header-export-dot", export_dot(model));
+    if t > 0.0 {
+        let v = ui.visuals();
+        export = export.fill(
+            v.widgets
+                .inactive
+                .weak_bg_fill
+                .lerp_to_gamma(v.selection.bg_fill, t),
+        );
     }
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
@@ -233,9 +264,10 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
             .on_hover_ui(hover)
             .on_disabled_hover_ui(hover);
         // No dot with nothing open or nothing to export: it would say "ready" about an empty project.
-        if export_dot(model) {
+        if t_dot > 0.0 {
             let at = r.rect.left_center() + egui::vec2(10.0, 0.0);
-            ui.painter().circle_filled(at, 4.0, super::status::GREEN);
+            ui.painter()
+                .circle_filled(at, 4.0, super::status::GREEN.gamma_multiply(t_dot));
         }
         if r.clicked() && !field_focused(ui, model, "Export") {
             model.export_clicked();
@@ -252,7 +284,7 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
                 None => "Exporting. Cancel is in the Files tab.".to_string(),
             };
             ui.add(
-                egui::ProgressBar::new(frac)
+                egui::ProgressBar::new(shown_progress(ui.ctx(), model.drawer_epoch, frac))
                     .desired_width(size.x)
                     .desired_height(size.y - gap - button_h)
                     .text(format!("{done}/{total}"))

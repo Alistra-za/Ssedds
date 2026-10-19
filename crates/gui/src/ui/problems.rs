@@ -27,7 +27,7 @@ fn rows(ui: &egui::Ui, model: &AppModel) -> Rows {
             return out;
         }
     }
-    let out: Rows = Arc::new(filtered(model, f.as_ref()));
+    let out: Rows = filtered(model, f.as_ref());
     ui.data_mut(|d| d.insert_temp(id, (all, f, out.clone())));
     out
 }
