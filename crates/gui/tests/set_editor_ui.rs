@@ -1640,6 +1640,9 @@ fn a_slot_that_gets_a_texture_flashes_and_a_set_switch_does_not() {
         .filter(|r| f[0].contains(r.center()))
         .collect();
     assert_eq!(rows.len(), 1, "the flash outlines one slot row");
+    // Final review M3: and it is the row that got the emissive, not another slot's.
+    let emissive = h.get_by_label("Emissive _g thumbnail").rect();
+    assert!(f[0].contains(emissive.center()), "{f:?} vs {emissive:?}");
     // K13: the hold is a timer, not a frame per frame; the fade asks for every frame (K2's read). Two more steps
     // first: the slot Grid asks for one frame after its column widths change.
     let delay = |h: &Harness<'static, AppModel>| {
