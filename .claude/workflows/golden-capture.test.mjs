@@ -231,7 +231,7 @@ const lib = (cmd, env = {}) => {
   assert.ok(s[iPos + 1].wait_s && /tumbles/.test(s[iPos + 1].note), 'position re-checked after keyframing')
   // NPC sweep before placing; cell lights off for the group and back on after.
   const iNpc = at(x => x.body && x.body.formType === 'Actor')
-  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /reference formId (never its "base" id/.test(s[iNpc].note), 'NPCs listed for disabling (by reference id, not base id) before placement')
+  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /reference formId \(never its "base" id/.test(s[iNpc].note), 'NPCs listed for disabling (by reference id, not base id) before placement')
   const iOff = at(x => x.body && x.body.command === '0008287F.disable'), iOn = at(x => x.body && x.body.command === '0008287F.enable')
   assert.ok(iOff > 0 && iOff < at(x => x.body && x.body.action === 'drive') && iOn > at(x => x.tool === 'communityshaders.capture'), 'disable before the camera, enable after the captures')
   // Nothing changes the scene before the capture is on disk; consecutive captures stay back to back.
