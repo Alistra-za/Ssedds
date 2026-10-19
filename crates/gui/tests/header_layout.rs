@@ -362,7 +362,10 @@ fn the_meshes_header_never_overlaps() {
         assert!(h.query_by_label("Textures column").is_none());
         assert!(PanelState::load(&h.ctx, Id::new("meshes-header")).is_none());
         // Note AM: an idle bar with no status holds nothing.
-        if !widgets(&h, "meshes-bar").is_empty() {
+        // The bar is not drawn while it has nothing to show (layout v2 ask).
+        if PanelState::load(&h.ctx, Id::new("meshes-bar")).is_some()
+            && !widgets(&h, "meshes-bar").is_empty()
+        {
             assert_no_overlap(&h, "meshes-bar", w);
         }
     }
@@ -451,4 +454,12 @@ fn render_the_toolbar() {
     let crop =
         image::imageops::crop_imm(&img, 0, 0, img.width(), bottom.min(img.height())).to_image();
     crop.save(&out).expect("save png");
+}
+
+/// Layout v2 ask (HANDOFF 2026-10-19): with no scan and nothing to say, the Meshes view draws no empty bar strip.
+#[test]
+fn meshes_bar_hidden_without_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let h = harness(pbr_opened(d.path()), 1024.0, true);
+    assert!(PanelState::load(&h.ctx, Id::new("meshes-bar")).is_none());
 }

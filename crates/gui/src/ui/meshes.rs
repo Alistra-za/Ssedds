@@ -18,19 +18,10 @@ const BLUE: egui::Color32 = egui::Color32::from_rgb(90, 140, 220);
 /// Problems listed under "Scan details"; the count is always shown.
 const MAX_LISTED: usize = 200;
 
-/// The whole page in the app: the view toggle, then the view.
-pub fn page(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    egui::Panel::top("meshes-header").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            super::header::view_toggle(ui);
-            mo2_button(ui, m);
-        });
-    });
-    show(ui, m);
-}
-
 pub fn show(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    egui::Panel::top("meshes-bar").show(ui, |ui| bar(ui, m));
+    if bar_has_content(m) {
+        egui::Panel::top("meshes-bar").show(ui, |ui| bar(ui, m));
+    }
     egui::Panel::left("meshes-tree")
         .default_size(620.0)
         .show(ui, |ui| tree(ui, m));
@@ -162,6 +153,23 @@ pub fn scan_row(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         });
     }
+}
+
+/// Whether `bar` draws anything; an empty bar strip is not drawn (layout v2 ask). Keep in step with `bar`.
+fn bar_has_content(m: &MeshesModel) -> bool {
+    let details = m.report.as_ref().is_some_and(|r| {
+        !r.notes.is_empty()
+            || !r.missing_mods.is_empty()
+            || !r.problems.is_empty()
+            || r.plugins.is_some()
+    });
+    m.scanning()
+        || !m.status.is_empty()
+        || details
+        || m.has_store()
+        || m.file_refs.is_some()
+        || m.error.is_some()
+        || m.banner.is_some()
 }
 
 fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
