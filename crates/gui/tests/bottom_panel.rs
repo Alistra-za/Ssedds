@@ -521,6 +521,10 @@ fn export_files_follows_a_decision_without_a_frame_of_lag() {
     let m = h.state();
     assert_eq!(m.export_files(), uncached_export_files(m));
     assert!(m.export_files() < files, "undo removes a file");
+    // Directly, with no frame between: `export_files` must notice the new view key itself.
+    h.state_mut().items.clear();
+    h.state_mut().invalidate_views();
+    assert_eq!(h.state().export_files(), 0);
 }
 
 #[test]
