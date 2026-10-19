@@ -786,6 +786,51 @@ fn the_collapsed_settings_strip_opens_the_settings() {
     h.get_by_label("Settings");
 }
 
+/// I2 (shots 15, 28): settings wider than the panel moved its left edge in, so the toolbar and viewports drew over its
+/// left strip. The centre ends at the panel's left edge, and the group headings start inside the panel.
+#[test]
+fn the_preview_settings_panel_is_never_drawn_under_the_toolbar() {
+    use eframe::egui::containers::panel::PanelState;
+    for key in ["landscape/rock01_rmaos", "landscape/rock01_normal.png"] {
+        let d = tempfile::tempdir().unwrap();
+        let mut model = opened(d.path());
+        model.expand(key);
+        assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+        let mut h = Harness::builder()
+            .with_size(eframe::egui::vec2(1600.0, 1000.0))
+            .build_ui_state(
+                |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+                model,
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run();
+        let panel = PanelState::load(&h.ctx, eframe::egui::Id::new("preview-settings"))
+            .expect("the settings are open at 1600 wide")
+            .outer_rect;
+        let bar = toolbar_rect(&h);
+        assert!(
+            bar.right() <= panel.left() + 0.5,
+            "{key}: the toolbar {bar:?} runs under the settings {panel:?}"
+        );
+        assert!(
+            panel.right() <= h.ctx.content_rect().right(),
+            "{key}: the settings {panel:?} run off the window"
+        );
+        // The panel is the rightmost thing with these labels; its stored rect is where egui moved it.
+        for g in ["Alpha", "Mipmaps", "Compression"] {
+            let r = h
+                .query_all_by_label(g)
+                .map(|n| n.rect())
+                .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+                .unwrap_or_else(|| panic!("{key}: no {g} heading"));
+            assert!(
+                panel.contains_rect(r),
+                "{key}: {g} {r:?} outside the settings {panel:?}"
+            );
+        }
+    }
+}
+
 /// K8, S7: at 1100 px the Advanced drawer gives way (down to its 260 px minimum) so the preview keeps PREVIEW_MIN, and
 /// it gets its width back once the preview closes.
 #[test]

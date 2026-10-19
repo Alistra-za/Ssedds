@@ -122,7 +122,10 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
         egui::Panel::right("preview-settings")
             .exact_size(SETTINGS_WIDTH)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical()
+                // I2: both axes, so settings wider than the panel scroll inside it instead of moving its left edge
+                // under the toolbar (egui cuts an over-wide right panel from the left). Thin bars show without hover.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+                egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| settings_panel::draw(ui, model, &key, true));
             });
