@@ -111,6 +111,12 @@ const lib = (cmd, env = {}) => {
     const m90 = mapDraws([{ event: 1, shape: 'S', world: [100, 0, 0] }], r90, { tol: 60, offsets: { R1: { S: [0, 100, 0] }, R2: { S: [0, 100, 0] } } })
     assert.deepEqual([m90[0].status, m90[0].form], ['matched', 'R1'], JSON.stringify(m90))
   }
+  {
+    // Codex aa95ee2 P2: case-folded offset prefixes that disagree must not give a confident match.
+    const rr = [{ form: 'A1', ref: 'a', pos: [0, 0, 0], angle: [0, 0, 0], shapes: ['panel'] }, { form: 'B1', ref: 'b', pos: [300, 0, 0], angle: [0, 0, 0], shapes: ['panel'] }]
+    const mm = mapDraws([{ event: 1, shape: 'panel:1', world: [0, 100, 0] }], rr, { tol: 60, offsets: { A1: { Panel: [0, 100, 0], panel: [0, -100, 0] }, B1: { panel: [0, 100, 0] } } })
+    assert.notEqual(mm[0].form, 'A1', JSON.stringify(mm))
+  }
   const mo = mapDraws([{ event: 6, shape: 'EyesMale', world: [-35, 315, 120] }], refs, { tol: 60, offsets: { F1: { EyesMale: [0, 0, 120] }, F2: { EyesMale: [35, 85, 120] } } })
   assert.deepEqual([mo[0].status, mo[0].by, mo[0].form], ['matched', 'offset', 'F2'])
   ok('mapDraws (W9): unique name matched by name; shared names and duplicate draws ambiguous; unexpected shape unmatched; collision resolved only with offsets')

@@ -626,7 +626,11 @@ const formKey = f => String(f).replace(/^0x/i, '').toUpperCase().padStart(8, '0'
 const lc = s => String(s).toLowerCase()
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
   const offs = Object.fromEntries(Object.entries(offsets).map(([k, v]) => [formKey(k), v]))
-  const offsetOf = (form, shape) => Object.entries(offs[formKey(form)] || {}).find(([p]) => lc(shape).startsWith(lc(p)))
+  // Prefixes that fold to the same shape but disagree (Panel vs panel) give no offset: the match stays ambiguous.
+  const offsetOf = (form, shape) => {
+    const hits = Object.entries(offs[formKey(form)] || {}).filter(([p]) => lc(shape).startsWith(lc(p)))
+    return hits.every(([, v]) => JSON.stringify(v) === JSON.stringify(hits[0][1])) ? hits[0] : undefined
+  }
   const nameCount = {}
   for (const d of draws) nameCount[lc(d.shape)] = (nameCount[lc(d.shape)] || 0) + 1
   const near = (list, d) => list.map(r => {
