@@ -624,22 +624,19 @@ struct MoveHits {
     out_of_range: bool,
 }
 
-/// Blank: every set. All digits: that position first when it is in 1..=N, then the sets whose id or label holds
-/// the digits. Anything else: the sets whose folded id or label holds the folded query.
+/// Blank: every set. All digits: that position only, never a name (I1), and no row when it is outside 1..=N.
+/// Anything else: the sets whose folded id or label holds the folded query.
 fn move_to_hits(views: &[SetView], query: &str) -> MoveHits {
     let q = engine::sets::fold_id(query.trim());
-    let named = |skip: Option<usize>| -> Vec<usize> {
-        (0..views.len())
-            .filter(|&i| Some(i) != skip)
+    if q.is_empty() || !q.chars().all(|c| c.is_ascii_digit()) {
+        let rows = (0..views.len())
             .filter(|&i| {
                 engine::sets::fold_id(&views[i].id).contains(&q)
                     || engine::sets::fold_id(&views[i].label).contains(&q)
             })
-            .collect()
-    };
-    if q.is_empty() || !q.chars().all(|c| c.is_ascii_digit()) {
+            .collect();
         return MoveHits {
-            rows: named(None),
+            rows,
             out_of_range: false,
         };
     }
@@ -649,10 +646,8 @@ fn move_to_hits(views: &[SetView], query: &str) -> MoveHits {
         .ok()
         .filter(|n| (1..=views.len()).contains(n))
         .map(|n| n - 1);
-    let mut rows: Vec<usize> = at.into_iter().collect();
-    rows.extend(named(at));
     MoveHits {
-        rows,
+        rows: at.into_iter().collect(),
         out_of_range: at.is_none(),
     }
 }
@@ -1394,6 +1389,16 @@ fn move_to_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
                     .hint_text("Number or name")
                     .desired_width(f32::INFINITY),
             );
+            // M5: a hint is only a placeholder, so the field gets an accessible name too.
+            field.widget_info(|| egui::WidgetInfo {
+                label: Some("Position or set name".into()),
+                ..egui::WidgetInfo::text_edit(
+                    true,
+                    query.as_str(),
+                    query.as_str(),
+                    "Number or name",
+                )
+            });
             if !field.has_focus() && !field.lost_focus() {
                 field.request_focus();
             }
@@ -1423,8 +1428,7 @@ fn move_to_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
             *sel = (*sel).min(last);
             if hits.out_of_range {
                 ui.weak(format!("Positions are 1 to {}", views.len()));
-            }
-            if hits.rows.is_empty() {
+            } else if hits.rows.is_empty() {
                 ui.weak("Nothing matches");
             }
             let row_h = ui.spacing().interact_size.y;
@@ -1513,28 +1517,46 @@ mod tests {
 
     #[test]
     fn move_to_hits_reads_numbers_then_names() {
-        let views: Vec<SetView> = ["a/Rock2", "a/leaf", "b/Moss"]
+        let views: Vec<SetView> = ["a/Rock2", "a/leaf", "b/Moss", "c/armor_4", "c/s0"]
             .iter()
             .map(|id| SetView::new(format!("k/{id}"), id.to_string(), vec![]))
             .collect();
         let hits = |q: &str| move_to_hits(&views, q);
-        // "2": position 2 first, then the names holding a 2 (not listed twice).
+        // I1: digits are a position only, never a name ("2" is not also Rock2).
         assert_eq!(
             hits("2"),
             MoveHits {
-                rows: vec![1, 0],
+                rows: vec![1],
                 out_of_range: false
             }
         );
         assert_eq!(hits(" 1 ").rows, vec![0]);
-        assert!(hits("0").out_of_range);
-        assert!(hits("0").rows.is_empty());
-        assert!(hits("99999999999999999999999").out_of_range);
-        assert_eq!(hits("").rows, vec![0, 1, 2]);
-        assert_eq!(hits("   ").rows, vec![0, 1, 2]);
+        assert_eq!(
+            hits("01").rows,
+            vec![0],
+            "a leading zero is still position 1"
+        );
+        // Out of range: no row, even where a name holds the digits (the 0 in s0).
+        for q in ["0", "00", "6", "99999999999999999999999"] {
+            assert_eq!(
+                hits(q),
+                MoveHits {
+                    rows: vec![],
+                    out_of_range: true
+                },
+                "{q:?}"
+            );
+        }
+        assert_eq!(hits("").rows, vec![0, 1, 2, 3, 4]);
+        assert_eq!(hits("   ").rows, vec![0, 1, 2, 3, 4]);
         assert!(!hits("").out_of_range);
         assert_eq!(hits("MOSS").rows, vec![2]);
-        assert_eq!(hits("A\\").rows, vec![0, 1], "folded like set ids");
+        assert_eq!(hits("A\\L").rows, vec![1], "folded like set ids");
+        assert_eq!(
+            hits("armor_4").rows,
+            vec![3],
+            "a name with a digit is a name"
+        );
         assert!(hits("zzz").rows.is_empty());
         assert!(!hits("zzz").out_of_range);
     }

@@ -65,14 +65,27 @@ fn open_move_to(h: &mut Harness<'static, AppModel>, id: &str) {
     h.run();
 }
 
-/// K14: the dialog's field, not the Sets search box (also a TextInput).
+/// K14: the dialog's field, not the Sets search box (also a TextInput), found by its accessible name (M5).
 fn field<'a>(h: &'a Harness<'static, AppModel>) -> egui_kittest::Node<'a> {
-    let mut v: Vec<_> = h
-        .query_all_by_role(Role::TextInput)
-        .filter(|n| n.accesskit_node().is_focused())
-        .collect();
-    assert_eq!(v.len(), 1, "one focused text field");
-    v.remove(0)
+    let f = h.get_by_role_and_label(Role::TextInput, "Position or set name");
+    assert!(f.accesskit_node().is_focused(), "the field has the focus");
+    f
+}
+
+/// The fixture plus nine created sets: 12 in all, one named "extra/armor_13" (a number in a name).
+fn twelve_sets(dir: &std::path::Path) -> AppModel {
+    let mut m = opened_checked(dir);
+    for i in 4..=12 {
+        let id = if i == 12 {
+            "extra/armor_13".to_string()
+        } else {
+            format!("extra/s{i:02}")
+        };
+        m.edit_docs("t", None, true, move |_, s| s.create_set(&id));
+    }
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(ids(&m).len(), 12);
+    m
 }
 
 fn type_query(h: &mut Harness<'static, AppModel>, text: &str) {
@@ -221,27 +234,27 @@ fn move_to_out_of_range_or_no_match_moves_nothing() {
     let mut h = harness(opened_checked(d.path()));
     h.run();
     let before = order_text(&h);
-    // "0" also matches rock01's own name (the 0 in "rock01"): that row is the only one, so Enter picks the set's
-    // own position, which closes the dialog and changes nothing. "99" and "zzz" have no row: Enter does nothing.
-    for (q, hint, own_row) in [
-        ("0", "Positions are 1 to 3", true),
-        ("99", "Positions are 1 to 3", false),
-        ("zzz", "Nothing matches", false),
+    // I1: digits are a position only, never a name ("0" would match the 0 in "rock01"). Out of range: no row, the
+    // hint, and Enter does nothing, so the dialog stays open.
+    open_move_to(&mut h, "landscape/rock01");
+    for (q, hint, other) in [
+        ("0", "Positions are 1 to 3", "Nothing matches"),
+        ("00", "Positions are 1 to 3", "Nothing matches"),
+        ("99", "Positions are 1 to 3", "Nothing matches"),
+        ("zzz", "Nothing matches", "Positions are 1 to 3"),
     ] {
-        if !dialog_open(&h) {
-            open_move_to(&mut h, "landscape/rock01");
-        }
         h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
         h.run();
         type_query(&mut h, q);
         assert_eq!(field(&h).value().as_deref(), Some(q));
         assert!(h.query_by_label(hint).is_some(), "{q:?} shows {hint:?}");
+        assert!(h.query_by_label(other).is_none(), "{q:?} hides {other:?}");
         let rows = h.query_all_by_label_contains("  landscape/").count();
-        assert_eq!(rows, own_row as usize, "{q:?}: rows listed");
+        assert_eq!(rows, 0, "{q:?}: no row listed");
         enter(&mut h);
         assert_eq!(order_text(&h), before, "{q:?} + Enter moves nothing");
         assert!(!h.state().is_dirty(), "{q:?}");
-        assert_eq!(dialog_open(&h), !own_row, "{q:?}: open after Enter");
+        assert!(dialog_open(&h), "{q:?}: the dialog stays open after Enter");
     }
     // A name that matches several sets highlights the first in the full order (leaf, position 1).
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
@@ -258,6 +271,100 @@ fn move_to_out_of_range_or_no_match_moves_nothing() {
         ids(h.state()),
         ["landscape/rock01", "landscape/leaf", "landscape/odd"]
     );
+}
+
+#[test]
+fn a_number_past_the_end_never_picks_a_set_named_with_it() {
+    // I1, review failure case 2: "13" with 12 sets, one named armor_13.
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(twelve_sets(d.path()));
+    h.run();
+    let before = ids(h.state());
+    // The created sets sort first: s04 is position 2, on screen.
+    assert_eq!(before[1], "extra/s04");
+    let rows_with_armor = |h: &Harness<'static, AppModel>| {
+        h.query_all_by_label_contains("armor_13")
+            .filter(|n| !in_sets_column(h, n.rect()))
+            .count()
+    };
+    open_move_to(&mut h, "extra/s04");
+    assert_eq!(rows_with_armor(&h), 1, "the control: blank lists armor_13");
+    type_query(&mut h, "13");
+    assert!(h.query_by_label("Positions are 1 to 12").is_some());
+    assert_eq!(rows_with_armor(&h), 0, "no name row for 13");
+    enter(&mut h);
+    assert_eq!(ids(h.state()), before, "nothing moved");
+    assert!(
+        h.query_by_label("Move extra/s04 to…").is_some(),
+        "the dialog stays open"
+    );
+}
+
+#[test]
+fn the_number_slot_has_one_width_for_one_and_two_digits() {
+    // M2: N = 12, so "1" and "12" share a slot and the names line up.
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(twelve_sets(d.path()));
+    h.run();
+    // Every card, also those scrolled below the panel (AccessKit rects are not clipped).
+    let widths: Vec<f32> = h
+        .query_all_by_label_contains("Position ")
+        .map(|n| n.rect().width())
+        .collect();
+    assert_eq!(widths.len(), 12, "{widths:?}");
+    assert!(
+        widths.iter().all(|w| (w - widths[0]).abs() < 0.01),
+        "one slot width: {widths:?}"
+    );
+    let one = h.get_by_label("Position 1 of 12").rect();
+    let two = h.get_by_label("Position 12 of 12").rect();
+    assert!(
+        (one.right() - two.right()).abs() < 0.01,
+        "right edges line up"
+    );
+}
+
+#[test]
+fn esc_closes_move_to_with_no_change() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened_checked(d.path()));
+    h.run();
+    let before = order_text(&h);
+    open_move_to(&mut h, "landscape/rock01");
+    type_query(&mut h, "1");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!dialog_open(&h), "Esc closes the dialog");
+    assert_eq!(order_text(&h), before);
+    assert!(!h.state().is_dirty());
+}
+
+#[test]
+fn ctrl_z_does_nothing_while_move_to_is_open() {
+    // `actions::keys` holds the global keys while a Sets dialog is pending.
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened_checked(d.path()));
+    h.run();
+    open_move_to(&mut h, "landscape/rock01");
+    type_query(&mut h, "1");
+    enter(&mut h);
+    let moved = ["landscape/rock01", "landscape/leaf", "landscape/odd"];
+    assert_eq!(ids(h.state()), moved);
+    open_move_to(&mut h, "landscape/rock01");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(
+        ids(h.state()),
+        moved,
+        "Ctrl+Z is held while the dialog is open"
+    );
+    assert!(dialog_open(&h));
+    // The control: closed, the same Ctrl+Z undoes the move.
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(ids(h.state()), LEAF_ODD_ROCK);
 }
 
 #[test]
