@@ -1668,6 +1668,91 @@ fn a_slot_that_gets_a_texture_flashes_and_a_set_switch_does_not() {
     assert!(slot_flashes(&h).is_empty(), "a set switch does not flash");
 }
 
+/// rock01 open in the editor (settled, 0.05 s steps) and leaf.png decided as an emissive that fills an empty slot.
+fn emissive_and_rock(d: &std::path::Path) -> (Harness<'static, AppModel>, String) {
+    let mut m = pbr_opened(d);
+    let leaf = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("leaf.png"))
+        .unwrap()
+        .key
+        .clone();
+    m.decide(
+        &leaf,
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::PbrEmissive),
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    rock_selected(&mut m);
+    let mut h = slow_harness(m);
+    h.run();
+    (h, leaf)
+}
+
+/// Drops `leaf` into rock01 (moving it out of its own set if asked) and waits for the plan.
+fn drop_leaf(h: &mut Harness<'static, AppModel>, leaf: &str) {
+    use sdc_gui::model::sets::{DropChoice, DropOutcome};
+    match h.state_mut().drop_on_set(leaf, "landscape/rock01") {
+        DropOutcome::Joined => {}
+        DropOutcome::AskChoice { .. } => assert_eq!(
+            h.state_mut()
+                .drop_choice(leaf, "landscape/rock01", DropChoice::Move),
+            DropOutcome::Joined
+        ),
+        o => panic!("the emissive should fill an empty slot: {o:?}"),
+    }
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+}
+
+/// Review M1: only a slot that gets a member flashes. Undoing the drop empties the slot: no flash; redo fills it.
+#[test]
+fn undoing_a_drop_does_not_flash_the_emptied_slot_and_redo_does() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut h, leaf) = emissive_and_rock(d.path());
+    drop_leaf(&mut h, &leaf);
+    for _ in 0..16 {
+        h.step();
+    }
+    assert!(slot_flashes(&h).is_empty(), "the drop's flash is over");
+    h.state_mut().undo();
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.step();
+    h.step();
+    assert!(
+        slot_flashes(&h).is_empty(),
+        "an emptied slot does not flash"
+    );
+    h.state_mut().redo();
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.step();
+    h.step();
+    assert_eq!(slot_flashes(&h).len(), 1, "redo fills the slot again");
+}
+
+/// Review M2: a slot changed while the set editor was not drawn does not flash when the set shows again.
+#[test]
+fn a_slot_changed_while_the_editor_was_hidden_does_not_flash() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut h, leaf) = emissive_and_rock(d.path());
+    let rock = h
+        .state()
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("rock01.png"))
+        .unwrap()
+        .key
+        .clone();
+    h.state_mut().select_item(&rock);
+    h.step();
+    h.step();
+    drop_leaf(&mut h, &leaf);
+    h.step();
+    rock_selected(h.state_mut());
+    h.step();
+    h.step();
+    assert!(slot_flashes(&h).is_empty(), "no flash for a hidden change");
+}
+
 /// The widths of the rect shapes painted last frame centred on `c` and about a thumbnail wide (image, fill, border).
 fn thumb_paint(h: &Harness<'static, AppModel>, c: eframe::egui::Pos2) -> Vec<f32> {
     use eframe::egui::{Pos2, Shape};

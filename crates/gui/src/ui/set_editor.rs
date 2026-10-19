@@ -95,6 +95,7 @@ pub fn draw(
 ) {
     let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
         ui.weak("This set is no longer in the plan.");
+        drops.slot_seen = None;
         return;
     };
     slot_changes(ui.ctx(), drops, &v);
@@ -249,8 +250,9 @@ pub fn draw(
     select_or_expand(ui, model, &v.id, select, expand);
 }
 
-/// R9 (CF14): a slot whose member changed since last frame, in the same set, flashes; drop, Replace, Assign…, an
-/// Explorer drop and undo/redo all land here. Another set drawn (a switch) only records its slots.
+/// R9 (CF14): a slot that got a new member since last frame, in the same set, flashes; drop, Replace, Assign…, an
+/// Explorer drop and undo/redo all land here. Another set drawn (a switch), or the first frame after the editor was
+/// hidden (`ui::draw_with_scan` clears `slot_seen`), only records its slots.
 fn slot_changes(ctx: &egui::Context, drops: &mut DropState, v: &SetView) {
     let mut slots: Vec<Option<String>> = vec![];
     for (k, f) in &v.slots {
@@ -267,8 +269,9 @@ fn slot_changes(ctx: &egui::Context, drops: &mut DropState, v: &SetView) {
         fn key(s: &[Option<String>], i: usize) -> Option<&str> {
             s.get(i).and_then(|k| k.as_deref())
         }
-        if let Some(n) = (0..seen.len().max(slots.len())).find(|&i| key(seen, i) != key(&slots, i))
-        {
+        // Review M1: the slot that got a member; an emptied slot (the texture moved away, an undone drop) does not.
+        let got = |i: &usize| key(&slots, *i).is_some() && key(seen, *i) != key(&slots, *i);
+        if let Some(n) = (0..slots.len()).find(got) {
             drops.slot_flash = Some((id.clone(), n as u8, ctx.input(|i| i.time)));
         }
     }

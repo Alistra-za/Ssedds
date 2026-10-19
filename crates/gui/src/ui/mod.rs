@@ -203,6 +203,11 @@ pub fn draw_with_scan(
     }
     let c = egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
     ui.set_opacity(opacity);
+    // Review M2: with the set editor not drawn, its next frame only records the slots, so a change made meanwhile
+    // does not flash (CF14).
+    if !set_editor_shown(model, three_d) {
+        state.drops.slot_seen = None;
+    }
     ui.ctx()
         .data_mut(|d| d.insert_temp(centre_id(), c.response.rect));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
