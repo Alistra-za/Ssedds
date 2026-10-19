@@ -35,7 +35,7 @@ From left to right: Textures, Sets, then the centre. The right edge holds the Ad
 
 ### Textures (left)
 
-One tile per file, with a thumbnail, the name and badges. Under the search box is a row of pills with counts: *Needs decision*, *Has warnings*, *Failed* and *Not in a set*. **Filter ▾** opens a popup with combos for *Sub-type*, *Output format*, *Encoder*, *Set membership* and *Sort* (Name, Source size or Status); it reads **Filter (k) ▾** while k of the four filter combos are set. The **−** / **+** buttons after it make the tiles smaller or larger (64 to 192 points, steps of 16). Everything combines, and **Clear filters** resets the pills, the combos and the search (not the sort or the tile size). A raw map that feeds a packed output shows "Packed into …". The **◀** on the heading collapses the column to a strip; **▶** expands it.
+One tile per file, with a thumbnail, the name and badges. Above the search box is a row of pills with counts: *Needs decision*, *Warnings*, *Failed* and *Not in a set*. **Filter ▾** opens a popup with combos for *Sub-type*, *Output format*, *Encoder*, *Set membership* and *Sort* (Name, Source size or Status), and stays open while you use it; it reads **Filter (k) ▾** while k of the four filter combos are set. The **−** / **+** buttons after it make the tiles smaller or larger (64 to 192 points, steps of 16). Everything combines, and **Clear filters** resets the pills, the combos and the search (not the sort or the tile size). A raw map that feeds a packed output shows "Packed into …". The **◀** on the heading collapses the column to a strip; **▶** expands it.
 
 ### Centre
 
@@ -238,7 +238,7 @@ A pinned slot keeps its fill. It refuses drags in or out and the slot commands, 
 
 A `_coat` map fills the Subsurface card, which then reads "Coat colour + strength". When RNM normal layers are active, the normal card has a blue outline; see [RNM layers](#rnm-normal-layers).
 
-**Shader** lists the shaders the current Mode offers. The pick reads "(auto)" when Tessalith chose it and "(fallback)" when the shader you asked for does not exist under this Mode. **Auto** clears your choice. Shader warnings show on the set's badge. See [Texture types](Texture-Types.md#set-shaders).
+**Shader** lists the shaders the current Mode offers. The pick reads "(auto)" when Tessalith chose it and "(fallback)" when the shader you asked for does not exist under this Mode. **Auto** clears your choice. Shader warnings show on the set card's **⚠ n** button. See [Texture types](Texture-Types.md#set-shaders).
 
 **Used by plugins** lists the plugin texture sets (TXST) and alternate textures that use this set, from the last scan, with **Refresh**.
 
@@ -341,7 +341,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 
 ## Presets
 
-**Presets…** (the last entry of the Preset combo in the header) (or *Open the preset creator* in the command palette) opens the preset creator, a window you can move and resize; where it was is remembered in `gui.toml`. It edits your own presets, the files in `%APPDATA%\sdc\presets\` that the command line also loads.
+**Presets…** (the last entry of the Preset combo in the header, or *Open the preset creator* in the command palette) opens the preset creator, a window you can move and resize; where it was is remembered in `gui.toml`. It edits your own presets, the files in `%APPDATA%\sdc\presets\` that the command line also loads.
 
 - **The top bar.** Pick a preset. The built-in ones are read-only: **Duplicate** makes an editable copy (named `<id>-copy`, without the original's suffix aliases), and **New** starts an empty preset on the current target's quality preset. **Name** is the preset's id and file name (lower-case letters, digits and `-`); **Base** is the preset it builds on; **Target** is cs, vanilla, or "from the base". **Save preset**, **Revert**, **Reset preset** (drops every per-sub-type and suffix-branch change, so the base shows through) and **Delete…** (your presets only, after a confirmation). The line beside them says whether the preset loads, or why not, in the engine's own words. **TOML preview** shows exactly what Save writes. Picking another preset, New or Duplicate while you have unsaved changes asks first. Preset files in the folder that did not load are listed at the top of the window with the reason, and **Open folder** opens the folder.
 - **The sub-types.** One row per sub-type, in two families: **PBR / Community Shaders** (the sub-types only the cs target has: PBR, coat, Advanced skin, flow, HDR sky; and complex grass), then **Vanilla** (everything vanilla also has, including glow, envmask and complex_material). Complex grass is under PBR / Community Shaders: both targets have it, but it is a Community Shaders feature. Inside a family the rows are grouped Colour, Normal, Data and Special, where it has them. A row's title shows its format; open it for:
