@@ -1,7 +1,7 @@
 //! M6 Track F3a: the selection gestures and the bulk panel, drawn.
 mod support;
 use eframe::egui::{Key, Modifiers};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::{AppModel, Dialog, Selection};
 use support::*;
@@ -213,6 +213,29 @@ fn the_copy_dialog_ticks_every_field_and_check_none_clears_them() {
     assert!(matches!(
         &h.state().dialog,
         Some(Dialog::CopySettings { fields, .. }) if fields.iter().all(|f| !f.1)
+    ));
+}
+
+#[test]
+fn the_copy_dialog_applies_nothing_with_nothing_ticked() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(LEAF, "format", serde_json::json!("bc1"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    m.open_copy_settings();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Check none").click();
+    h.run();
+    let apply = h.get_by_label("Apply");
+    assert!(apply.accesskit_node().is_disabled());
+    apply.click();
+    h.run();
+    assert!(matches!(
+        &h.state().dialog,
+        Some(Dialog::CopySettings { .. })
     ));
 }
 

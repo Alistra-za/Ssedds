@@ -184,10 +184,10 @@ fn chosen_id(name: &str) -> egui::Id {
     egui::Id::new(name).with("chosen")
 }
 
-/// The width a panel has now, in points: the Textures and Sets columns keep the width the user dragged to apart from
-/// egui's own (see `column_panel`).
+/// The width a panel has now, in points: the Textures and Sets columns and the Advanced drawer keep the width the user
+/// dragged to apart from egui's own (see `ui::chosen_width_panel`).
 fn panel_width(ctx: &egui::Context, name: &str) -> Option<f32> {
-    if matches!(name, "textures" | "sets") {
+    if matches!(name, "textures" | "sets" | "advanced") {
         return ctx.data_mut(|d| d.get_persisted::<f32>(chosen_id(name)));
     }
     PanelState::load(ctx, egui::Id::new(name)).map(|s| s.outer_rect.width())
@@ -309,21 +309,16 @@ pub fn capture(
     l.preview_layout = view.layout.name().to_string();
     l.look = look_now(looks.0, &prev.look);
     l.set_look = look_now(looks.1, &prev.set_look);
+    let content = ctx.content_rect();
+    // The 3D settings window is constrained to the window, Presets to the area under the header (A9).
     if let Some(r) = settings_window_now(ctx) {
-        let now = [r.min.x, r.min.y, r.width(), r.height()];
-        let moved = prev
-            .settings_window
-            .is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() >= 0.5));
-        if moved {
+        if let Some(now) = window_rect(r, prev.settings_window, content) {
             l.settings_window = Some(now);
         }
     }
     if let Some(r) = ctx.memory(|m| m.area_rect(crate::ui::presets::window_id())) {
-        let now = [r.min.x, r.min.y, r.width(), r.height()];
-        if prev
-            .presets_window
-            .is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() >= 0.5))
-        {
+        let area = crate::ui::below_header(ctx).unwrap_or(content);
+        if let Some(now) = window_rect(r, prev.presets_window, area) {
             l.presets_window = Some(now);
         }
     }
@@ -333,6 +328,30 @@ pub fn capture(
         .map(|n| n.to_string())
         .collect();
     l
+}
+
+/// A floating window's rect `r` to save over `prev`, or None to keep `prev`. A width or height at the clamp to `area`
+/// is egui's, not the user's: it keeps `prev`'s, and with nothing saved yet nothing is written (I3). The position is
+/// always taken; a change under half a point is noise.
+/// shortcut: a user who drags a window to the full width or height of `area` keeps their previous size on that axis;
+/// read the resize drag (`ctx.read_response`) if that ever matters.
+fn window_rect(r: Rect, prev: Option<[f32; 4]>, area: Rect) -> Option<[f32; 4]> {
+    let (wide, tall) = (
+        r.width() >= area.width() - 1.0,
+        r.height() >= area.height() - 1.0,
+    );
+    let now = match prev {
+        None if wide || tall => return None,
+        None => [r.min.x, r.min.y, r.width(), r.height()],
+        Some(p) => [
+            r.min.x,
+            r.min.y,
+            if wide { p[2] } else { r.width() },
+            if tall { p[3] } else { r.height() },
+        ],
+    };
+    prev.is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() >= 0.5))
+        .then_some(now)
 }
 
 /// The saved look when it still means `look` (a default look saves as nothing).
@@ -405,7 +424,7 @@ fn window_now(ctx: &egui::Context, prev: Option<WindowSettings>) -> Option<Windo
 /// Puts the saved arrangement into egui before the first frame: the panel widths and the Textures | Meshes view.
 pub fn restore_ctx(ctx: &egui::Context, l: &LayoutSettings) {
     for (name, w) in &l.widths {
-        if matches!(name.as_str(), "textures" | "sets") {
+        if matches!(name.as_str(), "textures" | "sets" | "advanced") {
             ctx.data_mut(|d| d.insert_persisted(chosen_id(name), *w));
         } else {
             let outer_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(*w, 100.0));

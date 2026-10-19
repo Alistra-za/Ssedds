@@ -340,6 +340,7 @@ impl eframe::App for SdcApp {
             crate::ui::actions::keys(&ctx, &mut self.model, self.state.drops.pending.is_some());
             // C7: the one header in both views (MO2… framed with Mode), then the bottom panel (R7), then the view.
             crate::ui::header::draw(ui, &mut self.model, Some(&mut self.meshes));
+            crate::ui::record_below_header(ui);
             crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer);
             crate::ui::meshes::show(ui, &mut self.meshes);
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {

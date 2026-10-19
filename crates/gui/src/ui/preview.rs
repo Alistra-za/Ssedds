@@ -7,12 +7,15 @@ use crate::model::preview::{EncodedState, PreviewOut, SourceState};
 use crate::model::view::{self, readouts, skipped_note, Channel, Layout, ViewState};
 use crate::model::AppModel;
 use crate::render::{self, Params, Slot, UploadPath};
+use crate::ui::columns::{strip_button, STRIP_WIDTH};
 use crate::ui::settings_panel;
 use eframe::egui::{self, Align, Color32, Layout as UiLayout, Rect, RichText, Sense, UiBuilder};
 use engine::config::Format;
 use std::sync::Arc;
 
 const SETTINGS_WIDTH: f32 = 280.0;
+/// The narrowest the viewports get (A10): below it the settings collapse to a strip.
+pub const PREVIEW_MIN: f32 = 480.0;
 const GAP: f32 = 6.0;
 const DIVIDER_GRAB: f32 = 10.0;
 const PANE_BG: Color32 = Color32::from_gray(38);
@@ -44,6 +47,8 @@ pub struct PreviewUi {
     fitted_for: Option<String>,
     /// The pixel readout of the texel under the cursor, shown in the notes strip (laid out before the viewports).
     readout: Option<Vec<String>>,
+    /// The settings were opened from their strip: they stay open until the preview closes (A10).
+    settings_open: bool,
 }
 
 /// The facts about the expanded texture's mips that the toolbar, the viewports and the notes share.
@@ -112,16 +117,46 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
     if info.known() {
         model.view.clamp_mip(info.first, info.end);
     }
-    egui::Panel::right("preview-settings")
-        .exact_size(SETTINGS_WIDTH)
-        .show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| settings_panel::draw(ui, model, &key, true));
-        });
-    let requests = egui::Panel::top("preview-toolbar")
+    // A10: the viewports keep PREVIEW_MIN; the settings collapse to a strip rather than squeeze them.
+    if state.settings_open || ui.available_width() - SETTINGS_WIDTH >= PREVIEW_MIN {
+        egui::Panel::right("preview-settings")
+            .exact_size(SETTINGS_WIDTH)
+            .show(ui, |ui| {
+                // I2: both axes, so settings wider than the panel scroll inside it instead of moving its left edge
+                // under the toolbar (egui cuts an over-wide right panel from the left). Thin bars show without hover.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| settings_panel::draw(ui, model, &key, true));
+            });
+    } else {
+        // Its own id: a strip under "preview-settings" would store 24 px as that panel's width (A6).
+        egui::Panel::right("preview-settings-strip")
+            .resizable(false)
+            .exact_size(STRIP_WIDTH)
+            .frame(egui::Frame::new().fill(ui.visuals().panel_fill))
+            .show(ui, |ui| {
+                if strip_button(ui, "Settings")
+                    .on_hover_text("Show the texture settings")
+                    .clicked()
+                {
+                    state.settings_open = true;
+                }
+            });
+    }
+    let toolbar_id = egui::Id::new("preview-toolbar");
+    let height = |ui: &egui::Ui| {
+        egui::containers::panel::PanelState::load(ui.ctx(), toolbar_id)
+            .map(|s| s.outer_rect.height())
+    };
+    let before = height(ui);
+    let requests = egui::Panel::top(toolbar_id)
         .show(ui, |ui| toolbar(ui, model, &info))
         .inner;
+    // The panel clips to last frame's height: a row the toolbar just gained (first draw, a pin) shows next frame.
+    if height(ui) != before {
+        ui.ctx().request_repaint();
+    }
     if requests.close {
         model.collapse();
         return;
@@ -159,14 +194,20 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, info: &Info) -> Requests {
         {
             requests.close = true;
         }
-        ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
+        // Top-aligned: centring the wrapped rows in last frame's height never settles once they wrap.
+        ui.with_layout(UiLayout::left_to_right(Align::Min), |ui| {
             ui.horizontal_wrapped(|ui| toolbar_row(ui, model, info, &mut requests));
         });
     });
     requests
 }
 
+/// The wrapped flow: Channels, View and Encode, each after a small caption, then the sRGB / UNORM choice and the
+/// mip control (K9, K10: captions and separators in one flow, so a cluster can wrap like any other widgets).
 fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &mut Requests) {
+    // A caption or the mip label never breaks across rows: the flow wraps whole widgets.
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    caption_label(ui, "Channels");
     for (channel, name) in CHANNELS {
         if ui
             .selectable_label(model.view.channel == channel, name)
@@ -177,22 +218,33 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
         }
     }
     ui.separator();
-    mip_control(ui, &mut model.view, info);
+    view_cluster(ui, model, info, requests);
+    ui.separator();
+    encode_cluster(ui, model);
     ui.separator();
     // HDR formats (BC6H, RGBA16F) are tone-mapped for display: the sRGB / UNORM choice does not apply to them.
     let hdr = info.format.is_some_and(Format::is_hdr);
-    ui.add_enabled_ui(!hdr, |ui| {
-        let linear = model.view.view_linear;
-        if ui.selectable_label(!linear, "sRGB").clicked() {
-            model.view.view_linear = false;
+    // One widget per `add_enabled`, so each wraps on its own in the flow (a nested scope's first widget never wraps).
+    let linear = model.view.view_linear;
+    for (text, value) in [("sRGB", false), ("UNORM", true)] {
+        if ui
+            .add_enabled(!hdr, egui::Button::selectable(linear == value, text))
+            .on_disabled_hover_text("HDR formats are tone-mapped for display")
+            .clicked()
+        {
+            model.view.view_linear = value;
         }
-        if ui.selectable_label(linear, "UNORM").clicked() {
-            model.view.view_linear = true;
-        }
-    })
-    .response
-    .on_disabled_hover_text("HDR formats are tone-mapped for display");
-    ui.separator();
+    }
+    mip_control(ui, &mut model.view, info);
+}
+
+fn caption_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).small().weak());
+}
+
+/// Side by side, Split, the pin controls, Heatmap, Lens, Tile 3×3, Fit, 1:1 and, for HDR, the exposure.
+fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &mut Requests) {
+    caption_label(ui, "View");
     let layout = model.view.layout;
     if ui
         .selectable_label(layout == Layout::SideBySide, "Side by side")
@@ -208,11 +260,15 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
         model.view.layout = Layout::Split;
     }
     pin_controls(ui, model);
-    let possible = info.heatmap_possible();
-    ui.add_enabled_ui(possible, |ui| {
-        ui.toggle_value(&mut model.view.heatmap, "Heatmap")
-            .on_disabled_hover_text("Needs an encoded result with a source image");
-    });
+    // `add_enabled`, not `add_enabled_ui`: a nested scope's first widget never wraps, so it ran under ✕ Close.
+    let heatmap = egui::Button::selectable(model.view.heatmap, "Heatmap");
+    if ui
+        .add_enabled(info.heatmap_possible(), heatmap)
+        .on_disabled_hover_text("Needs an encoded result with a source image")
+        .clicked()
+    {
+        model.view.heatmap = !model.view.heatmap;
+    }
     ui.toggle_value(&mut model.view.lens, "Lens")
         .on_hover_text(format!(
             "A magnifier circle at 8x that follows the cursor ({})",
@@ -223,21 +279,6 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
             "Repeat the picture 3×3 to check the seams ({})",
             super::actions::keys_text("tile")
         ));
-    if hdr {
-        ui.separator();
-        ui.spacing_mut().slider_width = 90.0;
-        let (lo, hi) = view::EXPOSURE_RANGE;
-        let r = ui
-            .add(
-                egui::Slider::new(&mut model.view.exposure, lo..=hi)
-                    .step_by(0.1)
-                    .suffix(" EV"),
-            )
-            .on_hover_text("Exposure: scales the HDR values by 2^EV before the tone map");
-        let ev = f64::from(model.view.exposure);
-        r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), ev, "Exposure"));
-    }
-    ui.separator();
     requests.fit = ui
         .button("Fit")
         .on_hover_text("Zoom to fit the viewport")
@@ -246,7 +287,27 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
         .button("1:1")
         .on_hover_text("One image pixel per screen pixel")
         .clicked();
-    ui.separator();
+    if info.format.is_some_and(Format::is_hdr) {
+        // Scoped: the mip slider after it keeps egui's width.
+        ui.scope(|ui| {
+            ui.spacing_mut().slider_width = 90.0;
+            let (lo, hi) = view::EXPOSURE_RANGE;
+            let r = ui
+                .add(
+                    egui::Slider::new(&mut model.view.exposure, lo..=hi)
+                        .step_by(0.1)
+                        .suffix(" EV"),
+                )
+                .on_hover_text("Exposure: scales the HDR values by 2^EV before the tone map");
+            let ev = f64::from(model.view.exposure);
+            r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), ev, "Exposure"));
+        });
+    }
+}
+
+/// Live encode and Encode now.
+fn encode_cluster(ui: &mut egui::Ui, model: &mut AppModel) {
+    caption_label(ui, "Encode");
     let mut live = model.preview.live;
     if ui
         .checkbox(&mut live, "Live encode")
@@ -315,9 +376,14 @@ fn mip_control(ui: &mut egui::Ui, view: &mut ViewState, info: &Info) {
 }
 
 /// True when the button was pressed. Present (disabled) even when nothing can be encoded, so the toolbar keeps its shape.
+/// The toolbar's is the preview's one filled push button while it can encode (A9).
 fn encode_button(ui: &mut egui::Ui, model: &AppModel) -> bool {
-    ui.add_enabled(can_encode(model), egui::Button::new("Encode now"))
-        .clicked()
+    let enabled = can_encode(model);
+    let mut b = egui::Button::new("Encode now");
+    if enabled {
+        b = b.fill(ui.visuals().selection.bg_fill);
+    }
+    ui.add_enabled(enabled, b).clicked()
 }
 
 fn can_encode(model: &AppModel) -> bool {

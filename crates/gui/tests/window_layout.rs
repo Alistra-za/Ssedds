@@ -606,3 +606,172 @@ fn a_legacy_grey_is_saved_back_as_bg_after_an_unrelated_change() {
     let (back, _) = GuiSettings::load(&path);
     assert_eq!(back.layout.look.unwrap().bg, Some([0.25; 3]));
 }
+
+// ---- Layout v2 Task 4.3 fix round 1: the Advanced drawer keeps the width the user chose
+
+type AppHarness = egui_kittest::Harness<'static, (sdc_gui::model::AppModel, sdc_gui::ui::State)>;
+
+/// A 1280×800 app with Advanced open at a saved `width`, restored the way a start restores gui.toml.
+fn advanced_at(width: f32, d: &std::path::Path) -> AppHarness {
+    let mut model = support::opened(d);
+    model.settings.advanced_open = true;
+    let h = egui_kittest::Harness::builder()
+        .with_size(vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (sdc_gui::model::AppModel, sdc_gui::ui::State)| {
+                sdc_gui::ui::draw_with(ui, m, s)
+            },
+            (model, sdc_gui::ui::State::default()),
+        );
+    sdc_gui::layout::restore_ctx(
+        &h.ctx,
+        &LayoutSettings {
+            widths: [("advanced".to_string(), width)].into(),
+            ..LayoutSettings::default()
+        },
+    );
+    let mut h = h;
+    h.run();
+    h
+}
+
+/// What a save would write for the Advanced drawer now.
+fn saved_advanced(h: &AppHarness) -> Option<f32> {
+    let m = &h.state().0;
+    sdc_gui::layout::capture(
+        &h.ctx,
+        &LayoutSettings::default(),
+        &m.filter,
+        &m.prefs,
+        &m.sets_filter,
+        &m.view,
+        (&Default::default(), &Default::default()),
+    )
+    .widths
+    .get("advanced")
+    .copied()
+}
+
+fn drawn_advanced(h: &AppHarness) -> f32 {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("advanced"))
+        .unwrap()
+        .outer_rect
+        .width()
+}
+
+/// At 1280 the drawer's cap is 656 with nothing expanded: a saved 700 is drawn at the cap and still saved as 700.
+#[test]
+fn a_saved_advanced_width_over_the_cap_is_kept_in_gui_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = advanced_at(700.0, d.path());
+    h.run();
+    assert!(drawn_advanced(&h) < 700.0, "drawn {}", drawn_advanced(&h));
+    assert_eq!(saved_advanced(&h), Some(700.0));
+}
+
+/// An expanded preview narrows the drawer; collapsing it gives the user's 600 back, and 600 is saved throughout.
+#[test]
+fn the_advanced_width_comes_back_after_a_preview_and_is_saved_unchanged() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = advanced_at(600.0, d.path());
+    assert_eq!(drawn_advanced(&h), 600.0);
+    h.state_mut().0.expand("landscape/rock01_rmaos");
+    assert!(h
+        .state_mut()
+        .0
+        .wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert!(drawn_advanced(&h) < 600.0, "drawn {}", drawn_advanced(&h));
+    assert_eq!(saved_advanced(&h), Some(600.0));
+    h.state_mut().0.collapse();
+    h.run();
+    assert_eq!(drawn_advanced(&h), 600.0);
+    assert_eq!(saved_advanced(&h), Some(600.0));
+}
+
+// ---- Layout v2 final review I3: a clamped Presets window never overwrites the saved size
+
+/// The Presets window open in a `size` app with `saved` in gui.toml: (its drawn rect, the area under the header,
+/// what a start then a real change writes to gui.toml as `presets_window`).
+fn presets_saved_after(
+    size: egui::Vec2,
+    saved: Option<[f32; 4]>,
+) -> (Rect, Rect, Option<[f32; 4]>) {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("sdc/gui.toml");
+    let settings = GuiSettings {
+        layout: LayoutSettings {
+            presets_window: saved,
+            ..LayoutSettings::default()
+        },
+        ..GuiSettings::default()
+    };
+    let mut m = sdc_gui::model::AppModel::placeholder(settings.clone());
+    m.open_presets();
+    // A draft fills the window (with none it shrinks to one line).
+    m.presets_model().select("cs-quality");
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(size)
+        .build_ui_state(
+            |ui, m: &mut sdc_gui::model::AppModel| sdc_gui::ui::draw(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.run();
+    let drawn = h
+        .ctx
+        .memory(|m| m.area_rect(sdc_gui::ui::presets::window_id()))
+        .expect("the Presets window is open");
+    let below = sdc_gui::ui::below_header(&h.ctx).expect("below-header recorded");
+    let mut app = sdc_gui::app::SdcApp::new(sdc_gui::model::AppModel::new(
+        settings,
+        Some(path.clone()),
+        support::session(),
+    ));
+    let t0 = Instant::now();
+    app.sync_layout_at(&h.ctx, t0);
+    app.model.filter.failed = true;
+    app.sync_layout_at(&h.ctx, t0 + Duration::from_secs(1));
+    app.sync_layout_at(&h.ctx, t0 + Duration::from_secs(4));
+    let written = GuiSettings::load(&path).0.layout;
+    assert_eq!(
+        written.filters,
+        vec!["failed".to_string()],
+        "gui.toml was written"
+    );
+    (drawn, below, written.presets_window)
+}
+
+#[test]
+fn a_presets_window_clamped_under_the_header_keeps_its_saved_size() {
+    let saved = [80.0, 120.0, 860.0, 680.0];
+    let (drawn, below, written) = presets_saved_after(vec2(1100.0, 700.0), Some(saved));
+    assert!(
+        drawn.height() < 680.0 && drawn.bottom() <= below.bottom() + 0.5,
+        "clamped at 1100x700: {drawn:?} in {below:?}"
+    );
+    let written = written.expect("the rect is saved");
+    // The clamped height keeps the saved one; the width, not clamped, is what egui drew. (Pre-existing, out of this
+    // fix: a saved W x H draws as W+3 x H+3, so the width written is 863.)
+    assert_eq!(
+        written[3], saved[3],
+        "the saved height is kept: {written:?}"
+    );
+    assert!(drawn.width() < below.width() - 1.0);
+    assert_eq!(written[2], drawn.width(), "{written:?}");
+    // Back in a large window, the saved height comes back, not the clamped one.
+    let (drawn, _, _) = presets_saved_after(vec2(1600.0, 1000.0), Some(written));
+    assert!(drawn.height() >= 680.0 - 0.5, "{drawn:?}");
+}
+
+#[test]
+fn a_fresh_profile_never_saves_a_clamped_presets_window() {
+    // 480 px tall at least with none saved, so a 520 px app clamps it.
+    let (drawn, below, written) = presets_saved_after(vec2(1100.0, 520.0), None);
+    assert!(
+        drawn.height() >= below.height() - 2.0,
+        "clamped: {drawn:?} in {below:?}"
+    );
+    assert_eq!(written, None, "a clamped first rect is not saved");
+}

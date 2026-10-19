@@ -1038,6 +1038,7 @@ fn menu(
 }
 
 /// What a button in the drop modal asked for; applied after the modal is drawn (the modal only reads the model).
+#[derive(Clone, Copy)]
 enum ModalAnswer {
     Choice(DropChoice),
     Replace,
@@ -1057,63 +1058,71 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
         return;
     }
     let Some(p) = st.pending.clone() else { return };
-    let mut answer = None;
-    let keys = super::dialogs::modal_keys(ctx, "set-drop", true, |ui| match &p {
+    use super::dialogs::Role;
+    // Per case: the title, the body line, and the footer as (label, role, what it answers).
+    let (title, line, footer) = match &p {
         Pending::Choice { item, from, .. } => {
             let name = model.item(item).map_or(item.clone(), |i| i.name.clone());
-            ui.heading(format!("{name} is in {from}"));
-            if ui.button("Move it here").clicked() {
-                answer = Some(ModalAnswer::Choice(DropChoice::Move));
-            }
-            if ui.button("Share (borrow its finished output)").clicked() {
-                answer = Some(ModalAnswer::Choice(DropChoice::Share));
-            }
-            if ui.button("Duplicate the source for this set").clicked() {
-                answer = Some(ModalAnswer::Choice(DropChoice::Duplicate));
-            }
-            if ui.button("Cancel").clicked() {
-                answer = Some(ModalAnswer::Close);
-            }
+            // K5: the three answers stay in the body; the footer has only Cancel.
+            let footer = vec![("Cancel".to_string(), Role::Plain, ModalAnswer::Close)];
+            (format!("{name} is in {from}"), None, footer)
         }
         Pending::Replace { set, existing, .. } => {
             let name = model
                 .item(existing)
                 .map_or(existing.clone(), |i| i.name.clone());
-            ui.heading("Replace?");
-            ui.label(format!("{set} already has {name} in that slot."));
-            ui.horizontal(|ui| {
-                if ui.button(format!("Replace {name}")).clicked() {
-                    answer = Some(ModalAnswer::Replace);
-                }
-                if ui.button("Cancel").clicked() {
-                    answer = Some(ModalAnswer::Close);
-                }
-            });
+            // K1: Enter does nothing here, so Cancel is Plain and nothing is filled.
+            let footer = vec![
+                (
+                    format!("Replace {}", super::dialogs::short_name(&name)),
+                    Role::Destructive,
+                    ModalAnswer::Replace,
+                ),
+                ("Cancel".to_string(), Role::Plain, ModalAnswer::Close),
+            ];
+            let line = format!("{set} already has {name} in that slot.");
+            ("Replace?".to_string(), Some(line), footer)
         }
         Pending::Refused(why) => {
-            ui.heading("Can't do that");
-            ui.label(why);
-            if ui.button("OK").clicked() {
-                answer = Some(ModalAnswer::Close);
-            }
+            let footer = vec![("OK".to_string(), Role::Default, ModalAnswer::Close)];
+            ("Can't do that".to_string(), Some(why.clone()), footer)
         }
         Pending::ConfirmDelete { id, members } => {
-            ui.heading(format!(
+            let title = format!(
                 "Delete set '{id}' ({members} member{})?",
                 if *members == 1 { "" } else { "s" }
-            ));
-            ui.label("Its textures stay; only the set is removed.");
-            ui.horizontal(|ui| {
-                if ui.button("Delete").clicked() {
-                    answer = Some(ModalAnswer::Delete);
-                }
-                if ui.button("Cancel").clicked() {
-                    answer = Some(ModalAnswer::Close);
-                }
-            });
+            );
+            let footer = vec![
+                ("Delete".to_string(), Role::Destructive, ModalAnswer::Delete),
+                ("Cancel".to_string(), Role::Default, ModalAnswer::Close),
+            ];
+            let line = "Its textures stay; only the set is removed.".to_string();
+            (title, Some(line), footer)
         }
-        Pending::Rename { .. } | Pending::FillNames { .. } => {}
-    });
+        Pending::Rename { .. } | Pending::FillNames { .. } => return,
+    };
+    let buttons: Vec<(&str, _, bool)> = footer.iter().map(|b| (b.0.as_str(), b.1, true)).collect();
+    let mut answer = None;
+    let (keys, clicked) =
+        super::dialogs::dialog(ctx, "set-drop", true, 420.0, &title, &buttons, |ui| {
+            if let Some(line) = &line {
+                ui.label(line);
+            }
+            if matches!(p, Pending::Choice { .. }) {
+                for (label, c) in [
+                    ("Move it here", DropChoice::Move),
+                    ("Share (borrow its finished output)", DropChoice::Share),
+                    ("Duplicate the source for this set", DropChoice::Duplicate),
+                ] {
+                    if ui.button(label).clicked() {
+                        answer = Some(ModalAnswer::Choice(c));
+                    }
+                }
+            }
+        });
+    if let Some(i) = clicked {
+        answer = Some(footer[i].2);
+    }
     // Esc and a click outside cancel; Enter takes the safe default of a confirm (Cancel) and presses the OK of a refusal.
     let confirm = matches!(p, Pending::ConfirmDelete { .. } | Pending::Refused(_));
     if answer.is_none() && (keys.cancel || (keys.enter && confirm)) {
@@ -1158,45 +1167,42 @@ fn fill_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
     let Some(Pending::FillNames { set, rows, ticks }) = &mut st.pending else {
         return;
     };
-    let (mut apply, mut cancel, mut error) = (false, false, None);
-    let keys = super::dialogs::modal_keys(ctx, "fill-names", false, |ui| {
-        ui.heading(format!("Fill {set} from names"));
-        ui.label("Each ticked file moves into the set's slot; nothing is copied.");
-        egui::Grid::new("fill-names-grid")
-            .num_columns(2)
-            .show(ui, |ui| {
-                for (r, tick) in rows.iter().zip(ticks.iter_mut()) {
-                    let mut on = *tick && r.blocked.is_none();
-                    let resp =
-                        ui.add_enabled(r.blocked.is_none(), egui::Checkbox::new(&mut on, &r.name));
-                    if let Some(why) = &r.blocked {
-                        resp.on_disabled_hover_text(why);
+    use super::dialogs::Role;
+    let mut error = None;
+    let title = format!("Fill {set} from names");
+    let buttons = [("Cancel", Role::Plain, true), ("Fill", Role::Default, true)];
+    let (keys, clicked) =
+        super::dialogs::dialog(ctx, "fill-names", false, 420.0, &title, &buttons, |ui| {
+            ui.label("Each ticked file moves into the set's slot; nothing is copied.");
+            egui::Grid::new("fill-names-grid")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    for (r, tick) in rows.iter().zip(ticks.iter_mut()) {
+                        let mut on = *tick && r.blocked.is_none();
+                        let resp = ui.add_enabled(
+                            r.blocked.is_none(),
+                            egui::Checkbox::new(&mut on, &r.name),
+                        );
+                        if let Some(why) = &r.blocked {
+                            resp.on_disabled_hover_text(why);
+                        }
+                        *tick = on;
+                        let mut what = format!("→ {}", r.slot.label());
+                        match (&r.blocked, &r.replaces) {
+                            (Some(why), _) => what.push_str(&format!(" · {why}")),
+                            (None, Some(cur)) => what.push_str(&format!(" · replaces {cur}")),
+                            _ => {}
+                        }
+                        ui.label(what);
+                        ui.end_row();
                     }
-                    *tick = on;
-                    let mut what = format!("→ {}", r.slot.label());
-                    match (&r.blocked, &r.replaces) {
-                        (Some(why), _) => what.push_str(&format!(" · {why}")),
-                        (None, Some(cur)) => what.push_str(&format!(" · replaces {cur}")),
-                        _ => {}
-                    }
-                    ui.label(what);
-                    ui.end_row();
-                }
-            });
-        ui.horizontal(|ui| {
-            if ui.button("Fill").clicked() {
-                apply = true;
-            }
-            if ui.button("Cancel").clicked() {
-                cancel = true;
-            }
+                });
         });
-    });
-    if keys.cancel || cancel {
+    if keys.cancel || clicked == Some(0) {
         st.pending = None;
         return;
     }
-    if apply || keys.enter {
+    if clicked == Some(1) || keys.enter {
         let picked: Vec<String> = rows
             .iter()
             .zip(ticks.iter())
@@ -1216,33 +1222,27 @@ fn rename_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
     let Some(Pending::Rename { id, text, error }) = &mut st.pending else {
         return;
     };
-    let (mut submit, mut cancel) = (false, false);
+    use super::dialogs::Role;
+    let mut submit = false;
+    let title = format!("Rename {id}");
+    // The field's own Enter renames, so no button is the Default.
+    let buttons = [("Cancel", Role::Plain, true), ("OK", Role::Plain, true)];
     // Only Esc cancels: a click outside could lose the typed name (AG11).
-    let keys = super::dialogs::modal_keys(ctx, "set-rename", false, |ui| {
-        ui.heading(format!("Rename {id}"));
-        let field = ui.text_edit_singleline(text);
-        if !field.has_focus() && !field.lost_focus() {
-            field.request_focus();
-        }
-        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            submit = true;
-        }
-        if let Some(e) = error.as_ref() {
-            ui.colored_label(RED, e);
-        }
-        ui.horizontal(|ui| {
-            if ui.button("OK").clicked() {
+    let (keys, clicked) =
+        super::dialogs::dialog(ctx, "set-rename", false, 420.0, &title, &buttons, |ui| {
+            let field = ui.text_edit_singleline(text);
+            if !field.has_focus() && !field.lost_focus() {
+                field.request_focus();
+            }
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 submit = true;
             }
-            if ui.button("Cancel").clicked() {
-                cancel = true;
+            if let Some(e) = error.as_ref() {
+                ui.colored_label(RED, e);
             }
         });
-    });
-    if keys.cancel {
-        cancel = true;
-    }
-    if cancel {
+    submit |= clicked == Some(1);
+    if keys.cancel || clicked == Some(0) {
         st.pending = None;
     } else if submit {
         match model.rename_set(id, text) {

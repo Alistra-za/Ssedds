@@ -68,6 +68,33 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     TEST_STATE.with(|s| draw_with(ui, model, &mut s.borrow_mut()));
 }
 
+fn below_header_id() -> egui::Id {
+    egui::Id::new("below-header")
+}
+
+fn centre_id() -> egui::Id {
+    egui::Id::new("centre-rect")
+}
+
+/// A9: the area under the header (and the scan row), as of the last frame.
+pub fn below_header(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp(below_header_id()))
+}
+
+/// A9: the CentralPanel's rect as of the last frame (the Meshes view has none: K7, it is `below_header`).
+pub fn centre_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp(centre_id()))
+}
+
+/// Call just before `bottom::draw`. K7: the Meshes view has no CentralPanel of ours, so it writes both keys alike.
+pub fn record_below_header(ui: &egui::Ui) {
+    let r = ui.available_rect_before_wrap();
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(below_header_id(), r);
+        d.insert_temp(centre_id(), r);
+    });
+}
+
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     draw_with_scan(ui, model, state, None);
 }
@@ -114,6 +141,8 @@ pub fn draw_with_scan(
     } else {
         header::draw(ui, model, None);
     }
+    // A9: what is left under the header and the scan row, for windows that must not cover them.
+    record_below_header(ui);
     // Under the header and the scan row, before the columns (R7).
     bottom::draw(ui, model, &mut state.drawer);
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
@@ -131,8 +160,9 @@ pub fn draw_with_scan(
     // A11: no columns until a folder is open.
     if model.root.is_some() {
         let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
-        // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
-        let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
+        // Each column stops at its minimum and leaves the columns after it theirs and the centre its floor.
+        let floor = centre_floor(model);
+        let textures_max = ui.available_width() - columns::SETS_MIN - floor;
         column_panel(
             ui,
             Column::Textures,
@@ -147,14 +177,16 @@ pub fn draw_with_scan(
             ui,
             Column::Sets,
             260.0,
-            columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
+            columns::SETS_MIN..=ui.available_width() - floor,
             model,
             |ui, model| {
                 sets_column::draw(ui, model, thumbs, drops, cmds);
             },
         );
     }
-    egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    let c = egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(centre_id(), c.response.rect));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
     // (spec §5.1).
     if let Some(f) = state.drops.file.take() {
@@ -169,6 +201,16 @@ pub fn draw_with_scan(
     presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
     set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+}
+
+/// The narrowest the centre gets: `CENTRE_MIN`, and while a texture is expanded enough for `PREVIEW_MIN` beside the
+/// collapsed settings strip (K8). The 16 is `Frame::central_panel`'s 8 px margin a side.
+pub(crate) fn centre_floor(model: &AppModel) -> f32 {
+    if model.expanded.is_some() {
+        set_preview::CENTRE_MIN.max(preview::PREVIEW_MIN + columns::STRIP_WIDTH + 16.0)
+    } else {
+        set_preview::CENTRE_MIN
+    }
 }
 
 /// Mirrors `centre`'s and `set_editor::draw`'s routing: true when the centre shows a set's editor (2D: a set still in
@@ -365,41 +407,49 @@ fn column_panel(
             model.save_settings();
         }
     } else {
-        // egui stores the width it drew, clamped to the window; keep the width the user dragged to apart, so a
-        // window narrowed and widened again gets it back.
-        use egui::containers::panel::PanelState;
-        let (panel, chosen) = (egui::Id::new(id), egui::Id::new(id).with("chosen"));
-        let resize = ui.ctx().read_response(panel.with("__resize"));
-        let released = resize.as_ref().is_some_and(|r| r.drag_stopped());
-        if !released && !resize.is_some_and(|r| r.dragged()) {
-            let w = ui
-                .data_mut(|d| d.get_persisted::<f32>(chosen))
-                .unwrap_or(width);
-            let outer_rect = egui::Rect::from_min_size(
-                ui.available_rect_before_wrap().min,
-                egui::vec2(w, ui.available_height()),
-            );
-            ui.data_mut(|d| d.insert_persisted(panel, PanelState { outer_rect }));
-        }
-        egui::Panel::left(id)
-            .default_size(width)
-            .size_range(range)
-            .show(ui, |ui| {
-                // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                // Trace-debug #11: blur text fields on the press, while the old set is still drawn, so its
-                // commit-on-focus-loss runs before the release changes the selection (AO1).
-                // shortcut: a press and release in one frame still loses the edit; defer the selection a frame if seen.
-                if ui.input(|i| i.pointer.primary_pressed())
-                    && ui.rect_contains_pointer(ui.max_rect())
-                {
-                    ui.memory_mut(|m| m.stop_text_input());
-                }
-                content(ui, model)
-            });
-        // egui stores the released width during `show`.
-        if let Some(s) = PanelState::load(ui.ctx(), panel).filter(|_| released) {
-            ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
-        }
+        let panel = egui::Panel::left(id).default_size(width).size_range(range);
+        chosen_width_panel(ui, id, width, panel, |ui| {
+            // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            // Trace-debug #11: blur text fields on the press, while the old set is still drawn, so its
+            // commit-on-focus-loss runs before the release changes the selection (AO1).
+            // shortcut: a press and release in one frame still loses the edit; defer the selection a frame if seen.
+            if ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(ui.max_rect())
+            {
+                ui.memory_mut(|m| m.stop_text_input());
+            }
+            content(ui, model)
+        });
+    }
+}
+
+/// Shows `panel` (whose id is `id`) at the width the user dragged to, `<id>/chosen`, or `width` before any drag.
+/// egui stores the width it drew, clamped to `size_range` and the window; keeping the chosen width apart gives it back
+/// once the clamp lifts (a window widened again, a preview closed), and it is what gui.toml saves (`layout.rs`).
+pub(crate) fn chosen_width_panel(
+    ui: &mut egui::Ui,
+    id: &str,
+    width: f32,
+    panel: egui::Panel,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    use egui::containers::panel::PanelState;
+    let (panel_id, chosen) = (egui::Id::new(id), egui::Id::new(id).with("chosen"));
+    let resize = ui.ctx().read_response(panel_id.with("__resize"));
+    let released = resize.as_ref().is_some_and(|r| r.drag_stopped());
+    if !released && !resize.is_some_and(|r| r.dragged()) {
+        let w = ui
+            .data_mut(|d| d.get_persisted::<f32>(chosen))
+            .unwrap_or(width);
+        let outer_rect = egui::Rect::from_min_size(
+            ui.available_rect_before_wrap().min,
+            egui::vec2(w, ui.available_height()),
+        );
+        ui.data_mut(|d| d.insert_persisted(panel_id, PanelState { outer_rect }));
+    }
+    panel.show(ui, add);
+    // egui stores the released width during `show`.
+    if let Some(s) = PanelState::load(ui.ctx(), panel_id).filter(|_| released) {
+        ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
     }
 }
