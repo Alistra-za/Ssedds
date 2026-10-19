@@ -34,7 +34,7 @@ pub fn view_switch(ui: &mut egui::Ui, m: &mut AppModel) {
     let mut three_d = m.settings.set_view_3d;
     if ui
         .selectable_label(!three_d, "2D")
-        .on_hover_text("Show the set's slot cards")
+        .on_hover_text("Show the set's slot rows")
         .clicked()
     {
         three_d = false;
