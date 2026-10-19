@@ -55,6 +55,12 @@ pub enum Pending {
         rows: Vec<FillProposal>,
         ticks: Vec<bool>,
     },
+    /// Note CF5: Move to…, the set, the typed number or name, and the highlighted row.
+    MoveTo {
+        id: String,
+        query: String,
+        sel: usize,
+    },
 }
 
 /// Item 17: files dropped from Explorer this frame, and where (`None` when the position is unknown).
@@ -96,6 +102,7 @@ enum Act {
     Drop(String, String),
     NewSet(String),
     Reorder(String, usize),
+    OpenMoveTo(String),
     OpenRename(String),
     Delete(String, usize),
     /// Item 18: open Fill from names on a set.
@@ -292,7 +299,7 @@ struct Editing<'a> {
 }
 
 /// Why the ≡ handle and Move up / Move down are off while the Sets filter is on.
-const CLEAR_TO_REORDER: &str = "Clear the filter to reorder sets";
+const CLEAR_TO_REORDER: &str = "Clear the filter to reorder sets, or use Move to…";
 
 /// R17: the search box, the pills with their counts and the shader popup, under the heading.
 fn filter_rows(ui: &mut egui::Ui, model: &mut AppModel) {
@@ -443,7 +450,16 @@ pub fn draw(
                     bulk: sel_sets.len() >= 2,
                 };
                 let out = pill(
-                    ui, model, thumbs, v, index, &editing, is_blocked, look, &sel_items, &mut acts,
+                    ui,
+                    model,
+                    thumbs,
+                    v,
+                    (index, views.len()),
+                    &editing,
+                    is_blocked,
+                    look,
+                    &sel_items,
+                    &mut acts,
                 );
                 if reveal
                     .as_deref()
@@ -514,11 +530,13 @@ pub fn draw(
                     st.pending = Some(Pending::Refused(why));
                 }
             }
-            Act::Reorder(id, to) => {
-                if model.reorder_set(&id, to) {
-                    st.flash = Some((id, now));
-                    ctx.request_repaint();
-                }
+            Act::Reorder(id, to) => apply_reorder(model, st, &ctx, &id, to),
+            Act::OpenMoveTo(id) => {
+                st.pending = Some(Pending::MoveTo {
+                    id,
+                    query: String::new(),
+                    sel: 0,
+                })
             }
             Act::OpenRename(id) => {
                 st.pending = Some(Pending::Rename {
@@ -551,6 +569,91 @@ pub fn draw(
             }
             Act::Shader(id, shader) => model.set_shader(&id, shader),
         }
+    }
+}
+
+/// K5: every reorder (drag, Move up / Move down, Move to…): the moved set flashes and scrolls into view (CF5).
+fn apply_reorder(
+    model: &mut AppModel,
+    st: &mut DropState,
+    ctx: &egui::Context,
+    id: &str,
+    to: usize,
+) {
+    let key = crate::model::sets::views(model)
+        .iter()
+        .find(|v| engine::sets::same_id(&v.id, id))
+        .map(|v| v.key.clone());
+    if model.reorder_set(id, to) {
+        st.flash = Some((id.to_string(), ctx.input(|i| i.time)));
+        ctx.request_repaint();
+        model.nav.reveal_set = key.filter(|k| !k.is_empty());
+    }
+}
+
+/// CF4: the card's place in the full order, a small weak number in a slot as wide as `total`'s, so names line up.
+fn position_label(ui: &mut egui::Ui, n: usize, total: usize) {
+    let font = egui::FontId::monospace(egui::TextStyle::Small.resolve(ui.style()).size);
+    let color = ui.visuals().weak_text_color();
+    let (w, galley) = ui.fonts_mut(|f| {
+        let w = f
+            .layout_no_wrap(total.to_string(), font.clone(), color)
+            .size()
+            .x;
+        (w, f.layout_no_wrap(n.to_string(), font, color))
+    });
+    // A fixed slot painted right-aligned: no child Ui, so the header row's width never depends on the number.
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(w, galley.size().y), egui::Sense::hover());
+    let at = egui::pos2(rect.right() - galley.size().x, rect.top());
+    ui.painter().galley(at, galley, color);
+    // K6: the number carries the name; the card's own response has none.
+    r.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Label,
+            true,
+            format!("Position {n} of {total}"),
+        )
+    });
+}
+
+/// Move to…'s list: indices into `views`, in the full order (CF5).
+#[derive(Debug, PartialEq, Eq)]
+struct MoveHits {
+    rows: Vec<usize>,
+    /// The query is a number outside 1..=N.
+    out_of_range: bool,
+}
+
+/// Blank: every set. All digits: that position first when it is in 1..=N, then the sets whose id or label holds
+/// the digits. Anything else: the sets whose folded id or label holds the folded query.
+fn move_to_hits(views: &[SetView], query: &str) -> MoveHits {
+    let q = engine::sets::fold_id(query.trim());
+    let named = |skip: Option<usize>| -> Vec<usize> {
+        (0..views.len())
+            .filter(|&i| Some(i) != skip)
+            .filter(|&i| {
+                engine::sets::fold_id(&views[i].id).contains(&q)
+                    || engine::sets::fold_id(&views[i].label).contains(&q)
+            })
+            .collect()
+    };
+    if q.is_empty() || !q.chars().all(|c| c.is_ascii_digit()) {
+        return MoveHits {
+            rows: named(None),
+            out_of_range: false,
+        };
+    }
+    // A number too big for usize is out of range too.
+    let at = q
+        .parse::<usize>()
+        .ok()
+        .filter(|n| (1..=views.len()).contains(n))
+        .map(|n| n - 1);
+    let mut rows: Vec<usize> = at.into_iter().collect();
+    rows.extend(named(at));
+    MoveHits {
+        rows,
+        out_of_range: at.is_none(),
     }
 }
 
@@ -636,7 +739,7 @@ fn pill(
     model: &AppModel,
     thumbs: &mut ThumbCache,
     v: &SetView,
-    index: usize,
+    (index, total): (usize, usize),
     editing: &Editing,
     blocked: bool,
     look: PillLook,
@@ -702,6 +805,7 @@ fn pill(
                         ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
                     };
                     ui.horizontal(|ui| {
+                        position_label(ui, index + 1, total);
                         let sense = if editing.reorder {
                             egui::Sense::drag()
                         } else {
@@ -1028,6 +1132,14 @@ fn menu(
         acts.push(Act::Reorder(v.id.clone(), index + 1));
         ui.close();
     }
+    // R2: it moves by the full order and names the target, so it stays on while a filter is on.
+    let move_to = ui
+        .button("Move to…")
+        .on_hover_text("Move the set to a position you type, by number or by name");
+    if tip(move_to).clicked() {
+        acts.push(Act::OpenMoveTo(v.id.clone()));
+        ui.close();
+    }
     let fill = ui.button("Fill from names…").on_hover_text(
         "Move in the files of this folder named like the set with a known suffix (_n, _p, _rmaos, …)",
     );
@@ -1055,6 +1167,10 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
     }
     if matches!(st.pending, Some(Pending::FillNames { .. })) {
         fill_modal(ctx, model, st);
+        return;
+    }
+    if matches!(st.pending, Some(Pending::MoveTo { .. })) {
+        move_to_modal(ctx, model, st);
         return;
     }
     let Some(p) = st.pending.clone() else { return };
@@ -1099,7 +1215,7 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
             let line = "Its textures stay; only the set is removed.".to_string();
             (title, Some(line), footer)
         }
-        Pending::Rename { .. } | Pending::FillNames { .. } => return,
+        Pending::Rename { .. } | Pending::FillNames { .. } | Pending::MoveTo { .. } => return,
     };
     let buttons: Vec<(&str, _, bool)> = footer.iter().map(|b| (b.0.as_str(), b.1, true)).collect();
     let mut answer = None;
@@ -1252,6 +1368,101 @@ fn rename_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
     }
 }
 
+/// Move to… (R3, CF5): type a position or a name, the arrows move the highlight, Enter or a click picks it. Esc or
+/// Cancel closes; a click outside does not (it holds typed text). It moves in the full order, filter or not.
+fn move_to_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
+    let Some(Pending::MoveTo { id, query, sel }) = &mut st.pending else {
+        return;
+    };
+    use super::dialogs::Role;
+    let views = crate::model::sets::views(model);
+    let visible = model.visible_sets();
+    let mut picked = None;
+    let title = format!("Move {id} to…");
+    let buttons = [("Cancel", Role::Plain, true)];
+    let (keys, clicked) =
+        super::dialogs::dialog(ctx, "set-move-to", false, 420.0, &title, &buttons, |ui| {
+            // Before the field, so it does not move its cursor with them (as the palette does).
+            let (up, down) = ui.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                )
+            });
+            let field = ui.add(
+                egui::TextEdit::singleline(query)
+                    .hint_text("Number or name")
+                    .desired_width(f32::INFINITY),
+            );
+            if !field.has_focus() && !field.lost_focus() {
+                field.request_focus();
+            }
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    field.id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                )
+            });
+            // Never on the opening frame: the field had no focus to lose (BY2).
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if field.changed() {
+                *sel = 0;
+            }
+            let hits = move_to_hits(&views, query);
+            let last = hits.rows.len().saturating_sub(1);
+            if up {
+                *sel = sel.saturating_sub(1);
+            }
+            if down {
+                *sel = (*sel + 1).min(last);
+            }
+            *sel = (*sel).min(last);
+            if hits.out_of_range {
+                ui.weak(format!("Positions are 1 to {}", views.len()));
+            }
+            if hits.rows.is_empty() {
+                ui.weak("Nothing matches");
+            }
+            let row_h = ui.spacing().interact_size.y;
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .auto_shrink([false, true])
+                .show_rows(ui, row_h, hits.rows.len(), |ui, range| {
+                    for r in range {
+                        let i = hits.rows[r];
+                        ui.horizontal(|ui| {
+                            let text = format!("{}  {}", i + 1, views[i].label);
+                            let resp = ui.selectable_label(r == *sel, text);
+                            if r == *sel && (up || down) {
+                                resp.scroll_to_me(None);
+                            }
+                            if resp.clicked() {
+                                picked = Some(i);
+                            }
+                            if !visible.contains(&i) {
+                                ui.weak("(hidden by filter)");
+                            }
+                        });
+                    }
+                });
+            if enter {
+                picked = picked.or_else(|| hits.rows.get(*sel).copied());
+            }
+        });
+    if keys.cancel || clicked == Some(0) {
+        st.pending = None;
+    } else if let Some(to) = picked {
+        // The set's own position closes too: `reorder_set` refuses it, so nothing changes.
+        let id = id.clone();
+        st.pending = None;
+        apply_reorder(model, st, ctx, &id, to);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1298,6 +1509,34 @@ mod tests {
             reorder_target(Some("c"), Some(0), &v),
             Some(("c".to_string(), 0))
         );
+    }
+
+    #[test]
+    fn move_to_hits_reads_numbers_then_names() {
+        let views: Vec<SetView> = ["a/Rock2", "a/leaf", "b/Moss"]
+            .iter()
+            .map(|id| SetView::new(format!("k/{id}"), id.to_string(), vec![]))
+            .collect();
+        let hits = |q: &str| move_to_hits(&views, q);
+        // "2": position 2 first, then the names holding a 2 (not listed twice).
+        assert_eq!(
+            hits("2"),
+            MoveHits {
+                rows: vec![1, 0],
+                out_of_range: false
+            }
+        );
+        assert_eq!(hits(" 1 ").rows, vec![0]);
+        assert!(hits("0").out_of_range);
+        assert!(hits("0").rows.is_empty());
+        assert!(hits("99999999999999999999999").out_of_range);
+        assert_eq!(hits("").rows, vec![0, 1, 2]);
+        assert_eq!(hits("   ").rows, vec![0, 1, 2]);
+        assert!(!hits("").out_of_range);
+        assert_eq!(hits("MOSS").rows, vec![2]);
+        assert_eq!(hits("A\\").rows, vec![0, 1], "folded like set ids");
+        assert!(hits("zzz").rows.is_empty());
+        assert!(!hits("zzz").out_of_range);
     }
 
     #[test]
