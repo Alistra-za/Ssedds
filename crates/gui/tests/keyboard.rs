@@ -550,3 +550,73 @@ fn ctrl_s_in_a_text_field_says_so_in_the_status_line() {
         .any(|e| e.text == "Ctrl+S: leave the text field first"));
     assert!(h.state().0.is_dirty(), "and nothing was saved");
 }
+
+/// Alpha of a modal backdrop: the last full-width black rect (egui multiplies an Area fade into its shapes). None until something is painted; a new Area first pass is an invisible sizing pass.
+fn frame_alpha<S>(h: &Harness<'_, S>) -> Option<u8> {
+    fn rects(s: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| rects(s, out)),
+            egui::Shape::Rect(r) => out.push(r.clone()),
+            _ => {}
+        }
+    }
+    let mut all = Vec::new();
+    h.output()
+        .shapes
+        .iter()
+        .for_each(|c| rects(&c.shape, &mut all));
+    all.iter()
+        .rev()
+        .find(|r| {
+            r.rect.width() >= 1400.0
+                && r.fill.to_srgba_unmultiplied()[..3] == [0; 3]
+                && r.fill.a() > 0
+        })
+        .map(|r| r.fill.a())
+}
+
+/// Steps (20 ms each, so a 0.2 s fade cannot finish in one) until an overlay frame is painted; returns its alpha on
+/// that first visible frame and once settled.
+fn first_and_rest(h: &mut Harness<'static, AppModel>) -> (u8, u8) {
+    for _ in 0..6 {
+        h.step();
+        if let Some(first) = frame_alpha(h) {
+            h.run_steps(20);
+            return (first, frame_alpha(h).expect("still painted"));
+        }
+    }
+    panic!("no overlay was painted");
+}
+
+fn fast_app(m: AppModel) -> Harness<'static, AppModel> {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1500.0, 900.0))
+        .with_step_dt(0.02)
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    // kittest zeroes the stock animation time, which would turn every Area fade off.
+    h.ctx.global_style_mut(|s| s.animation_time = 0.2);
+    h.run();
+    h
+}
+
+/// Note CF3: an overlay opened from the keyboard is at its resting opacity on its first visible frame; one opened
+/// with the mouse (the error dialog is the control) still fades in, so the pin can see a fade.
+#[test]
+fn the_palette_and_the_sheet_open_without_a_fade() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = fast_app(opened(d.path()));
+    h.key_press(Key::F1);
+    let (first, rest) = first_and_rest(&mut h);
+    assert_eq!(first, rest, "the sheet faded in");
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    let (first, rest) = first_and_rest(&mut h);
+    assert_eq!(first, rest, "the palette faded in");
+    h.key_press(Key::Escape);
+    h.run();
+    h.state_mut().dialog = Some(sdc_gui::model::Dialog::Error("Boom".into()));
+    let (first, rest) = first_and_rest(&mut h);
+    assert!(first < rest, "the control must fade: {first} vs {rest}");
+}

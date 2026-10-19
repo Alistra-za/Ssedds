@@ -361,6 +361,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         live.rows.clear();
         if r.has_focus() && live.open && !rows.is_empty() {
             egui::Area::new(live_id.with("area"))
+                .fade_in(false)
                 .order(egui::Order::Foreground)
                 .fixed_pos(list_rect.min)
                 .show(ui.ctx(), |ui| {
