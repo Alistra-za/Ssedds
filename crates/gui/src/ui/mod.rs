@@ -119,13 +119,13 @@ pub fn draw_with_scan(
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
     let three_d = state.set3d.enabled && set_preview::wanted(model);
     // C6: a set editor in 2D has Advanced as its panel's last tab; everything else keeps the window-edge drawer.
-    if model.root.is_none() {
-        // A11: the start screen has no drawer.
-    } else if !three_d && set_editor_shown(model, three_d) {
+    // A11: the start screen (no folder) has no drawer.
+    let folder = model.root.is_some();
+    if folder && !three_d && set_editor_shown(model, three_d) {
         // The drawer is one panel: keep the columns' widget ids (a set pill's open menu) as if it were drawn, as egui
         // does for a collapsed panel.
         ui.skip_ahead_auto_ids(1);
-    } else {
+    } else if folder {
         advanced::draw(ui, model, &mut state.advanced);
     }
     // A11: no columns until a folder is open.

@@ -61,10 +61,7 @@ fn a_recent_folder_on_the_start_screen_opens_it() {
     h.run();
     h.get_by_label(&root.display().to_string()).click();
     h.run();
-    assert!(
-        h.state().busy() || h.state().root.is_some(),
-        "opening started"
-    );
+    assert_eq!(h.state().root.as_deref(), Some(root.as_path()));
 }
 
 #[test]
