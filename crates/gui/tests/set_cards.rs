@@ -289,7 +289,7 @@ fn drags_a_texture(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> bool {
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(6.0 * step as f32, 0.0),
         ));
-        h.run_steps(2); // the ghost repaints while dragging
+        h.run_steps(2); // the payload pass, then the painted one
     }
     let dragging = egui::DragAndDrop::payload::<DragItem>(&h.ctx).is_some();
     egui::DragAndDrop::clear_payload(&h.ctx);
@@ -421,7 +421,7 @@ fn a_texture_dragged_over_a_card_outlines_it() {
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(2.0 * step as f32, 0.0),
         ));
-        h.run_steps(2); // the ghost repaints while dragging
+        h.run_steps(2); // the payload pass, then the painted one
     }
     assert!(
         egui::DragAndDrop::has_payload_of_type::<DragItem>(&h.ctx),
@@ -452,7 +452,7 @@ fn start_drag(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> egui::Pos2 
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(10.0 * step as f32, 0.0),
         ));
-        h.run_steps(2); // the ghost repaints while dragging
+        h.run_steps(2); // the payload pass, then the painted one
     }
     at + egui::vec2(30.0, 0.0)
 }
@@ -518,7 +518,7 @@ fn the_ghost_is_painted_from_the_payload_alone_and_goes_with_it() {
     let at = egui::pos2(900.0, 500.0);
     egui::DragAndDrop::set_payload(&h.ctx, DragItem(key));
     h.hover_at(at);
-    h.run_steps(2); // the ghost repaints while dragging
+    h.run_steps(2); // the payload pass, then the painted one
     assert_ghost_rect(&h, at);
     egui::DragAndDrop::clear_payload(&h.ctx);
     h.run();
@@ -618,4 +618,48 @@ fn a_pressed_strip_fills() {
     });
     h.run();
     assert!(covers(&h), "the pressed strip is filled");
+}
+
+/// Final review D1: a drag held still asks for no frames (the ghost moves only with pointer events), and egui's own
+/// repaint after the release frame takes the ghost and the dim away one frame after release.
+#[test]
+fn a_still_drag_asks_for_no_frames_and_the_ghost_goes_one_frame_after_release() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()));
+    h.run();
+    let label = outside_sets(&h, "rock01_normal.png").rect();
+    let p = start_drag(&mut h, label.center());
+    let delay = |h: &Harness<'static, AppModel>| {
+        h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    };
+    h.run();
+    assert_ghost_rect(&h, p);
+    assert!(delay(&h) > std::time::Duration::ZERO, "a still drag idles");
+    h.event(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.step();
+    assert_eq!(
+        delay(&h),
+        std::time::Duration::ZERO,
+        "the release frame asks for one more"
+    );
+    h.step();
+    let want = p + egui::vec2(12.0, 12.0);
+    assert!(
+        !shapes(&h).iter().any(|s| match s {
+            egui::Shape::Rect(r) => (r.rect.min - want).length() < 1.0,
+            egui::Shape::Mesh(m) => (m.calc_bounds().min - want).length() < 1.0,
+            _ => false,
+        }),
+        "the ghost is gone"
+    );
+    assert!(
+        !shapes(&h).iter().any(|s| matches!(s,
+            egui::Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color.a() < 200)),
+        "no tile is dimmed"
+    );
 }

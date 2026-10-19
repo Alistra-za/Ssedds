@@ -655,8 +655,8 @@ pub(super) fn drag_ghost(ctx: &egui::Context, model: &AppModel, thumbs: &mut Thu
     let Some(p) = egui::DragAndDrop::payload::<crate::ui::sets_column::DragItem>(ctx) else {
         return;
     };
-    // Until the release frame is followed by one without the ghost (the drag bounds this).
-    ctx.request_repaint();
+    // No repaint request: the ghost moves only with pointer events, and egui repaints after the release frame's
+    // events, which takes the ghost away (final review D1).
     let (Some(pos), Some(item)) = (ctx.pointer_interact_pos(), model.item(&p.0)) else {
         return;
     };
