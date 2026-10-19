@@ -3,6 +3,7 @@
 //! menu. Drawing only: every change is a model call, made after drawing.
 use super::columns::{bulk_menu, member, status_text, AMBER, RED};
 use super::slot_commands::SlotCmdState;
+use super::status::Status;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
@@ -217,16 +218,9 @@ fn warn_button(ui: &mut egui::Ui, v: &SetView, rows: &[(&str, &Warning)], acts: 
 }
 
 /// The status pill: the status dot and the short kind (cut on a narrow card), in a rounded frame, the long text on
-/// hover.
-fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, blocked: bool) {
-    use super::status::{dot, Status};
-    let s = if blocked {
-        Status::Blocks
-    } else if !crate::model::bottom::set_ready(model, v) {
-        Status::Warning
-    } else {
-        Status::Ready
-    };
+/// hover. The caller works out `s` from one `flagged` fetch per frame (Task 6).
+fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, s: Status) {
+    use super::status::dot;
     egui::Frame::new()
         .corner_radius(8.0)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
@@ -244,7 +238,7 @@ fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, blocked: bool) 
             }
         })
         .response
-        .on_hover_text(pill_hover(model, v, blocked));
+        .on_hover_text(pill_hover(model, v, s == Status::Blocks));
 }
 
 /// A member's thumbnail on the card with today's behaviours: click selects, double-click expands, a slot member has
@@ -422,6 +416,8 @@ pub fn draw(
     }
     let blocked: std::collections::HashSet<String> =
         export_blocks(model).into_iter().map(|i| i.set_id).collect();
+    // One fetch per frame: each drawn card asks `set_ready_in`, not `problems()` (Task 6).
+    let flagged = crate::model::bottom::flagged(model);
     let mut acts = vec![];
     // `dropped`: the set let go over a card this frame, with that card's index (R1).
     let (mut dropped, mut hovered) = (None, None);
@@ -511,7 +507,13 @@ pub fn draw(
                     v,
                     (index, views.len()),
                     &editing,
-                    blocked.contains(&v.id),
+                    if blocked.contains(&v.id) {
+                        Status::Blocks
+                    } else if !crate::model::bottom::set_ready_in(&flagged, v) {
+                        Status::Warning
+                    } else {
+                        Status::Ready
+                    },
                     look,
                     &sel_items,
                     &mut acts,
@@ -814,7 +816,7 @@ fn pill(
     v: &SetView,
     (index, total): (usize, usize),
     editing: &Editing,
-    blocked: bool,
+    status: Status,
     look: PillLook,
     sel_items: &HashSet<String>,
     acts: &mut Vec<Act>,
@@ -895,7 +897,7 @@ fn pill(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     warn_button(ui, v, &rows, acts);
-                                    status_pill(ui, model, v, blocked);
+                                    status_pill(ui, model, v, status);
                                     ui.with_layout(
                                         egui::Layout::left_to_right(egui::Align::Center),
                                         name,
@@ -908,7 +910,7 @@ fn pill(
                     });
                     if !wide {
                         ui.horizontal_wrapped(|ui| {
-                            status_pill(ui, model, v, blocked);
+                            status_pill(ui, model, v, status);
                             warn_button(ui, v, &rows, acts);
                         });
                     }

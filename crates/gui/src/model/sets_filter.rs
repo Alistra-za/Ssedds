@@ -90,6 +90,7 @@ impl AppModel {
                 return l.clone();
             }
         }
+        let flagged = bottom::flagged(self);
         let f = &self.sets_filter;
         let q = engine::sets::fold_id(f.search.trim());
         let entries = self
@@ -109,8 +110,8 @@ impl AppModel {
                         && (q.is_empty()
                             || engine::sets::fold_id(&v.id).contains(&q)
                             || engine::sets::fold_id(&v.label).contains(&q))
-                        && (!f.attention || !bottom::set_ready(self, v))
-                        && (!f.ready || bottom::set_ready(self, v))
+                        && (!f.attention || !bottom::set_ready_in(&flagged, v))
+                        && (!f.ready || bottom::set_ready_in(&flagged, v))
                         && (!f.no_json || !writes_json_in(self, &entries, v))
                         && f.shader
                             .is_none_or(|s| v.shader.as_ref().map(|p| p.shader) == Some(s))
@@ -136,9 +137,10 @@ impl AppModel {
             .as_ref()
             .map(|d| d.entries())
             .unwrap_or_default();
+        let flagged = bottom::flagged(self);
         let mut c = SetCounts::default();
         for v in views.iter().filter(|v| !v.key.is_empty()) {
-            let ready = bottom::set_ready(self, v);
+            let ready = bottom::set_ready_in(&flagged, v);
             c.ready += usize::from(ready);
             c.attention += usize::from(!ready);
             c.no_json += usize::from(!writes_json_in(self, &entries, v));

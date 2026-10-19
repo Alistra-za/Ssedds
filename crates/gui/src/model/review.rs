@@ -175,7 +175,36 @@ impl AppModel {
     }
 
     /// The files an export writes: items with a job that is neither undecided, packed into another nor skipped.
+    /// Cached like `bottom::problems` (Review and the header read it every frame): `items` is only replaced
+    /// together with `invalidate_views`, which changes the view key.
     pub fn export_files(&self) -> usize {
+        let key = self.view_key();
+        let inner = super::bottom::problems_inner(self);
+        {
+            let c = self.views.borrow();
+            if c.key.as_ref() == Some(&key) {
+                if let Some((k, n)) = c.export_files {
+                    if k == inner {
+                        return n;
+                    }
+                }
+            }
+        }
+        let n = self.count_export_files();
+        self.export_files_builds
+            .set(self.export_files_builds.get() + 1);
+        let mut c = self.views.borrow_mut();
+        if c.key.as_ref() != Some(&key) {
+            *c = super::ViewCache {
+                key: Some(key),
+                ..Default::default()
+            };
+        }
+        c.export_files = Some((inner, n));
+        n
+    }
+
+    fn count_export_files(&self) -> usize {
         self.items
             .iter()
             .filter(|i| {
