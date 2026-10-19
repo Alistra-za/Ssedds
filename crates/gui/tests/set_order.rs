@@ -499,6 +499,34 @@ fn a_palette_pick_scrolls_an_undrawn_set_into_view() {
 }
 
 #[test]
+fn a_reveal_lands_on_a_far_card_among_mixed_heights() {
+    // Review I1: the first screen holds short cards (no members), so the mean underestimates the rest.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = many_sets(d.path(), 500);
+    let all: Vec<String> = m.items.iter().map(|i| i.key.clone()).collect();
+    for (i, s) in m.sets.iter_mut().enumerate() {
+        if i < 20 {
+            s.members.clear();
+        } else {
+            s.members = all.clone();
+        }
+    }
+    m.invalidate_views();
+    let key = views(&m)[449].key.clone();
+    let mut h = big_harness(m);
+    h.run();
+    h.state_mut()
+        .palette_pick(&sdc_gui::model::nav::Pick::Set(key));
+    // `run` settling is the pin that the re-aim ends.
+    h.run();
+    assert!(
+        pos_rect(&h, 450, 500).is_some(),
+        "card 450 is on screen: {:?}",
+        positions(&h)
+    );
+}
+
+#[test]
 fn a_drag_released_after_the_source_scrolled_away_still_reorders() {
     // Review Focus 1.
     let d = tempfile::tempdir().unwrap();

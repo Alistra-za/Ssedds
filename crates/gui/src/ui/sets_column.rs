@@ -88,7 +88,14 @@ pub struct DropState {
     pub slot_note: Option<SlotNote>,
     /// R4: each set card's height when last laid out, by set id; a card off screen allocates this instead.
     pub card_h: HashMap<String, f32>,
+    /// Review I1: frames a reveal has re-aimed at a card not yet laid out (capped by `REVEAL_TRIES`).
+    pub reveal_tries: u8,
+    /// The Sets scroll offset and view height last frame, for a reveal's jump (review I1).
+    pub view: Option<(f32, f32)>,
 }
+
+/// Review I1: a reveal re-aims at most this many frames, so a key that names no visible card cannot loop.
+const REVEAL_TRIES: u8 = 8;
 
 /// R4: the height of a card never laid out, until any card has been measured (then their mean).
 const CARD_EST: f32 = 110.0;
@@ -441,81 +448,121 @@ pub fn draw(
         .map(|(id, t)| (id.as_str(), (now - t) / FLASH_SECS));
     // Laid-out cards by full index, for the insertion line.
     let mut rects: HashMap<usize, egui::Rect> = HashMap::new();
-    // A set the palette picked scrolls into view (item 19).
-    let reveal = model.nav.reveal_set.take();
     let est = if st.card_h.is_empty() {
         CARD_EST
     } else {
         st.card_h.values().sum::<f32>() / st.card_h.len() as f32
     };
+    let card_h = |id: &str| st.card_h.get(id).copied().unwrap_or(est);
+    // A set the palette picked scrolls into view (item 19); `reveal_at` is its place in `visible`.
+    let reveal = model.nav.reveal_set.take();
+    let reveal_at = reveal.as_deref().and_then(|k| {
+        visible
+            .iter()
+            .position(|&i| !views[i].key.is_empty() && views[i].key == k)
+    });
+    // Review I1: a target outside last frame's view jumps to the offset the known heights give, the least scroll
+    // that shows it. `scroll_to_rect` on an estimated rect glided to the wrong card, and its relative target
+    // double-counted when aimed again.
+    let jump = reveal_at.and_then(|n| {
+        let (off, view_h) = st.view?;
+        let sp = ui.spacing().item_spacing.y;
+        let top: f32 = visible[..n]
+            .iter()
+            .map(|&i| card_h(&views[i].id) + sp)
+            .sum();
+        let h = card_h(&views[visible[n]].id);
+        let outside = top + h <= off || top >= off + view_h;
+        outside.then(|| {
+            if top < off {
+                top
+            } else {
+                (top + h - view_h).max(0.0)
+            }
+        })
+    });
     let mut resized = false;
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // `index` is the set's place among all sets: the reorder and Move up / Move down use it (K19).
-            for &index in visible.iter() {
-                let v = &views[index];
-                // R4: a card outside the clip rect allocates its last height instead of being laid out.
-                // shortcut: heights of off-screen cards go stale when the column width changes (the scroll bar length is off until they are drawn); measure on resize if it shows.
-                let h = st.card_h.get(&v.id).copied().unwrap_or(est);
-                let probe =
-                    egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), h));
-                let rect = if ui.is_rect_visible(probe) {
-                    let look = PillLook {
-                        dragging: dragged.as_deref() == Some(v.id.as_str()),
-                        flash: flash.filter(|(id, _)| *id == v.id).map(|(_, f)| f),
-                        selected: !v.key.is_empty() && sel_sets.contains(&v.key),
-                        bulk: sel_sets.len() >= 2,
-                    };
-                    let out = pill(
-                        ui,
-                        model,
-                        thumbs,
-                        v,
-                        (index, views.len()),
-                        &editing,
-                        blocked.contains(&v.id),
-                        look,
-                        &sel_items,
-                        &mut acts,
-                    );
-                    resized |= (out.rect.height() - h).abs() > 0.5;
-                    st.card_h.insert(v.id.clone(), out.rect.height());
-                    if let Some(d) = out.dropped_set {
-                        dropped = Some((d, index));
-                    }
-                    if out.hovered_by_set {
-                        hovered = Some(index);
-                    }
-                    rects.insert(index, out.rect);
-                    out.rect
-                } else {
-                    // K9: `allocate_space` takes one auto id, as the card's scope does, so later cards keep their ids.
-                    ui.allocate_space(probe.size()).1
+    let mut reveal_drawn = false;
+    let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    if let Some(y) = jump {
+        area = area.vertical_scroll_offset(y);
+    }
+    let out = area.show(ui, |ui| {
+        // `index` is the set's place among all sets: the reorder and Move up / Move down use it (K19).
+        for (pos, &index) in visible.iter().enumerate() {
+            let v = &views[index];
+            // R4: a card outside the clip rect allocates its last height instead of being laid out.
+            // shortcut: heights of off-screen cards go stale when the column width changes (the scroll bar length is off until they are drawn); measure on resize if it shows.
+            // shortcut: after a jump, cards above the view are estimates, so scrolling up shifts the visible cards as each is measured; anchor the top visible card (add the height deltas above it to the scroll offset) if users notice.
+            let h = st.card_h.get(&v.id).copied().unwrap_or(est);
+            let probe =
+                egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), h));
+            let rect = if ui.is_rect_visible(probe) {
+                let look = PillLook {
+                    dragging: dragged.as_deref() == Some(v.id.as_str()),
+                    flash: flash.filter(|(id, _)| *id == v.id).map(|(_, f)| f),
+                    selected: !v.key.is_empty() && sel_sets.contains(&v.key),
+                    bulk: sel_sets.len() >= 2,
                 };
-                if reveal
-                    .as_deref()
-                    .is_some_and(|k| !v.key.is_empty() && k == v.key)
-                {
+                let out = pill(
+                    ui,
+                    model,
+                    thumbs,
+                    v,
+                    (index, views.len()),
+                    &editing,
+                    blocked.contains(&v.id),
+                    look,
+                    &sel_items,
+                    &mut acts,
+                );
+                resized |= (out.rect.height() - h).abs() > 0.5;
+                st.card_h.insert(v.id.clone(), out.rect.height());
+                if let Some(d) = out.dropped_set {
+                    dropped = Some((d, index));
+                }
+                if out.hovered_by_set {
+                    hovered = Some(index);
+                }
+                rects.insert(index, out.rect);
+                out.rect
+            } else {
+                // K9: `allocate_space` takes one auto id, as the card's scope does, so later cards keep their ids.
+                ui.allocate_space(probe.size()).1
+            };
+            if reveal_at == Some(pos) {
+                reveal_drawn = rects.contains_key(&index);
+                // A target in or across last frame's view glides there as before.
+                if jump.is_none() {
                     ui.scroll_to_rect(rect, None);
                 }
             }
-            if let (Some(from), Some(to)) = (dragged_index, hovered) {
-                if let Some((r, y)) = rects
-                    .get(&to)
-                    .and_then(|r| insertion_y(from, to, *r).map(|y| (*r, y)))
-                {
-                    let accent = ui.visuals().selection.stroke.color;
-                    ui.painter().line_segment(
-                        [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
-                        egui::Stroke::new(3.0, accent),
-                    );
-                }
+        }
+        if let (Some(from), Some(to)) = (dragged_index, hovered) {
+            if let Some((r, y)) = rects
+                .get(&to)
+                .and_then(|r| insertion_y(from, to, *r).map(|y| (*r, y)))
+            {
+                let accent = ui.visuals().selection.stroke.color;
+                ui.painter().line_segment(
+                    [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
+                    egui::Stroke::new(3.0, accent),
+                );
             }
-            if model.root.is_some() {
-                new_set_area(ui, &editing, &mut acts);
-            }
-        });
+        }
+        if model.root.is_some() {
+            new_set_area(ui, &editing, &mut acts);
+        }
+    });
+    st.view = Some((out.state.offset.y, out.inner_rect.height()));
+    // Review I1: aim again next frame until the target is laid out with every height around it measured.
+    if reveal_at.is_some() && !(reveal_drawn && !resized) && st.reveal_tries < REVEAL_TRIES {
+        st.reveal_tries += 1;
+        model.nav.reveal_set = reveal;
+        ctx.request_repaint();
+    } else if reveal.is_some() {
+        st.reveal_tries = 0;
+    }
     // A measured height moved the cards below it: one more frame lays them out where they now are (settles).
     if resized {
         ctx.request_repaint();

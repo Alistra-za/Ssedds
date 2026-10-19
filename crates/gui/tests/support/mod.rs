@@ -61,6 +61,8 @@ pub fn opened(dir: &Path) -> AppModel {
 }
 
 /// Task 5: `opened` with `m.sets` replaced by `n` clones of the first set, each under its own key, members unchanged.
+/// The synthetic sets last only until the next plan: any re-plan (a reorder does one) replaces them with the fixture's
+/// own sets. After an edit, check `sets_doc.order()`, not `views`.
 pub fn many_sets(dir: &Path, n: usize) -> AppModel {
     let mut m = opened(dir);
     let first = m.sets[0].clone();
