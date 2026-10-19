@@ -483,7 +483,11 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
             ),
         ] {
             if ui
-                .add(egui::Button::selectable(*on, text).corner_radius(10))
+                .add(
+                    egui::Button::selectable(*on, text)
+                        .corner_radius(10)
+                        .frame_when_inactive(true),
+                )
                 .on_hover_text(hover)
                 .clicked()
             {
