@@ -55,7 +55,7 @@ pub fn modal_keys(
 
 /// Whether dialog `id` was drawn the frame before this one; call once per frame it is drawn. False on the frame it
 /// opens, so the Enter that opened it (a palette pick) is not also the dialog's Enter.
-pub fn opened_before(ctx: &egui::Context, id: &str) -> bool {
+fn opened_before(ctx: &egui::Context, id: &str) -> bool {
     let (seen, frame) = (egui::Id::new(("modal-seen", id)), ctx.cumulative_frame_nr());
     let was_open = ctx
         .data(|d| d.get_temp::<u64>(seen))
@@ -85,8 +85,8 @@ pub fn footer_order(roles: &[Role]) -> Vec<usize> {
     order
 }
 
-/// The one dialog frame (A7): title strip (heading + separator), body, separator, right-aligned footer, at most
-/// `width` px wide. The Default is filled with `visuals.selection.bg_fill`; a Destructive one has a 1.5 px `RED`
+/// The one dialog frame (A7): title strip (heading + separator), body, separator, right-aligned footer, exactly
+/// `width` px wide (the right-to-left footer fills the row). The Default is filled with `visuals.selection.bg_fill`; a Destructive one has a 1.5 px `RED`
 /// outline. `buttons` are (label, role, enabled); a disabled one is drawn disabled and never clicked. Built on
 /// [`modal_keys`]: returns its Keys and the index into `buttons` that was clicked. The caller maps Enter to its
 /// Default (the button Enter pressed before A7; Enter semantics are unchanged, DECISIONS AG11).
@@ -179,7 +179,7 @@ fn copy_settings(
         }
     });
     let close = clicked == Some(0) || k.cancel;
-    if clicked == Some(1) {
+    if clicked == Some(1) && any {
         let ticked: Vec<String> = fields.iter().filter(|f| f.1).map(|f| f.0.clone()).collect();
         model.apply_copy_settings(from, to, &ticked);
     } else if close {

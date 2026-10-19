@@ -44,15 +44,33 @@ enum Act {
     ResetAll,
 }
 
+/// A9: the saved rect moved (then shrunk) to fit inside `area`, the window below the header; with none saved,
+/// a rect centred on `centre` at 90 % of its size, at least 640x480, shrunk to `area`.
+pub fn place(saved: Option<egui::Rect>, area: egui::Rect, centre: egui::Rect) -> egui::Rect {
+    let (size, want) = match saved {
+        Some(r) => (r.size(), r.min),
+        None => {
+            let s = (centre.size() * 0.9).max(egui::vec2(640.0, 480.0));
+            (s, centre.center() - s / 2.0)
+        }
+    };
+    let size = size.min(area.size());
+    let min = want.max(area.min).min(area.max - size);
+    egui::Rect::from_min_size(min, size)
+}
+
 pub fn window(ctx: &egui::Context, model: &mut AppModel) {
     if !model.presets_open {
         return;
     }
     let target = model.target;
-    let rect = model.settings.layout.presets_window.map_or(
-        egui::Rect::from_min_size(egui::pos2(80.0, 80.0), egui::vec2(860.0, 680.0)),
-        |[x, y, w, h]| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)),
-    );
+    let area = super::below_header(ctx).unwrap_or_else(|| ctx.content_rect());
+    let saved = model
+        .settings
+        .layout
+        .presets_window
+        .map(|[x, y, w, h]| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)));
+    let rect = place(saved, area, super::centre_rect(ctx).unwrap_or(area));
     let pm = model.presets_model();
     let mut acts = vec![];
     let mut open = true;
@@ -61,7 +79,9 @@ pub fn window(ctx: &egui::Context, model: &mut AppModel) {
         .open(&mut open)
         .resizable(true)
         .default_rect(rect)
-        .constrain(true)
+        .constrain_to(area)
+        // K6: constrain_to alone lets a window taller than `area` rise over the header.
+        .max_size(area.size())
         .show(ctx, |ui| {
             top_bar(ui, pm, &mut acts);
             ui.separator();

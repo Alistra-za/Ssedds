@@ -68,6 +68,33 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     TEST_STATE.with(|s| draw_with(ui, model, &mut s.borrow_mut()));
 }
 
+fn below_header_id() -> egui::Id {
+    egui::Id::new("below-header")
+}
+
+fn centre_id() -> egui::Id {
+    egui::Id::new("centre-rect")
+}
+
+/// A9: the area under the header (and the scan row), as of the last frame.
+pub fn below_header(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp(below_header_id()))
+}
+
+/// A9: the CentralPanel's rect as of the last frame (the Meshes view has none: K7, it is `below_header`).
+pub fn centre_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp(centre_id()))
+}
+
+/// Call just before `bottom::draw`. K7: the Meshes view has no CentralPanel of ours, so it writes both keys alike.
+pub fn record_below_header(ui: &egui::Ui) {
+    let r = ui.available_rect_before_wrap();
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(below_header_id(), r);
+        d.insert_temp(centre_id(), r);
+    });
+}
+
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     draw_with_scan(ui, model, state, None);
 }
@@ -114,6 +141,8 @@ pub fn draw_with_scan(
     } else {
         header::draw(ui, model, None);
     }
+    // A9: what is left under the header and the scan row, for windows that must not cover them.
+    record_below_header(ui);
     // Under the header and the scan row, before the columns (R7).
     bottom::draw(ui, model, &mut state.drawer);
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
@@ -154,7 +183,9 @@ pub fn draw_with_scan(
             },
         );
     }
-    egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    let c = egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(centre_id(), c.response.rect));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
     // (spec §5.1).
     if let Some(f) = state.drops.file.take() {
