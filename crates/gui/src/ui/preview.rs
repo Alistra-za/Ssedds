@@ -224,17 +224,17 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     ui.separator();
     // HDR formats (BC6H, RGBA16F) are tone-mapped for display: the sRGB / UNORM choice does not apply to them.
     let hdr = info.format.is_some_and(Format::is_hdr);
-    ui.add_enabled_ui(!hdr, |ui| {
-        let linear = model.view.view_linear;
-        if ui.selectable_label(!linear, "sRGB").clicked() {
-            model.view.view_linear = false;
+    // One widget per `add_enabled`, so each wraps on its own in the flow (a nested scope's first widget never wraps).
+    let linear = model.view.view_linear;
+    for (text, value) in [("sRGB", false), ("UNORM", true)] {
+        if ui
+            .add_enabled(!hdr, egui::Button::selectable(linear == value, text))
+            .on_disabled_hover_text("HDR formats are tone-mapped for display")
+            .clicked()
+        {
+            model.view.view_linear = value;
         }
-        if ui.selectable_label(linear, "UNORM").clicked() {
-            model.view.view_linear = true;
-        }
-    })
-    .response
-    .on_disabled_hover_text("HDR formats are tone-mapped for display");
+    }
     mip_control(ui, &mut model.view, info);
 }
 
@@ -260,11 +260,15 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
         model.view.layout = Layout::Split;
     }
     pin_controls(ui, model);
-    let possible = info.heatmap_possible();
-    ui.add_enabled_ui(possible, |ui| {
-        ui.toggle_value(&mut model.view.heatmap, "Heatmap")
-            .on_disabled_hover_text("Needs an encoded result with a source image");
-    });
+    // `add_enabled`, not `add_enabled_ui`: a nested scope's first widget never wraps, so it ran under ✕ Close.
+    let heatmap = egui::Button::selectable(model.view.heatmap, "Heatmap");
+    if ui
+        .add_enabled(info.heatmap_possible(), heatmap)
+        .on_disabled_hover_text("Needs an encoded result with a source image")
+        .clicked()
+    {
+        model.view.heatmap = !model.view.heatmap;
+    }
     ui.toggle_value(&mut model.view.lens, "Lens")
         .on_hover_text(format!(
             "A magnifier circle at 8x that follows the cursor ({})",

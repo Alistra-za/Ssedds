@@ -816,6 +816,8 @@ fn the_preview_settings_panel_is_never_drawn_under_the_toolbar() {
             panel.right() <= h.ctx.content_rect().right(),
             "{key}: the settings {panel:?} run off the window"
         );
+        // The toolbar beside the open settings is narrower, and nothing in it runs under ✕ Close.
+        assert_toolbar_layout(&h);
         // The panel is the rightmost thing with these labels; its stored rect is where egui moved it.
         for g in ["Alpha", "Mipmaps", "Compression"] {
             let r = h
