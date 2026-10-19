@@ -82,7 +82,7 @@ fn row(
     preset_combo(ui, model);
     ui.separator();
     view_toggle(ui);
-    if !meshes_view_active(ui.ctx()) {
+    if model.root.is_some() && !meshes_view_active(ui.ctx()) {
         column_toggles(ui, model);
     }
     right_end(ui, model);

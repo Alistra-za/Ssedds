@@ -295,12 +295,12 @@ fn the_json_editor_button_is_small_and_in_the_panel_header() {
 }
 
 /// `set_editor_shown` mirrors `centre`'s and `set_editor::draw`'s routing: in every centre state exactly one of the
-/// window-edge drawer and the set panel is drawn (3D: the drawer). Each case is a fresh harness, so the persisted
+/// window-edge drawer and the set panel is drawn (3D: the drawer); with no folder (the start screen), neither. Each case is a fresh harness, so the persisted
 /// panel states are this case's own.
 #[test]
 fn drawer_and_panel_never_both_or_neither() {
     type Setup = fn(&mut AppModel);
-    let cases: [(&str, Setup, bool, bool); 7] = [
+    let cases: [(&str, Setup, bool, bool); 8] = [
         (
             "expanded texture over a set",
             |m| {
@@ -330,6 +330,13 @@ fn drawer_and_panel_never_both_or_neither() {
         (
             "a texture",
             |m| m.select_item("landscape/leaf.png"),
+            false,
+            false,
+        ),
+        // A11: the start screen draws neither.
+        (
+            "no folder",
+            |m| *m = AppModel::placeholder(Default::default()),
             false,
             false,
         ),
@@ -367,7 +374,8 @@ fn drawer_and_panel_never_both_or_neither() {
         }
         let panel = PanelState::load(&h.ctx, Id::new("set-panel")).is_some();
         assert_eq!(panel, want_panel, "{name}: the set panel");
-        assert_eq!(drawer_drawn(&h), !want_panel, "{name}: the drawer");
+        let want_drawer = !want_panel && name != "no folder";
+        assert_eq!(drawer_drawn(&h), want_drawer, "{name}: the drawer");
     }
 }
 

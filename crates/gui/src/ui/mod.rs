@@ -34,6 +34,7 @@ pub mod status;
 pub mod thumbs;
 pub mod viewport3d;
 
+use crate::model::picker::{PickerPurpose, PickerSpec};
 use crate::model::{AppModel, Selection};
 use eframe::egui;
 use std::cell::RefCell;
@@ -118,36 +119,41 @@ pub fn draw_with_scan(
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
     let three_d = state.set3d.enabled && set_preview::wanted(model);
     // C6: a set editor in 2D has Advanced as its panel's last tab; everything else keeps the window-edge drawer.
-    if !three_d && set_editor_shown(model, three_d) {
+    if model.root.is_none() {
+        // A11: the start screen has no drawer.
+    } else if !three_d && set_editor_shown(model, three_d) {
         // The drawer is one panel: keep the columns' widget ids (a set pill's open menu) as if it were drawn, as egui
         // does for a collapsed panel.
         ui.skip_ahead_auto_ids(1);
     } else {
         advanced::draw(ui, model, &mut state.advanced);
     }
-    let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
-    // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
-    let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
-    column_panel(
-        ui,
-        Column::Textures,
-        380.0,
-        columns::TEXTURES_MIN..=textures_max,
-        model,
-        |ui, model| {
-            columns::textures(ui, model, thumbs);
-        },
-    );
-    column_panel(
-        ui,
-        Column::Sets,
-        260.0,
-        columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
-        model,
-        |ui, model| {
-            sets_column::draw(ui, model, thumbs, drops, cmds);
-        },
-    );
+    // A11: no columns until a folder is open.
+    if model.root.is_some() {
+        let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
+        // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
+        let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
+        column_panel(
+            ui,
+            Column::Textures,
+            380.0,
+            columns::TEXTURES_MIN..=textures_max,
+            model,
+            |ui, model| {
+                columns::textures(ui, model, thumbs);
+            },
+        );
+        column_panel(
+            ui,
+            Column::Sets,
+            260.0,
+            columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
+            model,
+            |ui, model| {
+                sets_column::draw(ui, model, thumbs, drops, cmds);
+            },
+        );
+    }
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
     // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
     // (spec §5.1).
@@ -178,10 +184,42 @@ fn set_editor_shown(model: &AppModel, three_d: bool) -> bool {
                 if crate::model::sets::set_views(model).iter().any(|v| v.key == *key)))
 }
 
+/// A11: with no folder, one big Open folder…, the recent folders and the drop hint.
+fn start_screen(ui: &mut egui::Ui, model: &mut AppModel) {
+    let mut open = None;
+    let mut pick = false;
+    ui.vertical_centered(|ui| {
+        ui.add_space((ui.available_height() / 3.0).max(0.0));
+        ui.label(egui::RichText::new(model.empty_hint()).heading());
+        ui.add_space(12.0);
+        let b = egui::Button::new(egui::RichText::new("Open folder…").size(18.0))
+            .min_size(egui::vec2(240.0, 44.0))
+            .fill(ui.visuals().selection.bg_fill);
+        pick = crate::model::picker::button(ui, &model.picker, b);
+        if !model.settings.recent.is_empty() {
+            ui.add_space(16.0);
+            ui.weak("Recent");
+            for p in &model.settings.recent {
+                if ui.link(p.display().to_string()).clicked() {
+                    open = Some(p.clone());
+                }
+            }
+        }
+        ui.add_space(16.0);
+        ui.weak("Or drag a folder onto the window.");
+    });
+    if pick {
+        model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
+    }
+    if let Some(p) = open {
+        model.request_open(p);
+    }
+}
+
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
 fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: bool) {
     if model.root.is_none() {
-        ui.centered_and_justified(|ui| ui.label(model.empty_hint()));
+        start_screen(ui, model);
         return;
     }
     if model.expanded.is_some() {
