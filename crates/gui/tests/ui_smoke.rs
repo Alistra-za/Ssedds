@@ -18,21 +18,62 @@ fn harness(model: AppModel) -> Harness<'static, AppModel> {
 }
 
 #[test]
-fn the_empty_window_shows_its_regions() {
-    let mut h = harness(AppModel::placeholder(GuiSettings::default()));
+fn the_start_screen_offers_open_folder_recent_and_the_drop_hint() {
+    let s = GuiSettings {
+        recent: vec![std::path::PathBuf::from(r"C:\mods\One")],
+        ..Default::default()
+    };
+    let mut h = harness(AppModel::placeholder(s));
     h.run();
-    for label in [
-        "Open folder…",
-        "Mode",
-        "Export",
-        "Save",
-        "Textures",
-        "Sets",
-        "Advanced",
-    ] {
-        h.get_by_label(label);
-    }
+    h.get_by_label("Open folder…");
+    h.get_by_label(r"C:\mods\One");
+    h.get_by_label("Or drag a folder onto the window.");
     h.get_by_label_contains("Open a folder");
+    assert!(h.query_by_label("Advanced").is_none());
+    assert!(
+        h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+            .next()
+            .is_none(),
+        "no Sets search box"
+    );
+    assert!(
+        h.query_all_by_label("Textures").next().is_none(),
+        "no column heading or eye"
+    );
+    assert!(
+        h.query_all_by_label("Sets").next().is_none(),
+        "no Sets column"
+    );
+    for l in ["Mode", "Export", "Save"] {
+        h.get_by_label(l);
+    }
+}
+
+#[test]
+fn a_recent_folder_on_the_start_screen_opens_it() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let s = GuiSettings {
+        recent: vec![root.clone()],
+        ..Default::default()
+    };
+    let mut h = harness(AppModel::new(s, None, session()));
+    h.run();
+    h.get_by_label(&root.display().to_string()).click();
+    h.run();
+    assert_eq!(h.state().root.as_deref(), Some(root.as_path()));
+}
+
+#[test]
+fn a_cancelled_first_open_shows_its_note_on_the_start_screen() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(mod_folder(d.path()));
+    m.cancel_open();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Opening cancelled");
+    h.get_by_label("Open folder…");
 }
 
 #[test]
@@ -78,7 +119,7 @@ fn clicking_a_tile_selects_it_and_the_needs_decision_filter_narrows_the_grid() {
         "selection was {:?}",
         h.state().selection
     );
-    h.get_by_label("Needs decision").click();
+    h.get_by_label_contains("Needs decision").click();
     h.run();
     assert!(h.state().filter.needs_decision);
     h.get_by_label_contains("leaf.png");
@@ -657,7 +698,8 @@ fn the_header_shows_the_effective_export_folder() {
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
     h.run();
-    let want = format!("Export folder: {}", root.join("sdc-out").display());
+    // K8: the accessible name keeps the whole path; the button text may cut it.
+    let want = format!("Export to: {}", root.join("sdc-out").display());
     h.get_by_label(&want);
     assert!(h.query_by_label_contains("not set").is_none());
 }

@@ -7,7 +7,8 @@ use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
 use crate::model::sets::{
-    fill_proposals, shader_options, DropChoice, DropOutcome, FillProposal, SetView, SlotFill,
+    badge_text, fill_proposals, kind_text, shader_options, slot_row, DropChoice, DropOutcome,
+    FillProposal, SetView, SlotFill, SlotKind,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -110,12 +111,163 @@ enum Act {
     Slot(MenuAction),
 }
 
-fn badge(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) -> egui::Response {
-    let t = egui::RichText::new(text).small();
-    ui.label(match color {
-        Some(c) => t.color(c),
-        None => t.weak(),
-    })
+/// Below this inner card width the pill and the ⚠ button go under the name, so the header row never holds the
+/// Sets column open past `SETS_MIN`.
+const WIDE_CARD: f32 = 150.0;
+/// The size of a member thumbnail (`columns::member`), which an empty chip matches.
+const CHIP: f32 = 32.0;
+
+/// A chip's letter (A3): the slot's suffix in capitals, "D" for the diffuse.
+fn chip_letter(k: SlotKind) -> String {
+    match k.suffix() {
+        "" => "D".to_string(),
+        s => s.to_uppercase(),
+    }
+}
+
+/// An empty slot (or a missing entry, outlined): a dim box with the letter. K11: named by the letter.
+fn letter_box(ui: &mut egui::Ui, letter: &str, outline: Option<egui::Color32>) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(egui::Vec2::splat(CHIP), egui::Sense::hover());
+    let vis = ui.visuals();
+    let stroke = match outline {
+        Some(c) => egui::Stroke::new(2.0, c),
+        None => vis.widgets.noninteractive.bg_stroke,
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, vis.extreme_bg_color);
+    p.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        letter,
+        egui::TextStyle::Small.resolve(ui.style()),
+        vis.weak_text_color(),
+    );
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, letter));
+    r
+}
+
+/// The letter in a filled chip's bottom-left corner, on a dark backing so it reads over any thumbnail.
+fn paint_letter(ui: &egui::Ui, rect: egui::Rect, letter: &str) {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let g = ui
+        .painter()
+        .layout_no_wrap(letter.to_string(), font, egui::Color32::WHITE);
+    let at = rect.left_bottom() + egui::vec2(1.0, -1.0 - g.size().y);
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(at, g.size()).expand(1.0),
+        2.0,
+        egui::Color32::from_black_alpha(170),
+    );
+    ui.painter().galley(at, g, egui::Color32::WHITE);
+}
+
+/// The pill's hover (R15): the long badge, then one line each for blocked, owns, missing entries and recipes.
+fn pill_hover(model: &AppModel, v: &SetView, blocked: bool) -> String {
+    let mut lines = vec![badge_text(model, v).to_string()];
+    if blocked {
+        lines.push("blocked".to_string());
+    }
+    lines.extend(v.owns.iter().map(|s| format!("owns {}", s.label())));
+    lines.extend(v.missing.iter().map(|m| format!("no file matches {m}")));
+    for r in &v.recipes {
+        let mut l = format!("{}: {}", r.subtype.id(), status_text(r.status).0);
+        if let Some(reason) = &r.reason {
+            l.push_str(&format!(" ({reason})"));
+        }
+        lines.push(l);
+    }
+    lines.join("\n")
+}
+
+/// Task 1.6's "⚠ n" button: the set's and its members' warnings on hover; a click opens Problems on the set.
+fn warn_button(ui: &mut egui::Ui, v: &SetView, rows: &[(&str, &Warning)], acts: &mut Vec<Act>) {
+    if rows.is_empty() {
+        return;
+    }
+    let warn = ui
+        .add(egui::Button::new(
+            egui::RichText::new(format!("⚠ {}", rows.len()))
+                .small()
+                .color(AMBER),
+        ))
+        .on_hover_text(warning_tooltip(rows));
+    if warn.clicked() {
+        acts.push(Act::Problems(v.key.clone()));
+    }
+}
+
+/// The status pill: the status dot and the short kind (cut on a narrow card), in a rounded frame, the long text on
+/// hover.
+fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, blocked: bool) {
+    use super::status::{dot, Status};
+    let s = if blocked {
+        Status::Blocks
+    } else if !crate::model::bottom::set_ready(model, v) {
+        Status::Warning
+    } else {
+        Status::Ready
+    };
+    egui::Frame::new()
+        .corner_radius(8.0)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            let kind =
+                egui::Label::new(egui::RichText::new(kind_text(model, v)).small()).truncate();
+            // In the card row's right-to-left layout the first widget lands rightmost: the dot stays left.
+            if ui.layout().prefer_right_to_left() {
+                ui.add(kind);
+                dot(ui, s);
+            } else {
+                dot(ui, s);
+                ui.add(kind);
+            }
+        })
+        .response
+        .on_hover_text(pill_hover(model, v, blocked));
+}
+
+/// A member's thumbnail on the card with today's behaviours: click selects, double-click expands, a slot member has
+/// the slot menu, and `drag` offers it for dragging; `note` is a line added to its hover. `None` when the item is
+/// not in the model.
+#[allow(clippy::too_many_arguments)]
+fn member_chip(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    thumbs: &mut ThumbCache,
+    v: &SetView,
+    mk: &str,
+    kind: Option<SlotKind>,
+    drag: bool,
+    note: Option<&str>,
+    sel_items: &HashSet<String>,
+    acts: &mut Vec<Act>,
+    member_menu: &mut bool,
+) -> Option<egui::Response> {
+    let item = model.item(mk)?;
+    let locked = kind.is_some_and(|k| v.locks.contains(&k.slot_number()));
+    let pgp = kind.is_some_and(|k| crate::pgp::prefix::pgp_locked(&v.settings, k.slot_number()));
+    let r = member(ui, item, sel_items.contains(mk), locked, pgp, thumbs, note);
+    if let Some(k) = kind {
+        *member_menu |= r.secondary_clicked();
+        let open = r.context_menu(|ui| {
+            let title = format!("Slot {}: {}", k.slot_number(), k.label());
+            if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, k)) {
+                acts.push(Act::Slot(a));
+            }
+        });
+        *member_menu |= open.is_some();
+    }
+    if drag {
+        r.dnd_set_drag_payload(DragItem(mk.to_string()));
+    }
+    if r.double_clicked() {
+        acts.push(Act::Expand(mk.to_string()));
+    } else if r.clicked() {
+        acts.push(Act::SelectItem(mk.to_string()));
+    }
+    Some(r)
 }
 
 /// The warning tooltip: `<file>: <code> <message>` per warning, at most `TIP_LINES`, then "… and K more".
@@ -135,6 +287,80 @@ fn warning_tooltip(rows: &[(&str, &Warning)]) -> String {
 struct Editing<'a> {
     on: bool,
     why: &'a str,
+    /// Editable and no filter on: sets can be reordered (R17).
+    reorder: bool,
+}
+
+/// Why the ≡ handle and Move up / Move down are off while the Sets filter is on.
+const CLEAR_TO_REORDER: &str = "Clear the filter to reorder sets";
+
+/// R17: the search box, the pills with their counts and the shader popup, under the heading.
+fn filter_rows(ui: &mut egui::Ui, model: &mut AppModel) {
+    ui.add(
+        egui::TextEdit::singleline(&mut model.sets_filter.search)
+            .hint_text("Search sets")
+            .desired_width(f32::INFINITY),
+    );
+    let c = model.set_counts();
+    ui.horizontal_wrapped(|ui| {
+        let f = &mut model.sets_filter;
+        for (on, text, hover) in [
+            (
+                &mut f.attention,
+                format!("Needs attention {}", c.attention),
+                "Only sets that are not ready: a problem in the set or one of its textures",
+            ),
+            (
+                &mut f.ready,
+                format!("Ready {}", c.ready),
+                "Only sets with no problem",
+            ),
+            (
+                &mut f.no_json,
+                format!("No JSON {}", c.no_json),
+                "Only sets that write no JSON",
+            ),
+        ] {
+            if ui
+                .add(
+                    egui::Button::selectable(*on, text)
+                        .corner_radius(10)
+                        .frame_when_inactive(true),
+                )
+                .on_hover_text(hover)
+                .clicked()
+            {
+                *on = !*on;
+            }
+        }
+        let text = if f.shader.is_none() {
+            "Filter ▾"
+        } else {
+            "Filter (1) ▾"
+        };
+        // A9: a saved shader the Mode does not offer is listed too, so it is never invisible.
+        let mut shaders = shader_options(model.target);
+        if let Some(s) = f.shader.filter(|s| !shaders.contains(s)) {
+            shaders.push(s);
+        }
+        crate::ui::path_picker::menu(ui, text, |ui| {
+            if ui.selectable_label(f.shader.is_none(), "Any").clicked() {
+                f.shader = None;
+                ui.close();
+            }
+            for s in shaders {
+                if ui
+                    .selectable_label(f.shader == Some(s), s.label())
+                    .clicked()
+                {
+                    f.shader = Some(s);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Only sets with this shader");
+    });
 }
 
 pub fn draw(
@@ -151,7 +377,10 @@ pub fn draw(
             ui.label(egui::RichText::new(s).strong());
         }
     });
+    filter_rows(ui, model);
     ui.separator();
+    // R17: while a filter is on, the handle, Move up / Move down and the insertion line are off (K19).
+    let filtering = model.sets_filter_active();
     // One set per frame keeps the per-pill and per-member tests O(1) however many are selected.
     let sel_sets: HashSet<String> = model.selected_sets().into_iter().collect();
     let sel_items: HashSet<String> = model.selected_items().into_iter().collect();
@@ -160,10 +389,17 @@ pub fn draw(
     let editing = Editing {
         on: editable,
         why: &why,
+        reorder: editable && !filtering,
     };
     let views = crate::model::sets::views(model);
+    let visible = model.visible_sets();
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
+    } else if visible.is_empty() && filtering && !views.is_empty() {
+        ui.label(format!("No sets match the filter ({} hidden)", views.len()));
+        if ui.button("Clear filter").clicked() {
+            model.clear_sets_filter();
+        }
     }
     let blocked: std::collections::HashSet<String> =
         export_blocks(model).into_iter().map(|i| i.set_id).collect();
@@ -196,7 +432,9 @@ pub fn draw(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (index, v) in views.iter().enumerate() {
+            // `index` is the set's place among all sets: the reorder and Move up / Move down use it (K19).
+            for &index in visible.iter() {
+                let v = &views[index];
                 let is_blocked = blocked.contains(&v.id);
                 let look = PillLook {
                     dragging: dragged.as_deref() == Some(v.id.as_str()),
@@ -238,7 +476,7 @@ pub fn draw(
             }
         });
     let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
-    if editable {
+    if editing.reorder {
         if let Some((id, to)) = reorder_target(released.as_deref(), hovered, &ids) {
             acts.push(Act::Reorder(id, to));
         }
@@ -419,37 +657,29 @@ fn pill(
     } else {
         ui.visuals().widgets.noninteractive.bg_stroke
     };
+    // A5: the open set and the selected sets are filled with the selection colour (`selected_sets` holds the open one).
+    let fill = if selected {
+        ui.visuals().selection.bg_fill.gamma_multiply(0.35)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    // The drop zone repaints its own frame's fill and stroke, so the card's look is an inner frame.
+    let card = egui::Frame::group(ui.style())
+        .corner_radius(12.0)
+        .stroke(stroke)
+        .fill(fill);
     let scoped = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
         if look.dragging {
             ui.set_opacity(0.5);
         }
-        let (_zone, dropped) = item_zone(
+        let (zone, dropped) = item_zone(
             ui,
             editing.on,
-            egui::Frame::group(ui.style())
-                .corner_radius(12.0)
-                .stroke(stroke),
+            egui::Frame::NONE.corner_radius(12.0),
             |ui| {
-                ui.style_mut().interaction.selectable_labels = false;
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let sense = if editing.on {
-                        egui::Sense::drag()
-                    } else {
-                        egui::Sense::hover()
-                    };
-                    let handle = ui.add(egui::Label::new("≡").sense(sense));
-                    if editing.on {
-                        handle.dnd_set_drag_payload(DragSet(v.id.clone()));
-                        handle_released = handle.drag_stopped();
-                    }
-                    ui.label(egui::RichText::new(&v.label).strong());
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if crate::model::bottom::set_ready(model, v) {
-                        super::status::dot(ui, super::status::Status::Ready);
-                    }
-                    badge(ui, crate::model::sets::badge_text(model, v), None);
+                card.show(ui, |ui| {
+                    ui.style_mut().interaction.selectable_labels = false;
+                    ui.set_width(ui.available_width());
                     let rows: Vec<(&str, &Warning)> = v
                         .members
                         .iter()
@@ -467,85 +697,144 @@ fn pill(
                                 .map(|w| (v.label.as_str(), w)),
                         )
                         .collect();
+                    let wide = ui.available_width() >= WIDE_CARD;
+                    let name = |ui: &mut egui::Ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
+                    };
+                    ui.horizontal(|ui| {
+                        let sense = if editing.reorder {
+                            egui::Sense::drag()
+                        } else {
+                            egui::Sense::hover()
+                        };
+                        let handle = ui.add(egui::Label::new("≡").sense(sense));
+                        if editing.reorder {
+                            handle.dnd_set_drag_payload(DragSet(v.id.clone()));
+                            handle_released = handle.drag_stopped();
+                        } else if editing.on {
+                            handle.on_hover_text(CLEAR_TO_REORDER);
+                        }
+                        if wide {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    warn_button(ui, v, &rows, acts);
+                                    status_pill(ui, model, v, blocked);
+                                    ui.with_layout(
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        name,
+                                    );
+                                },
+                            );
+                        } else {
+                            name(ui);
+                        }
+                    });
+                    if !wide {
+                        ui.horizontal_wrapped(|ui| {
+                            status_pill(ui, model, v, blocked);
+                            warn_button(ui, v, &rows, acts);
+                        });
+                    }
                     if !v.key.is_empty() {
                         shader_combo(ui, model, v, editing, acts);
                     }
-                    if !rows.is_empty() {
-                        let warn = ui
-                            .add(egui::Button::new(
-                                egui::RichText::new(format!("⚠ {}", rows.len()))
-                                    .small()
-                                    .color(AMBER),
-                            ))
-                            .on_hover_text(warning_tooltip(&rows));
-                        if warn.clicked() {
-                            acts.push(Act::Problems(v.key.clone()));
-                        }
+                    if v.key.is_empty() && v.created && v.missing.is_empty() {
+                        ui.weak("Drop a texture here to start");
                     }
-                    if blocked {
-                        badge(ui, "blocked", Some(RED));
-                    }
-                    for s in &v.owns {
-                        badge(ui, &format!("owns {}", s.label()), None);
-                    }
-                    for f in v.slots.values() {
-                        if let SlotFill::Borrowed { from, .. } = f {
-                            badge(ui, &format!("borrowed from {from}"), Some(AMBER));
-                        }
-                    }
-                    for m in &v.missing {
-                        badge(ui, &format!("missing: {m}"), Some(RED));
-                    }
-                });
-                if v.key.is_empty() && v.created && v.missing.is_empty() {
-                    ui.weak("Drop a texture here to start");
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for mk in &v.members {
-                        let Some(item) = model.item(mk) else { continue };
-                        let sel = sel_items.contains(mk);
-                        // F3a Task 8: the slot the member fills in this set, if any, has a slot menu.
-                        let kind = v
-                            .slots
-                            .iter()
-                            .find(|(_, f)| matches!(f, SlotFill::Own { item } if item == mk))
-                            .map(|(k, _)| *k);
-                        let locked = kind.is_some_and(|k| v.locks.contains(&k.slot_number()));
-                        let pgp = kind.is_some_and(|k| {
-                            crate::pgp::prefix::pgp_locked(&v.settings, k.slot_number())
-                        });
-                        let r = member(ui, item, sel, locked, pgp, thumbs);
-                        if let Some(k) = kind {
-                            member_menu |= r.secondary_clicked();
-                            let open = r.context_menu(|ui| {
-                                let title = format!("Slot {}: {}", k.slot_number(), k.label());
-                                if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, k)) {
-                                    acts.push(Act::Slot(a));
+                    ui.horizontal_wrapped(|ui| {
+                        let row = slot_row(v.shader.as_ref(), &v.slots);
+                        let mut chipped: HashSet<&str> = HashSet::new();
+                        for cell in &row {
+                            let k = cell.kind;
+                            let letter = chip_letter(k);
+                            let (mk, from) = match &cell.fill {
+                                SlotFill::Own { item } => (item, None),
+                                SlotFill::Borrowed { from, item } => (item, Some(from)),
+                                SlotFill::Empty => {
+                                    letter_box(ui, &letter, None)
+                                        .on_hover_text(format!("{} (empty)", k.label()));
+                                    continue;
                                 }
+                            };
+                            chipped.insert(mk);
+                            let note = from.map(|f| format!("borrowed from {f}"));
+                            // K13: a borrowed item belongs to another set: no drag payload from here.
+                            let Some(r) = member_chip(
+                                ui,
+                                model,
+                                thumbs,
+                                v,
+                                mk,
+                                Some(k),
+                                from.is_none(),
+                                note.as_deref(),
+                                sel_items,
+                                acts,
+                                &mut member_menu,
+                            ) else {
+                                letter_box(ui, &letter, None);
+                                continue;
+                            };
+                            paint_letter(ui, r.rect, &letter);
+                            if from.is_some() {
+                                ui.painter().rect_stroke(
+                                    r.rect,
+                                    2.0,
+                                    egui::Stroke::new(2.0, AMBER),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            r.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &letter)
                             });
-                            member_menu |= open.is_some();
                         }
-                        r.dnd_set_drag_payload(DragItem(mk.clone()));
-                        if r.double_clicked() {
-                            acts.push(Act::Expand(mk.clone()));
-                        } else if r.clicked() {
-                            acts.push(Act::SelectItem(mk.clone()));
+                        // K12: an add/remove entry that matches no file.
+                        for m in &v.missing {
+                            letter_box(ui, "?", Some(RED))
+                                .on_hover_text(format!("no file matches {m}"));
                         }
-                    }
-                });
-                for recipe in &v.recipes {
-                    let (word, color) = status_text(recipe.status);
-                    let t = egui::RichText::new(format!("{}: {word}", recipe.subtype.id())).small();
-                    let r = ui.label(match color {
-                        Some(c) => t.color(c),
-                        None => t.weak(),
+                        // Members in no chip (an env mask `_m`, a clashing second kind) follow as plain thumbnails.
+                        for mk in &v.members {
+                            if chipped.contains(mk.as_str()) {
+                                continue;
+                            }
+                            // F3a Task 8: the slot the member fills in this set, if any, has a slot menu.
+                            let kind = v
+                                .slots
+                                .iter()
+                                .find(|(_, f)| matches!(f, SlotFill::Own { item } if item == mk))
+                                .map(|(k, _)| *k);
+                            member_chip(
+                                ui,
+                                model,
+                                thumbs,
+                                v,
+                                mk,
+                                kind,
+                                true,
+                                None,
+                                sel_items,
+                                acts,
+                                &mut member_menu,
+                            );
+                        }
                     });
-                    if let Some(reason) = &recipe.reason {
-                        r.on_hover_text(reason);
-                    }
-                }
+                });
             },
         );
+        // Final review I1: the zone's hover stroke is under the card frame, so outline the drop target on top.
+        if editing.on
+            && egui::DragAndDrop::has_payload_of_type::<DragItem>(ui.ctx())
+            && zone.contains_pointer()
+        {
+            ui.painter().rect_stroke(
+                zone.rect,
+                12.0,
+                ui.visuals().widgets.active.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
         dropped
     });
     let dropped = scoped.inner;
@@ -563,7 +852,7 @@ fn pill(
         }
     }
     // Not consuming: the handle's release (in `draw`) applies the move.
-    let hovered_by_set = editing.on && resp.dnd_hover_payload::<DragSet>().is_some();
+    let hovered_by_set = editing.reorder && resp.dnd_hover_payload::<DragSet>().is_some();
     // F3a D4: a right-click on an unselected pill selects it alone first; among two or more selected sets the pill
     // shows the bulk menu, otherwise its own.
     if resp.secondary_clicked() && !v.key.is_empty() && !member_menu {
@@ -605,18 +894,10 @@ fn shader_combo(
         };
         format!("{}{tag}", p.shader.label())
     });
-    // A ComboBox never wraps and is at least `combo_width` wide, which held the Sets column open: start a new row
-    // when it would not fit, and never be wider than the row.
-    // AG124: in a wrapped row `available_width` is the whole row's, not what is left after the badges.
-    let left = |ui: &egui::Ui| ui.max_rect().right() - ui.cursor().min.x;
-    let w = ui.spacing().combo_width;
-    if left(ui) < w {
-        ui.end_row();
-    }
-    let w = left(ui).min(w);
+    // A5: its own row, the card's width (a ComboBox never wraps, so it is never wider than the row).
     ui.add_enabled_ui(editing.on, |ui| {
         egui::ComboBox::from_id_salt(("shader", &v.id))
-            .width(w)
+            .width(ui.available_width())
             .truncate()
             .selected_text(text)
             .show_ui(ui, |ui| {
@@ -730,11 +1011,20 @@ fn menu(
         acts.push(Act::Delete(v.id.clone(), v.members.len()));
         ui.close();
     }
-    if tip(ui.button("Move up")).clicked() && index > 0 {
+    // K19: `index` is among all sets; while a filter is on neither moves.
+    let move_button = |ui: &mut egui::Ui, label: &str| {
+        let r = ui.add_enabled(editing.reorder || !editing.on, egui::Button::new(label));
+        if editing.on && !editing.reorder {
+            r.on_disabled_hover_text(CLEAR_TO_REORDER)
+        } else {
+            tip(r)
+        }
+    };
+    if move_button(ui, "Move up").clicked() && index > 0 {
         acts.push(Act::Reorder(v.id.clone(), index - 1));
         ui.close();
     }
-    if tip(ui.button("Move down")).clicked() {
+    if move_button(ui, "Move down").clicked() {
         acts.push(Act::Reorder(v.id.clone(), index + 1));
         ui.close();
     }

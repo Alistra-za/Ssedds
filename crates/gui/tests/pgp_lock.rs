@@ -303,7 +303,7 @@ fn a_locked_slot_card_shows_the_cross_and_one_tooltip() {
     };
     let before = empties(&h);
     assert!(!before.is_empty());
-    h.get_by_label("RMAOS").click_secondary();
+    outside_sets(&h, "RMAOS").click_secondary();
     h.run();
     h.get_by_label(KEEP).click();
     h.run();

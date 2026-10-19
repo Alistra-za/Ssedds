@@ -19,14 +19,19 @@ fn harness(model: AppModel) -> Harness<'static, AppModel> {
 fn the_sets_column_shows_badges_and_the_new_set_area() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(pbr_opened(d.path()));
+    instant_tooltips(&h);
     h.run();
     assert!(
         h.query_by_label("Defaults").is_none(),
         "the default block is fixed: no Defaults card"
     );
     h.get_by_label("landscape/rock01");
-    // Note BM: the fixture is a PBR set under textures/landscape: PBR Landscape, no block yet.
-    h.get_by_label(sdc_gui::model::sets::BADGE_PBR_LANDSCAPE_PGP_ONLY);
+    // Note BM: the fixture is a PBR set under textures/landscape: PBR Landscape, no block yet. Layout v2 A5: the
+    // pill says the kind, its hover the long badge.
+    h.get_by_label("PBR Landscape").hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains(sdc_gui::model::sets::BADGE_PBR_LANDSCAPE_PGP_ONLY);
     h.get_by_label_contains("Drop here to start a new set");
 }
 
@@ -35,7 +40,7 @@ fn the_textures_header_offers_the_not_in_a_set_filter() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(pbr_opened(d.path()));
     h.run();
-    h.get_by_label_contains("not in a set");
+    h.get_by_label_contains("Not in a set");
 }
 
 #[test]
@@ -827,7 +832,13 @@ fn the_header_has_the_json_editor_and_the_drawer_has_no_pgpatcher_keys() {
     m.settings.advanced_open = true;
     let mut h = harness(m);
     h.run();
+    // R14: the editor is an entry of Export to ▾.
+    h.get_by_label_contains("Export to: ").click();
+    h.run();
     h.get_by_label(sdc_gui::ui::header::JSON_EDITOR);
+    // Close the menu again before the drawer checks.
+    h.key_press(eframe::egui::Key::Escape);
+    h.run();
     // Layout v2 C6: with a set, Advanced is the set panel's tab (open here); the TruePBR box is on its Material tab.
     h.get_by_label_contains("Preset inspector");
     assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());
@@ -1279,10 +1290,8 @@ fn a_filled_slot_the_shader_cannot_use_says_why() {
         amber_outlines(&hb) + 1,
         "one card outlined"
     );
-    let rmaos = h
-        .query_all_by_label("RMAOS")
-        .next()
-        .expect("the RMAOS card");
+    // K11: the Sets column's "RMAOS" chip is not the card.
+    let rmaos = outside_sets(&h, "RMAOS");
     rmaos.hover();
     h.run();
     h.run();

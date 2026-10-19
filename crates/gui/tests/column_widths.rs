@@ -262,3 +262,22 @@ fn collapsed_and_hidden_columns_leave_no_gap() {
         );
     }
 }
+
+/// A11: the start screen draws no columns, but the saved widths survive a trip through it.
+#[test]
+fn a_saved_column_width_survives_the_start_screen() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(d.path(), 1600.0);
+    let x = divider(&h, "textures") + 100.0;
+    let (_, w) = drag(&mut h, "textures", x);
+    let root = h.state().0.root.clone().unwrap();
+    {
+        let (m, _) = h.state_mut();
+        m.root = None;
+    }
+    h.run_steps(3);
+    assert!(PanelState::load(&h.ctx, Id::new("textures")).is_some());
+    h.state_mut().0.root = Some(root);
+    h.run_steps(3);
+    assert_eq!(outer(&h, "textures").width(), w);
+}

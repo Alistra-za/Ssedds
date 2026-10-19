@@ -171,3 +171,24 @@ pub fn slot_rect<S>(h: &egui_kittest::Harness<'_, S>, label: &str) -> eframe::eg
         .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
         .unwrap_or_else(|| panic!("no slot row {label:?}"))
 }
+
+/// Layout v2 K11: whether `r` is inside the Sets column. Its cards' chips are named by their letter, and "RMAOS" is
+/// also the set editor's slot row.
+pub fn in_sets_column<S>(h: &egui_kittest::Harness<'_, S>, r: eframe::egui::Rect) -> bool {
+    use eframe::egui::{containers::panel::PanelState, Id};
+    PanelState::load(&h.ctx, Id::new("sets")).is_some_and(|p| p.outer_rect.contains_rect(r))
+}
+
+/// The one node labelled `label` outside the Sets column (K11).
+pub fn outside_sets<'a, S>(
+    h: &'a egui_kittest::Harness<'_, S>,
+    label: &'a str,
+) -> egui_kittest::Node<'a> {
+    use egui_kittest::kittest::Queryable;
+    let mut n: Vec<_> = h
+        .query_all_by_label(label)
+        .filter(|n| !in_sets_column(h, n.rect()))
+        .collect();
+    assert_eq!(n.len(), 1, "one {label:?} outside the Sets column");
+    n.pop().unwrap()
+}

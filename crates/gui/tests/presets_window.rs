@@ -19,6 +19,17 @@ fn harness(model: AppModel) -> Harness<'static, AppModel> {
 fn presets_opens_the_creator_and_a_builtin_is_read_only() {
     let mut h = harness(AppModel::placeholder(GuiSettings::default()));
     h.run();
+    // R14, K5: Presets… ends the Preset popup, which opens with no folder too.
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| {
+            n.accesskit_node()
+                .value()
+                .or(n.accesskit_node().label())
+                .is_some_and(|v| v.starts_with("default ("))
+        })
+        .expect("the Preset combo")
+        .click();
+    h.run();
     h.get_by_label("Presets…").click();
     h.run();
     assert!(h.state().presets_open);

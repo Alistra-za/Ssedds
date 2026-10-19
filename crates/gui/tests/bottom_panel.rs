@@ -33,8 +33,8 @@ fn the_panel_starts_collapsed_with_its_tabs_and_toggling_messages_opens_and_clos
     let mut h = harness(opened(d.path()));
     h.run();
     h.get_by_label("Files");
-    // The header's Messages button (until branch 3) and the panel's Messages tab.
-    assert_eq!(h.query_all_by_label("Messages").count(), 2);
+    // R14: only the panel's Messages tab (the header's button is gone).
+    assert_eq!(h.query_all_by_label("Messages").count(), 1);
     assert!(!h.state().bottom.open);
     h.state_mut().toggle_tab(BottomTab::Messages);
     h.run();
@@ -43,6 +43,24 @@ fn the_panel_starts_collapsed_with_its_tabs_and_toggling_messages_opens_and_clos
     h.state_mut().toggle_tab(BottomTab::Messages);
     h.run();
     assert!(!h.state().bottom.open && !h.state().messages.is_open());
+}
+
+/// Task 3.1 review: the Ctrl+M hint the header's Messages button carried is on the tab's hover.
+#[test]
+fn the_messages_tab_hover_names_its_shortcut() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened(d.path()));
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.run();
+    let want = "Notes and results of this session (Ctrl+M)";
+    assert!(h.query_by_label(want).is_none());
+    h.get_by_label("Messages").hover();
+    h.run();
+    h.run();
+    h.get_by_label(want);
 }
 
 #[test]

@@ -30,6 +30,8 @@ fn full() -> LayoutSettings {
         filter_set: "in".into(),
         sort: "size".into(),
         tile: 128.0,
+        sets_filters: vec!["attention".into(), "no-json".into()],
+        sets_shader: Some("pbr_landscape".into()),
         preview_channel: 3,
         preview_layout: "split".into(),
         look: Some(LookSettings {
@@ -334,6 +336,9 @@ fn a_new_app_starts_from_the_saved_layout() {
     let mut app = SdcApp::new(model);
     assert!(app.model.filter.warnings && app.model.filter.not_in_set);
     assert!(!app.model.filter.failed && !app.model.filter.needs_decision);
+    let s = &app.model.sets_filter;
+    assert!(s.attention && s.no_json && !s.ready);
+    assert_eq!(s.shader, Some(engine::shader::Shader::PbrLandscape));
     assert_eq!(app.model.view.channel, Channel::B);
     assert_eq!(app.model.view.layout, Layout::Split);
     assert_eq!(

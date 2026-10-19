@@ -15,6 +15,8 @@ pub const WIDTH_IDS: [&str; 5] = [
 ];
 /// The Textures filter toggles, by their `gui.toml` names.
 pub const FILTER_NAMES: [&str; 4] = ["needs-decision", "warnings", "failed", "not-in-set"];
+/// What `[layout] sets_filters` may name: the Sets column's pills.
+pub const SETS_FILTER_NAMES: [&str; 3] = ["attention", "ready", "no-json"];
 /// A saved panel width outside this range (points) is ignored.
 pub const WIDTH_RANGE: (f32, f32) = (200.0, 8000.0);
 
@@ -172,6 +174,12 @@ pub struct LayoutSettings {
     pub sort: String,
     #[serde(deserialize_with = "lenient_tile")]
     pub tile: f32,
+    /// The Sets column pills that are on, by [`SETS_FILTER_NAMES`] name, and its shader filter (a `Shader` id; none:
+    /// Any). Its search is not saved (R17).
+    #[serde(deserialize_with = "lenient_strings")]
+    pub sets_filters: Vec<String>,
+    #[serde(deserialize_with = "lenient")]
+    pub sets_shader: Option<String>,
     /// The preview channel, as `Channel::shader_id`.
     #[serde(deserialize_with = "lenient")]
     pub preview_channel: u8,
@@ -210,6 +218,8 @@ impl Default for LayoutSettings {
             filter_set: "any".into(),
             sort: "name".into(),
             tile: 96.0,
+            sets_filters: vec![],
+            sets_shader: None,
             preview_channel: 0,
             preview_layout: "side-by-side".into(),
             look: None,
@@ -241,6 +251,16 @@ impl LayoutSettings {
             seen.push(f.clone());
             keep
         });
+        let mut seen: Vec<String> = vec![];
+        self.sets_filters.retain(|f| {
+            let keep = SETS_FILTER_NAMES.contains(&f.as_str()) && !seen.contains(f);
+            seen.push(f.clone());
+            keep
+        });
+        self.sets_shader = self
+            .sets_shader
+            .take()
+            .filter(|s| engine::shader::Shader::ALL.iter().any(|k| k.id() == s));
         if !["any", "in", "not-in"].contains(&self.filter_set.as_str()) {
             self.filter_set = "any".into();
         }

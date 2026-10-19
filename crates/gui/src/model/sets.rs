@@ -302,6 +302,19 @@ pub fn badge_text(m: &AppModel, v: &SetView) -> &'static str {
     }
 }
 
+/// Layout v2 A5: the short kind on the set card's pill (`badge_text` is its hover).
+pub fn kind_text(m: &AppModel, v: &SetView) -> &'static str {
+    if v.skin {
+        "skin"
+    } else if is_pbr_landscape(v) {
+        "PBR Landscape"
+    } else if is_json_set(v, m.target) {
+        "PBR → JSON"
+    } else {
+        "vanilla"
+    }
+}
+
 /// The set's pick is `pbr_landscape` (Note BM): it gets the PBR Landscape card and badge.
 pub fn is_pbr_landscape(v: &SetView) -> bool {
     v.shader

@@ -295,12 +295,12 @@ fn the_json_editor_button_is_small_and_in_the_panel_header() {
 }
 
 /// `set_editor_shown` mirrors `centre`'s and `set_editor::draw`'s routing: in every centre state exactly one of the
-/// window-edge drawer and the set panel is drawn (3D: the drawer). Each case is a fresh harness, so the persisted
-/// panel states are this case's own.
+/// window-edge drawer and the set panel is drawn (3D: the drawer); with no folder (the start screen), neither. Each
+/// case is a fresh harness, so the persisted panel states are this case's own. The last field is (panel, drawer).
 #[test]
 fn drawer_and_panel_never_both_or_neither() {
     type Setup = fn(&mut AppModel);
-    let cases: [(&str, Setup, bool, bool); 7] = [
+    let cases: [(&str, Setup, bool, (bool, bool)); 8] = [
         (
             "expanded texture over a set",
             |m| {
@@ -308,7 +308,7 @@ fn drawer_and_panel_never_both_or_neither() {
                 m.expanded = Some("landscape/rock01.png".into());
             },
             false,
-            false,
+            (false, true),
         ),
         (
             "two sets",
@@ -319,21 +319,28 @@ fn drawer_and_panel_never_both_or_neither() {
                 assert!(m.in_bulk());
             },
             false,
-            false,
+            (false, true),
         ),
         (
             "nothing",
             |m| m.selection = sdc_gui::model::Selection::None,
             false,
-            false,
+            (false, true),
         ),
         (
             "a texture",
             |m| m.select_item("landscape/leaf.png"),
             false,
-            false,
+            (false, true),
         ),
-        ("a set in 2D", rock_selected, false, true),
+        // A11: the start screen draws neither.
+        (
+            "no folder",
+            |m| *m = AppModel::placeholder(Default::default()),
+            false,
+            (false, false),
+        ),
+        ("a set in 2D", rock_selected, false, (true, false)),
         (
             "a set in 3D",
             |m| {
@@ -341,16 +348,16 @@ fn drawer_and_panel_never_both_or_neither() {
                 m.settings.set_view_3d = true;
             },
             true,
-            false,
+            (false, true),
         ),
         (
             "a stale set",
             |m| m.selection = sdc_gui::model::Selection::Set("landscape/gone".into()),
             false,
-            false,
+            (false, true),
         ),
     ];
-    for (name, setup, three_d, want_panel) in cases {
+    for (name, setup, three_d, (want_panel, want_drawer)) in cases {
         let d = tempfile::tempdir().unwrap();
         let mut m = pbr_opened_plain(d.path());
         setup(&mut m);
@@ -367,7 +374,7 @@ fn drawer_and_panel_never_both_or_neither() {
         }
         let panel = PanelState::load(&h.ctx, Id::new("set-panel")).is_some();
         assert_eq!(panel, want_panel, "{name}: the set panel");
-        assert_eq!(drawer_drawn(&h), !want_panel, "{name}: the drawer");
+        assert_eq!(drawer_drawn(&h), want_drawer, "{name}: the drawer");
     }
 }
 

@@ -69,7 +69,7 @@ Banners about PGPatcher:
 
 ## The Meshes view
 
-Switch to it with **Meshes view** in the header.
+Switch to it with the **Meshes** tab in the header.
 
 ### Scan details
 

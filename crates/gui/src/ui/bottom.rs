@@ -25,7 +25,14 @@ fn tab_buttons(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut clicked = None;
     for (tab, text) in tabs(model) {
         let on = model.bottom.open && model.bottom.tab == tab;
-        if ui.selectable_label(on, text).clicked() {
+        let mut r = ui.selectable_label(on, text);
+        if tab == BottomTab::Messages {
+            r = r.on_hover_text(format!(
+                "Notes and results of this session ({})",
+                super::actions::keys_text("messages")
+            ));
+        }
+        if r.clicked() {
             clicked = Some(tab);
         }
     }

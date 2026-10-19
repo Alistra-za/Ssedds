@@ -59,6 +59,7 @@ impl SdcApp {
             &layout,
             &mut model.filter,
             &mut model.prefs,
+            &mut model.sets_filter,
             &mut model.view,
         );
         meshes.v3.look = Look::from_settings(layout.look.as_ref());
@@ -91,6 +92,7 @@ impl SdcApp {
             ctx,
             &self.model.filter,
             &self.model.prefs,
+            &self.model.sets_filter,
             &self.model.view,
             looks,
         );
@@ -100,6 +102,7 @@ impl SdcApp {
                 &self.model.settings.layout,
                 &self.model.filter,
                 &self.model.prefs,
+                &self.model.sets_filter,
                 &self.model.view,
                 looks,
             );
@@ -335,8 +338,10 @@ impl eframe::App for SdcApp {
         if crate::ui::header::meshes_view_active(&ctx) {
             // The Textures view reads its keys in `ui::draw_with_scan`.
             crate::ui::actions::keys(&ctx, &mut self.model, self.state.drops.pending.is_some());
+            // C7: the one header in both views (MO2… framed with Mode), then the bottom panel (R7), then the view.
+            crate::ui::header::draw(ui, &mut self.model, Some(&mut self.meshes));
             crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer);
-            crate::ui::meshes::page(ui, &mut self.meshes);
+            crate::ui::meshes::show(ui, &mut self.meshes);
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {
                 self.model.settings.render3d.shaders = Some(fp);
                 self.model.save_settings();
@@ -344,6 +349,8 @@ impl eframe::App for SdcApp {
             // The Textures model's dialogs (close with unsaved edits, an export error), the shortcut sheet and the palette
             // must show in this view too.
             crate::ui::dialogs::draw(&ctx, &mut self.model);
+            // Export to ▾ and the palette open the PGPatcher JSON editor in this view too (K4).
+            crate::ui::json_editor::draw(&ctx, &mut self.model);
             crate::ui::presets::window(&ctx, &mut self.model);
         } else {
             crate::ui::draw_with_scan(ui, &mut self.model, &mut self.state, Some(&mut self.meshes));

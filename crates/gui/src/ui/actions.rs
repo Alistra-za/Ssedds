@@ -607,6 +607,7 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
     let blocked = set_modal
         || model.dialog.is_some()
         || egui::Popup::is_any_open(ctx)
+        || super::columns::combo_menu_open(ctx)
         || ctx.memory(|m| m.top_modal_layer().is_some());
     if blocked {
         return None;

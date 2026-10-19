@@ -38,7 +38,7 @@ fn opened_on_the_set(d: &std::path::Path) -> Harness<'static, AppModel> {
 fn a_card_right_click_locks_and_unlocks_the_slot() {
     let d = tempfile::tempdir().unwrap();
     let mut h = opened_on_the_set(d.path());
-    h.get_by_label("RMAOS").click_secondary();
+    outside_sets(&h, "RMAOS").click_secondary();
     h.run();
     h.get_by_label("Pin slot (sdc)").click();
     h.run();
@@ -54,7 +54,7 @@ fn a_card_right_click_locks_and_unlocks_the_slot() {
 fn path_from_the_card_menu_opens_the_slot_commands_window_and_it_toggles_the_lock() {
     let d = tempfile::tempdir().unwrap();
     let mut h = opened_on_the_set(d.path());
-    h.get_by_label("RMAOS").click_secondary();
+    outside_sets(&h, "RMAOS").click_secondary();
     h.run();
     h.get_by_label("Path…").click();
     h.run();
@@ -93,7 +93,7 @@ fn emptying_the_path_box_leaves_it_empty() {
     m.select_set(&key);
     let mut h = harness(m);
     h.run();
-    h.get_by_label("RMAOS").click_secondary();
+    outside_sets(&h, "RMAOS").click_secondary();
     h.run();
     h.get_by_label("Path…").click();
     h.run();

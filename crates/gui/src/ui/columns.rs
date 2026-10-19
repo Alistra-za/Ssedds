@@ -15,8 +15,6 @@ pub const STRIP_WIDTH: f32 = 24.0;
 /// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.
 const TILE: f32 = crate::model::texture_view::ColumnPrefs::TILE_DEFAULT;
 const MEMBER: f32 = 32.0;
-/// The narrowest a filter combo gets before the row moves one to the next line.
-const COMBO_WIDTH: f32 = 100.0;
 const TILE_MARGIN: f32 = 4.0;
 const TILE_STROKE: f32 = 2.0;
 /// Scroll bar and margin allowance when fitting tiles to a row.
@@ -225,7 +223,6 @@ fn tile(
 
 /// What the Textures column derives from the selection, the filters and the items; rebuilt only when those change.
 pub struct ColumnStats {
-    pub not_in_set: usize,
     pub summary: Option<String>,
     pub chosen: HashSet<String>,
 }
@@ -257,7 +254,6 @@ pub fn column_stats(ctx: &egui::Context, model: &AppModel) -> Arc<ColumnStats> {
         }
     }
     let s = Arc::new(ColumnStats {
-        not_in_set: model.not_in_set_count(),
         summary: model.selection_summary(false),
         chosen: model.selected_items().into_iter().collect(),
     });
@@ -279,14 +275,6 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         if n > 0 && ui.link(link).clicked() {
             model.open_problems(Some(crate::model::bottom::ProblemsFilter::Undecided));
         }
-        let not_in = column_stats(ui.ctx(), model).not_in_set;
-        if not_in > 0
-            && ui
-                .link(egui::RichText::new(format!("{not_in} not in a set")).color(AMBER))
-                .clicked()
-        {
-            model.filter.not_in_set = true;
-        }
     });
     let changed = model.items.iter().filter(|i| i.changed_on_disk).count();
     if changed > 0 {
@@ -297,17 +285,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
             }
         });
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.toggle_value(&mut model.filter.needs_decision, "Needs decision")
-            .on_hover_text("Only textures that still need a decision from you");
-        ui.toggle_value(&mut model.filter.warnings, "Has warnings")
-            .on_hover_text("Only textures with warnings");
-        ui.toggle_value(&mut model.filter.failed, "Failed")
-            .on_hover_text("Only textures that failed to plan or export");
-        ui.toggle_value(&mut model.filter.not_in_set, "Not in a set")
-            .on_hover_text("Only textures that are not a member of any set");
-    });
-    combo_filters(ui, model);
+    filter_row(ui, model);
     ui.add(
         egui::TextEdit::singleline(&mut model.search)
             .hint_text("Search")
@@ -477,34 +455,145 @@ fn combo_at(ui: &mut egui::Ui, model: &mut AppModel, o: &FilterOptions, n: usize
     }
 }
 
-/// The sub-type, format, encoder and set-membership combos, the sort and the tile size, under the four toggles. A
-/// combo is a nested layout, which `horizontal_wrapped` cannot wrap, so the rows are cut here by the column's width.
-fn combo_filters(ui: &mut egui::Ui, model: &mut AppModel) {
-    let o = model.filter_options();
-    let gap = ui.spacing().item_spacing.x;
-    let avail = ui.available_width();
-    let per = (((avail + gap) / (COMBO_WIDTH + gap)) as usize).clamp(1, COMBOS);
-    // AG124: each combo gets an exact share of the row. `ComboBox::width` is only a minimum and a truncated combo
-    // takes all the room left, so a row of them ran wider than the column (the black bar).
-    let slot = ((avail + gap) / per as f32 - gap).floor().max(1.0);
-    let height = ui.spacing().interact_size.y;
-    for row in (0..COMBOS).collect::<Vec<_>>().chunks(per) {
-        ui.horizontal(|ui| {
-            for &n in row {
-                ui.allocate_ui(egui::vec2(slot, height), |ui| combo_at(ui, model, &o, n));
+/// The filter pills with their counts, the Filter ▾ popup and the tile buttons, in one wrapped row (A6, R16).
+fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
+    let c = model.filter_counts();
+    ui.horizontal_wrapped(|ui| {
+        let f = &mut model.filter;
+        for (on, text, hover) in [
+            (
+                &mut f.needs_decision,
+                format!("Needs decision {}", c.needs_decision),
+                "Only textures that still need a decision from you",
+            ),
+            (
+                &mut f.warnings,
+                format!("Warnings {}", c.warnings),
+                "Only textures with warnings",
+            ),
+            (
+                &mut f.failed,
+                format!("Failed {}", c.failed),
+                "Only textures that failed to plan or export",
+            ),
+            (
+                &mut f.not_in_set,
+                format!("Not in a set {}", c.not_in_set),
+                "Only textures that are not a member of any set",
+            ),
+        ] {
+            if ui
+                .add(
+                    egui::Button::selectable(*on, text)
+                        .corner_radius(10)
+                        .frame_when_inactive(true),
+                )
+                .on_hover_text(hover)
+                .clicked()
+            {
+                *on = !*on;
             }
+        }
+        // A7: Sort is not a filter, so it stays out of the count.
+        let k = [
+            f.subtype.is_some(),
+            f.format.is_some(),
+            f.encoder.is_some(),
+            f.set != SetFilter::Any,
+        ]
+        .iter()
+        .filter(|on| **on)
+        .count();
+        let text = if k == 0 {
+            "Filter ▾".to_string()
+        } else {
+            format!("Filter ({k}) ▾")
+        };
+        combo_menu(ui, &text, |ui| filter_popup(ui, model));
+        let (lo, hi) = ColumnPrefs::TILE_RANGE;
+        let tile = model.prefs.tile;
+        // R16: a saved size off the 16 grid loads as it is and steps from there.
+        for (glyph, name, hover, to, enabled) in [
+            (
+                "−",
+                "Smaller tiles",
+                "Smaller thumbnails",
+                (tile - TILE_STEP).max(lo),
+                tile > lo,
+            ),
+            (
+                "+",
+                "Larger tiles",
+                "Larger thumbnails",
+                (tile + TILE_STEP).min(hi),
+                tile < hi,
+            ),
+        ] {
+            let r = ui.add_enabled(enabled, egui::Button::new(glyph));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
+            if r.on_hover_text(format!("{hover} ({lo} to {hi} points)"))
+                .clicked()
+            {
+                model.prefs.tile = to;
+            }
+        }
+    });
+}
+
+/// Where [`combo_menu`] keeps the pass it was last shown open in. shortcut: one id, so one combo menu in the app;
+/// key it by the button id if a second one is added.
+const COMBO_MENU: &str = "sdc-combo-menu";
+
+/// Whether the combo menu was open at the last pass. [`super::actions::keys`] holds the shortcuts then, as it does for
+/// egui's own popups, so Esc reaches the menu. A menu not drawn at the last pass (another view) is closed.
+pub(crate) fn combo_menu_open(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new(COMBO_MENU)))
+        .is_some_and(|p| p + 1 == pass)
+}
+
+/// A menu that holds combos (final review I2). A combo's popup takes egui's one open-popup slot, which would close a
+/// menu kept there, so this menu keeps its own open state; and a click while one of its combos is open (a pick, or a
+/// click off it) only closes that combo. A click outside, Esc or the button closes the menu.
+fn combo_menu(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
+    let button = ui.button(label);
+    let mut open = combo_menu_open(ui.ctx());
+    let child_open = egui::Popup::is_any_open(ui.ctx());
+    if button.clicked() {
+        open = !open;
+    }
+    let shown = egui::Popup::menu(&button)
+        .open_bool(&mut open)
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+        .show(content);
+    if shown.is_some_and(|r| !child_open && !button.clicked() && r.response.clicked_elsewhere()) {
+        open = false;
+    }
+    let (id, pass) = (egui::Id::new(COMBO_MENU), ui.ctx().cumulative_pass_nr());
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(id, pass);
+        } else {
+            d.remove::<u64>(id);
+        }
+    });
+}
+
+/// How far a tile button moves the size.
+const TILE_STEP: f32 = 16.0;
+/// Every combo in the popup is this wide.
+const POPUP_COMBO_WIDTH: f32 = 220.0;
+
+/// The sub-type, format, encoder and set-membership combos and the sort. A combo is a nested layout, so each gets an
+/// exact-width slot (AG124: `ComboBox::width` is only a minimum and a truncated combo takes all the room left).
+fn filter_popup(ui: &mut egui::Ui, model: &mut AppModel) {
+    let o = model.filter_options();
+    let height = ui.spacing().interact_size.y;
+    for n in 0..COMBOS {
+        ui.allocate_ui(egui::vec2(POPUP_COMBO_WIDTH, height), |ui| {
+            combo_at(ui, model, &o, n)
         });
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Tile size");
-        let (lo, hi) = ColumnPrefs::TILE_RANGE;
-        ui.spacing_mut().slider_width = 70.0;
-        let r = ui
-            .add(egui::Slider::new(&mut model.prefs.tile, lo..=hi).show_value(false))
-            .on_hover_text("How large the thumbnails are, in points (64 to 192)");
-        let tile = f64::from(model.prefs.tile);
-        r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), tile, "Tile size"));
-    });
 }
 
 pub(super) fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color32>) {
@@ -523,6 +612,8 @@ pub(super) fn member(
     locked: bool,
     pgp_locked: bool,
     thumbs: &mut ThumbCache,
+    // A line added to the one hover (a set card's "borrowed from …").
+    note: Option<&str>,
 ) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(MEMBER, MEMBER), egui::Sense::click_and_drag());
@@ -577,6 +668,10 @@ pub(super) fn member(
     }
     if pgp_locked {
         hover.push_str(" (PGPatcher lock: the mesh's original texture is used)");
+    }
+    if let Some(n) = note {
+        hover.push('\n');
+        hover.push_str(n);
     }
     response.on_hover_text(hover)
 }

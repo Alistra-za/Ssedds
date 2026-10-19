@@ -269,11 +269,18 @@ fn the_actions_and_buttons_are_disabled_while_a_dialog_is_open() {
             m,
         );
     h.run();
+    // R14: Open folder… is the first entry of Open ▾.
+    h.get_by_label("Open").click();
+    h.run();
     let b = h.get_by_label("Open folder…");
     assert!(b.accesskit_node().is_disabled());
     tx.send(None).unwrap();
     wait_closed(&h.state().picker);
     h.run();
+    if h.query_by_label("Open folder…").is_none() {
+        h.get_by_label("Open").click();
+        h.run();
+    }
     assert!(!h
         .get_by_label("Open folder…")
         .accesskit_node()
@@ -318,13 +325,19 @@ fn the_export_folder_cannot_change_while_an_export_runs() {
     m.poll();
     assert_eq!(m.settings.export_folder, before);
     assert!(m.status_line.contains("an export is running"));
-    // The header button is off, with the reason.
+    // Export to ▾'s Choose export folder… is off, with the reason (K7).
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1400.0, 900.0))
         .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
-    h.run();
-    let b = h.get_by_label_contains("Export folder:");
+    h.run_steps(2);
+    h.get_by_label_contains("Export to: ").click();
+    h.run_steps(2);
+    let b = h.get_by_label("Choose export folder…");
     assert!(b.accesskit_node().is_disabled());
+    b.hover();
+    // run(), not run_steps: the tooltip waits out its delay.
+    h.run();
+    h.get_by_label(sdc_gui::ui::header::EXPORT_RUNNING_HOVER);
 }
 
 /// Polls until the Save report worker has answered.
