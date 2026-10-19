@@ -126,7 +126,7 @@ fn outer(h: &H, id: &str) -> egui::Rect {
 
 #[test]
 fn elide_middle_keeps_the_drive_and_the_tail() {
-    let p = r"C:\Users\Curti\AppData\Local\Temp\mods\My Mod";
+    let p = r"C:\Users\Modder\AppData\Local\Temp\mods\My Mod";
     assert_eq!(elide_middle(p, 100), p);
     assert_eq!(elide_middle(p, 20), r"C:\…\mods\My Mod");
     assert_eq!(elide_middle(p, 24), r"C:\…\Temp\mods\My Mod");
