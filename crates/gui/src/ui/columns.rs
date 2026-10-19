@@ -216,9 +216,10 @@ fn tile(
         .on_hover_text(tile_tooltip(item));
     ui.set_opacity(opacity);
     // T7: hover and press show instantly; the frame's stroke was chosen before `interact`, so paint over it.
+    // Not on the dimmed drag source: a full-opacity stroke would make it look lit (review I1).
     let base = border_of(ui, &item.status);
     let stroke = interact_stroke(ui, &resp, base);
-    if stroke != base {
+    if stroke != base && !dim {
         ui.painter().rect_stroke(
             resp.rect,
             ui.visuals().widgets.noninteractive.corner_radius,
@@ -654,6 +655,8 @@ pub(super) fn drag_ghost(ctx: &egui::Context, model: &AppModel, thumbs: &mut Thu
     let Some(p) = egui::DragAndDrop::payload::<crate::ui::sets_column::DragItem>(ctx) else {
         return;
     };
+    // Until the release frame is followed by one without the ghost (the drag bounds this).
+    ctx.request_repaint();
     let (Some(pos), Some(item)) = (ctx.pointer_interact_pos(), model.item(&p.0)) else {
         return;
     };
@@ -665,7 +668,11 @@ pub(super) fn drag_ghost(ctx: &egui::Context, model: &AppModel, thumbs: &mut Thu
     match thumbs.get(ctx, item) {
         Some(t) => painter.image(
             t.id(),
-            rect,
+            // Fitted, not stretched (review M2): a non-square thumbnail keeps its aspect in the 40 x 40 box.
+            egui::Rect::from_center_size(
+                rect.center(),
+                t.size_vec2() * (rect.width() / t.size_vec2().max_elem()),
+            ),
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE.gamma_multiply(0.75),
         ),

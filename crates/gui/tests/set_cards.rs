@@ -289,7 +289,7 @@ fn drags_a_texture(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> bool {
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(6.0 * step as f32, 0.0),
         ));
-        h.run();
+        h.run_steps(2); // the ghost repaints while dragging
     }
     let dragging = egui::DragAndDrop::payload::<DragItem>(&h.ctx).is_some();
     egui::DragAndDrop::clear_payload(&h.ctx);
@@ -421,7 +421,7 @@ fn a_texture_dragged_over_a_card_outlines_it() {
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(2.0 * step as f32, 0.0),
         ));
-        h.run();
+        h.run_steps(2); // the ghost repaints while dragging
     }
     assert!(
         egui::DragAndDrop::has_payload_of_type::<DragItem>(&h.ctx),
@@ -452,13 +452,13 @@ fn start_drag(h: &mut Harness<'static, AppModel>, at: egui::Pos2) -> egui::Pos2 
         h.event(egui::Event::PointerMoved(
             at + egui::vec2(10.0 * step as f32, 0.0),
         ));
-        h.run();
+        h.run_steps(2); // the ghost repaints while dragging
     }
     at + egui::vec2(30.0, 0.0)
 }
 
-/// T7 K10: a 40 x 40 ghost 12 pt below and right of the pointer, and the Grabbing cursor (R5, green from the start).
-fn assert_ghost(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
+/// T7 K10: a 40 x 40 ghost 12 pt below and right of the pointer.
+fn assert_ghost_rect(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
     assert!(egui::DragAndDrop::has_payload_of_type::<
         sdc_gui::ui::sets_column::DragItem,
     >(&h.ctx));
@@ -475,6 +475,11 @@ fn assert_ghost(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
             .any(|r| (r.min - want).length() < 1.0 && (r.width() - 40.0).abs() < 0.5),
         "a 40 wide ghost at {want:?}"
     );
+}
+
+/// The ghost plus the Grabbing cursor (R5, green from the start; the drag plugin sets it for a dragged widget).
+fn assert_ghost(h: &Harness<'static, AppModel>, pointer: egui::Pos2) {
+    assert_ghost_rect(h, pointer);
     assert_eq!(
         h.output().platform_output.cursor_icon,
         egui::CursorIcon::Grabbing
@@ -494,7 +499,43 @@ fn a_dragged_tile_shows_a_ghost_under_the_pointer_and_dims_its_source() {
     let faded = shapes(&h).iter().any(|s| matches!(s,
         egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 && r.stroke.color.a() < 200));
     assert!(faded, "the dragged source is dimmed");
+    // Review I1: no full-opacity hover or press stroke over the dimmed source.
+    let lit = shapes(&h).iter().any(|s| matches!(s,
+        egui::Shape::Rect(r) if r.rect.contains_rect(label) && r.stroke.width == 2.0 && r.stroke.color.a() == 255));
+    assert!(!lit, "the dimmed source shows no full-opacity stroke");
     egui::DragAndDrop::clear_payload(&h.ctx);
+}
+
+/// Review M3: the ghost needs no source widget, and goes with the payload.
+#[test]
+fn the_ghost_is_painted_from_the_payload_alone_and_goes_with_it() {
+    use sdc_gui::ui::sets_column::DragItem;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let key = m.items[0].key.clone();
+    let mut h = harness(m);
+    h.run();
+    let at = egui::pos2(900.0, 500.0);
+    egui::DragAndDrop::set_payload(&h.ctx, DragItem(key));
+    h.hover_at(at);
+    h.run_steps(2); // the ghost repaints while dragging
+    assert_ghost_rect(&h, at);
+    egui::DragAndDrop::clear_payload(&h.ctx);
+    h.run();
+    let want = at + egui::vec2(12.0, 12.0);
+    assert!(
+        !shapes(&h).iter().any(|s| match s {
+            egui::Shape::Rect(r) => (r.rect.min - want).length() < 1.0,
+            egui::Shape::Mesh(m) => (m.calc_bounds().min - want).length() < 1.0,
+            _ => false,
+        }),
+        "the ghost is gone with the payload"
+    );
+    assert!(
+        !shapes(&h).iter().any(|s| matches!(s,
+            egui::Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color.a() < 200)),
+        "no tile is dimmed"
+    );
 }
 
 #[test]
