@@ -55,8 +55,9 @@ export const EXTRACT_STAGES = [
   { stage: 'defines', script: 'cslog_defines.py', runner: 'python' },
   { stage: 'fixture', script: 'golden_fixture.py', runner: 'python' },
 ]
-export const DEFAULT_JOURNAL = 'F:\\ai\\dds\\tools\\rdc-fixtures\\.golden-recovery.json'
-export const EXTRACTOR_ROOT = 'F:\\ai\\dds\\tools\\rdc-out\\golden' // fixed in golden_common.GOLDEN_ROOT
+// The extractors write below <tools>\rdc-out\golden (golden_common.GOLDEN_ROOT); the journal and kept captures
+// default below <tools>\rdc-fixtures. No machine path is built in: the caller passes --tools and --journal.
+const extractorRoot = (tools) => path.join(tools, 'rdc-out', 'golden')
 
 // ---------- JSON text scanner: positions of every object member, so edits touch only value bytes ----------
 function scan(text) {
@@ -446,7 +447,9 @@ async function preflight(o) {
   let scripts = []
   try { scripts = extractScripts(plan.x_extract) } catch (e) { errs.push(e.message) }
   if (errs.length) return { ok: false, reason: `plan: ${errs.join('; ')}` }
-  const journal = o.journal || DEFAULT_JOURNAL
+  if (!o.journal) return { ok: false, reason: 'preflight needs --journal' }
+  if (!o.tools) return { ok: false, reason: 'preflight needs --tools (the folder with rdc-scripts and rdc-out)' }
+  const journal = o.journal
   const delay = +(process.env.GOLDEN_TEST_DELAY_BEFORE_LOCK_MS || 0) // test hook: widen the window before the lock
   if (delay) await sleepMs(delay)
   if (o['dry-run']) return preflightBody(o, { plan, profile, overlay, rawGroups, scripts, journal, dry: true })
@@ -469,10 +472,12 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
   if (!csSettingsVersion || !mo.csMeta) return { ok: false, reason: `CS version unknown (SettingsUser Version "${csSettingsVersion}", meta "${mo.csMeta}")` }
   const csKey = `cs-${csSettingsVersion.split('-').slice(0, 3).join('.')}-${mo.csMeta}`
   // x_fixture_out can only name where the extractors already write (golden_common.GOLDEN_ROOT\<cs-version>).
-  const extractOut = path.join(EXTRACTOR_ROOT, csKey)
+  const extractOut = path.join(extractorRoot(o.tools), csKey)
   if (plan.x_fixture_out && path.resolve(plan.x_fixture_out).toLowerCase() !== path.resolve(extractOut).toLowerCase()) return { ok: false, reason: `plan: x_fixture_out ${plan.x_fixture_out} differs from the extractors' fixed output ${extractOut}` }
   const s6 = (plan.x_s6_files || []).map(f => {
-    const p = f.path.startsWith('G:\\Acherus') ? path.join(o.mo2, f.path.slice('G:\\Acherus'.length)) : f.path
+    // x_mo2_root: the MO2 folder the plan's paths were written against, rebased onto --mo2; relative paths are under --mo2.
+    const r = plan.x_mo2_root
+    const p = r && f.path.toLowerCase().startsWith(r.toLowerCase()) ? path.join(o.mo2, f.path.slice(r.length)) : path.isAbsolute(f.path) ? f.path : path.join(o.mo2, f.path)
     return { path: p, copy_of: f.copy_of || null, exists: fs.existsSync(p), sha256_want: f.sha256 || null, ok: false }
   })
   for (const f of s6) f.ok = f.exists && (!f.sha256_want || (await sha256(f.path)) === f.sha256_want)
@@ -481,7 +486,7 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
   const featureLog = (plan.x_cs_feature_log || {})[profile] || ''
   if (featureLog && !fs.existsSync(featureLog)) return { ok: false, reason: `plan: x_cs_feature_log for ${profile} ${featureLog} does not exist` }
   // W6/W10: the plan's x_keep_rdc wins (per profile below it); --keep-root overrides both (tests).
-  const keepRoot = o['keep-root'] || plan.x_keep_rdc || path.join('F:\\ai\\dds\\tools\\rdc-fixtures', csKey)
+  const keepRoot = o['keep-root'] || plan.x_keep_rdc || path.join(o.tools, 'rdc-fixtures', csKey)
   const keepDir = path.join(keepRoot, profile)
   const needF = planned * CAPTURE_GB + 20, freeF = freeGb(existingAncestor(keepRoot))
   const needG = planned * CAPTURE_GB + 10, freeG = freeGb(existingAncestor(capturesDir))
@@ -582,7 +587,8 @@ function planText(r, dry) {
 
 // --run-id: automatic cleanup, restores only the entry this run applied. Without it (restore_only): any pending entry.
 async function restore(o) {
-  const journal = o.journal || DEFAULT_JOURNAL
+  if (!o.journal) return { ok: false, reason: 'restore needs --journal' }
+  const journal = o.journal
   const settingsPath = settingsPathOf(o.mo2)
   const key = canonPath(settingsPath)
   return withJournalLock(journal, `restore ${o['run-id'] || 'unscoped'}`, () => restoreLocked(o, journal, settingsPath, key))

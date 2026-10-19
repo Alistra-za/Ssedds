@@ -1,7 +1,7 @@
 export const meta = {
   name: 'golden-capture',
   description: 'Phase D golden captures: apply a CS settings profile, launch Skyrim via MO2 + DevBench, place subjects and camera relative to the coc marker, take RenderDoc captures, quit, restore settings byte-exact, keep the .rdc files as fixtures and run the golden extractors',
-  whenToUse: 'NIF team Phase D golden RenderDoc captures (one profile per run: A, B, A_DC). Args: {plan: "<phase-d plan .json>", profile: "A"|"B"|"A_DC" (default plan x_profile), mo2: "G:\\\\Acherus", tools: "F:\\\\ai\\\\dds\\\\tools", owner_ok: true, dry_run: false, restore_only: false, cell: "<override plan cell>", journal: "<recovery journal, default F:\\\\ai\\\\dds\\\\tools\\\\rdc-fixtures\\\\.golden-recovery.json>", run_root: "<default .superpowers/sdd/captures/golden; each run gets a fresh <UTC time>-<run id> dir below it>", out: "<results .md, default in the run dir>"}. dry_run runs only Preflight and returns the full plan without touching settings or launching the game; restore_only only restores pending settings from the journal.',
+  whenToUse: 'NIF team Phase D golden RenderDoc captures (one profile per run: A, B, A_DC). Args: {plan: "<phase-d plan .json>", profile: "A"|"B"|"A_DC" (default plan x_profile), mo2: "<MO2 instance folder>", tools: "<tools folder with rdc-scripts and RenderDoc>", owner_ok: true, dry_run: false, restore_only: false, cell: "<override plan cell>", journal: "<recovery journal, default <tools>\\\\rdc-fixtures\\\\.golden-recovery.json>", run_root: "<default .superpowers/sdd/captures/golden; each run gets a fresh <UTC time>-<run id> dir below it>", out: "<results .md, default in the run dir>"}. dry_run runs only Preflight and returns the full plan without touching settings or launching the game; restore_only only restores pending settings from the journal.',
   phases: [
     { title: 'Preflight', detail: 'plan checks, CS version, disk, journal, game not running; back up SettingsUser.json and apply the profile atomically (dry_run: plan only)' },
     { title: 'Session', detail: 'launch via MO2, wait DevBench + a positive shader-compile signal, coc, per group: place, frame, draw check, capture; qqq' },
@@ -13,7 +13,7 @@ export const meta = {
 }
 
 // NIF-team fork of in-game-capture.js (main 93323c3) for Phase D golden captures
-// (F:\ai\dds\nifparseref\plan\nif-edit-v2\phase-d-capture-requirements.md §3-§4, W1-W9).
+// (the NIF team's plan folder, nif-edit-v2/phase-d-capture-requirements.md §3-§4, W1-W9; see CLAUDE.local.md).
 //
 // USAGE
 //   Three runs, one game launch each (CS settings are read at boot):
@@ -49,10 +49,11 @@ export const meta = {
 //   x_gamehour / x_gamehour_alternatives  sun hour for the setup console (default 12) and hours to try when subjects are in shadow
 //   x_layout_yaw_deg / x_origin_shift  turn the whole plan frame (x_pos, x_angle Z, x_camera rel/yaw, light and player
 //                      positions) clockwise by the heading, then shift it by [dx,dy,dz] world units from the marker
-//   x_s6_files         files the owner places in mods\s6; checked, never written
+//   x_s6_files         files the owner places in mods\s6; checked, never written. A relative path is under args.mo2;
+//                      x_mo2_root names the MO2 folder absolute paths were written against, rebased onto args.mo2
 //   x_cs_feature_log   optional {profile: path} debug CS log of the same feature set, passed as P04_CS_FEATURE_LOG so an
 //                      info-level profile gets its defines in this run (the shader cache loses its bytecode later)
-//   x_keep_rdc         where kept .rdc go (per profile below it); default F:\ai\dds\tools\rdc-fixtures\<cs-version>
+//   x_keep_rdc         where kept .rdc go (per profile below it); default <tools>\rdc-fixtures\<cs-version>
 //   x_extract          stages to run: A, B, dispatch, C, shader_id, defines, fixture (default all; others rejected)
 //   x_fixture_out      must equal the extractors' fixed output root rdc-out\golden\<cs-version> (checked)
 //   x_shape_offsets    optional {form: {shapePrefix: [x,y,z]}} model offsets for W9; x_match_tol (default 60 units).
@@ -92,9 +93,10 @@ const RUN_ROOT = a.run_root || '.superpowers/sdd/captures/golden'
 let RUN_DIR = null // the fresh dir preflight creates (never reused); set from its output
 let OUT = a.out || null
 const LIB = a.lib || '.claude/workflows/golden-capture-lib.mjs'
-const JOURNAL = a.journal || 'F:\\ai\\dds\\tools\\rdc-fixtures\\.golden-recovery.json'
 const MO2 = a.mo2
 const TOOLS = a.tools
+if (!a.journal && !TOOLS) throw new Error('golden-capture needs args.journal or args.tools (the journal defaults to <tools>\\rdc-fixtures)')
+const JOURNAL = a.journal || `${TOOLS}\\rdc-fixtures\\.golden-recovery.json`
 const node = (cmd) => `node ${LIB} ${cmd}`
 
 const RULES = `Owner data under ${MO2} is read-only except what golden-capture-lib.mjs writes (SettingsUser.json via preflight/restore). Do not edit SettingsUser.json or delete anything yourself; never delete from the Captures folder. Never write into ${MO2}\\mods. Never run \`python -\` heredocs (write a script file, run \`python -I file\`). Never send DevBench console \`help ... 4\` (stalls the main thread), \`tm\` (hides the overlay markers the scripts need), \`save\`/\`savegame\`, \`set timescale to 0\` or DevBench game setTimeScale/freeze. Never kill processes you did not start. A DevBench 504 is not fatal: poll GET /api/health until "frame" advances, then continue.`
@@ -138,7 +140,7 @@ try {
     properties: { exit_code: { type: 'integer' }, stdout_json: { type: 'string', description: 'the command stdout, verbatim' } },
     required: ['exit_code', 'stdout_json'],
   }
-  const preCmd = node(`preflight --run-root "${RUN_ROOT}" --journal "${JOURNAL}" --plan "${a.plan}" --mo2 "${MO2}"${PROFILE_ARG ? ` --profile ${PROFILE_ARG}` : ''}${a.cell ? ` --cell "${a.cell}"` : ''}${a.keep_root ? ` --keep-root "${a.keep_root}"` : ''}${a.cs_mod ? ` --cs-mod "${a.cs_mod}"` : ''}${DRY ? ' --dry-run' : ''}`)
+  const preCmd = node(`preflight --run-root "${RUN_ROOT}" --journal "${JOURNAL}" --tools "${TOOLS}" --plan "${a.plan}" --mo2 "${MO2}"${PROFILE_ARG ? ` --profile ${PROFILE_ARG}` : ''}${a.cell ? ` --cell "${a.cell}"` : ''}${a.keep_root ? ` --keep-root "${a.keep_root}"` : ''}${a.cs_mod ? ` --cs-mod "${a.cs_mod}"` : ''}${DRY ? ' --dry-run' : ''}`)
   const preRun = await agent(
     `Preflight for a golden capture run. ${RULES}
 Run exactly this one command from the repository root (PowerShell or bash), once:
@@ -253,7 +255,7 @@ const kept = (session.captures || []).map(c => {
 
 // ---------------- Analyse (W5, W9) ----------------
 phase('Analyse')
-// Env vars and run order per F:\ai\dds\tools\rdc-scripts\GOLDEN-EXTRACTORS.md; stages from the plan's x_extract.
+// Env vars and run order per <tools>\rdc-scripts\GOLDEN-EXTRACTORS.md; stages from the plan's x_extract.
 function extractorCommands(rdc, c) {
   const S = `${TOOLS}\\rdc-scripts`
   const camFile = `${RUN_DIR}\\camera_${c.group}.json`
