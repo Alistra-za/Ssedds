@@ -256,7 +256,7 @@ const RUN = path.join(T, 'run')
 const FIX = path.join(T, 'fixtures')
 const JOURNAL = path.join(T, 'journal', '.golden-recovery.json')
 let RUN_A = null // run dir created by the apply test
-const preArgs = (run = RUN, profile = 'A') => `--plan "${PLAN}" --mo2 "${MO2}" --run-root "${run}" --journal "${JOURNAL}" --keep-root "${FIX}" --profile ${profile}`
+const preArgs = (run = RUN, profile = 'A') => `--plan "${PLAN}" --mo2 "${MO2}" --tools "${path.join(T, 'tools')}" --run-root "${run}" --journal "${JOURNAL}" --keep-root "${FIX}" --profile ${profile}`
 const restoreCmd = `restore --mo2 "${MO2}" --journal "${JOURNAL}"`
 const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JOURNAL, 'utf8')).entries).some(e => e.state === 'applied') } catch { return false } }
 {
@@ -357,7 +357,7 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   assert.notEqual(sha(LIVE), ORIG_SHA)
   const { spawn } = await import('node:child_process')
   const b = new Promise(res => {
-    const p = spawn(process.execPath, [LIB, 'preflight', '--plan', PLAN, '--mo2', MO2, '--run-root', path.join(T, 'run-n4b'), '--journal', JOURNAL, '--keep-root', FIX, '--profile', 'B'], { env: { ...process.env, GOLDEN_TEST_DELAY_BEFORE_LOCK_MS: '2500' } })
+    const p = spawn(process.execPath, [LIB, 'preflight', '--plan', PLAN, '--mo2', MO2, '--tools', path.join(T, 'tools'), '--run-root', path.join(T, 'run-n4b'), '--journal', JOURNAL, '--keep-root', FIX, '--profile', 'B'], { env: { ...process.env, GOLDEN_TEST_DELAY_BEFORE_LOCK_MS: '2500' } })
     let out = ''; p.stdout.on('data', x => { out += x }); p.on('close', () => res(JSON.parse(out)))
   })
   await new Promise(r => setTimeout(r, 300)) // B is started and waiting before its lock
@@ -438,7 +438,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   return { res, err, calls, logs, prompts }
 }
 {
-  const base = { plan: PLAN, mo2: MO2, tools: 'F:\\ai\\dds\\tools', lib: LIB, keep_root: FIX, journal: JOURNAL, profile: 'A' }
+  const base = { plan: PLAN, mo2: MO2, tools: path.join(T, 'tools'), lib: LIB, keep_root: FIX, journal: JOURNAL, profile: 'A' }
   const d = await runWorkflow({ ...base, dry_run: true, run_root: path.join(T, 'wf-dry') }, {})
   assert.equal(d.res.dry_run, true); assert.deepEqual(d.calls, ['preflight (dry run)']); assert.equal(sha(LIVE), ORIG_SHA)
   ok(`workflow dry_run: only Preflight ran; returned ${path.basename(d.res.plan_txt)}`)
