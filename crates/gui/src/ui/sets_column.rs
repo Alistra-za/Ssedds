@@ -391,7 +391,7 @@ pub fn draw(
     let visible = model.visible_sets();
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
-    } else if visible.is_empty() && filtering {
+    } else if visible.is_empty() && filtering && !views.is_empty() {
         ui.label(format!("No sets match the filter ({} hidden)", views.len()));
         if ui.button("Clear filter").clicked() {
             model.clear_sets_filter();

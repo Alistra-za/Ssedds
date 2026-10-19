@@ -113,6 +113,21 @@ fn each_new_filter_alone_and_combined_with_and() {
 }
 
 #[test]
+fn ctrl_a_with_every_texture_hidden_keeps_the_selection() {
+    // A select-all over nothing never deselects.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = mixed(d.path());
+    m.click_item("t/t00000", false, false);
+    m.click_item("t/t00001", true, false);
+    let before = (m.selection.clone(), m.selected_items());
+    m.search = "zzz".into();
+    assert!(m.visible_items().is_empty());
+    m.select_all_visible();
+    assert_eq!((m.selection.clone(), m.selected_items()), before);
+    assert_eq!(before.1.len(), 2);
+}
+
+#[test]
 fn a_texture_with_no_job_matches_no_combo_value() {
     let d = tempfile::tempdir().unwrap();
     let mut m = mixed(d.path());

@@ -5,7 +5,7 @@ use eframe::egui::{self, accesskit::Role, containers::panel::PanelState, Id};
 use egui_kittest::kittest::{by, NodeT, Queryable};
 use egui_kittest::Harness;
 use engine::shader::Shader;
-use sdc_gui::model::sets::{self, views};
+use sdc_gui::model::sets::views;
 use sdc_gui::model::sets_filter::SetsFilter;
 use sdc_gui::model::{AppModel, Selection};
 use sdc_gui::settings::*;
@@ -229,6 +229,55 @@ fn shift_click_ranges_follow_the_visible_sets() {
     want.sort();
     assert_eq!(sel, want, "the hidden leaf is not in the range");
     assert!(!m.selected_sets().contains(&leaf));
+}
+
+#[test]
+fn ctrl_a_with_every_set_hidden_keeps_the_selection() {
+    // A select-all over nothing never deselects.
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, [rock, leaf, _]) = rock_leaf_odd(d.path());
+    m.click_set(&rock, false, false);
+    m.click_set(&leaf, true, false);
+    let before = (m.selection.clone(), m.selected_sets());
+    m.sets_filter.search = "zzz".into();
+    assert!(m.visible_sets().is_empty());
+    m.select_all_visible();
+    assert_eq!((m.selection.clone(), m.selected_sets()), before);
+}
+
+#[test]
+fn no_false_no_match_while_the_first_plan_runs() {
+    // Pills restored from gui.toml, then a folder opens: until the views exist there is no "No sets match" and no
+    // Clear filter that would wipe them.
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let mut s = GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..GuiSettings::default()
+    };
+    s.layout.sets_filters = vec!["ready".into()];
+    let mut m = AppModel::new(s, None, session());
+    sdc_gui::layout::restore_model(
+        &m.settings.layout.clone(),
+        &mut m.filter,
+        &mut m.prefs,
+        &mut m.sets_filter,
+        &mut sdc_gui::model::view::ViewState::default(),
+    );
+    assert!(m.sets_filter.ready);
+    m.open_folder(root);
+    assert!(views(&m).is_empty(), "the plan has not arrived yet");
+    let mut h = harness(m);
+    h.step();
+    assert!(views(h.state()).is_empty());
+    assert!(h.query_by_label_contains("No sets match").is_none());
+    assert!(h.query_by_label("Clear filter").is_none());
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run();
+    assert!(h.state().sets_filter.ready, "the restored pill stays");
+    // Nothing is ready in this fixture: now the message is true.
+    h.get_by_label("No sets match the filter (3 hidden)");
+    h.get_by_label("Clear filter");
 }
 
 #[test]
@@ -551,5 +600,4 @@ fn move_up_and_down_are_off_while_filtered() {
             "{b} is disabled"
         );
     }
-    let _ = sets::views(h.state());
 }

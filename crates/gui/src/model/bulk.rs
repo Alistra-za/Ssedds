@@ -213,7 +213,8 @@ impl AppModel {
     }
 
     /// F3a D1 Ctrl+A: every visible texture, or every visible set when a set is the active entry (search and filters
-    /// applied; K18). The active entry stays when it is among them; else the first becomes active.
+    /// applied; K18). The active entry stays when it is among them; else the first becomes active. With nothing
+    /// visible the selection is kept.
     pub fn select_all_visible(&mut self) {
         let sets = matches!(self.selection, Selection::Set(_));
         let keys = if sets {
@@ -221,6 +222,10 @@ impl AppModel {
         } else {
             self.visible_keys()
         };
+        // A select-all over nothing never deselects.
+        if keys.is_empty() {
+            return;
+        }
         let active = self
             .active_of(sets)
             .filter(|a| keys.iter().any(|k| k == a))
