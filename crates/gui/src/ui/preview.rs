@@ -141,9 +141,19 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
                 }
             });
     }
-    let requests = egui::Panel::top("preview-toolbar")
+    let toolbar_id = egui::Id::new("preview-toolbar");
+    let height = |ui: &egui::Ui| {
+        egui::containers::panel::PanelState::load(ui.ctx(), toolbar_id)
+            .map(|s| s.outer_rect.height())
+    };
+    let before = height(ui);
+    let requests = egui::Panel::top(toolbar_id)
         .show(ui, |ui| toolbar(ui, model, &info))
         .inner;
+    // The panel clips to last frame's height: a row the toolbar just gained (first draw, a pin) shows next frame.
+    if height(ui) != before {
+        ui.ctx().request_repaint();
+    }
     if requests.close {
         model.collapse();
         return;

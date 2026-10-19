@@ -407,41 +407,49 @@ fn column_panel(
             model.save_settings();
         }
     } else {
-        // egui stores the width it drew, clamped to the window; keep the width the user dragged to apart, so a
-        // window narrowed and widened again gets it back.
-        use egui::containers::panel::PanelState;
-        let (panel, chosen) = (egui::Id::new(id), egui::Id::new(id).with("chosen"));
-        let resize = ui.ctx().read_response(panel.with("__resize"));
-        let released = resize.as_ref().is_some_and(|r| r.drag_stopped());
-        if !released && !resize.is_some_and(|r| r.dragged()) {
-            let w = ui
-                .data_mut(|d| d.get_persisted::<f32>(chosen))
-                .unwrap_or(width);
-            let outer_rect = egui::Rect::from_min_size(
-                ui.available_rect_before_wrap().min,
-                egui::vec2(w, ui.available_height()),
-            );
-            ui.data_mut(|d| d.insert_persisted(panel, PanelState { outer_rect }));
-        }
-        egui::Panel::left(id)
-            .default_size(width)
-            .size_range(range)
-            .show(ui, |ui| {
-                // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                // Trace-debug #11: blur text fields on the press, while the old set is still drawn, so its
-                // commit-on-focus-loss runs before the release changes the selection (AO1).
-                // shortcut: a press and release in one frame still loses the edit; defer the selection a frame if seen.
-                if ui.input(|i| i.pointer.primary_pressed())
-                    && ui.rect_contains_pointer(ui.max_rect())
-                {
-                    ui.memory_mut(|m| m.stop_text_input());
-                }
-                content(ui, model)
-            });
-        // egui stores the released width during `show`.
-        if let Some(s) = PanelState::load(ui.ctx(), panel).filter(|_| released) {
-            ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
-        }
+        let panel = egui::Panel::left(id).default_size(width).size_range(range);
+        chosen_width_panel(ui, id, width, panel, |ui| {
+            // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            // Trace-debug #11: blur text fields on the press, while the old set is still drawn, so its
+            // commit-on-focus-loss runs before the release changes the selection (AO1).
+            // shortcut: a press and release in one frame still loses the edit; defer the selection a frame if seen.
+            if ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(ui.max_rect())
+            {
+                ui.memory_mut(|m| m.stop_text_input());
+            }
+            content(ui, model)
+        });
+    }
+}
+
+/// Shows `panel` (whose id is `id`) at the width the user dragged to, `<id>/chosen`, or `width` before any drag.
+/// egui stores the width it drew, clamped to `size_range` and the window; keeping the chosen width apart gives it back
+/// once the clamp lifts (a window widened again, a preview closed), and it is what gui.toml saves (`layout.rs`).
+pub(crate) fn chosen_width_panel(
+    ui: &mut egui::Ui,
+    id: &str,
+    width: f32,
+    panel: egui::Panel,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    use egui::containers::panel::PanelState;
+    let (panel_id, chosen) = (egui::Id::new(id), egui::Id::new(id).with("chosen"));
+    let resize = ui.ctx().read_response(panel_id.with("__resize"));
+    let released = resize.as_ref().is_some_and(|r| r.drag_stopped());
+    if !released && !resize.is_some_and(|r| r.dragged()) {
+        let w = ui
+            .data_mut(|d| d.get_persisted::<f32>(chosen))
+            .unwrap_or(width);
+        let outer_rect = egui::Rect::from_min_size(
+            ui.available_rect_before_wrap().min,
+            egui::vec2(w, ui.available_height()),
+        );
+        ui.data_mut(|d| d.insert_persisted(panel_id, PanelState { outer_rect }));
+    }
+    panel.show(ui, add);
+    // egui stores the released width during `show`.
+    if let Some(s) = PanelState::load(ui.ctx(), panel_id).filter(|_| released) {
+        ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
     }
 }

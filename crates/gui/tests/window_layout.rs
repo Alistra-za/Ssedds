@@ -606,3 +606,85 @@ fn a_legacy_grey_is_saved_back_as_bg_after_an_unrelated_change() {
     let (back, _) = GuiSettings::load(&path);
     assert_eq!(back.layout.look.unwrap().bg, Some([0.25; 3]));
 }
+
+// ---- Layout v2 Task 4.3 fix round 1: the Advanced drawer keeps the width the user chose
+
+type AppHarness = egui_kittest::Harness<'static, (sdc_gui::model::AppModel, sdc_gui::ui::State)>;
+
+/// A 1280×800 app with Advanced open at a saved `width`, restored the way a start restores gui.toml.
+fn advanced_at(width: f32, d: &std::path::Path) -> AppHarness {
+    let mut model = support::opened(d);
+    model.settings.advanced_open = true;
+    let h = egui_kittest::Harness::builder()
+        .with_size(vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (sdc_gui::model::AppModel, sdc_gui::ui::State)| {
+                sdc_gui::ui::draw_with(ui, m, s)
+            },
+            (model, sdc_gui::ui::State::default()),
+        );
+    sdc_gui::layout::restore_ctx(
+        &h.ctx,
+        &LayoutSettings {
+            widths: [("advanced".to_string(), width)].into(),
+            ..LayoutSettings::default()
+        },
+    );
+    let mut h = h;
+    h.run();
+    h
+}
+
+/// What a save would write for the Advanced drawer now.
+fn saved_advanced(h: &AppHarness) -> Option<f32> {
+    let m = &h.state().0;
+    sdc_gui::layout::capture(
+        &h.ctx,
+        &LayoutSettings::default(),
+        &m.filter,
+        &m.prefs,
+        &m.sets_filter,
+        &m.view,
+        (&Default::default(), &Default::default()),
+    )
+    .widths
+    .get("advanced")
+    .copied()
+}
+
+fn drawn_advanced(h: &AppHarness) -> f32 {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("advanced"))
+        .unwrap()
+        .outer_rect
+        .width()
+}
+
+/// At 1280 the drawer's cap is 656 with nothing expanded: a saved 700 is drawn at the cap and still saved as 700.
+#[test]
+fn a_saved_advanced_width_over_the_cap_is_kept_in_gui_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = advanced_at(700.0, d.path());
+    h.run();
+    assert!(drawn_advanced(&h) < 700.0, "drawn {}", drawn_advanced(&h));
+    assert_eq!(saved_advanced(&h), Some(700.0));
+}
+
+/// An expanded preview narrows the drawer; collapsing it gives the user's 600 back, and 600 is saved throughout.
+#[test]
+fn the_advanced_width_comes_back_after_a_preview_and_is_saved_unchanged() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = advanced_at(600.0, d.path());
+    assert_eq!(drawn_advanced(&h), 600.0);
+    h.state_mut().0.expand("landscape/rock01_rmaos");
+    assert!(h
+        .state_mut()
+        .0
+        .wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert!(drawn_advanced(&h) < 600.0, "drawn {}", drawn_advanced(&h));
+    assert_eq!(saved_advanced(&h), Some(600.0));
+    h.state_mut().0.collapse();
+    h.run();
+    assert_eq!(drawn_advanced(&h), 600.0);
+    assert_eq!(saved_advanced(&h), Some(600.0));
+}

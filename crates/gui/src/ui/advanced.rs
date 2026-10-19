@@ -54,20 +54,21 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     let mut close = false;
     // Drawn before the columns: it leaves them their minimums and the centre its floor (K8, rule §2.3).
     let max = ui.available_width() - TEXTURES_MIN - SETS_MIN - super::centre_floor(model);
-    egui::Panel::right("advanced")
+    let panel = egui::Panel::right("advanced")
         .default_size(380.0)
-        .size_range(ADV_MIN..=max.max(ADV_MIN))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Advanced");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close = ui.button("Close").clicked();
-                });
+        .size_range(ADV_MIN..=max.max(ADV_MIN));
+    // The user's width survives the cap (a narrow window, an expanded preview) and is what gui.toml saves.
+    super::chosen_width_panel(ui, "advanced", 380.0, panel, |ui| {
+        ui.horizontal(|ui| {
+            ui.heading("Advanced");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.button("Close").clicked();
             });
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| body(ui, model, state));
         });
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| body(ui, model, state));
+    });
     if close {
         model.settings.advanced_open = false;
         model.save_settings();

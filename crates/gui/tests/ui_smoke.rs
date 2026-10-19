@@ -712,9 +712,10 @@ fn assert_toolbar_layout(h: &Harness<'static, AppModel>) {
             "{l} {r:?} under Close {close:?}"
         );
     }
-    // Every control lies inside the toolbar panel and is not clipped by it (skill §10.2-10.3).
+    // Every control lies inside the toolbar panel and is not clipped by it (skill §10.2-10.3). The finished pass is
+    // `prev_pass`: egui swaps the two at the end of a pass.
     let widgets: Vec<_> = h.ctx.viewport(|v| {
-        v.this_pass
+        v.prev_pass
             .widgets
             .layers()
             .flat_map(|(_, ws)| ws)
@@ -727,12 +728,11 @@ fn assert_toolbar_layout(h: &Harness<'static, AppModel>) {
             "{l} {r:?} outside the toolbar {bar:?}"
         );
         let hit = widgets.iter().find(|(w, _)| w == r).map(|(_, i)| *i);
-        if let Some(hit) = hit {
-            assert!(
-                hit.expand(0.5).contains_rect(*r),
-                "{l} {r:?} clipped to {hit:?}"
-            );
-        }
+        let hit = hit.unwrap_or_else(|| panic!("{l} {r:?} has no widget rect in the last pass"));
+        assert!(
+            hit.expand(0.5).contains_rect(*r),
+            "{l} {r:?} clipped to {hit:?}"
+        );
     }
 }
 
@@ -826,6 +826,22 @@ fn at_1100_wide_the_advanced_drawer_leaves_the_preview_its_width() {
         "viewport {}",
         bar.width()
     );
+    assert_toolbar_layout(&h);
+    // A pinned result adds Compare: Source / Pinned and Unpin to the View cluster; they stay in the toolbar too.
+    h.state_mut().encode_now();
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert!(h.state().can_pin());
+    h.state_mut().pin_this();
+    h.run();
+    let bar = toolbar_rect(&h);
+    for label in ["Compare:", "Source", "Pinned", "Unpin"] {
+        let r = toolbar_node(&h, label, false);
+        assert!(
+            bar.contains_rect(r),
+            "{label} {r:?} outside the toolbar {bar:?}"
+        );
+    }
     assert_toolbar_layout(&h);
     h.state_mut().collapse();
     h.run();
