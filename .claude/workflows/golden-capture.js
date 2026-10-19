@@ -20,6 +20,7 @@ export const meta = {
 //     1. {plan, profile: "A",    mo2, tools, owner_ok: true}   golden: P0 probe + A1-A6 (plan top level)
 //     2. {plan, profile: "B",    mo2, tools, owner_ok: true}   as shipped: groups of x_profiles_other_runs.B
 //     3. {plan, profile: "A_DC", mo2, tools, owner_ok: true}   A without DynamicCubemaps at boot
+//   Any key of x_profiles_other_runs works the same way (A_RT retest, B_LOG / A_DC_LOG debug-log launches).
 //   Always do a dry run first: add dry_run: true. It runs Preflight read-only and returns <its fresh run dir>/plan.txt:
 //   every settings edit (line, old -> new), every DevBench request per group (origin shown as 0,0,0), every capture.
 //   If run 1's P0 probe shows no directional light, pass cell: "<x_cell_fallback[0]>" to every run.
@@ -30,7 +31,12 @@ export const meta = {
 //   x_cs_settings      overlay of SettingsUser.json sections/keys (nested objects); only listed keys are edited,
 //                      missing keys are inserted. Always added on top: RenderDoc."Enable RenderDoc Capture",
 //                      Advanced."Frame Annotations" = true. Log Level is not forced (debug level = CS developer mode = debug shaders).
-//   x_profiles_other_runs  {<profile>: {x_cs_settings: {...} | "<base> without <Feature> in Disable at Boot", groups: [labels]}}
+//   x_profiles_other_runs  {<profile>: {x_cs_settings: {...} | "<base>" | "<base> without <Feature> in Disable at Boot",
+//                      x_cs_settings_add: {...} merged on top (e.g. A_DC_LOG = A_DC + Log Level 1), groups: [labels]}}
+//                      (A_RT = "A" with only the retest groups; A_DC_LOG = debug-log launch for P0, not a fixture)
+//   x_origin_expected  [x,y,z] of the plan cell's coc marker; steps refuses an origin more than 2 units away (unsettled player)
+//   groups[].x_disable_refs  cell refs (8 hex) disabled for that group only and enabled again after it (light owners
+//                      that would fill a big subject's 7 light slots); every group also disables nearby NPCs for the session
 //   x_cell_fallback    cells to use instead if the P0 probe finds no directional light (manual: args.cell)
 //   groups[].x_pos / x_angle   per form, [x,y,z] relative to the coc marker / SetAngle degrees (default row at y+400)
 //   groups[].x_camera  {rel:[x,y,z] from the marker, pitch, yaw} for camera drive (default rel [0,-150,120], 0.15, 0)
@@ -186,16 +192,17 @@ DevBench: http://127.0.0.1:${pre.port}; tools via POST /api/tool/<name> with JSO
    (a) devbench_tools.json lists communityshaders.inspect with a shadercache kind: poll it until compiling is false and completedTasks + failedTasks == totalTasks (record failedTasks);
    (b) the CS log (CommunityShaders.log under Documents\\My Games\\Skyrim Special Edition*\\SKSE; only if the owner log level is debug, which this run no longer forces, so normally use (a)): a line "Compilation completed in" written after this launch and after the last "Compiling " line.
    Wait up to 45 minutes (a cleared shader cache recompiles everything). Before each group's first capture check again: if new "Compiling " lines appeared after the last "Compilation completed", wait for the next one (or the tool to report done). If no positive signal is available or it never comes, do not capture: set compile_ready=false and stop_reason "compile readiness unknown", go to step 5. Record the signal and what it showed in shader_wait.
-3. W3 origin: ALWAYS console "coc ${pre.cell}" (even if already in that cell: a save does not stand on the marker), wait for playerLoaded, then before anything else read the player position (inspect {"kind":"player"} or scene): that is the origin. Then console exec each of setup_console in order.
+3. W3 origin: ALWAYS console "coc ${pre.cell}" (even if already in that cell: a save does not stand on the marker), wait for playerLoaded, then before anything else read the player position (inspect {"kind":"scene"} position) every 0.5 s until z has changed by less than 0.5 units over 2 s (the player drops onto the floor after coc: run e718aa1a read z 9.7 units high and every subject floated). That settled position is the origin. If the steps command below refuses the origin ("had not settled"), re-read it and retry; never pass a value you did not read. Then console exec each of setup_console in order.
 4. Groups in resolved.json order (risky ones are already last). For each group run:
    ${node(`steps --run-dir "${RUN_DIR}" --group <label> --origin <ox>,<oy>,<oz>`)}
-   and send its steps in order: "tool" = POST /api/tool/<tool> with "body", "$refN"/"$lightref" = the ref saved by the step with that "save", "wait_s" = sleep, "only_if" = only when that condition holds. Notes:
+   and send its steps in order, each after the previous one returned: "tool" = POST /api/tool/<tool> with "body"; when a step has "body_raw", send that text verbatim as the body instead (it writes whole-number Float args as 225.0: DevBench drops whole-number Floats, so SetAngle 225 left runs b40e2215/58f625f1/e718aa1a at 43.5 deg); "$refN"/"$lightN" = the ref saved by the step with that "save" (substitute it in body_raw too); "until" = repeat that request every 0.5 s (up to 10 s) until it returns that value; "wait_s" = sleep; "wait_rdc" = wait until the new .rdc in captures_dir exists and its size is stable for 5 s, and send nothing (no freecam off, no Disable) before that; "only_if" = only when that condition holds. Notes:
+   - The inspect refs formType Actor step lists NPCs: disable (console "<formId>.disable") every listed actor that is not the player and not placed by this run within 2000 units of a subject or the camera, so none stands in frame (run e718aa1a: a guard over the A1 coffin). Never kill, moveto or save; the disable lasts only this session.
    - inspect refs after each placement: model must be the expected mesh; record the actual position. If the ref is an Actor, also papyrus Actor.SetDontMove [true].
    - Write ${RUN_DIR}/refs_<label>.json = [{"form","ref","pos":[x,y,z],"angle":[ax,ay,az]}] for the placed refs (actual positions) and ${RUN_DIR}/camera_<label>.json = the camera get result (JSON).
    - Point lights (W4): the LIGH steps run every time (primary method). Record the inspect lights result in light: every placed light listed, and each subject within ~100 units of one. The anchor's logLP is a LightPlacer diagnostic only: record what it shows; never ReloadLP or Disable/Enable the anchor.
    - The first step moves the player out of the camera's view; the draw check must show no player body.
    - Draw check: find the native png under ${MO2}\\overwrite, downscale it, look at it, and confirm every subject is on screen (objects outside the view only show up as shadow draws). If not, adjust the camera drive (record the change) and retry up to 3 times. A probe group (no forms) is just the empty view. Sun check (exterior cells): if the subjects stand in shadow (no direct sun on them or the floor around them), try each resolved.gamehour_alternatives hour in order with console "set gamehour to H", wait 5 s, re-check; keep the first lit hour for this and all later groups and record it. If none is lit, keep the plan hour and say so.
-   - Captures: one communityshaders.capture request per capture. Wait until the new .rdc in the captures_dir appears and its size is stable for 5 s before the next request, except a capture marked consecutive, which is sent right after the previous request. Record each file's full path and the DevBench frame at request time. Label captures <group>_cap<n>.
+   - Captures: one communityshaders.capture request per capture, sent while the planned camera is still driven (camera get right before it must match camera_<label>.json). The wait_rdc step after it holds every later step, so the capture can never show the view after freecam off (run b40e2215 P0); a capture marked consecutive is sent right after the previous request. Record each file's full path and the DevBench frame at request time. Label captures <group>_cap<n>.
    - Risky group: after placing, poll /api/health for 10 s; if the game died set crashed and stop (no retry).
 5. Quit without saving: console exec "qqq". Wait until Get-Process SkyrimSE is gone (up to 3 min). If the game crashed at any point, stop driving, set crashed, and return what you have.
 Return the cell, origin, compile_ready, per-group refs/camera/light/draw check, and every capture.`,

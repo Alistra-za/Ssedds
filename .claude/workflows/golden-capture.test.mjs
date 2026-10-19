@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { planSettingsEdits, resolveProfile, validatePlan, groupSteps, resolveGroups, deepMerge, extractScripts, mapDraws, setupConsole } from './golden-capture-lib.mjs'
+import { planSettingsEdits, resolveProfile, validatePlan, groupSteps, resolveGroups, deepMerge, extractScripts, mapDraws, setupConsole, rawBody, checkOrigin } from './golden-capture-lib.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const LIB = path.join(HERE, 'golden-capture-lib.mjs')
@@ -199,6 +199,53 @@ const lib = (cmd, env = {}) => {
   const iCam = s.findIndex(x => x.body && x.body.action === 'drive')
   assert.ok(iCam > 0 && s.findIndex(x => x.save === 'light0') < iCam, 'player first, lights before the camera')
   ok('layout yaw/shift turns positions, angles, camera, player and lights; player moved first; LIGH lights primary and cleaned up')
+}
+
+{
+  // Retest fixes (runs b40e2215, 58f625f1, e718aa1a).
+  const p = { x_profile: 'A', x_cs_settings: { 'Disable at Boot': { DynamicCubemaps: true, Skin: true } },
+    x_profiles_other_runs: { RT: { x_cs_settings: 'A', groups: ['K'] }, DCLOG: { x_cs_settings: 'A without DynamicCubemaps in Disable at Boot', x_cs_settings_add: { Advanced: { 'Log Level': 1 } }, groups: ['P'] } },
+    groups: [{ label: 'P', forms: [], tags: [], captures: [{ after_s: 0 }] },
+      { label: 'K', forms: ['000F4983'], tags: ['Core01'], x_pos: [[0, 400, 0]], x_angle: [[0, 0, 180]], x_motion_keyframed: ['000F4983'], x_disable_refs: ['0008287f'],
+        x_light_pos: [[0, 330, 100]], captures: [{ after_s: 0 }, { after_s: 0, consecutive: true }] }] }
+  const rt = resolveProfile(p, 'RT'), dl = resolveProfile(p, 'DCLOG')
+  assert.deepEqual(rt.overlay['Disable at Boot'], p.x_cs_settings['Disable at Boot'], '"A" reuses the base overlay'); assert.deepEqual(rt.groups.map(g => g.label), ['K'])
+  assert.ok(!('DynamicCubemaps' in dl.overlay['Disable at Boot'])); assert.equal(dl.overlay['Disable at Boot'].Skin, true)
+  assert.equal(dl.overlay.Advanced['Log Level'], 1); assert.equal(dl.overlay.Advanced['Frame Annotations'], true)
+  assert.throws(() => resolveProfile({ ...p, x_profiles_other_runs: { X: { x_cs_settings: 'B' } } }, 'X'), /not understood/)
+  assert.deepEqual(validatePlan(p, p.groups), [])
+  assert.ok(validatePlan(p, [{ ...p.groups[1], x_disable_refs: ['xyz'] }]).length, 'bad x_disable_refs id rejected')
+  ok('profiles: "<base>" string reuses the overlay; x_cs_settings_add merges on top (A_DC_LOG)')
+
+  const [, k] = resolveGroups(p, p.groups, []), [pr] = resolveGroups(p, p.groups.slice(0, 1), [])
+  const s = groupSteps(k, [10, 20, -208]), at = f => s.findIndex(x => f(x))
+  const fn = n => x => x.body && x.body.function === n
+  // Float args survive DevBench: whole numbers carry a decimal point in body_raw.
+  const ang = s.find(fn('SetAngle')); assert.match(ang.body_raw, /"args":\[0\.0,0\.0,180\.0\]/); assert.deepEqual(JSON.parse(ang.body_raw), ang.body)
+  assert.match(s.find(x => fn('SetPosition')(x) && x.body.self.form === '$ref0').body_raw, /,-208\.0\]/)
+  assert.ok(!s.find(fn('PlaceAtMe')).body_raw && !s.find(fn('SetMotionType')).body_raw, 'Int args stay as they are')
+  assert.equal(rawBody({ args: [1.5, -2] }), '{"args":[1.5,-2.0]}')
+  // Keyframed only after the 3D loaded, then placed, then checked.
+  const i3d = at(fn('Is3DLoaded')), iMT = at(fn('SetMotionType')), iPos = at(x => fn('SetPosition')(x) && x.body.self.form === '$ref0')
+  assert.ok(at(fn('PlaceAtMe')) < i3d && s[i3d].until === true && i3d < iMT && iMT < iPos, 'PlaceAtMe -> Is3DLoaded (until true) -> SetMotionType -> SetPosition')
+  assert.ok(s[iPos + 1].wait_s && /tumbles/.test(s[iPos + 1].note), 'position re-checked after keyframing')
+  // NPC sweep before placing; cell lights off for the group and back on after.
+  const iNpc = at(x => x.body && x.body.formType === 'Actor')
+  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /disable/.test(s[iNpc].note), 'NPCs listed for disabling before placement')
+  const iOff = at(x => x.body && x.body.command === '0008287F.disable'), iOn = at(x => x.body && x.body.command === '0008287F.enable')
+  assert.ok(iOff > 0 && iOff < at(x => x.body && x.body.action === 'drive') && iOn > at(x => x.tool === 'communityshaders.capture'), 'disable before the camera, enable after the captures')
+  // Nothing changes the scene before the capture is on disk; consecutive captures stay back to back.
+  const caps = s.map((x, i) => [x, i]).filter(([x]) => x.tool === 'communityshaders.capture').map(([, i]) => i)
+  assert.equal(caps[1], caps[0] + 1, 'consecutive pair has no wait between'); assert.ok(s[caps[1] + 1].wait_rdc, 'wait_rdc after the pair')
+  const ps = groupSteps(pr, [0, 0, 0]), pc = ps.findIndex(x => x.tool === 'communityshaders.capture')
+  assert.ok(ps[pc + 1].wait_rdc && ps.findIndex(x => x.body && x.body.action === 'freecam' && x.body.on === false) > pc + 1, 'P0: freecam off only after the .rdc is complete')
+  // Unsettled origin refused (run e718aa1a read z -198.3 for a -208 marker).
+  assert.match(checkOrigin([29288.988, 2687.362, -198.315], [29288.99, 2687.36, -208]), /not settled/)
+  assert.equal(checkOrigin([29288.99, 2687.36, -207.99996], [29288.99, 2687.36, -208]), null); assert.equal(checkOrigin([1, 2, 3], null), null)
+  // Shape names the engine gives skin parts start with a space; tags match them trimmed.
+  const md = mapDraws([{ shape: ' (FE4CD828)[1]/ (FE4CD82E) [100%]', world: [0, 0, 0] }], [{ form: '000A2C8F', ref: 'r', pos: [0, 0, 0], shapes: ['(FE4CD828)'] }])
+  assert.equal(md[0].status, 'matched')
+  ok('steps: float body_raw, keyframed after Is3DLoaded, NPC sweep, x_disable_refs on/off, wait_rdc before freecam off; unsettled origin refused; leading-space shape names match')
 }
 
 // ---------- 4. preflight dry run writes nothing to the settings ----------

@@ -177,13 +177,16 @@ export function resolveProfile(plan, profileArg) {
     }
     overlay = other.x_cs_settings ?? {}
     if (typeof overlay === 'string') {
-      // The one string form the plan uses: "<base> without <Feature> in Disable at Boot".
-      const m = /^(\w+) without (\w+) in Disable at Boot$/.exec(overlay.trim())
-      if (!m || m[1] !== base) throw new Error(`profile ${profile}: x_cs_settings string "${overlay}" not understood (only "${base} without <Feature> in Disable at Boot"); give an object`)
+      // String forms: "<base>" (reuse the base overlay) or "<base> without <Feature> in Disable at Boot".
+      const m = /^(\w+)(?: without (\w+) in Disable at Boot)?$/.exec(overlay.trim())
+      if (!m || m[1] !== base) throw new Error(`profile ${profile}: x_cs_settings string "${overlay}" not understood (only "${base}" or "${base} without <Feature> in Disable at Boot"); give an object`)
       overlay = structuredClone(plan.x_cs_settings || {})
-      if (!overlay['Disable at Boot'] || !(m[2] in overlay['Disable at Boot'])) throw new Error(`profile ${profile}: ${m[2]} is not in ${base}'s Disable at Boot`)
-      delete overlay['Disable at Boot'][m[2]]
+      if (m[2]) {
+        if (!overlay['Disable at Boot'] || !(m[2] in overlay['Disable at Boot'])) throw new Error(`profile ${profile}: ${m[2]} is not in ${base}'s Disable at Boot`)
+        delete overlay['Disable at Boot'][m[2]]
+      }
     }
+    if (other.x_cs_settings_add) overlay = deepMerge(overlay, other.x_cs_settings_add) // e.g. A_DC + Log Level
   }
   return { profile, overlay: deepMerge(overlay, CAPTURE_KEYS), groups }
 }
@@ -198,7 +201,7 @@ export function validatePlan(plan, groups) {
     if (g.x_pos && g.x_pos.length !== f.length) errs.push(`${g.label}: x_pos has ${g.x_pos.length} entries for ${f.length} forms`)
     if (g.x_angle && g.x_angle.length !== f.length) errs.push(`${g.label}: x_angle has ${g.x_angle.length} entries for ${f.length} forms`)
     if (!Array.isArray(g.captures) || !g.captures.length) errs.push(`${g.label}: no captures`)
-    for (const id of [...f, ...(g.x_motion_keyframed || [])]) if (!/^[0-9A-Fa-f]{8}$/.test(id)) errs.push(`${g.label}: form ${id} is not 8 hex digits`)
+    for (const id of [...f, ...(g.x_motion_keyframed || []), ...(g.x_disable_refs || [])]) if (!/^[0-9A-Fa-f]{8}$/.test(id)) errs.push(`${g.label}: form ${id} is not 8 hex digits`)
   }
   const labels = new Set((plan.groups || []).map(g => g.label))
   // W8: questions without "outcomes" are fixture goals; only their groups must exist.
@@ -248,7 +251,7 @@ export function resolveGroups(plan, groups, s6) {
     return {
       label: g.label, forms, tags: [...(g.tags || []), ...(optional && optional.used ? opt.tags || [] : [])],
       probe: !forms.length, camera: { ...cam, rel: L.pos(cam.rel), yaw: L.yaw(cam.yaw || 0) }, settle_s: g.settle_s ?? 3, player, lights,
-      captures: g.captures, risky: !!g.risky, note: g.x_note || '', optional,
+      captures: g.captures, risky: !!g.risky, note: g.x_note || '', optional, disable_refs: (g.x_disable_refs || []).map(x => x.toUpperCase()),
     }
   })
   // Risky groups last (base rule: they may crash the game).
@@ -256,17 +259,41 @@ export function resolveGroups(plan, groups, s6) {
 }
 
 // W3/W4: the exact DevBench requests for one group, given the coc-marker origin.
+// DevBench drops whole-number Float args (runs b40e2215, 58f625f1, e718aa1a: SetAngle [0,0,225] left every A1/A2 ref at
+// 43.5 deg). JSON.stringify writes 225, so Float calls also carry body_raw with every number written as a float.
+const FLOAT_FNS = new Set(['SetAngle', 'SetPosition'])
+const floatText = v => (Number.isInteger(v) ? v.toFixed(1) : String(v))
+export function rawBody(body) { return JSON.stringify({ ...body, args: '@ARGS@' }).replace('"@ARGS@"', `[${body.args.map(floatText).join(',')}]`) }
+
+// The steps command refuses an origin read before the player settled (run e718aa1a: z -198.3 right after coc, -208
+// settled, so every subject floated 10 units). Only when the plan names the expected marker position for its cell.
+export function checkOrigin(origin, expected, tol = 2) {
+  if (!expected) return null
+  const off = origin.map((v, i) => +(v - expected[i]).toFixed(2))
+  return off.some(d => Math.abs(d) > tol) ? `origin ${origin.join(',')} is ${off.join(',')} from the expected marker ${expected.join(',')} (tolerance ${tol}): the player had not settled; re-read the position until z is stable for 2 s` : null
+}
+
 export function groupSteps(g, origin) {
   const S = []
-  const papyrus = (fn, self, args, script = 'ObjectReference') => ({ tool: 'papyrus', body: { action: 'call', script, function: fn, self, args } })
+  const papyrus = (fn, self, args, script = 'ObjectReference') => {
+    const body = { action: 'call', script, function: fn, self, args }
+    return FLOAT_FNS.has(fn) ? { tool: 'papyrus', body, body_raw: rawBody(body) } : { tool: 'papyrus', body }
+  }
   // The free camera does not hide the player, so move the player out of view first (P0 probe was mostly the body).
   if (g.player) S.push({ ...papyrus('SetPosition', { form: '0x14' }, vadd(origin, g.player)), note: `player out of view, rel ${JSON.stringify(g.player)}` })
+  // Run e718aa1a: a guard (AI off from tai) stood over the A1 coffin. Session only: the game is never saved.
+  S.push({ tool: 'inspect', body: { kind: 'refs', formType: 'Actor', radius: 3000, limit: 200 }, note: 'NPCs out of frame: console exec "<formId>.disable" for every listed actor that is not the player (0x14) and not placed by this run, within 2000 units of any subject position or the camera; record them in notes. They stay disabled for the session (never saved; no kill, no moveto)' })
   g.forms.forEach((f, i) => {
     const ref = { form: `$ref${i}` }
     S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${f.form}` }, 1, false, false]), save: `ref${i}`, note: `place ${f.form}${f.light_anchor ? ' (Light Placer anchor)' : ''}` })
-    if (f.keyframed) S.push({ ...papyrus('SetMotionType', ref, [4, true]), note: 'keyframed: no Havok drift' })
+    // Run b40e2215: SetMotionType sent before the 3D existed did not hold (A1 Core01 tumbled); after the 3D (A5, by hand) it did.
+    if (f.keyframed) {
+      S.push({ ...papyrus('Is3DLoaded', ref, []), until: true, note: 'repeat every 0.5 s (up to 10 s) until it returns true' })
+      S.push({ ...papyrus('SetMotionType', ref, [4, true]), note: 'keyframed after the 3D loaded: no Havok drift' })
+    }
     S.push(papyrus('SetAngle', ref, f.angle))
     S.push({ ...papyrus('SetPosition', ref, vadd(origin, f.rel)), note: `rel ${JSON.stringify(f.rel)}` })
+    if (f.keyframed) S.push({ wait_s: 2, note: 'keyframed: the next inspect must show the same position (within 1 unit) and angle; if it moved, send SetMotionType, SetAngle, SetPosition again once, else record "tumbles"' })
     S.push({ tool: 'inspect', body: { kind: 'refs', formId: `$ref${i}` }, note: 'record model path and position; if it is an Actor also call Actor.SetDontMove [true]' })
     if (f.light_anchor) {
       S.push({ tool: 'console', body: { action: 'exec', command: `prid $ref${i}` }, note: 'ref id as 8 hex digits without 0x' })
@@ -278,7 +305,11 @@ export function groupSteps(g, origin) {
     S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${g.light.fallback_ligh}` }, 1, false, false]), save: `light${k}`, note: `point light ${k + 1}/${lights.length} (primary method)` })
     S.push({ ...papyrus('SetPosition', { form: `$light${k}` }, vadd(origin, p)), note: `rel ${JSON.stringify(p)}` })
   })
-  if (lights.length) S.push({ tool: 'inspect', body: { kind: 'lights', scope: 'scene' }, note: 'record: every placed light listed (owner, position); each subject has one within ~100 units' })
+  // Cell lights that would fill a big subject's light slots (run b40e2215 A6: the stairs :0/:6 reached 9-11 cell lights
+  // and got no placed LIGH). Session only; enabled again at the end of the group.
+  const dis = g.disable_refs || []
+  for (const id of dis) S.push({ tool: 'console', body: { action: 'exec', command: `${id}.disable` }, note: 'cell light source off for this group only (never saved)' })
+  if (lights.length) S.push({ tool: 'inspect', body: { kind: 'lights', scope: 'scene' }, note: `record: every placed light listed (owner, position); each subject has one within ~100 units${dis.length ? '; none of the disabled owners is listed' : ''}` })
   const cam = g.camera
   S.push({ tool: 'camera', body: { action: 'freecam', on: true } })
   const [x, y, z] = vadd(origin, cam.rel)
@@ -288,10 +319,15 @@ export function groupSteps(g, origin) {
   S.push({ wait_s: g.settle_s, note: 'settle; W2 shader-compile check before the first capture' })
   g.captures.forEach((c, n) => {
     if (c.after_s) S.push({ wait_s: c.after_s })
-    S.push({ tool: 'communityshaders.capture', body: { kind: 'renderdoc', frames: 1 }, note: `${g.label}_cap${n}${c.consecutive ? ' (consecutive: send right after the previous request)' : ' (wait for the previous .rdc to be complete first)'}` })
+    S.push({ tool: 'communityshaders.capture', body: { kind: 'renderdoc', frames: 1 }, note: `${g.label}_cap${n}${c.consecutive ? ' (consecutive: send right after the previous request)' : ''}` })
+    // Run b40e2215 P0: freecam off went out before the capture frame, so P0 shows the player's view. Nothing may change
+    // the scene until the capture is on disk.
+    if (!(g.captures[n + 1] || {}).consecutive) S.push({ wait_rdc: true, note: 'wait until the new .rdc in captures_dir exists and its size is stable for 5 s before the next step' })
   })
   g.forms.forEach((f, i) => { S.push(papyrus('Disable', { form: `$ref${i}` }, [false])); S.push(papyrus('Delete', { form: `$ref${i}` }, [])) })
   lights.forEach((p, k) => { S.push(papyrus('Disable', { form: `$light${k}` }, [false])); S.push(papyrus('Delete', { form: `$light${k}` }, [])) })
+  for (const id of dis) S.push({ tool: 'console', body: { action: 'exec', command: `${id}.enable` }, note: 'cell light source back on' })
+  if (g.forms.length || lights.length) S.push({ wait_s: 2, note: 'deferred Delete: let it finish before the next group places (run 58f625f1 A3: a reused ref id was deleted)' })
   S.push({ tool: 'camera', body: { action: 'freecam', on: false } })
   return S
 }
@@ -468,6 +504,7 @@ async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, jo
     mo2_profile: mo.profile, settings_path: settingsPath, settings_applied_copy: appliedCopy, captures_dir: capturesDir, journal, overlay,
     edits, keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts,
     shape_offsets: plan.x_shape_offsets || {}, match_tol: plan.x_match_tol || 60,
+    origin_expected: cell === plan.cell ? plan.x_origin_expected || null : null, // marker of the plan's own cell only
     s6, groups, planned_captures: planned, port, setup_console: setup, gamehour_alternatives: plan.x_gamehour_alternatives || [],
   }
   writeJson(path.join(runDir, 'resolved.json'), resolved)
@@ -523,13 +560,13 @@ function planText(r, dry) {
   L.push(`captures: ${r.planned_captures}, kept in ${r.keep_dir}; extractor output ${r.extract_out}`)
   L.push(`extract: ${r.extract_scripts.map(s => s.script).join(', ')}`)
   for (const f of r.s6) L.push(`s6 file ${f.path}: ${f.ok ? 'present' : f.exists ? 'sha256 differs' : 'missing'} (never written by this workflow)`)
-  L.push(`session: launch MO2 SKSE, wait DevBench :${r.port}, coc ${r.cell}, origin = player position after coc (dry run shows origin 0,0,0)`)
+  L.push(`session: launch MO2 SKSE, wait DevBench :${r.port}, coc ${r.cell}, origin = player position after coc once z is stable for 2 s${r.origin_expected ? ` (steps refuses one more than 2 units from ${r.origin_expected.join(',')})` : ''} (dry run shows origin 0,0,0)`)
   L.push('shader compiles (W2): positive signal required before the first capture, else the run stops ("compile readiness unknown")')
   L.push(`setup console: ${r.setup_console.join(' | ')}`)
   for (const g of r.groups) {
     L.push(`group ${g.label}${g.probe ? ' (probe)' : ''}${g.risky ? ' (risky, last)' : ''}: tags ${g.tags.join(', ') || '-'}${g.note ? `  # ${g.note}` : ''}`)
     if (g.optional) L.push(`  optional ${g.optional.form}: ${g.optional.used ? 'used' : 'skipped'} (${g.optional.why})`)
-    for (const s of groupSteps(g, [0, 0, 0])) L.push(`  ${s.only_if ? `[if ${s.only_if}] ` : ''}${s.tool ? `${s.tool} ${JSON.stringify(s.body)}` : `wait ${s.wait_s}s`}${s.save ? ` => $${s.save}` : ''}${s.note ? `  # ${s.note}` : ''}`)
+    for (const s of groupSteps(g, [0, 0, 0])) L.push(`  ${s.only_if ? `[if ${s.only_if}] ` : ''}${s.tool ? `${s.tool} ${s.body_raw || JSON.stringify(s.body)}${s.until !== undefined ? ` (until ${s.until})` : ''}` : s.wait_rdc ? 'wait for the .rdc' : `wait ${s.wait_s}s`}${s.save ? ` => $${s.save}` : ''}${s.note ? `  # ${s.note}` : ''}`)
   }
   L.push('quit: console qqq; then restore settings (atomic byte copy of the backup, sha256 checked), keep each .rdc (copy + sha256; the Captures copies stay for the owner to delete)')
   return L.join('\n') + '\n'
@@ -621,9 +658,9 @@ async function copy(o) {
 // Clockwise like SetAngle Z and layoutOf().pos: +90 deg maps +Y to +X.
 const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) + v[1] * Math.sin(a), -v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] }
 // Form ids as bare 8-digit uppercase hex: refs_*.json say 0x0010BEA6, plan keys say 0010BEA6. Shape names, tags and
-// offset prefixes compare case-insensitively (plan tag "coffin", shape "Coffin").
+// offset prefixes compare case-insensitively (plan tag "coffin", shape "Coffin") and without leading spaces.
 const formKey = f => String(f).replace(/^0x/i, '').toUpperCase().padStart(8, '0')
-const lc = s => String(s).toLowerCase()
+const lc = s => String(s).toLowerCase().trimStart() // engine-named skin parts start with a space: " (FE4CD828)[1]/ ..."
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
   const offs = Object.fromEntries(Object.entries(offsets).map(([k, v]) => [formKey(k), v]))
   // Prefixes that fold to the same shape but disagree (Panel vs panel) give no offset: the match stays ambiguous.
@@ -689,6 +726,8 @@ async function main() {
       if (!g) throw new Error(`no group ${o.group}`)
       const origin = o.origin.split(',').map(Number)
       if (origin.length !== 3 || origin.some(Number.isNaN)) throw new Error('--origin needs x,y,z')
+      const bad = checkOrigin(origin, r.origin_expected)
+      if (bad) throw new Error(bad)
       out = { ok: true, group: g.label, origin, steps: groupSteps(g, origin) }
     } else if (cmd === 'restore') out = await restore(o)
     else if (cmd === 'keep') out = await keep(o)
