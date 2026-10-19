@@ -649,3 +649,49 @@ fn the_position_number_is_body_size_in_the_handle_colour() {
         .collect();
     assert_eq!(colors, [style.visuals.widgets.inactive.fg_stroke.color]);
 }
+
+/// Final review D2: a reveal of a card cut by the view's edge glides with egui's scroll animation, and with Reduce
+/// motion it lands at once. Against an unreduced control, so the test fails if the setting is ignored.
+#[test]
+fn a_reveal_glide_lands_at_once_with_reduce_motion() {
+    // The card's label top after 2 steps and after the scroll has settled.
+    let tops = |reduce: bool| {
+        let d = tempfile::tempdir().unwrap();
+        let m = many_sets(d.path(), 500);
+        // Steps of 0.01 s, so 2 steps sit inside egui's 0.1-0.3 s scroll glide.
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1500.0, 900.0))
+            .with_step_dt(0.01)
+            .with_max_steps(64)
+            .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        // kittest turns egui's scroll animation off; the app runs with the stock one.
+        h.ctx
+            .all_styles_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::default());
+        h.state_mut().settings.reduce_motion = reduce;
+        h.run();
+        // Only cards on screen are laid out, so the last one is the card the view's bottom edge cuts (its label may
+        // lie below the column, so no `in_sets_column` filter here).
+        let top = |h: &Harness<'static, AppModel>, n: usize| {
+            h.query_all_by_label(&format!("Position {n} of 500"))
+                .next()
+                .map(|l| l.rect().top())
+        };
+        let n = (1..=500).rev().find(|n| top(&h, *n).is_some()).unwrap();
+        let key = views(h.state())[n - 1].key.clone();
+        h.state_mut()
+            .palette_pick(&sdc_gui::model::nav::Pick::Set(key));
+        h.step();
+        h.step();
+        let early = top(&h, n).unwrap();
+        h.run();
+        (early, top(&h, n).unwrap())
+    };
+    let (early, end) = tops(false);
+    assert!(early - end > 1.0, "the control glides: {early} then {end}");
+    let (early, end) = tops(true);
+    assert!(
+        (early - end).abs() < 0.5,
+        "reduced lands at once: {early} then {end}"
+    );
+}

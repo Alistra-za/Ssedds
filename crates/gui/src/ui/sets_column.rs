@@ -560,9 +560,14 @@ pub fn draw(
             };
             if reveal_at == Some(pos) {
                 reveal_drawn = rects.contains_key(&index);
-                // A target in or across last frame's view glides there as before.
+                // A target in or across last frame's view glides there as before; Reduce motion lands at once (D2).
                 if jump.is_none() {
-                    ui.scroll_to_rect(rect, None);
+                    let anim = if super::motion::reduce_motion(ui.ctx()) {
+                        egui::style::ScrollAnimation::none()
+                    } else {
+                        ui.style().scroll_animation
+                    };
+                    ui.scroll_to_rect_animation(rect, None, anim);
                 }
             }
         }
