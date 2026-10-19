@@ -58,10 +58,13 @@ GPU and CPU mixed BC7
 | bc7e u4 | 0.12 | −0.39 | −0.36 |
 | bc7e u5 | 0.22 | +0.01 | −0.03 |
 | bc7e u6 | 0.28 | 0 | 0 |
+| bc7e max‡ | ~0.6 | +0.32 | +0.32 |
 | ISPC slow | 0.30 | −0.59 | −0.67 |
 | NVTT Production/Highest | ~14 | −0.32 | −0.37 |
 | texconv CPU (-bc x) | ~16–20 | −1.6 | −2.4 |
 | Compressonator q1.0 | ~33 | −0.16 | −1.50 |
+
+‡ `max` is opt-in (`encoder.effort = "max"`). It was measured later, on a 150-texture Skyrim sample, not on the set above. It took 2.7× the time of u5 (`veryslow`) with the two run alternately per image, and 2.9× in separate runs, so about 0.6 s/Mpix on this table's scale. That matches the expected ~3×. Δ is against u6 on that sample: RGB on diffuse (images over 60 dB left out; +0.94 with all 60) and alpha PSNR on the 30 textures with alpha. Against u5 it gains +0.18 dB on diffuse, +0.037° on normal maps and +0.24 dB on alpha. A build ran during part of the alternating run (CPU about 14% busy before it, up to 6 rustc processes); the separate runs had the machine nearly idle. Details: [bc7e tuning](docs/research/bc7e-tuning.md).
 
 BC7E vs only cpu encoders at maximum settings (besides ISPC)
 | Measure | bc7e -u5 | NVTT 3 Production | Compressonator q1.0 | Intel ISPC slow | texconv -bc x |
