@@ -569,3 +569,63 @@ fn the_index_list_is_built_once_per_change_at_10k() {
     assert_eq!(m.visible_builds(), b0 + 4);
     let _ = (Key::A, Modifiers::NONE);
 }
+
+/// A combo in the open Filter ▾ popup, by its name.
+fn combo<'a>(h: &'a Harness<'static, AppModel>, name: &str) -> egui_kittest::Node<'a> {
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| {
+            n.accesskit_node()
+                .value()
+                .is_some_and(|v| v.starts_with(name))
+        })
+        .unwrap_or_else(|| panic!("{name} combo in {:?}", filter_combos(h)))
+}
+
+/// Final review I2: the popup is the only way to these filters, so pick two values through it, the second
+/// without reopening Filter ▾ (a pick in a combo's own popup must not close the menu).
+#[test]
+fn two_filters_are_picked_through_the_filter_popup_without_reopening_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = app_harness(mixed(d.path()));
+    h.run();
+    h.run();
+    filter_button(&h).click();
+    h.run();
+    h.run();
+    combo(&h, "Sub-type").click();
+    h.run();
+    h.run();
+    h.get_by_label("diffuse").click();
+    h.run();
+    h.run();
+    assert_eq!(h.state().filter.subtype.as_deref(), Some("diffuse"));
+    assert_eq!(shown(h.state()), keys(&[0, 2, 4, 6]));
+    assert!(
+        !filter_combos(&h).is_empty(),
+        "Filter ▾ stays open after a pick in one of its combos"
+    );
+    combo(&h, "Encoder").click();
+    h.run();
+    h.get_by_label("NVTT").click();
+    h.run();
+    h.run();
+    assert_eq!(h.state().filter.encoder.as_deref(), Some("nvtt"));
+    assert_eq!(h.state().filter.subtype.as_deref(), Some("diffuse"));
+    assert_eq!(shown(h.state()), keys(&[2, 6]));
+    // A click outside still closes it, and the button opens it again.
+    h.get_by_label("Larger tiles").click();
+    h.run();
+    h.run();
+    assert!(
+        filter_combos(&h).is_empty(),
+        "a click outside closes Filter ▾"
+    );
+    filter_button(&h).click();
+    h.run();
+    h.run();
+    assert!(!filter_combos(&h).is_empty(), "the button reopens it");
+    h.key_press(Key::Escape);
+    h.run();
+    h.run();
+    assert!(filter_combos(&h).is_empty(), "Esc closes it");
+}

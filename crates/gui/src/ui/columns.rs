@@ -505,7 +505,7 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
         } else {
             format!("Filter ({k}) ▾")
         };
-        crate::ui::path_picker::menu(ui, &text, |ui| filter_popup(ui, model));
+        combo_menu(ui, &text, |ui| filter_popup(ui, model));
         let (lo, hi) = ColumnPrefs::TILE_RANGE;
         let tile = model.prefs.tile;
         // R16: a saved size off the 16 grid loads as it is and steps from there.
@@ -532,6 +532,45 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
             {
                 model.prefs.tile = to;
             }
+        }
+    });
+}
+
+/// Where [`combo_menu`] keeps the pass it was last shown open in. shortcut: one id, so one combo menu in the app;
+/// key it by the button id if a second one is added.
+const COMBO_MENU: &str = "sdc-combo-menu";
+
+/// Whether the combo menu was open at the last pass. [`super::actions::keys`] holds the shortcuts then, as it does for
+/// egui's own popups, so Esc reaches the menu. A menu not drawn at the last pass (another view) is closed.
+pub(crate) fn combo_menu_open(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new(COMBO_MENU)))
+        .is_some_and(|p| p + 1 == pass)
+}
+
+/// A menu that holds combos (final review I2). A combo's popup takes egui's one open-popup slot, which would close a
+/// menu kept there, so this menu keeps its own open state; and a click while one of its combos is open (a pick, or a
+/// click off it) only closes that combo. A click outside, Esc or the button closes the menu.
+fn combo_menu(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
+    let button = ui.button(label);
+    let mut open = combo_menu_open(ui.ctx());
+    let child_open = egui::Popup::is_any_open(ui.ctx());
+    if button.clicked() {
+        open = !open;
+    }
+    let shown = egui::Popup::menu(&button)
+        .open_bool(&mut open)
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+        .show(content);
+    if shown.is_some_and(|r| !child_open && !button.clicked() && r.response.clicked_elsewhere()) {
+        open = false;
+    }
+    let (id, pass) = (egui::Id::new(COMBO_MENU), ui.ctx().cumulative_pass_nr());
+    ui.data_mut(|d| {
+        if open {
+            d.insert_temp(id, pass);
+        } else {
+            d.remove::<u64>(id);
         }
     });
 }
