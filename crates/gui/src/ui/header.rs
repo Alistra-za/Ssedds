@@ -9,6 +9,14 @@ use engine::config::Target;
 pub const JSON_EDITOR: &str = "PGPatcher JSON editor…";
 /// Export's width: twice what it was (Note BH3).
 const EXPORT_WIDTH: f32 = 240.0;
+/// CF12: the export bar's fraction as drawn: it glides linearly to `frac` over 0.3 s (at once under reduce motion). A
+/// new export (a new `drawer_epoch`) is a new animation, whose first frame is its own value, so it never sweeps back.
+#[doc(hidden)]
+pub fn shown_progress(ctx: &egui::Context, epoch: u64, frac: f32) -> f32 {
+    let id = egui::Id::new(("export-progress", epoch));
+    ctx.animate_value_with_time(id, frac, super::motion::move_dur(ctx, 0.3))
+}
+
 /// The fewest path characters Export to ▾ shows (K1).
 const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
@@ -276,7 +284,7 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
                 None => "Exporting. Cancel is in the Files tab.".to_string(),
             };
             ui.add(
-                egui::ProgressBar::new(frac)
+                egui::ProgressBar::new(shown_progress(ui.ctx(), model.drawer_epoch, frac))
                     .desired_width(size.x)
                     .desired_height(size.y - gap - button_h)
                     .text(format!("{done}/{total}"))

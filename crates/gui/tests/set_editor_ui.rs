@@ -1557,3 +1557,195 @@ fn slot_commands_is_a_normal_button_after_the_rows() {
     assert!(b.width() < 200.0, "not a full-width bar");
     assert!(b.min.y > slot_rect(&h, "Subsurface _s").max.y);
 }
+
+/// Task 9: a harness at 0.05 s a step, for pins taken mid-animation.
+fn slow_harness(m: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 900.0))
+        .with_step_dt(0.05)
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// The 2 px strokes in the accent (any alpha above 0) painted last frame outside the Sets column: the slot flash.
+fn slot_flashes(h: &Harness<'static, AppModel>) -> Vec<eframe::egui::Rect> {
+    use eframe::egui::{Color32, Rect, Shape};
+    fn walk(s: &Shape, accent: Color32, out: &mut Vec<Rect>) {
+        match s {
+            Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color.a() > 0 => {
+                // `gamma_multiply` scales every channel alike: the accent at the stroke's alpha.
+                let want = accent.gamma_multiply(r.stroke.color.a() as f32 / accent.a() as f32);
+                let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+                let c = r.stroke.color;
+                if near(c.r(), want.r()) && near(c.g(), want.g()) && near(c.b(), want.b()) {
+                    out.push(r.rect);
+                }
+            }
+            Shape::Vec(v) => v.iter().for_each(|x| walk(x, accent, out)),
+            _ => {}
+        }
+    }
+    let accent = h.ctx.global_style().visuals.selection.stroke.color;
+    let mut out = vec![];
+    for c in &h.output().shapes {
+        walk(&c.shape, accent, &mut out);
+    }
+    out.retain(|r| !in_sets_column(h, *r));
+    out
+}
+
+#[test]
+fn a_slot_that_gets_a_texture_flashes_and_a_set_switch_does_not() {
+    use sdc_gui::model::sets::{set_views, DropChoice, DropOutcome};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let leaf = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("leaf.png"))
+        .unwrap()
+        .key
+        .clone();
+    m.decide(
+        &leaf,
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::PbrEmissive),
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    rock_selected(&mut m);
+    let mut h = slow_harness(m);
+    h.run();
+    assert!(slot_flashes(&h).is_empty(), "nothing flashes on open");
+    let out = h.state_mut().drop_on_set(&leaf, "landscape/rock01");
+    match out {
+        DropOutcome::Joined => {}
+        DropOutcome::AskChoice { .. } => {
+            let o = h
+                .state_mut()
+                .drop_choice(&leaf, "landscape/rock01", DropChoice::Move);
+            assert_eq!(o, DropOutcome::Joined);
+        }
+        o => panic!("the emissive should fill an empty slot: {o:?}"),
+    }
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.step();
+    h.step();
+    let f = slot_flashes(&h);
+    assert_eq!(f.len(), 1, "one slot row flashes: {f:?}");
+    let rows: Vec<_> = h
+        .query_all_by_label_contains(" thumbnail")
+        .map(|n| n.rect())
+        .filter(|r| f[0].contains(r.center()))
+        .collect();
+    assert_eq!(rows.len(), 1, "the flash outlines one slot row");
+    // K13: the hold is a timer, not a frame per frame; the fade asks for every frame (K2's read). Two more steps
+    // first: the slot Grid asks for one frame after its column widths change.
+    let delay = |h: &Harness<'static, AppModel>| {
+        h.output().viewport_output[&eframe::egui::ViewportId::ROOT].repaint_delay
+    };
+    h.step();
+    h.step();
+    assert!(
+        delay(&h) > std::time::Duration::ZERO,
+        "holding: {:?} {:?}",
+        delay(&h),
+        h.ctx.repaint_causes()
+    );
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(delay(&h), std::time::Duration::ZERO, "fading");
+    assert_eq!(slot_flashes(&h).len(), 1, "still fading at 0.4 s of 0.6");
+    // Another set: its slots differ from rock01's, but switching never flashes.
+    let other = set_views(h.state())
+        .into_iter()
+        .find(|v| v.id != "landscape/rock01")
+        .expect("a second set")
+        .key;
+    h.state_mut().select_set(&other);
+    h.step();
+    h.step();
+    assert!(slot_flashes(&h).is_empty(), "a set switch does not flash");
+}
+
+/// The widths of the rect shapes painted last frame centred on `c` and about a thumbnail wide (image, fill, border).
+fn thumb_paint(h: &Harness<'static, AppModel>, c: eframe::egui::Pos2) -> Vec<f32> {
+    use eframe::egui::{Pos2, Shape};
+    fn walk(s: &Shape, c: Pos2, out: &mut Vec<f32>) {
+        match s {
+            Shape::Rect(r) if (r.rect.center() - c).length() < 1.0 && r.rect.width() > 40.0 => {
+                out.push(r.rect.width())
+            }
+            Shape::Vec(v) => v.iter().for_each(|x| walk(x, c, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    for s in &h.output().shapes {
+        walk(&s.shape, c, &mut out);
+    }
+    out
+}
+
+/// Presses (or releases) the primary button on the first slot thumbnail; its rect.
+fn press_thumbnail(h: &mut Harness<'static, AppModel>, down: bool) -> eframe::egui::Rect {
+    let r = h
+        .query_all_by_label_contains(" thumbnail")
+        .next()
+        .expect("a slot thumbnail")
+        .rect();
+    let pos = r.center();
+    let ev = &mut h.input_mut().events;
+    ev.push(eframe::egui::Event::PointerMoved(pos));
+    ev.push(eframe::egui::Event::PointerButton {
+        pos,
+        button: eframe::egui::PointerButton::Primary,
+        pressed: down,
+        modifiers: Default::default(),
+    });
+    r
+}
+
+#[test]
+fn a_pressed_slot_thumbnail_scales_to_097() {
+    const THUMB: f32 = 56.0;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = slow_harness(m);
+    h.run();
+    let r = press_thumbnail(&mut h, true);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(r.width(), THUMB, "the hit rect keeps its size");
+    let w = thumb_paint(&h, r.center());
+    assert!(!w.is_empty(), "the thumbnail is painted");
+    for x in &w {
+        assert!((x - THUMB * 0.97).abs() <= 0.5, "pressed: {w:?}");
+    }
+    press_thumbnail(&mut h, false);
+    for _ in 0..3 {
+        h.step();
+    }
+    let w = thumb_paint(&h, r.center());
+    assert!(!w.is_empty());
+    for x in w {
+        assert!((x - THUMB).abs() <= 0.5, "released: {x}");
+    }
+    // Reduce motion: no scale while held.
+    let mut m = pbr_opened(&d.path().join("reduced"));
+    rock_selected(&mut m);
+    m.settings.reduce_motion = true;
+    let mut h = slow_harness(m);
+    h.run();
+    let r = press_thumbnail(&mut h, true);
+    for _ in 0..3 {
+        h.step();
+    }
+    let w = thumb_paint(&h, r.center());
+    assert!(!w.is_empty());
+    for x in w {
+        assert!((x - THUMB).abs() <= 0.5, "reduce motion, held: {x}");
+    }
+}

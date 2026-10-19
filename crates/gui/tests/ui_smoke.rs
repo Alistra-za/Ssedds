@@ -1541,3 +1541,75 @@ fn an_accepted_suggestion_reads_auto_with_its_reason_on_hover() {
     h.run();
     h.get_by_label_contains("colour under textures/landscape");
 }
+
+/// The opacity of the text shapes painted last frame whose text is exactly `text`.
+fn text_opacity(h: &Harness<'static, AppModel>, text: &str) -> Vec<f32> {
+    use eframe::egui::Shape;
+    fn walk(s: &Shape, text: &str, out: &mut Vec<f32>) {
+        match s {
+            // `Ui::multiply_opacity` scales the shape's colours, not `opacity_factor`; a label's glyphs are the
+            // placeholder colour, painted with the fallback.
+            Shape::Text(t) if t.galley.text() == text => {
+                let c = t.override_text_color.unwrap_or(t.fallback_color);
+                out.push(c.a() as f32 / 255.0 * t.opacity_factor)
+            }
+            Shape::Vec(v) => v.iter().for_each(|x| walk(x, text, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    for s in &h.output().shapes {
+        walk(&s.shape, text, &mut out);
+    }
+    out
+}
+
+/// Task 9 (CF16, K1): the columns fade in when a folder opens; a folder already open on the first frame (restored at
+/// launch) and the start screen show at full opacity.
+#[test]
+fn opening_a_folder_fades_the_columns_in_and_a_restored_one_does_not() {
+    let small = |m: AppModel| {
+        let h = Harness::builder()
+            .with_size(eframe::egui::vec2(1280.0, 800.0))
+            .with_step_dt(0.05)
+            .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h
+    };
+    let d = tempfile::tempdir().unwrap();
+    let mut h = small(opened(d.path()));
+    h.step();
+    // The header's "Sets" eye and the column heading, both at full alpha on frame 1 and after.
+    let rest = text_opacity(&h, "Sets");
+    assert!(
+        rest.len() == 2 && rest.iter().all(|&x| x == 1.0),
+        "restored: {rest:?}"
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(text_opacity(&h, "Sets"), rest, "restored: no fade");
+
+    let root = mod_folder(&d.path().join("fresh"));
+    let mut h = small(AppModel::new(GuiSettings::default(), None, session()));
+    h.step();
+    let a = text_opacity(&h, "Open folder…");
+    assert!(
+        !a.is_empty() && a.iter().all(|&x| x == 1.0),
+        "start screen: {a:?}"
+    );
+    h.state_mut().open_folder(root);
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.step();
+    let a = text_opacity(&h, "Sets");
+    assert!(
+        !a.is_empty() && a.iter().any(|&x| x < 1.0),
+        "fading in: {a:?} (rest {rest:?})"
+    );
+    // The header's "Sets" eye is drawn before the fade and stays; the column heading fades.
+    assert!(a.contains(&1.0), "the header is not faded: {a:?}");
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(text_opacity(&h, "Sets"), rest, "faded in");
+}
