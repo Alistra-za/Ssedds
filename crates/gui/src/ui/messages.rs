@@ -16,10 +16,10 @@ fn color(s: Severity) -> Option<egui::Color32> {
     }
 }
 
-/// The toasts of the last frame: id, rect (the pointer over one pauses its time) and whether its entry has reached
-/// full opacity once (the rise runs only until then).
+/// The toasts of the last frame: id, rect (the pointer over one pauses its time), whether its entry has reached
+/// full opacity once (the rise runs only until then), and whether it is exiting (only a hover reverses an exit).
 #[derive(Clone, Default)]
-struct Rects(Vec<(u64, egui::Rect, bool)>);
+struct Rects(Vec<(u64, egui::Rect, bool, bool)>);
 
 /// Toast entry: the fade in and the rise, in seconds and points.
 const ENTER: f32 = 0.20;
@@ -45,7 +45,7 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
     let hovered: HashSet<u64> = last
         .0
         .iter()
-        .filter(|(_, r, _)| pointer.is_some_and(|p| r.contains(p)))
+        .filter(|(_, r, ..)| pointer.is_some_and(|p| r.contains(p)))
         .map(|(i, ..)| *i)
         .collect();
     model.messages.tick(now, &hovered);
@@ -59,6 +59,9 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
     };
     let mut rects = Rects::default();
     if !toasts.is_empty() {
+        // shortcut: the anchored Area places itself from last frame's size, so a new toast's first visible frame
+        // draws the stack one toast low; `request_discard` would fix it but can handle a click twice. Upgrade if
+        // egui sizes anchored Areas in the same pass.
         egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
             .order(egui::Order::Foreground)
@@ -70,7 +73,10 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
                 for t in &toasts {
                     let key = toast_anim_id(t.id);
                     let prev = last.0.iter().find(|(i, ..)| *i == t.id);
-                    let target = t.left > fade || hovered.contains(&t.id);
+                    // Sticky: reduce motion shrinking `fade` mid-exit must not brighten the toast again.
+                    let exiting =
+                        !hovered.contains(&t.id) && (t.left <= fade || prev.is_some_and(|p| p.3));
+                    let target = !exiting;
                     let ease = emath::easing::quadratic_out;
                     if prev.is_none() {
                         // First-call rule: seed closed, so the first frame starts the entry.
@@ -91,7 +97,7 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
                             })
                         })
                     });
-                    rects.0.push((t.id, r.response.rect, risen));
+                    rects.0.push((t.id, r.response.rect, risen, exiting));
                 }
             });
     }

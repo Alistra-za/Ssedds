@@ -493,9 +493,23 @@ fn turning_on_reduce_motion_mid_fade_ends_the_fade_sooner() {
     h.step();
     sdc_gui::ui::motion::set_reduce_motion(&h.ctx, true);
     steps(&mut h, 2);
-    let a = paint(&h, "Saved").map_or(0.0, |p| p.frame);
-    assert_eq!(a, 0.0);
+    assert!(paint(&h, "Saved").is_none_or(|p| p.frame == 0.0));
     h.state_mut().1 = 4.2;
     steps(&mut h, 2);
     assert!(h.query_by_label("Saved").is_none());
+}
+
+/// Review Minor 1: reduce motion shrinks the fade to 0.12 s, so with 0.15 s left `left > fade` holds again. An exit
+/// is sticky (only a hover reverses it), so the toast never brightens again.
+#[test]
+fn reduce_motion_during_an_exit_never_brightens_the_toast() {
+    let mut h = toast_harness("Saved");
+    settle(&mut h);
+    h.state_mut().1 = 3.85;
+    h.step();
+    let before = paint(&h, "Saved").expect("fading").frame;
+    sdc_gui::ui::motion::set_reduce_motion(&h.ctx, true);
+    h.step();
+    let after = paint(&h, "Saved").map_or(0.0, |p| p.frame);
+    assert!(after <= before, "{after} > {before}");
 }
