@@ -620,13 +620,15 @@ async function copy(o) {
 //   the candidates and their distances (XY when no offset) for the report.
 // Clockwise like SetAngle Z and layoutOf().pos: +90 deg maps +Y to +X.
 const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) + v[1] * Math.sin(a), -v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] }
-// Form ids as bare 8-digit uppercase hex: refs_*.json say 0x0010BEA6, plan keys say 0010BEA6.
+// Form ids as bare 8-digit uppercase hex: refs_*.json say 0x0010BEA6, plan keys say 0010BEA6. Shape names, tags and
+// offset prefixes compare case-insensitively (plan tag "coffin", shape "Coffin").
 const formKey = f => String(f).replace(/^0x/i, '').toUpperCase().padStart(8, '0')
+const lc = s => String(s).toLowerCase()
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
   const offs = Object.fromEntries(Object.entries(offsets).map(([k, v]) => [formKey(k), v]))
-  const offsetOf = (form, shape) => Object.entries(offs[formKey(form)] || {}).find(([p]) => shape.startsWith(p))
+  const offsetOf = (form, shape) => Object.entries(offs[formKey(form)] || {}).find(([p]) => lc(shape).startsWith(lc(p)))
   const nameCount = {}
-  for (const d of draws) nameCount[d.shape] = (nameCount[d.shape] || 0) + 1
+  for (const d of draws) nameCount[lc(d.shape)] = (nameCount[lc(d.shape)] || 0) + 1
   const near = (list, d) => list.map(r => {
     const off = offsetOf(r.form, d.shape)
     const exp = off ? vadd(r.pos, rotZ(off[1], (r.angle || [0, 0, 0])[2])) : r.pos
@@ -634,10 +636,10 @@ export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
     return { form: r.form, ref: r.ref, dist: +dist.toFixed(1), mode: off ? '3d+offset' : 'xy' }
   }).sort((x, y) => x.dist - y.dist)
   return draws.map(d => {
-    const cands = refs.filter(r => (r.shapes || []).some(p => d.shape.startsWith(p)))
+    const cands = refs.filter(r => (r.shapes || []).some(p => lc(d.shape).startsWith(lc(p))))
     const res = (status, by, hit, candidates) => ({ ...d, status, by, form: hit ? hit.form : null, ref: hit ? hit.ref : null, candidates })
     if (!cands.length) return res('unmatched', null, null, near(refs, d).slice(0, 3))
-    if (cands.length === 1 && nameCount[d.shape] === 1) return res('matched', 'name', cands[0], near(cands, d))
+    if (cands.length === 1 && nameCount[lc(d.shape)] === 1) return res('matched', 'name', cands[0], near(cands, d))
     const c = near(cands, d)
     if (cands.every(r => offsetOf(r.form, d.shape))) {
       const [a, b] = c

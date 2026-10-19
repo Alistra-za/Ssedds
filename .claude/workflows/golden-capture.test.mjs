@@ -127,6 +127,13 @@ const lib = (cmd, env = {}) => {
     assert.deepEqual([mh[0].status, mh[0].by, mh[0].form, mh[0].candidates[0].mode], ['matched', 'offset', '0x0010BEA6', '3d+offset'], JSON.stringify(mh))
   }
   ok('mapDraws: form ids normalised on both sides (0x prefix, case, padding) when looking up x_shape_offsets')
+  {
+    // Run b40e2215: plan tag "coffin", shape "Coffin"; collisions and offset prefixes ignore case too.
+    const ci = [{ form: 'C1', ref: 'a', pos: [0, 0, 0], shapes: ['coffin'] }, { form: 'T1', ref: 'b', pos: [500, 0, 0], shapes: ['Object174'] }]
+    const mc = mapDraws([{ event: 1, shape: 'Coffin', world: [0, 0, 0] }, { event: 2, shape: 'OBJECT174', world: [500, 0, 0] }, { event: 3, shape: 'object174', world: [2000, 0, 0] }], ci, { tol: 60, offsets: { T1: { object174: [0, 0, 0] } } })
+    assert.deepEqual(mc.map(x => [x.status, x.by, x.form]), [['matched', 'name', 'C1'], ['matched', 'offset', 'T1'], ['ambiguous', null, null]], JSON.stringify(mc))
+  }
+  ok('mapDraws: shape/tag/offset matching is case-insensitive (coffin vs Coffin; Object174 name collision counted case-insensitively)')
 }
 
 // ---------- 2. profiles and plan checks (W1, W8) ----------
