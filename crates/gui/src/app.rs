@@ -59,6 +59,7 @@ impl SdcApp {
             &layout,
             &mut model.filter,
             &mut model.prefs,
+            &mut model.sets_filter,
             &mut model.view,
         );
         meshes.v3.look = Look::from_settings(layout.look.as_ref());
@@ -91,6 +92,7 @@ impl SdcApp {
             ctx,
             &self.model.filter,
             &self.model.prefs,
+            &self.model.sets_filter,
             &self.model.view,
             looks,
         );
@@ -100,6 +102,7 @@ impl SdcApp {
                 &self.model.settings.layout,
                 &self.model.filter,
                 &self.model.prefs,
+                &self.model.sets_filter,
                 &self.model.view,
                 looks,
             );

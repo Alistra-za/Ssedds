@@ -287,6 +287,76 @@ fn warning_tooltip(rows: &[(&str, &Warning)]) -> String {
 struct Editing<'a> {
     on: bool,
     why: &'a str,
+    /// Editable and no filter on: sets can be reordered (R17).
+    reorder: bool,
+}
+
+/// Why the ≡ handle and Move up / Move down are off while the Sets filter is on.
+const CLEAR_TO_REORDER: &str = "Clear the filter to reorder sets";
+
+/// R17: the search box, the pills with their counts and the shader popup, under the heading.
+fn filter_rows(ui: &mut egui::Ui, model: &mut AppModel) {
+    ui.add(
+        egui::TextEdit::singleline(&mut model.sets_filter.search)
+            .hint_text("Search sets")
+            .desired_width(f32::INFINITY),
+    );
+    let c = model.set_counts();
+    ui.horizontal_wrapped(|ui| {
+        let f = &mut model.sets_filter;
+        for (on, text, hover) in [
+            (
+                &mut f.attention,
+                format!("Needs attention {}", c.attention),
+                "Only sets that are not ready: a problem in the set or one of its textures",
+            ),
+            (
+                &mut f.ready,
+                format!("Ready {}", c.ready),
+                "Only sets with no problem",
+            ),
+            (
+                &mut f.no_json,
+                format!("No JSON {}", c.no_json),
+                "Only sets that write no JSON",
+            ),
+        ] {
+            if ui
+                .add(egui::Button::selectable(*on, text).corner_radius(10))
+                .on_hover_text(hover)
+                .clicked()
+            {
+                *on = !*on;
+            }
+        }
+        let text = if f.shader.is_none() {
+            "Filter ▾"
+        } else {
+            "Filter (1) ▾"
+        };
+        // A9: a saved shader the Mode does not offer is listed too, so it is never invisible.
+        let mut shaders = shader_options(model.target);
+        if let Some(s) = f.shader.filter(|s| !shaders.contains(s)) {
+            shaders.push(s);
+        }
+        crate::ui::path_picker::menu(ui, text, |ui| {
+            if ui.selectable_label(f.shader.is_none(), "Any").clicked() {
+                f.shader = None;
+                ui.close();
+            }
+            for s in shaders {
+                if ui
+                    .selectable_label(f.shader == Some(s), s.label())
+                    .clicked()
+                {
+                    f.shader = Some(s);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Only sets with this shader");
+    });
 }
 
 pub fn draw(
@@ -303,7 +373,10 @@ pub fn draw(
             ui.label(egui::RichText::new(s).strong());
         }
     });
+    filter_rows(ui, model);
     ui.separator();
+    // R17: while a filter is on, the handle, Move up / Move down and the insertion line are off (K19).
+    let filtering = model.sets_filter_active();
     // One set per frame keeps the per-pill and per-member tests O(1) however many are selected.
     let sel_sets: HashSet<String> = model.selected_sets().into_iter().collect();
     let sel_items: HashSet<String> = model.selected_items().into_iter().collect();
@@ -312,10 +385,17 @@ pub fn draw(
     let editing = Editing {
         on: editable,
         why: &why,
+        reorder: editable && !filtering,
     };
     let views = crate::model::sets::views(model);
+    let visible = model.visible_sets();
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
+    } else if visible.is_empty() && filtering {
+        ui.label(format!("No sets match the filter ({} hidden)", views.len()));
+        if ui.button("Clear filter").clicked() {
+            model.clear_sets_filter();
+        }
     }
     let blocked: std::collections::HashSet<String> =
         export_blocks(model).into_iter().map(|i| i.set_id).collect();
@@ -348,7 +428,9 @@ pub fn draw(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (index, v) in views.iter().enumerate() {
+            // `index` is the set's place among all sets: the reorder and Move up / Move down use it (K19).
+            for &index in visible.iter() {
+                let v = &views[index];
                 let is_blocked = blocked.contains(&v.id);
                 let look = PillLook {
                     dragging: dragged.as_deref() == Some(v.id.as_str()),
@@ -390,7 +472,7 @@ pub fn draw(
             }
         });
     let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
-    if editable {
+    if editing.reorder {
         if let Some((id, to)) = reorder_target(released.as_deref(), hovered, &ids) {
             acts.push(Act::Reorder(id, to));
         }
@@ -616,15 +698,17 @@ fn pill(
                         ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
                     };
                     ui.horizontal(|ui| {
-                        let sense = if editing.on {
+                        let sense = if editing.reorder {
                             egui::Sense::drag()
                         } else {
                             egui::Sense::hover()
                         };
                         let handle = ui.add(egui::Label::new("≡").sense(sense));
-                        if editing.on {
+                        if editing.reorder {
                             handle.dnd_set_drag_payload(DragSet(v.id.clone()));
                             handle_released = handle.drag_stopped();
+                        } else if editing.on {
+                            handle.on_hover_text(CLEAR_TO_REORDER);
                         }
                         if wide {
                             ui.with_layout(
@@ -752,7 +836,7 @@ fn pill(
         }
     }
     // Not consuming: the handle's release (in `draw`) applies the move.
-    let hovered_by_set = editing.on && resp.dnd_hover_payload::<DragSet>().is_some();
+    let hovered_by_set = editing.reorder && resp.dnd_hover_payload::<DragSet>().is_some();
     // F3a D4: a right-click on an unselected pill selects it alone first; among two or more selected sets the pill
     // shows the bulk menu, otherwise its own.
     if resp.secondary_clicked() && !v.key.is_empty() && !member_menu {
@@ -911,11 +995,20 @@ fn menu(
         acts.push(Act::Delete(v.id.clone(), v.members.len()));
         ui.close();
     }
-    if tip(ui.button("Move up")).clicked() && index > 0 {
+    // K19: `index` is among all sets; while a filter is on neither moves.
+    let move_button = |ui: &mut egui::Ui, label: &str| {
+        let r = ui.add_enabled(editing.reorder || !editing.on, egui::Button::new(label));
+        if editing.on && !editing.reorder {
+            r.on_disabled_hover_text(CLEAR_TO_REORDER)
+        } else {
+            tip(r)
+        }
+    };
+    if move_button(ui, "Move up").clicked() && index > 0 {
         acts.push(Act::Reorder(v.id.clone(), index - 1));
         ui.close();
     }
-    if tip(ui.button("Move down")).clicked() {
+    if move_button(ui, "Move down").clicked() {
         acts.push(Act::Reorder(v.id.clone(), index + 1));
         ui.close();
     }

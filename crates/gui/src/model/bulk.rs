@@ -124,9 +124,12 @@ impl AppModel {
             .collect()
     }
 
+    /// The keys of the sets the column shows, in display order (R17: the Sets filter applied).
     fn set_order(&self) -> Vec<String> {
-        super::sets::views(self)
+        let views = super::sets::views(self);
+        self.visible_sets()
             .iter()
+            .map(|&i| &views[i])
             .filter(|v| !v.key.is_empty())
             .map(|v| v.key.clone())
             .collect()
@@ -140,7 +143,7 @@ impl AppModel {
         self.click(key, ctrl, shift, false, &order);
     }
 
-    /// F3a D1: the same over the Sets column, in its display order (sets have no filter).
+    /// F3a D1: the same over the Sets column, in its display order (search and filters applied, R17).
     pub fn click_set(&mut self, key: &str, ctrl: bool, shift: bool) {
         let order = self.set_order();
         self.click(key, ctrl, shift, true, &order);
@@ -209,8 +212,8 @@ impl AppModel {
         self.bulk = BulkState::default();
     }
 
-    /// F3a D1 Ctrl+A: every visible texture (search and filters applied), or every set when a set is the active
-    /// entry. The active entry stays when it is among them; else the first becomes active.
+    /// F3a D1 Ctrl+A: every visible texture, or every visible set when a set is the active entry (search and filters
+    /// applied; K18). The active entry stays when it is among them; else the first becomes active.
     pub fn select_all_visible(&mut self) {
         let sets = matches!(self.selection, Selection::Set(_));
         let keys = if sets {
@@ -232,19 +235,20 @@ impl AppModel {
     }
 
     /// F3a D1: "12 selected", or "12 selected (4 hidden by filter)", for the column of that kind while two or
-    /// more are selected there. Sets have no filter.
+    /// more are selected there.
     pub fn selection_summary(&self, sets: bool) -> Option<String> {
         let keys = self.selected(sets);
         if keys.len() < 2 {
             return None;
         }
-        let hidden = if sets {
-            0
+        let shown: std::collections::HashSet<String> = if sets {
+            self.set_order()
         } else {
-            let shown: std::collections::HashSet<String> =
-                self.visible_keys().into_iter().collect();
-            keys.iter().filter(|k| !shown.contains(*k)).count()
-        };
+            self.visible_keys()
+        }
+        .into_iter()
+        .collect();
+        let hidden = keys.iter().filter(|k| !shown.contains(*k)).count();
         Some(match hidden {
             0 => format!("{} selected", keys.len()),
             h => format!("{} selected ({h} hidden by filter)", keys.len()),

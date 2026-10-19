@@ -489,6 +489,7 @@ fn filters_sort_and_tile_round_trip_through_gui_toml() {
         &m.settings.layout.clone(),
         &mut m.filter,
         &mut m.prefs,
+        &mut m.sets_filter,
         &mut sdc_gui::model::view::ViewState::default(),
     );
     assert_eq!(m.filter.subtype.as_deref(), Some("normal"));
@@ -500,6 +501,7 @@ fn filters_sort_and_tile_round_trip_through_gui_toml() {
         &m.settings.layout,
         &m.filter,
         &m.prefs,
+        &m.sets_filter,
         &sdc_gui::model::view::ViewState::default(),
         (&Default::default(), &Default::default()),
     );

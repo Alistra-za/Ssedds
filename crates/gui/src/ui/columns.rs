@@ -15,7 +15,6 @@ pub const STRIP_WIDTH: f32 = 24.0;
 /// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.
 const TILE: f32 = crate::model::texture_view::ColumnPrefs::TILE_DEFAULT;
 const MEMBER: f32 = 32.0;
-/// The narrowest a filter combo gets before the row moves one to the next line.
 const TILE_MARGIN: f32 = 4.0;
 const TILE_STROKE: f32 = 2.0;
 /// Scroll bar and margin allowance when fitting tiles to a row.

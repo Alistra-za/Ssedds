@@ -36,6 +36,7 @@ pub mod rnm_preview;
 pub mod sections;
 pub mod set_preview;
 pub mod sets;
+pub mod sets_filter;
 pub mod shell;
 pub mod skin;
 pub mod texture_view;
@@ -350,6 +351,9 @@ pub struct AppModel {
     pub prefs: texture_view::ColumnPrefs,
     pub(crate) texture_cache: std::cell::RefCell<texture_view::TextureViewCache>,
     pub search: String,
+    /// The Sets column's search and filters (layout v2, R17).
+    pub sets_filter: sets_filter::SetsFilter,
+    pub(crate) sets_filter_cache: std::cell::RefCell<sets_filter::SetsFilterCache>,
     pub status_line: String,
     /// Item 20: the toasts and the Messages log (DECISIONS AG112-AG114); every status-line note also lands here.
     pub messages: messages::Messages,
@@ -542,6 +546,8 @@ impl AppModel {
             prefs: Default::default(),
             texture_cache: Default::default(),
             search: String::new(),
+            sets_filter: Default::default(),
+            sets_filter_cache: Default::default(),
             status_line: String::new(),
             messages: Default::default(),
             bottom: Default::default(),

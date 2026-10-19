@@ -1,12 +1,13 @@
 //! Window and layout memory (item 3, DECISIONS AG3, AG17-AG20): what is saved in `gui.toml` `[layout]`, how the saved
 //! window is fitted to the monitors, and the debounce that keeps the file from being written every frame.
+use crate::model::sets_filter::SetsFilter;
 use crate::model::texture_view::{ColumnPrefs, SetFilter, SortKey};
 use crate::model::view::{Channel, Layout, ViewState};
 use crate::model::viewport3d::Look;
 use crate::model::Filter;
 use crate::settings::{
-    LayoutSettings, LookSettings, WindowSettings, DETAILS_NAMES, FILTER_NAMES, WIDTH_IDS,
-    WIDTH_RANGE,
+    LayoutSettings, LookSettings, WindowSettings, DETAILS_NAMES, FILTER_NAMES, SETS_FILTER_NAMES,
+    WIDTH_IDS, WIDTH_RANGE,
 };
 use eframe::egui::{self, containers::panel::PanelState, pos2, vec2, Rect};
 use std::time::{Duration, Instant};
@@ -203,6 +204,8 @@ pub struct Probe {
     meshes_view: bool,
     filter: Filter,
     prefs: ColumnPrefs,
+    /// The Sets filter without its search, which is not saved (R17).
+    sets: SetsFilter,
     channel: Channel,
     layout: Layout,
     looks: (Look, Look),
@@ -220,6 +223,7 @@ pub fn probe(
     ctx: &egui::Context,
     filter: &Filter,
     prefs: &ColumnPrefs,
+    sets: &SetsFilter,
     view: &ViewState,
     looks: (&Look, &Look),
 ) -> Probe {
@@ -239,6 +243,10 @@ pub fn probe(
         meshes_view: crate::ui::header::meshes_view_active(ctx),
         filter: filter.clone(),
         prefs: *prefs,
+        sets: SetsFilter {
+            search: String::new(),
+            ..sets.clone()
+        },
         channel: view.channel,
         layout: view.layout,
         looks: (*looks.0, *looks.1),
@@ -255,6 +263,7 @@ pub fn capture(
     prev: &LayoutSettings,
     filter: &Filter,
     prefs: &ColumnPrefs,
+    sets: &SetsFilter,
     view: &ViewState,
     looks: (&Look, &Look),
 ) -> LayoutSettings {
@@ -289,6 +298,13 @@ pub fn capture(
     l.filter_set = filter.set.name().to_string();
     l.sort = prefs.sort.name().to_string();
     l.tile = prefs.tile;
+    l.sets_filters = SETS_FILTER_NAMES
+        .iter()
+        .zip([sets.attention, sets.ready, sets.no_json])
+        .filter(|(_, on)| *on)
+        .map(|(n, _)| n.to_string())
+        .collect();
+    l.sets_shader = sets.shader.map(|s| s.id().to_string());
     l.preview_channel = view.channel.shader_id() as u8;
     l.preview_layout = view.layout.name().to_string();
     l.look = look_now(looks.0, &prev.look);
@@ -402,11 +418,13 @@ pub fn restore_ctx(ctx: &egui::Context, l: &LayoutSettings) {
     }
 }
 
-/// The Textures filters, the preview channel and layout the file names; an unknown one is skipped.
+/// The Textures and Sets filters, the preview channel and layout the file names; an unknown one is skipped. The
+/// Sets search is left as it is (not saved, R17).
 pub fn restore_model(
     l: &LayoutSettings,
     filter: &mut Filter,
     prefs: &mut ColumnPrefs,
+    sets: &mut SetsFilter,
     view: &mut ViewState,
 ) {
     let has = |n: &str| l.filters.iter().any(|f| f == n);
@@ -423,6 +441,18 @@ pub fn restore_model(
     *prefs = ColumnPrefs {
         sort: SortKey::from_name(&l.sort).unwrap_or_default(),
         tile: l.tile,
+    };
+    let on = |n: &str| l.sets_filters.iter().any(|f| f == n);
+    *sets = SetsFilter {
+        search: std::mem::take(&mut sets.search),
+        attention: on("attention"),
+        ready: on("ready"),
+        no_json: on("no-json"),
+        shader: l.sets_shader.as_deref().and_then(|id| {
+            engine::shader::Shader::ALL
+                .into_iter()
+                .find(|s| s.id() == id)
+        }),
     };
     view.channel = Channel::from_id(u32::from(l.preview_channel)).unwrap_or_default();
     view.layout = Layout::from_name(&l.preview_layout).unwrap_or_default();
