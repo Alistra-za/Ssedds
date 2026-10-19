@@ -40,6 +40,9 @@ pub struct Recipe {
     pub prefix: String,
     pub suffix: String,
     pub case: Case,
+    /// Inputs: the recipe runs over the folders and the base name, not the base name alone (the map suffix and the
+    /// extension still stay).
+    pub path: bool,
 }
 
 impl Recipe {
@@ -280,6 +283,11 @@ fn input_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<RenameR
                 } else {
                     t
                 }
+            }
+            None if d.recipe.path => {
+                let (p, matched) = d.recipe.apply(re, &format!("{dir}{base}"));
+                r.matched = matched;
+                format!("{p}{tail}.{real_ext}")
             }
             None => {
                 let (b, matched) = d.recipe.apply(re, base);
