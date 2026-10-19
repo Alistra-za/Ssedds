@@ -120,6 +120,13 @@ const lib = (cmd, env = {}) => {
     assert.equal(cx[0].status, 'ambiguous', `X=${x}`); assert.deepEqual(cx[0].candidates.map(c => c.form).sort(), ['R0', 'R120'])
   }
   ok('mapDraws: refs at X=0 and X=120 both expecting the shape, draw at X=85 or X=100, no offsets -> ambiguous with both candidates')
+  {
+    // Run b40e2215: refs_*.json forms are 0x-prefixed, plan x_shape_offsets keys are bare 8-digit hex.
+    const hx = [{ form: '0x0010BEA6', ref: 'a', pos: [0, 0, 0], angle: [0, 0, 0], shapes: ['EyesMale'] }, { form: '0x0010CDC0', ref: 'b', pos: [60, 0, 0], angle: [0, 0, 0], shapes: ['EyesMale'] }]
+    const mh = mapDraws([{ event: 1, shape: 'EyesMale', world: [0, 0, 120] }], hx, { tol: 60, offsets: { '0010BEA6': { EyesMale: [0, 0, 120] }, '10cdc0': { EyesMale: [0, 0, 120] } } })
+    assert.deepEqual([mh[0].status, mh[0].by, mh[0].form, mh[0].candidates[0].mode], ['matched', 'offset', '0x0010BEA6', '3d+offset'], JSON.stringify(mh))
+  }
+  ok('mapDraws: form ids normalised on both sides (0x prefix, case, padding) when looking up x_shape_offsets')
 }
 
 // ---------- 2. profiles and plan checks (W1, W8) ----------

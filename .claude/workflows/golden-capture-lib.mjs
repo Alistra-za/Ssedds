@@ -620,8 +620,11 @@ async function copy(o) {
 //   the candidates and their distances (XY when no offset) for the report.
 // Clockwise like SetAngle Z and layoutOf().pos: +90 deg maps +Y to +X.
 const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) + v[1] * Math.sin(a), -v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] }
+// Form ids as bare 8-digit uppercase hex: refs_*.json say 0x0010BEA6, plan keys say 0010BEA6.
+const formKey = f => String(f).replace(/^0x/i, '').toUpperCase().padStart(8, '0')
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
-  const offsetOf = (form, shape) => Object.entries(offsets[form] || {}).find(([p]) => shape.startsWith(p))
+  const offs = Object.fromEntries(Object.entries(offsets).map(([k, v]) => [formKey(k), v]))
+  const offsetOf = (form, shape) => Object.entries(offs[formKey(form)] || {}).find(([p]) => shape.startsWith(p))
   const nameCount = {}
   for (const d of draws) nameCount[d.shape] = (nameCount[d.shape] || 0) + 1
   const near = (list, d) => list.map(r => {
@@ -647,7 +650,7 @@ function mapDrawsCmd(o) {
   const r = readJson(path.join(o['run-dir'], 'resolved.json'))
   const g = r.groups.find(x => x.label === o.group)
   if (!g) throw new Error(`no group ${o.group}`)
-  const shapesOf = form => (g.forms.find(f => f.form === String(form).replace(/^0x/i, '').toUpperCase()) || {}).shapes || []
+  const shapesOf = form => (g.forms.find(f => formKey(f.form) === formKey(form)) || {}).shapes || []
   const refs = readJson(path.join(o['run-dir'], `refs_${o.group}.json`)).map(x => ({ ...x, shapes: x.shapes || shapesOf(x.form) }))
   const out = mapDraws(readJson(o.draws), refs, { tol: r.match_tol, offsets: r.shape_offsets })
   const file = path.join(o['run-dir'], `drawmap_${o.label || o.group}.json`)
