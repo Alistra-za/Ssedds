@@ -622,3 +622,30 @@ fn a_drop_outside_any_card_moves_nothing() {
         "the payload is gone"
     );
 }
+
+/// Final review I1: the number is body size in the ≡ handle's colour (ui-rules 4.7), not small weak gray.
+#[test]
+fn the_position_number_is_body_size_in_the_handle_colour() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened_checked(d.path()));
+    h.run();
+    let slot = h.get_by_label("Position 1 of 3").rect();
+    let style = h.ctx.global_style();
+    let body = egui::TextStyle::Body.resolve(&style).size;
+    assert!(slot.height() >= body, "{} < {body}", slot.height());
+    let colors: Vec<egui::Color32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t)
+                if t.galley.text() == "1"
+                    && slot.contains(t.galley.rect.translate(t.pos.to_vec2()).center()) =>
+            {
+                Some(t.fallback_color)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(colors, [style.visuals.widgets.inactive.fg_stroke.color]);
+}

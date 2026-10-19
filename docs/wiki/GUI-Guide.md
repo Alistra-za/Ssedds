@@ -204,7 +204,7 @@ If an export is blocked, Review's *Blockers* column lists what to fix; **Go to s
 
 - **Drag a texture** from the Textures column onto a set to move it there, or onto empty space to start a new set. Dropping onto a filled slot asks **Replace** or **Cancel**.
 - **Share** lets a set borrow another set's finished output. **Duplicate** copies the source into the set. A shared `_rmaos` is never variance-baked.
-- The small number at the left of a set is its place in the full order (1 to N). A filter does not renumber it.
+- The number at the left of a set is its place in the full order (1 to N). A filter does not renumber it.
 - **≡** drags a set to reorder (off while a Sets filter is on). A drag reaches only the cards on screen; for a long move use **Move to…**.
 - **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up**, **Move down** and **Move to…**. **Move to…** opens a dialog: type a position (1 to N) or part of a set's name, pick a row with Up, Down and Enter, and the set moves there; it also works while a Sets filter is on. **Delete set** asks first, naming the set and its member count. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Fill from names…** (set menu) lists files in the set's folder named like its diffuse plus a known suffix, and moves the ticked ones in as one undo step.

@@ -696,10 +696,11 @@ fn apply_reorder(
     }
 }
 
-/// CF4: the card's place in the full order, a small weak number in a slot as wide as `total`'s, so names line up.
+/// CF4: the card's place in the full order, a body-size number in a slot as wide as `total`'s, so names line up.
 fn position_label(ui: &mut egui::Ui, n: usize, total: usize) {
-    let font = egui::FontId::monospace(egui::TextStyle::Small.resolve(ui.style()).size);
-    let color = ui.visuals().weak_text_color();
+    let font = egui::FontId::monospace(egui::TextStyle::Body.resolve(ui.style()).size);
+    // The ≡ handle's colour (a sensing Label): 5.3:1 on the card; `text_color()` would be about 3.3:1.
+    let color = ui.visuals().widgets.inactive.fg_stroke.color;
     let (w, galley) = ui.fonts_mut(|f| {
         let w = f
             .layout_no_wrap(total.to_string(), font.clone(), color)
