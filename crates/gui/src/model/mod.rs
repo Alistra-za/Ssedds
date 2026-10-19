@@ -2478,6 +2478,11 @@ impl AppModel {
         self.replan();
     }
 
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.settings.reduce_motion = on;
+        self.save_settings();
+    }
+
     pub fn set_bc1_choice(&mut self, c: crate::settings::Bc1Choice) {
         self.settings.bc1_decoder = c;
         self.save_settings();

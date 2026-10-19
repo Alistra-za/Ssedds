@@ -15,6 +15,7 @@ pub mod input_name;
 pub mod json_editor;
 pub mod meshes;
 pub mod messages;
+pub mod motion;
 pub mod path_picker;
 pub mod pgp_fields;
 pub mod plugin_refs;
@@ -106,6 +107,7 @@ pub fn draw_with_scan(
     state: &mut State,
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
+    motion::set_reduce_motion(ui.ctx(), model.settings.reduce_motion);
     state.thumbs.sweep(model.items_rev());
     // Trace-debug #52: a modal or Slot commands left open would act on the new folder's set of the same id.
     if state
