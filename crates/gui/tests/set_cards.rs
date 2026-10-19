@@ -376,3 +376,63 @@ fn a_borrowed_chip_is_amber_and_offers_no_drag() {
         "an own chip still drags"
     );
 }
+
+/// Final review I1: a texture dragged over a card outlines that card, on top of the card's own frame (the drop
+/// zone's own hover stroke sits under the card frame).
+#[test]
+fn a_texture_dragged_over_a_card_outlines_it() {
+    use sdc_gui::ui::sets_column::DragItem;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let item = m.items[0].key.clone();
+    let mut h = harness(m);
+    h.run();
+    let card = card_rect(&h);
+    let active = h.ctx.global_style().visuals.widgets.active.bg_stroke;
+    let near = |a: egui::Rect, b: egui::Rect| {
+        (a.min - b.min).length() < 1.0 && (a.max - b.max).length() < 1.0
+    };
+    // The last rect shape on the card, and whether it is the drop outline.
+    let top_is_outline = |h: &Harness<'static, AppModel>| {
+        shapes(h)
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r) if near(r.rect, card) && r.stroke.width > 0.0 => {
+                    Some(r.stroke)
+                }
+                _ => None,
+            })
+            .next_back()
+            .is_some_and(|s| s == active)
+    };
+    assert!(!top_is_outline(&h), "no outline without a drag");
+    let at = card.center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    h.hover_at(at);
+    h.run();
+    h.event(press(true));
+    for step in 1..=3 {
+        egui::DragAndDrop::set_payload(&h.ctx, DragItem(item.clone()));
+        h.event(egui::Event::PointerMoved(
+            at + egui::vec2(2.0 * step as f32, 0.0),
+        ));
+        h.run();
+    }
+    assert!(
+        egui::DragAndDrop::has_payload_of_type::<DragItem>(&h.ctx),
+        "a texture is in flight"
+    );
+    assert!(
+        top_is_outline(&h),
+        "the card under a dragged texture is outlined on top of its frame"
+    );
+    egui::DragAndDrop::clear_payload(&h.ctx);
+    h.event(press(false));
+    h.run();
+    assert!(!top_is_outline(&h), "the outline goes with the drag");
+}

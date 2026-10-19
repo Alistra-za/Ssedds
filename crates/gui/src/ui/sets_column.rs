@@ -668,7 +668,7 @@ fn pill(
         if look.dragging {
             ui.set_opacity(0.5);
         }
-        let (_zone, dropped) = item_zone(
+        let (zone, dropped) = item_zone(
             ui,
             editing.on,
             egui::Frame::NONE.corner_radius(12.0),
@@ -819,6 +819,18 @@ fn pill(
                 });
             },
         );
+        // Final review I1: the zone's hover stroke is under the card frame, so outline the drop target on top.
+        if editing.on
+            && egui::DragAndDrop::has_payload_of_type::<DragItem>(ui.ctx())
+            && zone.contains_pointer()
+        {
+            ui.painter().rect_stroke(
+                zone.rect,
+                12.0,
+                ui.visuals().widgets.active.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
         dropped
     });
     let dropped = scoped.inner;
