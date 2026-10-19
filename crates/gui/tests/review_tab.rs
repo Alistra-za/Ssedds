@@ -14,7 +14,12 @@ use support::*;
 const ROCK: &str = "landscape/rock01.png";
 
 fn harness(model: AppModel) -> Harness<'static, AppModel> {
+    harness_dt(model, 0.25)
+}
+
+fn harness_dt(model: AppModel, dt: f32) -> Harness<'static, AppModel> {
     let h = Harness::builder()
+        .with_step_dt(dt)
         .with_size(egui::vec2(1400.0, 900.0))
         .build_ui_state(
             |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
@@ -49,12 +54,20 @@ fn reviewing(
     dir: &std::path::Path,
     edits: &[(&str, serde_json::Value)],
 ) -> Harness<'static, AppModel> {
+    reviewing_dt(dir, edits, 0.25)
+}
+
+fn reviewing_dt(
+    dir: &std::path::Path,
+    edits: &[(&str, serde_json::Value)],
+    dt: f32,
+) -> Harness<'static, AppModel> {
     let mut m = pbr_ready(dir);
     for (k, v) in edits {
         m.set_json_value("landscape/rock01", k, Some(v.clone()));
     }
     assert!(m.wait_idle(Duration::from_secs(60)));
-    let mut h = harness(m);
+    let mut h = harness_dt(m, dt);
     h.run();
     press(&mut h, "Export");
     assert!(h.state().review.is_some());
@@ -328,4 +341,112 @@ fn the_columns_stay_above_the_footer() {
             r.bottom()
         );
     }
+}
+
+/// The fill of the painted frame around `rect` (the Export button's).
+fn fill_at(h: &Harness<'static, AppModel>, rect: egui::Rect) -> egui::Color32 {
+    fn flat(s: &egui::Shape, out: &mut Vec<egui::Shape>) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| flat(s, out)),
+            s => out.push(s.clone()),
+        }
+    }
+    let mut all = vec![];
+    for c in &h.output().shapes {
+        flat(&c.shape, &mut all);
+    }
+    all.iter()
+        .find_map(|s| match s {
+            egui::Shape::Rect(r)
+                if r.rect.expand(1.0).contains_rect(rect)
+                    && rect.expand(1.0).contains_rect(r.rect) =>
+            {
+                Some(r.fill)
+            }
+            _ => None,
+        })
+        .expect("the Export button's frame")
+}
+
+/// Tick the only pitfall with one click and one frame, so the fade is caught at its start.
+fn tick_once(h: &mut Harness<'static, AppModel>) {
+    let asks = pbr_export::export_asks(h.state());
+    h.get_by_label(&asks[0].text).scroll_to_me();
+    h.run();
+    h.get_by_label(&asks[0].text).hover();
+    h.run();
+    h.get_by_label(&asks[0].text).click();
+    // The click takes a frame or two to reach the model; the next frame is the first the gate passes.
+    for _ in 0..6 {
+        h.step();
+        if h.state().review_gate().is_ok() {
+            break;
+        }
+    }
+    h.step();
+}
+
+fn between(c: egui::Color32, a: egui::Color32, b: egui::Color32) -> bool {
+    let ok = |x: u8, p: u8, q: u8| x > p.min(q) && x < p.max(q);
+    c != a
+        && c != b
+        && (ok(c.r(), a.r(), b.r()) || ok(c.g(), a.g(), b.g()) || ok(c.b(), a.b(), b.b()))
+}
+
+/// Note CF11, Review Focus 3: Export fades to the accent when it becomes ready and snaps back at once (K11).
+#[test]
+fn export_fades_to_the_accent_and_snaps_back() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing_dt(d.path(), &[("alphaprop_thresh", json!(128))], 0.05);
+    let text = h.state().review_button_text();
+    let accent = h.ctx.global_style().visuals.selection.bg_fill;
+    let rest = h.ctx.global_style().visuals.widgets.inactive.weak_bg_fill;
+    let off = fill_at(&h, h.get_by_label(&text).rect());
+    tick_once(&mut h);
+    assert!(!disabled(&h, &text));
+    let first = fill_at(&h, h.get_by_label(&text).rect());
+    assert!(
+        between(first, rest, accent),
+        "{first:?} not between {rest:?} and {accent:?}"
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(fill_at(&h, h.get_by_label(&text).rect()), accent);
+    // Untick: the gate fails, the state snaps to 0 and the disabled look returns.
+    let asks = pbr_export::export_asks(h.state());
+    h.get_by_label(&asks[0].text).click();
+    h.step();
+    h.step();
+    assert!(disabled(&h, &text));
+    assert_eq!(fill_at(&h, h.get_by_label(&text).rect()), off);
+    // Ticking again fades again.
+    tick_once(&mut h);
+    let again = fill_at(&h, h.get_by_label(&text).rect());
+    assert!(between(again, rest, accent), "{again:?}");
+}
+
+#[test]
+fn reduced_motion_makes_the_export_accent_full_within_3_steps() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing_dt(d.path(), &[("alphaprop_thresh", json!(128))], 0.05);
+    h.state_mut().settings.reduce_motion = true;
+    let text = h.state().review_button_text();
+    let accent = h.ctx.global_style().visuals.selection.bg_fill;
+    tick_once(&mut h);
+    h.step();
+    h.step();
+    assert_eq!(fill_at(&h, h.get_by_label(&text).rect()), accent);
+}
+
+/// Guard, green from the start (K11): the button is live on the frame the gate passes; only paint animates.
+#[test]
+fn the_review_export_works_on_the_frame_it_becomes_ready() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing_dt(d.path(), &[("alphaprop_thresh", json!(128))], 0.05);
+    let text = h.state().review_button_text();
+    tick_once(&mut h);
+    h.get_by_label(&text).click();
+    h.step();
+    assert!(h.state().export.running.is_some() || h.state().export.summary.is_some());
 }
