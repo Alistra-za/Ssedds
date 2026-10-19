@@ -3,7 +3,7 @@ mod support;
 use eframe::egui;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use sdc_gui::model::messages::{Messages, Severity, FADE, FADE_WARN, LOG_CAP, MAX_SHOWN};
+use sdc_gui::model::messages::{Messages, Severity, FADE, FADE_OUT, FADE_WARN, LOG_CAP, MAX_SHOWN};
 use sdc_gui::model::AppModel;
 use sdc_gui::ui::actions;
 use std::collections::HashSet;
@@ -95,15 +95,10 @@ fn hovering_a_toast_pauses_its_fade() {
     assert!(m.toasts().is_empty());
 }
 
+/// Note CF2: the exit fade is 200 ms (it runs on egui time; see the toast paint tests below).
 #[test]
-fn the_fade_out_dims_the_last_half_second() {
-    let (mut m, t0) = (store(), Instant::now());
-    m.notify(Severity::Info, "x");
-    m.tick(t0, &none());
-    assert_eq!(m.toasts()[0].opacity(), 1.0);
-    m.tick(secs(t0, 3.75), &none());
-    let o = m.toasts()[0].opacity();
-    assert!((o - 0.5).abs() < 0.01, "{o}");
+fn the_exit_fade_is_200_ms() {
+    assert_eq!(FADE_OUT, Duration::from_millis(200));
 }
 
 #[test]
@@ -277,4 +272,230 @@ fn twenty_quick_undos_leave_one_queued_undo_toast_and_the_queue_is_capped() {
         m.notify(Severity::Info, format!("kind{i}: x"));
     }
     assert_eq!(m.queued(), sdc_gui::model::messages::MAX_QUEUED);
+}
+
+// ---- Note CF2: toasts fade whole, enter with a rise, and repaint only while moving
+
+type ToastHarness = Harness<'static, (AppModel, f32)>;
+
+/// A `draw_at` harness at 0.05 s steps; `at` is the model clock in seconds after `t0`.
+fn toast_harness(first: &str) -> ToastHarness {
+    let mut m = AppModel::new(
+        sdc_gui::settings::GuiSettings::default(),
+        None,
+        support::session(),
+    );
+    m.messages.notify(Severity::Info, first);
+    let t0 = Instant::now();
+    let h = Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .with_step_dt(0.05)
+        .build_ui_state(
+            move |ui, (m, at): &mut (AppModel, f32)| {
+                sdc_gui::ui::messages::draw_at(ui.ctx(), m, t0 + Duration::from_secs_f32(*at))
+            },
+            (m, 0.0),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// The model's first tick at `at = 0`, then 10 steps at `at = 1.0`: the entry has settled.
+fn settle(h: &mut ToastHarness) {
+    h.step();
+    h.state_mut().1 = 1.0;
+    steps(h, 10);
+}
+
+fn steps(h: &mut ToastHarness, n: usize) {
+    for _ in 0..n {
+        h.step();
+    }
+}
+
+/// What the last frame painted for the toast `text`.
+#[derive(Debug, Clone, Copy)]
+struct Paint {
+    /// The popup frame's fill alpha (0-1).
+    frame: f32,
+    /// The text's alpha (0-1).
+    text: f32,
+    /// The text galley's top.
+    y: f32,
+    /// The text's painted rect.
+    rect: egui::Rect,
+}
+
+fn paint(h: &ToastHarness, text: &str) -> Option<Paint> {
+    fn walk<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+            s => out.push(s),
+        }
+    }
+    let mut all = vec![];
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut all);
+    }
+    let t = all.iter().find_map(|s| match s {
+        egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+        _ => None,
+    })?;
+    let rect = t.galley.rect.translate(t.pos.to_vec2());
+    // A label's glyphs carry PLACEHOLDER; the painted colour is the fallback.
+    let v = t.galley.rows[0].row.visuals.mesh.vertices[0].color;
+    let text_a = if v == egui::Color32::PLACEHOLDER {
+        t.fallback_color
+    } else {
+        v
+    }
+    .a() as f32
+        / 255.0;
+    // The popup frame: the smallest unblurred rect around the text (the shadow is blurred).
+    let frame = all
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Rect(r) if r.blur_width == 0.0 && r.rect.contains_rect(rect) => Some(r),
+            _ => None,
+        })
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))?;
+    Some(Paint {
+        frame: frame.fill.a() as f32 / 255.0,
+        text: text_a,
+        y: t.pos.y,
+        rect,
+    })
+}
+
+/// K2: the last step asked for an immediate frame.
+fn asks_for_a_frame(h: &ToastHarness) -> bool {
+    h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay == Duration::ZERO
+}
+
+/// 01#1: the frame and its shadow fade with the text, not only the text.
+#[test]
+fn a_toast_fades_whole_over_its_last_200_ms() {
+    let mut h = toast_harness("Saved");
+    settle(&mut h);
+    let rest = paint(&h, "Saved").expect("drawn");
+    h.state_mut().1 = 3.85;
+    steps(&mut h, 2);
+    let p = paint(&h, "Saved").expect("still drawn");
+    assert!(p.frame < rest.frame - 0.1, "{p:?} vs {rest:?}");
+    let (f, t) = (p.frame / rest.frame, p.text / rest.text);
+    assert!((f - t).abs() < 0.03, "frame x{f}, text x{t}");
+}
+
+/// "Saved"'s y below "Ready" (same Area). The anchored Area places itself from last frame's size, so on a new
+/// toast's first frame the whole stack sits one toast low; measuring against the other toast removes that.
+fn below_ready(h: &ToastHarness) -> f32 {
+    paint(h, "Saved").expect("Saved drawn").y - paint(h, "Ready").expect("Ready drawn").y
+}
+
+/// K4: the first toast warms the Area, so the first frame of "Saved" is a visible one.
+#[test]
+fn a_new_toast_rises_8pt_and_fades_in() {
+    let mut h = toast_harness("Ready");
+    settle(&mut h);
+    let rest_frame = paint(&h, "Ready").expect("drawn").frame;
+    h.state_mut().0.messages.notify(Severity::Info, "Saved");
+    h.step();
+    let (first, first_dy) = (
+        paint(&h, "Saved").expect("drawn on its first frame"),
+        below_ready(&h),
+    );
+    assert!(asks_for_a_frame(&h), "the entry asks for frames");
+    steps(&mut h, 4);
+    let (five, five_dy) = (paint(&h, "Saved").unwrap(), below_ready(&h));
+    steps(&mut h, 10);
+    let rest_dy = below_ready(&h);
+    eprintln!(
+        "rise on frame 1: {} pt, alpha {first:?}",
+        first_dy - rest_dy
+    );
+    assert!(first_dy >= rest_dy + 4.0, "{first_dy} vs {rest_dy}");
+    assert!(first.frame < rest_frame, "{first:?}");
+    assert!((five_dy - rest_dy).abs() <= 0.5, "{five_dy} vs {rest_dy}");
+    assert_eq!(five.frame, rest_frame);
+    assert_eq!(paint(&h, "Saved").unwrap().frame, rest_frame);
+}
+
+#[test]
+fn a_resting_toast_asks_for_no_frames_until_its_fade() {
+    let mut h = toast_harness("Saved");
+    h.step();
+    h.state_mut().1 = 0.25;
+    steps(&mut h, 10);
+    let d = h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+    assert!(d != Duration::ZERO, "{d:?}");
+    assert!(
+        (Duration::from_secs_f32(3.4)..=Duration::from_secs_f32(3.8)).contains(&d),
+        "{d:?}"
+    );
+}
+
+/// Review Focus 2: the entry runs on egui time, so a pointer resting on it (which freezes the model clock) does
+/// not leave it half-visible.
+#[test]
+fn a_hovered_toast_reaches_full_opacity_during_its_entry() {
+    let mut h = toast_harness("Ready");
+    settle(&mut h);
+    let rest_frame = paint(&h, "Ready").unwrap().frame;
+    h.state_mut().0.messages.notify(Severity::Info, "Saved");
+    h.step();
+    let r = paint(&h, "Saved").unwrap().rect;
+    h.hover_at(r.center());
+    steps(&mut h, 5);
+    assert_eq!(paint(&h, "Saved").unwrap().frame, rest_frame);
+}
+
+/// K14: the `|| hovered` target bites inside the exit window: a hovered toast fades back up and stays.
+#[test]
+fn a_hovered_toast_in_its_fade_comes_back_to_full_opacity() {
+    let mut h = toast_harness("Saved");
+    settle(&mut h);
+    let rest = paint(&h, "Saved").unwrap();
+    h.state_mut().1 = 3.9;
+    h.step();
+    assert!(
+        paint(&h, "Saved").unwrap().frame < rest.frame,
+        "the fade began"
+    );
+    h.hover_at(rest.rect.center());
+    steps(&mut h, 5);
+    assert_eq!(paint(&h, "Saved").expect("held").frame, rest.frame);
+}
+
+#[test]
+fn reduced_motion_toasts_fade_without_rising() {
+    let mut h = toast_harness("Ready");
+    settle(&mut h);
+    let rest_frame = paint(&h, "Ready").unwrap().frame;
+    sdc_gui::ui::motion::set_reduce_motion(&h.ctx, true);
+    h.state_mut().0.messages.notify(Severity::Info, "Saved");
+    h.step();
+    let (first, first_dy) = (paint(&h, "Saved").expect("drawn"), below_ready(&h));
+    assert!(first.frame < rest_frame, "it still fades: {first:?}");
+    steps(&mut h, 2);
+    let three = paint(&h, "Saved").unwrap();
+    steps(&mut h, 10);
+    let rest_dy = below_ready(&h);
+    assert!((first_dy - rest_dy).abs() <= 0.5, "{first_dy} vs {rest_dy}");
+    assert_eq!(three.frame, rest_frame);
+}
+
+/// Review Focus 5. From 0.75 of the way in, 2 steps finish a 0.12 s fade but not a 0.2 s one (alpha 0.0625).
+#[test]
+fn turning_on_reduce_motion_mid_fade_ends_the_fade_sooner() {
+    let mut h = toast_harness("Saved");
+    settle(&mut h);
+    h.state_mut().1 = 3.9;
+    h.step();
+    sdc_gui::ui::motion::set_reduce_motion(&h.ctx, true);
+    steps(&mut h, 2);
+    let a = paint(&h, "Saved").map_or(0.0, |p| p.frame);
+    assert_eq!(a, 0.0);
+    h.state_mut().1 = 4.2;
+    steps(&mut h, 2);
+    assert!(h.query_by_label("Saved").is_none());
 }

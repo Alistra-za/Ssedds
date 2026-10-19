@@ -12,8 +12,8 @@ pub const MAX_QUEUED: usize = 5;
 /// How long a toast stays, and a warning or error.
 pub const FADE: Duration = Duration::from_secs(4);
 pub const FADE_WARN: Duration = Duration::from_secs(8);
-/// The last part of a toast's time fades it out.
-pub const FADE_OUT: Duration = Duration::from_millis(500);
+/// The last part of a toast's time fades it out (on egui time, `ui::messages`; Note CF2).
+pub const FADE_OUT: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -47,13 +47,6 @@ pub struct Toast {
     pub text: String,
     /// Time left on screen; frozen while the pointer is over the toast.
     pub left: Duration,
-}
-
-impl Toast {
-    /// 1.0 while it stays, down to 0.0 over its last [`FADE_OUT`].
-    pub fn opacity(&self) -> f32 {
-        (self.left.as_secs_f32() / FADE_OUT.as_secs_f32()).min(1.0)
-    }
 }
 
 pub struct Messages {
