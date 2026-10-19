@@ -200,7 +200,8 @@ pub fn draw(
                         r,
                         2.0,
                         egui::Stroke::new(2.0, c),
-                        egui::StrokeKind::Outside,
+                        // Inside: the first row's top is the scroll area's clip edge (final review M1).
+                        egui::StrokeKind::Inside,
                     );
                 }
             }

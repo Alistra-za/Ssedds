@@ -1579,6 +1579,8 @@ fn slot_flashes(h: &Harness<'static, AppModel>) -> Vec<eframe::egui::Rect> {
                 let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
                 let c = r.stroke.color;
                 if near(c.r(), want.r()) && near(c.g(), want.g()) && near(c.b(), want.b()) {
+                    // Final review M1: Outside would put the first row's top edge past the scroll area's clip.
+                    assert_eq!(r.stroke_kind, eframe::egui::StrokeKind::Inside);
                     out.push(r.rect);
                 }
             }
