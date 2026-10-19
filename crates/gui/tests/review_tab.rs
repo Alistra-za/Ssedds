@@ -426,17 +426,26 @@ fn export_fades_to_the_accent_and_snaps_back() {
     assert!(between(again, rest, accent), "{again:?}");
 }
 
+/// Final review M2: one step into the fade, the 0.12 s reduced fade (`cubic_out` 0.80) is nearer the accent than
+/// the 0.15 s one (0.70) in an unreduced control, so the test fails if Reduce motion is ignored.
 #[test]
-fn reduced_motion_makes_the_export_accent_full_within_3_steps() {
-    let d = tempfile::tempdir().unwrap();
-    let mut h = reviewing_dt(d.path(), &[("alphaprop_thresh", json!(128))], 0.05);
-    h.state_mut().settings.reduce_motion = true;
-    let text = h.state().review_button_text();
-    let accent = h.ctx.global_style().visuals.selection.bg_fill;
-    tick_once(&mut h);
-    h.step();
-    h.step();
-    assert_eq!(fill_at(&h, h.get_by_label(&text).rect()), accent);
+fn reduced_motion_brings_the_export_accent_sooner_than_the_control() {
+    let one_step_in = |reduce: bool| {
+        let d = tempfile::tempdir().unwrap();
+        let mut h = reviewing_dt(d.path(), &[("alphaprop_thresh", json!(128))], 0.05);
+        h.state_mut().settings.reduce_motion = reduce;
+        let text = h.state().review_button_text();
+        tick_once(&mut h);
+        let accent = h.ctx.global_style().visuals.selection.bg_fill;
+        (fill_at(&h, h.get_by_label(&text).rect()), accent)
+    };
+    let ((reduced, accent), (control, _)) = (one_step_in(true), one_step_in(false));
+    let dist = |c: egui::Color32| {
+        c.r().abs_diff(accent.r()) as u32
+            + c.g().abs_diff(accent.g()) as u32
+            + c.b().abs_diff(accent.b()) as u32
+    };
+    assert!(dist(reduced) < dist(control), "{reduced:?} vs {control:?}");
 }
 
 /// Guard, green from the start (K11): the button is live on the frame the gate passes; only paint animates.
