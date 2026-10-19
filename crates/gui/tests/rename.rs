@@ -110,6 +110,7 @@ fn the_recipe_runs_find_regex_prefix_suffix_and_case_on_the_base_only() {
         prefix: "p_".into(),
         suffix: "_s".into(),
         case: Case::Upper,
+        path: false,
     };
     let p = plan(&m);
     assert_eq!(row(&p, LEAF).new, "landscape/P_EAFL_S.png");
@@ -483,4 +484,41 @@ fn a_case_only_rename_is_stored_as_an_alias() {
     assert!(m.apply_rename());
     idle(&mut m);
     assert_eq!(m.project.as_ref().unwrap().read_as(LEAF), None);
+}
+
+/// Owner 2026-10-19: Whole path runs the recipe over the folders and the base name; the map suffix and the
+/// extension stay. Off, Find never sees the folders.
+#[test]
+fn whole_path_renames_folders_in_bulk() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    m.run_menu(MenuAction::RenameInputs);
+    dialog(&mut m).recipe.find = "landscape/".into();
+    dialog(&mut m).recipe.replace = "stone/".into();
+    let p = plan(&m);
+    assert_eq!(
+        p.matched().0,
+        0,
+        "base name only: the folder is not searched"
+    );
+    assert_eq!(row(&p, ROCK).new, ROCK);
+    dialog(&mut m).recipe.path = true;
+    let p = plan(&m);
+    assert_eq!(p.matched(), (2, 2));
+    assert_eq!(row(&p, ROCK).new, "stone/rock01.png");
+    assert_eq!(row(&p, LEAF).new, "stone/leaf.png");
+    assert!(p.can_apply());
+    let r = dialog(&mut m);
+    r.recipe.find.clear();
+    r.recipe.replace.clear();
+    r.recipe.prefix = "src/".into();
+    r.recipe.suffix = "_old".into();
+    let p = plan(&m);
+    assert_eq!(
+        row(&p, ROCK).new,
+        "src/landscape/rock01_old.png",
+        "prefix before the folders, suffix before the extension"
+    );
 }

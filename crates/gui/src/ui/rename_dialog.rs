@@ -29,7 +29,8 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, mut d: RenameDialog) {
         });
         ui.label(
             egui::RichText::new(match d.mode {
-                RenameMode::Inputs => "Only the base name changes (the part before _n, _normal…). Type in New to set a whole path.",
+                RenameMode::Inputs if d.recipe.path => "The folders and the base name change; the map suffix (_n, _normal…) and the extension stay.",
+                RenameMode::Inputs => "Only the base name changes (the part before _n, _normal…). Tick Whole path to change the folders too.",
                 RenameMode::Outputs => "A TruePBR set on Community Shaders renames through its PGPatcher rename.",
             })
             .small()
@@ -51,6 +52,11 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, mut d: RenameDialog) {
                 ui.end_row();
                 ui.checkbox(&mut d.recipe.regex, "Regex")
                     .on_hover_text("$1 or ${name} in Replace for a capture group");
+                if d.mode == RenameMode::Inputs {
+                    ui.checkbox(&mut d.recipe.path, "Whole path").on_hover_text(
+                        "Find, Replace, Prefix and Suffix work on the folders and the base name",
+                    );
+                }
                 egui::ComboBox::from_id_salt("rename-case")
                     .selected_text(case_label(d.recipe.case))
                     .show_ui(ui, |ui| {
@@ -76,9 +82,9 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, mut d: RenameDialog) {
             .show(ui, |ui| {
                 egui::Grid::new("rename-rows")
                     .striped(true)
-                    .num_columns(6)
+                    .num_columns(5)
                     .show(ui, |ui| {
-                        for h in ["", "Old", "New", "Kind", "Output", ""] {
+                        for h in ["", "Old", "Kind", "Output", ""] {
                             ui.label(egui::RichText::new(h).strong());
                         }
                         ui.end_row();
@@ -105,22 +111,6 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, mut d: RenameDialog) {
                                 }
                             };
                             ui.label(text(&r.old));
-                            let mut typed = d
-                                .typed
-                                .get(&r.key)
-                                .cloned()
-                                .unwrap_or_else(|| r.new.clone());
-                            let edit = ui.add_enabled(
-                                r.skipped.is_none(),
-                                egui::TextEdit::singleline(&mut typed).desired_width(220.0),
-                            );
-                            if edit.changed() {
-                                if typed.trim().is_empty() {
-                                    d.typed.remove(&r.key);
-                                } else {
-                                    d.typed.insert(r.key.clone(), typed);
-                                }
-                            }
                             ui.label(text(&r.kind.as_ref().map_or(String::new(), |(a, b)| {
                                 if a == b {
                                     a.clone()

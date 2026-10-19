@@ -1905,3 +1905,8 @@ Spec: `.superpowers/ui-review-motion/00-summary.md` (with 01-03 beside it). Plan
   - `set_editor_ui.rs`: `a_slot_that_gets_a_texture_flashes_and_a_set_switch_does_not`, `undoing_a_drop_does_not_flash_the_emptied_slot_and_redo_does`, `a_slot_changed_while_the_editor_was_hidden_does_not_flash`, `a_pressed_slot_thumbnail_scales_to_097`.
   - `ui_smoke.rs`: `opening_a_folder_fades_the_columns_in_and_a_restored_one_does_not`, `reduce_motion_shortens_the_folder_fade_in`.
   - `advanced.rs`: `the_reduce_motion_box_saves_and_reaches_the_ui`. `settings.rs`: `reduce_motion_round_trips_in_gui_toml`. `src/ui/motion.rs`: `reduced_motion_drops_movement_and_caps_fades`. `support/mod.rs`: `many_sets` (fixture).
+
+## Note CG — Rename dialog: Whole path, no New column (owner, 2026-10-19)
+- **CG1 Whole path (Inputs).** `Recipe::path`: *Find*, *Replace*, *Prefix* and *Suffix* run over `<folders>/<base name>`, not the base name alone. The map suffix (`_n`, `_albedo`…) and the extension stay, so the kind a file reads as only changes if the recipe writes a suffix into the name. Prefix goes before the folders; Suffix before the map suffix. Outputs mode has no toggle (an output base name has no folders). Owner: bulk path edits ("i need to bulk edit paths").
+- **CG2 No New column.** The table is Old, Kind, Output: *New* repeated *Output* and was clipped too narrow to read (owner, 2026-10-19). Per-row typing is gone from the dialog: a single row is renamed by unticking the others. `RenameDialog::typed` stays in the model, because the set editor's input-name box (Note AO) uses it.
+- **CG3 Tests.** `rename::whole_path_renames_folders_in_bulk`, `dialog_keys::the_rename_dialog_has_no_new_column_and_a_whole_path_toggle`.

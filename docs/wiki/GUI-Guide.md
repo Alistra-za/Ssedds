@@ -155,7 +155,7 @@ Right-click a texture or a set, or press **F2**, for the rename dialog. It has t
 | **Inputs** | Reads files under corrected names, for a source saved with the wrong name. Writes `[inputs."<file>"] as = "<new path>"` to `sdc.toml`. The file on disk is never renamed, and `sdc convert` reads the same alias. The tile shows "read as <name>". |
 | **Outputs** | Gives a set's outputs a new base name. Each output keeps its folder and suffix (`steel.dds`, `steel_n.dds`, `steel_rmaos.dds`). On a TruePBR set this writes the set's PGPatcher Rename; on other sets it is saved in `sdc-project.toml`. |
 
-The dialog changes only the base name (the part before `_n`, `_normal` and so on). Tools: *Find* and *Replace* (tick *Regex* for a pattern, `$1` for a group), *Prefix*, *Suffix* and *Case*. Type in a row's *New* cell to set it by hand, or untick a row to leave it out.
+The dialog changes only the base name (the part before `_n`, `_normal` and so on). Tools: *Find* and *Replace* (tick *Regex* for a pattern, `$1` for a group), *Prefix*, *Suffix* and *Case*. In Inputs mode, tick *Whole path* to run them over the folders too, which moves many files to another folder in one go. The map suffix and the extension still stay. Untick a row to leave it out.
 
 Apply is greyed out while any row is red: two names collide, a name Windows cannot use, a changed extension, or an output name ending in a map suffix. Amber rows are warnings: a file whose name now reads as another kind of map, or an output that scanned meshes still use under its old name.
 
