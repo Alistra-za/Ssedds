@@ -869,3 +869,90 @@ fn the_footer_order_is_plain_then_destructive_then_the_default() {
         vec![1, 3, 0, 2]
     );
 }
+
+/// I1: the modal `area` over 8 frames: its height settles by frame 4, and every node whose label contains one of
+/// `parts` lies on screen.
+fn assert_dialog_settles_on_screen<S>(h: &mut Harness<'static, S>, area: &str, parts: &[&str]) {
+    let id = egui::Id::new(area);
+    let mut heights = vec![];
+    for _ in 0..8 {
+        h.step();
+        let r = h
+            .ctx
+            .memory(|m| m.area_rect(id))
+            .expect("the dialog is open");
+        heights.push(r.height());
+    }
+    assert!(
+        heights[3..].iter().all(|x| (x - heights[3]).abs() < 0.5),
+        "{area}: the height settles: {heights:?}"
+    );
+    let screen = h.ctx.content_rect();
+    for part in parts {
+        let rects: Vec<egui::Rect> = h
+            .query_all_by_label_contains(part)
+            .map(|n| n.rect())
+            .collect();
+        assert!(!rects.is_empty(), "{area}: no {part:?}");
+        for r in rects {
+            assert!(
+                screen.contains_rect(r),
+                "{area}: {part:?} at {r:?} is off {screen:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_long_json_name_keeps_the_overwrite_dialog_on_screen() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let name = format!("{}.json", "n".repeat(195));
+    assert_eq!(name.chars().count(), 200);
+    m.dialog = Some(Dialog::OverwriteJson(d.path().join(&name)));
+    let mut h = harness(m);
+    assert_dialog_settles_on_screen(
+        &mut h,
+        "overwrite-json",
+        &[
+            "The PGPatcher JSON was edited",
+            "was edited outside Tessalith",
+            "Overwrite n",
+            "Keep the edited",
+        ],
+    );
+    // The body keeps the whole name; the buttons carry a shortened one.
+    h.get_by_label_contains(&format!("{name} was edited outside"));
+    let short = sdc_gui::ui::dialogs::short_name(&name);
+    assert_eq!(short, format!("{}…{}.json", "n".repeat(20), "n".repeat(11)));
+    h.get_by_label(&format!("Keep the edited {short}"));
+    h.get_by_label(&format!("Overwrite {short}"));
+}
+
+#[test]
+fn a_long_texture_name_keeps_the_replace_dialog_on_screen() {
+    use sdc_gui::model::sets::DropChoice;
+    use sdc_gui::ui::sets_column::Pending;
+    use sdc_gui::ui::State;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+            (opened(d.path()), State::default()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    let existing = format!("textures/{}.png", "t".repeat(111));
+    h.state_mut().1.drops.pending = Some(Pending::Replace {
+        item: "landscape/leaf.png".into(),
+        set: "s".into(),
+        existing: existing.clone(),
+        choice: DropChoice::Move,
+    });
+    assert_dialog_settles_on_screen(
+        &mut h,
+        "set-drop",
+        &["Replace?", "already has", "Replace t", "Cancel"],
+    );
+    h.get_by_label_contains(&format!("s already has {existing} in"));
+}

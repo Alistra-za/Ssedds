@@ -1074,7 +1074,7 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
             // K1: Enter does nothing here, so Cancel is Plain and nothing is filled.
             let footer = vec![
                 (
-                    format!("Replace {name}"),
+                    format!("Replace {}", super::dialogs::short_name(&name)),
                     Role::Destructive,
                     ModalAnswer::Replace,
                 ),

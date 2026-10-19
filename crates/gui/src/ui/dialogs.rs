@@ -112,7 +112,10 @@ pub fn dialog(
         ui.separator();
         let roles: Vec<Role> = buttons.iter().map(|b| b.1).collect();
         // K5: right-to-left, so the buttons go in reversed; a long row wraps instead of widening the dialog.
-        ui.with_layout(
+        // I1: rows start one button tall, as `horizontal_wrapped` seeds them. `with_layout` seeded them with last
+        // frame's leftover height, and a wrapped footer then doubled the modal's height every frame.
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
             egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
             |ui| {
                 for i in footer_order(&roles).into_iter().rev() {
@@ -131,6 +134,18 @@ pub fn dialog(
         );
     });
     (keys, clicked)
+}
+
+/// `name` cut in the middle for a button label: its first 20 and last 16 characters around `…` when it is longer
+/// than 40. The body line above the buttons carries the whole name (I1).
+pub fn short_name(name: &str) -> String {
+    let n = name.chars().count();
+    if n <= 40 {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(20).collect();
+    let tail: String = name.chars().skip(n - 16).collect();
+    format!("{head}…{tail}")
 }
 
 /// The weak line under a body that names the files an unsaved-changes question is about.
@@ -389,9 +404,10 @@ fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::P
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let short = short_name(&name);
     let (overwrite, keep) = (
-        format!("Overwrite {name}"),
-        format!("Keep the edited {name}"),
+        format!("Overwrite {short}"),
+        format!("Keep the edited {short}"),
     );
     let buttons = [
         (overwrite.as_str(), Role::Destructive, true),
