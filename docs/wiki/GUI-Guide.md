@@ -8,26 +8,26 @@ The window has two views, picked in the header: the Textures view (converter and
 
 | Control | What it does |
 |---|---|
-| **Open folder…** | Pick a source folder. You can also drag a folder onto the window; a dropped file opens the folder that holds it. |
-| **Recent** | The last ten folders. |
+| **Open** | A menu: **Open folder…** (pick a source folder), then your recent folders (the last ten), or a greyed "No recent folders". You can also drag a folder onto the window; a dropped file opens the folder that holds it. |
+| **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
 | **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Framed together with **MO2…**. |
 | **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. |
-| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. |
-| **Presets…** | The preset creator (see [Presets](#presets)). |
-| **Textures view** / **Meshes view** | Switch views. Tabs in the middle of the bottom row; the selected one is filled. |
-| **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. At the far left of the bottom row. |
-| **Export** | Convert the folder. The big button at the right edge, as tall as both rows. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the Files tab). |
-| **Messages** (Ctrl+M) | Opens the Messages tab of the bottom panel: the last 500 notices, newest first; the button counts the ones you have not seen. Ctrl+M again collapses the panel. |
-| **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
-| **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Under **Messages**, left of Export. |
-| **Export folder: …** | Where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. By default `sdc-out` inside the opened folder (or the export folder older versions saved for every project). At the right end of the top row. |
-| **PG JSON Editor** | Open the TruePBR JSON editor window (cs mode, with a folder open). The JSON's file name is its top field. At the right end of the bottom row. |
+| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. Its last entry, **Presets…**, opens the preset creator (see [Presets](#presets)). |
+| **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
+| **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. Right after the view tabs, Textures view with a folder open only. |
+| **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. By default `sdc-out` inside the opened folder (or the export folder older versions saved for every project). A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor window; the JSON's file name is its top field). |
+| **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Left of Export. |
+| **Export** | Convert the folder. The big button at the right edge. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the Files tab). |
 
 The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). The **MO2…** header button opens the scan source popup: the MO2 instance with **Choose…**, its profiles, **Scan a folder…** and **Scan** / **Cancel**; the button's hover text names the instance and profile. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
 
+The header is one row from about 1340 points of window width; in a narrower window **Export to**, **Save** and **Export** wrap onto a second line instead of overlapping. The Meshes view draws the same header. **Messages** is not a header button: it is the first tab of the bottom panel (its label counts the notices you have not seen; **Ctrl+M** opens it, and again collapses the panel).
+
+**Start screen.** With no folder open the window shows one large **Open folder** button under "Open a folder of source textures to begin.", the **Recent** folders as links, and "Or drag a folder onto the window." The columns appear when a folder is open.
+
 When you open a folder, the GUI reads it recursively, analyses every image and plans the conversion. Nothing is written to your textures. If `sdc.toml` cannot be parsed or the engine rejects it (an unknown field, an unknown `allow` code, an unknown sub-type; most out-of-range values are reported per file as `CFG-INVALID` instead), the folder is planned without it, the banner shows the error, and the GUI stays read-only until you fix the file and press **Reload**.
 
-While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" with a bar and **Cancel**, which re-opens the folder you had before. Thumbnails appear when the whole plan lands. File and folder dialogs do not freeze the window; only one is open at a time. **Ctrl+K** opens a command palette and **F1** the shortcut sheet (see [Keyboard shortcuts](#keyboard-shortcuts)). Toasts report routine results; anything that needs a decision stays a dialog. The window size and position, column widths, view, Textures filters and 3D view settings come back at the next start.
+While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" with a bar and **Cancel**, which re-opens the folder you had before. Thumbnails appear when the whole plan lands. File and folder dialogs do not freeze the window; only one is open at a time. **Ctrl+K** opens a command palette and **F1** the shortcut sheet (see [Keyboard shortcuts](#keyboard-shortcuts)). Toasts report routine results; anything that needs a decision stays a dialog. The window size and position, column widths, view, Textures and Sets filters (not the search text) and 3D view settings come back at the next start.
 
 ## The three columns
 
@@ -35,7 +35,7 @@ From left to right: Textures, Sets, then the centre. The right edge holds the Ad
 
 ### Textures (left)
 
-One tile per file, with a thumbnail, the name and badges. Filters: the toggles *Needs decision*, *Has warnings*, *Failed* and *Not in a set*; combos for *Sub-type*, *Output format*, *Encoder* and *Set membership*; and a search box. They combine, and **Clear filters** resets them. *Sort* orders by Name, Source size or Status, and a slider sets the tile size. A raw map that feeds a packed output shows "Packed into …". The **◀** on the heading collapses the column to a strip; **▶** expands it.
+One tile per file, with a thumbnail, the name and badges. Under the search box is a row of pills with counts: *Needs decision*, *Has warnings*, *Failed* and *Not in a set*. **Filter ▾** opens a popup with combos for *Sub-type*, *Output format*, *Encoder*, *Set membership* and *Sort* (Name, Source size or Status); it reads **Filter (k) ▾** while k of the four filter combos are set. The **−** / **+** buttons after it make the tiles smaller or larger (64 to 192 points, steps of 16). Everything combines, and **Clear filters** resets the pills, the combos and the search (not the sort or the tile size). A raw map that feeds a packed output shows "Packed into …". The **◀** on the heading collapses the column to a strip; **▶** expands it.
 
 ### Centre
 
@@ -118,10 +118,10 @@ In the Textures or Sets column:
 |---|---|
 | Ctrl+click | Add or remove one entry. |
 | Shift+click | Select the range from the last clicked entry, in the order shown. |
-| Ctrl+A | Select everything shown. |
+| Ctrl+A | Select everything shown (in the Sets column, the visible sets only). With nothing shown it does nothing and keeps the selection. |
 | Esc | Clear the selection. |
 
-Textures and sets are never selected together. The column heading counts the selection, for example "12 selected (4 hidden by filter)". Textures hidden by the search or a filter stay selected and are edited too.
+Textures and sets are never selected together. The column heading counts the selection, for example "12 selected (4 hidden by filter)". Textures and sets hidden by the search or a filter stay selected and are edited too (sets: "2 selected (1 hidden by filter)").
 
 ### Editing them together
 
@@ -207,7 +207,8 @@ If an export is blocked, Review's *Blockers* column lists what to fix; **Go to s
 - **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up** and **Move down**. **Delete set** asks first, naming the set and its member count. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Fill from names…** (set menu) lists files in the set's folder named like its diffuse plus a known suffix, and moves the ticked ones in as one undo step.
 - Dropping a file from Explorer on a slot row fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
-- Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON"; a PBR Landscape set says which JSON it writes ("PBR Landscape → CS + PGPatcher JSON", "→ CS JSON", "→ PGPatcher JSON (no CS records yet)" or "PBR Landscape (no JSON yet)").
+- Each set is a card: its name, a status pill with a dot (red blocks export, amber not ready, green ready) and what the set is ("vanilla", "PBR → JSON", "PBR Landscape", "skin"), the **shader** combo across the full width, and one lettered slot chip per slot (D, N, RMAOS, P and so on). A filled chip is the thumbnail and drags, selects and opens its slot menu; an empty one is a dim box; amber-outlined means borrowed from another set; a red **?** is a file no match was found for. "⚠ n" opens the set's problems. Hover the pill for the long text: a missing file, a blocking problem, and which JSON a set writes ("PBR Landscape → CS + PGPatcher JSON", "→ CS JSON", "→ PGPatcher JSON (no CS records yet)" or "PBR Landscape (no JSON yet)").
+- The Sets column has its own filter: a *Search sets* box, the pills *Needs attention*, *Ready* and *No JSON* with counts, and **Filter ▾** for a shader. A filter only hides: the open set and a multi-selection stay selected and the editor stays open. With nothing matching, the column says "No sets match the filter" and offers **Clear filter**. Reordering is off while a filter is on, and a set you create while a filter is on stays hidden until you clear it. The pills and the shader are remembered; the search text is not.
 
 Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot pins and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
 
@@ -277,7 +278,7 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 
 ### The TruePBR JSON editor
 
-Open it with **PG JSON Editor** in the header or from the **TruePBR JSON editor…** button in a set's Material tab. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
+Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu or from the **TruePBR JSON editor…** button in a set's Material tab. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
 
 - Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set in the main window), then its keys as small pills with the same controls as the Material tab's groups.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
@@ -340,7 +341,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 
 ## Presets
 
-**Presets…** in the header (or *Open the preset creator* in the command palette) opens the preset creator, a window you can move and resize; where it was is remembered in `gui.toml`. It edits your own presets, the files in `%APPDATA%\sdc\presets\` that the command line also loads.
+**Presets…** (the last entry of the Preset combo in the header) (or *Open the preset creator* in the command palette) opens the preset creator, a window you can move and resize; where it was is remembered in `gui.toml`. It edits your own presets, the files in `%APPDATA%\sdc\presets\` that the command line also loads.
 
 - **The top bar.** Pick a preset. The built-in ones are read-only: **Duplicate** makes an editable copy (named `<id>-copy`, without the original's suffix aliases), and **New** starts an empty preset on the current target's quality preset. **Name** is the preset's id and file name (lower-case letters, digits and `-`); **Base** is the preset it builds on; **Target** is cs, vanilla, or "from the base". **Save preset**, **Revert**, **Reset preset** (drops every per-sub-type and suffix-branch change, so the base shows through) and **Delete…** (your presets only, after a confirmation). The line beside them says whether the preset loads, or why not, in the engine's own words. **TOML preview** shows exactly what Save writes. Picking another preset, New or Duplicate while you have unsaved changes asks first. Preset files in the folder that did not load are listed at the top of the window with the reason, and **Open folder** opens the folder.
 - **The sub-types.** One row per sub-type, in two families: **PBR / Community Shaders** (the sub-types only the cs target has: PBR, coat, Advanced skin, flow, HDR sky; and complex grass), then **Vanilla** (everything vanilla also has, including glow, envmask and complex_material). Complex grass is under PBR / Community Shaders: both targets have it, but it is a Community Shaders feature. Inside a family the rows are grouped Colour, Normal, Data and Special, where it has them. A row's title shows its format; open it for:

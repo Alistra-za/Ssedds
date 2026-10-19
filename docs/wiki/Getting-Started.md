@@ -160,14 +160,14 @@ Copy the contents of the output folder (everything except `_sdc`) into your mod,
 
 The GUI runs the same engine and reads and writes the same `sdc.toml`, so you can switch between the two at any point.
 
-1. Start `tessalith.exe`. Choose **Open folder…** and pick `C:\Work\IronPlate`, or drag the folder onto the window. The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written yet.
+1. Start `tessalith.exe`. The start screen has one large **Open folder** button (and your recent folders below it). Click it and pick `C:\Work\IronPlate`, or drag the folder onto the window. The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written yet.
 2. Check **Mode** in the header. It should read `cs`. Changing it writes `target` to `sdc.toml`.
-3. The Textures column on the left shows a tile per file. The three raw maps show "Packed into ..." because they feed the `_rmaos`. A tile with an amber border needs a decision. Use the **Needs decision** filter to see only those.
+3. The Textures column on the left shows a tile per file. The three raw maps show "Packed into ..." because they feed the `_rmaos`. A tile with an amber border needs a decision. Click the **Needs decision** pill above the tiles to see only those (**Filter ▾** has the other filters and the sort).
 4. Click a tile. The centre column shows its settings in groups (Type, Colour, Alpha, Mipmaps, Compression), and each value says where it came from. A sub-type the GUI accepted reads **(auto)**; hover it to see why.
 5. For an amber tile, answer the question shown in the centre column: the sub-type buttons, the alpha buttons (*Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*), *DirectX* or *OpenGL* for a normal map's green channel, or **Acknowledge for this texture** for a blocking warning. Each answer is written to `sdc.toml` as a `[files]` entry.
-6. Click the `ironplate` set in the Sets column on the right. The set editor shows a card for each slot (Diffuse, Normal, RMAOS and so on) and the set's **Shader**, which should read `pbr` (auto). On the RMAOS card you can set fills for missing channels; for this example set Specular to 128 to match the `sdc.toml` from Part 1.
+6. Click the `ironplate` set in the Sets column on the right. Its card shows the set's status, its shader and a lettered chip per slot. The set editor shows a row for each slot (Diffuse, Normal, RMAOS and so on) and the set's **Shader**, which should read `pbr` (auto). On the RMAOS card you can set fills for missing channels; for this example set Specular to 128 to match the `sdc.toml` from Part 1.
 7. Fill in the TruePBR settings for the set (Material, Features and the rest) if you want values other than the defaults. Leave **Matching** on the diffuse path.
-8. Set the **Export folder** in the header. By default it is `sdc-out` inside the opened folder. Each project remembers its own export folder. Set the **JSON:** name; by default it is the folder name.
+8. Check **Export to** in the header (its menu has **Choose export folder…**). By default it is `sdc-out` inside the opened folder. Each project remembers its own export folder. Set the **JSON:** name; by default it is the folder name.
 9. Press **Export**. The GUI saves `sdc.toml` and `sdc-project.toml` first, then converts. If something is blocked, undecided or worth a second look, the Review tab opens at the bottom first; fix or tick what it lists and press its Export. Then the Files tab shows each file, and the Problems tab lists the warnings.
 10. When the export finishes, the GUI writes `<export folder>\PBRNIFPatcher\<name>.json` for every PBR set that exported fully.
 
