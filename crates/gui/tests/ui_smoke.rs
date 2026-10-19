@@ -675,14 +675,14 @@ fn closing_during_an_export_asks_and_keep_running_leaves_it_alone() {
     let mut h = harness(model);
     h.run();
     h.get_by_label_contains("An export is running");
-    h.get_by_label("Cancel export and continue");
-    press(&mut h, "Keep running");
+    h.get_by_label("Stop the export and close");
+    press(&mut h, "Keep exporting");
     assert!(h.state().dialog.is_none());
     assert!(!h.state().export.running.as_ref().unwrap().is_cancelled());
     // Asking again and cancelling sets the token.
     assert!(!h.state_mut().request_close());
     h.run();
-    press(&mut h, "Cancel export and continue");
+    press(&mut h, "Stop the export and close");
     assert!(h.state().export.running.as_ref().unwrap().is_cancelled());
     settle(&mut h);
     assert!(h.state_mut().take_close_ready());

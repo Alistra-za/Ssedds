@@ -112,6 +112,16 @@ fn unsaved_edits_ask_before_new_and_esc_keeps_them() {
     h.get_by_label("New").click();
     h.run();
     h.get_by_label("Discard unsaved changes to edited?");
+    // A7 / R18: the discard question has no Enter default; Enter keeps it open and the edits.
+    h.run();
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    h.get_by_label("Discard unsaved changes to edited?");
+    assert_eq!(
+        h.state_mut().presets_model().id(),
+        "edited",
+        "Enter kept the edits"
+    );
     h.key_press(eframe::egui::Key::Escape);
     h.run();
     h.run();

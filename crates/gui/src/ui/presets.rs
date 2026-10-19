@@ -941,18 +941,27 @@ fn discard_prompt(ctx: &egui::Context, model: &mut AppModel, acts: &mut Vec<Act>
     } else {
         id
     };
-    let (mut discard, mut cancel) = (false, false);
-    let keys = super::dialogs::modal_keys(ctx, "presets-discard", true, |ui| {
-        ui.label(format!("Discard unsaved changes to {name}?"));
-        ui.horizontal(|ui| {
-            discard = ui.button("Discard").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
-    if discard {
+    use super::dialogs::Role;
+    // Enter does nothing here (AM15), so no button is the Default.
+    let buttons = [
+        ("Cancel", Role::Plain, true),
+        ("Discard", Role::Destructive, true),
+    ];
+    let (keys, clicked) = super::dialogs::dialog(
+        ctx,
+        "presets-discard",
+        true,
+        420.0,
+        "Discard changes?",
+        &buttons,
+        |ui| {
+            ui.label(format!("Discard unsaved changes to {name}?"));
+        },
+    );
+    if clicked == Some(1) {
         acts.push(Act::Discard(Box::new(pending)));
     }
-    if discard || cancel || keys.cancel {
+    if clicked.is_some() || keys.cancel {
         ctx.data_mut(|d| d.remove::<Act>(discard_id()));
     }
 }

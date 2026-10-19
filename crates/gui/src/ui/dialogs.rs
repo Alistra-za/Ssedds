@@ -64,6 +64,80 @@ pub fn opened_before(ctx: &egui::Context, id: &str) -> bool {
     was_open
 }
 
+/// A footer button's part in a dialog (layout v2 A7, R18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Plain,
+    /// Outlined in red: it drops, overwrites, stops or deletes something.
+    Destructive,
+    /// The one button Enter presses, filled with the accent. A dialog whose Enter does nothing has none.
+    Default,
+}
+
+/// A7 / R18: left-to-right footer order: Plain buttons as given, then Destructive ones, then the one Default.
+pub fn footer_order(roles: &[Role]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..roles.len()).collect();
+    order.sort_by_key(|&i| match roles[i] {
+        Role::Plain => 0,
+        Role::Destructive => 1,
+        Role::Default => 2,
+    });
+    order
+}
+
+/// The one dialog frame (A7): title strip (heading + separator), body, separator, right-aligned footer, at most
+/// `width` px wide. The Default is filled with `visuals.selection.bg_fill`; a Destructive one has a 1.5 px `RED`
+/// outline. `buttons` are (label, role, enabled); a disabled one is drawn disabled and never clicked. Built on
+/// [`modal_keys`]: returns its Keys and the index into `buttons` that was clicked. The caller maps Enter to its
+/// Default (the button Enter pressed before A7; Enter semantics are unchanged, DECISIONS AG11).
+pub fn dialog(
+    ctx: &egui::Context,
+    id: &str,
+    outside: bool,
+    width: f32,
+    title: &str,
+    buttons: &[(&str, Role, bool)],
+    body: impl FnOnce(&mut egui::Ui),
+) -> (Keys, Option<usize>) {
+    debug_assert!(
+        buttons.iter().filter(|b| b.1 == Role::Default).count() <= 1,
+        "a dialog has at most one Enter default"
+    );
+    let mut clicked = None;
+    let keys = modal_keys(ctx, id, outside, |ui| {
+        ui.set_max_width(width);
+        ui.heading(title);
+        ui.separator();
+        body(ui);
+        ui.separator();
+        let roles: Vec<Role> = buttons.iter().map(|b| b.1).collect();
+        // K5: right-to-left, so the buttons go in reversed; a long row wraps instead of widening the dialog.
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+            |ui| {
+                for i in footer_order(&roles).into_iter().rev() {
+                    let (label, role, enabled) = buttons[i];
+                    let b = egui::Button::new(label);
+                    let b = match role {
+                        Role::Plain => b,
+                        Role::Destructive => b.stroke(egui::Stroke::new(1.5, super::status::RED)),
+                        Role::Default => b.fill(ui.visuals().selection.bg_fill),
+                    };
+                    if ui.add_enabled(enabled, b).clicked() {
+                        clicked = Some(i);
+                    }
+                }
+            },
+        );
+    });
+    (keys, clicked)
+}
+
+/// The weak line under a body that names the files an unsaved-changes question is about.
+fn files_hint(ui: &mut egui::Ui) {
+    ui.weak("sdc.toml, sdc-project.toml");
+}
+
 /// F3a D4: the copy checklist, every field ticked to start. The ticks live in the dialog itself.
 fn copy_settings(
     ctx: &egui::Context,
@@ -72,15 +146,15 @@ fn copy_settings(
     to: &[String],
     mut fields: Vec<(String, bool)>,
 ) {
-    let (mut apply, mut close) = (false, false);
     let name = model
         .item(from)
         .map_or(from.to_string(), |i| i.name.clone());
-    let k = modal_keys(ctx, "copy-settings", false, |ui| {
-        ui.heading(format!(
-            "Copy settings from {name} to {} selected",
-            to.len()
-        ));
+    let title = format!("Copy settings from {name} to {} selected", to.len());
+    // Apply's enabled state is read before the body: a Check none shows on the next frame.
+    let any = fields.iter().any(|f| f.1);
+    // R18: Enter does nothing here, so neither button is the Default.
+    let buttons = [("Cancel", Role::Plain, true), ("Apply", Role::Plain, any)];
+    let (k, clicked) = dialog(ctx, "copy-settings", false, 420.0, &title, &buttons, |ui| {
         ui.horizontal(|ui| {
             if ui.button("Check all").clicked() {
                 fields.iter_mut().for_each(|f| f.1 = true);
@@ -103,15 +177,9 @@ fn copy_settings(
                 format!("{}: {value}", crate::model::bulk::field_label(f)),
             );
         }
-        ui.horizontal(|ui| {
-            apply = ui
-                .add_enabled(fields.iter().any(|f| f.1), egui::Button::new("Apply"))
-                .clicked();
-            close = ui.button("Cancel").clicked();
-        });
     });
-    close |= k.cancel;
-    if apply {
+    let close = clicked == Some(0) || k.cancel;
+    if clicked == Some(1) {
         let ticked: Vec<String> = fields.iter().filter(|f| f.1).map(|f| f.0.clone()).collect();
         model.apply_copy_settings(from, to, &ticked);
     } else if close {
@@ -123,46 +191,57 @@ fn copy_settings(
 
 /// F3a D4: Reset all asks first; it names how many textures lose their settings.
 fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
-    let (mut reset, mut close) = (false, false);
-    let k = modal_keys(ctx, "confirm-reset-all", true, |ui| {
-        ui.heading(format!("Reset all settings of {} textures?", keys.len()));
-        ui.label(
+    let title = format!("Reset all settings of {} textures?", keys.len());
+    let buttons = [
+        ("Reset", Role::Destructive, true),
+        ("Cancel", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "confirm-reset-all",
+        true,
+        420.0,
+        &title,
+        &buttons,
+        |ui| {
+            ui.label(
             "Their entries in sdc.toml are removed; acknowledged warnings are kept. Settings in \
              sdc-project.toml are not touched. Undo brings everything back.",
         );
-        ui.horizontal(|ui| {
-            reset = ui.button("Reset").clicked();
-            close = ui.button("Cancel").clicked();
-        });
-    });
-    close |= k.cancel || k.enter;
-    if reset {
+        },
+    );
+    if clicked == Some(0) {
         model.reset_all_settings(keys);
-    } else if close {
+    } else if clicked == Some(1) || k.cancel || k.enter {
         model.dialog = None;
     }
 }
 
 fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
-    let (mut save, mut discard, mut cancel) = (false, false, false);
-    let k = modal_keys(ctx, "close-unsaved", true, |ui| {
-        ui.heading("Unsaved changes");
-        ui.label("sdc.toml or sdc-project.toml has changes that are not saved.");
-        ui.horizontal(|ui| {
-            save = ui.button("Save").clicked();
-            discard = ui.button("Discard").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
-    save |= k.enter;
-    cancel |= k.cancel;
-    if save {
+    let buttons = [
+        ("Cancel", Role::Plain, true),
+        ("Discard", Role::Destructive, true),
+        ("Save", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "close-unsaved",
+        true,
+        420.0,
+        "Unsaved changes",
+        &buttons,
+        |ui| {
+            ui.label("Your edits are not saved.");
+            files_hint(ui);
+        },
+    );
+    if clicked == Some(2) || k.enter {
         model.dialog = None;
         // A failed save raises its own dialog (changed on disk, or an error) and the window stays open.
         if model.save().is_ok() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-    } else if discard {
+    } else if clicked == Some(1) {
         model.dialog = None;
         // Dropping the edits makes the close request pass `request_close`.
         if let Some(p) = model.project.as_mut() {
@@ -174,128 +253,159 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         model.history.clear();
         model.refresh_banner();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-    } else if cancel {
+    } else if clicked == Some(0) || k.cancel {
         model.dialog = None;
     }
 }
 
 /// Trace-debug #10: Enter and Esc cancel; only the button drops the edits.
 fn reload_unsaved(ctx: &egui::Context, model: &mut AppModel) {
-    let (mut reload, mut cancel) = (false, false);
-    let k = modal_keys(ctx, "reload-unsaved", true, |ui| {
-        ui.heading("Unsaved changes");
-        ui.label("Reload drops the unsaved changes to sdc.toml and sdc-project.toml, and Undo.");
-        ui.horizontal(|ui| {
-            reload = ui.button("Discard and reload").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
-    if reload {
+    let buttons = [
+        ("Discard and reload", Role::Destructive, true),
+        ("Cancel", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "reload-unsaved",
+        true,
+        420.0,
+        "Unsaved changes",
+        &buttons,
+        |ui| {
+            ui.label("Reload drops your unsaved edits and Undo.");
+            files_hint(ui);
+        },
+    );
+    if clicked == Some(0) {
         model.reload_documents();
-    } else if cancel || k.cancel || k.enter {
+    } else if clicked == Some(1) || k.cancel || k.enter {
         model.dialog = None;
     }
 }
 
 fn external_change(ctx: &egui::Context, model: &mut AppModel, which: DocKind) {
-    let (mut reload, mut overwrite, mut cancel) = (false, false, false);
-    let k = modal_keys(ctx, "external-change", true, |ui| {
-        ui.heading(format!("{} changed on disk", which.file()));
-        ui.label("Another program changed the file after it was opened.");
-        ui.horizontal(|ui| {
-            reload = ui.button("Reload").clicked();
-            overwrite = ui.button("Overwrite").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
+    let title = format!("{} changed on disk", which.file());
+    let buttons = [
+        ("Reload from disk", Role::Plain, true),
+        ("Overwrite with my changes", Role::Destructive, true),
+        ("Cancel", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "external-change",
+        true,
+        420.0,
+        &title,
+        &buttons,
+        |ui| {
+            ui.label("Another program changed the file after it was opened.");
+        },
+    );
     // Enter keeps the edits in memory and the file on disk as they are; it is never Overwrite (AG11).
-    cancel |= k.cancel || k.enter;
-    if reload {
-        model.resolve_external_change(which, false);
-    } else if overwrite {
-        model.resolve_external_change(which, true);
-    } else if cancel {
-        model.dialog = None;
+    match clicked {
+        Some(0) => model.resolve_external_change(which, false),
+        Some(1) => model.resolve_external_change(which, true),
+        _ if clicked.is_some() || k.cancel || k.enter => model.dialog = None,
+        _ => {}
     }
 }
 
 fn error(ctx: &egui::Context, model: &mut AppModel, msg: &str) {
-    let mut ok = false;
-    let k = modal_keys(ctx, "error", true, |ui| {
-        ui.heading("Error");
-        ui.label(msg);
-        ok = ui.button("OK").clicked();
-    });
-    if ok || k.cancel || k.enter {
+    let (k, clicked) = dialog(
+        ctx,
+        "error",
+        true,
+        420.0,
+        "Error",
+        &[("OK", Role::Default, true)],
+        |ui| {
+            ui.label(msg);
+        },
+    );
+    if clicked.is_some() || k.cancel || k.enter {
         model.dialog = None;
     }
 }
 
 fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::PathBuf) {
-    let (mut save, mut discard, mut cancel) = (false, false, false);
-    let k = modal_keys(ctx, "open-unsaved", true, |ui| {
-        ui.heading("Unsaved changes");
-        ui.label(
-            "sdc.toml or sdc-project.toml has changes that are not saved. Opening another folder would lose them.",
-        );
-        ui.horizontal(|ui| {
-            save = ui.button("Save").clicked();
-            discard = ui.button("Discard").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
-    save |= k.enter;
-    cancel |= k.cancel;
-    if save {
+    let buttons = [
+        ("Cancel", Role::Plain, true),
+        ("Discard", Role::Destructive, true),
+        ("Save", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "open-unsaved",
+        true,
+        420.0,
+        "Unsaved changes",
+        &buttons,
+        |ui| {
+            ui.label("Your edits are not saved. Opening another folder would lose them.");
+            files_hint(ui);
+        },
+    );
+    if clicked == Some(2) || k.enter {
         model.resolve_open_unsaved(root, true);
-    } else if discard {
+    } else if clicked == Some(1) {
         model.resolve_open_unsaved(root, false);
-    } else if cancel {
+    } else if clicked == Some(0) || k.cancel {
         model.dialog = None;
     }
 }
 
 fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport) {
-    let (mut cancel_export, mut keep) = (false, false);
-    let k = modal_keys(ctx, "export-running", true, |ui| {
-        ui.heading("An export is running");
-        ui.label(match &action {
-            AfterExport::Close => "Cancel it and close?",
-            AfterExport::Open(_) => "Cancel it and open the other folder?",
-        });
-        ui.horizontal(|ui| {
-            cancel_export = ui.button("Cancel export and continue").clicked();
-            keep = ui.button("Keep running").clicked();
-        });
-    });
-    keep |= k.cancel || k.enter;
-    if cancel_export {
+    let (question, stop) = match &action {
+        AfterExport::Close => ("Stop it and close?", "Stop the export and close"),
+        AfterExport::Open(_) => (
+            "Stop it and open the other folder?",
+            "Stop the export and open the folder",
+        ),
+    };
+    let buttons = [
+        (stop, Role::Destructive, true),
+        ("Keep exporting", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "export-running",
+        true,
+        420.0,
+        "An export is running",
+        &buttons,
+        |ui| {
+            ui.label(question);
+        },
+    );
+    if clicked == Some(0) {
         model.resolve_export_running(action, true);
-    } else if keep {
+    } else if clicked == Some(1) || k.cancel || k.enter {
         model.resolve_export_running(action, false);
     }
 }
 
 fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::Path) {
-    let (mut overwrite, mut keep) = (false, false);
-    let k = modal_keys(ctx, "overwrite-json", true, |ui| {
-        ui.heading("The PGPatcher JSON was edited");
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (overwrite, keep) = (
+        format!("Overwrite {name}"),
+        format!("Keep the edited {name}"),
+    );
+    let buttons = [
+        (overwrite.as_str(), Role::Destructive, true),
+        (keep.as_str(), Role::Default, true),
+    ];
+    let title = "The PGPatcher JSON was edited";
+    let (k, clicked) = dialog(ctx, "overwrite-json", true, 420.0, title, &buttons, |ui| {
         ui.label(format!(
             "{name} was edited outside Tessalith since the last export."
         ));
-        ui.horizontal(|ui| {
-            overwrite = ui.button("Overwrite edited JSON").clicked();
-            keep = ui.button("Keep it").clicked();
-        });
     });
-    keep |= k.cancel || k.enter;
-    if overwrite {
+    if clicked == Some(0) {
         model.resolve_overwrite_json(true);
-    } else if keep {
+    } else if clicked == Some(1) || k.cancel || k.enter {
         model.resolve_overwrite_json(false);
     }
 }

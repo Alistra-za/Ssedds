@@ -528,3 +528,344 @@ fn enter_with_review_open_never_exports() {
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
     assert!(h.state().export.summary.is_none() && h.state().export.running.is_none());
 }
+
+// ---- layout v2 A7 (R18): one dialog frame, the Enter default drawn filled, clearer buttons
+
+/// Every rectangle painted in the last frame.
+fn painted_rects(h: &Harness<'static, AppModel>) -> Vec<egui::epaint::RectShape> {
+    fn walk(s: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
+        match s {
+            egui::Shape::Rect(r) => out.push(r.clone()),
+            egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
+/// The dialog's button `label`: the lowest match on screen (the header has a Save of its own).
+fn dialog_button(h: &Harness<'static, AppModel>, label: &str) -> egui::Rect {
+    h.query_all_by_label(label)
+        .map(|n| n.rect())
+        .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
+        .unwrap_or_else(|| panic!("no {label} button"))
+}
+
+#[test]
+fn the_enter_default_is_rightmost_and_filled() {
+    use sdc_gui::ui::status::RED;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    m.dialog = Some(Dialog::CloseUnsaved);
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    let (save, discard, cancel) = (
+        dialog_button(&h, "Save"),
+        dialog_button(&h, "Discard"),
+        dialog_button(&h, "Cancel"),
+    );
+    assert!(
+        save.center().x > discard.center().x && discard.center().x > cancel.center().x,
+        "the footer reads Cancel, Discard, Save: {cancel:?} {discard:?} {save:?}"
+    );
+    let rects = painted_rects(&h);
+    let fill = h.ctx.style_of(h.ctx.theme()).visuals.selection.bg_fill;
+    let red = egui::Stroke::new(1.5, RED);
+    let filled = |b: egui::Rect| {
+        rects
+            .iter()
+            .any(|r| r.fill == fill && r.rect.contains(b.center()))
+    };
+    let outlined = |b: egui::Rect| {
+        rects
+            .iter()
+            .any(|r| r.stroke == red && r.rect.contains(b.center()))
+    };
+    assert!(
+        filled(save),
+        "Save, the Enter default, is filled with the accent"
+    );
+    assert!(outlined(discard), "Discard has the red destructive outline");
+    assert!(
+        !filled(discard) && !filled(cancel),
+        "only the default is filled"
+    );
+    assert!(
+        !outlined(save) && !outlined(cancel),
+        "only the destructive one is outlined"
+    );
+}
+
+/// Two quiet frames, then Enter and one more frame.
+fn press_enter<S>(h: &mut Harness<'static, S>) {
+    h.run();
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+}
+
+fn docs_text(root: &std::path::Path) -> String {
+    ["sdc.toml", "sdc-project.toml"]
+        .iter()
+        .map(|f| std::fs::read_to_string(root.join(f)).unwrap_or_default())
+        .collect()
+}
+
+/// R18 / AG11: the Enter default is drawn, never changed. Each row is a dialog and what its Enter did before A7.
+/// presets-discard's row is in presets_window.rs (its harness), set-rename's and fill-names' keys are pinned in
+/// set_editor_ui.rs and fill_from_names.rs, the rename dialog's below.
+#[test]
+fn every_dialogs_enter_still_presses_what_it_pressed() {
+    use sdc_gui::model::AfterExport;
+    // CloseUnsaved: Enter saves.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    m.dialog = Some(Dialog::CloseUnsaved);
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(
+        h.state().dialog.is_none() && !h.state().is_dirty(),
+        "CloseUnsaved: Enter saved"
+    );
+    // OpenUnsaved: Enter saves, then opens the other folder.
+    let d = tempfile::tempdir().unwrap();
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = mod_folder(other_dir.path());
+    let mut m = with_a_step(d.path());
+    let root = m.root.clone().unwrap();
+    let before = docs_text(&root);
+    m.dialog = Some(Dialog::OpenUnsaved(other.clone()));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "OpenUnsaved: closed");
+    assert_ne!(
+        docs_text(&root),
+        before,
+        "OpenUnsaved: Enter saved the edits"
+    );
+    assert_eq!(
+        h.state().root.as_deref(),
+        Some(other.as_path()),
+        "OpenUnsaved: and opened the other folder"
+    );
+    // ReloadUnsaved: Enter cancels.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    m.dialog = Some(Dialog::ReloadUnsaved);
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(
+        h.state().dialog.is_none() && h.state().is_dirty(),
+        "ReloadUnsaved: Enter cancelled"
+    );
+    // ExternalChange: Enter cancels, never Reload or Overwrite.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    let root = m.root.clone().unwrap();
+    let before = docs_text(&root);
+    m.dialog = Some(Dialog::ExternalChange(DocKind::Project));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "ExternalChange: closed");
+    assert!(
+        h.state().is_dirty() && h.state().can_undo(),
+        "ExternalChange: the edits are kept"
+    );
+    assert_eq!(docs_text(&root), before, "ExternalChange: nothing written");
+    // ExportRunning: Enter keeps exporting.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    export_through(&mut m);
+    assert!(!m.request_close());
+    assert_eq!(m.dialog, Some(Dialog::ExportRunning(AfterExport::Close)));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "ExportRunning: closed");
+    assert!(
+        !h.state().export.running.as_ref().unwrap().is_cancelled(),
+        "ExportRunning: Enter kept exporting"
+    );
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
+    // OverwriteJson: Enter keeps the edited JSON.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    export_through(&mut m);
+    assert!(m.wait_idle(std::time::Duration::from_secs(120)));
+    let p = pgp_json_path(&m);
+    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    export_through(&mut m);
+    assert!(m.wait_idle(std::time::Duration::from_secs(120)));
+    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "OverwriteJson: closed");
+    assert!(
+        std::fs::read_to_string(&p).unwrap().contains("edited"),
+        "OverwriteJson: Enter kept the edited file"
+    );
+    // Error: Enter is OK.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.dialog = Some(Dialog::Error("boom".into()));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "Error: Enter closed it");
+    // ConfirmResetAll: Enter cancels.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    let steps = m.history.undo.len();
+    m.dialog = Some(Dialog::ConfirmResetAll(vec!["landscape/rock01".into()]));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "ConfirmResetAll: closed");
+    assert_eq!(
+        h.state().history.undo.len(),
+        steps,
+        "ConfirmResetAll: nothing reset"
+    );
+    // CopySettings: Enter does nothing, even with Apply enabled.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let copy = Dialog::CopySettings {
+        from: "landscape/rock01".into(),
+        to: vec!["landscape/leaf.png".into()],
+        fields: vec![("resize".into(), true)],
+    };
+    m.dialog = Some(copy.clone());
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert_eq!(
+        h.state().dialog,
+        Some(copy),
+        "CopySettings: Enter did nothing"
+    );
+}
+
+/// The sets column's dialogs and Slot commands, which live in `ui::State`.
+#[test]
+fn the_set_dialogs_enter_still_presses_what_it_pressed() {
+    use sdc_gui::model::sets::DropChoice;
+    use sdc_gui::ui::sets_column::Pending;
+    use sdc_gui::ui::State;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+            (opened(d.path()), State::default()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    let steps = h.state().0.history.undo.len();
+    // Enter does nothing on a Replace (K1) or a Choice; Esc cancels both.
+    for p in [
+        Pending::Replace {
+            item: "landscape/leaf.png".into(),
+            set: "s".into(),
+            existing: "landscape/rock01".into(),
+            choice: DropChoice::Move,
+        },
+        Pending::Choice {
+            item: "landscape/leaf.png".into(),
+            set: "s".into(),
+            from: "t".into(),
+        },
+    ] {
+        h.state_mut().1.drops.pending = Some(p.clone());
+        press_enter(&mut h);
+        assert_eq!(
+            h.state().1.drops.pending,
+            Some(p.clone()),
+            "Enter did nothing: {p:?}"
+        );
+        h.key_press(Key::Escape);
+        h.run();
+        assert_eq!(h.state().1.drops.pending, None, "Esc cancels: {p:?}");
+    }
+    // ConfirmDelete: Enter cancels.
+    h.state_mut().1.drops.pending = Some(Pending::ConfirmDelete {
+        id: "s".into(),
+        members: 1,
+    });
+    press_enter(&mut h);
+    assert_eq!(h.state().1.drops.pending, None, "ConfirmDelete: closed");
+    assert_eq!(
+        h.state().0.history.undo.len(),
+        steps,
+        "ConfirmDelete: nothing deleted"
+    );
+    // Slot commands: Enter does nothing; Esc closes it (A2).
+    h.state_mut().1.slot_cmds.open = Some("s".into());
+    press_enter(&mut h);
+    assert_eq!(
+        h.state().1.slot_cmds.open.as_deref(),
+        Some("s"),
+        "Slot commands: Enter did nothing"
+    );
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(
+        h.state().1.slot_cmds.open,
+        None,
+        "Slot commands: Esc closed it"
+    );
+}
+
+/// K4: the rename dialog takes the shared keys. Enter right after typing in Find (the field gives its focus up on
+/// that Enter) applies.
+#[test]
+fn enter_right_after_typing_in_find_applies_the_rename() {
+    use egui::accesskit::Role;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item("landscape/leaf.png", false, false);
+    m.last_recipe.replace = "twig".into();
+    let mut h = harness(m);
+    h.run();
+    h.state_mut()
+        .open_rename(sdc_gui::model::rename::RenameMode::Inputs);
+    h.run();
+    h.run();
+    // The Find field: the first text box right of the "Find" label, on its row.
+    let label = h.get_by_label("Find").rect();
+    let find = h
+        .query_all_by_role(Role::TextInput)
+        .map(|n| n.rect())
+        .filter(|r| (r.center().y - label.center().y).abs() < 6.0 && r.min.x > label.max.x)
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the Find field");
+    h.query_all_by_role(Role::TextInput)
+        .find(|n| n.rect() == find)
+        .unwrap()
+        .focus();
+    h.run();
+    h.query_all_by_role(Role::TextInput)
+        .find(|n| n.rect() == find)
+        .unwrap()
+        .type_text("leaf");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().dialog.is_none(), "Enter applied");
+    assert_eq!(
+        h.state().read_as_of("landscape/leaf.png").as_deref(),
+        Some("landscape/twig.png")
+    );
+}
+
+#[test]
+fn the_footer_order_is_plain_then_destructive_then_the_default() {
+    use sdc_gui::ui::dialogs::{footer_order, Role::*};
+    assert_eq!(footer_order(&[Default, Plain, Destructive]), vec![1, 2, 0]);
+    assert_eq!(footer_order(&[Destructive, Default]), vec![0, 1]);
+    assert_eq!(footer_order(&[Plain, Plain]), vec![0, 1]);
+    assert_eq!(
+        footer_order(&[Destructive, Plain, Default, Plain]),
+        vec![1, 3, 0, 2]
+    );
+}
