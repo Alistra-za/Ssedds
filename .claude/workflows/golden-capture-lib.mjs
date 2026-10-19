@@ -283,7 +283,7 @@ export function groupSteps(g, origin) {
   // The free camera does not hide the player, so move the player out of view first (P0 probe was mostly the body).
   if (g.player) S.push({ ...papyrus('SetPosition', { form: '0x14' }, vadd(origin, g.player)), note: `player out of view, rel ${JSON.stringify(g.player)}` })
   // Run e718aa1a: a guard (AI off from tai) stood over the A1 coffin. Session only: the game is never saved.
-  S.push({ tool: 'inspect', body: { kind: 'refs', formType: 'Actor', radius: 3000, limit: 200 }, note: 'NPCs out of frame: console exec "<formId>.disable" with the entry reference formId (never its "base" id: a base id fails with "Script command not found", run 6732949d) for every listed actor that is not the player (0x14) and not placed by this run, within 2000 units of any subject position or the camera; record them in notes. They stay disabled for the session (never saved; no kill, no moveto)' })
+  S.push({ tool: 'inspect', body: { kind: 'refs', formType: 'Actor', radius: 3000, limit: 200 }, note: 'NPCs out of frame: papyrus call ObjectReference.Disable [false] with self {form: <the entry reference formId, never its "base" id>}, then IsDisabled; if it stays false the actor has an enable parent: GetEnableParent and Disable that marker instead, then check IsDisabled on the actor again (run 60b10eb5: Whiterun guards, parents 0x00037049/0x0007877E). Console "<id>.disable" does not work through DevBench ("Script command not found"). Do this for every listed actor that is not the player (0x14) and not placed by this run, within 2000 units of any subject position or the camera; record them in notes. They stay disabled for the session (never saved; no kill, no moveto)' })
   g.forms.forEach((f, i) => {
     const ref = { form: `$ref${i}` }
     S.push({ ...papyrus('PlaceAtMe', { form: '0x14' }, [{ form: `0x${f.form}` }, 1, false, false]), save: `ref${i}`, note: `place ${f.form}${f.light_anchor ? ' (Light Placer anchor)' : ''}` })
@@ -309,7 +309,8 @@ export function groupSteps(g, origin) {
   // Cell lights that would fill a big subject's light slots (run b40e2215 A6: the stairs :0/:6 reached 9-11 cell lights
   // and got no placed LIGH). Session only; enabled again at the end of the group.
   const dis = g.disable_refs || []
-  for (const id of dis) S.push({ tool: 'console', body: { action: 'exec', command: `${id}.disable` }, note: 'cell light source off for this group only (never saved)' })
+  // Run 60b10eb5: DevBench console exec does not parse "<id>.disable" (Script command not found); the Papyrus member call works.
+  for (const id of dis) S.push({ ...papyrus('Disable', { form: `0x${id}` }, [false]), note: 'cell light source off for this group only (never saved); IsDisabled must then return true, else record it (enable parent?)' })
   if (lights.length) S.push({ tool: 'inspect', body: { kind: 'lights', scope: 'scene' }, note: `record: every placed light listed (owner, position); each subject has one within ~100 units${dis.length ? '; none of the disabled owners is listed' : ''}` })
   const cam = g.camera
   S.push({ tool: 'camera', body: { action: 'freecam', on: true } })
@@ -329,7 +330,7 @@ export function groupSteps(g, origin) {
   })
   g.forms.forEach((f, i) => { S.push(papyrus('Disable', { form: `$ref${i}` }, [false])); S.push(papyrus('Delete', { form: `$ref${i}` }, [])) })
   lights.forEach((p, k) => { S.push(papyrus('Disable', { form: `$light${k}` }, [false])); S.push(papyrus('Delete', { form: `$light${k}` }, [])) })
-  for (const id of dis) S.push({ tool: 'console', body: { action: 'exec', command: `${id}.enable` }, note: 'cell light source back on' })
+  for (const id of dis) S.push({ ...papyrus('Enable', { form: `0x${id}` }, [false]), note: 'cell light source back on' })
   if (g.forms.length || lights.length) S.push({ wait_s: 2, note: 'deferred Delete: let it finish before the next group places (run 58f625f1 A3: a reused ref id was deleted)' })
   S.push({ tool: 'camera', body: { action: 'freecam', on: false } })
   return S

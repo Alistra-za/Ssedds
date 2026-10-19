@@ -231,8 +231,9 @@ const lib = (cmd, env = {}) => {
   assert.ok(s[iPos + 1].wait_s && /tumbles/.test(s[iPos + 1].note), 'position re-checked after keyframing')
   // NPC sweep before placing; cell lights off for the group and back on after.
   const iNpc = at(x => x.body && x.body.formType === 'Actor')
-  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /reference formId \(never its "base" id/.test(s[iNpc].note), 'NPCs listed for disabling (by reference id, not base id) before placement')
-  const iOff = at(x => x.body && x.body.command === '0008287F.disable'), iOn = at(x => x.body && x.body.command === '0008287F.enable')
+  assert.ok(iNpc > 0 && iNpc < at(fn('PlaceAtMe')) && /Disable \[false\] with self \{form: <the entry reference formId, never its "base" id>\}[\s\S]*GetEnableParent/.test(s[iNpc].note), 'NPCs listed for disabling (by reference id, not base id) before placement')
+  const self = (fn) => x => x.tool === 'papyrus' && x.body.function === fn && x.body.self.form === '0x0008287F'
+  const iOff = at(self('Disable')), iOn = at(self('Enable'))
   assert.ok(iOff > 0 && iOff < at(x => x.body && x.body.action === 'drive') && iOn > at(x => x.tool === 'communityshaders.capture'), 'disable before the camera, enable after the captures')
   // Nothing changes the scene before the capture is on disk; consecutive captures stay back to back.
   const caps = s.map((x, i) => [x, i]).filter(([x]) => x.tool === 'communityshaders.capture').map(([, i]) => i)
