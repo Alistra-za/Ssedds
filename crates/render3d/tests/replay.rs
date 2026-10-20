@@ -516,6 +516,30 @@ fn load_fixture_rejects_bad_depth() {
         e.contains("extras.json") && e.contains("stencil test not replayable"),
         "{e}"
     );
+    // depthEnable false overrides func/write only after both are valid.
+    let e = fails(&|p| {
+        edit_json(p, "extras.json", &|v| {
+            v["depthStencil"]["depthEnable"] = json!(false);
+            v["depthStencil"]["depthFunc"] = json!("Bogus");
+        })
+    });
+    assert!(e.contains("extras.json") && e.contains("Bogus"), "{e}");
+    let e = fails(&|p| {
+        edit_json(p, "extras.json", &|v| {
+            v["depthStencil"]["depthEnable"] = json!(false);
+            v["depthStencil"]
+                .as_object_mut()
+                .unwrap()
+                .remove("depthWrite");
+        })
+    });
+    assert!(e.contains("extras.json") && e.contains("depthWrite"), "{e}");
+    // Only NotFound means "no depth": any other read error names depth.json.
+    let e = fails(&|p| {
+        fs::remove_file(p.join("depth.json")).unwrap();
+        fs::create_dir(p.join("depth.json")).unwrap();
+    });
+    assert!(e.contains("depth.json"), "{e}");
 }
 
 /// [`write_fixture_deferred`] plus the subject-level composite.json in the golden layout (D4): the stand-in composite

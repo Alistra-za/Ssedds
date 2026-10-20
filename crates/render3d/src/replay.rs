@@ -88,10 +88,13 @@ pub struct ReplayDepth {
 /// depth.json of `dir` and extras.json depthStencil, None when there is no depth.json.
 fn load_depth(dir: &Path, crop: [u32; 4], extras: &Value) -> Result<Option<ReplayDepth>, String> {
     let dp = dir.join("depth.json");
-    if !dp.exists() {
-        return Ok(None);
-    }
-    let d = json(&dp)?;
+    // Only NotFound means "no captured depth"; any other error must not fall back to LessEqual silently.
+    let s = match std::fs::read_to_string(&dp) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        r => r.map_err(|e| format!("{}: {e}", dp.display()))?,
+    };
+    let d: Value = serde_json::from_str(&nonfinite_to_null(&s))
+        .map_err(|e| format!("{}: {e}", dp.display()))?;
     let derr = |m: &str| format!("{}: {m}", dp.display());
     let format = d.get("format").and_then(Value::as_str).unwrap_or("");
     if !matches!(format, "R24G8_TYPELESS" | "D24_UNORM_S8_UINT") {
@@ -136,13 +139,8 @@ fn load_depth(dir: &Path, crop: [u32; 4], extras: &Value) -> Result<Option<Repla
     if flag("stencilEnable")? {
         return Err(eerr("stencilEnable: stencil test not replayable"));
     }
-    if !flag("depthEnable")? {
-        return Ok(Some(ReplayDepth {
-            d24s8,
-            func: 8,
-            write: false,
-        }));
-    }
+    let enable = flag("depthEnable")?;
+    let write = flag("depthWrite")?;
     let f = ds.get("depthFunc").and_then(Value::as_str).unwrap_or("");
     // D3D11_COMPARISON_FUNC values; RenderDoc names Never/Always AlwaysFalse/AlwaysTrue.
     let func = match f {
@@ -156,10 +154,15 @@ fn load_depth(dir: &Path, crop: [u32; 4], extras: &Value) -> Result<Option<Repla
         "AlwaysTrue" | "Always" => 8,
         _ => return Err(eerr(&format!("depthFunc {f:?} unknown"))),
     };
-    Ok(Some(ReplayDepth {
-        d24s8,
-        func,
-        write: flag("depthWrite")?,
+    // Validated first, then a disabled depth test passes everything and writes nothing.
+    Ok(Some(if enable {
+        ReplayDepth { d24s8, func, write }
+    } else {
+        ReplayDepth {
+            d24s8,
+            func: 8,
+            write: false,
+        }
     }))
 }
 
