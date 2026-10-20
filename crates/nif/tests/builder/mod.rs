@@ -7,6 +7,12 @@ pub struct Nif {
     types: Vec<String>,
     blocks: Vec<(u16, Vec<u8>)>,
     pub strings: Vec<String>,
+    /// Footer root refs.
+    pub roots: Vec<i32>,
+    /// OR-ed into block i's stored type index (e.g. 0x8000).
+    pub type_flags: Vec<u16>,
+    /// Overrides the computed Max String Length.
+    pub max_string_len: Option<u32>,
 }
 
 impl Nif {
@@ -18,6 +24,15 @@ impl Nif {
             types: vec![],
             blocks: vec![],
             strings: vec![],
+            roots: vec![0],
+            type_flags: vec![],
+            max_string_len: None,
+        }
+    }
+    /// Registers a block type without adding a block.
+    pub fn add_type(&mut self, kind: &str) {
+        if !self.types.iter().any(|x| x == kind) {
+            self.types.push(kind.into());
         }
     }
     pub fn string(&mut self, s: &str) -> i32 {
@@ -54,14 +69,16 @@ impl Nif {
             b.extend((t.len() as u32).to_le_bytes());
             b.extend(t.as_bytes());
         }
-        for (t, _) in &self.blocks {
-            b.extend(t.to_le_bytes());
+        for (i, (t, _)) in self.blocks.iter().enumerate() {
+            let f = self.type_flags.get(i).copied().unwrap_or(0);
+            b.extend((t | f).to_le_bytes());
         }
         for (_, body) in &self.blocks {
             b.extend((body.len() as u32).to_le_bytes());
         }
         b.extend((self.strings.len() as u32).to_le_bytes());
-        b.extend((self.strings.iter().map(|s| s.len()).max().unwrap_or(0) as u32).to_le_bytes());
+        let computed = self.strings.iter().map(|s| s.len()).max().unwrap_or(0) as u32;
+        b.extend(self.max_string_len.unwrap_or(computed).to_le_bytes());
         for s in &self.strings {
             b.extend((s.len() as u32).to_le_bytes());
             b.extend(s.as_bytes());
@@ -70,8 +87,10 @@ impl Nif {
         for (_, body) in &self.blocks {
             b.extend(body);
         }
-        b.extend(1u32.to_le_bytes()); // one root
-        b.extend(0i32.to_le_bytes());
+        b.extend((self.roots.len() as u32).to_le_bytes());
+        for r in &self.roots {
+            b.extend(r.to_le_bytes());
+        }
         b
     }
 }
