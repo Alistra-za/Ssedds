@@ -1876,16 +1876,24 @@ pub fn check_profile(
         );
     }
     // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).
-    let (ow, oh) = crate::resize::target_dims((a.width, a.height), p.resize);
+    let (rw, rh) = crate::resize::target_dims((a.width, a.height), p.resize);
+    // Note CI23: `drop_top_mip` writes mip 1 as the base, so the DIM checks read that size (the mips' halving rule).
+    let dropped = p.drop_top_mip && crate::mips::level_count(rw, rh, &p.mips.levels) > 1;
+    let (ow, oh) = if dropped {
+        ((rw / 2).max(1), (rh / 2).max(1))
+    } else {
+        (rw, rh)
+    };
     let mode = serde_json::to_value(p.resize).unwrap_or_default();
-    let resized = ((ow, oh) != (a.width, a.height)).then(|| {
+    let resized = ((rw, rh) != (a.width, a.height)).then(|| {
         Warning::new(
             DimResized,
             format!(
-                "{}x{} resized to {ow}x{oh} (resize = {})",
+                "{}x{} resized to {ow}x{oh} (resize = {}{})",
                 a.width,
                 a.height,
-                mode.as_str().unwrap_or("?")
+                mode.as_str().unwrap_or("?"),
+                if dropped { ", drop_top_mip" } else { "" }
             ),
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
@@ -2210,7 +2218,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
             subtype_prov = Provenance::Fallback;
         }
     }
-    let (profile, mut provenance, dropped_filter) =
+    let (mut profile, mut provenance, dropped_filter) =
         match layered_profile_with(ctx, f, subtype, false) {
             Ok(v) => v,
             Err(e) => {
@@ -2238,6 +2246,16 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                 };
             }
         };
+    // Note CI23: on a single-level chain `drop_top_mip` does nothing, so it is cleared: it stays out of the hash and
+    // never re-encodes identical bytes.
+    if profile.drop_top_mip {
+        let (w, h) =
+            crate::resize::target_dims((f.analysis.width, f.analysis.height), profile.resize);
+        if crate::mips::level_count(w, h, &profile.mips.levels) <= 1 {
+            profile.drop_top_mip = false;
+            provenance.remove("drop_top_mip");
+        }
+    }
     // The category follows the sub-type.
     provenance.insert("subtype".into(), subtype_prov.clone());
     provenance.insert("category".into(), subtype_prov);

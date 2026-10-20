@@ -194,6 +194,11 @@ pub fn steep_share(img: &Rgba32F, channel: usize) -> f64 {
 /// Check 3 (fake resolution): a detail ratio below this flags the texture (DECISIONS Note CI20).
 pub const LOW_DETAIL_RATIO: f64 = 0.25;
 
+/// Whether a detail ratio flags the texture: strictly below [`LOW_DETAIL_RATIO`].
+pub fn is_low_detail(ratio: f64) -> bool {
+    ratio < LOW_DETAIL_RATIO
+}
+
 /// Mean squared difference over finite RGB samples between `hi` and `lo` sampled nearest at `hi`'s size.
 fn up_error(hi: &Rgba32F, lo: &Rgba32F) -> f64 {
     let (mut sum, mut n) = (0.0f64, 0u64);
@@ -502,6 +507,30 @@ mod tests {
         let mut odd = Rgba32F::new(1001, 9, [0.0, 0.0, 0.0, 1.0]);
         odd.px = noise(1001, 3).px[..1001 * 9].to_vec();
         assert!(detail_ratio(&chain(odd, 3)).is_some());
+    }
+
+    /// Above the threshold: a bilinear upscale with a little native noise on top, a soft texture with some detail of
+    /// its own. Pins that the threshold is not raised past it.
+    #[test]
+    fn a_soft_texture_with_some_native_detail_is_not_flagged() {
+        let up = up2(&noise(128, 2), true);
+        let fine = noise(256, 7);
+        let mut mix = up.clone();
+        for (m, f) in mix.px.iter_mut().zip(&fine.px) {
+            for c in 0..3 {
+                m[c] = 0.85 * m[c] + 0.15 * f[c];
+            }
+        }
+        let r = detail_ratio(&chain(mix, 3)).unwrap();
+        assert!((LOW_DETAIL_RATIO..0.6).contains(&r), "{r}");
+    }
+
+    /// The comparison is strict: exactly the threshold is not low detail.
+    #[test]
+    fn low_detail_is_strictly_below_the_threshold() {
+        assert!(!is_low_detail(LOW_DETAIL_RATIO));
+        assert!(is_low_detail(LOW_DETAIL_RATIO - 1e-9));
+        assert!(!is_low_detail(LOW_DETAIL_RATIO + 1e-9));
     }
 
     #[test]

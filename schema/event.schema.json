@@ -1093,7 +1093,7 @@
           "$ref": "#/$defs/ColorSpec"
         },
         "drop_top_mip": {
-          "description": "Write the chain from mip 1: half size, every lower level unchanged (v2 artist checks, check 3's half-size\nchoice). Not serialised at its default, so existing profile hashes hold.",
+          "description": "Write the texture at half size, from its mip 1; every lower level is unchanged.",
           "type": "boolean"
         },
         "encoder": {

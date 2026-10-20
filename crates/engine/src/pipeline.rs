@@ -228,7 +228,11 @@ fn prepare_then<T>(
         }
     };
     enter(Stage::Load);
-    check_stamps(job)?;
+    // Note CI20 (review M10): a measure-only job writes nothing and its content was matched by hash in `run`, so a
+    // touched-but-identical source is not failed for its stamp.
+    if keep != Keep::Measure {
+        check_stamps(job)?;
+    }
     let extra = after_stamps()?;
     // Spec §6.2–6.3 (DECISIONS R4): a roughness member decodes its `_n` first and keeps only the footprint lengths,
     // so the two images are never held together.
@@ -468,8 +472,9 @@ pub fn process_file(
     // Only a ratio below the threshold acts; its warning names the base size.
     let flagged = |prep: &Prepared| {
         prep.detail_ratio
-            .filter(|r| *r < crate::checks::LOW_DETAIL_RATIO)
+            .filter(|r| crate::checks::is_low_detail(*r))
             .map(|r| {
+                // dims[0] is the source size only because an eligible job has resize none and no dropped mip.
                 let (w, h) = prep.dims[0];
                 crate::codes::Warning::new(
                     crate::codes::Code::ChkLowDetail,

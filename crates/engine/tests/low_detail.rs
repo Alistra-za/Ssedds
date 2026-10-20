@@ -314,3 +314,178 @@ fn drop_top_mip_on_an_n_leaves_its_rmaos_bake_unchanged() {
         std::fs::read(d.path().join("b/pbr/iron_rmaos.dds")).unwrap()
     );
 }
+
+fn plan_of(r: BatchRequest) -> Plan {
+    let rep = Reporter::new(Arc::new(NullSink), "t");
+    Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap()
+}
+
+fn job_of<'a>(p: &'a Plan, name: &str) -> &'a engine::policy::ResolvedJob {
+    p.jobs
+        .iter()
+        .find(|j| j.input.file_name().is_some_and(|n| n == name))
+        .unwrap_or_else(|| panic!("no job for {name}"))
+}
+
+/// A request over `in/` with only `sets` (no sub-type override).
+fn plain(dir: &Path, out: &str, sets: &[&str]) -> BatchRequest {
+    let mut r = BatchRequest::new(vec![dir.join("in")], dir.join(out), Target::Cs);
+    r.recursive = true;
+    r.accept = AcceptSuggestions::High;
+    r.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+    r
+}
+
+/// Review I1: the DIM checks read the size actually written, after the dropped top level.
+#[test]
+fn the_dim_checks_see_the_size_after_drop_top_mip() {
+    let d = tempfile::tempdir().unwrap();
+    let i = d.path().join("in");
+    std::fs::create_dir_all(&i).unwrap();
+    ImageBuffer::from_fn(256, 4, |x, y| Rgb([x as u8, y as u8 * 60, 90]))
+        .save(i.join("strip.png"))
+        .unwrap();
+    std::fs::write(
+        i.join("sdc.toml"),
+        "[files.\"strip.png\"]\nsubtype = \"diffuse\"\ndrop_top_mip = true\n",
+    )
+    .unwrap();
+    let r = plain(d.path(), "out", &[]);
+    let p = plan_of(r.clone());
+    let j = job_of(&p, "strip.png");
+    let small: Vec<_> = j
+        .warnings
+        .iter()
+        .filter(|w| w.code == Code::DimSmall)
+        .collect();
+    assert_eq!(small.len(), 1, "{:?}", j.warnings);
+    assert_eq!(small[0].severity, engine::codes::Severity::Blocking);
+    run(r);
+    assert!(!d.path().join("out/strip.dds").exists());
+
+    // A 64² `_flow` written at 32².
+    std::fs::remove_file(i.join("strip.png")).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([x as u8 * 4, y as u8 * 4, 0]))
+        .save(i.join("water_flow.png"))
+        .unwrap();
+    std::fs::write(
+        i.join("sdc.toml"),
+        "[files.\"water_flow.png\"]\nsubtype = \"flow\"\ndrop_top_mip = true\n",
+    )
+    .unwrap();
+    let p = plan_of(plain(d.path(), "out", &[]));
+    let j = job_of(&p, "water_flow.png");
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::DimFlowSmall),
+        "{:?}",
+        j.warnings
+    );
+    std::fs::write(
+        i.join("sdc.toml"),
+        "[files.\"water_flow.png\"]\nsubtype = \"flow\"\n",
+    )
+    .unwrap();
+    let p = plan_of(plain(d.path(), "out", &[]));
+    assert!(!job_of(&p, "water_flow.png")
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::DimFlowSmall));
+
+    // `resize = half` plus the field: DIM-RESIZED names the written size.
+    std::fs::remove_file(i.join("water_flow.png")).unwrap();
+    noise(1024, 1).save(i.join("big.png")).unwrap();
+    std::fs::write(
+        i.join("sdc.toml"),
+        "[files.\"big.png\"]\nsubtype = \"diffuse\"\nresize = \"half\"\ndrop_top_mip = true\n",
+    )
+    .unwrap();
+    let r = plain(d.path(), "out2", &["encoder.effort=ultrafast"]);
+    let p = plan_of(r.clone());
+    let w = job_of(&p, "big.png")
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::DimResized)
+        .cloned()
+        .expect("DIM-RESIZED");
+    assert_eq!(w.data["to"], serde_json::json!([256, 256]), "{}", w.message);
+    assert!(w.message.contains("to 256x256"), "{}", w.message);
+    run(r);
+    assert_eq!(dds(&d.path().join("out2/big.dds")).0, 256);
+}
+
+/// Review M2: an explicit `false` hashes as the absent key (still up to date); `true` re-encodes.
+#[test]
+fn an_explicit_false_stays_up_to_date_and_true_re_encodes() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path(), 2);
+    run(req(d.path(), "out", LowDetailMode::Off));
+    let up = d.path().join("out/up.dds");
+    let t0 = mtime(&up);
+    let toml = |v: bool| {
+        std::fs::write(
+            d.path().join("in/sdc.toml"),
+            format!("[files.\"up.png\"]\ndrop_top_mip = {v}\n"),
+        )
+        .unwrap()
+    };
+    toml(false);
+    let (s, _) = run(req(d.path(), "out", LowDetailMode::Off));
+    assert_eq!((s.converted, s.up_to_date), (0, 2));
+    assert_eq!(mtime(&up), t0);
+    toml(true);
+    let (s, _) = run(req(d.path(), "out", LowDetailMode::Off));
+    assert_eq!((s.converted, s.up_to_date), (1, 1));
+    assert_eq!(dds(&up).0, 512);
+}
+
+/// Review M3: on a single-level chain the field does nothing, so it is left out of the profile (and the hash).
+#[test]
+fn drop_top_mip_on_a_single_level_chain_is_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path(), 2);
+    let mut r = req(d.path(), "out", LowDetailMode::Off);
+    r.overrides
+        .push(parse_set("file:**/up.png.mips.levels=none").unwrap());
+    run(r.clone());
+    let up = d.path().join("out/up.dds");
+    let t0 = mtime(&up);
+    r.overrides
+        .push(parse_set("file:**/up.png.drop_top_mip=true").unwrap());
+    assert!(!job_of(&plan_of(r.clone()), "up.png").profile.drop_top_mip);
+    let (s, _) = run(r);
+    assert_eq!((s.converted, s.up_to_date), (0, 2));
+    assert_eq!(mtime(&up), t0);
+    assert_eq!(dds(&up).0, 1024);
+}
+
+/// Review M10: a source re-saved with the same bytes after planning is still measured under Hold (the content was
+/// checked by hash), not failed for a changed stamp.
+#[test]
+fn hold_measures_a_touched_but_identical_source() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path(), 2);
+    run(req(d.path(), "out", LowDetailMode::Off));
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), new_batch_id());
+    let e = Engine::new().unwrap();
+    let plan = e
+        .plan(
+            req(d.path(), "out", LowDetailMode::Hold),
+            &rep,
+            &CancelToken::default(),
+        )
+        .unwrap();
+    let src = d.path().join("in/up.png");
+    let f = std::fs::OpenOptions::new().write(true).open(&src).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+        .unwrap();
+    drop(f);
+    let s = e.run(plan, &rep, &CancelToken::default()).unwrap();
+    let ev = sink.take();
+    assert_eq!(s.failed, 0, "{ev:?}");
+    assert_eq!(skips(&ev, "up.dds")[0].0, SkipKind::LowDetail);
+    assert_eq!(s.exit_code(), 0);
+}
