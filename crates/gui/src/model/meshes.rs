@@ -1303,6 +1303,16 @@ impl MeshesModel {
             .iter()
             .flat_map(|s| s.textures.iter().flatten().cloned())
             .chain(self.tex_users.as_ref().map(|(p, _)| p.clone()))
+            // The edit panel's slots (an edited path is not on the cards).
+            .chain(self.edit.iter().flat_map(|e| {
+                e.model.texsets.values().flat_map(|t| {
+                    t.raw
+                        .slots
+                        .iter()
+                        .map(|s| nif::path::canon_texture(s).norm)
+                        .filter(|p| !p.is_empty())
+                })
+            }))
             .collect();
         v.sort();
         v.dedup();

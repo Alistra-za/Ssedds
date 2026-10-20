@@ -61,8 +61,9 @@ pub struct NifEdit {
     parsed: Arc<ParsedNif>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
-    /// The merge key of the drag whose op is the last one; a push with the same key replaces that op.
-    drag: Option<String>,
+    /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
+    /// replaces those ops.
+    drag: Option<(String, usize)>,
 }
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
@@ -267,22 +268,27 @@ impl NifEdit {
     }
 
     /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
-    /// drag) and a single op replaces the drag's op instead, keeping its original `base`: a drag is one op.
-    pub fn push(&mut self, mut ops: Vec<Op>, merge: Option<String>) {
+    /// drag) with as many ops replaces the drag's ops instead, each keeping its original `base`: a drag is one op
+    /// (or one op per colour channel).
+    pub fn push(&mut self, ops: Vec<Op>, merge: Option<String>) {
         let merging = merge.is_some();
-        let same_drag = merging && merge == self.drag && ops.len() == 1;
-        self.drag = merge.clone();
+        let n = ops.len();
+        let same_drag = merging
+            && self.drag.as_ref().map(|(k, c)| (Some(k), *c)) == Some((merge.as_ref(), n))
+            && self.doc.ops.len() >= n;
+        self.drag = merge.clone().map(|k| (k, n));
         self.history.record(self.doc.to_text(), merge);
-        match (same_drag, self.doc.ops.last_mut()) {
-            (true, Some(last)) => {
-                let mut op = ops.remove(0);
-                keep_base(&mut op, &last.op);
-                last.op = op;
+        if same_drag {
+            let start = self.doc.ops.len() - n;
+            for (d, mut op) in self.doc.ops[start..].iter_mut().zip(ops) {
+                keep_base(&mut op, &d.op);
+                d.op = op;
             }
-            _ => self.doc.ops.extend(ops.into_iter().map(|op| DocOp {
+        } else {
+            self.doc.ops.extend(ops.into_iter().map(|op| DocOp {
                 op,
                 status: OpStatus::Applied,
-            })),
+            }));
         }
         self.reapply();
         if merging {
@@ -522,6 +528,30 @@ impl MeshesModel {
         let before = e.materials();
         e.selection = s;
         self.edit_changed(before);
+    }
+
+    /// Runs `f` on the session (Solo, Keep mine, Take source, Revert) and updates the preview.
+    pub fn edit_with(&mut self, f: impl FnOnce(&mut NifEdit)) {
+        let Some(e) = &mut self.edit else { return };
+        let before = e.materials();
+        f(e);
+        self.edit_changed(before);
+    }
+
+    /// "Check that files exist": on, the slot warnings include missing files; off, they are dropped again.
+    pub fn set_edit_check_exists(&mut self, on: bool) {
+        let Some(e) = &mut self.edit else { return };
+        e.check_exists = on;
+        e.warnings = validate(&e.model, None);
+        self.edit_checks();
+    }
+
+    /// The Browse list: scanned winning texture paths that contain `filter` (at most `limit`).
+    pub fn texture_paths(&self, filter: &str, limit: usize) -> Vec<String> {
+        self.store
+            .as_ref()
+            .and_then(|s| s.texture_paths(filter, limit).ok())
+            .unwrap_or_default()
     }
 
     /// The session's error, and the missing-file check when it is on.

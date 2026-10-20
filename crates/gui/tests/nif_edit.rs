@@ -687,3 +687,411 @@ fn a_failed_reopen_returns_the_view_to_the_mesh() {
     assert!(m.error.is_some());
     assert!(m.v3.is_mesh());
 }
+
+// ---- v2 A17: the edit panel, selection, Shader and Alpha tabs ----
+
+#[path = "../../nif/tests/builder/mod.rs"]
+mod builder;
+use builder::scenes;
+use eframe::egui;
+use egui::accesskit::Role as AkRole;
+use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::Harness;
+use nif::edit::validate::Target;
+
+/// The Meshes view alone, as `meshes_view.rs` draws it.
+fn view(m: MeshesModel) -> Harness<'static, MeshesModel> {
+    let h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// A read-only edit session on `bytes` without a scan (no store, no preview).
+fn direct(bytes: Vec<u8>) -> MeshesModel {
+    let mut m = MeshesModel::empty();
+    m.edit = Some(NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap());
+    m
+}
+
+fn shape_named(e: &NifEdit, name: &str) -> u32 {
+    e.model
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some(name))
+        .unwrap()
+        .block
+}
+
+fn select(m: &mut MeshesModel, name: &str) -> u32 {
+    let b = shape_named(m.edit.as_ref().unwrap(), name);
+    m.select_edit(Selection::Shape(b));
+    b
+}
+
+fn ops(m: &MeshesModel) -> Vec<Op> {
+    m.edit.as_ref().unwrap().doc.ops().to_vec()
+}
+
+#[test]
+fn edit_toggle_opens_the_panel_with_four_tabs() {
+    let (_d, m) = session(false);
+    let mut h = view(m);
+    h.run_steps(4);
+    assert!(h.query_by_label("Controllers").is_none());
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(h.state().edit.is_some(), "Edit opens a session");
+    for l in ["Shader", "Alpha", "Controllers", "Extra data"] {
+        h.get_by_label(l);
+    }
+    h.get_by_label("Source: A");
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(h.state().edit.is_none(), "Edit again closes it");
+    assert!(h.query_by_label("Controllers").is_none());
+}
+
+#[test]
+fn clicking_a_card_selects_the_shape_and_root_card_is_first() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    m.shapes_col = true;
+    let s = m.shapes[0].clone();
+    let card = format!(
+        "{} {} — {}",
+        s.index3d
+            .map_or("#– (not in scene tree)".into(), |i| format!("#{i}")),
+        s.name.as_deref().unwrap_or("(unnamed)"),
+        s.kind
+    );
+    let mut h = view(m);
+    h.run_steps(4);
+    let root = h.get_by_label("Root").rect();
+    let first = h.get_by_label(&card).rect();
+    assert!(root.max.y <= first.min.y, "Root is the first card");
+    h.get_by_label(&card).click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().selection,
+        Selection::Shape(s.block)
+    );
+    h.get_by_label("Root").click();
+    h.run_steps(4);
+    assert_eq!(h.state().edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+#[test]
+fn typing_glossiness_records_one_op_and_one_undo_step() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let (shape, shader) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Glossiness").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_label("Glossiness").type_text("12.5");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.model.lighting[&shader].lighting.params.glossiness, 12.5);
+    assert_eq!(op_values(m).len(), 1, "typing is one op");
+    // A drag: two ticks with the panel's merge key, then the drag ends.
+    tick(m, 20.5);
+    tick(m, 30.5);
+    m.edit.as_mut().unwrap().flush();
+    assert_eq!(op_values(m).len(), 2, "the drag is one more op");
+    assert!(m.undo_edit());
+    assert_eq!(op_values(m).len(), 1, "one undo step undoes the drag");
+    assert!(m.undo_edit());
+    assert!(op_values(m).is_empty());
+    assert!(!m.edit.as_ref().unwrap().history.can_undo());
+}
+
+#[test]
+fn shared_alpha_banner_and_split_on_edit() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Alpha").click();
+    h.run_steps(2);
+    h.get_by_label("Shared by 2 shapes: editing will split.");
+    h.get_by_label("Blend").click();
+    h.run_steps(2);
+    let m = h.state_mut();
+    let got = ops(m);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(matches!(got[0], Op::SplitAlpha { .. }));
+    assert!(matches!(
+        got[1],
+        Op::SetBits {
+            field: Field::AlphaFlags,
+            mask: 1,
+            ..
+        }
+    ));
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.doc.ops.iter().all(|d| d.status == OpStatus::Applied),
+        "{:?}",
+        e.outcomes
+    );
+    let b = shape_named(e, "B");
+    let (aa, ab) = (
+        e.model.shape(a).unwrap().alpha.unwrap(),
+        e.model.shape(b).unwrap().alpha.unwrap(),
+    );
+    assert_ne!(aa, ab, "A has its own alpha now");
+    assert_eq!(e.model.alphas[&aa].alpha.flags, 0x00EC);
+    assert_eq!(e.model.alphas[&ab].alpha.flags, 0x00ED, "B is untouched");
+    assert!(m.undo_edit());
+    assert!(ops(m).is_empty(), "split and edit are one undo step");
+}
+
+#[test]
+fn shared_set_banner_and_texture_edit_keeps_other_shape() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Shared by 2 shapes: editing makes a copy for this shape.");
+    let path = r"textures\a.dds";
+    let find = |h: &Harness<'static, MeshesModel>| {
+        h.query_all_by_role(AkRole::TextInput)
+            .find(|n| n.value().as_deref() == Some(path))
+            .unwrap_or_else(|| panic!("no box shows {path}"))
+            .focus()
+    };
+    find(&h);
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.query_all_by_role(AkRole::TextInput)
+        .find(|n| n.value().as_deref() == Some(path))
+        .unwrap()
+        .type_text(r"textures\b.dds");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(e.doc.ops.len(), 1);
+    assert_eq!(e.doc.ops[0].status, OpStatus::Applied, "{:?}", e.outcomes);
+    let slot0 = |name: &str| {
+        let s = e.model.shape(shape_named(e, name)).unwrap();
+        let set = e.model.lighting[&s.shader.unwrap()].texture_set.unwrap();
+        String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[0]).into_owned()
+    };
+    assert_eq!(slot0("A"), r"textures\b.dds");
+    assert_eq!(slot0("B"), r"textures\a.dds");
+}
+
+#[test]
+fn shared_shader_notice_shows_on_the_shader_tab() {
+    let mut m = direct(scenes::two_shapes_one_shader());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Shared by 2 shapes: shader edits change all of them.");
+}
+
+#[test]
+fn skinned_and_pbr_bits_are_greyed() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    assert!(h.get_by_label("Skinned").accesskit_node().is_disabled());
+    assert!(h
+        .get_by_label("Unused01 (TruePBR)")
+        .accesskit_node()
+        .is_disabled());
+    assert!(!h.get_by_label("Specular").accesskit_node().is_disabled());
+    assert!(h.query_by_label("Specular level").is_none());
+    h.get_by_label("Glossiness");
+    // A PBR shape: Glossiness and Specular Strength read as CS uses them.
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(a), Role::Shader).unwrap();
+    let shader = e.model.shape(a).unwrap().shader.unwrap();
+    let base = e.model.lighting[&shader].lighting.slsf2;
+    m.edit_push(
+        vec![Op::SetBits {
+            at,
+            field: Field::Slsf2,
+            mask: 1 << 23,
+            value: 1 << 23,
+            base,
+        }],
+        None,
+    );
+    h.run_steps(2);
+    h.get_by_label("Specular level");
+    h.get_by_label("Roughness scale");
+    assert!(h.query_by_label("Glossiness").is_none());
+}
+
+#[test]
+fn own_emit_badge_shows_for_emissive_without_own_emit() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    assert!(h
+        .query_by_label("No effect in game: Own_Emit is off")
+        .is_none());
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(a), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::EmissiveColor(0),
+            value: Value::F32(1.0f32.to_bits()),
+            base: Value::F32(0.0f32.to_bits()),
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.warnings.iter().any(|w| matches!(
+        w.target,
+        Target::Field {
+            field: Field::EmissiveColor(0),
+            ..
+        }
+    )));
+    h.run_steps(2);
+    h.get_by_label("No effect in game: Own_Emit is off");
+}
+
+/// A colour change is three channel ops; a drag of the picker merges them as three ops with the first bases.
+#[test]
+fn a_colour_drag_is_three_ops_with_the_original_bases() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(a), Role::Shader).unwrap();
+    let push = |m: &mut MeshesModel, v: f32, base: f32| {
+        let ops = (0..3)
+            .map(|i| Op::SetField {
+                at: at.clone(),
+                field: Field::SpecularColor(i),
+                value: Value::F32(v.to_bits()),
+                base: Value::F32(base.to_bits()),
+            })
+            .collect();
+        m.edit_push(ops, Some("Color|x|Specular colour".into()));
+    };
+    push(&mut m, 0.5, 1.0);
+    push(&mut m, 0.25, 0.5);
+    let got = ops(&m);
+    assert_eq!(got.len(), 3, "{got:?}");
+    for op in &got {
+        let Op::SetField { value, base, .. } = op else {
+            panic!("{op:?}")
+        };
+        assert_eq!(*value, Value::F32(0.25f32.to_bits()));
+        assert_eq!(*base, Value::F32(1.0f32.to_bits()), "the drag's first base");
+    }
+    assert!(m.undo_edit());
+    assert!(ops(&m).is_empty(), "one undo step");
+}
+
+/// Layout v2: the edit panel sits beside the 3D view under the shared header, above the open bottom panel.
+#[test]
+fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
+    use egui::containers::panel::PanelState;
+    use sdc_gui::app::SdcApp;
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("appdata");
+    std::fs::create_dir_all(&a).unwrap();
+    std::env::set_var("LOCALAPPDATA", &a);
+    std::env::set_var("APPDATA", &a);
+    let d = files(false);
+    let model = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings::default(),
+        None,
+        support::session(),
+    );
+    let mut app = SdcApp::new(model);
+    app.meshes.procs = sdc_gui::model::meshes::no_procs;
+    app.meshes.store_path = Some(d.path().join("scan.db"));
+    scan_and_select(&mut app.meshes, d.path());
+    app.meshes.open_edit();
+    let (shape, _) = lit_shape(app.meshes.edit.as_ref().unwrap());
+    app.meshes.select_edit(Selection::Shape(shape));
+    app.model.show_tab(sdc_gui::model::bottom::BottomTab::Files);
+    let mut frame = eframe::Frame::_new_kittest();
+    let (w, hgt) = (1280.0, 800.0);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(w, hgt))
+        .build_ui_state(
+            move |ui, app: &mut SdcApp| eframe::App::ui(app, ui, &mut frame),
+            app,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(6);
+    // The shared header and the open bottom panel are still there.
+    for l in ["Save", "Export", "MO2…", "Files"] {
+        h.get_by_label(l);
+    }
+    let panel = |id: &str| {
+        PanelState::load(&h.ctx, egui::Id::new(id))
+            .unwrap()
+            .outer_rect
+    };
+    let (edit, tree, bottom) = (panel("meshes-edit"), panel("meshes-tree"), panel("bottom"));
+    assert!(
+        edit.max.x <= w + 0.5,
+        "edit panel past the window: {edit:?}"
+    );
+    assert!(
+        tree.max.x <= edit.min.x,
+        "tree {tree:?} under edit {edit:?}"
+    );
+    assert!(
+        edit.max.y <= bottom.min.y + 0.5,
+        "edit {edit:?} over bottom {bottom:?}"
+    );
+    let frame3d = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(
+        frame3d.max.x <= edit.min.x,
+        "3D {frame3d:?} under edit {edit:?}"
+    );
+    assert!(frame3d.min.x >= tree.max.x);
+    assert!(
+        frame3d.width() > 100.0 && frame3d.height() > 100.0,
+        "{frame3d:?}"
+    );
+    let folder = h.get_by_label("Shader folder…").rect();
+    assert!(
+        folder.max.x <= edit.min.x,
+        "3D toolbar pushed under the panel"
+    );
+    for l in [
+        "Shader",
+        "Alpha",
+        "Controllers",
+        "Extra data",
+        "Undo NIF edit",
+        "Redo NIF edit",
+    ] {
+        let r = h.get_by_label(l).rect();
+        assert!(
+            edit.contains(r.center()),
+            "{l} {r:?} outside the panel {edit:?}"
+        );
+    }
+}

@@ -1,5 +1,6 @@
 //! The Meshes view (plan A Task 12): mods, with the NIFs of the open mod under it (GUI tweaks G9) | shapes of the
 //! selected NIF. Draws `MeshesModel`; every store read happens in the model on a click, never here.
+use crate::model::meshes::nif_edit::Selection;
 use crate::model::meshes::{
     alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
     slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING,
@@ -15,6 +16,12 @@ const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
 const GREEN: egui::Color32 = egui::Color32::from_rgb(90, 170, 90);
 const BLUE: egui::Color32 = egui::Color32::from_rgb(90, 140, 220);
+/// The NIF edit panel's narrowest width, and the 3D view's narrowest beside it.
+const EDIT_MIN: f32 = 300.0;
+const EDIT_CENTRE_MIN: f32 = 240.0;
+
+mod edit_fields;
+mod edit_panel;
 /// Problems listed under "Scan details"; the count is always shown.
 const MAX_LISTED: usize = 200;
 
@@ -25,6 +32,16 @@ pub fn show(ui: &mut egui::Ui, m: &mut MeshesModel) {
     egui::Panel::left("meshes-tree")
         .default_size(620.0)
         .show(ui, |ui| tree(ui, m));
+    if m.edit.is_some() {
+        // The 3D view keeps at least EDIT_CENTRE_MIN; when the window is too small the panel's minimum wins.
+        let max = (ui.available_width() - EDIT_CENTRE_MIN).max(EDIT_MIN);
+        egui::Panel::right("meshes-edit")
+            .default_size(380.0)
+            .size_range(EDIT_MIN..=max)
+            .show(ui, |ui| edit_panel::panel(ui, m));
+    } else {
+        ui.skip_ahead_auto_ids(1);
+    }
     egui::CentralPanel::default().show(ui, |ui| detail(ui, m));
     dialogs(ui.ctx(), m);
 }
@@ -523,7 +540,34 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         return;
     }
     if let Some(n) = &row {
-        ui.heading(display_path(&n.path));
+        let editing = m.edit.is_some();
+        let mut toggle = false;
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(display_path(&n.path)).heading())
+                        .truncate(),
+                );
+            },
+            |ui| {
+                toggle = ui
+                    .add(egui::Button::selectable(editing, "Edit"))
+                    .on_hover_text(if editing {
+                        "Close the NIF edit panel"
+                    } else {
+                        "Edit this NIF's shaders, alpha and extra data"
+                    })
+                    .clicked();
+            },
+        );
+        if toggle {
+            if editing {
+                m.close_edit();
+            } else {
+                m.open_edit();
+            }
+        }
         if n.le_mesh {
             ui.colored_label(AMBER, LE_WARNING);
         }
@@ -547,6 +591,16 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 m.set_view_source(true);
             }
         });
+        // R11: "In game" still shows PGPatcher's copy, which was made from the unedited NIF.
+        if m.edit
+            .as_ref()
+            .is_some_and(|e| e.doc.export.ops_hash.is_some())
+        {
+            ui.colored_label(
+                AMBER,
+                "PGPatcher output predates your edit: re-run PGPatcher.",
+            );
+        }
     }
     super::viewport3d::show(ui, &mut m.v3);
 }
@@ -554,7 +608,7 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
 /// The shape cards of the selected NIF, in the left column (owner, 2026-10-14). A click on a texture asks who else
 /// uses it.
 fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    let (mut clicked, mut open) = (None, None);
+    let (mut clicked, mut open, mut pick) = (None, None, None);
     egui::ScrollArea::vertical()
         .id_salt("meshes-shapes-scroll")
         .auto_shrink([false, false])
@@ -580,22 +634,70 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     }
                 });
             }
+            // Edit mode (spec §7): a Root card first, and a click on a card's title selects it for the panel.
+            let editing = m.edit.as_ref().map(|e| e.selection);
+            if let Some(sel) = editing {
+                let on = sel == Selection::Root;
+                card(ui, Some(on), |ui| {
+                    let r = ui
+                        .add(egui::Button::selectable(
+                            on,
+                            egui::RichText::new("Root").strong(),
+                        ))
+                        .on_hover_text("The root node: its extra data");
+                    if r.clicked() {
+                        pick = Some(Selection::Root);
+                    }
+                });
+                ui.separator();
+            }
             if m.shapes.is_empty() {
                 ui.label("No shapes.");
             }
             for s in &m.shapes {
-                if let Some(p) = shape(ui, m, s, &mut open) {
-                    clicked = Some(p);
-                }
+                let on = editing.map(|sel| sel == Selection::Shape(s.block));
+                card(ui, on, |ui| {
+                    let (p, title) = shape(ui, m, s, &mut open, on);
+                    if p.is_some() {
+                        clicked = p;
+                    }
+                    if title {
+                        pick = Some(Selection::Shape(s.block));
+                    }
+                });
                 ui.separator();
             }
         });
     if let Some(p) = clicked {
         m.show_users(&p);
     }
+    if let Some(s) = pick {
+        m.select_edit(s);
+    }
     if open.is_some() {
         m.open_in_textures = open;
     }
+}
+
+/// A shape card's frame in edit mode (`selected` Some): the selected card is outlined and tinted with the selection
+/// colour. Outside edit mode the card is drawn as before, without a frame.
+fn card(ui: &mut egui::Ui, selected: Option<bool>, add: impl FnOnce(&mut egui::Ui)) {
+    let frame = match selected {
+        None => return add(ui),
+        Some(true) => {
+            let s = ui.visuals().selection;
+            egui::Frame::new()
+                .stroke(s.stroke)
+                .fill(s.bg_fill.gamma_multiply(0.15))
+                .inner_margin(4.0)
+                .corner_radius(4.0)
+        }
+        Some(false) => egui::Frame::new().inner_margin(4.0),
+    };
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        add(ui)
+    });
 }
 
 /// Item 9: "Open in Textures" after a texture path that is an item of the open folder.
@@ -777,26 +879,31 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         });
 }
 
-/// One shape card, numbered by PGPatcher's 3D index. Returns the texture path that was clicked.
+/// One shape card, numbered by PGPatcher's 3D index. Returns the texture path that was clicked, and whether the
+/// title was clicked. `edit`: in edit mode, whether this card is selected (its title is then a selectable button).
 fn shape(
     ui: &mut egui::Ui,
     m: &MeshesModel,
     s: &ShapeView,
     open: &mut Option<String>,
-) -> Option<String> {
+    edit: Option<bool>,
+) -> (Option<String>, bool) {
     let mut clicked = None;
     let number = s
         .index3d
         .map_or_else(|| "#– (not in scene tree)".to_string(), |i| format!("#{i}"));
-    ui.label(
-        egui::RichText::new(format!(
-            "{number} {} — {}",
-            s.name.as_deref().unwrap_or("(unnamed)"),
-            s.kind
-        ))
-        .strong(),
-    )
-    .on_hover_text(format!(
+    let title = egui::RichText::new(format!(
+        "{number} {} — {}",
+        s.name.as_deref().unwrap_or("(unnamed)"),
+        s.kind
+    ))
+    .strong();
+    let title = match edit {
+        Some(on) => ui.add(egui::Button::selectable(on, title)),
+        None => ui.label(title),
+    };
+    let picked = edit.is_some() && title.clicked();
+    title.on_hover_text(format!(
         "NIF block {}\nPGPatcher 3D index: the number plugins use for this shape's alternate textures",
         s.block
     ));
@@ -897,7 +1004,7 @@ fn shape(
             });
         }
     });
-    clicked
+    (clicked, picked)
 }
 
 fn dialogs(ctx: &egui::Context, m: &mut MeshesModel) {
