@@ -1370,7 +1370,7 @@ fn big_db(dir: &Path, n: i64) -> PathBuf {
 /// Item 12 (option c): a texture no mesh uses is answered from the indexed `users_of_texture`, without the
 /// `nifs_using_texture` scan (about 137 ms at 375k paths).
 #[test]
-fn an_unused_texture_is_answered_without_the_scan() {
+fn texture_lookups_use_the_index() {
     let d = tempfile::tempdir().unwrap();
     let db = big_db(d.path(), 75_000);
     let _ = winning_shapes(&db, "textures/warm/up.dds"); // open the file once, so the page cache is warm
@@ -1379,8 +1379,11 @@ fn an_unused_texture_is_answered_without_the_scan() {
     let ms = t.elapsed().as_millis();
     assert!(none.is_empty());
     assert!(ms < 50, "{ms} ms for an unused texture");
-    // A used texture still returns its shapes (through the scan).
+    // A used texture is indexed too (Note CK): no scan of `tex_use`.
+    let t = std::time::Instant::now();
     let used = winning_shapes(&db, TEX).unwrap();
+    let ms = t.elapsed().as_millis();
+    assert!(ms < 50, "{ms} ms for a used texture");
     assert_eq!(used.len(), 1);
     assert_eq!(used[0].nif, "meshes/m0/n0.nif");
     assert_eq!(used[0].blocks, vec![0]);

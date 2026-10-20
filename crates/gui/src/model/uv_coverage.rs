@@ -1,7 +1,7 @@
 //! UV coverage (Task 7): which winning NIF shapes use a texture (scan DB), their UVs rasterised into a 1-bit mask,
 //! and the share of used texels that sit close to another UV island (gutter). Everything here runs on a worker.
 use super::viewport3d::{FileReader, FileSource};
-use modscan::store::{ShapeView, Store, TexKey};
+use modscan::store::Store;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -447,52 +447,13 @@ pub struct ShapeRef {
 /// so is a copy gone from the scan.
 pub fn winning_shapes(db: &Path, tex: &str) -> Result<Vec<ShapeRef>, String> {
     count_read();
-    let want = nif::path::canon_texture(tex.as_bytes()).norm;
-    // The query matches the slot's raw string (PGPatcher's form), so it is asked for a fragment every alias of the
-    // canonical path contains (`Data\Textures\a\wall.dds`, `a\wall.dds`, `textures\pbr\…`), and each shape is
-    // re-checked on its canonical slot path.
-    // shortcut: `Contains` cannot use the path index (a scan of `path`); upgrade with a typed canonical-path query in
-    // modscan (NIF-team request) if Check all is slow on large scans.
-    let rel = want.strip_prefix("textures/").unwrap_or(&want);
-    let rel = rel.strip_prefix("pbr/").unwrap_or(rel);
-    let frag = match rel.rfind('.') {
-        Some(i) if !rel[i..].contains('/') => &rel[..i],
-        _ => rel,
-    };
     let store = Store::open_read_only(db).map_err(|e| e.to_string())?;
-    // Indexed pre-filter (`path.p`): no lighting shape names the canonical path in slot 0, so the scan below can
-    // find nothing. Aliases need no check of their own: the scan stores every slot under its canonical path, and the
-    // re-check below accepts a shape only when that path equals `want`.
-    // shortcut: a used texture still pays the `nifs_using_texture` scan (~137 ms at 375k paths); upgrade when modscan
-    // adds an indexed typed canonical key (NIF HANDOFF request 2026-10-20).
-    let users = store.users_of_texture(&want).map_err(|e| e.to_string())?;
-    if !users.iter().any(|&(_, slot, kind)| slot == 0 && kind == 1) {
-        return Ok(vec![]);
-    }
-    let key = TexKey::Contains {
-        slot: 0,
-        frag: frag.to_string(),
-    };
+    // Indexed on `path.p`; every raw spelling of the slot (`Data\Textures\…`, `textures\…`) resolves to `tex` (Note CK).
     let rows = store
-        .nifs_using_texture(&key, usize::MAX)
+        .nifs_using_canonical_texture(0, tex, usize::MAX)
         .map_err(|e| e.to_string())?;
-    let mut shapes: HashMap<i64, Vec<ShapeView>> = HashMap::new();
     let mut by_copy: BTreeMap<i64, (String, Vec<u32>)> = BTreeMap::new();
     for r in rows.into_iter().filter(|r| !r.le_mesh) {
-        let views = match shapes.entry(r.load_copy_id) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(store.shapes_of(r.load_copy_id).map_err(|e| e.to_string())?)
-            }
-        };
-        let names_it = views
-            .iter()
-            .find(|v| v.block == r.shape_block)
-            .and_then(|v| v.textures.first().cloned().flatten())
-            .is_some_and(|p| p == want);
-        if !names_it {
-            continue;
-        }
         let e = by_copy
             .entry(r.load_copy_id)
             .or_insert((r.nif_path, vec![]));

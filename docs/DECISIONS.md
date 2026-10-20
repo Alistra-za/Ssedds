@@ -2197,3 +2197,9 @@ The letters CJ are provisional: take the next free letter on `main` at merge and
 Main-team request (Track C, NIF HANDOFF 2026-10-20): the UV coverage overlay asked `nifs_using_texture(Contains)` for one texture, a scan of `path` (~840 ms on the owner's scan.db).
 - **CK1** `Store::nifs_using_canonical_texture(slot, path, limit)` returns the same `MatchRow`s as `nifs_using_texture` (lighting shapes of the latest winners, a derived winner on its source copy, same order), for shapes whose slot resolves to `path`'s canonical form (`nif::path::canon_texture`). Every raw spelling of that file matches (`Data\Textures\a.dds`, `a.dds`). The condition is `path.p = ?`, so the `path` index answers it; a test pins the query plan (no scan of `path`).
 - **CK2** A method, not a new `TexKey` variant: `TexKey` is matched exhaustively in the GUI (main-team `set_preview.rs`), so a variant would force a main-team edit. No raw-slot post-filter: the canonical path is what the game loads, and callers that need PGPatcher's raw form keep using `TexKey`. The shared query body moved to `match_sql` / `match_rows`; `nifs_using_texture` is unchanged.
+- **CL39 UV coverage uses the indexed canonical lookup (controller, 2026-10-20).** `winning_shapes` now calls modscan's `Store::nifs_using_canonical_texture(0, tex, …)` (Note CK, the NIF team's answer to the CL33 request). That replaces three things:
+  - the `TexKey::Contains` scan;
+  - its canonical re-check through `shapes_of`;
+  - CL33's `users_of_texture` pre-filter.
+
+  A texture that meshes use is now an indexed lookup too. The synthetic test `texture_lookups_use_the_index` gives both the unused and the used case a 50 ms budget. CL33's and CL34's `shortcut:` limits are lifted.
