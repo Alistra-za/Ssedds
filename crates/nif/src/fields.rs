@@ -86,6 +86,12 @@ fn trailer_len(shader_type: u32) -> u8 {
 }
 
 pub fn locate(h: &Header, b: &[u8], block: usize, f: Field) -> Result<(usize, Value), NifError> {
+    if block >= h.sizes.len() {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: "no such block".into(),
+        });
+    }
     let bs = h.offsets()[block];
     let geo = |msg: String| NifError::Geometry {
         block: block as u32,

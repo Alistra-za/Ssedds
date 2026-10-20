@@ -94,3 +94,36 @@ fn encode_net_round_trips() {
     let n = read_net(&h, &b, 0).unwrap();
     assert_eq!((n.name, n.extra, n.controller), (3, vec![1, -1], 9));
 }
+
+#[test]
+fn out_of_range_block_is_an_error_not_a_panic() {
+    let b = one_block_nif("NiAlphaProperty", encode_net(-1, &[], -1));
+    let h = Header::parse(&b).unwrap();
+    assert!(matches!(
+        read_net(&h, &b, 1),
+        Err(NifError::Geometry { .. })
+    ));
+    assert!(matches!(
+        locate(&h, &b, 1, Field::AlphaFlags),
+        Err(NifError::Geometry { .. })
+    ));
+}
+
+#[test]
+fn trailer_counts_per_shader_type() {
+    for (t, n) in [
+        (1u32, 1u8),
+        (5, 3),
+        (6, 3),
+        (7, 2),
+        (11, 5),
+        (14, 4),
+        (16, 7),
+    ] {
+        let body = lsp_body(t, &[], -1, &vec![0.5; n as usize]);
+        let b = one_block_nif("BSLightingShaderProperty", body);
+        let h = Header::parse(&b).unwrap();
+        assert!(locate(&h, &b, 0, Field::Trailer(n - 1)).is_ok(), "type {t}");
+        assert!(locate(&h, &b, 0, Field::Trailer(n)).is_err(), "type {t}");
+    }
+}

@@ -22,6 +22,12 @@ impl ObjectNet {
 }
 
 pub fn read_net(h: &Header, b: &[u8], block: usize) -> Result<ObjectNet, NifError> {
+    if block >= h.sizes.len() {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: "no such block".into(),
+        });
+    }
     let bs = h.offsets()[block];
     let block_end = bs + h.sizes[block] as usize;
     let geo = |msg: &str| NifError::Geometry {
