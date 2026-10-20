@@ -41,7 +41,7 @@ Look for `CHK-UV-GUTTER`. UV islands that sit closer than 8 texels let a smaller
 
 ### UV coverage is greyed out
 
-The overlay and the check read your Meshes scan, so scan first: scan your MO2 instance in the Meshes view. The toggle's hover gives the reason: a scan that is running or was stopped (let it finish, or scan again), no scan database, or a scan with no rows (an empty scan counts as none). Only colour textures (diffuse, PBR albedo, skin albedo) have UV coverage, and landscape diffuses are left out.
+The overlay and the check read your Meshes scan, so scan first: scan your MO2 instance in the Meshes view. The toggle's hover gives the reason: a scan that is running or was stopped (let it finish, or scan again), no scan database, or a scan with no rows (an empty scan counts as none). Only colour textures (diffuse, PBR albedo, skin albedo) have UV coverage, and landscape diffuses are left out. The toggle is also off while a pin is compared ("Hidden while comparing") and after a failed read (its hover lists the errors), and **Check all UV coverage** stays off until the **UV coverage** check is turned on ("Turn on UV coverage check first").
 
 ### A texture was held for half size
 
@@ -300,7 +300,7 @@ These come from the GUI's artist checks, plus `CHK-LOW-DETAIL`, which convert me
 | `CHK-PLASTIC` | warning | A vanilla `_n` with no alpha or an almost all-white alpha: flat, full specular. | Add a varying alpha, or ignore. |
 | `CHK-GREEN-GUESS` | info | The normal map's slopes look like OpenGL green. | **Treat as OpenGL (flip green)**, or ignore. |
 | `CHK-Z-SIGN` | warning | A normal map's blue channel points the wrong way. | Check the source. |
-| `CHK-PARALLAX` | warning | A height map misses the set's neutral height, uses little range, clips, is mostly white or is too steep. | Check the height map. |
+| `CHK-PARALLAX` | warning | A height map, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), uses little range, clips, is mostly white or is too steep. | Check the height map. |
 | `CHK-PARALLAX-SCALE` | warning | A landscape set's displacement scale is more than 2x from the others. | Make the scales match. |
 | `CHK-LOW-DETAIL` | warning | Mip 0 adds little detail over mip 1. | Export at half size, or ignore. |
 | `CHK-UV-GUTTER` | warning | UV islands closer than 8 texels for more than 2 % of used texels. | Space the islands out. |

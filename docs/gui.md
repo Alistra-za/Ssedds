@@ -370,7 +370,7 @@ Six checks read the numbers Tessalith already measures while it plans, and tell 
 | **Plastic look** | A vanilla `_n` with no alpha, or an alpha that is almost all white: the specular is then flat and full. A soft warning, because mesh values vary. On a hair or Advanced Skin set the message adds that Community Shaders does not read that alpha. An `_msn` never raises it. Code `CHK-PLASTIC`. |
 | **Fake resolution** | A texture whose top mip adds almost nothing over mip 1 (an upscale, or a 2K made from a 1K). Measured during Export. Code `CHK-LOW-DETAIL`. See *Half size* below. |
 | **Green direction** | A normal map that looks like OpenGL when it is read as DirectX (`CHK-GREEN-GUESS`, an Info result, never an auto-flip) and a normal whose blue channel points the wrong way (`CHK-Z-SIGN`). |
-| **Parallax** | A height map (`_p`) or a complex `_m` alpha that does not fit the set's neutral height (0.5, or 1.0 with a multilayer coat), uses too little range, clips, is mostly white, or is steep enough to tear; landscape sets whose displacement scales differ by more than 2x. Codes `CHK-PARALLAX` and `CHK-PARALLAX-SCALE`. |
+| **Parallax** | A height map (`_p`) or a complex `_m` alpha, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), that uses too little range, clips, is mostly white, or is steep enough to tear; landscape sets whose displacement scales differ by more than 2x. Codes `CHK-PARALLAX` and `CHK-PARALLAX-SCALE`. |
 | **UV coverage** | UV islands that sit closer than 8 texels to each other for more than 2 % of the used texels, so colours bleed across them at a distance (mip 3 and up). Code `CHK-UV-GUTTER`. Needs a Meshes scan; see below. |
 
 **Where the results show.**

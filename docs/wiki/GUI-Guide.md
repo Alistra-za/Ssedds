@@ -353,7 +353,7 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 | Plastic look | A vanilla `_n` with no alpha or an almost all-white alpha, so the specular is flat and full. Soft by design. |
 | Fake resolution | A top mip that adds almost nothing over mip 1. Measured during Export. |
 | Green direction | A normal that looks OpenGL when read as DirectX (an Info hint, never an auto-flip) or whose blue points the wrong way. |
-| Parallax | A height map that misses the set's neutral height, uses little range, clips, is mostly white or is too steep; landscape sets whose displacement scales differ by more than 2x. |
+| Parallax | A height map, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), that uses little range, clips, is mostly white or is too steep; landscape sets whose displacement scales differ by more than 2x. |
 | UV coverage | UV islands closer than 8 texels for more than 2 % of used texels, so colour bleeds at a distance. Needs a Meshes scan. |
 
 - **Problems rows.** Each warning is a row in the bottom panel's Problems tab, after the ordinary warnings. **Checks N** narrows the list to them.
