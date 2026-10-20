@@ -83,8 +83,13 @@ impl EditDoc {
         sha256_hex(t.as_bytes())
     }
 
+    /// The ops differ from the last export; a document never exported is pending once it has ops (an undo back to
+    /// no ops after an export is pending: the exported file still has the edits).
     pub fn pending(&self) -> bool {
-        !self.ops.is_empty() && self.export.ops_hash.as_deref() != Some(self.ops_hash().as_str())
+        match &self.export.ops_hash {
+            None => !self.ops.is_empty(),
+            Some(h) => *h != self.ops_hash(),
+        }
     }
 
     pub fn has_conflicts(&self) -> bool {

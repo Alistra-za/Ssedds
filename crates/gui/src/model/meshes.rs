@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub mod edit_doc;
+pub mod export;
 pub mod nif_edit;
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
@@ -519,6 +520,8 @@ pub struct MeshesModel {
     pub v3: Viewport3d,
     /// The open NIF edit session (v2 A16), for the selected NIF.
     pub edit: Option<nif_edit::NifEdit>,
+    /// The NIF list's edit chips, by data path: read from the edit mod after a scan, then kept current by the session.
+    pub doc_badges: HashMap<String, export::DocBadge>,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
     /// Result of the All meshes search for `all_query` (winners with their mod), at most `ALL_LIMIT`.
@@ -605,6 +608,7 @@ impl MeshesModel {
             folder_items_for: (vec![], u64::MAX),
             v3: Viewport3d::new(None),
             edit: None,
+            doc_badges: HashMap::new(),
             procs: system_procs,
             settings,
             settings_changed: false,
@@ -949,6 +953,8 @@ impl MeshesModel {
                 return;
             }
         }
+        self.refresh_doc_badges();
+        self.refresh_placement();
         // The winners may have changed: ask again.
         self.all_nifs.clear();
         self.all_query = None;

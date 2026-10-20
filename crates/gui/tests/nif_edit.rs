@@ -364,7 +364,11 @@ fn instance(modlist: &str) -> tempfile::TempDir {
 
 /// Mods A (x.nif, a loose texture no shape uses) and PGP (PGPatcher's patch of x.nif); an LE x.nif in A alone.
 fn files(le: bool) -> tempfile::TempDir {
-    let d = instance("+PGP\n+A\n");
+    files_with(le, "+PGP\n+A\n")
+}
+
+fn files_with(le: bool, modlist: &str) -> tempfile::TempDir {
+    let d = instance(modlist);
     let le_bytes = fixture("TestNifFile_Animated_LE.nif");
     put(d.path(), "mods/A/meshes/x.nif", le.then_some(&le_bytes[..]));
     put(d.path(), "mods/A/textures/new.dds", Some(b"dds"));
@@ -1504,4 +1508,343 @@ fn the_add_row_name_does_not_follow_to_another_shape() {
     h.state_mut().select_edit(Selection::Shape(b));
     h.run_steps(3);
     assert_eq!(name(&h).as_deref(), Some("BSX"));
+}
+
+// ---- v2 A19: export, placement check, guard and pending list ----
+
+use sdc_gui::model::meshes::export::*;
+
+fn mod_row(name: &str, prio: i32, derived: bool) -> modscan::store::ModRow {
+    modscan::store::ModRow {
+        id: prio as i64,
+        name: name.into(),
+        kind: modscan::store::KIND_MOD,
+        priority: prio,
+        derived,
+    }
+}
+
+#[test]
+fn placement_rules() {
+    let mods = [
+        mod_row("PGP", 9, true),
+        mod_row("B", 7, false),
+        mod_row(EDIT_MOD, 5, false),
+        mod_row("A", 3, false),
+    ];
+    let ok = [
+        copy("PGP", 9, true),
+        copy(EDIT_MOD, 5, false),
+        copy("A", 3, false),
+    ];
+    assert_eq!(placement(&ok, &mods, EDIT_MOD), Placement::Ok);
+    let below = [
+        copy("PGP", 9, true),
+        copy("B", 7, false),
+        copy("A", 3, false),
+    ];
+    assert_eq!(
+        placement(&below, &mods, EDIT_MOD),
+        Placement::Below("B".into())
+    );
+    let low_pg = [mod_row("PGP", 4, true), mod_row(EDIT_MOD, 5, false)];
+    let c = [copy("PGP", 4, true), copy("A", 3, false)];
+    assert_eq!(
+        placement(&c, &low_pg, EDIT_MOD),
+        Placement::AbovePg("PGP".into())
+    );
+    assert_eq!(placement(&ok, &mods[..2], EDIT_MOD), Placement::NotEnabled);
+    assert_eq!(Placement::Ok.text(), "Placement OK.");
+    assert_eq!(
+        Placement::NotEnabled.text(),
+        "The edit mod is not enabled: enable 'sdc NIF Edits' in MO2."
+    );
+    assert_eq!(
+        Placement::NotScanned.text(),
+        "Rescan to check where 'sdc NIF Edits' sits."
+    );
+    assert_eq!(
+        Placement::Below("B".into()).text(),
+        "The edit mod is below B: your edit loses. Drag 'sdc NIF Edits' below B in MO2."
+    );
+    assert_eq!(
+        Placement::AbovePg("PGP".into()).text(),
+        "The edit mod is above PGP: PGPatcher output will not include your edit until you drag 'sdc NIF Edits' above PGP in MO2."
+    );
+}
+
+/// `files(false)` plus A's y.nif, with `sdc NIF Edits` (an empty folder) between PGP and A; scanned, x.nif selected.
+fn export_session() -> (tempfile::TempDir, MeshesModel) {
+    let d = files_with(false, "+PGP\n+sdc NIF Edits\n+A\n");
+    std::fs::create_dir_all(d.path().join("mods").join(EDIT_MOD)).unwrap();
+    put(d.path(), "mods/A/meshes/y.nif", None);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    let x = m.nifs.iter().find(|n| n.path.ends_with("x.nif")).unwrap();
+    m.select_nif(x.copy_id);
+    (d, m)
+}
+
+fn exported(d: &tempfile::TempDir) -> std::path::PathBuf {
+    d.path()
+        .join("mods")
+        .join(EDIT_MOD)
+        .join("meshes")
+        .join("x.nif")
+}
+
+/// Sets the first lit shape's glossiness to `v` (one op).
+fn gloss(m: &mut MeshesModel, v: f32) {
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let cur = e.model.lighting[&shader].lighting.params.glossiness;
+    let op = Op::SetField {
+        at: nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap(),
+        field: Field::Glossiness,
+        value: Value::F32(v.to_bits()),
+        base: Value::F32(cur.to_bits()),
+    };
+    m.edit_push(vec![op], None);
+}
+
+#[test]
+fn export_writes_the_patched_nif_and_records_its_hash() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    assert_eq!(m.error, None);
+    assert_eq!(
+        m.edit.as_ref().unwrap().placement,
+        Some(Placement::Ok),
+        "the edit mod sits between A and PGP"
+    );
+    gloss(&mut m, 12.5);
+    assert_eq!(
+        m.export_edit(None),
+        ExportOutcome::Written {
+            rerun_pgpatcher: true
+        }
+    );
+    let e = m.edit.as_ref().unwrap();
+    let want = nif::edit::apply(&e.source, &e.doc.ops()).unwrap().bytes;
+    assert_ne!(want, *e.source);
+    assert_eq!(std::fs::read(exported(&d)).unwrap(), want);
+    let saved = load(&e.doc_path).unwrap().unwrap();
+    assert_eq!(
+        saved.export.sha256.as_deref(),
+        Some(sha256_hex(&want).as_str())
+    );
+    assert!(saved.export.at.is_some());
+    assert!(!saved.pending());
+    assert!(!e.doc.pending());
+}
+
+#[test]
+fn hand_edited_export_asks_before_overwrite() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let p = exported(&d);
+    std::fs::write(&p, b"junk").unwrap();
+    // Overwrite without having been asked is asked first.
+    let ExportOutcome::Guard { diff } = m.export_edit(Some(GuardChoice::Overwrite)) else {
+        panic!("a hand-edited file asks first")
+    };
+    assert!(!diff.is_empty());
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk");
+    assert!(matches!(m.export_edit(None), ExportOutcome::Guard { .. }));
+    assert_eq!(
+        m.export_edit(Some(GuardChoice::KeepTheirs)),
+        ExportOutcome::KeptTheirs
+    );
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk");
+    assert!(matches!(m.export_edit(None), ExportOutcome::Guard { .. }));
+    assert!(matches!(
+        m.export_edit(Some(GuardChoice::Overwrite)),
+        ExportOutcome::Written { .. }
+    ));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), *e.patched);
+}
+
+#[test]
+fn conflicting_doc_blocks_export() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    // The source's own glossiness changes on disk to another value.
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let src = nif::model::read_model(&e.source).unwrap();
+    let cur = src.lighting[&shader].lighting.params.glossiness;
+    assert_ne!(cur, 7.0);
+    let theirs = nif::edit::apply(
+        &e.source,
+        &[Op::SetField {
+            at: nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap(),
+            field: Field::Glossiness,
+            value: Value::F32(7.0f32.to_bits()),
+            base: Value::F32(cur.to_bits()),
+        }],
+    )
+    .unwrap()
+    .bytes;
+    assert_ne!(theirs, *e.source);
+    std::fs::write(d.path().join("mods/A/meshes/x.nif"), &theirs).unwrap();
+    assert_eq!(
+        m.export_edit(None),
+        ExportOutcome::Blocked("Resolve the conflicts first.".into())
+    );
+    assert!(!exported(&d).exists());
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(*e.source, theirs);
+    assert!(e.doc.has_conflicts());
+}
+
+#[test]
+fn a_refused_edit_blocks_export() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[0]).into_owned();
+    let op = Op::SetTexturePath {
+        at: nif::edit::anchor_shape(&e.model, shape),
+        slot: 0,
+        path: "textures\\\u{4e2d}.dds".into(),
+        base,
+    };
+    m.edit_push(vec![op], None);
+    assert!(matches!(
+        m.edit.as_ref().unwrap().outcomes[0],
+        nif::edit::Outcome::Refused(_)
+    ));
+    assert_eq!(
+        m.export_edit(None),
+        ExportOutcome::Blocked("1 edits cannot be applied.".into())
+    );
+    assert!(!exported(&d).exists());
+}
+
+#[test]
+fn export_refuses_bytes_that_do_not_read_back() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let e = m.edit.as_mut().unwrap();
+    let mut bad = (*e.patched).clone();
+    bad.truncate(bad.len() - 3);
+    e.patched = std::sync::Arc::new(bad);
+    let out = m.export_edit(None);
+    assert!(
+        matches!(&out, ExportOutcome::Blocked(s) if s.starts_with("The written file would not read back: ")),
+        "{out:?}"
+    );
+    assert!(!exported(&d).exists());
+}
+
+#[test]
+fn an_unreadable_export_file_blocks_and_writes_nothing() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    std::fs::create_dir_all(exported(&d)).unwrap();
+    for choice in [None, Some(GuardChoice::Overwrite)] {
+        let out = m.export_edit(choice);
+        assert!(
+            matches!(&out, ExportOutcome::Blocked(s) if s.starts_with("Cannot read ")),
+            "{out:?}"
+        );
+    }
+    assert!(exported(&d).is_dir());
+    let doc = load(&m.edit.as_ref().unwrap().doc_path).unwrap().unwrap();
+    assert!(doc.export.sha256.is_none());
+}
+
+fn badge_of(m: &MeshesModel, name: &str) -> Option<DocBadge> {
+    m.pending_docs()
+        .into_iter()
+        .find(|(k, _)| k.ends_with(name))
+        .map(|(_, b)| b)
+}
+
+#[test]
+fn pending_list_and_chips() {
+    let (_d, mut m) = export_session();
+    let y = m.nifs.iter().find(|n| n.path.ends_with("y.nif")).unwrap();
+    m.select_nif(y.copy_id);
+    m.open_edit();
+    gloss(&mut m, 30.5);
+    let x = m.nifs.iter().find(|n| n.path.ends_with("x.nif")).unwrap();
+    m.select_nif(x.copy_id);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Exported));
+    assert_eq!(badge_of(&m, "y.nif"), Some(DocBadge::Pending));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Edited");
+    h.get_by_label("Edit pending");
+    assert!(h.query_by_label("Edit conflict").is_none());
+}
+
+#[test]
+fn undo_after_export_makes_it_pending_again() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Exported));
+    assert!(m.undo_edit());
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.doc.pending(), "the exported file still has the edit");
+    assert!(
+        e.doc.export.sha256.is_some(),
+        "undo keeps the export record"
+    );
+    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Pending));
+    // Our own file is replaced without asking.
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(std::fs::read(exported(&d)).unwrap(), *e.source);
+}
+
+#[test]
+fn export_button_and_guard_dialog_enter_keeps_theirs() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let Op::SetField { at, .. } = &ops(&m)[0] else {
+        unreachable!()
+    };
+    let revert = format!("Revert: {}: Glossiness", at.shape.as_deref().unwrap());
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label("To: mods\\sdc NIF Edits\\meshes\\x.nif");
+    h.get_by_label("Placement OK.");
+    h.get_by_role_and_label(AkRole::Button, &revert);
+    h.get_by_role_and_label(AkRole::Button, "Export NIF")
+        .click();
+    h.run_steps(3);
+    let p = exported(&d);
+    assert!(p.is_file(), "the click exported");
+    h.get_by_label("Re-run PGPatcher so its output includes this edit.");
+    std::fs::write(&p, b"junk").unwrap();
+    h.get_by_role_and_label(AkRole::Button, "Export NIF")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("This file changed since sdc exported it.");
+    h.get_by_role_and_label(AkRole::Button, "Diff").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Overwrite");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h
+        .query_by_label("This file changed since sdc exported it.")
+        .is_none());
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk", "Enter keeps theirs");
+    assert!(h.state().edit.as_ref().unwrap().guard.is_none());
 }

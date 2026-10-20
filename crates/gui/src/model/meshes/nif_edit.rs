@@ -1,15 +1,18 @@
 //! The NIF edit session (spec §3.4, §7, §8.1; plan A16): the source copy an edit applies to, its edit document and
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
-use super::edit_doc::{self, DocOp, EditDoc, NifHistory, OpStatus, SourceId, EDIT_MOD};
+use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
+use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Content, FileSource};
+use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, KIND_BSA};
-use nif::edit::validate::{validate, Warning};
+use nif::edit::validate::{new_errors, validate, Warning};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel};
 use render3d::{ParsedNif, ShapeId};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -57,6 +60,18 @@ pub struct NifEdit {
     pub le_mesh: bool,
     /// The last failure (apply, save, undo text); `MeshesModel` moves it to its own `error`.
     pub error: Option<String>,
+    /// Every enabled copy of the NIF (the store's order), for the placement check and the PGPatcher re-run note.
+    pub copies: Vec<PathCopy>,
+    /// The placement check (spec §8.2); None without an MO2 instance.
+    pub placement: Option<Placement>,
+    /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
+    pub blocked: Option<String>,
+    /// The guard dialog's question, while it is open.
+    pub guard: Option<GuardAsk>,
+    /// The last export's result line, and whether it is an error.
+    pub export_note: Option<(String, bool)>,
+    /// `nif::edit::apply` failed: the patched bytes are stale.
+    apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
     parsed: Arc<ParsedNif>,
     /// A merged (drag) push not saved yet.
@@ -65,6 +80,17 @@ pub struct NifEdit {
     /// replaces those ops.
     drag: Option<(String, usize)>,
 }
+
+/// The open guard dialog: the block diff, whether Diff is showing it, and the hash of the file it was asked about
+/// (Overwrite applies only while the file still has it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuardAsk {
+    pub diff: Vec<String>,
+    pub show_diff: bool,
+    pub sha256: String,
+}
+
+pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
@@ -166,16 +192,8 @@ impl NifEdit {
         data_path: &str,
         edit_mod: Option<&Path>,
     ) -> Result<NifEdit, String> {
-        let cannot = |e: nif::NifError| format!("This NIF cannot be edited: {e}");
-        let scan = nif::scan::scan(&source).map_err(cannot)?;
-        let model = read_model(&source).map_err(cannot)?;
-        let id = SourceId {
-            origin: source_copy.origin.clone(),
-            data_path: data_path.into(),
-            archive: (source_copy.kind == KIND_BSA).then(|| source_copy.root.clone()),
-            size: source.len() as u64,
-            sha256: edit_doc::sha256_hex(&source),
-        };
+        let (scan, model) = read_source(&source)?;
+        let id = source_id(&source_copy, data_path, &source);
         let (edit_mod, doc_path, export_path) = match edit_mod {
             Some(m) => (
                 m.to_path_buf(),
@@ -214,6 +232,12 @@ impl NifEdit {
             source_copy,
             le_mesh: scan.le_mesh,
             error: None,
+            copies: vec![],
+            placement: None,
+            blocked: None,
+            guard: None,
+            export_note: None,
+            apply_err: None,
             parsed: Arc::default(),
             unsaved: false,
             drag: None,
@@ -221,11 +245,143 @@ impl NifEdit {
         // Applying re-anchors each op on the current source: `nif::edit::rebase` and the patched bytes in one pass.
         e.reapply();
         if changed {
-            let conflicts = e.doc.ops.iter().filter(|d| d.status == OpStatus::Conflict);
-            let n = conflicts.count();
-            e.source_changed = Some((e.doc.ops.len() - n, n));
+            e.count_changed();
         }
         Ok(e)
+    }
+
+    fn count_changed(&mut self) {
+        let n = self
+            .doc
+            .ops
+            .iter()
+            .filter(|d| d.status == OpStatus::Conflict)
+            .count();
+        self.source_changed = Some((self.doc.ops.len() - n, n));
+    }
+
+    /// The source copy's bytes changed on disk (export step 1): the ops are re-anchored on them and the statuses
+    /// updated and saved.
+    pub fn reload_source(&mut self, source: Vec<u8>) -> Result<(), String> {
+        let (scan, model) = read_source(&source)?;
+        self.doc.source = source_id(&self.source_copy, &self.data_path, &source);
+        self.source_warnings = validate(&model, None);
+        self.le_mesh = scan.le_mesh;
+        self.source = Arc::new(source);
+        self.reapply();
+        self.count_changed();
+        self.save();
+        Ok(())
+    }
+
+    /// Why the current state cannot be exported, from memory alone (export steps 2-4): refused ops first (A16 keeps
+    /// them as conflicts), then conflicts, new validation errors and bytes that do not read back.
+    pub fn export_block(&self) -> Option<String> {
+        if self.edit_mod.as_os_str().is_empty() {
+            return Some("Export needs an MO2 instance.".into());
+        }
+        if let Some(e) = &self.apply_err {
+            return Some(e.clone());
+        }
+        if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
+            return Some("No edits to export.".into());
+        }
+        let refused = self
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, Outcome::Refused(_)))
+            .count();
+        if refused > 0 {
+            return Some(format!("{refused} edits cannot be applied."));
+        }
+        if self.doc.has_conflicts()
+            || self
+                .outcomes
+                .iter()
+                .any(|o| matches!(o, Outcome::Conflict(_)))
+        {
+            return Some("Resolve the conflicts first.".into());
+        }
+        if let Some(w) = new_errors(&self.source_warnings, &self.warnings).first() {
+            return Some(w.text.clone());
+        }
+        read_back(&self.patched).err()
+    }
+
+    /// Recomputes `blocked` after the ops or the warnings changed.
+    pub fn refresh_blocked(&mut self) {
+        self.blocked = self.export_block();
+    }
+
+    /// Export steps 1-6 (spec §8.3). Nothing is written when a check fails; a file sdc did not write is replaced
+    /// only by an Overwrite answered for exactly the bytes on disk now.
+    pub fn export(&mut self, choice: Option<GuardChoice>) -> ExportOutcome {
+        let asked = self.guard.take();
+        if self.edit_mod.as_os_str().is_empty() {
+            return ExportOutcome::Blocked("Export needs an MO2 instance.".into());
+        }
+        let c = &self.source_copy;
+        let now = match read_file(&FileSource::from_store(c.kind, &c.root, &self.data_path)) {
+            Ok(b) => b,
+            Err(e) => return ExportOutcome::Blocked(e),
+        };
+        if edit_doc::sha256_hex(&now) != self.doc.source.sha256 {
+            if let Err(e) = self.reload_source(now) {
+                return ExportOutcome::Blocked(e);
+            }
+        }
+        self.refresh_blocked();
+        if let Some(why) = self.blocked.clone() {
+            return ExportOutcome::Blocked(why);
+        }
+        let path = self.export_path.clone();
+        let cannot_read = |e: std::io::Error| {
+            ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
+        };
+        let last = self.doc.export.sha256.clone();
+        let ours = |b: &[u8]| last.as_deref() == Some(edit_doc::sha256_hex(b).as_str());
+        match engine::dds::may_replace(&path, &self.patched, ours) {
+            Ok(()) => {}
+            Err(Kept::Unreadable(e)) => return cannot_read(e),
+            Err(Kept::Foreign) => {
+                let on_disk = match std::fs::read(&path) {
+                    Ok(b) => b,
+                    Err(e) => return cannot_read(e),
+                };
+                let sha256 = edit_doc::sha256_hex(&on_disk);
+                match choice {
+                    Some(GuardChoice::KeepTheirs) => return ExportOutcome::KeptTheirs,
+                    Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
+                    _ => {
+                        let diff =
+                            nif::write::block_diff(&on_disk, &self.patched).unwrap_or_else(|e| {
+                                vec![format!("The file on disk does not read as a NIF: {e}")]
+                            });
+                        self.guard = Some(GuardAsk {
+                            diff: diff.clone(),
+                            show_diff: false,
+                            sha256,
+                        });
+                        return ExportOutcome::Guard { diff };
+                    }
+                }
+            }
+        }
+        if let Err(e) = engine::dds::write_atomic(&path, &self.patched) {
+            return ExportOutcome::Blocked(format!("Cannot write {}: {e}", path.display()));
+        }
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        self.doc.export = ExportRec {
+            sha256: Some(edit_doc::sha256_hex(&self.patched)),
+            at: Some(at),
+            ops_hash: Some(self.doc.ops_hash()),
+        };
+        self.save();
+        ExportOutcome::Written {
+            rerun_pgpatcher: self.copies.iter().any(|c| c.derived),
+        }
     }
 
     /// Applies the ops to the source: patched bytes, outcomes (each `ReAnchored` block written back into its op),
@@ -235,9 +391,13 @@ impl NifEdit {
             Ok(a) => a,
             Err(e) => {
                 self.error = Some(e.to_string());
+                self.apply_err = Some(e.to_string());
+                self.refresh_blocked();
                 return;
             }
         };
+        self.apply_err = None;
+        self.export_note = None; // the last export's line no longer describes these edits
         for (d, o) in self.doc.ops.iter_mut().zip(&a.outcomes) {
             if let Outcome::ReAnchored { block } = o {
                 anchor_mut(&mut d.op).block = *block;
@@ -255,6 +415,7 @@ impl NifEdit {
         }
         self.warnings = validate(&self.model, None);
         self.parsed = Arc::new(render3d::parse(&self.patched));
+        self.refresh_blocked();
     }
 
     fn save(&mut self) {
@@ -311,7 +472,12 @@ impl NifEdit {
         self.drag = None;
         let Some(t) = text else { return false };
         match EditDoc::from_text(&t) {
-            Ok(d) => self.doc = d,
+            // Undo changes the ops, not what is on disk: the export record and the source identity stay current.
+            Ok(mut d) => {
+                d.export = std::mem::take(&mut self.doc.export);
+                d.source = self.doc.source.clone();
+                self.doc = d;
+            }
             Err(e) => {
                 self.error = Some(e);
                 return false;
@@ -389,6 +555,22 @@ impl NifEdit {
     }
 }
 
+fn read_source(source: &[u8]) -> Result<(nif::scan::NifScan, NifModel), String> {
+    let cannot = |e: nif::NifError| format!("This NIF cannot be edited: {e}");
+    let scan = nif::scan::scan(source).map_err(cannot)?;
+    Ok((scan, read_model(source).map_err(cannot)?))
+}
+
+fn source_id(copy: &PathCopy, data_path: &str, source: &[u8]) -> SourceId {
+    SourceId {
+        origin: copy.origin.clone(),
+        data_path: data_path.into(),
+        archive: (copy.kind == KIND_BSA).then(|| copy.root.clone()),
+        size: source.len() as u64,
+        sha256: edit_doc::sha256_hex(source),
+    }
+}
+
 /// Each shape's (shader type, slot paths) for [`texture_sources`].
 fn slot_paths(p: &ParsedNif) -> Vec<(u32, Vec<String>)> {
     p.shapes
@@ -438,6 +620,7 @@ impl MeshesModel {
                     self.v3.set_content(Some(c), false);
                     self.v3.nif_view = true;
                 }
+                self.refresh_placement();
                 self.edit_checks();
             }
             Err(e) => {
@@ -461,7 +644,8 @@ impl MeshesModel {
             .ok_or_else(|| format!("No source copy of {path} to edit."))?
             .clone();
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
-        let e = NifEdit::open(bytes, src, path, edit_mod)?;
+        let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
+        e.copies = copies;
         if e.le_mesh {
             return Ok((e, None));
         }
@@ -554,7 +738,7 @@ impl MeshesModel {
             .unwrap_or_default()
     }
 
-    /// The session's error, and the missing-file check when it is on.
+    /// The session's error, the missing-file check when it is on, the export block and the session's NIF badge.
     fn edit_checks(&mut self) {
         let Some(e) = &mut self.edit else { return };
         if let Some(err) = e.error.take() {
@@ -564,6 +748,74 @@ impl MeshesModel {
             let exists = |n: &str| matches!(store.texture_location(n), Ok(Some(_)));
             e.warnings = validate(&e.model, Some(&exists));
         }
+        e.refresh_blocked();
+        if !e.edit_mod.as_os_str().is_empty() {
+            match DocBadge::of(&e.doc) {
+                Some(b) => self.doc_badges.insert(e.data_path.clone(), b),
+                None => self.doc_badges.remove(&e.data_path),
+            };
+        }
+    }
+
+    /// Export steps 1-7 for the open session (spec §8): the outcome also sets the session's guard and result line.
+    pub fn export_edit(&mut self, choice: Option<GuardChoice>) -> ExportOutcome {
+        let Some(e) = &mut self.edit else {
+            return ExportOutcome::Blocked("No NIF is being edited.".into());
+        };
+        let before = e.materials();
+        let out = e.export(choice);
+        e.export_note = match &out {
+            ExportOutcome::Written { rerun_pgpatcher } => Some((
+                match rerun_pgpatcher {
+                    true => RERUN_PGPATCHER.into(),
+                    false => "Exported.".into(),
+                },
+                false,
+            )),
+            ExportOutcome::Blocked(s) => Some((s.clone(), true)),
+            ExportOutcome::KeptTheirs => {
+                Some(("Not exported: the file on disk was kept.".into(), false))
+            }
+            ExportOutcome::Guard { .. } => None,
+        };
+        // A changed source re-applied the ops: the preview follows.
+        self.edit_changed(before);
+        out
+    }
+
+    /// The badge of every edit document in the edit mod, keyed by data path (walks `.sdc\nif-edits`).
+    pub fn pending_docs(&self) -> HashMap<String, DocBadge> {
+        self.edit_mod()
+            .map(|m| super::export::pending_docs(&m).into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// `doc_badges` from disk; after a scan, or a change of instance.
+    pub(super) fn refresh_doc_badges(&mut self) {
+        self.doc_badges = self.pending_docs();
+    }
+
+    /// The session's placement line: from the store's copies and mod rows, and the modlist to tell a mod that is not
+    /// scanned yet from one that is not enabled.
+    pub(super) fn refresh_placement(&mut self) {
+        let Some(e) = &mut self.edit else { return };
+        let Some(ScanTarget::Mo2 { root, profile }) = &self.target else {
+            e.placement = None;
+            return;
+        };
+        let mut p = placement(&e.copies, &self.mods, EDIT_MOD);
+        if p == Placement::NotEnabled {
+            let listed = Instance::load(root, Some(profile))
+                .ok()
+                .and_then(|i| modscan::mo2::loose_origins(&i).ok())
+                .is_some_and(|(on, missing)| {
+                    on.iter().any(|o| o.name == EDIT_MOD) || missing.iter().any(|n| n == EDIT_MOD)
+                });
+            if listed {
+                p = Placement::NotScanned;
+            }
+        }
+        e.placement = Some(p);
     }
 
     /// The preview after a change (R10): each changed shape's material goes to the loaded content; a texture path

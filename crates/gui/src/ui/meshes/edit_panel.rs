@@ -1,11 +1,13 @@
-//! The NIF edit panel (spec §7, plan A17): what is edited and from where, Solo, Undo / Redo, the ops that did not
-//! apply, then the Shader, Alpha, Controllers and Extra data tabs.
+//! The NIF edit panel (spec §7, plan A17/A19): what is edited and from where, Solo, Undo / Redo, the pending edits,
+//! Export NIF with its guard dialog, then the Shader, Alpha, Controllers and Extra data tabs.
 use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
-use crate::model::meshes::edit_doc::OpStatus;
+use crate::model::meshes::edit_doc::{OpStatus, EDIT_MOD};
+use crate::model::meshes::export::{GuardChoice, Placement};
 use crate::model::meshes::nif_edit::NifEdit;
 use crate::model::meshes::MeshesModel;
-use crate::ui::status::{AMBER, RED};
+use crate::ui::dialogs::{dialog, Role};
+use crate::ui::status::{AMBER, GREEN, RED};
 use eframe::egui;
 use nif::edit::{Op, Outcome};
 
@@ -78,36 +80,133 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             format!("Source changed: {applied} applied, {conflicts} conflicts"),
         );
     }
-    for (i, d) in e.doc.ops.iter().enumerate() {
-        if d.status != OpStatus::Conflict {
-            continue;
-        }
-        let (why, conflict) = match e.outcomes.get(i) {
-            Some(Outcome::Conflict(s)) => (s.as_str(), true),
-            Some(Outcome::Refused(s)) => (s.as_str(), false),
-            _ => ("not applied", false),
-        };
-        let text = format!("{}: {why}", op_label(&d.op));
-        egui::Sides::new().shrink_left().truncate().show(
-            ui,
-            |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&text).color(RED)).truncate());
-            },
-            |ui| {
-                if conflict {
-                    if ui.small_button("Take source").clicked() {
-                        act.take_source = Some(i);
-                    }
-                    if ui.small_button("Keep mine").clicked() {
-                        act.keep_mine = Some(i);
-                    }
-                } else if ui.small_button("Revert").clicked() {
+    // One scope: the rows and lines that come and go here must not shift the tabs' auto ids (a focused field would
+    // lose its focus, and a typed value its commit, when the first edit adds a row).
+    ui.push_id("meshes-edit-pending", |ui| {
+        // The pending list (spec §7): every op, the ones that did not apply in red with their way out.
+        egui::ScrollArea::vertical()
+            .id_salt("meshes-edit-ops")
+            .max_height(OPS_MAX_H)
+            .show(ui, |ui| {
+                for (i, d) in e.doc.ops.iter().enumerate() {
+                    let failed = d.status == OpStatus::Conflict;
+                    op_row(ui, e, i, &op_label(&d.op), failed, act);
+                }
+            });
+        export_block(ui, e, act);
+    });
+    guard_dialog(ui.ctx(), e, act);
+    ui.separator();
+}
+
+const OPS_MAX_H: f32 = 120.0;
+
+fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, act: &mut Act) {
+    let (text, conflict) = match (failed, e.outcomes.get(i)) {
+        (false, _) => (label.to_string(), false),
+        (true, Some(Outcome::Conflict(s))) => (format!("{label}: {s}"), true),
+        (true, Some(Outcome::Refused(s))) => (format!("{label}: {s}"), false),
+        (true, _) => (format!("{label}: not applied"), false),
+    };
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            let t = egui::RichText::new(&text);
+            ui.add(egui::Label::new(if failed { t.color(RED) } else { t }).truncate());
+        },
+        |ui| {
+            if conflict {
+                if ui.small_button("Take source").clicked() {
+                    act.take_source = Some(i);
+                }
+                if ui.small_button("Keep mine").clicked() {
+                    act.keep_mine = Some(i);
+                }
+            } else {
+                let r = ui.small_button("Revert");
+                // Several rows have a Revert: each is named after its edit.
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        format!("Revert: {label}"),
+                    )
+                });
+                if r.clicked() {
                     act.revert = Some(i);
                 }
-            },
-        );
+            }
+        },
+    );
+}
+
+/// "Export NIF" with its destination, its blocked reason or last result, and the placement line (spec §8).
+fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
+    if e.edit_mod.as_os_str().is_empty() {
+        return; // read-only: no MO2 instance, nothing to export to
     }
-    ui.separator();
+    let to = format!("To: mods\\{EDIT_MOD}\\{}", e.data_path.replace('/', "\\"));
+    ui.add(egui::Label::new(&to).truncate());
+    let r = ui.add_enabled(e.blocked.is_none(), egui::Button::new("Export NIF"));
+    if r.clicked() {
+        act.export = Some(None);
+    }
+    if let Some(why) = &e.blocked {
+        r.on_disabled_hover_text(why);
+        ui.add(egui::Label::new(egui::RichText::new(why).color(RED)).wrap());
+    }
+    if let Some((note, err)) = e
+        .export_note
+        .as_ref()
+        .filter(|n| Some(&n.0) != e.blocked.as_ref())
+    {
+        let t = egui::RichText::new(note);
+        ui.add(egui::Label::new(if *err { t.color(RED) } else { t }).wrap());
+    }
+    if let Some(p) = &e.placement {
+        let color = if *p == Placement::Ok { GREEN } else { AMBER };
+        ui.add(egui::Label::new(egui::RichText::new(p.text()).color(color)).wrap());
+    }
+}
+
+/// The hand-edit guard (spec §8.3): Enter keeps the file on disk; Esc closes without writing.
+fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
+    let Some(g) = &e.guard else { return };
+    let buttons = [
+        ("Overwrite", Role::Destructive, true),
+        ("Diff", Role::Plain, true),
+        ("Keep theirs", Role::Default, true),
+    ];
+    let title = "This file changed since sdc exported it.";
+    let (k, clicked) = dialog(
+        ctx,
+        "nif-export-guard",
+        true,
+        420.0,
+        title,
+        &buttons,
+        |ui| {
+            ui.add(egui::Label::new(e.export_path.display().to_string()).truncate());
+            if g.show_diff {
+                egui::ScrollArea::vertical()
+                    .id_salt("nif-export-guard-diff")
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for l in &g.diff {
+                            ui.add(egui::Label::new(l).wrap());
+                        }
+                    });
+            }
+        },
+    );
+    match clicked {
+        Some(0) => act.export = Some(Some(GuardChoice::Overwrite)),
+        Some(1) => act.guard_diff = true,
+        Some(_) => act.export = Some(Some(GuardChoice::KeepTheirs)),
+        None if k.enter => act.export = Some(Some(GuardChoice::KeepTheirs)),
+        None if k.cancel => act.guard_close = true,
+        None => {}
+    }
 }
 
 /// A short name of what an op changes, for the rows of ops that did not apply.
@@ -160,5 +259,17 @@ fn apply(m: &mut MeshesModel, act: Act) {
     }
     if act.open.is_some() {
         m.open_in_textures = act.open;
+    }
+    if let Some(choice) = act.export {
+        m.export_edit(choice);
+    }
+    if let (true, Some(e)) = (act.guard_close, &mut m.edit) {
+        e.guard = None;
+    }
+    if let (true, Some(g)) = (
+        act.guard_diff,
+        m.edit.as_mut().and_then(|e| e.guard.as_mut()),
+    ) {
+        g.show_diff = !g.show_diff;
     }
 }

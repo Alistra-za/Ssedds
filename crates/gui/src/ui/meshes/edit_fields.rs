@@ -27,6 +27,12 @@ pub(super) struct Act {
     pub take_source: Option<usize>,
     pub revert: Option<usize>,
     pub open: Option<String>,
+    /// "Export NIF", or a guard answer.
+    pub export: Option<Option<crate::model::meshes::export::GuardChoice>>,
+    /// The guard dialog closed without an answer (Esc).
+    pub guard_close: bool,
+    /// Diff pressed in the guard dialog.
+    pub guard_diff: bool,
 }
 
 const LABEL_W: f32 = 132.0;

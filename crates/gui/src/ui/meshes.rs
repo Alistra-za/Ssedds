@@ -1,5 +1,6 @@
 //! The Meshes view (plan A Task 12): mods, with the NIFs of the open mod under it (GUI tweaks G9) | shapes of the
 //! selected NIF. Draws `MeshesModel`; every store read happens in the model on a click, never here.
+use crate::model::meshes::export::DocBadge;
 use crate::model::meshes::nif_edit::Selection;
 use crate::model::meshes::{
     alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
@@ -439,7 +440,7 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
                             if let Some(o) = origin {
                                 ui.weak(o);
                             }
-                            badges(ui, n);
+                            badges(ui, n, m.doc_badges.get(&n.path).copied());
                         });
                     }
                 }
@@ -495,7 +496,7 @@ fn all_meshes(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     if let Some(o) = origin {
                         ui.weak(o);
                     }
-                    badges(ui, n);
+                    badges(ui, n, m.doc_badges.get(&n.path).copied());
                 });
             }
         });
@@ -504,7 +505,7 @@ fn all_meshes(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
 }
 
-fn badges(ui: &mut egui::Ui, n: &NifRow) {
+fn badges(ui: &mut egui::Ui, n: &NifRow, edit: Option<DocBadge>) {
     let color = if n.wins {
         GREEN
     } else if n.patched_in_game {
@@ -532,6 +533,14 @@ fn badges(ui: &mut egui::Ui, n: &NifRow) {
     }
     if let Some(p) = &n.problem {
         chip(ui, RED, "Problem").on_hover_text(p);
+    }
+    if let Some(b) = edit {
+        let color = match b {
+            DocBadge::Pending => AMBER,
+            DocBadge::Exported => GREEN,
+            DocBadge::Conflict => RED,
+        };
+        chip(ui, color, b.chip());
     }
 }
 
