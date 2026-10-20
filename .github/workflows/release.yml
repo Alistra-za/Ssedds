@@ -1,0 +1,35 @@
+name: Release build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Installs the channel, target and components pinned in rust-toolchain.toml.
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # Builds sdc-gui and sdc in release for the triple in .cargo/config, then writes
+      # dist/Tessalith-<version>-win-x64.zip and dist/SHA256SUMS.txt. No ISPC needed: encoders are vendored.
+      - name: Build and package
+        run: tools/package-release.ps1
+        shell: pwsh
+      # The zip is what SignPath would sign. A SignPath submit step would go here, after this upload.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tessalith-win-x64
+          path: |
+            dist/Tessalith-*-win-x64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
