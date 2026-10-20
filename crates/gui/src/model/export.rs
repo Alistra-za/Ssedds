@@ -80,6 +80,9 @@ pub struct ExportModel {
     pub(crate) index_stale: bool,
 }
 
+/// The source of `ExportModel::revision`: unique across models, so a cache never mistakes one for another.
+static REV: AtomicU64 = AtomicU64::new(1);
+
 fn slash(p: &str) -> String {
     p.replace('\\', "/")
 }
@@ -175,7 +178,6 @@ impl ExportModel {
             ev.kind,
             EventKind::Progress { .. } | EventKind::BatchStarted { .. }
         ) {
-            static REV: AtomicU64 = AtomicU64::new(1);
             self.revision = REV.fetch_add(1, Ordering::Relaxed);
         }
         match &ev.kind {
@@ -280,6 +282,14 @@ impl ExportModel {
                 Some((r.job_key.clone(), (n("width")?, n("height")?)))
             })
             .collect()
+    }
+
+    /// M7 (Note CI24): drop the `CHK-LOW-DETAIL` warnings of these jobs, written at half size by the held pass.
+    pub fn drop_low_detail(&mut self, jobs: &HashSet<String>) {
+        for r in self.rows.iter_mut().filter(|r| jobs.contains(&r.job_key)) {
+            r.warnings.retain(|w| w.code != Code::ChkLowDetail);
+        }
+        self.revision = REV.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Warnings grouped by code: code → job keys (M3a spec §2.5).

@@ -304,6 +304,19 @@ fn the_half_size_footer_stays_on_screen_with_many_rows() {
                 "{b} at {r:?} is off a {w}x800 window"
             );
         }
+        // M4: the shortened name's tick box is named by the full path. M5: the list is capped at 60 % of the
+        // window: from the first row to the footer is the list plus a separator.
+        let first = h
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, &long)
+            .rect();
+        let footer = h.get_by_label("Export all at full size").rect();
+        let cap = 800.0 * sdc_gui::ui::dialogs::HALF_SIZE_LIST_SHARE;
+        assert!(
+            footer.min.y - first.min.y <= cap + 30.0,
+            "list from {} to {} is over the {cap} px cap",
+            first.min.y,
+            footer.min.y
+        );
     }
 }
 
@@ -498,6 +511,10 @@ fn the_second_pass_keeps_the_progress_epoch() {
     let epoch = m.drawer_epoch;
     m.export_full_size();
     assert!(m.export.running.is_some());
+    // K14: the clock runs again (the first pass's `BatchDone` stopped it).
+    let now = std::time::Instant::now();
+    let pace = m.export.pace.as_ref().unwrap();
+    assert!(pace.elapsed(now + Duration::from_secs(1)) > pace.elapsed(now));
     assert!(m.wait_idle(WAIT));
     assert_eq!(m.drawer_epoch, epoch);
 }
@@ -528,45 +545,48 @@ fn with_drop_top_mip_off_flagged_textures_export_full_and_are_listed() {
     );
     assert_eq!(rows.len(), 2, "once per texture (up, up2): {rows:?}");
     assert!(rows.iter().all(|r| r.0 == Level::Check));
-    let other: Vec<_> = problems(&m)
-        .iter()
-        .filter(|p| p.level != Level::Check)
-        .cloned()
-        .collect();
-    // The header Export dot reads `ready_rows`: the CHK rows never count there (this fixture has other warnings).
-    let f = sdc_gui::model::bottom::flagged(&m);
-    assert_eq!(f.ready_rows, other.len());
-    assert!(f.check_rows >= rows.len());
     assert!(filtered(&m, Some(&ProblemsFilter::Checks))
         .iter()
         .any(|p| p.code == Some(Code::ChkLowDetail)));
-    let summary = sdc_gui::model::checks::checks_summary(&m).unwrap();
-    let n: usize = summary.split_whitespace().nth(1).unwrap().parse().unwrap();
-    assert!(n >= 2, "{summary}");
+    // M3: the header Export dot reads `ready_rows`; turning the switch off removes the 2 CHK rows and must leave
+    // `ready_rows` unchanged (the fixture has other, real warnings, so the dot itself is not green here).
+    let on = sdc_gui::model::bottom::flagged(&m);
+    let summary_count = |m: &AppModel| -> usize {
+        sdc_gui::model::checks::checks_summary(m)
+            .and_then(|s| s.split_whitespace().nth(1)?.parse().ok())
+            .unwrap_or(0)
+    };
+    let n_on = summary_count(&m);
     let mut off = m.settings.checks;
     off.low_detail = false;
     m.set_checks(off);
     m.poll();
     assert!(low(&m).is_empty());
+    let f_off = sdc_gui::model::bottom::flagged(&m);
+    assert_eq!(
+        f_off.ready_rows, on.ready_rows,
+        "a CHK row never counts as ready"
+    );
+    assert_eq!(f_off.check_rows + 2, on.check_rows);
+    assert_eq!(summary_count(&m) + 2, n_on, "the summary counts each once");
 }
 
-#[test]
-fn the_json_finishers_run_once_after_the_final_pass() {
+/// A PBR set (`landscape/rock01`, its albedo upscaled 2x, so held) with a PGPatcher JSON, in Hold mode.
+fn pbr_held(dir: &Path) -> AppModel {
     use sdc_gui::model::Answer;
-    let d = tempfile::tempdir().unwrap();
-    let r = d.path().join("textures/landscape");
+    let r = dir.join("textures/landscape");
     std::fs::create_dir_all(&r).unwrap();
     upscaled(5).save(r.join("rock01.png")).unwrap();
     ImageBuffer::from_pixel(64, 64, Rgb([128u8, 128, 255]))
         .save(r.join("rock01_normal.png"))
         .unwrap();
     std::fs::write(
-        d.path().join("textures/sdc.toml"),
+        dir.join("textures/sdc.toml"),
         "[defaults.encoder]\neffort = \"ultrafast\"\n",
     )
     .unwrap();
     let settings = GuiSettings {
-        export_folder: Some(d.path().join("export")),
+        export_folder: Some(dir.join("export")),
         checks: ChecksSettings {
             drop_top_mip: true,
             ..ChecksSettings::default()
@@ -575,7 +595,7 @@ fn the_json_finishers_run_once_after_the_final_pass() {
     };
     let mut m = AppModel::new(settings, None, support::session());
     m.accept = engine::policy::AcceptSuggestions::None;
-    m.open_folder(d.path().join("textures"));
+    m.open_folder(dir.join("textures"));
     assert!(m.wait_idle(WAIT));
     m.decide(
         "landscape/rock01.png",
@@ -590,19 +610,31 @@ fn the_json_finishers_run_once_after_the_final_pass() {
         Answer::Green(engine::config::GreenConvention::Directx),
     );
     assert!(m.wait_idle(WAIT));
-    let go = |m: &mut AppModel| {
-        m.export_clicked();
-        if m.review.is_some() {
-            m.acknowledge_all_asks();
-            m.export_from_review();
-        }
-        assert!(m.wait_idle(WAIT));
-    };
+    m
+}
+
+/// Export, through Review when it opens (its asks acknowledged).
+fn go(m: &mut AppModel) {
+    m.export_clicked();
+    if m.review.is_some() {
+        m.acknowledge_all_asks();
+        m.export_from_review();
+    }
+    assert!(m.wait_idle(WAIT));
+}
+
+fn json_path(m: &AppModel) -> PathBuf {
+    m.export_root()
+        .join("PBRNIFPatcher")
+        .join(format!("{}.json", sdc_gui::model::pbr_export::json_name(m)))
+}
+
+#[test]
+fn the_json_finishers_run_once_after_the_final_pass() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_held(d.path());
     go(&mut m);
-    let json = m.export_root().join("PBRNIFPatcher").join(format!(
-        "{}.json",
-        sdc_gui::model::pbr_export::json_name(&m)
-    ));
+    let json = json_path(&m);
     half_rows(&m);
     assert!(!json.exists(), "no JSON while the box is open");
     assert_eq!(logged(&m, "Checks:"), 0, "no summary while the box is open");
@@ -703,4 +735,180 @@ fn the_advanced_row_shows_a_saved_half_size_and_clear_removes_it() {
             .file_value("up.png", "drop_top_mip"),
         None
     );
+}
+
+/// M1: an Export click while the half-size pass waits for its plan is not queued silently.
+#[test]
+fn an_export_click_while_the_half_size_pass_waits_gets_a_note() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    m.export_half_size(&["up.png".to_string()]);
+    assert!(m.export_queued());
+    m.export_clicked();
+    assert_eq!(m.status_line, "Export waits for the half-size pass");
+    assert_eq!(logged(&m, "Export waits for the half-size pass"), 1);
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(dims(&m, "up.png"), (512, 512));
+    assert_eq!(m.dialog, None, "the click started no second export");
+}
+
+/// M1: a Review ask that appears while the half-size pass waits stops it: Review opens, nothing more is written
+/// past the warning, and the first pass's JSON is still written.
+#[test]
+fn a_new_review_ask_stops_the_half_size_pass() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_held(d.path());
+    go(&mut m);
+    half_rows(&m);
+    m.export_half_size(&["landscape/rock01.png".to_string()]);
+    m.set_json_value("landscape/rock01", "match1", Some(serde_json::json!("")));
+    assert!(m.wait_idle(WAIT));
+    assert!(m.review.is_some(), "Review opens on the new ask");
+    assert!(
+        m.status_line
+            .contains("not exported: a new warning needs a look in Review"),
+        "{}",
+        m.status_line
+    );
+    // The JSON finisher ran for the first pass: its only set was held, so it says why nothing was written.
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.contains("not in JSON: landscape/rock01 (skipped: held")),
+        "{:?}",
+        m.export.notes
+    );
+    assert!(!m
+        .export_root()
+        .join(job(&m, "landscape/rock01.png"))
+        .exists());
+}
+
+/// M5, Review Focus 1: the save fails after "Export selected" (the read-only flag set after the box opened): the
+/// step is undone and everything is written at full size; no half size without a saved field.
+#[test]
+fn a_failed_half_size_save_is_undone_and_exports_full_size() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    half_rows(&m);
+    let path = m.root.clone().unwrap().join("sdc.toml");
+    let mut perm = std::fs::metadata(&path).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(&path, perm.clone()).unwrap();
+    m.export_half_size(&["up.png".to_string()]);
+    assert!(matches!(m.dialog, Some(Dialog::Error(_))), "{:?}", m.dialog);
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value("up.png", "drop_top_mip"),
+        None,
+        "the step was undone"
+    );
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(dims(&m, "up.png"), (1024, 1024));
+    assert!(!toml(&m).contains("drop_top_mip"));
+    #[allow(clippy::permissions_set_readonly_false)]
+    perm.set_readonly(false);
+    std::fs::set_permissions(&path, perm).unwrap();
+}
+
+/// M6: one mip level has nothing to drop: the Advanced row is locked with the reason, and no write sets it.
+#[test]
+fn the_half_size_row_is_locked_without_mips() {
+    use sdc_gui::model::fields::advanced_field_views;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    m.set_field("up.png", "mips.levels", serde_json::json!("none"));
+    assert!(m.wait_idle(WAIT));
+    let j = m.item("up.png").unwrap().job.clone().unwrap();
+    let v = advanced_field_views(m.target, &j)
+        .into_iter()
+        .find(|v| v.field == "drop_top_mip")
+        .unwrap();
+    assert_eq!(v.lock, Some("No mips to drop"));
+    m.set_field("up.png", "drop_top_mip", serde_json::json!(true));
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value("up.png", "drop_top_mip"),
+        None
+    );
+}
+
+/// M7: a texture the held pass wrote at half size loses its first-pass CHK-LOW-DETAIL row; the unticked one keeps it.
+#[test]
+fn a_texture_written_at_half_size_drops_its_low_detail_row() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    m.export_half_size(&["up.png".to_string()]);
+    assert!(m.wait_idle(WAIT));
+    let low = |m: &AppModel, item: &str| {
+        let k = job(m, item);
+        let row = m.export.rows.iter().find(|r| r.job_key == k).unwrap();
+        let in_row = row.warnings.iter().any(|w| w.code == Code::ChkLowDetail);
+        let in_problems = problems(m)
+            .iter()
+            .any(|p| p.code == Some(Code::ChkLowDetail) && p.at == At::File(k.clone()));
+        (in_row, in_problems)
+    };
+    assert_eq!(low(&m, "up.png"), (false, false));
+    assert_eq!(low(&m, "up2.png"), (true, true));
+}
+
+/// Owner ruling 2026-10-20: Copy settings asks about a saved half size; its Enter default copies everything else.
+#[test]
+fn copy_settings_asks_about_a_saved_half_size() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    m.set_field("up.png", "drop_top_mip", serde_json::json!(true));
+    m.set_field("up.png", "header", serde_json::json!("dx10"));
+    assert!(m.wait_idle(WAIT));
+    let select = |m: &mut AppModel| {
+        m.click_item("noise.png", false, false);
+        m.click_item("up2.png", true, false);
+        m.click_item("up.png", true, false);
+        m.open_copy_settings();
+    };
+    select(&mut m);
+    let fields = match &m.dialog {
+        Some(Dialog::CopySettings { fields, .. }) => fields.clone(),
+        d => panic!("{d:?}"),
+    };
+    assert!(
+        fields.iter().all(|(f, _)| f != "drop_top_mip"),
+        "the question is the one place it is decided: {fields:?}"
+    );
+    let ticked: Vec<String> = fields.into_iter().map(|f| f.0).collect();
+    m.copy_settings_chosen("up.png", &["noise.png".into(), "up2.png".into()], &ticked);
+    assert!(matches!(m.dialog, Some(Dialog::CopyHalfSize { .. })));
+    // Enter = "Copy without half size".
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    let mut m = h.into_state();
+    assert_eq!(m.dialog, None);
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value("up2.png", "header"),
+        Some(serde_json::json!("dx10"))
+    );
+    assert_eq!(p.file_value("up2.png", "drop_top_mip"), None);
+    assert!(m.wait_idle(WAIT));
+    select(&mut m);
+    m.copy_settings_chosen("up.png", &["noise.png".into(), "up2.png".into()], &ticked);
+    m.resolve_copy_half_size(true);
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value("noise.png", "drop_top_mip"),
+        Some(serde_json::json!(true))
+    );
+    assert_eq!(m.undo_label(), Some("Copy settings from up.png"));
 }

@@ -151,6 +151,13 @@ pub enum Dialog {
     ConfirmResetAll(Vec<String>),
     /// F3b: the rename dialog (input aliases or output names).
     Rename(rename::RenameDialog),
+    /// Owner ruling 2026-10-20 (Note CI26): Copy settings from a texture with a saved half size asks whether the
+    /// targets get it too; `fields` are the ticked fields, copied either way.
+    CopyHalfSize {
+        from: String,
+        to: Vec<String>,
+        fields: Vec<String>,
+    },
     /// Check 3, Hold mode (Note CI24): the textures held at the end of the export, ticked to write at half size.
     HalfSize(Vec<HalfRow>),
     Error(String),
@@ -462,6 +469,8 @@ pub struct AppModel {
     pub half_size_unwritable: Option<String>,
     /// The running (or last) export pass is a held export's second pass (Note CI24).
     half_pass: bool,
+    /// The Review asks (texts) when the last fresh export started: a held pass stops on any new one (M1).
+    export_asked: Vec<String>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -615,6 +624,7 @@ impl AppModel {
             pending_json_answer: None,
             half_size_unwritable: None,
             half_pass: false,
+            export_asked: Vec::new(),
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -1142,6 +1152,19 @@ impl AppModel {
     /// out-of-range value), ignore `sdc.toml` as for a parse error (spec §7.4): read-only, banner, and plan the
     /// folder again without it. Any other failure (or a config error with `sdc.toml` already ignored) is a dialog.
     fn plan_failed(&mut self, f: PlanFailure) {
+        let half = self
+            .continue_after_plan
+            .filter(|c| matches!(c, Continue::HalfSize { .. }));
+        let why = format!("planning failed: {}", f.message);
+        self.plan_failed_now(f);
+        // I1: after the failure is handled, so a deferred Open does not run in the middle of it.
+        if half.is_some() {
+            self.continue_after_plan = half;
+            self.drop_half_size(&why);
+        }
+    }
+
+    fn plan_failed_now(&mut self, f: PlanFailure) {
         self.export_after_plan = false;
         self.continue_after_plan = None;
         // An error naming the user config is not the project's fault; ignoring `sdc.toml` would not help.
@@ -1398,6 +1421,13 @@ impl AppModel {
         if self.root.is_none() {
             return;
         }
+        // M1: the held textures' pass is the export in progress; a click is not queued behind it silently.
+        if matches!(self.continue_after_plan, Some(Continue::HalfSize { .. })) {
+            let note = "Export waits for the half-size pass";
+            self.status_line = note.into();
+            self.messages.notify(messages::Severity::Info, note);
+            return;
+        }
         // A plan is in flight (just opened, or an edit): the items on screen are the previous plan's, so the checks
         // wait for the plan that lands (spec §2.6: the button is never silently disabled).
         if self.planning.is_some() || self.votes_pending.is_some() {
@@ -1618,26 +1648,45 @@ impl AppModel {
                     self.continue_after_plan = Some(how);
                     return;
                 }
-                let n = self.export.held().len();
                 let why = if self.export_stopped() {
                     match &self.dialog {
                         Some(Dialog::Error(e)) => e.clone(),
                         _ => "the export is blocked; see Review".into(),
                     }
+                } else if pbr_export::export_asks(self)
+                    .iter()
+                    .any(|a| !self.export_asked.contains(&a.text))
+                {
+                    // M1: never written past a warning that appeared after the first pass (ui-rules 7.3).
+                    self.open_review();
+                    "a new warning needs a look in Review".into()
                 } else if self.start_export_pass(false, save) {
                     return;
                 } else {
                     "the export did not start".into()
                 };
-                self.held_note(n, &format!("not exported: {why}"));
-                let completed = self
-                    .export
-                    .summary
-                    .as_ref()
-                    .is_some_and(|s| s.cancelled.is_empty());
-                self.finish_export(completed, None);
+                self.half_size_dropped(&why);
             }
         }
+    }
+
+    /// I1: a queued held pass that can no longer run: say why, then finish the export.
+    fn drop_half_size(&mut self, why: &str) {
+        if matches!(self.continue_after_plan, Some(Continue::HalfSize { .. })) {
+            self.continue_after_plan = None;
+            self.half_size_dropped(why);
+        }
+    }
+
+    /// The held textures stay unwritten: the note, then the first pass's finishers and a deferred close or open.
+    fn half_size_dropped(&mut self, why: &str) {
+        self.held_note(self.export.held().len(), &format!("not exported: {why}"));
+        let completed = self
+            .export
+            .summary
+            .as_ref()
+            .is_some_and(|s| s.cancelled.is_empty());
+        self.finish_export(completed, None);
     }
 
     /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
@@ -1743,9 +1792,21 @@ impl AppModel {
             };
             self.show_tab(bottom::BottomTab::Files);
             self.drawer_epoch += 1;
+            self.export_asked = pbr_export::export_asks(self)
+                .into_iter()
+                .map(|a| a.text)
+                .collect();
         } else {
             // K14: the first pass's `BatchDone` stopped the clock.
             self.export.pace = Some(export::Pace::new(Instant::now()));
+            // M7: a texture now written at half size no longer carries its first-pass CHK-LOW-DETAIL.
+            let halved: std::collections::HashSet<String> = self
+                .items
+                .iter()
+                .filter(|i| i.job.as_ref().is_some_and(|j| j.profile.drop_top_mip))
+                .map(|i| i.job_key.clone())
+                .collect();
+            self.export.drop_low_detail(&halved);
         }
         self.half_pass = !fresh;
         let cancel = CancelToken::default();
@@ -2009,6 +2070,10 @@ impl AppModel {
         }
         // A newer answer replaces an older one; it never stacks.
         self.after_export = Some(action);
+        // M2 (owner answer 4): close or open during the held full-size pass means full size, then close or open.
+        if self.export.running.is_some() && self.half_pass {
+            return;
+        }
         if self.export.running.is_some() {
             self.cancel_export();
         } else {
@@ -2502,6 +2567,16 @@ impl AppModel {
         if field == "drop_top_mip" && value == json!(false) {
             return self.clear_field(item_key, field);
         }
+        // M6: never a half size where there is no mip to drop (the row is disabled there).
+        let locked = |m: &Self| {
+            m.item(item_key)
+                .and_then(|i| i.job.as_ref())
+                .and_then(|j| fields::field_lock(m.target, &j.profile, field))
+                .is_some()
+        };
+        if field == "drop_top_mip" && locked(self) {
+            return;
+        }
         // DECISIONS Note NV: "Built-in" is the texture's own format default, so one bulk value fits BC7 and BC6H.
         let value = match field {
             "encoder.backend" if value != serde_json::json!(engine::config::Backend::Nvtt) => self
@@ -2866,6 +2941,18 @@ impl AppModel {
     }
 
     pub fn reload_documents(&mut self) {
+        let half = self
+            .continue_after_plan
+            .filter(|c| matches!(c, Continue::HalfSize { .. }));
+        self.reload_documents_now();
+        // I1: the held pass belonged to the dropped documents; finish the export after the reload.
+        if half.is_some() {
+            self.continue_after_plan = half;
+            self.drop_half_size("the documents were reloaded");
+        }
+    }
+
+    fn reload_documents_now(&mut self) {
         self.dialog = None;
         // K4, K5: Review and an export queued behind a plan belong to the documents being dropped.
         self.close_review();
@@ -3408,6 +3495,158 @@ mod tests {
         assert!(m.messages.entries().any(|e| e
             .text
             .contains("exported at full size before opening the folder")));
+    }
+
+    /// I1: a PBR set written whole by the first pass (its JSON is due) and `landscape/up.png` held.
+    fn held_pbr_fixture(d: &std::path::Path) -> AppModel {
+        let r = d.join("textures/landscape");
+        std::fs::create_dir_all(&r).unwrap();
+        image::RgbImage::from_fn(64, 64, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+        })
+        .save(r.join("rock01.png"))
+        .unwrap();
+        image::RgbImage::from_pixel(64, 64, image::Rgb([128, 128, 255]))
+            .save(r.join("rock01_normal.png"))
+            .unwrap();
+        let mut m = held_fixture(d);
+        std::fs::rename(d.join("textures/up.png"), r.join("up.png")).unwrap();
+        std::fs::write(
+            d.join("textures/sdc.toml"),
+            "[defaults.encoder]\neffort = \"ultrafast\"\n\n[files.\"landscape/up.png\"]\nsubtype = \"diffuse\"\n",
+        )
+        .unwrap();
+        m.accept = AcceptSuggestions::None;
+        m.open_folder(d.join("textures"));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
+        m.decide(
+            "landscape/rock01_normal.png",
+            Answer::Subtype(Subtype::PbrNormal),
+        );
+        m.decide(
+            "landscape/rock01_normal.png",
+            Answer::Green(GreenConvention::Directx),
+        );
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        m.export_clicked();
+        if m.review.is_some() {
+            m.acknowledge_all_asks();
+            m.export_from_review();
+        }
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        assert!(
+            matches!(m.dialog, Some(Dialog::HalfSize(_))),
+            "{:?}",
+            m.dialog
+        );
+        m
+    }
+
+    fn pgp_json(m: &AppModel) -> PathBuf {
+        m.export_root()
+            .join("PBRNIFPatcher")
+            .join(format!("{}.json", pbr_export::json_name(m)))
+    }
+
+    fn logged(m: &AppModel, s: &str) -> bool {
+        m.messages.entries().any(|e| e.text.contains(s))
+    }
+
+    /// I1: a failed re-plan drops the queued held pass with a note; the first pass's JSON is still written and a
+    /// deferred close still happens.
+    #[test]
+    fn a_failed_replan_while_the_half_size_pass_waits_finishes_the_export() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_pbr_fixture(d.path());
+        assert!(!pgp_json(&m).exists(), "the finishers wait for the box");
+        m.export_half_size(&["landscape/up.png".to_string()]);
+        assert!(!m.request_close());
+        m.plan_failed(PlanFailure {
+            message: "plan broke".into(),
+            config: false,
+        });
+        assert!(logged(
+            &m,
+            "1 texture held for half size was not exported: planning failed: plan broke"
+        ));
+        assert!(pgp_json(&m).exists(), "{:?}", m.export.notes);
+        assert!(m.take_close_ready());
+        assert!(m.wait_idle(Duration::from_secs(120)));
+    }
+
+    /// I1: a Reload while the held pass waits, the same.
+    #[test]
+    fn a_reload_while_the_half_size_pass_waits_finishes_the_export() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_pbr_fixture(d.path());
+        m.export_half_size(&["landscape/up.png".to_string()]);
+        assert!(!m.request_close());
+        m.reload_documents();
+        assert!(logged(
+            &m,
+            "1 texture held for half size was not exported: the documents were reloaded"
+        ));
+        assert!(pgp_json(&m).exists(), "{:?}", m.export.notes);
+        assert!(m.take_close_ready());
+        assert!(m.wait_idle(Duration::from_secs(120)));
+    }
+
+    /// M2 (owner answer 4): "Stop the export and close" asked in the first pass and answered during the held
+    /// full-size pass does not cancel it: full size first, then the close.
+    #[test]
+    fn stop_and_close_during_the_held_pass_waits_for_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_fixture(d.path());
+        m.export_clicked();
+        assert!(!m.request_close());
+        assert!(matches!(m.dialog, Some(Dialog::ExportRunning(_))));
+        first_pass(&mut m, |_| {});
+        assert!(m.export.running.is_some(), "the full-size pass runs");
+        m.resolve_export_running(AfterExport::Close, true);
+        assert!(m.export.running.is_some(), "not cancelled");
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        assert_eq!(up_width(&m), 1024);
+        assert!(m.take_close_ready());
+    }
+
+    /// K12 while the pass is queued, and the Open variants (M5).
+    #[test]
+    fn close_or_open_while_the_half_size_pass_waits_happen_after_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_fixture(d.path());
+        m.export_clicked();
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        m.export_half_size(&["up.png".to_string()]);
+        assert!(!m.request_close());
+        assert!(!m.take_close_ready());
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        assert_eq!(up_width(&m), 512);
+        assert!(m.take_close_ready());
+
+        let other = d.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        for queued in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            let mut m = held_fixture(d.path());
+            let up = m.export_root().join("up.dds");
+            m.export_clicked();
+            assert!(m.wait_idle(Duration::from_secs(120)));
+            if queued {
+                m.export_half_size(&["up.png".to_string()]);
+            }
+            assert!(!m.request_open(other.clone()));
+            assert_ne!(m.root.as_ref(), Some(&other));
+            assert!(m.wait_idle(Duration::from_secs(120)));
+            assert_eq!(m.root.as_ref(), Some(&other), "queued: {queued}");
+            let b = std::fs::read(&up).unwrap();
+            let w = u32::from_le_bytes(b[16..20].try_into().unwrap());
+            assert_eq!(w, if queued { 512 } else { 1024 });
+            assert_eq!(
+                logged(&m, "exported at full size before opening the folder"),
+                !queued
+            );
+        }
     }
 
     /// K12: a close asked while the box is open answers it as full size; the window closes after that pass.

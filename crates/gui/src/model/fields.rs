@@ -164,6 +164,15 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
             Some("no encoder runs for uncompressed formats")
         }
         "color.tag" if target != Target::Cs => Some("_SRGB is only written under cs"),
+        // M6: one level has no mip 1 to write from (the engine ignores the field there, Note CI23).
+        "drop_top_mip"
+            if matches!(
+                p.mips.levels,
+                MipLevels::Keyword(MipKeyword::None) | MipLevels::Count(0..=1)
+            ) =>
+        {
+            Some("No mips to drop")
+        }
         "encoder.perceptual"
             if !(p.subtype.category() == Category::Color
                 && p.alpha.policy != AlphaPolicy::Data
