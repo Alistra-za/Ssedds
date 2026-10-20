@@ -1730,21 +1730,21 @@ fn placement_rules() {
         Placement::AbovePg("PGP".into())
     );
     assert_eq!(placement(&ok, &mods[..2], EDIT_MOD), Placement::NotEnabled);
-    assert_eq!(Placement::Ok.text(), "Placement OK.");
+    assert_eq!(Placement::Ok.text(EDIT_MOD), "Placement OK.");
     assert_eq!(
-        Placement::NotEnabled.text(),
+        Placement::NotEnabled.text(EDIT_MOD),
         "The edit mod is not enabled: enable 'sdc NIF Edits' in MO2."
     );
     assert_eq!(
-        Placement::NotScanned.text(),
+        Placement::NotScanned.text(EDIT_MOD),
         "Rescan to check where 'sdc NIF Edits' sits."
     );
     assert_eq!(
-        Placement::Below("B".into()).text(),
+        Placement::Below("B".into()).text(EDIT_MOD),
         "The edit mod is below B: your edit loses. Drag 'sdc NIF Edits' below B in MO2."
     );
     assert_eq!(
-        Placement::AbovePg("PGP".into()).text(),
+        Placement::AbovePg("PGP".into()).text(EDIT_MOD),
         "The edit mod is above PGP: PGPatcher output will not include your edit until you drag 'sdc NIF Edits' above PGP in MO2."
     );
 }
@@ -2031,7 +2031,7 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
     let revert = format!("Revert 1: {}: Glossiness", at.shape.as_deref().unwrap());
     let mut h = view(m);
     h.run_steps(3);
-    h.get_by_label("To: mods\\sdc NIF Edits\\meshes\\x.nif");
+    h.get_by_label(&format!("To: {}", exported(&d).display()));
     h.get_by_label("Placement OK.");
     h.get_by_role_and_label(AkRole::Button, &revert);
     h.get_by_role_and_label(AkRole::Button, "Export NIF")
@@ -2436,4 +2436,122 @@ fn slsf2_warning_shows_under_the_flags() {
     h.run_steps(2);
     set_slsf2(&mut h, a, 1 << 12);
     h.get_by_label("Fit_Slope (SLSF2 12) does nothing without the PBR flag.");
+}
+
+// ---- v2 P14 (owner, 2026-10-20): the NIF export follows the Textures export folder ----
+
+/// `files_with(false, modlist)` with `mods\MyOut` made before the scan (so a listed MyOut gets its mod row); scanned,
+/// x.nif selected, the export root set to `root(instance)`.
+fn session_into(
+    modlist: &str,
+    root: impl Fn(&Path) -> std::path::PathBuf,
+) -> (tempfile::TempDir, MeshesModel) {
+    let d = files_with(false, modlist);
+    std::fs::create_dir_all(d.path().join("mods").join("MyOut")).unwrap();
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.set_nif_export_root(Some(root(d.path())));
+    (d, m)
+}
+
+fn nif_doc(root: &Path) -> std::path::PathBuf {
+    root.join(r".sdc\nif-edits\meshes\x.nif.sdc-nifedit.toml")
+}
+
+#[test]
+fn export_goes_to_the_textures_export_folder_and_checks_that_mod() {
+    let (d, mut m) = session_into("+PGP\n+MyOut\n+A\n", |r| r.join(r"mods\MyOut"));
+    let out = d.path().join(r"mods\MyOut");
+    m.open_edit();
+    assert_eq!(m.error, None);
+    assert_eq!(m.edit.as_ref().unwrap().placement, Some(Placement::Ok));
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert!(out.join(r"meshes\x.nif").is_file());
+    assert!(nif_doc(&out).is_file());
+    assert!(!d.path().join("mods").join(EDIT_MOD).exists());
+    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Exported));
+}
+
+#[test]
+fn placement_names_the_export_folder_mod() {
+    let (_d, mut m) = session_into("+PGP\n+A\n+MyOut\n", |r| r.join(r"mods\MyOut"));
+    m.open_edit();
+    let p = m.edit.as_ref().unwrap().placement.clone().unwrap();
+    assert_eq!(p, Placement::Below("A".into()));
+    assert_eq!(
+        p.text("MyOut"),
+        "The edit mod is below A: your edit loses. Drag 'MyOut' below A in MO2."
+    );
+}
+
+#[test]
+fn without_an_export_folder_the_fallback_mod_is_used() {
+    let (d, m) = export_session();
+    assert_eq!(m.nif_export_root, None);
+    assert_eq!(m.edit_mod(), Some(d.path().join("mods").join(EDIT_MOD)));
+}
+
+#[test]
+fn an_export_folder_outside_the_instance_is_not_checked_and_still_exports() {
+    let o = tempfile::tempdir().unwrap();
+    let out = o.path().join("out");
+    let (_d, mut m) = session_into("+PGP\n+A\n", |_| out.clone());
+    m.open_edit();
+    let p = m.edit.as_ref().unwrap().placement.clone();
+    assert_eq!(p, Some(Placement::NotInMo2));
+    assert_eq!(
+        Placement::NotInMo2.text("out"),
+        "The export folder is not an MO2 mod here: load order not checked."
+    );
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert!(out.join(r"meshes\x.nif").is_file());
+    assert!(nif_doc(&out).is_file());
+}
+
+#[test]
+fn changing_the_export_folder_with_an_edit_open_keeps_its_ops() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc.ops.len(), 1, "the session kept its edit");
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert_eq!(e.export_path, out.join(r"meshes\x.nif"));
+    gloss(&mut m, 20.5);
+    let saved = load(&nif_doc(&out)).unwrap().unwrap();
+    assert_eq!(saved.ops.len(), 2, "the next save goes to the new folder");
+    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Pending));
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert!(out.join(r"meshes\x.nif").is_file());
+}
+
+#[test]
+fn the_destination_line_shows_the_real_path() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let full = format!("To: {}", exported(&d).display());
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label(&full);
+    h.get_by_label("Change it with Export to ▾ in the header.");
+}
+
+#[test]
+fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let want = model.export_root();
+    let (_d, h) = in_the_meshes_view(model, 1);
+    let m = &h.state().meshes;
+    assert_eq!(m.nif_export_root.as_deref(), Some(want.as_path()));
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.doc_path.starts_with(&want));
+    assert_eq!(e.doc.ops.len(), 1);
 }

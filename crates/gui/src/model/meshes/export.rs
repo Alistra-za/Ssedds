@@ -1,6 +1,6 @@
-//! Export of a NIF edit into `sdc NIF Edits` (spec §8, plan A19): the MO2 placement check, the guard outcomes and
+//! Export of a NIF edit into the export folder (spec §8, plan A19, Note CI29): the MO2 placement check, the guard outcomes and
 //! the per-NIF badges read from the edit documents. No egui types. The export routine is `MeshesModel::export_edit`.
-use super::edit_doc::{self, EditDoc, EDIT_MOD};
+use super::edit_doc::{self, EditDoc};
 use modscan::store::{ModRow, PathCopy, KIND_BSA, KIND_MOD};
 use std::path::Path;
 
@@ -14,23 +14,29 @@ pub enum Placement {
     Below(String),
     /// PGPatcher output with lower priority than the edit mod.
     AbovePg(String),
+    /// The export folder is not a folder directly in the instance's `mods` (Note CI29).
+    NotInMo2,
 }
 
 impl Placement {
-    pub fn text(&self) -> String {
+    /// The line for an edit mod named `edit_mod` (the export folder's name).
+    pub fn text(&self, edit_mod: &str) -> String {
         match self {
             Placement::Ok => "Placement OK.".into(),
             Placement::NotEnabled => {
-                format!("The edit mod is not enabled: enable '{EDIT_MOD}' in MO2.")
+                format!("The edit mod is not enabled: enable '{edit_mod}' in MO2.")
             }
-            Placement::NotScanned => format!("Rescan to check where '{EDIT_MOD}' sits."),
+            Placement::NotScanned => format!("Rescan to check where '{edit_mod}' sits."),
             Placement::Below(x) => format!(
-                "The edit mod is below {x}: your edit loses. Drag '{EDIT_MOD}' below {x} in MO2."
+                "The edit mod is below {x}: your edit loses. Drag '{edit_mod}' below {x} in MO2."
             ),
             Placement::AbovePg(x) => format!(
                 "The edit mod is above {x}: PGPatcher output will not include your edit until you drag \
-                 '{EDIT_MOD}' above {x} in MO2."
+                 '{edit_mod}' above {x} in MO2."
             ),
+            Placement::NotInMo2 => {
+                "The export folder is not an MO2 mod here: load order not checked.".into()
+            }
         }
     }
 }

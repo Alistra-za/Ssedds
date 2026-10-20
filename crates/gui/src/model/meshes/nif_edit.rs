@@ -95,6 +95,9 @@ pub struct GuardAsk {
 }
 
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
+/// No Textures export folder and no MO2 instance: the session is read-only (Note CI29).
+pub const NO_EXPORT_FOLDER: &str =
+    "Export needs an export folder (Export to ▾) or an MO2 instance.";
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
@@ -284,7 +287,7 @@ impl NifEdit {
     /// them as conflicts), then conflicts, new validation errors and bytes that do not read back.
     pub fn export_block(&self) -> Option<String> {
         if self.edit_mod.as_os_str().is_empty() {
-            return Some("Export needs an MO2 instance.".into());
+            return Some(NO_EXPORT_FOLDER.into());
         }
         if let Some(e) = &self.apply_err {
             return Some(e.clone());
@@ -328,7 +331,7 @@ impl NifEdit {
             return ExportOutcome::KeptTheirs; // whatever is on disk now stays
         }
         if self.edit_mod.as_os_str().is_empty() {
-            return ExportOutcome::Blocked("Export needs an MO2 instance.".into());
+            return ExportOutcome::Blocked(NO_EXPORT_FOLDER.into());
         }
         let c = &self.source_copy;
         let now = match read_file(&FileSource::from_store(c.kind, &c.root, &self.data_path)) {
@@ -595,6 +598,15 @@ fn slot_paths(p: &ParsedNif) -> Vec<(u32, Vec<String>)> {
         .collect()
 }
 
+/// The same folder, ignoring ASCII case, `/` versus `\` and a trailing separator (MO2 paths on Windows).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy().replace('/', "\\");
+        s.trim_end_matches('\\').to_ascii_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
 /// A new `Content::Parsed` key: every load of edited bytes is a new load (R10).
 fn next_key() -> u64 {
     static KEY: AtomicU64 = AtomicU64::new(1);
@@ -602,8 +614,12 @@ fn next_key() -> u64 {
 }
 
 impl MeshesModel {
-    /// `<instance>\mods\sdc NIF Edits`; None for a folder source (or an instance that no longer loads).
+    /// Where NIF edits go (Note CI29): the Textures export folder, else `<instance>\mods\sdc NIF Edits`; None for a
+    /// folder source without an export folder (or an instance that no longer loads).
     pub fn edit_mod(&self) -> Option<PathBuf> {
+        if self.nif_export_root.is_some() {
+            return self.nif_export_root.clone();
+        }
         let Some(ScanTarget::Mo2 { root, profile }) = &self.target else {
             return None;
         };
@@ -621,7 +637,7 @@ impl MeshesModel {
         };
         let edit_mod = self.edit_mod();
         if edit_mod.is_none() {
-            self.error = Some("Export needs an MO2 instance.".into());
+            self.error = Some(NO_EXPORT_FOLDER.into());
         }
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((e, content)) => {
@@ -842,23 +858,63 @@ impl MeshesModel {
     /// scanned yet from one that is not enabled.
     pub(super) fn refresh_placement(&mut self) {
         let Some(e) = &mut self.edit else { return };
-        let Some(ScanTarget::Mo2 { root, profile }) = &self.target else {
+        let (Some(ScanTarget::Mo2 { root, profile }), false) =
+            (&self.target, e.edit_mod.as_os_str().is_empty())
+        else {
             e.placement = None;
             return;
         };
-        let mut p = placement(&e.copies, &self.mods, EDIT_MOD);
+        let inst = Instance::load(root, Some(profile)).ok();
+        // Only a folder directly in the instance's `mods` is an MO2 mod (Note CI29); its folder name is the mod name.
+        let name = match (e.edit_mod.parent(), e.edit_mod.file_name(), &inst) {
+            (Some(parent), Some(name), Some(i)) if same_dir(parent, &i.mods) => {
+                name.to_string_lossy().into_owned()
+            }
+            _ => {
+                e.placement = Some(Placement::NotInMo2);
+                return;
+            }
+        };
+        let mut p = placement(&e.copies, &self.mods, &name);
         if p == Placement::NotEnabled {
-            let listed = Instance::load(root, Some(profile))
-                .ok()
+            let listed = inst
                 .and_then(|i| modscan::mo2::loose_origins(&i).ok())
                 .is_some_and(|(on, missing)| {
-                    on.iter().any(|o| o.name == EDIT_MOD) || missing.iter().any(|n| n == EDIT_MOD)
+                    on.iter().any(|o| o.name.eq_ignore_ascii_case(&name))
+                        || missing.iter().any(|n| n.eq_ignore_ascii_case(&name))
                 });
             if listed {
                 p = Placement::NotScanned;
             }
         }
         e.placement = Some(p);
+    }
+
+    /// The app sets the Textures export folder each frame (Note CI29). A change re-reads the chips; an open session
+    /// keeps its ops and is re-pointed at the new folder, where the next save writes its document.
+    pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
+        if self.nif_export_root == root {
+            return;
+        }
+        self.nif_export_root = root;
+        let to = self.edit_mod();
+        if let Some(e) = &mut self.edit {
+            let paths = match &to {
+                Some(m) => edit_doc::doc_path(m, &e.data_path)
+                    .and_then(|d| Ok((m.clone(), d, edit_doc::export_path(m, &e.data_path)?))),
+                None => Ok(Default::default()),
+            };
+            match paths {
+                Ok((m, d, x)) => (e.edit_mod, e.doc_path, e.export_path) = (m, d, x),
+                Err(err) => e.error = Some(err),
+            }
+            // Both described the old folder's file.
+            e.guard = None;
+            e.export_note = None;
+        }
+        self.refresh_doc_badges();
+        self.refresh_placement();
+        self.edit_checks(); // after the badges: the session's own badge wins
     }
 
     /// The preview after a change (R10): each changed shape's material goes to the loaded content; a texture path

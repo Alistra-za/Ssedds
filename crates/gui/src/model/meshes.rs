@@ -522,6 +522,9 @@ pub struct MeshesModel {
     pub edit: Option<nif_edit::NifEdit>,
     /// The NIF list's edit chips, by data path: read from the edit mod after a scan, then kept current by the session.
     pub doc_badges: HashMap<String, export::DocBadge>,
+    /// The Textures export folder (`AppModel::export_root`) when the Textures side has one, set by the app each frame
+    /// through `set_nif_export_root`; the NIF export goes there, else to `<mods>\sdc NIF Edits` (Note CI29).
+    pub nif_export_root: Option<PathBuf>,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
     /// Result of the All meshes search for `all_query` (winners with their mod), at most `ALL_LIMIT`.
@@ -609,6 +612,7 @@ impl MeshesModel {
             v3: Viewport3d::new(None),
             edit: None,
             doc_badges: HashMap::new(),
+            nif_export_root: None,
             procs: system_procs,
             settings,
             settings_changed: false,

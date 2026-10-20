@@ -2,11 +2,12 @@
 //! Export NIF with its guard dialog, then the Shader, Alpha, Controllers and Extra data tabs.
 use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
-use crate::model::meshes::edit_doc::{OpStatus, EDIT_MOD};
+use crate::model::meshes::edit_doc::OpStatus;
 use crate::model::meshes::export::{GuardChoice, Placement};
 use crate::model::meshes::nif_edit::NifEdit;
 use crate::model::meshes::MeshesModel;
 use crate::ui::dialogs::{dialog, Role};
+use crate::ui::header::elide_middle;
 use crate::ui::status::{AMBER, GREEN, RED};
 use eframe::egui;
 use nif::edit::{Op, Outcome};
@@ -143,10 +144,20 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
 /// "Export NIF" with its destination, its blocked reason or last result, and the placement line (spec §8).
 fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     if e.edit_mod.as_os_str().is_empty() {
-        return; // read-only: no MO2 instance, nothing to export to
+        return; // read-only: no export folder and no MO2 instance, nothing to export to
     }
-    let to = format!("To: mods\\{EDIT_MOD}\\{}", e.data_path.replace('/', "\\"));
-    ui.add(egui::Label::new(&to).truncate());
+    // The real destination (Note CI29), cut in the middle like the header's Export to; the full path on hover and in
+    // the accessible name.
+    // MO2 joins `mods` with `/`: shown with `\` throughout.
+    let full = e.export_path.display().to_string().replace('/', "\\");
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let glyph = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
+    let chars = ((ui.available_width() / glyph.max(1.0)) as usize).saturating_sub(4);
+    let to = format!("To: {full}");
+    let r = ui.add(egui::Label::new(format!("To: {}", elide_middle(&full, chars))).truncate());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &to));
+    r.on_hover_text(&to);
+    ui.weak("Change it with Export to ▾ in the header.");
     let r = ui.add_enabled(e.blocked.is_none(), egui::Button::new("Export NIF"));
     if r.clicked() {
         act.export = Some(None);
@@ -165,7 +176,8 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     }
     if let Some(p) = &e.placement {
         let color = if *p == Placement::Ok { GREEN } else { AMBER };
-        ui.add(egui::Label::new(egui::RichText::new(p.text()).color(color)).wrap());
+        let mod_name = e.edit_mod.file_name().unwrap_or_default().to_string_lossy();
+        ui.add(egui::Label::new(egui::RichText::new(p.text(&mod_name)).color(color)).wrap());
     }
 }
 
