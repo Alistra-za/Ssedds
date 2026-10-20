@@ -369,6 +369,8 @@ pub struct Look {
     /// The sun's turn about the vertical (world Z), radians in 0..2π (Shift+right drag). The studio HDRI turns with it
     /// (owner D4: `Scene::env_yaw`).
     pub sun_yaw: f32,
+    /// Opaque shapes through CS's deferred pass (v2 D8); `false` = forward.
+    pub deferred: bool,
 }
 
 impl Look {
@@ -425,6 +427,7 @@ impl Look {
             point: s.point.unwrap_or(d.point),
             radius: s.radius.unwrap_or(d.radius),
             sun_yaw: s.sun_yaw.unwrap_or(d.sun_yaw),
+            deferred: s.deferred.unwrap_or(d.deferred),
         }
     }
 }
@@ -439,6 +442,7 @@ impl crate::settings::LookSettings {
             point: Some(l.point),
             radius: Some(l.radius),
             sun_yaw: Some(l.sun_yaw),
+            deferred: Some(l.deferred),
         }
     }
 }
@@ -452,6 +456,7 @@ impl Default for Look {
             point: 0.0,
             radius: 2.0,
             sun_yaw: 0.0,
+            deferred: true,
         }
     }
 }
