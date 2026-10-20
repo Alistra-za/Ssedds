@@ -305,12 +305,18 @@ pub fn cube_faces(img: &Hdr, size: u32, yaw: f32) -> [Vec<[f32; 4]>; 6] {
     })
 }
 
-/// 2×2 box mips down to 1×1, mip 0 included. `size` must be a power of two and `face` `size²` texels.
+/// 2×2 box mips down to 1×1, mip 0 included. Err unless `size` is a power of two and `face` is `size²` texels.
 /// shortcut: a box chain, not CS's GGX-prefiltered specular irradiance; prefilter if the owner's visual check asks (R4).
-pub fn mip_chain(face: &[[f32; 4]], size: u32) -> Vec<Vec<[f32; 4]>> {
-    assert!(size.is_power_of_two() && face.len() == (size * size) as usize);
+pub fn mip_chain(face: &[[f32; 4]], size: u32) -> Result<Vec<Vec<[f32; 4]>>, String> {
+    let n = size as usize;
+    if !size.is_power_of_two() || n.checked_mul(n) != Some(face.len()) {
+        return Err(format!(
+            "mip chain: {} texels for a {size}² face (the size must be a power of two)",
+            face.len()
+        ));
+    }
     let mut out = vec![face.to_vec()];
-    let mut n = size as usize;
+    let mut n = n;
     while n > 1 {
         let (prev, h) = (out.last().expect("mip 0"), n / 2);
         let next = (0..h * h)
@@ -328,7 +334,7 @@ pub fn mip_chain(face: &[[f32; 4]], size: u32) -> Vec<Vec<[f32; 4]>> {
         out.push(next);
         n = h;
     }
-    out
+    Ok(out)
 }
 
 /// The bundled studio HDRI with its ambient, decoded on first use.

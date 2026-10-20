@@ -55,11 +55,18 @@ pub struct EnvMaps {
 impl EnvMaps {
     /// From the HDRI turned by `yaw`: [`hdri::cube_faces`] + [`hdri::mip_chain`] down to 1×1 (the composite divides by
     /// the level-15 luminance), RGBA16F. `env` and `reflection` are the same view (an HDRI has no sky/no-sky split).
+    /// Err unless `size` is a power of two up to [`crate::textures::MAX_CUBE`].
     pub fn new(gpu: &Gpu, img: &Hdr, size: u32, yaw: f32) -> Result<EnvMaps, String> {
+        if !size.is_power_of_two() || size > crate::textures::MAX_CUBE {
+            return Err(format!(
+                "env cube size {size} is not a power of two up to {}",
+                crate::textures::MAX_CUBE
+            ));
+        }
         let mut data = Vec::new();
         let mut mips = 0;
         for face in hdri::cube_faces(img, size, yaw) {
-            let chain = hdri::mip_chain(&face, size);
+            let chain = hdri::mip_chain(&face, size)?;
             mips = chain.len() as u32;
             for px in chain.iter().flatten() {
                 // As the backdrop: clamped below f16's maximum, so a hot pixel never becomes infinity.
@@ -162,6 +169,12 @@ impl Composite {
                 Some(_) => {}
                 None => unbound.push(format!("t{reg} {name}")),
             }
+        }
+        // Fail closed like the SRVs: the only sampler there is an input for is the captured LinearSampler.
+        if let Some((name, slot)) = r.samplers.iter().find(|s| s.0 != "LinearSampler") {
+            return Err(format!(
+                "{SOURCE}: sampler s{slot} {name} has no input (only LinearSampler is bound)"
+            ));
         }
         unbound.extend(
             r.uavs

@@ -858,6 +858,20 @@ fn read_cube_dds_accepts_cubes_and_rejects_others() {
         ),
         ("header only", cube_dds(4, 3, 26, 4, 1, &[])[..100].to_vec()),
         ("not DDS", b"nope".to_vec()),
+        // Review I1: 16384² × 16 B = 2^32 overflows u32 face sizes; an empty body must be Err, not a panic.
+        (
+            "hostile 16384² RGBA32F, empty body",
+            cube_dds(16384, 1, 2, 4, 1, &[]),
+        ),
+        (
+            "hostile 16384² RGBA32F, 15 mips",
+            cube_dds(16384, 15, 2, 4, 1, &[]),
+        ),
+        ("over the 16384 cap", cube_dds(32768, 1, 26, 4, 1, &[])),
+        (
+            "146-byte header",
+            cube_dds(4, 3, 26, 4, 1, &[])[..146].to_vec(),
+        ),
     ];
     for (what, b) in bad {
         assert!(read_cube_dds(&b).is_err(), "{what}");
@@ -993,4 +1007,50 @@ fn replay_without_env_cube_file_reports_missing_env() {
     let dir = write_fixture_dc(root.path(), Some("../composite/nope.dds"), 0.0);
     let e = load_fixture(&dir).err().expect("unreadable cube file");
     assert!(e.contains("nope.dds"), "{e}");
+}
+
+/// Review I1: `cube_srv` sizes in checked u64; an oversized cube or a short body is Err before any D3D call.
+#[test]
+fn cube_srv_rejects_oversized_and_short_data() {
+    use render3d::textures::cube_srv;
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
+    };
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    assert!(cube_srv(&gpu, 16384, 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, &[]).is_err());
+    assert!(cube_srv(&gpu, 65536, 17, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, &[]).is_err());
+    assert!(cube_srv(&gpu, 32768, 1, DXGI_FORMAT_R11G11B10_FLOAT, 4, &[]).is_err());
+    assert!(cube_srv(
+        &gpu,
+        2,
+        2,
+        DXGI_FORMAT_R11G11B10_FLOAT,
+        4,
+        &[0; 6 * 5 * 4 - 1]
+    )
+    .is_err());
+    assert!(cube_srv(&gpu, 2, 3, DXGI_FORMAT_R11G11B10_FLOAT, 4, &[0; 6 * 5 * 4]).is_err());
+    assert!(cube_srv(&gpu, 2, 2, DXGI_FORMAT_R11G11B10_FLOAT, 4, &[0; 6 * 5 * 4]).is_ok());
+}
+
+/// Review M1: every env cube the composite reflects must be in the capture under its own name and bind. A composite
+/// that also reads t6 EnvTexture (stand-in STANDIN_COMPOSITE_ENV6) with only t7 saved is an error, never t7 bound
+/// in its place.
+#[test]
+fn replay_env_cube_binds_by_exact_name() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = write_fixture_dc(root.path(), Some("../composite/t7.dds"), 0.0);
+    edit_json(&dir, "composite.json", &|v| {
+        v["definesInferred"] = json!(["DYNAMIC_CUBEMAPS", "STANDIN_COMPOSITE_ENV6"]);
+        v["srvs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": "EnvTexture", "bind": 6, "type": "null", "cube": false}));
+    });
+    let r = load_fixture(&dir).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let e = ren.render_replay(&r, true).expect_err("t6 has no cube");
+    assert!(e.contains("EnvTexture"), "{e}");
+    assert_eq!(ren.bound_cs_views(), 0);
 }

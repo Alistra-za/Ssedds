@@ -416,7 +416,7 @@ const M5: [f32; 3] = [0.25, 0.125, 0.5];
 /// The 1×1 mip of face +Z of the studio env cube at yaw 0, as the GPU stores it (RGBA16F).
 fn env_last_z() -> [f32; 4] {
     let faces = render3d::hdri::cube_faces(&render3d::hdri::studio().image, 256, 0.0);
-    let chain = render3d::hdri::mip_chain(&faces[4], 256);
+    let chain = render3d::hdri::mip_chain(&faces[4], 256).unwrap();
     chain.last().unwrap()[0].map(|v| half::f16::from_f32(v).to_f32())
 }
 
@@ -458,19 +458,21 @@ fn dc_composite_adds_reflectance_times_the_env_cube() {
     r.render(&Scene::neutral(), 64, 64).unwrap();
     let e = env_last_z();
     let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
-    // The f32 sums are exact here (M5 is a power of two times an f16); G lands exactly halfway between two halves, and
-    // D3D lets the UAV store round a tie either way (WARP rounds toward zero), so each channel must be bit-equal to
-    // one of the two halves around the exact sum.
-    for k in 0..3 {
-        let sum = base[k] + M5[k] * e[k];
-        let (near, zero) = (f16(sum), f16_toward_zero(sum));
-        assert!(
-            got[k].to_bits() == near.to_bits() || got[k].to_bits() == zero.to_bits(),
-            "ch {k}: {got:?}, sum {sum} -> {near} / {zero}"
-        );
-    }
-    assert_eq!(got[3], 1.0);
+    let sums: Vec<f32> = (0..3).map(|k| base[k] + M5[k] * e[k]).collect();
+    assert_store(got, [sums[0], sums[1], sums[2], 1.0]);
     assert_eq!(r.bound_cs_views(), 0);
+}
+
+/// `got` (an RGBA16F store) equals the nearest-even half of each exact f32 `sum`, bit for bit. Only on a channel whose
+/// sum lies exactly halfway between two halves may it be the half toward zero instead: D3D lets the store round a tie
+/// either way (WARP rounds toward zero). The sums must be exact in f32 (a power of two times an f16 plus an f16).
+fn assert_store(got: [f32; 4], sum: [f32; 4]) {
+    for k in 0..4 {
+        let near = f16(sum[k]);
+        let ok = got[k].to_bits() == near.to_bits()
+            || is_tie(sum[k]) && got[k] == f16_toward_zero(sum[k]);
+        assert!(ok, "ch {k}: {got:?}, exact {:?} -> {near}", sum);
+    }
 }
 
 /// `v` (positive) rounded to a half toward zero.
@@ -481,6 +483,27 @@ fn f16_toward_zero(v: f32) -> f32 {
     } else {
         h.to_f32()
     }
+}
+
+/// `v` (positive) lies exactly halfway between two adjacent halves.
+fn is_tie(v: f32) -> bool {
+    let lo = half::f16::from_f32(f16_toward_zero(v));
+    let hi = half::f16::from_bits(lo.to_bits() + 1);
+    (v as f64 - lo.to_f64()) == (hi.to_f64() - v as f64)
+}
+
+#[test]
+fn the_tie_rule_holds_only_on_ties() {
+    // 0.38806152 = 1589.5 x 2^-12: the D5 G channel, halfway between 0.38793945 and 0.3881836.
+    let tie = 0.375 + 0.125 * 0.104_492_19;
+    assert!(is_tie(tie));
+    assert!(!is_tie(0.5 + 0.25 * 0.107_910_156));
+    assert_store([0.38793945, 0.0, 0.0, 1.0], [tie, 0.0, 0.0, 1.0]);
+    assert!(std::panic::catch_unwind(|| assert_store(
+        [0.4997, 0.0, 0.0, 1.0],
+        [0.49975, 0.0, 0.0, 1.0]
+    ))
+    .is_err());
 }
 
 /// Views bound to the compute stage of `gpu` (SRVs 0..20 + UAVs 0..8).
@@ -567,6 +590,69 @@ fn forward_dc_draw_samples_the_env_cube() {
     ];
     let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
     assert_eq!(bits(got), bits(want), "{got:?} vs {want:?}");
+    assert_eq!(r.env_builds(), 1);
+}
+
+/// Review M7: the forward EnvTexture register (CS t31) gets the env cube too (stand-in STANDIN_ENV_T31 samples t31
+/// instead of t30).
+#[test]
+fn forward_dc_draw_samples_env_texture_t31() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut plain = loaded(cache.path(), FLAT, vec![opaque()]);
+    plain.render(&Scene::neutral(), 64, 64).unwrap();
+    let base = px(&plain.read_mrt(0).unwrap(), 64, 32, 32);
+    let mut r = loaded(
+        cache.path(),
+        &feats(&[DC, "STANDIN_ENV_T31"]),
+        vec![opaque()],
+    );
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    let e = env_last_z();
+    let want = [
+        f16(base[0] + e[0]),
+        f16(base[1] + e[1]),
+        f16(base[2] + e[2]),
+        base[3],
+    ];
+    let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
+    assert_eq!(bits(got), bits(want), "{got:?} vs {want:?}");
+}
+
+/// Review M6: the composite's own sampler goes only to `LinearSampler`; any other reflected sampler is an error.
+#[test]
+fn composite_with_an_unknown_sampler_fails_closed() {
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let src = render3d::source::SourceSet::new(standin_root());
+    let defines = ["CSHADER", DC, "STANDIN_COMPOSITE_SAMPLER2"].map(String::from);
+    let e = Composite::new(&gpu, &src, &defines, cache.path())
+        .err()
+        .expect("unknown sampler");
+    assert!(e.contains("PointSampler"), "{e}");
+}
+
+/// Review M4: a failed env-cube build is an Err once, then remembered for its yaw (no rebuild every frame, the frame
+/// draws with no reflection); a new yaw tries again. The failure is faked with a cube size that is not a power of two.
+#[test]
+fn failed_env_cube_build_is_not_retried_for_the_same_yaw() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = loaded(cache.path(), &feats(&[DC]), vec![opaque()]);
+    r.set_deferred(true).unwrap();
+    r.set_env_size(100);
+    let mut s = Scene::neutral();
+    let e = r.render(&s, 64, 64).unwrap_err();
+    assert!(e.contains("power of two"), "{e}");
+    let (_, events) = render3d::perf_log::capture(|| r.render(&s, 64, 64).unwrap());
+    assert!(
+        events.iter().all(|e| e["event"] != "env_cube"),
+        "{events:?}"
+    );
+    assert_eq!(r.env_builds(), 0);
+    s.env_yaw = 0.5;
+    assert!(r.render(&s, 64, 64).is_err(), "a new yaw tries again");
+    r.set_env_size(render3d::hdri::ENV_SIZE);
+    s.env_yaw = 0.25;
+    r.render(&s, 64, 64).unwrap();
     assert_eq!(r.env_builds(), 1);
 }
 

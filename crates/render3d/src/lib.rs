@@ -389,6 +389,8 @@ pub struct Renderer {
     env: Option<(u32, composite::EnvMaps)>,
     /// Env cube builds (test hook).
     env_builds: usize,
+    /// Side of the env cube ([`hdri::ENV_SIZE`]; a test hook can make it invalid to fake a failed build).
+    env_size: u32,
 }
 
 impl Renderer {
@@ -493,6 +495,7 @@ impl Renderer {
             composite_builds: 0,
             env: None,
             env_builds: 0,
+            env_size: hdri::ENV_SIZE,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -844,6 +847,12 @@ impl Renderer {
     #[doc(hidden)]
     pub fn env_builds(&self) -> usize {
         self.env_builds
+    }
+
+    /// Test hook: the env cube side for the next builds (a size that is not a power of two makes the build fail).
+    #[doc(hidden)]
+    pub fn set_env_size(&mut self, size: u32) {
+        self.env_size = size;
     }
 
     /// Test hook: successful composite builds since this renderer was made.
@@ -2287,18 +2296,35 @@ impl Renderer {
         if want_env && self.env.as_ref().is_none_or(|e| e.0 != yaw) {
             let t = std::time::Instant::now();
             self.env = None;
-            let e = composite::EnvMaps::new(
+            match composite::EnvMaps::new(
                 &self.gpu,
                 &hdri::studio().image,
-                hdri::ENV_SIZE,
+                self.env_size,
                 scene.env_yaw,
-            )?;
-            self.env = Some((yaw, e));
-            self.env_builds += 1;
-            perf_log::emit(
-                "env_cube",
-                serde_json::json!({ "ms": perf_log::ms_since(t) }),
-            );
+            ) {
+                Ok(e) => {
+                    self.env = Some((yaw, e));
+                    self.env_builds += 1;
+                    perf_log::emit(
+                        "env_cube",
+                        serde_json::json!({ "ms": perf_log::ms_since(t) }),
+                    );
+                }
+                Err(e) => {
+                    // Review M4: remembered for this yaw (the 2×2 black default: no reflection), so the next frames
+                    // draw without rebuilding; a new yaw tries again. This frame reports the error.
+                    perf_log::emit("env_cube_failed", serde_json::json!({ "error": &e }));
+                    let black = self.default_srv(SrvKind::Cube, [0, 0, 0, 255])?;
+                    self.env = Some((
+                        yaw,
+                        composite::EnvMaps {
+                            env: black.clone(),
+                            reflection: black,
+                        },
+                    ));
+                    return Err(format!("environment cube: {e}"));
+                }
+            }
         }
         let view = View::new(&scene.camera, self.bounds, w, h);
         // Taken, so a failed frame leaves "unknown" and the next one writes everything.

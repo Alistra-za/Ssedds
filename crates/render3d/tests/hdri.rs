@@ -119,12 +119,19 @@ fn mip_chain_halves_to_one_texel_and_keeps_the_mean() {
             [v, 1.0 - v, v * v, 1.0]
         })
         .collect();
-    let chain = mip_chain(&face, 256);
+    let chain = mip_chain(&face, 256).unwrap();
     assert_eq!(chain.len(), 9);
     for (m, level) in chain.iter().enumerate() {
         assert_eq!(level.len(), (256 >> m) * (256 >> m), "mip {m}");
     }
     assert_eq!(chain[0], face);
+    // Review M5: no panic in public API.
+    assert!(mip_chain(&face[..100 * 100], 100).is_err());
+    assert!(mip_chain(&face, 128).is_err(), "face is not 128²");
+    assert!(mip_chain(&[], 0).is_err());
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    assert!(EnvMaps::new(&gpu, &index_image(16, 8), 100, 0.0).is_err());
+    assert!(EnvMaps::new(&gpu, &index_image(16, 8), 0, 0.0).is_err());
     for k in 0..4 {
         let mean = face.iter().map(|p| p[k] as f64).sum::<f64>() / face.len() as f64;
         let last = chain[8][0][k] as f64;
@@ -132,23 +139,18 @@ fn mip_chain_halves_to_one_texel_and_keeps_the_mean() {
     }
 }
 
-/// The uploaded cube sampled by the GPU (POINT, level 0) at the `cube_dir` of off-centre texels of every face returns
-/// that texel: catches face order and flips the CPU tests cannot see.
-#[test]
-fn env_cube_matches_d3d_cube_addressing() {
+/// `cube` sampled on the GPU (POINT, level 0) at the `cube_dir` of each (face, x, y) texel of an `n`² cube.
+fn sample_cube(
+    gpu: &render3d::device::Gpu,
+    cube: &windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
+    texels: &[(usize, u32, u32)],
+    n_size: u32,
+) -> Vec<[f32; 4]> {
     use windows::Win32::Graphics::Direct3D11::*;
-    const N: u32 = 4;
-    let gpu = render3d::device::Gpu::new_warp().unwrap();
-    let img = index_image(16, 8);
-    let env = EnvMaps::new(&gpu, &img, N, 0.0).unwrap();
-    let faces = cube_faces(&img, N, 0.0);
-    let texels: Vec<(usize, u32, u32)> = (0..6)
-        .flat_map(|f| [(f, 0, 1), (f, 3, 0), (f, 1, 3), (f, 2, 2)])
-        .collect();
     let dirs: Vec<f32> = texels
         .iter()
         .flat_map(|&(f, x, y)| {
-            let d = cube_dir(f, x, y, N);
+            let d = cube_dir(f, x, y, n_size);
             [d[0], d[1], d[2], 0.0]
         })
         .collect();
@@ -216,7 +218,7 @@ fn env_cube_matches_d3d_cube_addressing() {
         ..Default::default()
     };
     let (mut cs, mut smp, mut dsrv, mut uav) = (None, None, None, None);
-    let got: Vec<[f32; 4]> = unsafe {
+    unsafe {
         gpu.device
             .CreateComputeShader(&c.bytecode, None, Some(&mut cs))
             .unwrap();
@@ -229,7 +231,7 @@ fn env_cube_matches_d3d_cube_addressing() {
             .unwrap();
         let ctx = &gpu.ctx;
         ctx.CSSetShader(cs.as_ref(), None);
-        ctx.CSSetShaderResources(0, Some(&[Some(env.reflection.clone()), dsrv.clone()]));
+        ctx.CSSetShaderResources(0, Some(&[Some(cube.clone()), dsrv.clone()]));
         ctx.CSSetSamplers(0, Some(&[smp.clone()]));
         ctx.CSSetUnorderedAccessViews(0, 1, Some(&uav), None);
         ctx.Dispatch(n, 1, 1);
@@ -241,7 +243,22 @@ fn env_cube_matches_d3d_cube_addressing() {
         ctx.Unmap(&staging, 0);
         ctx.ClearState();
         v
-    };
+    }
+}
+
+/// The uploaded cube sampled by the GPU (POINT, level 0) at the `cube_dir` of off-centre texels of every face returns
+/// that texel: catches face order and flips the CPU tests cannot see.
+#[test]
+fn env_cube_matches_d3d_cube_addressing() {
+    const N: u32 = 4;
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    let img = index_image(16, 8);
+    let env = EnvMaps::new(&gpu, &img, N, 0.0).unwrap();
+    let faces = cube_faces(&img, N, 0.0);
+    let texels: Vec<(usize, u32, u32)> = (0..6)
+        .flat_map(|f| [(f, 0, 1), (f, 3, 0), (f, 1, 3), (f, 2, 2)])
+        .collect();
+    let got = sample_cube(&gpu, &env.reflection, &texels, N);
     for (i, &(f, x, y)) in texels.iter().enumerate() {
         let want = faces[f][(y * N + x) as usize].map(|v| half::f16::from_f32(v).to_f32());
         assert_eq!(
@@ -250,5 +267,32 @@ fn env_cube_matches_d3d_cube_addressing() {
             "face {f} ({x}, {y}): {:?} vs {want:?}",
             got[i]
         );
+    }
+}
+
+/// Review M7: an R11G11B10 cube (the captured format) through `cube_srv`: 2², 2 mips, every mip-0 texel distinct
+/// (R = 2^(f-2), G = 1 + i/64, B = 1); sampled back exactly.
+#[test]
+fn r11g11b10_cube_srv_samples_back_its_texels() {
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R11G11B10_FLOAT;
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    let texel = |f: u32, i: u32| ((13 + f) << 6) | (((15 << 6) | i) << 11) | ((15 << 5) << 22);
+    let mut data = vec![];
+    for f in 0..6 {
+        for i in 0..4 {
+            data.extend(texel(f, i).to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes()); // mip 1
+    }
+    let srv =
+        render3d::textures::cube_srv(&gpu, 2, 2, DXGI_FORMAT_R11G11B10_FLOAT, 4, &data).unwrap();
+    let texels: Vec<(usize, u32, u32)> = (0..6)
+        .flat_map(|f| [(f, 0, 0), (f, 1, 1), (f, 0, 1)])
+        .collect();
+    let got = sample_cube(&gpu, &srv, &texels, 2);
+    for (k, &(f, x, y)) in texels.iter().enumerate() {
+        let i = y * 2 + x;
+        let want = [(f as f32 - 2.0).exp2(), 1.0 + i as f32 / 64.0, 1.0, 1.0];
+        assert_eq!(got[k], want, "face {f} ({x}, {y})");
     }
 }

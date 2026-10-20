@@ -1434,8 +1434,7 @@ impl Renderer {
                 rc.thread_groups
             ));
         }
-        // The captured cube(s) in their own format. CS's permutation reads one (t7; t6 is stripped), so a single cube
-        // serves both names.
+        // The captured cube(s) in their own format.
         let mut cubes = vec![];
         for (name, bind, bytes) in &rc.env {
             let bytes = bytes
@@ -1446,20 +1445,35 @@ impl Renderer {
             let bpp = cube_bpp(format).ok_or("cube format")?;
             cubes.push((
                 name.as_str(),
+                *bind,
                 cube_srv(gpu, size, mips, format, bpp, data)
                     .map_err(|e| format!("t{bind} {name}: {e}"))?,
             ));
         }
-        let pick = |n: &str| {
-            cubes
+        // Fail closed (review M1): every env cube the composite reflects is the capture's cube of that exact name and
+        // bind, never another one in its place.
+        let mut found = [None, None];
+        for (i, want) in ["EnvTexture", "EnvReflectionsTexture"].iter().enumerate() {
+            let Some((_, reg, _)) = c.reflection.srvs.iter().find(|s| s.0 == *want) else {
+                continue;
+            };
+            let cube = cubes
                 .iter()
-                .find(|c| c.0 == n)
-                .or(cubes.first())
-                .map(|c| c.1.clone())
-        };
-        let env = match (pick("EnvTexture"), pick("EnvReflectionsTexture")) {
-            (Some(env), Some(reflection)) => Some(EnvMaps { env, reflection }),
-            _ => None,
+                .find(|x| x.0 == *want && x.1 == *reg)
+                .ok_or_else(|| {
+                    format!("composite reads {want} at t{reg}; the capture saved no cube for it")
+                })?;
+            found[i] = Some(cube.2.clone());
+        }
+        // A name the composite does not reflect is never bound, so it may share the other view.
+        let env = match found {
+            [None, None] => None,
+            [e, r] => {
+                let (env, reflection) = (e.or(r.clone()), r);
+                let reflection = reflection.or(env.clone());
+                env.zip(reflection)
+                    .map(|(env, reflection)| EnvMaps { env, reflection })
+            }
         };
         let sampler = rc
             .sampler

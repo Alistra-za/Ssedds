@@ -286,6 +286,26 @@ pub fn default_srv(
     }
 }
 
+/// Largest cube side accepted (D3D11's maximum cube dimension).
+pub const MAX_CUBE: u32 = 16384;
+
+/// Bytes of one mip of an `size`² cube face, `bpp` bytes per texel, in checked u64.
+fn level_bytes(size: u32, m: u32, bpp: u32) -> Option<u64> {
+    let w = u64::from((size >> m).max(1));
+    w.checked_mul(w)?.checked_mul(u64::from(bpp))
+}
+
+/// Bytes of the 6 faces of a `size`² cube with `mips` levels: Err unless 1 ≤ size ≤ [`MAX_CUBE`], 1 ≤ mips ≤ the full
+/// chain, and the u64 arithmetic does not overflow (hostile headers, review I1).
+fn cube_bytes(size: u32, mips: u32, bpp: u32) -> Result<u64, String> {
+    if size == 0 || size > MAX_CUBE || mips == 0 || mips > 32 - size.leading_zeros() {
+        return Err(format!("cube {size}² with {mips} mips is not uploadable"));
+    }
+    let face = (0..mips).try_fold(0u64, |t, m| t.checked_add(level_bytes(size, m, bpp)?));
+    face.and_then(|f| f.checked_mul(6))
+        .ok_or_else(|| format!("cube {size}² × {mips} mips: size overflows"))
+}
+
 /// Immutable cube SRV from tight subresources in D3D order (face-major, mip-minor), `bpp` bytes per texel (an
 /// uncompressed format). `data` must be exactly the 6 faces of `mips` levels.
 pub fn cube_srv(
@@ -296,28 +316,30 @@ pub fn cube_srv(
     bpp: u32,
     data: &[u8],
 ) -> Result<ID3D11ShaderResourceView, String> {
-    let level = |m: u32| (size >> m).max(1);
-    let face_bytes: usize = (0..mips)
-        .map(|m| (level(m) * level(m) * bpp) as usize)
-        .sum();
-    if size == 0 || mips == 0 || data.len() != 6 * face_bytes {
+    let need = cube_bytes(size, mips, bpp)?;
+    if data.len() as u64 != need {
         return Err(format!(
-            "cube {size}² × {mips} mips: {} bytes, need {}",
-            data.len(),
-            6 * face_bytes
+            "cube {size}² × {mips} mips: {} bytes, need {need}",
+            data.len()
         ));
     }
     let mut init = Vec::with_capacity(6 * mips as usize);
-    let mut at = 0;
+    let mut at = 0usize;
     for _ in 0..6 {
         for m in 0..mips {
-            let w = level(m);
+            let w = (size >> m).max(1);
+            // Bounded by `need` = data.len(), which already fits in memory; the pitches must also fit D3D's u32.
+            let slice = level_bytes(size, m, bpp).unwrap_or(u64::MAX);
+            let (pitch, slice) = (
+                w.checked_mul(bpp).ok_or("cube row pitch overflows")?,
+                u32::try_from(slice).map_err(|_| "cube slice over 4 GiB")?,
+            );
             init.push(D3D11_SUBRESOURCE_DATA {
                 pSysMem: data[at..].as_ptr() as _,
-                SysMemPitch: w * bpp,
-                SysMemSlicePitch: w * w * bpp,
+                SysMemPitch: pitch,
+                SysMemSlicePitch: slice,
             });
-            at += (w * w * bpp) as usize;
+            at += slice as usize;
         }
     }
     let t = create_texture(gpu, &tex_desc(size, size, mips, 6, format), &init)?;
@@ -356,27 +378,21 @@ pub fn read_cube_dds(bytes: &[u8]) -> Result<(u32, u32, DXGI_FORMAT, &[u8]), Str
     let (format, dim, misc, array) = (DXGI_FORMAT(u(128)? as i32), u(132)?, u(136)?, u(140)?);
     let bpp =
         cube_bpp(format).ok_or_else(|| format!("DDS format {} is not a cube format", format.0))?;
-    if dim != 3 || w != h || w == 0 || mips > 32 - w.leading_zeros() {
+    if dim != 3 || w != h {
         return Err(format!(
-            "DDS {w}x{h}, {mips} mips, dimension {dim}: not a square 2D cube"
+            "DDS {w}x{h}, dimension {dim}: not a square 2D cube"
         ));
     }
+    let need = cube_bytes(w, mips, bpp).map_err(|e| format!("DDS {e}"))?;
     let cube = misc & D3D11_RESOURCE_MISC_TEXTURECUBE.0 as u32 != 0;
     if !(cube && array == 1 || !cube && array == 6) {
         return Err(format!(
             "DDS is not 6 faces (misc {misc:#x}, arraySize {array})"
         ));
     }
-    let data = &bytes[148..];
-    let face: usize = (0..mips)
-        .map(|m| ((w >> m).max(1).pow(2) * bpp) as usize)
-        .sum();
-    if data.len() != 6 * face {
-        return Err(format!(
-            "DDS cube data {} bytes, need {}",
-            data.len(),
-            6 * face
-        ));
+    let data = bytes.get(148..).ok_or("DDS shorter than its DX10 header")?;
+    if data.len() as u64 != need {
+        return Err(format!("DDS cube data {} bytes, need {need}", data.len()));
     }
     Ok((w, mips, format, data))
 }

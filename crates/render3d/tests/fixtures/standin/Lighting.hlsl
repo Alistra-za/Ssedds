@@ -34,7 +34,8 @@
 // - STANDIN_DEFERRED_TINT (DEFERRED permutations only): Diffuse gets +0.5 green, so a DEFERRED program drawn into a
 //   forward target shows (v2 D4 review).
 // - DYNAMIC_CUBEMAPS (with STANDIN_FLAT, plain forward main only): the colour adds the level-15 +Z sample of
-//   EnvReflectionsTexture at t30, CS's forward DC register, so the env cube binding shows in pixels (v2 D5).
+//   EnvReflectionsTexture at t30, CS's forward DC register, so the env cube binding shows in pixels (v2 D5). With
+//   STANDIN_ENV_T31 it samples EnvTexture at t31 instead (CS's other forward DC register).
 
 struct VsOut
 {
@@ -243,14 +244,21 @@ PsOutForward main(VsOut i)
 }
 #else
 #if defined(DYNAMIC_CUBEMAPS) && defined(STANDIN_FLAT)
-// CS's forward DC path samples DynamicCubemaps::EnvReflectionsTexture at t30 (DynamicCubemaps.hlsli:17).
+// CS's forward DC path samples DynamicCubemaps::EnvReflectionsTexture at t30 and EnvTexture at t31
+// (DynamicCubemaps.hlsli:17-18).
+#	if defined(STANDIN_ENV_T31)
+TextureCube<float3> EnvTexture : register(t31);
+#		define STANDIN_ENV EnvTexture
+#	else
 TextureCube<float3> EnvReflectionsTexture : register(t30);
+#		define STANDIN_ENV EnvReflectionsTexture
+#	endif
 #endif
 float4 main(VsOut i) : SV_Target
 {
     float4 c = shade(i);
 #if defined(DYNAMIC_CUBEMAPS) && defined(STANDIN_FLAT)
-    c.rgb += EnvReflectionsTexture.SampleLevel(DiffuseSampler, float3(0.0, 0.0, 1.0), 15);
+    c.rgb += STANDIN_ENV.SampleLevel(DiffuseSampler, float3(0.0, 0.0, 1.0), 15);
 #endif
     return c;
 }
