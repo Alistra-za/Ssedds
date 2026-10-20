@@ -220,3 +220,90 @@ fn a_psd_source_has_a_size() {
     std::fs::write(&p, b).unwrap();
     assert_eq!(sdc_gui::model::out_size::source_dims(&p), Some((w, h)));
 }
+
+/// Final review M6: the four places that size a dropped top mip agree: the encode (`pipeline.rs`), the DIM checks
+/// and the clear on a single-level chain (`policy.rs`), and this estimate. Odd sizes, 1×N and the smallest chains
+/// are planned with `resize = half` (so DIM-RESIZED reports the size it checks); the sizes the DIM checks let through
+/// are also exported and their headers read.
+#[test]
+fn the_dropped_top_mip_size_agrees_in_all_four_places() {
+    use engine::api::*;
+    use engine::codes::Code;
+    use engine::events::*;
+    use engine::resize::target_dims;
+    use std::sync::Arc;
+    // (source size, mips.levels, exported)
+    let cases: &[((u32, u32), &str, bool)] = &[
+        ((2050, 6), "\"full\"", false),
+        ((2054, 2), "\"full\"", false),
+        ((2, 2049), "\"full\"", false),
+        ((1027, 1), "\"full\"", false),
+        ((1030, 514), "2", false),
+        ((1030, 514), "\"none\"", false),
+        ((1026, 2), "2", false),
+        ((2048, 8), "\"full\"", false),
+        ((2048, 16), "\"full\"", true),
+        ((1024, 1024), "2", true),
+        ((1024, 1024), "\"none\"", true),
+    ];
+    let d = tempfile::tempdir().unwrap();
+    let i = d.path().join("in");
+    std::fs::create_dir_all(&i).unwrap();
+    let mut toml = String::from("[defaults.encoder]\neffort = \"ultrafast\"\n");
+    for (n, ((w, h), levels, _)) in cases.iter().enumerate() {
+        image::RgbImage::from_pixel(*w, *h, image::Rgb([120, 90, 60]))
+            .save(i.join(format!("s{n}.png")))
+            .unwrap();
+        toml += &format!(
+            "\n[files.\"s{n}.png\"]\nsubtype = \"diffuse\"\nresize = \"half\"\ndrop_top_mip = true\nmips.levels = {levels}\n"
+        );
+    }
+    std::fs::write(i.join("sdc.toml"), toml).unwrap();
+    let mut r = BatchRequest::new(vec![i], d.path().join("out"), Target::Cs);
+    r.accept = engine::policy::AcceptSuggestions::High;
+    let rep = Reporter::new(Arc::new(NullSink), "t");
+    let e = Engine::new().unwrap();
+    let plan = e.plan(r, &rep, &CancelToken::default()).unwrap();
+    let mut written = vec![];
+    for (n, ((w, h), levels, exported)) in cases.iter().enumerate() {
+        let name = format!("s{n}.png");
+        let j = plan
+            .jobs
+            .iter()
+            .find(|j| j.input.file_name().is_some_and(|f| f == name.as_str()))
+            .unwrap_or_else(|| panic!("no job for {name}"));
+        let p = &j.profile;
+        let (rw, rh) = target_dims((*w, *h), p.resize);
+        let chain = engine::mips::level_count(rw, rh, &p.mips.levels);
+        let want = if chain > 1 {
+            ((rw / 2).max(1), (rh / 2).max(1))
+        } else {
+            (rw, rh)
+        };
+        let case = format!("{w}x{h} levels {levels}");
+        assert_eq!(p.drop_top_mip, chain > 1, "the clear: {case}");
+        let est = estimate((*w, *h), p);
+        assert_eq!((est.width, est.height), want, "the estimate: {case}");
+        assert_eq!(est.mips, chain - u32::from(chain > 1), "{case}");
+        let to = j
+            .warnings
+            .iter()
+            .find(|w| w.code == Code::DimResized)
+            .unwrap_or_else(|| panic!("no DIM-RESIZED: {case}"));
+        assert_eq!(
+            to.data["to"],
+            serde_json::json!([want.0, want.1]),
+            "the DIM checks: {case}"
+        );
+        if *exported {
+            written.push((j.output.clone(), want, est.mips as usize, case));
+        }
+    }
+    e.run(plan, &rep, &CancelToken::default()).unwrap();
+    for (out, want, mips, case) in written {
+        let b = std::fs::read(&out).unwrap_or_else(|_| panic!("not written: {case}"));
+        let f = engine::dds::read_dds(&b).unwrap();
+        assert_eq!((f.width, f.height), want, "the encode: {case}");
+        assert_eq!(f.levels.len(), mips, "{case}");
+    }
+}
