@@ -261,6 +261,7 @@ pub fn all() -> Vec<Vec<u8>> {
         alpha_testref(),
         managed_clip(),
         all_extras(),
+        root_extras(),
         shared_alpha_and_set(),
     ]
 }
@@ -269,6 +270,11 @@ pub fn all() -> Vec<Vec<u8>> {
 /// 4712/6283/0/1.0) plus a NiStringsExtraData (read-only row).
 pub fn all_extras() -> Vec<u8> {
     let mut n = Nif::new(100);
+    add_extras(&mut n);
+    n.bytes()
+}
+
+fn add_extras(n: &mut Nif) {
     let (bsx, bodytri, val, nm, pg, f, inv, ss) = (
         n.string("BSX"),
         n.string("BODYTRI"),
@@ -292,6 +298,19 @@ pub fn all_extras() -> Vec<u8> {
         "NiStringsExtraData",
         W::default().i32(ss).u32(1).sized("x").0,
     );
+}
+
+/// `all_extras` blocks (0-6) with a root NiNode (7, roots = [7]) listing them in order, a -1 entry after block 2.
+pub fn root_extras() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    add_extras(&mut n);
+    let r = n.string("Root");
+    let mut w = W::default().i32(r).u32(8);
+    for e in [0, 1, 2, -1, 3, 4, 5, 6] {
+        w = w.i32(e);
+    }
+    n.block("NiNode", avobj(w.i32(-1)).u32(0).u32(0).0);
+    n.roots = vec![7];
     n.bytes()
 }
 
@@ -320,7 +339,7 @@ pub fn shared_alpha_and_set() -> Vec<u8> {
             .u8(128)
             .0,
     );
-    n.block("BSLightingShaderProperty", lsp(1, 3));
-    n.block("BSLightingShaderProperty", lsp(1, 3));
+    n.block("BSLightingShaderProperty", lsp(0, 3));
+    n.block("BSLightingShaderProperty", lsp(0, 3));
     n.bytes()
 }
