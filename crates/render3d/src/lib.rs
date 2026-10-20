@@ -354,6 +354,8 @@ pub struct Renderer {
     overrides: BTreeMap<usize, (Arc<[u8]>, textures::Texture)>,
     /// [`Renderer::set_debug_output`]: the term the next permutations write instead of the lit colour.
     debug: DebugOutput,
+    /// [`Renderer::set_deferred`]: opaque shapes draw the DEFERRED permutation into the 8 CS render targets.
+    deferred: bool,
 }
 
 impl Renderer {
@@ -451,6 +453,7 @@ impl Renderer {
             missing_fill: None,
             overrides: BTreeMap::new(),
             debug: DebugOutput::Lit,
+            deferred: false,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -688,6 +691,29 @@ impl Renderer {
 
     pub fn debug_output(&self) -> DebugOutput {
         self.debug
+    }
+
+    /// Deferred mode (v2 D3): opaque shapes compile DEFERRED and write CS's 8 render targets; blended shapes and
+    /// built-ins stay forward. The frame shows RT0. A changed value re-permutes every shape (`begin_all`): the old
+    /// draws stay on screen while programs compile. Err, with nothing changed, when the shaders have no
+    /// `Lighting.hlsl`; the same value is always Ok and does nothing.
+    pub fn set_deferred(&mut self, on: bool) -> Result<(), String> {
+        if on == self.deferred {
+            return Ok(());
+        }
+        self.sources.get(Path::new("Lighting.hlsl"))?;
+        self.deferred = on;
+        self.begin_all();
+        Ok(())
+    }
+
+    pub fn deferred(&self) -> bool {
+        self.deferred
+    }
+
+    /// `m` draws the DEFERRED permutation: deferred mode, not a built-in, opaque.
+    fn deferred_for(&self, m: &MaterialState) -> bool {
+        self.deferred && !self.fixed_pipeline && pipe(m).blend.is_none()
     }
 
     /// The loaded CS `Lighting.hlsl` has the single `return psout;` and the names the debug block reads. After
@@ -973,6 +999,7 @@ impl Renderer {
             } else {
                 pipe(m)
             },
+            deferred: self.deferred_for(m),
             skinned: m.skinned,
             bound,
             built: m.clone(),
@@ -992,8 +1019,9 @@ impl Renderer {
             .map(String::as_str)
             .filter(|d| !(old_ll && *d == "ENABLE_LL"))
             .collect();
-        let vs = defines(&pm, Stage::Vertex, &f, false);
-        let mut ps = defines(&pm, Stage::Pixel, &f, false);
+        let deferred = self.deferred_for(m);
+        let vs = defines(&pm, Stage::Vertex, &f, deferred);
+        let mut ps = defines(&pm, Stage::Pixel, &f, deferred);
         let lighting = Path::new("Lighting.hlsl");
         // A debug view: the injected source for both stages (one extra VS compile per permutation, shared by the
         // five views) and SDC_DEBUG on the PS only. Without an anchor, Lit (no failure per shape).
@@ -1225,6 +1253,7 @@ impl Renderer {
         n.compiled = std::mem::take(&mut self.compiled);
         n.missing_fill = self.missing_fill;
         n.debug = self.debug;
+        n.deferred = self.deferred;
         // Device objects do not move: upload each override again (it decoded before, so a failure is not expected).
         for (slot, (bytes, _)) in std::mem::take(&mut self.overrides) {
             match textures::load_dds(&n.gpu, &bytes) {
@@ -1411,7 +1440,12 @@ impl Renderer {
                 .get(&id)
                 .ok_or_else(|| format!("no shape with id {} is loaded", id.0))?;
             let features: Vec<&str> = self.features.iter().map(String::as_str).collect();
-            let kind = classify(&state.material, &m, &features);
+            let kind = classify(
+                &state.material,
+                &m,
+                &features,
+                self.deferred && !self.fixed_pipeline,
+            );
             let rebuild = state.draw.is_none()
                 || state.status != ShapeStatus::Drawing
                 || kind == EditKind::Permutation;
@@ -1909,6 +1943,41 @@ impl Renderer {
         Some(v)
     }
 
+    /// Test hook: RT `rt` of the last frame's target, whole, as f32 RGBA ([`Target::read_f32`]). Err without a frame
+    /// or for an RT the target does not have (1-7 on a forward target).
+    #[doc(hidden)]
+    pub fn read_mrt(&self, rt: usize) -> Result<Vec<f32>, String> {
+        let t = self.target.as_ref().ok_or("no frame rendered")?;
+        t.read_f32(&self.gpu, rt, [0, 0, t.width, t.height])
+    }
+
+    /// Test hook: (width, height) of every texture of the current target: depth, colour, RT1-7, then the main UAV's
+    /// resource.
+    #[doc(hidden)]
+    pub fn target_dims(&self) -> Vec<(u32, u32)> {
+        use windows::core::Interface;
+        use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_TEXTURE2D_DESC};
+        let dims = |t: &ID3D11Texture2D| {
+            let mut d = D3D11_TEXTURE2D_DESC::default();
+            // SAFETY: `d` is a live local the call fills in; `t` is a live texture.
+            unsafe { t.GetDesc(&mut d) };
+            (d.Width, d.Height)
+        };
+        let Some(t) = self.target.as_ref() else {
+            return vec![];
+        };
+        let mut out = vec![dims(&t.depth), dims(&t.color)];
+        out.extend(t.mrt.iter().skip(1).map(|m| dims(&m.0)));
+        if let Some(u) = &t.main_uav {
+            // SAFETY: plain COM getter on a live view.
+            let res = unsafe { u.GetResource() };
+            if let Ok(tex) = res.and_then(|r| r.cast::<ID3D11Texture2D>()) {
+                out.push(dims(&tex));
+            }
+        }
+        out
+    }
+
     fn compute_bounds(&self) -> Option<([f32; 3], f32)> {
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
         let mut points: Vec<[f32; 3]> = vec![];
@@ -1995,9 +2064,15 @@ impl Renderer {
         if self
             .target
             .as_ref()
-            .is_none_or(|t| t.width != w || t.height != h)
+            .is_none_or(|t| t.width != w || t.height != h || t.deferred() != self.deferred)
         {
-            self.target = Some(Target::new(&self.gpu, w, h)?);
+            // Drop the old one first: two full deferred targets need not coexist.
+            self.target = None;
+            self.target = Some(if self.deferred {
+                Target::new_deferred(&self.gpu, w, h)?
+            } else {
+                Target::new(&self.gpu, w, h)?
+            });
         }
         let view = View::new(&scene.camera, self.bounds, w, h);
         // Taken, so a failed frame leaves "unknown" and the next one writes everything.
@@ -2052,10 +2127,23 @@ impl Renderer {
             if let (Background::Hdri, Some(Ok(b))) = (scene.background, &self.backdrop) {
                 b.draw(gpu, &view, !self.encode_srgb, scene.env_yaw);
             }
+            // RT0 alone until a DEFERRED draw: a forward program must never see RT1-7 (its PS_OUTPUT writes
+            // MotionVectors and NormalGlossiness too, Lighting.hlsl:303-308).
+            let mut bound_all = false;
             for id in &self.draw_order {
                 let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
                     continue;
                 };
+                let want = s.deferred && target.deferred();
+                if want != bound_all {
+                    let rtvs = if want {
+                        target.rtvs()
+                    } else {
+                        vec![Some(target.rtv.clone())]
+                    };
+                    ctx.OMSetRenderTargets(Some(&rtvs), &target.dsv);
+                    bound_all = want;
+                }
                 uploads += if self.reference_writer {
                     {
                         // Test hook only (P0's reference writer): recomputed every frame.

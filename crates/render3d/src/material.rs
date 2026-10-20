@@ -366,14 +366,24 @@ fn bindings(m: &MaterialState) -> Vec<(Option<u32>, &str)> {
 /// Sorts an edit by what it costs. The permutation oracle is `permutation::defines` (03 §1.2): `Permutation`
 /// iff the VS or PS define set differs. Otherwise `Textures` iff a slot's register or canonical path differs
 /// (e.g. a new path, or type 0 ↔ 2 moving slot 2 between t12 and t6), else `Cbuffer`. A change of `hidden` alone
-/// is `Cbuffer`.
-pub fn classify(old: &MaterialState, new: &MaterialState, features: &[&str]) -> EditKind {
+/// is `Cbuffer`. `deferred` (deferred mode, not a built-in): an opaque material compiles DEFERRED, so opaque ↔ blended
+/// is a `Permutation` there.
+pub fn classify(
+    old: &MaterialState,
+    new: &MaterialState,
+    features: &[&str],
+    deferred: bool,
+) -> EditKind {
     if old == new {
         return EditKind::Same;
     }
     let (a, b) = (perm_material(old), perm_material(new));
+    let (da, db) = (
+        deferred && pipe(old).blend.is_none(),
+        deferred && pipe(new).blend.is_none(),
+    );
     for stage in [Stage::Vertex, Stage::Pixel] {
-        if defines(&a, stage, features, false) != defines(&b, stage, features, false) {
+        if defines(&a, stage, features, da) != defines(&b, stage, features, db) {
             return EditKind::Permutation;
         }
     }

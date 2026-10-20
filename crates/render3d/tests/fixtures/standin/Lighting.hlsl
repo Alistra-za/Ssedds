@@ -25,6 +25,10 @@
 //   colour adds skinMaterialFlags.x x the t71 RGB, so the RFAOS lookup shows in pixels (P1-C Task 8 tests).
 // - STANDIN_REPLAY (with STANDIN_FLAT): the flat colour adds DirLightColor (PS b2), so a replay reads every PS
 //   cbuffer and a zero-padded short b2 adds nothing (v2 D2 tests).
+// - DEFERRED (render3d's deferred define): main writes CS's 8 render targets (PsOut, CS's field names). Diffuse is
+//   the forward colour; RT1-7 hold fixed markers (v2 D3 tests). It declares the names the debug block reads, but its
+//   `return psout ;` has a space, so this file has no debug anchor; tests/deferred.rs writes a copy without that
+//   space to get one (the temp-copy pattern of tests/settings.rs).
 
 struct VsOut
 {
@@ -132,7 +136,7 @@ cbuffer SkinPerGeometry : register(b7)
 Texture2D<float4> TexSkinExtraSampler : register(t71);
 #endif
 
-float4 main(VsOut i) : SV_Target
+float4 shade(VsOut i)
 {
     float4 base = DiffuseMap.Sample(DiffuseSampler, i.Uv);
     float3 bump = NormalMap.Sample(DiffuseSampler, i.Uv).xyz * 2.0 - 1.0;
@@ -170,5 +174,52 @@ float4 main(VsOut i) : SV_Target
     return float4(c, base.a * 0.5);
 #endif
 }
+
+#if defined(DEFERRED)
+struct MaterialProperties
+{
+    float3 BaseColor;
+    float Roughness;
+    float Metallic;
+    float AO;
+};
+
+struct PsOut
+{
+    float4 Diffuse : SV_Target0;
+    float4 MotionVectors : SV_Target1;
+    float4 NormalGlossiness : SV_Target2;
+    float4 Albedo : SV_Target3;
+    float4 Specular : SV_Target4;
+    float4 Reflectance : SV_Target5;
+    float4 Masks : SV_Target6;
+    float4 Masks2 : SV_Target7;
+};
+
+PsOut main(VsOut i)
+{
+    PsOut psout;
+    MaterialProperties material = (MaterialProperties)0;
+    material.BaseColor = DiffuseMap.Sample(DiffuseSampler, i.Uv).rgb;
+    float3 worldNormal = normalize(i.Normal);
+    float glossiness = 0.25;
+    float vertexAO = 0.5;
+    psout.Diffuse = shade(i);
+    // Markers: exact in each RT's format and different per RT, so a swapped RTV shows.
+    psout.MotionVectors = float4(0.25, 0.5, 0.0, 0.0);
+    psout.NormalGlossiness = float4(1.0, 0.0, 1.0, 1.0);
+    psout.Albedo = float4(0.0, 1.0, 0.0, 0.0);
+    psout.Specular = float4(0.5, 0.25, 0.125, 0.0);
+    psout.Reflectance = float4(0.25, 0.125, 0.5, 0.0);
+    psout.Masks = float4(2.0, 4.0, 0.0625, 0.0);
+    psout.Masks2 = float4(1.0, 0.0, 0.0, 0.0);
+    return psout ;
+}
+#else
+float4 main(VsOut i) : SV_Target
+{
+    return shade(i);
+}
+#endif
 
 #endif

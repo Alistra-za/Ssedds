@@ -3,7 +3,7 @@
 //! Ruling D-P2: the captured IA + mesh.vb/ib are drawn as they are; the VS defines are derived from the PS list and
 //! the IA ([`vs_defines`]) and checked against the compiled VS input signature.
 use crate::compile::compile;
-use crate::device::{Gpu, Target};
+use crate::device::{Gpu, Target, MRT_FORMATS};
 use crate::draw::create_program;
 use crate::golden;
 use crate::permutation::Defines;
@@ -59,8 +59,10 @@ pub struct Replay {
     pub write_masks: Vec<u8>,
     /// Any stageB.blend[i].enabled.
     pub blended: bool,
-    /// mrt<i>_before.f32 for the RTs the replay binds (D2: index 0).
+    /// mrt<i>_before.f32 of every mrt.json rt, index order.
     pub before: Vec<Vec<f32>>,
+    /// mrt.json rt formats, index order (e.g. "R16G16B16A16_FLOAT").
+    pub formats: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -435,17 +437,39 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         .checked_mul(crop[3] as usize)
         .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| format!("{}: crop {crop:?} too large", mp.display()))?;
-    let before0 = mrt
+    let mut rts: Vec<(u64, String, String)> = mrt
         .get("rts")
         .and_then(Value::as_array)
-        .and_then(|r| {
-            r.iter()
-                .find(|r| r.get("index").and_then(Value::as_u64) == Some(0))
+        .ok_or_else(|| format!("{}: no rts", mp.display()))?
+        .iter()
+        .map(|r| {
+            let s = |p: &str| r.pointer(p).and_then(Value::as_str).map(String::from);
+            Some((
+                r.get("index")?.as_u64()?,
+                s("/format")?,
+                s("/files/before")?,
+            ))
         })
-        .and_then(|r| r.pointer("/files/before"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{}: no rt 0 before file", mp.display()))?;
-    let before = vec![golden::read_f32(&dir.join(before0), px)?];
+        .collect::<Option<_>>()
+        .ok_or_else(|| {
+            format!(
+                "{}: an rt without index, format or before file",
+                mp.display()
+            )
+        })?;
+    rts.sort_by_key(|r| r.0);
+    if rts.is_empty() || rts.iter().enumerate().any(|(i, r)| r.0 != i as u64) {
+        return Err(format!(
+            "{}: rt indices {:?} are not 0..n",
+            mp.display(),
+            rts.iter().map(|r| r.0).collect::<Vec<_>>()
+        ));
+    }
+    let before = rts
+        .iter()
+        .map(|r| golden::read_f32(&dir.join(&r.2), px))
+        .collect::<Result<Vec<_>, _>>()?;
+    let formats = rts.into_iter().map(|r| r.1).collect();
 
     let ep = dir.join("extras.json");
     let eerr = |m: &str| format!("{}: {m}", ep.display());
@@ -500,6 +524,7 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         write_masks,
         blended,
         before,
+        formats,
     })
 }
 
@@ -611,10 +636,30 @@ fn sampler_state(gpu: &Gpu, s: &Sampler) -> Result<ID3D11SamplerState, String> {
 impl Renderer {
     /// Draws `r` with its captured geometry, cbuffers, textures and samplers and reads the bound targets back over
     /// the crop. `deferred` chooses which targets are bound, never the permutation (the fixture's define list is
-    /// compiled as is): false = RT0 only (the PS writes to unbound slots are discarded).
+    /// compiled as is): false = RT0 only (the PS writes to unbound slots are discarded); true = the 8 CS targets in
+    /// [`MRT_FORMATS`], each seeded from its before file and written through its captured write mask.
     pub fn render_replay(&mut self, r: &Replay, deferred: bool) -> Result<ReplayOut, String> {
         if deferred {
-            return Err("deferred replay needs the 8 targets (Task D3)".into());
+            if r.formats.len() != 8 {
+                return Err(format!(
+                    "deferred replay needs 8 RTs in mrt.json, the fixture has {}",
+                    r.formats.len()
+                ));
+            }
+            for (i, f) in r.formats.iter().enumerate() {
+                if f != MRT_FORMATS[i].1 {
+                    return Err(format!(
+                        "mrt.json rt {i} is {f}, the deferred target is {}",
+                        MRT_FORMATS[i].1
+                    ));
+                }
+            }
+            if r.write_masks.len() < 8 {
+                return Err(format!(
+                    "deferred replay needs 8 write masks in state.json stageB.blend, the fixture has {}",
+                    r.write_masks.len()
+                ));
+            }
         }
         if r.blended {
             // shortcut: blended (hint-1 forward) subjects need the captured blend state on top of the seeded RT0; D6b if wanted
@@ -744,16 +789,29 @@ impl Renderer {
         let mut bd = D3D11_BLEND_DESC::default();
         bd.RenderTarget[0].BlendEnable = false.into();
         bd.RenderTarget[0].RenderTargetWriteMask = r.write_masks.first().copied().unwrap_or(0xf);
+        if deferred {
+            // Per-RT masks (Coffin: RT0 and RT3 keep their seeded alpha).
+            bd.IndependentBlendEnable = true.into();
+            for (t, m) in bd.RenderTarget.iter_mut().zip(&r.write_masks) {
+                t.BlendEnable = false.into();
+                t.RenderTargetWriteMask = *m;
+            }
+        }
         let mut blend = None;
         // SAFETY: descriptor and out-pointer are locals.
         unsafe { gpu.device.CreateBlendState(&bd, Some(&mut blend)) }
             .map_err(|e| gpu.fail("CreateBlendState", e))?;
 
         // Full size: screen-space lookups (t14 shadow mask) use SV_Position.
-        let target = Target::new(gpu, r.size.0, r.size.1)?;
+        let target = if deferred {
+            Target::new_deferred(gpu, r.size.0, r.size.1)?
+        } else {
+            Target::new(gpu, r.size.0, r.size.1)?
+        };
         target.clear(gpu, [0.0; 4]);
-        if let Some(b) = r.before.first() {
-            target.seed_f32(gpu, r.crop, b)?;
+        let bound = if deferred { 8 } else { 1 };
+        for (i, b) in r.before.iter().take(bound).enumerate() {
+            target.seed_f32(gpu, i, r.crop, b)?;
         }
         let v = r.viewport;
         // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
@@ -761,7 +819,7 @@ impl Renderer {
             let ctx = &gpu.ctx;
             // A frame's SRVs, cbuffers and samplers stay bound: a register the fixture leaves empty must read 0.
             ctx.ClearState();
-            ctx.OMSetRenderTargets(Some(&[Some(target.rtv.clone())]), &target.dsv);
+            ctx.OMSetRenderTargets(Some(&target.rtvs()), &target.dsv);
             ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
                 TopLeftX: v[0],
                 TopLeftY: v[1],
@@ -802,11 +860,13 @@ impl Renderer {
             // Vertex k of mesh.vb is index − minIndex.
             ctx.DrawIndexed(r.mesh.index_count, 0, -(r.mesh.min_index as i32));
         }
-        let rt0 = target.read_f32(gpu, r.crop);
+        let mrt = (0..bound)
+            .map(|i| target.read_f32(gpu, i, r.crop))
+            .collect::<Result<Vec<_>, _>>();
         // SAFETY: plain context call; `render` rebinds everything per frame.
         unsafe { gpu.ctx.ClearState() };
         Ok(ReplayOut {
-            mrt: vec![rt0?],
+            mrt: mrt?,
             main: None,
             warnings,
         })

@@ -1,6 +1,8 @@
-//! Replay mode (v2 Phase D, D2): a golden fixture's captured geometry, cbuffers, textures and samplers.
+//! Replay mode (v2 Phase D, D2; deferred targets D3): a golden fixture's captured geometry, cbuffers, textures and
+//! samplers.
 mod common;
 
+use render3d::device::MRT_FORMATS;
 use render3d::golden::{self, Noise};
 use render3d::{load_fixture, Renderer};
 use serde_json::json;
@@ -262,11 +264,69 @@ fn replay_writes_fixture_cbuffers_verbatim() {
     }
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     let e = ren.render_replay(&r, true).err().unwrap();
-    assert!(e.contains("D3"), "{e}");
+    assert!(e.contains("8 RTs"), "{e}");
     fs::remove_file(d.path().join("cb_ps_b2.bin")).unwrap();
     let r = load_fixture(d.path()).unwrap();
     let e = ren.render_replay(&r, false).err().unwrap();
     assert!(e.contains("cb_ps_b2"), "{e}");
+}
+
+/// [`write_fixture`] with DEFERRED and the 8 CS targets: every RT seeded (0, 0, 0, 1); write masks as Coffin's
+/// (RT0 and RT3 keep their alpha).
+fn write_fixture_deferred(dir: &Path) {
+    let defines: Vec<&str> = STANDIN.iter().copied().chain(["DEFERRED"]).collect();
+    write_fixture(dir, &defines);
+    let rts: Vec<_> = MRT_FORMATS
+        .iter()
+        .enumerate()
+        .map(|(i, (_, f))| {
+            json!({"index": i, "format": f,
+                   "files": {"before": format!("mrt{i}_before.f32"), "after": format!("mrt{i}.f32")}})
+        })
+        .collect();
+    edit_json(dir, "mrt.json", &|v| v["rts"] = json!(rts));
+    let seed = f32s(&[0.0, 0.0, 0.0, 1.0].repeat(16));
+    for i in 0..8 {
+        fs::write(dir.join(format!("mrt{i}_before.f32")), &seed).unwrap();
+        fs::write(dir.join(format!("mrt{i}.f32")), &seed).unwrap();
+    }
+    edit_json(dir, "state.json", &|v| {
+        v["stageB"]["blend"] = (0..8)
+            .map(|i| json!({"enabled": false, "writeMask": if i == 0 || i == 3 { 7 } else { 15 }}))
+            .collect()
+    });
+}
+
+#[test]
+fn replay_deferred_reads_eight_targets() {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_deferred(d.path());
+    let r = load_fixture(d.path()).unwrap();
+    assert_eq!(r.before.len(), 8);
+    let names: Vec<&str> = MRT_FORMATS.iter().map(|f| f.1).collect();
+    assert_eq!(r.formats, names);
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let out = ren.render_replay(&r, true).unwrap();
+    assert_eq!(out.mrt.len(), 8);
+    let m: [[f32; 4]; 8] = [
+        [0.75, 0.25, 0.5, 1.0],
+        [0.25, 0.5, 0.0, 1.0],
+        [1.0, 0.0, 1.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [0.5, 0.25, 0.125, 1.0],
+        [0.25, 0.125, 0.5, 1.0],
+        [2.0, 4.0, 0.0625, 1.0],
+        [1.0, 0.0, 0.0, 1.0],
+    ];
+    for (i, rt) in out.mrt.iter().enumerate() {
+        assert_eq!(rt.len(), 64, "RT{i}");
+        for px in rt.chunks(4) {
+            assert_eq!(px, m[i], "RT{i}");
+        }
+    }
+    let fwd = ren.render_replay(&r, false).unwrap();
+    assert_eq!(fwd.mrt[0], out.mrt[0]);
 }
 
 #[test]
@@ -285,14 +345,57 @@ fn replay_real_fixture_smoke() {
         &root.join("noise_Skyrim_AE_1.6.1170_frame207657_Skyrim_AE_1.6.1170_frame207658.json"),
     )
     .unwrap();
-    for s in SUBJECTS {
+    for (s, deferred) in SUBJECTS.iter().flat_map(|s| [(s, false), (s, true)]) {
         let dir = root.join(s);
         let r = load_fixture(&dir).unwrap();
-        let out = ren.render_replay(&r, false).unwrap();
+        let out = ren.render_replay(&r, deferred).unwrap();
         let n = (r.crop[2] * r.crop[3]) as usize;
+        let mask = golden::read_mask(&dir.join("mask.bin"), n).unwrap();
+        let name = dir.file_name().unwrap().to_string_lossy();
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        if deferred {
+            assert_eq!(out.mrt.len(), 8, "{s}");
+            for rt in &out.mrt {
+                assert_eq!(rt.len(), n * 4, "{s}");
+                assert!(rt.iter().all(|v| v.is_finite()), "{s}");
+            }
+            let fwd = ren.render_replay(&r, false).unwrap();
+            assert_eq!(
+                bits(&out.mrt[0]),
+                bits(&fwd.mrt[0]),
+                "{s}: RT0 deferred vs forward"
+            );
+            let masked = mask.iter().filter(|m| **m).count();
+            for (i, rt) in out.mrt.iter().enumerate() {
+                let file = format!("mrt{i}.f32");
+                let after = golden::read_f32(&dir.join(&file), n * 4).unwrap();
+                let (p99, max) = noise.limit(&name, &file).unwrap();
+                let d = golden::diff_tol(
+                    rt,
+                    &after,
+                    &mask,
+                    golden::format_tol(&r.formats[i]).unwrap(),
+                    max,
+                );
+                let identical = (0..n)
+                    .filter(|&p| {
+                        mask[p] && bits(&rt[4 * p..4 * p + 4]) == bits(&after[4 * p..4 * p + 4])
+                    })
+                    .count();
+                // A zero diff where the draw changed nothing would only compare `before` with itself.
+                let changed = (0..n)
+                    .filter(|&p| mask[p] && rt[4 * p..4 * p + 4] != r.before[i][4 * p..4 * p + 4])
+                    .count();
+                println!(
+                    "{s} RT{i} {}: {d:?} (noise p99 {p99}, max {max}); bit-identical {identical} of {masked}; changed {changed}",
+                    r.formats[i]
+                );
+            }
+            println!("{s} deferred: warnings {:?}", out.warnings);
+            continue;
+        }
         assert_eq!(out.mrt[0].len(), n * 4, "{s}");
         assert!(out.mrt[0].iter().all(|v| v.is_finite()), "{s}");
-        let mask = golden::read_mask(&dir.join("mask.bin"), n).unwrap();
         let masked = mask.iter().filter(|m| **m).count();
         assert!(masked > 0, "{s}: empty mask");
         let changed = (0..n)
@@ -303,7 +406,6 @@ fn replay_real_fixture_smoke() {
             "{s}: {changed} of {masked} masked pixels changed"
         );
         let after = golden::read_f32(&dir.join("mrt0.f32"), n * 4).unwrap();
-        let name = dir.file_name().unwrap().to_string_lossy();
         let (p99, max) = noise.limit(&name, "mrt0.f32").unwrap();
         let d = golden::diff_tol(
             &out.mrt[0],
@@ -312,7 +414,6 @@ fn replay_real_fixture_smoke() {
             golden::format_tol("R16G16B16A16_FLOAT").unwrap(),
             max,
         );
-        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         let identical = (0..n)
             .filter(|&p| {
                 mask[p] && bits(&out.mrt[0][4 * p..4 * p + 4]) == bits(&after[4 * p..4 * p + 4])

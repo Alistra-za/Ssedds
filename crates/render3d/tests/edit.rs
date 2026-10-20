@@ -1,7 +1,9 @@
 //! Live material edits on WARP with the stand-in shader. `STANDIN_FLAT` makes pixels = 0.25·diffuse +
 //! EmitColor (+ 0.5 green when PBRFlags ≠ 0), so cbuffer and texture edits show without lighting saturation.
 mod common;
-use common::{cache_files, channel, covered, dds_rgba8, fixture, renderer, FLAT};
+use common::{
+    cache_files, channel, covered, dds_rgba8, fixture, plane_shape, planes, renderer, FLAT, IDENT,
+};
 use nif::material::MaterialState;
 use nif::props::Alpha;
 use render3d::scene::Scene;
@@ -261,46 +263,6 @@ fn pbr_flags_reach_the_shader() {
 }
 
 // ---- A14: per-shape blend, cull and depth state ----
-
-fn plane_shape(
-    id: u32,
-    world: [[f32; 4]; 3],
-    emissive: [f32; 3],
-    slsf2: u32,
-) -> render3d::ParsedShape {
-    let mut m = MaterialState::builtin_default();
-    m.slsf1 |= (1 << 31) | (1 << 22); // Z_Buffer_Test, Own_Emit
-    m.slsf2 = slsf2;
-    m.params.emissive_color = emissive;
-    m.params.emissive_multiple = 1.0;
-    render3d::ParsedShape {
-        id: ShapeId(id),
-        name: format!("plane{id}"),
-        mesh: std::sync::Arc::new(render3d::builtin_mesh(render3d::Builtin::Plane)),
-        world,
-        material: m,
-    }
-}
-
-const IDENT: [[f32; 4]; 3] = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-];
-
-fn planes(cache: &std::path::Path, shapes: Vec<render3d::ParsedShape>) -> Renderer {
-    let mut r = renderer(cache, FLAT);
-    let parsed = render3d::ParsedNif {
-        shapes,
-        ..Default::default()
-    };
-    let rep = r.load_parsed(&parsed, &|_| None);
-    assert!(
-        rep.errors.is_empty() && rep.compile_errors.is_empty(),
-        "{rep:?}"
-    );
-    r
-}
 
 #[test]
 fn blend_pair_edit_changes_pixels_without_a_compile() {
