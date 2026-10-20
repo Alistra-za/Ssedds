@@ -186,10 +186,13 @@ fn load_composite(
     px: usize,
 ) -> Result<Option<ReplayComposite>, String> {
     let cp = dir.join("composite.json");
-    if !cp.exists() {
-        return Ok(None);
-    }
-    let c = json(&cp)?;
+    // Only NotFound means "no composite"; exists() would turn any other error into a silent skip.
+    let s = match std::fs::read_to_string(&cp) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        r => r.map_err(|e| format!("{}: {e}", cp.display()))?,
+    };
+    let c: Value = serde_json::from_str(&nonfinite_to_null(&s))
+        .map_err(|e| format!("{}: {e}", cp.display()))?;
     let err = |m: &str| format!("{}: {m}", cp.display());
     let list = |k: &str| {
         c.get(k)

@@ -624,6 +624,14 @@ fn replay_composite_refuses_mismatched_fixtures() {
     let e = replay_err(&mut ren, d.path());
     assert!(e.contains("composite.json"), "{e}");
 
+    // Only NotFound means "no composite": any other read error names composite.json.
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_composite(d.path());
+    fs::remove_file(d.path().join("composite.json")).unwrap();
+    fs::create_dir(d.path().join("composite.json")).unwrap();
+    let e = replay_err(&mut ren, d.path());
+    assert!(e.contains("composite.json"), "{e}");
+
     // D3's fixture has no composite.json: no main.
     let d = tempfile::tempdir().unwrap();
     write_fixture_deferred(d.path());
