@@ -522,22 +522,46 @@ pub fn summary_text(n: usize, textures: usize, sets: usize) -> String {
 }
 
 /// The end-of-export line: the Warning-level check rows in Problems (item, set and export-row results; Info is
-/// never a row). `None` when there are none.
+/// never a row). `None` when there are none. It covers what this export wrote: once the export has rows, only the
+/// textures (and sets with a member) that have one are counted; with no rows it covers the whole project. A texture
+/// counts once, whether its rows are keyed by item or by job (CI19).
 pub fn checks_summary(m: &AppModel) -> Option<String> {
     use super::bottom::{problems, At, Level};
-    let rows = problems(m);
-    let (mut files, mut sets) = (
-        std::collections::HashSet::new(),
-        std::collections::HashSet::new(),
-    );
+    use std::collections::HashSet;
+    let exported: HashSet<&str> = m.export.rows.iter().map(|r| r.job_key.as_str()).collect();
+    let all = exported.is_empty();
+    let item_of_job = |j: &str| {
+        m.items
+            .iter()
+            .find(|i| i.job_key == j)
+            .map(|i| i.key.clone())
+    };
+    let wrote = |item: &str| {
+        all || m
+            .item(item)
+            .is_some_and(|i| exported.contains(i.job_key.as_str()))
+    };
+    let views = super::sets::views(m);
+    let (mut textures, mut sets) = (HashSet::new(), HashSet::new());
     let mut n = 0;
-    for p in rows.iter().filter(|p| p.level == Level::Check) {
-        n += 1;
+    for p in problems(m).iter().filter(|p| p.level == Level::Check) {
         match &p.at {
-            At::Texture(k) | At::File(k) => files.insert(k.as_str()),
-            At::Set { key, .. } => sets.insert(key.as_str()),
-            At::Project => false,
-        };
+            At::Texture(k) if wrote(k) => {
+                textures.insert(k.clone());
+            }
+            At::File(j) => {
+                textures.insert(item_of_job(j).unwrap_or_else(|| j.clone()));
+            }
+            At::Set { key, .. }
+                if views
+                    .iter()
+                    .any(|v| &v.key == key && v.members.iter().any(|k| wrote(k))) =>
+            {
+                sets.insert(key.clone());
+            }
+            _ => continue,
+        }
+        n += 1;
     }
-    (n > 0).then(|| summary_text(n, files.len(), sets.len()))
+    (n > 0).then(|| summary_text(n, textures.len(), sets.len()))
 }

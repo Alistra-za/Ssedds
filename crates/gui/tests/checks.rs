@@ -937,3 +937,128 @@ fn an_unstated_normal_that_looks_opengl_gets_the_hint_on_its_own_line() {
     h.get_by_label_contains("Looks OpenGL (curl test).");
     assert_eq!(h.query_all_by_label_contains("CHK-GREEN-GUESS").count(), 0);
 }
+
+/// Two landscape sets `a` (albedo luma 20) and `b` (128), each with a bumpy GL-green `_n` (an Info result) and a
+/// full-range `_p`; b has displacement scale 5, so both sets are scale outliers (a set row each).
+fn landscape_pair(dir: &Path) -> AppModel {
+    let r = dir.join("textures/test");
+    std::fs::create_dir_all(&r).unwrap();
+    for (stem, l) in [("a", 20u8), ("b", 128)] {
+        ImageBuffer::from_fn(64, 64, |_, _| Rgb([l, l, l]))
+            .save(r.join(format!("{stem}.png")))
+            .unwrap();
+        gl_bumpy(&r.join(format!("{stem}_n.png")));
+        ImageBuffer::from_fn(64, 64, |x, y| Rgb([((x + y) * 2) as u8; 3]))
+            .save(r.join(format!("{stem}_p.png")))
+            .unwrap();
+    }
+    let mut m = support::opened_as_the_app(dir.join("textures"), dir.join("export"));
+    for stem in ["a", "b"] {
+        let id = sdc_gui::model::sets::views(&m)
+            .iter()
+            .find(|v| v.key.ends_with(stem))
+            .expect("the set")
+            .id
+            .clone();
+        m.set_shader(&id, Some(Shader::Landscape));
+        if stem == "b" {
+            m.set_json_value(&id, "displacement_scale", Some(json!(5.0)));
+        }
+        assert!(m.wait_idle(Duration::from_secs(60)));
+    }
+    m.poll();
+    m
+}
+
+#[test]
+fn checks_summary_mixes_items_sets_and_info_without_miscounting() {
+    let d = tempfile::tempdir().unwrap();
+    let m = landscape_pair(d.path());
+    let rows = check_rows(&m);
+    let info = m
+        .items
+        .iter()
+        .flat_map(|i| m.check_warnings(&i.key))
+        .filter(|w| w.severity == Severity::Info)
+        .count();
+    assert!(info >= 1, "an Info result sits beside the warnings");
+    let sets = rows
+        .iter()
+        .filter(|p| matches!(p.at, At::Set { .. }))
+        .count();
+    assert_eq!(sets, 2, "{rows:?}");
+    let tex: std::collections::HashSet<_> = rows
+        .iter()
+        .filter_map(|p| match &p.at {
+            At::Texture(k) => Some(k.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        checks_summary(&m).unwrap(),
+        summary_text(rows.len(), tex.len(), 2)
+    );
+    assert_eq!(
+        checks_summary(&m).as_deref(),
+        Some("Checks: 4 warnings on 2 textures and 2 sets; see Problems")
+    );
+}
+
+fn done_row(job_key: &str, warnings: Vec<Warning>) -> sdc_gui::model::export::Row {
+    sdc_gui::model::export::Row {
+        job_key: job_key.into(),
+        path: job_key.into(),
+        state: sdc_gui::model::export::RowState::Done { passed: true },
+        warnings,
+    }
+}
+
+#[test]
+fn the_summary_covers_what_the_export_wrote_not_the_whole_project() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = landscape_pair(d.path());
+    let job = m.item("test/a_n.png").unwrap().job_key.clone();
+    m.export.rows = vec![done_row(&job, vec![])];
+    m.invalidate_views();
+    // a_n and its set; b_n and set b were not exported.
+    assert_eq!(
+        checks_summary(&m).as_deref(),
+        Some("Checks: 2 warnings on 1 texture and 1 set; see Problems")
+    );
+}
+
+#[test]
+fn a_texture_with_an_item_row_and_a_file_row_counts_once() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = landscape_pair(d.path());
+    let job = m.item("test/a_n.png").unwrap().job_key.clone();
+    let low = Warning::new(Code::ChkRange, "an engine export-row check result");
+    m.export.rows = vec![done_row(&job, vec![low])];
+    m.invalidate_views();
+    let rows = check_rows(&m);
+    assert!(
+        rows.iter().any(|p| matches!(&p.at, At::File(_))),
+        "{rows:?}"
+    );
+    // plastic (Texture) + ChkRange (File) on a_n: two warnings, one texture, plus a's set row.
+    assert_eq!(
+        checks_summary(&m).as_deref(),
+        Some("Checks: 3 warnings on 1 texture and 1 set; see Problems")
+    );
+}
+
+#[test]
+fn a_set_row_click_selects_the_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = landscape_pair(d.path());
+    m.open_problems(None);
+    let mut h = harness(m, 1400.0);
+    h.run();
+    let go: Vec<_> = h.query_all_by_label("Go to set").collect();
+    assert!(!go.is_empty());
+    go[0].click();
+    h.run();
+    let sel = h.state().selected_sets();
+    assert_eq!(sel.len(), 1, "{sel:?}");
+    assert!(sel[0].ends_with("/a") || sel[0].ends_with("/b"));
+}

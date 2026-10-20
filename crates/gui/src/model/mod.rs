@@ -1191,8 +1191,10 @@ impl AppModel {
                     messages::Severity::Info
                 };
                 self.messages.notify(sev, export_finished_text(&summary));
+                let completed = summary.cancelled.is_empty();
                 self.export.summary = Some(summary);
-                if let Some(t) = checks::checks_summary(self) {
+                // CI19: only a completed export gets the line; a cancel logs just "Export finished".
+                if let Some(t) = checks::checks_summary(self).filter(|_| completed) {
                     self.messages.notify(messages::Severity::Info, t);
                 }
             }
@@ -1215,6 +1217,12 @@ impl AppModel {
                 self.dialog = Some(Dialog::Error(e));
             }
         }
+    }
+
+    /// Tests: end the export with a made-up result (`WorkerMsg` is private), as the worker's `ExportDone` would.
+    #[doc(hidden)]
+    pub fn end_export_with(&mut self, result: Result<engine::api::BatchSummary, String>) {
+        self.export_ended(result);
     }
 
     /// An export waits for a plan to land (Export clicked while planning, or a Continue after a re-plan).

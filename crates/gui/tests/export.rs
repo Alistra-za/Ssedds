@@ -390,3 +390,61 @@ fn export_never_asks_about_check_warnings() {
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert!(m.export.summary.is_some());
 }
+
+// ---- the end-of-export checks summary: when it is logged (CI19) ----
+
+const SUMMARY: &str = "Checks: 1 warning on 1 texture; see Problems";
+
+/// A decided folder whose only check result is the fixture's plastic `_n`.
+fn with_one_check() -> (tempfile::TempDir, AppModel) {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    decide_all(&mut m);
+    m.poll();
+    assert_eq!(
+        sdc_gui::model::checks::checks_summary(&m).as_deref(),
+        Some(SUMMARY)
+    );
+    (d, m)
+}
+
+fn summary_lines(m: &AppModel) -> usize {
+    m.messages
+        .entries()
+        .filter(|e| e.text.starts_with("Checks:"))
+        .count()
+}
+
+#[test]
+fn a_completed_export_logs_the_summary_once() {
+    let (_d, mut m) = with_one_check();
+    m.end_export_with(Ok(Default::default()));
+    assert_eq!(summary_lines(&m), 1);
+}
+
+#[test]
+fn a_cancelled_export_logs_no_summary() {
+    let (_d, mut m) = with_one_check();
+    let s = engine::api::BatchSummary {
+        cancelled: vec!["a.png".into()],
+        ..Default::default()
+    };
+    m.end_export_with(Ok(s));
+    assert_eq!(summary_lines(&m), 0);
+}
+
+#[test]
+fn a_failed_export_logs_no_summary() {
+    let (_d, mut m) = with_one_check();
+    m.end_export_with(Err("disk full".into()));
+    assert_eq!(summary_lines(&m), 0);
+}
+
+#[test]
+fn an_export_that_ends_under_an_open_dialog_still_logs_the_summary_and_keeps_the_dialog() {
+    let (_d, mut m) = with_one_check();
+    m.dialog = Some(Dialog::ReloadUnsaved);
+    m.end_export_with(Ok(Default::default()));
+    assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
+    assert_eq!(summary_lines(&m), 1);
+}
