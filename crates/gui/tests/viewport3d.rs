@@ -108,7 +108,10 @@ fn panel_shows_toggle_footer_and_problems() {
     let mut h = harness(v);
     h.run();
     h.get_by_label("Community Shaders features");
-    h.get_by_label("Dynamic Cubemaps: off in preview");
+    assert!(
+        h.query_by_label_contains("Off in this preview").is_none(),
+        "no off line when nothing is off"
+    );
     h.get_by_label("Missing texture: textures/a/b.dds");
     h.get_by_label("Compile error: Body: ps: X3000");
     h.get_by_label(v3::FRAME_LABEL);
@@ -2110,11 +2113,11 @@ fn the_panel_stays_awake_until_the_refresh_after_the_last_shapes_is_read() {
 
 #[test]
 fn the_off_line_lists_what_the_renderer_leaves_off() {
-    assert_eq!(v3::off_line(&[], v3::CUBEMAPS_FOOTER), v3::CUBEMAPS_FOOTER);
+    assert_eq!(v3::off_line(&[]), None);
     let off = ["DynamicCubemaps", "LODBlending", "ScreenSpaceGI", "NRD"].map(String::from);
     assert_eq!(
-        v3::off_line(&off, "unused"),
-        "Off in this preview: Dynamic Cubemaps, LOD Blending, Screen Space GI, NRD"
+        v3::off_line(&off).as_deref(),
+        Some("Off in this preview: Dynamic Cubemaps, LOD Blending, Screen Space GI, NRD")
     );
     let mut v = Viewport3d::with_state(V3State::Ready);
     v.handle(v3::V3Reply::OffInPreview(off.to_vec()));
@@ -2880,4 +2883,193 @@ fn two_panels_with_the_same_frame_id_keep_their_own_textures() {
     };
     let (ta, tb) = (get("meshes").unwrap().1, get("set_preview").unwrap().1);
     assert_ne!(ta.id(), tb.id());
+}
+
+// ---- v2 Phase D, D8: the "Accurate (deferred)" toggle ----
+
+#[test]
+fn deferred_toggle_sends_one_command_and_rerenders() {
+    let (mut v, cmds) = rendered();
+    assert!(v.look.deferred, "on by default");
+    let rid = v.render_sent_for_test();
+    frame_reply(&mut v, rid); // nothing in flight before the toggle
+    assert!(!v.busy());
+    v.set_deferred(false);
+    let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+    assert_eq!(sent.len(), 1, "exactly one command");
+    assert!(matches!(sent[0], v3::V3Cmd::SetDeferred(false)));
+    assert!(v.busy(), "awake until the render thread answers the toggle");
+    v.set_deferred(false);
+    assert!(cmds.try_recv().is_err(), "the same value sends nothing");
+    v.request_frame(64, 64);
+    let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+    assert_eq!(sent.len(), 1, "a render, no load");
+    match &sent[0] {
+        v3::V3Cmd::Render { look, .. } => assert!(!look.deferred),
+        _ => panic!("a render, no load"),
+    }
+    let rid = v.render_sent_for_test();
+    frame_reply(&mut v, rid);
+    v.handle(v3::V3Reply::Reconfigured(1));
+    assert!(!v.busy());
+}
+
+/// Step-2 choice: `fake_render_thread` hands `ensure_thread` a channel instead of spawning the render loop, so the
+/// real `request_frame → ensure_thread → Load` order is what is checked (`attach_test_thread` stays silent).
+#[test]
+fn a_saved_deferred_choice_is_sent_before_the_first_load() {
+    for on in [true, false] {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = Viewport3d::new(Some(fp(d.path(), "CS", "a")));
+        v.on_located(Ok(Some(fp(d.path(), "CS", "a"))));
+        v.cache_dir = Some(d.path().to_path_buf());
+        v.look.deferred = on;
+        let cmds = v.fake_render_thread();
+        v.set_mesh(Some(spec(1, false)));
+        v.request_frame(64, 64);
+        let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+        if on {
+            assert_eq!(sent.len(), 2, "on: SetDeferred, then Load");
+            assert!(matches!(sent[0], v3::V3Cmd::SetDeferred(true)));
+            assert!(matches!(sent[1], v3::V3Cmd::Load { .. }));
+            assert!(v.busy());
+        } else {
+            assert_eq!(sent.len(), 1, "off: the thread starts forward, Load only");
+            assert!(matches!(sent[0], v3::V3Cmd::Load { .. }));
+        }
+    }
+}
+
+#[test]
+fn deferred_toggle_is_in_the_view_menu() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.look.sun = 3.0;
+    v.look.hdri = true;
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label(sdc_gui::ui::viewport3d::VIEW_MENU).click();
+    h.run();
+    h.get_by_label(v3::DEFERRED_LABEL).click();
+    h.run();
+    assert!(!h.state().look.deferred);
+    h.get_by_label("Reset view").click();
+    h.run();
+    assert!(!h.state().look.deferred, "Reset view keeps the toggle");
+    assert_eq!(
+        h.state().look,
+        v3::Look {
+            deferred: false,
+            ..v3::Look::default()
+        }
+    );
+}
+
+fn alpha_tested() -> MaterialState {
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    }); // DO_ALPHA_TEST: the stand-in's pixel permutation compiles
+    m
+}
+
+fn lit(v: &Viewport3d) -> bool {
+    v.frame.as_ref().is_some_and(|f| {
+        f.rgba
+            .chunks(4)
+            .any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0)
+    })
+}
+
+fn wait_lit(v: &mut Viewport3d) {
+    let t = std::time::Instant::now();
+    while !lit(v) && t.elapsed().as_secs() < 10 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(lit(v), "a lit frame");
+}
+
+/// A viewport on a copy of the stand-in whose `DeferredCompositeCS.hlsl` is `composite` (None: the stand-in's).
+fn standin_copy(composite: Option<&str>) -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    for f in ["Lighting.hlsl", "DeferredCompositeCS.hlsl"] {
+        std::fs::copy(standin_root().join(f), d.path().join(f)).unwrap();
+    }
+    if let Some(c) = composite {
+        std::fs::write(d.path().join("DeferredCompositeCS.hlsl"), c).unwrap();
+    }
+    d
+}
+
+fn viewport_on(shaders: &Path, cache: &Path) -> Viewport3d {
+    let f = render3d::locate::fingerprint(shaders, None).unwrap();
+    let mut v = Viewport3d::new(Some(f.clone()));
+    v.on_located(Ok(Some(f)));
+    v.cache_dir = Some(cache.to_path_buf());
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 1,
+            shape: Builtin::Sphere,
+            material: alpha_tested(),
+            textures: Arc::new(HashMap::new()),
+        }),
+        false,
+    );
+    v
+}
+
+const DEFERRED_NOTICE: &str = "Deferred preview unavailable: ";
+
+#[test]
+fn deferred_falls_back_and_shows_the_notice() {
+    let shaders = standin_copy(Some("this is not hlsl"));
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = viewport_on(shaders.path(), cache.path());
+    assert!(v.look.deferred);
+    run_idle(&mut v);
+    let notice = v.notice.clone().expect("the fallback notice");
+    assert!(notice.starts_with(DEFERRED_NOTICE), "{notice}");
+    assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
+    wait_lit(&mut v);
+    assert!(v.look.deferred, "D-P30: the preference stays");
+    // A user toggle (off, then on) reports the failure again.
+    v.notice = None;
+    v.set_deferred(false);
+    run_idle(&mut v);
+    v.notice = None;
+    v.set_deferred(true);
+    run_idle(&mut v);
+    let again = v.notice.clone().expect("the notice is back");
+    assert!(again.starts_with(DEFERRED_NOTICE), "{again}");
+    let mut h = harness(v);
+    h.run_steps(4);
+    h.get_by_label(&again);
+}
+
+#[test]
+fn deferred_on_with_the_standin_draws_and_goes_idle() {
+    let shaders = standin_copy(None);
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = viewport_on(shaders.path(), cache.path());
+    run_idle(&mut v);
+    assert_eq!(v.notice, None);
+    assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
+    wait_lit(&mut v);
+    v.report = None;
+    let before = v.frame.as_ref().unwrap().id;
+    v.set_deferred(false);
+    run_idle(&mut v);
+    let t = std::time::Instant::now();
+    while v.frame.as_ref().unwrap().id == before && t.elapsed().as_secs() < 10 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_ne!(v.frame.as_ref().unwrap().id, before, "re-rendered");
+    assert!(lit(&v));
+    assert_eq!(v.notice, None);
+    assert!(
+        v.report.is_none(),
+        "no Loaded reply: nothing was loaded again"
+    );
 }
