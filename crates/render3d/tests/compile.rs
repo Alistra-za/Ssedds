@@ -246,6 +246,30 @@ fn compile_error_is_reported_not_fatal() {
     assert!(e.contains("undefined_symbol"), "{e}");
 }
 
+/// v2 D6c: only variables the shader reads (D3D_SVF_USED) are returned, as (cbuffer, variable).
+#[test]
+fn used_vars_marks_read_cbuffer_variables() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("used.hlsl"),
+        "cbuffer C : register(b1) { float4 A; float4 B; };\nfloat4 main() : SV_Target { return A; }",
+    )
+    .unwrap();
+    let c = compile(
+        &d.path().join("used.hlsl"),
+        d.path(),
+        &Default::default(),
+        "ps_5_0",
+        d.path(),
+        "h",
+    )
+    .unwrap();
+    assert_eq!(
+        render3d::compile::used_vars(&c.bytecode).unwrap(),
+        vec![("C".to_string(), "A".to_string())]
+    );
+}
+
 #[test]
 fn cbuffer_writer_sets_by_name() {
     let layout = render3d::compile::CbLayout {

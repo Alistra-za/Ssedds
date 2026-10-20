@@ -175,6 +175,24 @@ enum Lookup {
     Waiting,
 }
 
+/// The floats of `var` as written in the first of `cbs` that has it.
+fn cb_floats(cbs: &[draw::Cb], var: &str) -> Option<Vec<f32>> {
+    let cb = cbs.iter().find(|c| c.writer.has(var))?;
+    let f = cb.writer.resolve(var)?;
+    let bytes = cb
+        .writer
+        .bytes()
+        .get(f.off as usize..(f.off + f.size) as usize)?;
+    Some(
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect(),
+    )
+}
+
 fn ready(r: &Result<Program, String>) -> Lookup {
     match r {
         Ok(p) => Lookup::Ready(p.clone()),
@@ -1988,21 +2006,13 @@ impl Renderer {
     /// the PS does not reflect `var`).
     #[doc(hidden)]
     pub fn draw_cb_floats(&self, id: ShapeId, var: &str) -> Option<Vec<f32>> {
-        let d = self.shapes.get(&id)?.draw.as_ref()?;
-        let cb = d.ps_cbs.iter().find(|c| c.writer.has(var))?;
-        let f = cb.writer.resolve(var)?;
-        let bytes = cb
-            .writer
-            .bytes()
-            .get(f.off as usize..(f.off + f.size) as usize)?;
-        Some(
-            bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect(),
-        )
+        cb_floats(&self.shapes.get(&id)?.draw.as_ref()?.ps_cbs, var)
+    }
+
+    /// Test hook: [`Renderer::draw_cb_floats`] over the shape's vertex-stage cbuffers (v2 D6c).
+    #[doc(hidden)]
+    pub fn draw_vs_cb_floats(&self, id: ShapeId, var: &str) -> Option<Vec<f32>> {
+        cb_floats(&self.shapes.get(&id)?.draw.as_ref()?.vs_cbs, var)
     }
 
     /// The blend, cull and depth state the shape's current draw uses (`None`: no draw yet). Test seam and the

@@ -497,3 +497,26 @@ fn pbr_bit_meaning_agrees_with_pbr_flags() {
     assert_eq!(pbr_bit_meaning(1 << 24, 24), None, "not PBR");
     assert_eq!(pbr_bit_meaning(1 << 23, 5), None);
 }
+
+/// v2 D6c: the stand-in's VS-only TexcoordOffset (b1) is read from the vertex stage; the pixel-stage hook has no such
+/// field.
+#[test]
+fn vs_cb_floats_reads_the_vertex_stage() {
+    #[path = "common/mod.rs"]
+    mod common;
+    let mut s = common::plane_shape(0, common::IDENT, [0.0; 3], 1);
+    s.material.params.uv_offset = [0.25, 0.5];
+    s.material.params.uv_scale = [2.0, 4.0];
+    let cache = tempfile::tempdir().unwrap();
+    let r = common::planes(cache.path(), vec![s]);
+    let id = render3d::ShapeId(0);
+    assert_eq!(
+        r.draw_vs_cb_floats(id, "TexcoordOffset"),
+        Some(vec![0.25, 0.5, 2.0, 4.0])
+    );
+    assert_eq!(r.draw_cb_floats(id, "TexcoordOffset"), None);
+    assert_eq!(
+        r.draw_vs_cb_floats(render3d::ShapeId(9), "TexcoordOffset"),
+        None
+    );
+}
