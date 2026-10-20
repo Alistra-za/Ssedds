@@ -264,6 +264,10 @@ pub fn all() -> Vec<Vec<u8>> {
         root_extras(),
         shared_alpha_and_set(),
         quirks(),
+        alpha_shape(0x12EC),
+        reordered(false, "S"),
+        reordered(true, "S"),
+        dup_names(),
     ]
 }
 
@@ -380,5 +384,46 @@ pub fn quirks() -> Vec<u8> {
     );
     n.type_flags = vec![0, 0, 0, 0, 0x8000];
     n.roots = vec![2, 0];
+    n.bytes()
+}
+
+/// BSTriShape "S" (0) -> NiAlphaProperty (1) with the given flags and threshold 128.
+pub fn alpha_shape(flags: u16) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", bstri_named(s, -1, 1));
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], -1))
+            .u16(flags)
+            .u8(128)
+            .0,
+    );
+    n.bytes()
+}
+
+/// One shape and its BSLSP, in either order: shape (0) + BSLSP (1), or BSLSP (0) + shape (1) when `swap`.
+pub fn reordered(swap: bool, name: &str) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = n.string(name);
+    if swap {
+        n.block("BSLightingShaderProperty", lsp(0, -1));
+        n.block("BSTriShape", bstri_named(s, 0, -1));
+    } else {
+        n.block("BSTriShape", bstri_named(s, 1, -1));
+        n.block("BSLightingShaderProperty", lsp(0, -1));
+    }
+    n.bytes()
+}
+
+/// Two BSTriShapes both named "A" (0, 1) with their own BSLSPs (2, 3).
+pub fn dup_names() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let a = n.string("A");
+    n.block("BSTriShape", bstri_named(a, 2, -1));
+    n.block("BSTriShape", bstri_named(a, 3, -1));
+    n.block("BSLightingShaderProperty", lsp(0, -1));
+    n.block("BSLightingShaderProperty", lsp(0, -1));
     n.bytes()
 }
