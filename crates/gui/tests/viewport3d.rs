@@ -3237,6 +3237,31 @@ fn deferred_falls_back_and_shows_the_notice() {
     h.get_by_label(&again);
 }
 
+/// D-P36 (F3): after a fallback, a new shaders folder retries deferred while the box stays checked; a new failure
+/// shows a new notice. A features change with the same failure says nothing again.
+#[test]
+fn a_shaders_change_retries_deferred_after_a_fallback() {
+    let first = standin_copy(Some("this is not hlsl"));
+    let second = standin_copy(Some("#error second stand-in"));
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = viewport_on(first.path(), cache.path());
+    run_idle(&mut v);
+    let a = v.notice.clone().expect("the fallback notice");
+    assert!(a.starts_with(DEFERRED_NOTICE), "{a}");
+    v.notice = None;
+    v.set_features(false);
+    run_idle(&mut v);
+    assert_eq!(v.notice, None, "the same failure is not told twice");
+    let f = render3d::locate::fingerprint(second.path(), None).unwrap();
+    v.on_located(Ok(Some(f)));
+    v.use_new();
+    run_idle(&mut v);
+    let b = v.notice.clone().expect("the retry's notice");
+    assert!(b.starts_with(DEFERRED_NOTICE), "{b}");
+    assert_ne!(b, a, "the new failure");
+    assert!(v.look.deferred);
+}
+
 #[test]
 fn deferred_on_with_the_standin_draws_and_goes_idle() {
     let shaders = standin_copy(None);

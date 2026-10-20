@@ -2206,6 +2206,9 @@ fn render_loop(
     let mut backdrop_told = false;
     // The deferred failure last reported (`Renderer::deferred_error`), so a late fallback is told once.
     let mut deferred_told: Option<String> = None;
+    // The look's deferred choice (the last SetDeferred): a shaders, features or settings change retries it after a
+    // fallback (D-P36). A failed retry is told by the check after render only when its error is new.
+    let mut want_deferred = false;
     let mut last_coverage: Option<String> = None;
     while let Ok(first) = rx.recv() {
         // Dropped at the end of the batch, after every other reply: answers each features/settings command.
@@ -2228,17 +2231,24 @@ fn render_loop(
                 }
                 V3Cmd::SetShaders(f) => {
                     r.set_shaders(f);
+                    if want_deferred && !r.deferred() {
+                        let _ = r.set_deferred(true);
+                    }
                     reload = true;
                     reshaded = true;
                     None
                 }
                 V3Cmd::SetFeatures(on) => {
                     r.set_features_on(on);
+                    if want_deferred && !r.deferred() {
+                        let _ = r.set_deferred(true);
+                    }
                     restyled = true;
                     ack.0 += 1;
                     None
                 }
                 V3Cmd::SetDeferred(on) => {
+                    want_deferred = on;
                     if on {
                         deferred_told = None; // turning it on reports a failure again (D-P33)
                     }
@@ -2252,6 +2262,9 @@ fn render_loop(
                 }
                 V3Cmd::SetSettings(s) => {
                     apply_settings(&mut r, s);
+                    if want_deferred && !r.deferred() {
+                        let _ = r.set_deferred(true);
+                    }
                     restyled = true;
                     ack.0 += 1;
                     None
