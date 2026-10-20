@@ -21,6 +21,7 @@ pub mod meshes;
 pub mod messages;
 pub mod nav;
 pub mod out_size;
+pub mod overlay;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
@@ -422,6 +423,8 @@ pub struct AppModel {
     /// The DDS header-patch choice (DECISIONS S7).
     pub dds_patch: dds_patch::DdsPatchState,
     pub view: view::ViewState,
+    /// The preview overlay job and the overlay on show (v2 checks, Note CI).
+    pub overlay: overlay::OverlayState,
     /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
     pub gpu_max_dim: u32,
     /// False when eframe found no usable GPU adapter: the preview is off, everything else works (M3a spec §7).
@@ -612,6 +615,7 @@ impl AppModel {
             preview,
             dds_patch: Default::default(),
             view: view::ViewState::default(),
+            overlay: Default::default(),
             gpu_max_dim: 16384,
             gpu_available: true,
             export_after_plan: false,
@@ -1081,7 +1085,7 @@ impl AppModel {
     /// A v2 worker job is in flight (owner answer 8): the app's one poll line keeps frames coming and `wait_idle`
     /// waits for it. Not part of `busy()`, which greys the Advanced fields. Tracks A and B add their jobs here.
     pub fn v2_jobs_pending(&self) -> bool {
-        false
+        self.overlay_pending()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -1222,6 +1226,7 @@ impl AppModel {
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
             WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
+            WorkerMsg::Overlay { generation, image } => self.overlay_landed(generation, image),
             WorkerMsg::Dims(dims) => self.dims_landed(dims),
             WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}

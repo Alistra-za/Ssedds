@@ -1,7 +1,9 @@
 //! The expanded preview (M3a spec §6): the toolbar, two linked viewports (source left, encoded right, or one
 //! viewport cut by a divider), the notes and readouts under them, and the compact settings strip beside them.
 //! All state lives in the model (`AppModel::view`, `AppModel::preview`); this file maps input to model calls.
+use crate::model::heatmap::HeatImage;
 use crate::model::items::ItemKind;
+use crate::model::overlay::OverlayKind;
 use crate::model::preview::NO_GPU;
 use crate::model::preview::{EncodedState, PreviewOut, SourceState};
 use crate::model::view::{self, readouts, skipped_note, Channel, Layout, ViewState};
@@ -49,6 +51,8 @@ pub struct PreviewUi {
     readout: Option<Vec<String>>,
     /// The settings were opened from their strip: they stay open until the preview closes (A10).
     settings_open: bool,
+    /// The overlay on the GPU and the image it was uploaded from (uploaded again only when that `Arc` changes).
+    overlay_tex: Option<(Arc<HeatImage>, egui::TextureHandle)>,
 }
 
 /// The facts about the expanded texture's mips that the toolbar, the viewports and the notes share.
@@ -279,6 +283,24 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
             "Repeat the picture 3×3 to check the seams ({})",
             super::actions::keys_text("tile")
         ));
+    // Only for a texture with a per-texel value-range warning (owner, spec "Value-range overlay").
+    if model
+        .expanded
+        .as_deref()
+        .is_some_and(|k| model.range_overlay_offered(k))
+    {
+        let mut on = model.view.overlay == Some(OverlayKind::Range);
+        let r = ui
+            .toggle_value(&mut on, "Range")
+            .on_hover_text("Paint the source texels outside the expected value range in magenta");
+        // ui-rules 8.4: distinct from any other "Range".
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, "Range overlay")
+        });
+        if r.changed() {
+            model.view.overlay = on.then_some(OverlayKind::Range);
+        }
+    }
     requests.fit = ui
         .button("Fit")
         .on_hover_text("Zoom to fit the viewport")
@@ -590,7 +612,8 @@ fn viewports(
     let left_draw = if model.comparing_pin() {
         draw_pinned_pane(ui, model, gpu, left, left_vis, size)
     } else {
-        draw_source_pane(ui, model, info, gpu, left, left_vis, size)
+        let overlay = range_overlay_texture(ui, model, state, key);
+        draw_source_pane(ui, model, info, gpu, left, left_vis, size, overlay)
     };
     let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
     if let Some((pinned, current)) = model.pin_captions() {
@@ -727,6 +750,60 @@ fn paint_clipped(ui: &mut egui::Ui, viewport: Rect, visible: Rect, slot: Slot, p
     });
 }
 
+/// The range overlay's texture while the toggle is on and offered; the image is built on a worker (`overlay_for`).
+fn range_overlay_texture(
+    ui: &egui::Ui,
+    model: &mut AppModel,
+    state: &mut PreviewUi,
+    key: &str,
+) -> Option<egui::TextureId> {
+    if model.view.overlay != Some(OverlayKind::Range) || !model.range_overlay_offered(key) {
+        return None;
+    }
+    let SourceState::Ready(s) = &model.preview.source else {
+        return None;
+    };
+    let mip = model.view.mip.saturating_sub(s.first_level);
+    let img = model.overlay_for(key, mip, OverlayKind::Range)?;
+    if !state
+        .overlay_tex
+        .as_ref()
+        .is_some_and(|(a, _)| Arc::ptr_eq(a, &img))
+    {
+        let size = [img.width as usize, img.height as usize];
+        let colour = egui::ColorImage::from_rgba_unmultiplied(size, &img.rgba);
+        let options = egui::TextureOptions {
+            magnification: egui::TextureFilter::Nearest,
+            wrap_mode: egui::TextureWrapMode::Repeat,
+            ..Default::default()
+        };
+        let tex = ui.ctx().load_texture("overlay", colour, options);
+        state.overlay_tex = Some((img, tex));
+    }
+    state.overlay_tex.as_ref().map(|(_, t)| t.id())
+}
+
+/// K8: the screen rect of the picture (uv `[0, 1]²`, or `[-1, 2)²` with Tile 3×3, as the shader shows it) and that uv
+/// rect. An overlay painted there with Repeat wrap lines up with the picture and never draws past it.
+pub fn picture_rects(
+    view: &ViewState,
+    viewport: Rect,
+    size: [f32; 2],
+    mip_size: (u32, u32),
+) -> (Rect, Rect) {
+    let (lo, hi) = if view.tile { (-1.0, 2.0) } else { (0.0, 1.0) };
+    let (offset, scale) = view.uv_rect(size, mip_size);
+    let at = |u: f32, i: usize| viewport.min[i] + (u - offset[i]) / scale[i] * size[i];
+    (
+        Rect::from_min_max(
+            egui::pos2(at(lo, 0), at(lo, 1)),
+            egui::pos2(at(hi, 0), at(hi, 1)),
+        ),
+        Rect::from_min_max(egui::pos2(lo, lo), egui::pos2(hi, hi)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_source_pane(
     ui: &mut egui::Ui,
     model: &AppModel,
@@ -735,6 +812,7 @@ fn draw_source_pane(
     viewport: Rect,
     visible: Rect,
     size: [f32; 2],
+    overlay: Option<egui::TextureId>,
 ) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let text = match &model.preview.source {
@@ -760,6 +838,12 @@ fn draw_source_pane(
         );
         paint_clipped(ui, viewport, visible, Slot::Source, params);
         drawn = Some((Slot::Source, params));
+        if let Some(id) = overlay {
+            let (pic, uv) = picture_rects(&model.view, viewport, size, info.size_of(mip));
+            ui.painter()
+                .with_clip_rect(visible.intersect(ui.clip_rect()))
+                .image(id, pic, uv, Color32::WHITE);
+        }
     }
     pane_overlay(ui, visible, "Source", None, text.as_deref(), false);
     drawn

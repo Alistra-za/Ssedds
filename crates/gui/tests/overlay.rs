@@ -1,0 +1,254 @@
+//! v2 artist checks, Task 6 (DECISIONS Note CI): the value-range overlay. Built on a worker from the preview's source
+//! levels, offered only for a texture with a per-texel CHK-RANGE warning, and polled through `v2_jobs_pending()`.
+mod support;
+use eframe::egui;
+use egui_kittest::kittest::Queryable;
+use egui_kittest::Harness;
+use engine::codes::Code;
+use engine::image::Rgba32F;
+use sdc_gui::model::checks::RangeRule;
+use sdc_gui::model::heatmap::HeatImage;
+use sdc_gui::model::overlay::{range_overlay, OverlayKind};
+use sdc_gui::model::preview::SourceState;
+use sdc_gui::model::AppModel;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+const DARK: u8 = 20;
+const PLAIN: u8 = 128;
+const CLEAN_RMAOS: [u8; 3] = [128, 10, 200];
+const METAL_RMAOS: [u8; 3] = [128, 255, 200];
+
+fn level(codes: &[[u8; 3]]) -> Rgba32F {
+    let mut l = Rgba32F::new(codes.len() as u32, 1, [0.0; 4]);
+    for (p, c) in l.px.iter_mut().zip(codes) {
+        *p = [
+            f32::from(c[0]) / 255.0,
+            f32::from(c[1]) / 255.0,
+            f32::from(c[2]) / 255.0,
+            1.0,
+        ];
+    }
+    l
+}
+
+#[test]
+fn range_overlay_paints_exactly_the_texels_a_rule_rejects() {
+    // Grey luma 20, 100, 245, 128: the albedo rule rejects below 30 and above 240.
+    let l = level(&[[20; 3], [100; 3], [245; 3], [128; 3]]);
+    let img = range_overlay(&l, &[RangeRule::AlbedoLuma]);
+    assert_eq!((img.width, img.height), (4, 1));
+    let alpha: Vec<u8> = img.rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+    assert_eq!(alpha, [160, 0, 160, 0]);
+    assert_eq!(&img.rgba[..4], &[255, 0, 255, 160]);
+    assert_eq!(&img.rgba[4..8], &[0, 0, 0, 0]);
+    // Any rule: rough extremes (R 0 or 255) or grey metal (G 26..=229).
+    let rm = level(&[[0, 10, 0], [128, 128, 0], [128, 10, 0], [255, 255, 0]]);
+    let img = range_overlay(&rm, &[RangeRule::RoughExtreme, RangeRule::MetalGrey]);
+    let alpha: Vec<u8> = img.rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+    assert_eq!(alpha, [160, 160, 0, 160]);
+    // Empty level, no rules: nothing painted, no panic.
+    let empty = range_overlay(&Rgba32F::new(0, 0, [0.0; 4]), &[RangeRule::AlbedoLuma]);
+    assert!(empty.rgba.is_empty());
+    assert!(range_overlay(&l, &[]).rgba.iter().all(|&b| b == 0));
+}
+
+fn harness(model: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(egui::vec2(1600.0, 1000.0))
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// The Range toggle for `test/wall.png` expanded in a PBR set with that albedo and `_rmaos`.
+fn range_toggle_shown(albedo: u8, rmaos: [u8; 3]) -> (bool, Vec<String>) {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_wall(d.path(), albedo, rmaos);
+    let rules: Vec<String> = m
+        .check_warnings("test/wall.png")
+        .iter()
+        .filter(|w| w.code == Code::ChkRange)
+        .map(|w| w.data["rule"].as_str().unwrap_or_default().to_string())
+        .collect();
+    m.expand("test/wall.png");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let offered = m.range_overlay_offered("test/wall.png");
+    let mut h = harness(m);
+    h.run();
+    let shown = h.query_by_label("Range overlay").is_some();
+    assert_eq!(shown, offered, "the toggle follows range_overlay_offered");
+    (shown, rules)
+}
+
+#[test]
+fn the_range_button_shows_only_for_textures_with_a_range_warning() {
+    let (shown, rules) = range_toggle_shown(DARK, CLEAN_RMAOS);
+    assert_eq!(rules, ["albedo_luma"]);
+    assert!(shown, "a dark albedo offers the overlay");
+    let (shown, rules) = range_toggle_shown(PLAIN, CLEAN_RMAOS);
+    assert!(rules.is_empty());
+    assert!(!shown, "a plain albedo has no Range button");
+    let (shown, rules) = range_toggle_shown(100, METAL_RMAOS);
+    assert_eq!(rules, ["dark_metal"]);
+    assert!(!shown, "dark metal is not a per-texel rule");
+}
+
+/// Poll until the expanded texture's source is ready, without waiting for v2 jobs.
+fn wait_source(m: &mut AppModel) {
+    let end = Instant::now() + Duration::from_secs(60);
+    while !matches!(m.preview.source, SourceState::Ready(_)) {
+        assert!(Instant::now() < end, "the source never loaded");
+        m.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+static BUILT_OFF_UI: AtomicBool = AtomicBool::new(false);
+
+fn slow(l: &Rgba32F, rules: &[RangeRule]) -> HeatImage {
+    std::thread::sleep(Duration::from_millis(1000));
+    range_overlay(l, rules)
+}
+
+fn noting_the_thread(l: &Rgba32F, rules: &[RangeRule]) -> HeatImage {
+    let name = std::thread::current().name().map(str::to_string);
+    if name.as_deref() == Some("tessalith-overlay") {
+        BUILT_OFF_UI.store(true, Ordering::SeqCst);
+    }
+    range_overlay(l, rules)
+}
+
+fn panics(_: &Rgba32F, _: &[RangeRule]) -> HeatImage {
+    panic!("overlay test panic")
+}
+
+#[test]
+fn the_overlay_is_built_off_the_ui_thread_and_a_stale_result_is_dropped() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_wall(d.path(), DARK, CLEAN_RMAOS);
+    let (a, b) = ("test/wall.png", "test/wall_rmaos.png");
+    // No source for the item on show: nothing starts.
+    assert!(m.overlay_for(a, 0, OverlayKind::Range).is_none());
+    assert!(!m.overlay_pending());
+    m.expand(a);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    // a's job is slow; b's starts before it lands, so a's result arrives last and must be dropped.
+    assert!(m.overlay_for_with(a, 0, OverlayKind::Range, slow).is_none());
+    assert!(m.overlay_pending());
+    m.expand(b);
+    wait_source(&mut m);
+    assert!(m.overlay_pending(), "a is still in flight");
+    assert!(m
+        .overlay_for_with(b, 0, OverlayKind::Range, noting_the_thread)
+        .is_none());
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    let img = m
+        .overlay_for(b, 0, OverlayKind::Range)
+        .expect("b's overlay");
+    // b (a clean _rmaos) paints nothing; a's (all dark albedo) would paint every texel.
+    assert_eq!((img.width, img.height), (64, 64));
+    assert!(
+        img.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0),
+        "a's stale image is on show"
+    );
+    assert!(
+        BUILT_OFF_UI.load(Ordering::SeqCst),
+        "built on the overlay worker"
+    );
+    assert_eq!(m.overlay.key.as_ref().map(|k| k.0.as_str()), Some(b));
+}
+
+#[test]
+fn v2_jobs_keep_the_app_polling_without_greying_advanced() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_wall(d.path(), DARK, CLEAN_RMAOS);
+    m.expand("test/wall.png");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(!m.busy() && !m.v2_jobs_pending());
+    assert!(m
+        .overlay_for_with("test/wall.png", 0, OverlayKind::Range, slow)
+        .is_none());
+    // In flight: the app keeps polling, and the Advanced fields stay enabled (`busy()` is false).
+    assert!(m.v2_jobs_pending());
+    assert!(!m.busy());
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(!m.v2_jobs_pending() && !m.busy());
+    let img = m
+        .overlay_for("test/wall.png", 0, OverlayKind::Range)
+        .expect("landed");
+    assert!(img
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [255, 0, 255, 160]));
+    // The same key starts nothing new.
+    assert!(!m.overlay_pending());
+    // Task 8's kind starts nothing yet.
+    assert!(m.overlay_for("test/wall.png", 0, OverlayKind::Uv).is_none());
+    assert!(!m.v2_jobs_pending());
+}
+
+/// K9: a panicking overlay job never leaves `v2_jobs_pending()` set (the app would poll at 50 ms forever).
+#[test]
+fn a_panicking_overlay_job_clears_v2_jobs_pending() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_wall(d.path(), DARK, CLEAN_RMAOS);
+    m.expand("test/wall.png");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m
+        .overlay_for_with("test/wall.png", 0, OverlayKind::Range, panics)
+        .is_none());
+    assert!(
+        m.wait_idle(Duration::from_secs(10)),
+        "wait_idle spun to its timeout"
+    );
+    assert!(!m.v2_jobs_pending());
+    // No image, and the same key is not retried every frame.
+    assert!(m
+        .overlay_for("test/wall.png", 0, OverlayKind::Range)
+        .is_none());
+    assert!(!m.overlay_pending());
+}
+
+/// A1, K8: `uv_rect` is (offset, scale); the overlay covers the picture's screen rect only, all nine copies with Tile.
+#[test]
+fn the_overlay_covers_the_picture_and_nothing_past_it() {
+    use sdc_gui::model::view::ViewState;
+    use sdc_gui::ui::preview::picture_rects;
+    let pane = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0));
+    let mut v = ViewState::default(); // zoom 1, centred
+    let (pic, uv) = picture_rects(&v, pane, [200.0, 100.0], (100, 50));
+    assert_eq!(
+        pic,
+        egui::Rect::from_min_max(egui::pos2(60.0, 45.0), egui::pos2(160.0, 95.0))
+    );
+    assert_eq!(
+        uv,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
+    );
+    v.tile = true;
+    let (pic, uv) = picture_rects(&v, pane, [200.0, 100.0], (100, 50));
+    assert_eq!(
+        pic,
+        egui::Rect::from_min_max(egui::pos2(-40.0, -5.0), egui::pos2(260.0, 145.0))
+    );
+    assert_eq!(
+        uv,
+        egui::Rect::from_min_max(egui::pos2(-1.0, -1.0), egui::pos2(2.0, 2.0))
+    );
+    // Panned and zoomed: the texel at the pane's centre is the view's centre uv.
+    v.tile = false;
+    v.zoom = 2.0;
+    v.center = [0.25, 0.5];
+    let (pic, _) = picture_rects(&v, pane, [200.0, 100.0], (100, 50));
+    let u = (pane.center().x - pic.min.x) / pic.width();
+    assert!((u - 0.25).abs() < 1e-6, "{u}");
+    assert!((pic.width() - 200.0).abs() < 1e-4);
+}
