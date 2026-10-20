@@ -395,13 +395,13 @@ fn sample_ops(b: &[u8]) -> Vec<SampleOp> {
             ));
         }
     }
-    // the most shared alpha, so SplitAlpha has something to split
-    let alpha_shape = m
-        .shapes
-        .iter()
-        .filter_map(|s| s.alpha.and_then(|a| m.alphas.get(&a)).map(|a| (s, a)))
-        .max_by_key(|(_, a)| a.prop.users.len());
-    if let Some((s, a)) = alpha_shape {
+    let alphas = || {
+        m.shapes
+            .iter()
+            .filter_map(|s| s.alpha.and_then(|a| m.alphas.get(&a)).map(|a| (s, a)))
+    };
+    // A field edit on a shared alpha is a Conflict by design (ruling P8): edit an unshared one.
+    if let Some((s, a)) = alphas().find(|(_, a)| a.prop.users.len() == 1) {
         let Value::U16(flags) = locate(&h, b, a.prop.block as usize, Field::AlphaFlags)
             .unwrap()
             .1
@@ -419,6 +419,9 @@ fn sample_ops(b: &[u8]) -> Vec<SampleOp> {
                 base: u32::from(flags & 1),
             },
         ));
+    }
+    // the most shared alpha, so SplitAlpha has something to split
+    if let Some((s, _)) = alphas().max_by_key(|(_, a)| a.prop.users.len()) {
         v.push((
             "split-alpha",
             vec![s.block],
