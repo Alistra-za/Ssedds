@@ -1278,11 +1278,11 @@ impl Store {
 
     /// Every enabled copy of NIF `path` (canonical): loose ones by priority (highest first), then BSAs by priority.
     pub fn copies_of_path(&self, path: &str) -> Result<Vec<PathCopy>, ScanError> {
-        let mut st = self.conn.prepare(
+        let mut st = self.conn.prepare(&format!(
             "SELECT c.id, o.name, o.kind, o.root, o.priority, o.derived_by IS NOT NULL
              FROM path p JOIN nif_copy c ON c.path_id = p.id JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
-             WHERE p.p = ?1 ORDER BY o.kind = 4, o.priority DESC, c.id",
-        )?;
+             WHERE p.p = ?1 ORDER BY o.kind = {KIND_BSA}, o.priority DESC, c.id"
+        ))?;
         let v = st
             .query_map([path], |r| {
                 Ok(PathCopy {

@@ -61,6 +61,8 @@ pub struct NifEdit {
     parsed: Arc<ParsedNif>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
+    /// The merge key of the drag whose op is the last one; a push with the same key replaces that op.
+    drag: Option<String>,
 }
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
@@ -142,6 +144,17 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
     }
 }
 
+/// `op` (a later tick of the same drag as `old`) takes `old`'s base: the value the drag started from.
+fn keep_base(op: &mut Op, old: &Op) {
+    match (op, old) {
+        (Op::SetField { base, .. }, Op::SetField { base: b, .. }) => *base = *b,
+        (Op::SetBits { base, .. }, Op::SetBits { base: b, .. }) => *base = *b,
+        (Op::SetTexturePath { base, .. }, Op::SetTexturePath { base: b, .. }) => base.clone_from(b),
+        (Op::EditExtra { base, .. }, Op::EditExtra { base: b, .. }) => base.clone_from(b),
+        _ => {}
+    }
+}
+
 impl NifEdit {
     /// Opens `source`, the bytes of `source_copy`, at `data_path`. `edit_mod` None: read-only with an in-memory
     /// document. A saved document is loaded (Err when it is malformed or newer: it is never overwritten); when its
@@ -202,6 +215,7 @@ impl NifEdit {
             error: None,
             parsed: Arc::default(),
             unsaved: false,
+            drag: None,
         };
         // Applying re-anchors each op on the current source: `nif::edit::rebase` and the patched bytes in one pass.
         e.reapply();
@@ -252,13 +266,24 @@ impl NifEdit {
         }
     }
 
-    pub fn push(&mut self, ops: Vec<Op>, merge: Option<String>) {
+    /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
+    /// drag) and a single op replaces the drag's op instead, keeping its original `base`: a drag is one op.
+    pub fn push(&mut self, mut ops: Vec<Op>, merge: Option<String>) {
         let merging = merge.is_some();
+        let same_drag = merging && merge == self.drag && ops.len() == 1;
+        self.drag = merge.clone();
         self.history.record(self.doc.to_text(), merge);
-        self.doc.ops.extend(ops.into_iter().map(|op| DocOp {
-            op,
-            status: OpStatus::Applied,
-        }));
+        match (same_drag, self.doc.ops.last_mut()) {
+            (true, Some(last)) => {
+                let mut op = ops.remove(0);
+                keep_base(&mut op, &last.op);
+                last.op = op;
+            }
+            _ => self.doc.ops.extend(ops.into_iter().map(|op| DocOp {
+                op,
+                status: OpStatus::Applied,
+            })),
+        }
         self.reapply();
         if merging {
             self.unsaved = true;
@@ -269,6 +294,7 @@ impl NifEdit {
 
     /// Ends a drag: the next merged push is a new undo step, and an unsaved drag is saved.
     pub fn flush(&mut self) {
+        self.drag = None;
         self.history.break_merge();
         if self.unsaved {
             self.save();
@@ -276,6 +302,7 @@ impl NifEdit {
     }
 
     fn restore(&mut self, text: Option<String>) -> bool {
+        self.drag = None;
         let Some(t) = text else { return false };
         match EditDoc::from_text(&t) {
             Ok(d) => self.doc = d,
@@ -304,6 +331,7 @@ impl NifEdit {
         if i >= self.doc.ops.len() {
             return;
         }
+        self.drag = None;
         self.history.record(self.doc.to_text(), None);
         self.doc.ops.remove(i);
         self.reapply();
@@ -319,6 +347,7 @@ impl NifEdit {
                 return;
             }
         };
+        self.drag = None;
         self.history.record(self.doc.to_text(), None);
         for (d, op) in self.doc.ops.iter_mut().zip(ops) {
             d.op = op;
@@ -405,7 +434,13 @@ impl MeshesModel {
                 }
                 self.edit_checks();
             }
-            Err(e) => self.error = Some(e),
+            Err(e) => {
+                // A previous session's Parsed preview would no longer match the error.
+                if !self.v3.is_mesh() {
+                    self.load_shapes();
+                }
+                self.error = Some(e);
+            }
         }
     }
 
@@ -527,6 +562,7 @@ impl MeshesModel {
         };
         let mut reload = fresh.keys().any(|k| !textures.contains_key(k));
         if !reload {
+            // The render thread keeps these edits and re-applies them on a reload it starts itself.
             for s in &next.shapes {
                 let old = before.iter().find(|(id, _)| *id == s.id).map(|(_, m)| m);
                 if old != Some(&s.material) && !self.v3.set_material(s.id, s.material.clone()) {

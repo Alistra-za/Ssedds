@@ -606,3 +606,84 @@ fn an_edited_nif_keeps_its_failed_shader_message_in_the_app() {
     h.run_steps(4);
     h.get_by_label("Edited: shader failed: boom");
 }
+
+// ---- A16 review: a slider drag is one op ----
+
+/// One drag tick on the first lit shape's glossiness, based on the value the panel shows now.
+fn tick(m: &mut MeshesModel, v: f32) {
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let cur = e.model.lighting[&shader].lighting.params.glossiness;
+    let op = Op::SetField {
+        at: nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap(),
+        field: Field::Glossiness,
+        value: Value::F32(v.to_bits()),
+        base: Value::F32(cur.to_bits()),
+    };
+    let key = nif::edit::merge_key(&op);
+    m.edit_push(vec![op], Some(key));
+}
+
+fn op_values(m: &MeshesModel) -> Vec<(f32, f32)> {
+    m.edit
+        .as_ref()
+        .unwrap()
+        .doc
+        .ops
+        .iter()
+        .map(|d| match &d.op {
+            Op::SetField {
+                value: Value::F32(v),
+                base: Value::F32(b),
+                ..
+            } => (f32::from_bits(*b), f32::from_bits(*v)),
+            o => panic!("{o:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_slider_drag_is_one_op_with_the_original_base() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let orig = e.model.lighting[&lit_shape(e).1].lighting.params.glossiness;
+    for v in [orig + 1.0, orig + 2.0, 40.5] {
+        tick(&mut m, v);
+    }
+    assert_eq!(op_values(&m), [(orig, 40.5)]);
+    // Undo is one step back to before the drag.
+    assert!(m.undo_edit());
+    assert!(op_values(&m).is_empty());
+    assert!(m.redo_edit());
+    assert_eq!(op_values(&m), [(orig, 40.5)]);
+    // After the drag ends, the next drag on the same field is a new op based on the committed value.
+    m.edit.as_mut().unwrap().flush();
+    for v in [50.5, 60.5] {
+        tick(&mut m, v);
+    }
+    assert_eq!(op_values(&m), [(orig, 40.5), (40.5, 60.5)]);
+    let e = m.edit.as_mut().unwrap();
+    assert!(e.doc.ops.iter().all(|d| d.status == OpStatus::Applied));
+    e.revert(1);
+    assert_eq!(e.doc.ops[0].status, OpStatus::Applied);
+    e.revert(0);
+    assert_eq!(
+        e.patched, e.source,
+        "reverting the drag restores the source bytes"
+    );
+}
+
+#[test]
+fn a_failed_reopen_returns_the_view_to_the_mesh() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    assert!(matches!(m.v3.content(), Some(Content::Parsed { .. })));
+    let p = m.edit.as_ref().unwrap().doc_path.clone();
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "not = [a document").unwrap();
+    m.open_edit();
+    assert!(m.edit.is_none());
+    assert!(m.error.is_some());
+    assert!(m.v3.is_mesh());
+}
