@@ -272,7 +272,11 @@ fn check_badge(ui: &mut egui::Ui, v: &SetView, checks: &[(&str, &Warning)], acts
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
             true,
-            format!("Check results: {n}"),
+            if n == 0 {
+                "Check results: info only".to_string()
+            } else {
+                format!("Check results: {n}")
+            },
         )
     });
     let r = r.on_hover_ui(|ui| {
@@ -942,11 +946,13 @@ fn pill(
                                 .map(|w| (v.label.as_str(), w)),
                         )
                         .collect();
-                    // Kept apart from `rows`: the "⚠ n" never counts check results.
+                    // Kept apart from `rows`: the "⚠ n" never counts check results. Undecided members are left out,
+                    // as in Problems (review I1).
                     let checks: Vec<(&str, &Warning)> = v
                         .members
                         .iter()
                         .filter_map(|k| model.item(k))
+                        .filter(|i| i.status != crate::model::items::ItemStatus::NeedsDecision)
                         .flat_map(|i| {
                             model
                                 .check_warnings(&i.key)
@@ -981,8 +987,9 @@ fn pill(
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    warn_button(ui, v, &rows, acts);
+                                    // Right to left: reads pill, ⚠, ⓘ, as the narrow row does (review M1).
                                     check_badge(ui, v, &checks, acts);
+                                    warn_button(ui, v, &rows, acts);
                                     status_pill(ui, model, v, status);
                                     ui.with_layout(
                                         egui::Layout::left_to_right(egui::Align::Center),

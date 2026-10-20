@@ -100,6 +100,8 @@ pub enum ProblemsFilter {
     Undecided,
     /// Only the artist checks' rows.
     Checks,
+    /// Only the artist checks' rows of one set (an engine set key): "Checks {n}" pressed while `Set` is on.
+    SetChecks(String),
 }
 
 impl AppModel {
@@ -110,7 +112,8 @@ impl AppModel {
     }
 }
 
-/// Every problem of the project: blocks, then decisions, then warnings, then checks. Cached (K9) under the views key plus
+/// Every problem of the project: blocks, then decisions, then warnings, then checks, then the last export's File rows
+/// (warnings, or checks for an engine `CHK-*` code). Cached (K9) under the views key plus
 /// what the asks and the File rows read; the build holds no `RefCell` borrow.
 pub fn problems(m: &AppModel) -> Arc<Vec<Problem>> {
     m.problem_lookups.set(m.problem_lookups.get() + 1);
@@ -369,6 +372,13 @@ pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Arc<Vec<Problem>> {
             let members = set_members(m, k);
             all.iter()
                 .filter(|p| in_set(p, k, &members))
+                .cloned()
+                .collect()
+        }
+        Some(ProblemsFilter::SetChecks(k)) => {
+            let members = set_members(m, k);
+            all.iter()
+                .filter(|p| p.level == Level::Check && in_set(p, k, &members))
                 .cloned()
                 .collect()
         }

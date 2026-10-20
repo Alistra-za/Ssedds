@@ -17,20 +17,26 @@ pub fn status_of(l: Level) -> Status {
 
 type Rows = Arc<Vec<Problem>>;
 
-/// `filtered` at most once per change: keyed on the (cached) problems build and the filter.
-fn rows(ui: &egui::Ui, model: &AppModel) -> Rows {
+/// `filtered` at most once per change: keyed on the (cached) problems build and the filter. Also the count the
+/// "Checks {n}" button shows: the set's check rows while a Set filter is on, else the project's (K6, review M2).
+fn rows(ui: &egui::Ui, model: &AppModel) -> (Rows, usize) {
     let all = problems(model);
     let f = model.bottom.filter.clone();
     let id = egui::Id::new("problems-rows");
-    if let Some((a, ff, out)) = ui.data(|d| d.get_temp::<(Rows, Option<ProblemsFilter>, Rows)>(id))
+    if let Some((a, ff, out, n)) =
+        ui.data(|d| d.get_temp::<(Rows, Option<ProblemsFilter>, Rows, usize)>(id))
     {
         if Arc::ptr_eq(&a, &all) && ff == f {
-            return out;
+            return (out, n);
         }
     }
     let out: Rows = filtered(model, f.as_ref());
-    ui.data_mut(|d| d.insert_temp(id, (all, f, out.clone())));
-    out
+    let n = match &f {
+        Some(ProblemsFilter::Set(_)) => out.iter().filter(|p| p.level == Level::Check).count(),
+        _ => flagged(model).check_rows,
+    };
+    ui.data_mut(|d| d.insert_temp(id, (all, f, out.clone(), n)));
+    (out, n)
 }
 
 enum Act {
@@ -38,37 +44,51 @@ enum Act {
     Set(String),
     File(String),
     Fix(RowPick),
-    ClearFilter,
-    Checks,
+    Filter(Option<ProblemsFilter>),
 }
 
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
-    let list = rows(ui, model);
+    // The count comes from the same cached build as the list (K6), not a count per frame.
+    let (list, checks) = rows(ui, model);
     let off = model.fix_off();
     let mut act = None;
-    // From the same cached build as the list (K6), not a count per frame.
-    let checks = flagged(model).check_rows;
-    let shows_checks = model.bottom.filter == Some(ProblemsFilter::Checks);
+    let label = |k: &String| {
+        crate::model::sets::views(model)
+            .iter()
+            .find(|v| v.key == *k)
+            .map_or(k.clone(), |v| v.label.clone())
+    };
     if model.bottom.filter.is_some() || checks > 0 {
         ui.horizontal(|ui| {
-            if let Some(f) = &model.bottom.filter {
-                let text = match f {
-                    ProblemsFilter::Undecided => "Undecided only ×".to_string(),
-                    ProblemsFilter::Checks => "Checks only ×".to_string(),
-                    ProblemsFilter::Set(k) => {
-                        let label = crate::model::sets::views(model)
-                            .iter()
-                            .find(|v| v.key == *k)
-                            .map_or(k.clone(), |v| v.label.clone());
-                        format!("Set: {label} ×")
-                    }
-                };
+            // The chip and what its × leaves; "Checks {n}" and what it sets (a Set filter keeps its set, M2).
+            let (chip, press) = match &model.bottom.filter {
+                None => (None, Some(ProblemsFilter::Checks)),
+                Some(ProblemsFilter::Undecided) => (
+                    Some(("Undecided only ×".to_string(), None)),
+                    Some(ProblemsFilter::Checks),
+                ),
+                Some(ProblemsFilter::Checks) => (Some(("Checks only ×".to_string(), None)), None),
+                Some(ProblemsFilter::Set(k)) => (
+                    Some((format!("Set: {} ×", label(k)), None)),
+                    Some(ProblemsFilter::SetChecks(k.clone())),
+                ),
+                Some(ProblemsFilter::SetChecks(k)) => (
+                    Some((
+                        format!("Set: {}, checks only ×", label(k)),
+                        Some(ProblemsFilter::Set(k.clone())),
+                    )),
+                    None,
+                ),
+            };
+            if let Some((text, back)) = chip {
                 if ui.button(text).clicked() {
-                    act = Some(Act::ClearFilter);
+                    act = Some(Act::Filter(back));
                 }
             }
-            if checks > 0 && !shows_checks && ui.button(format!("Checks {checks}")).clicked() {
-                act = Some(Act::Checks);
+            if let Some(f) = press.filter(|_| checks > 0) {
+                if ui.button(format!("Checks {checks}")).clicked() {
+                    act = Some(Act::Filter(Some(f)));
+                }
             }
         });
     }
@@ -152,8 +172,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             to_textures(ui);
         }
         Some(Act::Fix(r)) => apply(model, r),
-        Some(Act::ClearFilter) => model.bottom.filter = None,
-        Some(Act::Checks) => model.bottom.filter = Some(ProblemsFilter::Checks),
+        Some(Act::Filter(f)) => model.bottom.filter = f,
         None => {}
     }
 }

@@ -88,7 +88,9 @@ fn all_on() -> ChecksSettings {
 }
 
 #[test]
-fn albedo_out_of_range_luma_raises_chk_range_at_5_percent() {
+/// RANGE_SHARE (0.50 after the 10k tuning, CI8): 51 of 100 texels at luma 20 warn, 49 do not.
+fn albedo_out_of_range_luma_raises_chk_range_above_range_share() {
+    let at = (RANGE_SHARE * 100.0).round() as u32;
     let check = |dark: u32| {
         let d = tempfile::tempdir().unwrap();
         let (j, a) = planned(
@@ -105,12 +107,12 @@ fn albedo_out_of_range_luma_raises_chk_range_at_5_percent() {
         let j = as_subtype(j, Subtype::PbrAlbedo);
         texture_checks(&j, &a, HeightNeutral::Half, &all_on())
     };
-    let ws = check(6);
+    let ws = check(at + 1);
     let r = with(Code::ChkRange, &ws);
     assert_eq!(r.len(), 1, "{ws:?}");
     assert_eq!(r[0].data, json!({"rule": "albedo_luma"}));
     assert_eq!(r[0].severity, Severity::Warning);
-    assert!(with(Code::ChkRange, &check(4)).is_empty());
+    assert!(with(Code::ChkRange, &check(at - 1)).is_empty());
     // The switch hides it.
     let d = tempfile::tempdir().unwrap();
     let (j, a) = planned(d.path(), "wall.png", rgb(10, 10, |_, _| [20, 20, 20]));
@@ -358,6 +360,12 @@ fn cpm_alpha_at_or_below_4_counts_as_parallax_off() {
     let ms = cpm(5, Some(true));
     assert!(ms.iter().all(|m| !m.contains("4/255")), "{ms:?}");
     assert!(cpm(3, None).is_empty());
+    // Review I3 (CI1): an _m with no alpha has nothing to judge in A, even with parallax on.
+    let d = tempfile::tempdir().unwrap();
+    let (j, a) = planned(d.path(), "wall_m.png", rgb(64, 64, |_, _| [128, 128, 128]));
+    let mut j = as_subtype(j, Subtype::ComplexMaterial);
+    j.profile.alpha.parallax = Some(true);
+    assert!(parallax(&texture_checks(&j, &a, HeightNeutral::Half, &all_on())).is_empty());
 }
 
 #[test]
@@ -465,36 +473,55 @@ fn gl_bumpy(path: &Path) {
 /// A PBR set under `textures/test`: `wall.png` at luma `albedo`, a clean `wall_rmaos.png` and a `wall_n.png`, flat,
 /// or with `flipped` a bumpy one stored with the other green. Opened as the app opens a folder, shader Pbr, target cs.
 fn pbr_wall(dir: &Path, albedo: u8, flipped: bool) -> AppModel {
+    pbr_sets(dir, &[("wall", albedo)], flipped)
+}
+
+/// `pbr_wall` with one PBR set per `(stem, albedo luma)`.
+fn pbr_sets(dir: &Path, sets: &[(&str, u8)], flipped: bool) -> AppModel {
     let r = dir.join("textures/test");
     std::fs::create_dir_all(&r).unwrap();
-    ImageBuffer::from_fn(64, 64, |_, _| Rgb([albedo, albedo, albedo]))
-        .save(r.join("wall.png"))
-        .unwrap();
-    ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 10, 200]))
-        .save(r.join("wall_rmaos.png"))
-        .unwrap();
-    if flipped {
-        gl_bumpy(&r.join("wall_n.png"));
-    } else {
-        ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 128, 255]))
-            .save(r.join("wall_n.png"))
+    for &(stem, albedo) in sets {
+        ImageBuffer::from_fn(64, 64, |_, _| Rgb([albedo, albedo, albedo]))
+            .save(r.join(format!("{stem}.png")))
             .unwrap();
+        ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 10, 200]))
+            .save(r.join(format!("{stem}_rmaos.png")))
+            .unwrap();
+        let n = r.join(format!("{stem}_n.png"));
+        if flipped {
+            gl_bumpy(&n);
+        } else {
+            ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 128, 255]))
+                .save(n)
+                .unwrap();
+        }
     }
     let mut m = support::opened_as_the_app(dir.join("textures"), dir.join("export"));
-    let id = sdc_gui::model::sets::views(&m)
-        .iter()
-        .find(|v| v.key.ends_with("wall"))
-        .expect("the wall set")
-        .id
-        .clone();
-    m.set_shader(&id, Some(Shader::Pbr));
-    assert!(m.wait_idle(Duration::from_secs(60)));
-    let wall = m.item("test/wall.png").expect("wall item");
-    assert_eq!(
-        wall.job.as_ref().map(|j| j.profile.subtype),
-        Some(Subtype::PbrAlbedo)
-    );
+    for &(stem, _) in sets {
+        let id = sdc_gui::model::sets::views(&m)
+            .iter()
+            .find(|v| v.key.ends_with(stem))
+            .expect("the set")
+            .id
+            .clone();
+        m.set_shader(&id, Some(Shader::Pbr));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let albedo = m.item(&format!("test/{stem}.png")).expect("albedo item");
+        assert_eq!(
+            albedo.job.as_ref().map(|j| j.profile.subtype),
+            Some(Subtype::PbrAlbedo)
+        );
+    }
     m
+}
+
+fn set_key(m: &AppModel, stem: &str) -> String {
+    sdc_gui::model::sets::views(m)
+        .iter()
+        .find(|v| v.key.ends_with(stem))
+        .unwrap()
+        .key
+        .clone()
 }
 
 fn check_rows(m: &AppModel) -> Vec<bottom::Problem> {
@@ -537,6 +564,73 @@ fn turning_a_check_off_hides_its_warnings_without_a_replan() {
     m.replan();
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert!(check_rows(&m).is_empty(), "{:?}", check_rows(&m));
+}
+
+/// Review M6: opening another folder drops the old folder's check rows at once, before its plan lands.
+#[test]
+fn opening_another_folder_drops_the_old_check_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_wall(d.path(), 20, false);
+    assert_eq!(check_rows(&m).len(), 1);
+    let other = tempfile::tempdir().unwrap();
+    let r = other.path().join("textures/plain");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(8, 8, |_, _| Rgb([128u8, 128, 128]))
+        .save(r.join("rock.png"))
+        .unwrap();
+    m.open_folder(other.path().join("textures"));
+    m.poll();
+    assert!(m.check_warnings("test/wall.png").is_empty());
+    assert!(check_rows(&m).is_empty(), "{:?}", check_rows(&m));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(check_rows(&m).is_empty());
+}
+
+/// Review M6: an undone edit brings its check rows back with the plan it restores.
+#[test]
+fn undo_restores_the_check_rows_an_edit_removed() {
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_wall(d.path(), 20, false);
+    assert_eq!(check_rows(&m).len(), 1);
+    // As a plain diffuse the value-range rule does not apply.
+    m.decide("test/wall.png", Answer::Subtype(Subtype::Diffuse));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(check_rows(&m).is_empty(), "{:?}", check_rows(&m));
+    m.undo();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let rows = check_rows(&m);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].at, At::Texture("test/wall.png".into()));
+}
+
+/// Review M2: under a Set filter "Checks {n}" counts that set's check rows and keeps the set.
+#[test]
+fn the_checks_button_under_a_set_filter_counts_and_keeps_the_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_sets(d.path(), &[("wall", 20), ("rock", 20)], false);
+    assert_eq!(check_rows(&m).len(), 2);
+    let wall = set_key(&m, "wall");
+    m.open_problems(Some(ProblemsFilter::Set(wall.clone())));
+    let mut h = harness(m, 1600.0);
+    h.run();
+    h.get_by_label("Checks 1").click();
+    h.run();
+    assert_eq!(
+        h.state().bottom.filter,
+        Some(ProblemsFilter::SetChecks(wall.clone()))
+    );
+    let rows = bottom::filtered(h.state(), h.state().bottom.filter.as_ref());
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].at, At::Texture("test/wall.png".into()));
+    assert!(h.query_by_label_contains("Checks 1").is_none());
+    h.get_by_label_contains("checks only ×").click();
+    h.run();
+    assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Set(wall)));
+    // Without a Set filter the count is the project's.
+    h.state_mut().open_problems(None);
+    h.run();
+    h.get_by_label("Checks 2");
 }
 
 #[test]
@@ -664,10 +758,59 @@ fn the_card_shows_check_results_on_an_info_badge_outside_the_warning_count() {
         .expect("the Sets column")
         .outer_rect;
     assert!(sets.width() < 200.0, "{sets:?}");
+    // Review M7: inside the card's own frame, the smallest painted rect around the set's name and the chips below.
+    let name = h
+        .query_all_by_label("test/wall")
+        .map(|n| n.rect())
+        .filter(|r| sets.contains_rect(*r))
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the card's name");
+    let card = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Rect(r) => Some(r.rect),
+            _ => None,
+        })
+        .filter(|r| r.contains_rect(name) && r.height() > name.height() + 40.0)
+        .min_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("the card's frame");
     assert!(
-        sets.contains_rect(b),
-        "badge {b:?} inside the Sets column {sets:?}"
+        card.contains_rect(b),
+        "badge {b:?} inside the card {card:?}"
     );
+    assert!(b.min.y > name.max.y, "the badge wrapped below the name row");
+}
+
+/// Review I1: an undecided member's results are left out of the badge, as Problems leaves out its rows.
+#[test]
+fn an_undecided_members_check_results_are_not_on_the_badge() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_wall(d.path(), 20, false);
+    let i = m
+        .items
+        .iter()
+        .position(|i| i.key == "test/wall.png")
+        .unwrap();
+    m.items[i].status = sdc_gui::model::items::ItemStatus::NeedsDecision;
+    m.invalidate_views();
+    assert!(!m.check_warnings("test/wall.png").is_empty());
+    assert!(check_rows(&m).is_empty());
+    let mut h = harness(m, 1600.0);
+    h.run();
+    assert!(h.query_by_label_contains("Check results").is_none());
+}
+
+/// Review M3: a badge with only Info results is named for them, not "0".
+#[test]
+fn an_info_only_badge_is_named_info_only() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_wall(d.path(), 128, true);
+    let mut h = harness(m, 1600.0);
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Check results: info only");
+    assert!(h.query_by_label("Check results: 0").is_none());
 }
 
 #[test]

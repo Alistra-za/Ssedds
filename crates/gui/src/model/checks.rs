@@ -16,16 +16,17 @@ use engine::shader::Shader;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-/// Albedo: warn when more than this share of texels is darker than 30 or brighter than 240 (luma codes).
-pub const RANGE_SHARE: f64 = 0.05;
-/// Metallic (G of `_rmaos`): warn when more than this share is grey (codes 26..=229).
-pub const METAL_GREY_SHARE: f64 = 0.20;
+/// Albedo: warn when more than this share of texels is darker than 30 or brighter than 240 (luma codes). Tuned on
+/// the 10k set (DECISIONS CI8): 0.05 flagged 43 % of PBR albedos.
+pub const RANGE_SHARE: f64 = 0.50;
+/// Metallic (G of `_rmaos`): warn when more than this share is grey (codes 26..=229). 0.20 flagged 19 % (CI8).
+pub const METAL_GREY_SHARE: f64 = 0.40;
 /// Roughness (R of `_rmaos`): warn when more than this share is at code 0 or 255.
 pub const ROUGH_EXTREME_SHARE: f64 = 0.50;
 /// AO (B of `_rmaos`): warn when its mean is below this.
 pub const AO_DARK_MEAN: f64 = 0.35;
 /// Emissive: warn when fewer than this share of texels are black (luma code `<= LUMA_BLACK`).
-pub const EMISSIVE_BLACK_MIN: f64 = 0.50;
+pub const EMISSIVE_BLACK_MIN: f64 = 0.25;
 /// Dark metal: warn when more than this share of texels are metal (`_rmaos` G >= 128) with albedo luma < 155.
 pub const DARK_METAL_SHARE: f64 = 0.50;
 /// A metal map needs at least this share of metal texels before dark metal is judged.
@@ -38,8 +39,10 @@ pub const GREEN_RATIO: f64 = 0.5;
 pub const CURL_FLOOR: f64 = 1e-4;
 /// Parallax: a share at the clipping codes above this warns.
 pub const CLIP_SHARE: f64 = 0.10;
-/// Parallax: a share of steep neighbour steps above this warns.
-pub const STEEP_SHARE: f64 = 0.01;
+/// Parallax: a share of steep neighbour steps above this warns. 0.01 flagged 7 % of `_p` (CI8).
+pub const STEEP_SHARE: f64 = 0.03;
+/// Parallax: a height whose max − min is under this many codes uses too little of its range.
+pub const RANGE_USE_CODES: f64 = 16.0;
 /// Landscape displacement scales further apart than this factor are flagged.
 pub const SCALE_FACTOR: f64 = 2.0;
 
@@ -116,7 +119,7 @@ impl RangeRule {
         match self {
             RangeRule::AlbedoLuma => {
                 let l = luma_code(px[0], px[1], px[2]);
-                l < LUMA_DARK || l > LUMA_BRIGHT
+                !(LUMA_DARK..=LUMA_BRIGHT).contains(&l)
             }
             RangeRule::MetalGrey => (26..=229).contains(&px[1]),
             RangeRule::RoughExtreme => px[0] == 0 || px[0] == 255,
@@ -274,7 +277,11 @@ fn parallax_checks(
     let cpm = job.profile.subtype == Subtype::ComplexMaterial;
     let (c, b, what): (&ChannelStats, &BandCounts, &str) = match job.profile.subtype {
         Subtype::Height => (&a.channels[0], &s.bands[0], "_p"),
-        Subtype::ComplexMaterial if job.profile.alpha.parallax == Some(true) => {
+        // CI1 (review M2): without source alpha A reads 1.0 everywhere, so its bands say nothing; the engine's
+        // ALPHA-PARALLAX-NO-ALPHA already names that case.
+        Subtype::ComplexMaterial
+            if job.profile.alpha.parallax == Some(true) && a.alpha != AlphaContent::None =>
+        {
             (&a.channels[3], &s.bands[3], "_m alpha")
         }
         _ => return vec![],
@@ -286,7 +293,7 @@ fn parallax_checks(
     let mut out = vec![];
     let mut warn = |m: String| out.push(Warning::new(Code::ChkParallax, m));
     let used = f64::from(c.max - c.min);
-    if used < 32.0 / 255.0 {
+    if used < RANGE_USE_CODES / 255.0 {
         warn(format!(
             "{what} uses only {:.0}/255 of its range: the parallax will look flat",
             used * 255.0
@@ -332,7 +339,11 @@ pub fn dark_metal_share(albedo: &Thumbnail, rmaos: &Thumbnail) -> Option<f64> {
         return None;
     }
     let (mut metal, mut dark) = (0u64, 0u64);
-    for (a, r) in albedo.rgba.chunks_exact(4).zip(rmaos.rgba.chunks_exact(4)) {
+    let (pa, pr) = (
+        albedo.rgba.as_chunks::<4>().0,
+        rmaos.rgba.as_chunks::<4>().0,
+    );
+    for (a, r) in pa.iter().zip(pr) {
         if r[1] >= 128 {
             metal += 1;
             dark += u64::from(luma_code(a[0], a[1], a[2]) < 155);
