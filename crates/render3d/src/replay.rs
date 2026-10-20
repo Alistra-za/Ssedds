@@ -302,15 +302,28 @@ fn load_mesh(dir: &Path) -> Result<ReplayMesh, String> {
             ib.len()
         )));
     }
+    // R16: minIndex fits u16, so -minIndex fits the i32 base vertex; no index may lie below it.
+    let min_index = v
+        .get("minIndex")
+        .and_then(u32_of)
+        .filter(|m| *m <= u16::MAX as u32)
+        .ok_or_else(|| err("bad minIndex (must fit R16)".into()))?;
+    if ib
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .any(|c| (u16::from_le_bytes(*c) as u32) < min_index)
+    {
+        return Err(err(format!(
+            "{ib_file}: an index lies below minIndex {min_index}"
+        )));
+    }
     Ok(ReplayMesh {
         inputs,
         vbs,
         ib,
         index_count,
-        min_index: v
-            .get("minIndex")
-            .and_then(u32_of)
-            .ok_or_else(|| err("bad minIndex".into()))?,
+        min_index,
     })
 }
 
@@ -331,36 +344,40 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
             .and_then(floats::<16>)
             .ok_or_else(|| serr("bad ViewProj"))?,
     );
+    // Strict: a dropped entry would compile a different permutation.
     let defines: Vec<Vec<String>> = state
         .get("defines")
         .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .map(|l| {
-                    l.as_array()
-                        .map(|l| {
-                            l.iter()
-                                .filter_map(|d| d.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| serr("defines null or empty: no PS define list to compile"))?
+        .iter()
+        .map(|l| {
+            l.as_array()
+                .and_then(|l| l.iter().map(|d| d.as_str().map(String::from)).collect())
         })
-        .filter(|d: &Vec<Vec<String>>| !d.is_empty())
-        .ok_or_else(|| serr("defines null or empty: no PS define list to compile"))?;
+        .collect::<Option<_>>()
+        .ok_or_else(|| serr("defines: every variant must be a list of strings"))?;
     let blend = state
         .pointer("/stageB/blend")
         .and_then(Value::as_array)
         .ok_or_else(|| serr("no stageB.blend"))?;
     let write_masks = blend
         .iter()
-        .map(|b| b.get("writeMask").and_then(Value::as_u64).map(|m| m as u8))
+        .map(|b| {
+            b.get("writeMask")
+                .and_then(Value::as_u64)
+                .filter(|m| *m <= 15)
+                .map(|m| m as u8)
+        })
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| serr("bad stageB.blend writeMask"))?;
-    let blended = blend
+        .ok_or_else(|| serr("stageB.blend writeMask must be 0..=15"))?;
+    // Strict: a non-bool would replay a blended draw as opaque.
+    let enabled = blend
         .iter()
-        .any(|b| b.get("enabled").and_then(Value::as_bool) == Some(true));
+        .map(|b| b.get("enabled").and_then(Value::as_bool))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| serr("stageB.blend enabled must be a bool"))?;
+    let blended = enabled.contains(&true);
 
     let mut cbuffers = HashMap::new();
     for ent in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
@@ -407,6 +424,17 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         .and_then(|s| Some((u32_of(&s[0])?, u32_of(&s[1])?)))
         .ok_or_else(|| format!("{}: bad size", mp.display()))?;
     let crop = golden::read_mrt_info(dir)?.crop;
+    let inside = |o: u32, l: u32, s: u32| o.checked_add(l).is_some_and(|e| e <= s);
+    if !inside(crop[0], crop[2], size.0) || !inside(crop[1], crop[3], size.1) {
+        return Err(format!(
+            "{}: crop {crop:?} outside size {size:?}",
+            mp.display()
+        ));
+    }
+    let px = (crop[2] as usize)
+        .checked_mul(crop[3] as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| format!("{}: crop {crop:?} too large", mp.display()))?;
     let before0 = mrt
         .get("rts")
         .and_then(Value::as_array)
@@ -417,10 +445,7 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         .and_then(|r| r.pointer("/files/before"))
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{}: no rt 0 before file", mp.display()))?;
-    let before = vec![golden::read_f32(
-        &dir.join(before0),
-        (crop[2] * crop[3]) as usize * 4,
-    )?];
+    let before = vec![golden::read_f32(&dir.join(before0), px)?];
 
     let ep = dir.join("extras.json");
     let eerr = |m: &str| format!("{}: {m}", ep.display());
@@ -602,7 +627,7 @@ impl Renderer {
                 r.defines.len()
             ));
         }
-        let ps_list = &r.defines[0];
+        let ps_list = r.defines.first().ok_or("no PS define list to compile")?;
         let src = self.sources.get(Path::new("Lighting.hlsl"))?;
         let vs_d = to_defines(&vs_defines(ps_list, &r.mesh));
         let ps_d = to_defines(std::iter::once(&"PSHADER".to_string()).chain(ps_list));
@@ -734,6 +759,8 @@ impl Renderer {
         // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
         unsafe {
             let ctx = &gpu.ctx;
+            // A frame's SRVs, cbuffers and samplers stay bound: a register the fixture leaves empty must read 0.
+            ctx.ClearState();
             ctx.OMSetRenderTargets(Some(&[Some(target.rtv.clone())]), &target.dsv);
             ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
                 TopLeftX: v[0],

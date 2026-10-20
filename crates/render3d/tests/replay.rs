@@ -159,6 +159,93 @@ fn load_fixture_reads_a_synthetic_fixture() {
     assert!(msg.contains("R10G10B10A2_UNORM"), "{msg}");
 }
 
+fn edit_json(p: &Path, name: &str, f: &dyn Fn(&mut serde_json::Value)) {
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(p.join(name)).unwrap()).unwrap();
+    f(&mut v);
+    put(p, name, &v);
+}
+
+/// Err text from loading the synthetic fixture after `f` changed one file's JSON.
+fn load_err(name: &str, f: &dyn Fn(&mut serde_json::Value)) -> String {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture(d.path(), STANDIN);
+    edit_json(d.path(), name, f);
+    match load_fixture(d.path()) {
+        Ok(_) => panic!("{name}: load_fixture should fail"),
+        Err(e) => e,
+    }
+}
+
+type Edit = &'static dyn Fn(&mut serde_json::Value);
+
+#[test]
+fn load_fixture_refuses_malformed_fixtures() {
+    let cases: &[(&str, &str, Edit)] = &[
+        ("mrt.json", "crop", &|v| {
+            v["crop"] = json!([0, 0, 65536, 65536])
+        }),
+        ("mrt.json", "crop", &|v| v["crop"] = json!([6, 6, 4, 4])),
+        ("mesh.json", "minIndex", &|v| v["minIndex"] = json!(70000)),
+        ("mesh.json", "minIndex", &|v| v["minIndex"] = json!(1)),
+        ("state.json", "defines", &|v| v["defines"] = json!([null])),
+        ("state.json", "defines", &|v| {
+            v["defines"] = json!([["STANDIN_FLAT", 5]])
+        }),
+        ("state.json", "enabled", &|v| {
+            v["stageB"]["blend"][0]["enabled"] = json!("yes")
+        }),
+        ("state.json", "writeMask", &|v| {
+            v["stageB"]["blend"][0]["writeMask"] = json!(16)
+        }),
+    ];
+    for (file, field, f) in cases {
+        let e = load_err(file, *f);
+        assert!(e.contains(file) && e.contains(field), "{file}/{field}: {e}");
+    }
+}
+
+#[test]
+fn replay_refuses_an_empty_define_list() {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture(d.path(), STANDIN);
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let mut r = load_fixture(d.path()).unwrap();
+    r.defines.clear();
+    let e = ren.render_replay(&r, false).err().unwrap();
+    assert!(e.contains("define"), "{e}");
+}
+
+/// A normal frame binds t0 (the built-in's diffuse); a replay whose t0 is "null" must read 0 there, not that texture.
+#[test]
+fn replay_after_render_leaves_no_stale_bindings() {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture(d.path(), STANDIN);
+    edit_json(d.path(), "tex.json", &|v| {
+        v[0] = json!({"bind": 0, "type": "null", "isTexture": true})
+    });
+    // White t0 would add 0.25 to the flat colour if a stale view leaked in.
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &["STANDIN_OPAQUE_OK", "STANDIN_FLAT"]);
+    let rep = ren.load_builtin(
+        render3d::Builtin::Sphere,
+        nif::material::MaterialState::builtin_default(),
+        &|_| None,
+    );
+    assert!(
+        rep.errors.is_empty() && rep.compile_errors.is_empty(),
+        "{rep:?}"
+    );
+    ren.render(&render3d::scene::Scene::neutral(), 64, 64)
+        .unwrap();
+    let r = load_fixture(d.path()).unwrap();
+    let out = ren.render_replay(&r, false).unwrap();
+    for px in out.mrt[0].chunks(4) {
+        assert_eq!(px, [0.75, 0.25, 0.5, 1.0]);
+    }
+}
+
 #[test]
 fn replay_writes_fixture_cbuffers_verbatim() {
     let d = tempfile::tempdir().unwrap();
@@ -207,6 +294,7 @@ fn replay_real_fixture_smoke() {
         assert!(out.mrt[0].iter().all(|v| v.is_finite()), "{s}");
         let mask = golden::read_mask(&dir.join("mask.bin"), n).unwrap();
         let masked = mask.iter().filter(|m| **m).count();
+        assert!(masked > 0, "{s}: empty mask");
         let changed = (0..n)
             .filter(|&p| mask[p] && out.mrt[0][4 * p..4 * p + 4] != r.before[0][4 * p..4 * p + 4])
             .count();
@@ -224,7 +312,14 @@ fn replay_real_fixture_smoke() {
             golden::format_tol("R16G16B16A16_FLOAT").unwrap(),
             max,
         );
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        let identical = (0..n)
+            .filter(|&p| {
+                mask[p] && bits(&out.mrt[0][4 * p..4 * p + 4]) == bits(&after[4 * p..4 * p + 4])
+            })
+            .count();
         println!("{s}: {d:?} (noise p99 {p99}, max {max} used); changed {changed}/{masked}");
+        println!("{s}: bit-identical: {identical} of {masked}");
         println!("{s}: warnings {:?}", out.warnings);
     }
 }
