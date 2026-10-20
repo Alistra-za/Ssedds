@@ -126,6 +126,21 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             let t = "No effect in game: Own_Emit is off";
             push(Level::Warn, fld(block, Field::EmissiveColor(0)), t, None);
         }
+        let pbr = lt.slsf2 & (1 << 23) != 0;
+        let mlp = lt.slsf2 & (1 << 24) != 0;
+        let slsf2 = fld(block, Field::Slsf2);
+        if lt.shader_type == 11 && !pbr && !mlp {
+            let t = "Shader type 11 needs the Multi_Layer_Parallax flag (SLSF2 24) without PBR.";
+            push(Level::Warn, slsf2.clone(), t, None);
+        }
+        if mlp && lt.shader_type != 11 {
+            let t = "Multi_Layer_Parallax (SLSF2 24) is set but the shader type is not 11.";
+            push(Level::Warn, slsf2.clone(), t, None);
+        }
+        if !pbr && lt.slsf2 & (1 << 12) != 0 {
+            let t = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
+            push(Level::Warn, slsf2, t, None);
+        }
         let ext = lt.slsf1 & SLSF1_EXTERNAL_EMITTANCE != 0;
         let have = bsx.as_ref().map_or(0, |b| b.1);
         if ext != (have & BSX_EXTERNAL_EMIT != 0) {

@@ -83,7 +83,10 @@ fn trailer_ranges() {
             field: Field::Trailer(1)
         }
     );
-    assert!(warnings(&scenes::lsp_shape(11, &[5.0, 1.0, 1.0, 1.0, 1.0])).is_empty());
+    none(
+        &warnings(&scenes::lsp_shape(11, &[5.0, 1.0, 1.0, 1.0, 1.0])),
+        "MLP thickness 5 is outside 5-500",
+    );
 
     let w = warnings(&scenes::lsp_shape(7, &[0.0, 1.0]));
     only(&w, "POM passes 0 is outside 1-320", Level::Warn);
@@ -411,4 +414,78 @@ fn untouched_source_errors_are_not_new() {
     assert_eq!(n.len(), 1);
     assert_eq!(n[0].text, "Shader type 20 is FO4 only");
     assert_eq!(new_errors(&[], &edited).len(), 1);
+}
+
+const NEEDS_MLP: &str =
+    "Shader type 11 needs the Multi_Layer_Parallax flag (SLSF2 24) without PBR.";
+const MLP_NOT_11: &str = "Multi_Layer_Parallax (SLSF2 24) is set but the shader type is not 11.";
+const FIT_SLOPE: &str = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
+
+fn slsf_scene(shader_type: u32, slsf2: u32) -> Vec<Warning> {
+    let trailer: &[f32] = if shader_type == 11 {
+        &[5.0, 1.0, 1.0, 1.0, 1.0]
+    } else {
+        &[]
+    };
+    let b = put(
+        scenes::lsp_shape(shader_type, trailer),
+        1,
+        Field::Slsf2,
+        Value::U32(slsf2),
+    );
+    warnings(&b)
+}
+
+#[test]
+fn slsf_type_11_without_mlp_flag_warns_when_not_pbr() {
+    let w = slsf_scene(11, 0);
+    let x = only(&w, NEEDS_MLP, Level::Warn);
+    assert_eq!(
+        x.target,
+        Target::Field {
+            block: 1,
+            field: Field::Slsf2
+        }
+    );
+    none(&slsf_scene(11, 1 << 24), NEEDS_MLP);
+    none(&slsf_scene(11, 1 << 23), NEEDS_MLP);
+}
+
+#[test]
+fn slsf_mlp_flag_on_other_type_warns() {
+    for (t, f2) in [(0, 1 << 24), (0, (1 << 24) | (1 << 23))] {
+        let x = only(&slsf_scene(t, f2), MLP_NOT_11, Level::Warn);
+        assert_eq!(
+            x.target,
+            Target::Field {
+                block: 1,
+                field: Field::Slsf2
+            }
+        );
+    }
+    none(&slsf_scene(11, 1 << 24), MLP_NOT_11);
+}
+
+#[test]
+fn slsf_fit_slope_without_pbr_warns() {
+    let x = only(&slsf_scene(0, 1 << 12), FIT_SLOPE, Level::Warn);
+    assert_eq!(
+        x.target,
+        Target::Field {
+            block: 1,
+            field: Field::Slsf2
+        }
+    );
+    none(&slsf_scene(0, (1 << 12) | (1 << 23)), FIT_SLOPE);
+}
+
+#[test]
+fn slsf_vanilla_lighting_bits_do_not_warn() {
+    for t in [0, 11] {
+        let f2 = (1 << 25) | (1 << 26) | (1 << 27) | (1 << 30) | if t == 11 { 1 << 24 } else { 0 };
+        let w = slsf_scene(t, f2);
+        assert!(w.is_empty(), "{w:#?}");
+    }
+    // PBR type 11 without bit 24 is common.
+    assert!(slsf_scene(11, 1 << 23).is_empty());
 }
