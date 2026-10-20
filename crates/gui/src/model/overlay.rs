@@ -45,8 +45,8 @@ pub fn range_overlay(level: &Rgba32F, rules: &[RangeRule]) -> HeatImage {
 pub const UV_UNUSED: [u8; 4] = [0, 0, 0, 180];
 pub const UV_USED: [u8; 4] = [255, 255, 255, 40];
 
-/// The UV coverage overlay of `mask` (row 0 at v = 0, the image's top), ready to upload. Built on the read's worker
-/// with the coverage (Task 8), not by an overlay job: it depends on the mask only, never on the source mip.
+/// The UV coverage overlay of `mask` (row 0 at v = 0, the image's top), ready to upload. Built by an overlay job for
+/// the expanded item (`AppModel::uv_overlay`, CL44): it depends on the mask only, never on the source mip.
 pub fn uv_overlay_image(mask: &UvMask) -> Arc<ColorImage> {
     let n = mask.size;
     let mut rgba = Vec::with_capacity(n as usize * n as usize * 4);
@@ -75,6 +75,8 @@ pub struct OverlayState {
     rules: Vec<RangeRule>,
     /// The source the key's image is built from: a reloaded source (an edit, a re-plan) builds again.
     source: Weak<SourcePreview>,
+    /// The UV mask the key's image is built from: another answer (a new size, a re-read) builds again.
+    mask: Weak<UvMask>,
 }
 
 impl OverlayState {
@@ -84,6 +86,22 @@ impl OverlayState {
         self.image = None;
         self.rules.clear();
         self.source = Weak::new();
+        self.mask = Weak::new();
+    }
+
+    /// A new job for `key`: its generation. Another item's (or kind's) overlay is never shown over this one.
+    fn start(&mut self, item: &str, mip: usize, kind: OverlayKind) -> u64 {
+        if self
+            .key
+            .as_ref()
+            .is_none_or(|(i, _, k)| i != item || *k != kind)
+        {
+            self.image = None;
+        }
+        self.generation += 1;
+        self.key = Some((item.to_string(), mip, kind));
+        self.running = true;
+        self.generation
     }
 }
 
@@ -136,7 +154,7 @@ impl AppModel {
         kind: OverlayKind,
         build: Build,
     ) -> Option<Arc<ColorImage>> {
-        // The UV overlay is no overlay job: it comes with the coverage read (`AppModel::uv_overlay`).
+        // The UV overlay is built from the cached mask, not the source (`AppModel::uv_overlay`).
         if kind != OverlayKind::Range || self.preview.item.as_deref() != Some(item) {
             return None;
         }
@@ -154,20 +172,9 @@ impl AppModel {
         }
         src.levels.get(mip)?;
         let src = src.clone();
-        let o = &mut self.overlay;
-        // Another item's (or kind's) overlay is never shown over this one.
-        if o.key
-            .as_ref()
-            .is_none_or(|(i, _, k)| i != item || *k != kind)
-        {
-            o.image = None;
-        }
-        o.generation += 1;
-        let generation = o.generation;
-        o.key = Some((item.to_string(), mip, kind));
-        o.rules = rules.clone();
-        o.running = true;
-        o.source = Arc::downgrade(&src);
+        let generation = self.overlay.start(item, mip, kind);
+        self.overlay.rules = rules.clone();
+        self.overlay.source = Arc::downgrade(&src);
         spawn_guarded(self.tx.clone(), "overlay", move |tx| {
             // A panic lands as this job's "no overlay", so v2_jobs_pending clears (K9) and the key is not retried.
             let image = or_send(
@@ -188,6 +195,45 @@ impl AppModel {
             let _ = tx.send(WorkerMsg::Overlay {
                 generation,
                 image: Some(Arc::new(image)),
+            });
+        });
+        self.overlay.image.clone()
+    }
+
+    /// The UV overlay of the expanded `item` from `mask` (CL44): one overlay job per mask, so the UI thread does no
+    /// per-texel work (CL29) and only the image on show is kept. The previous image stays while the same item rebuilds.
+    pub(super) fn uv_overlay_job(
+        &mut self,
+        item: &str,
+        mask: Arc<UvMask>,
+    ) -> Option<Arc<ColorImage>> {
+        if self.preview.item.as_deref() != Some(item) {
+            return None;
+        }
+        let o = &self.overlay;
+        let same = o
+            .key
+            .as_ref()
+            .is_some_and(|(i, _, k)| i == item && *k == OverlayKind::Uv);
+        if same && o.mask.upgrade().is_some_and(|m| Arc::ptr_eq(&m, &mask)) {
+            return o.image.clone();
+        }
+        let generation = self.overlay.start(item, 0, OverlayKind::Uv);
+        self.overlay.rules.clear();
+        self.overlay.source = Weak::new();
+        self.overlay.mask = Arc::downgrade(&mask);
+        spawn_guarded(self.tx.clone(), "overlay", move |tx| {
+            let image = or_send(
+                tx,
+                || uv_overlay_image(&mask),
+                |_| WorkerMsg::Overlay {
+                    generation,
+                    image: None,
+                },
+            );
+            let _ = tx.send(WorkerMsg::Overlay {
+                generation,
+                image: Some(image),
             });
         });
         self.overlay.image.clone()

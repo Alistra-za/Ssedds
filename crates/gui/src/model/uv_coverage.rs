@@ -572,13 +572,6 @@ pub type ReadFn = fn(&Path, &str, [u32; 2], &AtomicBool) -> Result<Coverage, Str
 /// A cache key: the scan path and the written size the gutter was measured at (review I1).
 pub(super) type Key = (String, [u32; 2]);
 
-/// A cached answer and its overlay image (`None` for a failed read, review I2).
-#[derive(Clone)]
-struct Entry {
-    coverage: Arc<Coverage>,
-    image: Option<Arc<eframe::egui::ColorImage>>,
-}
-
 /// A running "Check all UV coverage".
 struct AllRun {
     run: u64,
@@ -594,7 +587,8 @@ const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_millis(250)
 /// cache, C4), the reads in flight, the Check-all run and the scan-has-rows answer. Every job here is counted in
 /// `AppModel::v2_jobs_pending`.
 pub struct UvState {
-    cache: HashMap<Key, Entry>,
+    /// The answers only: the overlay image is built for the expanded item when shown (CL44).
+    cache: HashMap<Key, Arc<Coverage>>,
     /// Bumped by landed answers (at most every `REFRESH_EVERY` during Check all) and by a clear: part of
     /// `refresh_checks`' key.
     revision: u64,
@@ -678,9 +672,7 @@ impl UvState {
         self.revision
     }
     pub(super) fn get(&self, tex: &str, size: [u32; 2]) -> Option<&Arc<Coverage>> {
-        self.cache
-            .get(&(tex.to_string(), size))
-            .map(|e| &e.coverage)
+        self.cache.get(&(tex.to_string(), size))
     }
 
     fn bump(&mut self) {
@@ -714,7 +706,7 @@ pub fn failed(c: &Coverage) -> bool {
     c.nifs == 0 && !c.errors.is_empty()
 }
 
-/// `read`'s answer as the message's coverage and overlay: an `Err` becomes a coverage with that error line (K18), a
+/// `read`'s answer as the message's coverage: an `Err` becomes a coverage with that error line (K18), a
 /// panic too (K9); `None` when `cancel` is set, so a cancelled read is never an answer (the flag decides, not the
 /// message, review M4).
 fn read_one(
@@ -723,7 +715,7 @@ fn read_one(
     tex: &str,
     size: [u32; 2],
     cancel: &AtomicBool,
-) -> Option<(Arc<Coverage>, Option<Arc<eframe::egui::ColorImage>>)> {
+) -> Option<Arc<Coverage>> {
     let got =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(db, tex, size, cancel)))
             .unwrap_or_else(|p| {
@@ -742,8 +734,7 @@ fn read_one(
         nifs: 0,
         errors: vec![why],
     });
-    let image = (!failed(&c)).then(|| super::overlay::uv_overlay_image(&c.mask));
-    Some((Arc::new(c), image))
+    Some(Arc::new(c))
 }
 
 /// One "Check all UV coverage" run's work: scan paths and written sizes.
@@ -777,8 +768,7 @@ pub fn check_all_run(
                     else {
                         break;
                     };
-                    let Some((coverage, image)) = read_one(job.read, &job.db, tex, *size, cancel)
-                    else {
+                    let Some(coverage) = read_one(job.read, &job.db, tex, *size, cancel) else {
                         break;
                     };
                     let _ = tx.send(WorkerMsg::UvCoverage {
@@ -786,7 +776,6 @@ pub fn check_all_run(
                         tex: tex.clone(),
                         size: *size,
                         coverage,
-                        image,
                     });
                     let d = done.fetch_add(1, Ordering::Relaxed) + 1;
                     let _ = tx.send(WorkerMsg::UvProgress {
@@ -927,8 +916,8 @@ impl super::AppModel {
     pub fn uv_coverage(&mut self, item: &str) -> Option<Arc<Coverage>> {
         self.uv_offered(item).ok()?;
         let key = self.uv_key(item)?;
-        if let Some(e) = self.uv.cache.get(&key) {
-            return Some(e.coverage.clone());
+        if let Some(c) = self.uv.cache.get(&key) {
+            return Some(c.clone());
         }
         if self.uv.pending.contains_key(&key) {
             return None;
@@ -941,13 +930,12 @@ impl super::AppModel {
         crate::worker::spawn_guarded(self.tx.clone(), "uv-read", move |tx| {
             // `read_one` turns a panic into this tex's error answer, so the read is not pending forever (K9). Only a
             // clear or a new folder cancels a single read, and either already dropped it from `pending`.
-            if let Some((coverage, image)) = read_one(read, &db, &tex, size, &cancel) {
+            if let Some(coverage) = read_one(read, &db, &tex, size, &cancel) {
                 let _ = tx.send(crate::worker::WorkerMsg::UvCoverage {
                     generation,
                     tex,
                     size,
                     coverage,
-                    image,
                 });
             }
         });
@@ -958,15 +946,18 @@ impl super::AppModel {
     /// Starts nothing.
     pub fn uv_failed(&self, item: &str) -> Option<Arc<Coverage>> {
         self.uv_offered(item).ok()?;
-        let e = self.uv.cache.get(&self.uv_key(item)?)?;
-        failed(&e.coverage).then(|| e.coverage.clone())
+        let c = self.uv.cache.get(&self.uv_key(item)?)?;
+        failed(c).then(|| c.clone())
     }
 
-    /// `item`'s overlay image from the cache (built on the worker with the coverage, CL29); `None` for a failed
-    /// read. Starts nothing.
-    pub fn uv_overlay(&self, item: &str) -> Option<Arc<eframe::egui::ColorImage>> {
+    /// `item`'s overlay image, built from its cached mask by an overlay job (CL44: only the expanded item's image is
+    /// kept, never one per cached answer); `None` until it lands, for a failed read, and for any other item. Starts
+    /// no read.
+    pub fn uv_overlay(&mut self, item: &str) -> Option<Arc<eframe::egui::ColorImage>> {
         self.uv_offered(item).ok()?;
-        self.uv.cache.get(&self.uv_key(item)?)?.image.clone()
+        let c = self.uv.cache.get(&self.uv_key(item)?)?;
+        let mask = (!failed(c)).then(|| c.mask.clone())?;
+        self.uv_overlay_job(item, mask)
     }
 
     /// Read every offered colour texture of the open folder that is not cached yet (C4) and whose size is known, on
@@ -1069,13 +1060,7 @@ impl super::AppModel {
         }
     }
 
-    pub(super) fn uv_landed(
-        &mut self,
-        generation: u64,
-        key: Key,
-        coverage: Arc<Coverage>,
-        image: Option<Arc<eframe::egui::ColorImage>>,
-    ) {
+    pub(super) fn uv_landed(&mut self, generation: u64, key: Key, coverage: Arc<Coverage>) {
         let single = self.uv.pending.get(&key) == Some(&generation);
         if single {
             self.uv.pending.remove(&key);
@@ -1083,7 +1068,7 @@ impl super::AppModel {
         if generation != self.uv.generation {
             return;
         }
-        self.uv.cache.insert(key, Entry { coverage, image });
+        self.uv.cache.insert(key, coverage);
         // M8: a single read (or an injected answer) re-runs the checks now; Check all at most every 250 ms.
         self.uv.dirty = true;
         if single || !self.uv.all_running() {

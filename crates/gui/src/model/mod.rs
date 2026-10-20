@@ -1242,8 +1242,7 @@ impl AppModel {
                 tex,
                 size,
                 coverage,
-                image,
-            } => self.uv_landed(generation, (tex, size), coverage, image),
+            } => self.uv_landed(generation, (tex, size), coverage),
             WorkerMsg::UvProgress {
                 run,
                 done,

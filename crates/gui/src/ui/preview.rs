@@ -805,7 +805,7 @@ fn uv_toggle(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 /// The overlay's texture while its toggle is on and offered: the range overlay from its worker job (`overlay_for`),
-/// UV coverage from the read that also built its image (`uv_coverage`, `uv_overlay`).
+/// UV coverage from its cached mask, by an overlay job too (`uv_coverage`, `uv_overlay`, CL44).
 fn overlay_texture(
     ui: &egui::Ui,
     model: &mut AppModel,
@@ -830,9 +830,6 @@ fn overlay_texture(
     };
     let mip = model.view.mip.saturating_sub(s.first_level);
     let img = if model.view.overlay == Some(OverlayKind::Uv) {
-        if model.overlay.key.is_some() {
-            model.overlay.clear(); // the range overlay is not on show: free it (M7)
-        }
         model.uv_coverage(key)?;
         model.uv_overlay(key)?
     } else {

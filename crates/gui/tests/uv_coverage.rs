@@ -770,7 +770,8 @@ fn check_all_polls_without_greying_advanced() {
     // A full run lands every texture in the cache.
     m.check_all_uv();
     assert!(m.wait_idle(Duration::from_secs(20)));
-    assert!(m.uv_overlay(WALL).is_some() && m.uv_overlay("a/wall2.png").is_some());
+    // CL44: answers only; no item is expanded, so no overlay image is built.
+    assert!(m.uv_overlay(WALL).is_none() && !m.overlay_pending());
     assert_eq!(m.uv_coverage(WALL).map(|c| c.nifs), Some(1));
     assert_eq!(m.uv_coverage("a/wall2.png").map(|c| c.nifs), Some(0));
     h.run_steps(2);
@@ -909,7 +910,6 @@ fn a_close_island_pair_raises_chk_uv_gutter_after_the_click() {
             generation: m.uv.generation(),
             tex: tex.clone(),
             size,
-            image: Some(sdc_gui::model::overlay::uv_overlay_image(&c.mask)),
             coverage: Arc::new(c),
         };
         m.sender().send(msg).unwrap();
@@ -1048,7 +1048,9 @@ fn the_ui_thread_never_reads_the_scan_db() {
     // The read landed (on the worker); this thread opened no scan DB, for the probe or the read.
     assert_eq!(h.state_mut().uv_coverage(WALL).map(|c| c.nifs), Some(1));
     assert_eq!(uv_reads_on_this_thread(), before);
-    assert!(h.state().uv_overlay(WALL).is_some());
+    // CL44: the preview asked for the overlay; an overlay job builds it.
+    assert!(h.state_mut().wait_idle(Duration::from_secs(10)));
+    assert!(h.state_mut().uv_overlay(WALL).is_some());
 }
 
 #[test]
@@ -1246,14 +1248,12 @@ fn check_all_answers_refresh_the_checks_in_batches() {
             nifs: 1,
             errors: vec![],
         };
-        let image = Some(sdc_gui::model::overlay::uv_overlay_image(&c.mask));
         m.sender()
             .send(WorkerMsg::UvCoverage {
                 generation: m.uv.generation(),
                 tex: format!("{tex}{k}"),
                 size,
                 coverage: Arc::new(c),
-                image,
             })
             .unwrap();
         m.poll();
@@ -1387,4 +1387,48 @@ fn texture_lookups_use_the_index() {
     assert_eq!(used.len(), 1);
     assert_eq!(used[0].nif, "meshes/m0/n0.nif");
     assert_eq!(used[0].blocks, vec![0]);
+}
+
+/// CL44 (final review I2): Check all caches the coverage (its 32 KiB mask) only. No 1 MiB overlay image is kept per
+/// texture; the expanded item's image is built on demand by an overlay job.
+#[test]
+fn check_all_over_many_textures_holds_no_overlay_images() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    let items: Vec<String> = (0..40).map(|i| format!("a/t{i:02}.png")).collect();
+    for p in &items {
+        let f = root.join(p);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        image::RgbImage::from_pixel(16, 16, image::Rgb([120, 90, 60]))
+            .save(f)
+            .unwrap();
+    }
+    let mut m = AppModel::new(GuiSettings::default(), None, support::session());
+    m.scan_db = Some(real_db(d.path()));
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.uv.read = |_, _, _, _| {
+        Ok(Coverage {
+            mask: Arc::new(UvMask::new(MASK_SIZE)),
+            used: 0.0,
+            gutter: None,
+            nifs: 1,
+            errors: vec![],
+        })
+    };
+    m.check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    for i in &items {
+        assert!(m.uv_coverage(i).is_some(), "{i} was not read");
+        assert!(m.uv_overlay(i).is_none(), "{i} holds an overlay image");
+    }
+    assert!(!m.overlay_pending() && m.overlay.image.is_none());
+    // Expanded: the image is built by a worker job, and only for that item.
+    m.expand(&items[0]);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.uv_overlay(&items[0]).is_none(), "built on the UI thread");
+    assert!(m.overlay_pending());
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert_eq!(m.uv_overlay(&items[0]).map(|i| i.size), Some([512, 512]));
+    assert!(m.uv_overlay(&items[1]).is_none());
 }
