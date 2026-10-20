@@ -29,9 +29,10 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R16G16B16A16_FLOAT,
-    DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R24G8_TYPELESS,
-    DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_D32_FLOAT,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT,
+    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_SAMPLE_DESC,
 };
 
 /// One golden subject, read by [`load_fixture`].
@@ -974,7 +975,12 @@ fn read_depth(gpu: &Gpu, tex: &ID3D11Texture2D, crop: [u32; 4]) -> Result<Vec<f3
             .map_err(|e| gpu.fail("CreateTexture2D (depth readback)", e))?;
     }
     let staging = staging.ok_or("no depth readback texture")?;
-    let d24 = d.Format == DXGI_FORMAT_R24G8_TYPELESS;
+    // Fail closed on any other layout: never read unknown bits as f32.
+    let d24 = match d.Format {
+        DXGI_FORMAT_R24G8_TYPELESS => true,
+        DXGI_FORMAT_D32_FLOAT => false,
+        f => return Err(format!("depth readback: format {} not supported", f.0)),
+    };
     let [x, y, w, h] = crop.map(|v| v as usize);
     let mut out = Vec::with_capacity(w * h);
     // SAFETY: `staging` is CPU-readable; while mapped, `pData` holds the rows `RowPitch` apart, 4 bytes per texel,
@@ -1257,8 +1263,7 @@ impl Renderer {
             .collect::<Result<Vec<_>, _>>();
         let depth = self
             .replay_depth
-            .then(|| read_depth(gpu, seeded.as_ref().map_or(&target.depth, |s| &s.2), r.crop))
-            .transpose()?;
+            .then(|| read_depth(gpu, seeded.as_ref().map_or(&target.depth, |s| &s.2), r.crop));
         let main = match (&r.composite, deferred, &mrt) {
             (Some(rc), true, Ok(_)) => Some(self.replay_composite(r, rc, &target, &mut warnings)),
             _ => None,
@@ -1269,7 +1274,8 @@ impl Renderer {
             mrt: mrt?,
             main: main.transpose()?,
             warnings,
-            depth,
+            // After ClearState: a readback error must not leave the draw's state bound.
+            depth: depth.transpose()?,
         })
     }
 

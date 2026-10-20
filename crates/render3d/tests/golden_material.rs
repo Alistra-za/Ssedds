@@ -756,28 +756,38 @@ fn hybrid(ren: &mut Renderer, env: &Env, dir: &Path) -> Result<(Replay, Vec<Stri
     Ok((r, notes))
 }
 
-/// The value a debug view writes at the traced pixel, from the trace's final values (None = component not traced).
+const UNPARSED: &str = "unparsed var";
+
+/// The value a debug view writes at the traced pixel, from the trace's final values (None = a null component).
+/// Err(UNPARSED) when a traced var is not an array of numbers and nulls.
 fn traced(view: DebugOutput, vars: &Value, pbr: bool) -> Result<[Option<f32>; 3], &'static str> {
-    let comp = |k: &str, i: usize| vars[k][i].as_f64().map(|x| x as f32);
-    let scalar = |k: &str| {
+    let comp = |k: &str, i: usize| -> Result<Option<f32>, &'static str> {
+        match vars[k].as_array().and_then(|a| a.get(i)) {
+            Some(Value::Null) => Ok(None),
+            Some(v) => v.as_f64().map(|x| Some(x as f32)).ok_or(UNPARSED),
+            None => Err(UNPARSED),
+        }
+    };
+    let vec3 = |k: &str, f: fn(f32) -> f32| -> Result<[Option<f32>; 3], &'static str> {
+        Ok([comp(k, 0)?.map(f), comp(k, 1)?.map(f), comp(k, 2)?.map(f)])
+    };
+    let scalar = |k: &str, f: fn(f32) -> f32| {
         if vars.get(k).is_none() {
             return Err("not traced");
         }
-        let v = comp(k, 0);
+        let v = comp(k, 0)?.map(f);
         Ok([v, v, v])
     };
     match view {
         DebugOutput::NormalWorld if vars.get("worldNormal").is_some() => {
-            Ok(std::array::from_fn(|i| {
-                comp("worldNormal", i).map(|n| n * 0.5 + 0.5)
-            }))
+            vec3("worldNormal", |n| n * 0.5 + 0.5)
         }
-        DebugOutput::Roughness if pbr => scalar("material.Roughness"),
-        DebugOutput::Roughness => scalar("glossiness").map(|v| v.map(|g| g.map(|g| 1.0 - g))),
-        DebugOutput::Metallic if pbr => scalar("material.Metallic"),
+        DebugOutput::Roughness if pbr => scalar("material.Roughness", |x| x),
+        DebugOutput::Roughness => scalar("glossiness", |g| 1.0 - g),
+        DebugOutput::Metallic if pbr => scalar("material.Metallic", |x| x),
         DebugOutput::Metallic => Err("non-PBR: no metallic term"),
         DebugOutput::Albedo if vars.get("material.BaseColor").is_some() => {
-            Ok(std::array::from_fn(|i| comp("material.BaseColor", i)))
+            vec3("material.BaseColor", |x| x)
         }
         _ => Err("not traced"),
     }
@@ -826,6 +836,8 @@ fn trace_values_match_unit_functions() {
     let (mut checked, mut failures, mut b_rows) = (0usize, Vec::new(), 0usize);
     // Compared Roughness + Metallic values; skipped occluded values whose colour was also over the limit.
     let (mut rough_metal, mut occluded_over) = (0usize, 0usize);
+    let (mut occluded_dz, mut missing_z, mut unparsed) =
+        (Vec::<f32>::new(), Vec::new(), Vec::new());
     for s in golden::subjects(&env.root, &["DBG"]).unwrap() {
         let name = s.dir.file_name().unwrap().to_string_lossy().into_owned();
         let who = format!("{}/{name}", s.capture);
@@ -928,8 +940,17 @@ fn trace_values_match_unit_functions() {
                             .push(format!("{who} {pick}"));
                         continue;
                     }
+                    let asserted = *mode == "A" && view != DebugOutput::Albedo;
                     let want = match traced(view, &tr["vars"], pbr) {
                         Ok(w) if w.iter().any(Option::is_some) => w,
+                        Err(e) if e == UNPARSED => {
+                            let line = format!("{mode} {who} {pick} {view:?}");
+                            if asserted {
+                                unparsed.push(line.clone());
+                            }
+                            skipped.entry(UNPARSED).or_default().push(line);
+                            continue;
+                        }
                         _ => continue,
                     };
                     let p = ((y - cy) * cw + (x - cx)) as usize;
@@ -945,7 +966,6 @@ fn trace_values_match_unit_functions() {
                         golden::format_tol("R16G16B16A16_FLOAT").unwrap(),
                         0.0,
                     );
-                    let asserted = *mode == "A" && view != DebugOutput::Albedo;
                     let zt = tr["vars"]["SV_POSITION"][2].as_f64().map(|z| z as f32);
                     let zr = out.depth.as_ref().unwrap()[p];
                     let visible = zt.is_some_and(|z| (z - zr).abs() <= 2.0 / 16_777_215.0);
@@ -962,7 +982,13 @@ fn trace_values_match_unit_functions() {
                         },
                         if visible { "" } else { " occluded" }
                     );
+                    // A trace without a depth cannot be placed: a failure with its own reason, never an occlusion.
+                    if asserted && zt.is_none() {
+                        missing_z.push(format!("{who} {pick} {view:?}"));
+                        continue;
+                    }
                     if asserted && !visible {
+                        occluded_dz.push((zt.unwrap() - zr).abs());
                         occluded_over += (d.over > 0.0) as usize;
                         skipped
                             .entry("occluded fragment")
@@ -1000,6 +1026,12 @@ fn trace_values_match_unit_functions() {
     for f in &failures {
         let _ = writeln!(t, "  {f}");
     }
+    let _ = writeln!(
+        t,
+        "mode A traces: {} (compared {checked}, occluded {}); FAIL no SV_POSITION in trace: {missing_z:?}; unparsed compared vars: {unparsed:?}",
+        checked + occluded_dz.len(),
+        occluded_dz.len()
+    );
     let _ = writeln!(t, "mode B rows (report-only): {b_rows}");
     for (why, list) in &skipped {
         let _ = writeln!(t, "skipped {why}: {}", list.len());
@@ -1019,7 +1051,36 @@ fn trace_values_match_unit_functions() {
     );
     assert!(checked >= 30, "only {checked} mode A values compared");
     assert!(
+        missing_z.is_empty(),
+        "no SV_POSITION in trace: {missing_z:#?}"
+    );
+    assert!(unparsed.is_empty(), "unparsed var: {unparsed:#?}");
+    // Bounded: a replay regression must not turn into skips (10 of 90 at D-P24).
+    let occluded = occluded_dz.len();
+    assert!(
+        occluded * 100 <= 12 * (checked + occluded),
+        "{occluded} occluded of {} mode A traces (over 12%)",
+        checked + occluded
+    );
+    assert!(
+        occluded_dz.iter().all(|dz| *dz > 2.0 / 16_777_215.0),
+        "an occluded trace within 2 D24 ulps: {occluded_dz:?}"
+    );
+    assert!(
         rough_metal >= 20,
         "only {rough_metal} Roughness + Metallic values compared"
     );
+}
+
+/// Fix round 2: a traced var that is not an array of numbers and nulls is "unparsed", never a silent skip.
+#[test]
+fn traced_reports_unparsed_vars() {
+    let v = serde_json::json!({"worldNormal": [0.0, null, 1.0], "material.Roughness": 0.5, "glossiness": ["x"]});
+    assert_eq!(
+        traced(DebugOutput::NormalWorld, &v, false),
+        Ok([Some(0.5), None, Some(1.0)])
+    );
+    assert_eq!(traced(DebugOutput::Roughness, &v, true), Err(UNPARSED));
+    assert_eq!(traced(DebugOutput::Roughness, &v, false), Err(UNPARSED));
+    assert_eq!(traced(DebugOutput::Metallic, &v, true), Err("not traced"));
 }
