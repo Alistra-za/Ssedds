@@ -5,7 +5,7 @@
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
-use crate::material::{write_material, write_skin_flags, Bound};
+use crate::material::{pipe, write_material, write_skin_flags, Bound, Pipe};
 use crate::mesh::GpuMesh;
 use crate::scene::{
     rows, write_static, LightValues, Mat3x4, PointValues, Scene, SceneFields, View, ViewValues,
@@ -68,6 +68,8 @@ pub struct ShapeDraw {
     pub samplers: Vec<u32>,
     pub model: Mat3x4,
     pub blend: bool,
+    /// Blend pair, cull and depth state; built-ins keep [`Pipe::FIXED`].
+    pub pipe: Pipe,
     pub skinned: bool,
     /// Registers bound to a real texture (not a 1×1 default); the PBR flags and `EnvmapData.y` read it.
     pub bound: Bound,
@@ -193,6 +195,7 @@ impl ShapeDraw {
         m: &MaterialState,
         linear_lighting: bool,
         feature_values: &[(String, Vec<f64>)],
+        fixed: bool,
     ) {
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
             cb.writer.zero();
@@ -202,6 +205,7 @@ impl ShapeDraw {
             cb.dirty = true;
         }
         self.blend = m.blend();
+        self.pipe = if fixed { Pipe::FIXED } else { pipe(m) };
         self.stale = true;
     }
 }

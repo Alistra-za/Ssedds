@@ -361,3 +361,62 @@ pub fn classify(old: &MaterialState, new: &MaterialState, features: &[&str]) -> 
         EditKind::Cbuffer
     }
 }
+
+/// One shape's blend, cull and depth state (v2 A14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pipe {
+    /// The `NiAlphaProperty` (source, destination) AlphaFunction after [`engine_blend`]; `None` = blending off.
+    pub blend: Option<(u8, u8)>,
+    /// The pair was remapped by the engine (G3), so it differs from what the NIF says.
+    pub mapped: bool,
+    pub cull_back: bool,
+    pub z_test: bool,
+    pub z_write: bool,
+}
+
+impl Pipe {
+    /// Built-in shapes keep the P0 look: alpha blend 6/7, no culling, depth test and write on.
+    pub const FIXED: Pipe = Pipe {
+        blend: Some((6, 7)),
+        mapped: false,
+        cull_back: false,
+        z_test: true,
+        z_write: true,
+    };
+}
+
+/// What the game draws for a NIF blend pair (G3): codes 11-15 act as ONE first; (6,7) is kept, (0,0) draws as
+/// (6,0) and (1,2) as (4,1); any other pair is unchanged. The bool is true when the pair was remapped.
+pub fn engine_blend(src: u8, dst: u8) -> ((u8, u8), bool) {
+    let fold = |c: u8| if c >= 11 { 0 } else { c };
+    match (fold(src), fold(dst)) {
+        (0, 0) => ((6, 0), true),
+        (1, 2) => ((4, 1), true),
+        p => (p, false),
+    }
+}
+
+/// The three pairs G3 measured in game.
+pub fn verified_blend(src: u8, dst: u8) -> bool {
+    matches!((src, dst), (6, 7) | (0, 0) | (1, 2))
+}
+
+/// The draw state a material asks for: alpha bits 1-4 / 5-8 when bit 0 is set; back-face culling unless
+/// Double_Sided (SLSF2 bit 4); depth test SLSF1 bit 31; depth write SLSF2 bit 0.
+pub fn pipe(m: &MaterialState) -> Pipe {
+    let (blend, mapped) = match m.alpha.filter(|a| a.blend()) {
+        Some(a) => {
+            let (p, mapped) =
+                engine_blend(((a.flags >> 1) & 0xF) as u8, ((a.flags >> 5) & 0xF) as u8);
+            (Some(p), mapped)
+        }
+        None => (None, false),
+    };
+    Pipe {
+        blend,
+        mapped,
+        cull_back: m.slsf2 & (1 << 4) == 0,
+        z_test: m.slsf1 & (1 << 31) != 0,
+        z_write: m.slsf2 & 1 != 0,
+    }
+}

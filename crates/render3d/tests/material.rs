@@ -406,3 +406,45 @@ fn classify_table() {
     glint.slsf2 |= 1 << 12;
     assert_eq!(classify(&pbr, &glint, &f), EditKind::Permutation);
 }
+
+use nif::props::Alpha;
+use render3d::material::{engine_blend, pipe, verified_blend, Pipe};
+
+#[test]
+fn engine_blend_follows_g3() {
+    assert_eq!(engine_blend(6, 7), ((6, 7), false));
+    assert_eq!(engine_blend(0, 0), ((6, 0), true));
+    assert_eq!(engine_blend(1, 2), ((4, 1), true));
+    assert_eq!(engine_blend(13, 7), ((0, 7), false));
+    assert_eq!(engine_blend(3, 9), ((3, 9), false));
+    assert!(!verified_blend(3, 9));
+    assert!(verified_blend(6, 7) && verified_blend(0, 0) && verified_blend(1, 2));
+}
+
+#[test]
+fn pipe_reads_alpha_and_shader_flags() {
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(Alpha {
+        flags: 0x00ED,
+        threshold: 0,
+    }); // blend on, 6/7
+    m.slsf1 |= 1 << 31;
+    m.slsf2 |= 1; // z test, z write
+    assert_eq!(
+        pipe(&m),
+        Pipe {
+            blend: Some((6, 7)),
+            mapped: false,
+            cull_back: true,
+            z_test: true,
+            z_write: true
+        }
+    );
+    m.slsf2 |= 1 << 4; // Double_Sided
+    assert!(!pipe(&m).cull_back);
+    m.alpha = Some(Alpha {
+        flags: 0x12EC,
+        threshold: 128,
+    }); // blend off
+    assert_eq!(pipe(&m).blend, None);
+}
