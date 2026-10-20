@@ -313,8 +313,15 @@ fn replay_matches_capture_per_mrt() {
     std::fs::write(&actual, outcomes.join("\n") + "\n").unwrap();
     let base_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-baseline.txt");
-    let base = std::fs::read_to_string(&base_path).unwrap_or_default();
+    // Fail closed: a missing or empty baseline must never turn an empty run into a pass.
+    let base = std::fs::read_to_string(&base_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", base_path.display()));
     let base: BTreeSet<&str> = base.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(!base.is_empty(), "{} is empty", base_path.display());
+    assert!(
+        !outcomes.is_empty(),
+        "no golden subjects found under SDC_GOLDEN"
+    );
     let now: BTreeSet<&str> = outcomes.iter().map(String::as_str).collect();
     let diff: Vec<String> = base
         .difference(&now)
