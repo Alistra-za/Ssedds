@@ -1,5 +1,5 @@
 //! v2 artist checks, Task 4 Step 6: check 3's detail ratio over the owner's 10k test set, measured on the chain
-//! export builds (DECISIONS Note CI20). Owner data: `#[ignore]`, gated on `SDC_TEXTURES_10K`. Run with
+//! export builds (DECISIONS Note CL20). Owner data: `#[ignore]`, gated on `SDC_TEXTURES_10K`. Run with
 //! `cargo test -p engine --release --test low_detail_corpus -- --ignored --nocapture`.
 use engine::api::*;
 use engine::checks::{detail_ratio, low_detail_eligible, LOW_DETAIL_RATIO};

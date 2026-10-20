@@ -217,7 +217,7 @@ impl ExportModel {
                     k => RowState::Skipped(*k, reason.clone()),
                 };
                 // A skip is not work: it counts in done/total but not in the files/s rate or the ETA.
-                // Hold mode (Note CI24): a held or measured-only file was started, so its skip ends the run.
+                // Hold mode (Note CL24): a held or measured-only file was started, so its skip ends the run.
                 let ends_run = matches!(kind, SkipKind::LowDetail | SkipKind::UpToDate);
                 if let Some(r) = self.row(&ev) {
                     if r.state.accepts_skip() || (ends_run && r.state == RowState::Running) {
@@ -284,7 +284,7 @@ impl ExportModel {
             .collect()
     }
 
-    /// M7 (Note CI24): drop the `CHK-LOW-DETAIL` warnings of these jobs, written at half size by the held pass.
+    /// M7 (Note CL24): drop the `CHK-LOW-DETAIL` warnings of these jobs, written at half size by the held pass.
     pub fn drop_low_detail(&mut self, jobs: &HashSet<String>) {
         for r in self.rows.iter_mut().filter(|r| jobs.contains(&r.job_key)) {
             r.warnings.retain(|w| w.code != Code::ChkLowDetail);

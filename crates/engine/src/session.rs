@@ -94,7 +94,7 @@ pub struct AnalysisCache {
     /// Whether to build a thumbnail beside each analysis. Off by default, so the throwaway cache `Engine::plan`
     /// uses (the CLI) never pays for a downscale; `Session::new` turns it on.
     pub thumbnails: bool,
-    /// Whether each analysis carries the artist check stats (DECISIONS Note CI). Off by default like `thumbnails`,
+    /// Whether each analysis carries the artist check stats (DECISIONS Note CL). Off by default like `thumbnails`,
     /// so the CLI computes none; `Session::new` turns it on.
     pub checks: bool,
     files: Mutex<HashMap<PathBuf, FileEntry>>,

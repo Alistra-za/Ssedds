@@ -42,6 +42,7 @@ fn full() -> LayoutSettings {
             point: Some(1.5),
             radius: Some(3.0),
             sun_yaw: Some(0.5),
+            deferred: None,
         }),
         set_look: None,
         settings_window: Some([300.0, 140.0, 460.0, 600.0]),
@@ -175,6 +176,7 @@ fn channels_layouts_and_looks_convert_both_ways() {
         point: 1.0,
         radius: 4.0,
         sun_yaw: 1.5,
+        deferred: false,
     };
     assert_eq!(Look::from_settings(Some(&LookSettings::of(&look))), look);
     assert_eq!(Look::from_settings(None), Look::default());
@@ -189,6 +191,32 @@ fn channels_layouts_and_looks_convert_both_ways() {
             ..Look::default()
         }
     );
+}
+
+/// v2 D8: "Accurate (deferred)" is on by default, saved on its own, and a bad value keeps the default.
+#[test]
+fn the_deferred_toggle_round_trips_and_defaults_to_on() {
+    assert!(Look::default().deferred);
+    assert!(Look::from_settings(None).deferred);
+    let off = Look {
+        deferred: false,
+        ..Look::default()
+    };
+    let saved = LookSettings::of(&off);
+    assert_eq!(saved.deferred, Some(false));
+    assert_eq!(Look::from_settings(Some(&saved)), off);
+    let unset = LookSettings {
+        deferred: None,
+        ..saved
+    };
+    assert!(Look::from_settings(Some(&unset)).deferred, "None = on");
+    let (s, err) = load_text("[layout.look]\ndeferred = 3\nsun = 2.0\n");
+    assert_eq!(err, None);
+    let look = s.layout.look.expect("the look table is read");
+    assert_eq!(look.deferred, None, "a number is ignored");
+    assert_eq!(look.sun, Some(2.0), "its siblings survive");
+    let (s, _) = load_text("[layout.look]\ndeferred = false\n");
+    assert!(!Look::from_settings(s.layout.look.as_ref()).deferred);
 }
 
 // ---- the off-screen clamp
@@ -349,7 +377,8 @@ fn a_new_app_starts_from_the_saved_layout() {
             sun: 2.0,
             point: 1.5,
             radius: 3.0,
-            sun_yaw: 0.5
+            sun_yaw: 0.5,
+            deferred: true,
         }
     );
     assert_eq!(app.state.set3d.v3.look.sun, 0.5);

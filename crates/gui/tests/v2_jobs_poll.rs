@@ -1,4 +1,4 @@
-//! Owner answer 8 (DECISIONS Note CI, Task 6): a v2 worker job keeps `SdcApp` polling through its one `app.rs`
+//! Owner answer 8 (DECISIONS Note CL, Task 6): a v2 worker job keeps `SdcApp` polling through its one `app.rs`
 //! line, and the app goes quiet once the job landed. Its own binary: `SdcApp` needs `%APPDATA%` and
 //! `%LOCALAPPDATA%` redirected, which is process-wide (preflight K11).
 mod support;

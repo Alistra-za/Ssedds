@@ -69,7 +69,7 @@ pub struct Analysis {
     /// `|L - 1|` of the bottom-left texel `(0, h - 1)`, the one CS's complex-grass detector reads, for every shape
     /// (PBR grass design R1); infinite for an empty image.
     pub corner_err: f32,
-    /// Artist check stats (DECISIONS Note CI); `None` unless [`AnalyseHints::bands`] asked for them.
+    /// Artist check stats (DECISIONS Note CL); `None` unless [`AnalyseHints::bands`] asked for them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checks: Option<CheckStats>,
 }

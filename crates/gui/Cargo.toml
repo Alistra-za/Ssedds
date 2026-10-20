@@ -29,7 +29,7 @@ toml_edit = "0.25"
 sha2.workspace = true
 hex.workspace = true
 modscan = { path = "../modscan" }
-nif = { path = "../nif" }
+nif = { path = "../nif", features = ["serde"] }
 render3d = { path = "../render3d" }
 vfs = { path = "../vfs" }
 pgpsim = { path = "../pgpsim" }

@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub const MASK_SIZE: u32 = 512;
 /// Mip-bleed distance in full-resolution texels (mip 3, the padding convention).
 pub const GUTTER_TEXELS: u32 = 8;
-/// Tuned on the owner's scan (CI34): 0.005 flagged 20 % of 289 shipped textures, 0.02 flags 6 %.
+/// Tuned on the owner's scan (CL34): 0.005 flagged 20 % of 289 shipped textures, 0.02 flags 6 %.
 pub const GUTTER_SHARE: f64 = 0.02;
 pub const TILE_CAP: i32 = 16;
 /// `coverage_for`'s `Err` when `cancel` was set: never a texture's answer (K18).
@@ -629,7 +629,7 @@ struct AllRun {
 /// How often landed Check-all answers re-run `refresh_checks` (review M8).
 const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// UV coverage in the GUI (DECISIONS Note CI): the session cache keyed by scan path and written size (no disk
+/// UV coverage in the GUI (DECISIONS Note CL): the session cache keyed by scan path and written size (no disk
 /// cache, C4), the reads in flight, the Check-all run and the scan-has-rows answer. Every job here is counted in
 /// `AppModel::v2_jobs_pending`.
 pub struct UvState {
@@ -1001,7 +1001,7 @@ impl super::AppModel {
         failed(&e.coverage).then(|| e.coverage.clone())
     }
 
-    /// `item`'s overlay image from the cache (built on the worker with the coverage, CI29); `None` for a failed
+    /// `item`'s overlay image from the cache (built on the worker with the coverage, CL29); `None` for a failed
     /// read. Starts nothing.
     pub fn uv_overlay(&self, item: &str) -> Option<Arc<eframe::egui::ColorImage>> {
         self.uv_offered(item).ok()?;

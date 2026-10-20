@@ -1,4 +1,4 @@
-//! v2 artist checks, Task 2 (DECISIONS Note CI): the GUI turns the engine's check stats into `CHK-*` warnings,
+//! v2 artist checks, Task 2 (DECISIONS Note CL): the GUI turns the engine's check stats into `CHK-*` warnings,
 //! lists the Warning-level ones as `Level::Check` Problems rows that never change "ready", and shows them on the set
 //! card's "ⓘ n" badge.
 mod support;
@@ -88,7 +88,7 @@ fn all_on() -> ChecksSettings {
 }
 
 #[test]
-/// RANGE_SHARE (0.50 after the 10k tuning, CI8): 51 of 100 texels at luma 20 warn, 49 do not.
+/// RANGE_SHARE (0.50 after the 10k tuning, CL8): 51 of 100 texels at luma 20 warn, 49 do not.
 fn albedo_out_of_range_luma_raises_chk_range_above_range_share() {
     let at = (RANGE_SHARE * 100.0).round() as u32;
     let check = |dark: u32| {
@@ -222,7 +222,7 @@ fn a_vanilla_n_with_no_alpha_or_white_alpha_raises_plastic_softly() {
 }
 
 #[test]
-/// Task 11 (Note CI37, owner 2026-10-20): on hair and Advanced Skin, CS doesn't read the `_n` alpha for specular, so
+/// Task 11 (Note CL37, owner 2026-10-20): on hair and Advanced Skin, CS doesn't read the `_n` alpha for specular, so
 /// CHK-PLASTIC still warns but says it only matters for vanilla. A plain set keeps today's text.
 fn plastic_on_hair_and_advanced_skin_says_it_only_matters_for_vanilla() {
     let d = tempfile::tempdir().unwrap();
@@ -250,7 +250,7 @@ fn plastic_on_hair_and_advanced_skin_says_it_only_matters_for_vanilla() {
 }
 
 #[test]
-/// Task 11 (Note CI38): an `_msn` never raises CHK-PLASTIC, with or without an `_s` in its set (specular comes
+/// Task 11 (Note CL38): an `_msn` never raises CHK-PLASTIC, with or without an `_s` in its set (specular comes
 /// from the `_s`; the check only reads a tangent-space `_n`).
 fn an_msn_raises_no_plastic_with_or_without_an_s() {
     for files in [&["body_msn.png", "body_s.png"][..], &["body_msn.png"][..]] {
@@ -424,7 +424,7 @@ fn cpm_alpha_at_or_below_4_counts_as_parallax_off() {
     let ms = cpm(5, Some(true));
     assert!(ms.iter().all(|m| !m.contains("4/255")), "{ms:?}");
     assert!(cpm(3, None).is_empty());
-    // Review I3 (CI1): an _m with no alpha has nothing to judge in A, even with parallax on.
+    // Review I3 (CL1): an _m with no alpha has nothing to judge in A, even with parallax on.
     let d = tempfile::tempdir().unwrap();
     let (j, a) = planned(d.path(), "wall_m.png", rgb(64, 64, |_, _| [128, 128, 128]));
     let mut j = as_subtype(j, Subtype::ComplexMaterial);

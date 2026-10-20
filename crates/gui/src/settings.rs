@@ -93,7 +93,7 @@ pub struct GuiSettings {
     /// The window and arrangement the app comes back to, `[layout]` in the file (DECISIONS AG3).
     #[serde(deserialize_with = "layout::lenient")]
     pub layout: LayoutSettings,
-    /// The artist checks' switches (DECISIONS Note CI), `[checks]` in the file.
+    /// The artist checks' switches (DECISIONS Note CL), `[checks]` in the file.
     pub checks: ChecksSettings,
 }
 

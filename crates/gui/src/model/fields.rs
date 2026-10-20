@@ -164,7 +164,7 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
             Some("no encoder runs for uncompressed formats")
         }
         "color.tag" if target != Target::Cs => Some("_SRGB is only written under cs"),
-        // M6: one level has no mip 1 to write from (the engine ignores the field there, Note CI23).
+        // M6: one level has no mip 1 to write from (the engine ignores the field there, Note CL23).
         "drop_top_mip"
             if matches!(
                 p.mips.levels,

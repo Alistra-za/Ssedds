@@ -228,7 +228,7 @@ fn prepare_then<T>(
         }
     };
     enter(Stage::Load);
-    // Note CI20 (review M10): a measure-only job writes nothing and its content was matched by hash in `run`, so a
+    // Note CL20 (review M10): a measure-only job writes nothing and its content was matched by hash in `run`, so a
     // touched-but-identical source is not failed for its stamp.
     if keep != Keep::Measure {
         check_stamps(job)?;
@@ -318,7 +318,7 @@ fn prepare_then<T>(
         && crate::checks::low_detail_eligible(p, (chain[0].width, chain[0].height)))
     .then(|| crate::checks::detail_ratio(&chain))
     .flatten();
-    // The half-size choice (Note CI20): written from mip 1, every lower level unchanged. Before `dims`, so the level
+    // The half-size choice (Note CL20): written from mip 1, every lower level unchanged. Before `dims`, so the level
     // list and `first_level` match the written chain.
     if p.drop_top_mip && chain.len() > 1 {
         chain.remove(0);
@@ -433,7 +433,7 @@ pub(crate) fn encode_levels(
 /// record, except after a second Ctrl-C: that aborts the process (exit 3) and can leave `.sdc-*.tmp` files, or an
 /// output without a record (`OUT-UNKNOWN-EXISTING` on the next run). A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
 ///
-/// Check 3 (`req.low_detail`, Note CI20): a flagged texture is `Held` under `Hold` (nothing written) and carries the
+/// Check 3 (`req.low_detail`, Note CL20): a flagged texture is `Held` under `Hold` (nothing written) and carries the
 /// warning in its report under `Warn`. A `measure_only` job (an up-to-date output under `Hold`) is loaded and
 /// measured, never encoded, and is `Held` or `UpToDate`.
 #[allow(clippy::too_many_arguments)]

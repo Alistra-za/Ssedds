@@ -195,7 +195,7 @@ static HAIR: ShaderSpec = ShaderSpec {
     required: &[role("diffuse", D), role("_n", N)],
     optional: &[],
 };
-/// Note CI35: CS hair also reads a `_flow`; vanilla hair does not (`HAIR`). By suffix, so a skipped DDS fills it.
+/// Note CL35: CS hair also reads a `_flow`; vanilla hair does not (`HAIR`). By suffix, so a skipped DDS fills it.
 static HAIR_CS: ShaderSpec = ShaderSpec {
     required: HAIR.required,
     optional: &[sfx("_flow", &[], &["flow"])],
@@ -311,7 +311,7 @@ impl Shader {
         }
     }
 
-    /// `spec` as `t` reads it: CS hair also reads `_flow` (Note CI35).
+    /// `spec` as `t` reads it: CS hair also reads `_flow` (Note CL35).
     pub fn spec_for(self, t: Target) -> &'static ShaderSpec {
         match (self, t) {
             (Shader::Hair, Target::Cs) => &HAIR_CS,
@@ -607,7 +607,7 @@ fn mesh_majority(i: &PickInput) -> Option<Shader> {
 /// Spec §4.1-4.3: explicit choice, else the first matching auto rule; a shader the target lacks falls back to
 /// `default_for(target)`. Order (owner answer 2026-10-11, "map wins, assume the user runs PGPatcher"): advanced
 /// skin, PBR (PBR grass, then CS PBR landscape, then plain PBR; Note BM), then the PGPatcher-patchable maps (complex `_m`, `_p`), which beat the mesh, then the mesh majority
-/// (S-shader-10), then envmap `_m`, `_g`, `_i`, `_sk`, `_flow` (Note CI35), hair/eyes/landscape paths and the default.
+/// (S-shader-10), then envmap `_m`, `_g`, `_i`, `_sk`, `_flow` (Note CL35), hair/eyes/landscape paths and the default.
 pub fn pick(i: &PickInput) -> ShaderPick {
     use Subtype::*;
     let has = |t: &[Subtype]| i.subtypes.iter().any(|s| t.contains(s));
@@ -661,7 +661,7 @@ pub fn pick(i: &PickInput) -> ShaderPick {
     } else if sfx("sk") {
         (Shader::Skin, AutoRule::Sk)
     } else if sfx("flow") {
-        // Note CI35 (owner 2026-10-20): only hair has a flow map; a suffix rule, so it beats the path rules.
+        // Note CL35 (owner 2026-10-20): only hair has a flow map; a suffix rule, so it beats the path rules.
         (Shader::Hair, AutoRule::Flow)
     } else if path("hair") {
         (Shader::Hair, AutoRule::HairPath)
@@ -1587,7 +1587,7 @@ mod tests {
         assert!(check_maps(&p, Target::Cs, &ms).is_empty());
     }
 
-    /// Task 11 (Note CI35): `_flow` picks Hair on both targets, ahead of the path rules.
+    /// Task 11 (Note CL35): `_flow` picks Hair on both targets, ahead of the path rules.
     #[test]
     fn a_flow_member_picks_hair_on_both_targets() {
         use Subtype::*;
@@ -1621,7 +1621,7 @@ mod tests {
         );
     }
 
-    /// Task 11 (Note CI35, CI36): CS hair reads `_flow`; vanilla hair does not, so it stays an extra map there.
+    /// Task 11 (Note CL35, CL36): CS hair reads `_flow`; vanilla hair does not, so it stays an extra map there.
     #[test]
     fn flow_is_a_cs_hair_map_and_extra_on_vanilla() {
         let p = ShaderPick {

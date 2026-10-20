@@ -153,14 +153,14 @@ pub enum Dialog {
     ConfirmResetAll(Vec<String>),
     /// F3b: the rename dialog (input aliases or output names).
     Rename(rename::RenameDialog),
-    /// Owner ruling 2026-10-20 (Note CI26): Copy settings from a texture with a saved half size asks whether the
+    /// Owner ruling 2026-10-20 (Note CL26): Copy settings from a texture with a saved half size asks whether the
     /// targets get it too; `fields` are the ticked fields, copied either way.
     CopyHalfSize {
         from: String,
         to: Vec<String>,
         fields: Vec<String>,
     },
-    /// Check 3, Hold mode (Note CI24): the textures held at the end of the export, ticked to write at half size.
+    /// Check 3, Hold mode (Note CL24): the textures held at the end of the export, ticked to write at half size.
     HalfSize(Vec<HalfRow>),
     Error(String),
 }
@@ -180,7 +180,7 @@ pub struct HalfRow {
 enum Continue {
     /// R3: Review's Export: the guards and the Review gate again, then the export (undecided textures skipped).
     Review,
-    /// Note CI24: the second pass of a held export (half size where chosen, the rest at full size). `save`: save
+    /// Note CL24: the second pass of a held export (half size where chosen, the rest at full size). `save`: save
     /// first; false after a failed half-size save that was undone.
     HalfSize { save: bool },
 }
@@ -351,7 +351,7 @@ pub struct AppModel {
     sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
-    /// The artist check results and what they were computed from (DECISIONS Note CI).
+    /// The artist check results and what they were computed from (DECISIONS Note CL).
     pub(crate) check_state: checks::CheckState,
     /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
     inputs_rev: u64,
@@ -424,9 +424,9 @@ pub struct AppModel {
     /// The DDS header-patch choice (DECISIONS S7).
     pub dds_patch: dds_patch::DdsPatchState,
     pub view: view::ViewState,
-    /// The preview overlay job and the overlay on show (v2 checks, Note CI).
+    /// The preview overlay job and the overlay on show (v2 checks, Note CL).
     pub overlay: overlay::OverlayState,
-    /// UV coverage: the session cache, its reads, Check all and the scan-has-rows answer (Note CI, Task 8).
+    /// UV coverage: the session cache, its reads, Check all and the scan-has-rows answer (Note CL, Task 8).
     pub uv: uv_coverage::UvState,
     /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
     pub gpu_max_dim: u32,
@@ -473,7 +473,7 @@ pub struct AppModel {
     pending_json_answer: Option<review::JsonAnswer>,
     /// Why `sdc.toml` cannot take the half-size choice, stat'd once when the half-size box opens (`None`: it can).
     pub half_size_unwritable: Option<String>,
-    /// The running (or last) export pass is a held export's second pass (Note CI24).
+    /// The running (or last) export pass is a held export's second pass (Note CL24).
     half_pass: bool,
     /// The Review asks (texts) when the last fresh export started: a held pass stops on any new one (M1).
     export_asked: Vec<String>,
@@ -966,7 +966,7 @@ impl AppModel {
                 self.continue_after_plan.take(),
             );
             match continued {
-                // Note CI24: a held export's second pass asks nothing, so no open dialog drops it (08f-1).
+                // Note CL24: a held export's second pass asks nothing, so no open dialog drops it (08f-1).
                 Some(how @ Continue::HalfSize { .. }) => self.run_continue(how),
                 _ if (clicked || continued.is_some()) && self.dialog.is_some() => {
                     self.queued_export_dropped()
@@ -1318,10 +1318,10 @@ impl AppModel {
         self.finish_export(completed, failure);
     }
 
-    /// After the final pass (Note CI24): the JSON/CS/CM files, the checks summary once, then what was asked while the
+    /// After the final pass (Note CL24): the JSON/CS/CM files, the checks summary once, then what was asked while the
     /// export ran (close, or open another folder), else its error as a dialog.
     fn finish_export(&mut self, completed: bool, failure: Option<String>) {
-        // CI19: only a completed export gets the checks line; a cancel logs just "Export finished".
+        // CL19: only a completed export gets the checks line; a cancel logs just "Export finished".
         if let Some(t) = checks::checks_summary(self).filter(|_| completed) {
             self.messages.notify(messages::Severity::Info, t);
         }
@@ -1796,7 +1796,7 @@ impl AppModel {
     }
 
     /// Save first when `save` (the CLI command and the next session read `sdc.toml`), then run the export on a worker.
-    /// `fresh`: a new export. Otherwise a held export's second pass (Note CI24): the JSON/CS/CM work, Review's JSON
+    /// `fresh`: a new export. Otherwise a held export's second pass (Note CL24): the JSON/CS/CM work, Review's JSON
     /// answer, the rows, `drawer_epoch` and the Files tab stay as the first pass left them. True when it started.
     fn start_export_pass(&mut self, fresh: bool, save: bool) -> bool {
         if self.export.running.is_some() || (save && self.save().is_err()) {
@@ -2226,7 +2226,7 @@ impl AppModel {
             self.continue_after_plan.take(),
         );
         match continued {
-            // Note CI24: a held export's second pass asks nothing, so no open dialog drops it; it also wins over a
+            // Note CL24: a held export's second pass asks nothing, so no open dialog drops it; it also wins over a
             // click (the export it finishes is the one clicked).
             Some(how @ Continue::HalfSize { .. }) => self.run_continue(how),
             // Audit 08f-1 holds for Review's queued Export too: never over an open question.
@@ -2599,7 +2599,7 @@ impl AppModel {
                 return self.edit_subtype("Change subtype", item_key, Some(st));
             }
         }
-        // Note CI (M9): an unticked half size removes the key; a written `false` would stay as a provenance entry.
+        // Note CL (M9): an unticked half size removes the key; a written `false` would stay as a provenance entry.
         if field == "drop_top_mip" && value == json!(false) {
             return self.clear_field(item_key, field);
         }
@@ -3450,7 +3450,7 @@ mod tests {
         assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
     }
 
-    /// Note CI24: `textures/up.png`, 512² noise upscaled to 1024² (flagged), opened in Hold mode.
+    /// Note CL24: `textures/up.png`, 512² noise upscaled to 1024² (flagged), opened in Hold mode.
     fn held_fixture(d: &std::path::Path) -> AppModel {
         let r = d.join("textures");
         std::fs::create_dir_all(&r).unwrap();

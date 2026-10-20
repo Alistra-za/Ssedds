@@ -385,7 +385,7 @@ fn interface(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
     });
 }
 
-/// The artist checks' switches (DECISIONS Note CI). Each box's AccessKit name ends in "check", apart from same-text
+/// The artist checks' switches (DECISIONS Note CL). Each box's AccessKit name ends in "check", apart from same-text
 /// controls such as the shader's "Parallax" (K22, ui-rules 8.4).
 fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
     section(ui, "Checks", |ui| {

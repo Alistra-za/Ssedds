@@ -16,7 +16,7 @@
 //! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b)
 //! and ALPHA-PARALLAX-NO-ALPHA (`alpha.parallax` on for a complex `_m` whose source has no alpha, DECISIONS AH2).
 //! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
-//! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CI).
+//! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CL).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -140,7 +140,7 @@ codes! {
     GrassDetectSource = "GRASS-DETECT-SOURCE" => Warning,
     ValGrassDetect = "VAL-GRASS-DETECT" => Error,
     PbrGrassDetect = "PBR-GRASS-DETECT" => Warning,
-    // v2 artist checks (DECISIONS Note CI): GUI-only check results, never emitted by the engine's plan or run.
+    // v2 artist checks (DECISIONS Note CL): GUI-only check results, never emitted by the engine's plan or run.
     ChkRange = "CHK-RANGE" => Warning,
     ChkPlastic = "CHK-PLASTIC" => Warning,
     ChkGreenGuess = "CHK-GREEN-GUESS" => Info,

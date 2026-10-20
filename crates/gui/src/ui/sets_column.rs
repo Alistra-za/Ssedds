@@ -248,7 +248,7 @@ fn warn_button(ui: &mut egui::Ui, v: &SetView, rows: &[(&str, &Warning)], acts: 
     }
 }
 
-/// The artist checks' "ⓘ n" badge (DECISIONS Note CI): `n` counts the Warning-level results, in the weak text colour
+/// The artist checks' "ⓘ n" badge (DECISIONS Note CL): `n` counts the Warning-level results, in the weak text colour
 /// because a check never changes "ready" (owner answer 1); the hover lists every result, Info ones included (owner
 /// answer 2); a click opens Problems on the set (ui-rules 1.3).
 fn check_badge(ui: &mut egui::Ui, v: &SetView, checks: &[(&str, &Warning)], acts: &mut Vec<Act>) {

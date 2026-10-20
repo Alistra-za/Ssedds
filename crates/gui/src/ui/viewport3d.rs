@@ -3,8 +3,8 @@
 use crate::model::meshes::LE_WARNING;
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::viewport3d::{
-    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
-    FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
+    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, DEFERRED_LABEL, FEATURES_LABEL,
+    FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
 use render3d::locate::Change;
@@ -109,7 +109,7 @@ pub fn toolbar(ui: &mut egui::Ui, v: &mut Viewport3d) {
     // The View menu holds sliders and a hex box: it stays open while they are used (AG125's menu).
     super::path_picker::menu(ui, VIEW_MENU, |ui| look_controls(ui, v))
         .response
-        .on_hover_text("Debug view, background, lights and Reset view");
+        .on_hover_text("Debug view, background, lights, deferred and Reset view");
     let copy = ui
         .add_enabled(v.frame.is_some(), egui::Button::new("Copy image"))
         .on_hover_text(format!(
@@ -256,6 +256,14 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
                 v.set_debug(d);
                 ui.weak(format!("({})", super::actions::keys_text("3d-debug")));
             });
+            let mut on = v.look.deferred;
+            if ui
+                .checkbox(&mut on, DEFERRED_LABEL)
+                .on_hover_text("Opaque shapes draw through Community Shaders' deferred pass, as in game. Off: the faster forward path.")
+                .changed()
+            {
+                v.set_deferred(on);
+            }
             let l = &mut v.look;
             ui.horizontal_wrapped(|ui| {
                 ui.label("Background");
@@ -288,7 +296,10 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
                     .on_hover_text("Lights, background and camera back to the defaults")
                     .clicked()
                 {
-                    *l = Look::default();
+                    *l = Look {
+                        deferred: l.deferred,
+                        ..Look::default()
+                    };
                     v.orbit.reset();
                 }
             });
@@ -395,7 +406,7 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
                 ui.colored_label(RED, format!("Error: {e}"));
             }
             // A recompile after a toggle can fail on a loaded mesh; the old look stays, so say why.
-            for i in v.shapes.iter().filter(|_| v.is_mesh()) {
+            for i in v.shapes.iter().filter(|_| v.is_mesh() || v.nif_view) {
                 if let ShapeStatus::Failed { error, .. } = &i.status {
                     let kept = if matches!(
                         i.status,
@@ -433,7 +444,9 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
 
 fn footer(ui: &mut egui::Ui, v: &Viewport3d) {
     ui.horizontal_wrapped(|ui| {
-        ui.weak(off_line(&v.off_in_preview, CUBEMAPS_FOOTER));
+        if let Some(off) = off_line(&v.off_in_preview) {
+            ui.weak(off);
+        }
         if let Some(c) = &v.coverage {
             ui.weak(format!("· {c}"));
         }

@@ -199,7 +199,7 @@ fn view_cube(format: DXGI_FORMAT, mips: u32) -> D3D11_SHADER_RESOURCE_VIEW_DESC 
 }
 
 /// A resource of the right dimension for a reflected SRV of `kind`: a 1×1 2D texture, a 1×1 single-slice
-/// 2D array, a 1×1×6 cube (every face `rgba`), or a 1-element zeroed (structured) buffer.
+/// 2D array, a 2×2×6 cube (every texel `rgba`), or a 1-element zeroed (structured) buffer.
 pub fn default_srv(
     gpu: &Gpu,
     kind: SrvKind,
@@ -234,7 +234,15 @@ pub fn default_srv(
             srv_from(gpu, &t.into(), &d)
         }
         SrvKind::Cube => {
-            let t = create_texture(gpu, &tex_desc(1, 1, 1, 6, fmt), &[one; 6])?;
+            // 2×2, not 1×1: under DYNAMIC_CUBEMAPS a 1×1 env cube black at mip 15 is CS's dynamic-cubemap marker
+            // (Lighting.hlsl:2024-2046), and a missing cube must mean "no reflection" (D5 R2).
+            let px4 = [rgba; 4];
+            let face = D3D11_SUBRESOURCE_DATA {
+                pSysMem: px4.as_ptr() as _,
+                SysMemPitch: 8,
+                SysMemSlicePitch: 16,
+            };
+            let t = create_texture(gpu, &tex_desc(2, 2, 1, 6, fmt), &[face; 6])?;
             srv_from(gpu, &t.into(), &view_cube(fmt, 1))
         }
         SrvKind::Buffer | SrvKind::Structured => {
@@ -276,6 +284,117 @@ pub fn default_srv(
             srv_from(gpu, &b.into(), &d)
         }
     }
+}
+
+/// Largest cube side accepted (D3D11's maximum cube dimension).
+pub const MAX_CUBE: u32 = 16384;
+
+/// Bytes of one mip of an `size`² cube face, `bpp` bytes per texel, in checked u64.
+fn level_bytes(size: u32, m: u32, bpp: u32) -> Option<u64> {
+    let w = u64::from((size >> m).max(1));
+    w.checked_mul(w)?.checked_mul(u64::from(bpp))
+}
+
+/// Bytes of the 6 faces of a `size`² cube with `mips` levels: Err unless 1 ≤ size ≤ [`MAX_CUBE`], 1 ≤ mips ≤ the full
+/// chain, and the u64 arithmetic does not overflow (hostile headers, review I1).
+fn cube_bytes(size: u32, mips: u32, bpp: u32) -> Result<u64, String> {
+    if size == 0 || size > MAX_CUBE || mips == 0 || mips > 32 - size.leading_zeros() {
+        return Err(format!("cube {size}² with {mips} mips is not uploadable"));
+    }
+    let face = (0..mips).try_fold(0u64, |t, m| t.checked_add(level_bytes(size, m, bpp)?));
+    face.and_then(|f| f.checked_mul(6))
+        .ok_or_else(|| format!("cube {size}² × {mips} mips: size overflows"))
+}
+
+/// Immutable cube SRV from tight subresources in D3D order (face-major, mip-minor), `bpp` bytes per texel (an
+/// uncompressed format). `data` must be exactly the 6 faces of `mips` levels.
+pub fn cube_srv(
+    gpu: &Gpu,
+    size: u32,
+    mips: u32,
+    format: DXGI_FORMAT,
+    bpp: u32,
+    data: &[u8],
+) -> Result<ID3D11ShaderResourceView, String> {
+    let need = cube_bytes(size, mips, bpp)?;
+    if data.len() as u64 != need {
+        return Err(format!(
+            "cube {size}² × {mips} mips: {} bytes, need {need}",
+            data.len()
+        ));
+    }
+    let mut init = Vec::with_capacity(6 * mips as usize);
+    let mut at = 0usize;
+    for _ in 0..6 {
+        for m in 0..mips {
+            let w = (size >> m).max(1);
+            // Bounded by `need` = data.len(), which already fits in memory; the pitches must also fit D3D's u32.
+            let slice = level_bytes(size, m, bpp).unwrap_or(u64::MAX);
+            let (pitch, slice) = (
+                w.checked_mul(bpp).ok_or("cube row pitch overflows")?,
+                u32::try_from(slice).map_err(|_| "cube slice over 4 GiB")?,
+            );
+            init.push(D3D11_SUBRESOURCE_DATA {
+                pSysMem: data[at..].as_ptr() as _,
+                SysMemPitch: pitch,
+                SysMemSlicePitch: slice,
+            });
+            at += slice as usize;
+        }
+    }
+    let t = create_texture(gpu, &tex_desc(size, size, mips, 6, format), &init)?;
+    srv_from(gpu, &t.into(), &view_cube(format, mips))
+}
+
+/// Bytes per texel of the cube formats [`read_cube_dds`] accepts: R11G11B10_FLOAT (26), RGBA16F (10), RGBA32F (2).
+pub fn cube_bpp(format: DXGI_FORMAT) -> Option<u32> {
+    match format.0 {
+        26 => Some(4),
+        10 => Some(8),
+        2 => Some(16),
+        _ => None,
+    }
+}
+
+/// A DX10 cube DDS as RenderDoc saves it: (size, mips, format, data). Accepts only R11G11B10_FLOAT (26), RGBA16F (10)
+/// and RGBA32F (2), square, 6 faces (cube flag with arraySize 1, or arraySize 6 without it), data exactly the faces.
+/// Anything else is Err.
+pub fn read_cube_dds(bytes: &[u8]) -> Result<(u32, u32, DXGI_FORMAT, &[u8]), String> {
+    let u = |o: usize| {
+        bytes
+            .get(o..o + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .ok_or("DDS shorter than its DX10 header")
+    };
+    if bytes.get(..4) != Some(b"DDS ") || u(4)? != 124 || bytes.get(84..88) != Some(b"DX10") {
+        return Err("not a DX10 DDS".into());
+    }
+    let (h, w) = (u(12)?, u(16)?);
+    let mips = if u(8)? & 0x20000 != 0 {
+        u(28)?.max(1)
+    } else {
+        1
+    };
+    let (format, dim, misc, array) = (DXGI_FORMAT(u(128)? as i32), u(132)?, u(136)?, u(140)?);
+    let bpp =
+        cube_bpp(format).ok_or_else(|| format!("DDS format {} is not a cube format", format.0))?;
+    if dim != 3 || w != h {
+        return Err(format!(
+            "DDS {w}x{h}, dimension {dim}: not a square 2D cube"
+        ));
+    }
+    let need = cube_bytes(w, mips, bpp).map_err(|e| format!("DDS {e}"))?;
+    let cube = misc & D3D11_RESOURCE_MISC_TEXTURECUBE.0 as u32 != 0;
+    if !(cube && array == 1 || !cube && array == 6) {
+        return Err(format!(
+            "DDS is not 6 faces (misc {misc:#x}, arraySize {array})"
+        ));
+    }
+    let data = bytes.get(148..).ok_or("DDS shorter than its DX10 header")?;
+    if data.len() as u64 != need {
+        return Err(format!("DDS cube data {} bytes, need {need}", data.len()));
+    }
+    Ok((w, mips, format, data))
 }
 
 /// The DXGI format a DDS is uploaded in: the DX10 header's own value, else the legacy header's only

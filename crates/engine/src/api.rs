@@ -124,7 +124,7 @@ pub struct BatchRequest {
     pub dry_run: bool,
     /// GUI (DECISIONS AG91): counters the planner updates while it loads and resolves; nothing is emitted or written.
     pub plan_progress: Option<PlanProgress>,
-    /// GUI (v2 artist checks, check 3, DECISIONS Note CI20): measure each eligible texture's detail ratio during the
+    /// GUI (v2 artist checks, check 3, DECISIONS Note CL20): measure each eligible texture's detail ratio during the
     /// run. `Off` for the CLI.
     pub low_detail: LowDetailMode,
 }
@@ -274,7 +274,7 @@ pub struct BatchSummary {
     pub skipped: u32,
     /// Of `skipped`, those skipped on purpose: `IN-DDS-SKIPPED` inputs, `PACK-CONFLICT` pre-packed files replaced
     /// under `packing.prefer = raw`, outputs kept by an explicit `--on-existing skip` and textures held as low detail
-    /// (`LowDetailMode::Hold`). They do not make the batch partial (DECISIONS Notes I, M9 and CI20).
+    /// (`LowDetailMode::Hold`). They do not make the batch partial (DECISIONS Notes I, M9 and CL20).
     pub skipped_intentional: u32,
     pub failed: u32,
     /// Written outputs whose validation reported an error (`passed = false`); also counted in `converted`.
@@ -286,7 +286,7 @@ pub struct BatchSummary {
 impl BatchSummary {
     /// Spec §8 precedence for a batch that ran: 1 partial (unintentionally skipped, failed or cancelled
     /// files) > 4 validation failed > 0. Up-to-date files, raw packing inputs and intentional skips
-    /// (DECISIONS Note I; held low-detail textures, Note CI20) do not make a batch partial. (2 and 3 come from
+    /// (DECISIONS Note I; held low-detail textures, Note CL20) do not make a batch partial. (2 and 3 come from
     /// `EngineError`.)
     pub fn exit_code(&self) -> i32 {
         let unintended = self.skipped.saturating_sub(self.skipped_intentional);
@@ -1988,7 +1988,7 @@ impl Engine {
                                 );
                                 continue;
                             }
-                            // Note CI20 (owner answer 2): "flagged again next time" — Hold re-measures an eligible
+                            // Note CL20 (owner answer 2): "flagged again next time" — Hold re-measures an eligible
                             // up-to-date output; the size half of eligibility is known only after Load.
                             Some(e)
                                 if current

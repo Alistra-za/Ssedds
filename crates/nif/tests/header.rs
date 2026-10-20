@@ -108,3 +108,27 @@ fn hostile_string_count_is_rejected() {
         Err(NifError::TooManyStrings(u32::MAX))
     ));
 }
+
+#[test]
+fn header_keeps_raw_parts_for_re_emit() {
+    let mut n = Nif::new(100);
+    n.add_type("NiUnusedType");
+    let b0 = n.block("NiNode", vec![0; 4]);
+    n.type_flags = vec![0x8000]; // top bit (PhysX) on block 0's type index
+    n.roots = vec![b0, 0];
+    let s = n.string("abc");
+    n.max_string_len = Some(99); // stored value is kept, not recomputed
+    let b = n.bytes();
+    let h = Header::parse(&b).unwrap();
+    assert_eq!(h.type_index_raw[0] & 0x8000, 0x8000);
+    assert_eq!(h.type_index[0] & 0x8000, 0);
+    assert_eq!(h.max_string_len, 99);
+    assert_eq!(&b[h.prefix_end..h.prefix_end + 2], &(2u16).to_le_bytes());
+    assert_eq!(
+        u32::from_le_bytes(b[h.nblocks_at..h.nblocks_at + 4].try_into().unwrap()),
+        1
+    );
+    assert_eq!(h.footer_at, b.len() - 12);
+    assert_eq!(h.roots(&b).unwrap(), vec![0, 0]);
+    assert_eq!(h.strings[s as usize], b"abc");
+}

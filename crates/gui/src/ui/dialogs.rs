@@ -35,7 +35,7 @@ pub fn half_size_buttons(writable: bool, any: bool) -> [(&'static str, Role, boo
     ]
 }
 
-/// Check 3, Hold mode (Note CI24): the held textures, ticked to write at half size. Esc is "Export all at full
+/// Check 3, Hold mode (Note CL24): the held textures, ticked to write at half size. Esc is "Export all at full
 /// size" (the spec's "close = full size"); a click outside does nothing, since it would start an export.
 fn half_size(ctx: &egui::Context, model: &mut AppModel, mut rows: Vec<crate::model::HalfRow>) {
     use crate::model::out_size::human;
@@ -327,7 +327,7 @@ fn copy_settings(
     }
 }
 
-/// Owner ruling 2026-10-20 (Note CI26): the one place a saved half size is copied. Enter copies without it (the
+/// Owner ruling 2026-10-20 (Note CL26): the one place a saved half size is copied. Enter copies without it (the
 /// safe side: the targets' mip 0 was never measured); Esc or a click outside cancels the whole copy.
 fn copy_half_size(ctx: &egui::Context, model: &mut AppModel, from: &str, n: usize) {
     let name = model

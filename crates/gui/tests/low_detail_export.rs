@@ -1,5 +1,5 @@
 //! v2 artist checks, check 3 in the GUI (Task 5): Hold mode, the half-size box, and the remembered half size
-//! (DECISIONS Note CI24-).
+//! (DECISIONS Note CL24-).
 mod support;
 use eframe::egui::{self, Key};
 use egui_kittest::kittest::Queryable;

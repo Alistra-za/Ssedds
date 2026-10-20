@@ -1,5 +1,5 @@
 //! v2 artist checks, check 3 (fake resolution) at convert time and the per-file `drop_top_mip` field
-//! (DECISIONS Note CI).
+//! (DECISIONS Note CL).
 use engine::api::*;
 use engine::codes::Code;
 use engine::config::Target;

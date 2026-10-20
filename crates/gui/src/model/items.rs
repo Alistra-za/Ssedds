@@ -55,7 +55,7 @@ pub struct TextureItem {
     pub decisions: Vec<Decision>,
     pub warnings: Vec<Warning>,
     pub thumb: Option<std::sync::Arc<Thumbnail>>,
-    /// The cached analysis, check stats included (DECISIONS Note CI); `None` for skipped, failed and packed-source
+    /// The cached analysis, check stats included (DECISIONS Note CL); `None` for skipped, failed and packed-source
     /// items.
     pub analysis: Option<std::sync::Arc<engine::analyse::Analysis>>,
     pub changed_on_disk: bool,

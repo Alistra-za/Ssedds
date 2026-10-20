@@ -648,7 +648,7 @@ impl AppModel {
         let Some(p) = self.project.as_ref() else {
             return;
         };
-        // Owner ruling 2026-10-20 (Note CI26): a saved half size is not a tick here; the half-size question decides it.
+        // Owner ruling 2026-10-20 (Note CL26): a saved half size is not a tick here; the half-size question decides it.
         let fields: Vec<(String, bool)> = all_fields()
             .into_iter()
             .filter(|(f, _)| *f != "drop_top_mip" && p.file_value(&from, f).is_some())

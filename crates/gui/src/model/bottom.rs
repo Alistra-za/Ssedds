@@ -57,7 +57,7 @@ impl AppModel {
     }
 }
 
-/// Red blocks the export; the others are orange in the list (A12). `Check` rows (artist checks, DECISIONS Note CI)
+/// Red blocks the export; the others are orange in the list (A12). `Check` rows (artist checks, DECISIONS Note CL)
 /// are listed but never change "ready" (`counts_as_ready_problem`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
@@ -306,7 +306,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             out.push(row(Level::Warning, at, text, Some(w.code)));
         }
     }
-    // Artist checks (DECISIONS Note CI): listed, never "ready"-changing; Info results stay on hover (owner answer 2).
+    // Artist checks (DECISIONS Note CL): listed, never "ready"-changing; Info results stay on hover (owner answer 2).
     for i in m
         .items
         .iter()

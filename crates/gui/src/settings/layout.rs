@@ -118,6 +118,9 @@ pub struct LookSettings {
     /// The sun's turn about the vertical, radians (Task 10, AG74). The HDRI backdrop and its ambient turn with it (AU4).
     #[serde(deserialize_with = "lenient")]
     pub sun_yaw: Option<f32>,
+    /// "Accurate (deferred)" (v2 D8); None = on.
+    #[serde(deserialize_with = "lenient")]
+    pub deferred: Option<bool>,
 }
 
 impl LookSettings {

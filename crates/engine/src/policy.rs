@@ -1877,7 +1877,7 @@ pub fn check_profile(
     }
     // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).
     let (rw, rh) = crate::resize::target_dims((a.width, a.height), p.resize);
-    // Note CI23: `drop_top_mip` writes mip 1 as the base, so the DIM checks read that size (the mips' halving rule).
+    // Note CL23: `drop_top_mip` writes mip 1 as the base, so the DIM checks read that size (the mips' halving rule).
     let dropped = p.drop_top_mip && crate::mips::level_count(rw, rh, &p.mips.levels) > 1;
     let (ow, oh) = if dropped {
         ((rw / 2).max(1), (rh / 2).max(1))
@@ -2246,7 +2246,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                 };
             }
         };
-    // Note CI23: on a single-level chain `drop_top_mip` does nothing, so it is cleared: it stays out of the hash and
+    // Note CL23: on a single-level chain `drop_top_mip` does nothing, so it is cleared: it stays out of the hash and
     // never re-encodes identical bytes.
     if profile.drop_top_mip {
         let (w, h) =

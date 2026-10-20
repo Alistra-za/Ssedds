@@ -1,4 +1,4 @@
-//! The artist checks (v2, DECISIONS Note CI): one pure function per check turns the engine's cached check stats
+//! The artist checks (v2, DECISIONS Note CL): one pure function per check turns the engine's cached check stats
 //! into `CHK-*` warnings, gated by the `[checks]` switches. Results live only in `AppModel`'s check maps: never in
 //! `TextureItem::warnings` or `SetView::set_warnings`, so they never change "ready" (owner answer 1).
 use super::sets::{SlotFill, SlotKind};
@@ -17,9 +17,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// Albedo: warn when more than this share of texels is darker than 30 or brighter than 240 (luma codes). Tuned on
-/// the 10k set (DECISIONS CI8): 0.05 flagged 43 % of PBR albedos.
+/// the 10k set (DECISIONS CL8): 0.05 flagged 43 % of PBR albedos.
 pub const RANGE_SHARE: f64 = 0.50;
-/// Metallic (G of `_rmaos`): warn when more than this share is grey (codes 26..=229). 0.20 flagged 19 % (CI8).
+/// Metallic (G of `_rmaos`): warn when more than this share is grey (codes 26..=229). 0.20 flagged 19 % (CL8).
 pub const METAL_GREY_SHARE: f64 = 0.40;
 /// Roughness (R of `_rmaos`): warn when more than this share is at code 0 or 255.
 pub const ROUGH_EXTREME_SHARE: f64 = 0.50;
@@ -41,7 +41,7 @@ pub const GREEN_RATIO: f64 = 0.5;
 pub const CURL_FLOOR: f64 = 1e-4;
 /// Parallax: a share at the clipping codes above this warns.
 pub const CLIP_SHARE: f64 = 0.10;
-/// Parallax: a share of steep neighbour steps above this warns. 0.01 flagged 7 % of `_p` (CI8).
+/// Parallax: a share of steep neighbour steps above this warns. 0.01 flagged 7 % of `_p` (CL8).
 pub const STEEP_SHARE: f64 = 0.03;
 /// Parallax: a height whose max − min is under this many codes uses too little of its range.
 pub const RANGE_USE_CODES: f64 = 16.0;
@@ -239,7 +239,7 @@ pub fn texture_checks(
     {
         let msg =
             "_n has no specular in its alpha (missing or all white): the surface may look plastic";
-        // Note CI37 (owner 2026-10-20): CS hair and Advanced Skin take specular elsewhere.
+        // Note CL37 (owner 2026-10-20): CS hair and Advanced Skin take specular elsewhere.
         let msg = match shader {
             Some(Shader::Hair) => format!("{msg}. {PLASTIC_CS_IGNORES} hair"),
             Some(Shader::AdvancedSkin) => format!("{msg}. {PLASTIC_CS_IGNORES} skin"),
@@ -287,7 +287,7 @@ fn parallax_checks(
     let cpm = job.profile.subtype == Subtype::ComplexMaterial;
     let (c, b, what): (&ChannelStats, &BandCounts, &str) = match job.profile.subtype {
         Subtype::Height => (&a.channels[0], &s.bands[0], "_p"),
-        // CI1 (review M2): without source alpha A reads 1.0 everywhere, so its bands say nothing; the engine's
+        // CL1 (review M2): without source alpha A reads 1.0 everywhere, so its bands say nothing; the engine's
         // ALPHA-PARALLAX-NO-ALPHA already names that case.
         Subtype::ComplexMaterial
             if job.profile.alpha.parallax == Some(true) && a.alpha != AlphaContent::None =>
@@ -582,7 +582,7 @@ pub fn summary_text(n: usize, textures: usize, sets: usize) -> String {
 /// The end-of-export line: the Warning-level check rows in Problems (item, set and export-row results; Info is
 /// never a row). `None` when there are none. It covers what this export wrote: once the export has rows, only the
 /// textures (and sets with a member) that have one are counted; with no rows it covers the whole project. A texture
-/// counts once, whether its rows are keyed by item or by job (CI19).
+/// counts once, whether its rows are keyed by item or by job (CL19).
 pub fn checks_summary(m: &AppModel) -> Option<String> {
     use super::bottom::{problems, At, Level};
     use std::collections::HashSet;

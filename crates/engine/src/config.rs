@@ -712,7 +712,7 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "ResizeMode::is_none")]
     pub resize: ResizeMode,
     /// Write the texture at half size, from its mip 1; every lower level is unchanged.
-    // Not serialised at its default, so existing profile hashes hold (v2 artist checks, DECISIONS Note CI21).
+    // Not serialised at its default, so existing profile hashes hold (v2 artist checks, DECISIONS Note CL21).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drop_top_mip: bool,
     pub encoder: EncoderSpec,

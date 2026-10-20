@@ -1,48 +1,8 @@
 mod builder;
-use builder::{Nif, W};
+use builder::scenes::{avobj, bstri, lsp, net, texset};
+use builder::Nif;
 use nif::scan::{scan, Shader};
 use nif::shape_head::ShapeKind;
-
-fn net(name: i32) -> W {
-    W::default().i32(name).u32(0).i32(-1)
-}
-fn avobj(w: W) -> W {
-    w.u32(14)
-        .fs(&[0.0; 3])
-        .fs(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
-        .f(1.0)
-        .i32(-1)
-}
-fn texset(paths: &[&str]) -> Vec<u8> {
-    let mut w = W::default().u32(paths.len() as u32);
-    for p in paths {
-        w = w.sized(p);
-    }
-    w.0
-}
-fn lsp(st: u32, ts: i32) -> Vec<u8> {
-    W::default()
-        .u32(st)
-        .i32(-1)
-        .u32(0)
-        .i32(-1)
-        .u32(0x8000_0000)
-        .u32(0x21)
-        .fs(&[0.0, 0.0])
-        .fs(&[1.0, 1.0])
-        .i32(ts)
-        .fs(&[0.0; 3])
-        .f(1.0)
-        .u32(3)
-        .f(1.0)
-        .f(0.0)
-        .f(80.0)
-        .fs(&[1.0; 3])
-        .f(1.0)
-        .f(0.3)
-        .f(2.0)
-        .0
-}
 
 #[test]
 fn bstrishape_links_shader_texset_alpha() {
@@ -191,19 +151,6 @@ fn ref_out_of_range_is_a_problem() {
     let s = scan(&n.bytes()).unwrap();
     assert!(matches!(s.shapes[0].shader, Shader::None));
     assert_eq!(s.problems.len(), 1);
-}
-
-fn bstri(shader: i32, alpha: i32) -> Vec<u8> {
-    avobj(net(-1))
-        .fs(&[0.0; 4])
-        .i32(-1)
-        .i32(shader)
-        .i32(alpha)
-        .u64(0)
-        .u16(0)
-        .u16(0)
-        .u32(0)
-        .0
 }
 
 #[test]

@@ -455,15 +455,18 @@ fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
 
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
 fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
+    // A20: the NIF history while a NIF edit is open in the Meshes view.
+    let nif = super::meshes::undo_target(ui.ctx());
     for (undo, name) in [(true, "Undo"), (false, "Redo")] {
-        let label = if undo {
-            model.undo_label()
-        } else {
-            model.redo_label()
+        let label = match nif {
+            Some((u, r)) => (if undo { u } else { r }).then_some("the last NIF edit"),
+            None if undo => model.undo_label(),
+            None => model.redo_label(),
         };
+        let sep = if nif.is_some() { " " } else { ": " };
         let hover = match label {
             Some(l) => format!(
-                "{name}: {l}  ({})",
+                "{name}{sep}{l}  ({})",
                 super::actions::keys_text(if undo { "undo" } else { "redo" })
             ),
             None => format!("Nothing to {}", name.to_lowercase()),
@@ -472,6 +475,7 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
         if r.on_hover_text(hover.clone())
             .on_disabled_hover_text(hover)
             .clicked()
+            && !super::meshes::request_undo(ui.ctx(), undo)
         {
             if undo {
                 model.undo();

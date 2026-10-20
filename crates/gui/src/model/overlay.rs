@@ -1,4 +1,4 @@
-//! The preview overlays (v2 artist checks, DECISIONS Note CI): the value-range overlay paints the texels a per-texel
+//! The preview overlays (v2 artist checks, DECISIONS Note CL): the value-range overlay paints the texels a per-texel
 //! CHK-RANGE rule rejects. Built on a worker from the preview's own source levels (no file read on the UI thread),
 //! as a ready `ColorImage`, so the UI only uploads it. One job at a time, keyed by (item, mip, kind) plus the rule
 //! set and the source; a result for an older key is dropped by its generation.

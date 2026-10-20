@@ -1,4 +1,4 @@
-//! v2 artist checks, Task 6 (DECISIONS Note CI): the value-range overlay. Built on a worker from the preview's source
+//! v2 artist checks, Task 6 (DECISIONS Note CL): the value-range overlay. Built on a worker from the preview's source
 //! levels, offered only for a texture with a per-texel CHK-RANGE warning, and polled through `v2_jobs_pending()`.
 mod support;
 use eframe::egui;

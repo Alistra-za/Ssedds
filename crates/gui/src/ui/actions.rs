@@ -249,7 +249,11 @@ pub static ACTIONS: &[Action] = &[
         AppModel::can_export,
     ),
     when(
-        a("undo", "Undo", Global, &[ctrl(Key::Z)], |m, _| m.undo()),
+        a("undo", "Undo", Global, &[ctrl(Key::Z)], |m, ctx| {
+            if !super::meshes::request_undo(ctx, true) {
+                m.undo();
+            }
+        }),
         AppModel::can_undo,
     ),
     when(
@@ -258,7 +262,11 @@ pub static ACTIONS: &[Action] = &[
             "Redo",
             Global,
             &[ctrl(Key::Y), ctrl_shift(Key::Z)],
-            |m, _| m.redo(),
+            |m, ctx| {
+                if !super::meshes::request_undo(ctx, false) {
+                    m.redo();
+                }
+            },
         ),
         AppModel::can_redo,
     ),
@@ -574,6 +582,15 @@ pub fn keys_text(id: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Whether action `a` can run now. A20: Undo / Redo follow the NIF history while a NIF edit is open.
+fn enabled(a: &Action, model: &AppModel, ctx: &egui::Context) -> bool {
+    match (a.id, super::meshes::undo_target(ctx)) {
+        ("undo", Some((u, _))) => u,
+        ("redo", Some((_, r))) => r,
+        _ => (a.enabled)(model),
+    }
+}
+
 /// Whether an action's area applies now.
 fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
     match area {
@@ -642,7 +659,7 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
         .filter(|a| {
             a.run.is_some()
                 && live(a.area, model, meshes)
-                && (a.enabled)(model)
+                && enabled(a, model, ctx)
                 && (!text || a.id == PALETTE)
         })
         .flat_map(|a| a.keys.iter().map(move |s| (a, *s)))
@@ -702,11 +719,15 @@ fn sheet(ctx: &egui::Context, model: &mut AppModel) {
 fn palette_actions(
     model: &AppModel,
     meshes_view: bool,
+    ctx: &egui::Context,
 ) -> Vec<(&'static str, &'static str, String)> {
     actions()
         .iter()
         .filter(|a| {
-            a.palette && a.run.is_some() && live(a.area, model, meshes_view) && (a.enabled)(model)
+            a.palette
+                && a.run.is_some()
+                && live(a.area, model, meshes_view)
+                && enabled(a, model, ctx)
         })
         .map(|a| (a.id, a.label, keys_text(a.id)))
         .collect()
@@ -718,7 +739,7 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
         return;
     };
     let meshes = super::header::meshes_view_active(ctx);
-    let offered = palette_actions(model, meshes);
+    let offered = palette_actions(model, meshes, ctx);
     let mut chosen = None;
     let k = super::dialogs::modal_keys(ctx, "palette", true, false, |ui| {
         ui.set_min_width(420.0);

@@ -1,5 +1,5 @@
 //! Artist check stats (v2 artist checks, checks 1, 2, 4 and 5): value bands, luma, the normal map's curl and the
-//! share of steep neighbour steps. They ride inside the cached [`crate::analyse::Analysis`] (DECISIONS Note CI).
+//! share of steep neighbour steps. They ride inside the cached [`crate::analyse::Analysis`] (DECISIONS Note CL).
 //! Check 3 (fake resolution) is measured on the export chain instead: [`detail_ratio`], [`low_detail_eligible`].
 use crate::analyse::{code8, AnalyseHints};
 use crate::config::{Category, MipKeyword, MipLevels, Profile, ResizeMode, Subtype};
@@ -191,7 +191,7 @@ pub fn steep_share(img: &Rgba32F, channel: usize) -> f64 {
     }
 }
 
-/// Check 3 (fake resolution): a detail ratio below this flags the texture (DECISIONS Note CI20).
+/// Check 3 (fake resolution): a detail ratio below this flags the texture (DECISIONS Note CL20).
 pub const LOW_DETAIL_RATIO: f64 = 0.25;
 
 /// Whether a detail ratio flags the texture: strictly below [`LOW_DETAIL_RATIO`].
@@ -486,7 +486,7 @@ mod tests {
         let small = noise(128, 2);
         let r = detail_ratio(&chain(up2(&small, false), 3)).unwrap();
         assert!(r < 0.01, "{r}");
-        // Bilinear: white noise scores about 0.19, noise softened with a 2x2 box about 0.24 (CI20).
+        // Bilinear: white noise scores about 0.19, noise softened with a 2x2 box about 0.24 (CL20).
         let r = detail_ratio(&chain(up2(&small, true), 3)).unwrap();
         assert!(r < LOW_DETAIL_RATIO, "{r}");
         let mut soft = small.clone();

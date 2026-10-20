@@ -391,7 +391,7 @@ fn export_never_asks_about_check_warnings() {
     assert!(m.export.summary.is_some());
 }
 
-// ---- the end-of-export checks summary: when it is logged (CI19) ----
+// ---- the end-of-export checks summary: when it is logged (CL19) ----
 
 const SUMMARY: &str = "Checks: 1 warning on 1 texture; see Problems";
 
