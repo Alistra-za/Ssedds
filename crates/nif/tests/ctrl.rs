@@ -243,3 +243,46 @@ fn scenes_all_parse() {
         Header::parse(&b).unwrap().check_file_length(&b).unwrap();
     }
 }
+
+#[test]
+fn chain_reports_negative_refs_other_than_minus_one() {
+    for bad in [-2, i32::MIN] {
+        let mut n = Nif::new(100);
+        n.block(
+            "NiAlphaController",
+            ctrl_body(bad, 0x48, -1, W::default().i32(-1)),
+        );
+        let b = n.bytes();
+        let h = Header::parse(&b).unwrap();
+        let mut p = vec![];
+        assert_eq!(chain(&h, &b, 0, &mut p), vec![0]);
+        assert_eq!(p.len(), 1, "{bad}: {p:?}");
+    }
+}
+
+#[test]
+fn sequence_strings_past_file_length_are_an_error() {
+    // 200 CBs x 4 refs to one 4 KB string: 3.2 MB of copies from a ~30 KB file
+    let mut n = Nif::new(100);
+    let s = n.string(&"x".repeat(4096));
+    let mut w = W::default().i32(-1).u32(200).u32(0);
+    for _ in 0..200 {
+        w = w.i32(-1).i32(-1).u8(0).i32(s).i32(s).i32(s).i32(s).i32(-1);
+    }
+    let body = w
+        .f(1.0)
+        .i32(-1)
+        .u32(0)
+        .fs(&[1.0, 0.0, 1.0])
+        .i32(-1)
+        .i32(-1)
+        .u16(0)
+        .0;
+    n.block("NiControllerSequence", body);
+    let b = n.bytes();
+    let h = Header::parse(&b).unwrap();
+    assert!(matches!(
+        read_sequence(&h, &b, 0),
+        Err(NifError::Geometry { .. })
+    ));
+}

@@ -113,7 +113,7 @@ pub fn read_ctrl(h: &Header, b: &[u8], block: usize) -> Result<TimeCtrl, NifErro
 pub fn chain(h: &Header, b: &[u8], first: i32, problems: &mut Vec<String>) -> Vec<u32> {
     let mut ids: Vec<u32> = vec![];
     let mut at = first;
-    while at >= 0 {
+    while at != -1 {
         if ids.contains(&(at as u32)) {
             problems.push(format!("controller chain loops at block {at}"));
             break;
@@ -190,13 +190,31 @@ pub struct Sequence {
     pub manager: i32,
 }
 
-fn string(h: &Header, block: usize, idx: i32) -> Result<Option<Vec<u8>>, NifError> {
+/// Copies one string-table entry. `budget` is the bytes still allowed to be copied for this sequence.
+fn string(
+    h: &Header,
+    block: usize,
+    idx: i32,
+    what: &str,
+    budget: &mut usize,
+) -> Result<Option<Vec<u8>>, NifError> {
     if idx == -1 {
         return Ok(None);
     }
-    h.string(idx)
-        .map(|s| Some(s.to_vec()))
-        .ok_or_else(|| geo(block, "string index outside the string table"))
+    let s = h.string(idx).ok_or_else(|| {
+        geo(
+            block,
+            &format!("{what}: string index outside the string table"),
+        )
+    })?;
+    // shortcut: bounded by the file length, not by a tighter per-field limit
+    *budget = budget.checked_sub(s.len()).ok_or_else(|| {
+        geo(
+            block,
+            "strings referenced by the sequence exceed the file length",
+        )
+    })?;
+    Ok(Some(s.to_vec()))
 }
 
 pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, NifError> {
@@ -217,23 +235,28 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         .ok_or_else(|| geo(block, "controlled-block count runs past the block"))?;
     let notes = u16::from_le_bytes([d[tail + 32], d[tail + 33]]) as usize;
     exact(h, block, tail + 34 + 4 * notes, d.len())?;
-    let blocks = (0..n)
-        .map(|i| {
-            let c = &d[12 + i * CB_LEN..];
-            let s = |k: usize| string(h, block, u32_at(c, 9 + 4 * k) as i32);
-            Ok(CtrlBlock {
-                interp: u32_at(c, 0) as i32,
-                controller: u32_at(c, 4) as i32,
-                node: s(0)?,
-                property: s(1)?,
-                ctrl_type: s(2)?,
-                ctrl_id: s(3)?,
-            })
-        })
-        .collect::<Result<Vec<_>, NifError>>()?;
+    let mut budget = b.len();
+    let mut blocks = Vec::with_capacity(n);
+    for i in 0..n {
+        let c = &d[12 + i * CB_LEN..];
+        let mut s = |k: usize| {
+            let what = format!("controlled block {i}");
+            string(h, block, u32_at(c, 9 + 4 * k) as i32, &what, &mut budget)
+        };
+        blocks.push(CtrlBlock {
+            interp: u32_at(c, 0) as i32,
+            controller: u32_at(c, 4) as i32,
+            node: s(0)?,
+            property: s(1)?,
+            ctrl_type: s(2)?,
+            ctrl_id: s(3)?,
+        });
+    }
+    let name = string(h, block, u32_at(d, 0) as i32, "name", &mut budget)?
+        .map(|s| String::from_utf8_lossy(&s).into());
     Ok(Sequence {
         block: block as u32,
-        name: string(h, block, u32_at(d, 0) as i32)?.map(|s| String::from_utf8_lossy(&s).into()),
+        name,
         blocks,
         manager: u32_at(d, tail + 24) as i32,
     })
