@@ -1050,3 +1050,44 @@ fn rebase_updates_reanchored_blocks() {
     assert!(matches!(&ops[0], Op::SetField { at, .. } if at.block == real));
     assert_eq!(rebase(&b, &ops).unwrap().1, vec![Outcome::Applied]); // a second run is plain Applied
 }
+
+/// Ruling P8 (A17 review): an alpha field edit never lands on an alpha that several shapes share.
+#[test]
+fn an_alpha_edit_on_a_shared_alpha_is_a_conflict() {
+    let b = scenes::shared_alpha_and_set();
+    let m = read_model(&b).unwrap();
+    let a = shape_named(&m, "A");
+    let set = |at: Anchor| Op::SetBits {
+        at,
+        field: Field::AlphaFlags,
+        mask: 1,
+        value: 0,
+        base: 0x00ED,
+    };
+    let shared = anchor_role(&m, Some(a), Role::Alpha).unwrap();
+    let r = apply(&b, &[set(shared.clone())]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This alpha is shared by 2 shapes: split it before editing.".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+    // Split first: the edit goes to A's own copy, the block the split appends.
+    let end = Header::parse(&b).unwrap().sizes.len() as u32;
+    let own = Anchor {
+        block: end,
+        ..shared
+    };
+    let r = apply(
+        &b,
+        &[
+            Op::SplitAlpha {
+                at: anchor_shape(&m, a),
+            },
+            set(own),
+        ],
+    )
+    .unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+}

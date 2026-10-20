@@ -432,6 +432,18 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         Op::SetField { field, .. } | Op::SetBits { field, .. } => *field,
         _ => unreachable!("filtered above"),
     };
+    // Ruling P8: an alpha field edit on a shared alpha would change every user; it needs a split first.
+    if at.role == Role::Alpha {
+        let users = m.alphas.get(&block).map_or(0, |a| a.prop.users.len());
+        if users > 1 {
+            return (
+                None,
+                Outcome::Conflict(format!(
+                    "This alpha is shared by {users} shapes: split it before editing."
+                )),
+            );
+        }
+    }
     if field == Field::ShaderType && matches!(op, Op::SetBits { .. }) {
         return refused("the shader type is not a bit field".into());
     }
