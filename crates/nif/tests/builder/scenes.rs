@@ -272,6 +272,7 @@ pub fn all() -> Vec<Vec<u8>> {
         shared_alpha_with_managed_ctrl(),
         shared_alpha_two_ctrl_chain(),
         one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]),
+        two_shapes_one_shader(),
     ]
 }
 
@@ -530,5 +531,16 @@ pub fn lsp_shape(shader_type: u32, trailer: &[f32]) -> Vec<u8> {
         "BSLightingShaderProperty",
         lsp_body(shader_type, &[], -1, trailer),
     );
+    n.bytes()
+}
+
+/// Two shapes (0, 1) on one BSLSP (3) with a texture set (2).
+pub fn two_shapes_one_shader() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (a, b) = (n.string("A"), n.string("B"));
+    n.block("BSTriShape", bstri_named(a, 3, -1));
+    n.block("BSTriShape", bstri_named(b, 3, -1));
+    n.block("BSShaderTextureSet", texset(&["textures\\a.dds"]));
+    n.block("BSLightingShaderProperty", lsp(0, 2));
     n.bytes()
 }

@@ -278,6 +278,12 @@ pub(crate) fn texture_path_op(
         .shader
         .and_then(|s| m.lighting.get(&s))
         .ok_or("the shape has no readable shader property")?;
+    if lsp.prop.users.len() > 1 {
+        return Err(format!(
+            "This shader is shared by {} shapes: a texture path edit would change all of them.",
+            lsp.prop.users.len()
+        ));
+    }
     let set = lsp
         .texture_set
         .and_then(|t| m.texsets.get(&t))

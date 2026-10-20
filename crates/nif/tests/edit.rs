@@ -874,3 +874,38 @@ fn merge_key_names_variant_block_and_field() {
     };
     assert_eq!(merge_key(&op), "SetBits|1|AlphaFlags");
 }
+
+#[test]
+fn shared_shader_texture_edit_is_refused() {
+    let b = scenes::two_shapes_one_shader();
+    let m = read_model(&b).unwrap();
+    let r = apply(&b, &[path_op(&m, 0, 0, "textures\\x.dds")]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused(
+            "This shader is shared by 2 shapes: a texture path edit would change all of them."
+                .into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn texture_edit_without_shader_or_set_is_refused() {
+    for b in [scenes::alpha_shape(0x12EC), scenes::reordered(false, "S")] {
+        let m = read_model(&b).unwrap();
+        let op = Op::SetTexturePath {
+            at: anchor_shape(&m, m.shapes[0].block),
+            slot: 0,
+            path: "x".into(),
+            base: String::new(),
+        };
+        let r = apply(&b, &[op]).unwrap();
+        assert!(
+            matches!(r.outcomes[0], Outcome::Refused(_)),
+            "{:?}",
+            r.outcomes
+        );
+        assert_eq!(r.bytes, b);
+    }
+}

@@ -450,7 +450,8 @@ fn real_file_edit_samples() {
         return;
     };
     let bsa = std::env::var_os("SDC_BSA").and_then(|p| vfs::bsa::Bsa::open(Path::new(&p)).ok());
-    let (mut failures, mut ran) = (vec![], 0);
+    let (mut failures, mut ran, mut found) = (vec![], 0, 0);
+    let mut per_kind: std::collections::BTreeMap<&str, u32> = Default::default();
     for rel in SAMPLES {
         let Some((src, b)) = sample_bytes(&root, bsa.as_ref(), rel) else {
             println!("MISSING {rel}");
@@ -460,6 +461,7 @@ fn real_file_edit_samples() {
             println!("UNREADABLE {rel} ({src})");
             continue;
         };
+        found += 1;
         let h0 = Header::parse(&b).unwrap();
         let mut line = vec![];
         for (label, touched, op) in sample_ops(&b) {
@@ -468,6 +470,7 @@ fn real_file_edit_samples() {
             match &r.outcomes[0] {
                 Outcome::Applied | Outcome::ReAnchored { .. } => {
                     ran += 1;
+                    *per_kind.entry(label).or_default() += 1;
                     line.push(format!("{label}=ok"));
                     let m = match read_model(&r.bytes) {
                         Ok(m) => m,
@@ -506,10 +509,19 @@ fn real_file_edit_samples() {
         }
         println!("{rel} ({src}): {}", line.join(" "));
     }
-    println!("{ran} ops applied; {} failures", failures.len());
+    println!(
+        "{ran} ops applied in {found} files; per kind {per_kind:?}; {} failures",
+        failures.len()
+    );
     for f in &failures {
         println!("  FAIL {f}");
     }
-    assert!(ran > 0, "no sample op ran");
+    assert!(
+        found >= 63,
+        "only {found} of the sample files were found (63 expected)"
+    );
+    for k in ["gloss", "texpath", "alpha-bits", "split-alpha", "add-extra"] {
+        assert!(per_kind.get(k).is_some_and(|&n| n > 0), "no {k} op applied");
+    }
     assert!(failures.is_empty(), "failures above");
 }
