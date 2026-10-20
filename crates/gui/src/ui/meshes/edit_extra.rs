@@ -315,7 +315,7 @@ fn prefill(kind: &str) -> &'static str {
 
 /// The type picker, a name and Add. The pick and the name live in egui memory until Add.
 fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor) {
-    let id = egui::Id::new(("meshes-edit-extra-add", root));
+    let id = egui::Id::new(("meshes-edit-extra-add", root, at.block));
     let (mut kind, mut name): (usize, String) = ui
         .data(|d| d.get_temp(id))
         .unwrap_or_else(|| (0, prefill(EDITABLE[0]).to_string()));

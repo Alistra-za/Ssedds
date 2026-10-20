@@ -1462,3 +1462,46 @@ fn drawing_the_controller_and_extra_tabs_records_nothing() {
     assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
     assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
 }
+
+/// P9: the value of an interpolator that two controllers share is greyed, and no edit reaches it.
+#[test]
+fn a_shared_interpolator_value_is_greyed() {
+    let mut m = direct(scenes::shader_ctrl(true));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let v = h.get_by_label("Emissive multiple value");
+    assert!(v.accesskit_node().is_disabled());
+    assert!(ops(h.state()).is_empty());
+    // The controller's own fields stay editable.
+    let f = h.get_by_label("Emissive multiple frequency");
+    assert!(!f.accesskit_node().is_disabled());
+}
+
+/// The name being typed in the Add row belongs to the shape it was typed for.
+#[test]
+fn the_add_row_name_does_not_follow_to_another_shape() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    let name = |h: &Harness<'static, MeshesModel>| {
+        h.get_by_role_and_label(AkRole::TextInput, "Name (shape)")
+            .accesskit_node()
+            .value()
+            .map(|s| s.to_string())
+    };
+    h.get_by_role_and_label(AkRole::TextInput, "Name (shape)")
+        .focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Name (shape)")
+        .type_text("Foo");
+    h.run_steps(2);
+    assert_eq!(name(&h).as_deref(), Some("BSXFoo"));
+    let b = shape_named(h.state().edit.as_ref().unwrap(), "B");
+    h.state_mut().select_edit(Selection::Shape(b));
+    h.run_steps(3);
+    assert_eq!(name(&h).as_deref(), Some("BSX"));
+}

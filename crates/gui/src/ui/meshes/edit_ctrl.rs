@@ -241,24 +241,38 @@ fn row(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, c: &TimeCtrl, at: &Anchor)
         } else {
             ["X", "Y", "Z"]
         };
-        for (k, &v) in i.value.iter().enumerate() {
-            let (label, name) = match i.value.len() {
-                1 => ("Value".to_string(), format!("{title} value")),
-                _ => (
-                    format!("Value {}", axes[k]),
-                    format!("{title} value {}", axes[k]),
-                ),
-            };
-            float_named(
-                ui,
-                e,
-                act,
-                at,
-                &label,
-                &name,
-                Field::InterpValue(k as u8),
-                v,
-            );
+        // P9: a value several controllers share is not edited through one of them.
+        let users = e
+            .model
+            .ctrls
+            .values()
+            .filter(|p| p.interp == c.interp)
+            .count();
+        let r = ui.add_enabled_ui(users <= 1, |ui| {
+            for (k, &v) in i.value.iter().enumerate() {
+                let (label, name) = match i.value.len() {
+                    1 => ("Value".to_string(), format!("{title} value")),
+                    _ => (
+                        format!("Value {}", axes[k]),
+                        format!("{title} value {}", axes[k]),
+                    ),
+                };
+                float_named(
+                    ui,
+                    e,
+                    act,
+                    at,
+                    &label,
+                    &name,
+                    Field::InterpValue(k as u8),
+                    v,
+                );
+            }
+        });
+        if users > 1 {
+            r.response.on_disabled_hover_text(format!(
+                "This interpolator is shared by {users} controllers: editing it would change all of them."
+            ));
         }
     }
 }
