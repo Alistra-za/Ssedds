@@ -1951,6 +1951,26 @@ impl Renderer {
         t.read_f32(&self.gpu, rt, [0, 0, t.width, t.height])
     }
 
+    /// Drops the current target (render's recreation branch; a test seam). The context holds references to bound
+    /// views, so they are unbound first: otherwise the old textures outlive this drop while the new ones are made.
+    /// `render` binds only the target's RTVs and DSV (no SRV or UAV of it), and rebinds them every frame.
+    #[doc(hidden)]
+    pub fn drop_target(&mut self) {
+        // SAFETY: plain context call with no pointers.
+        unsafe { self.gpu.ctx.OMSetRenderTargets(None, None) };
+        self.target = None;
+    }
+
+    /// Test hook: how many render target views the immediate context has bound.
+    #[doc(hidden)]
+    pub fn bound_rtvs(&self) -> usize {
+        let mut rtvs: [Option<windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView>; 8] =
+            Default::default();
+        // SAFETY: the out-array is a live local; the views it receives are released on drop.
+        unsafe { self.gpu.ctx.OMGetRenderTargets(Some(&mut rtvs), None) };
+        rtvs.iter().filter(|v| v.is_some()).count()
+    }
+
     /// Test hook: (width, height) of every texture of the current target: depth, colour, RT1-7, then the main UAV's
     /// resource.
     #[doc(hidden)]
@@ -2066,8 +2086,7 @@ impl Renderer {
             .as_ref()
             .is_none_or(|t| t.width != w || t.height != h || t.deferred() != self.deferred)
         {
-            // Drop the old one first: two full deferred targets need not coexist.
-            self.target = None;
+            self.drop_target();
             self.target = Some(if self.deferred {
                 Target::new_deferred(&self.gpu, w, h)?
             } else {

@@ -106,6 +106,47 @@ fn resize_recreates_every_target() {
     assert!(r.read_mrt(1).is_err());
 }
 
+/// D3D11 keeps the views it has bound alive: recreating the target must unbind them first, or the old textures
+/// outlive the Rust drop while the new ones are allocated. `drop_target` is what render's recreation branch calls.
+#[test]
+fn recreating_the_target_unbinds_the_old_views_first() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = two_planes(cache.path());
+    r.set_deferred(true).unwrap();
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert!(r.bound_rtvs() > 0, "a frame leaves its views bound");
+    r.drop_target();
+    assert!(r.target_dims().is_empty(), "the old target is gone");
+    assert_eq!(r.bound_rtvs(), 0);
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(r.target_dims(), vec![(64, 64); 10]);
+}
+
+/// A forward program writes SV_Target1/2 too (CS's forward PS_OUTPUT): drawn after an opaque deferred shape, it must
+/// leave that shape's RT1/RT2 untouched, so RT1-7 are never bound for it.
+#[test]
+fn forward_draws_never_see_rts_one_to_seven() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut f = FLAT.to_vec();
+    f.push("STANDIN_FORWARD_AUX");
+    let mut r = common::renderer(cache.path(), &f);
+    let parsed = render3d::ParsedNif {
+        shapes: vec![plane_shape(0, IDENT, [1.0, 0.0, 0.0], 1), blended(1)],
+        ..Default::default()
+    };
+    let rep = r.load_parsed(&parsed, &|_| None);
+    assert!(
+        rep.errors.is_empty() && rep.compile_errors.is_empty(),
+        "{rep:?}"
+    );
+    r.set_deferred(true).unwrap();
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert!(!has_deferred(&mut r, 1));
+    let (rt1, rt2) = (r.read_mrt(1).unwrap(), r.read_mrt(2).unwrap());
+    assert_eq!(px(&rt1, 64, 32, 32), M[1]);
+    assert_eq!(px(&rt2, 64, 32, 32), M[2]);
+}
+
 #[test]
 fn debug_views_still_render_in_deferred_mode() {
     let shaders = tempfile::tempdir().unwrap();

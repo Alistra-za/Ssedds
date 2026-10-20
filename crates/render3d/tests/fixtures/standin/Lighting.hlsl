@@ -29,6 +29,8 @@
 //   the forward colour; RT1-7 hold fixed markers (v2 D3 tests). It declares the names the debug block reads, but its
 //   `return psout ;` has a space, so this file has no debug anchor; tests/deferred.rs writes a copy without that
 //   space to get one (the temp-copy pattern of tests/settings.rs).
+// - STANDIN_FORWARD_AUX (forward permutations only): main also writes SV_Target1/2 like CS's forward PS_OUTPUT, so a
+//   test sees a forward draw that wrongly gets RT1-7 bound.
 
 struct VsOut
 {
@@ -214,6 +216,23 @@ PsOut main(VsOut i)
     psout.Masks = float4(2.0, 4.0, 0.0625, 0.0);
     psout.Masks2 = float4(1.0, 0.0, 0.0, 0.0);
     return psout ;
+}
+#elif defined(STANDIN_FORWARD_AUX)
+// Like CS's forward PS_OUTPUT: SV_Target1/2 written too, with conspicuous values (alpha 1, so a blend replaces).
+struct PsOutForward
+{
+    float4 Diffuse : SV_Target0;
+    float4 MotionVectors : SV_Target1;
+    float4 NormalGlossiness : SV_Target2;
+};
+
+PsOutForward main(VsOut i)
+{
+    PsOutForward o;
+    o.Diffuse = shade(i);
+    o.MotionVectors = float4(0.75, 0.125, 0.0, 1.0);
+    o.NormalGlossiness = float4(0.0, 1.0, 0.0, 1.0);
+    return o;
 }
 #else
 float4 main(VsOut i) : SV_Target
