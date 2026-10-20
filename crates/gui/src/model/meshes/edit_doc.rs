@@ -41,7 +41,6 @@ pub struct EditDoc {
     pub source: SourceId,
     #[serde(default)]
     pub export: ExportRec,
-    #[serde(default)]
     pub ops: Vec<DocOp>,
 }
 
@@ -60,7 +59,14 @@ impl EditDoc {
     }
 
     pub fn from_text(t: &str) -> Result<EditDoc, String> {
-        toml::from_str(t).map_err(|e| e.to_string())
+        let d: EditDoc = toml::from_str(t).map_err(|e| e.to_string())?;
+        if d.version > 1 {
+            return Err(format!(
+                "This edit file was written by a newer sdc (version {}).",
+                d.version
+            ));
+        }
+        Ok(d)
     }
 
     pub fn ops(&self) -> Vec<nif::edit::Op> {
