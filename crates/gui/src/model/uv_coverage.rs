@@ -459,6 +459,15 @@ pub fn winning_shapes(db: &Path, tex: &str) -> Result<Vec<ShapeRef>, String> {
         _ => rel,
     };
     let store = Store::open_read_only(db).map_err(|e| e.to_string())?;
+    // Indexed pre-filter (`path.p`): no lighting shape names the canonical path in slot 0, so the scan below can
+    // find nothing. Aliases need no check of their own: the scan stores every slot under its canonical path, and the
+    // re-check below accepts a shape only when that path equals `want`.
+    // shortcut: a used texture still pays the `nifs_using_texture` scan (~137 ms at 375k paths); upgrade when modscan
+    // adds an indexed typed canonical key (NIF HANDOFF request 2026-10-20).
+    let users = store.users_of_texture(&want).map_err(|e| e.to_string())?;
+    if !users.iter().any(|&(_, slot, kind)| slot == 0 && kind == 1) {
+        return Ok(vec![]);
+    }
     let key = TexKey::Contains {
         slot: 0,
         frag: frag.to_string(),

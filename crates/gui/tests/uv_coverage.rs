@@ -1306,3 +1306,82 @@ fn the_overlay_puts_uv_v0_at_the_top() {
     assert!(!used(n - 10, n / 4), "the leg is at the right (u flipped)");
     assert!(!used(n / 4, n / 4));
 }
+
+/// A scan DB of realistic size: `n` winning NIFs with two lighting shapes each, every shape its own texture set
+/// (`textures/m{k}/t{i}_{s}.dds` in slot 0, a `_n` in slot 1), so about 4n + n texture and mesh paths. NIF 0's first
+/// shape names `TEX`.
+fn big_db(dir: &Path, n: i64) -> PathBuf {
+    let db = dir.join("big.db");
+    let s = store(&db);
+    let c = s.conn();
+    origin(c, 1, &dir.join("Mod"), 1, false);
+    c.execute_batch("BEGIN").unwrap();
+    let tex_id: i64 = c
+        .query_row("SELECT id FROM path WHERE p = ?1", [TEX], |r| r.get(0))
+        .unwrap();
+    {
+        let mut path = c.prepare("INSERT INTO path(p) VALUES (?1)").unwrap();
+        let mut copy = c
+            .prepare("INSERT INTO nif_copy(id, path_id, origin_id, parse_status, le_mesh, is_derived) VALUES (?1, ?2, 1, 0, 0, 0)")
+            .unwrap();
+        let mut win = c
+            .prepare("INSERT INTO nif_winner(path_id, copy_id, n_copies) VALUES (?1, ?2, 1)")
+            .unwrap();
+        let mut ts = c
+            .prepare("INSERT INTO texset(id, n, t0, t1) VALUES (?1, 2, ?2, ?3)")
+            .unwrap();
+        let mut tu = c
+            .prepare("INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (?1, ?2, ?3)")
+            .unwrap();
+        let mut sh = c
+            .prepare("INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id) VALUES (?1, ?2, 'BSTriShape', 1, 0, 0, ?3)")
+            .unwrap();
+        let mut tset = 10i64;
+        for i in 0..n {
+            path.execute([format!("meshes/m{}/n{i}.nif", i % 97)])
+                .unwrap();
+            let p = c.last_insert_rowid();
+            let id = 100 + i;
+            copy.execute(rusqlite::params![id, p]).unwrap();
+            win.execute(rusqlite::params![p, id]).unwrap();
+            for b in 0..2i64 {
+                let t0 = if i == 0 && b == 0 {
+                    tex_id
+                } else {
+                    path.execute([format!("textures/m{}/t{i}_{b}.dds", i % 97)])
+                        .unwrap();
+                    c.last_insert_rowid()
+                };
+                path.execute([format!("textures/m{}/t{i}_{b}_n.dds", i % 97)])
+                    .unwrap();
+                let t1 = c.last_insert_rowid();
+                ts.execute(rusqlite::params![tset, t0, t1]).unwrap();
+                tu.execute(rusqlite::params![t0, tset, 0]).unwrap();
+                tu.execute(rusqlite::params![t1, tset, 1]).unwrap();
+                sh.execute(rusqlite::params![id, b, tset]).unwrap();
+                tset += 1;
+            }
+        }
+    }
+    c.execute_batch("COMMIT").unwrap();
+    db
+}
+
+/// Item 12 (option c): a texture no mesh uses is answered from the indexed `users_of_texture`, without the
+/// `nifs_using_texture` scan (about 137 ms at 375k paths).
+#[test]
+fn an_unused_texture_is_answered_without_the_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let db = big_db(d.path(), 75_000);
+    let _ = winning_shapes(&db, "textures/warm/up.dds"); // open the file once, so the page cache is warm
+    let t = std::time::Instant::now();
+    let none = winning_shapes(&db, "textures/a/unused.dds").unwrap();
+    let ms = t.elapsed().as_millis();
+    assert!(none.is_empty());
+    assert!(ms < 50, "{ms} ms for an unused texture");
+    // A used texture still returns its shapes (through the scan).
+    let used = winning_shapes(&db, TEX).unwrap();
+    assert_eq!(used.len(), 1);
+    assert_eq!(used[0].nif, "meshes/m0/n0.nif");
+    assert_eq!(used[0].blocks, vec![0]);
+}
