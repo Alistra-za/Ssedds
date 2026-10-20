@@ -268,6 +268,8 @@ pub fn all() -> Vec<Vec<u8>> {
         reordered(false, "S"),
         reordered(true, "S"),
         dup_names(),
+        shared_alpha_with_testref_chain(),
+        shared_alpha_with_managed_ctrl(),
     ]
 }
 
@@ -425,5 +427,60 @@ pub fn dup_names() -> Vec<u8> {
     n.block("BSTriShape", bstri_named(a, 3, -1));
     n.block("BSLightingShaderProperty", lsp(0, -1));
     n.block("BSLightingShaderProperty", lsp(0, -1));
+    n.bytes()
+}
+
+fn shared_alpha_chain(ctrl_flags: u16) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (r, a, b) = (n.string("Root"), n.string("A"), n.string("B"));
+    n.block(
+        "NiNode",
+        avobj(W::default().i32(r).u32(0).i32(-1))
+            .u32(2)
+            .i32(1)
+            .i32(2)
+            .u32(0)
+            .0,
+    );
+    n.block("BSTriShape", bstri_named(a, 3, 4));
+    n.block("BSTriShape", bstri_named(b, 3, 4));
+    n.block("BSLightingShaderProperty", lsp(0, -1));
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], 5))
+            .u16(0x00ED)
+            .u8(128)
+            .0,
+    );
+    n.block(
+        "BSNiAlphaPropertyTestRefController",
+        ctrl_body(-1, ctrl_flags, 4, W::default().i32(6)),
+    );
+    n.block("NiFloatInterpolator", W::default().f(1.0).i32(7).0);
+    n.block("NiFloatData", float_data(1));
+    n.bytes()
+}
+
+/// Root (0), BSTriShapes "A" (1) and "B" (2) sharing BSLSP (3) and NiAlphaProperty (4), whose free
+/// BSNiAlphaPropertyTestRefController (5) -> NiFloatInterpolator (6) -> NiFloatData (7).
+pub fn shared_alpha_with_testref_chain() -> Vec<u8> {
+    shared_alpha_chain(0x48)
+}
+
+/// Same as `shared_alpha_with_testref_chain` but the controller is Manager Controlled (flags 0x68).
+pub fn shared_alpha_with_managed_ctrl() -> Vec<u8> {
+    shared_alpha_chain(0x68)
+}
+
+/// BSTriShape "S" (0) -> BSLSP (1) of `shader_type` with the given trailer floats.
+pub fn lsp_shape(shader_type: u32, trailer: &[f32]) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", bstri_named(s, 1, -1));
+    n.block(
+        "BSLightingShaderProperty",
+        lsp_body(shader_type, &[], -1, trailer),
+    );
     n.bytes()
 }

@@ -7,6 +7,9 @@ use crate::model::{read_model, NifModel, ShapeModel};
 use crate::write::NifDoc;
 use crate::NifError;
 
+mod structural;
+pub use structural::trailer_defaults;
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
@@ -282,10 +285,13 @@ pub fn apply(src: &[u8], ops: &[Op]) -> Result<Applied, NifError> {
 
 fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     let refused = |s: String| (None, Outcome::Refused(s));
-    let (at, field) = match op {
-        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => (at, *field),
-        // A9-A11
-        _ => return refused("not supported yet".into()),
+    let at = match op {
+        Op::SetField { at, .. }
+        | Op::SetBits { at, .. }
+        | Op::SplitAlpha { at }
+        | Op::AddAlpha { at, .. }
+        | Op::RemoveAlpha { at } => at,
+        _ => return refused("not supported yet".into()), // A10, A11
     };
     let m = match read_model(cur) {
         Ok(m) => m,
@@ -299,8 +305,27 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         Ok(r) => r,
         Err(e) => return (None, Outcome::Conflict(e)),
     };
-    if field == Field::ShaderType {
-        return refused("not supported yet".into()); // A9-A11: structural::set_shader_type
+    let outcome = if re {
+        Outcome::ReAnchored { block }
+    } else {
+        Outcome::Applied
+    };
+    if matches!(
+        op,
+        Op::SplitAlpha { .. } | Op::AddAlpha { .. } | Op::RemoveAlpha { .. }
+    ) {
+        let r = match m.shape(block).filter(|_| at.role == Role::Shape) {
+            Some(s) => structural::alpha_op(&mut doc, &m, s, op),
+            None => Err("alpha ops anchor on a shape".into()),
+        };
+        return finish(doc, r, outcome);
+    }
+    let field = match op {
+        Op::SetField { field, .. } | Op::SetBits { field, .. } => *field,
+        _ => unreachable!("filtered above"),
+    };
+    if field == Field::ShaderType && matches!(op, Op::SetBits { .. }) {
+        return refused("the shader type is not a bit field".into());
     }
     if field == Field::Variable && m.managed(block) {
         return refused("the variable of a manager-controlled controller cannot change".into());
@@ -321,6 +346,10 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
             }
             if value.bytes().len() != current.bytes().len() {
                 return refused(format!("{value:?} does not fit {field:?}"));
+            }
+            if let (Field::ShaderType, Value::U32(t)) = (field, value) {
+                let r = structural::set_shader_type(&mut doc, &m, block, *t);
+                return finish(doc, r, outcome);
             }
             value.bytes()
         }
@@ -353,10 +382,12 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     if let Err(e) = doc.patch(block, rel, &new) {
         return refused(e.to_string());
     }
-    let outcome = if re {
-        Outcome::ReAnchored { block }
-    } else {
-        Outcome::Applied
-    };
     (Some(doc.bytes()), outcome)
+}
+
+fn finish(doc: NifDoc, r: Result<(), String>, ok: Outcome) -> (Option<Vec<u8>>, Outcome) {
+    match r {
+        Ok(()) => (Some(doc.bytes()), ok),
+        Err(e) => (None, Outcome::Refused(e)),
+    }
 }

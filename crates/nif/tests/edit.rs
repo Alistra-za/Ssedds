@@ -234,8 +234,180 @@ fn duplicate_shape_names_without_index_match_are_ambiguous() {
     assert_eq!(r.bytes, b);
 }
 
+fn shape_named(m: &nif::model::NifModel, name: &str) -> u32 {
+    m.shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no shape {name}"))
+        .block
+}
+
+fn block_bytes_of(b: &[u8], k: usize) -> Vec<u8> {
+    let h = Header::parse(b).unwrap();
+    b[h.offsets()[k]..h.offsets()[k] + h.sizes[k] as usize].to_vec()
+}
+
+fn type_op(b: &[u8], to: u32) -> (Op, u32) {
+    let at = shader_anchor(b);
+    let base = current(b, at.block, Field::ShaderType);
+    let blk = at.block;
+    let op = Op::SetField {
+        at,
+        field: Field::ShaderType,
+        value: Value::U32(to),
+        base,
+    };
+    (op, blk)
+}
+
+fn trailer(b: &[u8], block: u32, n: u8) -> f32 {
+    current(b, block, Field::Trailer(n)).as_f32().unwrap()
+}
+
 #[test]
-fn structural_ops_are_not_supported_yet() {
+fn trailer_defaults_table() {
+    assert_eq!(trailer_defaults(7), vec![4.0, 1.0]);
+    assert_eq!(trailer_defaults(11), vec![5.0, 0.25, 1.0, 1.0, 1.0]);
+    assert_eq!(trailer_defaults(16)[0], 1.3);
+    assert!(trailer_defaults(0).is_empty() && trailer_defaults(3).is_empty());
+}
+
+#[test]
+fn shader_type_change_rewrites_only_the_trailer_and_size() {
+    let b = scenes::lsp_shape(5, &[0.25, 0.5, 0.75]); // the fixtures are all type 0
+    let (op, blk) = type_op(&b, 1);
+    assert_eq!(current(&b, blk, Field::ShaderType), Value::U32(5));
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let (old, new) = (
+        block_bytes_of(&b, blk as usize),
+        block_bytes_of(&r.bytes, blk as usize),
+    );
+    assert_eq!(new.len(), old.len() - 8);
+    assert_eq!(new[..4], 1u32.to_le_bytes());
+    assert_eq!(new[4..new.len() - 4], old[4..new.len() - 4]);
+    assert_eq!(trailer(&r.bytes, blk, 0), 1.0);
+    assert!(read_model(&r.bytes).unwrap().problems.is_empty());
+    for k in (0..Header::parse(&b).unwrap().sizes.len()).filter(|&k| k as u32 != blk) {
+        assert_eq!(block_bytes_of(&b, k), block_bytes_of(&r.bytes, k), "{k}");
+    }
+}
+
+#[test]
+fn shader_type_5_to_6_keeps_the_tint_floats() {
+    let b = scenes::lsp_shape(5, &[0.25, 0.5, 0.75]);
+    let (op, blk) = type_op(&b, 6);
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let s = Header::parse(&b).unwrap().offsets()[blk as usize];
+    assert_eq!(changed_ranges(&b, &r.bytes), vec![s..s + 1]); // 5 -> 6: one byte
+    let got: Vec<f32> = (0..3).map(|n| trailer(&r.bytes, blk, n)).collect();
+    assert_eq!(got, vec![0.25, 0.5, 0.75]);
+    // a different trailer length takes the defaults
+    let (op, _) = type_op(&r.bytes, 7);
+    let r = apply(&r.bytes, &[op]).unwrap();
+    assert_eq!(
+        (trailer(&r.bytes, blk, 0), trailer(&r.bytes, blk, 1)),
+        (4.0, 1.0)
+    );
+}
+
+#[test]
+fn shader_type_20_is_refused() {
+    let b = read("TestNifFile_Skinned_SE.nif");
+    for t in [20, 21, 1000] {
+        let (op, _) = type_op(&b, t);
+        let r = apply(&b, &[op]).unwrap();
+        assert_eq!(
+            r.outcomes,
+            vec![Outcome::Refused(
+                "shader type 20 is not a Skyrim type".into()
+            )]
+        );
+        assert_eq!(r.bytes, b);
+    }
+}
+
+#[test]
+fn shader_type_stale_base_is_a_conflict() {
+    let b = read("TestNifFile_Skinned_SE.nif");
+    let (mut op, _) = type_op(&b, 1);
+    if let Op::SetField { base, .. } = &mut op {
+        *base = Value::U32(9);
+    }
+    let r = apply(&b, &[op]).unwrap();
+    assert!(matches!(r.outcomes[0], Outcome::Conflict(_)));
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn extra_ops_are_not_supported_yet() {
+    let b = scenes::alpha_shape(0x12EC);
+    let m = read_model(&b).unwrap();
+    let r = apply(
+        &b,
+        &[Op::RemoveExtra {
+            at: anchor_shape(&m, 0),
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused("not supported yet".into())]
+    );
+}
+
+fn split(m: &nif::model::NifModel, name: &str) -> Op {
+    Op::SplitAlpha {
+        at: anchor_shape(m, shape_named(m, name)),
+    }
+}
+
+#[test]
+fn split_gives_one_shape_its_own_alpha_and_chain() {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let a = shape_named(&m, "A");
+    let r = apply(&b, &[split(&m, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    assert!(m2.problems.is_empty(), "{:?}", m2.problems);
+    let (a2, b2) = (shape_named(&m2, "A"), shape_named(&m2, "B"));
+    assert_ne!(m2.shape(a2).unwrap().alpha, m2.shape(b2).unwrap().alpha);
+    assert_eq!(
+        m2.shape(b2).unwrap().alpha,
+        m.shape(shape_named(&m, "B")).unwrap().alpha
+    );
+    let new = m2.shape(a2).unwrap().alpha.unwrap();
+    let chain = &m2.alphas[&new].prop.ctrls;
+    assert_eq!(chain.len(), 1);
+    let c = &m2.ctrls[&chain[0]];
+    assert_eq!(c.target, new as i32);
+    assert_eq!(c.next, -1);
+    // its own interpolator and data, distinct from the originals (6, 7)
+    let i = c.interp.unwrap();
+    assert!(i > 7);
+    let i = &m2.interps[&(i as u32)];
+    assert!(i.data > 7);
+    let h = Header::parse(&r.bytes).unwrap();
+    assert_eq!(h.kind(i.data as usize), b"NiFloatData");
+    assert_eq!(
+        block_bytes_of(&r.bytes, i.data as usize),
+        block_bytes_of(&b, 7)
+    );
+    // the original alpha keeps its chain and now has one user
+    let old = &m2.alphas[&m.shape(shape_named(&m, "B")).unwrap().alpha.unwrap()];
+    assert_eq!((old.prop.ctrls.clone(), old.prop.users.len()), (vec![5], 1));
+    let old_len = Header::parse(&b).unwrap().sizes.len();
+    for k in 0..old_len {
+        if k as u32 != a {
+            assert_eq!(block_bytes_of(&r.bytes, k), block_bytes_of(&b, k), "{k}");
+        }
+    }
+}
+
+#[test]
+fn split_with_one_user_is_a_no_op() {
     let b = scenes::alpha_shape(0x12EC);
     let m = read_model(&b).unwrap();
     let r = apply(
@@ -245,10 +417,74 @@ fn structural_ops_are_not_supported_yet() {
         }],
     )
     .unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn split_with_a_managed_controller_is_refused() {
+    let b = scenes::shared_alpha_with_managed_ctrl();
+    let m = read_model(&b).unwrap();
+    let r = apply(&b, &[split(&m, "A")]).unwrap();
     assert_eq!(
         r.outcomes,
-        vec![Outcome::Refused("not supported yet".into())]
+        vec![Outcome::Refused(
+            "Shared alpha with a clip controller: splitting needs Phase C.".into()
+        )]
     );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn split_then_undo_restores_source_bytes() {
+    // undo = re-apply the remaining ops (none) to the pristine source
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let r = apply(&b, &[split(&m, "A")]).unwrap();
+    assert_ne!(r.bytes, b);
+    assert_eq!(apply(&b, &[]).unwrap().bytes, b);
+    // splitting again is a no-op: A is the only user of its new alpha
+    let again = apply(&r.bytes, &[split(&m, "A")]).unwrap();
+    assert_eq!(again.outcomes, vec![Outcome::Applied]);
+    assert_eq!(again.bytes, r.bytes);
+}
+
+#[test]
+fn add_then_remove_alpha_leaves_an_orphan_and_ref_minus_one() {
+    let b = scenes::reordered(false, "S");
+    let m = read_model(&b).unwrap();
+    let at = anchor_shape(&m, 0);
+    let add = Op::AddAlpha {
+        at: at.clone(),
+        flags: 4844,
+        threshold: 128,
+    };
+    let r = apply(&b, std::slice::from_ref(&add)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    let n = Header::parse(&b).unwrap().sizes.len() as u32;
+    assert_eq!(m2.shape(0).unwrap().alpha, Some(n));
+    assert_eq!(current(&r.bytes, n, Field::AlphaFlags), Value::U16(4844));
+    assert_eq!(current(&r.bytes, n, Field::AlphaThreshold), Value::U8(128));
+    assert_eq!(m2.alphas[&n].prop.users, vec![0]);
+    // a second add is refused
+    let r2 = apply(&r.bytes, &[add]).unwrap();
+    assert!(matches!(r2.outcomes[0], Outcome::Refused(_)));
+    assert_eq!(r2.bytes, r.bytes);
+    let rm = apply(&r.bytes, &[Op::RemoveAlpha { at }]).unwrap();
+    assert_eq!(rm.outcomes, vec![Outcome::Applied]);
+    let m3 = read_model(&rm.bytes).unwrap();
+    assert_eq!(m3.shape(0).unwrap().alpha, None);
+    let at_ref = m3.shapes[0].at.alpha;
+    assert_eq!(rm.bytes[at_ref..at_ref + 4], (-1i32).to_le_bytes());
+    // the orphan stays
+    assert!(m3.alphas.contains_key(&n) && m3.alphas[&n].prop.users.is_empty());
+    // nothing to remove the second time
+    let again = Op::RemoveAlpha {
+        at: anchor_shape(&m3, 0),
+    };
+    let rm2 = apply(&rm.bytes, &[again]).unwrap();
+    assert!(matches!(rm2.outcomes[0], Outcome::Refused(_)));
 }
 
 #[test]
