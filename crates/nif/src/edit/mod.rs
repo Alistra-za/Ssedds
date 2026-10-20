@@ -281,9 +281,8 @@ pub fn apply(src: &[u8], ops: &[Op]) -> Result<Applied, NifError> {
     Ok(Applied { bytes, outcomes })
 }
 
-fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
-    let refused = |s: String| (None, Outcome::Refused(s));
-    let at = match op {
+fn anchor_of(op: &Op) -> &Anchor {
+    match op {
         Op::SetField { at, .. }
         | Op::SetBits { at, .. }
         | Op::SplitAlpha { at }
@@ -293,7 +292,94 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         | Op::EditExtra { at, .. }
         | Op::RemoveExtra { at }
         | Op::SetTexturePath { at, .. } => at,
+    }
+}
+
+/// Re-runs `ops` on a changed source: every op that `apply` re-anchored gets the block it resolved to.
+pub fn rebase(new_src: &[u8], ops: &[Op]) -> Result<(Vec<Op>, Vec<Outcome>), NifError> {
+    let r = apply(new_src, ops)?;
+    let mut out = ops.to_vec();
+    for (op, o) in out.iter_mut().zip(&r.outcomes) {
+        if let Outcome::ReAnchored { block } = o {
+            match op {
+                Op::SetField { at, .. }
+                | Op::SetBits { at, .. }
+                | Op::SplitAlpha { at }
+                | Op::AddAlpha { at, .. }
+                | Op::RemoveAlpha { at }
+                | Op::AddExtra { at, .. }
+                | Op::EditExtra { at, .. }
+                | Op::RemoveExtra { at }
+                | Op::SetTexturePath { at, .. } => at.block = *block,
+            }
+        }
+    }
+    Ok((out, r.outcomes))
+}
+
+/// Keep mine: op `i`'s `base` becomes the value now at its anchor, in the bytes `ops[..i]` produce from
+/// `new_src`. An op without a base, or whose anchor is missing or ambiguous, is returned unchanged.
+pub fn keep_mine(new_src: &[u8], ops: &[Op], i: usize) -> Result<Vec<Op>, NifError> {
+    let mut out = ops.to_vec();
+    let Some(op) = ops.get(i) else { return Ok(out) };
+    let cur = apply(new_src, &ops[..i])?.bytes;
+    let (Ok(m), Ok(doc)) = (read_model(&cur), NifDoc::open(&cur)) else {
+        return Ok(out);
     };
+    let Ok((block, _)) = resolve(&m, anchor_of(op)) else {
+        return Ok(out);
+    };
+    let field_now = |f: Field| {
+        locate(doc.header(), &cur, block as usize, f)
+            .ok()
+            .map(|r| r.1)
+    };
+    match &mut out[i] {
+        Op::SetField { field, base, .. } => {
+            if let Some(v) = field_now(*field) {
+                *base = v;
+            }
+        }
+        Op::SetBits { field, base, .. } => match field_now(*field) {
+            Some(Value::U8(v)) => *base = v as u32,
+            Some(Value::U16(v)) => *base = v as u32,
+            Some(Value::U32(v)) => *base = v,
+            _ => {}
+        },
+        Op::SetTexturePath { slot, base, .. } => {
+            let slots = m
+                .shape(block)
+                .and_then(|s| s.shader)
+                .and_then(|s| m.lighting.get(&s))
+                .and_then(|l| l.texture_set)
+                .and_then(|t| m.texsets.get(&t))
+                .map(|t| &t.raw.slots);
+            if let Some(s) = slots.and_then(|s| s.get(*slot as usize)) {
+                *base = encoding_rs::WINDOWS_1252.decode(s).0.into_owned();
+            }
+        }
+        Op::EditExtra { base, .. } => {
+            if let Some(v) = m.extras.get(&block).and_then(|x| x.value.clone()) {
+                *base = v;
+            }
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+/// Take source: drops op `i`.
+pub fn take_source(ops: &[Op], i: usize) -> Vec<Op> {
+    let mut v = ops.to_vec();
+    if i < v.len() {
+        v.remove(i);
+    }
+    v
+}
+
+fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
+    let refused = |s: String| (None, Outcome::Refused(s));
+    let at = anchor_of(op);
     let m = match read_model(cur) {
         Ok(m) => m,
         Err(e) => return refused(e.to_string()),

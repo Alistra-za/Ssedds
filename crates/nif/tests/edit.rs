@@ -909,3 +909,144 @@ fn texture_edit_without_shader_or_set_is_refused() {
         assert_eq!(r.bytes, b);
     }
 }
+
+/// The Skinned fixture with its glossiness set to `to` (the "source changed" file).
+fn with_gloss(b: &[u8], at: &Anchor, to: f32) -> Vec<u8> {
+    let base = current(b, at.block, Field::Glossiness).as_f32().unwrap();
+    apply(b, &[gloss(at, to, base)]).unwrap().bytes
+}
+
+#[test]
+fn unchanged_field_in_a_changed_source_applies() {
+    let b = read("TestNifFile_Skinned_SE.nif");
+    let at = shader_anchor(&b);
+    let op = Op::SetField {
+        at: at.clone(),
+        field: Field::SpecularStrength,
+        value: Value::F32(2.0f32.to_bits()),
+        base: current(&b, at.block, Field::SpecularStrength),
+    };
+    let new_src = with_gloss(&b, &at, 50.0); // a different field changed
+    let (ops, outcomes) = rebase(&new_src, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(outcomes, vec![Outcome::Applied]);
+    assert_eq!(ops, vec![op]);
+}
+
+#[test]
+fn same_field_changed_in_source_is_a_conflict_and_keep_mine_resolves_it() {
+    let b = read("TestNifFile_Skinned_SE.nif");
+    let at = shader_anchor(&b);
+    let base = current(&b, at.block, Field::Glossiness).as_f32().unwrap();
+    let ops = [gloss(&at, 12.5, base)];
+    let new_src = with_gloss(&b, &at, 50.0);
+    assert!(matches!(
+        apply(&new_src, &ops).unwrap().outcomes[0],
+        Outcome::Conflict(_)
+    ));
+    let kept = keep_mine(&new_src, &ops, 0).unwrap();
+    assert_eq!(kept, vec![gloss(&at, 12.5, 50.0)]);
+    let r = apply(&new_src, &kept).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        current(&r.bytes, at.block, Field::Glossiness),
+        Value::F32(12.5f32.to_bits())
+    );
+}
+
+#[test]
+fn keep_mine_sets_base_for_set_bits_and_leaves_missing_anchors_alone() {
+    let b = scenes::alpha_shape(0x12EC);
+    let at = alpha_anchor(&b);
+    let bits = |base| Op::SetBits {
+        at: at.clone(),
+        field: Field::AlphaFlags,
+        mask: 1,
+        value: 0,
+        base,
+    };
+    let stale = [bits(1)]; // the file has bit 0 clear
+    assert!(matches!(
+        apply(&b, &stale).unwrap().outcomes[0],
+        Outcome::Conflict(_)
+    ));
+    let kept = keep_mine(&b, &stale, 0).unwrap();
+    assert_eq!(kept, vec![bits(0x12EC)]);
+    assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
+    // an anchor that no longer resolves (unnamed shape, wrong block) comes back unchanged
+    let mut gone = at.clone();
+    gone.block = 77;
+    gone.shape = None;
+    let lost = [Op::SetBits {
+        at: gone,
+        field: Field::AlphaFlags,
+        mask: 1,
+        value: 0,
+        base: 1,
+    }];
+    assert_eq!(keep_mine(&b, &lost, 0).unwrap(), lost.to_vec());
+}
+
+#[test]
+fn keep_mine_reads_the_current_texture_path_and_extra() {
+    use nif::extra::ExtraValue::Str;
+    let b = scenes::one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]);
+    let m = read_model(&b).unwrap();
+    let Op::SetTexturePath { at, slot, path, .. } = path_op(&m, 0, 1, "textures\\z.dds") else {
+        unreachable!()
+    };
+    let stale = Op::SetTexturePath {
+        at,
+        slot,
+        path,
+        base: "textures\\old.dds".into(),
+    };
+    let kept = keep_mine(&b, &[stale], 0).unwrap();
+    assert!(matches!(&kept[0], Op::SetTexturePath { base, .. } if base == "textures\\a_n.dds"));
+    assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
+
+    let b = scenes::root_extras();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, None, root_extra("BODYTRI", "NiStringExtraData")).unwrap();
+    let stale = Op::EditExtra {
+        at,
+        value: Str("new".into()),
+        base: Str("other".into()),
+    };
+    let kept = keep_mine(&b, &[stale], 0).unwrap();
+    assert!(matches!(&kept[0], Op::EditExtra { base: Str(s), .. } if s == "a\r\nb"));
+    assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
+}
+
+#[test]
+fn take_source_drops_the_op() {
+    let at = Anchor {
+        block: 0,
+        kind: String::new(),
+        shape: None,
+        role: Role::Shape,
+    };
+    let ops = [
+        gloss(&at, 1.0, 2.0),
+        gloss(&at, 3.0, 4.0),
+        gloss(&at, 5.0, 6.0),
+    ];
+    assert_eq!(take_source(&ops, 1), vec![ops[0].clone(), ops[2].clone()]);
+}
+
+#[test]
+fn rebase_updates_reanchored_blocks() {
+    let b = scenes::alpha_shape(0x12EC);
+    let mut at = alpha_anchor(&b);
+    let real = at.block;
+    at.block = 99; // the block moved in the new source
+    let op = Op::SetField {
+        at,
+        field: Field::AlphaThreshold,
+        value: Value::U8(10),
+        base: Value::U8(128),
+    };
+    let (ops, outcomes) = rebase(&b, &[op]).unwrap();
+    assert_eq!(outcomes, vec![Outcome::ReAnchored { block: real }]);
+    assert!(matches!(&ops[0], Op::SetField { at, .. } if at.block == real));
+    assert_eq!(rebase(&b, &ops).unwrap().1, vec![Outcome::Applied]); // a second run is plain Applied
+}
