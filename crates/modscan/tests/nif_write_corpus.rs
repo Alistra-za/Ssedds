@@ -527,7 +527,8 @@ fn real_file_edit_samples() {
 }
 
 /// SLSF2 flag census per (BSLightingShaderProperty shader type, CS TruePBR bit 23). Research for v2 A17; asserts only
-/// that files were found. Env: SDC_ACHERUS (winners) and SDC_BSA (one archive); output also to the scratchpad file.
+/// that files were found. Env: SDC_ACHERUS (winners) and SDC_BSA (one archive); output also to slsf-census.txt in the
+/// system temp folder.
 #[cfg(windows)]
 #[test]
 #[ignore]
