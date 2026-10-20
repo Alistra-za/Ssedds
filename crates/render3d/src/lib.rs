@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod cache;
 pub mod cbuffer;
 pub mod compile;
+pub mod composite;
 pub mod cs_settings;
 pub mod debug;
 pub mod device;
@@ -23,6 +24,7 @@ pub mod source;
 pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
+pub use composite::Composite;
 pub use debug::{Availability, DebugOutput};
 pub use material::{classify, pbr_bit_meaning, pbr_flags, Bound, EditKind, Pipe};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
@@ -356,6 +358,12 @@ pub struct Renderer {
     debug: DebugOutput,
     /// [`Renderer::set_deferred`]: opaque shapes draw the DEFERRED permutation into the 8 CS render targets.
     deferred: bool,
+    /// CS's DeferredCompositeCS for deferred frames (v2 D4); rebuilt when its defines change, from the disk cache.
+    composite: Option<Composite>,
+    /// Why deferred mode is off ("Deferred preview unavailable: …"), if a composite failed.
+    deferred_error: Option<String>,
+    /// Successful composite builds (test hook).
+    composite_builds: usize,
 }
 
 impl Renderer {
@@ -454,6 +462,9 @@ impl Renderer {
             overrides: BTreeMap::new(),
             debug: DebugOutput::Lit,
             deferred: false,
+            composite: None,
+            deferred_error: None,
+            composite_builds: 0,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -648,6 +659,7 @@ impl Renderer {
         self.sources = SourceSet::new(shaders.root.clone());
         self.shaders = shaders;
         self.programs.clear();
+        self.composite = None;
         self.old_ll = std::cell::OnceCell::new();
         self.coverage.clear();
         // The LL generation may have changed, so the display encode (follows linear_lighting) must be re-derived.
@@ -697,11 +709,25 @@ impl Renderer {
     /// built-ins stay forward. The frame shows RT0. A changed value re-permutes every shape (`begin_all`): the old
     /// draws stay on screen while programs compile. Err, with nothing changed, when the shaders have no
     /// `Lighting.hlsl`; the same value is always Ok and does nothing.
+    ///
+    /// Turning it on first builds CS's composite (v2 D4) synchronously (the disk cache makes later builds instant). If
+    /// that fails (no or a broken `DeferredCompositeCS.hlsl`, no typed UAV load) the frame stays forward and the Err
+    /// is "Deferred preview unavailable: <error>", also kept as [`Renderer::deferred_error`]. Off keeps the composite.
     pub fn set_deferred(&mut self, on: bool) -> Result<(), String> {
         if on == self.deferred {
             return Ok(());
         }
         self.sources.get(Path::new("Lighting.hlsl"))?;
+        if on && self.composite_stale() {
+            if let Err(e) = self.make_composite() {
+                let n = format!("Deferred preview unavailable: {e}");
+                self.deferred_error = Some(n.clone());
+                return Err(n);
+            }
+        }
+        if on {
+            self.deferred_error = None;
+        }
         self.deferred = on;
         self.begin_all();
         Ok(())
@@ -709,6 +735,59 @@ impl Renderer {
 
     pub fn deferred(&self) -> bool {
         self.deferred
+    }
+
+    /// Why deferred mode is off after a composite failure (the one notice; cleared by a successful `set_deferred(true)`).
+    pub fn deferred_error(&self) -> Option<&str> {
+        self.deferred_error.as_deref()
+    }
+
+    /// The composite's defines: CSHADER (CS's compute stage define, ColorManagement.hlsli:189) + the feature defines.
+    fn composite_defines(&self) -> Vec<String> {
+        std::iter::once("CSHADER".to_string())
+            .chain(self.features.iter().cloned())
+            .collect()
+    }
+
+    fn composite_stale(&self) -> bool {
+        self.composite
+            .as_ref()
+            .is_none_or(|c| c.defines != self.composite_defines())
+    }
+
+    fn make_composite(&mut self) -> Result<(), String> {
+        self.composite = None;
+        let c = Composite::new(
+            &self.gpu,
+            &self.sources,
+            &self.composite_defines(),
+            &self.cache_dir,
+        )?;
+        self.composite = Some(c);
+        self.composite_builds += 1;
+        Ok(())
+    }
+
+    /// A composite that fails in `render` (after a features, settings or shaders change): deferred mode goes off with
+    /// the notice and every shape re-permutes forward. Never an Err, never a blank frame.
+    fn composite_failed(&mut self, e: String) {
+        perf_log::emit("composite_failed", serde_json::json!({ "error": &e }));
+        self.composite = None;
+        self.deferred = false;
+        self.deferred_error = Some(format!("Deferred preview unavailable: {e}"));
+        self.begin_all();
+    }
+
+    /// Test hook: the current composite.
+    #[doc(hidden)]
+    pub fn composite(&self) -> Option<&Composite> {
+        self.composite.as_ref()
+    }
+
+    /// Test hook: successful composite builds since this renderer was made.
+    #[doc(hidden)]
+    pub fn composite_builds(&self) -> usize {
+        self.composite_builds
     }
 
     /// `m` draws the DEFERRED permutation: deferred mode, not a built-in, opaque.
@@ -1956,9 +2035,33 @@ impl Renderer {
     /// `render` binds only the target's RTVs and DSV (no SRV or UAV of it), and rebinds them every frame.
     #[doc(hidden)]
     pub fn drop_target(&mut self) {
-        // SAFETY: plain context call with no pointers.
-        unsafe { self.gpu.ctx.OMSetRenderTargets(None, None) };
+        // The composite binds the target's SRVs and UAV to the CS stage (and unbinds them); null them here too.
+        let srvs: [Option<ID3D11ShaderResourceView>; 20] = Default::default();
+        let uavs: [Option<windows::Win32::Graphics::Direct3D11::ID3D11UnorderedAccessView>; 8] =
+            Default::default();
+        // SAFETY: plain context calls; the arrays are live locals of the length passed.
+        unsafe {
+            self.gpu.ctx.OMSetRenderTargets(None, None);
+            self.gpu.ctx.CSSetShaderResources(0, Some(&srvs));
+            self.gpu
+                .ctx
+                .CSSetUnorderedAccessViews(0, 8, Some(uavs.as_ptr()), None);
+        }
         self.target = None;
+    }
+
+    /// Test hook: views bound to the compute stage (SRVs 0..20 + UAVs 0..8).
+    #[doc(hidden)]
+    pub fn bound_cs_views(&self) -> usize {
+        let mut srvs: [Option<ID3D11ShaderResourceView>; 20] = Default::default();
+        let mut uavs: [Option<windows::Win32::Graphics::Direct3D11::ID3D11UnorderedAccessView>; 8] =
+            Default::default();
+        // SAFETY: the out-arrays are live locals; the views they receive are released on drop.
+        unsafe {
+            self.gpu.ctx.CSGetShaderResources(0, Some(&mut srvs));
+            self.gpu.ctx.CSGetUnorderedAccessViews(0, Some(&mut uavs));
+        }
+        srvs.iter().filter(|v| v.is_some()).count() + uavs.iter().filter(|v| v.is_some()).count()
     }
 
     /// Test hook: how many render target views the immediate context has bound.
@@ -2081,6 +2184,12 @@ impl Renderer {
     pub fn render(&mut self, scene: &Scene, w: u32, h: u32) -> Result<Vec<u8>, String> {
         let t0 = std::time::Instant::now();
         let (w, h) = (w.max(1), h.max(1));
+        // Features, settings or shaders changed the composite's defines: rebuild (disk cache), or fall back forward.
+        if self.deferred && self.composite_stale() {
+            if let Err(e) = self.make_composite() {
+                self.composite_failed(e);
+            }
+        }
         if self
             .target
             .as_ref()
@@ -2149,81 +2258,105 @@ impl Renderer {
             // RT0 alone until a DEFERRED draw: a forward program must never see RT1-7 (its PS_OUTPUT writes
             // MotionVectors and NormalGlossiness too, Lighting.hlsl:303-308).
             let mut bound_all = false;
-            for id in &self.draw_order {
-                let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
-                    continue;
-                };
-                let want = s.deferred && target.deferred();
-                if want != bound_all {
-                    let rtvs = if want {
-                        target.rtvs()
-                    } else {
-                        vec![Some(target.rtv.clone())]
-                    };
-                    ctx.OMSetRenderTargets(Some(&rtvs), &target.dsv);
-                    bound_all = want;
-                }
-                uploads += if self.reference_writer {
-                    {
-                        // Test hook only (P0's reference writer): recomputed every frame.
-                        let fv = values_for(
+            // Opaque, then CS's composite into RT0 (deferred Lit frames only; debug views write psout.Diffuse
+            // alone), then blended draws forward on top, as in game. draw_order is already opaque-then-blended.
+            // shortcut: pixels no DEFERRED draw wrote (clear, backdrop, pending forward draws) see RT4 = 0, which
+            // is bit-exact under Linear Lighting but a GameGamma round trip without it; if D6b shows drift, draw
+            // the backdrop after the composite with depth_states[1].
+            for pass in [false, true] {
+                if pass && target.deferred() && self.debug == DebugOutput::Lit {
+                    if let Some(c) = self.composite.as_mut() {
+                        let fv = cs_settings::feature_data(
                             &self.settings,
+                            &c.fields(),
                             self.features_on,
-                            self.head_part,
-                            &s.fields,
-                            &s.built,
+                            false,
                         );
-                        s.update_by_name(gpu, scene, &view, &fv)
+                        c.write_scene(gpu, scene, &view, &fv);
+                        c.dispatch(gpu, target)?;
+                        ctx.OMSetRenderTargets(Some(&[Some(target.rtv.clone())]), &target.dsv);
+                        bound_all = false;
                     }
-                } else {
-                    s.update(gpu, &inputs)
-                };
-                ctx.IASetInputLayout(&s.mesh.layout);
-                for (slot, (b, stride)) in s.mesh.streams.iter().enumerate() {
-                    ctx.IASetVertexBuffers(
-                        slot as u32,
-                        1,
-                        Some(&Some(b.clone())),
-                        Some(stride),
-                        Some(&0),
+                }
+                for id in &self.draw_order {
+                    let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
+                        continue;
+                    };
+                    if s.blend != pass {
+                        continue;
+                    }
+                    let want = s.deferred && target.deferred();
+                    if want != bound_all {
+                        let rtvs = if want {
+                            target.rtvs()
+                        } else {
+                            vec![Some(target.rtv.clone())]
+                        };
+                        ctx.OMSetRenderTargets(Some(&rtvs), &target.dsv);
+                        bound_all = want;
+                    }
+                    uploads += if self.reference_writer {
+                        {
+                            // Test hook only (P0's reference writer): recomputed every frame.
+                            let fv = values_for(
+                                &self.settings,
+                                self.features_on,
+                                self.head_part,
+                                &s.fields,
+                                &s.built,
+                            );
+                            s.update_by_name(gpu, scene, &view, &fv)
+                        }
+                    } else {
+                        s.update(gpu, &inputs)
+                    };
+                    ctx.IASetInputLayout(&s.mesh.layout);
+                    for (slot, (b, stride)) in s.mesh.streams.iter().enumerate() {
+                        ctx.IASetVertexBuffers(
+                            slot as u32,
+                            1,
+                            Some(&Some(b.clone())),
+                            Some(stride),
+                            Some(&0),
+                        );
+                    }
+                    ctx.IASetIndexBuffer(&s.mesh.index, DXGI_FORMAT_R16_UINT, 0);
+                    ctx.VSSetShader(&s.vs, None);
+                    ctx.PSSetShader(&s.ps, None);
+                    for cb in &s.vs_cbs {
+                        ctx.VSSetConstantBuffers(cb.slot, Some(&[Some(cb.buffer.clone())]));
+                    }
+                    for cb in &s.ps_cbs {
+                        ctx.PSSetConstantBuffers(cb.slot, Some(&[Some(cb.buffer.clone())]));
+                    }
+                    for (reg, v) in &s.srvs {
+                        ctx.PSSetShaderResources(*reg, Some(&[Some(v.clone())]));
+                    }
+                    for slot in &s.samplers {
+                        ctx.PSSetSamplers(*slot, Some(&[Some(self.sampler.clone())]));
+                    }
+                    ctx.RSSetState(if s.pipe.cull_back {
+                        &self.raster_back
+                    } else {
+                        &self.raster
+                    });
+                    ctx.OMSetDepthStencilState(
+                        &self.depth_states[s.pipe.z_test as usize | (s.pipe.z_write as usize) << 1],
+                        0,
                     );
+                    // `blend` (alpha bit 0) gates the draw; a built-in's FIXED pair is 6/7 either way.
+                    if s.blend {
+                        let pair = s.pipe.blend.unwrap_or((6, 7));
+                        ctx.OMSetBlendState(
+                            blend_state(gpu, &mut self.blend_states, pair)?,
+                            None,
+                            0xffff_ffff,
+                        );
+                    } else {
+                        ctx.OMSetBlendState(None, None, 0xffff_ffff);
+                    }
+                    ctx.DrawIndexed(s.mesh.index_count, 0, 0);
                 }
-                ctx.IASetIndexBuffer(&s.mesh.index, DXGI_FORMAT_R16_UINT, 0);
-                ctx.VSSetShader(&s.vs, None);
-                ctx.PSSetShader(&s.ps, None);
-                for cb in &s.vs_cbs {
-                    ctx.VSSetConstantBuffers(cb.slot, Some(&[Some(cb.buffer.clone())]));
-                }
-                for cb in &s.ps_cbs {
-                    ctx.PSSetConstantBuffers(cb.slot, Some(&[Some(cb.buffer.clone())]));
-                }
-                for (reg, v) in &s.srvs {
-                    ctx.PSSetShaderResources(*reg, Some(&[Some(v.clone())]));
-                }
-                for slot in &s.samplers {
-                    ctx.PSSetSamplers(*slot, Some(&[Some(self.sampler.clone())]));
-                }
-                ctx.RSSetState(if s.pipe.cull_back {
-                    &self.raster_back
-                } else {
-                    &self.raster
-                });
-                ctx.OMSetDepthStencilState(
-                    &self.depth_states[s.pipe.z_test as usize | (s.pipe.z_write as usize) << 1],
-                    0,
-                );
-                // `blend` (alpha bit 0) gates the draw; a built-in's FIXED pair is 6/7 either way.
-                if s.blend {
-                    let pair = s.pipe.blend.unwrap_or((6, 7));
-                    ctx.OMSetBlendState(
-                        blend_state(gpu, &mut self.blend_states, pair)?,
-                        None,
-                        0xffff_ffff,
-                    );
-                } else {
-                    ctx.OMSetBlendState(None, None, 0xffff_ffff);
-                }
-                ctx.DrawIndexed(s.mesh.index_count, 0, 0);
             }
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
             ctx.OMSetDepthStencilState(None, 0);

@@ -115,9 +115,11 @@ fn recreating_the_target_unbinds_the_old_views_first() {
     r.set_deferred(true).unwrap();
     r.render(&Scene::neutral(), 64, 64).unwrap();
     assert!(r.bound_rtvs() > 0, "a frame leaves its views bound");
+    assert_eq!(r.bound_cs_views(), 0, "the composite unbinds its views");
     r.drop_target();
     assert!(r.target_dims().is_empty(), "the old target is gone");
     assert_eq!(r.bound_rtvs(), 0);
+    assert_eq!(r.bound_cs_views(), 0);
     r.render(&Scene::neutral(), 64, 64).unwrap();
     assert_eq!(r.target_dims(), vec![(64, 64); 10]);
 }
@@ -157,8 +159,18 @@ fn debug_views_still_render_in_deferred_mode() {
         src.replace("    return psout ;", "    return psout;"),
     )
     .unwrap();
+    std::fs::copy(
+        standin_root().join("DeferredCompositeCS.hlsl"),
+        shaders.path().join("DeferredCompositeCS.hlsl"),
+    )
+    .unwrap();
     let cache = tempfile::tempdir().unwrap();
-    let mut r = renderer_at(shaders.path(), cache.path(), FLAT);
+    // The composite adds Specular to RT0 in Lit; the debug colours below prove debug views skip it (v2 D4).
+    let mut r = renderer_at(
+        shaders.path(),
+        cache.path(),
+        &[FLAT, &["STANDIN_COMPOSITE_ADD"]].concat(),
+    );
     assert!(r.debug_supported());
     let mut s = plane_shape(0, IDENT, [0.0; 3], 1);
     s.material.set_slot_raw(0, r"textures\sdc\d.dds");
@@ -254,7 +266,10 @@ fn installed_cs_deferred_plane_smoke() {
         rep.errors.is_empty() && rep.compile_errors.is_empty(),
         "{rep:?}"
     );
+    let t = std::time::Instant::now();
     r.set_deferred(true).unwrap();
+    println!("set_deferred(true) cold: {:?}", t.elapsed());
+    assert_eq!(r.deferred_error(), None);
     assert_eq!(r.shapes()[0].status, ShapeStatus::Drawing);
     assert!(has_deferred(&mut r, 0));
     r.render(&Scene::neutral(), 1600, 900).unwrap();
@@ -262,6 +277,18 @@ fn installed_cs_deferred_plane_smoke() {
         r.render(&Scene::neutral(), 1600, 900).unwrap();
         println!("timing {:?}", r.last_timing());
     }
+    println!(
+        "composite builds {}, unbound {:?}",
+        r.composite_builds(),
+        r.composite().map(|c| &c.unbound)
+    );
+    // Warm: a fresh renderer on the same disk cache.
+    let fp = render3d::locate::fingerprint(std::path::Path::new(&shaders), None).unwrap();
+    let mut w = Renderer::new(fp, cache.path().to_path_buf()).unwrap();
+    w.load_parsed(&parsed, &|_| None);
+    let t = std::time::Instant::now();
+    w.set_deferred(true).unwrap();
+    println!("set_deferred(true) warm: {:?}", t.elapsed());
     let n = px(&r.read_mrt(2).unwrap(), 1600, 800, 450);
     println!("RT2 centre {n:?}");
     assert!(n.iter().any(|v| *v != 0.0), "NormalGlossiness written");

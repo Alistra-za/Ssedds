@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Direct3D::Fxc::{
 };
 use windows::Win32::Graphics::Direct3D::{
     ID3DBlob, D3D_CT_CBUFFER, D3D_SHADER_MACRO, D3D_SIT_CBUFFER, D3D_SIT_SAMPLER,
-    D3D_SIT_STRUCTURED, D3D_SIT_TEXTURE, D3D_SRV_DIMENSION_BUFFER,
+    D3D_SIT_STRUCTURED, D3D_SIT_TEXTURE, D3D_SIT_UAV_RWTYPED, D3D_SRV_DIMENSION_BUFFER,
     D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE, D3D_SVC_STRUCT, D3D_SVT_BOOL,
     D3D_SVT_FLOAT, D3D_SVT_INT, D3D_SVT_UINT,
 };
@@ -61,6 +61,14 @@ pub struct Reflection {
     pub samplers: Vec<(String, u32)>,
     /// (semantic, index, component mask).
     pub inputs: Vec<(String, u32, u32)>,
+    /// Typed UAVs (RWTexture*): (name, register). Compute shaders only (v2 D4).
+    // No REFLECT_VERSION bump for `uavs` and `threads`: no cs_5_0 entry was ever cached, and VS/PS have neither
+    // (an older entry reads them as empty / [0; 3], which is right).
+    #[serde(default)]
+    pub uavs: Vec<(String, u32)>,
+    /// numthreads; [0; 3] for VS/PS.
+    #[serde(default)]
+    pub threads: [u32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -450,6 +458,8 @@ pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
                 cb_slots.insert(name, b.BindPoint);
             } else if b.Type == D3D_SIT_SAMPLER {
                 out.samplers.push((name, b.BindPoint));
+            } else if b.Type == D3D_SIT_UAV_RWTYPED {
+                out.uavs.push((name, b.BindPoint));
             } else if let Some(kind) = srv_kind(&b) {
                 out.srvs.push((name, b.BindPoint, kind));
             }
@@ -506,7 +516,10 @@ pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
             out.inputs
                 .push((pcstr(p.SemanticName), p.SemanticIndex, p.Mask as u32));
         }
+        let [x, y, z] = &mut out.threads;
+        r.GetThreadGroupSize(Some(x), Some(y), Some(z));
     }
+    out.uavs.sort_by_key(|s| s.1);
     out.cbuffers.sort_by_key(|c| c.slot);
     out.srvs.sort_by_key(|s| s.1);
     out.samplers.sort_by_key(|s| s.1);

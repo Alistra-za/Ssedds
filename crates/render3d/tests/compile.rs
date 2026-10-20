@@ -490,3 +490,39 @@ fn feature_data_writes_reflected_kinds() {
     assert_eq!(word("skinParams", 0), 0.7f32.to_bits());
     assert_eq!(word("skinParams", 3), 1.0f32.to_bits());
 }
+
+/// v2 D4: a compute shader reflects its typed UAVs and thread-group size (the stand-in composite).
+#[test]
+fn composite_reflects_uavs_and_threads() {
+    let root = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/standin"
+    ));
+    let src = SourceSet::new(root)
+        .get(Path::new("DeferredCompositeCS.hlsl"))
+        .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let d = |names: &[&str]| {
+        Defines(
+            names
+                .iter()
+                .map(|n| (n.to_string(), "1".to_string()))
+                .collect(),
+        )
+    };
+    let c = render3d::compile::compile(&src, &d(&["CSHADER"]), "cs_5_0", cache.path()).unwrap();
+    assert_eq!(c.reflection.threads, [8, 8, 1]);
+    assert_eq!(
+        c.reflection.uavs,
+        [
+            ("MainRW".to_string(), 0),
+            ("NormalTAAMaskSpecularMaskRW".to_string(), 1)
+        ]
+    );
+    let add = d(&["CSHADER", "STANDIN_COMPOSITE_ADD"]);
+    let c = render3d::compile::compile(&src, &add, "cs_5_0", cache.path()).unwrap();
+    let regs: Vec<u32> = c.reflection.srvs.iter().map(|s| s.1).collect();
+    for r in [0, 2, 4] {
+        assert!(regs.contains(&r), "t{r} in {regs:?}");
+    }
+}

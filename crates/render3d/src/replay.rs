@@ -3,6 +3,7 @@
 //! Ruling D-P2: the captured IA + mesh.vb/ib are drawn as they are; the VS defines are derived from the PS list and
 //! the IA ([`vs_defines`]) and checked against the compiled VS input signature.
 use crate::compile::compile;
+use crate::composite::Composite;
 use crate::device::{Gpu, Target, MRT_FORMATS};
 use crate::draw::create_program;
 use crate::golden;
@@ -63,6 +64,103 @@ pub struct Replay {
     pub before: Vec<Vec<f32>>,
     /// mrt.json rt formats, index order (e.g. "R16G16B16A16_FLOAT").
     pub formats: Vec<String>,
+    /// The subject's composite.json (D4), if it has one.
+    pub composite: Option<ReplayComposite>,
+}
+
+/// The deferred composite dispatch of a subject's frame (composite.json in the subject dir).
+pub struct ReplayComposite {
+    /// "cs_b5" → bytes of composite.json cbuffers[].file (relative to the subject dir: "../composite/cb_cs_b5.bin").
+    pub cbuffers: HashMap<String, Vec<u8>>,
+    /// composite.json srvs (name, bind), "null" ones included.
+    pub srvs: Vec<(String, u32)>,
+    pub defines_inferred: Vec<String>,
+    pub thread_groups: [u32; 3],
+    /// mainrw.files [before, after] over the crop (mainrw.crop must equal mrt.json's).
+    pub before: Vec<f32>,
+    pub after: Vec<f32>,
+}
+
+/// composite.json of `dir`, None when there is none.
+fn load_composite(
+    dir: &Path,
+    crop: [u32; 4],
+    px: usize,
+) -> Result<Option<ReplayComposite>, String> {
+    let cp = dir.join("composite.json");
+    if !cp.exists() {
+        return Ok(None);
+    }
+    let c = json(&cp)?;
+    let err = |m: &str| format!("{}: {m}", cp.display());
+    let list = |k: &str| {
+        c.get(k)
+            .and_then(Value::as_array)
+            .ok_or_else(|| err(&format!("no {k}")))
+    };
+    let mut cbuffers = HashMap::new();
+    for cb in list("cbuffers")? {
+        let (Some(bind), Some(file)) = (
+            cb.get("bind").and_then(u32_of),
+            cb.get("file").and_then(Value::as_str),
+        ) else {
+            return Err(err("a cbuffer without bind or file"));
+        };
+        cbuffers.insert(format!("cs_b{bind}"), read(&dir.join(file))?);
+    }
+    let srvs = list("srvs")?
+        .iter()
+        .map(|s| {
+            Some((
+                s.get("name")?.as_str()?.to_string(),
+                u32_of(s.get("bind")?)?,
+            ))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| err("an srv without name or bind"))?;
+    let defines_inferred = list("definesInferred")?
+        .iter()
+        .map(|d| d.as_str().map(String::from))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| err("definesInferred must be strings"))?;
+    let thread_groups = c
+        .get("threadGroups")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() == 3)
+        .and_then(|a| Some([u32_of(&a[0])?, u32_of(&a[1])?, u32_of(&a[2])?]))
+        .ok_or_else(|| err("bad threadGroups"))?;
+    let m = c.get("mainrw").ok_or_else(|| err("no mainrw"))?;
+    let mcrop = m
+        .get("crop")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() == 4)
+        .and_then(|a| {
+            Some([
+                u32_of(&a[0])?,
+                u32_of(&a[1])?,
+                u32_of(&a[2])?,
+                u32_of(&a[3])?,
+            ])
+        });
+    if mcrop != Some(crop) {
+        return Err(err(&format!(
+            "mainrw crop {mcrop:?} is not mrt.json's {crop:?}"
+        )));
+    }
+    let files = m
+        .get("files")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() == 2)
+        .and_then(|a| Some([a[0].as_str()?, a[1].as_str()?]))
+        .ok_or_else(|| err("mainrw files must be [before, after]"))?;
+    Ok(Some(ReplayComposite {
+        cbuffers,
+        srvs,
+        defines_inferred,
+        thread_groups,
+        before: golden::read_f32(&dir.join(files[0]), px)?,
+        after: golden::read_f32(&dir.join(files[1]), px)?,
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -525,6 +623,7 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         blended,
         before,
         formats,
+        composite: load_composite(dir, crop, px)?,
     })
 }
 
@@ -581,7 +680,7 @@ pub fn vs_defines(ps: &[String], mesh: &ReplayMesh) -> Vec<String> {
 }
 
 /// "K=V" → (K, V); bare K → (K, "1") as in permutation.rs.
-fn to_defines<'a>(list: impl IntoIterator<Item = &'a String>) -> Defines {
+pub(crate) fn to_defines<'a>(list: impl IntoIterator<Item = &'a String>) -> Defines {
     Defines(
         list.into_iter()
             .map(|d| match d.split_once('=') {
@@ -863,13 +962,71 @@ impl Renderer {
         let mrt = (0..bound)
             .map(|i| target.read_f32(gpu, i, r.crop))
             .collect::<Result<Vec<_>, _>>();
+        let main = match (&r.composite, deferred, &mrt) {
+            (Some(rc), true, Ok(_)) => Some(self.replay_composite(r, rc, &target, &mut warnings)),
+            _ => None,
+        };
         // SAFETY: plain context call; `render` rebinds everything per frame.
         unsafe { gpu.ctx.ClearState() };
         Ok(ReplayOut {
             mrt: mrt?,
-            main: None,
+            main: main.transpose()?,
             warnings,
         })
+    }
+
+    /// The capture's composite on `target` after the draw: compiled with CSHADER, the inferred defines and the PS
+    /// list's ENABLE_LL / CS_GAME_GAMMA (not inferable from reflection, and the result depends on them), the captured
+    /// cbuffers, RT0's crop re-seeded from mainrw_before. Returns MainRW over the crop.
+    fn replay_composite(
+        &self,
+        r: &Replay,
+        rc: &ReplayComposite,
+        target: &Target,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<f32>, String> {
+        let gpu = &self.gpu;
+        let mut defines = vec!["CSHADER".to_string()];
+        defines.extend(rc.defines_inferred.iter().cloned());
+        defines.extend(
+            r.defines
+                .first()
+                .into_iter()
+                .flatten()
+                .filter(|d| *d == "ENABLE_LL" || d.starts_with("CS_GAME_GAMMA"))
+                .cloned(),
+        );
+        let mut c = Composite::new(gpu, &self.sources, &defines, &self.cache_dir)
+            .map_err(|e| format!("composite: {e}"))?;
+        let reflected: BTreeSet<(String, u32)> = c
+            .reflection
+            .srvs
+            .iter()
+            .map(|s| (s.0.clone(), s.1))
+            .collect();
+        let bound: BTreeSet<(String, u32)> = rc.srvs.iter().cloned().collect();
+        if reflected != bound {
+            return Err(format!(
+                "composite reflects {reflected:?}, the capture bound {bound:?}"
+            ));
+        }
+        let layouts = c.reflection.cbuffers.clone();
+        for (cb, l) in c.cbs.iter_mut().zip(&layouts) {
+            let raw = rc.cbuffers.get(&format!("cs_b{}", l.slot)).ok_or_else(|| {
+                format!("cb_cs_b{}.bin missing ({} is reflected)", l.slot, l.name)
+            })?;
+            cb.buffer = buffer(gpu, &cb_bytes(raw, l.size), D3D11_BIND_CONSTANT_BUFFER)?;
+        }
+        target.seed_f32(gpu, 0, r.crop, &rc.before)?;
+        let g = c.groups(target.width, target.height);
+        if g != rc.thread_groups {
+            warnings.push(format!(
+                "composite: {g:?} thread groups, the capture dispatched {:?}",
+                rc.thread_groups
+            ));
+        }
+        c.dispatch(gpu, target)?;
+        target.read_f32(gpu, 0, r.crop)
     }
 }
 

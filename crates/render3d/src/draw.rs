@@ -130,7 +130,7 @@ pub struct FrameInputs<'a> {
     pub view_changed: bool,
 }
 
-fn upload(gpu: &Gpu, cb: &Cb) {
+pub(crate) fn upload(gpu: &Gpu, cb: &Cb) {
     // SAFETY: the buffer was created with exactly `bytes().len()` bytes (≥ 16).
     unsafe {
         gpu.ctx

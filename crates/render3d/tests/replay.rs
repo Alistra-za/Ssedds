@@ -329,6 +329,96 @@ fn replay_deferred_reads_eight_targets() {
     assert_eq!(fwd.mrt[0], out.mrt[0]);
 }
 
+/// [`write_fixture_deferred`] plus the subject-level composite.json in the golden layout (D4): the stand-in composite
+/// with ADD, b5 BufferDim = (8, 8, 1/8, 1/8), MainRW seeded (0.25, 0.5, 0.75, 0.5) over the crop.
+fn write_fixture_composite(dir: &Path) {
+    write_fixture_deferred(dir);
+    let srv = |name: &str, bind: u32, ty: &str| json!({"name": name, "bind": bind, "type": ty});
+    put(
+        dir,
+        "composite.json",
+        &json!({
+            "threadGroups": [1, 1, 1],
+            "srvs": [srv("SpecularTexture", 0, "Texture2D"), srv("NormalRoughnessTexture", 2, "Texture2D"),
+                     srv("DepthTexture", 4, "null")],
+            "uavs": [{"name": "MainRW", "bind": 0}],
+            "cbuffers": [{"name": "SharedData", "bind": 5, "file": "cb_cs_b5.bin"}],
+            "definesInferred": ["STANDIN_COMPOSITE_ADD"],
+            "mainrw": {"crop": [2, 2, 4, 4], "files": ["mainrw_before.f32", "mainrw_after.f32"]},
+        }),
+    );
+    fs::write(dir.join("cb_cs_b5.bin"), f32s(&[8.0, 8.0, 0.125, 0.125])).unwrap();
+    let before = f32s(&[0.25, 0.5, 0.75, 0.5].repeat(16));
+    fs::write(dir.join("mainrw_before.f32"), &before).unwrap();
+    fs::write(dir.join("mainrw_after.f32"), &before).unwrap();
+}
+
+#[test]
+fn replay_deferred_composites_main() {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_composite(d.path());
+    let r = load_fixture(d.path()).unwrap();
+    let rc = r.composite.as_ref().unwrap();
+    assert_eq!(
+        rc.cbuffers.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["cs_b5".to_string()])
+    );
+    assert_eq!(rc.before.len(), 64);
+    assert_eq!(rc.thread_groups, [1, 1, 1]);
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let out = ren.render_replay(&r, true).unwrap();
+    let main = out.main.unwrap();
+    assert_eq!(main.len(), 64);
+    for p in main.chunks(4) {
+        assert_eq!(p, [0.75, 0.75, 0.875, 1.0]);
+    }
+    for p in out.mrt[0].chunks(4) {
+        assert_eq!(p, [0.75, 0.25, 0.5, 1.0], "mrt[0] is the pre-composite RT0");
+    }
+    assert!(ren.render_replay(&r, false).unwrap().main.is_none());
+}
+
+#[test]
+fn replay_composite_refuses_mismatched_fixtures() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let replay_err = |ren: &mut Renderer, dir: &Path| -> String {
+        match load_fixture(dir).and_then(|r| ren.render_replay(&r, true)) {
+            Ok(_) => panic!("should fail"),
+            Err(e) => e,
+        }
+    };
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_composite(d.path());
+    fs::remove_file(d.path().join("cb_cs_b5.bin")).unwrap();
+    let e = replay_err(&mut ren, d.path());
+    assert!(e.contains("cb_cs_b5"), "{e}");
+
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_composite(d.path());
+    edit_json(d.path(), "composite.json", &|v| {
+        v["srvs"].as_array_mut().unwrap().pop();
+    });
+    let e = replay_err(&mut ren, d.path());
+    assert!(e.contains("composite reflects"), "{e}");
+
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_composite(d.path());
+    edit_json(d.path(), "composite.json", &|v| {
+        v["mainrw"]["crop"] = json!([0, 0, 4, 4])
+    });
+    let e = replay_err(&mut ren, d.path());
+    assert!(e.contains("composite.json"), "{e}");
+
+    // D3's fixture has no composite.json: no main.
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_deferred(d.path());
+    let r = load_fixture(d.path()).unwrap();
+    assert!(r.composite.is_none());
+    assert!(ren.render_replay(&r, true).unwrap().main.is_none());
+}
+
 #[test]
 #[ignore]
 fn replay_real_fixture_smoke() {
@@ -392,6 +482,41 @@ fn replay_real_fixture_smoke() {
                 );
             }
             println!("{s} deferred: warnings {:?}", out.warnings);
+            // D4: the composite's MainRW against mainrw_after, over the mask and over the part of it where RT0
+            // at subject time still equals mainrw_before (later overdraw excluded).
+            let rc = r.composite.as_ref().expect("composite.json");
+            let main = out.main.as_ref().expect("composite ran");
+            assert_eq!(main.len(), n * 4, "{s}");
+            assert!(main.iter().all(|v| v.is_finite()), "{s}");
+            let after = golden::read_f32(&dir.join("mainrw_after.f32"), n * 4).unwrap();
+            let (_, max) = noise.limit(&name, "mainrw_after.f32").unwrap();
+            let mrt0 = golden::read_f32(&dir.join("mrt0.f32"), n * 4).unwrap();
+            let clean: Vec<bool> = (0..n)
+                .map(|p| {
+                    mask[p] && bits(&mrt0[4 * p..4 * p + 4]) == bits(&rc.before[4 * p..4 * p + 4])
+                })
+                .collect();
+            for (label, m) in [("mask", &mask), ("mask & mrt0 == mainrw_before", &clean)] {
+                let d = golden::diff_tol(
+                    main,
+                    &after,
+                    m,
+                    golden::format_tol("R16G16B16A16_FLOAT").unwrap(),
+                    max,
+                );
+                let count = m.iter().filter(|x| **x).count();
+                let identical = (0..n)
+                    .filter(|&p| {
+                        m[p] && bits(&main[4 * p..4 * p + 4]) == bits(&after[4 * p..4 * p + 4])
+                    })
+                    .count();
+                let changed = (0..n)
+                    .filter(|&p| m[p] && main[4 * p..4 * p + 4] != rc.before[4 * p..4 * p + 4])
+                    .count();
+                println!(
+                    "{s} composite [{label}]: {d:?} (noise max {max}); bit-identical {identical} of {count}; changed from before {changed}"
+                );
+            }
             continue;
         }
         assert_eq!(out.mrt[0].len(), n * 4, "{s}");
