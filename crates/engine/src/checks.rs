@@ -35,15 +35,21 @@ pub struct BandCounts {
 }
 
 impl BandCounts {
-    fn add(&mut self, c: u8) {
-        self.eq0 += u64::from(c == 0);
-        self.le4 += u64::from(c <= 4);
-        self.low += u64::from(c <= BAND_LOW);
-        self.high += u64::from(c >= BAND_HIGH);
-        self.ge251 += u64::from(c >= 251);
-        self.eq255 += u64::from(c == 255);
+    /// Count `n` texels of code `c`.
+    fn add(&mut self, c: u8, n: u64) {
+        self.eq0 += n * u64::from(c == 0);
+        self.le4 += n * u64::from(c <= 4);
+        self.low += n * u64::from(c <= BAND_LOW);
+        self.high += n * u64::from(c >= BAND_HIGH);
+        self.ge251 += n * u64::from(c >= 251);
+        self.eq255 += n * u64::from(c == 255);
     }
 }
+
+/// Per-texel code histograms for [`CheckStats`]: R, G, B, A and luma. Five increments per texel instead of 27
+/// counters (which spilled out of registers on every texel, DECISIONS Note CL42); folded once by
+/// [`CheckStats::from_hist`].
+pub(crate) type CodeHist = [[u64; 256]; 5];
 
 /// Mean squared curl of a normal map's slope field, read as stored and with green flipped. A real height field's
 /// slopes have no curl, so the smaller one names the green convention.
@@ -72,9 +78,18 @@ pub struct CheckStats {
 }
 
 impl CheckStats {
-    pub(crate) fn new(two_channel: bool) -> Self {
-        CheckStats {
-            texels: 0,
+    /// Count one texel's 8-bit codes (R, G, B, A) into `h`.
+    #[inline]
+    pub(crate) fn hist_add(h: &mut CodeHist, c: [u8; 4]) {
+        for (b, &v) in h.iter_mut().zip(&c) {
+            b[usize::from(v)] += 1;
+        }
+        h[4][usize::from(luma_code(c[0], c[1], c[2]))] += 1;
+    }
+    /// The stats of the texels counted into `h` (curl and steep unset).
+    pub(crate) fn from_hist(two_channel: bool, h: &CodeHist) -> Self {
+        let mut s = CheckStats {
+            texels: h[0].iter().sum(),
             two_channel,
             bands: [BandCounts::default(); 4],
             luma_dark: 0,
@@ -82,24 +97,27 @@ impl CheckStats {
             luma_black: 0,
             curl: None,
             steep: None,
+        };
+        for c in 0..=255u8 {
+            for (b, hc) in s.bands.iter_mut().zip(h) {
+                b.add(c, hc[usize::from(c)]);
+            }
+            let n = h[4][usize::from(c)];
+            s.luma_dark += n * u64::from(c < LUMA_DARK);
+            s.luma_bright += n * u64::from(c > LUMA_BRIGHT);
+            s.luma_black += n * u64::from(c <= LUMA_BLACK);
         }
-    }
-    /// Count one texel's 8-bit codes (R, G, B, A).
-    pub(crate) fn add(&mut self, c: [u8; 4]) {
-        self.texels += 1;
-        for (b, &v) in self.bands.iter_mut().zip(&c) {
-            b.add(v);
-        }
-        let l = luma_code(c[0], c[1], c[2]);
-        self.luma_dark += u64::from(l < LUMA_DARK);
-        self.luma_bright += u64::from(l > LUMA_BRIGHT);
-        self.luma_black += u64::from(l <= LUMA_BLACK);
+        s
     }
 }
 
 /// Rec. 709 luma of 8-bit codes, rounded to a code.
 pub fn luma_code(r: u8, g: u8, b: u8) -> u8 {
-    (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)).round() as u8
+    let v = 0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b);
+    // Same as `v.round()` for v >= 0 (the fraction is exact), without the libm call it is on baseline x86-64; it ran
+    // on every texel and was most of the check stats' load-time cost (DECISIONS Note CL42).
+    let t = v as u32;
+    (t + u32::from(v - f64::from(t) >= 0.5)) as u8
 }
 
 /// What to measure for a texture whose canonical suffix is `suffix`; nothing when `checks` is off (the CLI).
@@ -167,21 +185,30 @@ pub fn curl(img: &Rgba32F) -> Curl {
 /// Share of horizontal and vertical neighbour pairs in `channel` whose 8-bit codes differ by at least
 /// [`STEEP_CODES`]; 0 when there are no pairs.
 pub fn steep_share(img: &Rgba32F, channel: usize) -> f64 {
-    let (w, h) = (img.width, img.height);
-    let c = |x, y| i32::from(code8(img.at(x, y)[channel]));
-    let steep = |a: i32, b: i32| u64::from((a - b).abs() >= i32::from(STEEP_CODES));
+    let (w, h) = (img.width as usize, img.height as usize);
+    let steep = |a: u8, b: u8| u64::from(a.abs_diff(b) >= STEEP_CODES);
+    // Each row's codes are taken once and kept for the next row's vertical pairs.
+    let codes = |y: usize, out: &mut Vec<u8>| {
+        out.clear();
+        out.extend(img.px[y * w..(y + 1) * w].iter().map(|p| code8(p[channel])));
+    };
     let (mut hits, mut pairs) = (0u64, 0u64);
+    let (mut cur, mut next) = (Vec::with_capacity(w), Vec::with_capacity(w));
+    if h > 0 {
+        codes(0, &mut cur);
+    }
     for y in 0..h {
-        for x in 0..w {
-            let v = c(x, y);
-            if x + 1 < w {
-                hits += steep(v, c(x + 1, y));
-                pairs += 1;
-            }
-            if y + 1 < h {
-                hits += steep(v, c(x, y + 1));
-                pairs += 1;
-            }
+        hits += cur.windows(2).map(|p| steep(p[0], p[1])).sum::<u64>();
+        pairs += w.saturating_sub(1) as u64;
+        if y + 1 < h {
+            codes(y + 1, &mut next);
+            hits += cur
+                .iter()
+                .zip(&next)
+                .map(|(&a, &b)| steep(a, b))
+                .sum::<u64>();
+            pairs += w as u64;
+            std::mem::swap(&mut cur, &mut next);
         }
     }
     if pairs == 0 {
@@ -413,6 +440,16 @@ mod tests {
         assert_eq!(luma_code(255, 0, 0), 54); // 0.2126 * 255 = 54.2
         assert_eq!(luma_code(0, 255, 0), 182); // 182.4
         assert_eq!(luma_code(0, 0, 255), 18); // 18.4
+
+        // Exactly `round()` of the Rec. 709 sum for every code triple (CL42 replaced the libm call).
+        for r in 0..=255u8 {
+            for g in 0..=255u8 {
+                for b in 0..=255u8 {
+                    let v = 0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b);
+                    assert_eq!(luma_code(r, g, b), v.round() as u8, "{r} {g} {b}");
+                }
+            }
+        }
     }
 
     #[test]

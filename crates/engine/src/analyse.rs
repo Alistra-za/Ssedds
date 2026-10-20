@@ -123,7 +123,7 @@ pub fn analyse_with(img: &Rgba32F, info: &SourceInfo, hints: AnalyseHints) -> An
     let mut finite = [0u64; 4];
     let mut len_n = 0u64;
     let (mut gray, mut len_err, mut bb, mut rh, mut peak) = (true, 0.0f64, 0u64, 0u64, 0f32);
-    let mut checks = hints.bands.then(|| CheckStats::new(info.channels == 2));
+    let mut codes = hints.bands.then(|| Box::new([[0u64; 256]; 5]));
     for p in &img.px {
         for (c, (s, &v)) in ch.iter_mut().zip(p).enumerate() {
             if !v.is_finite() {
@@ -150,8 +150,8 @@ pub fn analyse_with(img: &Rgba32F, info: &SourceInfo, hints: AnalyseHints) -> An
             i32::from(code8(p[2])),
         );
         gray &= r.max(g).max(b) - r.min(g).min(b) <= 4;
-        if let Some(s) = &mut checks {
-            s.add([r as u8, g as u8, b as u8, a]);
+        if let Some(h) = &mut codes {
+            CheckStats::hist_add(h, [r as u8, g as u8, b as u8, a]);
         }
         bb += u64::from(p[2] < 0.1);
         rh += u64::from(p[0] > 0.9);
@@ -171,6 +171,7 @@ pub fn analyse_with(img: &Rgba32F, info: &SourceInfo, hints: AnalyseHints) -> An
         }
         s.mean /= finite[c].max(1) as f64;
     }
+    let mut checks = codes.map(|h| CheckStats::from_hist(info.channels == 2, &h));
     if let Some(s) = &mut checks {
         s.curl = hints.curl.then(|| crate::checks::curl(img));
         s.steep = hints.steps.map(|c| crate::checks::steep_share(img, c));
