@@ -1,5 +1,5 @@
 //! Golden replay (v2 Phase D, D6b): every profile-A subject replayed deferred and compared per MRT and on the
-//! composite's MainRW. First run: prints the numbers; thresholds come with the D9 ruling.
+//! composite MainRW. Thresholds (D-P18): over == 0 on RT0-RT7 and on main over the clean sub-mask.
 use render3d::golden::{self, Diff, Noise};
 use render3d::{load_fixture, Renderer};
 use std::collections::BTreeMap;
@@ -90,13 +90,25 @@ fn replay_matches_capture_per_mrt() {
         "capture | subject | profile | masked px | RT0..RT7 over%/max (bit-identical%, evidence px) | main [mask] | main [clean] (px) | warnings\n",
     );
     let mut skipped: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    let (mut run, mut nonfinite) = (0usize, Vec::new());
+    let (mut run, mut nonfinite, mut failures) = (0usize, Vec::new(), Vec::new());
     let mut rt_worst: Vec<Worst> = (0..8).map(|_| Worst::default()).collect();
     let (mut main_mask, mut main_clean) = (Worst::default(), Worst::default());
 
     for s in &subjects {
         let name = s.dir.file_name().unwrap().to_string_lossy().into_owned();
         let who = format!("{}/{name}", s.capture);
+        // D-P17: an overlay mask means the capture never changed (the game rejected the draw by depth).
+        let mrt: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(s.dir.join("mrt.json")).unwrap())
+                .unwrap();
+        if mrt["maskSource"] == "overlay" {
+            skipped.entry("overlay mask").or_default().push(who);
+            continue;
+        }
+        if mrt["crop"].is_null() || mrt["maskPixels"] == 0 {
+            skipped.entry("empty mask").or_default().push(who);
+            continue;
+        }
         let r = match load_fixture(&s.dir) {
             Ok(r) => r,
             Err(e) if e.contains("defines null") => {
@@ -153,6 +165,13 @@ fn replay_matches_capture_per_mrt() {
             // An RT the draw left at its before-values proves little: count where the capture changed.
             let evidence = masked - same(&after, &r.before[i], &mask);
             let _ = write!(row, " {}", cell(&d, same(rt, &after, &mask), evidence));
+            if d.over > 0.0 {
+                failures.push(format!(
+                    "{who} RT{i}: over {:.2}% max {:.3e}",
+                    100.0 * d.over,
+                    d.max_abs
+                ));
+            }
             rt_worst[i].add(&who, &d);
         }
         match out.main.as_ref() {
@@ -172,7 +191,10 @@ fn replay_matches_capture_per_mrt() {
                             && bits(&mrt0[4 * p..4 * p + 4]) == bits(&rc.before[4 * p..4 * p + 4])
                     })
                     .collect();
-                for (m, w) in [(&mask, &mut main_mask), (&clean, &mut main_clean)] {
+                for (label, m, w) in [
+                    ("mask", &mask, &mut main_mask),
+                    ("clean", &clean, &mut main_clean),
+                ] {
                     let d = golden::diff_tol(
                         main,
                         &after,
@@ -187,10 +209,20 @@ fn replay_matches_capture_per_mrt() {
                         cell(&d, same(main, &after, m), evidence),
                         d.pixels
                     );
+                    if label == "clean" && d.over > 0.0 {
+                        failures.push(format!(
+                            "{who} main [clean]: over {:.2}% max {:.3e}",
+                            100.0 * d.over,
+                            d.max_abs
+                        ));
+                    }
                     w.add(&who, &d);
                 }
             }
-            None => row.push_str(" | - | -"),
+            None => {
+                failures.push(format!("{who}: no composite output"));
+                row.push_str(" | - | -");
+            }
         }
         let _ = writeln!(row, " | {}", out.warnings.len());
         print!("{row}");
@@ -214,6 +246,10 @@ fn replay_matches_capture_per_mrt() {
     let _ = writeln!(summary, "{}", main_mask.line("main [mask]"));
     let _ = writeln!(summary, "{}", main_clean.line("main [clean]"));
     let _ = writeln!(summary, "non-finite: {nonfinite:?}");
+    let _ = writeln!(summary, "failing (D-P18): {}", failures.len());
+    for f in &failures {
+        let _ = writeln!(summary, "  {f}");
+    }
     print!("{summary}");
     table.push_str(&summary);
     let out = std::env::temp_dir().join("golden-replay.txt");
@@ -221,5 +257,7 @@ fn replay_matches_capture_per_mrt() {
     println!("table written to {}", out.display());
 
     assert!(nonfinite.is_empty(), "non-finite output: {nonfinite:?}");
-    assert!(run >= 20, "only {run} subjects ran");
+    // D-P18: zero over-limit pixels per RT and on the clean composite; main over the full mask is printed only.
+    assert!(failures.is_empty(), "over-limit pixels: {failures:#?}");
+    assert!(run >= 90, "only {run} subjects ran");
 }
