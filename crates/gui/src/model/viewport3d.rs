@@ -1906,7 +1906,22 @@ fn read_source(
 
 /// The bytes of one file (a fresh BSA index per call): for workers that read a single NIF.
 pub fn read_file(src: &FileSource) -> Result<Vec<u8>, String> {
-    read_source(src, &RefCell::new(HashMap::new()))
+    FileReader::default().read(src)
+}
+
+/// Reads files and keeps each archive it opened indexed, for a worker that reads many NIFs.
+#[derive(Default)]
+pub struct FileReader(RefCell<HashMap<PathBuf, Option<BsaIndex>>>);
+
+impl FileReader {
+    pub fn read(&self, src: &FileSource) -> Result<Vec<u8>, String> {
+        read_source(src, &self.0)
+    }
+
+    /// Archives opened so far (tests).
+    pub fn archives(&self) -> usize {
+        self.0.borrow().len()
+    }
 }
 
 struct BsaIndex {

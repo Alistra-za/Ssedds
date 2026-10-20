@@ -2037,27 +2037,50 @@ Track C (spec `docs/superpowers/specs/2026-10-16-v2-artist-checks-design.md`). O
   - **Deferred:** M5 (the lens shows no overlay), M6 (the toggle carries across items, like Tile 3×3), M8 (docs, Task 10).
   - **Tests.** `tests/overlay.rs` adds `the_ui_uploads_the_workers_image_and_frees_it_when_off`, `in_split_the_overlay_is_laid_out_on_the_viewport_and_clipped_to_the_source_side` (T1) and `the_range_toggle_is_disabled_while_comparing_a_pin`. `model::overlay::tests` adds `a_new_range_warning_on_the_same_source_rebuilds_the_overlay` and `a_mip_change_keeps_the_overlay_until_the_new_one_lands_and_collapse_frees_it`.
 
-- **CI30 UV coverage model (Task 7).** `model::uv_coverage` reads which meshes use a texture, rasterises their UVs and measures gutters. It runs on a worker (Task 8 calls it). It reads through the existing modscan, nif and vfs APIs, so the NIF team's crates are unchanged.
-  - **Mask.** 512 × 512 texels, 1 bit per texel (06), row 0 at v = 0 (`UvMask`). A texel is used when its centre lies in a triangle (inclusive edges, either winding).
-  - **Tiles.** Each triangle is drawn once per integer tile offset its UV box touches, shifted into [0, 1). So a trim strip repeating in u marks only its own v band. Past `TILE_CAP × TILE_CAP` (16 × 16) tiles, the triangle fills the mask (`shortcut:`). Rasterising stops once the mask is full (checked every 256 triangles and after a fill).
-  - **Bad geometry (K24).** A triangle with an index past the UVs, or with a non-finite UV, is skipped. `coverage_for` adds one error line for such a shape ("block N: k triangles have no UVs, skipped"), and one for a block `read_shape` refuses. A NIF that fails to read or parse adds one "`<nif>: <error>`" line and is not counted in `nifs`.
-  - **Gutter.** A used texel is a gutter texel when another UV island (4-connected) is at most `d = GUTTER_TEXELS × 512 / tex_width` empty mask texels away (Chebyshev). That is, within 8 full-resolution texels: the mip-3 bleed of the padding convention. It is judged by distance, not by block. The brief's test is binding: at 2048 wide (d = 2), islands at x 0..=9 and 12..=21, with 2 empty texels between, count as gutter. That makes the window radius d + 1 centre to centre, not d. The measure is a two-pass (rows, then columns) window min and max of the labels (van Herk, O(n) whatever d). The share is gutter texels / used texels, and 0.0 when none are used. It is `None` above 2048 wide (d < 2), where a 512 mask can't resolve the gap (`shortcut:`), and also for a width of 0.
-  - **Winners only.** `winning_shapes` uses `nifs_using_texture(Exact slot 0, usize::MAX)`. A derived (PGPatcher output) winner is read on its source copy. `le_mesh` copies are skipped, because the SE geometry reader refuses them. A copy gone from the scan is skipped. Blocks are grouped per `load_copy_id`. There is no LOD filter: the scan never stores LOD NIFs (`nif::path::is_lod_path`).
+- **CI30 UV coverage model (Task 7; fix round 1 after the review of e77f1e5).** `model::uv_coverage` reads which meshes use a texture, rasterises their UVs and measures gutters. It runs on a worker (Task 8 calls it). It reads through the existing modscan, nif and vfs APIs, so the NIF team's crates are unchanged. The only shared-file change is a public `viewport3d::FileReader` in the GUI crate.
+  - **Mask.** 512 × 512 texels, 1 bit per texel (06), row 0 at v = 0 (`UvMask`). A texel is used when its centre lies in a triangle (inclusive edges, either winding). Bounds are `debug_assert`ed in `get` and `set`. An island thinner than one mask texel (4 px at 2K) can mark nothing, so it drops out of the overlay and the gutter (`shortcut:`).
+  - **Tiles.** Each triangle is drawn once per integer tile offset its UV box touches, shifted into [0, 1). So a trim strip repeating in u marks only its own v band.
+    - Past `TILE_CAP` (16) tiles on an axis, the triangle covers its whole UV box, wrapped, with the full axis where it repeats past the cap (`shortcut:`). So a long strip (u 0..300) marks its own band, and only a triangle past the cap on both axes fills the mask (M1).
+    - Fullness is checked once the texels tested since the last check reach 4096, so a big triangle is followed by a check at once (M2). A fill on both axes stops at once.
+  - **Bad geometry (K24).** A triangle with an index past the UVs, or with a non-finite UV, is skipped. `coverage_for` adds one line per shape that had such triangles ("block N: k triangles with no or bad UVs skipped"), and one per block that `read_shape` refuses. A NIF that fails to read or parse adds one "`<nif>`: `<error>`" line and is not counted in `nifs`. LE copies and copies gone from the scan are skipped without a line (review M5, not carried).
+  - **Islands (I2).** Islands come from the mesh, not from the mask (`UvIslands`).
+    - An island is the triangles of one shape that are connected through shared UV vertices. Vertices are welded by UV value, because a hard edge or a split normal duplicates a vertex without moving its UV.
+    - Every texel keeps the island that marked it. When two islands mark the same texel (the same layout in two NIFs, a mirrored half, overlapping islands), they are joined into one (union-find): they share those texels, so they cannot bleed into each other.
+    - Islands of different shapes are otherwise apart, even where their edges meet exactly. So two islands less than one mask texel apart, or touching only at a corner, are still told apart and flagged. A model split into two shapes along a continuous UV seam is flagged along that seam.
+    - Once a fill on both axes has made the mask one island, later shapes are not drawn.
+  - **Gutter (I1, M7).** A used texel is a gutter texel when another island lies at Chebyshev centre distance ≤ d on each axis. That is, at most d − 1 empty mask texels between them, so islands are flagged when they sit closer than the mip-bleed distance of 8 full-res texels (mip 3, the padding convention).
+    - `d = ceil(GUTTER_TEXELS × 512 / side)`, with u from the width and v from the height. 2048 × 512 measures 2 across and 8 down; 1536 wide measures 3.
+    - Fix round 1 corrected the brief's test data: islands with 2 empty texels between them at 2048 are 8 px apart and not flagged. Mask quantisation moves an edge by ±1 mask texel, so at 1K a 7 px gap can measure as 3 or 4 empty texels.
+    - The measure is a two-pass (rows, then columns) window min and max of the island labels (van Herk, linear in texels whatever d). The share is gutter texels / used texels, and 0.0 when none are used.
+    - It is `None` when a side is 0, or when d < 2 on either axis (4096 and wider), where a 512 mask can't resolve the gap (`shortcut:`).
+    - Islands across the 0/1 edge are never neighbours, as with mip filters that don't wrap (`shortcut:`, M8).
+  - **Which shapes (I3).** `winning_shapes` returns the game-winning shapes whose slot 0 resolves to the texture's canonical path, the way "Used by meshes" (`used_by.rs`) matches `tp.p`. So `Data\Textures\a\wall.dds`, `a\wall.dds` and `\textures\a\wall.dds` all count.
+    - With today's modscan API it asks `nifs_using_texture(Contains { slot 0, frag })` for a fragment every alias contains: the path without `textures/`, `pbr/` or the extension. It then re-checks each shape's canonical slot path through `Store::shapes_of`, as `set_preview` does.
+    - `Contains` can't use the path index (`shortcut:`). Upgrade with a typed canonical-path query in modscan (a NIF-team request) if Check all is slow on large scans.
+    - Derived (PGPatcher output) winners are read on their source copy. `le_mesh` copies are skipped, because the SE geometry reader refuses them. A copy gone from the scan is skipped. Blocks are grouped per `load_copy_id`.
+    - There is no LOD filter: the scan never stores LOD NIFs (`nif::path::is_lod_path`).
+  - **Reads (I4).** `coverage_for` reads every NIF through one `viewport3d::FileReader`, so each BSA is opened and indexed once per call, not once per NIF. `read_file` is now `FileReader::default().read`.
   - **No scan.** `scan_has_rows` is false for a missing, old-schema (`ScanError::SchemaVersion`) or empty scan (no enabled origins). An empty or old-schema scan counts as no scan.
-  - **Errors and cancel.** `coverage_for` returns `Err` when the DB cannot be opened or queried, and when `cancel` is set. It checks `cancel` between NIFs and once at the end, so a partial mask is never an answer. Task 8 caches the `Err` (K18) and drops a cancelled one.
+  - **Errors and cancel (M3).** `coverage_for` returns `Err` when the DB cannot be opened or queried. It returns `Err(CANCELLED)` when `cancel` is set. It checks `cancel` before the query, between NIFs, between shapes and at the end, so a partial mask is never an answer. Task 8 checks the cancel flag, not the message, and never caches a cancelled result (K18, review M4).
   - **The overlay image.** Task 7 builds no image. `Coverage.mask` is an `Arc<UvMask>`, and Task 8's `OverlayKind::Uv` turns it into the `Arc<ColorImage>` on its worker (CI29).
-  - **Counter.** `uv_reads_on_this_thread()` counts `coverage_for` and `scan_has_rows` calls on the calling thread, like `out_size::header_reads_on_this_thread`.
-  - **Tests.** `tests/uv_coverage.rs` has 10 tests and 1 `#[ignore]`:
+  - **Counter (M9).** `uv_reads_on_this_thread()` counts every scan-DB open by `winning_shapes` (so also by `coverage_for`) and by `scan_has_rows` on the calling thread, like `out_size::header_reads_on_this_thread`.
+  - **API change for Task 8.** `coverage_for(db, tex, tex_size: [w, h], cancel)` and `gutter_share(&UvIslands, [w, h])`. `rasterize(&mut UvMask, ..)` stays.
+  - **Tests.** `tests/uv_coverage.rs` has 16 tests and 1 `#[ignore]`:
     - the triangle share and wrap;
-    - the trim strip;
+    - the trim strip and the long strip (M1);
     - the cap fill;
     - bad geometry;
-    - the gutter cases;
+    - the gutter radius at 2048 and 1024 (I1);
+    - touching, diagonal, hard-edge and overlapping islands (I2);
+    - per-axis and NPOT radii (M7);
+    - islands against `rasterize`, and the cap fill;
+    - one archive open per reader (I4);
     - winners with derived and LE copies;
+    - aliases (I3);
     - an unreadable NIF;
-    - cancel;
+    - cancel before the query;
     - the real-NIF fixture `TestNifFile_Skinned_SE.nif`, with one bad block;
     - an empty, old (`SCHEMA_VERSION - 1`) or missing DB;
     - the owner timing test (`SDC_ACHERUS` + `SDC_SCAN_DB`, ignored).
 
-    `model::uv_coverage::tests` has 2: the window against a brute-force minimum, and a full mask of odd size.
+    `model::uv_coverage::tests` has 3: the window against brute force, the wrapped axis, and the bounds `debug_assert`.

@@ -54,36 +54,155 @@ fn bad_geometry_is_skipped_not_a_panic() {
     assert!(m.is_full());
 }
 
-fn square(m: &mut UvMask, x0: u32, x1: u32) {
-    for y in 100..=109 {
-        for x in x0..=x1 {
-            m.set(x, y);
-        }
-    }
+#[test]
+fn a_long_trim_strip_marks_its_band_not_the_whole_mask() {
+    // M1: 301 tiles in u, 1 in v.
+    let uvs = [[0.0, 0.1], [300.0, 0.1], [300.0, 0.2], [0.0, 0.2]];
+    let m = tri_mask(&uvs, &[[0, 1, 2], [0, 2, 3]]);
+    assert!((m.used_share() - 0.1).abs() < 0.01, "{}", m.used_share());
+    assert!(!m.is_full());
+}
+
+/// Texels x0..=x1 by y0..=y1 as one shape (a quad of two triangles); x0 and y0 may be fractional.
+fn quad(i: &mut UvIslands, x0: f32, x1: u32, y0: f32, y1: u32) {
+    let n = MASK_SIZE as f32;
+    let (a, b, c, d) = (x0 / n, (x1 + 1) as f32 / n, y0 / n, (y1 + 1) as f32 / n);
+    i.add(&[[a, c], [b, c], [b, d], [a, d]], &[[0, 1, 2], [0, 2, 3]]);
+}
+
+fn pair(a: (f32, u32), b: (f32, u32)) -> UvIslands {
+    let mut i = UvIslands::new(MASK_SIZE);
+    quad(&mut i, a.0, a.1, 100.0, 109);
+    quad(&mut i, b.0, b.1, 100.0, 109);
+    i
 }
 
 #[test]
 fn islands_closer_than_8_texels_count_as_gutter_and_far_ones_do_not() {
-    let mut near = UvMask::new(MASK_SIZE);
-    square(&mut near, 0, 9);
-    square(&mut near, 12, 21);
-    let g = gutter_share(&near, 2048).unwrap();
-    assert!(g > 0.0, "{g}");
-    // d = 2 mask texels (8 full-res texels): a gap of at most 2 empty texels counts. Only the facing columns
-    // (x = 9 and x = 12) are gutter texels: 20 of 200.
-    assert!((g - 0.1).abs() < 1e-9, "{g}");
-    let mut far = UvMask::new(MASK_SIZE);
-    square(&mut far, 0, 9);
-    square(&mut far, 50, 59);
-    assert_eq!(gutter_share(&far, 2048), Some(0.0));
-    assert_eq!(gutter_share(&near, 4096), None);
-    assert_eq!(gutter_share(&near, 0), None);
-    // One island alone has no gutter, however close its own texels are.
-    let mut one = UvMask::new(MASK_SIZE);
-    square(&mut one, 0, 30);
-    assert_eq!(gutter_share(&one, 256), Some(0.0));
-    // Empty case.
-    assert_eq!(gutter_share(&UvMask::new(MASK_SIZE), 1024), Some(0.0));
+    // 2048 wide: d = 2 mask texels (8 px). A gap of 1 empty texel (4 px) counts; only x = 9 and x = 11 face each
+    // other within 2: 20 of 200. A gap of 2 (8 px) does not.
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (11.0, 20)), [2048, 2048]),
+        Some(0.1)
+    );
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (12.0, 21)), [2048, 2048]),
+        Some(0.0)
+    );
+    // 1024 wide: d = 4. A gap of 3 (6 px) counts, a gap of 4 (8 px) does not.
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (13.0, 22)), [1024, 1024]),
+        Some(0.1)
+    );
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (14.0, 23)), [1024, 1024]),
+        Some(0.0)
+    );
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (50.0, 59)), [2048, 2048]),
+        Some(0.0)
+    );
+    let near = pair((0.0, 9), (11.0, 20));
+    assert_eq!(gutter_share(&near, [4096, 4096]), None);
+    assert_eq!(gutter_share(&near, [0, 1024]), None);
+    assert_eq!(gutter_share(&near, [1024, 0]), None);
+    // One island alone has no gutter. Empty case: no division by zero.
+    let mut one = UvIslands::new(MASK_SIZE);
+    quad(&mut one, 0.0, 30, 0.0, 30);
+    assert_eq!(gutter_share(&one, [256, 256]), Some(0.0));
+    assert_eq!(
+        gutter_share(&UvIslands::new(MASK_SIZE), [1024, 1024]),
+        Some(0.0)
+    );
+}
+
+#[test]
+fn islands_touching_or_overlapping_are_told_apart_by_the_mesh() {
+    // I2: two meshes whose islands touch (no empty texel between) are still two islands: x 8..=11 are gutter.
+    let g = gutter_share(&pair((0.0, 9), (10.0, 19)), [2048, 2048]).unwrap();
+    assert!((g - 0.2).abs() < 1e-9, "{g}");
+    // Touching only at a corner.
+    let mut diag = UvIslands::new(MASK_SIZE);
+    quad(&mut diag, 0.0, 9, 100.0, 109);
+    quad(&mut diag, 10.2, 19, 110.2, 119);
+    assert!(gutter_share(&diag, [2048, 2048]).unwrap() > 0.0);
+    // One shape: two quads sharing an edge are one island, also when the edge's vertices are duplicated (a hard
+    // edge keeps the UV).
+    let n = MASK_SIZE as f32;
+    let (x0, x1, x2, y0, y1) = (0.0, 10.0 / n, 20.0 / n, 100.0 / n, 110.0 / n);
+    let mut one = UvIslands::new(MASK_SIZE);
+    one.add(
+        &[
+            [x0, y0],
+            [x1, y0],
+            [x1, y1],
+            [x0, y1],
+            [x1, y0],
+            [x2, y0],
+            [x2, y1],
+            [x1, y1],
+        ],
+        &[[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]],
+    );
+    assert_eq!(gutter_share(&one, [2048, 2048]), Some(0.0));
+    // Two meshes over the same texels (the same layout in two NIFs, or overlapping islands) are one island.
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (0.0, 9)), [2048, 2048]),
+        Some(0.0)
+    );
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (5.0, 14)), [2048, 2048]),
+        Some(0.0)
+    );
+}
+
+#[test]
+fn the_gutter_radius_follows_each_side_of_the_texture() {
+    // M7: 2048 x 512 has d = 2 across and d = 8 down. A gap of 5 empty texels is 20 px across and 5 px down.
+    let across = pair((0.0, 9), (15.0, 24));
+    assert_eq!(gutter_share(&across, [2048, 512]), Some(0.0));
+    let mut down = UvIslands::new(MASK_SIZE);
+    quad(&mut down, 0.0, 9, 100.0, 109);
+    quad(&mut down, 0.0, 9, 115.0, 124);
+    assert!(gutter_share(&down, [2048, 512]).unwrap() > 0.0);
+    assert_eq!(gutter_share(&down, [2048, 2048]), Some(0.0));
+    // NPOT 1536 wide: d = ceil(8 x 512 / 1536) = 3, so a gap of 2 (5.3 px) counts and a gap of 3 (8 px) does not.
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (12.0, 21)), [1536, 1536]),
+        Some(0.1)
+    );
+    assert_eq!(
+        gutter_share(&pair((0.0, 9), (13.0, 22)), [1536, 1536]),
+        Some(0.0)
+    );
+}
+
+#[test]
+fn islands_mark_the_same_mask_as_rasterize() {
+    let uvs = [[0.1, 0.1], [0.7, 0.2], [0.3, 0.9], [2.4, 0.5]];
+    let tris = [[0, 1, 2], [1, 3, 2]];
+    let mut i = UvIslands::new(MASK_SIZE);
+    i.add(&uvs, &tris);
+    assert_eq!(i.mask, tri_mask(&uvs, &tris));
+    // Past the cap on both axes: full, one island, and later shapes change nothing.
+    let mut f = UvIslands::new(MASK_SIZE);
+    f.add(&[[0.0, 0.0], [40.0, 0.0], [0.0, 40.0]], &[[0, 1, 2]]);
+    quad(&mut f, 0.0, 9, 100.0, 109);
+    assert!(f.mask.is_full());
+    assert_eq!(gutter_share(&f, [1024, 1024]), Some(0.0));
+}
+
+#[test]
+fn a_reader_opens_each_archive_once() {
+    // I4: a missing archive is tried once per reader, however many NIFs name it.
+    let r = sdc_gui::model::viewport3d::FileReader::default();
+    let bsa = |n: &str| FileSource::Bsa {
+        archive: "Z:/missing/Meshes.bsa".into(),
+        norm: n.into(),
+    };
+    assert!(r.read(&bsa("meshes/a.nif")).is_err());
+    assert!(r.read(&bsa("meshes/b.nif")).is_err());
+    assert_eq!(r.archives(), 1);
 }
 
 // ---- The scan DB ----
@@ -231,7 +350,7 @@ fn winning_shapes_lists_winning_copies_with_their_blocks() {
 fn an_unreadable_nif_is_an_error_line_not_a_failure() {
     let f = fixture();
     let before = uv_reads_on_this_thread();
-    let c = coverage_for(&f.db, TEX, 1024, &AtomicBool::new(false)).unwrap();
+    let c = coverage_for(&f.db, TEX, [1024, 1024], &AtomicBool::new(false)).unwrap();
     assert_eq!(uv_reads_on_this_thread(), before + 1);
     assert_eq!(c.nifs, 0);
     assert_eq!(c.errors.len(), 2, "{:?}", c.errors);
@@ -242,7 +361,7 @@ fn an_unreadable_nif_is_an_error_line_not_a_failure() {
     assert!(coverage_for(
         &f.db.with_extension("x"),
         TEX,
-        1024,
+        [1024, 1024],
         &AtomicBool::new(false)
     )
     .is_err());
@@ -251,7 +370,69 @@ fn an_unreadable_nif_is_an_error_line_not_a_failure() {
 #[test]
 fn a_cancelled_read_is_an_err_not_a_partial_mask() {
     let f = fixture();
-    assert!(coverage_for(&f.db, TEX, 1024, &AtomicBool::new(true)).is_err());
+    let before = uv_reads_on_this_thread();
+    let r = coverage_for(&f.db, TEX, [1024, 1024], &AtomicBool::new(true));
+    assert_eq!(r.unwrap_err(), CANCELLED);
+    // M3: checked before the query.
+    assert_eq!(uv_reads_on_this_thread(), before);
+}
+
+/// A winning copy whose slot 0 names `TEX` (texset 1) or another path (texset 2) through the raw string `raw`.
+fn alias(c: &rusqlite::Connection, id: i64, nif: &str, texset: i64, raw: &str) {
+    copy(c, id, nif, 2, false, false, &[]);
+    c.execute(
+        "INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id) VALUES (?1, 7, 'BSTriShape', 1, 0, 0, ?2)",
+        rusqlite::params![id, texset],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO tex_raw(copy_id, block, slot, raw, flags) VALUES (?1, 7, 0, ?2, 2)",
+        rusqlite::params![id, raw],
+    )
+    .unwrap();
+    winner(c, nif, id, None);
+}
+
+#[test]
+fn a_texture_named_under_an_alias_is_found_by_its_canonical_path() {
+    // I3: matched as "Used by meshes" matches, on the canonical slot path, whatever the raw string.
+    let f = fixture();
+    let s = modscan::store::Store::open(&f.db).unwrap();
+    let c = s.conn();
+    let other = path_id(c, "textures/b/a/wall.dds");
+    c.execute_batch(&format!(
+        "INSERT INTO texset(id, n, t0) VALUES (2, 1, {other});
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES ({other}, 2, 0);"
+    ))
+    .unwrap();
+    alias(c, 40, "meshes/d.nif", 1, r"Data\Textures\a\wall.dds");
+    alias(c, 41, "meshes/e.nif", 1, r"a\wall.dds");
+    alias(c, 42, "meshes/f.nif", 1, r"\textures\a\wall.dds");
+    // Another texture whose path contains the same fragment.
+    alias(c, 43, "meshes/g.nif", 2, r"textures\b\a\wall.dds");
+    drop(s);
+    let mut got: Vec<String> = winning_shapes(&f.db, TEX)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.nif)
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            "meshes/a.nif",
+            "meshes/b.nif",
+            "meshes/d.nif",
+            "meshes/e.nif",
+            "meshes/f.nif"
+        ]
+    );
+    let b: Vec<String> = winning_shapes(&f.db, "textures/b/a/wall.dds")
+        .unwrap()
+        .into_iter()
+        .map(|r| r.nif)
+        .collect();
+    assert_eq!(b, ["meshes/g.nif"]);
 }
 
 fn nif_fixture() -> Vec<u8> {
@@ -289,7 +470,7 @@ fn a_real_nif_marks_its_uvs() {
     winner(s.conn(), "meshes/body.nif", 10, None);
     drop(s);
 
-    let c = coverage_for(&db, TEX, 1024, &AtomicBool::new(false)).unwrap();
+    let c = coverage_for(&db, TEX, [1024, 1024], &AtomicBool::new(false)).unwrap();
     assert_eq!(c.nifs, 1);
     assert_eq!(c.errors.len(), 1, "{:?}", c.errors);
     assert!(
@@ -357,7 +538,7 @@ fn owner_coverage_of_a_single_user_texture_is_fast() {
         .find(|t| winning_shapes(db, t).is_ok_and(|w| w.len() == 1))
         .expect("a texture with one winning NIF");
     let t = std::time::Instant::now();
-    let c = coverage_for(db, tex, 1024, &AtomicBool::new(false)).unwrap();
+    let c = coverage_for(db, tex, [1024, 1024], &AtomicBool::new(false)).unwrap();
     let ms = t.elapsed().as_millis();
     eprintln!(
         "{tex}: used {:.3}, gutter {:?}, {ms} ms, errors {:?}",
