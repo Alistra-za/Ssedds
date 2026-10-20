@@ -441,8 +441,20 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         _ => unreachable!("filtered above"),
     };
     // Ruling P8: an alpha field edit on a shared alpha would change every user; it needs a split first.
-    if at.role == Role::Alpha {
-        let users = m.alphas.get(&block).map_or(0, |a| a.prop.users.len());
+    // The same holds for a controller on a shared alpha's chain.
+    let alpha_users = match at.role {
+        Role::Alpha => m.alphas.get(&block).map(|a| a.prop.users.len()),
+        Role::Ctrl {
+            owner: Owner::Alpha,
+            ..
+        } => m
+            .alphas
+            .values()
+            .find(|a| a.prop.ctrls.contains(&block))
+            .map(|a| a.prop.users.len()),
+        _ => None,
+    };
+    if let Some(users) = alpha_users {
         if users > 1 {
             return (
                 None,
@@ -458,7 +470,24 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     if field == Field::Variable && m.managed(block) {
         return refused("the variable of a manager-controlled controller cannot change".into());
     }
+    let ctrl = block;
     let block = field_block(&m, block, field);
+    // Ruling P9: an interpolator that several controllers reference would change all of them.
+    if block != ctrl {
+        let n = m
+            .ctrls
+            .values()
+            .filter(|c| c.interp == Some(block as i32))
+            .count();
+        if n > 1 {
+            return (
+                None,
+                Outcome::Conflict(format!(
+                    "This interpolator is shared by {n} controllers: editing it would change all of them."
+                )),
+            );
+        }
+    }
     let (rel, current) = match locate(doc.header(), cur, block as usize, field) {
         Ok(r) => r,
         Err(e) => return refused(e.to_string()),

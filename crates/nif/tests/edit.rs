@@ -1091,3 +1091,107 @@ fn an_alpha_edit_on_a_shared_alpha_is_a_conflict() {
     .unwrap();
     assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
 }
+
+fn ctrl_anchor(b: &[u8], owner: Owner, class: &str, var: Option<u32>, shape: &str) -> Anchor {
+    let m = read_model(b).unwrap();
+    let s = m.shapes.iter().find(|s| s.name.as_deref() == Some(shape));
+    let role = Role::Ctrl {
+        owner,
+        class: class.into(),
+        var,
+        nth: 0,
+    };
+    anchor_role(&m, s.map(|s| s.block), role).unwrap()
+}
+
+fn interp_op(at: &Anchor, to: f32, base: f32) -> Op {
+    Op::SetField {
+        at: at.clone(),
+        field: Field::InterpValue(0),
+        value: Value::F32(to.to_bits()),
+        base: Value::F32(base.to_bits()),
+    }
+}
+
+const LSCF: &str = "BSLightingShaderPropertyFloatController";
+
+#[test]
+fn interp_value_through_a_ctrl_anchor_patches_the_interpolator_only() {
+    let b = scenes::shader_ctrl(false);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[interp_op(&at, 0.75, 0.5)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let h = Header::parse(&b).unwrap();
+    let (rel, _) = locate(&h, &b, 3, Field::InterpValue(0)).unwrap();
+    let off = h.offsets()[3] + rel;
+    let ch = changed_ranges(&b, &r.bytes);
+    assert!(
+        !ch.is_empty() && ch.iter().all(|c| c.start >= off && c.end <= off + 4),
+        "{ch:?}"
+    );
+    assert_eq!(read_model(&r.bytes).unwrap().interps[&3].value, vec![0.75]);
+}
+
+#[test]
+fn interp_value_with_a_stale_base_conflicts_on_the_interpolator() {
+    let b = scenes::shader_ctrl(false);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[interp_op(&at, 0.75, 0.25)]).unwrap();
+    assert!(
+        matches!(&r.outcomes[0], Outcome::Conflict(s) if s.contains("was F32")),
+        "{:?}",
+        r.outcomes
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn keep_mine_reads_the_interp_value_base_from_the_interpolator() {
+    let b = scenes::shader_ctrl(false);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let ops = [interp_op(&at, 0.75, 0.25)];
+    let kept = keep_mine(&b, &ops, 0).unwrap();
+    let Op::SetField { base, .. } = &kept[0] else {
+        panic!()
+    };
+    assert_eq!(*base, Value::F32(0.5f32.to_bits()));
+    assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
+}
+
+/// P9: an interpolator that two controllers reference is not edited through either.
+#[test]
+fn a_shared_interpolator_is_a_conflict() {
+    let b = scenes::shader_ctrl(true);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[interp_op(&at, 0.75, 0.5)]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This interpolator is shared by 2 controllers: editing it would change all of them."
+                .into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+/// P8 extended: a controller field edit whose alpha has become shared needs the split first.
+#[test]
+fn a_controller_edit_on_a_shared_alpha_is_a_conflict() {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let class = "BSNiAlphaPropertyTestRefController";
+    let at = ctrl_anchor(&b, Owner::Alpha, class, None, "A");
+    let op = Op::SetField {
+        at,
+        field: Field::Frequency,
+        value: Value::F32(2.0f32.to_bits()),
+        base: Value::F32(1.0f32.to_bits()),
+    };
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This alpha is shared by 2 shapes: split it before editing.".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}

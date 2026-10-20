@@ -274,6 +274,8 @@ pub fn all() -> Vec<Vec<u8>> {
         one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]),
         two_shapes_one_shader(),
         emit_scene("BSX", 0x83, true),
+        shader_ctrl(false),
+        shader_ctrl(true),
     ]
 }
 
@@ -558,5 +560,27 @@ pub fn emit_scene(bsx_name: &str, bsx: u32, on_root: bool) -> Vec<u8> {
     let w = if on_root { w.u32(1).i32(0) } else { w.u32(0) };
     n.block("NiNode", avobj(w.i32(-1)).u32(0).u32(0).0);
     n.roots = vec![3];
+    n.bytes()
+}
+
+/// BSTriShape "S" (0) -> BSLSP (1) -> free LSCF var 11 (2) -> NiFloatInterpolator 0.5 (3). With `shared`, a second
+/// controller var 20 (3) follows the first and both use one interpolator (4).
+pub fn shader_ctrl(shared: bool) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", bstri_named(s, 1, -1));
+    n.block("BSLightingShaderProperty", lsp_body(0, &[], 2, &[]));
+    let (interp, second) = if shared { (4, 3) } else { (3, -1) };
+    n.block(
+        "BSLightingShaderPropertyFloatController",
+        ctrl_body(second, 0x48, 1, W::default().i32(interp).u32(11)),
+    );
+    if shared {
+        n.block(
+            "BSLightingShaderPropertyFloatController",
+            ctrl_body(-1, 0x48, 1, W::default().i32(interp).u32(20)),
+        );
+    }
+    n.block("NiFloatInterpolator", W::default().f(0.5).i32(-1).0);
     n.bytes()
 }
