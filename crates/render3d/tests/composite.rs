@@ -267,3 +267,28 @@ fn installed_composite_reflects() {
     );
     assert_eq!(r.threads, [8, 8, 1]);
 }
+
+/// D-P12: a late composite failure with async compilation on still gives a complete forward frame at once: the
+/// forward programs are rebuilt synchronously, and no DEFERRED program (tinted here) draws into the forward target.
+#[test]
+fn late_composite_failure_in_async_mode_draws_forward_at_once() {
+    let cache = tempfile::tempdir().unwrap();
+    let tint = feats(&[ADD, "STANDIN_DEFERRED_TINT"]);
+    let mut r = loaded(cache.path(), &tint, vec![opaque()]);
+    r.set_deferred(true).unwrap();
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    r.set_async_compile(true);
+    let broken = feats(&[ADD, "STANDIN_DEFERRED_TINT", "STANDIN_COMPOSITE_BROKEN"]);
+    r.set_features(broken.iter().map(|s| s.to_string()).collect());
+    let f = r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert!(!r.deferred());
+    assert!(r.deferred_error().is_some());
+    let fresh = loaded(cache.path(), &broken, vec![opaque()]).render(&Scene::neutral(), 64, 64);
+    let fresh = fresh.unwrap();
+    let diff = f
+        .chunks(4)
+        .zip(fresh.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(diff, 0, "pixels that differ from a fresh forward frame");
+}

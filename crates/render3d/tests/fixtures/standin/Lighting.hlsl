@@ -31,6 +31,8 @@
 //   space to get one (the temp-copy pattern of tests/settings.rs).
 // - STANDIN_FORWARD_AUX (forward permutations only): main also writes SV_Target1/2 like CS's forward PS_OUTPUT, so a
 //   test sees a forward draw that wrongly gets RT1-7 bound.
+// - STANDIN_DEFERRED_TINT (DEFERRED permutations only): Diffuse gets +0.5 green, so a DEFERRED program drawn into a
+//   forward target shows (v2 D4 review).
 
 struct VsOut
 {
@@ -207,6 +209,9 @@ PsOut main(VsOut i)
     float glossiness = 0.25;
     float vertexAO = 0.5;
     psout.Diffuse = shade(i);
+#    if defined(STANDIN_DEFERRED_TINT)
+    psout.Diffuse.g += 0.5;
+#    endif
     // Markers: exact in each RT's format and different per RT, so a swapped RTV shows.
     psout.MotionVectors = float4(0.25, 0.5, 0.0, 0.0);
     psout.NormalGlossiness = float4(1.0, 0.0, 1.0, 1.0);

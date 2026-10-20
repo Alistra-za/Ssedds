@@ -770,12 +770,28 @@ impl Renderer {
 
     /// A composite that fails in `render` (after a features, settings or shaders change): deferred mode goes off with
     /// the notice and every shape re-permutes forward. Never an Err, never a blank frame.
+    ///
+    /// Ruling D-P12: the forward programs are built synchronously even in async mode (one blocking compile on a rare
+    /// path), so the next frame is complete. A shape whose forward build fails is `Failed` without its old draw
+    /// on screen: render never draws a DEFERRED program into a forward target.
     fn composite_failed(&mut self, e: String) {
         perf_log::emit("composite_failed", serde_json::json!({ "error": &e }));
         self.composite = None;
         self.deferred = false;
         self.deferred_error = Some(format!("Deferred preview unavailable: {e}"));
         self.begin_all();
+        self.settle();
+        for s in self.shapes.values_mut() {
+            if let (
+                Some(d),
+                ShapeStatus::Failed {
+                    showing_previous, ..
+                },
+            ) = (&s.draw, &mut s.status)
+            {
+                *showing_previous &= !d.deferred;
+            }
+        }
     }
 
     /// Test hook: the current composite.
@@ -2282,7 +2298,8 @@ impl Renderer {
                     let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
                         continue;
                     };
-                    if s.blend != pass {
+                    // A DEFERRED program never draws into a forward target (its RT1-7 output would be lost; D-P12).
+                    if s.blend != pass || (s.deferred && !target.deferred()) {
                         continue;
                     }
                     let want = s.deferred && target.deferred();
