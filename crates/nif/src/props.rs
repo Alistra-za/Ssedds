@@ -128,18 +128,21 @@ fn finish(h: &Header, block: usize, c: &Cursor, start: usize, end: usize) -> Res
 }
 
 /// NiObjectNET: Name (string index), NumExtraData + refs, Controller.
-fn object_net(h: &Header, c: &mut Cursor) -> Result<Option<String>, NifError> {
-    let name = h.string(c.i32()?).map(lossy).filter(|s| !s.is_empty());
-    let n = c.u32()? as usize;
-    c.skip(4 * n)?;
-    c.i32()?;
-    Ok(name)
+fn object_net(
+    h: &Header,
+    b: &[u8],
+    block: usize,
+    c: &mut Cursor,
+) -> Result<Option<String>, NifError> {
+    let net = crate::net::read_net(h, b, block)?;
+    c.skip(net.end - c.pos())?;
+    Ok(h.string(net.name).map(lossy).filter(|s| !s.is_empty()))
 }
 
 pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
     let shader_type = c.u32()?; // before the name at BSVER 83..139 (plan 01 Q2)
-    let name = object_net(h, &mut c)?;
+    let name = object_net(h, b, block, &mut c)?;
     let slsf1 = c.u32()?;
     let slsf2 = c.u32()?;
     let uv_offset = c.f32s::<2>()?;
@@ -204,7 +207,7 @@ pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, N
 
 pub fn decode_effect(h: &Header, b: &[u8], block: usize) -> Result<Effect, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
-    let name = object_net(h, &mut c)?;
+    let name = object_net(h, b, block, &mut c)?;
     let slsf1 = c.u32()?;
     let slsf2 = c.u32()?;
     let uv_offset = c.f32s::<2>()?;
@@ -262,7 +265,7 @@ pub fn decode_texture_set(h: &Header, b: &[u8], block: usize) -> Result<TextureS
 
 pub fn decode_alpha(h: &Header, b: &[u8], block: usize) -> Result<Alpha, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
-    object_net(h, &mut c)?;
+    object_net(h, b, block, &mut c)?;
     let flags = c.u16()?;
     let threshold = c.u8()?;
     finish(h, block, &c, start, end)?;

@@ -2,10 +2,12 @@
 //! seeking by the header's block-size array (plan 01 Q1). Input is always `&[u8]`; loose files, BSA entries and
 //! fixtures share one path. Layer 1 (`geom`) decodes SSE BSTriShape geometry for the 3D preview.
 pub mod cursor;
+pub mod fields;
 pub mod geom;
 pub mod graph;
 pub mod header;
 pub mod material;
+pub mod net;
 pub mod path;
 pub mod props;
 pub mod scan;
