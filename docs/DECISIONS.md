@@ -1910,3 +1910,7 @@ Spec: `.superpowers/ui-review-motion/00-summary.md` (with 01-03 beside it). Plan
 - **CG1 Whole path (Inputs).** `Recipe::path`: *Find*, *Replace*, *Prefix* and *Suffix* run over `<folders>/<base name>`, not the base name alone. The map suffix (`_n`, `_albedo`…) and the extension stay, so the kind a file reads as only changes if the recipe writes a suffix into the name. Prefix goes before the folders; Suffix before the map suffix. Outputs mode has no toggle (an output base name has no folders). Owner: bulk path edits ("i need to bulk edit paths").
 - **CG2 No New column.** The table is Old, Kind, Output: *New* repeated *Output* and was clipped too narrow to read (owner, 2026-10-19). Per-row typing is gone from the dialog: a single row is renamed by unticking the others. `RenameDialog::typed` stays in the model, because the set editor's input-name box (Note AO) uses it.
 - **CG3 Tests.** `rename::whole_path_renames_folders_in_bulk`, `dialog_keys::the_rename_dialog_has_no_new_column_and_a_whole_path_toggle`.
+
+## Note CH — Version 0.9.0 (owner, 2026-10-19)
+
+- **CH1 Version.** The workspace version moves 0.8.0 → 0.9.0 after the 0.8.0-alpha.2 release (owner: "bump engine up to .9"). As in AX1, `ENGINE_VERSION` follows `CARGO_PKG_VERSION` and is part of `is_up_to_date`, so every `--on-existing if-changed` run re-encodes each recorded output once after upgrading. No preset or pixel output changes; goldens are unchanged. `docs/presets-changelog.md` gets a 0.9.0 entry and README names the version.
