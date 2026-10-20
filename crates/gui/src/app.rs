@@ -408,7 +408,8 @@ impl eframe::App for SdcApp {
             || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()
-            || self.state.set3d.busy();
+            || self.state.set3d.busy()
+            || self.model.v2_jobs_pending();
         let background =
             self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;
         if let Some(d) = worker_poll(visible, background) {

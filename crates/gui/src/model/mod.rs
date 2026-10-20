@@ -1078,6 +1078,12 @@ impl AppModel {
             || self.nvtt_pending
     }
 
+    /// A v2 worker job is in flight (owner answer 8): the app's one poll line keeps frames coming and `wait_idle`
+    /// waits for it. Not part of `busy()`, which greys the Advanced fields. Tracks A and B add their jobs here.
+    pub fn v2_jobs_pending(&self) -> bool {
+        false
+    }
+
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
@@ -2216,7 +2222,7 @@ impl AppModel {
         let end = Instant::now() + timeout;
         loop {
             self.poll();
-            if !self.busy() {
+            if !self.busy() && !self.v2_jobs_pending() {
                 return true;
             }
             if Instant::now() > end {
@@ -3193,6 +3199,14 @@ mod tests {
         let session =
             Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
         AppModel::new(GuiSettings::default(), None, session)
+    }
+
+    /// Owner answer 8: an idle model has no v2 job in flight, and `wait_idle` returns at once.
+    #[test]
+    fn an_idle_model_has_no_v2_jobs_pending() {
+        let mut m = bare_model();
+        assert!(!m.v2_jobs_pending());
+        assert!(m.wait_idle(Duration::from_secs(1)));
     }
 
     pub(super) fn panicked(what: &'static str) -> WorkerMsg {
