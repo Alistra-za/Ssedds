@@ -678,8 +678,5 @@ fn slsf_bit_census() {
     out += &format!("\n{}", table("mod winners", n, &cells));
 
     println!("{out}");
-    let _ = std::fs::write(
-        r"C:\Users\Curti\AppData\Local\Temp\claude\F--ai-dds\f6e60693-b887-4019-b7a9-84fda81ca99a\scratchpad\slsf-census.txt",
-        &out,
-    );
+    let _ = std::fs::write(std::env::temp_dir().join("slsf-census.txt"), &out);
 }
