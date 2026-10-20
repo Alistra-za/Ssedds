@@ -18,6 +18,80 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::CopySettings { from, to, fields } => copy_settings(ctx, model, &from, &to, fields),
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
         Dialog::Rename(d) => super::rename_dialog::draw(ctx, model, d),
+        Dialog::HalfSize(rows) => half_size(ctx, model, rows),
+    }
+}
+
+/// The half-size box's footer. Both buttons write, so neither is the Enter default (ui-rules 5.2); "Export selected"
+/// needs a writable `sdc.toml` and a tick.
+pub fn half_size_buttons(writable: bool, any: bool) -> [(&'static str, Role, bool); 2] {
+    [
+        ("Export all at full size", Role::Plain, true),
+        ("Export selected at half size", Role::Plain, writable && any),
+    ]
+}
+
+/// Check 3, Hold mode (Note CI24): the held textures, ticked to write at half size. Esc is "Export all at full
+/// size" (the spec's "close = full size"); a click outside does nothing, since it would start an export.
+fn half_size(ctx: &egui::Context, model: &mut AppModel, mut rows: Vec<crate::model::HalfRow>) {
+    use crate::model::out_size::human;
+    let why = model.half_size_unwritable.clone();
+    let any = rows.iter().any(|r| r.tick);
+    let buttons = half_size_buttons(why.is_none(), any);
+    let max_h = ctx.content_rect().height() * 0.6;
+    let (k, clicked) = dialog(
+        ctx,
+        "half-size",
+        false,
+        640.0,
+        "Export at half size?",
+        &buttons,
+        |ui| {
+            if let Some(why) = &why {
+                ui.colored_label(super::status::AMBER, why);
+            }
+            ui.label(
+                "Mip 0 of these textures adds little detail over mip 1. Ticked ones are written at half size, \
+                 and the choice is saved in sdc.toml; the rest are written at full size.",
+            );
+            ui.scope(|ui| {
+                ui.style_mut().spacing.scroll = egui::style::ScrollStyle::thin();
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for r in rows.iter_mut() {
+                            ui.horizontal(|ui| {
+                                ui.add_enabled(
+                                    why.is_none(),
+                                    egui::Checkbox::without_text(&mut r.tick),
+                                );
+                                ui.label(short_name(&r.item)).on_hover_text(&r.item);
+                                ui.weak(format!(
+                                    "{}×{} → {}×{}",
+                                    r.full.width, r.full.height, r.half.width, r.half.height
+                                ));
+                                ui.weak(format!(
+                                    "saves {}",
+                                    human(r.full.file_bytes().saturating_sub(r.half.file_bytes()))
+                                ));
+                            });
+                        }
+                    });
+            });
+        },
+    );
+    if clicked == Some(1) {
+        let ticked: Vec<String> = rows
+            .iter()
+            .filter(|r| r.tick)
+            .map(|r| r.item.clone())
+            .collect();
+        model.export_half_size(&ticked);
+    } else if clicked == Some(0) || k.cancel {
+        model.export_full_size();
+    } else if let Some(Dialog::HalfSize(kept)) = model.dialog.as_mut() {
+        *kept = rows;
     }
 }
 

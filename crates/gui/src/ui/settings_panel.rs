@@ -387,7 +387,10 @@ pub(super) fn editor(
                 .on_hover_text(PARALLAX_HOVER);
             (r.changed().then(|| json!(b)), r)
         }
-        "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
+        "alpha.exact_opaque"
+        | "encoder.perceptual"
+        | "encoder.bc1_transparent_black"
+        | "drop_top_mip" => {
             let mut b = f.value.as_bool().unwrap_or(false);
             let r = ui.add(egui::Checkbox::new(&mut b, "").indeterminate(mixed));
             (r.changed().then(|| json!(b)), r)

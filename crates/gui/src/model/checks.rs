@@ -62,6 +62,7 @@ pub fn check_of(code: Code) -> Option<Check> {
     Some(match code {
         Code::ChkRange => Check::Range,
         Code::ChkPlastic => Check::Plastic,
+        Code::ChkLowDetail => Check::LowDetail,
         Code::ChkGreenGuess | Code::ChkZSign => Check::Green,
         Code::ChkParallax | Code::ChkParallaxScale => Check::Parallax,
         _ => return None,

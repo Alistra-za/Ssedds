@@ -28,11 +28,15 @@ impl SizeEst {
     }
 }
 
-/// The DDS of a `src`-sized image under `p`.
+/// The DDS of a `src`-sized image under `p`. `drop_top_mip` removes level 0 from the chain the size would have
+/// (the engine's rule, Note CI23): half the size, and one level less, so `mips.levels = n` writes n − 1 levels while
+/// `full` stays a full chain of the half size.
 pub fn estimate(src: (u32, u32), p: &Profile) -> SizeEst {
     let (w, h) = engine::resize::target_dims(src, p.resize);
     let (w, h) = (w.max(1), h.max(1));
     let mips = engine::mips::level_count(w, h, &p.mips.levels);
+    let top = u32::from(p.drop_top_mip && mips > 1);
+    let (w, h, mips) = ((w >> top).max(1), (h >> top).max(1), mips - top);
     let pf = p.format.pixel_format(p.srgb_tag());
     let chain_bytes = (0..mips)
         .map(|i| pf.level_size((w >> i).max(1), (h >> i).max(1)) as u64)

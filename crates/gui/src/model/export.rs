@@ -215,8 +215,10 @@ impl ExportModel {
                     k => RowState::Skipped(*k, reason.clone()),
                 };
                 // A skip is not work: it counts in done/total but not in the files/s rate or the ETA.
+                // Hold mode (Note CI24): a held or measured-only file was started, so its skip ends the run.
+                let ends_run = matches!(kind, SkipKind::LowDetail | SkipKind::UpToDate);
                 if let Some(r) = self.row(&ev) {
-                    if r.state.accepts_skip() {
+                    if r.state.accepts_skip() || (ends_run && r.state == RowState::Running) {
                         r.state = state;
                     }
                 }
@@ -261,6 +263,23 @@ impl ExportModel {
         if let Some(p) = self.pace.as_mut() {
             p.finished(now);
         }
+    }
+
+    /// The rows held for half size (Hold mode): job key and the source size their `CHK-LOW-DETAIL` warning names.
+    pub fn held(&self) -> Vec<(String, (u32, u32))> {
+        self.rows
+            .iter()
+            .filter(|r| matches!(r.state, RowState::Skipped(SkipKind::LowDetail, _)))
+            .filter_map(|r| {
+                let d = &r
+                    .warnings
+                    .iter()
+                    .find(|w| w.code == Code::ChkLowDetail)?
+                    .data;
+                let n = |k: &str| d.get(k)?.as_u64().map(|v| v as u32);
+                Some((r.job_key.clone(), (n("width")?, n("height")?)))
+            })
+            .collect()
     }
 
     /// Warnings grouped by code: code → job keys (M3a spec §2.5).
