@@ -879,6 +879,8 @@ impl AppModel {
         if !after_plan {
             // A finished scan (or another database): the "Used by meshes" list reads again.
             self.used_by_scan_changed();
+            // And UV coverage, a session cache read from the scan.
+            self.uv.clear();
         }
         let after_plan = after_plan || self.votes_pending.is_some_and(|(_, a)| a);
         self.votes_gen += 1;
@@ -1238,9 +1240,10 @@ impl AppModel {
             WorkerMsg::UvCoverage {
                 generation,
                 tex,
+                size,
                 coverage,
                 image,
-            } => self.uv_landed(generation, tex, coverage, image),
+            } => self.uv_landed(generation, (tex, size), coverage, image),
             WorkerMsg::UvProgress {
                 run,
                 done,

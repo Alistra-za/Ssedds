@@ -492,8 +492,8 @@ impl AppModel {
             }
             any_colour = true;
             let g = self
-                .uv_tex(&i.key)
-                .and_then(|t| self.uv.get(&t))
+                .uv_key(&i.key)
+                .and_then(|(t, size)| self.uv.get(&t, size))
                 .and_then(|c| c.gutter)
                 .filter(|&g| on.uv && g > super::uv_coverage::GUTTER_SHARE);
             if let Some(g) = g {

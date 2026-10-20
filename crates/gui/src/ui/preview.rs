@@ -762,11 +762,16 @@ fn uv_toggle(ui: &mut egui::Ui, model: &mut AppModel) {
     let offered = model.uv_offered(&key);
     let on = model.view.overlay == Some(OverlayKind::Uv);
     let comparing = model.comparing_pin();
+    // Review I2: a failed read (cached, K18) disables the toggle with its error lines, and paints nothing.
+    let failed = model.uv_failed(&key);
     let reason = match offered {
-        Err(why) => why,
+        Err(why) => why.to_string(),
         // Review M3 (as Range): the overlay is drawn on the source pane, which a compared pin replaces.
-        Ok(()) if comparing => "Hidden while comparing",
-        Ok(()) => "",
+        Ok(()) if comparing => "Hidden while comparing".to_string(),
+        Ok(()) => failed
+            .as_deref()
+            .map(crate::model::uv_coverage::summary)
+            .unwrap_or_default(),
     };
     let r = ui
         .add_enabled(
@@ -809,7 +814,7 @@ fn overlay_texture(
 ) -> Option<egui::TextureId> {
     let offered = match model.view.overlay {
         Some(OverlayKind::Range) => model.range_overlay_offered(key),
-        Some(OverlayKind::Uv) => model.uv_offered(key).is_ok(),
+        Some(OverlayKind::Uv) => model.uv_offered(key).is_ok() && model.uv_failed(key).is_none(),
         None => false,
     };
     if !offered {

@@ -433,7 +433,7 @@ fn check_all_uv(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) 
         } else {
             done as f32 / total as f32
         };
-        ui.add(
+        let bar = ui.add(
             egui::ProgressBar::new(super::header::shown_progress(
                 ui.ctx(),
                 UV_EPOCH | run,
@@ -442,7 +442,18 @@ fn check_all_uv(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) 
             .text(format!("{done} / {total}"))
             .animate(false),
         );
-        if ui.button("Stop checking UV coverage").clicked() {
+        // Review M3: the visible "3 / 72" alone names nothing.
+        bar.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::ProgressIndicator,
+                true,
+                format!("Checking UV coverage: {done} of {total}"),
+            )
+        });
+        // After Stop, the reads in flight still finish (a big NIF can take seconds).
+        if model.uv.all_stopping() {
+            ui.add_enabled(false, egui::Button::new("Stopping…"));
+        } else if ui.button("Stop checking UV coverage").clicked() {
             actions.push(Action::CancelCheckAllUv);
         }
         return;

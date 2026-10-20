@@ -78,14 +78,15 @@ pub enum WorkerMsg {
         generation: u64,
         image: Option<Arc<eframe::egui::ColorImage>>,
     },
-    /// The UV coverage of scan path `tex` (`AppModel::uv_coverage`, Check all), with its overlay built on the worker;
-    /// a failed read is a `Coverage` with an error line (K18). A cancelled read sends nothing; a stale `generation`
-    /// (the cache was cleared since) is dropped.
+    /// The UV coverage of scan path `tex` at written size `size` (`AppModel::uv_coverage`, Check all), with its
+    /// overlay built on the worker (`None` for a failed read); a failed read is a `Coverage` with an error line
+    /// (K18). A cancelled read sends nothing; a stale `generation` (a clear or a new folder since) is dropped.
     UvCoverage {
         generation: u64,
         tex: String,
+        size: [u32; 2],
         coverage: Arc<crate::model::uv_coverage::Coverage>,
-        image: Arc<eframe::egui::ColorImage>,
+        image: Option<Arc<eframe::egui::ColorImage>>,
     },
     /// "Check all UV coverage" run `run` has read `done` of `total` textures; `finished` once the run has ended
     /// (cancelled runs end with `done < total`).

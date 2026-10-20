@@ -248,14 +248,15 @@ impl AppModel {
     }
 
     /// A finished scan: the list is read again on the next ask (the old one stays on screen until then). The UV
-    /// coverage cache is cleared, and its reads and Check all are cancelled.
+    /// coverage reads and Check all in flight are cancelled.
     pub(super) fn used_by_scan_changed(&mut self) {
         self.used_by.stale = true;
         self.used_by.generation += 1;
         self.used_by.pending = None;
         self.original_scan_changed();
-        // UV coverage is a session cache read from the scan: a finished scan or another folder reads it again.
-        self.uv.clear();
+        // UV coverage answers in flight are dropped; the cache stays, its key does not depend on the folder (review
+        // M7). A finished scan clears it in `refresh_mesh_votes`.
+        self.uv.drop_in_flight();
     }
 }
 

@@ -564,7 +564,8 @@ use std::time::Duration;
 
 const SCAN_FIRST: &str = "Scan your MO2 instance in the Meshes view first";
 const COLOUR_ONLY: &str = "Only colour textures on meshes have UV coverage";
-const UNSETTLED: &str = "Wait for the Meshes scan to finish";
+const UNSETTLED: &str =
+    "A Meshes scan is running or was stopped: wait for it to finish, or scan again";
 const WALL: &str = "a/wall.png";
 
 /// A scan DB whose one winning NIF (the nif crate's skinned fixture) names `TEX` in every shape with UVs.
@@ -742,13 +743,16 @@ fn check_all_polls_without_greying_advanced() {
     assert!(!m.busy());
     let mut h = harness(m);
     h.run_steps(3);
-    assert!(
-        h.query_by_label_contains("0 / 3").is_some(),
-        "no progress bar"
-    );
+    // Review M3: the bar is named for a screen reader, not just "0 / 3".
+    assert!(h.query_by_label("Checking UV coverage: 0 of 3").is_some());
     let stop = h.get_by_label("Stop checking UV coverage");
     assert!(!stop.accesskit_node().is_disabled());
     assert!(h.query_by_label("Check all UV coverage").is_none());
+    // Stop: "Stopping…" (disabled) until the reads in flight finish.
+    h.state_mut().cancel_check_all_uv(); // the button pushes this action (it may sit below the fold here)
+    h.run_steps(2);
+    assert!(h.state().uv.all_stopping());
+    assert!(h.get_by_label("Stopping…").accesskit_node().is_disabled());
     // The Advanced fields stay enabled while the run polls.
     let fields: Vec<bool> = h
         .query_all_by_label("Perceptual")
@@ -885,7 +889,7 @@ fn a_panicking_uv_read_clears_v2_jobs_pending() {
 fn a_close_island_pair_raises_chk_uv_gutter_after_the_click() {
     let d = tempfile::tempdir().unwrap();
     let mut m = uv_model(d.path(), Some(real_db(d.path())));
-    let tex = m.uv_tex(WALL).expect("a tex key");
+    let (tex, size) = m.uv_key(WALL).expect("a key");
     let gutter_rows = |m: &AppModel| {
         m.check_warnings(WALL)
             .iter()
@@ -904,7 +908,8 @@ fn a_close_island_pair_raises_chk_uv_gutter_after_the_click() {
         let msg = WorkerMsg::UvCoverage {
             generation: m.uv.generation(),
             tex: tex.clone(),
-            image: sdc_gui::model::overlay::uv_overlay_image(&c.mask),
+            size,
+            image: Some(sdc_gui::model::overlay::uv_overlay_image(&c.mask)),
             coverage: Arc::new(c),
         };
         m.sender().send(msg).unwrap();
@@ -941,7 +946,9 @@ fn a_close_island_pair_raises_chk_uv_gutter_after_the_click() {
     inject(&mut m, None);
     assert!(gutter_rows(&m).is_empty());
     let c = m.uv_coverage(WALL).unwrap();
-    assert!(summary(&c).contains("Gutter not measured above 2048 px wide"));
+    assert!(summary(&c).contains(
+        "gutter not measured at 4096 px or wider on either axis, or until the size is known"
+    ));
 }
 
 #[test]
@@ -1059,4 +1066,243 @@ fn the_uv_overlay_dims_unused_texels_and_veils_used_ones() {
     assert_eq!(img.pixels.iter().filter(|&&p| p == px(UV_USED)).count(), 1);
     // Empty mask: an empty image, no panic.
     assert!(uv_overlay_image(&UvMask::new(0)).pixels.is_empty());
+}
+
+// ---- Task 8 fix round 1 ----
+
+/// Review I1: no read before the written size is known, and a new written size reads again.
+#[test]
+fn an_unknown_size_reads_nothing_and_a_size_change_reads_again() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    let i = m.items.iter().position(|i| i.key == WALL).unwrap();
+    let analysis = m.items[i].analysis.take();
+    assert!(m.uv_key(WALL).is_none());
+    assert!(m.uv_coverage(WALL).is_none());
+    assert!(!m.uv.read_pending(), "read with no size");
+    m.check_all_uv();
+    assert_eq!(m.uv.all_progress(), Some((0, 2)), "Check all read it");
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    assert!(m.uv_overlay(WALL).is_none());
+    // The analysis lands: the read starts.
+    m.items[i].analysis = analysis;
+    assert!(m.uv_coverage(WALL).is_none());
+    assert!(m.uv.read_pending());
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    assert_eq!(m.uv_coverage(WALL).map(|c| c.nifs), Some(1));
+
+    // A 1024² diffuse, then written at half size.
+    let d = tempfile::tempdir().unwrap();
+    let db = real_db(d.path());
+    let root = d.path().join("textures/a");
+    std::fs::create_dir_all(&root).unwrap();
+    image::RgbImage::from_pixel(1024, 1024, image::Rgb([120, 90, 60]))
+        .save(root.join("wall.png"))
+        .unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, support::session());
+    m.scan_db = Some(db);
+    m.open_folder(d.path().join("textures"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.uv_key(WALL).map(|k| k.1), Some([1024, 1024]));
+    m.uv_coverage(WALL);
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    let full = m.uv_coverage(WALL).expect("read at 1024");
+    m.set_field(WALL, "resize", serde_json::json!("half"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.uv_key(WALL).map(|k| k.1), Some([512, 512]));
+    assert!(m.uv_coverage(WALL).is_none(), "the 1024 answer was reused");
+    assert!(m.uv.read_pending());
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    let half = m.uv_coverage(WALL).expect("read at 512");
+    assert!(!Arc::ptr_eq(&full, &half));
+}
+
+/// Review I2: a failed read paints no "unused" overlay; the toggle is disabled with the error as its hover, and
+/// the answer stays cached (K18).
+#[test]
+fn a_failed_read_paints_no_overlay_and_disables_the_toggle() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv.read = |_, _, _, _| Err("database is locked".into());
+    m.expand(WALL);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.uv_coverage(WALL);
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(m.uv_failed(WALL).is_some());
+    assert!(m.uv_overlay(WALL).is_none(), "a failed read has an overlay");
+    m.view.overlay = Some(sdc_gui::model::overlay::OverlayKind::Uv);
+    let mut h = harness(m);
+    h.run();
+    let node = h.get_by_label("UV coverage overlay");
+    assert!(node.accesskit_node().is_disabled());
+    node.hover();
+    h.run();
+    assert!(h.query_by_label_contains("database is locked").is_some());
+    assert!(!h.state().uv.read_pending(), "the failed read is retried");
+    // A true "no mesh uses it" answer (no error) still has its all-dim overlay.
+    let c = Coverage {
+        mask: Arc::new(UvMask::new(MASK_SIZE)),
+        used: 0.0,
+        gutter: Some(0.0),
+        nifs: 0,
+        errors: vec![],
+    };
+    assert!(!failed(&c));
+}
+
+/// Review M4: Check all needs the "UV coverage check" switch.
+#[test]
+fn check_all_is_disabled_while_the_uv_switch_is_off() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    assert_eq!(m.uv_check_all_offered(), Ok(()));
+    let mut c = m.settings.checks;
+    c.uv = false;
+    m.settings.checks = c;
+    assert_eq!(
+        m.uv_check_all_offered(),
+        Err("Turn on UV coverage check first")
+    );
+    m.settings.advanced_open = true;
+    let mut h = harness(m);
+    h.run();
+    let button = h.get_by_label("Check all UV coverage");
+    assert!(button.accesskit_node().is_disabled());
+    button.hover();
+    h.run();
+    assert!(h
+        .query_by_label_contains("Turn on UV coverage check first")
+        .is_some());
+}
+
+/// Review M5: a new scan stamp cancels a running Check all, also on an empty cache.
+#[test]
+fn a_stamp_change_cancels_check_all_on_an_empty_cache() {
+    let d = tempfile::tempdir().unwrap();
+    let db = real_db(d.path());
+    let mut m = uv_model(d.path(), Some(db.clone()));
+    m.uv.read = slow;
+    m.check_all_uv();
+    let generation = m.uv.generation();
+    bump_mtime(&db);
+    m.poll();
+    assert!(
+        m.uv.generation() > generation,
+        "answers of the old scan land"
+    );
+    assert!(
+        m.wait_idle(Duration::from_secs(10)),
+        "the run was not cancelled"
+    );
+    assert!(!m.uv.all_running());
+}
+
+/// Review M7: another folder keeps the cache (the key is the scan path); only answers in flight are dropped.
+#[test]
+fn opening_another_folder_keeps_the_uv_cache() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv_coverage(WALL);
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    let first = m.uv_coverage(WALL).expect("landed");
+    let other = d.path().join("other/textures");
+    std::fs::create_dir_all(other.join("b")).unwrap();
+    image::RgbImage::from_pixel(16, 16, image::Rgb([1, 2, 3]))
+        .save(other.join("b/x.png"))
+        .unwrap();
+    m.open_folder(other);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.open_folder(d.path().join("textures"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let again = m.uv_coverage(WALL).expect("the cache was cleared");
+    assert!(Arc::ptr_eq(&first, &again));
+    assert!(!m.uv.read_pending());
+    // A read in flight when the folder changes is dropped.
+    m.refresh_mesh_votes(false); // a finished scan does clear it
+    assert!(m.uv_overlay(WALL).is_none());
+    m.uv.read = slow;
+    m.uv_coverage(WALL);
+    let generation = m.uv.generation();
+    m.open_folder(d.path().join("textures"));
+    assert!(m.uv.generation() > generation);
+    assert!(!m.uv.read_pending());
+}
+
+/// Review M8: answers landing during Check all re-run the checks at most every 250 ms, and once when it ends.
+#[test]
+fn check_all_answers_refresh_the_checks_in_batches() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv.read = slow;
+    m.check_all_uv();
+    let (tex, size) = m.uv_key(WALL).unwrap();
+    let start = m.uv.revision();
+    let t0 = std::time::Instant::now();
+    for k in 0..5 {
+        let c = Coverage {
+            mask: Arc::new(UvMask::new(MASK_SIZE)),
+            used: 0.4,
+            gutter: Some(0.25),
+            nifs: 1,
+            errors: vec![],
+        };
+        let image = Some(sdc_gui::model::overlay::uv_overlay_image(&c.mask));
+        m.sender()
+            .send(WorkerMsg::UvCoverage {
+                generation: m.uv.generation(),
+                tex: format!("{tex}{k}"),
+                size,
+                coverage: Arc::new(c),
+                image,
+            })
+            .unwrap();
+        m.poll();
+    }
+    if t0.elapsed() < Duration::from_millis(250) {
+        assert!(
+            m.uv.revision() <= start + 1,
+            "{} bumps",
+            m.uv.revision() - start
+        );
+    }
+    m.cancel_check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(
+        m.uv.revision() > start,
+        "the end of the run did not refresh"
+    );
+}
+
+/// The mask's v = 0 is the image's top row, as DirectX UVs and the displayed DDS have it: an island at the top
+/// left of UV space is at the top left of the overlay.
+#[test]
+fn the_overlay_puts_uv_v0_at_the_top() {
+    use sdc_gui::model::overlay::{uv_overlay_image, UV_USED};
+    // An L-shaped island: a bar along the top (v 0..0.1, u 0..0.5) and a leg down the left (u 0..0.1, v 0..0.5).
+    let uvs = [
+        [0.0, 0.0],
+        [0.5, 0.0],
+        [0.5, 0.1],
+        [0.0, 0.1],
+        [0.1, 0.1],
+        [0.1, 0.5],
+        [0.0, 0.5],
+    ];
+    let mut mask = UvMask::new(MASK_SIZE);
+    rasterize(
+        &mut mask,
+        &uvs,
+        &[[0, 1, 2], [0, 2, 3], [3, 4, 5], [3, 5, 6]],
+    );
+    let img = uv_overlay_image(&mask);
+    let used = |x: usize, y: usize| {
+        img.pixels[y * img.size[0] + x]
+            == egui::Color32::from_rgba_unmultiplied(UV_USED[0], UV_USED[1], UV_USED[2], UV_USED[3])
+    };
+    let n = MASK_SIZE as usize;
+    assert!(used(n / 4, 10), "the top bar is not at the top");
+    assert!(used(10, n / 4), "the left leg is not at the left");
+    assert!(!used(n / 4, n - 10), "the bar is at the bottom (v flipped)");
+    assert!(!used(n - 10, n / 4), "the leg is at the right (u flipped)");
+    assert!(!used(n / 4, n / 4));
 }
