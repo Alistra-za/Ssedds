@@ -1503,17 +1503,17 @@ impl Engine {
         // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped),
         // before the bakes, so a baking roughness member copies its `_n`'s blend (Note W18).
         crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
-        let baking = crate::bake::plan::plan_bakes(
-            &crate::bake::plan::BakeCtx {
-                target,
-                sets: &sets,
-                files: &files,
-                aliases: registry.alias_table(),
-                shared: &shared,
-                borrowed: &borrowed,
-            },
-            &mut jobs,
-        );
+        let bake_cx = crate::bake::plan::BakeCtx {
+            target,
+            sets: &sets,
+            files: &files,
+            aliases: registry.alias_table(),
+            shared: &shared,
+            borrowed: &borrowed,
+        };
+        let baking = crate::bake::plan::plan_bakes(&bake_cx, &mut jobs);
+        // Note CL40: the opt-in complex `_m` gloss bake, any target.
+        crate::bake::plan::plan_gloss_bakes(&bake_cx, &mut jobs);
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];

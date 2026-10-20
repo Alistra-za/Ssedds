@@ -252,11 +252,12 @@ pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F> {
 
 /// [`build_chain`] with a roughness member's variance bake (spec §6.2): where `bake` adds variance, R is stored as
 /// `(min(α² + add, 1))^¼`, α the footprint mean of r²; every other value is bit-identical to [`build_chain`].
-/// `bake` is ignored unless the Work is a roughness member.
+/// A `complex_material` bakes its gloss (G) instead (Note CL40, [`bake_gloss`]); `bake` is ignored on anything else.
 pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>) -> Vec<Rgba32F> {
     let n = level_count(work.img.width, work.img.height, &p.mips.levels);
     let weighted = weighted_rgb(work, p);
     let rough = bake.filter(|_| work.roughness_r_squared);
+    let gloss = bake.filter(|_| p.subtype == Subtype::ComplexMaterial);
     let coat = coat_self_bake(work, p);
     let filt = effective_filter(work, p);
     let mut out = Vec::with_capacity(n as usize);
@@ -264,6 +265,9 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
     if let Some(b) = rough {
         let src = &work.img;
         bake_roughness(&mut base, 0, b, |i| src.px[i][0] * src.px[i][0]);
+    }
+    if let Some(b) = gloss {
+        bake_gloss(&mut base, 0, b);
     }
     out.push(base);
     // `acc` is the unnormalised accumulation level; the first step reads the base directly unless roughness needs
@@ -298,6 +302,9 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
         if let Some(b) = rough {
             bake_roughness(&mut fin, level, b, |i| next.px[i][0]);
         }
+        if let Some(b) = gloss {
+            bake_gloss(&mut fin, level, b);
+        }
         if let Some(t) = coat {
             bake_coat(&mut fin, &next, t);
         }
@@ -320,6 +327,20 @@ fn bake_roughness(
         let add = b.add_at(index, i as u32 % w, i as u32 / w);
         if add > 0.0 {
             px[0] = baked_roughness(alpha(i), add);
+        }
+    }
+}
+
+/// The opt-in complex `_m` gloss bake (DECISIONS Note CL40): where the `_n` footprint adds variance, G is stored as
+/// `1 − baked_roughness((1 − g)², add)`; the rest keep the plain chain's value bit for bit.
+fn bake_gloss(level: &mut Rgba32F, index: usize, b: &NormalVariance) {
+    let w = level.width;
+    for (i, px) in level.px.iter_mut().enumerate() {
+        let add = b.add_at(index, i as u32 % w, i as u32 / w);
+        if add > 0.0 {
+            // shortcut: g is the level's mean gloss, not the mean of α = (1 − g)²; average α if banding shows.
+            let r = 1.0 - px[1];
+            px[1] = 1.0 - baked_roughness(r * r, add);
         }
     }
 }

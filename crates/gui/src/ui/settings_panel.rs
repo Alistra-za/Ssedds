@@ -453,6 +453,21 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
             editor(ui, cx.key, cx.target, cx.job, cx.busy, f, false)
         })
         .inner;
+    // Note CL40: on a `normal` in a complex material set, renormalize_bake is the opt-in gloss bake.
+    let r = if f.field == "mips.normal"
+        && cx.job.profile.subtype == Subtype::Normal
+        && cx
+            .job
+            .shader
+            .as_ref()
+            .is_some_and(|s| s.shader == engine::shader::Shader::ComplexMaterial)
+    {
+        r.on_hover_text(
+            "Renormalise and bake also bakes this set's complex _m gloss (anti-shimmer)",
+        )
+    } else {
+        r
+    };
     if let Some(reason) = f.lock.map(str::to_string).or(cx.toml_read_only.clone()) {
         r.on_disabled_hover_text(reason);
     }
