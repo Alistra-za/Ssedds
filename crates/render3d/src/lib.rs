@@ -2282,6 +2282,8 @@ impl Renderer {
                     .is_some_and(|d| !d.env_regs.is_empty())
             });
         let yaw = scene.env_yaw.to_bits();
+        // shortcut: a CPU rebuild per yaw change (~11-16 ms in release, D5 report: the 25 MB equirect gather, the f16
+        // conversion and the upload); if a yaw drag stutters, build the cube on the GPU from the backdrop's texture.
         if want_env && self.env.as_ref().is_none_or(|e| e.0 != yaw) {
             let t = std::time::Instant::now();
             self.env = None;

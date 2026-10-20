@@ -42,14 +42,15 @@ fn cube_faces_agree_with_dir_to_uv() {
         for (f, axis) in AXES.iter().enumerate() {
             let d = cube_dir(f, 1, 1, 3);
             assert_eq!(d, *axis, "face {f} centre");
-            // `d`, not `axis`: at the poles the azimuth depends on the sign of zero.
             let (u, v) = dir_to_uv(turned(d, yaw));
             let (x, y) = (((u * 16.0) as usize).min(15), ((v * 8.0) as usize).min(7));
-            assert_eq!(
-                faces[f][4],
-                [x as f32, y as f32, 0.0, 1.0],
-                "face {f} yaw {yaw}"
-            );
+            let got = faces[f][4];
+            if f >= 4 {
+                // ±Z is a pole: every column is that direction, so only the row is defined.
+                assert_eq!(got[1..], [y as f32, 0.0, 1.0], "face {f} yaw {yaw}");
+            } else {
+                assert_eq!(got, [x as f32, y as f32, 0.0, 1.0], "face {f} yaw {yaw}");
+            }
         }
     }
 }

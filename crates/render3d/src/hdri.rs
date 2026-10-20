@@ -264,24 +264,44 @@ pub fn cube_dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
     d.map(|c| c / n)
 }
 
+/// Per texel of a `size` cube (face-major): the yaw-free part of [`dir_to_uv`] of its [`cube_dir`], the azimuth term
+/// `atan2(y, x) + YAW` and `v`.
+fn cube_angles(size: u32) -> Vec<(f32, f32)> {
+    (0..6)
+        .flat_map(|f| {
+            (0..size * size).map(move |i| {
+                let d = cube_dir(f, i % size, i / size, size);
+                (d[1].atan2(d[0]) + YAW, d[2].clamp(-1.0, 1.0).acos() / PI)
+            })
+        })
+        .collect()
+}
+
 /// Mip 0 of the env cube turned by `yaw` (as the backdrop and [`integrate`]): per texel, the equirect pixel holding
-/// `dir_to_uv(Rz(-yaw)·cube_dir)`, alpha 1. Face-major, rows top first.
+/// `dir_to_uv(Rz(-yaw)·cube_dir)`, alpha 1. Face-major, rows top first. A turn about +Z only shifts the azimuth, so
+/// `u = (azimuth − yaw)` from a per-size angle table (built once for [`ENV_SIZE`]): a yaw drag costs no atan2/acos.
 pub fn cube_faces(img: &Hdr, size: u32, yaw: f32) -> [Vec<[f32; 4]>; 6] {
-    let (s, c) = (-yaw).sin_cos();
+    static ENV: OnceLock<Vec<(f32, f32)>> = OnceLock::new();
+    let owned;
+    let table: &[(f32, f32)] = if size == ENV_SIZE {
+        ENV.get_or_init(|| cube_angles(ENV_SIZE))
+    } else {
+        owned = cube_angles(size);
+        &owned
+    };
     let (w, h) = (img.width, img.height);
+    let n = (size * size) as usize;
     std::array::from_fn(|f| {
-        let mut out = Vec::with_capacity((size * size) as usize);
-        for y in 0..size {
-            for x in 0..size {
-                let d = cube_dir(f, x, y, size);
-                let (u, v) = dir_to_uv([d[0] * c - d[1] * s, d[0] * s + d[1] * c, d[2]]);
+        table[f * n..(f + 1) * n]
+            .iter()
+            .map(|&(a, v)| {
+                let u = ((a - yaw) / TAU + 0.5).rem_euclid(1.0);
                 let px = ((u * w as f32) as usize).min(w - 1);
                 let py = ((v * h as f32) as usize).min(h - 1);
                 let i = (py * w + px) * 3;
-                out.push([img.rgb[i], img.rgb[i + 1], img.rgb[i + 2], 1.0]);
-            }
-        }
-        out
+                [img.rgb[i], img.rgb[i + 1], img.rgb[i + 2], 1.0]
+            })
+            .collect()
     })
 }
 
