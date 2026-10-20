@@ -41,14 +41,14 @@ impl Placement {
 pub fn placement(copies: &[PathCopy], mods: &[ModRow], edit_mod_name: &str) -> Placement {
     let Some(edit) = mods
         .iter()
-        .find(|m| m.kind == KIND_MOD && m.name == edit_mod_name)
+        .find(|m| m.kind == KIND_MOD && m.name.eq_ignore_ascii_case(edit_mod_name))
     else {
         return Placement::NotEnabled;
     };
     let others = || {
         copies
             .iter()
-            .filter(|c| c.kind != KIND_BSA && c.origin != edit_mod_name)
+            .filter(|c| c.kind != KIND_BSA && !c.origin.eq_ignore_ascii_case(edit_mod_name))
     };
     // MO2 lists higher priority lower down: drag below the highest source, above the lowest PGPatcher output.
     if let Some(c) = others()

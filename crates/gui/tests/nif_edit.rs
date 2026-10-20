@@ -339,6 +339,22 @@ fn pick_source_skips_the_edit_mod_and_pgpatcher_output() {
     assert!(pick_source(&c[..2], m).is_none());
 }
 
+/// Final review M2: Windows folder names ignore case, so `SDC NIF Edits` is still the edit mod.
+#[test]
+fn the_edit_mod_is_matched_ignoring_case() {
+    let m = Path::new(r"C:\I\mods\sdc NIF Edits");
+    let other = "SDC NIF Edits";
+    let c = [copy(other, 8, false), copy("A", 3, false)];
+    assert_eq!(pick_source(&c, m).map(|c| c.origin.as_str()), Some("A"));
+    let mods = [
+        mod_row("PGP", 9, true),
+        mod_row(other, 5, false),
+        mod_row("A", 3, false),
+    ];
+    let copies = [copy("PGP", 9, true), c[0].clone(), c[1].clone()];
+    assert_eq!(placement(&copies, &mods, EDIT_MOD), Placement::Ok);
+}
+
 #[test]
 fn generated_winner_warns() {
     assert_eq!(
