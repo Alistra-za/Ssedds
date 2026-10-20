@@ -245,7 +245,7 @@ Each set is made for one Skyrim shader. The shader decides which maps the set sh
 | `glow` | diffuse, `_n`, `_g` | |
 | `parallax` | diffuse, `_n`, `_p` | |
 | `skin` | diffuse, `_n`/`_msn` | `_sk`, `_s` (with `_msn`) |
-| `hair` | diffuse, `_n` | |
+| `hair` | diffuse, `_n` | `_flow` (`cs` only; vanilla hair does not read it) |
 | `eye` | diffuse, `_n` (model-space) | `_sk`, `_m`, `_e` |
 | `multilayer` | diffuse, `_n`, `_i` | `_m`, `_e`, `_b` |
 | `landscape` | diffuse, `_n` | |
@@ -264,7 +264,7 @@ You can pick a set's shader in the GUI's set editor, or with `--set set:<id>.sha
 5. A `_p`: `parallax`.
 6. In the GUI, after a mesh scan: the shader most of the meshes using the diffuse have (a strict majority).
 7. An `_m` env mask: `envmap`.
-8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`.
+8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`. `_flow`: `hair`, on both targets.
 9. A `hair` folder in the path: `hair`. An `eyes` folder: `eye`.
 10. Landscape textures: `landscape`.
 11. Otherwise `default`.

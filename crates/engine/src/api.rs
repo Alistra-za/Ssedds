@@ -1635,7 +1635,7 @@ impl Engine {
                     registry.alias_table(),
                     target,
                 );
-                warnings.extend(crate::shader::check_maps(p, &maps));
+                warnings.extend(crate::shader::check_maps(p, target, &maps));
             }
             rep.emit(
                 Some(&set.key),

@@ -104,7 +104,7 @@ fn checks_counts_on_textures_10k() {
             }
             _ => {}
         }
-        for w in texture_checks(job, &a, HeightNeutral::Half, &on) {
+        for w in texture_checks(job, &a, HeightNeutral::Half, None, &on) {
             // The rule (range) or the kind of finding (parallax), so each threshold has its own count.
             let kind = match w.data["rule"].as_str() {
                 Some(r) => r.to_string(),

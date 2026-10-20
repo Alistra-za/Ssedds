@@ -105,7 +105,7 @@ fn albedo_out_of_range_luma_raises_chk_range_above_range_share() {
             }),
         );
         let j = as_subtype(j, Subtype::PbrAlbedo);
-        texture_checks(&j, &a, HeightNeutral::Half, &all_on())
+        texture_checks(&j, &a, HeightNeutral::Half, None, &all_on())
     };
     let ws = check(at + 1);
     let r = with(Code::ChkRange, &ws);
@@ -121,7 +121,7 @@ fn albedo_out_of_range_luma_raises_chk_range_above_range_share() {
         range: false,
         ..all_on()
     };
-    assert!(texture_checks(&j, &a, HeightNeutral::Half, &off).is_empty());
+    assert!(texture_checks(&j, &a, HeightNeutral::Half, None, &off).is_empty());
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn ao_dark_is_a_mean_check_without_an_overlay_rule() {
     let d = tempfile::tempdir().unwrap();
     let (j, a) = planned(d.path(), "wall_rmaos.png", rgb(8, 8, |_, _| [128, 0, 51]));
     let j = as_subtype(j, Subtype::Rmaos);
-    let ws = texture_checks(&j, &a, HeightNeutral::Half, &all_on());
+    let ws = texture_checks(&j, &a, HeightNeutral::Half, None, &all_on());
     let r = with(Code::ChkRange, &ws);
     assert_eq!(r.len(), 1, "{ws:?}");
     assert_eq!(r[0].data, json!({"rule": "ao_dark"}));
@@ -200,7 +200,7 @@ fn a_vanilla_n_with_no_alpha_or_white_alpha_raises_plastic_softly() {
             ),
         };
         let j = as_subtype(j, st);
-        texture_checks(&j, &a, HeightNeutral::Half, &all_on())
+        texture_checks(&j, &a, HeightNeutral::Half, None, &all_on())
             .into_iter()
             .filter(|w| w.code == Code::ChkPlastic)
             .collect::<Vec<_>>()
@@ -222,6 +222,58 @@ fn a_vanilla_n_with_no_alpha_or_white_alpha_raises_plastic_softly() {
 }
 
 #[test]
+/// Task 11 (Note CI37, owner 2026-10-20): on hair and Advanced Skin, CS doesn't read the `_n` alpha for specular, so
+/// CHK-PLASTIC still warns but says it only matters for vanilla. A plain set keeps today's text.
+fn plastic_on_hair_and_advanced_skin_says_it_only_matters_for_vanilla() {
+    let d = tempfile::tempdir().unwrap();
+    let (j, a) = planned(d.path(), "wall_n.png", rgb(8, 8, |_, _| [128, 128, 255]));
+    let j = as_subtype(j, Subtype::Normal);
+    let msg = |sh: Option<Shader>| {
+        let ws = texture_checks(&j, &a, HeightNeutral::Half, sh, &all_on());
+        let p = with(Code::ChkPlastic, &ws);
+        assert_eq!(p.len(), 1, "{sh:?}: {ws:?}");
+        assert_eq!(p[0].severity, Severity::Warning);
+        assert_eq!(p[0].data, serde_json::Value::Null);
+        p[0].message.clone()
+    };
+    let base =
+        "_n has no specular in its alpha (missing or all white): the surface may look plastic";
+    let only = "Only matters for vanilla: Community Shaders doesn't read this normal map's alpha for specular on";
+    assert_eq!(msg(Some(Shader::Hair)), format!("{base}. {only} hair"));
+    assert_eq!(
+        msg(Some(Shader::AdvancedSkin)),
+        format!("{base}. {only} skin")
+    );
+    for sh in [None, Some(Shader::Default), Some(Shader::Skin)] {
+        assert_eq!(msg(sh), base, "{sh:?}");
+    }
+}
+
+#[test]
+/// Task 11 (Note CI38): an `_msn` never raises CHK-PLASTIC, with or without an `_s` in its set (specular comes
+/// from the `_s`; the check only reads a tangent-space `_n`).
+fn an_msn_raises_no_plastic_with_or_without_an_s() {
+    for files in [&["body_msn.png", "body_s.png"][..], &["body_msn.png"][..]] {
+        let d = tempfile::tempdir().unwrap();
+        let input = d.path().join("in");
+        std::fs::create_dir_all(&input).unwrap();
+        for f in files {
+            rgb(8, 8, |_, _| [128, 128, 255])(&input.join(f));
+        }
+        let (j, a) = planned(d.path(), "body_msn.png", |_| {});
+        assert_eq!(j.profile.subtype, Subtype::Msn, "{files:?}");
+        assert!(
+            with(
+                Code::ChkPlastic,
+                &texture_checks(&j, &a, HeightNeutral::Half, Some(Shader::Skin), &all_on())
+            )
+            .is_empty(),
+            "{files:?}"
+        );
+    }
+}
+
+#[test]
 fn a_two_channel_normal_raises_no_z_sign() {
     let d = tempfile::tempdir().unwrap();
     let (j, mut a) = planned(d.path(), "wall_n.png", rgb(8, 8, |_, _| [128, 128, 0]));
@@ -230,7 +282,7 @@ fn a_two_channel_normal_raises_no_z_sign() {
     let z = |a: &Analysis| {
         with(
             Code::ChkZSign,
-            &texture_checks(&j, a, HeightNeutral::Half, &all_on()),
+            &texture_checks(&j, a, HeightNeutral::Half, None, &all_on()),
         )
         .len()
     };
@@ -242,7 +294,7 @@ fn a_two_channel_normal_raises_no_z_sign() {
     let msn = as_subtype(j.clone(), Subtype::Msn);
     assert!(with(
         Code::ChkZSign,
-        &texture_checks(&msn, &a, HeightNeutral::Half, &all_on())
+        &texture_checks(&msn, &a, HeightNeutral::Half, None, &all_on())
     )
     .is_empty());
 }
@@ -253,7 +305,7 @@ fn green_guess_is_info_and_only_when_the_file_does_not_flip() {
     let (j, mut a) = planned(d.path(), "wall_n.png", rgb(8, 8, |_, _| [128, 128, 255]));
     let j = as_subtype(j, Subtype::PbrNormal);
     let guess = |j: &ResolvedJob, a: &Analysis| {
-        texture_checks(j, a, HeightNeutral::Half, &all_on())
+        texture_checks(j, a, HeightNeutral::Half, None, &all_on())
             .into_iter()
             .filter(|w| w.code == Code::ChkGreenGuess)
             .collect::<Vec<_>>()
@@ -295,7 +347,7 @@ fn parallax_judges_against_0_5_except_pbr_inner_layer_and_skips_vanilla_multilay
         }),
     );
     let j = as_subtype(j, Subtype::Height);
-    let at = |n| parallax(&texture_checks(&j, &a, n, &all_on()));
+    let at = |n| parallax(&texture_checks(&j, &a, n, None, &all_on()));
     let half = at(HeightNeutral::Half);
     assert!(half.iter().any(|m| m.contains("mostly white")), "{half:?}");
     assert!(
@@ -317,7 +369,7 @@ fn parallax_judges_against_0_5_except_pbr_inner_layer_and_skips_vanilla_multilay
     );
     let j = as_subtype(j, Subtype::Height);
     for n in [HeightNeutral::Half, HeightNeutral::White] {
-        let ms = parallax(&texture_checks(&j, &a, n, &all_on()));
+        let ms = parallax(&texture_checks(&j, &a, n, None, &all_on()));
         assert!(ms.iter().any(|m| m.contains("clipped")), "{n:?}: {ms:?}");
     }
 
@@ -332,7 +384,13 @@ fn parallax_judges_against_0_5_except_pbr_inner_layer_and_skips_vanilla_multilay
         }),
     );
     let j = as_subtype(j, Subtype::Height);
-    let ms = parallax(&texture_checks(&j, &a, HeightNeutral::Half, &all_on()));
+    let ms = parallax(&texture_checks(
+        &j,
+        &a,
+        HeightNeutral::Half,
+        None,
+        &all_on(),
+    ));
     assert!(ms.iter().all(|m| !m.contains("clipped")), "{ms:?}");
 }
 
@@ -349,7 +407,13 @@ fn cpm_alpha_at_or_below_4_counts_as_parallax_off() {
         );
         let mut j = as_subtype(j, Subtype::ComplexMaterial);
         j.profile.alpha.parallax = parallax_on;
-        parallax(&texture_checks(&j, &a, HeightNeutral::Half, &all_on()))
+        parallax(&texture_checks(
+            &j,
+            &a,
+            HeightNeutral::Half,
+            None,
+            &all_on(),
+        ))
     };
     let ms = cpm(3, Some(true));
     assert!(
@@ -365,7 +429,14 @@ fn cpm_alpha_at_or_below_4_counts_as_parallax_off() {
     let (j, a) = planned(d.path(), "wall_m.png", rgb(64, 64, |_, _| [128, 128, 128]));
     let mut j = as_subtype(j, Subtype::ComplexMaterial);
     j.profile.alpha.parallax = Some(true);
-    assert!(parallax(&texture_checks(&j, &a, HeightNeutral::Half, &all_on())).is_empty());
+    assert!(parallax(&texture_checks(
+        &j,
+        &a,
+        HeightNeutral::Half,
+        None,
+        &all_on()
+    ))
+    .is_empty());
 }
 
 #[test]

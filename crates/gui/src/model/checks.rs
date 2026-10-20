@@ -33,6 +33,8 @@ pub const DARK_METAL_SHARE: f64 = 0.50;
 pub const DARK_METAL_MIN_METAL: f64 = 0.02;
 /// Plastic: a vanilla `_n` whose alpha is at least this share >= 250 (or missing) has no specular map.
 pub const PLASTIC_SHARE: f64 = 0.95;
+const PLASTIC_CS_IGNORES: &str =
+    "Only matters for vanilla: Community Shaders doesn't read this normal map's alpha for specular on";
 /// Green guess: the flipped curl is under this ratio of the as-stored curl.
 pub const GREEN_RATIO: f64 = 0.5;
 /// Green guess: below this as-stored curl the map is too flat to judge.
@@ -201,11 +203,12 @@ fn range(rule: &str, msg: String) -> Warning {
     Warning::new(Code::ChkRange, msg).with_data(json!({ "rule": rule }))
 }
 
-/// Checks 1, 2, 4 and 5 of one texture, from its cached stats. Empty without stats.
+/// Checks 1, 2, 4 and 5 of one texture, from its cached stats. Empty without stats. `shader` is the set's shader.
 pub fn texture_checks(
     job: &ResolvedJob,
     a: &Analysis,
     neutral: HeightNeutral,
+    shader: Option<Shader>,
     on: &ChecksSettings,
 ) -> Vec<Warning> {
     let Some(s) = &a.checks else {
@@ -234,10 +237,15 @@ pub fn texture_checks(
         && st == Subtype::Normal
         && (a.alpha == AlphaContent::None || share(a.alpha_hist.ge250, s.texels) >= PLASTIC_SHARE)
     {
-        out.push(Warning::new(
-            Code::ChkPlastic,
-            "_n has no specular in its alpha (missing or all white): the surface may look plastic",
-        ));
+        let msg =
+            "_n has no specular in its alpha (missing or all white): the surface may look plastic";
+        // Note CI37 (owner 2026-10-20): CS hair and Advanced Skin take specular elsewhere.
+        let msg = match shader {
+            Some(Shader::Hair) => format!("{msg}. {PLASTIC_CS_IGNORES} hair"),
+            Some(Shader::AdvancedSkin) => format!("{msg}. {PLASTIC_CS_IGNORES} skin"),
+            _ => msg.to_string(),
+        };
+        out.push(Warning::new(Code::ChkPlastic, msg));
     }
     if on.green && st.category() == Category::Normal {
         if st != Subtype::Msn && !s.two_channel && s.texels > 0 && a.channels[2].mean < 0.5 {
@@ -448,12 +456,14 @@ impl AppModel {
         let on = self.settings.checks;
         let views = super::sets::views(self);
         let mut neutral = HashMap::new();
+        let mut shaders = HashMap::new();
         let mut scales = vec![];
         let mut items: HashMap<String, Vec<Warning>> = HashMap::new();
         for v in views.iter().filter(|v| !v.key.is_empty()) {
             let shader = v.shader_choice.or(v.shader.as_ref().map(|p| p.shader));
             let resolved = super::auto_flags::resolved(v.pbr, &v.slots, &v.settings);
             neutral.insert(v.key.as_str(), height_neutral(shader, &resolved));
+            shaders.insert(v.key.as_str(), shader);
             if matches!(shader, Some(Shader::Landscape | Shader::PbrLandscape))
                 && filled(&v.slots, SlotKind::Height)
             {
@@ -475,7 +485,13 @@ impl AppModel {
                 .and_then(|k| neutral.get(k))
                 .copied()
                 .unwrap_or(HeightNeutral::Half);
-            let ws = texture_checks(job, a, n, &on);
+            let sh = i
+                .set_key
+                .as_deref()
+                .and_then(|k| shaders.get(k))
+                .copied()
+                .flatten();
+            let ws = texture_checks(job, a, n, sh, &on);
             if !ws.is_empty() {
                 items.insert(i.key.clone(), ws);
             }
