@@ -569,12 +569,7 @@ fn an_edited_nif_keeps_its_failed_shader_message_in_the_app() {
     use egui_kittest::Harness;
     use render3d::{ShapeInfo, ShapeStatus};
     use sdc_gui::app::SdcApp;
-    let tmp = tempfile::tempdir().unwrap();
-    // As meshes_header.rs: nothing reaches the real sdc folders.
-    let a = tmp.path().join("appdata");
-    std::fs::create_dir_all(&a).unwrap();
-    std::env::set_var("LOCALAPPDATA", &a);
-    std::env::set_var("APPDATA", &a);
+    app_data();
     let d = files(false);
     let model = sdc_gui::model::AppModel::new(
         sdc_gui::settings::GuiSettings::default(),
@@ -1961,4 +1956,233 @@ fn a_path_typed_without_enter_is_exported_by_the_export_click() {
     );
     let e = h.state().edit.as_ref().unwrap();
     assert!(!e.doc.pending(), "the export includes the typed edit");
+}
+
+// ---- v2 A20: the shared Undo / Redo act on the NIF history while an edit is open in the Meshes view ----
+
+/// One app-data redirect for every `SdcApp` test of this binary (as meshes_header.rs): the variables are process-wide,
+/// so a test's own temp dir could be deleted under another test.
+fn app_data() {
+    static D: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    D.get_or_init(|| {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("appdata");
+        std::fs::create_dir_all(&a).unwrap();
+        std::env::set_var("LOCALAPPDATA", &a);
+        std::env::set_var("APPDATA", &a);
+        d
+    });
+}
+
+type AppH = Harness<'static, sdc_gui::app::SdcApp>;
+
+/// The app in the Meshes view with a Textures history step and an open NIF edit with `ops` NIF undo steps.
+fn both_histories(ops: usize) -> (tempfile::TempDir, tempfile::TempDir, AppH) {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::pbr_opened(&t.path().join("mod"));
+    assert!(model.can_undo() && !model.can_redo());
+    let (d, h) = in_the_meshes_view(model, ops);
+    (t, d, h)
+}
+
+fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile::TempDir, AppH) {
+    let d = files(false);
+    let mut app = sdc_gui::app::SdcApp::new(model);
+    app.meshes.procs = sdc_gui::model::meshes::no_procs;
+    app.meshes.store_path = Some(d.path().join("scan.db"));
+    scan_and_select(&mut app.meshes, d.path());
+    app.meshes.open_edit();
+    assert_eq!(app.meshes.error, None);
+    for i in 0..ops {
+        tick(&mut app.meshes, 40.5 + i as f32);
+        app.meshes.edit.as_mut().unwrap().flush();
+    }
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
+            app,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(4);
+    (d, h)
+}
+
+/// Beyond the brief's list: with no Textures history, Ctrl+Z and the header still undo the NIF step.
+#[test]
+fn ctrl_z_undoes_a_nif_edit_with_an_empty_textures_history() {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    assert!(!model.can_undo());
+    let (_d, mut h) = in_the_meshes_view(model, 2);
+    assert!(!header_button(&h, "Undo").accesskit_node().is_disabled());
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(nif(&h), (1, true));
+    header_button(&h, "Undo").click();
+    h.run_steps(4);
+    assert_eq!(nif(&h), (0, true));
+    assert!(!h.state().model.can_undo() && !h.state().model.can_redo());
+}
+
+/// (NIF ops, NIF can redo).
+fn nif(h: &AppH) -> (usize, bool) {
+    let e = h.state().meshes.edit.as_ref().unwrap();
+    (e.doc.ops.len(), e.history.can_redo())
+}
+
+/// (can undo, can redo, the undo label) of the Textures history.
+fn textures(h: &AppH) -> (bool, bool, Option<String>) {
+    let m = &h.state().model;
+    (m.can_undo(), m.can_redo(), m.undo_label().map(String::from))
+}
+
+fn header_button<'a>(h: &'a AppH, name: &'a str) -> egui_kittest::Node<'a> {
+    h.get_by_role_and_label(AkRole::Button, name)
+}
+
+fn press(h: &mut AppH, mods: egui::Modifiers, key: egui::Key) {
+    h.key_press_modifiers(mods, key);
+    h.run_steps(4);
+}
+
+/// Closes the edit: the shared Undo / Redo go back to the Textures history.
+fn close(h: &mut AppH) {
+    h.state_mut().meshes.close_edit();
+    h.run_steps(4);
+}
+
+#[test]
+fn header_undo_follows_the_nif_history_while_editing() {
+    let (_t, _d, mut h) = both_histories(1);
+    let tex = textures(&h);
+    header_button(&h, "Undo").click();
+    h.run_steps(4);
+    assert_eq!(nif(&h), (0, true), "the NIF op is undone");
+    assert_eq!(textures(&h), tex, "the Textures history is untouched");
+    header_button(&h, "Redo").click();
+    h.run_steps(4);
+    assert_eq!(nif(&h), (1, false));
+    assert_eq!(textures(&h), tex);
+    close(&mut h);
+    header_button(&h, "Undo").click();
+    h.run_steps(4);
+    assert!(
+        h.state().model.can_redo(),
+        "without an edit Undo is the Textures one"
+    );
+}
+
+#[test]
+fn ctrl_z_and_ctrl_y_follow_the_nif_history_while_editing() {
+    use egui::{Key, Modifiers};
+    let (_t, _d, mut h) = both_histories(2);
+    let tex = textures(&h);
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(nif(&h), (1, true));
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(nif(&h), (0, true));
+    press(&mut h, Modifiers::COMMAND, Key::Y);
+    assert_eq!(nif(&h), (1, true));
+    press(&mut h, Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+    assert_eq!(nif(&h), (2, false));
+    assert_eq!(textures(&h), tex, "the Textures history is untouched");
+    close(&mut h);
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert!(
+        h.state().model.can_redo(),
+        "without an edit Ctrl+Z is the Textures one"
+    );
+}
+
+/// Ctrl+K, "Undo", Enter.
+fn palette_undo(h: &mut AppH) {
+    press(h, egui::Modifiers::COMMAND, egui::Key::K);
+    h.event(egui::Event::Text("Undo".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(
+        h.state().model.nav.palette.is_none(),
+        "the palette ran a pick"
+    );
+}
+
+#[test]
+fn the_palette_undo_follows_the_nif_history_while_editing() {
+    let (_t, _d, mut h) = both_histories(1);
+    let tex = textures(&h);
+    palette_undo(&mut h);
+    assert!(
+        sdc_gui::ui::header::meshes_view_active(&h.ctx),
+        "the pick was the action, not a texture"
+    );
+    assert_eq!(nif(&h), (0, true));
+    assert_eq!(textures(&h), tex);
+    close(&mut h);
+    palette_undo(&mut h);
+    assert!(h.state().model.can_redo());
+}
+
+#[test]
+fn header_undo_enabled_state_and_hover_follow_the_nif_history() {
+    let (_t, _d, mut h) = both_histories(0);
+    assert!(
+        header_button(&h, "Undo").accesskit_node().is_disabled(),
+        "no NIF step to undo, though the Textures history has one"
+    );
+    header_button(&h, "Undo").hover();
+    h.run_steps(30);
+    h.get_by_label("Nothing to undo");
+    tick(&mut h.state_mut().meshes, 40.5);
+    h.state_mut().meshes.edit.as_mut().unwrap().flush();
+    h.run_steps(4);
+    assert!(!header_button(&h, "Undo").accesskit_node().is_disabled());
+    assert!(header_button(&h, "Redo").accesskit_node().is_disabled());
+    header_button(&h, "Undo").hover();
+    h.run_steps(30);
+    h.get_by_label_contains("Undo: NIF edit");
+}
+
+#[test]
+fn ctrl_z_does_nothing_in_a_text_field_a_popup_or_a_dialog() {
+    use egui::{Key, Modifiers};
+    let (_t, _d, mut h) = both_histories(1);
+    let tex = textures(&h);
+    // A focused text field.
+    h.query_all_by_role(AkRole::TextInput)
+        .next()
+        .expect("a text field")
+        .focus();
+    h.run_steps(2);
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(nif(&h), (1, false), "not with a text field focused");
+    assert_eq!(textures(&h), tex);
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    // An open popup (the header's Open menu).
+    header_button(&h, "Open").click();
+    h.run_steps(4);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(nif(&h), (1, false), "not with a popup open");
+    assert_eq!(textures(&h), tex);
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    // A shared dialog.
+    h.state_mut().model.dialog = Some(sdc_gui::model::Dialog::Error("x".into()));
+    h.run_steps(4);
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(nif(&h), (1, false), "not with a dialog open");
+    assert_eq!(textures(&h), tex);
+    // The guard: with nothing in the way, Ctrl+Z undoes the NIF step.
+    h.state_mut().model.dialog = None;
+    h.run_steps(4);
+    assert!(!egui::Popup::is_any_open(&h.ctx));
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(nif(&h), (0, true));
+    assert_eq!(textures(&h), tex);
 }
