@@ -330,7 +330,7 @@ pub fn keep_mine(new_src: &[u8], ops: &[Op], i: usize) -> Result<Vec<Op>, NifErr
         return Ok(out);
     };
     let field_now = |f: Field| {
-        locate(doc.header(), &cur, block as usize, f)
+        locate(doc.header(), &cur, field_block(&m, block, f) as usize, f)
             .ok()
             .map(|r| r.1)
     };
@@ -375,6 +375,14 @@ pub fn take_source(ops: &[Op], i: usize) -> Vec<Op> {
         v.remove(i);
     }
     v
+}
+
+/// The block that holds `field` of the anchored block: an interpolator value lives on the controller's interpolator.
+fn field_block(m: &NifModel, block: u32, field: Field) -> u32 {
+    match (field, m.ctrls.get(&block).and_then(|c| c.interp)) {
+        (Field::InterpValue(_), Some(i)) if i >= 0 => i as u32,
+        _ => block,
+    }
 }
 
 fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
@@ -450,6 +458,7 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     if field == Field::Variable && m.managed(block) {
         return refused("the variable of a manager-controlled controller cannot change".into());
     }
+    let block = field_block(&m, block, field);
     let (rel, current) = match locate(doc.header(), cur, block as usize, field) {
         Ok(r) => r,
         Err(e) => return refused(e.to_string()),

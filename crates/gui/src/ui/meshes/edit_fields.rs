@@ -36,7 +36,7 @@ const TYPE_HOVER: &str = "Changing the type changes the trailer fields.";
 const BROWSE_LIMIT: usize = 200;
 
 /// A row's name, painted: the control beside it carries the same name for AccessKit, so the name is one node.
-fn row_label(ui: &mut egui::Ui, text: &str) {
+pub(super) fn row_label(ui: &mut egui::Ui, text: &str) {
     let h = ui.spacing().interact_size.y;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(LABEL_W, h), egui::Sense::hover());
     ui.painter_at(rect).text(
@@ -49,7 +49,7 @@ fn row_label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// Warnings of `target` under their field: amber, red for errors, with "Fix" when the warning carries a fix.
-fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
+pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
     for w in e.warnings.iter().filter(|w| w.target == *target) {
         let color = if w.level == Level::Error { RED } else { AMBER };
         ui.horizontal(|ui| {
@@ -74,8 +74,23 @@ fn float(
     field: Field,
     v: f32,
 ) {
+    float_named(ui, e, act, at, name, name, field, v);
+}
+
+/// [`float`] with a row label that differs from the accessible name (rows of several controllers share labels).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn float_named(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    at: &Anchor,
+    label: &str,
+    name: &str,
+    field: Field,
+    v: f32,
+) {
     ui.horizontal(|ui| {
-        row_label(ui, name);
+        row_label(ui, label);
         let mut x = v;
         let speed = (v.abs() as f64 * 0.01).max(0.01);
         let r = ui.add(egui::DragValue::new(&mut x).speed(speed));
@@ -106,7 +121,7 @@ fn float(
 }
 
 /// Gives `r` (after `ui.add`) the role `typ` and the accessible name `name`, with its numeric or text value.
-fn set_name(
+pub(super) fn set_name(
     r: &egui::Response,
     typ: egui::WidgetType,
     name: &str,
@@ -256,7 +271,11 @@ fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
 }
 
 /// The selected shape, or a line saying why there is none.
-fn selected<'a>(ui: &mut egui::Ui, e: &'a NifEdit, what: &str) -> Option<&'a ShapeModel> {
+pub(super) fn selected<'a>(
+    ui: &mut egui::Ui,
+    e: &'a NifEdit,
+    what: &str,
+) -> Option<&'a ShapeModel> {
     let Selection::Shape(b) = e.selection else {
         ui.label(format!("Select a shape card to edit its {what}."));
         return None;

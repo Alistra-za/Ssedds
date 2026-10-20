@@ -1,6 +1,7 @@
 //! The NIF edit panel (spec §7, plan A17): what is edited and from where, Solo, Undo / Redo, the ops that did not
 //! apply, then the Shader, Alpha, Controllers and Extra data tabs.
 use super::edit_fields::{self, Act};
+use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
 use crate::model::meshes::nif_edit::NifEdit;
 use crate::model::meshes::MeshesModel;
@@ -34,10 +35,8 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
             .show(ui, |ui| match tab {
                 0 => edit_fields::shader_tab(ui, m, e, &mut act),
                 1 => edit_fields::alpha_tab(ui, e, &mut act),
-                // shortcut: the Controllers and Extra data tabs are Task A18.
-                _ => {
-                    ui.weak("Not editable yet.");
-                }
+                2 => edit_ctrl::controllers_tab(ui, e, &mut act),
+                _ => edit_extra::extra_tab(ui, e, &mut act),
             });
     }
     apply(m, act);

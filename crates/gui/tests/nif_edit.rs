@@ -698,6 +698,7 @@ use egui::accesskit::Role as AkRole;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use nif::edit::validate::Target;
+use nif::extra::ExtraValue;
 
 /// The Meshes view alone, as `meshes_view.rs` draws it.
 fn view(m: MeshesModel) -> Harness<'static, MeshesModel> {
@@ -1212,4 +1213,252 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
             "{l} {r:?} outside the panel {edit:?}"
         );
     }
+}
+
+// ---- v2 A18: Controllers (scalars) and Extra data tabs ----
+
+use builder::{Nif, W};
+
+/// Shape "S" (0) -> BSLSP (1) -> free float controllers var 11 (2, interp 4) and var 20 (3, interp 5); a root NiNode
+/// (12) listing BSXFlags `bsx` (6), a BSInvMarker, a multi-line string, an int, a bool and a negative-zero float.
+fn ctrl_scene(bsx: u32) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (s, r) = (n.string("S"), n.string("Root"));
+    n.block("BSTriShape", scenes::bstri_named(s, 1, -1));
+    n.block("BSLightingShaderProperty", scenes::lsp_body(0, &[], 2, &[]));
+    for (next, var, interp) in [(3, 11, 4), (-1, 20, 5)] {
+        let tail = W::default().i32(interp).u32(var);
+        n.block(
+            "BSLightingShaderPropertyFloatController",
+            scenes::ctrl_body(next, 0x48, 1, tail),
+        );
+    }
+    n.block("NiFloatInterpolator", W::default().f(0.5).i32(-1).0);
+    n.block("NiFloatInterpolator", W::default().f(0.25).i32(-1).0);
+    let names = ["BSX", "INV", "Tag", "Count", "PG_IGNORE", "Scale"].map(|x| n.string(x));
+    let val = n.string("a\r\nb");
+    n.block("BSXFlags", W::default().i32(names[0]).u32(bsx).0);
+    n.block(
+        "BSInvMarker",
+        W::default()
+            .i32(names[1])
+            .u16(4712)
+            .u16(6283)
+            .u16(0)
+            .f(1.0)
+            .0,
+    );
+    n.block("NiStringExtraData", W::default().i32(names[2]).i32(val).0);
+    n.block("NiIntegerExtraData", W::default().i32(names[3]).u32(7).0);
+    n.block("NiBooleanExtraData", W::default().i32(names[4]).u8(1).0);
+    n.block("NiFloatExtraData", W::default().i32(names[5]).f(-0.0).0);
+    let mut w = W::default().i32(r).u32(6);
+    for e in 6..12 {
+        w = w.i32(e);
+    }
+    n.block("NiNode", scenes::avobj(w.i32(-1)).u32(0).u32(0).0);
+    n.roots = vec![12];
+    n.bytes()
+}
+
+fn tab(h: &mut Harness<'static, MeshesModel>, name: &str) {
+    h.get_by_label(name).click();
+    h.run_steps(3);
+}
+
+fn edit_number(h: &mut Harness<'static, MeshesModel>, label: &str, text: &str) {
+    h.get_by_label(label).focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_label(label).type_text(text);
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+}
+
+#[test]
+fn controller_rows_show_variable_cycle_and_edit_frequency() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Emissive multiple");
+    h.get_by_label("U offset");
+    h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple cycle");
+    h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable");
+    h.get_by_role_and_label(AkRole::CheckBox, "Emissive multiple active");
+    assert!(ops(h.state()).is_empty(), "drawing records nothing");
+    edit_number(&mut h, "Emissive multiple frequency", "2");
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    let Op::SetField {
+        at,
+        field,
+        value,
+        base,
+    } = &got[0]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*field, Field::Frequency);
+    assert_eq!(*value, Value::F32(2.0f32.to_bits()));
+    assert_eq!(*base, Value::F32(1.0f32.to_bits()));
+    assert!(
+        matches!(
+            &at.role,
+            Role::Ctrl {
+                var: Some(11),
+                nth: 0,
+                ..
+            }
+        ),
+        "{at:?}"
+    );
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(e.model.ctrls[&2].frequency, 2.0);
+    assert_eq!(e.model.ctrls[&3].frequency, 1.0, "the other row untouched");
+    // The interpolator value goes through the controller's anchor.
+    edit_number(&mut h, "U offset value", "0.75");
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(e.model.interps[&5].value, vec![0.75], "{:?}", e.outcomes);
+}
+
+#[test]
+fn managed_variable_combo_is_disabled() {
+    let mut m = MeshesModel::empty();
+    m.edit = Some(
+        NifEdit::open(
+            scenes::managed_clip(),
+            copy("A", 1, false),
+            "meshes/x.nif",
+            None,
+        )
+        .unwrap(),
+    );
+    let b = m.edit.as_ref().unwrap().model.shapes[0].block;
+    m.select_edit(Selection::Shape(b));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Managed by a clip");
+    let var = h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable");
+    assert!(var.accesskit_node().is_disabled());
+    var.click();
+    h.run_steps(3);
+    assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
+}
+
+#[test]
+fn bsx_bits_toggle_and_inv_marker_round_trips() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    // Animated is ticked and locked: a free controller animates this model (D9).
+    let animated = h.get_by_role_and_label(AkRole::CheckBox, "Animated");
+    assert!(animated.accesskit_node().is_disabled());
+    assert_eq!(
+        animated.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    h.get_by_role_and_label(AkRole::CheckBox, "Havok").click();
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    let Op::EditExtra { value, base, at } = &got[0] else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*value, ExtraValue::Bsx(0x82 & !2));
+    assert_eq!(*base, ExtraValue::Bsx(0x82));
+    assert!(
+        matches!(&at.role, Role::Extra { on_root: true, .. }),
+        "{at:?}"
+    );
+    edit_number(&mut h, "Rotation X", "90");
+    let e = h.state().edit.as_ref().unwrap();
+    let inv = e.model.extras.values().find(|x| x.kind == "BSInvMarker");
+    let Some(ExtraValue::Inv { rot, zoom }) = inv.and_then(|x| x.value.clone()) else {
+        panic!("{inv:?}")
+    };
+    assert_eq!(rot, [1571, 6283, 0]);
+    assert_eq!(zoom, 1.0f32.to_bits());
+}
+
+/// Animated is not locked when no property has a free controller, and ticking it writes `old | 1`.
+#[test]
+fn animated_ticks_when_nothing_is_animated() {
+    let mut m = direct(scenes::emit_scene("BSX", 0x82, true));
+    m.select_edit(Selection::Root);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    h.get_by_role_and_label(AkRole::CheckBox, "Animated")
+        .click();
+    h.run_steps(3);
+    let got = ops(h.state());
+    let Some(Op::EditExtra { value, .. }) = got.first() else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*value, ExtraValue::Bsx(0x83));
+}
+
+#[test]
+fn add_and_remove_string_extra_on_a_shape() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    h.get_by_role_and_label(AkRole::ComboBox, "Add type (shape)")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "NiStringExtraData")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::TextInput, "Name (shape)")
+        .focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Name (shape)")
+        .type_text("Note");
+    h.run_steps(2);
+    h.get_by_label("Add to shape").click();
+    h.run_steps(4);
+    let e = h.state().edit.as_ref().unwrap();
+    let net = &e.model.shape(s).unwrap().net;
+    let added = e.model.extras_of(net);
+    assert_eq!(added.len(), 1, "{:?}", e.outcomes);
+    assert_eq!(added[0].kind, "NiStringExtraData");
+    assert_eq!(added[0].name.as_deref(), Some(&b"Note"[..]));
+    assert!(matches!(ops(h.state())[0], Op::AddExtra { .. }));
+    h.get_by_label("Remove Note (shape)").click();
+    h.run_steps(4);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(e.model.extras_of(&e.model.shape(s).unwrap().net).is_empty());
+    assert!(matches!(
+        ops(h.state()).last(),
+        Some(Op::RemoveExtra { .. })
+    ));
+    // The root's extras were never touched.
+    assert_eq!(
+        e.model.extras_of(e.model.root_net.as_ref().unwrap()).len(),
+        6
+    );
+}
+
+/// Drawing both tabs records nothing, whatever the values' bits (negative zero, CRLF).
+#[test]
+fn drawing_the_controller_and_extra_tabs_records_nothing() {
+    let mut m = direct(ctrl_scene(0x83));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    for t in ["Controllers", "Extra data", "Controllers", "Extra data"] {
+        tab(&mut h, t);
+        h.run_steps(6);
+    }
+    assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
+    assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
 }
