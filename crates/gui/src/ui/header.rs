@@ -458,13 +458,14 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     let nif = super::meshes::undo_target(ui.ctx());
     for (undo, name) in [(true, "Undo"), (false, "Redo")] {
         let label = match nif {
-            Some((u, r)) => (if undo { u } else { r }).then_some("NIF edit"),
+            Some((u, r)) => (if undo { u } else { r }).then_some("the last NIF edit"),
             None if undo => model.undo_label(),
             None => model.redo_label(),
         };
+        let sep = if nif.is_some() { " " } else { ": " };
         let hover = match label {
             Some(l) => format!(
-                "{name}: {l}  ({})",
+                "{name}{sep}{l}  ({})",
                 super::actions::keys_text(if undo { "undo" } else { "redo" })
             ),
             None => format!("Nothing to {}", name.to_lowercase()),

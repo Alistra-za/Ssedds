@@ -1129,11 +1129,7 @@ fn a_colour_drag_is_three_ops_with_the_original_bases() {
 fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
     use egui::containers::panel::PanelState;
     use sdc_gui::app::SdcApp;
-    let tmp = tempfile::tempdir().unwrap();
-    let a = tmp.path().join("appdata");
-    std::fs::create_dir_all(&a).unwrap();
-    std::env::set_var("LOCALAPPDATA", &a);
-    std::env::set_var("APPDATA", &a);
+    app_data();
     let d = files(false);
     let model = sdc_gui::model::AppModel::new(
         sdc_gui::settings::GuiSettings::default(),
@@ -2144,7 +2140,30 @@ fn header_undo_enabled_state_and_hover_follow_the_nif_history() {
     assert!(header_button(&h, "Redo").accesskit_node().is_disabled());
     header_button(&h, "Undo").hover();
     h.run_steps(30);
-    h.get_by_label_contains("Undo: NIF edit");
+    h.get_by_label_contains("Undo the last NIF edit");
+    header_button(&h, "Undo").click();
+    h.run_steps(4);
+    header_button(&h, "Redo").hover();
+    h.run_steps(30);
+    h.get_by_label_contains("Redo the last NIF edit");
+}
+
+/// Review: in the Textures view the header Undo and Ctrl+Z act on Textures although a NIF edit is open.
+#[test]
+fn the_textures_view_undoes_textures_with_a_nif_edit_open() {
+    let (_t, _d, mut h) = both_histories(1);
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    header_button(&h, "Undo").click();
+    h.run_steps(4);
+    assert!(h.state().model.can_redo(), "the header undid Textures");
+    assert_eq!(nif(&h), (1, false), "the NIF history is untouched");
+    h.state_mut().model.redo();
+    h.run_steps(4);
+    assert!(!h.state().model.can_redo());
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Z);
+    assert!(h.state().model.can_redo(), "Ctrl+Z undid Textures");
+    assert_eq!(nif(&h), (1, false));
 }
 
 #[test]
