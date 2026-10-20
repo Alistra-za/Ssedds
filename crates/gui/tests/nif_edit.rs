@@ -828,6 +828,84 @@ fn clicking_a_card_selects_the_shape_and_root_card_is_first() {
     assert_eq!(h.state().edit.as_ref().unwrap().selection, Selection::Root);
 }
 
+/// A BSTriShape with one triangle (positions only), so the preview draws it.
+fn one_tri(name: i32, shader: i32) -> Vec<u8> {
+    scenes::avobj(scenes::net(name))
+        .fs(&[0.0; 4])
+        .i32(-1)
+        .i32(shader)
+        .i32(-1)
+        .u64((1 << 44) | 4) // Vertex, 16-byte records
+        .u16(1)
+        .u16(3)
+        .u32(3 * 16 + 6)
+        .fs(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        .u16(0)
+        .u16(1)
+        .u16(2)
+        .u32(0) // particle data
+        .0
+}
+
+/// BSTriShapes "A" and "B" (0, 1), or "B" and "A" when `swap`, each with its own BSLSP (2, 3).
+fn two_named(swap: bool) -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let (a, b) = (n.string("A"), n.string("B"));
+    let (x, y) = if swap { (b, a) } else { (a, b) };
+    n.block("BSTriShape", one_tri(x, 2));
+    n.block("BSTriShape", one_tri(y, 3));
+    n.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    n.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    n.bytes()
+}
+
+/// x.nif in mod A and a PGPatcher copy in PGP with different bytes (its blocks numbered differently).
+fn files_pair(a: &[u8], pgp: &[u8]) -> tempfile::TempDir {
+    let d = instance("+PGP\n+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", Some(a));
+    put(d.path(), "mods/PGP/meshes/x.nif", Some(pgp));
+    put(d.path(), "mods/PGP/PGPatcher.esp", Some(b"e"));
+    let diff = format!(
+        r#"{{"meshes\\x.nif":{{"crc32original":{},"crc32patched":1}}}}"#,
+        crc32fast::hash(a)
+    );
+    put(
+        d.path(),
+        "mods/PGP/ParallaxGen_Diff.json",
+        Some(diff.as_bytes()),
+    );
+    d
+}
+
+/// Final review I1: the cards, their selection and Solo follow the edited copy, not the PGPatcher copy on show.
+#[test]
+fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
+    let d = files_pair(&two_named(false), &two_named(true));
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    assert!(m.pair.is_some(), "x.nif has a PGPatcher copy");
+    m.open_edit();
+    assert_eq!(m.error, None);
+    m.shapes_col = true;
+    let a = shape_named(m.edit.as_ref().unwrap(), "A");
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label_contains(") A — ").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().selection,
+        Selection::Shape(a)
+    );
+    h.get_by_label("Show only this shape").click();
+    h.run_steps(4);
+    let mats = h.state().edit.as_ref().unwrap().materials();
+    assert_eq!(mats.len(), 2);
+    for (id, mat) in mats {
+        assert_eq!(mat.hidden, id.0 != a, "shape block {}", id.0);
+    }
+}
+
 #[test]
 fn typing_glossiness_records_one_op_and_one_undo_step() {
     let (_d, mut m) = session(false);

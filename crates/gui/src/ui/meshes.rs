@@ -712,18 +712,52 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 });
                 ui.separator();
             }
-            if m.shapes.is_empty() {
+            // While editing, the edited copy's shapes (the shown copy may be PGPatcher's, numbered differently); each
+            // with its scanned card when the scan of that copy agrees on block and name, else a title only.
+            let cards: Vec<(u32, Option<&ShapeView>, String)> = match &m.edit {
+                Some(e) => e
+                    .model
+                    .shapes
+                    .iter()
+                    .map(|s| {
+                        let scanned = e
+                            .cards
+                            .iter()
+                            .find(|c| c.block == s.block && c.name == s.name);
+                        let name = s.name.as_deref().unwrap_or("(unnamed)");
+                        (s.block, scanned, format!("{name} — {:?}", s.kind))
+                    })
+                    .collect(),
+                None => m
+                    .shapes
+                    .iter()
+                    .map(|s| (s.block, Some(s), String::new()))
+                    .collect(),
+            };
+            if cards.is_empty() {
                 ui.label("No shapes.");
             }
-            for s in &m.shapes {
-                let on = editing.map(|sel| sel == Selection::Shape(s.block));
+            for (block, view, fallback) in cards {
+                let on = editing.map(|sel| sel == Selection::Shape(block));
                 card(ui, on, |ui| {
-                    let (p, title) = shape(ui, m, s, &mut open, on);
-                    if p.is_some() {
-                        clicked = p;
-                    }
+                    let title = match view {
+                        Some(s) => {
+                            let (p, title) = shape(ui, m, s, &mut open, on);
+                            if p.is_some() {
+                                clicked = p;
+                            }
+                            title
+                        }
+                        None => ui
+                            .add(egui::Button::selectable(
+                                on == Some(true),
+                                egui::RichText::new(fallback).strong(),
+                            ))
+                            .on_hover_text(format!("NIF block {block}"))
+                            .clicked(),
+                    };
                     if title {
-                        pick = Some(Selection::Shape(s.block));
+                        pick = Some(Selection::Shape(block));
                     }
                 });
                 ui.separator();

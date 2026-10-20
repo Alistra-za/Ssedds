@@ -6,7 +6,7 @@ use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Content, FileSource};
 use engine::dds::Kept;
 use modscan::mo2::Instance;
-use modscan::store::{PathCopy, KIND_BSA};
+use modscan::store::{PathCopy, ShapeView, KIND_BSA};
 use nif::edit::validate::{new_errors, validate, Warning};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
@@ -62,6 +62,8 @@ pub struct NifEdit {
     pub error: Option<String>,
     /// Every enabled copy of the NIF (the store's order), for the placement check and the PGPatcher re-run note.
     pub copies: Vec<PathCopy>,
+    /// The scan's shape cards of `source_copy` (texture and flag details for the edit-mode cards; final review I1).
+    pub cards: Vec<ShapeView>,
     /// The placement check (spec §8.2); None without an MO2 instance.
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
@@ -236,6 +238,7 @@ impl NifEdit {
             le_mesh: scan.le_mesh,
             error: None,
             copies: vec![],
+            cards: vec![],
             placement: None,
             blocked: None,
             guard: None,
@@ -654,6 +657,7 @@ impl MeshesModel {
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
         let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
         e.copies = copies;
+        e.cards = store.shapes_of(e.source_copy.copy_id).unwrap_or_default();
         if e.le_mesh {
             return Ok((e, None));
         }
