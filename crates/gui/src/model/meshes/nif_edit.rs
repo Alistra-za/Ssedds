@@ -88,6 +88,8 @@ pub struct GuardAsk {
     pub diff: Vec<String>,
     pub show_diff: bool,
     pub sha256: String,
+    /// sdc never exported to this path: the file there is not one it wrote and then saw changed.
+    pub never_exported: bool,
 }
 
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
@@ -292,7 +294,8 @@ impl NifEdit {
             .filter(|o| matches!(o, Outcome::Refused(_)))
             .count();
         if refused > 0 {
-            return Some(format!("{refused} edits cannot be applied."));
+            let s = if refused == 1 { "edit" } else { "edits" };
+            return Some(format!("{refused} {s} cannot be applied."));
         }
         if self.doc.has_conflicts()
             || self
@@ -363,6 +366,7 @@ impl NifEdit {
                             diff: diff.clone(),
                             show_diff: false,
                             sha256,
+                            never_exported: last.is_none(),
                         });
                         return ExportOutcome::Guard { diff };
                     }

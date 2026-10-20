@@ -1723,14 +1723,19 @@ fn a_refused_edit_blocks_export() {
         path: "textures\\\u{4e2d}.dds".into(),
         base,
     };
-    m.edit_push(vec![op], None);
+    m.edit_push(vec![op.clone()], None);
     assert!(matches!(
         m.edit.as_ref().unwrap().outcomes[0],
         nif::edit::Outcome::Refused(_)
     ));
     assert_eq!(
         m.export_edit(None),
-        ExportOutcome::Blocked("1 edits cannot be applied.".into())
+        ExportOutcome::Blocked("1 edit cannot be applied.".into())
+    );
+    m.edit_push(vec![op], None);
+    assert_eq!(
+        m.export_edit(None),
+        ExportOutcome::Blocked("2 edits cannot be applied.".into())
     );
     assert!(!exported(&d).exists());
 }
@@ -1874,4 +1879,86 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
         .is_none());
     assert_eq!(std::fs::read(&p).unwrap(), b"junk", "Enter keeps theirs");
     assert!(h.state().edit.as_ref().unwrap().guard.is_none());
+}
+
+// ---- v2 A19 review ----
+
+#[test]
+fn a_foreign_file_sdc_never_exported_has_its_own_guard_title() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"theirs").unwrap();
+    assert!(matches!(m.export_edit(None), ExportOutcome::Guard { .. }));
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label("A file sdc did not write is already at this path.");
+    assert!(h
+        .query_by_label("This file changed since sdc exported it.")
+        .is_none());
+    h.get_by_role_and_label(AkRole::Button, "Overwrite");
+    h.get_by_role_and_label(AkRole::Button, "Keep theirs");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(std::fs::read(&p).unwrap(), b"theirs");
+}
+
+#[test]
+fn pending_walk_does_not_follow_directory_links() {
+    let d = tempfile::tempdir().unwrap();
+    let edits = d.path().join(".sdc").join("nif-edits");
+    let sub = edits.join("meshes");
+    std::fs::create_dir_all(&sub).unwrap();
+    let mut doc = doc();
+    doc.ops.push(DocOp {
+        op: sample_op(),
+        status: OpStatus::Applied,
+    });
+    save(&sub.join("x.nif.sdc-nifedit.toml"), &doc).unwrap();
+    // A junction back to its own parent: a walk that follows it never ends (or lists the doc twice).
+    let link = sub.join("loop");
+    let ok = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&edits)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok && link.is_dir(), "the junction was made");
+    let found = pending_docs(d.path());
+    assert_eq!(found, vec![("meshes/x.nif".to_string(), DocBadge::Pending)]);
+    std::fs::remove_dir(&link).unwrap(); // the junction only, never its target
+}
+
+#[test]
+fn a_path_typed_without_enter_is_exported_by_the_export_click() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    gloss(&mut m, 12.5);
+    let mut h = view(m);
+    h.run_steps(3);
+    let field = "Diffuse path (slot 0)";
+    h.get_by_role_and_label(AkRole::TextInput, field).focus();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_role_and_label(AkRole::TextInput, field)
+        .type_text("textures\\typed.dds");
+    h.run_steps(1);
+    h.get_by_role_and_label(AkRole::Button, "Export NIF")
+        .click();
+    h.run_steps(4);
+    let bytes = std::fs::read(exported(&d)).expect("exported");
+    let needle = b"textures\\typed.dds";
+    assert!(
+        bytes.windows(needle.len()).any(|w| w == needle),
+        "the typed path is in the exported file"
+    );
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(!e.doc.pending(), "the export includes the typed edit");
 }

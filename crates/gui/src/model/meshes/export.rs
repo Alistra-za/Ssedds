@@ -124,10 +124,14 @@ pub fn pending_docs(edit_mod: &Path) -> Vec<(String, DocBadge)> {
         let Ok(rd) = std::fs::read_dir(&d) else {
             continue;
         };
-        for p in rd.flatten().map(|e| e.path()) {
-            if p.is_dir() {
+        // `file_type` does not follow links: a link or junction (a loop, or a path out of the mod) is skipped.
+        for (p, t) in rd
+            .flatten()
+            .filter_map(|e| Some((e.path(), e.file_type().ok()?)))
+        {
+            if t.is_dir() {
                 dirs.push(p);
-            } else if p.to_string_lossy().ends_with(".sdc-nifedit.toml") {
+            } else if t.is_file() && p.to_string_lossy().ends_with(".sdc-nifedit.toml") {
                 if let Ok(Some(doc)) = edit_doc::load(&p) {
                     if let Some(b) = DocBadge::of(&doc) {
                         out.push((doc.source.data_path.clone(), b));

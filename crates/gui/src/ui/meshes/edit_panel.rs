@@ -177,7 +177,10 @@ fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
         ("Diff", Role::Plain, true),
         ("Keep theirs", Role::Default, true),
     ];
-    let title = "This file changed since sdc exported it.";
+    let title = match g.never_exported {
+        true => "A file sdc did not write is already at this path.",
+        false => "This file changed since sdc exported it.",
+    };
     let (k, clicked) = dialog(
         ctx,
         "nif-export-guard",
@@ -260,6 +263,7 @@ fn apply(m: &mut MeshesModel, act: Act) {
     if act.open.is_some() {
         m.open_in_textures = act.open;
     }
+    // Last: a field that lost its focus to the Export click committed its push (and flush) above this frame (rule 7.5).
     if let Some(choice) = act.export {
         m.export_edit(choice);
     }
