@@ -207,6 +207,53 @@ fn load_fixture_refuses_malformed_fixtures() {
     }
 }
 
+/// D-P15: a logged list without DEFERRED on a draw the capture shows with 8 PS outputs gets DEFERRED, with a warning.
+#[test]
+fn load_fixture_adds_deferred_from_eight_outputs() {
+    let load = |outputs: u64, defines: &[&str]| {
+        let d = tempfile::tempdir().unwrap();
+        write_fixture(d.path(), defines);
+        edit_json(d.path(), "state.json", &|v| {
+            v["identity"]["outputs"] = json!(outputs);
+            let first = v["defines"][0].clone();
+            v["defines"] = json!([first.clone(), first]);
+        });
+        load_fixture(d.path()).unwrap()
+    };
+    let r = load(8, STANDIN);
+    assert_eq!(r.defines.len(), 2);
+    for v in &r.defines {
+        assert_eq!(v.iter().filter(|d| *d == "DEFERRED").count(), 1, "{v:?}");
+    }
+    assert_eq!(r.warnings, ["DEFERRED added from the capture's 8 outputs"]);
+    let r = load(3, STANDIN);
+    assert!(r
+        .defines
+        .iter()
+        .all(|v| !v.contains(&"DEFERRED".to_string())));
+    assert!(r.warnings.is_empty());
+    let with: Vec<&str> = STANDIN.iter().copied().chain(["DEFERRED"]).collect();
+    let r = load(8, &with);
+    assert!(r
+        .defines
+        .iter()
+        .all(|v| v.iter().filter(|d| *d == "DEFERRED").count() == 1));
+    assert!(r.warnings.is_empty());
+}
+
+/// D-P16: RenderDoc's "NoCull" is no culling, like "None".
+#[test]
+fn load_fixture_accepts_no_cull() {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture(d.path(), STANDIN);
+    edit_json(d.path(), "extras.json", &|v| {
+        v["rasterizer"]["cull"] = json!("NoCull")
+    });
+    assert!(!load_fixture(d.path()).unwrap().cull_back);
+    let e = load_err("extras.json", &|v| v["rasterizer"]["cull"] = json!("Front"));
+    assert!(e.contains("rasterizer"), "{e}");
+}
+
 #[test]
 fn replay_refuses_an_empty_define_list() {
     let d = tempfile::tempdir().unwrap();

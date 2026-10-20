@@ -66,6 +66,8 @@ pub struct Replay {
     pub formats: Vec<String>,
     /// The subject's composite.json (D4), if it has one.
     pub composite: Option<ReplayComposite>,
+    /// Load-time notes (e.g. a define added from the capture); render_replay passes them on.
+    pub warnings: Vec<String>,
 }
 
 /// The deferred composite dispatch of a subject's frame (composite.json in the subject dir).
@@ -445,7 +447,7 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
             .ok_or_else(|| serr("bad ViewProj"))?,
     );
     // Strict: a dropped entry would compile a different permutation.
-    let defines: Vec<Vec<String>> = state
+    let mut defines: Vec<Vec<String>> = state
         .get("defines")
         .and_then(Value::as_array)
         .filter(|a| !a.is_empty())
@@ -457,6 +459,18 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         })
         .collect::<Option<_>>()
         .ok_or_else(|| serr("defines: every variant must be a list of strings"))?;
+    let mut warnings = Vec::new();
+    // D-P15: CS's logged lists omit DEFERRED; the capture's 8 PS outputs prove the deferred variant ran.
+    let outputs = state.pointer("/identity/outputs").and_then(Value::as_u64);
+    if outputs == Some(8) && defines.iter().any(|v| !v.iter().any(|d| d == "DEFERRED")) {
+        for v in defines
+            .iter_mut()
+            .filter(|v| !v.iter().any(|d| d == "DEFERRED"))
+        {
+            v.push("DEFERRED".into());
+        }
+        warnings.push("DEFERRED added from the capture's 8 outputs".to_string());
+    }
     let blend = state
         .pointer("/stageB/blend")
         .and_then(Value::as_array)
@@ -584,7 +598,8 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         .get("rasterizer")
         .ok_or_else(|| eerr("no rasterizer"))?;
     let cull = r.get("cull").and_then(Value::as_str).unwrap_or("");
-    if !matches!(cull, "Back" | "None") || r.get("frontCCW").and_then(Value::as_bool) != Some(true)
+    if !matches!(cull, "Back" | "None" | "NoCull")
+        || r.get("frontCCW").and_then(Value::as_bool) != Some(true)
     {
         return Err(eerr(&format!(
             "rasterizer cull {cull:?} / frontCCW {:?} not replayable",
@@ -624,6 +639,7 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         before,
         formats,
         composite: load_composite(dir, crop, px)?,
+        warnings,
     })
 }
 
@@ -764,7 +780,7 @@ impl Renderer {
             // shortcut: blended (hint-1 forward) subjects need the captured blend state on top of the seeded RT0; D6b if wanted
             return Err("blended subjects do not replay yet".into());
         }
-        let mut warnings = Vec::new();
+        let mut warnings = r.warnings.clone();
         if r.defines.len() > 1 {
             warnings.push(format!(
                 "{} define variants; replaying the first",
