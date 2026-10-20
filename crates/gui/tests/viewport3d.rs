@@ -438,17 +438,84 @@ fn mean_frame_ms(v: &mut Viewport3d, (w, h): (u32, u32)) -> f64 {
         v.orbit.drag(5.0 * (i + 1) as f32, 0.0);
         v.request_frame(w, h);
         wait_idle(v);
-        let f = v.frame.clone().unwrap();
-        assert_eq!((f.width, f.height), (w, h));
+        let (f, tm) =
+            fresh_sample(v, (w, h)).unwrap_or_else(|e| panic!("sample {i} at {w}x{h}: {e}"));
         let t = Instant::now();
         let img =
             eframe::egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &f.rgba);
         let upload = t.elapsed().as_secs_f64() * 1000.0;
         std::hint::black_box(img);
-        let tm = v.timing.unwrap();
         total += tm.draw_ms + tm.gpu_ms + tm.readback_ms + upload;
     }
     total / 10.0
+}
+
+/// The frame and timing answering the last `Render` sent, at `w x h`: Err when it is stale (an older or refresh
+/// frame), the wrong size, or a render error or a notice (a deferred fallback) arrived since the request.
+fn fresh_sample(
+    v: &Viewport3d,
+    (w, h): (u32, u32),
+) -> Result<(Arc<v3::Frame>, render3d::FrameTiming), String> {
+    if let Some(e) = &v.render_error {
+        return Err(format!("render error: {e}"));
+    }
+    if let Some(n) = &v.notice {
+        return Err(format!("notice since the request: {n}"));
+    }
+    let f = v.frame.clone().ok_or("no frame")?;
+    let want = v.render_sent_for_test();
+    if f.id != want {
+        return Err(format!("stale frame {} (the request was {want})", f.id));
+    }
+    if (f.width, f.height) != (w, h) {
+        return Err(format!("frame {}x{}, asked {w}x{h}", f.width, f.height));
+    }
+    Ok((f, v.timing.ok_or("no timing")?))
+}
+
+#[test]
+fn a_perf_sample_takes_only_a_fresh_error_free_frame() {
+    let (mut v, _cmds) = rendered();
+    let (w, h) = (1, 1); // the size frame_of makes
+    v.request_frame(w, h);
+    let rid = v.render_sent_for_test();
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 9),
+        timing: Default::default(),
+    });
+    assert!(fresh_sample(&v, (w, h)).is_ok());
+    assert!(fresh_sample(&v, (64, 64)).is_err(), "wrong size");
+    // The next render fails: the old frame and timing stay, but they are stale.
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(w, h);
+    let rid = v.render_sent_for_test();
+    v.handle(v3::V3Reply::RenderError {
+        id: rid,
+        message: "boom".into(),
+    });
+    assert!(!v.busy());
+    let e = fresh_sample(&v, (w, h)).unwrap_err();
+    assert!(e.contains("boom"), "{e}");
+    // A frame for the request, but a fallback notice arrived meanwhile.
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 9),
+        timing: Default::default(),
+    });
+    assert!(fresh_sample(&v, (w, h)).is_ok());
+    v.handle(v3::V3Reply::Notice(
+        "Deferred preview unavailable: x".into(),
+    ));
+    assert!(
+        fresh_sample(&v, (w, h)).is_err(),
+        "a notice since the request"
+    );
+    // A refresh frame (compile-triggered) is not the answer to the request.
+    v.notice = None;
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of(1 << 62, 9),
+        timing: Default::default(),
+    });
+    assert!(fresh_sample(&v, (w, h)).is_err(), "a refresh frame");
 }
 
 /// v2 D8 perf gate: the deferred toggle never blocks the UI thread (each UI-side call < 16 ms), and deferred frames
