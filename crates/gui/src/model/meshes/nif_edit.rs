@@ -194,13 +194,14 @@ impl NifEdit {
         data_path: &str,
         edit_mod: Option<&Path>,
     ) -> Result<NifEdit, String> {
+        edit_doc::win(data_path)?; // read-only too: the session never opens on such a path
         let (scan, model) = read_source(&source)?;
         let id = source_id(&source_copy, data_path, &source);
         let (edit_mod, doc_path, export_path) = match edit_mod {
             Some(m) => (
                 m.to_path_buf(),
-                edit_doc::doc_path(m, data_path),
-                edit_doc::export_path(m, data_path),
+                edit_doc::doc_path(m, data_path)?,
+                edit_doc::export_path(m, data_path)?,
             ),
             None => Default::default(),
         };
@@ -645,6 +646,7 @@ impl MeshesModel {
         edit_mod: Option<&Path>,
     ) -> Result<(NifEdit, Option<Content>), String> {
         let store = self.store.as_ref().ok_or("No scan store.")?;
+        edit_doc::win(path)?; // before the read: a loose copy's root joined with `..` would read outside its mod
         let copies = store.copies_of_path(path).map_err(db_err)?;
         let src = pick_source(&copies, edit_mod.unwrap_or(Path::new("")))
             .ok_or_else(|| format!("No source copy of {path} to edit."))?

@@ -97,19 +97,28 @@ impl EditDoc {
     }
 }
 
-fn win(data_path: &str) -> String {
-    data_path.replace('/', "\\")
+/// `data_path` with `\` separators, or Err unless every component is a plain name: a crafted BSA folder such as
+/// `..\x` or `C:\x` must not lead a write out of the edit mod (Windows drops trailing dots and spaces, so `. .` too).
+pub fn win(data_path: &str) -> Result<String, String> {
+    let w = data_path.replace('/', "\\");
+    let bad = |s: &str| s.trim_end_matches(['.', ' ']).is_empty() || s.contains(':');
+    match w.split('\\').any(bad) {
+        true => Err(format!(
+            "This NIF's path cannot be used for an edit: {data_path}"
+        )),
+        false => Ok(w),
+    }
 }
 
-pub fn doc_path(edit_mod: &Path, data_path: &str) -> PathBuf {
-    edit_mod
+pub fn doc_path(edit_mod: &Path, data_path: &str) -> Result<PathBuf, String> {
+    Ok(edit_mod
         .join(".sdc")
         .join("nif-edits")
-        .join(format!("{}.sdc-nifedit.toml", win(data_path)))
+        .join(format!("{}.sdc-nifedit.toml", win(data_path)?)))
 }
 
-pub fn export_path(edit_mod: &Path, data_path: &str) -> PathBuf {
-    edit_mod.join(win(data_path))
+pub fn export_path(edit_mod: &Path, data_path: &str) -> Result<PathBuf, String> {
+    Ok(edit_mod.join(win(data_path)?))
 }
 
 pub fn save(path: &Path, doc: &EditDoc) -> Result<(), String> {

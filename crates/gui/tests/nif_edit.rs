@@ -78,15 +78,54 @@ fn negative_zero_survives_the_document() {
 fn doc_and_export_paths_follow_the_spec() {
     let m = Path::new(r"C:\I\mods\sdc NIF Edits");
     assert_eq!(
-        doc_path(m, "meshes/clutter/foo.nif"),
+        doc_path(m, "meshes/clutter/foo.nif").unwrap(),
         Path::new(
             r"C:\I\mods\sdc NIF Edits\.sdc\nif-edits\meshes\clutter\foo.nif.sdc-nifedit.toml"
         )
     );
     assert_eq!(
-        export_path(m, "meshes/clutter/foo.nif"),
+        export_path(m, "meshes/clutter/foo.nif").unwrap(),
         Path::new(r"C:\I\mods\sdc NIF Edits\meshes\clutter\foo.nif")
     );
+}
+
+const ESCAPING: [&str; 5] = [
+    r"..\x.nif",
+    r"C:\x.nif",
+    r"\x.nif",
+    r"meshes\..\..\x.nif",
+    "meshes/a:b.nif",
+];
+
+/// Final review I3: a data path from a crafted BSA must not lead a write out of the edit mod.
+#[test]
+fn a_data_path_that_leaves_the_edit_mod_is_refused() {
+    let m = Path::new(r"C:\I\mods\sdc NIF Edits");
+    for p in ESCAPING {
+        let want = format!("This NIF's path cannot be used for an edit: {p}");
+        assert_eq!(doc_path(m, p), Err(want.clone()), "{p}");
+        assert_eq!(export_path(m, p), Err(want), "{p}");
+    }
+}
+
+#[test]
+fn an_edit_on_an_escaping_path_does_not_open() {
+    let d = tempfile::tempdir().unwrap();
+    let edit_mod = d.path().join("mods").join(EDIT_MOD);
+    for p in ESCAPING {
+        let r = NifEdit::open(
+            fixture("TestNifFile_Skinned_SE.nif"),
+            copy("A", 1, false),
+            p,
+            Some(&edit_mod),
+        );
+        assert_eq!(
+            r.err(),
+            Some(format!("This NIF's path cannot be used for an edit: {p}")),
+            "{p}"
+        );
+    }
+    assert!(!edit_mod.exists(), "nothing written");
 }
 
 #[test]
