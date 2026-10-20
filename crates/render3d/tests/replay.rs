@@ -456,10 +456,21 @@ fn replay_seeds_captured_depth_and_uses_the_captured_depth_state() {
             }
         }
     }
+    // D6c test hook: the seeded D24 depth reads back as 0 (drawn, Equal) and 1 (untouched).
+    assert!(ren.render_replay(&r, true).unwrap().depth.is_none());
+    ren.set_replay_depth_readback(true);
+    let depth = ren.render_replay(&r, true).unwrap().depth.unwrap();
+    let want: Vec<f32> = (0..16).map(|p| if p % 4 < 2 { 0.0 } else { 1.0 }).collect();
+    assert_eq!(depth, want);
     // Without depth.json the whole crop is drawn, as before.
     fs::remove_file(d.path().join("depth.json")).unwrap();
     let r = load_fixture(d.path()).unwrap();
     assert!(r.depth.is_none());
+    // The target's D32 depth: z = 0 everywhere.
+    assert_eq!(
+        ren.render_replay(&r, true).unwrap().depth,
+        Some(vec![0.0; 16])
+    );
     let out = ren.render_replay(&r, true).unwrap();
     for (i, rt) in out.mrt.iter().enumerate() {
         for px in rt.chunks(4) {
@@ -638,6 +649,36 @@ fn replay_composite_refuses_mismatched_fixtures() {
     let r = load_fixture(d.path()).unwrap();
     assert!(r.composite.is_none());
     assert!(ren.render_replay(&r, true).unwrap().main.is_none());
+}
+
+/// D6c part 3: a debug view compiles the injected source with SDC_DEBUG, so RT0 is the view's value (the stand-in's
+/// Roughness view writes 1 − glossiness = 0.75); Lit draws the material colour as before.
+#[test]
+fn replay_honours_the_debug_view() {
+    let shaders = tempfile::tempdir().unwrap();
+    let src = fs::read_to_string(common::standin_root().join("Lighting.hlsl")).unwrap();
+    // The stand-in has no debug anchor on purpose (tests/deferred.rs pattern).
+    fs::write(
+        shaders.path().join("Lighting.hlsl"),
+        src.replace("    return psout ;", "    return psout;"),
+    )
+    .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_deferred(d.path());
+    let r = load_fixture(d.path()).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer_at(shaders.path(), cache.path(), &[]);
+    ren.set_debug_output(render3d::DebugOutput::Roughness)
+        .unwrap();
+    let out = ren.render_replay(&r, false).unwrap();
+    for px in out.mrt[0].chunks(4) {
+        assert_eq!(px, [0.75, 0.75, 0.75, 1.0], "Roughness view");
+    }
+    ren.set_debug_output(render3d::DebugOutput::Lit).unwrap();
+    let out = ren.render_replay(&r, false).unwrap();
+    for px in out.mrt[0].chunks(4) {
+        assert_eq!(px, [0.75, 0.25, 0.5, 1.0], "Lit");
+    }
 }
 
 #[test]

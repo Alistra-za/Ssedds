@@ -374,6 +374,8 @@ pub struct Renderer {
     overrides: BTreeMap<usize, (Arc<[u8]>, textures::Texture)>,
     /// [`Renderer::set_debug_output`]: the term the next permutations write instead of the lit colour.
     debug: DebugOutput,
+    /// Test hook (D6c): render_replay also reads the depth back.
+    replay_depth: bool,
     /// [`Renderer::set_deferred`]: opaque shapes draw the DEFERRED permutation into the 8 CS render targets.
     deferred: bool,
     /// CS's DeferredCompositeCS for deferred frames (v2 D4); rebuilt when its defines change, from the disk cache.
@@ -479,6 +481,7 @@ impl Renderer {
             missing_fill: None,
             overrides: BTreeMap::new(),
             debug: DebugOutput::Lit,
+            replay_depth: false,
             deferred: false,
             composite: None,
             deferred_error: None,
@@ -717,6 +720,12 @@ impl Renderer {
         self.debug = d;
         self.begin_all();
         Ok(())
+    }
+
+    /// Test hook (D6c): `render_replay` also returns the depth after the draw over the crop (`ReplayOut::depth`).
+    #[doc(hidden)]
+    pub fn set_replay_depth_readback(&mut self, on: bool) {
+        self.replay_depth = on;
     }
 
     pub fn debug_output(&self) -> DebugOutput {

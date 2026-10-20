@@ -10,7 +10,7 @@ use render3d::permutation::Defines;
 use render3d::replay::{cb_bytes, vs_defines};
 use render3d::source::SourceSet;
 use render3d::textures::register_for_slot;
-use render3d::{load_fixture, parse, ParsedNif, Renderer, Replay, ShapeId};
+use render3d::{load_fixture, parse, DebugOutput, ParsedNif, Renderer, Replay, ShapeId};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
@@ -735,4 +735,291 @@ fn extraction_matches_capture() {
         "only {reached} subjects reached the cbuffer step"
     );
     assert!(nonfinite.is_empty(), "non-finite output: {nonfinite:?}");
+}
+
+/// Part 3 mode B: the DBG subject with sdc's material swapped in (as in extraction_matches_capture); the NIF is
+/// unloaded afterwards so debug-view changes recompile nothing but the replay.
+fn hybrid(ren: &mut Renderer, env: &Env, dir: &Path) -> Result<(Replay, Vec<String>), String> {
+    let mut r = load_fixture(dir)?;
+    let sdc = load_sdc(ren, env, dir, &r)?;
+    let layout = material_fields(env, &r)?;
+    let fields = compare_fields(ren, sdc.id, &r, &layout);
+    let sizes: HashMap<&str, u32> = layout.iter().map(|(s, _, z)| (*s, *z)).collect();
+    let mut notes = swap_material(ren, &mut r, &fields, &sizes, &sdc);
+    notes.extend(
+        fields
+            .iter()
+            .filter(|f| !f.ok)
+            .map(|f| format!("{}.{} differs", f.cb, f.var)),
+    );
+    ren.load_parsed_sync(&ParsedNif::default(), &|_| None);
+    Ok((r, notes))
+}
+
+/// The value a debug view writes at the traced pixel, from the trace's final values (None = component not traced).
+fn traced(view: DebugOutput, vars: &Value, pbr: bool) -> Result<[Option<f32>; 3], &'static str> {
+    let comp = |k: &str, i: usize| vars[k][i].as_f64().map(|x| x as f32);
+    let scalar = |k: &str| {
+        if vars.get(k).is_none() {
+            return Err("not traced");
+        }
+        let v = comp(k, 0);
+        Ok([v, v, v])
+    };
+    match view {
+        DebugOutput::NormalWorld if vars.get("worldNormal").is_some() => {
+            Ok(std::array::from_fn(|i| {
+                comp("worldNormal", i).map(|n| n * 0.5 + 0.5)
+            }))
+        }
+        DebugOutput::Roughness if pbr => scalar("material.Roughness"),
+        DebugOutput::Roughness => scalar("glossiness").map(|v| v.map(|g| g.map(|g| 1.0 - g))),
+        DebugOutput::Metallic if pbr => scalar("material.Metallic"),
+        DebugOutput::Metallic => Err("non-PBR: no metallic term"),
+        DebugOutput::Albedo if vars.get("material.BaseColor").is_some() => {
+            Ok(std::array::from_fn(|i| comp("material.BaseColor", i)))
+        }
+        _ => Err("not traced"),
+    }
+}
+
+const VIEWS: [DebugOutput; 4] = [
+    DebugOutput::NormalWorld,
+    DebugOutput::Roughness,
+    DebugOutput::Metallic,
+    DebugOutput::Albedo,
+];
+
+/// Mode B subjects: (capture, subject folder name without the event).
+const MODE_B: &[(&str, &str)] = &[
+    ("Skyrim_AE_1.6.1170_frame26196", "Coffin"),
+    ("Skyrim_AE_1.6.1170_frame26196", "Object174"),
+    ("Skyrim_AE_1.6.1170_frame26196", "dibella_L.004_3"),
+    ("Skyrim_AE_1.6.1170_frame61618", "BlackreachCrystalL01_10"),
+    ("Skyrim_AE_1.6.1170_frame61618", "NorRubblePiece01_0"),
+];
+
+const WANTED: [&str; 5] = [
+    "worldNormal",
+    "material.Roughness",
+    "material.Metallic",
+    "material.BaseColor",
+    "glossiness",
+];
+
+#[test]
+#[ignore]
+fn trace_values_match_unit_functions() {
+    let Some(env) = env() else { return };
+    let fp = render3d::locate::fingerprint(&env.shaders, None).unwrap();
+    let mut ren = Renderer::new(fp, env.cache.path().to_path_buf()).unwrap();
+    assert!(
+        ren.debug_supported(),
+        "the installed Lighting.hlsl has no debug anchor"
+    );
+    // D-P24: a trace counts only when its fragment is the one the replay keeps (depth within 2 D24 ulps).
+    ren.set_replay_depth_readback(true);
+    let mut t = String::from(
+        "mode | subject | trace | view | traced | replay RT0 | over | traced z / replay z\n",
+    );
+    let mut skipped: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+    let (mut checked, mut failures, mut b_rows) = (0usize, Vec::new(), 0usize);
+    // Compared Roughness + Metallic values; skipped occluded values whose colour was also over the limit.
+    let (mut rough_metal, mut occluded_over) = (0usize, 0usize);
+    for s in golden::subjects(&env.root, &["DBG"]).unwrap() {
+        let name = s.dir.file_name().unwrap().to_string_lossy().into_owned();
+        let who = format!("{}/{name}", s.capture);
+        let mrt = json(&s.dir.join("mrt.json"));
+        if mrt["maskSource"] == "overlay" {
+            skipped.entry("overlay mask").or_default().push(who);
+            continue;
+        }
+        let r = match load_fixture(&s.dir) {
+            Ok(r) => r,
+            Err(e) if e.contains("defines null") => {
+                skipped.entry("defines null").or_default().push(who);
+                continue;
+            }
+            Err(e) => {
+                skipped
+                    .entry("load error")
+                    .or_default()
+                    .push(format!("{who}: {e}"));
+                continue;
+            }
+        };
+        if r.blended {
+            skipped.entry("blended").or_default().push(who);
+            continue;
+        }
+        if r.two_sided_alpha_tested() && r.depth.is_none() {
+            skipped
+                .entry("two-sided without depth")
+                .or_default()
+                .push(who);
+            continue;
+        }
+        let mut traces = Vec::new();
+        for pick in ["lit", "mid", "dark"] {
+            let p = s.dir.join(format!("trace_{pick}.json"));
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                skipped
+                    .entry("no trace file")
+                    .or_default()
+                    .push(format!("{who} {pick}"));
+                continue;
+            };
+            let tr: Value =
+                serde_json::from_str(&render3d::replay::nonfinite_to_null(&text)).unwrap();
+            let why = if tr.get("error").is_some() {
+                Some("error trace")
+            } else if tr["debugInfo"] != true {
+                Some("debugInfo not true")
+            } else if !WANTED.iter().any(|k| tr["vars"].get(*k).is_some()) {
+                Some("no wanted name")
+            } else {
+                None
+            };
+            match why {
+                Some(w) => skipped.entry(w).or_default().push(format!("{who} {pick}")),
+                None => traces.push((pick, tr)),
+            }
+        }
+        if traces.is_empty() {
+            continue;
+        }
+        let pbr = r.defines[0].iter().any(|d| d == "TRUE_PBR");
+        let mode_b = MODE_B.iter().any(|(c, tag)| {
+            *c == s.capture && name.split_once('_').is_some_and(|(_, rest)| rest == *tag)
+        });
+        let mut runs: Vec<(&str, Replay)> = vec![("A", r)];
+        if mode_b {
+            match hybrid(&mut ren, &env, &s.dir) {
+                Ok((h, notes)) => {
+                    let _ = writeln!(t, "B | {who} | notes {notes:?}");
+                    runs.push(("B", h));
+                }
+                Err(e) => {
+                    let _ = writeln!(t, "B | {who} | hybrid ERROR {e}");
+                }
+            }
+        }
+        for (mode, r) in &runs {
+            let [cx, cy, cw, ch] = r.crop;
+            for view in VIEWS {
+                ren.set_debug_output(view).unwrap();
+                let out = match ren.render_replay(r, false) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        skipped
+                            .entry("replay error")
+                            .or_default()
+                            .push(format!("{mode} {who} {view:?}: {e}"));
+                        continue;
+                    }
+                };
+                for (pick, tr) in &traces {
+                    let x = tr["x"].as_u64().unwrap() as u32;
+                    let y = tr["y"].as_u64().unwrap() as u32;
+                    if x < cx || y < cy || x >= cx + cw || y >= cy + ch {
+                        skipped
+                            .entry("traced pixel outside the crop")
+                            .or_default()
+                            .push(format!("{who} {pick}"));
+                        continue;
+                    }
+                    let want = match traced(view, &tr["vars"], pbr) {
+                        Ok(w) if w.iter().any(Option::is_some) => w,
+                        _ => continue,
+                    };
+                    let p = ((y - cy) * cw + (x - cx)) as usize;
+                    let got: [f32; 4] = out.mrt[0][4 * p..4 * p + 4].try_into().unwrap();
+                    // Untraced components and alpha compare with themselves.
+                    let b: Vec<f32> = (0..4)
+                        .map(|i| want.get(i).copied().flatten().unwrap_or(got[i]))
+                        .collect();
+                    let d = golden::diff_tol(
+                        &got,
+                        &b,
+                        &[true],
+                        golden::format_tol("R16G16B16A16_FLOAT").unwrap(),
+                        0.0,
+                    );
+                    let asserted = *mode == "A" && view != DebugOutput::Albedo;
+                    let zt = tr["vars"]["SV_POSITION"][2].as_f64().map(|z| z as f32);
+                    let zr = out.depth.as_ref().unwrap()[p];
+                    let visible = zt.is_some_and(|z| (z - zr).abs() <= 2.0 / 16_777_215.0);
+                    let _ = writeln!(
+                        t,
+                        "{mode}{} | {who} | {pick} | {view:?} | {} | {} | {} | {zt:?} / {zr}{}",
+                        if asserted { "" } else { " (report)" },
+                        fmt_v(&b[..3]),
+                        fmt_v(&got[..3]),
+                        if d.over > 0.0 {
+                            format!("OVER max {:.3e}", d.max_abs)
+                        } else {
+                            "0".into()
+                        },
+                        if visible { "" } else { " occluded" }
+                    );
+                    if asserted && !visible {
+                        occluded_over += (d.over > 0.0) as usize;
+                        skipped
+                            .entry("occluded fragment")
+                            .or_default()
+                            .push(format!(
+                                "{who} {pick} {view:?}: traced z {zt:?}, replay z {zr}{}",
+                                if d.over > 0.0 { " (colour over)" } else { "" }
+                            ));
+                        continue;
+                    }
+                    if asserted {
+                        checked += 1;
+                        rough_metal +=
+                            matches!(view, DebugOutput::Roughness | DebugOutput::Metallic) as usize;
+                        if d.over > 0.0 {
+                            failures.push(format!(
+                                "{who} {pick} {view:?}: traced {} replay {}",
+                                fmt_v(&b[..3]),
+                                fmt_v(&got[..3])
+                            ));
+                        }
+                    } else if *mode == "B" {
+                        b_rows += 1;
+                    }
+                }
+            }
+        }
+    }
+    ren.set_debug_output(DebugOutput::Lit).unwrap();
+    let _ = writeln!(
+        t,
+        "\nmode A compared values: {checked} (Roughness + Metallic {rough_metal}); failures: {}; occluded skips with colour over: {occluded_over}",
+        failures.len()
+    );
+    for f in &failures {
+        let _ = writeln!(t, "  {f}");
+    }
+    let _ = writeln!(t, "mode B rows (report-only): {b_rows}");
+    for (why, list) in &skipped {
+        let _ = writeln!(t, "skipped {why}: {}", list.len());
+        for w in list {
+            let _ = writeln!(t, "  {w}");
+        }
+    }
+    print!("{t}");
+    let out = std::env::temp_dir().join("golden-trace.txt");
+    std::fs::write(&out, &t).unwrap();
+    println!("table written to {}", out.display());
+    // A value whose depth matches but whose colour differs is a failure, never a skip: every colour mismatch must
+    // be an occluded fragment.
+    assert!(
+        failures.is_empty(),
+        "mode A trace mismatches on the visible fragment: {failures:#?}"
+    );
+    assert!(checked >= 30, "only {checked} mode A values compared");
+    assert!(
+        rough_metal >= 20,
+        "only {rough_metal} Roughness + Metallic values compared"
+    );
 }

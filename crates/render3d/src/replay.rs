@@ -18,13 +18,15 @@ use windows::core::PCSTR;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11SamplerState,
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_FLAG, D3D11_BIND_INDEX_BUFFER,
-    D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC, D3D11_COMPARISON_FUNC,
-    D3D11_CPU_ACCESS_WRITE, D3D11_DEPTH_STENCIL_DESC, D3D11_DEPTH_STENCIL_VIEW_DESC,
-    D3D11_DEPTH_WRITE_MASK_ALL, D3D11_DEPTH_WRITE_MASK_ZERO, D3D11_DSV_DIMENSION_TEXTURE2D,
-    D3D11_FILTER, D3D11_FILTER_ANISOTROPIC, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
-    D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_MODE,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING, D3D11_VIEWPORT,
+    ID3D11Texture2D, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_FLAG,
+    D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC,
+    D3D11_COMPARISON_FUNC, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_DEPTH_STENCIL_DESC,
+    D3D11_DEPTH_STENCIL_VIEW_DESC, D3D11_DEPTH_WRITE_MASK_ALL, D3D11_DEPTH_WRITE_MASK_ZERO,
+    D3D11_DSV_DIMENSION_TEXTURE2D, D3D11_FILTER, D3D11_FILTER_ANISOTROPIC,
+    D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_MAP_READ, D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
+    D3D11_TEXTURE_ADDRESS_MODE, D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING,
+    D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -296,6 +298,8 @@ pub struct ReplayOut {
     /// The composite's MainRW (D4).
     pub main: Option<Vec<f32>>,
     pub warnings: Vec<String>,
+    /// Depth after the draw over the crop (0..1), only with [`Renderer::set_replay_depth_readback`] (D6c test hook).
+    pub depth: Option<Vec<f32>>,
 }
 
 fn json(path: &Path) -> Result<Value, String> {
@@ -869,7 +873,14 @@ fn seeded_depth(
     size: (u32, u32),
     crop: [u32; 4],
     d: &ReplayDepth,
-) -> Result<(ID3D11DepthStencilView, ID3D11DepthStencilState), String> {
+) -> Result<
+    (
+        ID3D11DepthStencilView,
+        ID3D11DepthStencilState,
+        ID3D11Texture2D,
+    ),
+    String,
+> {
     let (w, h) = (size.0 as usize, size.1 as usize);
     let mut px = vec![0x00FF_FFFFu32; w * h];
     let (cx, cy, cw) = (crop[0] as usize, crop[1] as usize, crop[2] as usize);
@@ -898,6 +909,7 @@ fn seeded_depth(
         SysMemSlicePitch: 0,
     };
     let (mut staging, mut tex, mut dsv, mut state) = (None, None, None, None);
+    let depth_tex: ID3D11Texture2D;
     // SAFETY: `px`, the descriptors and out-pointers are live locals; both textures belong to `gpu.device`.
     unsafe {
         gpu.device
@@ -914,6 +926,7 @@ fn seeded_depth(
             tex.ok_or("no depth texture")?,
         );
         gpu.ctx.CopyResource(&tex, &staging);
+        depth_tex = tex.clone();
         let vd = D3D11_DEPTH_STENCIL_VIEW_DESC {
             Format: DXGI_FORMAT_D24_UNORM_S8_UINT,
             ViewDimension: D3D11_DSV_DIMENSION_TEXTURE2D,
@@ -936,7 +949,60 @@ fn seeded_depth(
             .CreateDepthStencilState(&sd, Some(&mut state))
             .map_err(|e| gpu.fail("CreateDepthStencilState (depth)", e))?;
     }
-    Ok((dsv.ok_or("no depth view")?, state.ok_or("no depth state")?))
+    Ok((
+        dsv.ok_or("no depth view")?,
+        state.ok_or("no depth state")?,
+        depth_tex,
+    ))
+}
+
+/// The crop of a depth texture (D32_FLOAT, or R24G8_TYPELESS read as D24) as 0..1 floats. Whole-resource copy:
+/// depth-stencil resources take no partial-box copies.
+fn read_depth(gpu: &Gpu, tex: &ID3D11Texture2D, crop: [u32; 4]) -> Result<Vec<f32>, String> {
+    let mut d = D3D11_TEXTURE2D_DESC::default();
+    let mut staging = None;
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    // SAFETY: descriptors and out-pointers are locals; both textures belong to `gpu.device`.
+    unsafe {
+        tex.GetDesc(&mut d);
+        d.Usage = D3D11_USAGE_STAGING;
+        d.BindFlags = 0;
+        d.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        d.MiscFlags = 0;
+        gpu.device
+            .CreateTexture2D(&d, None, Some(&mut staging))
+            .map_err(|e| gpu.fail("CreateTexture2D (depth readback)", e))?;
+    }
+    let staging = staging.ok_or("no depth readback texture")?;
+    let d24 = d.Format == DXGI_FORMAT_R24G8_TYPELESS;
+    let [x, y, w, h] = crop.map(|v| v as usize);
+    let mut out = Vec::with_capacity(w * h);
+    // SAFETY: `staging` is CPU-readable; while mapped, `pData` holds the rows `RowPitch` apart, 4 bytes per texel,
+    // and the crop lies inside the texture (render_replay checked it at load).
+    unsafe {
+        gpu.ctx.CopyResource(&staging, tex);
+        gpu.ctx
+            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+            .map_err(|e| gpu.fail("Map (depth)", e))?;
+        if !mapped.pData.is_null() {
+            for row in y..y + h {
+                let p = (mapped.pData as *const u8).add(row * mapped.RowPitch as usize + x * 4);
+                for b in std::slice::from_raw_parts(p, w * 4).as_chunks::<4>().0 {
+                    let v = u32::from_le_bytes(*b);
+                    out.push(if d24 {
+                        (v & 0x00FF_FFFF) as f32 / 16_777_215.0
+                    } else {
+                        f32::from_bits(v)
+                    });
+                }
+            }
+        }
+        gpu.ctx.Unmap(&staging, 0);
+    }
+    if out.len() != w * h {
+        return Err(gpu.fail("Map (depth)", "null pointer returned"));
+    }
+    Ok(out)
 }
 
 impl Renderer {
@@ -979,9 +1045,19 @@ impl Renderer {
             ));
         }
         let ps_list = r.defines.first().ok_or("no PS define list to compile")?;
-        let src = self.sources.get(Path::new("Lighting.hlsl"))?;
+        // D6c: a debug view compiles the injected source for both stages (as `wanted`) and SDC_DEBUG on the PS.
+        // Never SDC_DEBUG_PRELINEAR: the replay reads raw f32, so the view's data value is what comes back.
+        let lighting = Path::new("Lighting.hlsl");
+        let debug = self.debug.define();
+        let src = match debug {
+            Some(_) => self.sources.get_debug(lighting)?,
+            None => self.sources.get(lighting)?,
+        };
         let vs_d = to_defines(&vs_defines(ps_list, &r.mesh));
-        let ps_d = to_defines(std::iter::once(&"PSHADER".to_string()).chain(ps_list));
+        let mut ps_d = to_defines(std::iter::once(&"PSHADER".to_string()).chain(ps_list));
+        if let Some(n) = debug {
+            ps_d.0.push(("SDC_DEBUG".into(), n.to_string()));
+        }
         let vs = compile(&src, &vs_d, "vs_5_0", &self.cache_dir).map_err(|e| format!("VS: {e}"))?;
         let ps = compile(&src, &ps_d, "ps_5_0", &self.cache_dir).map_err(|e| format!("PS: {e}"))?;
         let vs_inputs: BTreeSet<(String, u32)> = vs
@@ -1147,7 +1223,7 @@ impl Renderer {
                 &self.raster
             });
             match &seeded {
-                Some((_, state)) => ctx.OMSetDepthStencilState(state, 0),
+                Some((_, state, _)) => ctx.OMSetDepthStencilState(state, 0),
                 // LessEqual + write: the fixture's Equal/no-write is a post-prepass state, and there is no prepass.
                 None => ctx.OMSetDepthStencilState(&self.depth_states[3], 0),
             }
@@ -1179,6 +1255,10 @@ impl Renderer {
         let mrt = (0..bound)
             .map(|i| target.read_f32(gpu, i, r.crop))
             .collect::<Result<Vec<_>, _>>();
+        let depth = self
+            .replay_depth
+            .then(|| read_depth(gpu, seeded.as_ref().map_or(&target.depth, |s| &s.2), r.crop))
+            .transpose()?;
         let main = match (&r.composite, deferred, &mrt) {
             (Some(rc), true, Ok(_)) => Some(self.replay_composite(r, rc, &target, &mut warnings)),
             _ => None,
@@ -1189,6 +1269,7 @@ impl Renderer {
             mrt: mrt?,
             main: main.transpose()?,
             warnings,
+            depth,
         })
     }
 
