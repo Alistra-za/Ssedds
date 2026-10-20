@@ -323,3 +323,29 @@ fn toggle_off_in_async_mode_keeps_the_deferred_frame_until_forward_lands() {
         "the tint shows the deferred frame was the deferred one"
     );
 }
+
+/// D-P14: toggled off in async mode, then a define change before the forward programs land: the composite is stale,
+/// so the forward programs are built at once with the new defines and the frame is complete and forward.
+#[test]
+fn define_change_during_async_toggle_off_settles_forward_at_once() {
+    let cache = tempfile::tempdir().unwrap();
+    let tint = feats(&[ADD, "STANDIN_DEFERRED_TINT"]);
+    let mut r = renderer(cache.path(), &tint);
+    r.set_deferred(true).unwrap();
+    load(&mut r, vec![opaque()]);
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    r.set_async_compile(true);
+    r.set_deferred(false).unwrap();
+    let changed = feats(&["STANDIN_DEFERRED_TINT"]);
+    r.set_features(changed.iter().map(|s| s.to_string()).collect());
+    let f = r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(r.target_dims().len(), 2);
+    let fresh = loaded(cache.path(), &changed, vec![opaque()]).render(&Scene::neutral(), 64, 64);
+    let fresh = fresh.unwrap();
+    let diff = f
+        .chunks(4)
+        .zip(fresh.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(diff, 0, "pixels that differ from a fresh forward frame");
+}

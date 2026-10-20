@@ -779,6 +779,12 @@ impl Renderer {
         self.composite = None;
         self.deferred = false;
         self.deferred_error = Some(format!("Deferred preview unavailable: {e}"));
+        self.forward_now();
+    }
+
+    /// Every shape re-permuted forward and settled on this thread whatever the async mode (D-P12, D-P14). A shape
+    /// whose forward build fails is `Failed` without its old DEFERRED draw on screen.
+    fn forward_now(&mut self) {
         self.begin_all();
         self.settle();
         for s in self.shapes.values_mut() {
@@ -2208,15 +2214,17 @@ impl Renderer {
         }
         // D-P13: after a toggle-off (async), the frame stays deferred while any draw still holds a DEFERRED program
         // and the composite is valid, so opaque shapes stay visible until their forward programs land.
-        let deferred_frame = self.deferred
-            || (!self.composite_stale()
-                && self
-                    .shapes
-                    .values()
-                    .filter(|s| {
-                        matches!(s.status, ShapeStatus::Drawing | ShapeStatus::Pending { .. })
-                    })
-                    .any(|s| s.draw.as_ref().is_some_and(|d| d.deferred)));
+        let holds_deferred = |r: &Renderer| {
+            r.shapes
+                .values()
+                .filter(|s| matches!(s.status, ShapeStatus::Drawing | ShapeStatus::Pending { .. }))
+                .any(|s| s.draw.as_ref().is_some_and(|d| d.deferred))
+        };
+        // D-P14: a define change during that wait leaves no valid composite: build the forward programs now.
+        if !self.deferred && self.composite_stale() && holds_deferred(self) {
+            self.forward_now();
+        }
+        let deferred_frame = self.deferred || (!self.composite_stale() && holds_deferred(self));
         if self
             .target
             .as_ref()
