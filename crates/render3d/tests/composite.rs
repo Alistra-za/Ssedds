@@ -292,3 +292,34 @@ fn late_composite_failure_in_async_mode_draws_forward_at_once() {
         .count();
     assert_eq!(diff, 0, "pixels that differ from a fresh forward frame");
 }
+
+/// D-P13: toggling deferred off in async mode keeps the deferred frame (target, composite) while any draw still holds
+/// a DEFERRED program, so opaque shapes never vanish; the frame goes forward once every program has landed.
+#[test]
+fn toggle_off_in_async_mode_keeps_the_deferred_frame_until_forward_lands() {
+    let cache = tempfile::tempdir().unwrap();
+    let tint = feats(&[ADD, "STANDIN_DEFERRED_TINT"]);
+    // Deferred before the load: only DEFERRED programs exist, so the forward ones must compile after the toggle.
+    let mut r = renderer(cache.path(), &tint);
+    r.set_deferred(true).unwrap();
+    load(&mut r, vec![opaque()]);
+    let d = r.render(&Scene::neutral(), 64, 64).unwrap();
+    r.set_async_compile(true);
+    r.set_deferred(false).unwrap();
+    assert_eq!(r.render(&Scene::neutral(), 64, 64).unwrap(), d);
+    assert_eq!(r.target_dims().len(), 10);
+    for j in r.take_jobs() {
+        r.apply_compiled(render3d::run_job(j));
+    }
+    let f = r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(r.target_dims().len(), 2);
+    let fresh = loaded(cache.path(), &tint, vec![opaque()]).render(&Scene::neutral(), 64, 64);
+    assert!(
+        f == fresh.unwrap(),
+        "the forward frame after the programs land"
+    );
+    assert!(
+        f != d,
+        "the tint shows the deferred frame was the deferred one"
+    );
+}

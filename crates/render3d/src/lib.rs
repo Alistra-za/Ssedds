@@ -2206,13 +2206,24 @@ impl Renderer {
                 self.composite_failed(e);
             }
         }
+        // D-P13: after a toggle-off (async), the frame stays deferred while any draw still holds a DEFERRED program
+        // and the composite is valid, so opaque shapes stay visible until their forward programs land.
+        let deferred_frame = self.deferred
+            || (!self.composite_stale()
+                && self
+                    .shapes
+                    .values()
+                    .filter(|s| {
+                        matches!(s.status, ShapeStatus::Drawing | ShapeStatus::Pending { .. })
+                    })
+                    .any(|s| s.draw.as_ref().is_some_and(|d| d.deferred)));
         if self
             .target
             .as_ref()
-            .is_none_or(|t| t.width != w || t.height != h || t.deferred() != self.deferred)
+            .is_none_or(|t| t.width != w || t.height != h || t.deferred() != deferred_frame)
         {
             self.drop_target();
-            self.target = Some(if self.deferred {
+            self.target = Some(if deferred_frame {
                 Target::new_deferred(&self.gpu, w, h)?
             } else {
                 Target::new(&self.gpu, w, h)?
