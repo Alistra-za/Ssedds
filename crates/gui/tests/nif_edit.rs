@@ -2173,6 +2173,10 @@ fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile:
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
     scan_and_select(&mut app.meshes, d.path());
+    // As the app's first frame sets it: the edit opens in the Textures export folder (Note CI29).
+    let root = (app.model.settings.export_folder.is_some() || app.model.root.is_some())
+        .then(|| app.model.export_root());
+    app.meshes.set_nif_export_root(root);
     app.meshes.open_edit();
     assert_eq!(app.meshes.error, None);
     for i in 0..ops {
@@ -2512,22 +2516,47 @@ fn an_export_folder_outside_the_instance_is_not_checked_and_still_exports() {
 }
 
 #[test]
-fn changing_the_export_folder_with_an_edit_open_keeps_its_ops() {
+fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
     let (d, mut m) = export_session();
-    m.open_edit();
-    gloss(&mut m, 12.5);
     let out = d.path().join(r"mods\MyOut");
+    let old = d.path().join("mods").join(EDIT_MOD);
+    // MyOut already has an edit of x.nif (one op, 7.5).
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    let theirs = std::fs::read(nif_doc(&out)).unwrap();
+    // Back to the fallback: an edit there, a shape selected and a drag in progress (not saved yet).
+    m.set_nif_export_root(None);
+    m.open_edit();
+    assert_eq!(m.edit.as_ref().unwrap().doc.ops.len(), 0);
+    gloss(&mut m, 12.5);
+    let shape = lit_shape(m.edit.as_ref().unwrap()).0;
+    m.select_edit(Selection::Shape(shape));
+    tick(&mut m, 40.5);
     m.set_nif_export_root(Some(out.clone()));
     let e = m.edit.as_ref().unwrap();
-    assert_eq!(e.doc.ops.len(), 1, "the session kept its edit");
     assert_eq!(e.doc_path, nif_doc(&out));
     assert_eq!(e.export_path, out.join(r"meshes\x.nif"));
-    gloss(&mut m, 20.5);
-    let saved = load(&nif_doc(&out)).unwrap().unwrap();
-    assert_eq!(saved.ops.len(), 2, "the next save goes to the new folder");
+    assert_eq!(op_values(&m).len(), 1, "MyOut's edit is loaded");
+    assert_eq!(op_values(&m)[0].1, 7.5);
+    assert_eq!(
+        e.selection,
+        Selection::Shape(shape),
+        "the selection is kept"
+    );
+    assert_eq!(
+        std::fs::read(nif_doc(&out)).unwrap(),
+        theirs,
+        "not overwritten"
+    );
+    let saved = load(&nif_doc(&old)).unwrap().unwrap();
+    assert_eq!(
+        saved.ops.len(),
+        2,
+        "the old folder keeps the session's edits and the drag"
+    );
     assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Pending));
-    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
-    assert!(out.join(r"meshes\x.nif").is_file());
 }
 
 #[test]
@@ -2547,11 +2576,25 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
     app_data();
     let t = tempfile::tempdir().unwrap();
     let model = support::opened(&t.path().join("mod"));
-    let want = model.export_root();
-    let (_d, h) = in_the_meshes_view(model, 1);
+    let first = model.export_root();
+    let (_d, mut h) = in_the_meshes_view(model, 1);
+    assert_eq!(
+        h.state().meshes.nif_export_root.as_deref(),
+        Some(first.as_path())
+    );
+    // Export to ▾ changes: the open edit is saved where it was and reopened from the new folder.
+    let want = t.path().join("other");
+    h.state_mut().model.settings.export_folder = Some(want.clone());
+    assert_eq!(h.state().model.export_root(), want);
+    h.run_steps(2);
     let m = &h.state().meshes;
     assert_eq!(m.nif_export_root.as_deref(), Some(want.as_path()));
     let e = m.edit.as_ref().unwrap();
     assert!(e.doc_path.starts_with(&want));
-    assert_eq!(e.doc.ops.len(), 1);
+    assert!(e.doc.ops.is_empty(), "the new folder has no edit of x.nif");
+    assert_eq!(
+        load(&nif_doc(&first)).unwrap().unwrap().ops.len(),
+        1,
+        "saved where it was"
+    );
 }

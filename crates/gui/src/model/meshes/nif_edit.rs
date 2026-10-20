@@ -890,31 +890,25 @@ impl MeshesModel {
         e.placement = Some(p);
     }
 
-    /// The app sets the Textures export folder each frame (Note CI29). A change re-reads the chips; an open session
-    /// keeps its ops and is re-pointed at the new folder, where the next save writes its document.
+    /// The app sets the Textures export folder each frame (Note CI29). A change re-reads the chips. An open session
+    /// is saved to the old folder (an unsaved drag too), then the same NIF is reopened from the new folder: its edit
+    /// document there, or a fresh one. No document is ever replaced by the switch. The selected shape is kept.
     pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
         if self.nif_export_root == root {
             return;
         }
         self.nif_export_root = root;
-        let to = self.edit_mod();
-        if let Some(e) = &mut self.edit {
-            let paths = match &to {
-                Some(m) => edit_doc::doc_path(m, &e.data_path)
-                    .and_then(|d| Ok((m.clone(), d, edit_doc::export_path(m, &e.data_path)?))),
-                None => Ok(Default::default()),
-            };
-            match paths {
-                Ok((m, d, x)) => (e.edit_mod, e.doc_path, e.export_path) = (m, d, x),
-                Err(err) => e.error = Some(err),
-            }
-            // Both described the old folder's file.
-            e.guard = None;
-            e.export_note = None;
-        }
         self.refresh_doc_badges();
-        self.refresh_placement();
-        self.edit_checks(); // after the badges: the session's own badge wins
+        let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
+            return;
+        };
+        self.drop_edit(); // flushes to the old folder
+        self.open_edit(); // the selected NIF is the edited one: selecting another ends the session
+        if let (Selection::Shape(id), Some(e)) = (selection, &self.edit) {
+            if e.parsed.shapes.iter().any(|s| s.id.0 == id) {
+                self.select_edit(selection);
+            }
+        }
     }
 
     /// The preview after a change (R10): each changed shape's material goes to the loaded content; a texture path
