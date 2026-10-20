@@ -56,6 +56,8 @@ pub struct NifModel {
     pub bsver: u32,
     /// Footer roots[0], when it is in range.
     pub root: Option<u32>,
+    /// Header type name of the root block; empty without a root.
+    pub root_kind: String,
     /// When the root block has an NiObjectNET prefix (node types).
     pub root_net: Option<ObjectNet>,
     pub shapes: Vec<ShapeModel>,
@@ -119,6 +121,7 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
             .first()
             .and_then(|&r| u32::try_from(r).ok())
             .filter(|&r| (r as usize) < n),
+        root_kind: String::new(),
         root_net: None,
         shapes: vec![],
         lighting: BTreeMap::new(),
@@ -130,6 +133,9 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
         sequences: vec![],
         problems: vec![],
     };
+    m.root_kind = m
+        .root
+        .map_or(String::new(), |r| crate::text::lossy(h.kind(r as usize)));
     let mut p = vec![];
     let mut shape_refs = vec![];
 

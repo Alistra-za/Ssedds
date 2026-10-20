@@ -1,8 +1,10 @@
 //! Structural ops: shader type re-emit and alpha add/remove/split (spec §5, plan A9). Removal is unlink: the
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
-use super::Op;
+use super::{Anchor, Op, Outcome, Role};
 use crate::ctrl::BASE_LEN;
+use crate::extra::{encode_extra, ExtraValue, EDITABLE};
 use crate::model::{NifModel, ShapeModel};
+use crate::net::{encode_net, ObjectNet};
 use crate::write::NifDoc;
 
 /// Default trailer floats after Lighting Effect 2 for a shader type (01-format §1.2).
@@ -151,4 +153,108 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
         patch(doc, new, at, *first as i32)?;
     }
     Ok(Some(new))
+}
+
+fn win1252(s: &str) -> Result<Vec<u8>, String> {
+    let (b, _, bad) = encoding_rs::WINDOWS_1252.encode(s);
+    if bad {
+        return Err(format!("{s:?} cannot be written in Windows-1252"));
+    }
+    Ok(b.into_owned())
+}
+
+/// Re-emits `owner`'s NiObjectNET prefix with `extra` as its extra-data list.
+fn set_extra_list(
+    doc: &mut NifDoc,
+    owner: u32,
+    net: &ObjectNet,
+    extra: &[i32],
+) -> Result<(), String> {
+    let base = doc.header().offsets()[owner as usize];
+    let body = doc.block(owner);
+    let (s, e) = (net.start - base, net.end - base);
+    let (head, tail) = body
+        .get(..s)
+        .zip(body.get(e..))
+        .ok_or("NiObjectNET outside its block")?;
+    let mut out = head.to_vec();
+    out.extend(encode_net(net.name, extra, net.controller));
+    out.extend(tail);
+    doc.set_block(owner, out);
+    Ok(())
+}
+
+/// AddExtra (anchored on a shape or the root), EditExtra and RemoveExtra (anchored on the extra block).
+pub(crate) fn extra_op(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    at: &Anchor,
+    block: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    match op {
+        Op::AddExtra {
+            kind, name, value, ..
+        } => {
+            let net = match at.role {
+                Role::Root => m.root_net.as_ref().ok_or("the root is not a node")?,
+                Role::Shape => &m.shape(block).ok_or("not a shape")?.net,
+                _ => return Err("extra data is added to a shape or the root".into()),
+            };
+            if !EDITABLE.contains(&kind.as_str()) {
+                return Err(format!("{kind} extra data is read-only"));
+            }
+            let nm = doc.string(&win1252(name)?);
+            let si = match value {
+                ExtraValue::Str(s) => doc.string(&win1252(s)?),
+                _ => -1,
+            };
+            let (k, body) = encode_extra(nm, value, si);
+            if k != kind {
+                return Err(format!("a {k} value cannot make a {kind}"));
+            }
+            let new = doc.append(k.as_bytes(), body);
+            let mut extra = net.extra.clone();
+            extra.push(new as i32);
+            set_extra_list(doc, block, net, &extra)?;
+        }
+        Op::EditExtra { value, base, .. } => {
+            let x = m.extras.get(&block).ok_or("not readable extra data")?;
+            if x.value.as_ref() != Some(base) {
+                return Ok(Outcome::Conflict(format!(
+                    "changed in the source: was {base:?}, now {:?}",
+                    x.value
+                )));
+            }
+            let si = match value {
+                ExtraValue::Str(s) => doc.string(&win1252(s)?),
+                _ => -1,
+            };
+            let (k, body) = encode_extra(-1, value, si);
+            if k != x.kind {
+                return Err(format!("a {k} value cannot replace a {}", x.kind));
+            }
+            doc.patch(block, 4, &body[4..]).map_err(|e| e.to_string())?;
+        }
+        Op::RemoveExtra { .. } => {
+            let owned = |n: &ObjectNet| n.extra.contains(&(block as i32));
+            let (owner, net) = match at.role {
+                Role::Extra { on_root: true, .. } => m.root.zip(m.root_net.as_ref()),
+                _ => m
+                    .shapes
+                    .iter()
+                    .filter(|s| s.name == at.shape)
+                    .find(|s| owned(&s.net))
+                    .map(|s| (s.block, &s.net)),
+            }
+            .filter(|(_, n)| owned(n))
+            .ok_or("no owner lists that extra data")?;
+            let mut extra = net.extra.clone();
+            let i = extra.iter().position(|&e| e == block as i32).unwrap();
+            extra.remove(i);
+            set_extra_list(doc, owner, net, &extra)?;
+        }
+        _ => return Err("not an extra-data op".into()),
+    }
+    Ok(Outcome::Applied)
 }

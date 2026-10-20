@@ -341,13 +341,16 @@ fn shader_type_stale_base_is_a_conflict() {
 }
 
 #[test]
-fn extra_ops_are_not_supported_yet() {
+fn texture_path_op_is_not_supported_yet() {
     let b = scenes::alpha_shape(0x12EC);
     let m = read_model(&b).unwrap();
     let r = apply(
         &b,
-        &[Op::RemoveExtra {
+        &[Op::SetTexturePath {
             at: anchor_shape(&m, 0),
+            slot: 0,
+            path: String::new(),
+            base: String::new(),
         }],
     )
     .unwrap();
@@ -355,6 +358,199 @@ fn extra_ops_are_not_supported_yet() {
         r.outcomes,
         vec![Outcome::Refused("not supported yet".into())]
     );
+}
+
+fn root_extra(name: &str, kind: &str) -> Role {
+    Role::Extra {
+        on_root: true,
+        name: name.into(),
+        kind: kind.into(),
+        nth: 0,
+    }
+}
+
+fn add_extra(at: Anchor, kind: &str, name: &str, value: nif::extra::ExtraValue) -> Op {
+    Op::AddExtra {
+        at,
+        kind: kind.into(),
+        name: name.into(),
+        value,
+    }
+}
+
+#[test]
+fn add_bsx_to_root_reemits_only_the_root_prefix() {
+    use nif::extra::ExtraValue;
+    let b = read("TestNifFile_Furniture_Col_SE.nif");
+    let (h0, m0) = (Header::parse(&b).unwrap(), read_model(&b).unwrap());
+    let root = m0.root.unwrap();
+    let net = m0.root_net.clone().unwrap();
+    let at = anchor_role(&m0, None, Role::Root).unwrap();
+    let r = apply(
+        &b,
+        &[add_extra(at, "BSXFlags", "BSXFlags", ExtraValue::Bsx(0x83))],
+    )
+    .unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let h1 = Header::parse(&r.bytes).unwrap();
+    let new = h0.sizes.len();
+    assert_eq!(h1.sizes.len(), new + 1);
+    for k in (0..new).filter(|&k| k != root as usize) {
+        assert_eq!(block_bytes_of(&r.bytes, k), block_bytes_of(&b, k), "{k}");
+    }
+    // strings are append-only
+    assert_eq!(h1.strings[..h0.strings.len()], h0.strings[..]);
+    let old = block_bytes_of(&b, root as usize);
+    let base = h0.offsets()[root as usize];
+    let (s, e) = (net.start - base, net.end - base);
+    let mut extra = net.extra.clone();
+    extra.push(new as i32);
+    let mut want = old[..s].to_vec();
+    want.extend(nif::net::encode_net(net.name, &extra, net.controller));
+    want.extend(&old[e..]);
+    assert_eq!(block_bytes_of(&r.bytes, root as usize), want);
+    let m1 = read_model(&r.bytes).unwrap();
+    let x = &m1.extras[&(new as u32)];
+    assert_eq!(x.kind, "BSXFlags");
+    assert_eq!(x.value, Some(ExtraValue::Bsx(0x83)));
+    assert_eq!(x.name.as_deref(), Some(&b"BSXFlags"[..]));
+}
+
+#[test]
+fn edit_string_extra_appends_a_string_and_patches_one_index() {
+    use nif::extra::ExtraValue::Str;
+    let b = scenes::root_extras();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, None, root_extra("BODYTRI", "NiStringExtraData")).unwrap();
+    let edit = |to: &str, base: &str| Op::EditExtra {
+        at: at.clone(),
+        value: Str(to.into()),
+        base: Str(base.into()),
+    };
+    let r = apply(&b, &[edit("new text", "a\r\nb")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let (h0, h1) = (Header::parse(&b).unwrap(), Header::parse(&r.bytes).unwrap());
+    assert_eq!(h1.strings.len(), h0.strings.len() + 1);
+    assert_eq!(h1.strings[h0.strings.len()], b"new text");
+    let (old, new) = (
+        block_bytes_of(&b, at.block as usize),
+        block_bytes_of(&r.bytes, at.block as usize),
+    );
+    assert_eq!(old[..4], new[..4]); // name untouched
+    assert_eq!(new[4..], (h0.strings.len() as i32).to_le_bytes());
+    let m1 = read_model(&r.bytes).unwrap();
+    assert_eq!(m1.extras[&at.block].value, Some(Str("new text".into())));
+    // a stale base is a conflict; an unmappable character is refused
+    let r = apply(&b, &[edit("x", "other"), edit("\u{65e5}", "a\r\nb")]).unwrap();
+    assert!(
+        matches!(r.outcomes[0], Outcome::Conflict(_)),
+        "{:?}",
+        r.outcomes
+    );
+    assert!(matches!(&r.outcomes[1], Outcome::Refused(s) if s.contains("Windows-1252")));
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn edit_inv_marker_round_trips() {
+    use nif::extra::ExtraValue::Inv;
+    let b = scenes::root_extras();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, None, root_extra("INV", "BSInvMarker")).unwrap();
+    let op = Op::EditExtra {
+        at,
+        value: Inv {
+            rot: [100, 200, 300],
+            zoom: 2.0f32.to_bits(),
+        },
+        base: Inv {
+            rot: [4712, 6283, 0],
+            zoom: 1.0f32.to_bits(),
+        },
+    };
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(r.bytes.len(), b.len());
+    let m1 = read_model(&r.bytes).unwrap();
+    let blk = m.root_net.as_ref().unwrap().extra[6] as u32;
+    assert_eq!(
+        m1.extras[&blk].value,
+        Some(Inv {
+            rot: [100, 200, 300],
+            zoom: 2.0f32.to_bits()
+        })
+    );
+}
+
+#[test]
+fn remove_extra_keeps_the_block_as_orphan_and_the_null_entries() {
+    let b = scenes::root_extras();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, None, root_extra("Count", "NiIntegerExtraData")).unwrap();
+    assert_eq!(at.block, 2);
+    let r = apply(&b, &[Op::RemoveExtra { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m1 = read_model(&r.bytes).unwrap();
+    assert_eq!(m1.root_net.unwrap().extra, vec![0, 1, -1, 3, 4, 5, 6]);
+    assert!(m1.extras.contains_key(&2)); // orphan stays
+    assert_eq!(block_bytes_of(&r.bytes, 2), block_bytes_of(&b, 2));
+    assert_eq!(m1.extras.len(), m.extras.len());
+}
+
+#[test]
+fn add_extra_to_a_shape_keeps_its_geometry_bytes() {
+    use nif::extra::ExtraValue::Int;
+    let b = scenes::alpha_shape(0x12EC);
+    let m = read_model(&b).unwrap();
+    let s = &m.shapes[0];
+    let at = anchor_role(&m, Some(s.block), Role::Shape).unwrap();
+    let r = apply(&b, &[add_extra(at, "NiIntegerExtraData", "Count", Int(5))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let (h0, m1) = (Header::parse(&b).unwrap(), read_model(&r.bytes).unwrap());
+    assert_eq!(m1.shapes[0].net.extra, vec![2]);
+    let e = h0.offsets()[0] + h0.sizes[0] as usize;
+    let h1 = Header::parse(&r.bytes).unwrap();
+    let e1 = h1.offsets()[0] + h1.sizes[0] as usize;
+    assert_eq!(&r.bytes[m1.shapes[0].net.end..e1], &b[s.net.end..e]);
+    assert_eq!(block_bytes_of(&r.bytes, 1), block_bytes_of(&b, 1));
+}
+
+#[test]
+fn unknown_extra_kind_is_refused() {
+    use nif::extra::ExtraValue::Int;
+    let b = scenes::root_extras();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, None, Role::Root).unwrap();
+    let r = apply(
+        &b,
+        &[
+            add_extra(at.clone(), "NiStringsExtraData", "X", Int(1)),
+            add_extra(at, "NiIntegerExtraData", "\u{65e5}", Int(1)),
+        ],
+    )
+    .unwrap();
+    assert!(
+        matches!(r.outcomes[0], Outcome::Refused(_)),
+        "{:?}",
+        r.outcomes
+    );
+    assert!(matches!(&r.outcomes[1], Outcome::Refused(s) if s.contains("Windows-1252")));
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn root_anchor_carries_the_root_kind_and_resolve_checks_it() {
+    let b = scenes::root_extras();
+    let m = read_model(&b).unwrap();
+    let a = anchor_role(&m, None, Role::Root).unwrap();
+    assert_eq!(a.kind, "NiNode");
+    assert_eq!(resolve(&m, &a), Ok((7, false)));
+    // a root of another type is not the same anchor: it re-anchors, never silently matches
+    let swapped = Anchor {
+        kind: "BSFadeNode".into(),
+        ..a
+    };
+    assert_eq!(resolve(&m, &swapped), Ok((7, true)));
 }
 
 fn split(m: &nif::model::NifModel, name: &str) -> Op {

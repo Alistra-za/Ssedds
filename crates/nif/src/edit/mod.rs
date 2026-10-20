@@ -125,7 +125,7 @@ fn role_cands(m: &NifModel, sel: &[&ShapeModel], role: &Role) -> Vec<Cand> {
     let mut v: Vec<Cand> = vec![];
     let shader_block = |s: &&ShapeModel| s.shader.filter(|b| m.lighting.contains_key(b));
     match role {
-        Role::Root => v.extend(m.root.map(|r| (r, String::new()))),
+        Role::Root => v.extend(m.root.map(|r| (r, m.root_kind.clone()))),
         Role::Shape => v.extend(sel.iter().map(|s| (s.block, format!("{:?}", s.kind)))),
         Role::Shader => v.extend(
             sel.iter()
@@ -210,10 +210,7 @@ pub fn resolve(m: &NifModel, a: &Anchor) -> Result<(u32, bool), String> {
         _ => m.shapes.iter().collect(),
     };
     let c = role_cands(m, &sel, &a.role);
-    if let Some((b, _)) = c
-        .iter()
-        .find(|(b, k)| *b == a.block && (k.is_empty() || *k == a.kind))
-    {
+    if let Some((b, _)) = c.iter().find(|(b, k)| *b == a.block && *k == a.kind) {
         return Ok((*b, false));
     }
     if own && a.shape.is_none() {
@@ -290,8 +287,11 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         | Op::SetBits { at, .. }
         | Op::SplitAlpha { at }
         | Op::AddAlpha { at, .. }
-        | Op::RemoveAlpha { at } => at,
-        _ => return refused("not supported yet".into()), // A10, A11
+        | Op::RemoveAlpha { at }
+        | Op::AddExtra { at, .. }
+        | Op::EditExtra { at, .. }
+        | Op::RemoveExtra { at } => at,
+        _ => return refused("not supported yet".into()), // A11
     };
     let m = match read_model(cur) {
         Ok(m) => m,
@@ -310,6 +310,16 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     } else {
         Outcome::Applied
     };
+    if matches!(
+        op,
+        Op::AddExtra { .. } | Op::EditExtra { .. } | Op::RemoveExtra { .. }
+    ) {
+        return match structural::extra_op(&mut doc, &m, at, block, op) {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
     if matches!(
         op,
         Op::SplitAlpha { .. } | Op::AddAlpha { .. } | Op::RemoveAlpha { .. }
