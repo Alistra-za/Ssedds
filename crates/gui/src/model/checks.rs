@@ -18,6 +18,8 @@ use std::collections::HashMap;
 
 /// Albedo: warn when more than this share of texels is darker than 30 or brighter than 240 (luma codes). Tuned on
 /// the 10k set (DECISIONS CL8): 0.05 flagged 43 % of PBR albedos.
+// shortcut: the share counts transparent texels too, so a cutout albedo is judged on its black background (CL8);
+// weight the bands by alpha if cutouts raise false warnings.
 pub const RANGE_SHARE: f64 = 0.50;
 /// Metallic (G of `_rmaos`): warn when more than this share is grey (codes 26..=229). 0.20 flagged 19 % (CL8).
 pub const METAL_GREY_SHARE: f64 = 0.40;
@@ -588,12 +590,13 @@ pub fn checks_summary(m: &AppModel) -> Option<String> {
     use std::collections::HashSet;
     let exported: HashSet<&str> = m.export.rows.iter().map(|r| r.job_key.as_str()).collect();
     let all = exported.is_empty();
-    let item_of_job = |j: &str| {
-        m.items
-            .iter()
-            .find(|i| i.job_key == j)
-            .map(|i| i.key.clone())
-    };
+    // Final review M7: one map, not a scan of the items per File row (reversed, so the first item wins, as `find` did).
+    let item_of: HashMap<&str, &str> = m
+        .items
+        .iter()
+        .rev()
+        .map(|i| (i.job_key.as_str(), i.key.as_str()))
+        .collect();
     let wrote = |item: &str| {
         all || m
             .item(item)
@@ -608,7 +611,11 @@ pub fn checks_summary(m: &AppModel) -> Option<String> {
                 textures.insert(k.clone());
             }
             At::File(j) => {
-                textures.insert(item_of_job(j).unwrap_or_else(|| j.clone()));
+                textures.insert(
+                    item_of
+                        .get(j.as_str())
+                        .map_or_else(|| j.clone(), |k| k.to_string()),
+                );
             }
             At::Set { key, .. }
                 if views
