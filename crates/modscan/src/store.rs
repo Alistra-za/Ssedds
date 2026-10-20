@@ -1556,31 +1556,51 @@ impl Store {
         if limit == 0 {
             return Ok(vec![]);
         }
-        // The slot string PGPatcher sees: the raw one when `tex_raw` keeps it, else the canonical path; lower case, `/`.
-        let eff = "lower(replace(coalesce(tr.raw, tp.p), char(92), '/'))";
-        let Some((slot, cond, arg, check)) = tex_query(key, eff) else {
+        let Some(q) = tex_query(key, EFF) else {
             return Ok(vec![]);
         };
+        self.match_rows(q, limit)
+    }
 
-        let sql = format!(
-            "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, {eff},
-                    (SELECT count(*) FROM shape s2 WHERE s2.copy_id = c.id) AS n_shapes
-             FROM path tp
-             JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = ?1
-             JOIN shape s ON s.texset_id = tu.texset_id AND s.shader_kind = 1
-             JOIN nif_copy c ON c.id = s.copy_id
-             LEFT JOIN tex_raw tr ON tr.copy_id = c.id AND tr.block = s.block AND tr.slot = ?1
-             JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
-             JOIN nif_winner w ON w.path_id = c.path_id
-             JOIN nif_copy wc ON wc.id = w.copy_id
-             JOIN origin wo ON wo.id = wc.origin_id AND wo.enabled = 1
-             LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
-             JOIN path np ON np.id = c.path_id
-             WHERE {cond}
-               AND c.id = CASE WHEN wc.is_derived = 1 THEN coalesce(ws.copy_id, wc.source_copy_id, wc.id)
-                               ELSE wc.id END
-             ORDER BY s.skinned, n_shapes, np.p, s.block"
-        );
+    /// [`Self::nifs_using_texture`] for the shapes whose slot resolves to the file `path` (any spelling; canonical
+    /// form as [`nif::path::canon_texture`] gives it), whatever raw string the NIF stores: `Data\Textures\a.dds`,
+    /// `a.dds` and `textures\a.dds` all match `textures/a.dds`. Looked up through the `path.p` index, so it is
+    /// cheap on any scan size.
+    pub fn nifs_using_canonical_texture(
+        &self,
+        slot: u32,
+        path: &str,
+        limit: usize,
+    ) -> Result<Vec<MatchRow>, ScanError> {
+        let norm = nif::path::canon_texture(path.as_bytes()).norm;
+        if limit == 0 || norm.is_empty() {
+            return Ok(vec![]);
+        }
+        self.match_rows(
+            (slot, CANONICAL.into(), norm, Box::new(|_: &str| true)),
+            limit,
+        )
+    }
+
+    /// `EXPLAIN QUERY PLAN` detail lines of [`Self::nifs_using_canonical_texture`]'s query (tests check the index).
+    #[doc(hidden)]
+    pub fn canonical_query_plan(&self) -> Result<Vec<String>, ScanError> {
+        let mut st = self
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", match_sql(CANONICAL)))?;
+        let v = st
+            .query_map(params![0i64, "textures/a.dds"], |r| r.get(3))?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// The shared body of the texture-user queries: rows for `slot` where `cond` holds on `?2`, post-filtered.
+    fn match_rows(
+        &self,
+        (slot, cond, arg, check): TexQuery,
+        limit: usize,
+    ) -> Result<Vec<MatchRow>, ScanError> {
+        let sql = match_sql(&cond);
         let mut st = self.conn.prepare(&sql)?;
         let mut rows = st.query(params![slot as i64, arg])?;
         let mut out = vec![];
@@ -1611,6 +1631,36 @@ impl Store {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+/// The slot string PGPatcher sees: the raw one when `tex_raw` keeps it, else the canonical path; lower case, `/`.
+const EFF: &str = "lower(replace(coalesce(tr.raw, tp.p), char(92), '/'))";
+/// [`Store::nifs_using_canonical_texture`]'s condition: the canonical slot path itself (indexed).
+const CANONICAL: &str = "tp.p = ?2";
+
+/// The query behind [`Store::nifs_using_texture`]: lighting shapes of the latest winners (a derived winner on its
+/// source copy) whose `slot` meets `cond` (argument `?2`); column 9 is the effective slot string.
+fn match_sql(cond: &str) -> String {
+    let eff = EFF;
+    format!(
+            "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, {eff},
+                    (SELECT count(*) FROM shape s2 WHERE s2.copy_id = c.id) AS n_shapes
+             FROM path tp
+             JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = ?1
+             JOIN shape s ON s.texset_id = tu.texset_id AND s.shader_kind = 1
+             JOIN nif_copy c ON c.id = s.copy_id
+             LEFT JOIN tex_raw tr ON tr.copy_id = c.id AND tr.block = s.block AND tr.slot = ?1
+             JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
+             JOIN nif_winner w ON w.path_id = c.path_id
+             JOIN nif_copy wc ON wc.id = w.copy_id
+             JOIN origin wo ON wo.id = wc.origin_id AND wo.enabled = 1
+             LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
+             JOIN path np ON np.id = c.path_id
+             WHERE {cond}
+               AND c.id = CASE WHEN wc.is_derived = 1 THEN coalesce(ws.copy_id, wc.source_copy_id, wc.id)
+                               ELSE wc.id END
+             ORDER BY s.skinned, n_shapes, np.p, s.block"
+    )
 }
 
 /// Columns and joins shared by `nifs_of` and `winning_nifs`; each adds its own WHERE and ORDER BY.

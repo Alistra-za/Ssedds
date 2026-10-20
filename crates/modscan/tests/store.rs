@@ -560,6 +560,59 @@ fn exact_compares_the_full_path_with_textures_added() {
 }
 
 #[test]
+fn canonical_matches_every_alias_through_the_path_index() {
+    let (_d, mut s, _) = query_store();
+    let a = origin(&mut s, "Aliases", 3);
+    // Raw slot strings that are not the canonical form keep a `tex_raw` row; all resolve to the same file.
+    for (nif, raw) in [
+        ("meshes/x/g2.nif", r"Data\Textures\XMead\reserve.dds"),
+        ("meshes/x/h.nif", r"xmead\reserve.dds"),
+    ] {
+        let copy = put(&mut s, nif, a, 0, lit(&[raw]), false);
+        s.conn()
+            .execute(
+                "INSERT INTO nif_winner SELECT path_id, id, 1 FROM nif_copy WHERE id = ?1",
+                [copy],
+            )
+            .unwrap();
+    }
+    for want in [r"textures\xmead\reserve.dds", r"XMead\Reserve.dds"] {
+        let rows = s.nifs_using_canonical_texture(0, want, 50).unwrap();
+        assert_eq!(
+            nifs(&rows),
+            [
+                "meshes/x/a.nif",
+                "meshes/x/d.nif",
+                "meshes/x/g2.nif",
+                "meshes/x/h.nif"
+            ],
+            "{want}"
+        );
+    }
+    // Same winner rules as the other keys: the derived winner b.nif is matched on its own pbr path only.
+    let rows = s
+        .nifs_using_canonical_texture(0, r"textures\pbr\xmead\reserve.dds", 50)
+        .unwrap();
+    assert_eq!(nifs(&rows), ["meshes/x/b.nif"]);
+    assert!(s
+        .nifs_using_canonical_texture(0, "", 50)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        s.nifs_using_canonical_texture(0, r"xmead\reserve.dds", 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let plan = s.canonical_query_plan().unwrap();
+    assert!(
+        plan.iter().any(|l| l.contains("SEARCH tp USING")),
+        "the canonical path is looked up by index: {plan:?}"
+    );
+    assert!(!plan.iter().any(|l| l.starts_with("SCAN tp")), "{plan:?}");
+}
+
+#[test]
 fn open_read_only_never_creates_rebuilds_or_writes() {
     let d = tempfile::tempdir().unwrap();
     let missing = d.path().join("nope").join("scan.db");
