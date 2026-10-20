@@ -33,7 +33,13 @@ enum Action {
     ReduceMotion(bool),
     NvttPath(Option<std::path::PathBuf>),
     Checks(ChecksSettings),
+    CheckAllUv,
+    CancelCheckAllUv,
 }
+
+/// K10: Check-all progress epochs are disjoint from the export's `drawer_epoch`, so the two bars never share one
+/// `shown_progress` animation.
+const UV_EPOCH: u64 = 1 << 63;
 
 /// The drawer: a 24 px "Advanced" strip while closed, the panel while `settings.advanced_open`.
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) {
@@ -103,6 +109,8 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::ReduceMotion(on) => model.set_reduce_motion(on),
             Action::NvttPath(p) => model.set_nvtt_path(p),
             Action::Checks(c) => model.set_checks(c),
+            Action::CheckAllUv => model.check_all_uv(),
+            Action::CancelCheckAllUv => model.cancel_check_all_uv(),
         }
     }
 }
@@ -412,7 +420,42 @@ fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
         if c != now {
             actions.push(Action::Checks(c));
         }
+        check_all_uv(ui, model, actions);
     });
+}
+
+/// "Check all UV coverage" for the open folder, or while it runs its bar (gliding only through `shown_progress`,
+/// CF12, with its own epoch, K10) and the button that stops it. Never greyed by `busy()` (owner answer 8).
+fn check_all_uv(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    if let (Some((done, total)), Some(run)) = (model.uv.all_progress(), model.uv.all_run()) {
+        let frac = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
+        ui.add(
+            egui::ProgressBar::new(super::header::shown_progress(
+                ui.ctx(),
+                UV_EPOCH | run,
+                frac,
+            ))
+            .text(format!("{done} / {total}"))
+            .animate(false),
+        );
+        if ui.button("Stop checking UV coverage").clicked() {
+            actions.push(Action::CancelCheckAllUv);
+        }
+        return;
+    }
+    let offered = model.uv_check_all_offered();
+    if ui
+        .add_enabled(offered.is_ok(), egui::Button::new("Check all UV coverage"))
+        .on_hover_text("Read the UV coverage of every colour texture in this folder from the meshes in your scan")
+        .on_disabled_hover_text(offered.err().unwrap_or_default())
+        .clicked()
+    {
+        actions.push(Action::CheckAllUv);
+    }
 }
 
 /// The mip level count (Full chain, None or 2..N levels); the basic panel only has the on/off tick box.

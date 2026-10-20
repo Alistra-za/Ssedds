@@ -185,7 +185,7 @@ fn v2_jobs_keep_the_app_polling_without_greying_advanced() {
     assert!(img.pixels.iter().all(|p| *p == bad()));
     // The same key starts nothing new.
     assert!(!m.overlay_pending());
-    // Task 8's kind starts nothing yet.
+    // The UV kind is no overlay job: its image comes with the coverage read (Task 8).
     assert!(m.overlay_for("test/wall.png", 0, OverlayKind::Uv).is_none());
     assert!(!m.v2_jobs_pending());
 }

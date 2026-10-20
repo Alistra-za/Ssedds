@@ -426,6 +426,8 @@ pub struct AppModel {
     pub view: view::ViewState,
     /// The preview overlay job and the overlay on show (v2 checks, Note CI).
     pub overlay: overlay::OverlayState,
+    /// UV coverage: the session cache, its reads, Check all and the scan-has-rows answer (Note CI, Task 8).
+    pub uv: uv_coverage::UvState,
     /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
     pub gpu_max_dim: u32,
     /// False when eframe found no usable GPU adapter: the preview is off, everything else works (M3a spec §7).
@@ -617,6 +619,7 @@ impl AppModel {
             dds_patch: Default::default(),
             view: view::ViewState::default(),
             overlay: Default::default(),
+            uv: Default::default(),
             gpu_max_dim: 16384,
             gpu_available: true,
             export_after_plan: false,
@@ -1087,12 +1090,16 @@ impl AppModel {
     /// waits for it. Not part of `busy()`, which greys the Advanced fields. Tracks A and B add their jobs here.
     pub fn v2_jobs_pending(&self) -> bool {
         self.overlay_pending()
+            || self.uv.read_pending()
+            || self.uv.all_running()
+            || self.uv.probe_pending()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         self.scan_stamp = cs_pbr::stamp(self.scan_db.as_deref());
+        self.uv_poll();
         self.cs_pbr.new_frame();
         for d in self.picker.take() {
             changed = true;
@@ -1228,6 +1235,19 @@ impl AppModel {
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
             WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
             WorkerMsg::Overlay { generation, image } => self.overlay_landed(generation, image),
+            WorkerMsg::UvCoverage {
+                generation,
+                tex,
+                coverage,
+                image,
+            } => self.uv_landed(generation, tex, coverage, image),
+            WorkerMsg::UvProgress {
+                run,
+                done,
+                total,
+                finished,
+            } => self.uv_progress(run, done, total, finished),
+            WorkerMsg::ScanHasRows { stamp, rows } => self.uv_rows_landed(stamp, rows),
             WorkerMsg::Dims(dims) => self.dims_landed(dims),
             WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}

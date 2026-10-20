@@ -78,6 +78,28 @@ pub enum WorkerMsg {
         generation: u64,
         image: Option<Arc<eframe::egui::ColorImage>>,
     },
+    /// The UV coverage of scan path `tex` (`AppModel::uv_coverage`, Check all), with its overlay built on the worker;
+    /// a failed read is a `Coverage` with an error line (K18). A cancelled read sends nothing; a stale `generation`
+    /// (the cache was cleared since) is dropped.
+    UvCoverage {
+        generation: u64,
+        tex: String,
+        coverage: Arc<crate::model::uv_coverage::Coverage>,
+        image: Arc<eframe::egui::ColorImage>,
+    },
+    /// "Check all UV coverage" run `run` has read `done` of `total` textures; `finished` once the run has ended
+    /// (cancelled runs end with `done < total`).
+    UvProgress {
+        run: u64,
+        done: usize,
+        total: usize,
+        finished: bool,
+    },
+    /// The scan-has-rows probe of the scan DB as it was at `stamp`.
+    ScanHasRows {
+        stamp: crate::model::cs_pbr::Stamp,
+        rows: bool,
+    },
     /// The RNM blended thumbnail of job `id` (`AppModel::rnm_preview_frame`); `None` when the blend failed.
     RnmPreview {
         id: u64,

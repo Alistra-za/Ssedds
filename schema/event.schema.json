@@ -473,7 +473,8 @@
         "CHK-Z-SIGN",
         "CHK-PARALLAX",
         "CHK-PARALLAX-SCALE",
-        "CHK-LOW-DETAIL"
+        "CHK-LOW-DETAIL",
+        "CHK-UV-GUTTER"
       ],
       "type": "string"
     },

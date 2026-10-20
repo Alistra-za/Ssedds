@@ -593,6 +593,482 @@ pub fn coverage_for(
     })
 }
 
+// ---- Task 8: the session cache, the reads, the scan-has-rows probe and "Check all UV coverage" ----
+
+/// How a read gets a texture's coverage: `coverage_for`, or a slow or panicking stand-in in tests.
+pub type ReadFn = fn(&Path, &str, [u32; 2], &AtomicBool) -> Result<Coverage, String>;
+
+/// A cached answer and its overlay image.
+#[derive(Clone)]
+struct Entry {
+    coverage: Arc<Coverage>,
+    image: Arc<eframe::egui::ColorImage>,
+}
+
+/// A running "Check all UV coverage".
+struct AllRun {
+    run: u64,
+    cancel: Arc<AtomicBool>,
+    done: usize,
+    total: usize,
+}
+
+/// UV coverage in the GUI (DECISIONS Note CI): the session cache keyed by scan path (no disk cache, C4), the reads in
+/// flight, the Check-all run and the scan-has-rows answer. Every job here is counted in `AppModel::v2_jobs_pending`.
+pub struct UvState {
+    cache: HashMap<String, Entry>,
+    /// Bumped by every landed answer and by a clear: part of `refresh_checks`' key.
+    revision: u64,
+    /// Bumped by a clear: an answer read before it is dropped.
+    generation: u64,
+    /// Scan paths with a single read in flight, and the generation it was started in.
+    pending: HashMap<String, u64>,
+    /// Cancels the single reads of this generation (set by a clear).
+    reads_cancel: Arc<AtomicBool>,
+    all: Option<AllRun>,
+    runs: u64,
+    /// The probe's answer and the scan-DB stamp it read.
+    has_rows: Option<(super::cs_pbr::Stamp, bool)>,
+    /// The stamp of the probe in flight.
+    probing: Option<super::cs_pbr::Stamp>,
+    /// The stamp the cache was filled under: a new one (an external scan, a running scan's checkpoint) clears it.
+    stamp: super::cs_pbr::Stamp,
+    /// Some item of the open folder has a colour sub-type (set in `refresh_checks`, read per frame by Advanced).
+    pub(super) any_colour: bool,
+    #[doc(hidden)]
+    pub read: ReadFn,
+}
+
+impl Default for UvState {
+    fn default() -> UvState {
+        UvState {
+            cache: HashMap::new(),
+            revision: 0,
+            generation: 0,
+            pending: HashMap::new(),
+            reads_cancel: Arc::default(),
+            all: None,
+            runs: 0,
+            has_rows: None,
+            probing: None,
+            stamp: None,
+            any_colour: false,
+            read: coverage_for,
+        }
+    }
+}
+
+impl UvState {
+    /// A single read is in flight.
+    pub fn read_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+    /// "Check all UV coverage" is running.
+    pub fn all_running(&self) -> bool {
+        self.all.is_some()
+    }
+    /// The scan-has-rows probe is in flight.
+    pub fn probe_pending(&self) -> bool {
+        self.probing.is_some()
+    }
+    /// (done, total) of the running Check all.
+    pub fn all_progress(&self) -> Option<(usize, usize)> {
+        self.all.as_ref().map(|a| (a.done, a.total))
+    }
+    /// The running Check all's number (its progress bar's own epoch, K10).
+    pub fn all_run(&self) -> Option<u64> {
+        self.all.as_ref().map(|a| a.run)
+    }
+    /// The generation an answer must carry to land (tests inject answers).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(super) fn get(&self, tex: &str) -> Option<&Arc<Coverage>> {
+        self.cache.get(tex).map(|e| &e.coverage)
+    }
+
+    /// Forget every answer, and cancel the reads and the Check all in flight (their answers are dropped).
+    pub(super) fn clear(&mut self) {
+        self.cache.clear();
+        self.pending.clear();
+        self.generation += 1;
+        self.revision += 1;
+        self.reads_cancel.store(true, Ordering::Relaxed);
+        self.reads_cancel = Arc::default();
+        if let Some(a) = &self.all {
+            a.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// `read`'s answer as the message's coverage and overlay: an `Err` becomes a coverage with that error line (K18), a
+/// panic too (K9); `None` when `cancel` is set, so a cancelled read is never an answer (the flag decides, not the
+/// message, review M4).
+fn read_one(
+    read: ReadFn,
+    db: &Path,
+    tex: &str,
+    size: [u32; 2],
+    cancel: &AtomicBool,
+) -> Option<(Arc<Coverage>, Arc<eframe::egui::ColorImage>)> {
+    let got =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(db, tex, size, cancel)))
+            .unwrap_or_else(|p| {
+                Err(format!(
+                    "internal error: {}",
+                    crate::worker::panic_text(&*p)
+                ))
+            });
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let c = got.unwrap_or_else(|why| Coverage {
+        mask: Arc::new(UvMask::new(MASK_SIZE)),
+        used: 0.0,
+        gutter: None,
+        nifs: 0,
+        errors: vec![why],
+    });
+    let image = super::overlay::uv_overlay_image(&c.mask);
+    Some((Arc::new(c), image))
+}
+
+/// One "Check all UV coverage" run's work: scan paths and texture sizes.
+pub struct AllJob {
+    pub run: u64,
+    pub generation: u64,
+    pub db: std::path::PathBuf,
+    pub work: Vec<(String, [u32; 2])>,
+    /// Worker threads (at least 1).
+    pub jobs: usize,
+    pub read: ReadFn,
+}
+
+/// Reads every texture of `job` on `job.jobs` scoped threads: one `UvCoverage` and one `UvProgress` per texture
+/// read, then one final `UvProgress { finished: true }`. `cancel` is checked before each texture, so a cancelled
+/// run ends after the reads in flight (which return early) with `done < total`.
+pub fn check_all_run(
+    tx: &std::sync::mpsc::Sender<crate::worker::WorkerMsg>,
+    job: &AllJob,
+    cancel: &AtomicBool,
+) {
+    use crate::worker::WorkerMsg;
+    use std::sync::atomic::AtomicUsize;
+    let (next, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let total = job.work.len();
+    std::thread::scope(|s| {
+        for _ in 0..job.jobs.clamp(1, total.max(1)) {
+            s.spawn(|| {
+                while !cancel.load(Ordering::Relaxed) {
+                    let Some((tex, size)) = job.work.get(next.fetch_add(1, Ordering::Relaxed))
+                    else {
+                        break;
+                    };
+                    let Some((coverage, image)) = read_one(job.read, &job.db, tex, *size, cancel)
+                    else {
+                        break;
+                    };
+                    let _ = tx.send(WorkerMsg::UvCoverage {
+                        generation: job.generation,
+                        tex: tex.clone(),
+                        coverage,
+                        image,
+                    });
+                    let d = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let _ = tx.send(WorkerMsg::UvProgress {
+                        run: job.run,
+                        done: d,
+                        total,
+                        finished: false,
+                    });
+                }
+            });
+        }
+    });
+    let _ = tx.send(WorkerMsg::UvProgress {
+        run: job.run,
+        done: done.load(Ordering::Relaxed),
+        total,
+        finished: true,
+    });
+}
+
+/// The overlay toggle's hover: how much of the texture the meshes use, the gutter, and any read errors.
+pub fn summary(c: &Coverage) -> String {
+    let mut s = format!(
+        "{:.1} % of the texture is used by {} mesh{}",
+        c.used * 100.0,
+        c.nifs,
+        if c.nifs == 1 { "" } else { "es" }
+    );
+    match c.gutter {
+        Some(g) => {
+            s += &format!(
+                "; {:.1} % of used texels sit within 8 texels of another UV island",
+                g * 100.0
+            )
+        }
+        None if c.errors.is_empty() || c.nifs > 0 => {
+            s += "; Gutter not measured above 2048 px wide"
+        }
+        None => {}
+    }
+    for e in c.errors.iter().take(5) {
+        s += &format!("\n{e}");
+    }
+    if c.errors.len() > 5 {
+        s += &format!("\n… and {} more", c.errors.len() - 5);
+    }
+    s
+}
+
+/// The answers of the sub-types that have UV coverage: colour textures on meshes. `LandscapeDiffuse` is left out
+/// (terrain uses LTEX/TXST records, not NIF shapes).
+// shortcut: normals share their set's UVs but are not offered; offer them through their set's colour if asked.
+pub(super) fn colour(st: engine::config::Subtype) -> bool {
+    use engine::config::Subtype::*;
+    matches!(st, Diffuse | PbrAlbedo | SkinAlbedo)
+}
+
+const WAIT_SCAN: &str = "Wait for the Meshes scan to finish";
+const SCAN_FIRST: &str = "Scan your MO2 instance in the Meshes view first";
+const COLOUR_ONLY: &str = "Only colour textures on meshes have UV coverage";
+
+impl super::AppModel {
+    /// The scan path the meshes name `item`'s output by, as "Used by meshes" asks for it (`<mesh_key>.dds`).
+    pub fn uv_tex(&self, item: &str) -> Option<String> {
+        let j = self.item(item)?.job.as_ref()?;
+        let stem = j.output.file_stem()?.to_string_lossy().into_owned();
+        Some(format!(
+            "{}.dds",
+            engine::shader::mesh_key(&j.game_path, &stem)
+        ))
+    }
+
+    /// The written texture's [width, height] (the engine's size rules, so a half size counts); [0, 0] without an
+    /// analysis, which leaves the gutter unmeasured.
+    fn uv_size(&self, item: &str) -> [u32; 2] {
+        let Some(i) = self.item(item) else {
+            return [0, 0];
+        };
+        match (&i.job, &i.analysis) {
+            (Some(j), Some(a)) => {
+                let e = super::out_size::estimate((a.width, a.height), &j.profile);
+                [e.width, e.height]
+            }
+            _ => [0, 0],
+        }
+    }
+
+    /// Why no scan answer can be read now, whatever the texture: a Meshes scan is running or was cancelled (BY6,
+    /// re-check C12), or there is no scan with rows (no DB, no file, an empty or old-schema DB, or no answer yet).
+    fn uv_scan_reason(&self) -> Result<(), &'static str> {
+        if self.scan_store_unsettled {
+            return Err(WAIT_SCAN);
+        }
+        let rows = self
+            .uv
+            .has_rows
+            .is_some_and(|(s, r)| r && s == self.scan_stamp);
+        if self.scan_db.is_none() || self.scan_stamp.is_none() || !rows {
+            return Err(SCAN_FIRST);
+        }
+        Ok(())
+    }
+
+    /// Whether `item` can show UV coverage, and why not. Cached state only: never the file system.
+    pub fn uv_offered(&self, item: &str) -> Result<(), &'static str> {
+        self.uv_scan_reason()?;
+        let st = self
+            .item(item)
+            .and_then(|i| i.job.as_ref())
+            .map(|j| j.profile.subtype);
+        if !st.is_some_and(colour) {
+            return Err(COLOUR_ONLY);
+        }
+        Ok(())
+    }
+
+    /// Why "Check all UV coverage" is off: the scan reason, or no colour texture in the folder (O(1) per frame).
+    pub fn uv_check_all_offered(&self) -> Result<(), &'static str> {
+        self.uv_scan_reason()?;
+        if !self.uv.any_colour {
+            return Err(COLOUR_ONLY);
+        }
+        Ok(())
+    }
+
+    /// `item`'s UV coverage from the session cache. A miss starts one worker read per scan path (none while one is
+    /// in flight); `None` until it lands, and always `None` when `item` is not offered.
+    pub fn uv_coverage(&mut self, item: &str) -> Option<Arc<Coverage>> {
+        self.uv_entry(item).map(|e| e.coverage)
+    }
+
+    /// `item`'s overlay image from the cache (built on the worker with the coverage, CI29). Starts nothing.
+    pub fn uv_overlay(&self, item: &str) -> Option<Arc<eframe::egui::ColorImage>> {
+        self.uv_offered(item).ok()?;
+        self.uv
+            .cache
+            .get(&self.uv_tex(item)?)
+            .map(|e| e.image.clone())
+    }
+
+    fn uv_entry(&mut self, item: &str) -> Option<Entry> {
+        self.uv_offered(item).ok()?;
+        let tex = self.uv_tex(item)?;
+        if let Some(e) = self.uv.cache.get(&tex) {
+            return Some(e.clone());
+        }
+        if self.uv.pending.contains_key(&tex) {
+            return None;
+        }
+        let db = self.scan_db.clone()?;
+        let size = self.uv_size(item);
+        let (generation, read) = (self.uv.generation, self.uv.read);
+        let cancel = self.uv.reads_cancel.clone();
+        self.uv.pending.insert(tex.clone(), generation);
+        crate::worker::spawn_guarded(self.tx.clone(), "uv-read", move |tx| {
+            // `read_one` turns a panic into this tex's error answer, so the read is not pending forever (K9). Only a
+            // clear cancels a single read, and the clear already dropped it from `pending`: nothing to send then.
+            if let Some((coverage, image)) = read_one(read, &db, &tex, size, &cancel) {
+                let _ = tx.send(crate::worker::WorkerMsg::UvCoverage {
+                    generation,
+                    tex,
+                    coverage,
+                    image,
+                });
+            }
+        });
+        None
+    }
+
+    /// Read every offered colour texture of the open folder that is not cached yet (C4), on `settings.jobs` threads
+    /// (0 = every core) inside one worker. Nothing to read: one `(0, 0)` and the run ends.
+    pub fn check_all_uv(&mut self) {
+        if self.uv.all.is_some() {
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let work: Vec<(String, [u32; 2])> = self
+            .items
+            .iter()
+            .filter(|i| self.uv_offered(&i.key).is_ok())
+            .filter_map(|i| Some((self.uv_tex(&i.key)?, self.uv_size(&i.key))))
+            .filter(|(t, _)| !self.uv.cache.contains_key(t) && seen.insert(t.clone()))
+            .collect();
+        self.uv.runs += 1;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.uv.all = Some(AllRun {
+            run: self.uv.runs,
+            cancel: cancel.clone(),
+            done: 0,
+            total: work.len(),
+        });
+        let jobs = match self.settings.jobs {
+            0 => std::thread::available_parallelism().map_or(4, |n| n.get()),
+            n => n,
+        };
+        let job = AllJob {
+            run: self.uv.runs,
+            generation: self.uv.generation,
+            db: self.scan_db.clone().unwrap_or_default(),
+            work,
+            jobs,
+            read: self.uv.read,
+        };
+        crate::worker::spawn_guarded(self.tx.clone(), "uv-all", move |tx| {
+            let (run, total) = (job.run, job.work.len());
+            // A panic outside the reads still ends the run (K9).
+            crate::worker::or_send(
+                tx,
+                || check_all_run(tx, &job, &cancel),
+                |_| crate::worker::WorkerMsg::UvProgress {
+                    run,
+                    done: 0,
+                    total,
+                    finished: true,
+                },
+            );
+        });
+    }
+
+    /// Stop Check all: the reads in flight return early, and the run ends when they have.
+    pub fn cancel_check_all_uv(&mut self) {
+        if let Some(a) = &self.uv.all {
+            a.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Start the scan-has-rows probe when the scan DB's stamp has changed since the last one, unless a Meshes scan
+    /// is unsettled (A12, C12). A new stamp also clears the cache (K18: errors are cached until then).
+    pub(super) fn uv_poll(&mut self) {
+        if self.uv.stamp != self.scan_stamp {
+            self.uv.stamp = self.scan_stamp;
+            if !self.uv.cache.is_empty() || self.uv.read_pending() {
+                self.uv.clear();
+            }
+        }
+        let answered = self.uv.has_rows.is_some_and(|(s, _)| s == self.scan_stamp);
+        if self.scan_store_unsettled
+            || self.scan_stamp.is_none()
+            || answered
+            || self.uv.probing == Some(self.scan_stamp)
+        {
+            return;
+        }
+        let Some(db) = self.scan_db.clone() else {
+            return;
+        };
+        let stamp = self.scan_stamp;
+        self.uv.probing = Some(stamp);
+        crate::worker::spawn_guarded(self.tx.clone(), "uv-probe", move |tx| {
+            let rows = crate::worker::or_send(
+                tx,
+                || scan_has_rows(&db),
+                |_| crate::worker::WorkerMsg::ScanHasRows { stamp, rows: false },
+            );
+            let _ = tx.send(crate::worker::WorkerMsg::ScanHasRows { stamp, rows });
+        });
+    }
+
+    pub(super) fn uv_rows_landed(&mut self, stamp: super::cs_pbr::Stamp, rows: bool) {
+        if self.uv.probing == Some(stamp) {
+            self.uv.probing = None;
+            self.uv.has_rows = Some((stamp, rows));
+        }
+    }
+
+    pub(super) fn uv_landed(
+        &mut self,
+        generation: u64,
+        tex: String,
+        coverage: Arc<Coverage>,
+        image: Arc<eframe::egui::ColorImage>,
+    ) {
+        if self.uv.pending.get(&tex) == Some(&generation) {
+            self.uv.pending.remove(&tex);
+        }
+        if generation == self.uv.generation {
+            self.uv.cache.insert(tex, Entry { coverage, image });
+            self.uv.revision += 1;
+        }
+    }
+
+    pub(super) fn uv_progress(&mut self, run: u64, done: usize, total: usize, finished: bool) {
+        let Some(a) = self.uv.all.as_mut().filter(|a| a.run == run) else {
+            return;
+        };
+        if finished {
+            self.uv.all = None;
+        } else {
+            (a.done, a.total) = (done.max(a.done), total);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

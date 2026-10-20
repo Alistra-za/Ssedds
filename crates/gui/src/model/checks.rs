@@ -65,6 +65,7 @@ pub fn check_of(code: Code) -> Option<Check> {
         Code::ChkLowDetail => Check::LowDetail,
         Code::ChkGreenGuess | Code::ChkZSign => Check::Green,
         Code::ChkParallax | Code::ChkParallaxScale => Check::Parallax,
+        Code::ChkUvGutter => Check::Uv,
         _ => return None,
     })
 }
@@ -386,8 +387,8 @@ pub fn scale_outliers(scales: &[(String, f64)]) -> Vec<String> {
 pub(crate) struct CheckState {
     items: HashMap<String, Vec<Warning>>,
     sets: HashMap<String, Vec<Warning>>,
-    /// (plans applied, sets document revision, switches) of the last refresh (K1).
-    key: Option<(u64, u64, ChecksSettings)>,
+    /// (plans applied, sets document revision, switches, UV cache revision) of the last refresh (K1).
+    key: Option<(u64, u64, ChecksSettings, u64)>,
     /// Bumped whenever `items` is replaced by a plan or cleared by a new folder.
     pub plans_applied: u64,
 }
@@ -434,7 +435,12 @@ impl AppModel {
             .sets_doc
             .as_ref()
             .map_or(0, crate::sets_doc::SetsDoc::rev);
-        let key = (self.check_state.plans_applied, doc, self.settings.checks);
+        let key = (
+            self.check_state.plans_applied,
+            doc,
+            self.settings.checks,
+            self.uv.revision(),
+        );
         if self.check_state.key == Some(key) {
             return false;
         }
@@ -474,6 +480,33 @@ impl AppModel {
                 items.insert(i.key.clone(), ws);
             }
         }
+        // UV coverage: only what a click read (owner: on click only), from the session cache.
+        let mut any_colour = false;
+        for i in &self.items {
+            if !i
+                .job
+                .as_ref()
+                .is_some_and(|j| super::uv_coverage::colour(j.profile.subtype))
+            {
+                continue;
+            }
+            any_colour = true;
+            let g = self
+                .uv_tex(&i.key)
+                .and_then(|t| self.uv.get(&t))
+                .and_then(|c| c.gutter)
+                .filter(|&g| on.uv && g > super::uv_coverage::GUTTER_SHARE);
+            if let Some(g) = g {
+                items.entry(i.key.clone()).or_default().push(Warning::new(
+                    Code::ChkUvGutter,
+                    format!(
+                        "UV islands sit closer than 8 texels for {:.1} % of used texels: colours bleed across them at distance (mip 3+)",
+                        g * 100.0
+                    ),
+                ));
+            }
+        }
+        self.uv.any_colour = any_colour;
         if on.range {
             for v in views.iter() {
                 let member = |st: Subtype| {

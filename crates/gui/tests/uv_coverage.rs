@@ -547,3 +547,516 @@ fn owner_coverage_of_a_single_user_texture_is_fast() {
     assert!(ms < 200, "{ms} ms");
     assert!(c.used > 0.0 && c.used <= 1.0, "{}", c.used);
 }
+
+// ---- Task 8: the GUI side (UvState, the toggle, the gutter warning, Check all) ----
+
+mod support;
+use eframe::egui;
+use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::Harness;
+use engine::codes::Code;
+use sdc_gui::model::AppModel;
+use sdc_gui::settings::GuiSettings;
+use sdc_gui::worker::WorkerMsg;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+const SCAN_FIRST: &str = "Scan your MO2 instance in the Meshes view first";
+const COLOUR_ONLY: &str = "Only colour textures on meshes have UV coverage";
+const UNSETTLED: &str = "Wait for the Meshes scan to finish";
+const WALL: &str = "a/wall.png";
+
+/// A scan DB whose one winning NIF (the nif crate's skinned fixture) names `TEX` in every shape with UVs.
+fn real_db(dir: &Path) -> PathBuf {
+    let bytes = nif_fixture();
+    let h = nif::header::Header::parse(&bytes).unwrap();
+    let blocks: Vec<u32> = nif::scan::scan(&bytes)
+        .unwrap()
+        .shapes
+        .iter()
+        .map(|s| s.block)
+        .filter(|&b| nif::geom::read_shape(&h, &bytes, b as usize).is_ok_and(|m| !m.uvs.is_empty()))
+        .collect();
+    let db = dir.join("scan.db");
+    let root = dir.join("Mod");
+    std::fs::create_dir_all(root.join("meshes")).unwrap();
+    std::fs::write(root.join("meshes").join("body.nif"), &bytes).unwrap();
+    let s = store(&db);
+    origin(s.conn(), 1, &root, 1, false);
+    copy(s.conn(), 10, "meshes/body.nif", 1, false, false, &blocks);
+    winner(s.conn(), "meshes/body.nif", 10, None);
+    db
+}
+
+/// Three plain diffuses in `a/` (`a/wall.png` is the one the scan names) and a landscape diffuse, opened with
+/// `db` as the scan database. The scan-has-rows probe has landed.
+fn uv_model(dir: &Path, db: Option<PathBuf>) -> AppModel {
+    let root = dir.join("textures");
+    for p in [
+        "a/wall.png",
+        "a/wall2.png",
+        "a/wall3.png",
+        "landscape/ground.png",
+    ] {
+        let f = root.join(p);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        image::RgbImage::from_pixel(16, 16, image::Rgb([120, 90, 60]))
+            .save(f)
+            .unwrap();
+    }
+    let mut m = AppModel::new(GuiSettings::default(), None, support::session());
+    m.scan_db = db;
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m
+}
+
+fn harness(model: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(egui::vec2(1600.0, 1000.0))
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// A read that waits (up to 5 s, or until cancelled) before it reads.
+fn slow(db: &Path, tex: &str, size: [u32; 2], cancel: &AtomicBool) -> Result<Coverage, String> {
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < end && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    coverage_for(db, tex, size, cancel)
+}
+
+fn panics(_: &Path, _: &str, _: [u32; 2], _: &AtomicBool) -> Result<Coverage, String> {
+    panic!("forced UV read panic")
+}
+
+/// The UV toggle of the expanded `item`: (disabled, its disabled hover shows `uv_offered`'s reason).
+fn toggle_state(mut m: AppModel, item: &str) -> (bool, bool) {
+    m.expand(item);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let reason = m.uv_offered(item).err().unwrap_or("never shown");
+    let mut h = harness(m);
+    h.run();
+    let node = h.get_by_label("UV coverage overlay");
+    let disabled = node.accesskit_node().is_disabled();
+    node.hover();
+    h.run();
+    (disabled, h.query_by_label_contains(reason).is_some())
+}
+
+#[test]
+fn uv_button_is_disabled_without_a_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let m = uv_model(d.path(), None);
+    assert_eq!(m.uv_offered(WALL), Err(SCAN_FIRST));
+    let (disabled, reason) = toggle_state(m, WALL);
+    assert!(disabled && reason, "disabled {disabled}, hover {reason}");
+}
+
+#[test]
+fn uv_button_is_disabled_with_an_empty_scan_db() {
+    let d = tempfile::tempdir().unwrap();
+    let empty = d.path().join("empty.db");
+    drop(modscan::store::Store::open(&empty).unwrap());
+    let m = uv_model(d.path(), Some(empty));
+    assert!(!m.uv.probe_pending());
+    assert_eq!(m.uv_offered(WALL), Err(SCAN_FIRST));
+    let (disabled, reason) = toggle_state(m, WALL);
+    assert!(disabled && reason, "disabled {disabled}, hover {reason}");
+
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    assert_eq!(m.uv_offered(WALL), Ok(()));
+    assert_eq!(
+        m.item("landscape/ground.png")
+            .and_then(|i| i.job.as_ref())
+            .map(|j| j.profile.subtype),
+        Some(engine::config::Subtype::LandscapeDiffuse)
+    );
+    assert_eq!(m.uv_offered("landscape/ground.png"), Err(COLOUR_ONLY));
+    assert!(m.uv_coverage("landscape/ground.png").is_none());
+    assert!(!m.v2_jobs_pending());
+    let (disabled, reason) = toggle_state(m, "landscape/ground.png");
+    assert!(disabled && reason, "disabled {disabled}, hover {reason}");
+}
+
+/// A new mtime on `p` (what a scan's checkpoint does to the stamp).
+fn bump_mtime(p: &Path) {
+    let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+    f.set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+        .unwrap();
+}
+
+#[test]
+fn uv_is_not_offered_while_a_meshes_scan_is_unsettled() {
+    // Re-check C12, A12.
+    let d = tempfile::tempdir().unwrap();
+    let db = real_db(d.path());
+    let root = d.path().join("textures/a");
+    std::fs::create_dir_all(&root).unwrap();
+    image::RgbImage::from_pixel(16, 16, image::Rgb([120, 90, 60]))
+        .save(root.join("wall.png"))
+        .unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, support::session());
+    m.scan_store_unsettled = true;
+    m.scan_db = Some(db.clone());
+    m.open_folder(d.path().join("textures"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.uv_offered(WALL), Err(UNSETTLED));
+    assert!(m.uv_coverage(WALL).is_none());
+    assert!(!m.v2_jobs_pending());
+    // A running scan changes the stamp: no probe starts while unsettled.
+    bump_mtime(&db);
+    m.poll();
+    assert!(!m.uv.probe_pending(), "a probe started mid-scan");
+    assert!(m.uv_coverage(WALL).is_none());
+    // The scan settles: the probe runs and the item is offered.
+    m.scan_store_unsettled = false;
+    m.poll();
+    assert!(m.uv.probe_pending());
+    assert_eq!(
+        m.uv_offered(WALL),
+        Err(SCAN_FIRST),
+        "offered before the answer"
+    );
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert_eq!(m.uv_offered(WALL), Ok(()));
+}
+
+#[test]
+fn check_all_polls_without_greying_advanced() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv.read = slow;
+    m.settings.advanced_open = true;
+    m.select_item(WALL);
+    m.check_all_uv();
+    assert_eq!(m.uv.all_progress(), Some((0, 3)));
+    assert!(m.v2_jobs_pending());
+    assert!(!m.busy());
+    let mut h = harness(m);
+    h.run_steps(3);
+    assert!(
+        h.query_by_label_contains("0 / 3").is_some(),
+        "no progress bar"
+    );
+    let stop = h.get_by_label("Stop checking UV coverage");
+    assert!(!stop.accesskit_node().is_disabled());
+    assert!(h.query_by_label("Check all UV coverage").is_none());
+    // The Advanced fields stay enabled while the run polls.
+    let fields: Vec<bool> = h
+        .query_all_by_label("Perceptual")
+        .map(|n| n.accesskit_node().is_disabled())
+        .collect();
+    assert!(
+        !fields.is_empty() && fields.iter().all(|d| !d),
+        "{fields:?}"
+    );
+    let m = h.state_mut();
+    m.uv.read = coverage_for;
+    m.cancel_check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    assert!(!m.v2_jobs_pending() && m.uv.all_progress().is_none());
+    // A full run lands every texture in the cache.
+    m.check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    assert!(m.uv_overlay(WALL).is_some() && m.uv_overlay("a/wall2.png").is_some());
+    assert_eq!(m.uv_coverage(WALL).map(|c| c.nifs), Some(1));
+    assert_eq!(m.uv_coverage("a/wall2.png").map(|c| c.nifs), Some(0));
+    h.run_steps(2);
+    assert!(!h
+        .get_by_label("Check all UV coverage")
+        .accesskit_node()
+        .is_disabled());
+}
+
+#[test]
+fn check_all_is_disabled_with_the_reason_when_nothing_is_offered() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), None);
+    m.settings.advanced_open = true;
+    let mut h = harness(m);
+    h.run();
+    let button = h.get_by_label("Check all UV coverage");
+    assert!(button.accesskit_node().is_disabled());
+    button.hover();
+    h.run();
+    assert!(h.query_by_label_contains(SCAN_FIRST).is_some());
+}
+
+#[test]
+fn coverage_lands_in_the_cache_and_a_finished_scan_clears_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    assert!(m.uv_coverage(WALL).is_none());
+    assert!(m.uv.read_pending());
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    let c = m.uv_coverage(WALL).expect("landed");
+    assert_eq!(c.nifs, 1);
+    assert!(c.used > 0.0);
+    assert!(!m.uv.read_pending(), "a cached answer started a read");
+    // A finished scan (the app calls this) clears the session cache.
+    m.refresh_mesh_votes(false);
+    assert!(m.uv_overlay(WALL).is_none());
+    assert!(m.uv_coverage(WALL).is_none());
+    assert!(m.uv.read_pending());
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    assert!(m.uv_coverage(WALL).is_some());
+}
+
+/// K18: a failed read is cached (not retried every frame); a cancelled one is never cached.
+#[test]
+fn a_failed_read_is_cached_and_a_cancelled_one_is_not() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv.read = |_, _, _, _| Err("no such table: path".into());
+    assert!(m.uv_coverage(WALL).is_none());
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    let c = m.uv_coverage(WALL).expect("the error is cached");
+    assert_eq!(c.nifs, 0);
+    assert_eq!(c.errors, ["no such table: path"]);
+    assert_eq!(c.gutter, None);
+    assert!(!m.uv.read_pending(), "a failed read is retried");
+    assert!(summary(&c).contains("no such table: path"));
+    assert!(m
+        .check_warnings(WALL)
+        .iter()
+        .all(|w| w.code != Code::ChkUvGutter));
+    // Cancelled: the reads stop and nothing is cached.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    fn signals(
+        db: &Path,
+        tex: &str,
+        size: [u32; 2],
+        cancel: &AtomicBool,
+    ) -> Result<Coverage, String> {
+        STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        slow(db, tex, size, cancel)
+    }
+    m.uv.read = signals;
+    m.check_all_uv();
+    // Cancel once a read is in flight, so the read itself returns `CANCELLED`.
+    while !STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    m.cancel_check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(m.uv_overlay(WALL).is_none(), "a cancelled read was cached");
+    // A single read is cancelled by a clear (a finished scan), and nothing lands either.
+    m.uv_coverage(WALL);
+    m.refresh_mesh_votes(false);
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(m.uv_overlay(WALL).is_none());
+}
+
+/// K9: a panicking read never leaves `v2_jobs_pending()` set, and its tex is not retried every frame.
+#[test]
+fn a_panicking_uv_read_clears_v2_jobs_pending() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv.read = panics;
+    m.uv_coverage(WALL);
+    m.check_all_uv();
+    assert!(
+        m.wait_idle(Duration::from_secs(10)),
+        "wait_idle spun to its timeout"
+    );
+    assert!(!m.v2_jobs_pending());
+    let c = m
+        .uv_coverage(WALL)
+        .expect("the panic is cached as an error");
+    assert!(
+        c.errors[0].contains("forced UV read panic"),
+        "{:?}",
+        c.errors
+    );
+    assert!(!m.uv.read_pending());
+}
+
+#[test]
+fn a_close_island_pair_raises_chk_uv_gutter_after_the_click() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    let tex = m.uv_tex(WALL).expect("a tex key");
+    let gutter_rows = |m: &AppModel| {
+        m.check_warnings(WALL)
+            .iter()
+            .filter(|w| w.code == Code::ChkUvGutter)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let inject = |m: &mut AppModel, gutter: Option<f64>| {
+        let c = Coverage {
+            mask: Arc::new(UvMask::new(MASK_SIZE)),
+            used: 0.4,
+            gutter,
+            nifs: 1,
+            errors: vec![],
+        };
+        let msg = WorkerMsg::UvCoverage {
+            generation: m.uv.generation(),
+            tex: tex.clone(),
+            image: sdc_gui::model::overlay::uv_overlay_image(&c.mask),
+            coverage: Arc::new(c),
+        };
+        m.sender().send(msg).unwrap();
+        m.poll();
+    };
+    // Nothing until a read (on click only).
+    assert!(gutter_rows(&m).is_empty());
+    inject(&mut m, Some(0.25));
+    let w = gutter_rows(&m);
+    assert_eq!(w.len(), 1);
+    assert_eq!(
+        w[0].message,
+        "UV islands sit closer than 8 texels for 25.0 % of used texels: colours bleed across them at distance (mip 3+)"
+    );
+    // A Problems row at Level::Check (it never changes "ready").
+    let rows = sdc_gui::model::bottom::problems(&m);
+    assert!(rows
+        .iter()
+        .any(|p| p.code == Some(Code::ChkUvGutter)
+            && p.level == sdc_gui::model::bottom::Level::Check));
+    // The switch hides it and brings it back, with no new read.
+    let mut c = m.settings.checks;
+    c.uv = false;
+    m.set_checks(c);
+    m.poll();
+    assert!(gutter_rows(&m).is_empty());
+    c.uv = true;
+    m.set_checks(c);
+    m.poll();
+    assert_eq!(gutter_rows(&m).len(), 1);
+    // At the share: no warning. Not measured: no warning, and the hover says why.
+    inject(&mut m, Some(GUTTER_SHARE));
+    assert!(gutter_rows(&m).is_empty());
+    inject(&mut m, None);
+    assert!(gutter_rows(&m).is_empty());
+    let c = m.uv_coverage(WALL).unwrap();
+    assert!(summary(&c).contains("Gutter not measured above 2048 px wide"));
+}
+
+#[test]
+fn check_all_cancels_between_textures() {
+    // K17: the scoped runner with the cancel flag already set.
+    let f = fixture();
+    let work: Vec<(String, [u32; 2])> = ["a/wall.dds", "a/b.dds", "a/c.dds"]
+        .iter()
+        .map(|t| (t.to_string(), [1024, 1024]))
+        .collect();
+    let run = |work: Vec<(String, [u32; 2])>, cancel: bool| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let job = AllJob {
+            run: 7,
+            generation: 1,
+            db: f.db.clone(),
+            work,
+            jobs: 4,
+            read: coverage_for,
+        };
+        check_all_run(&tx, &job, &AtomicBool::new(cancel));
+        drop(tx);
+        rx.iter().collect::<Vec<_>>()
+    };
+    let msgs = run(work.clone(), true);
+    assert_eq!(msgs.len(), 1);
+    assert!(matches!(
+        msgs[0],
+        WorkerMsg::UvProgress {
+            run: 7,
+            done: 0,
+            total: 3,
+            finished: true
+        }
+    ));
+    // 0 items: one (0, 0) and the run ends.
+    let msgs = run(vec![], false);
+    assert_eq!(msgs.len(), 1);
+    assert!(matches!(
+        msgs[0],
+        WorkerMsg::UvProgress {
+            done: 0,
+            total: 0,
+            finished: true,
+            ..
+        }
+    ));
+    // Not cancelled: one coverage per texture, then the end.
+    let msgs = run(work, false);
+    let covs = msgs
+        .iter()
+        .filter(|m| matches!(m, WorkerMsg::UvCoverage { .. }))
+        .count();
+    assert_eq!(covs, 3);
+    assert!(matches!(
+        msgs.last().unwrap(),
+        WorkerMsg::UvProgress {
+            done: 3,
+            total: 3,
+            finished: true,
+            ..
+        }
+    ));
+    // App level: cancelling ends the run and clears v2_jobs_pending.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.uv.read = slow;
+    m.check_all_uv();
+    assert!(m.uv.all_running());
+    m.cancel_check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(!m.uv.all_running() && !m.v2_jobs_pending());
+    // Nothing offered (no scan): the run ends at once.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = uv_model(d.path(), None);
+    m.check_all_uv();
+    assert!(m.wait_idle(Duration::from_secs(10)));
+    assert!(!m.uv.all_running());
+}
+
+#[test]
+fn the_ui_thread_never_reads_the_scan_db() {
+    let d = tempfile::tempdir().unwrap();
+    let before = uv_reads_on_this_thread();
+    let mut m = uv_model(d.path(), Some(real_db(d.path())));
+    m.expand(WALL);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.uv.read = slow;
+    m.view.overlay = Some(sdc_gui::model::overlay::OverlayKind::Uv);
+    let mut h = harness(m);
+    h.run_steps(4);
+    assert!(h.state().uv.read_pending(), "the preview asked for no read");
+    let m = h.state_mut();
+    m.uv.read = coverage_for;
+    assert!(m.wait_idle(Duration::from_secs(20)));
+    h.run_steps(2);
+    // The read landed (on the worker); this thread opened no scan DB, for the probe or the read.
+    assert_eq!(h.state_mut().uv_coverage(WALL).map(|c| c.nifs), Some(1));
+    assert_eq!(uv_reads_on_this_thread(), before);
+    assert!(h.state().uv_overlay(WALL).is_some());
+}
+
+#[test]
+fn the_uv_overlay_dims_unused_texels_and_veils_used_ones() {
+    use sdc_gui::model::overlay::{uv_overlay_image, UV_UNUSED, UV_USED};
+    let mut mask = UvMask::new(4);
+    mask.set(1, 0);
+    let img = uv_overlay_image(&mask);
+    assert_eq!(img.size, [4, 4]);
+    let px = |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+    assert_eq!(img.pixels[1], px(UV_USED));
+    assert_eq!(img.pixels[0], px(UV_UNUSED));
+    assert_eq!(img.pixels[4], px(UV_UNUSED));
+    // Row 0 is v = 0, the image's top.
+    assert_eq!(img.pixels.iter().filter(|&&p| p == px(UV_USED)).count(), 1);
+    // Empty mask: an empty image, no panic.
+    assert!(uv_overlay_image(&UvMask::new(0)).pixels.is_empty());
+}

@@ -305,6 +305,7 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
             model.view.overlay = (!on).then_some(OverlayKind::Range);
         }
     }
+    uv_toggle(ui, model);
     requests.fit = ui
         .button("Fit")
         .on_hover_text("Zoom to fit the viewport")
@@ -616,7 +617,7 @@ fn viewports(
     let left_draw = if model.comparing_pin() {
         draw_pinned_pane(ui, model, gpu, left, left_vis, size)
     } else {
-        let overlay = range_overlay_texture(ui, model, state, key);
+        let overlay = overlay_texture(ui, model, state, key);
         draw_source_pane(ui, model, info, gpu, left, left_vis, size, overlay)
     };
     let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
@@ -754,14 +755,64 @@ fn paint_clipped(ui: &mut egui::Ui, viewport: Rect, visible: Rect, slot: Slot, p
     });
 }
 
-/// The range overlay's texture while the toggle is on and offered; the image is built on a worker (`overlay_for`).
-fn range_overlay_texture(
+/// "UV coverage" (Task 8): drawn for every texture (K7), one `add_enabled` widget (CE20), disabled with
+/// `uv_offered`'s reason. The hover names the coverage once it has been read (on click only, owner).
+fn uv_toggle(ui: &mut egui::Ui, model: &mut AppModel) {
+    let key = model.expanded.clone().unwrap_or_default();
+    let offered = model.uv_offered(&key);
+    let on = model.view.overlay == Some(OverlayKind::Uv);
+    let comparing = model.comparing_pin();
+    let reason = match offered {
+        Err(why) => why,
+        // Review M3 (as Range): the overlay is drawn on the source pane, which a compared pin replaces.
+        Ok(()) if comparing => "Hidden while comparing",
+        Ok(()) => "",
+    };
+    let r = ui
+        .add_enabled(
+            reason.is_empty(),
+            egui::Button::selectable(on, "UV coverage"),
+        )
+        .on_disabled_hover_text(reason);
+    let r = if on {
+        let c = model.uv_coverage(&key);
+        r.on_hover_ui(|ui| {
+            ui.label(c.as_deref().map_or_else(
+                || "Reading which meshes use this texture…".to_string(),
+                crate::model::uv_coverage::summary,
+            ));
+        })
+    } else {
+        r.on_hover_text("Dim the texels no mesh uses, from the meshes in your scan")
+    };
+    // ui-rules 8.4: distinct from the Checks section's "UV coverage check".
+    r.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            r.enabled(),
+            on,
+            "UV coverage overlay",
+        )
+    });
+    if r.clicked() {
+        model.view.overlay = (!on).then_some(OverlayKind::Uv);
+    }
+}
+
+/// The overlay's texture while its toggle is on and offered: the range overlay from its worker job (`overlay_for`),
+/// UV coverage from the read that also built its image (`uv_coverage`, `uv_overlay`).
+fn overlay_texture(
     ui: &egui::Ui,
     model: &mut AppModel,
     state: &mut PreviewUi,
     key: &str,
 ) -> Option<egui::TextureId> {
-    if model.view.overlay != Some(OverlayKind::Range) || !model.range_overlay_offered(key) {
+    let offered = match model.view.overlay {
+        Some(OverlayKind::Range) => model.range_overlay_offered(key),
+        Some(OverlayKind::Uv) => model.uv_offered(key).is_ok(),
+        None => false,
+    };
+    if !offered {
         // Review M7: off frees the full-size image and its texture.
         state.overlay_tex = None;
         if model.overlay.key.is_some() {
@@ -773,7 +824,15 @@ fn range_overlay_texture(
         return None;
     };
     let mip = model.view.mip.saturating_sub(s.first_level);
-    let img = model.overlay_for(key, mip, OverlayKind::Range)?;
+    let img = if model.view.overlay == Some(OverlayKind::Uv) {
+        if model.overlay.key.is_some() {
+            model.overlay.clear(); // the range overlay is not on show: free it (M7)
+        }
+        model.uv_coverage(key)?;
+        model.uv_overlay(key)?
+    } else {
+        model.overlay_for(key, mip, OverlayKind::Range)?
+    };
     if !state
         .overlay_tex
         .as_ref()

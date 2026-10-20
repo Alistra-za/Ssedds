@@ -5,6 +5,7 @@
 use super::checks::{rules_for, RangeRule};
 use super::heatmap::HeatImage;
 use super::preview::SourceState;
+use super::uv_coverage::UvMask;
 use super::AppModel;
 use crate::worker::{or_send, spawn_guarded, WorkerMsg};
 use eframe::egui::ColorImage;
@@ -38,6 +39,26 @@ pub fn range_overlay(level: &Rgba32F, rules: &[RangeRule]) -> HeatImage {
         height: level.height,
         rgba,
     }
+}
+
+/// UV coverage: a texel no mesh uses (dimmed) and one a mesh uses (a light veil).
+pub const UV_UNUSED: [u8; 4] = [0, 0, 0, 180];
+pub const UV_USED: [u8; 4] = [255, 255, 255, 40];
+
+/// The UV coverage overlay of `mask` (row 0 at v = 0, the image's top), ready to upload. Built on the read's worker
+/// with the coverage (Task 8), not by an overlay job: it depends on the mask only, never on the source mip.
+pub fn uv_overlay_image(mask: &UvMask) -> Arc<ColorImage> {
+    let n = mask.size;
+    let mut rgba = Vec::with_capacity(n as usize * n as usize * 4);
+    for y in 0..n {
+        for x in 0..n {
+            rgba.extend_from_slice(if mask.get(x, y) { &UV_USED } else { &UV_UNUSED });
+        }
+    }
+    Arc::new(ColorImage::from_rgba_unmultiplied(
+        [n as usize, n as usize],
+        &rgba,
+    ))
 }
 
 /// The overlay job and the overlay on show.
@@ -115,7 +136,7 @@ impl AppModel {
         kind: OverlayKind,
         build: Build,
     ) -> Option<Arc<ColorImage>> {
-        // shortcut: only the range overlay exists; Task 8 adds the UV coverage job here.
+        // The UV overlay is no overlay job: it comes with the coverage read (`AppModel::uv_overlay`).
         if kind != OverlayKind::Range || self.preview.item.as_deref() != Some(item) {
             return None;
         }

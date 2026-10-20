@@ -149,6 +149,8 @@ codes! {
     ChkParallaxScale = "CHK-PARALLAX-SCALE" => Warning,
     // Check 3 (fake resolution): the one CHK code the engine emits, during a run whose request sets `low_detail`.
     ChkLowDetail = "CHK-LOW-DETAIL" => Warning,
+    // UV coverage (GUI): UV islands of a meshed colour texture sit closer than the mip-bleed distance.
+    ChkUvGutter = "CHK-UV-GUTTER" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -215,7 +217,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 100);
+        assert_eq!(Code::ALL.len(), 101);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -223,7 +225,7 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::ChkLowDetail));
+        assert_eq!(Code::ALL.last(), Some(&Code::ChkUvGutter));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));

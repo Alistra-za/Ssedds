@@ -247,12 +247,15 @@ impl AppModel {
         }));
     }
 
-    /// A finished scan: the list is read again on the next ask (the old one stays on screen until then).
+    /// A finished scan: the list is read again on the next ask (the old one stays on screen until then). The UV
+    /// coverage cache is cleared, and its reads and Check all are cancelled.
     pub(super) fn used_by_scan_changed(&mut self) {
         self.used_by.stale = true;
         self.used_by.generation += 1;
         self.used_by.pending = None;
         self.original_scan_changed();
+        // UV coverage is a session cache read from the scan: a finished scan or another folder reads it again.
+        self.uv.clear();
     }
 }
 
