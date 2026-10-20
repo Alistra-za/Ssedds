@@ -262,17 +262,15 @@ fn orbit_starts_at_the_auto_camera_and_double_click_resets() {
 const BODY: &str = r"meshes\actors\character\character assets\femalebody_1.nif";
 const PNG_NAME: &str = "b8_femalebody_1600x900.png";
 
-/// Renders the winning femalebody_1.nif through the viewport's worker at 1600×900, prints the frame times and
-/// writes the sRGB-encoded frame to %TEMP%. Needs SDC_ACHERUS and SDC_CS_SHADERS. `cargo test -p sdc-gui --release --test viewport3d -- --ignored --nocapture`.
-#[test]
-#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
-fn femalebody_1600x900_frame_times() {
+/// A viewport on the owner's winning femalebody_1.nif and its textures, shaders cached in `cache`, starting forward
+/// (`look.deferred` off). None, with the skip line, when SDC_ACHERUS or SDC_CS_SHADERS is unset.
+fn femalebody_viewport(cache: &Path) -> Option<Viewport3d> {
     let (Some(instance), Some(cs_shaders)) = (
         std::env::var_os("SDC_ACHERUS"),
         std::env::var_os("SDC_CS_SHADERS"),
     ) else {
         eprintln!("skipped: set SDC_ACHERUS and SDC_CS_SHADERS");
-        return;
+        return None;
     };
     let inst = modscan::mo2::Instance::load(Path::new(&instance), None).unwrap();
     let (mut origins, _) = modscan::mo2::loose_origins(&inst).unwrap();
@@ -298,7 +296,8 @@ fn femalebody_1600x900_frame_times() {
     let shaders = render3d::locate::fingerprint(Path::new(&cs_shaders), None).unwrap();
     let mut v = Viewport3d::new(Some(shaders.clone()));
     v.on_located(Ok(Some(shaders)));
-    v.cache_dir = Some(std::env::temp_dir().join("sdc_b8_shader_cache"));
+    v.cache_dir = Some(cache.to_path_buf());
+    v.look.deferred = false;
     v.set_mesh(Some(v3::MeshSpec {
         key: 1,
         nif: v3::FileSource::Loose(winner.root.join(BODY)),
@@ -306,14 +305,28 @@ fn femalebody_1600x900_frame_times() {
         le_mesh: false,
         head_part: false,
     }));
-    let wait = |v: &mut Viewport3d| {
-        let t = std::time::Instant::now();
-        while v.busy() && t.elapsed().as_secs() < 300 {
-            v.poll();
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        assert!(!v.busy(), "timed out");
+    Some(v)
+}
+
+/// Polls until nothing is in flight (5 min at most).
+fn wait_idle(v: &mut Viewport3d) {
+    let t = std::time::Instant::now();
+    while v.busy() && t.elapsed().as_secs() < 300 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!v.busy(), "timed out");
+}
+
+/// Renders the winning femalebody_1.nif through the viewport's worker at 1600×900 (forward), prints the frame times
+/// and writes the sRGB-encoded frame to %TEMP%. Needs SDC_ACHERUS and SDC_CS_SHADERS. `cargo test -p sdc-gui --release --test viewport3d -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
+fn femalebody_1600x900_frame_times() {
+    let Some(mut v) = femalebody_viewport(&std::env::temp_dir().join("sdc_b8_shader_cache")) else {
+        return;
     };
+    let wait = wait_idle;
     v.request_frame(1600, 900);
     wait(&mut v);
     println!("report: {:#?}", v.report);
@@ -406,6 +419,116 @@ fn render3d_shaders_round_trip_in_gui_toml() {
         });
         s.save(&p).unwrap();
         assert_eq!(sdc_gui::settings::GuiSettings::load(&p), (s, None));
+    }
+}
+
+/// The central frame of the Meshes view at `layout::DEFAULT_SIZE` (1400×900): 780×800 points at 1.0 ppp (the
+/// brief's figure for that layout; not re-measured with a kittest).
+const MESHES_DEFAULT: (u32, u32) = (780, 800);
+
+/// Mean ms of 10 timed frames after 5 warm-up orbits: draw + GPU + readback + the `ColorImage` build.
+fn mean_frame_ms(v: &mut Viewport3d, (w, h): (u32, u32)) -> f64 {
+    for _ in 0..5 {
+        v.orbit.drag(-3.0, 0.0);
+        v.request_frame(w, h);
+        wait_idle(v);
+    }
+    let mut total = 0.0;
+    for i in 0..10 {
+        v.orbit.drag(5.0 * (i + 1) as f32, 0.0);
+        v.request_frame(w, h);
+        wait_idle(v);
+        let f = v.frame.clone().unwrap();
+        assert_eq!((f.width, f.height), (w, h));
+        let t = Instant::now();
+        let img =
+            eframe::egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &f.rgba);
+        let upload = t.elapsed().as_secs_f64() * 1000.0;
+        std::hint::black_box(img);
+        let tm = v.timing.unwrap();
+        total += tm.draw_ms + tm.gpu_ms + tm.readback_ms + upload;
+    }
+    total / 10.0
+}
+
+/// v2 D8 perf gate: the deferred toggle never blocks the UI thread (each UI-side call < 16 ms), and deferred frames
+/// stay under 33.3 ms (30 fps) at 1600×900 and the Meshes default size. Cold = a fresh shader cache; warm = a new
+/// viewport on the same cache.
+#[test]
+#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
+fn femalebody_deferred_holds_30_fps() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut last = None;
+    for pass in ["cold", "warm"] {
+        let Some(mut v) = femalebody_viewport(cache.path()) else {
+            return;
+        };
+        v.request_frame(1600, 900);
+        wait_idle(&mut v);
+        println!("adapter: {:?}", v.adapter);
+        let before = v.frame.as_ref().map(|f| f.id);
+        let mut slowest = 0.0f64;
+        let mut timed = |f: &mut dyn FnMut()| {
+            let t = Instant::now();
+            f();
+            slowest = slowest.max(t.elapsed().as_secs_f64() * 1000.0);
+        };
+        let t0 = Instant::now();
+        timed(&mut || v.set_deferred(true));
+        let mut first = None;
+        loop {
+            timed(&mut || {
+                v.poll();
+            });
+            timed(&mut || v.request_frame(1600, 900));
+            if first.is_none() && v.frame.as_ref().map(|f| f.id) != before {
+                first = Some(t0.elapsed());
+            }
+            if first.is_some() && !v.busy() {
+                break;
+            }
+            assert!(t0.elapsed().as_secs() < 300, "the toggle never settled");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let settled = t0.elapsed();
+        let statuses: Vec<_> = v.shapes.iter().map(|s| (&s.name, &s.status)).collect();
+        println!(
+            "{pass} toggle: first new frame {:.1} ms, idle {:.1} ms, slowest UI call {slowest:.2} ms, shapes {statuses:?}",
+            first.unwrap().as_secs_f64() * 1000.0,
+            settled.as_secs_f64() * 1000.0
+        );
+        assert_eq!(v.notice, None, "no deferred fallback");
+        assert!(
+            !v.shapes.is_empty()
+                && v.shapes
+                    .iter()
+                    .all(|s| s.status == render3d::ShapeStatus::Drawing),
+            "{statuses:?}"
+        );
+        assert!(
+            slowest < 16.0,
+            "{pass}: a UI-side call took {slowest:.2} ms"
+        );
+        last = Some(v);
+    }
+    let mut v = last.unwrap();
+    for size in [(1600, 900), MESHES_DEFAULT] {
+        let deferred = mean_frame_ms(&mut v, size);
+        v.set_deferred(false);
+        v.request_frame(size.0, size.1);
+        wait_idle(&mut v);
+        let forward = mean_frame_ms(&mut v, size);
+        v.set_deferred(true);
+        v.request_frame(size.0, size.1);
+        wait_idle(&mut v);
+        println!(
+            "{}x{}: deferred mean {deferred:.2} ms, forward mean {forward:.2} ms",
+            size.0, size.1
+        );
+        assert!(
+            deferred < 33.3,
+            "{size:?}: deferred mean {deferred:.2} ms is under 30 fps"
+        );
     }
 }
 
