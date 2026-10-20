@@ -357,7 +357,7 @@ On a PBR shape, the SLSF2 flags that CS reads differently (Fit_Slope, Multi_Laye
 
 **LE files.** A Skyrim LE NIF opens without a 3D preview ("LE mesh: no 3D preview").
 
-**Not yet.** Adding or removing controllers and animation clips; splitting a shared shader or a shared interpolator (the edit is refused or is a conflict); a preview of PGPatcher's result on the edited NIF; an outline for the selected shape; the full PBR column of the SLSF flags.
+**Not yet.** Adding or removing controllers and animation clips; splitting a shared shader or a shared interpolator (the edit is refused or is a conflict); a preview of PGPatcher's result on the edited NIF; an outline for the selected shape.
 
 ## The bottom panel
 
