@@ -711,6 +711,10 @@ pub struct Profile {
     /// Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D).
     #[serde(default, skip_serializing_if = "ResizeMode::is_none")]
     pub resize: ResizeMode,
+    /// Write the chain from mip 1: half size, every lower level unchanged (v2 artist checks, check 3's half-size
+    /// choice). Not serialised at its default, so existing profile hashes hold.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drop_top_mip: bool,
     pub encoder: EncoderSpec,
     pub validation: ValidationSpec,
     pub packing: PackingSpec,

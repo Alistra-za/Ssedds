@@ -1,6 +1,8 @@
 //! Artist check stats (v2 artist checks, checks 1, 2, 4 and 5): value bands, luma, the normal map's curl and the
 //! share of steep neighbour steps. They ride inside the cached [`crate::analyse::Analysis`] (DECISIONS Note CI).
+//! Check 3 (fake resolution) is measured on the export chain instead: [`detail_ratio`], [`low_detail_eligible`].
 use crate::analyse::{code8, AnalyseHints};
+use crate::config::{Category, MipKeyword, MipLevels, Profile, ResizeMode, Subtype};
 use crate::image::Rgba32F;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -189,6 +191,65 @@ pub fn steep_share(img: &Rgba32F, channel: usize) -> f64 {
     }
 }
 
+/// Check 3 (fake resolution): a detail ratio below this flags the texture (DECISIONS Note CI20).
+pub const LOW_DETAIL_RATIO: f64 = 0.25;
+
+/// Mean squared difference over finite RGB samples between `hi` and `lo` sampled nearest at `hi`'s size.
+fn up_error(hi: &Rgba32F, lo: &Rgba32F) -> f64 {
+    let (mut sum, mut n) = (0.0f64, 0u64);
+    for y in 0..hi.height {
+        // Clamped: an odd level's half rounds down, so its last row and column map to the last texel.
+        let ly = (y * lo.height / hi.height).min(lo.height - 1);
+        for x in 0..hi.width {
+            let lx = (x * lo.width / hi.width).min(lo.width - 1);
+            let (a, b) = (hi.at(x, y), lo.at(lx, ly));
+            for c in 0..3 {
+                let d = f64::from(a[c] - b[c]);
+                if d.is_finite() {
+                    sum += d * d;
+                    n += 1;
+                }
+            }
+        }
+    }
+    if n == 0 {
+        0.0
+    } else {
+        sum / n as f64
+    }
+}
+
+/// Check 3: the detail mip 0 adds over mip 1 against what mip 1 adds over mip 2 (E01 / E12). A native texture
+/// scores near or above 1, a 2x upscale near 0. `None` under 3 levels or when mip 1 adds nothing (E12 < 1e-6).
+pub fn detail_ratio(chain: &[Rgba32F]) -> Option<f64> {
+    let [m0, m1, m2, ..] = chain else {
+        return None;
+    };
+    let e12 = up_error(m1, m2);
+    (e12 >= 1e-6).then(|| up_error(m0, m1) / e12)
+}
+
+/// Whether check 3 measures a texture of `dims` under `p`: colour or normal (never complex grass), no resize or
+/// dropped top level already, at least 3 mips, and above the half floor (the T4 `HALF_FLOOR`), so a texture that
+/// could not be halved is never flagged.
+pub fn low_detail_eligible(p: &Profile, dims: (u32, u32)) -> bool {
+    low_detail_profile_eligible(p)
+        && crate::resize::target_dims(dims, ResizeMode::Half) != dims
+        && crate::mips::level_count(dims.0, dims.1, &p.mips.levels) >= 3
+}
+
+/// The half of [`low_detail_eligible`] known before Load: everything but the size.
+pub fn low_detail_profile_eligible(p: &Profile) -> bool {
+    p.resize == ResizeMode::None
+        && !p.drop_top_mip
+        && matches!(p.category, Category::Color | Category::Normal)
+        && p.subtype != Subtype::ComplexGrass
+        && !matches!(
+            p.mips.levels,
+            MipLevels::Keyword(MipKeyword::None) | MipLevels::Count(0..=2)
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +419,126 @@ mod tests {
         assert_eq!(hints_for(Some("n"), false), AnalyseHints::default());
         // Bands are on for every suffix, and for none.
         assert!(hints_for(Some("rmaos"), true).bands && hints_for(None, true).bands);
+    }
+
+    /// `n`² white noise from a fixed LCG.
+    fn noise(n: u32, seed: u64) -> Rgba32F {
+        let mut s = seed;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut img = Rgba32F::new(n, n, [0.0, 0.0, 0.0, 1.0]);
+        for p in &mut img.px {
+            *p = [next(), next(), next(), 1.0];
+        }
+        img
+    }
+
+    /// 2x upscale, nearest or bilinear (texel centres).
+    fn up2(img: &Rgba32F, bilinear: bool) -> Rgba32F {
+        let (w, h) = (img.width, img.height);
+        let mut out = Rgba32F::new(w * 2, h * 2, [0.0; 4]);
+        for y in 0..h * 2 {
+            for x in 0..w * 2 {
+                *out.at_mut(x, y) = if bilinear {
+                    let fx = ((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (w - 1) as f32);
+                    let fy = ((y as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (h - 1) as f32);
+                    let (x0, y0) = (fx.floor() as u32, fy.floor() as u32);
+                    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+                    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+                    let (a, b) = (img.at(x0, y0), img.at(x1, y0));
+                    let (c, d) = (img.at(x0, y1), img.at(x1, y1));
+                    std::array::from_fn(|i| {
+                        (a[i] * (1.0 - tx) + b[i] * tx) * (1.0 - ty)
+                            + (c[i] * (1.0 - tx) + d[i] * tx) * ty
+                    })
+                } else {
+                    img.at(x / 2, y / 2)
+                };
+            }
+        }
+        out
+    }
+
+    /// A box chain of `levels` levels.
+    fn chain(img: Rgba32F, levels: usize) -> Vec<Rgba32F> {
+        let mut c = vec![img];
+        while c.len() < levels {
+            let l = c.last().unwrap();
+            let to = ((l.width / 2).max(1), (l.height / 2).max(1));
+            c.push(crate::mips::area_resample(l, to, false));
+        }
+        c
+    }
+
+    #[test]
+    fn native_noise_has_a_high_ratio_and_a_2x_upscale_a_low_one() {
+        let r = detail_ratio(&chain(noise(256, 1), 3)).unwrap();
+        assert!(r > 0.5, "{r}");
+        let small = noise(128, 2);
+        let r = detail_ratio(&chain(up2(&small, false), 3)).unwrap();
+        assert!(r < 0.01, "{r}");
+        // Bilinear: white noise scores about 0.19, noise softened with a 2x2 box about 0.24 (CI20).
+        let r = detail_ratio(&chain(up2(&small, true), 3)).unwrap();
+        assert!(r < LOW_DETAIL_RATIO, "{r}");
+        let mut soft = small.clone();
+        for y in 0..127 {
+            for x in 0..127 {
+                let (a, b, c, d) = (
+                    small.at(x, y),
+                    small.at(x + 1, y),
+                    small.at(x, y + 1),
+                    small.at(x + 1, y + 1),
+                );
+                *soft.at_mut(x, y) = std::array::from_fn(|i| (a[i] + b[i] + c[i] + d[i]) / 4.0);
+            }
+        }
+        let r = detail_ratio(&chain(up2(&soft, true), 3)).unwrap();
+        assert!(r < LOW_DETAIL_RATIO, "{r}");
+        // NPOT with odd mips (1001x9 → 500x4 → 250x2) stays in bounds.
+        let mut odd = Rgba32F::new(1001, 9, [0.0, 0.0, 0.0, 1.0]);
+        odd.px = noise(1001, 3).px[..1001 * 9].to_vec();
+        assert!(detail_ratio(&chain(odd, 3)).is_some());
+    }
+
+    #[test]
+    fn a_flat_image_has_no_ratio() {
+        let flat = Rgba32F::new(256, 256, [0.3, 0.4, 0.5, 1.0]);
+        assert_eq!(detail_ratio(&chain(flat, 3)), None);
+        assert_eq!(detail_ratio(&chain(noise(256, 4), 2)), None);
+    }
+
+    #[test]
+    fn low_detail_is_not_measured_at_the_half_floor() {
+        use crate::config::{MipKeyword, MipLevels, ResizeMode, Subtype, Target};
+        let reg = crate::presets::PresetRegistry::builtin().unwrap();
+        let prof = |st| reg.profile("cs-quality", Target::Cs, st).unwrap();
+        let d = prof(Subtype::Diffuse);
+        assert!(!low_detail_eligible(&d, (512, 512)));
+        assert!(!low_detail_eligible(&d, (512, 256)));
+        assert!(low_detail_eligible(&d, (1024, 256)));
+        assert!(low_detail_eligible(&d, (512, 1024)));
+        assert!(low_detail_eligible(&d, (1000, 600)));
+        assert!(low_detail_eligible(&prof(Subtype::Normal), (1024, 1024)));
+        let mut half = d.clone();
+        half.resize = ResizeMode::Half;
+        assert!(!low_detail_eligible(&half, (1024, 1024)));
+        let mut dropped = d.clone();
+        dropped.drop_top_mip = true;
+        assert!(!low_detail_eligible(&dropped, (1024, 1024)));
+        let mut none = d.clone();
+        none.mips.levels = MipLevels::Keyword(MipKeyword::None);
+        assert!(!low_detail_eligible(&none, (1024, 1024)));
+        let mut two = d.clone();
+        two.mips.levels = MipLevels::Count(2);
+        assert!(!low_detail_eligible(&two, (1024, 1024)));
+        assert!(!low_detail_eligible(
+            &prof(Subtype::ComplexGrass),
+            (1024, 2048)
+        ));
+        assert!(!low_detail_eligible(&prof(Subtype::Rmaos), (1024, 1024)));
     }
 }

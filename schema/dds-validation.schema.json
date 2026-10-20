@@ -149,7 +149,8 @@
         "CHK-GREEN-GUESS",
         "CHK-Z-SIGN",
         "CHK-PARALLAX",
-        "CHK-PARALLAX-SCALE"
+        "CHK-PARALLAX-SCALE",
+        "CHK-LOW-DETAIL"
       ],
       "type": "string"
     },

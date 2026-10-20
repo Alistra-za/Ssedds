@@ -472,7 +472,8 @@
         "CHK-GREEN-GUESS",
         "CHK-Z-SIGN",
         "CHK-PARALLAX",
-        "CHK-PARALLAX-SCALE"
+        "CHK-PARALLAX-SCALE",
+        "CHK-LOW-DETAIL"
       ],
       "type": "string"
     },
@@ -1091,6 +1092,10 @@
         "color": {
           "$ref": "#/$defs/ColorSpec"
         },
+        "drop_top_mip": {
+          "description": "Write the chain from mip 1: half size, every lower level unchanged (v2 artist checks, check 3's half-size\nchoice). Not serialised at its default, so existing profile hashes hold.",
+          "type": "boolean"
+        },
         "encoder": {
           "$ref": "#/$defs/EncoderSpec"
         },
@@ -1632,6 +1637,11 @@
         {
           "const": "packed_source",
           "description": "A raw map consumed by a recipe; the event's `job_key` names the packed output.",
+          "type": "string"
+        },
+        {
+          "const": "low_detail",
+          "description": "`CHK-LOW-DETAIL`: held by `BatchRequest::low_detail = hold`, not written (v2 artist checks, check 3).",
           "type": "string"
         }
       ]

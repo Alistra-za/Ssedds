@@ -6,7 +6,7 @@
 //! against the memory budget and runs this on its rayon pool under `catch_unwind`; the encode stage's band
 //! parallelism runs on the same pool. Nothing here depends on the thread count: every encoded block is a pure
 //! function of its own texels, so the written bytes are identical for any `--jobs`.
-use crate::api::{BatchRequest, CancelToken};
+use crate::api::{BatchRequest, CancelToken, LowDetailMode};
 use crate::bake::NormalVariance;
 use crate::config::{Backend, Format, Profile, Subtype};
 use crate::coverage::{coverage_fraction, preserve_coverage};
@@ -37,6 +37,18 @@ pub enum FileError {
     /// Stopped by the cancel token before anything was written.
     Cancelled,
     Failed(Stage, String),
+}
+
+/// What `process_file` did with a file that did not fail.
+// One value per file, moved once: boxing the outcome would buy nothing.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum Processed {
+    Written(FileOutcome),
+    /// Held as low detail (`LowDetailMode::Hold`): nothing written; carries the `CHK-LOW-DETAIL` warning.
+    Held(crate::codes::Warning),
+    /// A measure-only run of an up-to-date output that was not flagged.
+    UpToDate,
 }
 
 #[derive(Debug)]
@@ -115,12 +127,13 @@ fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationR
 
 /// What `prepare` keeps of the chain (M3a spec §6.5). `Encode` is the export: every mip is quantised, none of the
 /// float chain is kept. `Preview` and `SourceOnly` start at the first mip within `max_size`; `SourceOnly` stops
-/// before quantising.
+/// before quantising. `Measure` (check 3's measure-only run, preflight K15) keeps nothing and always measures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Keep {
     Encode,
     Preview { max_size: u32 },
     SourceOnly { max_size: u32 },
+    Measure,
 }
 
 /// The stages up to quantise. `chain` and `inputs` start at mip `first_level`; `dims` covers every mip. `chain` is
@@ -134,6 +147,8 @@ pub(crate) struct Prepared {
     pub inputs: Vec<EncoderInput>,
     pub base_coverage: Option<f64>,
     pub source_peak: Option<f32>,
+    /// Check 3's ratio, when measuring was asked for and the texture is eligible.
+    pub detail_ratio: Option<f64>,
 }
 
 /// Source stamps (final review I7): the plan's decisions (alpha policy, sub-type facts, ...) hold only for the
@@ -189,16 +204,18 @@ pub(crate) fn prepare(
     tracker: &FileTracker,
     keep: Keep,
 ) -> Result<Prepared, FileError> {
-    prepare_then(job, cancel, tracker, keep, || Ok(())).map(|(prep, ())| prep)
+    prepare_then(job, cancel, tracker, keep, false, || Ok(())).map(|(prep, ())| prep)
 }
 
 /// `prepare`, running `after_stamps` once the stamp check has passed and before anything is decoded (the export
-/// hashes its sources there, so a source that cannot be hashed still fails before it is loaded).
+/// hashes its sources there, so a source that cannot be hashed still fails before it is loaded). `detail` (or
+/// `Keep::Measure`) measures check 3's ratio on an eligible chain.
 fn prepare_then<T>(
     job: &ResolvedJob,
     cancel: &CancelToken,
     tracker: &FileTracker,
     keep: Keep,
+    detail: bool,
     after_stamps: impl FnOnce() -> Result<T, FileError>,
 ) -> Result<(Prepared, T), FileError> {
     let enter = |st: Stage| tracker.stage.set(st);
@@ -292,9 +309,19 @@ fn prepare_then<T>(
     if base_coverage.is_some() {
         preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
     }
+    // Check 3 runs on the finished chain. An eligible job has `resize = none`, so `chain[0]` is the source size.
+    let detail_ratio = ((detail || keep == Keep::Measure)
+        && crate::checks::low_detail_eligible(p, (chain[0].width, chain[0].height)))
+    .then(|| crate::checks::detail_ratio(&chain))
+    .flatten();
+    // The half-size choice (Note CI20): written from mip 1, every lower level unchanged. Before `dims`, so the level
+    // list and `first_level` match the written chain.
+    if p.drop_top_mip && chain.len() > 1 {
+        chain.remove(0);
+    }
     let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();
     let first_level = match keep {
-        Keep::Encode => 0,
+        Keep::Encode | Keep::Measure => 0,
         Keep::Preview { max_size } | Keep::SourceOnly { max_size } => {
             first_level_within(&dims, max_size)
         }
@@ -304,14 +331,14 @@ fn prepare_then<T>(
     let source_peak = source_peak(&chain[first_level], p);
     // Quantise clamps mip 0 (Task 31). These exact levels are encoded and handed to Validate (Task 35).
     let inputs: Vec<EncoderInput> = match keep {
-        Keep::SourceOnly { .. } => vec![],
+        Keep::SourceOnly { .. } | Keep::Measure => vec![],
         _ => chain[first_level..]
             .iter()
             .map(|l| to_encoder_input(l, &work, p))
             .collect(),
     };
     let chain = match keep {
-        Keep::Encode => {
+        Keep::Encode | Keep::Measure => {
             drop(chain);
             vec![]
         }
@@ -329,6 +356,7 @@ fn prepare_then<T>(
             inputs,
             base_coverage,
             source_peak,
+            detail_ratio,
         },
         extra,
     ))
@@ -400,17 +428,22 @@ pub(crate) fn encode_levels(
 /// or anything panics, `tracker.written` tells the caller to remove the output, so an output on disk has its
 /// record, except after a second Ctrl-C: that aborts the process (exit 3) and can leave `.sdc-*.tmp` files, or an
 /// output without a record (`OUT-UNKNOWN-EXISTING` on the next run). A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
+///
+/// Check 3 (`req.low_detail`, Note CI20): a flagged texture is `Held` under `Hold` (nothing written) and carries the
+/// warning in its report under `Warn`. A `measure_only` job (an up-to-date output under `Hold`) is loaded and
+/// measured, never encoded, and is `Held` or `UpToDate`.
 #[allow(clippy::too_many_arguments)]
 pub fn process_file(
     job: &ResolvedJob,
     req: &BatchRequest,
     preset: &PresetRef,
+    measure_only: bool,
     cancel: &CancelToken,
     rep: &Reporter,
     manifest: &Manifest,
     tracker: &FileTracker,
     nvtt: Option<&NvttTool>,
-) -> Result<FileOutcome, FileError> {
+) -> Result<Processed, FileError> {
     let enter = |st: Stage| tracker.stage.set(st);
     enter(Stage::Load);
     // Test hook (Task 44, `test-hooks` feature only): panic on the named input file to prove per-file panic isolation.
@@ -432,10 +465,32 @@ pub fn process_file(
         }
     };
 
+    // Only a ratio below the threshold acts; its warning names the base size.
+    let flagged = |prep: &Prepared| {
+        prep.detail_ratio
+            .filter(|r| *r < crate::checks::LOW_DETAIL_RATIO)
+            .map(|r| {
+                let (w, h) = prep.dims[0];
+                crate::codes::Warning::new(
+                    crate::codes::Code::ChkLowDetail,
+                    format!(
+                        "mip 0 adds little detail over mip 1 ({r:.2}); a {w}x{h} texture carries about {}x{} of detail",
+                        w / 2,
+                        h / 2
+                    ),
+                )
+                .with_data(serde_json::json!({ "width": w, "height": h, "ratio": r }))
+            })
+    };
+    if measure_only {
+        let (prep, ()) = prepare_then(job, cancel, tracker, Keep::Measure, true, || Ok(()))?;
+        return Ok(flagged(&prep).map_or(Processed::UpToDate, Processed::Held));
+    }
+    let detail = req.low_detail != LowDetailMode::Off;
     // The hashes sit between the stamp check and the load, as they always have: a source that cannot be hashed
     // fails here, before it is decoded.
     let (prep, (source_sha256, sources)) =
-        prepare_then(job, cancel, tracker, Keep::Encode, || {
+        prepare_then(job, cancel, tracker, Keep::Encode, detail, || {
             let source_sha256 =
                 sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
             // Spec §6.4 "Provenance": a packed output records every source (its first source is `job.input`, Note M8).
@@ -479,6 +534,12 @@ pub fn process_file(
             }
             Ok((source_sha256, sources))
         })?;
+    let low_detail = flagged(&prep);
+    if req.low_detail == LowDetailMode::Hold {
+        if let Some(w) = low_detail {
+            return Ok(Processed::Held(w));
+        }
+    }
     let (width, height) = prep.dims[0];
 
     enter(Stage::Compress);
@@ -602,9 +663,11 @@ pub fn process_file(
     manifest
         .append(&record)
         .map_err(|e| fail(Stage::Write)(format!("manifest {}: {e}", manifest.path().display())))?;
-    Ok(FileOutcome {
+    // `Warn`: listed with the file's warnings only; the record and its validation summary do not carry it.
+    report.warnings.extend(low_detail);
+    Ok(Processed::Written(FileOutcome {
         output: job.output.clone(),
         report,
         record,
-    })
+    }))
 }

@@ -223,6 +223,7 @@ pub const FIELD_PATHS: &[&str] = &[
     "format",
     "header",
     "resize",
+    "drop_top_mip",
     "encoder.backend",
     "encoder.effort",
     "encoder.rgbcx_level",

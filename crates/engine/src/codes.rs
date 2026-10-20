@@ -16,7 +16,7 @@
 //! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b)
 //! and ALPHA-PARALLAX-NO-ALPHA (`alpha.parallax` on for a complex `_m` whose source has no alpha, DECISIONS AH2).
 //! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
-//! and the six `CHK-*` codes of the GUI's artist checks (v2 artist checks, DECISIONS Note CI).
+//! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CI).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -147,6 +147,8 @@ codes! {
     ChkZSign = "CHK-Z-SIGN" => Warning,
     ChkParallax = "CHK-PARALLAX" => Warning,
     ChkParallaxScale = "CHK-PARALLAX-SCALE" => Warning,
+    // Check 3 (fake resolution): the one CHK code the engine emits, during a run whose request sets `low_detail`.
+    ChkLowDetail = "CHK-LOW-DETAIL" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -213,7 +215,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 99);
+        assert_eq!(Code::ALL.len(), 100);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -221,7 +223,7 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::ChkParallaxScale));
+        assert_eq!(Code::ALL.last(), Some(&Code::ChkLowDetail));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));
