@@ -1,7 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.8.0-alpha.2
 
+- GUI layout v2. The header is rebuilt, and dialogs share one frame with a fixed button order. The export Review tab is split out, the Sets column has a filter, and the Presets window and the 3D settings window have moved. See docs/gui.md.
+- Set cards show their position number. **Move to…** in a set's menu opens a dialog where you type a position or a set name; while a filter is on, it is the only way to reorder.
+- The Sets column draws only the cards on screen, so it stays fast with hundreds of sets. Tab and screen readers reach only the cards on screen; Ctrl+K and Move to… still reach every set.
+- Motion:
+  - Toasts rise and fade, and stay while the pointer is on them.
+  - Export fades to the accent colour when it becomes available.
+  - Progress bars glide.
+  - A dragged texture shows a ghost at the pointer.
+  - Reordered sets and changed slots flash.
+  - The columns fade in when a folder opens.
+  - Ctrl+K, F1 and path autocomplete open at once.
+- **Reduce motion** under Advanced → Interface stops movement and shortens fades.
+- Rename dialog: a **Whole path** toggle (Inputs) runs Find, Replace, Prefix and Suffix over the folders too, for moving many inputs at once. The clipped *New* column is gone; *Output* shows the result.
+- Fewer per-frame costs in the GUI. Background-only reads (output sizes, *used by*, report save) may appear up to 250 ms later.
 - New bc7e quality level `encoder.effort = "max"` (sdc patch 0002: a quantised endpoint search and a fully refined, wider
   partition ranking on top of `veryslow`). Off by default; the default output is unchanged. It needs a build whose bc7e
   objects carry the patch and is refused with `CFG-INVALID` otherwise. Numbers: docs/research/bc7e-tuning.md.
