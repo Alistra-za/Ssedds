@@ -263,6 +263,7 @@ pub fn all() -> Vec<Vec<u8>> {
         all_extras(),
         root_extras(),
         shared_alpha_and_set(),
+        quirks(),
     ]
 }
 
@@ -341,5 +342,43 @@ pub fn shared_alpha_and_set() -> Vec<u8> {
     );
     n.block("BSLightingShaderProperty", lsp(0, 3));
     n.block("BSLightingShaderProperty", lsp(0, 3));
+    n.bytes()
+}
+
+/// Real-file quirks in one scene: footer roots [2, 0]; an unused type entry; strings "Shape" x2 and ""; a null extra
+/// entry on the root; the BSLSP (3) above its shape (1) and the alpha (0) below it; emissive multiple -0.0 and
+/// glossiness 1e38; a controller (5) with interpolator -1; flags 0x20 with no manager; type-index top bit on block 4.
+pub fn quirks() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    n.add_type("NiPSysData"); // unused
+    n.strings = ["Shape", "Shape", "", "Root"].map(String::from).to_vec();
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], -1))
+            .u16(0x00ED)
+            .u8(128)
+            .0,
+    );
+    n.block("BSTriShape", bstri_named(0, 3, 0));
+    n.block(
+        "NiNode",
+        avobj(W::default().i32(3).u32(2).i32(-1).i32(4).i32(-1))
+            .u32(1)
+            .i32(1)
+            .u32(0)
+            .0,
+    );
+    let mut lsp = lsp_body(0, &[], 5, &[]);
+    lsp[56..60].copy_from_slice(&(-0.0f32).to_le_bytes()); // emissive multiple
+    lsp[72..76].copy_from_slice(&1e38f32.to_le_bytes()); // glossiness
+    n.block("BSLightingShaderProperty", lsp);
+    n.block("BSXFlags", W::default().i32(2).u32(0x83).0);
+    n.block(
+        "BSLightingShaderPropertyFloatController",
+        ctrl_body(-1, 0x68, 3, W::default().i32(-1).u32(11)),
+    );
+    n.type_flags = vec![0, 0, 0, 0, 0x8000];
+    n.roots = vec![2, 0];
     n.bytes()
 }

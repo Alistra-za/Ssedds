@@ -131,3 +131,22 @@ fn block_diff_names_changed_and_added_blocks() {
         .iter()
         .any(|l| l.ends_with(": same size, bytes differ")));
 }
+
+#[test]
+fn quirk_fixture_round_trips_and_survives_an_unrelated_edit() {
+    let b = scenes::quirks();
+    assert_eq!(NifDoc::open(&b).unwrap().bytes(), b);
+    let mut d = NifDoc::open(&b).unwrap();
+    d.string(b"Extra"); // forces a header re-emit
+    let out = d.bytes();
+    let (h0, h) = (Header::parse(&b).unwrap(), Header::parse(&out).unwrap());
+    assert_eq!(h.roots(&out).unwrap(), vec![2, 0]);
+    assert_ne!(h0.type_index_raw[4] & 0x8000, 0);
+    assert!(nif::model::read_model(&b).unwrap().problems.is_empty());
+    assert_eq!(h.block_types, h0.block_types); // unused type kept
+    assert_eq!(h.type_index_raw, h0.type_index_raw);
+    assert_eq!(&h.strings[..h0.strings.len()], &h0.strings[..]);
+    for k in 0..h0.sizes.len() {
+        assert_eq!(block_bytes(&h, &out, k), block_bytes(&h0, &b, k));
+    }
+}
