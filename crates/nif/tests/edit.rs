@@ -407,6 +407,44 @@ fn split_gives_one_shape_its_own_alpha_and_chain() {
 }
 
 #[test]
+fn split_copies_a_two_controller_chain_with_a_shared_interpolator() {
+    let b = scenes::shared_alpha_two_ctrl_chain();
+    let m = read_model(&b).unwrap();
+    let r = apply(&b, &[split(&m, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    assert!(m2.problems.is_empty(), "{:?}", m2.problems);
+    let new = m2.shape(shape_named(&m2, "A")).unwrap().alpha.unwrap();
+    let chain = &m2.alphas[&new].prop.ctrls;
+    assert_eq!(chain.len(), 2);
+    let (c1, c2) = (&m2.ctrls[&chain[0]], &m2.ctrls[&chain[1]]);
+    assert_eq!((c1.next, c2.next), (chain[1] as i32, -1));
+    assert_eq!((c1.target, c2.target), (new as i32, new as i32));
+    let (i1, i2) = (c1.interp.unwrap(), c2.interp.unwrap());
+    assert!(i1 > 8 && i2 > 8 && i1 != i2); // one copy per controller
+    assert_ne!(m2.interps[&(i1 as u32)].data, m2.interps[&(i2 as u32)].data);
+    for k in 0..Header::parse(&b).unwrap().sizes.len() {
+        if k as u32 != shape_named(&m, "A") {
+            assert_eq!(block_bytes_of(&r.bytes, k), block_bytes_of(&b, k), "{k}");
+        }
+    }
+}
+
+#[test]
+fn split_does_not_copy_a_data_ref_past_the_source_blocks() {
+    let mut b = scenes::shared_alpha_two_ctrl_chain();
+    let h = Header::parse(&b).unwrap();
+    let n = h.sizes.len() as u32;
+    let at = h.offsets()[7] + 4; // the interpolator's data ref
+    b[at..at + 4].copy_from_slice(&n.to_le_bytes());
+    let m = read_model(&b).unwrap();
+    let r = apply(&b, &[split(&m, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    // alpha + 2 controllers + 2 interpolators, no data copies; the hostile ref is kept as is
+    assert_eq!(Header::parse(&r.bytes).unwrap().sizes.len() as u32, n + 5);
+}
+
+#[test]
 fn split_with_one_user_is_a_no_op() {
     let b = scenes::alpha_shape(0x12EC);
     let m = read_model(&b).unwrap();

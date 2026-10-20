@@ -270,6 +270,7 @@ pub fn all() -> Vec<Vec<u8>> {
         dup_names(),
         shared_alpha_with_testref_chain(),
         shared_alpha_with_managed_ctrl(),
+        shared_alpha_two_ctrl_chain(),
     ]
 }
 
@@ -471,6 +472,42 @@ pub fn shared_alpha_with_testref_chain() -> Vec<u8> {
 /// Same as `shared_alpha_with_testref_chain` but the controller is Manager Controlled (flags 0x68).
 pub fn shared_alpha_with_managed_ctrl() -> Vec<u8> {
     shared_alpha_chain(0x68)
+}
+
+/// Like `shared_alpha_with_testref_chain` but the chain is two controllers (5, 6) sharing one
+/// NiFloatInterpolator (7) over NiFloatData (8).
+pub fn shared_alpha_two_ctrl_chain() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (r, a, b) = (n.string("Root"), n.string("A"), n.string("B"));
+    n.block(
+        "NiNode",
+        avobj(W::default().i32(r).u32(0).i32(-1))
+            .u32(2)
+            .i32(1)
+            .i32(2)
+            .u32(0)
+            .0,
+    );
+    n.block("BSTriShape", bstri_named(a, 3, 4));
+    n.block("BSTriShape", bstri_named(b, 3, 4));
+    n.block("BSLightingShaderProperty", lsp(0, -1));
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], 5))
+            .u16(0x00ED)
+            .u8(128)
+            .0,
+    );
+    for next in [6, -1] {
+        n.block(
+            "BSNiAlphaPropertyTestRefController",
+            ctrl_body(next, 0x48, 4, W::default().i32(7)),
+        );
+    }
+    n.block("NiFloatInterpolator", W::default().f(1.0).i32(8).0);
+    n.block("NiFloatData", float_data(1));
+    n.bytes()
 }
 
 /// BSTriShape "S" (0) -> BSLSP (1) of `shader_type` with the given trailer floats.

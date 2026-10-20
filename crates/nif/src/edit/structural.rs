@@ -36,7 +36,7 @@ pub(crate) fn set_shader_type(
         .prop
         .net;
     let body = doc.block(lsp);
-    let p = net.end - (net.start - 4); // block-relative end of the NiObjectNET
+    let p = net.end - doc.header().offsets()[lsp as usize]; // block-relative end of the NiObjectNET
     let head = body
         .get(..p + 84)
         .ok_or("shader block shorter than its fixed fields")?;
@@ -120,6 +120,7 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
     if a.prop.ctrls.iter().any(|&c| m.managed(c)) {
         return Err("Shared alpha with a clip controller: splitting needs Phase C.".into());
     }
+    let source_blocks = doc.len(); // refs are bounded by the source, not the growing doc
     let new = copy(doc, a.prop.block);
     // (controller copy, Some((interpolator copy, data copy, pose floats))) in chain order
     let mut copies = vec![];
@@ -130,7 +131,7 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
             let n = copy(doc, i.block);
             let data = u32::try_from(i.data)
                 .ok()
-                .filter(|&d| i.known && d < doc.len());
+                .filter(|&d| i.known && d < source_blocks);
             ni = Some((n, data.map(|d| copy(doc, d)), i.value.len()));
         }
         copies.push((nc, ni));
