@@ -16,6 +16,7 @@ pub mod props;
 pub mod scan;
 pub mod shape_head;
 pub mod text;
+pub mod write;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum NifError {
