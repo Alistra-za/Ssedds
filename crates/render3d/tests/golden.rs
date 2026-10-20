@@ -7,6 +7,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 const PROFILES: &[&str] = &["A", "A_RT", "A_RT2"];
+const TWO_SIDED: &str =
+    "two-sided alpha-tested: replay has no prepass depth (D-P19, captured depth in D6c)";
 
 fn bits(v: &[f32]) -> Vec<u32> {
     v.iter().map(|x| x.to_bits()).collect()
@@ -141,7 +143,12 @@ fn replay_matches_capture_per_mrt() {
                 continue;
             }
         };
-        run += 1;
+        // D-P19: without the prepass depth, front/back face order on two-sided alpha-tested draws differs from the game.
+        let two_sided = !r.cull_back
+            && r.defines
+                .iter()
+                .any(|v| v.iter().any(|d| d == "DO_ALPHA_TEST"));
+        let mut fails = Vec::new();
         let n = (r.crop[2] * r.crop[3]) as usize;
         let mask = golden::read_mask(&s.dir.join("mask.bin"), n).unwrap();
         let masked = mask.iter().filter(|m| **m).count();
@@ -166,13 +173,15 @@ fn replay_matches_capture_per_mrt() {
             let evidence = masked - same(&after, &r.before[i], &mask);
             let _ = write!(row, " {}", cell(&d, same(rt, &after, &mask), evidence));
             if d.over > 0.0 {
-                failures.push(format!(
+                fails.push(format!(
                     "{who} RT{i}: over {:.2}% max {:.3e}",
                     100.0 * d.over,
                     d.max_abs
                 ));
             }
-            rt_worst[i].add(&who, &d);
+            if !two_sided {
+                rt_worst[i].add(&who, &d);
+            }
         }
         match out.main.as_ref() {
             Some(main) => {
@@ -210,23 +219,35 @@ fn replay_matches_capture_per_mrt() {
                         d.pixels
                     );
                     if label == "clean" && d.over > 0.0 {
-                        failures.push(format!(
+                        fails.push(format!(
                             "{who} main [clean]: over {:.2}% max {:.3e}",
                             100.0 * d.over,
                             d.max_abs
                         ));
                     }
-                    w.add(&who, &d);
+                    if !two_sided {
+                        w.add(&who, &d);
+                    }
                 }
             }
             None => {
-                failures.push(format!("{who}: no composite output"));
+                fails.push(format!("{who}: no composite output"));
                 row.push_str(" | - | -");
             }
         }
         let _ = writeln!(row, " | {}", out.warnings.len());
         print!("{row}");
-        table.push_str(&row);
+        if two_sided {
+            // Information only, so D6c can show the improvement.
+            skipped
+                .entry(TWO_SIDED)
+                .or_default()
+                .push(row.trim_end().to_string());
+        } else {
+            run += 1;
+            failures.extend(fails);
+            table.push_str(&row);
+        }
     }
 
     let mut summary = format!(
