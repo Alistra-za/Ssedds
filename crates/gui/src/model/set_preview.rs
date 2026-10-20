@@ -1011,7 +1011,7 @@ pub const TILING: &str = "Tiling (preview only)";
 pub const LE_ONLY: &str =
     "Every mesh using this diffuse is an LE mesh, which is not drawn: showing a built-in shape";
 pub const OFF_FEATURES: &str = "Off in this preview: Light Limit Fix, Skylighting, Screen-Space Shadows, \
-Subsurface Scattering, Dynamic Cubemaps, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, \
+Subsurface Scattering, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, \
 water, fog, Volumetric Shadows";
 /// How often the fingerprint is checked when no input arrived (02 §3.2).
 pub const THROTTLE: Duration = Duration::from_millis(200);

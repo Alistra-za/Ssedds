@@ -108,7 +108,10 @@ fn panel_shows_toggle_footer_and_problems() {
     let mut h = harness(v);
     h.run();
     h.get_by_label("Community Shaders features");
-    h.get_by_label("Dynamic Cubemaps: off in preview");
+    assert!(
+        h.query_by_label_contains("Off in this preview").is_none(),
+        "no off line when nothing is off"
+    );
     h.get_by_label("Missing texture: textures/a/b.dds");
     h.get_by_label("Compile error: Body: ps: X3000");
     h.get_by_label(v3::FRAME_LABEL);
@@ -259,17 +262,15 @@ fn orbit_starts_at_the_auto_camera_and_double_click_resets() {
 const BODY: &str = r"meshes\actors\character\character assets\femalebody_1.nif";
 const PNG_NAME: &str = "b8_femalebody_1600x900.png";
 
-/// Renders the winning femalebody_1.nif through the viewport's worker at 1600×900, prints the frame times and
-/// writes the sRGB-encoded frame to %TEMP%. Needs SDC_ACHERUS and SDC_CS_SHADERS. `cargo test -p sdc-gui --release --test viewport3d -- --ignored --nocapture`.
-#[test]
-#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
-fn femalebody_1600x900_frame_times() {
+/// A viewport on the owner's winning femalebody_1.nif and its textures, shaders cached in `cache`, starting forward
+/// (`look.deferred` off). None, with the skip line, when SDC_ACHERUS or SDC_CS_SHADERS is unset.
+fn femalebody_viewport(cache: &Path) -> Option<Viewport3d> {
     let (Some(instance), Some(cs_shaders)) = (
         std::env::var_os("SDC_ACHERUS"),
         std::env::var_os("SDC_CS_SHADERS"),
     ) else {
         eprintln!("skipped: set SDC_ACHERUS and SDC_CS_SHADERS");
-        return;
+        return None;
     };
     let inst = modscan::mo2::Instance::load(Path::new(&instance), None).unwrap();
     let (mut origins, _) = modscan::mo2::loose_origins(&inst).unwrap();
@@ -295,7 +296,8 @@ fn femalebody_1600x900_frame_times() {
     let shaders = render3d::locate::fingerprint(Path::new(&cs_shaders), None).unwrap();
     let mut v = Viewport3d::new(Some(shaders.clone()));
     v.on_located(Ok(Some(shaders)));
-    v.cache_dir = Some(std::env::temp_dir().join("sdc_b8_shader_cache"));
+    v.cache_dir = Some(cache.to_path_buf());
+    v.look.deferred = false;
     v.set_mesh(Some(v3::MeshSpec {
         key: 1,
         nif: v3::FileSource::Loose(winner.root.join(BODY)),
@@ -303,14 +305,28 @@ fn femalebody_1600x900_frame_times() {
         le_mesh: false,
         head_part: false,
     }));
-    let wait = |v: &mut Viewport3d| {
-        let t = std::time::Instant::now();
-        while v.busy() && t.elapsed().as_secs() < 300 {
-            v.poll();
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        assert!(!v.busy(), "timed out");
+    Some(v)
+}
+
+/// Polls until nothing is in flight (5 min at most).
+fn wait_idle(v: &mut Viewport3d) {
+    let t = std::time::Instant::now();
+    while v.busy() && t.elapsed().as_secs() < 300 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!v.busy(), "timed out");
+}
+
+/// Renders the winning femalebody_1.nif through the viewport's worker at 1600×900 (forward), prints the frame times
+/// and writes the sRGB-encoded frame to %TEMP%. Needs SDC_ACHERUS and SDC_CS_SHADERS. `cargo test -p sdc-gui --release --test viewport3d -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
+fn femalebody_1600x900_frame_times() {
+    let Some(mut v) = femalebody_viewport(&std::env::temp_dir().join("sdc_b8_shader_cache")) else {
+        return;
     };
+    let wait = wait_idle;
     v.request_frame(1600, 900);
     wait(&mut v);
     println!("report: {:#?}", v.report);
@@ -403,6 +419,183 @@ fn render3d_shaders_round_trip_in_gui_toml() {
         });
         s.save(&p).unwrap();
         assert_eq!(sdc_gui::settings::GuiSettings::load(&p), (s, None));
+    }
+}
+
+/// The central frame of the Meshes view at `layout::DEFAULT_SIZE` (1400×900): 780×800 points at 1.0 ppp (the
+/// brief's figure for that layout; not re-measured with a kittest).
+const MESHES_DEFAULT: (u32, u32) = (780, 800);
+
+/// Mean ms of 10 timed frames after 5 warm-up orbits: draw + GPU + readback + the `ColorImage` build.
+fn mean_frame_ms(v: &mut Viewport3d, (w, h): (u32, u32)) -> f64 {
+    for _ in 0..5 {
+        v.orbit.drag(-3.0, 0.0);
+        v.request_frame(w, h);
+        wait_idle(v);
+    }
+    let mut total = 0.0;
+    for i in 0..10 {
+        v.orbit.drag(5.0 * (i + 1) as f32, 0.0);
+        v.request_frame(w, h);
+        wait_idle(v);
+        let (f, tm) =
+            fresh_sample(v, (w, h)).unwrap_or_else(|e| panic!("sample {i} at {w}x{h}: {e}"));
+        let t = Instant::now();
+        let img =
+            eframe::egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &f.rgba);
+        let upload = t.elapsed().as_secs_f64() * 1000.0;
+        std::hint::black_box(img);
+        total += tm.draw_ms + tm.gpu_ms + tm.readback_ms + upload;
+    }
+    total / 10.0
+}
+
+/// The frame and timing answering the last `Render` sent, at `w x h`: Err when it is stale (an older or refresh
+/// frame), the wrong size, or a render error or a notice (a deferred fallback) arrived since the request.
+fn fresh_sample(
+    v: &Viewport3d,
+    (w, h): (u32, u32),
+) -> Result<(Arc<v3::Frame>, render3d::FrameTiming), String> {
+    if let Some(e) = &v.render_error {
+        return Err(format!("render error: {e}"));
+    }
+    if let Some(n) = &v.notice {
+        return Err(format!("notice since the request: {n}"));
+    }
+    let f = v.frame.clone().ok_or("no frame")?;
+    let want = v.render_sent_for_test();
+    if f.id != want {
+        return Err(format!("stale frame {} (the request was {want})", f.id));
+    }
+    if (f.width, f.height) != (w, h) {
+        return Err(format!("frame {}x{}, asked {w}x{h}", f.width, f.height));
+    }
+    Ok((f, v.timing.ok_or("no timing")?))
+}
+
+#[test]
+fn a_perf_sample_takes_only_a_fresh_error_free_frame() {
+    let (mut v, _cmds) = rendered();
+    let (w, h) = (1, 1); // the size frame_of makes
+    v.request_frame(w, h);
+    let rid = v.render_sent_for_test();
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 9),
+        timing: Default::default(),
+    });
+    assert!(fresh_sample(&v, (w, h)).is_ok());
+    assert!(fresh_sample(&v, (64, 64)).is_err(), "wrong size");
+    // The next render fails: the old frame and timing stay, but they are stale.
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(w, h);
+    let rid = v.render_sent_for_test();
+    v.handle(v3::V3Reply::RenderError {
+        id: rid,
+        message: "boom".into(),
+    });
+    assert!(!v.busy());
+    let e = fresh_sample(&v, (w, h)).unwrap_err();
+    assert!(e.contains("boom"), "{e}");
+    // A frame for the request, but a fallback notice arrived meanwhile.
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 9),
+        timing: Default::default(),
+    });
+    assert!(fresh_sample(&v, (w, h)).is_ok());
+    v.handle(v3::V3Reply::Notice(
+        "Deferred preview unavailable: x".into(),
+    ));
+    assert!(
+        fresh_sample(&v, (w, h)).is_err(),
+        "a notice since the request"
+    );
+    // A refresh frame (compile-triggered) is not the answer to the request.
+    v.notice = None;
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of(1 << 62, 9),
+        timing: Default::default(),
+    });
+    assert!(fresh_sample(&v, (w, h)).is_err(), "a refresh frame");
+}
+
+/// v2 D8 perf gate: the deferred toggle never blocks the UI thread (each UI-side call < 16 ms), and deferred frames
+/// stay under 33.3 ms (30 fps) at 1600×900 and the Meshes default size. Cold = a fresh shader cache; warm = a new
+/// viewport on the same cache.
+#[test]
+#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
+fn femalebody_deferred_holds_30_fps() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut last = None;
+    for pass in ["cold", "warm"] {
+        let Some(mut v) = femalebody_viewport(cache.path()) else {
+            return;
+        };
+        v.request_frame(1600, 900);
+        wait_idle(&mut v);
+        println!("adapter: {:?}", v.adapter);
+        let before = v.frame.as_ref().map(|f| f.id);
+        let mut slowest = 0.0f64;
+        let mut timed = |f: &mut dyn FnMut()| {
+            let t = Instant::now();
+            f();
+            slowest = slowest.max(t.elapsed().as_secs_f64() * 1000.0);
+        };
+        let t0 = Instant::now();
+        timed(&mut || v.set_deferred(true));
+        let mut first = None;
+        loop {
+            timed(&mut || {
+                v.poll();
+            });
+            timed(&mut || v.request_frame(1600, 900));
+            if first.is_none() && v.frame.as_ref().map(|f| f.id) != before {
+                first = Some(t0.elapsed());
+            }
+            if first.is_some() && !v.busy() {
+                break;
+            }
+            assert!(t0.elapsed().as_secs() < 300, "the toggle never settled");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let settled = t0.elapsed();
+        let statuses: Vec<_> = v.shapes.iter().map(|s| (&s.name, &s.status)).collect();
+        println!(
+            "{pass} toggle: first new frame {:.1} ms, idle {:.1} ms, slowest UI call {slowest:.2} ms, shapes {statuses:?}",
+            first.unwrap().as_secs_f64() * 1000.0,
+            settled.as_secs_f64() * 1000.0
+        );
+        assert_eq!(v.notice, None, "no deferred fallback");
+        assert!(
+            !v.shapes.is_empty()
+                && v.shapes
+                    .iter()
+                    .all(|s| s.status == render3d::ShapeStatus::Drawing),
+            "{statuses:?}"
+        );
+        assert!(
+            slowest < 16.0,
+            "{pass}: a UI-side call took {slowest:.2} ms"
+        );
+        last = Some(v);
+    }
+    let mut v = last.unwrap();
+    for size in [(1600, 900), MESHES_DEFAULT] {
+        let deferred = mean_frame_ms(&mut v, size);
+        v.set_deferred(false);
+        v.request_frame(size.0, size.1);
+        wait_idle(&mut v);
+        let forward = mean_frame_ms(&mut v, size);
+        v.set_deferred(true);
+        v.request_frame(size.0, size.1);
+        wait_idle(&mut v);
+        println!(
+            "{}x{}: deferred mean {deferred:.2} ms, forward mean {forward:.2} ms",
+            size.0, size.1
+        );
+        assert!(
+            deferred < 33.3,
+            "{size:?}: deferred mean {deferred:.2} ms is under 30 fps"
+        );
     }
 }
 
@@ -2110,11 +2303,11 @@ fn the_panel_stays_awake_until_the_refresh_after_the_last_shapes_is_read() {
 
 #[test]
 fn the_off_line_lists_what_the_renderer_leaves_off() {
-    assert_eq!(v3::off_line(&[], v3::CUBEMAPS_FOOTER), v3::CUBEMAPS_FOOTER);
+    assert_eq!(v3::off_line(&[]), None);
     let off = ["DynamicCubemaps", "LODBlending", "ScreenSpaceGI", "NRD"].map(String::from);
     assert_eq!(
-        v3::off_line(&off, "unused"),
-        "Off in this preview: Dynamic Cubemaps, LOD Blending, Screen Space GI, NRD"
+        v3::off_line(&off).as_deref(),
+        Some("Off in this preview: Dynamic Cubemaps, LOD Blending, Screen Space GI, NRD")
     );
     let mut v = Viewport3d::with_state(V3State::Ready);
     v.handle(v3::V3Reply::OffInPreview(off.to_vec()));
@@ -2880,4 +3073,218 @@ fn two_panels_with_the_same_frame_id_keep_their_own_textures() {
     };
     let (ta, tb) = (get("meshes").unwrap().1, get("set_preview").unwrap().1);
     assert_ne!(ta.id(), tb.id());
+}
+
+// ---- v2 Phase D, D8: the "Accurate (deferred)" toggle ----
+
+#[test]
+fn deferred_toggle_sends_one_command_and_rerenders() {
+    let (mut v, cmds) = rendered();
+    assert!(v.look.deferred, "on by default");
+    let rid = v.render_sent_for_test();
+    frame_reply(&mut v, rid); // nothing in flight before the toggle
+    assert!(!v.busy());
+    v.set_deferred(false);
+    let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+    assert_eq!(sent.len(), 1, "exactly one command");
+    assert!(matches!(sent[0], v3::V3Cmd::SetDeferred(false)));
+    assert!(v.busy(), "awake until the render thread answers the toggle");
+    v.set_deferred(false);
+    assert!(cmds.try_recv().is_err(), "the same value sends nothing");
+    v.request_frame(64, 64);
+    let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+    assert_eq!(sent.len(), 1, "a render, no load");
+    match &sent[0] {
+        v3::V3Cmd::Render { look, .. } => assert!(!look.deferred),
+        _ => panic!("a render, no load"),
+    }
+    let rid = v.render_sent_for_test();
+    frame_reply(&mut v, rid);
+    v.handle(v3::V3Reply::Reconfigured(1));
+    assert!(!v.busy());
+}
+
+/// Step-2 choice: `fake_render_thread` hands `ensure_thread` a channel instead of spawning the render loop, so the
+/// real `request_frame → ensure_thread → Load` order is what is checked (`attach_test_thread` stays silent).
+#[test]
+fn a_saved_deferred_choice_is_sent_before_the_first_load() {
+    for on in [true, false] {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = Viewport3d::new(Some(fp(d.path(), "CS", "a")));
+        v.on_located(Ok(Some(fp(d.path(), "CS", "a"))));
+        v.cache_dir = Some(d.path().to_path_buf());
+        v.look.deferred = on;
+        let cmds = v.fake_render_thread();
+        v.set_mesh(Some(spec(1, false)));
+        v.request_frame(64, 64);
+        let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+        if on {
+            assert_eq!(sent.len(), 2, "on: SetDeferred, then Load");
+            assert!(matches!(sent[0], v3::V3Cmd::SetDeferred(true)));
+            assert!(matches!(sent[1], v3::V3Cmd::Load { .. }));
+            assert!(v.busy());
+        } else {
+            assert_eq!(sent.len(), 1, "off: the thread starts forward, Load only");
+            assert!(matches!(sent[0], v3::V3Cmd::Load { .. }));
+        }
+    }
+}
+
+#[test]
+fn deferred_toggle_is_in_the_view_menu() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.look.sun = 3.0;
+    v.look.hdri = true;
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label(sdc_gui::ui::viewport3d::VIEW_MENU).click();
+    h.run();
+    h.get_by_label(v3::DEFERRED_LABEL).click();
+    h.run();
+    assert!(!h.state().look.deferred);
+    h.get_by_label("Reset view").click();
+    h.run();
+    assert!(!h.state().look.deferred, "Reset view keeps the toggle");
+    assert_eq!(
+        h.state().look,
+        v3::Look {
+            deferred: false,
+            ..v3::Look::default()
+        }
+    );
+}
+
+fn alpha_tested() -> MaterialState {
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    }); // DO_ALPHA_TEST: the stand-in's pixel permutation compiles
+    m
+}
+
+fn lit(v: &Viewport3d) -> bool {
+    v.frame.as_ref().is_some_and(|f| {
+        f.rgba
+            .chunks(4)
+            .any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0)
+    })
+}
+
+fn wait_lit(v: &mut Viewport3d) {
+    let t = std::time::Instant::now();
+    while !lit(v) && t.elapsed().as_secs() < 10 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(lit(v), "a lit frame");
+}
+
+/// A viewport on a copy of the stand-in whose `DeferredCompositeCS.hlsl` is `composite` (None: the stand-in's).
+fn standin_copy(composite: Option<&str>) -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    for f in ["Lighting.hlsl", "DeferredCompositeCS.hlsl"] {
+        std::fs::copy(standin_root().join(f), d.path().join(f)).unwrap();
+    }
+    if let Some(c) = composite {
+        std::fs::write(d.path().join("DeferredCompositeCS.hlsl"), c).unwrap();
+    }
+    d
+}
+
+fn viewport_on(shaders: &Path, cache: &Path) -> Viewport3d {
+    let f = render3d::locate::fingerprint(shaders, None).unwrap();
+    let mut v = Viewport3d::new(Some(f.clone()));
+    v.on_located(Ok(Some(f)));
+    v.cache_dir = Some(cache.to_path_buf());
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 1,
+            shape: Builtin::Sphere,
+            material: alpha_tested(),
+            textures: Arc::new(HashMap::new()),
+        }),
+        false,
+    );
+    v
+}
+
+const DEFERRED_NOTICE: &str = "Deferred preview unavailable: ";
+
+#[test]
+fn deferred_falls_back_and_shows_the_notice() {
+    let shaders = standin_copy(Some("this is not hlsl"));
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = viewport_on(shaders.path(), cache.path());
+    assert!(v.look.deferred);
+    run_idle(&mut v);
+    let notice = v.notice.clone().expect("the fallback notice");
+    assert!(notice.starts_with(DEFERRED_NOTICE), "{notice}");
+    assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
+    wait_lit(&mut v);
+    assert!(v.look.deferred, "D-P30: the preference stays");
+    // D-P33: turning it off says nothing new; turning it on again reports the failure again.
+    v.notice = None;
+    v.set_deferred(false);
+    run_idle(&mut v);
+    assert_eq!(v.notice, None, "no notice when the toggle turns off");
+    v.set_deferred(true);
+    run_idle(&mut v);
+    let again = v.notice.clone().expect("the notice is back");
+    assert!(again.starts_with(DEFERRED_NOTICE), "{again}");
+    let mut h = harness(v);
+    h.run_steps(4);
+    h.get_by_label(&again);
+}
+
+/// D-P36 (F3): after a fallback, a new shaders folder retries deferred while the box stays checked; a new failure
+/// shows a new notice. A features change with the same failure says nothing again.
+#[test]
+fn a_shaders_change_retries_deferred_after_a_fallback() {
+    let first = standin_copy(Some("this is not hlsl"));
+    let second = standin_copy(Some("#error second stand-in"));
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = viewport_on(first.path(), cache.path());
+    run_idle(&mut v);
+    let a = v.notice.clone().expect("the fallback notice");
+    assert!(a.starts_with(DEFERRED_NOTICE), "{a}");
+    v.notice = None;
+    v.set_features(false);
+    run_idle(&mut v);
+    assert_eq!(v.notice, None, "the same failure is not told twice");
+    let f = render3d::locate::fingerprint(second.path(), None).unwrap();
+    v.on_located(Ok(Some(f)));
+    v.use_new();
+    run_idle(&mut v);
+    let b = v.notice.clone().expect("the retry's notice");
+    assert!(b.starts_with(DEFERRED_NOTICE), "{b}");
+    assert_ne!(b, a, "the new failure");
+    assert!(v.look.deferred);
+}
+
+#[test]
+fn deferred_on_with_the_standin_draws_and_goes_idle() {
+    let shaders = standin_copy(None);
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = viewport_on(shaders.path(), cache.path());
+    run_idle(&mut v);
+    assert_eq!(v.notice, None);
+    assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
+    wait_lit(&mut v);
+    v.report = None;
+    let before = v.frame.as_ref().unwrap().id;
+    v.set_deferred(false);
+    run_idle(&mut v);
+    let t = std::time::Instant::now();
+    while v.frame.as_ref().unwrap().id == before && t.elapsed().as_secs() < 10 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_ne!(v.frame.as_ref().unwrap().id, before, "re-rendered");
+    assert!(lit(&v));
+    assert_eq!(v.notice, None);
+    assert!(
+        v.report.is_none(),
+        "no Loaded reply: nothing was loaded again"
+    );
 }

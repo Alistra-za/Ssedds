@@ -70,6 +70,22 @@ pub fn decode_head(
     block: usize,
     kind: ShapeKind,
 ) -> Result<ShapeHead, NifError> {
+    decode_head_at(h, b, block, kind).map(|(s, _)| s)
+}
+
+/// Absolute file offsets of the shader and alpha refs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefAt {
+    pub shader: usize,
+    pub alpha: usize,
+}
+
+pub fn decode_head_at(
+    h: &Header,
+    b: &[u8],
+    block: usize,
+    kind: ShapeKind,
+) -> Result<(ShapeHead, RefAt), NifError> {
     let mut c = Cursor::new(b, h.offsets()[block]);
     let name = h.string(c.i32()?).map(lossy).filter(|s| !s.is_empty());
     let n = c.u32()? as usize;
@@ -79,11 +95,17 @@ pub fn decode_head(
     c.skip(12 + 36 + 4)?; // translation, rotation, scale
     c.i32()?; // collision
     let (skinned, shader, alpha);
+    let mut at = RefAt {
+        shader: 0,
+        alpha: 0,
+    };
     let (mut vertex_desc, mut num_triangles, mut num_vertices) = (None, None, None);
     if kind.bs_layout(h.bsver) {
         c.skip(16)?; // bounding sphere
         skinned = c.i32()? != -1;
+        at.shader = c.pos();
         shader = c.i32()?;
+        at.alpha = c.pos();
         alpha = c.i32()?;
         if kind.has_vertex_head() {
             vertex_desc = Some(c.u64()?);
@@ -97,17 +119,22 @@ pub fn decode_head(
         c.skip(8 * m)?; // material names + extra data
         c.i32()?; // active material
         c.u8()?; // needs update
+        at.shader = c.pos();
         shader = c.i32()?;
+        at.alpha = c.pos();
         alpha = c.i32()?;
     }
-    Ok(ShapeHead {
-        kind,
-        name,
-        skinned,
-        shader,
-        alpha,
-        vertex_desc,
-        num_triangles,
-        num_vertices,
-    })
+    Ok((
+        ShapeHead {
+            kind,
+            name,
+            skinned,
+            shader,
+            alpha,
+            vertex_desc,
+            num_triangles,
+            num_vertices,
+        },
+        at,
+    ))
 }

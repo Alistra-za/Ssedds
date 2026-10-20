@@ -54,7 +54,8 @@ export const meta = {
 //   x_cs_feature_log   optional {profile: path} debug CS log of the same feature set, passed as P04_CS_FEATURE_LOG so an
 //                      info-level profile gets its defines in this run (the shader cache loses its bytecode later)
 //   x_keep_rdc         where kept .rdc go (per profile below it); default <tools>\rdc-fixtures\<cs-version>
-//   x_extract          stages to run: A, B, dispatch, C, shader_id, defines, fixture (default all; others rejected)
+//   x_extract          stages to run: A, B, dispatch, C, D, shader_id, defines, fixture (default all but D; others
+//                      rejected); a profile in x_profiles_other_runs may give its own (DBG adds D = X4 traces)
 //   x_fixture_out      must equal the extractors' fixed output root rdc-out\golden\<cs-version> (checked)
 //   x_shape_offsets    optional {form: {shapePrefix: [x,y,z]}} model offsets for W9; x_match_tol (default 60 units).
 //                      W9 matches a draw by shape name when exactly one placed ref expects it; collided names

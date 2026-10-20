@@ -25,9 +25,57 @@ pub fn fixture(name: &str) -> Vec<u8> {
 
 /// A WARP renderer on the stand-in shader with exactly `features` as CS feature defines.
 pub fn renderer(cache: &Path, features: &[&str]) -> Renderer {
-    let fp = render3d::locate::fingerprint(&standin_root(), None).unwrap();
+    renderer_at(&standin_root(), cache, features)
+}
+
+/// [`renderer`] on the shaders in `root` (a modified copy of the stand-in).
+pub fn renderer_at(root: &Path, cache: &Path, features: &[&str]) -> Renderer {
+    let fp = render3d::locate::fingerprint(root, None).unwrap();
     let mut r = Renderer::with_gpu(Gpu::new_warp().unwrap(), fp, cache.to_path_buf()).unwrap();
     r.set_features(features.iter().map(|s| s.to_string()).collect());
+    r
+}
+
+/// A built-in plane as a parsed shape: Z test on, Own_Emit with `emissive` (so STANDIN_FLAT shows it), `slsf2` as
+/// given (bit 4 = Double_Sided).
+pub fn plane_shape(
+    id: u32,
+    world: [[f32; 4]; 3],
+    emissive: [f32; 3],
+    slsf2: u32,
+) -> render3d::ParsedShape {
+    let mut m = nif::material::MaterialState::builtin_default();
+    m.slsf1 |= (1 << 31) | (1 << 22); // Z_Buffer_Test, Own_Emit
+    m.slsf2 = slsf2;
+    m.params.emissive_color = emissive;
+    m.params.emissive_multiple = 1.0;
+    render3d::ParsedShape {
+        id: render3d::ShapeId(id),
+        name: format!("plane{id}"),
+        mesh: std::sync::Arc::new(render3d::builtin_mesh(render3d::Builtin::Plane)),
+        world,
+        material: m,
+    }
+}
+
+pub const IDENT: [[f32; 4]; 3] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+];
+
+/// A FLAT stand-in renderer with `shapes` loaded (no errors).
+pub fn planes(cache: &Path, shapes: Vec<render3d::ParsedShape>) -> Renderer {
+    let mut r = renderer(cache, FLAT);
+    let parsed = render3d::ParsedNif {
+        shapes,
+        ..Default::default()
+    };
+    let rep = r.load_parsed(&parsed, &|_| None);
+    assert!(
+        rep.errors.is_empty() && rep.compile_errors.is_empty(),
+        "{rep:?}"
+    );
     r
 }
 

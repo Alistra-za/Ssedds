@@ -14,9 +14,9 @@ use windows::Win32::Graphics::Direct3D::Fxc::{
 };
 use windows::Win32::Graphics::Direct3D::{
     ID3DBlob, D3D_CT_CBUFFER, D3D_SHADER_MACRO, D3D_SIT_CBUFFER, D3D_SIT_SAMPLER,
-    D3D_SIT_STRUCTURED, D3D_SIT_TEXTURE, D3D_SRV_DIMENSION_BUFFER,
-    D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE, D3D_SVC_STRUCT, D3D_SVT_BOOL,
-    D3D_SVT_FLOAT, D3D_SVT_INT, D3D_SVT_UINT,
+    D3D_SIT_STRUCTURED, D3D_SIT_TEXTURE, D3D_SIT_UAV_RWTYPED, D3D_SRV_DIMENSION_BUFFER,
+    D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE, D3D_SVC_STRUCT, D3D_SVF_USED,
+    D3D_SVT_BOOL, D3D_SVT_FLOAT, D3D_SVT_INT, D3D_SVT_UINT,
 };
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11ShaderReflection, ID3D11ShaderReflectionType, D3D11_SHADER_BUFFER_DESC,
@@ -61,6 +61,14 @@ pub struct Reflection {
     pub samplers: Vec<(String, u32)>,
     /// (semantic, index, component mask).
     pub inputs: Vec<(String, u32, u32)>,
+    /// Typed UAVs (RWTexture*): (name, register). Compute shaders only (v2 D4).
+    // No REFLECT_VERSION bump for `uavs` and `threads`: no cs_5_0 entry was ever cached, and VS/PS have neither
+    // (an older entry reads them as empty / [0; 3], which is right).
+    #[serde(default)]
+    pub uavs: Vec<(String, u32)>,
+    /// numthreads; [0; 3] for VS/PS.
+    #[serde(default)]
+    pub threads: [u32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -421,21 +429,59 @@ fn var_kind(t: &D3D11_SHADER_TYPE_DESC) -> VarKind {
     }
 }
 
-/// Reflects compiled DXBC into plain data (cbuffer layouts, SRV/sampler slots, input signature).
-pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
-    let e = |e: windows::core::Error| e.to_string();
+fn reflector(bytecode: &[u8]) -> Result<ID3D11ShaderReflection, String> {
     let mut raw = std::ptr::null_mut();
     // SAFETY: bytecode is a valid slice; D3DReflect writes an AddRef'd ID3D11ShaderReflection into `raw`.
-    let r: ID3D11ShaderReflection = unsafe {
+    unsafe {
         D3DReflect(
             bytecode.as_ptr() as _,
             bytecode.len(),
             &ID3D11ShaderReflection::IID,
             &mut raw,
         )
-        .map_err(e)?;
-        ID3D11ShaderReflection::from_raw(raw)
-    };
+        .map_err(|e| e.to_string())?;
+        Ok(ID3D11ShaderReflection::from_raw(raw))
+    }
+}
+
+/// (cbuffer, variable) for every top-level cbuffer variable the shader reads (D3D_SVF_USED), in reflection order.
+/// On demand (v2 D6c): not part of [`Reflection`], so cached entries stay valid.
+pub fn used_vars(bytecode: &[u8]) -> Result<Vec<(String, String)>, String> {
+    let e = |e: windows::core::Error| e.to_string();
+    let r = reflector(bytecode)?;
+    let mut out = vec![];
+    // SAFETY (whole block): out-params are valid locals; indices are bounded by the shader desc counts.
+    unsafe {
+        let mut sd = D3D11_SHADER_DESC::default();
+        r.GetDesc(&mut sd).map_err(e)?;
+        for i in 0..sd.ConstantBuffers {
+            let Some(cb) = r.GetConstantBufferByIndex(i) else {
+                continue;
+            };
+            let mut bd = D3D11_SHADER_BUFFER_DESC::default();
+            cb.GetDesc(&mut bd).map_err(e)?;
+            if bd.Type != D3D_CT_CBUFFER {
+                continue;
+            }
+            for j in 0..bd.Variables {
+                let Some(v) = cb.GetVariableByIndex(j) else {
+                    continue;
+                };
+                let mut vd = D3D11_SHADER_VARIABLE_DESC::default();
+                v.GetDesc(&mut vd).map_err(e)?;
+                if vd.uFlags & D3D_SVF_USED.0 as u32 != 0 {
+                    out.push((pcstr(bd.Name), pcstr(vd.Name)));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Reflects compiled DXBC into plain data (cbuffer layouts, SRV/sampler slots, input signature).
+pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
+    let e = |e: windows::core::Error| e.to_string();
+    let r = reflector(bytecode)?;
     let mut out = Reflection::default();
     // SAFETY (whole block): out-params are valid locals; indices are bounded by the shader desc counts.
     unsafe {
@@ -450,6 +496,8 @@ pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
                 cb_slots.insert(name, b.BindPoint);
             } else if b.Type == D3D_SIT_SAMPLER {
                 out.samplers.push((name, b.BindPoint));
+            } else if b.Type == D3D_SIT_UAV_RWTYPED {
+                out.uavs.push((name, b.BindPoint));
             } else if let Some(kind) = srv_kind(&b) {
                 out.srvs.push((name, b.BindPoint, kind));
             }
@@ -506,7 +554,10 @@ pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
             out.inputs
                 .push((pcstr(p.SemanticName), p.SemanticIndex, p.Mask as u32));
         }
+        let [x, y, z] = &mut out.threads;
+        r.GetThreadGroupSize(Some(x), Some(y), Some(z));
     }
+    out.uavs.sort_by_key(|s| s.1);
     out.cbuffers.sort_by_key(|c| c.slot);
     out.srvs.sort_by_key(|s| s.1);
     out.samplers.sort_by_key(|s| s.1);

@@ -353,13 +353,13 @@ fn classify_table() {
         edit(&mut m);
         m
     };
-    assert_eq!(classify(&base, &base.clone(), &f), EditKind::Same);
+    assert_eq!(classify(&base, &base.clone(), &f, false), EditKind::Same);
     let uv = with(&|m| m.params.uv_scale = [2.0, 2.0]);
-    assert_eq!(classify(&base, &uv, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&base, &uv, &f, false), EditKind::Cbuffer);
     let emit = with(&|m| m.params.emissive_color = [1.0, 0.0, 0.0]);
-    assert_eq!(classify(&base, &emit, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&base, &emit, &f, false), EditKind::Cbuffer);
     let hidden = with(&|m| m.hidden = true);
-    assert_eq!(classify(&base, &hidden, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&base, &hidden, &f, false), EditKind::Cbuffer);
     // Adding the alpha property toggles DO_ALPHA_TEST; flipping blend on an existing one does not.
     let test_only = with(&|m| {
         m.alpha = Some(Alpha {
@@ -367,42 +367,156 @@ fn classify_table() {
             threshold: 128,
         })
     });
-    assert_eq!(classify(&base, &test_only, &f), EditKind::Permutation);
+    assert_eq!(
+        classify(&base, &test_only, &f, false),
+        EditKind::Permutation
+    );
     let mut blended = test_only.clone();
     blended.alpha = Some(Alpha {
         flags: 0x201,
         threshold: 128,
     });
-    assert_eq!(classify(&test_only, &blended, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&test_only, &blended, &f, false), EditKind::Cbuffer);
+    // Deferred mode: opaque ↔ blended moves the shape between DEFERRED and forward (D3); a plain edit does not.
+    assert_eq!(
+        classify(&test_only, &blended, &f, true),
+        EditKind::Permutation
+    );
+    assert_eq!(classify(&base, &uv, &f, true), EditKind::Cbuffer);
     // Specular strength 0 ↔ > 0 toggles SPECULAR on vanilla shapes.
     let no_spec = with(&|m| m.params.specular_strength = 0.0);
-    assert_eq!(classify(&base, &no_spec, &f), EditKind::Permutation);
+    assert_eq!(classify(&base, &no_spec, &f, false), EditKind::Permutation);
     // A new slot path rebinds; a raw-only change (same canonical path) does not.
     let tex = with(&|m| m.set_slot_raw(0, "textures\\a.dds"));
-    assert_eq!(classify(&base, &tex, &f), EditKind::Textures);
+    assert_eq!(classify(&base, &tex, &f, false), EditKind::Textures);
     let mut same_norm = tex.clone();
     same_norm.set_slot_raw(0, "Textures/A.DDS");
-    assert_eq!(classify(&tex, &same_norm, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&tex, &same_norm, &f, false), EditKind::Cbuffer);
     // Glowmap (type 2) moves slot 2 from t12 to t6 without a define: a binding change.
     let mut glow_src = base.clone();
     glow_src.set_slot_raw(2, "textures\\g.dds");
     let mut glow = glow_src.clone();
     glow.shader_type = 2;
-    assert_eq!(classify(&glow_src, &glow, &f), EditKind::Textures);
+    assert_eq!(classify(&glow_src, &glow, &f, false), EditKind::Textures);
     // PBR on/off is TRUE_PBR; under PBR, roughness and the shader type (technique 0) are cbuffer edits,
     // Rim (→ Subsurface) too, but Fit_Slope toggles GLINT.
     let pbr = with(&|m| m.slsf2 |= 1 << 23);
-    assert_eq!(classify(&base, &pbr, &f), EditKind::Permutation);
+    assert_eq!(classify(&base, &pbr, &f, false), EditKind::Permutation);
     let mut rough = pbr.clone();
     rough.params.specular_strength = 0.25;
-    assert_eq!(classify(&pbr, &rough, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&pbr, &rough, &f, false), EditKind::Cbuffer);
     let mut t11 = pbr.clone();
     t11.shader_type = 11;
-    assert_eq!(classify(&pbr, &t11, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&pbr, &t11, &f, false), EditKind::Cbuffer);
     let mut rim = pbr.clone();
     rim.slsf2 |= 1 << 26;
-    assert_eq!(classify(&pbr, &rim, &f), EditKind::Cbuffer);
+    assert_eq!(classify(&pbr, &rim, &f, false), EditKind::Cbuffer);
     let mut glint = pbr.clone();
     glint.slsf2 |= 1 << 12;
-    assert_eq!(classify(&pbr, &glint, &f), EditKind::Permutation);
+    assert_eq!(classify(&pbr, &glint, &f, false), EditKind::Permutation);
+}
+
+use nif::props::Alpha;
+use render3d::material::{engine_blend, pipe, verified_blend, Pipe};
+
+#[test]
+fn engine_blend_follows_g3() {
+    assert_eq!(engine_blend(6, 7), ((6, 7), false));
+    assert_eq!(engine_blend(0, 0), ((6, 0), true));
+    assert_eq!(engine_blend(1, 2), ((4, 1), true));
+    assert_eq!(engine_blend(13, 7), ((0, 7), false));
+    assert_eq!(engine_blend(3, 9), ((3, 9), false));
+    assert!(!verified_blend(3, 9));
+    assert!(verified_blend(6, 7) && verified_blend(0, 0) && verified_blend(1, 2));
+}
+
+#[test]
+fn pipe_reads_alpha_and_shader_flags() {
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(Alpha {
+        flags: 0x00ED,
+        threshold: 0,
+    }); // blend on, 6/7
+    m.slsf1 |= 1 << 31;
+    m.slsf2 |= 1; // z test, z write
+    assert_eq!(
+        pipe(&m),
+        Pipe {
+            blend: Some((6, 7)),
+            mapped: false,
+            cull_back: true,
+            z_test: true,
+            z_write: true
+        }
+    );
+    m.slsf2 |= 1 << 4; // Double_Sided
+    assert!(!pipe(&m).cull_back);
+    m.alpha = Some(Alpha {
+        flags: 0x12EC,
+        threshold: 128,
+    }); // blend off
+    assert_eq!(pipe(&m).blend, None);
+}
+
+#[test]
+fn pbr_bit_meaning_agrees_with_pbr_flags() {
+    use render3d::pbr_bit_meaning;
+    const BITS: [u32; 6] = [12, 24, 25, 26, 27, 30];
+    // Meaning -> the pbr_flags bit it must set (None: "No effect with PBR").
+    let feature = |s: &str| match s {
+        "Two-layer coat" => PBR_TWO_LAYER,
+        "Inner-layer parallax" => PBR_INTERLAYER_PARALLAX,
+        "Fuzz" => PBR_FUZZ,
+        "Coat normal" => PBR_COAT_NORMAL,
+        "Hair (Marschner)" => PBR_HAIR_MARSCHNER,
+        "Coloured coat" => PBR_COLORED_COAT,
+        "Subsurface" => PBR_SUBSURFACE,
+        "Glint" => PBR_GLINT,
+        "No effect with PBR" => 0,
+        other => panic!("{other}"),
+    };
+    for mask in 0..64u32 {
+        let on: Vec<u32> = (0..6)
+            .filter(|i| mask >> i & 1 != 0)
+            .map(|i| BITS[i])
+            .collect();
+        let m = pbr(&on);
+        let flags = pbr_flags(&m, &Bound::default());
+        let mut labelled = 0;
+        for b in BITS {
+            let want = pbr_bit_meaning(m.slsf2, b);
+            if m.slsf2 >> b & 1 == 0 {
+                continue;
+            }
+            let f = feature(want.unwrap());
+            labelled |= f;
+            assert!(f == 0 || flags & f != 0, "{on:?} bit {b}");
+        }
+        assert_eq!(flags, labelled, "{on:?}: a feature has no labelling bit");
+    }
+    assert_eq!(pbr_bit_meaning(1 << 24, 24), None, "not PBR");
+    assert_eq!(pbr_bit_meaning(1 << 23, 5), None);
+}
+
+/// v2 D6c: the stand-in's VS-only TexcoordOffset (b1) is read from the vertex stage; the pixel-stage hook has no such
+/// field.
+#[test]
+fn vs_cb_floats_reads_the_vertex_stage() {
+    #[path = "common/mod.rs"]
+    mod common;
+    let mut s = common::plane_shape(0, common::IDENT, [0.0; 3], 1);
+    s.material.params.uv_offset = [0.25, 0.5];
+    s.material.params.uv_scale = [2.0, 4.0];
+    let cache = tempfile::tempdir().unwrap();
+    let r = common::planes(cache.path(), vec![s]);
+    let id = render3d::ShapeId(0);
+    assert_eq!(
+        r.draw_vs_cb_floats(id, "TexcoordOffset"),
+        Some(vec![0.25, 0.5, 2.0, 4.0])
+    );
+    assert_eq!(r.draw_cb_floats(id, "TexcoordOffset"), None);
+    assert_eq!(
+        r.draw_vs_cb_floats(render3d::ShapeId(9), "TexcoordOffset"),
+        None
+    );
 }

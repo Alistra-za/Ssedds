@@ -560,6 +560,59 @@ fn exact_compares_the_full_path_with_textures_added() {
 }
 
 #[test]
+fn canonical_matches_every_alias_through_the_path_index() {
+    let (_d, mut s, _) = query_store();
+    let a = origin(&mut s, "Aliases", 3);
+    // Raw slot strings that are not the canonical form keep a `tex_raw` row; all resolve to the same file.
+    for (nif, raw) in [
+        ("meshes/x/g2.nif", r"Data\Textures\XMead\reserve.dds"),
+        ("meshes/x/h.nif", r"xmead\reserve.dds"),
+    ] {
+        let copy = put(&mut s, nif, a, 0, lit(&[raw]), false);
+        s.conn()
+            .execute(
+                "INSERT INTO nif_winner SELECT path_id, id, 1 FROM nif_copy WHERE id = ?1",
+                [copy],
+            )
+            .unwrap();
+    }
+    for want in [r"textures\xmead\reserve.dds", r"XMead\Reserve.dds"] {
+        let rows = s.nifs_using_canonical_texture(0, want, 50).unwrap();
+        assert_eq!(
+            nifs(&rows),
+            [
+                "meshes/x/a.nif",
+                "meshes/x/d.nif",
+                "meshes/x/g2.nif",
+                "meshes/x/h.nif"
+            ],
+            "{want}"
+        );
+    }
+    // Same winner rules as the other keys: the derived winner b.nif is matched on its own pbr path only.
+    let rows = s
+        .nifs_using_canonical_texture(0, r"textures\pbr\xmead\reserve.dds", 50)
+        .unwrap();
+    assert_eq!(nifs(&rows), ["meshes/x/b.nif"]);
+    assert!(s
+        .nifs_using_canonical_texture(0, "", 50)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        s.nifs_using_canonical_texture(0, r"xmead\reserve.dds", 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let plan = s.canonical_query_plan().unwrap();
+    assert!(
+        plan.iter().any(|l| l.contains("SEARCH tp USING")),
+        "the canonical path is looked up by index: {plan:?}"
+    );
+    assert!(!plan.iter().any(|l| l.starts_with("SCAN tp")), "{plan:?}");
+}
+
+#[test]
 fn open_read_only_never_creates_rebuilds_or_writes() {
     let d = tempfile::tempdir().unwrap();
     let missing = d.path().join("nope").join("scan.db");
@@ -1156,4 +1209,66 @@ fn winning_nifs_folds_ascii_only_like_the_stored_keys() {
     assert_eq!(s.winning_nifs("Ärger", 10).unwrap().len(), 1);
     assert_eq!(s.winning_nifs("ärGER/x", 10).unwrap().len(), 0);
     assert_eq!(s.winning_nifs("ÄrGER/x", 10).unwrap().len(), 1);
+}
+
+// ---- v2 A16: source copies of a path and the texture browse list ----
+
+fn origin_of(s: &mut Store, kind: i32, name: &str, priority: i32, derived_by: Option<i32>) -> i64 {
+    s.upsert_origin(&OriginSpec {
+        kind,
+        name: name.into(),
+        root: format!("R/{name}"),
+        parent: None,
+        priority,
+        derived_by,
+        derived_state: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn copies_of_path_orders_loose_by_priority_then_bsas() {
+    let (_d, mut s, a) = store();
+    let b = origin(&mut s, "B", 5);
+    let bsa_lo = origin_of(&mut s, modscan::store::KIND_BSA, "lo.bsa", 1, None);
+    let bsa_hi = origin_of(&mut s, modscan::store::KIND_BSA, "hi.bsa", 2, None);
+    let pg = origin_of(&mut s, KIND_MOD, "PG", 9, Some(a as i32));
+    let p = "meshes/x/a.nif";
+    let ids: Vec<i64> = [bsa_lo, a, pg, bsa_hi, b]
+        .iter()
+        .map(|&o| put(&mut s, p, o, 0, lit(&[]), false))
+        .collect();
+    put(&mut s, "meshes/x/other.nif", a, 0, lit(&[]), false);
+    let c = s.copies_of_path(p).unwrap();
+    let names: Vec<&str> = c.iter().map(|c| c.origin.as_str()).collect();
+    assert_eq!(names, ["PG", "B", "A", "hi.bsa", "lo.bsa"]);
+    assert_eq!(c[0].copy_id, ids[2]);
+    assert!(c[0].derived);
+    assert!(!c[1].derived);
+    assert_eq!(c[1].root, "B");
+    assert_eq!(c[1].priority, 5);
+    assert_eq!(c[3].kind, modscan::store::KIND_BSA);
+    assert_eq!(c[3].root, "R/hi.bsa");
+    assert!(s.copies_of_path("meshes/x/none.nif").unwrap().is_empty());
+}
+
+#[test]
+fn texture_paths_lists_winners_by_substring_sorted_and_limited() {
+    let (_d, mut s, a) = store();
+    let names = [
+        "textures/b/rock_n.dds",
+        "textures/a/rock.dds",
+        "textures/c/tree.dds",
+        "textures/d/r%ck.dds",
+    ];
+    let pid = s.path_ids(&names).unwrap();
+    let w: HashMap<i64, (i64, u32)> = pid.iter().map(|&p| (p, (a, 1))).collect();
+    s.set_textures(&w).unwrap();
+    assert_eq!(
+        s.texture_paths("ROCK", 10).unwrap(),
+        ["textures/a/rock.dds", "textures/b/rock_n.dds"]
+    );
+    assert_eq!(s.texture_paths("rock", 1).unwrap(), ["textures/a/rock.dds"]);
+    assert_eq!(s.texture_paths("%", 10).unwrap(), ["textures/d/r%ck.dds"]);
+    assert_eq!(s.texture_paths("", 10).unwrap().len(), 4);
 }

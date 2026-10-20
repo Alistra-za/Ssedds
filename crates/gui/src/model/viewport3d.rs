@@ -35,8 +35,8 @@ pub const KEEP_OLD: &str = "Keep old";
 pub const UPDATED_NOTICE: &str = "Community Shaders updated — recompiling shaders…";
 /// The CS-features toggle (on by default). Off compiles without CS feature defines (P0: no `ENABLE_LL`).
 pub const FEATURES_LABEL: &str = "Community Shaders features";
-/// The footer's off-in-preview line until the user's CS settings have been read (P0 wording).
-pub const CUBEMAPS_FOOTER: &str = "Dynamic Cubemaps: off in preview";
+/// The View menu's deferred toggle (v2 D8, on by default): opaque shapes through CS's deferred pass.
+pub const DEFERRED_LABEL: &str = "Accurate (deferred)";
 /// Notice prefix when a CS settings file did not parse (CS may be writing it): the previous settings stay (C10).
 pub const SETTINGS_KEPT: &str = "Community Shaders settings not read, keeping the previous ones";
 
@@ -58,13 +58,13 @@ fn spaced(name: &str) -> String {
 }
 
 /// The panel's off-in-preview line: the user's loaded CS features this preview does not compile
-/// (`Renderer::off_in_preview`); `fallback` until the thread has reported them (no settings read yet).
-pub fn off_line(off: &[String], fallback: &str) -> String {
+/// (`Renderer::off_in_preview`); `None` when nothing is off (D-P31).
+pub fn off_line(off: &[String]) -> Option<String> {
     if off.is_empty() {
-        return fallback.to_string();
+        return None;
     }
     let names: Vec<String> = off.iter().map(|n| spaced(n)).collect();
-    format!("Off in this preview: {}", names.join(", "))
+    Some(format!("Off in this preview: {}", names.join(", ")))
 }
 /// Accessible name of the drawn frame.
 pub const FRAME_LABEL: &str = "3D preview";
@@ -369,6 +369,8 @@ pub struct Look {
     /// The sun's turn about the vertical (world Z), radians in 0..2π (Shift+right drag). The studio HDRI turns with it
     /// (owner D4: `Scene::env_yaw`).
     pub sun_yaw: f32,
+    /// Opaque shapes through CS's deferred pass (v2 D8); `false` = forward.
+    pub deferred: bool,
 }
 
 impl Look {
@@ -425,6 +427,7 @@ impl Look {
             point: s.point.unwrap_or(d.point),
             radius: s.radius.unwrap_or(d.radius),
             sun_yaw: s.sun_yaw.unwrap_or(d.sun_yaw),
+            deferred: s.deferred.unwrap_or(d.deferred),
         }
     }
 }
@@ -439,6 +442,7 @@ impl crate::settings::LookSettings {
             point: Some(l.point),
             radius: Some(l.radius),
             sun_yaw: Some(l.sun_yaw),
+            deferred: Some(l.deferred),
         }
     }
 }
@@ -452,6 +456,7 @@ impl Default for Look {
             point: 0.0,
             radius: 2.0,
             sun_yaw: 0.0,
+            deferred: true,
         }
     }
 }
@@ -562,6 +567,9 @@ pub enum V3Cmd {
     SetShaders(Fingerprint),
     /// The "Community Shaders features" toggle (`Renderer::set_features_on`): no reload, changed shapes recompile.
     SetFeatures(bool),
+    /// The "Accurate (deferred)" toggle (`Renderer::set_deferred`): no reload; every shape re-permutes in the
+    /// background while its old draw stays.
+    SetDeferred(bool),
     /// New user CS settings (`Renderer::set_settings`, C11): a cbuffer rewrite, recompiles only when the defines
     /// change, never a reload.
     SetSettings(CsSettings),
@@ -753,6 +761,8 @@ pub struct Viewport3d {
     pub bounds: Option<([f32; 3], f32)>,
     /// Shapes of the loaded `Parsed`/`Builtin` content (empty for a `Mesh`).
     pub shapes: Vec<ShapeInfo>,
+    /// The `Parsed` content is the NIF editor's (v2 A16): its failed shapes are listed like a mesh's.
+    pub nif_view: bool,
     /// The last material edit: its kind and render-thread time in ms.
     pub last_edit: Option<(EditKind, f64)>,
     /// Texture swaps the render thread refused (a bad DDS, a kind the slot does not read); the set preview lists them.
@@ -809,6 +819,8 @@ pub struct Viewport3d {
     /// The new location's settings, held while a Moved popup is open and applied by "Use new".
     popup_settings: Option<CsSettings>,
     thread: Option<Sender<V3Cmd>>,
+    /// Test seam: the channel `ensure_thread` takes instead of spawning the render loop.
+    fake_thread: Option<Sender<V3Cmd>>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
     gap: GapWatch,
@@ -842,6 +854,7 @@ impl Viewport3d {
             bounds: None,
             content: None,
             shapes: vec![],
+            nif_view: false,
             last_edit: None,
             swap_errors: vec![],
             status: None,
@@ -876,6 +889,7 @@ impl Viewport3d {
             failed_hash: None,
             popup_settings: None,
             thread: None,
+            fake_thread: None,
             tx,
             rx,
             gap: GapWatch::default(),
@@ -906,6 +920,15 @@ impl Viewport3d {
     pub fn attach_test_thread(&mut self) -> Receiver<V3Cmd> {
         let (t, r) = channel();
         self.thread = Some(t);
+        r
+    }
+
+    /// Test seam: the next `ensure_thread` uses this channel instead of spawning the render loop, so its start-up
+    /// commands are seen in order (`attach_test_thread` skips them).
+    #[doc(hidden)]
+    pub fn fake_render_thread(&mut self) -> Receiver<V3Cmd> {
+        let (t, r) = channel();
+        self.fake_thread = Some(t);
         r
     }
 
@@ -1166,6 +1189,19 @@ impl Viewport3d {
         }
     }
 
+    /// The "Accurate (deferred)" toggle (v2 D8): the render thread re-permutes every shape in the background while
+    /// the old draws stay. Nothing reloads.
+    pub fn set_deferred(&mut self, on: bool) {
+        if self.look.deferred == on {
+            return;
+        }
+        self.look.deferred = on;
+        if let Some(t) = &self.thread {
+            self.reconf_sent += 1;
+            let _ = t.send(V3Cmd::SetDeferred(on));
+        }
+    }
+
     /// The mesh the Meshes view shows (`None`: nothing selected). Loaded on the next `request_frame`.
     pub fn set_mesh(&mut self, spec: Option<MeshSpec>) {
         let same = match (&self.content, &spec) {
@@ -1382,15 +1418,25 @@ impl Viewport3d {
         let (Some(shaders), Some(cache)) = (self.shaders.clone(), self.cache_dir.clone()) else {
             return false;
         };
-        let (ctx, crx) = channel();
-        let features = self.features_on;
-        let settings = self.settings.clone();
-        let me = ctx.clone();
-        spawn_guarded(self.tx.clone(), "viewport3d", move |tx| {
-            render_loop(crx, me, tx, shaders, cache, features, settings)
-        });
+        let ctx = match self.fake_thread.take() {
+            Some(t) => t,
+            None => {
+                let (ctx, crx) = channel();
+                let features = self.features_on;
+                let settings = self.settings.clone();
+                let me = ctx.clone();
+                spawn_guarded(self.tx.clone(), "viewport3d", move |tx| {
+                    render_loop(crx, me, tx, shaders, cache, features, settings)
+                });
+                ctx
+            }
+        };
         self.load_variant_sent = Variant::Source; // a new thread starts at the default
         if self.debug != DebugView::Lit && ctx.send(V3Cmd::SetDebug(self.debug)).is_ok() {
+            self.reconf_sent += 1;
+        }
+        // The thread starts forward; sent before request_frame's first Load, so nothing compiles twice.
+        if self.look.deferred && ctx.send(V3Cmd::SetDeferred(true)).is_ok() {
             self.reconf_sent += 1;
         }
         self.thread = Some(ctx);
@@ -2158,6 +2204,11 @@ fn render_loop(
     let mut refresh_id: u64 = 1 << 62;
     let mut stats = FrameStats::default();
     let mut backdrop_told = false;
+    // The deferred failure last reported (`Renderer::deferred_error`), so a late fallback is told once.
+    let mut deferred_told: Option<String> = None;
+    // The look's deferred choice (the last SetDeferred): a shaders, features or settings change retries it after a
+    // fallback (D-P36). A failed retry is told by the check after render only when its error is new.
+    let mut want_deferred = false;
     let mut last_coverage: Option<String> = None;
     while let Ok(first) = rx.recv() {
         // Dropped at the end of the batch, after every other reply: answers each features/settings command.
@@ -2180,18 +2231,40 @@ fn render_loop(
                 }
                 V3Cmd::SetShaders(f) => {
                     r.set_shaders(f);
+                    if want_deferred && !r.deferred() {
+                        let _ = r.set_deferred(true);
+                    }
                     reload = true;
                     reshaded = true;
                     None
                 }
                 V3Cmd::SetFeatures(on) => {
                     r.set_features_on(on);
+                    if want_deferred && !r.deferred() {
+                        let _ = r.set_deferred(true);
+                    }
+                    restyled = true;
+                    ack.0 += 1;
+                    None
+                }
+                V3Cmd::SetDeferred(on) => {
+                    want_deferred = on;
+                    if on {
+                        deferred_told = None; // turning it on reports a failure again (D-P33)
+                    }
+                    if let Err(e) = r.set_deferred(on) {
+                        deferred_told = Some(e.clone());
+                        send(V3Reply::Notice(e));
+                    }
                     restyled = true;
                     ack.0 += 1;
                     None
                 }
                 V3Cmd::SetSettings(s) => {
                     apply_settings(&mut r, s);
+                    if want_deferred && !r.deferred() {
+                        let _ = r.set_deferred(true);
+                    }
                     restyled = true;
                     ack.0 += 1;
                     None
@@ -2409,6 +2482,13 @@ fn render_loop(
                 send(V3Reply::Notice(format!("Studio backdrop unavailable: {e}")));
             }
         }
+        // A shaders, features or settings change can turn deferred off during render (late fallback).
+        if let Some(e) = r.deferred_error() {
+            if deferred_told.as_deref() != Some(e) {
+                send(V3Reply::Notice(e.to_owned()));
+            }
+        }
+        deferred_told = r.deferred_error().map(str::to_owned);
         match result {
             Ok(rgba) => {
                 let frame = Arc::new(Frame {
