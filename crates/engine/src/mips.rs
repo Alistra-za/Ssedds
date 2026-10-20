@@ -19,7 +19,7 @@
 //! vector chain accumulates from that written mip 0, so its lower levels and the variance bake see the stored vectors.
 //! A `_cnr` with `mips.normal = renormalize_bake` (the default) widens its own coat roughness (alpha) from its own
 //! footprint lengths (DECISIONS R2); `mips.normal` is inert on every other sub-type here: the `_n` -> `_rmaos` bake
-//! arrives through [`build_chain_with`].
+//! and the opt-in `normal` -> complex `_m` gloss bake (Note CL40) arrive through [`build_chain_with`].
 use crate::bake::{baked_roughness, variance_add, NormalVariance};
 use crate::config::*;
 use crate::image::Rgba32F;
@@ -339,7 +339,8 @@ fn bake_gloss(level: &mut Rgba32F, index: usize, b: &NormalVariance) {
         let add = b.add_at(index, i as u32 % w, i as u32 / w);
         if add > 0.0 {
             // shortcut: g is the level's mean gloss, not the mean of α = (1 − g)²; average α if banding shows.
-            let r = 1.0 - px[1];
+            // Mip 0 is stored as authored, so a float source can hold G outside [0, 1] (review M3).
+            let r = 1.0 - px[1].clamp(0.0, 1.0);
             px[1] = 1.0 - baked_roughness(r * r, add);
         }
     }
@@ -1217,6 +1218,92 @@ mod tests {
         let baked = build_chain_with(&rw, &pr, Some(&nv));
         assert_ne!(baked, build_chain(&rw, &pr)); // the bake is live
         assert_eq!(baked, build_chain_with(&rw, &pk, Some(&nv)));
+    }
+
+    /// Note CL40 (review I1, M3): with a `_n` twice the `_m`'s size (shift 1), every level's G, mip 0 included, is
+    /// `1 − ((1 − g)⁴ + add)^¼` where add > 0, g the plain chain's G clamped to [0, 1]; the add restated in f64 from
+    /// the written `_n`'s footprint (the `_m` level + 1). R, B and A are untouched.
+    #[test]
+    fn complex_material_gloss_matches_the_formula_with_a_larger_normal() {
+        use crate::bake::LengthPyramid;
+        const W: u32 = 8;
+        let t = 0.25f64;
+        let mut normals = Rgba32F::new(2 * W, 2 * W, [0.0, 0.0, 0.0, 1.0]);
+        for y in 0..2 * W {
+            for x in 0..2 * W {
+                let nx = 0.6 * (x as f32 * 1.3 + y as f32 * 0.7).sin();
+                let ny = 0.6 * (x as f32 * 0.9 - y as f32 * 1.1).cos();
+                let nz = (1.0 - nx * nx - ny * ny).sqrt();
+                *normals.at_mut(x, y) = [nx * 0.5 + 0.5, ny * 0.5 + 0.5, nz * 0.5 + 0.5, 1.0];
+            }
+        }
+        let nw = preprocess(normals, &profile(Subtype::Normal));
+        let mut written = nw.img;
+        for px in &mut written.px {
+            normalize_vector(px, nw.domain);
+        }
+        let p = profile(Subtype::ComplexMaterial);
+        let mut img = Rgba32F::new(W, W, [0.25, 0.0, 0.5, 0.0]);
+        for y in 0..W {
+            for x in 0..W {
+                img.at_mut(x, y)[1] = 0.3 + 0.6 * ((x * 5 + y * 3) % W) as f32 / W as f32;
+            }
+        }
+        // M3: a float source above 1 at mip 0 bakes as gloss 1.
+        img.at_mut(3, 2)[1] = 1.2;
+        let wk = work(img, Domain::Stored, false);
+        let nv = NormalVariance::new(LengthPyramid::build(&written), (W, W), t).unwrap();
+        assert_eq!(nv.shift(), 1);
+        let plain = build_chain(&wk, &p);
+        let baked = build_chain_with(&wk, &p, Some(&nv));
+        assert_eq!(plain.len(), baked.len());
+        let add_ref = |level: u32, x: u32, y: u32| {
+            let f = 1u32 << (level + 1);
+            let mut s = [0.0f64; 3];
+            for j in 0..f {
+                for i in 0..f {
+                    let q = written.at(x * f + i, y * f + j);
+                    for c in 0..3 {
+                        s[c] += f64::from(q[c]);
+                    }
+                }
+            }
+            let n = f64::from(f * f);
+            let l = (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]).sqrt() / n;
+            if l >= crate::bake::NOISE_FLOOR_L {
+                0.0
+            } else {
+                let kappa = (3.0 * l - l * l * l) / (1.0 - l * l);
+                (0.5 / kappa).min(t * t)
+            }
+        };
+        let mut changed_at_mip0 = 0;
+        for (level, (u, v)) in plain.iter().zip(&baked).enumerate() {
+            for y in 0..u.height {
+                for x in 0..u.width {
+                    let (a, b) = (u.at(x, y), v.at(x, y));
+                    assert_eq!((a[0], a[2], a[3]), (b[0], b[2], b[3]));
+                    let add = add_ref(level as u32, x, y);
+                    let g = f64::from(a[1]);
+                    let want = if add > 0.0 {
+                        let r = 1.0 - g.clamp(0.0, 1.0);
+                        1.0 - (r.powi(4) + add).min(1.0).powf(0.25)
+                    } else {
+                        g
+                    };
+                    assert!(
+                        (f64::from(b[1]) - want).abs() < 1e-5,
+                        "mip {level} ({x}, {y}): {} vs {want} (add {add})",
+                        b[1]
+                    );
+                    if level == 0 && add > 0.0 && b[1] != a[1] {
+                        changed_at_mip0 += 1;
+                    }
+                }
+            }
+        }
+        assert!(changed_at_mip0 > W * W / 2, "{changed_at_mip0}");
+        assert!(add_ref(0, 3, 2) > 0.0); // the 1.2 texel is baked
     }
 
     #[test]

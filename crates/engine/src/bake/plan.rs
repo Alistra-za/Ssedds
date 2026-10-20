@@ -304,7 +304,8 @@ fn attach(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     let rnm = nj.active_rnm().cloned();
     let mut any = false;
     for &m in members {
-        // DECISIONS R10: `check_profile` already raised TAG-CONTENT-MISMATCH for an sRGB roughness.
+        // DECISIONS R10: an sRGB member never bakes. `check_profile` raised TAG-CONTENT-MISMATCH for a roughness
+        // member; an sRGB complex `_m` (Note CL40) is skipped with no code.
         if jobs[m].profile.color.content == ColorContent::Srgb {
             continue;
         }
@@ -469,7 +470,9 @@ pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
 /// the gloss (G) of each writable, non-DDS `complex_material` job of the set, a packed one included. Sizes follow
 /// `bake_shift` (`SET-BAKE-RATIO` on the `_m`, as `bake_set`). The `_n`'s profile is left as the user set it. An
 /// undecided `_n` bakes nothing, silently; a derived CM `_m` (Track A) has no `_n` in its plan, so it never bakes.
-pub fn plan_gloss_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) {
+/// A borrowed Normal slot is not followed. Returns the keys of the sets that bake (`set_resolved.bake`).
+pub fn plan_gloss_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
+    let mut baking = BTreeSet::new();
     let mut by_set: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, j) in jobs.iter().enumerate() {
         by_set.entry(j.set_key.clone()).or_default().push(i);
@@ -499,8 +502,9 @@ pub fn plan_gloss_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) {
                     && writable(&jobs[i])
             })
             .collect();
-        if !members.is_empty() {
-            attach(jobs, n, &members);
+        if !members.is_empty() && attach(jobs, n, &members) {
+            baking.insert(set.key.clone());
         }
     }
+    baking
 }

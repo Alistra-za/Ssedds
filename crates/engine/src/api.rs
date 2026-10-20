@@ -1511,9 +1511,9 @@ impl Engine {
             shared: &shared,
             borrowed: &borrowed,
         };
-        let baking = crate::bake::plan::plan_bakes(&bake_cx, &mut jobs);
+        let mut baking = crate::bake::plan::plan_bakes(&bake_cx, &mut jobs);
         // Note CL40: the opt-in complex `_m` gloss bake, any target.
-        crate::bake::plan::plan_gloss_bakes(&bake_cx, &mut jobs);
+        baking.extend(crate::bake::plan::plan_gloss_bakes(&bake_cx, &mut jobs));
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];

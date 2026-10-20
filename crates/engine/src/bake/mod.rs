@@ -55,7 +55,7 @@ pub fn bake_shift(normal: (u32, u32), member: (u32, u32)) -> Result<i32, String>
     let pot = |(w, h): (u32, u32)| w.is_power_of_two() && h.is_power_of_two();
     if !pot(normal) || !pot(member) {
         return Err(format!(
-            "_n {}x{} and roughness {}x{} must both be powers of two",
+            "_n {}x{} and member {}x{} must both be powers of two",
             normal.0, normal.1, member.0, member.1
         ));
     }
@@ -63,7 +63,7 @@ pub fn bake_shift(normal: (u32, u32), member: (u32, u32)) -> Result<i32, String>
     let (sx, sy) = (log(normal.0) - log(member.0), log(normal.1) - log(member.1));
     if sx != sy {
         return Err(format!(
-            "_n {}x{} and roughness {}x{} differ in aspect, so their size ratio is not one power of two",
+            "_n {}x{} and member {}x{} differ in aspect, so their size ratio is not one power of two",
             normal.0, normal.1, member.0, member.1
         ));
     }

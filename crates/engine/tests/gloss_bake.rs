@@ -207,8 +207,23 @@ fn the_normal_itself_is_unchanged_by_the_opt_in() {
         .unwrap()
     };
     assert_eq!(hash(a.path(), &[CM]), hash(b.path(), &[CM, OPT_IN]));
-    convert(request(a.path(), Target::Vanilla, &[CM], &[]));
-    convert(request(b.path(), Target::Vanilla, &[CM, OPT_IN], &[]));
+    let baked = |ev: &[EngineEvent]| {
+        ev.iter()
+            .any(|e| matches!(e.kind, EventKind::SetResolved { bake: true, .. }))
+    };
+    // Review M2: the set reports its bake.
+    assert!(!baked(&convert(request(
+        a.path(),
+        Target::Vanilla,
+        &[CM],
+        &[]
+    ))));
+    assert!(baked(&convert(request(
+        b.path(),
+        Target::Vanilla,
+        &[CM, OPT_IN],
+        &[]
+    ))));
     assert!(out(a.path(), "wall_n.dds") == out(b.path(), "wall_n.dds"));
     // The opt-in run did bake the _m.
     assert!(out(a.path(), "wall_m.dds") != out(b.path(), "wall_m.dds"));
@@ -230,10 +245,16 @@ fn a_size_mismatch_reports_set_bake_ratio_and_does_not_bake() {
     ));
     let m = job(&p, "wall_m.png");
     assert!(m.bake.is_none());
+    let w = m
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::SetBakeRatio)
+        .unwrap_or_else(|| panic!("{:?}", m.warnings));
+    // Review M1: the message names the member, not a roughness map.
     assert!(
-        m.warnings.iter().any(|w| w.code == Code::SetBakeRatio),
-        "{:?}",
-        m.warnings
+        w.message.contains("member 768x768") && !w.message.contains("roughness"),
+        "{}",
+        w.message
     );
     convert(request(a.path(), Target::Vanilla, &[CM, FAST], &allow));
     convert(request(
