@@ -1,7 +1,6 @@
 //! The expanded preview (M3a spec §6): the toolbar, two linked viewports (source left, encoded right, or one
 //! viewport cut by a divider), the notes and readouts under them, and the compact settings strip beside them.
 //! All state lives in the model (`AppModel::view`, `AppModel::preview`); this file maps input to model calls.
-use crate::model::heatmap::HeatImage;
 use crate::model::items::ItemKind;
 use crate::model::overlay::OverlayKind;
 use crate::model::preview::NO_GPU;
@@ -52,7 +51,7 @@ pub struct PreviewUi {
     /// The settings were opened from their strip: they stay open until the preview closes (A10).
     settings_open: bool,
     /// The overlay on the GPU and the image it was uploaded from (uploaded again only when that `Arc` changes).
-    overlay_tex: Option<(Arc<HeatImage>, egui::TextureHandle)>,
+    overlay_tex: Option<(Arc<egui::ColorImage>, egui::TextureHandle)>,
 }
 
 /// The facts about the expanded texture's mips that the toolbar, the viewports and the notes share.
@@ -289,16 +288,21 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
         .as_deref()
         .is_some_and(|k| model.range_overlay_offered(k))
     {
-        let mut on = model.view.overlay == Some(OverlayKind::Range);
+        let on = model.view.overlay == Some(OverlayKind::Range);
+        // Review M3: the overlay is drawn on the source pane, which a compared pin replaces.
         let r = ui
-            .toggle_value(&mut on, "Range")
-            .on_hover_text("Paint the source texels outside the expected value range in magenta");
+            .add_enabled(
+                !model.comparing_pin(),
+                egui::Button::selectable(on, "Range"),
+            )
+            .on_hover_text("Paint the source texels outside the expected value range in magenta")
+            .on_disabled_hover_text("Hidden while comparing");
         // ui-rules 8.4: distinct from any other "Range".
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, "Range overlay")
         });
-        if r.changed() {
-            model.view.overlay = on.then_some(OverlayKind::Range);
+        if r.clicked() {
+            model.view.overlay = (!on).then_some(OverlayKind::Range);
         }
     }
     requests.fit = ui
@@ -758,6 +762,11 @@ fn range_overlay_texture(
     key: &str,
 ) -> Option<egui::TextureId> {
     if model.view.overlay != Some(OverlayKind::Range) || !model.range_overlay_offered(key) {
+        // Review M7: off frees the full-size image and its texture.
+        state.overlay_tex = None;
+        if model.overlay.key.is_some() {
+            model.overlay.clear();
+        }
         return None;
     }
     let SourceState::Ready(s) = &model.preview.source else {
@@ -770,14 +779,22 @@ fn range_overlay_texture(
         .as_ref()
         .is_some_and(|(a, _)| Arc::ptr_eq(a, &img))
     {
-        let size = [img.width as usize, img.height as usize];
-        let colour = egui::ColorImage::from_rgba_unmultiplied(size, &img.rgba);
+        // Review I1, M4: the worker built the ColorImage; the upload shares its `Arc` (no per-texel work here), and
+        // Nearest both ways keeps a single bad texel visible when zoomed out.
         let options = egui::TextureOptions {
             magnification: egui::TextureFilter::Nearest,
+            minification: egui::TextureFilter::Nearest,
             wrap_mode: egui::TextureWrapMode::Repeat,
             ..Default::default()
         };
-        let tex = ui.ctx().load_texture("overlay", colour, options);
+        let data = egui::ImageData::Color(img.clone());
+        let tex = match state.overlay_tex.take() {
+            Some((_, mut tex)) => {
+                tex.set(data, options);
+                tex
+            }
+            None => ui.ctx().load_texture("overlay", data, options),
+        };
         state.overlay_tex = Some((img, tex));
     }
     state.overlay_tex.as_ref().map(|(_, t)| t.id())

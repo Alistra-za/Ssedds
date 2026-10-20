@@ -2352,6 +2352,7 @@ impl AppModel {
     pub fn collapse(&mut self) {
         self.expanded = None;
         self.preview_close();
+        self.overlay.clear();
     }
 
     fn snapshot_of(

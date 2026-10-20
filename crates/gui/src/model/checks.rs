@@ -392,6 +392,14 @@ pub(crate) struct CheckState {
     pub plans_applied: u64,
 }
 
+#[cfg(test)]
+impl CheckState {
+    /// Add one result to `key` without a refresh (unit tests).
+    pub(crate) fn push_item_warning(&mut self, key: &str, w: Warning) {
+        self.items.entry(key.to_string()).or_default().push(w);
+    }
+}
+
 fn filled(slots: &std::collections::BTreeMap<SlotKind, SlotFill>, k: SlotKind) -> bool {
     !matches!(slots.get(&k), None | Some(SlotFill::Empty))
 }

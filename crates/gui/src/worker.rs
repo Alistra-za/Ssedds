@@ -72,10 +72,11 @@ pub enum WorkerMsg {
         id: u64,
         image: Option<Arc<crate::model::heatmap::HeatImage>>,
     },
-    /// The preview overlay of job `generation` (`AppModel::overlay_for`); `None` when the job panicked.
+    /// The preview overlay of job `generation` (`AppModel::overlay_for`), ready to upload; `None` when the job
+    /// panicked.
     Overlay {
         generation: u64,
-        image: Option<Arc<crate::model::heatmap::HeatImage>>,
+        image: Option<Arc<eframe::egui::ColorImage>>,
     },
     /// The RNM blended thumbnail of job `id` (`AppModel::rnm_preview_frame`); `None` when the blend failed.
     RnmPreview {

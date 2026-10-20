@@ -152,9 +152,9 @@ fn the_overlay_is_built_off_the_ui_thread_and_a_stale_result_is_dropped() {
         .overlay_for(b, 0, OverlayKind::Range)
         .expect("b's overlay");
     // b (a clean _rmaos) paints nothing; a's (all dark albedo) would paint every texel.
-    assert_eq!((img.width, img.height), (64, 64));
+    assert_eq!(img.size, [64, 64]);
     assert!(
-        img.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0),
+        img.pixels.iter().all(|p| p.a() == 0),
         "a's stale image is on show"
     );
     assert!(
@@ -182,12 +182,7 @@ fn v2_jobs_keep_the_app_polling_without_greying_advanced() {
     let img = m
         .overlay_for("test/wall.png", 0, OverlayKind::Range)
         .expect("landed");
-    assert!(img
-        .rgba
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .all(|p| *p == [255, 0, 255, 160]));
+    assert!(img.pixels.iter().all(|p| *p == bad()));
     // The same key starts nothing new.
     assert!(!m.overlay_pending());
     // Task 8's kind starts nothing yet.
@@ -251,4 +246,163 @@ fn the_overlay_covers_the_picture_and_nothing_past_it() {
     let u = (pane.center().x - pic.min.x) / pic.width();
     assert!((u - 0.25).abs() < 1e-6, "{u}");
     assert!((pic.width() - 200.0).abs() < 1e-4);
+}
+
+/// `RANGE_BAD` as the worker's premultiplied `ColorImage` stores it.
+fn bad() -> egui::Color32 {
+    let [r, g, b, a] = sdc_gui::model::overlay::RANGE_BAD;
+    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+type GpuHarness = Harness<'static, (AppModel, sdc_gui::ui::State)>;
+
+/// A harness whose GpuStatus says the source is on the GPU, so the source pane (and the overlay over it) is drawn.
+fn gpu_harness(model: AppModel) -> GpuHarness {
+    let mut s = sdc_gui::ui::State::default();
+    s.gpu.renderer = true;
+    s.gpu.source = true;
+    let h = Harness::builder()
+        .with_size(egui::vec2(1600.0, 1000.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (AppModel, sdc_gui::ui::State)| sdc_gui::ui::draw_with(ui, m, s),
+            (model, s),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// The allocated "overlay" texture: its id and options.
+fn overlay_texture(h: &GpuHarness) -> Option<(egui::TextureId, egui::TextureOptions)> {
+    let manager = h.ctx.tex_manager();
+    let tm = manager.read();
+    let found = tm
+        .allocated()
+        .find(|(_, m)| m.name == "overlay")
+        .map(|(id, m)| (*id, m.options));
+    found
+}
+
+/// Steps until the overlay has landed and a frame has uploaded it; returns that texture's id.
+fn step_until_uploaded(h: &mut GpuHarness) -> egui::TextureId {
+    for _ in 0..50 {
+        h.step();
+        assert!(h.state_mut().0.wait_idle(Duration::from_secs(10)));
+        if h.state().0.overlay.image.is_none() {
+            continue;
+        }
+        h.step();
+        if let Some((id, _)) = overlay_texture(h) {
+            return id;
+        }
+    }
+    panic!("the overlay was never uploaded");
+}
+
+/// A dark albedo expanded with the Range overlay on.
+fn dark_with_range(dir: &std::path::Path) -> AppModel {
+    let mut m = support::pbr_wall(dir, DARK, CLEAN_RMAOS);
+    m.expand("test/wall.png");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.view.overlay = Some(OverlayKind::Range);
+    m
+}
+
+/// Review I1, M4, M7: the worker hands the UI a ready `ColorImage` (the model holds `Arc<ColorImage>`, which the
+/// frame uploads as is); the texture is the image's size with Nearest both ways; turning the toggle off frees the
+/// image and the texture. (kittest's renderer consumes `textures_delta` inside `step`, so the uploaded `Arc` itself
+/// cannot be compared here.)
+#[test]
+fn the_ui_uploads_the_workers_image_and_frees_it_when_off() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = gpu_harness(dark_with_range(d.path()));
+    let id = step_until_uploaded(&mut h);
+    let img = h.state().0.overlay.image.clone().unwrap();
+    assert_eq!(img.size, [64, 64]);
+    assert!(img.pixels.iter().all(|p| *p == bad()));
+    let (_, options) = overlay_texture(&h).unwrap();
+    assert_eq!(options.minification, egui::TextureFilter::Nearest);
+    assert_eq!(options.magnification, egui::TextureFilter::Nearest);
+    assert_eq!(options.wrap_mode, egui::TextureWrapMode::Repeat);
+    assert_eq!(h.ctx.tex_manager().read().meta(id).unwrap().size, [64, 64]);
+    h.state_mut().0.view.overlay = None;
+    h.step();
+    h.step();
+    assert!(
+        h.state().0.overlay.image.is_none(),
+        "the image is kept while off"
+    );
+    assert!(
+        overlay_texture(&h).is_none(),
+        "the texture is kept while off"
+    );
+}
+
+/// Review T1 (K8): in Split the overlay's viewport is the whole viewport (`left`), and it is clipped to the
+/// source side of the divider (`visible`), not drawn over the encoded side.
+#[test]
+fn in_split_the_overlay_is_laid_out_on_the_viewport_and_clipped_to_the_source_side() {
+    use eframe::egui::containers::panel::PanelState;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = dark_with_range(d.path());
+    m.view.layout = sdc_gui::model::view::Layout::Split;
+    m.view.split = 0.3;
+    let mut h = gpu_harness(m);
+    let id = step_until_uploaded(&mut h);
+    let (clip, mesh) = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id == id => Some((c.clip_rect, mesh.clone())),
+            _ => None,
+        })
+        .expect("the overlay is painted");
+    let bar = PanelState::load(&h.ctx, egui::Id::new("preview-toolbar"))
+        .expect("the toolbar")
+        .outer_rect;
+    let pic = mesh.calc_bounds();
+    // Fit centres the picture in the viewport, which spans the toolbar's width.
+    assert!(
+        (pic.center().x - bar.center().x).abs() < 2.0,
+        "picture {pic:?} not centred in the viewport {bar:?}"
+    );
+    assert!((clip.min.x - bar.min.x).abs() < 2.0, "clip {clip:?}");
+    let divider = bar.min.x + 0.3 * bar.width();
+    assert!(
+        (clip.max.x - divider).abs() < 2.0,
+        "clip {clip:?} vs divider {divider}"
+    );
+}
+
+/// Review M3: while a pin is compared the source pane is the pin, so the toggle is disabled and says why.
+#[test]
+fn the_range_toggle_is_disabled_while_comparing_a_pin() {
+    use egui_kittest::kittest::NodeT;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_wall(d.path(), DARK, CLEAN_RMAOS);
+    m.expand("test/wall.png");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.encode_now();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.pin_this();
+    m.set_compare_pinned(true);
+    assert!(m.comparing_pin());
+    let mut h = harness(m);
+    h.run();
+    let node = h.get_by_label("Range overlay");
+    assert!(
+        node.accesskit_node().is_disabled(),
+        "enabled while comparing"
+    );
+    node.hover();
+    h.run();
+    assert!(h
+        .query_by_label_contains("Hidden while comparing")
+        .is_some());
+    h.state_mut().set_compare_pinned(false);
+    h.run();
+    assert!(!h
+        .get_by_label("Range overlay")
+        .accesskit_node()
+        .is_disabled());
 }
