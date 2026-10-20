@@ -65,6 +65,8 @@ fn diff_tol_relative_and_noise() {
     // zero capture value compares absolutely, not as 0 * rel
     assert_eq!(diff_tol(&px(0.0), &px(0.0), &[true], t, 0.0).over, 0.0);
     assert_eq!(diff_tol(&px(0.01), &px(0.0), &[true], t, 0.0).over, 1.0);
+    // floor: a tiny nonzero difference against 0 must pass
+    assert_eq!(diff_tol(&px(5e-7), &px(0.0), &[true], t, 0.0).over, 0.0);
     // Abs
     let t = Tol::Abs(1.0 / 255.0);
     assert_eq!(diff_tol(&px(0.003), &px(0.0), &[true], t, 0.0).over, 0.0);
@@ -99,23 +101,31 @@ fn noise_load_and_limit() {
     assert!(Noise::load(&d.path().join("bad.json")).is_err());
 }
 
-fn subject(root: &Path, cap: &str, name: &str, profile: Option<&str>) {
-    let d = root.join(cap).join(name);
-    fs::create_dir_all(&d).unwrap();
-    if let Some(p) = profile {
-        fs::write(d.join("manifest.json"), format!(r#"{{"profile":"{p}"}}"#)).unwrap();
-    }
+fn capture(root: &Path, cap: &str, profile: &str) {
+    fs::create_dir_all(root.join(cap)).unwrap();
+    fs::write(
+        root.join(cap).join("manifest.json"),
+        format!(r#"{{"profile":"{profile}"}}"#),
+    )
+    .unwrap();
+}
+
+fn subject(root: &Path, cap: &str, name: &str) {
+    fs::create_dir_all(root.join(cap).join(name)).unwrap();
 }
 
 #[test]
 fn subjects_filter_and_sort() {
     let d = tempfile::tempdir().unwrap();
     let r = d.path();
-    subject(r, "capB_2", "ev20_Zed", Some("A_RT"));
-    subject(r, "capB_2", "ev10_Alpha_3", Some("A_RT"));
-    subject(r, "capA_1", "ev99_Coffin", Some("A_RT"));
-    subject(r, "capA_1", "ev5_Other", Some("B"));
-    subject(r, "capA_1", "composite", None);
+    capture(r, "capB_2", "A_RT");
+    capture(r, "capA_1", "A_RT");
+    capture(r, "capC_3", "B");
+    subject(r, "capB_2", "ev20_Zed");
+    subject(r, "capB_2", "ev10_Alpha_3");
+    subject(r, "capA_1", "ev99_Coffin");
+    subject(r, "capA_1", "composite");
+    subject(r, "capC_3", "ev5_Other");
     let s = subjects(r, &["A_RT"]).unwrap();
     let got: Vec<_> = s
         .iter()
@@ -138,6 +148,60 @@ fn subjects_filter_and_sort() {
     );
     assert_eq!(subjects(r, &["A_RT", "B"]).unwrap().len(), 4);
     assert!(subjects(&r.join("nope"), &["A_RT"]).is_err());
+}
+
+#[test]
+fn subjects_profile_comes_from_capture_manifest() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path();
+    capture(r, "cap", "A_RT");
+    subject(r, "cap", "ev1_X");
+    fs::write(r.join("cap/ev1_X/manifest.json"), r#"{"profile":"B"}"#).unwrap();
+    assert_eq!(subjects(r, &["A_RT"]).unwrap().len(), 1);
+    assert!(subjects(r, &["B"]).unwrap().is_empty());
+    // missing or malformed capture manifest is an error naming the path
+    fs::create_dir_all(r.join("cap2/ev2_Y")).unwrap();
+    let e = subjects(r, &["A_RT"]).err().unwrap();
+    assert!(e.contains("cap2"), "{e}");
+    fs::write(r.join("cap2/manifest.json"), "{}").unwrap();
+    assert!(subjects(r, &["A_RT"]).is_err());
+}
+
+#[test]
+fn nonfinite_channels_fail_closed() {
+    let b = vec![0.5f32; 4];
+    let mut a = b.clone();
+    a[2] = f32::NAN;
+    let d = diff(&a, &b, &[true], 0.1);
+    assert_eq!((d.over, d.max_abs), (1.0, f32::INFINITY));
+    assert!(d.mean_abs.is_finite());
+    let t = Tol::Abs(1.0);
+    let d = diff_tol(&a, &b, &[true], t, 0.0);
+    assert_eq!((d.over, d.max_abs), (1.0, f32::INFINITY));
+    assert!(d.mean_abs.is_finite());
+    // bit-identical non-finite values pass
+    let (mut a, mut b) = (vec![0.5f32; 4], vec![0.5f32; 4]);
+    a[1] = f32::INFINITY;
+    b[1] = f32::INFINITY;
+    let d = diff(&a, &b, &[true], 0.1);
+    assert_eq!((d.over, d.max_abs), (0.0, 0.0));
+    a[3] = f32::NAN;
+    b[3] = f32::NAN;
+    assert_eq!(diff_tol(&a, &b, &[true], t, 0.0).over, 0.0);
+}
+
+#[test]
+fn noise_rejects_bad_values() {
+    let d = tempfile::tempdir().unwrap();
+    for (i, bad) in ["1e100", "-1"].iter().enumerate() {
+        let p = d.path().join(format!("n{i}.json"));
+        let j = format!(
+            r#"{{"tolerances":{{"static":{{"files":{{"mrt0.f32":{{"p99":{bad},"max":0.1}}}}}}}}}}"#
+        );
+        fs::write(&p, j).unwrap();
+        let e = Noise::load(&p).err().unwrap();
+        assert!(e.contains("mrt0.f32") && e.contains("static"), "{e}");
+    }
 }
 
 #[test]

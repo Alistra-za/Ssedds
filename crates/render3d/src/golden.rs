@@ -19,14 +19,23 @@ fn walk(a: &[f32], b: &[f32], mask: &[bool], limit: impl Fn(usize, f32) -> f32) 
         a.len() == 4 * mask.len() && b.len() == a.len(),
         "golden diff: length mismatch"
     );
-    let (mut max_abs, mut sum, mut pixels, mut over) = (0f32, 0f64, 0u32, 0u32);
+    let (mut max_abs, mut sum, mut chans, mut pixels, mut over) = (0f32, 0f64, 0u64, 0u32, 0u32);
     for p in (0..mask.len()).filter(|&p| mask[p]) {
         pixels += 1;
         let mut bad = false;
         for i in 4 * p..4 * p + 4 {
+            if !a[i].is_finite() || !b[i].is_finite() {
+                // fail closed unless the stored bits are identical
+                if a[i].to_bits() != b[i].to_bits() {
+                    max_abs = f32::INFINITY;
+                    bad = true;
+                }
+                continue;
+            }
             let d = (a[i] - b[i]).abs();
             max_abs = max_abs.max(d);
             sum += d as f64;
+            chans += 1;
             bad |= d > limit(i % 4, b[i]);
         }
         over += bad as u32;
@@ -41,7 +50,11 @@ fn walk(a: &[f32], b: &[f32], mask: &[bool], limit: impl Fn(usize, f32) -> f32) 
     }
     Diff {
         max_abs,
-        mean_abs: (sum / (4.0 * pixels as f64)) as f32,
+        mean_abs: if chans == 0 {
+            0.0
+        } else {
+            (sum / chans as f64) as f32
+        },
         over: over as f32 / pixels as f32,
         pixels,
     }
@@ -126,14 +139,14 @@ impl Noise {
                 .ok_or_else(|| err("tolerance set without files"))?;
             let mut m = HashMap::new();
             for (f, l) in files {
-                let g = |k: &str| l.get(k).and_then(Value::as_f64).map(|x| x as f32);
-                m.insert(
-                    f.clone(),
-                    (
-                        g("p99").ok_or_else(|| err("bad p99"))?,
-                        g("max").ok_or_else(|| err("bad max"))?,
-                    ),
-                );
+                let g = |k: &str| {
+                    l.get(k)
+                        .and_then(Value::as_f64)
+                        .map(|x| x as f32)
+                        .filter(|x| x.is_finite() && *x >= 0.0)
+                        .ok_or_else(|| err(&format!("bad {k} for {set}/{f}")))
+                };
+                m.insert(f.clone(), (g("p99")?, g("max")?));
             }
             sets.insert(set.clone(), m);
         }
@@ -160,19 +173,31 @@ pub struct Subject {
 }
 
 fn subdirs(p: &Path) -> Result<Vec<PathBuf>, String> {
-    let rd = std::fs::read_dir(p).map_err(|e| format!("{}: {e}", p.display()))?;
-    Ok(rd
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect())
+    let e = |e: std::io::Error| format!("{}: {e}", p.display());
+    let mut out = Vec::new();
+    for ent in std::fs::read_dir(p).map_err(e)? {
+        let ent = ent.map_err(e)?;
+        if ent.file_type().map_err(e)?.is_dir() {
+            out.push(ent.path());
+        }
+    }
+    Ok(out)
 }
 
-/// Every subject under `root` whose manifest.json "profile" is in `profiles`; sorted by (capture, event).
+/// Every subject under `root` whose capture folder's manifest.json "profile" is in `profiles`; sorted by (capture, event).
 pub fn subjects(root: &Path, profiles: &[&str]) -> Result<Vec<Subject>, String> {
     let mut out = Vec::new();
     for cap in subdirs(root)? {
         let capture = cap.file_name().unwrap().to_string_lossy().into_owned();
+        let mpath = cap.join("manifest.json");
+        let profile = read_json(&mpath)?
+            .get("profile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{}: no profile", mpath.display()))?
+            .to_string();
+        if !profiles.contains(&profile.as_str()) {
+            continue;
+        }
         for dir in subdirs(&cap)? {
             let name = dir.file_name().unwrap().to_string_lossy().into_owned();
             let Some((ev, shape)) = name.strip_prefix("ev").and_then(|r| r.split_once('_')) else {
@@ -181,24 +206,13 @@ pub fn subjects(root: &Path, profiles: &[&str]) -> Result<Vec<Subject>, String> 
             let Ok(event) = ev.parse::<u32>() else {
                 continue;
             };
-            let mpath = dir.join("manifest.json");
-            if !mpath.is_file() {
-                continue;
-            }
-            let profile = read_json(&mpath)?
-                .get("profile")
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("{}: no profile", mpath.display()))?
-                .to_string();
-            if profiles.contains(&profile.as_str()) {
-                out.push(Subject {
-                    dir,
-                    capture: capture.clone(),
-                    profile,
-                    event,
-                    shape: shape.to_string(),
-                });
-            }
+            out.push(Subject {
+                dir,
+                capture: capture.clone(),
+                profile: profile.clone(),
+                event,
+                shape: shape.to_string(),
+            });
         }
     }
     out.sort_by(|a, b| (&a.capture, a.event).cmp(&(&b.capture, b.event)));
