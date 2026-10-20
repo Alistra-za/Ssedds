@@ -1,8 +1,9 @@
 //! Golden replay (v2 Phase D, D6b): every profile-A subject replayed deferred and compared per MRT and on the
-//! composite MainRW. Thresholds (D-P18): over == 0 on RT0-RT7 and on main over the clean sub-mask.
+//! composite MainRW. Thresholds (D-P18): over == 0 on RT0-RT7 and on main over the clean sub-mask; the subject
+//! classes must match tests/fixtures/golden-baseline.txt (D-P20).
 use render3d::golden::{self, Diff, Noise};
 use render3d::{load_fixture, Renderer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -93,65 +94,67 @@ fn replay_matches_capture_per_mrt() {
     );
     let mut skipped: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     let (mut run, mut nonfinite, mut failures) = (0usize, Vec::new(), Vec::new());
+    let (mut outcomes, mut no_clean) = (Vec::new(), Vec::new());
     let mut rt_worst: Vec<Worst> = (0..8).map(|_| Worst::default()).collect();
     let (mut main_mask, mut main_clean) = (Worst::default(), Worst::default());
 
     for s in &subjects {
         let name = s.dir.file_name().unwrap().to_string_lossy().into_owned();
         let who = format!("{}/{name}", s.capture);
+        let mut skip = |code: &'static str, detail: String| {
+            outcomes.push(format!("{who} {code}"));
+            skipped.entry(code).or_default().push(detail);
+        };
         // D-P17: an overlay mask means the capture never changed (the game rejected the draw by depth).
         let mrt: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(s.dir.join("mrt.json")).unwrap())
                 .unwrap();
         if mrt["maskSource"] == "overlay" {
-            skipped.entry("overlay mask").or_default().push(who);
+            skip("overlay-mask", who.clone());
             continue;
         }
-        if mrt["crop"].is_null() || mrt["maskPixels"] == 0 {
-            skipped.entry("empty mask").or_default().push(who);
+        // No crop: the extractor wrote no mask at all (the draw rasterized nothing).
+        if mrt["crop"].is_null() {
+            skip("empty-mask", who.clone());
             continue;
         }
         let r = match load_fixture(&s.dir) {
             Ok(r) => r,
             Err(e) if e.contains("defines null") => {
-                skipped.entry("defines null").or_default().push(who);
+                skip("defines-null", who.clone());
                 continue;
             }
             Err(e) => {
-                skipped
-                    .entry("load error")
-                    .or_default()
-                    .push(format!("{who}: {e}"));
+                skip("load-error", format!("{who}: {e}"));
                 continue;
             }
         };
+        // D-P21: RUN or empty is decided by the real mask.bin population, not by metadata.
+        let n = (r.crop[2] * r.crop[3]) as usize;
+        let mask = golden::read_mask(&s.dir.join("mask.bin"), n).unwrap();
+        let masked = mask.iter().filter(|m| **m).count();
+        if masked == 0 {
+            skip("empty-mask", who.clone());
+            continue;
+        }
         if r.blended {
-            skipped.entry("blended").or_default().push(who);
+            skip("blended", who.clone());
             continue;
         }
         let Some(rc) = r.composite.as_ref() else {
-            skipped.entry("no composite data").or_default().push(who);
+            skip("no-composite-data", who.clone());
             continue;
         };
         let out = match ren.render_replay(&r, true) {
             Ok(o) => o,
             Err(e) => {
-                skipped
-                    .entry("replay error")
-                    .or_default()
-                    .push(format!("{who}: {e}"));
+                skip("replay-error", format!("{who}: {e}"));
                 continue;
             }
         };
-        // D-P19: without the prepass depth, front/back face order on two-sided alpha-tested draws differs from the game.
-        let two_sided = !r.cull_back
-            && r.defines
-                .iter()
-                .any(|v| v.iter().any(|d| d == "DO_ALPHA_TEST"));
+        let two_sided = r.two_sided_alpha_tested();
+        let mut clean_px = None;
         let mut fails = Vec::new();
-        let n = (r.crop[2] * r.crop[3]) as usize;
-        let mask = golden::read_mask(&s.dir.join("mask.bin"), n).unwrap();
-        let masked = mask.iter().filter(|m| **m).count();
         let mut row = format!("{} | {} | {} | {masked} |", s.capture, name, s.profile);
         for (i, rt) in out.mrt.iter().enumerate() {
             let file = format!("mrt{i}.f32");
@@ -218,6 +221,9 @@ fn replay_matches_capture_per_mrt() {
                         cell(&d, same(main, &after, m), evidence),
                         d.pixels
                     );
+                    if label == "clean" {
+                        clean_px = Some(d.pixels);
+                    }
                     if label == "clean" && d.over > 0.0 {
                         fails.push(format!(
                             "{who} main [clean]: over {:.2}% max {:.3e}",
@@ -239,11 +245,19 @@ fn replay_matches_capture_per_mrt() {
         print!("{row}");
         if two_sided {
             // Information only, so D6c can show the improvement.
+            outcomes.push(format!("{who} two-sided-alpha-tested"));
             skipped
-                .entry(TWO_SIDED)
+                .entry("two-sided-alpha-tested")
                 .or_default()
                 .push(row.trim_end().to_string());
         } else {
+            // D-P21: an empty clean sub-mask checks nothing on the composite; its own class, MRTs still asserted.
+            if clean_px == Some(0) {
+                outcomes.push(format!("{who} no-clean-composite"));
+                no_clean.push(who.clone());
+            } else {
+                outcomes.push(format!("{who} RUN"));
+            }
             run += 1;
             failures.extend(fails);
             table.push_str(&row);
@@ -255,7 +269,20 @@ fn replay_matches_capture_per_mrt() {
         subjects.len(),
         skipped.values().map(Vec::len).sum::<usize>()
     );
+    let _ = writeln!(
+        summary,
+        "run without a clean composite (no-clean-composite, MRTs asserted): {}",
+        no_clean.len()
+    );
+    for w in &no_clean {
+        let _ = writeln!(summary, "  {w}");
+    }
     for (why, list) in &skipped {
+        let why = if *why == "two-sided-alpha-tested" {
+            TWO_SIDED
+        } else {
+            why
+        };
         let _ = writeln!(summary, "skipped {why}: {}", list.len());
         for w in list {
             let _ = writeln!(summary, "  {w}");
@@ -280,5 +307,24 @@ fn replay_matches_capture_per_mrt() {
     assert!(nonfinite.is_empty(), "non-finite output: {nonfinite:?}");
     // D-P18: zero over-limit pixels per RT and on the clean composite; main over the full mask is printed only.
     assert!(failures.is_empty(), "over-limit pixels: {failures:#?}");
-    assert!(run >= 90, "only {run} subjects ran");
+    // D-P20: the subject list and each subject's class must match the tracked baseline exactly.
+    outcomes.sort();
+    let actual = std::env::temp_dir().join("golden-baseline.actual.txt");
+    std::fs::write(&actual, outcomes.join("\n") + "\n").unwrap();
+    let base_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-baseline.txt");
+    let base = std::fs::read_to_string(&base_path).unwrap_or_default();
+    let base: BTreeSet<&str> = base.lines().filter(|l| !l.trim().is_empty()).collect();
+    let now: BTreeSet<&str> = outcomes.iter().map(String::as_str).collect();
+    let diff: Vec<String> = base
+        .difference(&now)
+        .map(|l| format!("- {l}"))
+        .chain(now.difference(&base).map(|l| format!("+ {l}")))
+        .collect();
+    assert!(
+        diff.is_empty(),
+        "subjects differ from tests/fixtures/golden-baseline.txt (- baseline, + this run; this run's list is in {}):\n{}",
+        actual.display(),
+        diff.join("\n")
+    );
 }

@@ -429,6 +429,18 @@ fn load_mesh(dir: &Path) -> Result<ReplayMesh, String> {
     })
 }
 
+impl Replay {
+    /// D-P19/D-P22: no culling and DO_ALPHA_TEST in the variant the replay renders (the first). Without the game's
+    /// prepass depth, front/back face order on such draws differs from the game.
+    pub fn two_sided_alpha_tested(&self) -> bool {
+        !self.cull_back
+            && self
+                .defines
+                .first()
+                .is_some_and(|v| v.iter().any(|d| d == "DO_ALPHA_TEST"))
+    }
+}
+
 /// Reads one golden subject folder. Every error names the file.
 pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
     let sp = dir.join("state.json");

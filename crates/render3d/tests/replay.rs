@@ -254,6 +254,26 @@ fn load_fixture_accepts_no_cull() {
     assert!(e.contains("rasterizer"), "{e}");
 }
 
+/// D-P22: the two-sided alpha-tested class follows the variant the replay renders (the first), not any variant.
+#[test]
+fn two_sided_alpha_tested_reads_the_rendered_variant() {
+    let class = |cull: &str, variants: serde_json::Value| {
+        let d = tempfile::tempdir().unwrap();
+        write_fixture(d.path(), STANDIN);
+        edit_json(d.path(), "extras.json", &|v| {
+            v["rasterizer"]["cull"] = json!(cull)
+        });
+        edit_json(d.path(), "state.json", &|v| v["defines"] = variants.clone());
+        load_fixture(d.path()).unwrap().two_sided_alpha_tested()
+    };
+    let plain: Vec<&str> = STANDIN.to_vec();
+    let alpha: Vec<&str> = STANDIN.iter().copied().chain(["DO_ALPHA_TEST"]).collect();
+    assert!(class("NoCull", json!([alpha.clone(), plain.clone()])));
+    assert!(class("None", json!([alpha.clone()])));
+    assert!(!class("NoCull", json!([plain.clone(), alpha.clone()])));
+    assert!(!class("Back", json!([alpha])));
+}
+
 #[test]
 fn replay_refuses_an_empty_define_list() {
     let d = tempfile::tempdir().unwrap();
