@@ -319,6 +319,44 @@ A shape card shows, from the top:
 
 A texture path that is a texture of the open folder has an **Open in Textures** button, on the shape card and on the "Users of" list's title. It switches to the Textures view, selects that texture and scrolls it into view.
 
+### Editing a NIF
+
+**Edit** (next to the NIF's name in the Meshes view) opens the edit panel for the selected NIF; click it again to close the panel. The panel shows the file's data path and `Source: <where it came from>`. Edits never change the source file. They are kept in a small edit document in `mods\sdc NIF Edits\.sdc\nif-edits`, and **Export NIF** writes a copy.
+
+**Cards.** In edit mode the shape cards get a **Root** card first, then one card per shape. Click a card's title to select it; the tabs below edit the selected card. **Show only this shape** hides the other shapes in the 3D view.
+
+**Tabs.**
+- **Shader** edits the BSLightingShaderProperty of the selected shape: shader type, SLSF1 and SLSF2 flags, glossiness, specular, emissive, UV scale and offset, the per-type fields, and the texture slots (type a path, **Browse**, or pick from the scanned textures; **Check that files exist** and **Filter textures** help). A texture path change shows in the 3D view at once.
+- **Alpha** edits the NiAlphaProperty: **Blend**, source and destination, **Test**, function, threshold, plus **Add alpha** and **Remove alpha**. "Shown as the engine draws it" and "Shown as CS evaluates it (alpha ≥ threshold)" say how the preview treats the test. A blend pair the engine mapping does not cover is drawn as stored and marked "Not verified in game".
+- **Controllers** lists the shape's controllers (alpha, shader float and colour, texture transform) with their start, stop, frequency, phase, cycle and the animated value. A controller driven by a clip is read-only ("Driven by a clip").
+- **Extra data** lists the extra data of the root or the selected shape: BSXFlags bits, string, integer, boolean and float values, BSInvMarker. **Add to root**, **Add to shape** and **Remove** change the list.
+
+**Shared blocks.** The panel says when a block has more than one user.
+- A shared alpha: "Shared by N shapes: editing will split." The first edit splits it, so only this shape changes. On the Controllers tab you click **Split alpha** first. If a clip also drives that alpha, it cannot be split yet.
+- A shared texture set: "Shared by N shapes: editing makes a copy for this shape."
+- A shared shader: "Shared by N shapes: shader edits change all of them." A texture path edit on a shared shader is refused, because it would change the other shapes.
+- A shared interpolator: an edit is a conflict ("This interpolator is shared by N controllers"). The row is greyed.
+
+**Warnings.** Values are never clamped. A value outside the range the game expects, or a flag combination that looks wrong, shows an amber warning under the field (red for an error), sometimes with a **Fix** button. A red error that your edit introduced stops **Export NIF**. An error that was already in the source only warns.
+
+**Pending list.** Every edit is a row under the file name. A slider drag is one row. **Revert** removes that edit. A row in red did not apply, with the reason.
+
+**Export NIF.** The line `To: mods\sdc NIF Edits\<path>` shows the destination. The edit mod must exist and be enabled in MO2; without an MO2 instance the button is off ("Export needs an MO2 instance."). The button is also off, with the reason in red, when there are no edits, an edit cannot be applied, conflicts are open, or an edit introduced an error. The line under it checks the mod order and turns amber when it is wrong: "Placement OK.", or a message to drag `sdc NIF Edits` below the highest source or above the lowest PGPatcher output. After an export the line says "Re-run PGPatcher so its output includes this edit." when the NIF has a PGPatcher copy.
+
+**The guard.** If the file at the destination is not the one Tessalith last wrote, a dialog asks first: "This file changed since sdc exported it." (or "A file sdc did not write is already at this path."). **Overwrite** replaces it, **Diff** lists the changed blocks, **Keep theirs** leaves the file alone. Enter is **Keep theirs**; Esc closes the dialog without writing.
+
+**The NIF list.** A NIF with a saved edit gets a chip: **Edit pending**, **Edited** (exported and unchanged) or **Edit conflict**.
+
+**Undo.** While an edit is open in the Meshes view, the header **Undo** and **Redo**, the command palette and **Ctrl+Z** / **Ctrl+Y** act on the NIF edit. With no edit open they act on the Textures history as before. The panel has its own **Undo** and **Redo** buttons too. A slider drag is one step.
+
+**Source changed.** If the source NIF changes on disk (a mod update), the edits are re-applied by name and role, not by position. The panel says "Source changed: N applied, M conflicts". A conflicting edit has **Take source** (drop your edit) and **Keep mine** (keep it on top of the new source).
+
+**In game.** On a NIF with a PGPatcher copy, **In game** still shows PGPatcher's output, which was made from the unedited NIF. Once you have exported, the amber line "PGPatcher output predates your edit: re-run PGPatcher." shows. **Source** shows your edit.
+
+**LE files.** A Skyrim LE NIF opens without a 3D preview ("LE mesh: no 3D preview").
+
+**Not yet.** Adding or removing controllers and animation clips; splitting a shared shader or a shared interpolator (the edit is refused or is a conflict); a preview of PGPatcher's result on the edited NIF; an outline for the selected shape; the full PBR column of the SLSF flags.
+
 ## The bottom panel
 
 A panel runs along the bottom of the window in both views, full width. Collapsed it is one strip of tab buttons; click a tab to open the panel on it, and click the tab that is showing (or the **▼** at the right) to collapse it. Drag its top edge to resize. The tabs are **Problems (N)**, **Review** (listed only while Review is open), **Messages** and **Files**. The Messages button's number counts notes you have not seen.
