@@ -273,6 +273,7 @@ pub fn all() -> Vec<Vec<u8>> {
         shared_alpha_two_ctrl_chain(),
         one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]),
         two_shapes_one_shader(),
+        emit_scene("BSX", 0x83, true),
     ]
 }
 
@@ -542,5 +543,20 @@ pub fn two_shapes_one_shader() -> Vec<u8> {
     n.block("BSTriShape", bstri_named(b, 3, -1));
     n.block("BSShaderTextureSet", texset(&["textures\\a.dds"]));
     n.block("BSLightingShaderProperty", lsp(0, 2));
+    n.bytes()
+}
+
+/// Root NiNode (3) with a BSXFlags (0, named `bsx_name`, value `bsx`) -> shape "S" (1) -> BSLSP (2); no texture set.
+/// `roots = [3]`; `on_root = false` leaves the BSXFlags out of the root's extra list.
+pub fn emit_scene(bsx_name: &str, bsx: u32, on_root: bool) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (b, s, r) = (n.string(bsx_name), n.string("S"), n.string("Root"));
+    n.block("BSXFlags", W::default().i32(b).u32(bsx).0);
+    n.block("BSTriShape", bstri_named(s, 2, -1));
+    n.block("BSLightingShaderProperty", lsp_body(0, &[], -1, &[]));
+    let w = W::default().i32(r);
+    let w = if on_root { w.u32(1).i32(0) } else { w.u32(0) };
+    n.block("NiNode", avobj(w.i32(-1)).u32(0).u32(0).0);
+    n.roots = vec![3];
     n.bytes()
 }
