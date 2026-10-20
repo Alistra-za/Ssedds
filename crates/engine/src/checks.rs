@@ -120,27 +120,39 @@ pub fn hints_for(suffix: Option<&str>, checks: bool) -> AnalyseHints {
 
 /// Image-space slopes `(p, q)` (y down) of an encoded normal: x and y decoded from R and G, z rebuilt (B is ignored,
 /// so BC5's zero blue reads the same) and clamped to at least 0.1.
+// shortcut: duplicates Track B's from_normal::slopes; merge when Track B lands
 fn slopes(px: [f32; 4]) -> (f64, f64) {
     let (x, y) = (f64::from(px[0]) * 2.0 - 1.0, f64::from(px[1]) * 2.0 - 1.0);
     let z = (1.0 - x * x - y * y).max(0.0).sqrt().max(0.1);
     (-x / z, -y / z)
 }
 
-/// Mean squared curl `∂q/∂x − ∂p/∂y` (forward differences, wrapping), as stored and with green flipped. Texels whose
-/// differences are not finite are skipped; 0 when none remain.
+/// Mean squared curl `∂q/∂x − ∂p/∂y` (central differences over interior texels only, so a map that does not tile
+/// gets no seam term), as stored and with green flipped. Texels whose differences are not finite are skipped; 0 when
+/// none remain (also for images under 3x3).
 pub fn curl(img: &Rgba32F) -> Curl {
-    let (w, h) = (img.width, img.height);
+    let (w, h) = (img.width as usize, img.height as usize);
     let (mut a, mut f, mut n) = (0.0f64, 0.0f64, 0u64);
-    for y in 0..h {
-        for x in 0..w {
-            let (p0, q0) = slopes(img.at(x, y));
-            let (_, q1) = slopes(img.at((x + 1) % w, y));
-            let (p1, _) = slopes(img.at(x, (y + 1) % h));
-            let (qx, py) = (q1 - q0, p1 - p0);
-            let (s, t) = ((qx - py).powi(2), (-qx - py).powi(2));
-            if s.is_finite() && t.is_finite() {
-                (a, f, n) = (a + s, f + t, n + 1);
+    if w >= 3 && h >= 3 {
+        let row = |y: usize| -> Vec<(f64, f64)> {
+            img.px[y * w..(y + 1) * w]
+                .iter()
+                .map(|&p| slopes(p))
+                .collect()
+        };
+        // Rolling rows y - 1, y, y + 1: each texel's slopes are decoded once.
+        let (mut up, mut mid) = (row(0), row(1));
+        for y in 1..h - 1 {
+            let down = row(y + 1);
+            for x in 1..w - 1 {
+                let qx = mid[x + 1].1 - mid[x - 1].1;
+                let py = down[x].0 - up[x].0;
+                let (s, t) = ((qx - py).powi(2), (-qx - py).powi(2));
+                if s.is_finite() && t.is_finite() {
+                    (a, f, n) = (a + s, f + t, n + 1);
+                }
             }
+            (up, mid) = (mid, down);
         }
     }
     let n = n.max(1) as f64;
@@ -261,6 +273,40 @@ mod tests {
             (a.as_stored - b.as_stored).abs() <= 1e-3 * a.flipped && b.flipped.is_finite(),
             "{a:?} {b:?}"
         );
+    }
+
+    /// Review I1: a map that does not tile must not get a seam term. Saddle `h = (x/w)(y/h)`: the far edges jump.
+    #[test]
+    fn a_non_tiling_saddle_has_low_curl_as_stored() {
+        let mut h = Rgba32F::new(64, 64, [0.0; 4]);
+        for y in 0..64 {
+            for x in 0..64 {
+                let v = (x as f32 / 64.0) * (y as f32 / 64.0);
+                *h.at_mut(x, y) = [v, v, v, 1.0];
+            }
+        }
+        let c = curl(&encode01(&crate::rnm::blend::bump_normals(&h, 4.0)));
+        assert!(c.as_stored < 0.1 * c.flipped, "{c:?}");
+    }
+
+    /// Review I2: pixel-scale detail (white-noise height) still names the convention. Central differences commute
+    /// with `bump_normals`' central stencil, so only float rounding is left as stored: the bound is 1e-6 of flipped
+    /// (forward differences gave about 0.6).
+    #[test]
+    fn a_white_noise_bump_map_has_near_zero_curl_as_stored() {
+        let mut h = Rgba32F::new(128, 128, [0.0; 4]);
+        let mut s = 0x2545_f491_u32;
+        for p in &mut h.px {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let v = (s >> 8) as f32 / (1u32 << 24) as f32;
+            *p = [v, v, v, 1.0];
+        }
+        let c = curl(&encode01(&crate::rnm::blend::bump_normals(&h, 1.0)));
+        assert!(c.flipped > 0.0 && c.as_stored < 1e-6 * c.flipped, "{c:?}");
+        let c2 = curl(&flip_g(&encode01(&crate::rnm::blend::bump_normals(
+            &h, 1.0,
+        ))));
+        assert!(c2.flipped < 1e-6 * c2.as_stored, "{c2:?}");
     }
 
     #[test]
