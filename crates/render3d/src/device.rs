@@ -30,13 +30,18 @@ use windows::Win32::Graphics::Direct3D::{
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext,
-    ID3D11RenderTargetView, ID3D11Texture2D, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET,
-    D3D11_CLEAR_DEPTH, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11UnorderedAccessView,
+    D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_BIND_UNORDERED_ACCESS, D3D11_BOX, D3D11_CLEAR_DEPTH, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_DEPTH_STENCIL_VIEW_DESC, D3D11_DSV_DIMENSION_TEXTURE2D,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC,
+    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT, DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R11G11B10_FLOAT,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UNORM,
+    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_TYPELESS, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1,
@@ -193,8 +198,22 @@ impl Gpu {
     }
 }
 
-/// Offscreen render target: RGBA16F colour + D32 depth. P0 forward writes
-/// `SV_Target0` only.
+/// CS's deferred G-buffer, index = RT (Lighting.hlsl:290-301: Diffuse, MotionVectors, NormalGlossiness, Albedo,
+/// Specular, Reflectance, Masks, Masks2). Formats as the golden captures' mrt.json lists them; names as there and
+/// in [`crate::golden::format_tol`].
+pub const MRT_FORMATS: [(DXGI_FORMAT, &str); 8] = [
+    (DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT"),
+    (DXGI_FORMAT_R16G16_FLOAT, "R16G16_FLOAT"),
+    (DXGI_FORMAT_R10G10B10A2_UNORM, "R10G10B10A2_UNORM"),
+    (DXGI_FORMAT_R10G10B10A2_UNORM, "R10G10B10A2_UNORM"),
+    (DXGI_FORMAT_R11G11B10_FLOAT, "R11G11B10_FLOAT"),
+    (DXGI_FORMAT_R11G11B10_FLOAT, "R11G11B10_FLOAT"),
+    (DXGI_FORMAT_R11G11B10_FLOAT, "R11G11B10_FLOAT"),
+    (DXGI_FORMAT_R16_UNORM, "R16_UNORM"),
+];
+
+/// Offscreen render target: RGBA16F colour + D32 depth. Forward writes `SV_Target0` only; a deferred target
+/// ([`Target::new_deferred`]) adds RT1-7 and `color` is RT0.
 pub struct Target {
     pub width: u32,
     pub height: u32,
@@ -204,6 +223,17 @@ pub struct Target {
     pub dsv: ID3D11DepthStencilView,
     /// CPU-readable copy target for the readback, created with the target (03 §7).
     pub staging: ID3D11Texture2D,
+    /// Deferred only: RT0..RT7 (texture, RTV, SRV) in [`MRT_FORMATS`] order; mrt[0] is `color`. Empty = forward
+    /// target.
+    pub mrt: Vec<(
+        ID3D11Texture2D,
+        ID3D11RenderTargetView,
+        ID3D11ShaderResourceView,
+    )>,
+    /// Deferred only: `color` as a UAV. CS's MainRW is RT0 itself (composite.json ResourceId::879).
+    pub main_uav: Option<ID3D11UnorderedAccessView>,
+    /// Deferred only: `depth` as an R32_FLOAT SRV, the composite's DepthTexture (D5; the depth is R32_TYPELESS there).
+    pub depth_srv: Option<ID3D11ShaderResourceView>,
 }
 
 fn tex2d_desc(w: u32, h: u32, format: DXGI_FORMAT) -> D3D11_TEXTURE2D_DESC {
@@ -257,16 +287,132 @@ fn table(cell: &'static OnceLock<Vec<u8>>, f: fn(u16) -> u8) -> &'static [u8] {
 static UNORM8: OnceLock<Vec<u8>> = OnceLock::new();
 static SRGB8: OnceLock<Vec<u8>> = OnceLock::new();
 
+/// Bytes per texel of an [`MRT_FORMATS`] format.
+fn texel_bytes(f: DXGI_FORMAT) -> usize {
+    match f {
+        DXGI_FORMAT_R16G16B16A16_FLOAT => 8,
+        DXGI_FORMAT_R16_UNORM => 2,
+        _ => 4,
+    }
+}
+
+/// One texel → RGBA f32 the way the golden extractors write `.f32`: missing channels 0, missing alpha 1.
+fn decode(f: DXGI_FORMAT, t: &[u8]) -> [f32; 4] {
+    let h = |i: usize| half::f16::from_le_bytes([t[i], t[i + 1]]).to_f32();
+    let word = || u32::from_le_bytes([t[0], t[1], t[2], t[3]]);
+    // 11- and 10-bit floats share half's exponent; their mantissa is half's top 6 (5) bits.
+    let small = |bits: u32| half::f16::from_bits(bits as u16).to_f32();
+    match f {
+        DXGI_FORMAT_R16G16B16A16_FLOAT => [h(0), h(2), h(4), h(6)],
+        DXGI_FORMAT_R16G16_FLOAT => [h(0), h(2), 0.0, 1.0],
+        DXGI_FORMAT_R10G10B10A2_UNORM => {
+            let v = word();
+            let c = |s: u32| ((v >> s) & 0x3ff) as f32 / 1023.0;
+            [c(0), c(10), c(20), (v >> 30) as f32 / 3.0]
+        }
+        DXGI_FORMAT_R11G11B10_FLOAT => {
+            let v = word();
+            [
+                small((v & 0x7ff) << 4),
+                small(((v >> 11) & 0x7ff) << 4),
+                small(((v >> 22) & 0x3ff) << 5),
+                1.0,
+            ]
+        }
+        DXGI_FORMAT_R16_UNORM => [
+            u16::from_le_bytes([t[0], t[1]]) as f32 / 65535.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+        _ => [0.0; 4],
+    }
+}
+
+/// RGBA f32 → one texel of `f`, appended to `out`; exact for any value [`decode`] produced from that format.
+fn encode(f: DXGI_FORMAT, c: [f32; 4], out: &mut Vec<u8>) {
+    let unorm = |x: f32, max: f32| (x.clamp(0.0, 1.0) * max).round() as u32;
+    let small = |x: f32, shift: u32| u32::from(half::f16::from_f32(x.max(0.0)).to_bits()) >> shift;
+    let halves = |n: usize| {
+        c[..n]
+            .iter()
+            .flat_map(|x| half::f16::from_f32(*x).to_le_bytes())
+    };
+    match f {
+        DXGI_FORMAT_R16G16B16A16_FLOAT => out.extend(halves(4)),
+        DXGI_FORMAT_R16G16_FLOAT => out.extend(halves(2)),
+        DXGI_FORMAT_R10G10B10A2_UNORM => out.extend(
+            (unorm(c[0], 1023.0)
+                | (unorm(c[1], 1023.0) << 10)
+                | (unorm(c[2], 1023.0) << 20)
+                | (unorm(c[3], 3.0) << 30))
+                .to_le_bytes(),
+        ),
+        DXGI_FORMAT_R11G11B10_FLOAT => out.extend(
+            ((small(c[0], 4) & 0x7ff)
+                | ((small(c[1], 4) & 0x7ff) << 11)
+                | ((small(c[2], 5) & 0x3ff) << 22))
+                .to_le_bytes(),
+        ),
+        DXGI_FORMAT_R16_UNORM => out.extend((unorm(c[0], 65535.0) as u16).to_le_bytes()),
+        _ => {}
+    }
+}
+
 impl Target {
     /// Creates the colour and depth textures and their views. A removed
     /// device gives an error starting with [`DEVICE_REMOVED`].
     pub fn new(gpu: &Gpu, w: u32, h: u32) -> Result<Target, String> {
+        Target::build(gpu, w, h, false)
+    }
+
+    /// A deferred target: [`Target::new`] plus RT1-7 in [`MRT_FORMATS`], an SRV on every RT, and `color` (RT0)
+    /// also bound as a UAV. All textures are made together, so a resize or toggle never mixes sizes.
+    pub fn new_deferred(gpu: &Gpu, w: u32, h: u32) -> Result<Target, String> {
+        Target::build(gpu, w, h, true)
+    }
+
+    /// True for a [`Target::new_deferred`] target.
+    pub fn deferred(&self) -> bool {
+        !self.mrt.is_empty()
+    }
+
+    /// The colour RTVs to bind: RT0..RT7 when deferred, else RT0 alone.
+    pub fn rtvs(&self) -> Vec<Option<ID3D11RenderTargetView>> {
+        if self.deferred() {
+            self.mrt.iter().map(|m| Some(m.1.clone())).collect()
+        } else {
+            vec![Some(self.rtv.clone())]
+        }
+    }
+
+    fn build(gpu: &Gpu, w: u32, h: u32, deferred: bool) -> Result<Target, String> {
         let mut cd = tex2d_desc(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
         cd.BindFlags = D3D11_BIND_RENDER_TARGET.0 as u32;
+        if deferred {
+            cd.BindFlags |= (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_UNORDERED_ACCESS.0) as u32;
+        }
         let color = create_tex(gpu, &cd)?;
-        let mut dd = tex2d_desc(w, h, DXGI_FORMAT_D32_FLOAT);
+        // Deferred: typeless, so the composite can read it as R32_FLOAT (D5 R6); the DSV is D32_FLOAT either way.
+        let mut dd = tex2d_desc(
+            w,
+            h,
+            if deferred {
+                DXGI_FORMAT_R32_TYPELESS
+            } else {
+                DXGI_FORMAT_D32_FLOAT
+            },
+        );
         dd.BindFlags = D3D11_BIND_DEPTH_STENCIL.0 as u32;
+        if deferred {
+            dd.BindFlags |= D3D11_BIND_SHADER_RESOURCE.0 as u32;
+        }
         let depth = create_tex(gpu, &dd)?;
+        let dsv_desc = D3D11_DEPTH_STENCIL_VIEW_DESC {
+            Format: DXGI_FORMAT_D32_FLOAT,
+            ViewDimension: D3D11_DSV_DIMENSION_TEXTURE2D,
+            ..Default::default()
+        };
         let mut sd = tex2d_desc(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
         sd.Usage = D3D11_USAGE_STAGING;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -278,25 +424,90 @@ impl Target {
                 .CreateRenderTargetView(&color, None, Some(&mut rtv))
                 .map_err(|e| gpu.fail("CreateRenderTargetView", e))?;
             gpu.device
-                .CreateDepthStencilView(&depth, None, Some(&mut dsv))
+                .CreateDepthStencilView(&depth, Some(&dsv_desc), Some(&mut dsv))
                 .map_err(|e| gpu.fail("CreateDepthStencilView", e))?;
+        }
+        let rtv = rtv.ok_or_else(|| gpu.fail("CreateRenderTargetView", "no view returned"))?;
+        let (mut mrt, mut main_uav, mut depth_srv) = (Vec::new(), None, None);
+        if deferred {
+            for (i, (format, _)) in MRT_FORMATS.iter().enumerate() {
+                let (tex, view) = if i == 0 {
+                    (color.clone(), rtv.clone())
+                } else {
+                    let mut d = tex2d_desc(w, h, *format);
+                    d.BindFlags =
+                        (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32;
+                    let tex = create_tex(gpu, &d)?;
+                    let mut v = None;
+                    // SAFETY: live resource and local out-pointer.
+                    unsafe { gpu.device.CreateRenderTargetView(&tex, None, Some(&mut v)) }
+                        .map_err(|e| gpu.fail("CreateRenderTargetView", e))?;
+                    let v =
+                        v.ok_or_else(|| gpu.fail("CreateRenderTargetView", "no view returned"))?;
+                    (tex, v)
+                };
+                let mut srv = None;
+                // SAFETY: live resource and local out-pointer.
+                unsafe {
+                    gpu.device
+                        .CreateShaderResourceView(&tex, None, Some(&mut srv))
+                }
+                .map_err(|e| gpu.fail("CreateShaderResourceView", e))?;
+                let srv =
+                    srv.ok_or_else(|| gpu.fail("CreateShaderResourceView", "no view returned"))?;
+                mrt.push((tex, view, srv));
+            }
+            // SAFETY: live resource and local out-pointer.
+            unsafe {
+                gpu.device
+                    .CreateUnorderedAccessView(&color, None, Some(&mut main_uav))
+            }
+            .map_err(|e| gpu.fail("CreateUnorderedAccessView", e))?;
+            if main_uav.is_none() {
+                return Err(gpu.fail("CreateUnorderedAccessView", "no view returned"));
+            }
+            let sd = D3D11_SHADER_RESOURCE_VIEW_DESC {
+                Format: DXGI_FORMAT_R32_FLOAT,
+                ViewDimension: windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_SRV {
+                        MostDetailedMip: 0,
+                        MipLevels: 1,
+                    },
+                },
+            };
+            // SAFETY: live resource, descriptor and out-pointer are locals.
+            unsafe {
+                gpu.device
+                    .CreateShaderResourceView(&depth, Some(&sd), Some(&mut depth_srv))
+            }
+            .map_err(|e| gpu.fail("CreateShaderResourceView (depth)", e))?;
+            if depth_srv.is_none() {
+                return Err(gpu.fail("CreateShaderResourceView (depth)", "no view returned"));
+            }
         }
         Ok(Target {
             width: w,
             height: h,
             color,
-            rtv: rtv.ok_or_else(|| gpu.fail("CreateRenderTargetView", "no view returned"))?,
+            rtv,
             depth,
             dsv: dsv.ok_or_else(|| gpu.fail("CreateDepthStencilView", "no view returned"))?,
             staging,
+            mrt,
+            main_uav,
+            depth_srv,
         })
     }
 
-    /// Clears colour to `rgba` and depth to 1.0.
+    /// Clears colour to `rgba`, RT1-7 to 0 (CS Masks2 0 = no occlusion) and depth to 1.0.
     pub fn clear(&self, gpu: &Gpu, rgba: [f32; 4]) {
         // SAFETY: views belong to `gpu.device`; `rgba` outlives the call.
         unsafe {
             gpu.ctx.ClearRenderTargetView(&self.rtv, &rgba);
+            for m in self.mrt.iter().skip(1) {
+                gpu.ctx.ClearRenderTargetView(&m.1, &[0.0; 4]);
+            }
             gpu.ctx
                 .ClearDepthStencilView(&self.dsv, D3D11_CLEAR_DEPTH.0, 1.0, 0);
         }
@@ -354,6 +565,114 @@ impl Target {
         }
         Ok(out)
     }
+
+    fn check_crop(&self, crop: [u32; 4]) -> Result<(), String> {
+        let [x, y, w, h] = crop.map(u64::from);
+        if x + w > self.width.into() || y + h > self.height.into() {
+            return Err(format!(
+                "crop {crop:?} outside the {}x{} target",
+                self.width, self.height
+            ));
+        }
+        Ok(())
+    }
+
+    /// RT `rt` (0 = `color`; 1-7 only on a deferred target) and its format.
+    fn rt(&self, rt: usize) -> Result<(&ID3D11Texture2D, DXGI_FORMAT), String> {
+        match rt {
+            0 => Ok((&self.color, MRT_FORMATS[0].0)),
+            _ if rt < self.mrt.len() => Ok((&self.mrt[rt].0, MRT_FORMATS[rt].0)),
+            _ => Err(format!(
+                "no RT{rt}: the target has {}",
+                self.mrt.len().max(1)
+            )),
+        }
+    }
+
+    /// RT `rt` over `crop` ([x, y, w, h]) as row-major f32 RGBA, decoded like the golden extractors (half → f32
+    /// unclamped; UNORM / small floats per [`MRT_FORMATS`]; missing channels 0, missing alpha 1): the layout of a
+    /// golden fixture's `mrt<N>.f32`.
+    pub fn read_f32(&self, gpu: &Gpu, rt: usize, crop: [u32; 4]) -> Result<Vec<f32>, String> {
+        let (src, format) = self.rt(rt)?;
+        self.check_crop(crop)?;
+        let [x, y, w, h] = crop;
+        let mut sd = tex2d_desc(w, h, format);
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        let staging = create_tex(gpu, &sd)?;
+        let b = D3D11_BOX {
+            left: x,
+            top: y,
+            front: 0,
+            right: x + w,
+            bottom: y + h,
+            back: 1,
+        };
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        // SAFETY: both resources belong to `gpu.device`; `b` and `mapped` are locals; the box lies inside (checked).
+        unsafe {
+            gpu.ctx
+                .CopySubresourceRegion(&staging, 0, 0, 0, 0, src, 0, Some(&b));
+            gpu.ctx
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|e| gpu.fail("Map", e))?;
+        }
+        let (w, h, tb) = (w as usize, h as usize, texel_bytes(format));
+        let pitch = mapped.RowPitch as usize;
+        let mut out = Vec::with_capacity(w * h * 4);
+        if !mapped.pData.is_null() {
+            for row in 0..h {
+                // SAFETY: while mapped, `pData` holds `h` rows `RowPitch` bytes apart, each `w` texels of `tb`
+                // bytes. Read as bytes, so no alignment assumption.
+                let px = unsafe {
+                    std::slice::from_raw_parts((mapped.pData as *const u8).add(row * pitch), w * tb)
+                };
+                out.extend(px.chunks_exact(tb).flat_map(|t| decode(format, t)));
+            }
+        }
+        // SAFETY: paired with the successful Map above.
+        unsafe { gpu.ctx.Unmap(&staging, 0) };
+        if out.len() != w * h * 4 {
+            return Err(gpu.fail("Map", "null pointer returned"));
+        }
+        Ok(out)
+    }
+
+    /// Writes `rgba` (row-major f32 RGBA, `crop` = [x, y, w, h]) into RT `rt`, encoded in its format: a golden
+    /// fixture's `mrt<N>_before.f32` as the draw's starting contents.
+    pub fn seed_f32(
+        &self,
+        gpu: &Gpu,
+        rt: usize,
+        crop: [u32; 4],
+        rgba: &[f32],
+    ) -> Result<(), String> {
+        let (dst, format) = self.rt(rt)?;
+        self.check_crop(crop)?;
+        let [x, y, w, h] = crop;
+        if rgba.len() != (w * h * 4) as usize {
+            return Err(format!("seed: {} floats for a {w}x{h} crop", rgba.len()));
+        }
+        let tb = texel_bytes(format);
+        let mut bytes = Vec::with_capacity((w * h) as usize * tb);
+        for px in rgba.as_chunks::<4>().0 {
+            encode(format, *px, &mut bytes);
+        }
+        let b = D3D11_BOX {
+            left: x,
+            top: y,
+            front: 0,
+            right: x + w,
+            bottom: y + h,
+            back: 1,
+        };
+        // SAFETY: `bytes` holds `h` rows of `w × tb` bytes and outlives the call; the box lies inside (checked).
+        unsafe {
+            gpu.ctx
+                .UpdateSubresource(dst, 0, Some(&b), bytes.as_ptr() as _, w * tb as u32, 0)
+        };
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -385,5 +704,59 @@ mod tests {
         assert_eq!(unorm8(b(2.0)), 255);
         assert_eq!(unorm8(b(-1.0)), 0);
         assert_eq!(unorm8(f16::NAN.to_bits()), 0);
+    }
+
+    #[test]
+    fn mrt_texels_decode_like_the_extractors() {
+        use super::{decode, encode, texel_bytes};
+        use windows::Win32::Graphics::Dxgi::Common::*;
+        let h = |v: f32| f16::from_f32(v).to_le_bytes();
+        let rg16 = [h(0.25), h(0.5)].concat();
+        let samples: [(DXGI_FORMAT, Vec<u8>, [f32; 4]); 5] = [
+            (
+                DXGI_FORMAT_R10G10B10A2_UNORM,
+                (1023u32 | 512 << 20 | 3 << 30).to_le_bytes().to_vec(),
+                [1.0, 0.0, 512.0 / 1023.0, 1.0],
+            ),
+            (
+                DXGI_FORMAT_R11G11B10_FLOAT,
+                (0x3C0u32 | 0x3C0 << 11 | 0x1E0 << 22)
+                    .to_le_bytes()
+                    .to_vec(),
+                [1.0; 4],
+            ),
+            (
+                DXGI_FORMAT_R11G11B10_FLOAT,
+                0x380u32.to_le_bytes().to_vec(),
+                [0.5, 0.0, 0.0, 1.0],
+            ),
+            (
+                DXGI_FORMAT_R16_UNORM,
+                0xFFFFu16.to_le_bytes().to_vec(),
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            (DXGI_FORMAT_R16G16_FLOAT, rg16, [0.25, 0.5, 0.0, 1.0]),
+        ];
+        for (f, texel, want) in samples {
+            assert_eq!(texel.len(), texel_bytes(f), "{f:?}");
+            let got = decode(f, &texel);
+            assert_eq!(got, want, "{f:?}");
+            let mut out = Vec::new();
+            encode(f, got, &mut out);
+            assert_eq!(out, texel, "{f:?} round trip");
+        }
+        // RGBA16F: four halves, exact.
+        let px = [h(0.75), h(-2.0), h(4.0), h(1.0)].concat();
+        assert_eq!(
+            decode(DXGI_FORMAT_R16G16B16A16_FLOAT, &px),
+            [0.75, -2.0, 4.0, 1.0]
+        );
+        let mut out = Vec::new();
+        encode(
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+            [0.75, -2.0, 4.0, 1.0],
+            &mut out,
+        );
+        assert_eq!(out, px);
     }
 }

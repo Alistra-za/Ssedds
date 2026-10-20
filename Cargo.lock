@@ -3058,11 +3058,13 @@ dependencies = [
  "half",
  "hex",
  "image",
+ "modscan",
  "nif",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "vfs",
  "walkdir",
  "windows",
 ]

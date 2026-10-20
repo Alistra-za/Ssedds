@@ -23,6 +23,20 @@
 //   pixels (P1-C settings tests).
 // - STANDIN_SKIN (with STANDIN_FLAT): CS's SkinPerGeometry (b7) and skin extra map (t71) are declared, and the flat
 //   colour adds skinMaterialFlags.x x the t71 RGB, so the RFAOS lookup shows in pixels (P1-C Task 8 tests).
+// - STANDIN_REPLAY (with STANDIN_FLAT): the flat colour adds DirLightColor (PS b2), so a replay reads every PS
+//   cbuffer and a zero-padded short b2 adds nothing (v2 D2 tests).
+// - DEFERRED (render3d's deferred define): main writes CS's 8 render targets (PsOut, CS's field names). Diffuse is
+//   the forward colour; RT1-7 hold fixed markers (v2 D3 tests). It declares the names the debug block reads, but its
+//   `return psout ;` has a space, so this file has no debug anchor; tests/deferred.rs writes a copy without that
+//   space to get one (the temp-copy pattern of tests/settings.rs).
+// - STANDIN_FORWARD_AUX (forward permutations only): main also writes SV_Target1/2 like CS's forward PS_OUTPUT, so a
+//   test sees a forward draw that wrongly gets RT1-7 bound.
+// - STANDIN_FORWARD_BROKEN: every forward pixel permutation fails to compile; DEFERRED ones still compile.
+// - STANDIN_DEFERRED_TINT (DEFERRED permutations only): Diffuse gets +0.5 green, so a DEFERRED program drawn into a
+//   forward target shows (v2 D4 review).
+// - DYNAMIC_CUBEMAPS (with STANDIN_FLAT, plain forward main only): the colour adds the level-15 +Z sample of
+//   EnvReflectionsTexture at t30, CS's forward DC register, so the env cube binding shows in pixels (v2 D5). With
+//   STANDIN_ENV_T31 it samples EnvTexture at t31 instead (CS's other forward DC register).
 
 struct VsOut
 {
@@ -83,6 +97,9 @@ VsOut main(VsIn v)
 #if !defined(DO_ALPHA_TEST) && !defined(STANDIN_OPAQUE_OK)
 #error stand-in: this permutation is meant to fail (test fixture)
 #endif
+#if defined(STANDIN_FORWARD_BROKEN) && !defined(DEFERRED)
+#error stand-in: forward pixel permutations fail (test fixture)
+#endif
 
 cbuffer StandinLight : register(b2)
 {
@@ -130,7 +147,7 @@ cbuffer SkinPerGeometry : register(b7)
 Texture2D<float4> TexSkinExtraSampler : register(t71);
 #endif
 
-float4 main(VsOut i) : SV_Target
+float4 shade(VsOut i)
 {
     float4 base = DiffuseMap.Sample(DiffuseSampler, i.Uv);
     float3 bump = NormalMap.Sample(DiffuseSampler, i.Uv).xyz * 2.0 - 1.0;
@@ -146,6 +163,9 @@ float4 main(VsOut i) : SV_Target
 #endif
 #if defined(STANDIN_SKIN)
     col += skinMaterialFlags.x * TexSkinExtraSampler.SampleLevel(DiffuseSampler, i.Uv, 0).rgb;
+#endif
+#if defined(STANDIN_REPLAY)
+    col += DirLightColor.rgb;
 #endif
     return float4(col, base.a * 0.5);
 #else
@@ -165,5 +185,87 @@ float4 main(VsOut i) : SV_Target
     return float4(c, base.a * 0.5);
 #endif
 }
+
+#if defined(DEFERRED)
+struct MaterialProperties
+{
+    float3 BaseColor;
+    float Roughness;
+    float Metallic;
+    float AO;
+};
+
+struct PsOut
+{
+    float4 Diffuse : SV_Target0;
+    float4 MotionVectors : SV_Target1;
+    float4 NormalGlossiness : SV_Target2;
+    float4 Albedo : SV_Target3;
+    float4 Specular : SV_Target4;
+    float4 Reflectance : SV_Target5;
+    float4 Masks : SV_Target6;
+    float4 Masks2 : SV_Target7;
+};
+
+PsOut main(VsOut i)
+{
+    PsOut psout;
+    MaterialProperties material = (MaterialProperties)0;
+    material.BaseColor = DiffuseMap.Sample(DiffuseSampler, i.Uv).rgb;
+    float3 worldNormal = normalize(i.Normal);
+    float glossiness = 0.25;
+    float vertexAO = 0.5;
+    psout.Diffuse = shade(i);
+#    if defined(STANDIN_DEFERRED_TINT)
+    psout.Diffuse.g += 0.5;
+#    endif
+    // Markers: exact in each RT's format and different per RT, so a swapped RTV shows.
+    psout.MotionVectors = float4(0.25, 0.5, 0.0, 0.0);
+    psout.NormalGlossiness = float4(1.0, 0.0, 1.0, 1.0);
+    psout.Albedo = float4(0.0, 1.0, 0.0, 0.0);
+    psout.Specular = float4(0.5, 0.25, 0.125, 0.0);
+    psout.Reflectance = float4(0.25, 0.125, 0.5, 0.0);
+    psout.Masks = float4(2.0, 4.0, 0.0625, 0.0);
+    psout.Masks2 = float4(1.0, 0.0, 0.0, 0.0);
+    return psout ;
+}
+#elif defined(STANDIN_FORWARD_AUX)
+// Like CS's forward PS_OUTPUT: SV_Target1/2 written too, with conspicuous values (alpha 1, so a blend replaces).
+struct PsOutForward
+{
+    float4 Diffuse : SV_Target0;
+    float4 MotionVectors : SV_Target1;
+    float4 NormalGlossiness : SV_Target2;
+};
+
+PsOutForward main(VsOut i)
+{
+    PsOutForward o;
+    o.Diffuse = shade(i);
+    o.MotionVectors = float4(0.75, 0.125, 0.0, 1.0);
+    o.NormalGlossiness = float4(0.0, 1.0, 0.0, 1.0);
+    return o;
+}
+#else
+#if defined(DYNAMIC_CUBEMAPS) && defined(STANDIN_FLAT)
+// CS's forward DC path samples DynamicCubemaps::EnvReflectionsTexture at t30 and EnvTexture at t31
+// (DynamicCubemaps.hlsli:17-18).
+#	if defined(STANDIN_ENV_T31)
+TextureCube<float3> EnvTexture : register(t31);
+#		define STANDIN_ENV EnvTexture
+#	else
+TextureCube<float3> EnvReflectionsTexture : register(t30);
+#		define STANDIN_ENV EnvReflectionsTexture
+#	endif
+#endif
+float4 main(VsOut i) : SV_Target
+{
+    float4 c = shade(i);
+#if defined(DYNAMIC_CUBEMAPS) && defined(STANDIN_FLAT)
+    c.rgb += STANDIN_ENV.SampleLevel(DiffuseSampler, float3(0.0, 0.0, 1.0), 15);
+#endif
+    return c;
+}
+#endif
 
 #endif

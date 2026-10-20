@@ -1,7 +1,7 @@
 //! One NIF shape → one forward CS Lighting draw: permutation, VS/PS, zero-initialised cbuffers filled from
 //! the material and the stub scene, SRVs for every reflected register, one sampler per reflected slot.
-//! P0 is forward only (no `DEFERRED`, no 8 MRTs); in-game opaque objects take the deferred path
-//! (answers.md, hint 15), but the forward permutation of the same Lighting.hlsl is what P0 renders.
+//! Forward by default. In deferred mode (v2 D3) an opaque shape's draw is the `DEFERRED` permutation and writes CS's
+//! 8 render targets (`ShapeDraw::deferred`), as in game (answers.md, hint 15); blended shapes stay forward into RT0.
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
@@ -70,6 +70,10 @@ pub struct ShapeDraw {
     pub blend: bool,
     /// Blend pair, cull and depth state; built-ins keep [`Pipe::FIXED`].
     pub pipe: Pipe,
+    /// Built from the DEFERRED permutation: draws with all 8 render targets bound.
+    pub deferred: bool,
+    /// PS registers render binds the env cube at, after `srvs` (true = EnvReflectionsTexture, false = EnvTexture).
+    pub env_regs: Vec<(u32, bool)>,
     pub skinned: bool,
     /// Registers bound to a real texture (not a 1×1 default); the PBR flags and `EnvmapData.y` read it.
     pub bound: Bound,
@@ -128,7 +132,7 @@ pub struct FrameInputs<'a> {
     pub view_changed: bool,
 }
 
-fn upload(gpu: &Gpu, cb: &Cb) {
+pub(crate) fn upload(gpu: &Gpu, cb: &Cb) {
     // SAFETY: the buffer was created with exactly `bytes().len()` bytes (≥ 16).
     unsafe {
         gpu.ctx
