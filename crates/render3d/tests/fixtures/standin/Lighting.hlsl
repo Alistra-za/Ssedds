@@ -31,6 +31,7 @@
 //   space to get one (the temp-copy pattern of tests/settings.rs).
 // - STANDIN_FORWARD_AUX (forward permutations only): main also writes SV_Target1/2 like CS's forward PS_OUTPUT, so a
 //   test sees a forward draw that wrongly gets RT1-7 bound.
+// - STANDIN_FORWARD_BROKEN: every forward pixel permutation fails to compile; DEFERRED ones still compile.
 // - STANDIN_DEFERRED_TINT (DEFERRED permutations only): Diffuse gets +0.5 green, so a DEFERRED program drawn into a
 //   forward target shows (v2 D4 review).
 // - DYNAMIC_CUBEMAPS (with STANDIN_FLAT, plain forward main only): the colour adds the level-15 +Z sample of
@@ -95,6 +96,9 @@ VsOut main(VsIn v)
 
 #if !defined(DO_ALPHA_TEST) && !defined(STANDIN_OPAQUE_OK)
 #error stand-in: this permutation is meant to fail (test fixture)
+#endif
+#if defined(STANDIN_FORWARD_BROKEN) && !defined(DEFERRED)
+#error stand-in: forward pixel permutations fail (test fixture)
 #endif
 
 cbuffer StandinLight : register(b2)

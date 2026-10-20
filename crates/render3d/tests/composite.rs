@@ -382,6 +382,30 @@ fn toggle_off_in_async_mode_keeps_the_deferred_frame_until_forward_lands() {
     );
 }
 
+/// D-P36 (F4): toggled off in async mode, a shape whose forward compile fails keeps only its DEFERRED draw, which a
+/// forward frame never draws: it must not report that its previous draw is on screen.
+#[test]
+fn a_dropped_deferred_draw_does_not_report_showing_previous() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), &feats(&["STANDIN_FORWARD_BROKEN"]));
+    r.set_deferred(true).unwrap();
+    load(&mut r, vec![opaque()]);
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    r.set_async_compile(true);
+    r.set_deferred(false).unwrap();
+    for j in r.take_jobs() {
+        r.apply_compiled(render3d::run_job(j));
+    }
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(r.target_dims().len(), 2, "the frame is forward");
+    match &r.shapes()[0].status {
+        render3d::ShapeStatus::Failed {
+            showing_previous, ..
+        } => assert!(!showing_previous, "its DEFERRED draw is not on screen"),
+        s => panic!("the forward compile fails: {s:?}"),
+    }
+}
+
 /// D-P14: toggled off in async mode, then a define change before the forward programs land: the composite is stale,
 /// so the forward programs are built at once with the new defines and the frame is complete and forward.
 #[test]

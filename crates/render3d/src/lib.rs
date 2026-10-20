@@ -824,6 +824,11 @@ impl Renderer {
     fn forward_now(&mut self) {
         self.begin_all();
         self.settle();
+        self.drop_deferred_previous();
+    }
+
+    /// A forward frame never draws a DEFERRED program: a `Failed` shape holding one does not show its previous draw.
+    fn drop_deferred_previous(&mut self) {
         for s in self.shapes.values_mut() {
             if let (
                 Some(d),
@@ -2278,6 +2283,9 @@ impl Renderer {
         } else {
             !self.composite_stale() && holds_deferred(self)
         };
+        if !deferred_frame {
+            self.drop_deferred_previous(); // D-P36 (F4): e.g. a forward compile that failed after an async toggle-off
+        }
         if self
             .target
             .as_ref()
