@@ -7,6 +7,7 @@ pub mod cs_settings;
 pub mod debug;
 pub mod device;
 pub mod draw;
+pub mod golden;
 pub mod hdri;
 pub mod includes;
 pub mod locate;
