@@ -17,15 +17,19 @@ use std::path::Path;
 use windows::core::PCSTR;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Buffer, ID3D11SamplerState, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_FLAG,
-    D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC,
-    D3D11_COMPARISON_FUNC, D3D11_FILTER, D3D11_FILTER_ANISOTROPIC, D3D11_INPUT_ELEMENT_DESC,
-    D3D11_INPUT_PER_VERTEX_DATA, D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA,
-    D3D11_TEXTURE_ADDRESS_MODE, D3D11_USAGE_IMMUTABLE, D3D11_VIEWPORT,
+    ID3D11Buffer, ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11SamplerState,
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_FLAG, D3D11_BIND_INDEX_BUFFER,
+    D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC, D3D11_COMPARISON_FUNC,
+    D3D11_CPU_ACCESS_WRITE, D3D11_DEPTH_STENCIL_DESC, D3D11_DEPTH_STENCIL_VIEW_DESC,
+    D3D11_DEPTH_WRITE_MASK_ALL, D3D11_DEPTH_WRITE_MASK_ZERO, D3D11_DSV_DIMENSION_TEXTURE2D,
+    D3D11_FILTER, D3D11_FILTER_ANISOTROPIC, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
+    D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_MODE,
+    D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT,
-    DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_FORMAT, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R24G8_TYPELESS,
+    DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 
 /// One golden subject, read by [`load_fixture`].
@@ -68,6 +72,95 @@ pub struct Replay {
     pub composite: Option<ReplayComposite>,
     /// Load-time notes (e.g. a define added from the capture); render_replay passes them on.
     pub warnings: Vec<String>,
+    /// depth.json + extras.json depthStencil; None = no captured depth (LessEqual + write from a 1.0 clear, as today).
+    pub depth: Option<ReplayDepth>,
+}
+
+/// The captured prepass depth (X3d, D6c) and the draw's depth state.
+pub struct ReplayDepth {
+    /// depth_before.d24s8 over the crop, row-major: depth = v & 0xFFFFFF, stencil = v >> 24.
+    pub d24s8: Vec<u32>,
+    /// D3D11_COMPARISON_FUNC.
+    pub func: i32,
+    pub write: bool,
+}
+
+/// depth.json of `dir` and extras.json depthStencil, None when there is no depth.json.
+fn load_depth(dir: &Path, crop: [u32; 4], extras: &Value) -> Result<Option<ReplayDepth>, String> {
+    let dp = dir.join("depth.json");
+    if !dp.exists() {
+        return Ok(None);
+    }
+    let d = json(&dp)?;
+    let derr = |m: &str| format!("{}: {m}", dp.display());
+    let format = d.get("format").and_then(Value::as_str).unwrap_or("");
+    if !matches!(format, "R24G8_TYPELESS" | "D24_UNORM_S8_UINT") {
+        return Err(derr(&format!("format {format:?} is not D24S8")));
+    }
+    let dcrop = d
+        .get("crop")
+        .and_then(Value::as_array)
+        .and_then(|a| a.iter().map(u32_of).collect::<Option<Vec<_>>>());
+    if dcrop.as_deref() != Some(&crop[..]) {
+        return Err(derr(&format!(
+            "crop {dcrop:?} differs from mrt.json's {crop:?}"
+        )));
+    }
+    let fp = dir.join(
+        d.get("file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| derr("no file"))?,
+    );
+    let raw = read(&fp)?;
+    if raw.len() != crop[2] as usize * crop[3] as usize * 4 {
+        return Err(format!(
+            "{}: {} bytes, the crop needs {}",
+            fp.display(),
+            raw.len(),
+            crop[2] as usize * crop[3] as usize * 4
+        ));
+    }
+    let d24s8 = raw
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
+        .collect();
+    let eerr = |m: &str| format!("{}: depthStencil {m}", dir.join("extras.json").display());
+    let ds = extras.get("depthStencil").ok_or_else(|| eerr("missing"))?;
+    let flag = |k: &str| {
+        ds.get(k)
+            .and_then(Value::as_bool)
+            .ok_or_else(|| eerr(&format!("{k} must be a bool")))
+    };
+    if flag("stencilEnable")? {
+        return Err(eerr("stencilEnable: stencil test not replayable"));
+    }
+    if !flag("depthEnable")? {
+        return Ok(Some(ReplayDepth {
+            d24s8,
+            func: 8,
+            write: false,
+        }));
+    }
+    let f = ds.get("depthFunc").and_then(Value::as_str).unwrap_or("");
+    // D3D11_COMPARISON_FUNC values; RenderDoc names Never/Always AlwaysFalse/AlwaysTrue.
+    let func = match f {
+        "AlwaysFalse" | "Never" => 1,
+        "Less" => 2,
+        "Equal" => 3,
+        "LessEqual" => 4,
+        "Greater" => 5,
+        "NotEqual" => 6,
+        "GreaterEqual" => 7,
+        "AlwaysTrue" | "Always" => 8,
+        _ => return Err(eerr(&format!("depthFunc {f:?} unknown"))),
+    };
+    Ok(Some(ReplayDepth {
+        d24s8,
+        func,
+        write: flag("depthWrite")?,
+    }))
 }
 
 /// The deferred composite dispatch of a subject's frame (composite.json in the subject dir).
@@ -652,6 +745,7 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         formats,
         composite: load_composite(dir, crop, px)?,
         warnings,
+        depth: load_depth(dir, crop, &extras)?,
     })
 }
 
@@ -758,6 +852,84 @@ fn sampler_state(gpu: &Gpu, s: &Sampler) -> Result<ID3D11SamplerState, String> {
     unsafe { gpu.device.CreateSamplerState(&d, Some(&mut out)) }
         .map_err(|e| gpu.fail("CreateSamplerState", e))?;
     out.ok_or_else(|| "no sampler".into())
+}
+
+/// A full-size D24S8 depth buffer: 0x00FFFFFF (depth 1, stencil 0) with the crop rows from `d`, its DSV and the
+/// captured depth state (stencil off). STAGING with initial data, then CopyResource: depth-stencil resources take
+/// neither UpdateSubresource nor partial-box copies.
+fn seeded_depth(
+    gpu: &Gpu,
+    size: (u32, u32),
+    crop: [u32; 4],
+    d: &ReplayDepth,
+) -> Result<(ID3D11DepthStencilView, ID3D11DepthStencilState), String> {
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let mut px = vec![0x00FF_FFFFu32; w * h];
+    let (cx, cy, cw) = (crop[0] as usize, crop[1] as usize, crop[2] as usize);
+    for (j, row) in d.d24s8.chunks_exact(cw).enumerate() {
+        let o = (cy + j) * w + cx;
+        px[o..o + cw].copy_from_slice(row);
+    }
+    let mut desc = D3D11_TEXTURE2D_DESC {
+        Width: size.0,
+        Height: size.1,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_R24G8_TYPELESS,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+        MiscFlags: 0,
+    };
+    let init = D3D11_SUBRESOURCE_DATA {
+        pSysMem: px.as_ptr() as _,
+        SysMemPitch: size.0 * 4,
+        SysMemSlicePitch: 0,
+    };
+    let (mut staging, mut tex, mut dsv, mut state) = (None, None, None, None);
+    // SAFETY: `px`, the descriptors and out-pointers are live locals; both textures belong to `gpu.device`.
+    unsafe {
+        gpu.device
+            .CreateTexture2D(&desc, Some(&init), Some(&mut staging))
+            .map_err(|e| gpu.fail("CreateTexture2D (depth staging)", e))?;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.CPUAccessFlags = 0;
+        desc.BindFlags = D3D11_BIND_DEPTH_STENCIL.0 as u32;
+        gpu.device
+            .CreateTexture2D(&desc, None, Some(&mut tex))
+            .map_err(|e| gpu.fail("CreateTexture2D (depth)", e))?;
+        let (staging, tex) = (
+            staging.ok_or("no depth staging texture")?,
+            tex.ok_or("no depth texture")?,
+        );
+        gpu.ctx.CopyResource(&tex, &staging);
+        let vd = D3D11_DEPTH_STENCIL_VIEW_DESC {
+            Format: DXGI_FORMAT_D24_UNORM_S8_UINT,
+            ViewDimension: D3D11_DSV_DIMENSION_TEXTURE2D,
+            ..Default::default()
+        };
+        gpu.device
+            .CreateDepthStencilView(&tex, Some(&vd), Some(&mut dsv))
+            .map_err(|e| gpu.fail("CreateDepthStencilView (depth)", e))?;
+        let sd = D3D11_DEPTH_STENCIL_DESC {
+            DepthEnable: true.into(),
+            DepthWriteMask: if d.write {
+                D3D11_DEPTH_WRITE_MASK_ALL
+            } else {
+                D3D11_DEPTH_WRITE_MASK_ZERO
+            },
+            DepthFunc: D3D11_COMPARISON_FUNC(d.func),
+            ..Default::default()
+        };
+        gpu.device
+            .CreateDepthStencilState(&sd, Some(&mut state))
+            .map_err(|e| gpu.fail("CreateDepthStencilState (depth)", e))?;
+    }
+    Ok((dsv.ok_or("no depth view")?, state.ok_or("no depth state")?))
 }
 
 impl Renderer {
@@ -940,13 +1112,20 @@ impl Renderer {
         for (i, b) in r.before.iter().take(bound).enumerate() {
             target.seed_f32(gpu, i, r.crop, b)?;
         }
+        // D6c: the captured depth, seeded through a staging copy (D3D11 has no partial or CPU writes to depth-stencil).
+        let seeded = r
+            .depth
+            .as_ref()
+            .map(|d| seeded_depth(gpu, r.size, r.crop, d))
+            .transpose()?;
+        let dsv = seeded.as_ref().map_or(&target.dsv, |s| &s.0);
         let v = r.viewport;
         // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
         unsafe {
             let ctx = &gpu.ctx;
             // A frame's SRVs, cbuffers and samplers stay bound: a register the fixture leaves empty must read 0.
             ctx.ClearState();
-            ctx.OMSetRenderTargets(Some(&target.rtvs()), &target.dsv);
+            ctx.OMSetRenderTargets(Some(&target.rtvs()), dsv);
             ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
                 TopLeftX: v[0],
                 TopLeftY: v[1],
@@ -960,8 +1139,11 @@ impl Renderer {
             } else {
                 &self.raster
             });
-            // LessEqual + write: the fixture's Equal/no-write is a post-prepass state, and replay has no prepass.
-            ctx.OMSetDepthStencilState(&self.depth_states[3], 0);
+            match &seeded {
+                Some((_, state)) => ctx.OMSetDepthStencilState(state, 0),
+                // LessEqual + write: the fixture's Equal/no-write is a post-prepass state, and there is no prepass.
+                None => ctx.OMSetDepthStencilState(&self.depth_states[3], 0),
+            }
             ctx.OMSetBlendState(blend.as_ref(), None, 0xffff_ffff);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ctx.IASetInputLayout(&layout);

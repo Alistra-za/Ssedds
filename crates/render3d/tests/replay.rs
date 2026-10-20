@@ -396,6 +396,128 @@ fn replay_deferred_reads_eight_targets() {
     assert_eq!(fwd.mrt[0], out.mrt[0]);
 }
 
+/// D6c: captured prepass depth over the crop (left half 0x00000000, right half 0x00FFFFFF) and the captured depth
+/// state, with ViewProj's third row zeroed in cb_vs_b2.bin so every vertex has z = 0 (exact in D24).
+fn write_depth(dir: &Path, depth_stencil: serde_json::Value) {
+    let mut vs = fs::read(dir.join("cb_vs_b2.bin")).unwrap();
+    // World is 12 floats, ViewProj row-major after it: row 2 = floats 20..24.
+    vs[80..96].fill(0);
+    fs::write(dir.join("cb_vs_b2.bin"), vs).unwrap();
+    edit_json(dir, "extras.json", &|v| {
+        v["depthStencil"] = depth_stencil.clone()
+    });
+    put(
+        dir,
+        "depth.json",
+        &json!({"format": "R24G8_TYPELESS", "resourceId": "ResourceId::1", "beforeEvent": 1,
+                "crop": [2, 2, 4, 4], "file": "depth_before.d24s8", "sameAtEvent": true, "pick": []}),
+    );
+    let px: Vec<u8> = (0..16u32)
+        .flat_map(|i| if i % 4 < 2 { 0u32 } else { 0x00FF_FFFF }.to_le_bytes())
+        .collect();
+    fs::write(dir.join("depth_before.d24s8"), px).unwrap();
+}
+
+fn equal_no_write() -> serde_json::Value {
+    json!({"depthEnable": true, "depthFunc": "Equal", "depthWrite": false, "stencilEnable": false})
+}
+
+#[test]
+fn replay_seeds_captured_depth_and_uses_the_captured_depth_state() {
+    let d = tempfile::tempdir().unwrap();
+    write_fixture_deferred(d.path());
+    write_depth(d.path(), equal_no_write());
+    let r = load_fixture(d.path()).unwrap();
+    let depth = r.depth.as_ref().expect("depth.json read");
+    assert_eq!((depth.func, depth.write, depth.d24s8.len()), (3, false, 16));
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let drawn: [[f32; 4]; 8] = [
+        [0.75, 0.25, 0.5, 1.0],
+        [0.25, 0.5, 0.0, 1.0],
+        [1.0, 0.0, 1.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [0.5, 0.25, 0.125, 1.0],
+        [0.25, 0.125, 0.5, 1.0],
+        [2.0, 4.0, 0.0625, 1.0],
+        [1.0, 0.0, 0.0, 1.0],
+    ];
+    for deferred in [true, false] {
+        let out = ren.render_replay(&r, deferred).unwrap();
+        assert_eq!(out.mrt.len(), if deferred { 8 } else { 1 });
+        for (i, rt) in out.mrt.iter().enumerate() {
+            for (p, px) in rt.chunks(4).enumerate() {
+                let want = if p % 4 < 2 {
+                    drawn[i]
+                } else {
+                    [0.0, 0.0, 0.0, 1.0]
+                };
+                assert_eq!(px, want, "deferred {deferred} RT{i} pixel {p}");
+            }
+        }
+    }
+    // Without depth.json the whole crop is drawn, as before.
+    fs::remove_file(d.path().join("depth.json")).unwrap();
+    let r = load_fixture(d.path()).unwrap();
+    assert!(r.depth.is_none());
+    let out = ren.render_replay(&r, true).unwrap();
+    for (i, rt) in out.mrt.iter().enumerate() {
+        for px in rt.chunks(4) {
+            assert_eq!(px, drawn[i], "no depth RT{i}");
+        }
+    }
+}
+
+#[test]
+fn load_fixture_maps_the_captured_depth_state() {
+    let load = |ds: serde_json::Value| {
+        let d = tempfile::tempdir().unwrap();
+        write_fixture(d.path(), STANDIN);
+        write_depth(d.path(), ds);
+        let r = load_fixture(d.path()).unwrap();
+        let depth = r.depth.unwrap();
+        (depth.func, depth.write)
+    };
+    let ds = |en: bool, f: &str, w: bool| json!({"depthEnable": en, "depthFunc": f, "depthWrite": w, "stencilEnable": false});
+    assert_eq!(load(ds(true, "LessEqual", true)), (4, true));
+    assert_eq!(load(ds(true, "AlwaysFalse", false)), (1, false));
+    assert_eq!(load(ds(true, "AlwaysTrue", false)), (8, false));
+    assert_eq!(load(ds(false, "Equal", true)), (8, false));
+}
+
+#[test]
+fn load_fixture_rejects_bad_depth() {
+    let fails = |f: &dyn Fn(&Path)| {
+        let d = tempfile::tempdir().unwrap();
+        write_fixture(d.path(), STANDIN);
+        write_depth(d.path(), equal_no_write());
+        f(d.path());
+        match load_fixture(d.path()) {
+            Ok(_) => panic!("load_fixture should fail"),
+            Err(e) => e,
+        }
+    };
+    let e = fails(&|p| fs::write(p.join("depth_before.d24s8"), [0u8; 60]).unwrap());
+    assert!(e.contains("depth_before.d24s8"), "{e}");
+    let e = fails(&|p| edit_json(p, "depth.json", &|v| v["crop"] = json!([2, 2, 4, 3])));
+    assert!(e.contains("depth.json") && e.contains("crop"), "{e}");
+    let e = fails(&|p| {
+        edit_json(p, "extras.json", &|v| {
+            v["depthStencil"]["depthFunc"] = json!("Bogus")
+        })
+    });
+    assert!(e.contains("extras.json") && e.contains("Bogus"), "{e}");
+    let e = fails(&|p| {
+        edit_json(p, "extras.json", &|v| {
+            v["depthStencil"]["stencilEnable"] = json!(true)
+        })
+    });
+    assert!(
+        e.contains("extras.json") && e.contains("stencil test not replayable"),
+        "{e}"
+    );
+}
+
 /// [`write_fixture_deferred`] plus the subject-level composite.json in the golden layout (D4): the stand-in composite
 /// with ADD, b5 BufferDim = (8, 8, 1/8, 1/8), MainRW seeded (0.25, 0.5, 0.75, 0.5) over the crop.
 fn write_fixture_composite(dir: &Path) {
