@@ -753,6 +753,8 @@ pub struct Viewport3d {
     pub bounds: Option<([f32; 3], f32)>,
     /// Shapes of the loaded `Parsed`/`Builtin` content (empty for a `Mesh`).
     pub shapes: Vec<ShapeInfo>,
+    /// The `Parsed` content is the NIF editor's (v2 A16): its failed shapes are listed like a mesh's.
+    pub nif_view: bool,
     /// The last material edit: its kind and render-thread time in ms.
     pub last_edit: Option<(EditKind, f64)>,
     /// Texture swaps the render thread refused (a bad DDS, a kind the slot does not read); the set preview lists them.
@@ -842,6 +844,7 @@ impl Viewport3d {
             bounds: None,
             content: None,
             shapes: vec![],
+            nif_view: false,
             last_edit: None,
             swap_errors: vec![],
             status: None,

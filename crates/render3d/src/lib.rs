@@ -22,7 +22,7 @@ pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
 pub use debug::{Availability, DebugOutput};
-pub use material::{classify, pbr_flags, Bound, EditKind};
+pub use material::{classify, pbr_bit_meaning, pbr_flags, Bound, EditKind, Pipe};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
 
@@ -32,7 +32,7 @@ use cs_settings::CsSettings;
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
-use material::{perm_material, write_material, write_skin_flags};
+use material::{perm_material, pipe, write_material, write_skin_flags};
 use nif::material::MaterialState;
 use permutation::{defines, Defines, Stage};
 pub use scene::Background;
@@ -43,12 +43,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11BlendState, ID3D11Query, ID3D11RasterizerState, ID3D11SamplerState,
-    ID3D11ShaderResourceView, D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE,
-    D3D11_BLEND_OP_ADD, D3D11_BLEND_SRC_ALPHA, D3D11_COLOR_WRITE_ENABLE_ALL,
-    D3D11_COMPARISON_NEVER, D3D11_CULL_NONE, D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-    D3D11_FLOAT32_MAX, D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_RASTERIZER_DESC,
-    D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_WRAP, D3D11_VIEWPORT,
+    ID3D11BlendState, ID3D11DepthStencilState, ID3D11Query, ID3D11RasterizerState,
+    ID3D11SamplerState, ID3D11ShaderResourceView, D3D11_BLEND, D3D11_BLEND_DESC,
+    D3D11_BLEND_DEST_ALPHA, D3D11_BLEND_DEST_COLOR, D3D11_BLEND_INV_DEST_ALPHA,
+    D3D11_BLEND_INV_DEST_COLOR, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_INV_SRC_COLOR,
+    D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD, D3D11_BLEND_SRC_ALPHA, D3D11_BLEND_SRC_ALPHA_SAT,
+    D3D11_BLEND_SRC_COLOR, D3D11_BLEND_ZERO, D3D11_COLOR_WRITE_ENABLE_ALL,
+    D3D11_COMPARISON_LESS_EQUAL, D3D11_COMPARISON_NEVER, D3D11_CULL_BACK, D3D11_CULL_NONE,
+    D3D11_DEPTH_STENCIL_DESC, D3D11_DEPTH_WRITE_MASK_ALL, D3D11_DEPTH_WRITE_MASK_ZERO,
+    D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_FLOAT32_MAX, D3D11_QUERY_DESC,
+    D3D11_QUERY_EVENT, D3D11_RASTERIZER_DESC, D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC,
+    D3D11_TEXTURE_ADDRESS_WRAP, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
@@ -318,7 +323,14 @@ pub struct Renderer {
     bounds: Option<([f32; 3], f32)>,
     sampler: ID3D11SamplerState,
     raster: ID3D11RasterizerState,
-    alpha_blend: ID3D11BlendState,
+    /// Same as `raster` with back-face culling (a shape without Double_Sided).
+    raster_back: ID3D11RasterizerState,
+    /// Depth-stencil states indexed `z_test | z_write << 1`.
+    depth_states: [ID3D11DepthStencilState; 4],
+    /// Blend states by (src, dst) AlphaFunction, made on first use.
+    blend_states: HashMap<(u8, u8), ID3D11BlendState>,
+    /// The loaded model is a built-in: every draw keeps [`Pipe::FIXED`] (false after `load` and `load_parsed*`).
+    fixed_pipeline: bool,
     target: Option<Target>,
     encode_srgb: bool,
     timing: FrameTiming,
@@ -379,18 +391,12 @@ impl Renderer {
             DepthClipEnable: true.into(),
             ..Default::default()
         };
-        let mut bd = D3D11_BLEND_DESC::default();
-        bd.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: true.into(),
-            SrcBlend: D3D11_BLEND_SRC_ALPHA,
-            DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
-            BlendOp: D3D11_BLEND_OP_ADD,
-            SrcBlendAlpha: D3D11_BLEND_ONE,
-            DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
-            BlendOpAlpha: D3D11_BLEND_OP_ADD,
-            RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+        // A shape without Double_Sided culls back faces (v2 A14); same winding as above.
+        let rd_back = D3D11_RASTERIZER_DESC {
+            CullMode: D3D11_CULL_BACK,
+            ..rd
         };
-        let (mut s, mut r, mut b) = (None, None, None);
+        let (mut s, mut r, mut rb) = (None, None, None);
         // SAFETY: descriptors and out-pointers are locals.
         unsafe {
             gpu.device
@@ -400,9 +406,30 @@ impl Renderer {
                 .CreateRasterizerState(&rd, Some(&mut r))
                 .map_err(|e| format!("CreateRasterizerState: {e}"))?;
             gpu.device
-                .CreateBlendState(&bd, Some(&mut b))
-                .map_err(|e| format!("CreateBlendState: {e}"))?;
+                .CreateRasterizerState(&rd_back, Some(&mut rb))
+                .map_err(|e| format!("CreateRasterizerState: {e}"))?;
         }
+        // Index = z_test | z_write << 1. G3 retest: the game tests LessEqual.
+        let mut depth_states = Vec::with_capacity(4);
+        for i in 0..4usize {
+            let dd = D3D11_DEPTH_STENCIL_DESC {
+                DepthEnable: (i & 1 != 0).into(),
+                DepthWriteMask: if i & 2 != 0 {
+                    D3D11_DEPTH_WRITE_MASK_ALL
+                } else {
+                    D3D11_DEPTH_WRITE_MASK_ZERO
+                },
+                DepthFunc: D3D11_COMPARISON_LESS_EQUAL,
+                ..Default::default()
+            };
+            let mut ds = None;
+            // SAFETY: descriptor and out-pointer are locals.
+            unsafe { gpu.device.CreateDepthStencilState(&dd, Some(&mut ds)) }
+                .map_err(|e| format!("CreateDepthStencilState: {e}"))?;
+            depth_states.push(ds.ok_or("no depth state")?);
+        }
+        let depth_states: [ID3D11DepthStencilState; 4] =
+            depth_states.try_into().map_err(|_| "depth states")?;
         let mut q: Option<ID3D11Query> = None;
         let qd = D3D11_QUERY_DESC {
             Query: D3D11_QUERY_EVENT,
@@ -446,7 +473,10 @@ impl Renderer {
             bounds: None,
             sampler: s.ok_or("no sampler")?,
             raster: r.ok_or("no rasterizer state")?,
-            alpha_blend: b.ok_or("no blend state")?,
+            raster_back: rb.ok_or("no rasterizer state")?,
+            depth_states,
+            blend_states: HashMap::new(),
+            fixed_pipeline: false,
             target: None,
             encode_srgb: false,
             timing: FrameTiming::default(),
@@ -569,6 +599,7 @@ impl Renderer {
     /// the new values when its program lands.
     fn rewrite_static(&mut self) {
         let ll = self.linear_lighting();
+        let fixed = self.fixed_pipeline;
         for s in self.shapes.values_mut() {
             if s.status != ShapeStatus::Drawing {
                 continue;
@@ -581,7 +612,7 @@ impl Renderer {
                     &d.fields,
                     &s.material,
                 );
-                d.rewrite_material(&s.material, ll, &fv);
+                d.rewrite_material(&s.material, ll, &fv, fixed);
             }
         }
     }
@@ -934,6 +965,11 @@ impl Renderer {
             samplers: program.ps.reflection.samplers.iter().map(|s| s.1).collect(),
             model: *world,
             blend: m.blend(),
+            pipe: if self.fixed_pipeline {
+                Pipe::FIXED
+            } else {
+                pipe(m)
+            },
             skinned: m.skinned,
             bound,
             built: m.clone(),
@@ -1217,7 +1253,7 @@ impl Renderer {
         parsed: &ParsedNif,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
     ) -> LoadReport {
-        self.load_inner(parsed, textures, true)
+        self.load_inner(parsed, textures, true, false)
     }
 
     /// Replaces the loaded model with `parsed`: geometry and textures now, one program per distinct
@@ -1229,7 +1265,7 @@ impl Renderer {
         parsed: &ParsedNif,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
     ) -> LoadReport {
-        self.load_inner(parsed, textures, !self.async_compile)
+        self.load_inner(parsed, textures, !self.async_compile, false)
     }
 
     fn load_inner(
@@ -1237,12 +1273,14 @@ impl Renderer {
         parsed: &ParsedNif,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         sync: bool,
+        fixed: bool,
     ) -> LoadReport {
         self.shapes.clear();
         self.draw_order.clear();
         self.tex_cache.clear();
         self.evicted_missing.clear();
         self.bounds = None;
+        self.fixed_pipeline = fixed;
         self.head_part = parsed.head_part;
         let mut rep = LoadReport {
             le_mesh: parsed.le_mesh,
@@ -1330,7 +1368,7 @@ impl Renderer {
             }],
             ..ParsedNif::default()
         };
-        self.load_parsed(&parsed, textures)
+        self.load_inner(&parsed, textures, !self.async_compile, true)
     }
 
     /// Every loaded shape in id order, with the material last loaded or set and its status.
@@ -1468,6 +1506,7 @@ impl Renderer {
             d.bound = bound;
         }
         let ll = self.linear_lighting();
+        let fixed = self.fixed_pipeline;
         let d = self
             .shapes
             .get_mut(&id)
@@ -1480,7 +1519,7 @@ impl Renderer {
             &d.fields,
             m,
         );
-        d.rewrite_material(m, ll, &fv);
+        d.rewrite_material(m, ll, &fv, fixed);
         Ok(())
     }
 
@@ -1744,6 +1783,7 @@ impl Renderer {
         }
         self.tex_cache.insert(path.to_string(), entry);
         let ll = self.linear_lighting();
+        let fixed = self.fixed_pipeline;
         let mut touched = vec![];
         for (id, reg, srv, real, under) in plan {
             let Some(s) = self.shapes.get_mut(&id) else {
@@ -1773,7 +1813,7 @@ impl Renderer {
                     &d.fields,
                     &material,
                 );
-                d.rewrite_material(&material, ll, &fv);
+                d.rewrite_material(&material, ll, &fv, fixed);
             }
             if !under {
                 touched.push((id, reg));
@@ -1825,6 +1865,12 @@ impl Renderer {
                 .map(|b| f32::from_le_bytes(*b))
                 .collect(),
         )
+    }
+
+    /// The blend, cull and depth state the shape's current draw uses (`None`: no draw yet). Test seam and the
+    /// GUI badge source.
+    pub fn pipe_of(&self, id: ShapeId) -> Option<Pipe> {
+        self.shapes.get(&id)?.draw.as_ref().map(|d| d.pipe)
     }
 
     /// Test hook: the COM pointer of the shape's index buffer. A hot-swap must leave it alone (no mesh reload).
@@ -2047,14 +2093,31 @@ impl Renderer {
                 for slot in &s.samplers {
                     ctx.PSSetSamplers(*slot, Some(&[Some(self.sampler.clone())]));
                 }
+                ctx.RSSetState(if s.pipe.cull_back {
+                    &self.raster_back
+                } else {
+                    &self.raster
+                });
+                ctx.OMSetDepthStencilState(
+                    &self.depth_states[s.pipe.z_test as usize | (s.pipe.z_write as usize) << 1],
+                    0,
+                );
+                // `blend` (alpha bit 0) gates the draw; a built-in's FIXED pair is 6/7 either way.
                 if s.blend {
-                    ctx.OMSetBlendState(&self.alpha_blend, None, 0xffff_ffff);
+                    let pair = s.pipe.blend.unwrap_or((6, 7));
+                    ctx.OMSetBlendState(
+                        blend_state(gpu, &mut self.blend_states, pair)?,
+                        None,
+                        0xffff_ffff,
+                    );
                 } else {
                     ctx.OMSetBlendState(None, None, 0xffff_ffff);
                 }
                 ctx.DrawIndexed(s.mesh.index_count, 0, 0);
             }
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
+            ctx.OMSetDepthStencilState(None, 0);
+            ctx.RSSetState(&self.raster);
         }
         self.uploads = uploads;
         let draw_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -2144,6 +2207,54 @@ fn wait_idle(gpu: &Gpu, q: &ID3D11Query) -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_micros(200));
         }
     }
+}
+
+/// `NiAlphaProperty` AlphaFunction 0-10 as a D3D11 blend factor (codes above 10 never reach here: `engine_blend`
+/// folds them to ONE).
+fn blend_factor(f: u8) -> D3D11_BLEND {
+    [
+        D3D11_BLEND_ONE,
+        D3D11_BLEND_ZERO,
+        D3D11_BLEND_SRC_COLOR,
+        D3D11_BLEND_INV_SRC_COLOR,
+        D3D11_BLEND_DEST_COLOR,
+        D3D11_BLEND_INV_DEST_COLOR,
+        D3D11_BLEND_SRC_ALPHA,
+        D3D11_BLEND_INV_SRC_ALPHA,
+        D3D11_BLEND_DEST_ALPHA,
+        D3D11_BLEND_INV_DEST_ALPHA,
+        D3D11_BLEND_SRC_ALPHA_SAT,
+    ]
+    .get(f as usize)
+    .copied()
+    .unwrap_or(D3D11_BLEND_ONE)
+}
+
+/// The blend state for a pair, made on first use. The alpha channel keeps ONE / INV_SRC_ALPHA.
+fn blend_state<'a>(
+    gpu: &Gpu,
+    cache: &'a mut HashMap<(u8, u8), ID3D11BlendState>,
+    pair: (u8, u8),
+) -> Result<&'a ID3D11BlendState, String> {
+    if let std::collections::hash_map::Entry::Vacant(v) = cache.entry(pair) {
+        let mut bd = D3D11_BLEND_DESC::default();
+        bd.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
+            BlendEnable: true.into(),
+            SrcBlend: blend_factor(pair.0),
+            DestBlend: blend_factor(pair.1),
+            BlendOp: D3D11_BLEND_OP_ADD,
+            SrcBlendAlpha: D3D11_BLEND_ONE,
+            DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
+            BlendOpAlpha: D3D11_BLEND_OP_ADD,
+            RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+        };
+        let mut b = None;
+        // SAFETY: descriptor and out-pointer are locals.
+        unsafe { gpu.device.CreateBlendState(&bd, Some(&mut b)) }
+            .map_err(|e| format!("CreateBlendState: {e}"))?;
+        v.insert(b.ok_or("no blend state")?);
+    }
+    Ok(&cache[&pair])
 }
 
 #[cfg(test)]
