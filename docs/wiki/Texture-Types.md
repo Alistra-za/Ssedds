@@ -264,7 +264,7 @@ You can pick a set's shader in the GUI's set editor, or with `--set set:<id>.sha
 5. A `_p`: `parallax`.
 6. In the GUI, after a mesh scan: the shader most of the meshes using the diffuse have (a strict majority).
 7. An `_m` env mask: `envmap`.
-8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`. `_flow`: `hair`, on both targets.
+8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`. `_flow`: `hair`, on both targets, unless the path has a `water` or `landscape` folder.
 9. A `hair` folder in the path: `hair`. An `eyes` folder: `eye`.
 10. Landscape textures: `landscape`.
 11. Otherwise `default`.

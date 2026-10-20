@@ -3136,6 +3136,43 @@ fn shader_hair_auto_from_path() {
     assert_eq!(p["mips"]["coverage"].as_str(), Some("on"), "{p}");
 }
 
+/// Task 11 (Note CL35): a `_flow` member picks hair without a hair path, and the hair diffuse defaults follow.
+#[test]
+fn shader_hair_auto_from_flow() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/hc.png", rgb(16)),
+            ("textures/a/hc_n.png", flat_normal(16)),
+            ("textures/a/hc_flow.png", rgb(16)),
+        ],
+        "textures/a/hc",
+        ("hair", "auto:flow"),
+        &[Code::ShaderAuto],
+    );
+    // An alpha-less diffuse keeps `remove`; the hair coverage default shows.
+    let p = &planned(&o, "hc.png")["profile"];
+    assert_eq!(p["mips"]["coverage"].as_str(), Some("on"), "{p}");
+}
+
+/// Task 11 fix I1 (Note CL35): a water `_flow` set keeps its old shader and gets no hair defaults.
+#[test]
+fn a_water_flow_set_is_not_hair() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/water/water.png", rgb(16)),
+            ("textures/water/water_n.png", flat_normal(16)),
+            ("textures/water/water_flow.png", rgb(16)),
+        ],
+        "textures/water/water",
+        ("default", "auto:default"),
+        &[Code::ShaderAuto, Code::ShaderExtraMap],
+    );
+    let p = &planned(&o, "water.png")["profile"];
+    assert_ne!(p["mips"]["coverage"].as_str(), Some("on"), "{p}");
+}
+
 #[test]
 fn shader_eye_auto_from_path() {
     let o = shader_case(

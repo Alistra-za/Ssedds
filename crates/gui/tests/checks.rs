@@ -732,6 +732,41 @@ fn soft_check_rows_are_listed_but_leave_ready_alone() {
 }
 
 #[test]
+/// Task 11 fix M1 (Note CL37): `refresh_checks` passes the set's shader, so a hair set's flat `_n` lists the
+/// vanilla-only wording on its Problems row.
+fn a_hair_sets_plastic_row_has_the_hair_wording() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/hair");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([120u8, 90, 60]))
+        .save(r.join("braid.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 128, 255]))
+        .save(r.join("braid_n.png"))
+        .unwrap();
+    let mut m = support::opened_as_the_app(d.path().join("textures"), d.path().join("export"));
+    m.poll();
+    let v = sdc_gui::model::sets::views(&m);
+    let v = v
+        .iter()
+        .find(|v| v.key.ends_with("braid"))
+        .expect("the set");
+    assert_eq!(v.shader.as_ref().map(|p| p.shader), Some(Shader::Hair));
+    let rows: Vec<_> = check_rows(&m)
+        .into_iter()
+        .filter(|p| p.code == Some(Code::ChkPlastic))
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0].text.ends_with(
+            "Only matters for vanilla: Community Shaders doesn't read this normal map's alpha for specular on hair"
+        ),
+        "{}",
+        rows[0].text
+    );
+}
+
+#[test]
 fn info_check_results_are_never_problems_rows() {
     let d = tempfile::tempdir().unwrap();
     let m = pbr_wall(d.path(), 128, true);

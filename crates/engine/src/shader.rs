@@ -660,8 +660,9 @@ pub fn pick(i: &PickInput) -> ShaderPick {
         (Shader::Multilayer, AutoRule::I)
     } else if sfx("sk") {
         (Shader::Skin, AutoRule::Sk)
-    } else if sfx("flow") {
-        // Note CL35 (owner 2026-10-20): only hair has a flow map; a suffix rule, so it beats the path rules.
+    } else if sfx("flow") && !path("water") && !landscape_path() {
+        // Note CL35 (owner 2026-10-20): a `_flow` outside water and landscape is a hair flow map; a suffix rule, so
+        // it beats the hair/eyes path rules. Water and landscape sets fall through to the rules below as before.
         (Shader::Hair, AutoRule::Flow)
     } else if path("hair") {
         (Shader::Hair, AutoRule::HairPath)
@@ -1599,10 +1600,43 @@ mod tests {
                 (Shader::Hair, ShaderOrigin::Auto(AutoRule::Flow)),
                 "{t:?}"
             );
-            // A path rule that would pick another shader loses to the suffix rule.
-            for p in ["textures/actors/eyes/x.png", "textures/landscape/x.png"] {
-                assert_eq!(pick(&input(t, &s, &st, &[p])).shader, Shader::Hair, "{p}");
-            }
+            // The eyes path rule loses to the suffix rule.
+            let p = ["textures/actors/eyes/x.png"];
+            assert_eq!(pick(&input(t, &s, &st, &p)).shader, Shader::Hair);
+        }
+        // Fix M2: the suffix rules above `_flow` still win.
+        for (sf, want) in [("g", Shader::Glow), ("sk", Shader::Skin)] {
+            let s = sx(&["flow", sf]);
+            assert_eq!(
+                pick(&input(Target::Vanilla, &s, &st, &["textures/a/x.png"])).shader,
+                want,
+                "{sf}"
+            );
+        }
+        // Fix I1 (Note CL35): a water or landscape `_flow` is not hair; the later rules decide as before.
+        for (p, want) in [
+            (
+                "textures/water/water.png",
+                (Shader::Default, AutoRule::Otherwise),
+            ),
+            (
+                "textures/a/water/x.png",
+                (Shader::Default, AutoRule::Otherwise),
+            ),
+            (
+                "textures/landscape/x.png",
+                (Shader::Landscape, AutoRule::Landscape),
+            ),
+            (
+                "textures/a/landscape/x.png",
+                (Shader::Landscape, AutoRule::Landscape),
+            ),
+        ] {
+            assert_eq!(
+                auto(&pick(&input(Target::Vanilla, &s, &st, &[p]))),
+                (want.0, ShaderOrigin::Auto(want.1)),
+                "{p}"
+            );
         }
         // A skipped DDS `_flow` has no sub-type; the suffix alone picks.
         assert_eq!(
