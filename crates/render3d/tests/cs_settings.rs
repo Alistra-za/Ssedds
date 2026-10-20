@@ -283,6 +283,20 @@ fn preview_defines_follow_loaded_and_switches() {
     assert!(preview_defines(&ll_off, true).is_empty());
 }
 
+/// D5 (R1): Dynamic Cubemaps has no master switch (its ini has only [Info]): loaded means DYNAMIC_CUBEMAPS.
+#[test]
+fn dynamic_cubemaps_loaded_adds_the_define() {
+    let mut s = read_settings(&paths(true, true, true, None));
+    assert!(!preview_defines(&s, true)
+        .iter()
+        .any(|d| d == "DYNAMIC_CUBEMAPS"));
+    s.loaded.insert("DynamicCubemaps".into());
+    assert!(preview_defines(&s, true)
+        .iter()
+        .any(|d| d == "DYNAMIC_CUBEMAPS"));
+    assert!(preview_defines(&s, false).is_empty());
+}
+
 fn value<'a>(fd: &'a [(String, Vec<f64>)], name: &str) -> &'a [f64] {
     &fd.iter()
         .find(|(n, _)| n == name)

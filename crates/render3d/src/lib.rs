@@ -384,6 +384,11 @@ pub struct Renderer {
     deferred_error: Option<String>,
     /// Successful composite builds (test hook).
     composite_builds: usize,
+    /// The env cube from the HDRI (v2 D5), keyed by `Scene::env_yaw` bits; built in `render` only when the composite
+    /// or a drawn program reads one.
+    env: Option<(u32, composite::EnvMaps)>,
+    /// Env cube builds (test hook).
+    env_builds: usize,
 }
 
 impl Renderer {
@@ -486,6 +491,8 @@ impl Renderer {
             composite: None,
             deferred_error: None,
             composite_builds: 0,
+            env: None,
+            env_builds: 0,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -833,6 +840,12 @@ impl Renderer {
         self.composite.as_ref()
     }
 
+    /// Test hook: env cube builds since this renderer was made (one per yaw while something reads it).
+    #[doc(hidden)]
+    pub fn env_builds(&self) -> usize {
+        self.env_builds
+    }
+
     /// Test hook: successful composite builds since this renderer was made.
     #[doc(hidden)]
     pub fn composite_builds(&self) -> usize {
@@ -1128,6 +1141,7 @@ impl Renderer {
                 pipe(m)
             },
             deferred: self.deferred_for(m),
+            env_regs: env_regs(&program.ps.reflection),
             skinned: m.skinned,
             bound,
             built: m.clone(),
@@ -2256,6 +2270,34 @@ impl Renderer {
                 Target::new(&self.gpu, w, h)?
             });
         }
+        // D5: the env cube, before `gpu` and `target` are borrowed below. Any background (R7): the HDRI is the
+        // preview's environment.
+        let want_env = (deferred_frame
+            && self.debug == DebugOutput::Lit
+            && self.composite.as_ref().is_some_and(Composite::needs_env))
+            || self.draw_order.iter().any(|id| {
+                self.shapes[id]
+                    .draw
+                    .as_ref()
+                    .is_some_and(|d| !d.env_regs.is_empty())
+            });
+        let yaw = scene.env_yaw.to_bits();
+        if want_env && self.env.as_ref().is_none_or(|e| e.0 != yaw) {
+            let t = std::time::Instant::now();
+            self.env = None;
+            let e = composite::EnvMaps::new(
+                &self.gpu,
+                &hdri::studio().image,
+                hdri::ENV_SIZE,
+                scene.env_yaw,
+            )?;
+            self.env = Some((yaw, e));
+            self.env_builds += 1;
+            perf_log::emit(
+                "env_cube",
+                serde_json::json!({ "ms": perf_log::ms_since(t) }),
+            );
+        }
         let view = View::new(&scene.camera, self.bounds, w, h);
         // Taken, so a failed frame leaves "unknown" and the next one writes everything.
         let (lights_changed, view_changed) = match self.last_frame.take() {
@@ -2327,7 +2369,12 @@ impl Renderer {
                             false,
                         );
                         c.write_scene(gpu, scene, &view, &fv);
-                        c.dispatch(gpu, target)?;
+                        let inputs = composite::Inputs {
+                            depth: target.depth_srv.as_ref(),
+                            env: self.env.as_ref().map(|e| &e.1),
+                            sampler: None,
+                        };
+                        c.dispatch(gpu, target, &inputs)?;
                         ctx.OMSetRenderTargets(Some(&[Some(target.rtv.clone())]), &target.dsv);
                         bound_all = false;
                     }
@@ -2387,6 +2434,13 @@ impl Renderer {
                     for (reg, v) in &s.srvs {
                         ctx.PSSetShaderResources(*reg, Some(&[Some(v.clone())]));
                     }
+                    // D5 R3: the env cube over the 2×2 default at the forward DC registers (t30/t31).
+                    if let Some((_, e)) = &self.env {
+                        for (reg, reflections) in &s.env_regs {
+                            let v = if *reflections { &e.reflection } else { &e.env };
+                            ctx.PSSetShaderResources(*reg, Some(&[Some(v.clone())]));
+                        }
+                    }
                     for slot in &s.samplers {
                         ctx.PSSetSamplers(*slot, Some(&[Some(self.sampler.clone())]));
                     }
@@ -2433,6 +2487,24 @@ impl Renderer {
         };
         Ok(px)
     }
+}
+
+/// The PS registers the env cube is bound at: reflected cubes named `…EnvReflectionsTexture` (true) or `…EnvTexture`
+/// (CS's `DynamicCubemaps::` t30 / t31 under DYNAMIC_CUBEMAPS).
+fn env_regs(r: &compile::Reflection) -> Vec<(u32, bool)> {
+    r.srvs
+        .iter()
+        .filter(|s| s.2 == SrvKind::Cube)
+        .filter_map(|(n, reg, _)| {
+            if n.ends_with("EnvReflectionsTexture") {
+                Some((*reg, true))
+            } else if n.ends_with("EnvTexture") {
+                Some((*reg, false))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// A define the CS settings manage (C8): `ENABLE_LL` or a [`cs_settings::PREVIEW_FEATURES`] define.

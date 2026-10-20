@@ -106,6 +106,18 @@ fn resize_recreates_every_target() {
     assert!(r.read_mrt(1).is_err());
 }
 
+/// D5: the deferred depth is R32_TYPELESS with an R32_FLOAT SRV (the composite's DepthTexture); forward keeps D32.
+#[test]
+fn deferred_target_has_a_depth_srv() {
+    use render3d::device::{Gpu, Target};
+    let gpu = Gpu::new_warp().unwrap();
+    assert!(Target::new_deferred(&gpu, 8, 8)
+        .unwrap()
+        .depth_srv
+        .is_some());
+    assert!(Target::new(&gpu, 8, 8).unwrap().depth_srv.is_none());
+}
+
 /// D3D11 keeps the views it has bound alive: recreating the target must unbind them first, or the old textures
 /// outlive the Rust drop while the new ones are allocated. `drop_target` is what render's recreation branch calls.
 #[test]

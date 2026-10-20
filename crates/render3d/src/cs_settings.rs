@@ -56,6 +56,9 @@ pub const PREVIEW_FEATURES: &[(&str, &str)] = &[
     ("Skin", "CS_SKIN"),
     ("ExtendedMaterials", "EXTENDED_MATERIALS"),
     ("ExtendedTranslucency", "EXTENDED_TRANSLUCENCY"),
+    // No master switch (Features/DynamicCubemaps.ini has only [Info]): loaded means on. Lighting and the deferred
+    // composite get it together (D5 R1).
+    ("DynamicCubemaps", "DYNAMIC_CUBEMAPS"),
 ];
 
 /// Reads and merges the settings. Absent files are skipped; a file that does not parse is skipped with a note

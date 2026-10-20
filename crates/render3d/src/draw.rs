@@ -72,6 +72,8 @@ pub struct ShapeDraw {
     pub pipe: Pipe,
     /// Built from the DEFERRED permutation: draws with all 8 render targets bound.
     pub deferred: bool,
+    /// PS registers render binds the env cube at, after `srvs` (true = EnvReflectionsTexture, false = EnvTexture).
+    pub env_regs: Vec<(u32, bool)>,
     pub skinned: bool,
     /// Registers bound to a real texture (not a 1×1 default); the PBR flags and `EnvmapData.y` read it.
     pub bound: Bound,

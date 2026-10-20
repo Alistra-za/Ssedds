@@ -90,7 +90,8 @@ fn composite_runs_on_warp_with_stub_inputs() {
     assert_eq!(r.deferred_error(), None);
     r.render(&Scene::neutral(), 64, 64).unwrap();
     let rt0 = r.read_mrt(0).unwrap();
-    // b5 BufferDim written (else every thread exits), t0/t2 bound, t4 unbound reads 0.
+    // b5 BufferDim written (else every thread exits), t0/t2 bound; t4 (the deferred depth) is bound but reaches only
+    // u1 without STANDIN_COMPOSITE_DEPTH, as CS reads depth outside DYNAMIC_CUBEMAPS only for MotionVectorsRW.
     assert_eq!(px(&rt0, 64, 32, 32), plus_m4(base));
     assert_eq!(
         bits(px(&rt0, 64, 0, 0)),
@@ -268,6 +269,63 @@ fn installed_composite_reflects() {
     assert_eq!(r.threads, [8, 8, 1]);
 }
 
+/// D5 step 0: the installed composite with the A_DC defines reflects exactly what frame246061's composite.json binds
+/// (t0, t2, t4 depth, t5, t7 cube; t6 EnvTexture is stripped) and one sampler, s0 LinearSampler.
+#[test]
+#[ignore]
+fn installed_dc_composite_reflects() {
+    let Ok(shaders) = std::env::var("SDC_CS_SHADERS") else {
+        println!("skipped: set SDC_CS_SHADERS");
+        return;
+    };
+    use render3d::compile::SrvKind;
+    let gpu = render3d::device::Gpu::new().unwrap();
+    let src = render3d::source::SourceSet::new(shaders.into());
+    let cache = tempfile::tempdir().unwrap();
+    let defines = [
+        "CSHADER",
+        "DYNAMIC_CUBEMAPS",
+        "ENABLE_LL",
+        "CS_GAME_GAMMA=1.600000024",
+    ]
+    .map(String::from);
+    let c = Composite::new(&gpu, &src, &defines, cache.path()).unwrap();
+    let r = &c.reflection;
+    println!("srvs {:?}\nsamplers {:?}", r.srvs, r.samplers);
+    let srvs: Vec<(&str, u32, SrvKind)> = r.srvs.iter().map(|s| (s.0.as_str(), s.1, s.2)).collect();
+    assert_eq!(
+        srvs,
+        [
+            ("SpecularTexture", 0, SrvKind::Tex2D),
+            ("NormalRoughnessTexture", 2, SrvKind::Tex2D),
+            ("DepthTexture", 4, SrvKind::Tex2D),
+            ("ReflectanceTexture", 5, SrvKind::Tex2D),
+            ("EnvReflectionsTexture", 7, SrvKind::Cube),
+        ]
+    );
+    assert_eq!(r.samplers, [("LinearSampler".to_string(), 0)]);
+    assert!(c.needs_env());
+    if let Ok(root) = std::env::var("SDC_GOLDEN") {
+        let p = std::path::Path::new(&root)
+            .join("Skyrim_AE_1.6.1170_frame246061/composite/composite.json");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let bound: Vec<(String, u32)> = j["srvs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                (
+                    s["name"].as_str().unwrap().into(),
+                    s["bind"].as_u64().unwrap() as u32,
+                )
+            })
+            .collect();
+        let refl: Vec<(String, u32)> = r.srvs.iter().map(|s| (s.0.clone(), s.1)).collect();
+        assert_eq!(refl, bound, "frame246061 composite.json");
+    }
+}
+
 /// D-P12: a late composite failure with async compilation on still gives a complete forward frame at once: the
 /// forward programs are rebuilt synchronously, and no DEFERRED program (tinted here) draws into the forward target.
 #[test]
@@ -348,4 +406,186 @@ fn define_change_during_async_toggle_off_settles_forward_at_once() {
         .filter(|(a, b)| a != b)
         .count();
     assert_eq!(diff, 0, "pixels that differ from a fresh forward frame");
+}
+
+const DEPTH: &str = "STANDIN_COMPOSITE_DEPTH";
+const DC: &str = "DYNAMIC_CUBEMAPS";
+/// The stand-in's RT5 (Reflectance) marker.
+const M5: [f32; 3] = [0.25, 0.125, 0.5];
+
+/// The 1×1 mip of face +Z of the studio env cube at yaw 0, as the GPU stores it (RGBA16F).
+fn env_last_z() -> [f32; 4] {
+    let faces = render3d::hdri::cube_faces(&render3d::hdri::studio().image, 256, 0.0);
+    let chain = render3d::hdri::mip_chain(&faces[4], 256);
+    chain.last().unwrap()[0].map(|v| half::f16::from_f32(v).to_f32())
+}
+
+fn f16(v: f32) -> f32 {
+    half::f16::from_f32(v).to_f32()
+}
+
+/// The deferred depth is bound to DepthTexture: with STANDIN_COMPOSITE_DEPTH a pixel no draw covered (cleared depth
+/// 1.0) gains exactly 1.
+#[test]
+fn composite_reads_the_bound_depth() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = loaded(cache.path(), &feats(&[DEPTH]), vec![opaque()]);
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    let corner = px(&r.read_mrt(0).unwrap(), 64, 0, 0);
+    r.set_deferred(true).unwrap();
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    let got = px(&r.read_mrt(0).unwrap(), 64, 0, 0);
+    let want = [
+        f16(corner[0] + 1.0),
+        f16(corner[1] + 1.0),
+        f16(corner[2] + 1.0),
+        1.0,
+    ];
+    assert_eq!(bits(got), bits(want), "{got:?} vs {want:?}");
+    assert_eq!(r.bound_cs_views(), 0);
+}
+
+/// DYNAMIC_CUBEMAPS: the composite adds RT5 × the env cube's level-15 +Z sample (the HDRI cube, yaw 0).
+#[test]
+fn dc_composite_adds_reflectance_times_the_env_cube() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut fwd = loaded(cache.path(), FLAT, vec![opaque()]);
+    fwd.render(&Scene::neutral(), 64, 64).unwrap();
+    let base = px(&fwd.read_mrt(0).unwrap(), 64, 32, 32);
+    let mut r = loaded(cache.path(), &feats(&[DC]), vec![opaque()]);
+    r.set_deferred(true).unwrap();
+    assert_eq!(r.deferred_error(), None);
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    let e = env_last_z();
+    let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
+    // The f32 sums are exact here (M5 is a power of two times an f16); G lands exactly halfway between two halves, and
+    // D3D lets the UAV store round a tie either way (WARP rounds toward zero), so each channel must be bit-equal to
+    // one of the two halves around the exact sum.
+    for k in 0..3 {
+        let sum = base[k] + M5[k] * e[k];
+        let (near, zero) = (f16(sum), f16_toward_zero(sum));
+        assert!(
+            got[k].to_bits() == near.to_bits() || got[k].to_bits() == zero.to_bits(),
+            "ch {k}: {got:?}, sum {sum} -> {near} / {zero}"
+        );
+    }
+    assert_eq!(got[3], 1.0);
+    assert_eq!(r.bound_cs_views(), 0);
+}
+
+/// `v` (positive) rounded to a half toward zero.
+fn f16_toward_zero(v: f32) -> f32 {
+    let h = half::f16::from_f32(v);
+    if h.to_f32() > v {
+        half::f16::from_bits(h.to_bits() - 1).to_f32()
+    } else {
+        h.to_f32()
+    }
+}
+
+/// Views bound to the compute stage of `gpu` (SRVs 0..20 + UAVs 0..8).
+fn cs_views(gpu: &render3d::device::Gpu) -> usize {
+    use windows::Win32::Graphics::Direct3D11::{
+        ID3D11ShaderResourceView, ID3D11UnorderedAccessView,
+    };
+    let mut s: [Option<ID3D11ShaderResourceView>; 20] = Default::default();
+    let mut u: [Option<ID3D11UnorderedAccessView>; 8] = Default::default();
+    unsafe {
+        gpu.ctx.CSGetShaderResources(0, Some(&mut s));
+        gpu.ctx.CSGetUnorderedAccessViews(0, Some(&mut u));
+    }
+    s.iter().flatten().count() + u.iter().flatten().count()
+}
+
+#[test]
+fn composite_without_env_input_fails_closed() {
+    use render3d::composite::Inputs;
+    use render3d::device::{Gpu, Target};
+    let gpu = Gpu::new_warp().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let src = render3d::source::SourceSet::new(standin_root());
+    let c = Composite::new(&gpu, &src, &["CSHADER".into(), DC.into()], cache.path()).unwrap();
+    assert!(c.needs_env());
+    let t = Target::new_deferred(&gpu, 16, 16).unwrap();
+    let e = c
+        .dispatch(
+            &gpu,
+            &t,
+            &Inputs {
+                depth: t.depth_srv.as_ref(),
+                env: None,
+                sampler: None,
+            },
+        )
+        .unwrap_err();
+    assert!(e.contains("EnvReflectionsTexture"), "{e}");
+    assert_eq!(cs_views(&gpu), 0);
+    let plain = Composite::new(&gpu, &src, &["CSHADER".into()], cache.path()).unwrap();
+    assert!(!plain.needs_env());
+}
+
+/// Built in `render` only when something reads it (the DC composite or a forward env register), once per yaw.
+#[test]
+fn env_cube_is_built_once_per_yaw() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = loaded(cache.path(), &feats(&[DC]), vec![opaque()]);
+    r.set_deferred(true).unwrap();
+    let mut s = Scene::neutral();
+    r.render(&s, 64, 64).unwrap();
+    r.render(&s, 64, 64).unwrap();
+    assert_eq!(r.env_builds(), 1);
+    s.env_yaw = 0.5;
+    let (_, events) = render3d::perf_log::capture(|| r.render(&s, 64, 64).unwrap());
+    assert_eq!(r.env_builds(), 2);
+    let ev = events
+        .iter()
+        .find(|e| e["event"] == "env_cube")
+        .unwrap_or_else(|| panic!("no env_cube event in {events:?}"));
+    println!("env_cube build {} ms", ev["ms"]);
+    let mut plain = loaded(cache.path(), &feats(&[ADD]), vec![opaque()]);
+    plain.set_deferred(true).unwrap();
+    plain.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(plain.env_builds(), 0);
+}
+
+/// R3: a forward DC draw reads the env cube at its EnvReflectionsTexture register (the stand-in adds its level-15 +Z
+/// sample under DYNAMIC_CUBEMAPS && STANDIN_FLAT, forward only).
+#[test]
+fn forward_dc_draw_samples_the_env_cube() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut plain = loaded(cache.path(), FLAT, vec![opaque()]);
+    plain.render(&Scene::neutral(), 64, 64).unwrap();
+    let base = px(&plain.read_mrt(0).unwrap(), 64, 32, 32);
+    let mut r = loaded(cache.path(), &feats(&[DC]), vec![opaque()]);
+    r.render(&Scene::neutral(), 64, 64).unwrap();
+    let e = env_last_z();
+    let want = [
+        f16(base[0] + e[0]),
+        f16(base[1] + e[1]),
+        f16(base[2] + e[2]),
+        base[3],
+    ];
+    let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
+    assert_eq!(bits(got), bits(want), "{got:?} vs {want:?}");
+    assert_eq!(r.env_builds(), 1);
+}
+
+/// R2: an unbound env cube (default) is 2×2 black, so Lighting's DC marker test (a 1×1 cube, Lighting.hlsl:2024-2046)
+/// never mistakes a missing cube for CS's dynamic cubemap.
+#[test]
+fn missing_env_cube_is_not_the_dc_marker() {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_TEXTURE2D_DESC};
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    let v = render3d::textures::default_srv(&gpu, render3d::compile::SrvKind::Cube, [0, 0, 0, 255])
+        .unwrap();
+    let mut d = D3D11_TEXTURE2D_DESC::default();
+    unsafe {
+        v.GetResource()
+            .unwrap()
+            .cast::<ID3D11Texture2D>()
+            .unwrap()
+            .GetDesc(&mut d)
+    };
+    assert_eq!((d.Width, d.Height, d.ArraySize, d.MipLevels), (2, 2, 6, 1));
 }

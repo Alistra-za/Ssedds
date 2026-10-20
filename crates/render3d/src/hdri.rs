@@ -243,6 +243,74 @@ pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
     integrate(&cells(img), 0.0)
 }
 
+/// Side of the environment cube (v2 D5): the captured Dynamic Cubemaps cube is 256², 9 mips.
+pub const ENV_SIZE: u32 = 256;
+
+/// CS's GetSamplingVector (DynamicCubemaps/CaptureCommon.hlsli:48): texel centre of face 0..6 (+X −X +Y −Y +Z −Z) →
+/// unit world direction. This is D3D's cube addressing (tests/hdri.rs checks it on the GPU).
+pub fn cube_dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
+    let s = (x as f32 + 0.5) / size as f32;
+    let t = (y as f32 + 0.5) / size as f32;
+    let (u, v) = (2.0 * s - 1.0, 2.0 * (1.0 - t) - 1.0);
+    let d = match face {
+        0 => [1.0, v, -u],
+        1 => [-1.0, v, u],
+        2 => [u, 1.0, -v],
+        3 => [u, -1.0, v],
+        4 => [u, v, 1.0],
+        _ => [-u, v, -1.0],
+    };
+    let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    d.map(|c| c / n)
+}
+
+/// Mip 0 of the env cube turned by `yaw` (as the backdrop and [`integrate`]): per texel, the equirect pixel holding
+/// `dir_to_uv(Rz(-yaw)·cube_dir)`, alpha 1. Face-major, rows top first.
+pub fn cube_faces(img: &Hdr, size: u32, yaw: f32) -> [Vec<[f32; 4]>; 6] {
+    let (s, c) = (-yaw).sin_cos();
+    let (w, h) = (img.width, img.height);
+    std::array::from_fn(|f| {
+        let mut out = Vec::with_capacity((size * size) as usize);
+        for y in 0..size {
+            for x in 0..size {
+                let d = cube_dir(f, x, y, size);
+                let (u, v) = dir_to_uv([d[0] * c - d[1] * s, d[0] * s + d[1] * c, d[2]]);
+                let px = ((u * w as f32) as usize).min(w - 1);
+                let py = ((v * h as f32) as usize).min(h - 1);
+                let i = (py * w + px) * 3;
+                out.push([img.rgb[i], img.rgb[i + 1], img.rgb[i + 2], 1.0]);
+            }
+        }
+        out
+    })
+}
+
+/// 2×2 box mips down to 1×1, mip 0 included. `size` must be a power of two and `face` `size²` texels.
+/// shortcut: a box chain, not CS's GGX-prefiltered specular irradiance; prefilter if the owner's visual check asks (R4).
+pub fn mip_chain(face: &[[f32; 4]], size: u32) -> Vec<Vec<[f32; 4]>> {
+    assert!(size.is_power_of_two() && face.len() == (size * size) as usize);
+    let mut out = vec![face.to_vec()];
+    let mut n = size as usize;
+    while n > 1 {
+        let (prev, h) = (out.last().expect("mip 0"), n / 2);
+        let next = (0..h * h)
+            .map(|i| {
+                let (x, y) = (i % h * 2, i / h * 2);
+                let (a, b, c, d) = (
+                    prev[y * n + x],
+                    prev[y * n + x + 1],
+                    prev[(y + 1) * n + x],
+                    prev[(y + 1) * n + x + 1],
+                );
+                std::array::from_fn(|k| (a[k] + b[k] + c[k] + d[k]) * 0.25)
+            })
+            .collect();
+        out.push(next);
+        n = h;
+    }
+    out
+}
+
 /// The bundled studio HDRI with its ambient, decoded on first use.
 pub struct Studio {
     pub image: Hdr,

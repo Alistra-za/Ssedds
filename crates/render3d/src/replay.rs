@@ -31,8 +31,8 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_D32_FLOAT,
     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT,
-    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
-    DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32_TYPELESS,
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 
 /// One golden subject, read by [`load_fixture`].
@@ -957,7 +957,7 @@ fn seeded_depth(
     ))
 }
 
-/// The crop of a depth texture (D32_FLOAT, or R24G8_TYPELESS read as D24) as 0..1 floats. Whole-resource copy:
+/// The crop of a depth texture (D32_FLOAT or R32_TYPELESS as f32, R24G8_TYPELESS read as D24) as 0..1 floats. Whole-resource copy:
 /// depth-stencil resources take no partial-box copies.
 fn read_depth(gpu: &Gpu, tex: &ID3D11Texture2D, crop: [u32; 4]) -> Result<Vec<f32>, String> {
     let mut d = D3D11_TEXTURE2D_DESC::default();
@@ -978,7 +978,7 @@ fn read_depth(gpu: &Gpu, tex: &ID3D11Texture2D, crop: [u32; 4]) -> Result<Vec<f3
     // Fail closed on any other layout: never read unknown bits as f32.
     let d24 = match d.Format {
         DXGI_FORMAT_R24G8_TYPELESS => true,
-        DXGI_FORMAT_D32_FLOAT => false,
+        DXGI_FORMAT_D32_FLOAT | DXGI_FORMAT_R32_TYPELESS => false,
         f => return Err(format!("depth readback: format {} not supported", f.0)),
     };
     let [x, y, w, h] = crop.map(|v| v as usize);
@@ -1329,7 +1329,12 @@ impl Renderer {
                 rc.thread_groups
             ));
         }
-        c.dispatch(gpu, target)?;
+        let inputs = crate::composite::Inputs {
+            depth: target.depth_srv.as_ref(),
+            env: None,
+            sampler: None,
+        };
+        c.dispatch(gpu, target, &inputs)?;
         target.read_f32(gpu, 0, r.crop)
     }
 }
