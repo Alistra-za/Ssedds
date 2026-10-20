@@ -305,7 +305,8 @@ fn json(path: &Path) -> Result<Value, String> {
 
 /// The extractors write Python's `NaN` / `Infinity` / `-Infinity` (garbage cbuffer vars such as WindTimers); serde
 /// rejects them, so outside strings they become `null`. No field replay reads may be non-finite.
-fn nonfinite_to_null(s: &str) -> String {
+#[doc(hidden)]
+pub fn nonfinite_to_null(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let (mut in_str, mut esc) = (false, false);
     let mut rest = s;
