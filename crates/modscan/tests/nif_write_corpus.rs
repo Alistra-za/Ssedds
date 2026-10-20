@@ -681,3 +681,165 @@ fn slsf_bit_census() {
     println!("{out}");
     let _ = std::fs::write(std::env::temp_dir().join("slsf-census.txt"), &out);
 }
+
+/// How much shared-block structure v2 edits must handle (alpha, texture set, lighting property, interpolator
+/// sharing). Prep for the manual check; asserts only that files were found. Env: SDC_ACHERUS and SDC_BSA; output
+/// also to sharing-census.txt in the system temp folder.
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn sharing_census() {
+    use modscan::{mo2::Instance, scan::run, scan::Source, store::Store};
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::{atomic::AtomicBool, Arc, Mutex};
+    type Open = Arc<(vfs::bsa::Bsa, HashMap<String, usize>)>;
+    type Hit = (u64, u64, [bool; 5]);
+    const CATS: [&str; 5] = [
+        "alpha prop with >1 shape user",
+        "texture set with >1 BSLSP user",
+        "lighting prop with >1 shape user",
+        "interpolator used by >1 controller",
+        "shared alpha whose chain has a managed controller",
+    ];
+
+    // (shapes, shapes on shared alpha props, per-category hit)
+    fn census(b: &[u8]) -> Option<Hit> {
+        nif::scan::scan(b).ok()?;
+        let m = read_model(b).ok()?;
+        let shared_alpha = || m.alphas.values().filter(|a| a.prop.users.len() > 1);
+        let mut by_interp: BTreeMap<i32, u32> = BTreeMap::new();
+        for i in m.ctrls.values().filter_map(|c| c.interp) {
+            *by_interp.entry(i).or_default() += 1;
+        }
+        let hit = [
+            shared_alpha().next().is_some(),
+            m.texsets.values().any(|t| t.users.len() > 1),
+            m.lighting.values().any(|l| l.prop.users.len() > 1),
+            by_interp.values().any(|&n| n > 1),
+            shared_alpha().any(|a| a.prop.ctrls.iter().any(|&c| m.managed(c))),
+        ];
+        let affected = shared_alpha().map(|a| a.prop.users.len() as u64).sum();
+        Some((m.shapes.len() as u64, affected, hit))
+    }
+
+    #[derive(Default)]
+    struct Tally {
+        files: u64,
+        shapes: u64,
+        affected: u64,
+        cat: [(u64, Vec<(bool, String)>); 5],
+    }
+    impl Tally {
+        fn add(&mut self, origin: &str, loose: bool, r: Hit) {
+            self.files += 1;
+            self.shapes += r.0;
+            self.affected += r.1;
+            for (c, _) in r.2.iter().enumerate().filter(|(_, &h)| h) {
+                self.cat[c].0 += 1;
+                self.cat[c].1.push((loose, origin.to_string()));
+            }
+        }
+        fn table(&mut self, title: &str) -> String {
+            let mut s = format!(
+                "== {title}: {} NIFs accepted, {} shapes; shapes on shared alpha props: {} ==\n",
+                self.files, self.shapes, self.affected
+            );
+            for (i, name) in CATS.iter().enumerate() {
+                let (n, ex) = &mut self.cat[i];
+                ex.sort_by_key(|(loose, o)| (!*loose, o.clone())); // loose mod files first
+                s += &format!("  {name}: {n} files\n");
+                for (_, o) in ex.iter().take(10) {
+                    s += &format!("      {o}\n");
+                }
+            }
+            s
+        }
+    }
+
+    let (Some(root), Some(bsa_path)) = (env_path("SDC_ACHERUS"), env_path("SDC_BSA")) else {
+        return;
+    };
+    let mut out = String::new();
+
+    let bsa = vfs::bsa::Bsa::open(&bsa_path).unwrap();
+    let name = bsa_path.file_name().unwrap().to_string_lossy().to_string();
+    let found: Vec<(String, Hit)> = bsa
+        .entries
+        .par_iter()
+        .filter(|e| e.norm.ends_with(".nif"))
+        .filter_map(|e| Some((e.norm.clone(), census(&bsa.read(e).ok()?)?)))
+        .collect();
+    assert!(!found.is_empty(), "no BSA nif accepted");
+    let mut vanilla = Tally::default();
+    for (p, r) in found {
+        vanilla.add(&format!("{name}:{p}"), false, r);
+    }
+    out += &vanilla.table(&format!("vanilla BSA {name}"));
+
+    let db = std::env::temp_dir().join("sdc-v2a-corpus.db");
+    for ext in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{ext}", db.display()));
+    }
+    let mut store = Store::open(&db).unwrap();
+    run(
+        &Source::Mo2(Instance::load(&root, None).unwrap()),
+        &mut store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &modscan::win::process_names,
+    )
+    .unwrap();
+    let ids: Vec<i64> = store
+        .conn()
+        .prepare("SELECT copy_id FROM nif_winner")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let locs: Vec<(String, i32, String)> = ids
+        .into_iter()
+        .filter_map(|id| store.copy_location(id).unwrap())
+        .filter(|(p, ..)| !p.contains("facegendata/"))
+        .map(|(p, k, root, _)| (p, k, root))
+        .collect();
+    let archives: Mutex<HashMap<String, Open>> = Mutex::new(HashMap::new());
+    let found: Vec<(String, bool, Hit)> = locs
+        .par_iter()
+        .filter_map(|(p, kind, root)| {
+            let bsa = *kind == modscan::store::KIND_BSA;
+            let bytes = if bsa {
+                let a = archives
+                    .lock()
+                    .unwrap()
+                    .entry(root.clone())
+                    .or_insert_with(|| {
+                        let b = vfs::bsa::Bsa::open(Path::new(root)).unwrap();
+                        let ix = (b.entries.iter().enumerate())
+                            .map(|(i, e)| (e.norm.clone(), i))
+                            .collect();
+                        Arc::new((b, ix))
+                    })
+                    .clone();
+                a.1.get(p).and_then(|&i| a.0.read(&a.0.entries[i]).ok())
+            } else {
+                std::fs::read(Path::new(root).join(p)).ok()
+            }?;
+            let mut c: Vec<&str> = root
+                .rsplit(['\\', '/'])
+                .take(if bsa { 2 } else { 1 })
+                .collect();
+            c.reverse();
+            Some((format!("{}:{p}", c.join("/")), !bsa, census(&bytes)?))
+        })
+        .collect();
+    assert!(!found.is_empty(), "no winner nif accepted");
+    let mut mods = Tally::default();
+    for (o, loose, r) in found {
+        mods.add(&o, loose, r);
+    }
+    out += &format!("\n{}", mods.table("mod winners"));
+
+    println!("{out}");
+    let _ = std::fs::write(std::env::temp_dir().join("sharing-census.txt"), &out);
+}
