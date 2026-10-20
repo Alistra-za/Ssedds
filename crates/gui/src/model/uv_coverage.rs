@@ -495,8 +495,21 @@ pub struct Coverage {
 
 /// The UV coverage of `tex` (`tex_size` = [width, height]) over every winning shape that names it. `Err` for a DB
 /// that cannot be opened or queried, and [`CANCELLED`] when `cancel` is set (checked before the query, between NIFs
-/// and between shapes), so a partial mask is never taken as the answer.
+/// and between shapes), so a partial mask is never taken as the answer. Each archive is indexed once per call.
 pub fn coverage_for(
+    db: &Path,
+    tex: &str,
+    tex_size: [u32; 2],
+    cancel: &AtomicBool,
+) -> Result<Coverage, String> {
+    coverage_for_with(&FileReader::default(), db, tex, tex_size, cancel)
+}
+
+/// `coverage_for` through `reader`, so a worker reading many textures indexes each archive once (final review M1).
+// shortcut: no cap on the winning NIFs and shapes read per texture (cancellable between them, on a worker, never the
+// UI thread); cap or sample them if Check all is slow on huge sets.
+pub fn coverage_for_with(
+    reader: &FileReader,
     db: &Path,
     tex: &str,
     tex_size: [u32; 2],
@@ -507,7 +520,6 @@ pub fn coverage_for(
         return Err(CANCELLED.into());
     }
     let shapes = winning_shapes(db, tex)?;
-    let reader = FileReader::default(); // each archive is opened and indexed once per call
     let mut isl = UvIslands::new(MASK_SIZE);
     let (mut nifs, mut errors) = (0, vec![]);
     for s in &shapes {
@@ -566,8 +578,9 @@ pub fn coverage_for(
 
 // ---- Task 8: the session cache, the reads, the scan-has-rows probe and "Check all UV coverage" ----
 
-/// How a read gets a texture's coverage: `coverage_for`, or a slow or panicking stand-in in tests.
-pub type ReadFn = fn(&Path, &str, [u32; 2], &AtomicBool) -> Result<Coverage, String>;
+/// How a read gets a texture's coverage: `coverage_for_with`, or a slow or panicking stand-in in tests. The reader
+/// is the worker thread's own (one per Check-all thread, M1).
+pub type ReadFn = fn(&FileReader, &Path, &str, [u32; 2], &AtomicBool) -> Result<Coverage, String>;
 
 /// A cache key: the scan path and the written size the gutter was measured at (review I1).
 pub(super) type Key = (String, [u32; 2]);
@@ -631,7 +644,7 @@ impl Default for UvState {
             probing: None,
             stamp: None,
             any_colour: false,
-            read: coverage_for,
+            read: coverage_for_with,
         }
     }
 }
@@ -710,20 +723,22 @@ pub fn failed(c: &Coverage) -> bool {
 /// panic too (K9); `None` when `cancel` is set, so a cancelled read is never an answer (the flag decides, not the
 /// message, review M4).
 fn read_one(
+    reader: &FileReader,
     read: ReadFn,
     db: &Path,
     tex: &str,
     size: [u32; 2],
     cancel: &AtomicBool,
 ) -> Option<Arc<Coverage>> {
-    let got =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(db, tex, size, cancel)))
-            .unwrap_or_else(|p| {
-                Err(format!(
-                    "internal error: {}",
-                    crate::worker::panic_text(&*p)
-                ))
-            });
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        read(reader, db, tex, size, cancel)
+    }))
+    .unwrap_or_else(|p| {
+        Err(format!(
+            "internal error: {}",
+            crate::worker::panic_text(&*p)
+        ))
+    });
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
@@ -763,12 +778,14 @@ pub fn check_all_run(
     std::thread::scope(|s| {
         for _ in 0..job.jobs.clamp(1, total.max(1)) {
             s.spawn(|| {
+                let reader = FileReader::default();
                 while !cancel.load(Ordering::Relaxed) {
                     let Some((tex, size)) = job.work.get(next.fetch_add(1, Ordering::Relaxed))
                     else {
                         break;
                     };
-                    let Some(coverage) = read_one(job.read, &job.db, tex, *size, cancel) else {
+                    let Some(coverage) = read_one(&reader, job.read, &job.db, tex, *size, cancel)
+                    else {
                         break;
                     };
                     let _ = tx.send(WorkerMsg::UvCoverage {
@@ -930,7 +947,8 @@ impl super::AppModel {
         crate::worker::spawn_guarded(self.tx.clone(), "uv-read", move |tx| {
             // `read_one` turns a panic into this tex's error answer, so the read is not pending forever (K9). Only a
             // clear or a new folder cancels a single read, and either already dropped it from `pending`.
-            if let Some(coverage) = read_one(read, &db, &tex, size, &cancel) {
+            if let Some(coverage) = read_one(&FileReader::default(), read, &db, &tex, size, &cancel)
+            {
                 let _ = tx.send(crate::worker::WorkerMsg::UvCoverage {
                     generation,
                     tex,

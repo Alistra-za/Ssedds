@@ -625,15 +625,27 @@ fn harness(model: AppModel) -> Harness<'static, AppModel> {
 }
 
 /// A read that waits (up to 5 s, or until cancelled) before it reads.
-fn slow(db: &Path, tex: &str, size: [u32; 2], cancel: &AtomicBool) -> Result<Coverage, String> {
+fn slow(
+    r: &sdc_gui::model::viewport3d::FileReader,
+    db: &Path,
+    tex: &str,
+    size: [u32; 2],
+    cancel: &AtomicBool,
+) -> Result<Coverage, String> {
     let end = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < end && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(5));
     }
-    coverage_for(db, tex, size, cancel)
+    coverage_for_with(r, db, tex, size, cancel)
 }
 
-fn panics(_: &Path, _: &str, _: [u32; 2], _: &AtomicBool) -> Result<Coverage, String> {
+fn panics(
+    _: &sdc_gui::model::viewport3d::FileReader,
+    _: &Path,
+    _: &str,
+    _: [u32; 2],
+    _: &AtomicBool,
+) -> Result<Coverage, String> {
     panic!("forced UV read panic")
 }
 
@@ -763,7 +775,7 @@ fn check_all_polls_without_greying_advanced() {
         "{fields:?}"
     );
     let m = h.state_mut();
-    m.uv.read = coverage_for;
+    m.uv.read = coverage_for_with;
     m.cancel_check_all_uv();
     assert!(m.wait_idle(Duration::from_secs(20)));
     assert!(!m.v2_jobs_pending() && m.uv.all_progress().is_none());
@@ -820,7 +832,7 @@ fn coverage_lands_in_the_cache_and_a_finished_scan_clears_it() {
 fn a_failed_read_is_cached_and_a_cancelled_one_is_not() {
     let d = tempfile::tempdir().unwrap();
     let mut m = uv_model(d.path(), Some(real_db(d.path())));
-    m.uv.read = |_, _, _, _| Err("no such table: path".into());
+    m.uv.read = |_, _, _, _, _| Err("no such table: path".into());
     assert!(m.uv_coverage(WALL).is_none());
     assert!(m.wait_idle(Duration::from_secs(10)));
     let c = m.uv_coverage(WALL).expect("the error is cached");
@@ -838,13 +850,14 @@ fn a_failed_read_is_cached_and_a_cancelled_one_is_not() {
     let mut m = uv_model(d.path(), Some(real_db(d.path())));
     static STARTED: AtomicBool = AtomicBool::new(false);
     fn signals(
+        r: &sdc_gui::model::viewport3d::FileReader,
         db: &Path,
         tex: &str,
         size: [u32; 2],
         cancel: &AtomicBool,
     ) -> Result<Coverage, String> {
         STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
-        slow(db, tex, size, cancel)
+        slow(r, db, tex, size, cancel)
     }
     m.uv.read = signals;
     m.check_all_uv();
@@ -967,7 +980,7 @@ fn check_all_cancels_between_textures() {
             db: f.db.clone(),
             work,
             jobs: 4,
-            read: coverage_for,
+            read: coverage_for_with,
         };
         check_all_run(&tx, &job, &AtomicBool::new(cancel));
         drop(tx);
@@ -1042,7 +1055,7 @@ fn the_ui_thread_never_reads_the_scan_db() {
     h.run_steps(4);
     assert!(h.state().uv.read_pending(), "the preview asked for no read");
     let m = h.state_mut();
-    m.uv.read = coverage_for;
+    m.uv.read = coverage_for_with;
     assert!(m.wait_idle(Duration::from_secs(20)));
     h.run_steps(2);
     // The read landed (on the worker); this thread opened no scan DB, for the probe or the read.
@@ -1125,7 +1138,7 @@ fn an_unknown_size_reads_nothing_and_a_size_change_reads_again() {
 fn a_failed_read_paints_no_overlay_and_disables_the_toggle() {
     let d = tempfile::tempdir().unwrap();
     let mut m = uv_model(d.path(), Some(real_db(d.path())));
-    m.uv.read = |_, _, _, _| Err("database is locked".into());
+    m.uv.read = |_, _, _, _, _| Err("database is locked".into());
     m.expand(WALL);
     assert!(m.wait_idle(Duration::from_secs(60)));
     m.uv_coverage(WALL);
@@ -1407,7 +1420,7 @@ fn check_all_over_many_textures_holds_no_overlay_images() {
     m.scan_db = Some(real_db(d.path()));
     m.open_folder(root);
     assert!(m.wait_idle(Duration::from_secs(60)));
-    m.uv.read = |_, _, _, _| {
+    m.uv.read = |_, _, _, _, _| {
         Ok(Coverage {
             mask: Arc::new(UvMask::new(MASK_SIZE)),
             used: 0.0,
@@ -1431,4 +1444,41 @@ fn check_all_over_many_textures_holds_no_overlay_images() {
     assert!(m.wait_idle(Duration::from_secs(10)));
     assert_eq!(m.uv_overlay(&items[0]).map(|i| i.size), Some([512, 512]));
     assert!(m.uv_overlay(&items[1]).is_none());
+}
+
+/// Final review M1: a Check-all thread reads every texture through one `FileReader`, so each archive is indexed once
+/// per thread, not once per texture. Each stand-in read opens its own (missing) archive; on one thread the reader
+/// has seen all three by the last texture.
+#[test]
+fn check_all_shares_one_file_reader_per_thread() {
+    use sdc_gui::model::viewport3d::FileReader;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static SEEN: AtomicUsize = AtomicUsize::new(0);
+    fn read(
+        r: &FileReader,
+        _: &Path,
+        tex: &str,
+        _: [u32; 2],
+        _: &AtomicBool,
+    ) -> Result<Coverage, String> {
+        let _ = r.read(&FileSource::Bsa {
+            archive: format!("Z:/missing/{tex}.bsa").into(),
+            norm: "meshes/a.nif".into(),
+        });
+        SEEN.fetch_max(r.archives(), Ordering::SeqCst);
+        Err("stand-in".into())
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let job = AllJob {
+        run: 1,
+        generation: 1,
+        db: Path::new("unused.db").into(),
+        work: ["a", "b", "c"].map(|t| (t.to_string(), [64, 64])).to_vec(),
+        jobs: 1,
+        read,
+    };
+    check_all_run(&tx, &job, &AtomicBool::new(false));
+    drop(tx);
+    assert_eq!(rx.iter().count(), 7, "3 answers, 3 progress lines, the end");
+    assert_eq!(SEEN.load(Ordering::SeqCst), 3);
 }
