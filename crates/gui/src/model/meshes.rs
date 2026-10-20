@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub mod edit_doc;
+pub mod nif_edit;
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
@@ -516,6 +517,8 @@ pub struct MeshesModel {
     pub folder_items_for: (Vec<String>, u64),
     /// The 3D panel.
     pub v3: Viewport3d,
+    /// The open NIF edit session (v2 A16), for the selected NIF.
+    pub edit: Option<nif_edit::NifEdit>,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
     /// Result of the All meshes search for `all_query` (winners with their mod), at most `ALL_LIMIT`.
@@ -601,6 +604,7 @@ impl MeshesModel {
             open_in_textures: None,
             folder_items_for: (vec![], u64::MAX),
             v3: Viewport3d::new(None),
+            edit: None,
             procs: system_procs,
             settings,
             settings_changed: false,
@@ -983,6 +987,7 @@ impl MeshesModel {
         self.plugin_uses.clear();
         self.plugin_inert.clear();
         self.show_inert_uses = false;
+        self.drop_edit();
         self.v3.set_mesh(None);
     }
 
@@ -1423,8 +1428,33 @@ fn mesh_spec(
     let Some((path, kind, root, le_mesh)) = store.copy_location(copy)? else {
         return Ok(None);
     };
+    let paths: Vec<(u32, Vec<String>)> = shapes
+        .iter()
+        .map(|s| {
+            let ty = s.shader_type.filter(|_| s.shader_kind == 1).unwrap_or(0);
+            let slots = s.textures.iter().map(|t| t.clone().unwrap_or_default());
+            (ty, slots.collect())
+        })
+        .collect();
+    let textures = texture_sources(store, &paths)?;
+    Ok(Some(MeshSpec {
+        key: copy,
+        nif: FileSource::from_store(kind, &root, &path),
+        textures,
+        le_mesh,
+        head_part: store.is_head_part_mesh(&path).unwrap_or(false), // shading only: a failed lookup is body
+    }))
+}
+
+/// Where the game's copy of each texture is, for shapes given as (shader type, slot paths; "" = empty): every slot
+/// path the store has, then the skin RFAOS candidates (render3d resolves only through this map), those optional: a
+/// failed read is quiet. The first entry for a path wins.
+fn texture_sources(
+    store: &Store,
+    paths: &[(u32, Vec<String>)],
+) -> Result<HashMap<String, FileSource>, ScanError> {
     let mut textures = HashMap::new();
-    for t in shapes.iter().flat_map(|s| s.textures.iter().flatten()) {
+    for t in paths.iter().flat_map(|(_, s)| s).filter(|t| !t.is_empty()) {
         if textures.contains_key(t) {
             continue;
         }
@@ -1432,11 +1462,9 @@ fn mesh_spec(
             textures.insert(t.clone(), FileSource::from_store(k, &r, t));
         }
     }
-    // The skin RFAOS candidates too (render3d resolves only through this map), optional: a failed read is quiet.
-    for s in shapes {
-        let slot = |i: usize| s.textures.get(i).cloned().flatten().unwrap_or_default();
-        let ty = s.shader_type.filter(|_| s.shader_kind == 1).unwrap_or(0);
-        for c in render3d::textures::rfaos_candidates(ty, &slot(1), &slot(7)) {
+    for (ty, s) in paths {
+        let slot = |i: usize| s.get(i).map_or("", String::as_str);
+        for c in render3d::textures::rfaos_candidates(*ty, slot(1), slot(7)) {
             if textures.contains_key(&c) {
                 continue;
             }
@@ -1446,13 +1474,7 @@ fn mesh_spec(
             }
         }
     }
-    Ok(Some(MeshSpec {
-        key: copy,
-        nif: FileSource::from_store(kind, &root, &path),
-        textures,
-        le_mesh,
-        head_part: store.is_head_part_mesh(&path).unwrap_or(false), // shading only: a failed lookup is body
-    }))
+    Ok(textures)
 }
 
 /// One line about a finished scan.

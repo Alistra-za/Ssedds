@@ -395,7 +395,7 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
                 ui.colored_label(RED, format!("Error: {e}"));
             }
             // A recompile after a toggle can fail on a loaded mesh; the old look stays, so say why.
-            for i in v.shapes.iter().filter(|_| v.is_mesh()) {
+            for i in v.shapes.iter().filter(|_| v.is_mesh() || v.nif_view) {
                 if let ShapeStatus::Failed { error, .. } = &i.status {
                     let kept = if matches!(
                         i.status,
