@@ -337,7 +337,9 @@ A texture path that is a texture of the open folder has an **Open in Textures** 
 - A shared shader: "Shared by N shapes: shader edits change all of them." A texture path edit on a shared shader is refused, because it would change the other shapes.
 - A shared interpolator: an edit is a conflict ("This interpolator is shared by N controllers"). The row is greyed.
 
-**Warnings.** Values are never clamped. A value outside the range the game expects, or a flag combination that looks wrong, shows an amber warning under the field (red for an error), sometimes with a **Fix** button. A red error that your edit introduced stops **Export NIF**. An error that was already in the source only warns.
+On a PBR shape, the SLSF2 flags that CS reads differently (Fit_Slope, Multi_Layer_Parallax, Soft, Back, Rim and Effect lighting) get a dimmer "PBR: <meaning>" label, and the same text in their hover; a non-PBR shape shows only the vanilla names.
+
+**Warnings.** Values are never clamped. A value outside the range the game expects, or a flag combination that looks wrong, shows an amber warning under the field (red for an error), sometimes with a **Fix** button. A red error that your edit introduced stops **Export NIF**. An error that was already in the source only warns. Three flag warnings come from the corpus census: shader type 11 without the Multi_Layer_Parallax flag (SLSF2 24) and without PBR; SLSF2 24 on a shader type other than 11; Fit_Slope (SLSF2 12) without PBR.
 
 **Pending list.** Every edit is a row under the file name. A slider drag is one row. **Revert** removes that edit. A row in red did not apply, with the reason.
 
