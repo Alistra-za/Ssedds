@@ -566,6 +566,8 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 m.close_edit();
             } else {
                 m.open_edit();
+                // The session starts on Root: show the cards so a shape can be picked.
+                m.shapes_col |= m.edit.is_some();
             }
         }
         if n.le_mesh {

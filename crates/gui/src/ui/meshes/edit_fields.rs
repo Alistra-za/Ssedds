@@ -79,7 +79,7 @@ fn float(
         let mut x = v;
         let speed = (v.abs() as f64 * 0.01).max(0.01);
         let r = ui.add(egui::DragValue::new(&mut x).speed(speed));
-        set_name(&r, name, Some(x as f64));
+        set_name(&r, egui::WidgetType::DragValue, name, Some(x as f64), None);
         if r.changed() && x.to_bits() != v.to_bits() {
             let op = Op::SetField {
                 at: at.clone(),
@@ -105,18 +105,25 @@ fn float(
     );
 }
 
-/// Gives `r` (after `ui.add`) the accessible name `name`, keeping its value.
-fn set_name(r: &egui::Response, name: &str, value: Option<f64>) {
+/// Gives `r` (after `ui.add`) the role `typ` and the accessible name `name`, with its numeric or text value.
+fn set_name(
+    r: &egui::Response,
+    typ: egui::WidgetType,
+    name: &str,
+    value: Option<f64>,
+    text: Option<String>,
+) {
     let (name, enabled) = (name.to_string(), r.enabled());
     r.widget_info(move || {
-        let mut i = egui::WidgetInfo::labeled(egui::WidgetType::DragValue, enabled, name.clone());
+        let mut i = egui::WidgetInfo::labeled(typ, enabled, name.clone());
         i.value = value;
+        i.current_text_value = text.clone();
         i
     });
 }
 
-/// An RGB colour: a picker and the three exact floats. A change pushes all three channels (an untouched channel
-/// with its own bits, so −0.0 survives) as one merged step.
+/// An RGB colour: a picker and the three exact floats. A real change pushes all three channels (an untouched
+/// channel with its own bits, so −0.0 survives) as one merged step.
 fn color(
     ui: &mut egui::Ui,
     e: &NifEdit,
@@ -127,18 +134,30 @@ fn color(
     v: [f32; 3],
 ) {
     let mut x = v;
-    let mut done = false;
+    let (mut done, mut changed) = (false, false);
     ui.horizontal(|ui| {
         row_label(ui, name);
-        let r = ui.color_edit_button_rgb(&mut x);
-        set_name(&r, name, None);
+        // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
+        let mut picked = v;
+        let r = ui.color_edit_button_rgb(&mut picked);
+        set_name(&r, egui::WidgetType::ColorButton, name, None, None);
+        if r.changed() {
+            x = picked;
+            changed = true;
+        }
         for (i, c) in ["R", "G", "B"].into_iter().enumerate() {
-            let r = ui.add(egui::DragValue::new(&mut x[i]).speed(0.005));
-            set_name(&r, &format!("{name} {c}"), Some(x[i] as f64));
+            let mut f = x[i];
+            let r = ui.add(egui::DragValue::new(&mut f).speed(0.005));
+            let n = format!("{name} {c}");
+            set_name(&r, egui::WidgetType::DragValue, &n, Some(f as f64), None);
+            if r.changed() {
+                x[i] = f;
+                changed = true;
+            }
             done |= r.drag_stopped() || r.lost_focus();
         }
     });
-    if x.iter().zip(&v).any(|(a, b)| a.to_bits() != b.to_bits()) {
+    if changed && x.iter().zip(&v).any(|(a, b)| a.to_bits() != b.to_bits()) {
         let ops: Vec<Op> = (0..3)
             .map(|i| Op::SetField {
                 at: at.clone(),
@@ -282,16 +301,19 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
     ui.horizontal(|ui| {
         row_label(ui, "Shader type");
         let mut t = lt.shader_type;
-        egui::ComboBox::from_id_salt("meshes-edit-shader-type")
+        let shown = shader_type_name(t);
+        let r = egui::ComboBox::from_id_salt("meshes-edit-shader-type")
             .width(200.0)
-            .selected_text(shader_type_name(t))
+            .selected_text(&shown)
             .show_ui(ui, |ui| {
                 for (i, n) in SHADER_TYPES.iter().enumerate() {
                     ui.selectable_value(&mut t, i as u32, format!("{n} ({i})"));
                 }
             })
-            .response
-            .on_hover_text(TYPE_HOVER);
+            .response;
+        let typ = egui::WidgetType::ComboBox;
+        set_name(&r, typ, "Shader type", None, Some(shown));
+        r.on_hover_text(TYPE_HOVER);
         if t != lt.shader_type {
             act.push = Some((
                 vec![Op::SetField {
@@ -341,17 +363,22 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
         row_label(ui, "Clamp mode");
         let mut c = p.texture_clamp_mode;
         let r = ui.add(egui::DragValue::new(&mut c));
-        set_name(&r, "Clamp mode", Some(c as f64));
+        set_name(
+            &r,
+            egui::WidgetType::DragValue,
+            "Clamp mode",
+            Some(c as f64),
+            None,
+        );
         if c != p.texture_clamp_mode {
-            act.push = Some((
-                vec![Op::SetField {
-                    at: at.clone(),
-                    field: Field::ClampMode,
-                    value: Value::U32(c),
-                    base: Value::U32(p.texture_clamp_mode),
-                }],
-                Some(format!("SetField|{}|ClampMode", at.block)),
-            ));
+            let op = Op::SetField {
+                at: at.clone(),
+                field: Field::ClampMode,
+                value: Value::U32(c),
+                base: Value::U32(p.texture_clamp_mode),
+            };
+            let key = merge_key(&op);
+            act.push = Some((vec![op], Some(key)));
         }
         act.flush |= r.drag_stopped() || r.lost_focus();
     });
@@ -487,7 +514,8 @@ fn texture_slots(
                 == Some(set)
         })
         .count();
-    if users > 1 {
+    // A shared shader refuses path edits (P5): its own notice says so, so no "copy" promise here.
+    if users > 1 && l.prop.users.len() <= 1 {
         ui.add(
             egui::Label::new(
                 egui::RichText::new(format!(
@@ -544,7 +572,14 @@ fn texture_slots(
                 browse.response.widget_info(move || {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, bname.clone())
                 });
-                path_field(ui, set, i, &text, &mut commit);
+                path_field(
+                    ui,
+                    set,
+                    i,
+                    &format!("{name} path (slot {i})"),
+                    &text,
+                    &mut commit,
+                );
             },
         );
         if let Some(path) = commit.filter(|p| *p != text) {
@@ -562,7 +597,14 @@ fn texture_slots(
 }
 
 /// The raw path, edited in a buffer and committed on Enter or focus loss (Esc drops the buffer).
-fn path_field(ui: &mut egui::Ui, set: u32, slot: usize, text: &str, commit: &mut Option<String>) {
+fn path_field(
+    ui: &mut egui::Ui,
+    set: u32,
+    slot: usize,
+    name: &str,
+    text: &str,
+    commit: &mut Option<String>,
+) {
     let id = egui::Id::new(("meshes-edit-slot", set, slot));
     let mut buf = ui
         .data(|d| d.get_temp::<String>(id))
@@ -571,6 +613,13 @@ fn path_field(ui: &mut egui::Ui, set: u32, slot: usize, text: &str, commit: &mut
         egui::TextEdit::singleline(&mut buf)
             .id(id.with("field"))
             .desired_width(ui.available_width()),
+    );
+    set_name(
+        &r,
+        egui::WidgetType::TextEdit,
+        name,
+        None,
+        Some(buf.clone()),
     );
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(id));
@@ -676,19 +725,23 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             .wrap(),
         );
     }
-    // After a split this shape's alpha is the block the split appends: the end of the file.
-    let at = if shared {
-        let end = nif::header::Header::parse(&e.patched).map_or(0, |h| h.sizes.len() as u32);
-        Some(Anchor {
-            block: end,
+    // Built only when an edit is pushed. After a split this shape's alpha is the block the split appends: the end
+    // of the file.
+    let at = || {
+        let own = Anchor {
+            block: a.prop.block,
             kind: "NiAlphaProperty".into(),
             shape: shape.name.clone(),
             role: Role::Alpha,
-        })
-    } else {
-        anchor_role(&e.model, Some(shape.block), Role::Alpha)
+        };
+        match shared {
+            true => Anchor {
+                block: nif::header::Header::parse(&e.patched).map_or(0, |h| h.sizes.len() as u32),
+                ..own
+            },
+            false => anchor_role(&e.model, Some(shape.block), Role::Alpha).unwrap_or(own),
+        }
     };
-    let Some(at) = at else { return };
     let edit = |act: &mut Act, op: Op, merge: Option<String>| {
         let ops = match shared {
             true => vec![
@@ -704,7 +757,7 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     let flags = a.alpha.flags;
     let fl = AlphaFlags::from_raw(flags);
     let bits = |mask: u32, value: u32| Op::SetBits {
-        at: at.clone(),
+        at: at(),
         field: Field::AlphaFlags,
         mask,
         value,
@@ -727,14 +780,16 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
         ui.horizontal(|ui| {
             row_label(ui, name);
             let mut v = cur;
-            egui::ComboBox::from_id_salt(("meshes-edit-alpha", name))
+            let r = egui::ComboBox::from_id_salt(("meshes-edit-alpha", name))
                 .width(180.0)
                 .selected_text(label(cur))
                 .show_ui(ui, |ui| {
                     for c in 0..n {
                         ui.selectable_value(&mut v, c, format!("{} ({c})", label(c)));
                     }
-                });
+                })
+                .response;
+            set_name(&r, egui::WidgetType::ComboBox, name, None, Some(label(cur)));
             if v != cur {
                 let mask = ((1u32 << width) - 1) << shift;
                 edit(act, bits(mask, (v as u32) << shift), None);
@@ -764,10 +819,16 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             row_label(ui, "Threshold");
             let mut t = a.alpha.threshold;
             let r = ui.add(egui::Slider::new(&mut t, 0..=255));
-            set_name(&r, "Threshold", Some(t as f64));
+            set_name(
+                &r,
+                egui::WidgetType::Slider,
+                "Threshold",
+                Some(t as f64),
+                None,
+            );
             if t != a.alpha.threshold {
                 let op = Op::SetField {
-                    at: at.clone(),
+                    at: at(),
                     field: Field::AlphaThreshold,
                     value: Value::U8(t),
                     base: Value::U8(a.alpha.threshold),

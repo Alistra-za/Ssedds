@@ -746,6 +746,10 @@ fn edit_toggle_opens_the_panel_with_four_tabs() {
     h.get_by_label("Edit").click();
     h.run_steps(4);
     assert!(h.state().edit.is_some(), "Edit opens a session");
+    assert!(
+        h.state().shapes_col,
+        "Edit shows the shape cards to pick from"
+    );
     for l in ["Shader", "Alpha", "Controllers", "Extra data"] {
         h.get_by_label(l);
     }
@@ -998,6 +1002,93 @@ fn a_shared_alpha_that_cannot_split_is_not_edited() {
         .flags;
     assert_eq!(before, after, "B's alpha changed: {:?}", e.outcomes);
     assert!(e.doc.ops.is_empty(), "{:?}", e.doc.ops);
+}
+
+/// `shared_alpha_and_set` with shape A's emissive [0.8, 0.6, −0.0] and specular [0.8, 0.6, 0.4]: colours the egui
+/// picker's HSV round trip does not give back bit for bit.
+fn odd_colours() -> Vec<u8> {
+    let b = scenes::shared_alpha_and_set();
+    let m = nif::model::read_model(&b).unwrap();
+    let a = m
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some("A"))
+        .unwrap()
+        .block;
+    let at = nif::edit::anchor_role(&m, Some(a), Role::Shader).unwrap();
+    let lp = &m.lighting[&m.shape(a).unwrap().shader.unwrap()]
+        .lighting
+        .params;
+    let mut ops = vec![];
+    for (field, now, new) in [
+        (
+            Field::EmissiveColor as fn(u8) -> Field,
+            lp.emissive_color,
+            [0.8f32, 0.6, -0.0],
+        ),
+        (Field::SpecularColor, lp.specular_color, [0.8, 0.6, 0.4]),
+    ] {
+        for i in 0..3 {
+            ops.push(Op::SetField {
+                at: at.clone(),
+                field: field(i as u8),
+                value: Value::F32(new[i].to_bits()),
+                base: Value::F32(now[i].to_bits()),
+            });
+        }
+    }
+    let r = nif::edit::apply(&b, &ops).unwrap();
+    assert!(r.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+    r.bytes
+}
+
+/// A17 review: drawing a colour row never records an edit; a real change keeps the other channels' bits.
+#[test]
+fn drawing_a_colour_records_nothing_and_a_change_keeps_the_other_channels() {
+    let mut m = direct(odd_colours());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(8);
+    assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
+    assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
+    h.get_by_label("Specular colour B").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_label("Specular colour B").type_text("0.25");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(!e.doc.ops.is_empty());
+    let l = &e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
+        .lighting
+        .params;
+    let bits = |c: [f32; 3]| c.map(f32::to_bits);
+    assert_eq!(bits(l.specular_color), bits([0.8, 0.6, 0.25]));
+    assert_eq!(
+        bits(l.emissive_color),
+        bits([0.8, 0.6, -0.0]),
+        "emissive untouched"
+    );
+}
+
+/// A17 review: every control carries its name and its own role (the row names are painted).
+#[test]
+fn edit_controls_have_names_and_roles() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::ComboBox, "Shader type");
+    h.get_by_role_and_label(AkRole::ColorWell, "Specular colour");
+    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)");
+    h.get_by_label("Alpha").click();
+    h.run_steps(2);
+    for l in ["Source", "Destination", "Function"] {
+        h.get_by_role_and_label(AkRole::ComboBox, l);
+    }
+    h.get_by_role_and_label(AkRole::Slider, "Threshold");
 }
 
 /// A colour change is three channel ops; a drag of the picker merges them as three ops with the first bases.
