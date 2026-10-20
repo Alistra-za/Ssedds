@@ -28,6 +28,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub mod edit_doc;
+
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
     "Default",
