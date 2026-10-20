@@ -76,7 +76,14 @@ pub fn read_extra(h: &Header, b: &[u8], block: usize) -> Result<Extra, NifError>
         let v = match kind.as_str() {
             "BSXFlags" => ExtraValue::Bsx(c.u32()?),
             "NiStringExtraData" => {
-                ExtraValue::Str(text::lossy(h.string(c.i32()?).unwrap_or_default()))
+                let i = c.i32()?;
+                // -1 is the null string; any other unresolvable index is a damaged file, not an empty string.
+                let s = match (i, h.string(i)) {
+                    (-1, _) => &[][..],
+                    (_, Some(s)) => s,
+                    _ => return Err(geo("string index outside the string table")),
+                };
+                ExtraValue::Str(text::lossy(s))
             }
             "NiIntegerExtraData" => ExtraValue::Int(c.u32()?),
             "NiBooleanExtraData" => ExtraValue::Bool(c.u8()?),

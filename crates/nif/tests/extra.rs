@@ -103,3 +103,22 @@ fn shared_scene_shares_alpha_and_set() {
     assert_eq!(h.kind(4), b"NiAlphaProperty");
     assert_eq!(decode_texture_set_raw(&h, &b, 3).unwrap().slots.len(), 1);
 }
+
+#[test]
+fn string_extra_null_index_is_empty_but_dangling_is_an_error() {
+    let body = |i: i32| builder::W::default().i32(-1).i32(i).0;
+    let b = one_block_nif("NiStringExtraData", body(-1));
+    let h = Header::parse(&b).unwrap();
+    assert_eq!(
+        read_extra(&h, &b, 0).unwrap().value,
+        Some(ExtraValue::Str(String::new()))
+    );
+    for i in [0, 7, -2, i32::MIN] {
+        let b = one_block_nif("NiStringExtraData", body(i));
+        let h = Header::parse(&b).unwrap();
+        assert!(
+            matches!(read_extra(&h, &b, 0), Err(NifError::Geometry { .. })),
+            "{i}"
+        );
+    }
+}
