@@ -22,7 +22,7 @@ pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
 pub use debug::{Availability, DebugOutput};
-pub use material::{classify, pbr_flags, Bound, EditKind, Pipe};
+pub use material::{classify, pbr_bit_meaning, pbr_flags, Bound, EditKind, Pipe};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
 

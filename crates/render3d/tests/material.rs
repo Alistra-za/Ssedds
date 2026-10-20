@@ -448,3 +448,43 @@ fn pipe_reads_alpha_and_shader_flags() {
     }); // blend off
     assert_eq!(pipe(&m).blend, None);
 }
+
+#[test]
+fn pbr_bit_meaning_agrees_with_pbr_flags() {
+    use render3d::pbr_bit_meaning;
+    const BITS: [u32; 6] = [12, 24, 25, 26, 27, 30];
+    // Meaning -> the pbr_flags bit it must set (None: "No effect with PBR").
+    let feature = |s: &str| match s {
+        "Two-layer coat" => PBR_TWO_LAYER,
+        "Inner-layer parallax" => PBR_INTERLAYER_PARALLAX,
+        "Fuzz" => PBR_FUZZ,
+        "Coat normal" => PBR_COAT_NORMAL,
+        "Hair (Marschner)" => PBR_HAIR_MARSCHNER,
+        "Coloured coat" => PBR_COLORED_COAT,
+        "Subsurface" => PBR_SUBSURFACE,
+        "Glint" => PBR_GLINT,
+        "No effect with PBR" => 0,
+        other => panic!("{other}"),
+    };
+    for mask in 0..64u32 {
+        let on: Vec<u32> = (0..6)
+            .filter(|i| mask >> i & 1 != 0)
+            .map(|i| BITS[i])
+            .collect();
+        let m = pbr(&on);
+        let flags = pbr_flags(&m, &Bound::default());
+        let mut labelled = 0;
+        for b in BITS {
+            let want = pbr_bit_meaning(m.slsf2, b);
+            if m.slsf2 >> b & 1 == 0 {
+                continue;
+            }
+            let f = feature(want.unwrap());
+            labelled |= f;
+            assert!(f == 0 || flags & f != 0, "{on:?} bit {b}");
+        }
+        assert_eq!(flags, labelled, "{on:?}: a feature has no labelling bit");
+    }
+    assert_eq!(pbr_bit_meaning(1 << 24, 24), None, "not PBR");
+    assert_eq!(pbr_bit_meaning(1 << 23, 5), None);
+}

@@ -90,6 +90,28 @@ pub fn pbr_flags(m: &MaterialState, bound: &Bound) -> u32 {
     f
 }
 
+/// What CS does with SLSF2 `bit` on a PBR material, by the same precedence as [`pbr_flags`]; `None` for a
+/// non-PBR material or a bit CS's PBR remap does not read.
+pub fn pbr_bit_meaning(slsf2: u32, bit_no: u32) -> Option<&'static str> {
+    if !bit(slsf2, 23) {
+        return None;
+    }
+    let (mlp, soft, back) = (bit(slsf2, 24), bit(slsf2, 25), bit(slsf2, 27));
+    const NONE: &str = "No effect with PBR";
+    Some(match bit_no {
+        24 => "Two-layer coat",
+        25 if mlp => "Inner-layer parallax",
+        25 if !back => "Fuzz",
+        27 if mlp => "Coat normal",
+        27 => "Hair (Marschner)",
+        30 if mlp => "Coloured coat",
+        26 if !mlp && !back => "Subsurface",
+        12 if !mlp && !soft && !back => "Glint",
+        12 | 25 | 26 | 30 => NONE,
+        _ => return None,
+    })
+}
+
 /// The permutation-relevant subset of a material.
 pub fn perm_material(m: &MaterialState) -> Material {
     Material {
