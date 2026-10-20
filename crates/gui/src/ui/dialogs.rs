@@ -32,14 +32,18 @@ pub struct Keys {
 }
 
 /// A modal dialog. `outside`: whether a click outside cancels it; false where a stray click could lose typed input
-/// or an open choice. The caller decides what `Keys` mean for each dialog.
+/// or an open choice. `fade_in`: egui's 0.2 s fade; false for overlays opened from the keyboard (Note CF3). The caller
+/// decides what `Keys` mean for each dialog.
 pub fn modal_keys(
     ctx: &egui::Context,
     id: &str,
     outside: bool,
+    fade_in: bool,
     add: impl FnOnce(&mut egui::Ui),
 ) -> Keys {
-    let shown = egui::Modal::new(egui::Id::new(id)).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new(id));
+    let area = egui::Modal::default_area(egui::Id::new(id)).fade_in(fade_in);
+    let shown = modal.area(area).show(ctx, |ui| {
         ui.set_max_width(420.0);
         add(ui);
     });
@@ -104,7 +108,7 @@ pub fn dialog(
         "a dialog has at most one Enter default"
     );
     let mut clicked = None;
-    let keys = modal_keys(ctx, id, outside, |ui| {
+    let keys = modal_keys(ctx, id, outside, true, |ui| {
         ui.set_max_width(width);
         ui.heading(title);
         ui.separator();

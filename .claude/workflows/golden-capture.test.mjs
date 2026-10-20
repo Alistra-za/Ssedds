@@ -255,8 +255,9 @@ const lib = (cmd, env = {}) => {
 const RUN = path.join(T, 'run')
 const FIX = path.join(T, 'fixtures')
 const JOURNAL = path.join(T, 'journal', '.golden-recovery.json')
+const TOOLS = path.join(T, 'tools')
 let RUN_A = null // run dir created by the apply test
-const preArgs = (run = RUN, profile = 'A') => `--plan "${PLAN}" --mo2 "${MO2}" --tools "${path.join(T, 'tools')}" --run-root "${run}" --journal "${JOURNAL}" --keep-root "${FIX}" --profile ${profile}`
+const preArgs = (run = RUN, profile = 'A') => `--plan "${PLAN}" --mo2 "${MO2}" --run-root "${run}" --journal "${JOURNAL}" --tools "${TOOLS}" --keep-root "${FIX}" --profile ${profile}`
 const restoreCmd = `restore --mo2 "${MO2}" --journal "${JOURNAL}"`
 const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JOURNAL, 'utf8')).entries).some(e => e.state === 'applied') } catch { return false } }
 {
@@ -278,6 +279,18 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   const bad = lib(`preflight ${preArgs().replace(PLAN, withLog(path.join(T, 'no-such.log')))} --dry-run`)
   assert.equal(bad.ok, false); assert.match(bad.reason, /x_cs_feature_log/)
   ok('preflight: x_cs_feature_log passed through; a missing log refused')
+}
+{
+  // No machine path is built in: s6 paths are relative to --mo2 or rebased from x_mo2_root; --tools and --journal are required.
+  const p = path.join(T, 'plan-s6.json')
+  fs.writeFileSync(p, JSON.stringify({ ...JSON.parse(fs.readFileSync(PLAN, 'utf8')), x_mo2_root: 'X:\\OldMO2', x_s6_files: [{ path: 'mods\\s6\\rel.nif' }, { path: 'X:\\OldMO2\\mods\\s6\\abs.nif' }] }))
+  const r = lib(`preflight ${preArgs().replace(PLAN, p)} --dry-run`)
+  assert.equal(r.ok, true, r.reason)
+  assert.deepEqual(r.s6, [`${path.join(MO2, 'mods', 's6', 'rel.nif')}: missing`, `${path.join(MO2, 'mods', 's6', 'abs.nif')}: missing`])
+  assert.ok(r.keep_dir.startsWith(FIX) && r.extract_out.startsWith(path.join(TOOLS, 'rdc-out', 'golden')))
+  assert.match(lib(`preflight ${preArgs().replace(` --tools "${TOOLS}"`, '')} --dry-run`).reason, /needs --tools/)
+  assert.match(lib(`preflight ${preArgs().replace(` --journal "${JOURNAL}"`, '')} --dry-run`).reason, /needs --journal/)
+  ok('preflight: s6 paths relative to --mo2 or rebased from x_mo2_root; --tools and --journal required')
 }
 
 // ---------- 5. game running: preflight refuses ----------
@@ -357,7 +370,7 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   assert.notEqual(sha(LIVE), ORIG_SHA)
   const { spawn } = await import('node:child_process')
   const b = new Promise(res => {
-    const p = spawn(process.execPath, [LIB, 'preflight', '--plan', PLAN, '--mo2', MO2, '--tools', path.join(T, 'tools'), '--run-root', path.join(T, 'run-n4b'), '--journal', JOURNAL, '--keep-root', FIX, '--profile', 'B'], { env: { ...process.env, GOLDEN_TEST_DELAY_BEFORE_LOCK_MS: '2500' } })
+    const p = spawn(process.execPath, [LIB, 'preflight', '--plan', PLAN, '--mo2', MO2, '--run-root', path.join(T, 'run-n4b'), '--journal', JOURNAL, '--tools', TOOLS, '--keep-root', FIX, '--profile', 'B'], { env: { ...process.env, GOLDEN_TEST_DELAY_BEFORE_LOCK_MS: '2500' } })
     let out = ''; p.stdout.on('data', x => { out += x }); p.on('close', () => res(JSON.parse(out)))
   })
   await new Promise(r => setTimeout(r, 300)) // B is started and waiting before its lock
@@ -438,7 +451,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   return { res, err, calls, logs, prompts }
 }
 {
-  const base = { plan: PLAN, mo2: MO2, tools: path.join(T, 'tools'), lib: LIB, keep_root: FIX, journal: JOURNAL, profile: 'A' }
+  const base = { plan: PLAN, mo2: MO2, tools: TOOLS, lib: LIB, keep_root: FIX, journal: JOURNAL, profile: 'A' }
   const d = await runWorkflow({ ...base, dry_run: true, run_root: path.join(T, 'wf-dry') }, {})
   assert.equal(d.res.dry_run, true); assert.deepEqual(d.calls, ['preflight (dry run)']); assert.equal(sha(LIVE), ORIG_SHA)
   ok(`workflow dry_run: only Preflight ran; returned ${path.basename(d.res.plan_txt)}`)

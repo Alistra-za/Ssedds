@@ -164,6 +164,13 @@ fn the_set_filter_keeps_the_sets_rows_and_its_members_rows() {
 }
 
 #[test]
+fn the_unfiltered_list_is_the_problems_list_itself() {
+    let d = tempfile::tempdir().unwrap();
+    let m = opened(d.path());
+    assert!(std::sync::Arc::ptr_eq(&filtered(&m, None), &problems(&m)));
+}
+
+#[test]
 fn open_problems_sets_the_filter_and_shows_the_tab() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());

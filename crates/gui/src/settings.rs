@@ -82,6 +82,8 @@ pub struct GuiSettings {
     /// The 3D view's settings window (TruePBR settings…) is open (AG132).
     pub set_settings_open: bool,
     pub advanced_open: bool,
+    /// Reduce motion (Note CF1): shorter fades, no sliding or scaling.
+    pub reduce_motion: bool,
     /// M5 (DECISIONS Note NV2): an explicit `nvcompress.exe`; `None` looks on PATH, then in the NVIDIA install folder.
     pub nvtt_path: Option<PathBuf>,
     /// The Meshes view's source (plan A Task 12), `[meshes]` in the file.
@@ -129,6 +131,7 @@ impl Default for GuiSettings {
             set_view_3d: false,
             set_settings_open: false,
             advanced_open: false,
+            reduce_motion: false,
             nvtt_path: None,
             meshes: MeshesSettings::default(),
             render3d: Render3dSettings::default(),

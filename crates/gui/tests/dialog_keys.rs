@@ -956,3 +956,32 @@ fn a_long_texture_name_keeps_the_replace_dialog_on_screen() {
     );
     h.get_by_label_contains(&format!("s already has {existing} in"));
 }
+
+/// Owner 2026-10-19: the rename table has no New column (Output shows the result), and Inputs has a Whole path
+/// toggle that makes Find see the folders.
+#[test]
+fn the_rename_dialog_has_no_new_column_and_a_whole_path_toggle() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item("landscape/leaf.png", false, false);
+    let mut h = harness(m);
+    h.run();
+    h.state_mut()
+        .open_rename(sdc_gui::model::rename::RenameMode::Inputs);
+    h.run();
+    assert!(h.query_by_label("New").is_none(), "no New column");
+    h.get_by_label("Output");
+    h.get_by_label("Whole path").click();
+    h.run();
+    match &h.state().dialog {
+        Some(Dialog::Rename(r)) => assert!(r.recipe.path, "the toggle sets the recipe"),
+        other => panic!("expected the rename dialog, got {other:?}"),
+    }
+    h.state_mut()
+        .set_rename_mode(sdc_gui::model::rename::RenameMode::Outputs);
+    h.run();
+    assert!(
+        h.query_by_label("Whole path").is_none(),
+        "Outputs renames base names only"
+    );
+}

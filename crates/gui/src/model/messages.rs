@@ -12,8 +12,8 @@ pub const MAX_QUEUED: usize = 5;
 /// How long a toast stays, and a warning or error.
 pub const FADE: Duration = Duration::from_secs(4);
 pub const FADE_WARN: Duration = Duration::from_secs(8);
-/// The last part of a toast's time fades it out.
-pub const FADE_OUT: Duration = Duration::from_millis(500);
+/// The last part of a toast's time fades it out (on egui time, `ui::messages`; Note CF2).
+pub const FADE_OUT: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -49,13 +49,6 @@ pub struct Toast {
     pub left: Duration,
 }
 
-impl Toast {
-    /// 1.0 while it stays, down to 0.0 over its last [`FADE_OUT`].
-    pub fn opacity(&self) -> f32 {
-        (self.left.as_secs_f32() / FADE_OUT.as_secs_f32()).min(1.0)
-    }
-}
-
 pub struct Messages {
     log: VecDeque<Entry>,
     unread: usize,
@@ -65,6 +58,9 @@ pub struct Messages {
     next_id: u64,
     /// The clock of the last `tick`; `None` while no toast is on screen, so a new toast starts with its full time.
     last_tick: Option<Instant>,
+    /// The toasts hovered at the last `tick`. A resting pointer sends no frames, so the frame it leaves on has the
+    /// whole rest as its `dt`; that frame charges these nothing.
+    hovered_last: HashSet<u64>,
     /// Gives the entry its time text; tests replace it.
     pub clock: fn() -> String,
 }
@@ -79,6 +75,7 @@ impl Default for Messages {
             queue: VecDeque::new(),
             next_id: 0,
             last_tick: None,
+            hovered_last: HashSet::new(),
             clock: local_time,
         }
     }
@@ -134,16 +131,19 @@ impl Messages {
         }
     }
 
-    /// Advances the toasts to `now`. A toast in `hovered` keeps its time. Returns true while any toast is on screen
+    /// Advances the toasts to `now`. A toast in `hovered`, or hovered at the last tick, keeps its time. Returns true while any toast is on screen
     /// or waiting (the caller keeps frames coming).
     pub fn tick(&mut self, now: Instant, hovered: &HashSet<u64>) -> bool {
         if let Some(last) = self.last_tick {
             let dt = now.saturating_duration_since(last);
-            for t in self.shown.iter_mut().filter(|t| !hovered.contains(&t.id)) {
-                t.left = t.left.saturating_sub(dt);
+            for t in self.shown.iter_mut() {
+                if !hovered.contains(&t.id) && !self.hovered_last.contains(&t.id) {
+                    t.left = t.left.saturating_sub(dt);
+                }
             }
             self.shown.retain(|t| !t.left.is_zero());
         }
+        self.hovered_last.clone_from(hovered);
         self.fill();
         self.last_tick = (!self.shown.is_empty()).then_some(now);
         self.last_tick.is_some()

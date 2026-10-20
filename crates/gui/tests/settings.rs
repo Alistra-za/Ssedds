@@ -7,6 +7,22 @@ fn defaults_follow_the_spec() {
     assert!(!s.live_encode, "preview encoding is off by default");
     assert!(!s.allow_16k_preview);
     assert_eq!(s.bc1_decoder, Bc1Choice::Ideal);
+    assert!(!s.reduce_motion, "motion is on by default");
+}
+
+#[test]
+fn reduce_motion_round_trips_in_gui_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc/gui.toml");
+    let s = GuiSettings {
+        reduce_motion: true,
+        ..Default::default()
+    };
+    s.save(&p).unwrap();
+    assert_eq!(GuiSettings::load(&p).0, s);
+    assert!(std::fs::read_to_string(&p)
+        .unwrap()
+        .contains("reduce_motion = true"));
 }
 
 #[test]

@@ -59,6 +59,10 @@ fn the_lock_stops_are_the_separators() {
 type H = Harness<'static, (AppModel, State)>;
 
 fn harness() -> (tempfile::TempDir, H) {
+    harness_dt(0.25)
+}
+
+fn harness_dt(dt: f32) -> (tempfile::TempDir, H) {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     m.set_known(KnownPaths {
@@ -80,6 +84,7 @@ fn harness() -> (tempfile::TempDir, H) {
     m.select_set(&key);
     let mut h = Harness::builder()
         .with_size(egui::vec2(1600.0, 900.0))
+        .with_step_dt(dt)
         .build_ui_state(
             |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
             (m, State::default()),
@@ -664,4 +669,45 @@ fn own_output_rows_have_no_source_extension() {
         names.iter().any(|p| p == "textures/landscape/leaf"),
         "{names:?}"
     );
+}
+
+/// Alpha of the text shape that contains `needle`: the fade an Area applies reaches its fallback colour. The popup
+/// is a Foreground Area, painted after everything else, so the last match is the list row.
+fn row_alpha(h: &H, needle: &str) -> Option<u8> {
+    fn find(s: &egui::Shape, needle: &str) -> Option<u8> {
+        match s {
+            egui::Shape::Text(t) if t.galley.text().contains(needle) => Some(t.fallback_color.a()),
+            egui::Shape::Vec(v) => v.iter().find_map(|s| find(s, needle)),
+            _ => None,
+        }
+    }
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| find(&c.shape, needle))
+        .next_back()
+}
+
+/// Note CF3: the live path list is typed open, so it appears at its resting opacity on its first visible frame.
+#[test]
+fn the_path_list_shows_at_once_when_typing_reopens_it() {
+    let (_d, mut h) = harness_dt(0.02);
+    // kittest zeroes the stock animation time, which would turn every Area fade off.
+    h.ctx.global_style_mut(|s| s.animation_time = 0.2);
+    focus(&mut h);
+    clear_and_type(&mut h, "rocks");
+    h.run_steps(20);
+    let rest = row_alpha(&h, BIG).expect("the list is open");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.run_steps(20);
+    assert!(h.query_by_label(BIG).is_none(), "closed");
+    h.input_mut().events.push(egui::Event::Text("/".into()));
+    for _ in 0..6 {
+        h.step();
+        if let Some(first) = row_alpha(&h, BIG) {
+            assert_eq!(first, rest, "the list faded in");
+            return;
+        }
+    }
+    panic!("the list never reopened");
 }

@@ -17,6 +17,21 @@ struct Uploaded {
     pinned: Option<Arc<PreviewOut>>,
 }
 
+/// Poll for a worker result the user is waiting to see.
+const POLL_VISIBLE: std::time::Duration = std::time::Duration::from_millis(50);
+/// Poll for background work only (image sizes, used-by lookups, a report save): R7, Note CF.
+const POLL_BACKGROUND: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How soon to look at the worker channels again; `None` lets the app sleep. Workers hold only a `Sender`, so
+/// they can't wake the UI themselves (R7).
+fn worker_poll(visible: bool, background: bool) -> Option<std::time::Duration> {
+    if visible {
+        Some(POLL_VISIBLE)
+    } else {
+        background.then_some(POLL_BACKGROUND)
+    }
+}
+
 fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -387,18 +402,17 @@ impl eframe::App for SdcApp {
         self.state.set3d.v3.arm_gap(self.state.set3d.busy());
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
-        if self.model.busy()
+        let visible = self.model.busy()
             || self.model.heatmap_pending()
             || self.model.rnm_preview_pending()
-            || self.model.dims_pending()
-            || self.model.used_by_pending()
-            || self.model.report_saving
             || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()
-            || self.state.set3d.busy()
-        {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            || self.state.set3d.busy();
+        let background =
+            self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;
+        if let Some(d) = worker_poll(visible, background) {
+            ctx.request_repaint_after(d);
         }
         if self.model.preview.scheduled() {
             ctx.request_repaint_after(crate::model::preview::DEBOUNCE);
@@ -420,5 +434,19 @@ impl eframe::App for SdcApp {
         if self.layout_save.pending() {
             self.model.save_settings();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_poll_is_slow_for_background_work_only() {
+        use std::time::Duration;
+        assert_eq!(worker_poll(false, false), None);
+        assert_eq!(worker_poll(true, false), Some(Duration::from_millis(50)));
+        assert_eq!(worker_poll(true, true), Some(Duration::from_millis(50)));
+        assert_eq!(worker_poll(false, true), Some(Duration::from_millis(250)));
     }
 }

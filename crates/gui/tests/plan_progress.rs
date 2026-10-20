@@ -183,3 +183,38 @@ fn opening_another_folder_forgets_the_source_sizes() {
     m.open_folder(mod_folder(&d.path().join("other")));
     assert_eq!(m.sizes.dims_len(), 0);
 }
+
+/// Task 9 (CF12): the export bar glides to a new value over 0.3 s; a new export (a new `drawer_epoch`) starts at its
+/// own value instead of sweeping back from the last run's; reduce motion jumps.
+#[test]
+fn the_export_bar_glides_and_a_new_run_starts_at_its_own_value() {
+    use sdc_gui::ui::header::shown_progress;
+    // (epoch, the target fraction, the value shown last frame)
+    let mut h = egui_kittest::Harness::builder()
+        .with_step_dt(0.05)
+        .build_ui_state(
+            |ui, s: &mut (u64, f32, f32)| s.2 = shown_progress(ui.ctx(), s.0, s.1),
+            (1u64, 0.0f32, -1.0f32),
+        );
+    h.step();
+    assert_eq!(h.state().2, 0.0);
+    h.state_mut().1 = 0.5;
+    // egui's `animate_value_with_time` returns the old value on the frame its target changes, then glides.
+    h.step();
+    h.step();
+    let shown = h.state().2;
+    assert!(shown > 0.0 && shown < 0.5, "gliding: {shown}");
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(h.state().2, 0.5);
+    // A new run: its first frame is its own value, not a sweep back from 0.5.
+    *h.state_mut() = (2, 0.1, -1.0);
+    h.step();
+    assert_eq!(h.state().2, 0.1);
+    // Reduce motion: at once.
+    sdc_gui::ui::motion::set_reduce_motion(&h.ctx, true);
+    h.state_mut().1 = 0.9;
+    h.step();
+    assert_eq!(h.state().2, 0.9);
+}

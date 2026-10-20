@@ -227,8 +227,10 @@ pub(crate) struct ViewCache {
     pub problems: Option<(ProblemsKey, Arc<Vec<bottom::Problem>>)>,
     /// `export_asks`, keyed by `evidence_rev` inside the view_key cell (R-b: Review reads them every frame).
     pub asks: Option<(u64, Arc<Vec<pbr_export::ExportIssue>>)>,
+    /// `AppModel::export_files`, under the same key and `inner` tuple as `problems` (Task 6; ui-rules §9.1, §7.7).
+    pub export_files: Option<(ProblemsKey, usize)>,
     /// The keys `bottom::set_ready` looks up; reset with every `problems` build.
-    pub flagged: Option<Arc<std::collections::HashSet<String>>>,
+    pub flagged: Option<Arc<bottom::Flagged>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -363,6 +365,11 @@ pub struct AppModel {
     pub review: Option<review::Review>,
     pub(crate) problem_builds: std::cell::Cell<u64>,
     pub(crate) filter_builds: std::cell::Cell<u64>,
+    /// Task 6: `bottom::problems` calls and `export_files` builds (see `bottom::problem_lookups`).
+    pub(crate) problem_lookups: std::cell::Cell<u64>,
+    pub(crate) export_files_builds: std::cell::Cell<u64>,
+    /// Task 5: set cards laid out (`sets_column::pill` calls); see `sets_filter::set_cards_drawn`.
+    pub(crate) set_cards_drawn: std::cell::Cell<u64>,
     /// Item 22: per-item DDS sizes by plan revision.
     pub sizes: out_size::SizeCache,
     /// Item 21: the RNM blended thumbnail job.
@@ -554,6 +561,9 @@ impl AppModel {
             review: None,
             problem_builds: Default::default(),
             filter_builds: Default::default(),
+            problem_lookups: Default::default(),
+            export_files_builds: Default::default(),
+            set_cards_drawn: Default::default(),
             sizes: Default::default(),
             rnm_preview: Default::default(),
             status_note: None,
@@ -2476,6 +2486,11 @@ impl AppModel {
         self.save_settings();
         self.refresh_nvtt();
         self.replan();
+    }
+
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.settings.reduce_motion = on;
+        self.save_settings();
     }
 
     pub fn set_bc1_choice(&mut self, c: crate::settings::Bc1Choice) {

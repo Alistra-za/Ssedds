@@ -30,6 +30,7 @@ enum Action {
     Allow16k(bool),
     Live(bool),
     Bc1(Bc1Choice),
+    ReduceMotion(bool),
     NvttPath(Option<std::path::PathBuf>),
 }
 
@@ -83,6 +84,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     nvtt(ui, model, &mut actions);
     legacy_fills(ui, model, &mut actions);
     preview_settings(ui, model, &mut actions);
+    interface(ui, model, &mut actions);
     mipmaps(ui, model, &mut actions);
     texture_fields(ui, model, &mut actions);
     unmatched(ui, model, &mut actions);
@@ -96,6 +98,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::Allow16k(on) => model.set_allow_16k_preview(on),
             Action::Live(on) => model.set_live(on),
             Action::Bc1(c) => model.set_bc1_choice(c),
+            Action::ReduceMotion(on) => model.set_reduce_motion(on),
             Action::NvttPath(p) => model.set_nvtt_path(p),
         }
     }
@@ -352,6 +355,21 @@ fn preview_settings(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Actio
             .changed()
         {
             actions.push(Action::Live(live));
+        }
+    });
+}
+
+fn interface(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    section(ui, "Interface", |ui| {
+        let mut on = model.settings.reduce_motion;
+        if ui
+            .checkbox(&mut on, "Reduce motion")
+            .on_hover_text(
+                "Shorter fades and no sliding or scaling: toasts, the Export highlight, progress bars and press feedback",
+            )
+            .changed()
+        {
+            actions.push(Action::ReduceMotion(on));
         }
     });
 }
