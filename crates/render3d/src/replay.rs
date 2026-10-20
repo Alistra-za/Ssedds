@@ -1,0 +1,844 @@
+//! Replay mode (v2 Phase D, D2): draws a golden fixture's captured geometry with its exact cbuffers, textures and
+//! samplers, so the CS shader math is compared in isolation from render3d's own extraction and cbuffer writers.
+//! Ruling D-P2: the captured IA + mesh.vb/ib are drawn as they are; the VS defines are derived from the PS list and
+//! the IA ([`vs_defines`]) and checked against the compiled VS input signature.
+use crate::compile::compile;
+use crate::device::{Gpu, Target};
+use crate::draw::create_program;
+use crate::golden;
+use crate::permutation::Defines;
+use crate::textures::load_dds;
+use crate::Renderer;
+use serde_json::Value;
+use std::collections::{BTreeSet, HashMap};
+use std::ffi::CString;
+use std::path::Path;
+use windows::core::PCSTR;
+use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Buffer, ID3D11SamplerState, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_FLAG,
+    D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC,
+    D3D11_COMPARISON_FUNC, D3D11_FILTER, D3D11_FILTER_ANISOTROPIC, D3D11_INPUT_ELEMENT_DESC,
+    D3D11_INPUT_PER_VERTEX_DATA, D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA,
+    D3D11_TEXTURE_ADDRESS_MODE, D3D11_USAGE_IMMUTABLE, D3D11_VIEWPORT,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT,
+    DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
+};
+
+/// One golden subject, read by [`load_fixture`].
+pub struct Replay {
+    /// "vs_b2" / "ps_b1" → bytes of cb_<stage>_b<N>.bin. Keyed by file stem: PerTechnique(b0) and PerMaterial(b1)
+    /// exist on both stages with different bytes (extras.json).
+    pub cbuffers: HashMap<String, Vec<u8>>,
+    /// state.json World; None for skinned draws.
+    pub world: Option<[[f32; 4]; 3]>,
+    /// state.json ViewProj, row-major 16 floats.
+    pub view_proj: [[f32; 4]; 4],
+    /// = cbuffers["vs_b10"]; kept for D6 (already uploaded through cbuffers).
+    pub bones: Option<Vec<u8>>,
+    /// tex.json entries with saved: true → tex\t<N>.dds bytes.
+    pub textures: HashMap<u32, Vec<u8>>,
+    /// tex.json type "null": the game bound nothing (reads 0).
+    pub null_srvs: Vec<u32>,
+    /// mrt.json crop [x, y, w, h].
+    pub crop: [u32; 4],
+    /// mrt.json size.
+    pub size: (u32, u32),
+    /// state.json defines (PS list variants, "K=V" or "K").
+    pub defines: Vec<Vec<String>>,
+    pub mesh: ReplayMesh,
+    /// extras.json samplers.ps, by bind.
+    pub samplers: Vec<(u32, Sampler)>,
+    /// extras.json rasterizer cull == Back (front faces CCW).
+    pub cull_back: bool,
+    /// extras.json viewports[0]: x, y, w, h, minDepth, maxDepth.
+    pub viewport: [f32; 6],
+    /// state.json stageB.blend[i].writeMask.
+    pub write_masks: Vec<u8>,
+    /// Any stageB.blend[i].enabled.
+    pub blended: bool,
+    /// mrt<i>_before.f32 for the RTs the replay binds (D2: index 0).
+    pub before: Vec<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplayMesh {
+    /// Semantic, index (trailing digits of "TEXCOORD2"; none = 0), DXGI format, slot, byteOffset.
+    pub inputs: Vec<(String, u32, u32, u32, u32)>,
+    /// Slot, stride, mesh.vb<slot> bytes (the file is already sliced at srcByteOffset).
+    pub vbs: Vec<(u32, u32, Vec<u8>)>,
+    /// R16 indices.
+    pub ib: Vec<u8>,
+    pub index_count: u32,
+    pub min_index: u32,
+}
+
+/// A captured sampler, already in D3D11 enum values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sampler {
+    pub filter: i32,
+    pub address: [i32; 3],
+    pub border: [f32; 4],
+    pub compare: i32,
+    pub min_lod: f32,
+    pub max_lod: f32,
+    pub mip_bias: f32,
+    pub max_aniso: u32,
+}
+
+#[derive(Debug)]
+pub struct ReplayOut {
+    /// 8 when deferred (D3), 1 forward.
+    pub mrt: Vec<Vec<f32>>,
+    /// The composite's MainRW (D4).
+    pub main: Option<Vec<f32>>,
+    pub warnings: Vec<String>,
+}
+
+fn json(path: &Path) -> Result<Value, String> {
+    let s = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_str(&nonfinite_to_null(&s)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The extractors write Python's `NaN` / `Infinity` / `-Infinity` (garbage cbuffer vars such as WindTimers); serde
+/// rejects them, so outside strings they become `null`. No field replay reads may be non-finite.
+fn nonfinite_to_null(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let (mut in_str, mut esc) = (false, false);
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        if !in_str {
+            if let Some(t) = ["-Infinity", "Infinity", "NaN"]
+                .iter()
+                .find(|t| rest.starts_with(**t))
+            {
+                out.push_str("null");
+                rest = &rest[t.len()..];
+                continue;
+            }
+        }
+        if in_str && esc {
+            esc = false;
+        } else if in_str && c == '\\' {
+            esc = true;
+        } else if c == '"' {
+            in_str = !in_str;
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn floats<const N: usize>(v: &Value) -> Option<[f32; N]> {
+    let a = v.as_array().filter(|a| a.len() == N)?;
+    let mut out = [0f32; N];
+    for (o, x) in out.iter_mut().zip(a) {
+        *o = x.as_f64()? as f32;
+    }
+    Some(out)
+}
+
+fn rows<const R: usize>(f: &[f32]) -> [[f32; 4]; R] {
+    std::array::from_fn(|r| std::array::from_fn(|c| f[r * 4 + c]))
+}
+
+fn u32_of(v: &Value) -> Option<u32> {
+    v.as_u64().and_then(|n| u32::try_from(n).ok())
+}
+
+/// The four IA formats the D-P2 survey found; anything else is an error.
+fn ia_format(s: &str) -> Option<DXGI_FORMAT> {
+    Some(match s {
+        "R32G32B32A32_FLOAT" => DXGI_FORMAT_R32G32B32A32_FLOAT,
+        "R16G16_FLOAT" => DXGI_FORMAT_R16G16_FLOAT,
+        "R8G8B8A8_UNORM" => DXGI_FORMAT_R8G8B8A8_UNORM,
+        "R16G16B16A16_FLOAT" => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        _ => return None,
+    })
+}
+
+/// "TEXCOORD2" → ("TEXCOORD", 2); no trailing digits → index 0.
+fn split_semantic(s: &str) -> (String, u32) {
+    let head = s.trim_end_matches(|c: char| c.is_ascii_digit());
+    (head.to_string(), s[head.len()..].parse().unwrap_or(0))
+}
+
+fn sampler(v: &Value) -> Result<(u32, Sampler), String> {
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("");
+    let f = |k: &str| v.get(k).and_then(Value::as_f64).map(|x| x as f32);
+    let bind = v
+        .get("bind")
+        .and_then(u32_of)
+        .ok_or("sampler without bind")?;
+    let lin = |k: &str| match s(k) {
+        "Point" => Ok(0),
+        "Linear" => Ok(1),
+        x => Err(format!("sampler {bind}: {k} {x:?}")),
+    };
+    let comparison = match s("func") {
+        "Normal" => 0,
+        "Comparison" => 0x80,
+        x => return Err(format!("sampler {bind}: func {x:?}")),
+    };
+    let filter = if s("minify") == "Anisotropic" {
+        D3D11_FILTER_ANISOTROPIC.0
+    } else {
+        (0x10 * lin("minify")?) | (0x4 * lin("magnify")?) | lin("mip")?
+    } | comparison;
+    let mut address = [0; 3];
+    for (o, k) in address.iter_mut().zip(["addressU", "addressV", "addressW"]) {
+        *o = match s(k) {
+            "Wrap" => 1,
+            "Mirror" => 2,
+            "ClampEdge" => 3,
+            "ClampBorder" => 4,
+            "MirrorOnce" => 5,
+            x => return Err(format!("sampler {bind}: {k} {x:?}")),
+        };
+    }
+    let compare = match s("compare") {
+        "Never" => 1,
+        "Less" => 2,
+        "Equal" => 3,
+        "LessEqual" => 4,
+        "Greater" => 5,
+        "NotEqual" => 6,
+        "GreaterEqual" => 7,
+        "AlwaysTrue" => 8,
+        x => return Err(format!("sampler {bind}: compare {x:?}")),
+    };
+    let bad = |k: &str| format!("sampler {bind}: bad {k}");
+    Ok((
+        bind,
+        Sampler {
+            filter,
+            address,
+            border: v
+                .get("border")
+                .and_then(floats::<4>)
+                .ok_or_else(|| bad("border"))?,
+            compare,
+            min_lod: f("minLOD").ok_or_else(|| bad("minLOD"))?,
+            max_lod: f("maxLOD").ok_or_else(|| bad("maxLOD"))?,
+            mip_bias: f("mipBias").ok_or_else(|| bad("mipBias"))?,
+            max_aniso: (f("maxAniso").ok_or_else(|| bad("maxAniso"))? as u32).clamp(1, 16),
+        },
+    ))
+}
+
+fn load_mesh(dir: &Path) -> Result<ReplayMesh, String> {
+    let p = dir.join("mesh.json");
+    let err = |m: String| format!("{}: {m}", p.display());
+    let v = json(&p)?;
+    if v.get("topology").and_then(Value::as_str) != Some("TriangleList")
+        || v.get("indexed").and_then(Value::as_bool) != Some(true)
+        || v.get("indexStride").and_then(Value::as_u64) != Some(2)
+        || v.get("numInstances").and_then(Value::as_u64).unwrap_or(0) > 1
+    {
+        return Err(err(
+            "only indexed, R16, non-instanced TriangleList draws replay".into(),
+        ));
+    }
+    let mut inputs = Vec::new();
+    for i in v
+        .get("inputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| err("no inputs".into()))?
+    {
+        let name = i
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| err("input without name".into()))?;
+        let fmt = i.get("format").and_then(Value::as_str).unwrap_or("");
+        let format =
+            ia_format(fmt).ok_or_else(|| err(format!("{name}: IA format {fmt} not replayable")))?;
+        if i.get("perInstance").and_then(Value::as_bool) == Some(true) {
+            return Err(err(format!("{name}: per-instance input")));
+        }
+        let (sem, idx) = split_semantic(name);
+        let n = |k: &str| {
+            i.get(k)
+                .and_then(u32_of)
+                .ok_or_else(|| err(format!("{name}: bad {k}")))
+        };
+        inputs.push((sem, idx, format.0 as u32, n("slot")?, n("byteOffset")?));
+    }
+    let mut vbs = Vec::new();
+    for b in v
+        .get("vbs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| err("no vbs".into()))?
+    {
+        let n = |k: &str| {
+            b.get(k)
+                .and_then(u32_of)
+                .ok_or_else(|| err(format!("vb: bad {k}")))
+        };
+        let file = b
+            .get("file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| err("vb without file".into()))?;
+        vbs.push((n("slot")?, n("stride")?, read(&dir.join(file))?));
+    }
+    let ib_file = v
+        .get("ib")
+        .and_then(Value::as_str)
+        .ok_or_else(|| err("no ib".into()))?;
+    let ib = read(&dir.join(ib_file))?;
+    let index_count = v
+        .get("numIndices")
+        .and_then(u32_of)
+        .ok_or_else(|| err("bad numIndices".into()))?;
+    if ib.len() != 2 * index_count as usize {
+        return Err(err(format!(
+            "{ib_file} has {} bytes, numIndices {index_count}",
+            ib.len()
+        )));
+    }
+    Ok(ReplayMesh {
+        inputs,
+        vbs,
+        ib,
+        index_count,
+        min_index: v
+            .get("minIndex")
+            .and_then(u32_of)
+            .ok_or_else(|| err("bad minIndex".into()))?,
+    })
+}
+
+/// Reads one golden subject folder. Every error names the file.
+pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
+    let sp = dir.join("state.json");
+    let serr = |m: &str| format!("{}: {m}", sp.display());
+    let state = json(&sp)?;
+    let world = match state.get("World") {
+        None | Some(Value::Null) => None,
+        Some(w) => Some(rows::<3>(
+            &floats::<12>(w).ok_or_else(|| serr("bad World"))?,
+        )),
+    };
+    let view_proj = rows::<4>(
+        &state
+            .get("ViewProj")
+            .and_then(floats::<16>)
+            .ok_or_else(|| serr("bad ViewProj"))?,
+    );
+    let defines: Vec<Vec<String>> = state
+        .get("defines")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|l| {
+                    l.as_array()
+                        .map(|l| {
+                            l.iter()
+                                .filter_map(|d| d.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+        .filter(|d: &Vec<Vec<String>>| !d.is_empty())
+        .ok_or_else(|| serr("defines null or empty: no PS define list to compile"))?;
+    let blend = state
+        .pointer("/stageB/blend")
+        .and_then(Value::as_array)
+        .ok_or_else(|| serr("no stageB.blend"))?;
+    let write_masks = blend
+        .iter()
+        .map(|b| b.get("writeMask").and_then(Value::as_u64).map(|m| m as u8))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| serr("bad stageB.blend writeMask"))?;
+    let blended = blend
+        .iter()
+        .any(|b| b.get("enabled").and_then(Value::as_bool) == Some(true));
+
+    let mut cbuffers = HashMap::new();
+    for ent in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let ent = ent.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if let Some(stem) = name
+            .strip_prefix("cb_")
+            .and_then(|n| n.strip_suffix(".bin"))
+        {
+            cbuffers.insert(stem.to_string(), read(&ent.path())?);
+        }
+    }
+    let bones = cbuffers.get("vs_b10").cloned();
+
+    let tp = dir.join("tex.json");
+    let mut textures = HashMap::new();
+    let mut null_srvs = Vec::new();
+    for t in json(&tp)?
+        .as_array()
+        .ok_or_else(|| format!("{}: not a list", tp.display()))?
+    {
+        let bind = t
+            .get("bind")
+            .and_then(u32_of)
+            .ok_or_else(|| format!("{}: entry without bind", tp.display()))?;
+        if t.get("type").and_then(Value::as_str) == Some("null") {
+            null_srvs.push(bind);
+        } else if t.get("saved").and_then(Value::as_bool) == Some(true) {
+            let file = t
+                .get("file")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{}: t{bind} saved without file", tp.display()))?;
+            textures.insert(bind, read(&dir.join(file))?);
+        }
+    }
+    null_srvs.sort_unstable();
+
+    let mp = dir.join("mrt.json");
+    let mrt = json(&mp)?;
+    let size = mrt
+        .get("size")
+        .and_then(Value::as_array)
+        .filter(|s| s.len() == 2)
+        .and_then(|s| Some((u32_of(&s[0])?, u32_of(&s[1])?)))
+        .ok_or_else(|| format!("{}: bad size", mp.display()))?;
+    let crop = golden::read_mrt_info(dir)?.crop;
+    let before0 = mrt
+        .get("rts")
+        .and_then(Value::as_array)
+        .and_then(|r| {
+            r.iter()
+                .find(|r| r.get("index").and_then(Value::as_u64) == Some(0))
+        })
+        .and_then(|r| r.pointer("/files/before"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{}: no rt 0 before file", mp.display()))?;
+    let before = vec![golden::read_f32(
+        &dir.join(before0),
+        (crop[2] * crop[3]) as usize * 4,
+    )?];
+
+    let ep = dir.join("extras.json");
+    let eerr = |m: &str| format!("{}: {m}", ep.display());
+    let extras = json(&ep)?;
+    let samplers = extras
+        .pointer("/samplers/ps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eerr("no samplers.ps"))?
+        .iter()
+        .map(sampler)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| eerr(&e))?;
+    let r = extras
+        .get("rasterizer")
+        .ok_or_else(|| eerr("no rasterizer"))?;
+    let cull = r.get("cull").and_then(Value::as_str).unwrap_or("");
+    if !matches!(cull, "Back" | "None") || r.get("frontCCW").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(eerr(&format!(
+            "rasterizer cull {cull:?} / frontCCW {:?} not replayable",
+            r.get("frontCCW")
+        )));
+    }
+    let vp = extras
+        .pointer("/viewports/0")
+        .ok_or_else(|| eerr("no viewport"))?;
+    let mut viewport = [0f32; 6];
+    for (o, k) in viewport
+        .iter_mut()
+        .zip(["x", "y", "w", "h", "minDepth", "maxDepth"])
+    {
+        *o = vp
+            .get(k)
+            .and_then(Value::as_f64)
+            .ok_or_else(|| eerr(&format!("viewport: bad {k}")))? as f32;
+    }
+
+    Ok(Replay {
+        cbuffers,
+        world,
+        view_proj,
+        bones,
+        textures,
+        null_srvs,
+        crop,
+        size,
+        defines,
+        mesh: load_mesh(dir)?,
+        samplers,
+        cull_back: cull == "Back",
+        viewport,
+        write_masks,
+        blended,
+        before,
+    })
+}
+
+/// A captured cbuffer as uploaded: zero-padded to max(raw, reflected), rounded up to 16 (at least 16). The padding
+/// is what D3D11 reads past a short binding (0); a buffer longer than its reflection is kept whole.
+pub fn cb_bytes(raw: &[u8], reflected: u32) -> Vec<u8> {
+    let mut b = raw.to_vec();
+    b.resize(
+        (raw.len().max(reflected as usize).max(1)).next_multiple_of(16),
+        0,
+    );
+    b
+}
+
+/// PS-only defines render3d's own VS rule leaves out (permutation.rs `defines`), plus the techniques the VS clears.
+const PS_ONLY: &[&str] = &[
+    "PSHADER",
+    "DO_ALPHA_TEST",
+    "DEPTH_WRITE_DECALS",
+    "TRUE_PBR",
+    "GLINT",
+    "ANISO_LIGHTING",
+    "SPECULAR",
+    "SOFT_LIGHTING",
+    "RIM_LIGHTING",
+    "BACK_LIGHTING",
+    "PARALLAX",
+    "FACEGEN",
+    "FACEGEN_RGB_TINT",
+    "HAIR",
+];
+
+/// The VS define list for a fixture's PS list: VSHADER for PSHADER, the PS-only defines dropped, VC only when the IA
+/// has COLOR and SKINNED only when it has BLENDWEIGHT; everything else (feature defines, DEFERRED, …) kept.
+pub fn vs_defines(ps: &[String], mesh: &ReplayMesh) -> Vec<String> {
+    let has = |s: &str| mesh.inputs.iter().any(|i| i.0.eq_ignore_ascii_case(s));
+    let key = |d: &String| d.split('=').next().unwrap_or("").to_string();
+    let mut out = vec!["VSHADER".to_string()];
+    out.extend(
+        ps.iter()
+            .filter(|d| {
+                !PS_ONLY.contains(&key(d).as_str())
+                    && !matches!(key(d).as_str(), "VSHADER" | "VC" | "SKINNED")
+            })
+            .cloned(),
+    );
+    if has("COLOR") {
+        out.push("VC".into());
+    }
+    if has("BLENDWEIGHT") {
+        out.push("SKINNED".into());
+    }
+    out
+}
+
+/// "K=V" → (K, V); bare K → (K, "1") as in permutation.rs.
+fn to_defines<'a>(list: impl IntoIterator<Item = &'a String>) -> Defines {
+    Defines(
+        list.into_iter()
+            .map(|d| match d.split_once('=') {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => (d.clone(), "1".to_string()),
+            })
+            .collect(),
+    )
+}
+
+fn buffer(gpu: &Gpu, bytes: &[u8], bind: D3D11_BIND_FLAG) -> Result<ID3D11Buffer, String> {
+    let d = D3D11_BUFFER_DESC {
+        ByteWidth: u32::try_from(bytes.len()).map_err(|_| "buffer over 4 GiB")?,
+        Usage: D3D11_USAGE_IMMUTABLE,
+        BindFlags: bind.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+        StructureByteStride: 0,
+    };
+    let init = D3D11_SUBRESOURCE_DATA {
+        pSysMem: bytes.as_ptr() as _,
+        SysMemPitch: 0,
+        SysMemSlicePitch: 0,
+    };
+    let mut b = None;
+    // SAFETY: `bytes` outlives the call; descriptors are locals.
+    unsafe { gpu.device.CreateBuffer(&d, Some(&init), Some(&mut b)) }
+        .map_err(|e| gpu.fail("CreateBuffer", e))?;
+    b.ok_or_else(|| "CreateBuffer returned no buffer".into())
+}
+
+fn sampler_state(gpu: &Gpu, s: &Sampler) -> Result<ID3D11SamplerState, String> {
+    let d = D3D11_SAMPLER_DESC {
+        Filter: D3D11_FILTER(s.filter),
+        AddressU: D3D11_TEXTURE_ADDRESS_MODE(s.address[0]),
+        AddressV: D3D11_TEXTURE_ADDRESS_MODE(s.address[1]),
+        AddressW: D3D11_TEXTURE_ADDRESS_MODE(s.address[2]),
+        MipLODBias: s.mip_bias,
+        MaxAnisotropy: s.max_aniso,
+        ComparisonFunc: D3D11_COMPARISON_FUNC(s.compare),
+        BorderColor: s.border,
+        MinLOD: s.min_lod,
+        MaxLOD: s.max_lod,
+    };
+    let mut out = None;
+    // SAFETY: descriptor and out-pointer are locals.
+    unsafe { gpu.device.CreateSamplerState(&d, Some(&mut out)) }
+        .map_err(|e| gpu.fail("CreateSamplerState", e))?;
+    out.ok_or_else(|| "no sampler".into())
+}
+
+impl Renderer {
+    /// Draws `r` with its captured geometry, cbuffers, textures and samplers and reads the bound targets back over
+    /// the crop. `deferred` chooses which targets are bound, never the permutation (the fixture's define list is
+    /// compiled as is): false = RT0 only (the PS writes to unbound slots are discarded).
+    pub fn render_replay(&mut self, r: &Replay, deferred: bool) -> Result<ReplayOut, String> {
+        if deferred {
+            return Err("deferred replay needs the 8 targets (Task D3)".into());
+        }
+        if r.blended {
+            // shortcut: blended (hint-1 forward) subjects need the captured blend state on top of the seeded RT0; D6b if wanted
+            return Err("blended subjects do not replay yet".into());
+        }
+        let mut warnings = Vec::new();
+        if r.defines.len() > 1 {
+            warnings.push(format!(
+                "{} define variants; replaying the first",
+                r.defines.len()
+            ));
+        }
+        let ps_list = &r.defines[0];
+        let src = self.sources.get(Path::new("Lighting.hlsl"))?;
+        let vs_d = to_defines(&vs_defines(ps_list, &r.mesh));
+        let ps_d = to_defines(std::iter::once(&"PSHADER".to_string()).chain(ps_list));
+        let vs = compile(&src, &vs_d, "vs_5_0", &self.cache_dir).map_err(|e| format!("VS: {e}"))?;
+        let ps = compile(&src, &ps_d, "ps_5_0", &self.cache_dir).map_err(|e| format!("PS: {e}"))?;
+        let vs_inputs: BTreeSet<(String, u32)> = vs
+            .reflection
+            .inputs
+            .iter()
+            .filter(|i| !i.0.to_ascii_uppercase().starts_with("SV_"))
+            .map(|i| (i.0.to_ascii_uppercase(), i.1))
+            .collect();
+        let ia: BTreeSet<(String, u32)> = r
+            .mesh
+            .inputs
+            .iter()
+            .map(|i| (i.0.to_ascii_uppercase(), i.1))
+            .collect();
+        if vs_inputs != ia {
+            return Err(format!(
+                "captured IA {ia:?} does not match the VS inputs {vs_inputs:?}"
+            ));
+        }
+        let prog = create_program(&self.gpu, vs, ps)?;
+        let gpu = &self.gpu;
+
+        let names = r
+            .mesh
+            .inputs
+            .iter()
+            .map(|i| CString::new(i.0.as_str()).map_err(|_| format!("bad semantic {:?}", i.0)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let elems: Vec<D3D11_INPUT_ELEMENT_DESC> = r
+            .mesh
+            .inputs
+            .iter()
+            .zip(&names)
+            .map(|(i, n)| D3D11_INPUT_ELEMENT_DESC {
+                SemanticName: PCSTR(n.as_ptr() as _),
+                SemanticIndex: i.1,
+                Format: DXGI_FORMAT(i.2 as i32),
+                InputSlot: i.3,
+                AlignedByteOffset: i.4,
+                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                InstanceDataStepRate: 0,
+            })
+            .collect();
+        let mut layout = None;
+        // SAFETY: `elems` points into `names`, both alive for the call; the bytecode slice is valid.
+        unsafe {
+            gpu.device
+                .CreateInputLayout(&elems, &prog.vs.bytecode, Some(&mut layout))
+        }
+        .map_err(|e| gpu.fail("CreateInputLayout", e))?;
+        let layout = layout.ok_or("CreateInputLayout returned no layout")?;
+        let vbs = r
+            .mesh
+            .vbs
+            .iter()
+            .map(|(slot, stride, b)| {
+                Ok((*slot, *stride, buffer(gpu, b, D3D11_BIND_VERTEX_BUFFER)?))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let ib = buffer(gpu, &r.mesh.ib, D3D11_BIND_INDEX_BUFFER)?;
+
+        // Every reflected cbuffer from its file, verbatim (zero-padded to the reflection).
+        let mut cbs = Vec::new();
+        for (stage, refl) in [("vs", &prog.vs.reflection), ("ps", &prog.ps.reflection)] {
+            for l in &refl.cbuffers {
+                let raw = r
+                    .cbuffers
+                    .get(&format!("{stage}_b{}", l.slot))
+                    .ok_or_else(|| {
+                        format!(
+                            "cb_{stage}_b{}.bin missing ({} is reflected)",
+                            l.slot, l.name
+                        )
+                    })?;
+                let b = buffer(gpu, &cb_bytes(raw, l.size), D3D11_BIND_CONSTANT_BUFFER)?;
+                cbs.push((stage == "vs", l.slot, b));
+            }
+        }
+        // SRVs at their registers; a "null" register stays unbound like in game (reads 0), not render3d's defaults.
+        let mut srvs = Vec::new();
+        for (name, reg, kind) in &prog.ps.reflection.srvs {
+            if r.null_srvs.contains(reg) {
+                continue;
+            }
+            let Some(bytes) = r.textures.get(reg) else {
+                warnings.push(format!("t{reg} ({name}): not in the fixture, left unbound"));
+                continue;
+            };
+            match load_dds(gpu, bytes) {
+                Ok(t) if t.kind == *kind => srvs.push((*reg, t.srv)),
+                Ok(t) => warnings.push(format!(
+                    "t{reg} ({name}): fixture texture is {:?}, the shader reads {kind:?}; left unbound",
+                    t.kind
+                )),
+                Err(e) => warnings.push(format!("t{reg} ({name}): {e}; left unbound")),
+            }
+        }
+        let mut samplers = Vec::new();
+        for (name, slot) in &prog.ps.reflection.samplers {
+            match r.samplers.iter().find(|s| s.0 == *slot) {
+                Some((_, s)) => samplers.push((*slot, sampler_state(gpu, s)?)),
+                None => {
+                    warnings.push(format!(
+                        "s{slot} ({name}): no captured sampler, using the default"
+                    ));
+                    samplers.push((*slot, self.sampler.clone()));
+                }
+            }
+        }
+        let mut bd = D3D11_BLEND_DESC::default();
+        bd.RenderTarget[0].BlendEnable = false.into();
+        bd.RenderTarget[0].RenderTargetWriteMask = r.write_masks.first().copied().unwrap_or(0xf);
+        let mut blend = None;
+        // SAFETY: descriptor and out-pointer are locals.
+        unsafe { gpu.device.CreateBlendState(&bd, Some(&mut blend)) }
+            .map_err(|e| gpu.fail("CreateBlendState", e))?;
+
+        // Full size: screen-space lookups (t14 shadow mask) use SV_Position.
+        let target = Target::new(gpu, r.size.0, r.size.1)?;
+        target.clear(gpu, [0.0; 4]);
+        if let Some(b) = r.before.first() {
+            target.seed_f32(gpu, r.crop, b)?;
+        }
+        let v = r.viewport;
+        // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
+        unsafe {
+            let ctx = &gpu.ctx;
+            ctx.OMSetRenderTargets(Some(&[Some(target.rtv.clone())]), &target.dsv);
+            ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                TopLeftX: v[0],
+                TopLeftY: v[1],
+                Width: v[2],
+                Height: v[3],
+                MinDepth: v[4],
+                MaxDepth: v[5],
+            }]));
+            ctx.RSSetState(if r.cull_back {
+                &self.raster_back
+            } else {
+                &self.raster
+            });
+            // LessEqual + write: the fixture's Equal/no-write is a post-prepass state, and replay has no prepass.
+            ctx.OMSetDepthStencilState(&self.depth_states[3], 0);
+            ctx.OMSetBlendState(blend.as_ref(), None, 0xffff_ffff);
+            ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ctx.IASetInputLayout(&layout);
+            for (slot, stride, b) in &vbs {
+                ctx.IASetVertexBuffers(*slot, 1, Some(&Some(b.clone())), Some(stride), Some(&0));
+            }
+            ctx.IASetIndexBuffer(&ib, DXGI_FORMAT_R16_UINT, 0);
+            ctx.VSSetShader(&prog.vs_obj, None);
+            ctx.PSSetShader(&prog.ps_obj, None);
+            for (vs, slot, b) in &cbs {
+                if *vs {
+                    ctx.VSSetConstantBuffers(*slot, Some(&[Some(b.clone())]));
+                } else {
+                    ctx.PSSetConstantBuffers(*slot, Some(&[Some(b.clone())]));
+                }
+            }
+            for (reg, v) in &srvs {
+                ctx.PSSetShaderResources(*reg, Some(&[Some(v.clone())]));
+            }
+            for (slot, s) in &samplers {
+                ctx.PSSetSamplers(*slot, Some(&[Some(s.clone())]));
+            }
+            // Vertex k of mesh.vb is index − minIndex.
+            ctx.DrawIndexed(r.mesh.index_count, 0, -(r.mesh.min_index as i32));
+        }
+        let rt0 = target.read_f32(gpu, r.crop);
+        // SAFETY: plain context call; `render` rebinds everything per frame.
+        unsafe { gpu.ctx.ClearState() };
+        Ok(ReplayOut {
+            mrt: vec![rt0?],
+            main: None,
+            warnings,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mesh(sems: &[&str]) -> ReplayMesh {
+        ReplayMesh {
+            inputs: sems.iter().map(|s| (s.to_string(), 0, 2, 0, 0)).collect(),
+            vbs: vec![],
+            ib: vec![],
+            index_count: 0,
+            min_index: 0,
+        }
+    }
+
+    #[test]
+    fn cb_bytes_pads_to_the_reflection_and_keeps_longer_buffers() {
+        let b = cb_bytes(&[1; 20], 32);
+        assert_eq!(b.len(), 32);
+        assert!(b[..20].iter().all(|&x| x == 1) && b[20..].iter().all(|&x| x == 0));
+        assert_eq!(cb_bytes(&[1; 720], 192).len(), 720);
+        assert_eq!(cb_bytes(&[], 0).len(), 16);
+        assert_eq!(cb_bytes(&[1; 20], 0).len(), 32);
+    }
+
+    #[test]
+    fn vs_defines_follow_the_ia() {
+        let ps: Vec<String> = [
+            "VC",
+            "SPECULAR",
+            "FACEGEN",
+            "PROJECTED_UV",
+            "CS_GAME_GAMMA=1.6",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let has = |v: &[String], d: &str| v.iter().any(|x| x == d);
+        let plain = vs_defines(&ps, &mesh(&["POSITION", "TEXCOORD", "NORMAL"]));
+        for d in ["VSHADER", "PROJECTED_UV", "CS_GAME_GAMMA=1.6"] {
+            assert!(has(&plain, d), "{d} in {plain:?}");
+        }
+        for d in ["VC", "SPECULAR", "FACEGEN", "SKINNED"] {
+            assert!(!has(&plain, d), "{d} in {plain:?}");
+        }
+        let full = vs_defines(&ps, &mesh(&["POSITION", "COLOR", "BLENDWEIGHT"]));
+        assert!(has(&full, "VC") && has(&full, "SKINNED"), "{full:?}");
+    }
+
+    #[test]
+    fn nonfinite_tokens_become_null_outside_strings() {
+        assert_eq!(
+            nonfinite_to_null(r#"[NaN, -Infinity, Infinity, "NaN \"Infinity", 1.0]"#),
+            r#"[null, null, null, "NaN \"Infinity", 1.0]"#
+        );
+    }
+}

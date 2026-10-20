@@ -17,6 +17,7 @@ pub mod parse;
 pub mod perf_log;
 pub mod permutation;
 pub mod pool;
+pub mod replay;
 pub mod scene;
 pub mod source;
 pub mod textures;
@@ -26,6 +27,7 @@ pub use debug::{Availability, DebugOutput};
 pub use material::{classify, pbr_bit_meaning, pbr_flags, Bound, EditKind, Pipe};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
+pub use replay::{load_fixture, Replay, ReplayOut};
 
 use background::Backdrop;
 use compile::{cached, program_key, CompiledPair, ProgramKey, SrvKind};

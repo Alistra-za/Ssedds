@@ -23,6 +23,8 @@
 //   pixels (P1-C settings tests).
 // - STANDIN_SKIN (with STANDIN_FLAT): CS's SkinPerGeometry (b7) and skin extra map (t71) are declared, and the flat
 //   colour adds skinMaterialFlags.x x the t71 RGB, so the RFAOS lookup shows in pixels (P1-C Task 8 tests).
+// - STANDIN_REPLAY (with STANDIN_FLAT): the flat colour adds DirLightColor (PS b2), so a replay reads every PS
+//   cbuffer and a zero-padded short b2 adds nothing (v2 D2 tests).
 
 struct VsOut
 {
@@ -146,6 +148,9 @@ float4 main(VsOut i) : SV_Target
 #endif
 #if defined(STANDIN_SKIN)
     col += skinMaterialFlags.x * TexSkinExtraSampler.SampleLevel(DiffuseSampler, i.Uv, 0).rgb;
+#endif
+#if defined(STANDIN_REPLAY)
+    col += DirLightColor.rgb;
 #endif
     return float4(col, base.a * 0.5);
 #else

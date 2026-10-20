@@ -31,7 +31,7 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext,
     ID3D11RenderTargetView, ID3D11Texture2D, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_RENDER_TARGET,
-    D3D11_CLEAR_DEPTH, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_BOX, D3D11_CLEAR_DEPTH, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
 };
@@ -353,6 +353,86 @@ impl Target {
             return Err(gpu.fail("Map", "null pointer returned"));
         }
         Ok(out)
+    }
+
+    fn check_crop(&self, crop: [u32; 4]) -> Result<(), String> {
+        let [x, y, w, h] = crop.map(u64::from);
+        if x + w > self.width.into() || y + h > self.height.into() {
+            return Err(format!(
+                "crop {crop:?} outside the {}x{} target",
+                self.width, self.height
+            ));
+        }
+        Ok(())
+    }
+
+    /// The colour target over `crop` ([x, y, w, h]) as row-major f32 RGBA (half → f32, no clamping): the layout of
+    /// a golden fixture's `mrt<N>.f32`.
+    pub fn read_f32(&self, gpu: &Gpu, crop: [u32; 4]) -> Result<Vec<f32>, String> {
+        self.check_crop(crop)?;
+        let [x, y, w, h] = crop.map(|v| v as usize);
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        // SAFETY: both resources belong to `gpu.device`; `mapped` is a local.
+        unsafe {
+            gpu.ctx.CopyResource(&self.staging, &self.color);
+            gpu.ctx
+                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|e| gpu.fail("Map", e))?;
+        }
+        let pitch = mapped.RowPitch as usize;
+        let mut out = Vec::with_capacity(w * h * 4);
+        if !mapped.pData.is_null() {
+            for row in y..y + h {
+                // SAFETY: while mapped, `pData` holds `height` rows `RowPitch` bytes apart, each `width × 8` bytes
+                // (4 × f16); the crop lies inside (checked). Read as bytes, so no alignment assumption.
+                let px = unsafe {
+                    std::slice::from_raw_parts(
+                        (mapped.pData as *const u8).add(row * pitch + x * 8),
+                        w * 8,
+                    )
+                };
+                out.extend(
+                    px.as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| half::f16::from_le_bytes(*c).to_f32()),
+                );
+            }
+        }
+        // SAFETY: paired with the successful Map above.
+        unsafe { gpu.ctx.Unmap(&self.staging, 0) };
+        if out.len() != w * h * 4 {
+            return Err(gpu.fail("Map", "null pointer returned"));
+        }
+        Ok(out)
+    }
+
+    /// Writes `rgba` (row-major f32 RGBA, `crop` = [x, y, w, h]) into the colour target as half floats: a golden
+    /// fixture's `mrt<N>_before.f32` as the draw's starting contents.
+    pub fn seed_f32(&self, gpu: &Gpu, crop: [u32; 4], rgba: &[f32]) -> Result<(), String> {
+        self.check_crop(crop)?;
+        let [x, y, w, h] = crop;
+        if rgba.len() != (w * h * 4) as usize {
+            return Err(format!("seed: {} floats for a {w}x{h} crop", rgba.len()));
+        }
+        let bytes: Vec<u8> = rgba
+            .iter()
+            .flat_map(|v| half::f16::from_f32(*v).to_le_bytes())
+            .collect();
+        let b = D3D11_BOX {
+            left: x,
+            top: y,
+            front: 0,
+            right: x + w,
+            bottom: y + h,
+            back: 1,
+        };
+        // SAFETY: `bytes` holds `h` rows of `w × 8` bytes and outlives the call; the box lies inside (checked).
+        unsafe {
+            gpu.ctx
+                .UpdateSubresource(&self.color, 0, Some(&b), bytes.as_ptr() as _, w * 8, 0)
+        };
+        Ok(())
     }
 }
 
