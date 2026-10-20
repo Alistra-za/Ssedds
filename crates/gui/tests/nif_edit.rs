@@ -2205,3 +2205,50 @@ fn ctrl_z_does_nothing_in_a_text_field_a_popup_or_a_dialog() {
     assert_eq!(nif(&h), (0, true));
     assert_eq!(textures(&h), tex);
 }
+
+/// Sets `mask` bits of SLSF2 on shape A's shader (the edit panel redraws on the next run).
+fn set_slsf2(h: &mut Harness<'static, MeshesModel>, a: u32, mask: u32) {
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(a), Role::Shader).unwrap();
+    let shader = e.model.shape(a).unwrap().shader.unwrap();
+    let base = e.model.lighting[&shader].lighting.slsf2;
+    m.edit_push(
+        vec![Op::SetBits {
+            at,
+            field: Field::Slsf2,
+            mask,
+            value: mask,
+            base,
+        }],
+        None,
+    );
+    h.run_steps(2);
+}
+
+#[test]
+fn pbr_shape_labels_slsf2_bits_and_non_pbr_does_not() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    assert!(h.query_all_by_label_contains("PBR:").next().is_none());
+    set_slsf2(&mut h, a, (1 << 23) | (1 << 24) | (1 << 25));
+    h.get_by_label("PBR: Two-layer coat");
+    h.get_by_label("PBR: Inner-layer parallax");
+    // The checkbox keeps its name and adds the PBR meaning.
+    h.get_by_role_and_label(
+        egui::accesskit::Role::CheckBox,
+        "Multi_Layer_Parallax (PBR: Two-layer coat)",
+    );
+}
+
+#[test]
+fn slsf2_warning_shows_under_the_flags() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, a, 1 << 12);
+    h.get_by_label("Fit_Slope (SLSF2 12) does nothing without the PBR flag.");
+}

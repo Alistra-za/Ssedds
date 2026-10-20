@@ -492,7 +492,35 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                         Field::Slsf2 if bit == 23 => Some(PBR_HOVER),
                         _ => None,
                     };
-                    let r = ui.add_enabled(locked.is_none(), egui::Checkbox::new(&mut on, *name));
+                    let pbr_meaning = if field == Field::Slsf2 {
+                        render3d::pbr_bit_meaning(v, bit as u32)
+                    } else {
+                        None
+                    };
+                    let mut r = ui
+                        .horizontal(|ui| {
+                            let r = ui
+                                .add_enabled(locked.is_none(), egui::Checkbox::new(&mut on, *name));
+                            if let Some(m) = pbr_meaning {
+                                ui.weak(format!("PBR: {m}"));
+                            }
+                            r
+                        })
+                        .inner;
+                    if let Some(m) = pbr_meaning {
+                        let (full, enabled, checked) =
+                            (format!("{name} (PBR: {m})"), r.enabled(), on);
+                        r.widget_info(move || {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::Checkbox,
+                                enabled,
+                                checked,
+                                full.clone(),
+                            )
+                        });
+                        r = r
+                            .on_hover_text(format!("With the PBR flag CS reads this bit as: {m}."));
+                    }
                     if let Some(h) = locked {
                         r.on_disabled_hover_text(h);
                     } else if r.changed() {
