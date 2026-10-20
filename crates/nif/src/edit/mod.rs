@@ -185,8 +185,7 @@ fn role_cands(m: &NifModel, sel: &[&ShapeModel], role: &Role) -> Vec<Cand> {
                     .into_iter()
                     .filter(|e| {
                         e.kind == *kind
-                            && String::from_utf8_lossy(e.name.as_deref().unwrap_or(&[]))
-                                == name.as_str()
+                            && crate::text::lossy(e.name.as_deref().unwrap_or(&[])) == *name
                     })
                     .nth(*nth as usize);
                 v.extend(hit.map(|e| (e.block, e.kind.clone())));

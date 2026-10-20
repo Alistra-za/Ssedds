@@ -576,6 +576,25 @@ fn edit_string_extra_appends_a_string_and_patches_one_index() {
     assert_eq!(r.bytes, b);
 }
 
+/// Final review M1: an extra whose name has a byte >= 0x80 anchors under the Windows-1252 name the panel shows.
+#[test]
+fn a_non_ascii_extra_name_anchors_as_the_panel_names_it() {
+    let mut n = builder::Nif::new(100);
+    let nm = n.string("Countè");
+    n.block("NiIntegerExtraData", builder::W::default().i32(nm).u32(7).0);
+    let r = n.string("Root");
+    let root = builder::W::default().i32(r).u32(1).i32(0).i32(-1);
+    n.block("NiNode", scenes::avobj(root).u32(0).u32(0).0);
+    n.roots = vec![1];
+    let b = n.bytes();
+    let m = read_model(&b).unwrap();
+    let shown = nif::text::lossy("Countè".as_bytes());
+    let at = anchor_role(&m, None, root_extra(&shown, "NiIntegerExtraData"))
+        .expect("anchors by the shown name");
+    let r = apply(&b, &[Op::RemoveExtra { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+}
+
 #[test]
 fn edit_inv_marker_round_trips() {
     use nif::extra::ExtraValue::Inv;
