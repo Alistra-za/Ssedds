@@ -3,6 +3,7 @@ pub mod analyse;
 pub mod api;
 mod archive;
 pub mod bake;
+pub mod checks;
 pub mod codes;
 pub mod config;
 pub mod coverage;

@@ -94,6 +94,9 @@ pub struct AnalysisCache {
     /// Whether to build a thumbnail beside each analysis. Off by default, so the throwaway cache `Engine::plan`
     /// uses (the CLI) never pays for a downscale; `Session::new` turns it on.
     pub thumbnails: bool,
+    /// Whether each analysis carries the artist check stats (DECISIONS Note CI). Off by default like `thumbnails`,
+    /// so the CLI computes none; `Session::new` turns it on.
+    pub checks: bool,
     files: Mutex<HashMap<PathBuf, FileEntry>>,
     packs: Mutex<HashMap<String, PackEntry>>,
     loads: AtomicU64,
@@ -191,6 +194,19 @@ impl AnalysisCache {
             None => self.thumbnail_of(&job.input),
         }
     }
+    /// The job's analysis: its packed image's for a packed job, else its source's. Like [`Self::thumbnail`], it
+    /// ignores stamps.
+    pub fn analysis(&self, job: &ResolvedJob) -> Option<Analysis> {
+        match &job.pack {
+            Some(pk) => {
+                let key = pack_cache_key(pk)?;
+                lock(&self.packs).get(&key).map(|e| e.analysis.clone())
+            }
+            None => lock(&self.files)
+                .get(&job.input)
+                .map(|e| e.analysis.clone()),
+        }
+    }
 }
 
 /// An engine for one GUI window: encoders initialised once (the BC1 model is process-global, spec §4.6).
@@ -207,6 +223,7 @@ impl Session {
             engine: Engine::new()?,
             cache: AnalysisCache {
                 thumbnails: true,
+                checks: true,
                 ..Default::default()
             },
             bc1_model,

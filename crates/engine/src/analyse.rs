@@ -3,6 +3,7 @@
 //! One pass over the float image, no allocation beyond the result. Every
 //! "code" comparison is made on the nearest 8-bit code ([`code8`]) so the
 //! thresholds match what an 8-bit viewer of the same data would see.
+use crate::checks::CheckStats;
 use crate::image::{Rgba32F, SourceInfo};
 use crate::presets::AlphaContent;
 use schemars::JsonSchema;
@@ -68,6 +69,20 @@ pub struct Analysis {
     /// `|L - 1|` of the bottom-left texel `(0, h - 1)`, the one CS's complex-grass detector reads, for every shape
     /// (PBR grass design R1); infinite for an empty image.
     pub corner_err: f32,
+    /// Artist check stats (DECISIONS Note CI); `None` unless [`AnalyseHints::bands`] asked for them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<CheckStats>,
+}
+
+/// Which artist check stats [`analyse_with`] computes besides the §5.1 statistics. All off by default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnalyseHints {
+    /// Band and luma counts; without them no [`CheckStats`] is made.
+    pub bands: bool,
+    /// The normal map's curl, as stored and flipped.
+    pub curl: bool,
+    /// The steep-step share of this channel.
+    pub steps: Option<usize>,
 }
 
 /// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
@@ -90,6 +105,11 @@ pub fn code8(v: f32) -> u8 {
 /// Compute the §5.1 statistics for `img`. `info` says whether the source file
 /// actually carried an alpha channel (the float image always has four).
 pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
+    analyse_with(img, info, AnalyseHints::default())
+}
+
+/// [`analyse`], plus the artist check stats `hints` asks for.
+pub fn analyse_with(img: &Rgba32F, info: &SourceInfo, hints: AnalyseHints) -> Analysis {
     let count = img.px.len();
     let n = count.max(1) as f64;
     let mut ch = [ChannelStats {
@@ -103,6 +123,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
     let mut finite = [0u64; 4];
     let mut len_n = 0u64;
     let (mut gray, mut len_err, mut bb, mut rh, mut peak) = (true, 0.0f64, 0u64, 0u64, 0f32);
+    let mut checks = hints.bands.then(|| CheckStats::new(info.channels == 2));
     for p in &img.px {
         for (c, (s, &v)) in ch.iter_mut().zip(p).enumerate() {
             if !v.is_finite() {
@@ -129,6 +150,9 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
             i32::from(code8(p[2])),
         );
         gray &= r.max(g).max(b) - r.min(g).min(b) <= 4;
+        if let Some(s) = &mut checks {
+            s.add([r as u8, g as u8, b as u8, a]);
+        }
         bb += u64::from(p[2] < 0.1);
         rh += u64::from(p[0] > 0.9);
         if p[..3].iter().all(|v| v.is_finite()) {
@@ -146,6 +170,10 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
             (s.min, s.max) = (0.0, 0.0);
         }
         s.mean /= finite[c].max(1) as f64;
+    }
+    if let Some(s) = &mut checks {
+        s.curl = hints.curl.then(|| crate::checks::curl(img));
+        s.steep = hints.steps.map(|c| crate::checks::steep_share(img, c));
     }
     let ln = len_n.max(1) as f64;
     let all_255 = hist.eq255 as usize == count;
@@ -183,6 +211,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
             .map_or(f32::INFINITY, |c| {
                 crate::grass::unit_err([c[0], c[1], c[2]])
             }),
+        checks,
     }
 }
 
@@ -391,6 +420,78 @@ mod tests {
         };
         let img = Rgba32F::new(2, 1, [0.5, 0.5, 0.5, 251.0 / 255.0]);
         assert!(!analyse(&img, &none).alpha_near_opaque);
+    }
+
+    #[test]
+    fn band_counts_match_a_per_texel_count_and_are_absent_without_hints() {
+        use crate::checks::BandCounts;
+        let mut img = Rgba32F::new(4, 1, [0.0; 4]);
+        for (p, c) in img.px.iter_mut().zip([0u8, 25, 230, 255]) {
+            *p = [c as f32 / 255.0; 4];
+        }
+        let a = analyse_with(
+            &img,
+            &RGBA8,
+            AnalyseHints {
+                bands: true,
+                ..Default::default()
+            },
+        );
+        let s = a.checks.unwrap();
+        assert_eq!(
+            s.bands[0],
+            BandCounts {
+                eq0: 1,
+                le4: 1,
+                low: 2,
+                high: 2,
+                ge251: 1,
+                eq255: 1
+            }
+        );
+        assert_eq!(s.bands[3], s.bands[0]);
+        assert_eq!(
+            (s.luma_dark, s.luma_bright, s.luma_black, s.texels),
+            (2, 1, 1, 4)
+        );
+        assert!(!s.two_channel);
+        assert_eq!((s.curl, s.steep), (None, None));
+        assert_eq!(analyse(&img, &RGBA8).checks, None);
+        // Everything else is unchanged by the hints.
+        let mut plain = a.clone();
+        plain.checks = None;
+        assert_eq!(plain, analyse(&img, &RGBA8));
+        // A 0x0 image: texels 0, every count 0, no panic.
+        let e = analyse_with(
+            &Rgba32F::new(0, 0, [0.0; 4]),
+            &RGBA8,
+            AnalyseHints {
+                bands: true,
+                curl: true,
+                steps: Some(0),
+            },
+        );
+        let e = e.checks.unwrap();
+        assert_eq!(e.texels, 0);
+        assert_eq!(e.bands, [BandCounts::default(); 4]);
+        // Two-channel sources (BC5 / RG8) are flagged; curl and steps run only when hinted.
+        let rg = SourceInfo {
+            channels: 2,
+            has_alpha: false,
+            ..RGBA8
+        };
+        let s = analyse_with(
+            &img,
+            &rg,
+            AnalyseHints {
+                bands: true,
+                curl: true,
+                steps: Some(0),
+            },
+        )
+        .checks
+        .unwrap();
+        assert!(s.two_channel && s.curl.is_some() && s.steep.is_some());
     }
 
     /// 16-bit sources: the cutoff is 251/255 in float, so 250.9/255 is varying and 251/255 is not.

@@ -5,7 +5,7 @@
 //! `run` applies `--on-existing`, then converts the ready files on a rayon pool of `jobs` threads, admitting them
 //! by estimated memory against `--mem-budget`. Files that are unresolved, blocked or in error are reported and
 //! never converted: the engine does not guess (spec §8, DECISIONS "never auto-decide").
-use crate::analyse::analyse;
+use crate::analyse::analyse_with;
 use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover_reporting, InputFile, InputKind};
@@ -1087,6 +1087,7 @@ impl Engine {
                 panic_while_planning_for_test(&f.path, st);
             };
             enter(Stage::Load);
+            let split = split_for((set, f));
             // Taken before the read, so a change made while it is loaded is seen as a change too.
             let source = SourceStamp::of(&f.path);
             let (a, info) = match source.and_then(|s| cache.file(&f.path, s)) {
@@ -1098,7 +1099,8 @@ impl Engine {
                     let (img, info, meta) = load_image_meta(&f.path)?;
                     cache.count_loads(1);
                     enter(Stage::Analyse);
-                    let mut a = analyse(&img, &info);
+                    let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                    let mut a = analyse_with(&img, &info, hints);
                     a.icc_profile = meta.icc_profile;
                     a.dds_dxgi = meta.dds_dxgi;
                     if let Some(s) = source {
@@ -1110,7 +1112,6 @@ impl Engine {
                 }
             };
             enter(Stage::Resolve);
-            let split = split_for((set, f));
             let facts = FileFacts {
                 input: f,
                 suffix: split.suffix.as_deref(),
@@ -1375,7 +1376,14 @@ impl Engine {
                                     cache.count_loads(c.job.sources.len() as u64);
                                     stage.set(Stage::Analyse);
                                     let e = PackEntry {
-                                        analysis: analyse(&asm.image, &asm.info),
+                                        analysis: analyse_with(
+                                            &asm.image,
+                                            &asm.info,
+                                            crate::checks::hints_for(
+                                                Some(c.job.kind.suffix()),
+                                                cache.checks,
+                                            ),
+                                        ),
                                         info: asm.info,
                                         non_gray: asm.non_gray,
                                         thumb: cache.make_thumb(&asm.image, &asm.info),
