@@ -973,6 +973,33 @@ fn own_emit_badge_shows_for_emissive_without_own_emit() {
     h.get_by_label("No effect in game: Own_Emit is off");
 }
 
+/// A shared alpha whose split is refused (a clip controller) is not editable: an edit would land on every user.
+#[test]
+fn a_shared_alpha_that_cannot_split_is_not_edited() {
+    let mut m = direct(scenes::shared_alpha_with_managed_ctrl());
+    select(&mut m, "A");
+    let e = m.edit.as_ref().unwrap();
+    let b = shape_named(e, "B");
+    let before = e.model.alphas[&e.model.shape(b).unwrap().alpha.unwrap()]
+        .alpha
+        .flags;
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Alpha").click();
+    h.run_steps(2);
+    h.get_by_label("Shared alpha with a clip controller: splitting needs Phase C.");
+    if let Some(n) = h.query_by_label("Blend") {
+        n.click();
+    }
+    h.run_steps(2);
+    let e = h.state().edit.as_ref().unwrap();
+    let after = e.model.alphas[&e.model.shape(b).unwrap().alpha.unwrap()]
+        .alpha
+        .flags;
+    assert_eq!(before, after, "B's alpha changed: {:?}", e.outcomes);
+    assert!(e.doc.ops.is_empty(), "{:?}", e.doc.ops);
+}
+
 /// A colour change is three channel ops; a drag of the picker merges them as three ops with the first bases.
 #[test]
 fn a_colour_drag_is_three_ops_with_the_original_bases() {
