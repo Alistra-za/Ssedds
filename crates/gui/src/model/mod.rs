@@ -2106,7 +2106,8 @@ impl AppModel {
         // A newer answer replaces an older one; it never stacks.
         self.after_export = Some(action);
         // M2 (owner answer 4): close or open during the held full-size pass means full size, then close or open.
-        if self.export.running.is_some() && self.half_pass {
+        // CL43: or while the held pass waits for its plan (the cannot-ask branch re-queued it).
+        if (self.export.running.is_some() && self.half_pass) || self.half_size_waiting() {
             return;
         }
         if self.export.running.is_some() {
@@ -3133,6 +3134,11 @@ impl AppModel {
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             return;
         }
+        // CL43: opening now would drop a held pass waiting for its plan, and the first pass's JSON; open after it
+        // (the question comes back then if the edits are still unsaved).
+        if self.half_size_waiting() {
+            return self.defer_until_half_size(AfterExport::Open(root));
+        }
         if save {
             if self.save().is_err() {
                 return;
@@ -3709,6 +3715,77 @@ mod tests {
             .messages
             .entries()
             .any(|e| e.text.contains("exported at full size before closing")));
+        assert!(m.take_close_ready());
+    }
+
+    /// CL43 (final review I1): "Stop the export and close" answered while the held pass waits for its plan: the
+    /// close waits for that pass.
+    #[test]
+    fn stop_and_close_while_the_half_size_pass_waits_keeps_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_fixture(d.path());
+        m.export_clicked();
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        m.export_half_size(&["up.png".to_string()]);
+        assert!(m.half_size_waiting());
+        m.dialog = Some(Dialog::ExportRunning(AfterExport::Close));
+        m.resolve_export_running(AfterExport::Close, true);
+        assert!(
+            !m.take_close_ready(),
+            "close_ready with the held pass queued"
+        );
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        assert_eq!(up_width(&m), 512);
+        assert!(m.take_close_ready());
+    }
+
+    /// CL43: the OpenUnsaved answer while the held pass waits: the folder opens after that pass (the question comes
+    /// back then if edits are still unsaved).
+    #[test]
+    fn open_unsaved_while_the_half_size_pass_waits_opens_after_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_fixture(d.path());
+        let up = m.export_root().join("up.dds");
+        let other = d.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        m.export_clicked();
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        m.export_half_size(&["up.png".to_string()]);
+        m.dialog = Some(Dialog::OpenUnsaved(other.clone()));
+        m.resolve_open_unsaved(other.clone(), false);
+        assert_ne!(
+            m.root.as_ref(),
+            Some(&other),
+            "opened with the held pass queued"
+        );
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        let b = std::fs::read(&up).unwrap();
+        assert_eq!(u32::from_le_bytes(b[16..20].try_into().unwrap()), 512);
+        assert_eq!(m.root.as_ref(), Some(&other));
+    }
+
+    /// CL43: CloseUnsaved's Save and Discard send `ViewportCommand::Close`; the app answers the close event with
+    /// `request_close` (app.rs), which defers the close until the held pass has run. Discard's reload is done here
+    /// as `ui::dialogs::close_unsaved` does it.
+    #[test]
+    fn close_unsaved_while_the_half_size_pass_waits_closes_after_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = held_fixture(d.path());
+        m.export_clicked();
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        m.export_half_size(&["up.png".to_string()]);
+        m.dialog = None;
+        if let Some(p) = m.project.as_mut() {
+            p.reload();
+        }
+        if let Some(s) = m.sets_doc.as_mut() {
+            s.reload();
+        }
+        m.history.clear();
+        assert!(!m.request_close(), "closed with the held pass queued");
+        assert_eq!(m.after_export, Some(AfterExport::Close));
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        assert_eq!(up_width(&m), 512);
         assert!(m.take_close_ready());
     }
 }
