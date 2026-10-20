@@ -16,7 +16,7 @@ Skyrim_AE_1.6.1170_frame124546/ev16950_SOVStairsPiece01_6 RUN
 Skyrim_AE_1.6.1170_frame124546/ev19005_SOVStairsPiece01_1 RUN
 Skyrim_AE_1.6.1170_frame124546/ev19026_SOVStairsPiece01_0 RUN
 Skyrim_AE_1.6.1170_frame141442/ev29987_Coffin RUN
-Skyrim_AE_1.6.1170_frame141442/ev30024_Wreath04_0 two-sided-alpha-tested
+Skyrim_AE_1.6.1170_frame141442/ev30024_Wreath04_0 RUN
 Skyrim_AE_1.6.1170_frame141442/ev30657_Object174 RUN
 Skyrim_AE_1.6.1170_frame141442/ev30727_Object174 RUN
 Skyrim_AE_1.6.1170_frame141442/ev30773_Core01_22 RUN
@@ -104,7 +104,7 @@ Skyrim_AE_1.6.1170_frame62147/ev30896_dibella_L.004_3 RUN
 Skyrim_AE_1.6.1170_frame62147/ev30930_BlackreachVineFloor01_3 RUN
 Skyrim_AE_1.6.1170_frame62147/ev31107_Core01_1 no-clean-composite
 Skyrim_AE_1.6.1170_frame69672/ev31535_Coffin RUN
-Skyrim_AE_1.6.1170_frame69672/ev31572_Wreath04_0 two-sided-alpha-tested
+Skyrim_AE_1.6.1170_frame69672/ev31572_Wreath04_0 RUN
 Skyrim_AE_1.6.1170_frame69672/ev31833_Object174 RUN
 Skyrim_AE_1.6.1170_frame69672/ev31903_Object174 RUN
 Skyrim_AE_1.6.1170_frame69672/ev31949_Core01_22 RUN
@@ -113,7 +113,7 @@ Skyrim_AE_1.6.1170_frame69672/ev32004_dibella_L.004_3 RUN
 Skyrim_AE_1.6.1170_frame69672/ev32038_BlackreachVineFloor01_3 RUN
 Skyrim_AE_1.6.1170_frame69672/ev32077_Core01_1 no-clean-composite
 Skyrim_AE_1.6.1170_frame69673/ev28957_Coffin RUN
-Skyrim_AE_1.6.1170_frame69673/ev28994_Wreath04_0 two-sided-alpha-tested
+Skyrim_AE_1.6.1170_frame69673/ev28994_Wreath04_0 RUN
 Skyrim_AE_1.6.1170_frame69673/ev29255_Object174 RUN
 Skyrim_AE_1.6.1170_frame69673/ev29325_Object174 RUN
 Skyrim_AE_1.6.1170_frame69673/ev29371_Core01_22 RUN

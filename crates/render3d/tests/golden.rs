@@ -8,8 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 const PROFILES: &[&str] = &["A", "A_RT", "A_RT2"];
-const TWO_SIDED: &str =
-    "two-sided alpha-tested: replay has no prepass depth (D-P19, captured depth in D6c)";
+const TWO_SIDED: &str = "two-sided alpha-tested: no captured depth (capture not kept)";
 
 fn bits(v: &[f32]) -> Vec<u32> {
     v.iter().map(|x| x.to_bits()).collect()
@@ -152,7 +151,8 @@ fn replay_matches_capture_per_mrt() {
                 continue;
             }
         };
-        let two_sided = r.two_sided_alpha_tested();
+        // D6c: captured depth stands in for the game's prepass, so only subjects without it are skipped (D-P19).
+        let two_sided = r.two_sided_alpha_tested() && r.depth.is_none();
         let mut clean_px = None;
         let mut fails = Vec::new();
         let mut row = format!("{} | {} | {} | {masked} |", s.capture, name, s.profile);
@@ -241,7 +241,8 @@ fn replay_matches_capture_per_mrt() {
                 row.push_str(" | - | -");
             }
         }
-        let _ = writeln!(row, " | {}", out.warnings.len());
+        let depth = if r.depth.is_some() { " depth" } else { "" };
+        let _ = writeln!(row, " | {}{depth}", out.warnings.len());
         print!("{row}");
         if two_sided {
             // Information only, so D6c can show the improvement.
