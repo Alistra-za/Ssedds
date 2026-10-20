@@ -2276,9 +2276,9 @@ impl Renderer {
             && self.debug == DebugOutput::Lit
             && self.composite.as_ref().is_some_and(Composite::needs_env))
             || self.draw_order.iter().any(|id| {
-                self.shapes[id]
-                    .draw
-                    .as_ref()
+                self.shapes
+                    .get(id)
+                    .and_then(|s| s.draw.as_ref())
                     .is_some_and(|d| !d.env_regs.is_empty())
             });
         let yaw = scene.env_yaw.to_bits();
