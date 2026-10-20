@@ -100,7 +100,8 @@ pub fn locate(h: &Header, b: &[u8], block: usize, f: Field) -> Result<(usize, Va
     let found = match h.kind(block) {
         b"BSLightingShaderProperty" => lsp(h, b, block, f)?,
         b"NiAlphaProperty" => alpha(h, b, block, f)?,
-        _ => None,
+        k if crate::ctrl::is_ctrl(k) => ctrl(k, f),
+        k => interp(k, f),
     };
     let Some((rel, ty)) = found else {
         return Err(geo(format!("{f:?} does not exist on this block type")));
@@ -125,6 +126,30 @@ pub fn locate(h: &Header, b: &[u8], block: usize, f: Field) -> Result<(usize, Va
 }
 
 type Found = Option<(usize, Ty)>;
+
+/// Controller fields: NiTimeController base, then the variable on the classes that carry one.
+fn ctrl(kind: &[u8], f: Field) -> Found {
+    Some(match f {
+        Field::CtrlFlags => (4, Ty::U16),
+        Field::Frequency => (6, Ty::F32),
+        Field::Phase => (10, Ty::F32),
+        Field::StartTime => (14, Ty::F32),
+        Field::StopTime => (18, Ty::F32),
+        Field::Variable if crate::ctrl::known_len(kind) == Some(crate::ctrl::BASE_LEN + 8) => {
+            (30, Ty::U32)
+        }
+        _ => return None,
+    })
+}
+
+fn interp(kind: &[u8], f: Field) -> Found {
+    match f {
+        Field::InterpValue(i) if (i as usize) < crate::ctrl::interp_floats(kind) => {
+            Some((4 * i as usize, Ty::F32))
+        }
+        _ => None,
+    }
+}
 
 fn alpha(h: &Header, b: &[u8], block: usize, f: Field) -> Result<Found, NifError> {
     let p = read_net(h, b, block)?.end - h.offsets()[block];
