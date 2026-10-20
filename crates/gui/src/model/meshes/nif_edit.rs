@@ -317,6 +317,9 @@ impl NifEdit {
     /// only by an Overwrite answered for exactly the bytes on disk now.
     pub fn export(&mut self, choice: Option<GuardChoice>) -> ExportOutcome {
         let asked = self.guard.take();
+        if choice == Some(GuardChoice::KeepTheirs) {
+            return ExportOutcome::KeptTheirs; // whatever is on disk now stays
+        }
         if self.edit_mod.as_os_str().is_empty() {
             return ExportOutcome::Blocked("Export needs an MO2 instance.".into());
         }
@@ -350,7 +353,6 @@ impl NifEdit {
                 };
                 let sha256 = edit_doc::sha256_hex(&on_disk);
                 match choice {
-                    Some(GuardChoice::KeepTheirs) => return ExportOutcome::KeptTheirs,
                     Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
                     _ => {
                         let diff =

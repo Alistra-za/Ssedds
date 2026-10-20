@@ -129,7 +129,7 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
                     egui::WidgetInfo::labeled(
                         egui::WidgetType::Button,
                         true,
-                        format!("Revert: {label}"),
+                        format!("Revert {}: {label}", i + 1),
                     )
                 });
                 if r.clicked() {

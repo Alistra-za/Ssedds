@@ -1666,6 +1666,13 @@ fn hand_edited_export_asks_before_overwrite() {
     ));
     let e = m.edit.as_ref().unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), *e.patched);
+    // Keep theirs never writes, even when the file is gone by the time it is answered.
+    std::fs::remove_file(&p).unwrap();
+    assert_eq!(
+        m.export_edit(Some(GuardChoice::KeepTheirs)),
+        ExportOutcome::KeptTheirs
+    );
+    assert!(!p.exists());
 }
 
 #[test]
@@ -1772,7 +1779,7 @@ fn badge_of(m: &MeshesModel, name: &str) -> Option<DocBadge> {
 
 #[test]
 fn pending_list_and_chips() {
-    let (_d, mut m) = export_session();
+    let (d, mut m) = export_session();
     let y = m.nifs.iter().find(|n| n.path.ends_with("y.nif")).unwrap();
     m.select_nif(y.copy_id);
     m.open_edit();
@@ -1784,6 +1791,26 @@ fn pending_list_and_chips() {
     assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
     assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Exported));
     assert_eq!(badge_of(&m, "y.nif"), Some(DocBadge::Pending));
+    // A new session on the same store reads the chips from the edit documents, without a scan or an open edit.
+    let mut fresh = MeshesModel::new(
+        Some(d.path().join("scan.db")),
+        MeshesSettings {
+            instance: Some(d.path().to_path_buf()),
+            profile: Some("Default".into()),
+            folder: None,
+        },
+    );
+    fresh.procs = sdc_gui::model::meshes::no_procs;
+    fresh.activate_with(None);
+    let chips = |k: &str| {
+        fresh
+            .doc_badges
+            .iter()
+            .find(|(p, _)| p.ends_with(k))
+            .map(|(_, b)| *b)
+    };
+    assert_eq!(chips("x.nif"), Some(DocBadge::Exported));
+    assert_eq!(chips("y.nif"), Some(DocBadge::Pending));
     let mut h = view(m);
     h.run_steps(4);
     h.get_by_label("Edited");
@@ -1820,7 +1847,7 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
     let Op::SetField { at, .. } = &ops(&m)[0] else {
         unreachable!()
     };
-    let revert = format!("Revert: {}: Glossiness", at.shape.as_deref().unwrap());
+    let revert = format!("Revert 1: {}: Glossiness", at.shape.as_deref().unwrap());
     let mut h = view(m);
     h.run_steps(3);
     h.get_by_label("To: mods\\sdc NIF Edits\\meshes\\x.nif");

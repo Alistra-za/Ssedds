@@ -678,6 +678,7 @@ impl MeshesModel {
         self.settings_changed = true;
         self.target = Some(ScanTarget::Mo2 { root, profile });
         self.read_profiles();
+        self.refresh_doc_badges();
     }
 
     /// The profiles of the chosen instance: folders under its profiles folder that hold a `modlist.txt`, by name.
