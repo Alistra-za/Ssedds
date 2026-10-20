@@ -830,3 +830,110 @@ fn checks_settings_default_on_and_load_from_an_old_gui_toml() {
     assert_eq!(back.checks, s.checks);
     assert!(!back.checks.plastic);
 }
+
+// ---- Task 3: the end-of-export summary and the green suggestion ---------------------------------------------------
+
+#[test]
+fn checks_summary_text_has_plurals_and_counts_sets_apart() {
+    assert_eq!(
+        summary_text(3, 1, 1),
+        "Checks: 3 warnings on 1 texture and 1 set; see Problems"
+    );
+    assert_eq!(
+        summary_text(1, 1, 0),
+        "Checks: 1 warning on 1 texture; see Problems"
+    );
+    assert_eq!(
+        summary_text(2, 0, 2),
+        "Checks: 2 warnings on 2 sets; see Problems"
+    );
+}
+
+#[test]
+fn checks_summary_counts_warning_level_check_results_only() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_sets(d.path(), &[("a", 20), ("b", 20)], false);
+    assert_eq!(
+        checks_summary(&m).as_deref(),
+        Some("Checks: 2 warnings on 2 textures; see Problems")
+    );
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_wall(d.path(), 128, true); // only the Info CHK-GREEN-GUESS
+    assert_eq!(checks_summary(&m), None);
+}
+
+#[test]
+fn check_warnings_are_not_copied_into_the_export_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_wall(d.path(), 20, false);
+    m.export_clicked();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(m.export.rows.iter().all(|r| r
+        .warnings
+        .iter()
+        .all(|w| !w.code.as_str().starts_with("CHK-"))));
+    let rows = bottom::problems(&m);
+    let chk: Vec<_> = rows
+        .iter()
+        .filter(|p| p.code == Some(Code::ChkRange))
+        .collect();
+    assert_eq!(chk.len(), 1, "{rows:?}");
+    assert!(matches!(chk[0].at, At::Texture(_)));
+    let want = "Checks: 1 warning on 1 texture; see Problems";
+    let n = m.messages.entries().filter(|e| e.text == want).count();
+    assert_eq!(n, 1, "the summary is logged once");
+}
+
+#[test]
+fn a_check_row_click_selects_its_texture() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_wall(d.path(), 20, false);
+    m.open_problems(None);
+    let mut h = harness(m, 1400.0);
+    h.run();
+    h.get_by_label("test/wall.png").click();
+    h.run();
+    assert_eq!(
+        h.state().selected_items(),
+        vec!["test/wall.png".to_string()]
+    );
+}
+
+#[test]
+fn an_n_that_looks_opengl_offers_treat_as_opengl() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_wall(d.path(), 128, true);
+    m.select_item("test/wall_n.png");
+    let mut h = harness(m, 1400.0);
+    h.run();
+    h.get_by_label_contains("CHK-GREEN-GUESS");
+    h.get_by_label("Treat as OpenGL (flip green)").click();
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    let j = h
+        .state()
+        .item("test/wall_n.png")
+        .unwrap()
+        .job
+        .clone()
+        .unwrap();
+    assert_eq!(
+        j.profile.channels.green_convention,
+        Some(engine::config::GreenConvention::Opengl)
+    );
+}
+
+#[test]
+fn an_unstated_normal_that_looks_opengl_gets_the_hint_on_its_own_line() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/test");
+    std::fs::create_dir_all(&r).unwrap();
+    gl_bumpy(&r.join("wall_normal.png"));
+    let mut m = support::opened_as_the_app(d.path().join("textures"), d.path().join("export"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.select_item("test/wall_normal.png");
+    let mut h = harness(m, 1400.0);
+    h.run();
+    h.get_by_label_contains("Looks OpenGL (curl test).");
+    assert_eq!(h.query_all_by_label_contains("CHK-GREEN-GUESS").count(), 0);
+}

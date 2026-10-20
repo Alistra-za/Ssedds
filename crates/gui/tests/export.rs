@@ -361,3 +361,32 @@ fn answering_open_unsaved_during_an_export_waits_for_it() {
     m.cancel_export();
     assert!(m.wait_idle(Duration::from_secs(120)));
 }
+
+/// Re-check C3: an artist-check warning never opens Review and never reaches the blocks or asks.
+#[test]
+fn export_never_asks_about_check_warnings() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    decide_all(&mut m);
+    m.poll();
+    let c: usize = m
+        .items
+        .iter()
+        .map(|i| m.check_warnings(&i.key).len())
+        .sum::<usize>();
+    assert!(
+        c > 0,
+        "the fixture raises a check result (flat alpha-less normal)"
+    );
+    for i in sdc_gui::model::pbr_export::export_blocks(&m)
+        .iter()
+        .chain(sdc_gui::model::pbr_export::export_asks(&m).iter())
+    {
+        assert!(!format!("{i:?}").contains("CHK-"), "{i:?}");
+    }
+    m.export_clicked();
+    assert!(m.review.is_none(), "{:?}", m.review.is_some());
+    assert!(m.export.running.is_some());
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(m.export.summary.is_some());
+}

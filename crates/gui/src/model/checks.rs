@@ -509,3 +509,35 @@ impl AppModel {
         true
     }
 }
+
+/// "Checks: 3 warnings on 1 texture and 1 set; see Problems" (preflight K19).
+pub fn summary_text(n: usize, textures: usize, sets: usize) -> String {
+    let pl = |c: usize, w: &str| format!("{c} {w}{}", if c == 1 { "" } else { "s" });
+    let on = match (textures, sets) {
+        (t, 0) => pl(t, "texture"),
+        (0, s) => pl(s, "set"),
+        (t, s) => format!("{} and {}", pl(t, "texture"), pl(s, "set")),
+    };
+    format!("Checks: {} on {on}; see Problems", pl(n, "warning"))
+}
+
+/// The end-of-export line: the Warning-level check rows in Problems (item, set and export-row results; Info is
+/// never a row). `None` when there are none.
+pub fn checks_summary(m: &AppModel) -> Option<String> {
+    use super::bottom::{problems, At, Level};
+    let rows = problems(m);
+    let (mut files, mut sets) = (
+        std::collections::HashSet::new(),
+        std::collections::HashSet::new(),
+    );
+    let mut n = 0;
+    for p in rows.iter().filter(|p| p.level == Level::Check) {
+        n += 1;
+        match &p.at {
+            At::Texture(k) | At::File(k) => files.insert(k.as_str()),
+            At::Set { key, .. } => sets.insert(key.as_str()),
+            At::Project => false,
+        };
+    }
+    (n > 0).then(|| summary_text(n, files.len(), sets.len()))
+}

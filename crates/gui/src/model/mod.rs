@@ -1192,6 +1192,9 @@ impl AppModel {
                 };
                 self.messages.notify(sev, export_finished_text(&summary));
                 self.export.summary = Some(summary);
+                if let Some(t) = checks::checks_summary(self) {
+                    self.messages.notify(messages::Severity::Info, t);
+                }
             }
             Err(e) => {
                 self.messages

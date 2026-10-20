@@ -755,7 +755,10 @@ fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
         .filter(|w| {
             !matches!(
                 w.code,
-                Code::SugLowConfidence | Code::InGreenUnstated | Code::FmtHdrSource
+                Code::SugLowConfidence
+                    | Code::InGreenUnstated
+                    | Code::ChkGreenGuess
+                    | Code::FmtHdrSource
             )
         })
         .collect();
@@ -883,11 +886,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         item.kind,
         item.status.clone(),
     );
-    let (decisions, warnings, job) = (
+    let (decisions, mut warnings, job) = (
         item.decisions.clone(),
         item.warnings.clone(),
         item.job.clone(),
     );
+    // The texture's own list shows its check results, Info included (preflight K5, X3).
+    warnings.extend(model.check_warnings(key).iter().cloned());
     let packed_output = match &status {
         ItemStatus::PackedInto(j) => model
             .items
@@ -958,10 +963,24 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 }
                 _ => {}
             }
+            let guess = message_of(&warnings, Code::ChkGreenGuess);
             if let Some(m) = message_of(&warnings, Code::InGreenUnstated) {
                 // Note AW: an Info line, not a question; the OpenGL answer stays one click away.
+                let hint = if guess.is_some() {
+                    " Looks OpenGL (curl test)."
+                } else {
+                    ""
+                };
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("IN-GREEN-UNSTATED: {m}")).small());
+                    ui.label(egui::RichText::new(format!("IN-GREEN-UNSTATED: {m}{hint}")).small());
+                    if ui.small_button("Treat as OpenGL (flip green)").clicked() {
+                        actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
+                    }
+                });
+            } else if let Some(m) = guess {
+                // No AW question was asked: the check's own line, same button, never an auto-flip.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("CHK-GREEN-GUESS: {m}")).small());
                     if ui.small_button("Treat as OpenGL (flip green)").clicked() {
                         actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
                     }
