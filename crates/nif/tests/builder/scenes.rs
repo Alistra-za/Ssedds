@@ -271,7 +271,18 @@ pub fn all() -> Vec<Vec<u8>> {
         shared_alpha_with_testref_chain(),
         shared_alpha_with_managed_ctrl(),
         shared_alpha_two_ctrl_chain(),
+        one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]),
     ]
+}
+
+/// One shape (0) -> BSLSP (2) -> texture set (1) with the given slot paths.
+pub fn one_shape_set(paths: &[&str]) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", bstri_named(s, 2, -1));
+    n.block("BSShaderTextureSet", texset(paths));
+    n.block("BSLightingShaderProperty", lsp(0, 1));
+    n.bytes()
 }
 
 /// One of each editable extra (BSX 0x83 "BSX", BODYTRI "a\r\nb", int 7, bool 1 "PG_IGNORE", float -0.0, BSInvMarker

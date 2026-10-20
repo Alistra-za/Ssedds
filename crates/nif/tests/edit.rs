@@ -340,24 +340,149 @@ fn shader_type_stale_base_is_a_conflict() {
     assert_eq!(r.bytes, b);
 }
 
+fn path_op(m: &nif::model::NifModel, shape: u32, slot: u32, path: &str) -> Op {
+    let set = m.lighting[&m.shape(shape).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    let base = m.texsets[&set].raw.slots.get(slot as usize).cloned();
+    Op::SetTexturePath {
+        at: anchor_shape(m, shape),
+        slot,
+        path: path.into(),
+        base: String::from_utf8(base.unwrap_or_default()).unwrap(),
+    }
+}
+
 #[test]
-fn texture_path_op_is_not_supported_yet() {
-    let b = scenes::alpha_shape(0x12EC);
+fn unshared_set_edit_changes_only_that_block_and_its_size() {
+    let b = scenes::one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]);
     let m = read_model(&b).unwrap();
-    let r = apply(
-        &b,
-        &[Op::SetTexturePath {
-            at: anchor_shape(&m, 0),
-            slot: 0,
-            path: String::new(),
-            base: String::new(),
-        }],
-    )
-    .unwrap();
+    let op = path_op(&m, 0, 1, "textures\\much\\longer\\a_n.dds");
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let h2 = Header::parse(&r.bytes).unwrap();
+    assert_eq!(h2.sizes.len(), 3, "no block appended");
+    for k in [0, 2] {
+        assert_eq!(block_bytes_of(&r.bytes, k), block_bytes_of(&b, k));
+    }
+    let m2 = read_model(&r.bytes).unwrap();
+    assert!(m2.problems.is_empty());
+    assert_eq!(m2.texsets[&1].raw.slots[0], b"textures\\a.dds");
+    assert_eq!(
+        m2.texsets[&1].raw.slots[1],
+        b"textures\\much\\longer\\a_n.dds"
+    );
+    assert!(h2.sizes[1] > Header::parse(&b).unwrap().sizes[1]);
+}
+
+#[test]
+fn slot_counts_9_6_4_3_2_are_never_padded() {
+    for n in [9usize, 6, 4, 3, 2] {
+        let paths: Vec<String> = (0..n).map(|i| format!("textures\\s{i}.dds")).collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let b = scenes::one_shape_set(&refs);
+        let m = read_model(&b).unwrap();
+        let r = apply(&b, &[path_op(&m, 0, 0, "textures\\x.dds")]).unwrap();
+        let m2 = read_model(&r.bytes).unwrap();
+        assert_eq!(m2.texsets[&1].raw.slots.len(), n);
+        assert_eq!(m2.texsets[&1].raw.slots[0], b"textures\\x.dds");
+        assert_eq!(m2.texsets[&1].raw.slots[1..], m.texsets[&1].raw.slots[1..]);
+    }
+}
+
+#[test]
+fn slot_past_the_count_is_refused() {
+    let b = scenes::one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]);
+    let m = read_model(&b).unwrap();
+    let op = Op::SetTexturePath {
+        at: anchor_shape(&m, 0),
+        slot: 2,
+        path: "x".into(),
+        base: String::new(),
+    };
+    let r = apply(&b, &[op]).unwrap();
     assert_eq!(
         r.outcomes,
-        vec![Outcome::Refused("not supported yet".into())]
+        vec![Outcome::Refused("slot 2 is past the set's 2 slots".into())]
     );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn stale_base_conflicts_and_unmappable_path_is_refused() {
+    let b = scenes::one_shape_set(&["textures\\a.dds"]);
+    let m = read_model(&b).unwrap();
+    let mut stale = path_op(&m, 0, 0, "textures\\b.dds");
+    if let Op::SetTexturePath { base, .. } = &mut stale {
+        *base = "textures\\other.dds".into();
+    }
+    let r = apply(&b, &[stale, path_op(&m, 0, 0, "textures\\\u{4e2d}.dds")]).unwrap();
+    assert!(matches!(r.outcomes[0], Outcome::Conflict(_)));
+    assert!(matches!(r.outcomes[1], Outcome::Refused(_)));
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn second_edit_on_the_copy_edits_in_place() {
+    let b = scenes::shared_alpha_and_set();
+    let m = read_model(&b).unwrap();
+    let a = shape_named(&m, "A");
+    let ops = [
+        path_op(&m, a, 0, "textures\\new\\a.dds"),
+        Op::SetTexturePath {
+            at: anchor_shape(&m, a),
+            slot: 0,
+            path: "textures\\newer\\a.dds".into(),
+            base: "textures\\new\\a.dds".into(),
+        },
+    ];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(
+        Header::parse(&r.bytes).unwrap().sizes.len(),
+        Header::parse(&b).unwrap().sizes.len() + 1,
+        "one appended block only"
+    );
+    let m2 = read_model(&r.bytes).unwrap();
+    let set = m2.lighting[&m2.shape(shape_named(&m2, "A")).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    assert_eq!(m2.texsets[&set].raw.slots[0], b"textures\\newer\\a.dds");
+    assert_eq!(block_bytes_of(&r.bytes, 3), block_bytes_of(&b, 3));
+}
+
+#[test]
+fn shared_set_edit_leaves_other_shape_and_undo_is_identity() {
+    let b = scenes::shared_alpha_and_set();
+    let m = read_model(&b).unwrap();
+    let a = shape_named(&m, "A");
+    let set = m.lighting[&m.shape(a).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    let r = apply(&b, &[path_op(&m, a, 0, "textures\\new\\a.dds")]).unwrap();
+    let m2 = read_model(&r.bytes).unwrap();
+    assert_eq!(
+        block_bytes_of(&r.bytes, set as usize),
+        block_bytes_of(&b, set as usize)
+    );
+    assert_eq!(
+        Header::parse(&r.bytes).unwrap().sizes.len(),
+        Header::parse(&b).unwrap().sizes.len() + 1
+    );
+    let a_set = m2.lighting[&m2.shape(shape_named(&m2, "A")).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    assert_ne!(a_set, set);
+    assert_eq!(m2.texsets[&a_set].raw.slots[0], b"textures\\new\\a.dds");
+    assert_eq!(
+        m2.texsets[&a_set].raw.slots[1..],
+        m.texsets[&set].raw.slots[1..]
+    );
+    let b_set = m2.lighting[&m2.shape(shape_named(&m2, "B")).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    assert_eq!(b_set, set);
+    assert_eq!(apply(&b, &[]).unwrap().bytes, b);
 }
 
 fn root_extra(name: &str, kind: &str) -> Role {

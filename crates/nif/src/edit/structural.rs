@@ -5,6 +5,7 @@ use crate::ctrl::BASE_LEN;
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
 use crate::model::{NifModel, ShapeModel};
 use crate::net::{encode_net, ObjectNet};
+use crate::props::encode_texture_set;
 use crate::write::NifDoc;
 
 /// Default trailer floats after Lighting Effect 2 for a shader type (01-format §1.2).
@@ -256,5 +257,52 @@ pub(crate) fn extra_op(
         }
         _ => return Err("not an extra-data op".into()),
     }
+    Ok(Outcome::Applied)
+}
+
+/// SetTexturePath on the shape `shape`: edits its set in place when it has one user, else on a fresh copy that
+/// only this shape's BSLSP points at. A stale `base` is a Conflict.
+pub(crate) fn texture_path_op(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    shape: &ShapeModel,
+    op: &Op,
+) -> Result<Outcome, String> {
+    let Op::SetTexturePath {
+        slot, path, base, ..
+    } = op
+    else {
+        return Err("not a texture path op".into());
+    };
+    let lsp = shape
+        .shader
+        .and_then(|s| m.lighting.get(&s))
+        .ok_or("the shape has no readable shader property")?;
+    let set = lsp
+        .texture_set
+        .and_then(|t| m.texsets.get(&t))
+        .ok_or("the shader property has no readable texture set")?;
+    let n = set.raw.slots.len();
+    let old = set
+        .raw
+        .slots
+        .get(*slot as usize)
+        .ok_or(format!("slot {slot} is past the set's {n} slots"))?;
+    let now = encoding_rs::WINDOWS_1252.decode(old).0;
+    if now != *base {
+        return Ok(Outcome::Conflict(format!(
+            "changed in the source: was {base:?}, now {now:?}"
+        )));
+    }
+    let mut slots = set.raw.slots.clone();
+    slots[*slot as usize] = win1252(path)?;
+    let mut target = set.raw.block;
+    if set.users.len() > 1 {
+        target = copy(doc, target);
+        // texture-set ref sits 24 bytes after the NiObjectNET (01-format §1.2)
+        let at = lsp.prop.net.end - doc.header().offsets()[lsp.prop.block as usize] + 24;
+        patch(doc, lsp.prop.block, at, target as i32)?;
+    }
+    doc.set_block(target, encode_texture_set(&slots));
     Ok(Outcome::Applied)
 }

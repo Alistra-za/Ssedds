@@ -290,8 +290,8 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         | Op::RemoveAlpha { at }
         | Op::AddExtra { at, .. }
         | Op::EditExtra { at, .. }
-        | Op::RemoveExtra { at } => at,
-        _ => return refused("not supported yet".into()), // A11
+        | Op::RemoveExtra { at }
+        | Op::SetTexturePath { at, .. } => at,
     };
     let m = match read_model(cur) {
         Ok(m) => m,
@@ -310,6 +310,17 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     } else {
         Outcome::Applied
     };
+    if matches!(op, Op::SetTexturePath { .. }) {
+        let r = match m.shape(block).filter(|_| at.role == Role::Shape) {
+            Some(s) => structural::texture_path_op(&mut doc, &m, s, op),
+            None => Err("texture paths anchor on a shape".into()),
+        };
+        return match r {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
     if matches!(
         op,
         Op::AddExtra { .. } | Op::EditExtra { .. } | Op::RemoveExtra { .. }
