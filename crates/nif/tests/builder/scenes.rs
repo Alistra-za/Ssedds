@@ -77,7 +77,11 @@ pub fn lsp(st: u32, ts: i32) -> Vec<u8> {
 }
 
 pub fn bstri(shader: i32, alpha: i32) -> Vec<u8> {
-    avobj(net(-1))
+    bstri_named(-1, shader, alpha)
+}
+
+pub fn bstri_named(name: i32, shader: i32, alpha: i32) -> Vec<u8> {
+    avobj(net(name))
         .fs(&[0.0; 4])
         .i32(-1)
         .i32(shader)
@@ -256,5 +260,67 @@ pub fn all() -> Vec<Vec<u8>> {
         free_chain(),
         alpha_testref(),
         managed_clip(),
+        all_extras(),
+        shared_alpha_and_set(),
     ]
+}
+
+/// One of each editable extra (BSX 0x83 "BSX", BODYTRI "a\r\nb", int 7, bool 1 "PG_IGNORE", float -0.0, BSInvMarker
+/// 4712/6283/0/1.0) plus a NiStringsExtraData (read-only row).
+pub fn all_extras() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (bsx, bodytri, val, nm, pg, f, inv, ss) = (
+        n.string("BSX"),
+        n.string("BODYTRI"),
+        n.string("a\r\nb"),
+        n.string("Count"),
+        n.string("PG_IGNORE"),
+        n.string("Scale"),
+        n.string("INV"),
+        n.string("Strs"),
+    );
+    n.block("BSXFlags", W::default().i32(bsx).u32(0x83).0);
+    n.block("NiStringExtraData", W::default().i32(bodytri).i32(val).0);
+    n.block("NiIntegerExtraData", W::default().i32(nm).u32(7).0);
+    n.block("NiBooleanExtraData", W::default().i32(pg).u8(1).0);
+    n.block("NiFloatExtraData", W::default().i32(f).f(-0.0).0);
+    n.block(
+        "BSInvMarker",
+        W::default().i32(inv).u16(4712).u16(6283).u16(0).f(1.0).0,
+    );
+    n.block(
+        "NiStringsExtraData",
+        W::default().i32(ss).u32(1).sized("x").0,
+    );
+    n.bytes()
+}
+
+/// Root NiNode (0) with BSTriShapes "A" (1) and "B" (2) whose BSLSPs (5, 6) share one BSShaderTextureSet (3) and
+/// one NiAlphaProperty (4).
+pub fn shared_alpha_and_set() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (r, a, b) = (n.string("Root"), n.string("A"), n.string("B"));
+    n.block(
+        "NiNode",
+        avobj(W::default().i32(r).u32(0).i32(-1))
+            .u32(2)
+            .i32(1)
+            .i32(2)
+            .u32(0)
+            .0,
+    );
+    n.block("BSTriShape", bstri_named(a, 5, 4));
+    n.block("BSTriShape", bstri_named(b, 6, 4));
+    n.block("BSShaderTextureSet", texset(&["textures\\a.dds"]));
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], -1))
+            .u16(0x00ED)
+            .u8(128)
+            .0,
+    );
+    n.block("BSLightingShaderProperty", lsp(1, 3));
+    n.block("BSLightingShaderProperty", lsp(1, 3));
+    n.bytes()
 }

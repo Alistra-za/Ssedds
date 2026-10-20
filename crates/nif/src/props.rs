@@ -263,6 +263,47 @@ pub fn decode_texture_set(h: &Header, b: &[u8], block: usize) -> Result<TextureS
     Ok(TextureSet { slots })
 }
 
+/// A texture set exactly as stored: raw bytes, exact count, no normalisation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TexSetRaw {
+    pub block: u32,
+    pub slots: Vec<Vec<u8>>,
+}
+
+pub fn decode_texture_set_raw(h: &Header, b: &[u8], block: usize) -> Result<TexSetRaw, NifError> {
+    if block >= h.sizes.len() {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: "no such block".into(),
+        });
+    }
+    let (mut c, start, end) = block_cursor(h, b, block);
+    let n = c.u32()? as usize;
+    if n > MAX_TEXTURE_SLOTS {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: format!("{n} texture slots (at most {MAX_TEXTURE_SLOTS})"),
+        });
+    }
+    let slots = (0..n)
+        .map(|_| c.sized_bytes().map(<[u8]>::to_vec))
+        .collect::<Result<Vec<_>, _>>()?;
+    finish(h, block, &c, start, end)?;
+    Ok(TexSetRaw {
+        block: block as u32,
+        slots,
+    })
+}
+
+pub fn encode_texture_set(slots: &[Vec<u8>]) -> Vec<u8> {
+    let mut o = (slots.len() as u32).to_le_bytes().to_vec();
+    for s in slots {
+        o.extend((s.len() as u32).to_le_bytes());
+        o.extend(s);
+    }
+    o
+}
+
 pub fn decode_alpha(h: &Header, b: &[u8], block: usize) -> Result<Alpha, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
     object_net(h, b, block, &mut c)?;
