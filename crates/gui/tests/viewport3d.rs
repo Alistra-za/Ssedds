@@ -3156,11 +3156,11 @@ fn deferred_falls_back_and_shows_the_notice() {
     assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
     wait_lit(&mut v);
     assert!(v.look.deferred, "D-P30: the preference stays");
-    // A user toggle (off, then on) reports the failure again.
+    // D-P33: turning it off says nothing new; turning it on again reports the failure again.
     v.notice = None;
     v.set_deferred(false);
     run_idle(&mut v);
-    v.notice = None;
+    assert_eq!(v.notice, None, "no notice when the toggle turns off");
     v.set_deferred(true);
     run_idle(&mut v);
     let again = v.notice.clone().expect("the notice is back");

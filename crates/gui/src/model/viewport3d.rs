@@ -2239,7 +2239,9 @@ fn render_loop(
                     None
                 }
                 V3Cmd::SetDeferred(on) => {
-                    deferred_told = None; // a user toggle reports a failure again
+                    if on {
+                        deferred_told = None; // turning it on reports a failure again (D-P33)
+                    }
                     if let Err(e) = r.set_deferred(on) {
                         deferred_told = Some(e.clone());
                         send(V3Reply::Notice(e));
