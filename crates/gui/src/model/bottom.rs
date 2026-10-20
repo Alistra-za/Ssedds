@@ -1,6 +1,6 @@
 //! The bottom panel's state (layout v2 A1, A9; R7, R8): which tab shows, and whether the panel is open.
 use super::items::Decision;
-use super::{counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
+use super::{checks, counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -57,12 +57,19 @@ impl AppModel {
     }
 }
 
-/// Red blocks the export; the other two are orange (A12).
+/// Red blocks the export; the others are orange in the list (A12). `Check` rows (artist checks, DECISIONS Note CI)
+/// are listed but never change "ready" (`counts_as_ready_problem`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Blocks,
     Decide,
     Warning,
+    Check,
+}
+
+/// Whether a row takes "ready" away: every row but an artist check's (owner answer 1).
+pub fn counts_as_ready_problem(p: &Problem) -> bool {
+    p.level != Level::Check
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +98,8 @@ pub enum ProblemsFilter {
     /// An engine set key.
     Set(String),
     Undecided,
+    /// Only the artist checks' rows.
+    Checks,
 }
 
 impl AppModel {
@@ -101,7 +110,7 @@ impl AppModel {
     }
 }
 
-/// Every problem of the project: blocks, then decisions, then warnings. Cached (K9) under the views key plus
+/// Every problem of the project: blocks, then decisions, then warnings, then checks. Cached (K9) under the views key plus
 /// what the asks and the File rows read; the build holds no `RefCell` borrow.
 pub fn problems(m: &AppModel) -> Arc<Vec<Problem>> {
     m.problem_lookups.set(m.problem_lookups.get() + 1);
@@ -140,11 +149,15 @@ pub(super) fn problems_inner(m: &AppModel) -> super::ProblemsKey {
     )
 }
 
-/// The set keys and texture keys that carry a problem.
+/// The set keys and texture keys that carry a problem that takes "ready" away, and the row counts by that test.
 #[derive(Debug, Default)]
 pub struct Flagged {
     pub sets: HashSet<String>,
     pub textures: HashSet<String>,
+    /// Rows passing `counts_as_ready_problem` (the Export dot and its hover, K6).
+    pub ready_rows: usize,
+    /// `Level::Check` rows (the Problems tab's "Checks {n}").
+    pub check_rows: usize,
 }
 
 /// `Flagged`, built once per `problems` build (R-a: a set card asks every frame). Fetch it once per frame and ask
@@ -156,6 +169,11 @@ pub fn flagged(m: &AppModel) -> Arc<Flagged> {
     }
     let mut f = Flagged::default();
     for p in all.iter() {
+        if !counts_as_ready_problem(p) {
+            f.check_rows += 1;
+            continue;
+        }
+        f.ready_rows += 1;
         match &p.at {
             At::Set { key, .. } => f.sets.insert(key.clone()),
             At::Texture(t) => f.textures.insert(t.clone()),
@@ -285,12 +303,45 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             out.push(row(Level::Warning, at, text, Some(w.code)));
         }
     }
+    // Artist checks (DECISIONS Note CI): listed, never "ready"-changing; Info results stay on hover (owner answer 2).
+    for i in m
+        .items
+        .iter()
+        .filter(|i| i.status != ItemStatus::NeedsDecision)
+    {
+        for w in m
+            .check_warnings(&i.key)
+            .iter()
+            .filter(|w| counts_toward_badge(w))
+        {
+            let at = At::Texture(i.key.clone());
+            out.push(row(Level::Check, at, w.message.clone(), Some(w.code)));
+        }
+    }
+    for v in views.iter() {
+        for w in m
+            .set_check_warnings(&v.key)
+            .iter()
+            .filter(|w| counts_toward_badge(w))
+        {
+            let at = set_at(&v.key, &v.id);
+            out.push(row(Level::Check, at, w.message.clone(), Some(w.code)));
+        }
+    }
     // Rows only count once the export has ended: `revision` bumps on every engine event (R9).
     if m.export.running.is_none() {
+        // K2: an engine CHK-* row is a check row and follows its switch. The switches are not in `ProblemsKey`:
+        // a switch change reaches this build through `refresh_checks`' `invalidate_views()`.
+        let on = &m.settings.checks;
         for r in &m.export.rows {
             for w in &r.warnings {
+                let level = match checks::check_of(w.code) {
+                    Some(c) if !checks::switch_on(on, c) => continue,
+                    Some(_) => Level::Check,
+                    None => Level::Warning,
+                };
                 let at = At::File(r.job_key.clone());
-                out.push(row(Level::Warning, at, w.message.clone(), Some(w.code)));
+                out.push(row(level, at, w.message.clone(), Some(w.code)));
             }
         }
     }
@@ -307,6 +358,11 @@ pub fn filtered(m: &AppModel, f: Option<&ProblemsFilter>) -> Arc<Vec<Problem>> {
         Some(ProblemsFilter::Undecided) => all
             .iter()
             .filter(|p| p.level == Level::Decide)
+            .cloned()
+            .collect(),
+        Some(ProblemsFilter::Checks) => all
+            .iter()
+            .filter(|p| p.level == Level::Check)
             .cloned()
             .collect(),
         Some(ProblemsFilter::Set(k)) => {

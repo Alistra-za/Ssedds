@@ -2,7 +2,7 @@
 //! change and only the rows on screen are drawn.
 use super::review::{apply, fix_buttons, RowPick};
 use super::status::{dot, Status};
-use crate::model::bottom::{filtered, problems, At, Level, Problem, ProblemsFilter};
+use crate::model::bottom::{filtered, flagged, problems, At, Level, Problem, ProblemsFilter};
 use crate::model::AppModel;
 use eframe::egui;
 use std::sync::Arc;
@@ -10,7 +10,8 @@ use std::sync::Arc;
 pub fn status_of(l: Level) -> Status {
     match l {
         Level::Blocks => Status::Blocks,
-        Level::Decide | Level::Warning => Status::Warning,
+        // A check row's own dot is the list's severity marker, not a "ready" dot (owner: "amber is fine").
+        Level::Decide | Level::Warning | Level::Check => Status::Warning,
     }
 }
 
@@ -38,26 +39,38 @@ enum Act {
     File(String),
     Fix(RowPick),
     ClearFilter,
+    Checks,
 }
 
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     let list = rows(ui, model);
     let off = model.fix_off();
     let mut act = None;
-    if let Some(f) = &model.bottom.filter {
-        let text = match f {
-            ProblemsFilter::Undecided => "Undecided only ×".to_string(),
-            ProblemsFilter::Set(k) => {
-                let label = crate::model::sets::views(model)
-                    .iter()
-                    .find(|v| v.key == *k)
-                    .map_or(k.clone(), |v| v.label.clone());
-                format!("Set: {label} ×")
+    // From the same cached build as the list (K6), not a count per frame.
+    let checks = flagged(model).check_rows;
+    let shows_checks = model.bottom.filter == Some(ProblemsFilter::Checks);
+    if model.bottom.filter.is_some() || checks > 0 {
+        ui.horizontal(|ui| {
+            if let Some(f) = &model.bottom.filter {
+                let text = match f {
+                    ProblemsFilter::Undecided => "Undecided only ×".to_string(),
+                    ProblemsFilter::Checks => "Checks only ×".to_string(),
+                    ProblemsFilter::Set(k) => {
+                        let label = crate::model::sets::views(model)
+                            .iter()
+                            .find(|v| v.key == *k)
+                            .map_or(k.clone(), |v| v.label.clone());
+                        format!("Set: {label} ×")
+                    }
+                };
+                if ui.button(text).clicked() {
+                    act = Some(Act::ClearFilter);
+                }
             }
-        };
-        if ui.button(text).clicked() {
-            act = Some(Act::ClearFilter);
-        }
+            if checks > 0 && !shows_checks && ui.button(format!("Checks {checks}")).clicked() {
+                act = Some(Act::Checks);
+            }
+        });
     }
     if list.is_empty() {
         ui.weak("No problems");
@@ -140,6 +153,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         }
         Some(Act::Fix(r)) => apply(model, r),
         Some(Act::ClearFilter) => model.bottom.filter = None,
+        Some(Act::Checks) => model.bottom.filter = Some(ProblemsFilter::Checks),
         None => {}
     }
 }

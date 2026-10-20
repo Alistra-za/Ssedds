@@ -93,6 +93,36 @@ pub struct GuiSettings {
     /// The window and arrangement the app comes back to, `[layout]` in the file (DECISIONS AG3).
     #[serde(deserialize_with = "layout::lenient")]
     pub layout: LayoutSettings,
+    /// The artist checks' switches (DECISIONS Note CI), `[checks]` in the file.
+    pub checks: ChecksSettings,
+}
+
+/// `[checks]`: one switch per artist check; an off check's results are hidden everywhere. All on but
+/// `drop_top_mip`, which changes what an export writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChecksSettings {
+    pub range: bool,
+    pub plastic: bool,
+    pub low_detail: bool,
+    pub green: bool,
+    pub parallax: bool,
+    pub uv: bool,
+    pub drop_top_mip: bool,
+}
+
+impl Default for ChecksSettings {
+    fn default() -> Self {
+        ChecksSettings {
+            range: true,
+            plastic: true,
+            low_detail: true,
+            green: true,
+            parallax: true,
+            uv: true,
+            drop_top_mip: false,
+        }
+    }
 }
 
 /// `[render3d]`: the Community Shaders `Shaders` folder last used, re-checked on start and on focus.
@@ -136,6 +166,7 @@ impl Default for GuiSettings {
             meshes: MeshesSettings::default(),
             render3d: Render3dSettings::default(),
             layout: LayoutSettings::default(),
+            checks: ChecksSettings::default(),
         }
     }
 }

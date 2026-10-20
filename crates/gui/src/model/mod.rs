@@ -2,6 +2,7 @@
 pub mod auto_flags;
 pub mod bottom;
 pub mod bulk;
+pub mod checks;
 pub mod cm_json;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
@@ -326,6 +327,8 @@ pub struct AppModel {
     sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
+    /// The artist check results and what they were computed from (DECISIONS Note CI).
+    pub(crate) check_state: checks::CheckState,
     /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
     inputs_rev: u64,
     /// `TextureItem::key` to its index in `items` (audit 7).
@@ -535,6 +538,7 @@ impl AppModel {
             target: Target::Cs,
             items: vec![],
             items_rev: 0,
+            check_state: Default::default(),
             inputs_rev: 0,
             item_index: Default::default(),
             views: Default::default(),
@@ -720,6 +724,7 @@ impl AppModel {
             self.opening = Some((previous, recent));
         }
         self.items.clear();
+        self.check_state.plans_applied += 1;
         self.invalidate_views();
         self.sets.clear();
         self.sets_root = None;
@@ -1052,6 +1057,8 @@ impl AppModel {
             changed = true;
             self.handle(msg);
         }
+        // Last, so a plan that landed above is checked in this poll (K1).
+        changed |= self.refresh_checks();
         changed
     }
 
@@ -1831,6 +1838,8 @@ impl AppModel {
             && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
+        // K1: the checks run on this plan's analyses at the end of the poll that lands it.
+        self.check_state.plans_applied += 1;
         self.invalidate_views();
         self.sets = view.sets;
         self.sets_root = Some(view.output_root);

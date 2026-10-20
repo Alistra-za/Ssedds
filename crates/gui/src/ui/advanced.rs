@@ -7,7 +7,7 @@ use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::{AppModel, Selection};
-use crate::settings::{Bc1Choice, PREVIEW_SIZES};
+use crate::settings::{Bc1Choice, ChecksSettings, PREVIEW_SIZES};
 use eframe::egui;
 use engine::policy::ResolvedJob;
 use serde_json::Value;
@@ -32,6 +32,7 @@ enum Action {
     Bc1(Bc1Choice),
     ReduceMotion(bool),
     NvttPath(Option<std::path::PathBuf>),
+    Checks(ChecksSettings),
 }
 
 /// The drawer: a 24 px "Advanced" strip while closed, the panel while `settings.advanced_open`.
@@ -85,6 +86,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     legacy_fills(ui, model, &mut actions);
     preview_settings(ui, model, &mut actions);
     interface(ui, model, &mut actions);
+    checks(ui, model, &mut actions);
     mipmaps(ui, model, &mut actions);
     texture_fields(ui, model, &mut actions);
     unmatched(ui, model, &mut actions);
@@ -100,6 +102,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::Bc1(c) => model.set_bc1_choice(c),
             Action::ReduceMotion(on) => model.set_reduce_motion(on),
             Action::NvttPath(p) => model.set_nvtt_path(p),
+            Action::Checks(c) => model.set_checks(c),
         }
     }
 }
@@ -370,6 +373,44 @@ fn interface(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             .changed()
         {
             actions.push(Action::ReduceMotion(on));
+        }
+    });
+}
+
+/// The artist checks' switches (DECISIONS Note CI). Each box's AccessKit name ends in "check", apart from same-text
+/// controls such as the shader's "Parallax" (K22, ui-rules 8.4).
+fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    section(ui, "Checks", |ui| {
+        let now = model.settings.checks;
+        let mut c = now;
+        let boxes: [(&mut bool, &str, &str); 6] = [
+            (&mut c.range, "Value range", "Value range check"),
+            (&mut c.plastic, "Plastic look", "Plastic look check"),
+            (
+                &mut c.low_detail,
+                "Fake resolution",
+                "Fake resolution check",
+            ),
+            (&mut c.green, "Green direction", "Green direction check"),
+            (&mut c.parallax, "Parallax", "Parallax check"),
+            (&mut c.uv, "UV coverage", "UV coverage check"),
+        ];
+        for (on, text, name) in boxes {
+            let r = ui.checkbox(on, text);
+            let v = *on;
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, v, name));
+        }
+        // K22: without Fake resolution there is nothing to drop.
+        ui.add_enabled(
+            c.low_detail,
+            egui::Checkbox::new(&mut c.drop_top_mip, "Drop mip 0 when it adds nothing"),
+        )
+        .on_hover_text(
+            "Hold textures whose top mip adds almost nothing; choose at the end of the export which to write at half size",
+        )
+        .on_disabled_hover_text("Turn on Fake resolution first");
+        if c != now {
+            actions.push(Action::Checks(c));
         }
     });
 }

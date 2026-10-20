@@ -248,6 +248,41 @@ fn warn_button(ui: &mut egui::Ui, v: &SetView, rows: &[(&str, &Warning)], acts: 
     }
 }
 
+/// The artist checks' "ⓘ n" badge (DECISIONS Note CI): `n` counts the Warning-level results, in the weak text colour
+/// because a check never changes "ready" (owner answer 1); the hover lists every result, Info ones included (owner
+/// answer 2); a click opens Problems on the set (ui-rules 1.3).
+fn check_badge(ui: &mut egui::Ui, v: &SetView, checks: &[(&str, &Warning)], acts: &mut Vec<Act>) {
+    if checks.is_empty() {
+        return;
+    }
+    let n = checks
+        .iter()
+        .filter(|(_, w)| super::counts_toward_badge(w))
+        .count();
+    let text = if n == 0 {
+        "ⓘ".to_string()
+    } else {
+        format!("ⓘ {n}")
+    };
+    let weak = ui.visuals().weak_text_color();
+    let r = ui.add(egui::Button::new(
+        egui::RichText::new(text).small().color(weak),
+    ));
+    r.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            format!("Check results: {n}"),
+        )
+    });
+    let r = r.on_hover_ui(|ui| {
+        ui.label(warning_tooltip(checks));
+    });
+    if r.clicked() {
+        acts.push(Act::Problems(v.key.clone()));
+    }
+}
+
 /// The status pill: the status dot and the short kind (cut on a narrow card), in a rounded frame, the long text on
 /// hover. The caller works out `s` from one `flagged` fetch per frame (Task 6).
 fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, s: Status) {
@@ -907,6 +942,24 @@ fn pill(
                                 .map(|w| (v.label.as_str(), w)),
                         )
                         .collect();
+                    // Kept apart from `rows`: the "⚠ n" never counts check results.
+                    let checks: Vec<(&str, &Warning)> = v
+                        .members
+                        .iter()
+                        .filter_map(|k| model.item(k))
+                        .flat_map(|i| {
+                            model
+                                .check_warnings(&i.key)
+                                .iter()
+                                .map(move |w| (i.name.as_str(), w))
+                        })
+                        .chain(
+                            model
+                                .set_check_warnings(&v.key)
+                                .iter()
+                                .map(|w| (v.label.as_str(), w)),
+                        )
+                        .collect();
                     let wide = ui.available_width() >= WIDE_CARD;
                     let name = |ui: &mut egui::Ui| {
                         ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
@@ -929,6 +982,7 @@ fn pill(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     warn_button(ui, v, &rows, acts);
+                                    check_badge(ui, v, &checks, acts);
                                     status_pill(ui, model, v, status);
                                     ui.with_layout(
                                         egui::Layout::left_to_right(egui::Align::Center),
@@ -944,6 +998,7 @@ fn pill(
                         ui.horizontal_wrapped(|ui| {
                             status_pill(ui, model, v, status);
                             warn_button(ui, v, &rows, acts);
+                            check_badge(ui, v, &checks, acts);
                         });
                     }
                     if !v.key.is_empty() {
