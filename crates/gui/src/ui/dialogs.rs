@@ -62,11 +62,12 @@ fn half_size(ctx: &egui::Context, model: &mut AppModel, mut rows: Vec<crate::mod
                     .show(ui, |ui| {
                         for r in rows.iter_mut() {
                             ui.horizontal(|ui| {
+                                // The name is the tick box's label, so AccessKit names it (ui-rules 8.2).
                                 ui.add_enabled(
                                     why.is_none(),
-                                    egui::Checkbox::without_text(&mut r.tick),
-                                );
-                                ui.label(short_name(&r.item)).on_hover_text(&r.item);
+                                    egui::Checkbox::new(&mut r.tick, short_name(&r.item)),
+                                )
+                                .on_hover_text(&r.item);
                                 ui.weak(format!(
                                     "{}×{} → {}×{}",
                                     r.full.width, r.full.height, r.half.width, r.half.height

@@ -266,6 +266,8 @@ fn the_half_size_box_has_no_enter_default_and_ignores_a_click_outside() {
     assert!(h.state().export.running.is_none());
     h.get_by_label("Export all at full size");
     h.get_by_label("Export selected at half size");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "up.png");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "up2.png");
     assert!(half_size_buttons(true, true)
         .iter()
         .all(|b| b.1 == Role::Plain));
