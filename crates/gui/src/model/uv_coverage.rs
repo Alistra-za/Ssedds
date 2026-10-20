@@ -10,7 +10,8 @@ use std::sync::Arc;
 pub const MASK_SIZE: u32 = 512;
 /// Mip-bleed distance in full-resolution texels (mip 3, the padding convention).
 pub const GUTTER_TEXELS: u32 = 8;
-pub const GUTTER_SHARE: f64 = 0.005;
+/// Tuned on the owner's scan (CI34): 0.005 flagged 20 % of 289 shipped textures, 0.02 flags 6 %.
+pub const GUTTER_SHARE: f64 = 0.02;
 pub const TILE_CAP: i32 = 16;
 /// `coverage_for`'s `Err` when `cancel` was set: never a texture's answer (K18).
 pub const CANCELLED: &str = "cancelled";
