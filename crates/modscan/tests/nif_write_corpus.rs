@@ -259,3 +259,257 @@ fn winners_identity() {
         .collect();
     report("winners_identity", files);
 }
+
+/// Spec C 2 examples A-I and C 7 quirk examples (nifparseref/plan/nif-edit-v2/02-corpus.md); meshes-relative.
+const SAMPLES: &[&str] = &[
+    // A, B, C, I
+    "meshes/actors/atronachflame/character assets/fxatronachfiretrail.nif",
+    "meshes/actors/dragon/character assets/bonedragon.nif",
+    "meshes/actors/dragon/character assets/decaydragon2.nif",
+    "meshes/architecture/riften/ratwayhall/riftenrwdoorspecial01.nif",
+    "meshes/barreraveneno.nif",
+    "meshes/clockwork/furniture/blacksmithforgemarker.nif",
+    "meshes/clutter/beehive/beehive01.nif",
+    "meshes/dlc01/effects/ashpileghostdlc01soulcairn.nif",
+    "meshes/dlc02/architecture/ravenrock/dlc2blacksmithforge01rrnop.nif",
+    "meshes/dlc02/dungeons/dwemer/animated/dwekagrumezpanel01/kagrumezcontrolgemact01.nif",
+    "meshes/actors/alduin/alduin.nif",
+    "meshes/actors/alduin/farskin_alduin.nif",
+    "meshes/actors/dlc02/winglessdragon/characterassets/winglessdragon.nif",
+    "meshes/actors/dragon/character assets/bossdragon.nif",
+    "meshes/dlc02/clothes/miraakrobes/miraakrobesnoskin_0.nif",
+    "meshes/dragon war/dragonfrostwaveproject02.nif",
+    "meshes/dwemer/dwesmelter.nif",
+    "meshes/dlc01/effects/draguremergeground01cap.nif",
+    "meshes/effects/greybeardwords/fxgreybeardshoutkrein.nif",
+    "meshes/actors/dlc01/spriggan/sprigganfxtestunified.nif",
+    "meshes/actors/dlc02/spider_poison/characterassets/spiderpoisonexplosion.nif",
+    "meshes/actors/dragon/character assets/alduinunderskin.nif",
+    "meshes/actors/dragon/trailertemp/tempdragondeathposebake.nif",
+    "meshes/actors/spriggan/sprigganfxtestunified.nif",
+    "meshes/clutter/magicanomalyspawner/magicanomalyspawner.nif",
+    // D/E
+    "meshes/animobjects/dlc01bloodpotion.nif",
+    "meshes/animobjects/ms12whitephialrepaired.nif",
+    "meshes/animobjects/poisondamagehealth01.nif",
+    "meshes/_byoh/architecture/byohhouse/trophy/byohhousetrophyspriggan01.nif",
+    "meshes/_resourcepack/effects/rp_fxambsandpile01animated.nif",
+    "meshes/animobjects/animobjecttgfalmereye.nif",
+    "meshes/arch/eyeouter/lensfx2.nif",
+    // F
+    "meshes/creationclub/bgssse067/effects/lavabubbles01.nif",
+    "meshes/dlc01/dungeons/dwemer/animated/dwespecialforge01/dwespecialforgelava01.nif",
+    "meshes/actors/dragon/character assets/decaydragonbloodhead.nif",
+    "meshes/actors/dragon/character assets/decaydragonbloodtail.nif",
+    "meshes/actors/dragon/character assets/decaydragonbloodwingl.nif",
+    "meshes/actors/dragon/character assets/decaydragonbloodwingr.nif",
+    "meshes/actors/dragon/character assets/fxdragonresurrectiondirt.nif",
+    "meshes/actors/dragon/dragontoweridle.nif",
+    "meshes/dlc01/clutter/gargoyle/gargoyleingredient.nif",
+    "meshes/actors/dlc02/spider_poison/characterassets/zombiespiderimpact.nif",
+    // G (the RaceMenu.bsa ones are not in the meshes BSA and report MISSING)
+    "meshes/furniture/rtblacksmithforgemarker.nif",
+    "meshes/actors/character/character assets/body_magicoverlay.nif",
+    // H
+    "meshes/architecture/solitude/clutter/slighthousefire.nif",
+    "meshes/artsick/eyemod/colour/eyecolourblue.nif",
+    "meshes/armor/[d] bdor/hair/pcw/251/251_0.nif",
+    "meshes/actors/character/facegendata/facegeom/skyrim.esm/000132aa.nif",
+    // multiple BSLSP controllers on one property
+    "meshes/actors/dlc01/elk/blackreachdeer.nif",
+    "meshes/actors/dlc01/sabrecat/dlc1sabrecat.nif",
+    "meshes/actors/dragon/character assets/underskin.nif",
+    "meshes/architecture/winterhold/winterholdsymbol02.nif",
+    // C 7 quirks
+    "meshes/shock03.nif",
+    "meshes/venom02.nif",
+    "meshes/architecture/riften/riftendoor02.nif",
+    "meshes/clutter/civilwar/catapult/civilwarcatapult01.nif",
+    "meshes/cs/skin/skinmaterial.nif",
+    "meshes/architecture/gm_cabininterior.nif",
+    "meshes/4uplod-m/caramelhl.nif",
+    "meshes/magic/dragonflamewaveproject01.nif",
+    "meshes/clutter/quest/barenziahcrownwearable_go.nif",
+    "meshes/cotn/winterhold/winterholdbarn.nif",
+    "meshes/oaristys/clutter/hangingtankardsshelf03.nif",
+    "meshes/dlc01/plants/cavewormgroup/caveworm3group.nif",
+    "meshes/architecture/riften/rtmarketstalldoor01.nif",
+    "meshes/magus/mysticism/reanimateritualhandeffects1h.nif",
+];
+
+/// Loose file under the mods folder (first mod that has it), else the BSA.
+fn sample_bytes(root: &Path, bsa: Option<&vfs::bsa::Bsa>, rel: &str) -> Option<(String, Vec<u8>)> {
+    for m in std::fs::read_dir(root.join("mods")).ok()?.flatten() {
+        if let Ok(b) = std::fs::read(m.path().join(rel)) {
+            return Some((m.file_name().to_string_lossy().into_owned(), b));
+        }
+    }
+    let bsa = bsa?;
+    let e = bsa.entries.iter().find(|e| e.norm == rel)?;
+    Some(("BSA".into(), bsa.read(e).ok()?))
+}
+
+type SampleOp = (&'static str, Vec<u32>, nif::edit::Op);
+
+/// One Phase A op of each kind that fits the file, with the blocks the op may change.
+fn sample_ops(b: &[u8]) -> Vec<SampleOp> {
+    use nif::edit::{anchor_role, anchor_shape, Op, Role};
+    use nif::extra::ExtraValue;
+    use nif::fields::{locate, Field, Value};
+    let (m, h) = (read_model(b).unwrap(), Header::parse(b).unwrap());
+    let mut v: Vec<SampleOp> = vec![];
+    if let Some((s, l)) = m
+        .shapes
+        .iter()
+        .find_map(|s| s.shader.and_then(|x| m.lighting.get(&x)).map(|l| (s, l)))
+    {
+        let at = anchor_role(&m, Some(s.block), Role::Shader).unwrap();
+        let base = locate(&h, b, l.prop.block as usize, Field::Glossiness)
+            .unwrap()
+            .1;
+        v.push((
+            "gloss",
+            vec![l.prop.block],
+            Op::SetField {
+                at,
+                field: Field::Glossiness,
+                value: Value::F32(7.5f32.to_bits()),
+                base,
+            },
+        ));
+        let slot0 = l
+            .texture_set
+            .and_then(|t| m.texsets.get(&t).map(|x| (t, x)))
+            .and_then(|(t, x)| Some((t, x.raw.slots.first()?)))
+            .filter(|(_, s)| s.is_ascii());
+        if let Some((set, slot)) = slot0 {
+            v.push((
+                "texpath",
+                vec![set, l.prop.block],
+                Op::SetTexturePath {
+                    at: anchor_shape(&m, s.block),
+                    slot: 0,
+                    path: "textures\\a11\\sample.dds".into(),
+                    base: String::from_utf8(slot.clone()).unwrap(),
+                },
+            ));
+        }
+    }
+    // the most shared alpha, so SplitAlpha has something to split
+    let alpha_shape = m
+        .shapes
+        .iter()
+        .filter_map(|s| s.alpha.and_then(|a| m.alphas.get(&a)).map(|a| (s, a)))
+        .max_by_key(|(_, a)| a.prop.users.len());
+    if let Some((s, a)) = alpha_shape {
+        let Value::U16(flags) = locate(&h, b, a.prop.block as usize, Field::AlphaFlags)
+            .unwrap()
+            .1
+        else {
+            unreachable!()
+        };
+        v.push((
+            "alpha-bits",
+            vec![a.prop.block],
+            Op::SetBits {
+                at: anchor_role(&m, Some(s.block), Role::Alpha).unwrap(),
+                field: Field::AlphaFlags,
+                mask: 1,
+                value: u32::from(!flags & 1),
+                base: u32::from(flags & 1),
+            },
+        ));
+        v.push((
+            "split-alpha",
+            vec![s.block],
+            Op::SplitAlpha {
+                at: anchor_shape(&m, s.block),
+            },
+        ));
+    }
+    if let (Some(root), Some(at)) = (m.root, anchor_role(&m, None, Role::Root)) {
+        v.push((
+            "add-extra",
+            vec![root],
+            Op::AddExtra {
+                at,
+                kind: "NiIntegerExtraData".into(),
+                name: "A11Sample".into(),
+                value: ExtraValue::Int(7),
+            },
+        ));
+    }
+    v
+}
+
+#[test]
+#[ignore]
+fn real_file_edit_samples() {
+    use nif::edit::{apply, Outcome};
+    let Some(root) = env_path("SDC_ACHERUS") else {
+        return;
+    };
+    let bsa = std::env::var_os("SDC_BSA").and_then(|p| vfs::bsa::Bsa::open(Path::new(&p)).ok());
+    let (mut failures, mut ran) = (vec![], 0);
+    for rel in SAMPLES {
+        let Some((src, b)) = sample_bytes(&root, bsa.as_ref(), rel) else {
+            println!("MISSING {rel}");
+            continue;
+        };
+        let Ok(m0) = read_model(&b) else {
+            println!("UNREADABLE {rel} ({src})");
+            continue;
+        };
+        let h0 = Header::parse(&b).unwrap();
+        let mut line = vec![];
+        for (label, touched, op) in sample_ops(&b) {
+            let r = apply(&b, &[op]).unwrap();
+            let fail = |why: String| format!("{rel} [{label}]: {why}");
+            match &r.outcomes[0] {
+                Outcome::Applied | Outcome::ReAnchored { .. } => {
+                    ran += 1;
+                    line.push(format!("{label}=ok"));
+                    let m = match read_model(&r.bytes) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            failures.push(fail(format!("read_model: {e}")));
+                            continue;
+                        }
+                    };
+                    let new: Vec<_> = (m.problems.iter())
+                        .filter(|p| !m0.problems.contains(p))
+                        .collect();
+                    if !new.is_empty() {
+                        failures.push(fail(format!("new problems {new:?}")));
+                    }
+                    let h = Header::parse(&r.bytes).unwrap();
+                    if let Err(e) = h.check_file_length(&r.bytes) {
+                        failures.push(fail(format!("check_file_length: {e}")));
+                    }
+                    let blk = |h: &Header, b: &[u8], k: usize| {
+                        b[h.offsets()[k]..h.offsets()[k] + h.sizes[k] as usize].to_vec()
+                    };
+                    for k in (0..h0.sizes.len()).filter(|&k| !touched.contains(&(k as u32))) {
+                        if blk(&h, &r.bytes, k) != blk(&h0, &b, k) {
+                            failures.push(fail(format!("untouched block {k} changed")));
+                        }
+                    }
+                }
+                Outcome::Refused(why) => {
+                    line.push(format!("{label}=refused({why})"));
+                    if r.bytes != b {
+                        failures.push(fail("refused but bytes changed".into()));
+                    }
+                }
+                o => failures.push(fail(format!("unexpected {o:?}"))),
+            }
+        }
+        println!("{rel} ({src}): {}", line.join(" "));
+    }
+    println!("{ran} ops applied; {} failures", failures.len());
+    for f in &failures {
+        println!("  FAIL {f}");
+    }
+    assert!(ran > 0, "no sample op ran");
+    assert!(failures.is_empty(), "failures above");
+}
