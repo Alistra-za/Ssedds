@@ -242,6 +242,27 @@ fn toggle_back_to_forward_matches_the_old_frame() {
     assert_eq!(cache_files(cache.path()), files2);
 }
 
+/// D-P36 (F2): a deferred-mode frame with no DEFERRED draw (all blended, or a built-in) is a forward frame: no 8-RT
+/// target, no composite, the same pixels as forward.
+#[test]
+fn a_frame_without_a_deferred_draw_stays_forward() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = planes(cache.path(), vec![blended(1)]);
+    let fwd = r.render(&Scene::neutral(), 64, 64).unwrap();
+    r.set_deferred(true).unwrap();
+    assert_eq!(r.render(&Scene::neutral(), 64, 64).unwrap(), fwd);
+    assert_eq!(r.target_dims().len(), 2, "blended only: the forward target");
+    assert!(r.read_mrt(1).is_err());
+
+    let mut b = common::renderer(cache.path(), &["STANDIN_OPAQUE_OK"]);
+    let m = nif::material::MaterialState::builtin_default();
+    let rep = b.load_builtin(render3d::Builtin::Sphere, m, &|_| None);
+    assert!(rep.compile_errors.is_empty(), "{rep:?}");
+    b.set_deferred(true).unwrap();
+    b.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(b.target_dims().len(), 2, "a built-in: the forward target");
+}
+
 #[test]
 fn deferred_edit_from_opaque_to_blended_repermutes() {
     let cache = tempfile::tempdir().unwrap();

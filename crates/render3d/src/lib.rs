@@ -2266,7 +2266,18 @@ impl Renderer {
         if !self.deferred && self.composite_stale() && holds_deferred(self) {
             self.forward_now();
         }
-        let deferred_frame = self.deferred || (!self.composite_stale() && holds_deferred(self));
+        // D-P36 (F2): a frame with no DEFERRED draw (all blended, built-ins, nothing landed yet) is a forward frame.
+        let draws_deferred = self.draw_order.iter().any(|id| {
+            self.shapes
+                .get(id)
+                .and_then(|s| s.draw.as_ref())
+                .is_some_and(|d| d.deferred)
+        });
+        let deferred_frame = if self.deferred {
+            draws_deferred
+        } else {
+            !self.composite_stale() && holds_deferred(self)
+        };
         if self
             .target
             .as_ref()
@@ -2384,9 +2395,12 @@ impl Renderer {
             let mut bound_all = false;
             // Opaque, then CS's composite into RT0 (deferred Lit frames only; debug views write psout.Diffuse
             // alone), then blended draws forward on top, as in game. draw_order is already opaque-then-blended.
-            // shortcut: pixels no DEFERRED draw wrote (clear, backdrop, pending forward draws) see RT4 = 0, which
-            // is bit-exact under Linear Lighting but a GameGamma round trip without it; if D6b shows drift, draw
-            // the backdrop after the composite with depth_states[1].
+            // shortcut: the composite reads every pixel. The clear and the backdrop see RT4 = 0, bit-exact under Linear
+            // Lighting but a GameGamma round trip without it. A non-DEFERRED opaque draw on this target (a shape
+            // still pending forward after a toggle, or Failed keeping its forward draw) that wins the depth test
+            // over a DEFERRED pixel keeps that pixel's RT4/RT5, so the composite adds the hidden shape's specular
+            // and reflectance. Upgrade if either shows: draw non-DEFERRED opaque shapes (and the backdrop, with
+            // depth_states[1]) after the composite, with the blended pass.
             for pass in [false, true] {
                 if pass && target.deferred() && self.debug == DebugOutput::Lit {
                     if let Some(c) = self.composite.as_mut() {
