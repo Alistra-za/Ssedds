@@ -3,36 +3,40 @@
 //! Ruling D-P2: the captured IA + mesh.vb/ib are drawn as they are; the VS defines are derived from the PS list and
 //! the IA ([`vs_defines`]) and checked against the compiled VS input signature.
 use crate::compile::compile;
-use crate::composite::Composite;
+use crate::composite::{Composite, EnvMaps, Inputs};
 use crate::device::{Gpu, Target, MRT_FORMATS};
 use crate::draw::create_program;
 use crate::golden;
 use crate::permutation::Defines;
-use crate::textures::load_dds;
+use crate::textures::{cube_bpp, cube_srv, load_dds, read_cube_dds};
 use crate::Renderer;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::CString;
 use std::path::Path;
 use windows::core::PCSTR;
-use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+use windows::Win32::Graphics::Direct3D::{
+    D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D11_SRV_DIMENSION_TEXTURE2D,
+};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11SamplerState,
-    ID3D11Texture2D, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_FLAG,
-    D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC,
-    D3D11_COMPARISON_FUNC, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_DEPTH_STENCIL_DESC,
+    ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_CONSTANT_BUFFER,
+    D3D11_BIND_DEPTH_STENCIL, D3D11_BIND_FLAG, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BUFFER_DESC, D3D11_COMPARISON_FUNC,
+    D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_DEPTH_STENCIL_DESC,
     D3D11_DEPTH_STENCIL_VIEW_DESC, D3D11_DEPTH_WRITE_MASK_ALL, D3D11_DEPTH_WRITE_MASK_ZERO,
     D3D11_DSV_DIMENSION_TEXTURE2D, D3D11_FILTER, D3D11_FILTER_ANISOTROPIC,
     D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA, D3D11_MAPPED_SUBRESOURCE,
-    D3D11_MAP_READ, D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-    D3D11_TEXTURE_ADDRESS_MODE, D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE, D3D11_USAGE_STAGING,
-    D3D11_VIEWPORT,
+    D3D11_MAP_READ, D3D11_SAMPLER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
+    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_SRV,
+    D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_MODE, D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE,
+    D3D11_USAGE_STAGING, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_D32_FLOAT,
     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_UINT,
-    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32_TYPELESS,
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R24_UNORM_X8_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT,
+    DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 
 /// One golden subject, read by [`load_fixture`].
@@ -180,6 +184,29 @@ pub struct ReplayComposite {
     /// mainrw.files [before, after] over the crop (mainrw.crop must equal mrt.json's).
     pub before: Vec<f32>,
     pub after: Vec<f32>,
+    /// D5: the srvs entries with `cube: true` (name, bind, bytes of the entry's `file`, X3e); None = not saved.
+    pub env: Vec<(String, u32, Option<Vec<u8>>)>,
+    /// D5: `../composite/extras.json` samplers.cs (the composite's LinearSampler); None when that file is absent.
+    pub sampler: Option<Sampler>,
+}
+
+impl ReplayComposite {
+    /// Why the composite cannot run: a cube it reads that the capture did not save (captures whose .rdc was pruned
+    /// before X3e). None = every cube is there.
+    pub fn missing_env(&self) -> Option<String> {
+        let names: Vec<String> = self
+            .env
+            .iter()
+            .filter(|e| e.2.is_none())
+            .map(|e| format!("t{} {}", e.1, e.0))
+            .collect();
+        (!names.is_empty()).then(|| {
+            format!(
+                "composite reads {} but the capture saved no cube",
+                names.join(", ")
+            )
+        })
+    }
 }
 
 /// composite.json of `dir`, None when there is none.
@@ -222,6 +249,53 @@ fn load_composite(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| err("an srv without name or bind"))?;
+    let mut env = vec![];
+    for e in list("srvs")?
+        .iter()
+        .filter(|e| e.get("cube").and_then(Value::as_bool) == Some(true))
+    {
+        let (Some(name), Some(bind)) = (
+            e.get("name").and_then(Value::as_str),
+            e.get("bind").and_then(u32_of),
+        ) else {
+            return Err(err("a cube srv without name or bind"));
+        };
+        // A named file that does not read is an error, never a silent "no cube".
+        let bytes = match e.get("file").and_then(Value::as_str) {
+            Some(f) => Some(read(&dir.join(f))?),
+            None => None,
+        };
+        env.push((name.to_string(), bind, bytes));
+    }
+    // The capture-level extras (X2) hold the composite's samplers; only NotFound means "none captured".
+    let xp = dir.join("../composite/extras.json");
+    let sampler = match std::fs::read_to_string(&xp) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        r => {
+            let s = r.map_err(|e| format!("{}: {e}", xp.display()))?;
+            let x: Value = serde_json::from_str(&nonfinite_to_null(&s))
+                .map_err(|e| format!("{}: {e}", xp.display()))?;
+            let cs = x
+                .pointer("/samplers/cs")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("{}: no samplers.cs", xp.display()))?;
+            match &cs[..] {
+                [] => None,
+                [one] => Some(
+                    sampler(one)
+                        .map_err(|e| format!("{}: {e}", xp.display()))?
+                        .1,
+                ),
+                _ => {
+                    return Err(format!(
+                        "{}: {} composite samplers, the composite binds one",
+                        xp.display(),
+                        cs.len()
+                    ))
+                }
+            }
+        }
+    };
     let defines_inferred = list("definesInferred")?
         .iter()
         .map(|d| d.as_str().map(String::from))
@@ -264,6 +338,8 @@ fn load_composite(
         thread_groups,
         before: golden::read_f32(&dir.join(files[0]), px)?,
         after: golden::read_f32(&dir.join(files[1]), px)?,
+        env,
+        sampler,
     }))
 }
 
@@ -866,9 +942,10 @@ fn sampler_state(gpu: &Gpu, s: &Sampler) -> Result<ID3D11SamplerState, String> {
     out.ok_or_else(|| "no sampler".into())
 }
 
-/// A full-size D24S8 depth buffer: 0x00FFFFFF (depth 1, stencil 0) with the crop rows from `d`, its DSV and the
-/// captured depth state (stencil off). STAGING with initial data, then CopyResource: depth-stencil resources take
-/// neither UpdateSubresource nor partial-box copies.
+/// A full-size D24S8 depth buffer: 0x00FFFFFF (depth 1, stencil 0) with the crop rows from `d`, its DSV, the
+/// captured depth state (stencil off) and an R24_UNORM_X8 SRV (the composite's DepthTexture, as the game binds it).
+/// STAGING with initial data, then CopyResource: depth-stencil resources take neither UpdateSubresource nor
+/// partial-box copies.
 fn seeded_depth(
     gpu: &Gpu,
     size: (u32, u32),
@@ -879,6 +956,7 @@ fn seeded_depth(
         ID3D11DepthStencilView,
         ID3D11DepthStencilState,
         ID3D11Texture2D,
+        ID3D11ShaderResourceView,
     ),
     String,
 > {
@@ -909,7 +987,7 @@ fn seeded_depth(
         SysMemPitch: size.0 * 4,
         SysMemSlicePitch: 0,
     };
-    let (mut staging, mut tex, mut dsv, mut state) = (None, None, None, None);
+    let (mut staging, mut tex, mut dsv, mut state, mut srv) = (None, None, None, None, None);
     let depth_tex: ID3D11Texture2D;
     // SAFETY: `px`, the descriptors and out-pointers are live locals; both textures belong to `gpu.device`.
     unsafe {
@@ -918,7 +996,7 @@ fn seeded_depth(
             .map_err(|e| gpu.fail("CreateTexture2D (depth staging)", e))?;
         desc.Usage = D3D11_USAGE_DEFAULT;
         desc.CPUAccessFlags = 0;
-        desc.BindFlags = D3D11_BIND_DEPTH_STENCIL.0 as u32;
+        desc.BindFlags = (D3D11_BIND_DEPTH_STENCIL.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32;
         gpu.device
             .CreateTexture2D(&desc, None, Some(&mut tex))
             .map_err(|e| gpu.fail("CreateTexture2D (depth)", e))?;
@@ -936,6 +1014,19 @@ fn seeded_depth(
         gpu.device
             .CreateDepthStencilView(&tex, Some(&vd), Some(&mut dsv))
             .map_err(|e| gpu.fail("CreateDepthStencilView (depth)", e))?;
+        let sd = D3D11_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
+            ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_SRV {
+                    MostDetailedMip: 0,
+                    MipLevels: 1,
+                },
+            },
+        };
+        gpu.device
+            .CreateShaderResourceView(&tex, Some(&sd), Some(&mut srv))
+            .map_err(|e| gpu.fail("CreateShaderResourceView (depth)", e))?;
         let sd = D3D11_DEPTH_STENCIL_DESC {
             DepthEnable: true.into(),
             DepthWriteMask: if d.write {
@@ -954,6 +1045,7 @@ fn seeded_depth(
         dsv.ok_or("no depth view")?,
         state.ok_or("no depth state")?,
         depth_tex,
+        srv.ok_or("no depth SRV")?,
     ))
 }
 
@@ -1229,7 +1321,7 @@ impl Renderer {
                 &self.raster
             });
             match &seeded {
-                Some((_, state, _)) => ctx.OMSetDepthStencilState(state, 0),
+                Some((_, state, _, _)) => ctx.OMSetDepthStencilState(state, 0),
                 // LessEqual + write: the fixture's Equal/no-write is a post-prepass state, and there is no prepass.
                 None => ctx.OMSetDepthStencilState(&self.depth_states[3], 0),
             }
@@ -1265,7 +1357,18 @@ impl Renderer {
             .replay_depth
             .then(|| read_depth(gpu, seeded.as_ref().map_or(&target.depth, |s| &s.2), r.crop));
         let main = match (&r.composite, deferred, &mrt) {
-            (Some(rc), true, Ok(_)) => Some(self.replay_composite(r, rc, &target, &mut warnings)),
+            (Some(rc), true, Ok(_)) => match rc.missing_env() {
+                // D5: no cube saved (capture pruned before X3e): the MRTs stand, the composite is not compared.
+                Some(why) => {
+                    warnings.push(format!("composite skipped: {why}"));
+                    None
+                }
+                None => {
+                    // The game's depth: the seeded D24 prepass, else the draw's own (no captured depth).
+                    let depth = seeded.as_ref().map(|s| &s.3).or(target.depth_srv.as_ref());
+                    Some(self.replay_composite(r, rc, &target, depth, &mut warnings))
+                }
+            },
             _ => None,
         };
         // SAFETY: plain context call; `render` rebinds everything per frame.
@@ -1281,12 +1384,14 @@ impl Renderer {
 
     /// The capture's composite on `target` after the draw: compiled with CSHADER, the inferred defines and the PS
     /// list's ENABLE_LL / CS_GAME_GAMMA (not inferable from reflection, and the result depends on them), the captured
-    /// cbuffers, RT0's crop re-seeded from mainrw_before. Returns MainRW over the crop.
+    /// cbuffers, RT0's crop re-seeded from mainrw_before, `depth` at DepthTexture and the captured cube and sampler
+    /// (D5). Returns MainRW over the crop.
     fn replay_composite(
         &self,
         r: &Replay,
         rc: &ReplayComposite,
         target: &Target,
+        depth: Option<&ID3D11ShaderResourceView>,
         warnings: &mut Vec<String>,
     ) -> Result<Vec<f32>, String> {
         let gpu = &self.gpu;
@@ -1329,10 +1434,42 @@ impl Renderer {
                 rc.thread_groups
             ));
         }
-        let inputs = crate::composite::Inputs {
-            depth: target.depth_srv.as_ref(),
-            env: None,
-            sampler: None,
+        // The captured cube(s) in their own format. CS's permutation reads one (t7; t6 is stripped), so a single cube
+        // serves both names.
+        let mut cubes = vec![];
+        for (name, bind, bytes) in &rc.env {
+            let bytes = bytes
+                .as_ref()
+                .ok_or_else(|| format!("t{bind} {name}: no cube"))?;
+            let (size, mips, format, data) =
+                read_cube_dds(bytes).map_err(|e| format!("t{bind} {name}: {e}"))?;
+            let bpp = cube_bpp(format).ok_or("cube format")?;
+            cubes.push((
+                name.as_str(),
+                cube_srv(gpu, size, mips, format, bpp, data)
+                    .map_err(|e| format!("t{bind} {name}: {e}"))?,
+            ));
+        }
+        let pick = |n: &str| {
+            cubes
+                .iter()
+                .find(|c| c.0 == n)
+                .or(cubes.first())
+                .map(|c| c.1.clone())
+        };
+        let env = match (pick("EnvTexture"), pick("EnvReflectionsTexture")) {
+            (Some(env), Some(reflection)) => Some(EnvMaps { env, reflection }),
+            _ => None,
+        };
+        let sampler = rc
+            .sampler
+            .as_ref()
+            .map(|s| sampler_state(gpu, s))
+            .transpose()?;
+        let inputs = Inputs {
+            depth,
+            env: env.as_ref(),
+            sampler: sampler.as_ref(),
         };
         c.dispatch(gpu, target, &inputs)?;
         target.read_f32(gpu, 0, r.crop)

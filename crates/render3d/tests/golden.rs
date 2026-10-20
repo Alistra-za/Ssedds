@@ -1,13 +1,15 @@
 //! Golden replay (v2 Phase D, D6b): every profile-A subject replayed deferred and compared per MRT and on the
 //! composite MainRW. Thresholds (D-P18): over == 0 on RT0-RT7 and on main over the clean sub-mask; the subject
-//! classes must match tests/fixtures/golden-baseline.txt (D-P20).
+//! classes must match tests/fixtures/golden-baseline.txt (D-P20). D5 adds the Dynamic Cubemaps profiles A_DC and
+//! A_DC_N (A_DC_LOG is a define-log capture, R8): their composite reads the captured env cube (X3e); a subject whose
+//! capture saved none is class `no-env-cube` (MRTs asserted, composite not compared).
 use render3d::golden::{self, Diff, Noise};
 use render3d::{load_fixture, Renderer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-const PROFILES: &[&str] = &["A", "A_RT", "A_RT2"];
+const PROFILES: &[&str] = &["A", "A_RT", "A_RT2", "A_DC", "A_DC_N"];
 const TWO_SIDED: &str = "two-sided alpha-tested: no captured depth (capture not kept)";
 
 fn bits(v: &[f32]) -> Vec<u32> {
@@ -93,7 +95,7 @@ fn replay_matches_capture_per_mrt() {
     );
     let mut skipped: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     let (mut run, mut nonfinite, mut failures) = (0usize, Vec::new(), Vec::new());
-    let (mut outcomes, mut no_clean) = (Vec::new(), Vec::new());
+    let (mut outcomes, mut no_clean, mut no_env) = (Vec::new(), Vec::new(), Vec::new());
     let mut rt_worst: Vec<Worst> = (0..8).map(|_| Worst::default()).collect();
     let (mut main_mask, mut main_clean) = (Worst::default(), Worst::default());
 
@@ -186,7 +188,9 @@ fn replay_matches_capture_per_mrt() {
                 rt_worst[i].add(&who, &d);
             }
         }
+        let missing_env = rc.missing_env();
         match out.main.as_ref() {
+            None if missing_env.is_some() => row.push_str(" | no env cube | -"),
             Some(main) => {
                 let after = golden::read_f32(&s.dir.join("mainrw_after.f32"), n * 4).unwrap();
                 let (_, max) = noise
@@ -252,8 +256,12 @@ fn replay_matches_capture_per_mrt() {
                 .or_default()
                 .push(row.trim_end().to_string());
         } else {
+            // D5: the capture saved no env cube; MRTs asserted, the composite not compared.
+            if missing_env.is_some() {
+                outcomes.push(format!("{who} no-env-cube"));
+                no_env.push(who.clone());
             // D-P21: an empty clean sub-mask checks nothing on the composite; its own class, MRTs still asserted.
-            if clean_px == Some(0) {
+            } else if clean_px == Some(0) {
                 outcomes.push(format!("{who} no-clean-composite"));
                 no_clean.push(who.clone());
             } else {
@@ -276,6 +284,14 @@ fn replay_matches_capture_per_mrt() {
         no_clean.len()
     );
     for w in &no_clean {
+        let _ = writeln!(summary, "  {w}");
+    }
+    let _ = writeln!(
+        summary,
+        "run without an env cube (no-env-cube, MRTs asserted): {}",
+        no_env.len()
+    );
+    for w in &no_env {
         let _ = writeln!(summary, "  {w}");
     }
     for (why, list) in &skipped {

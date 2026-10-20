@@ -811,3 +811,186 @@ fn replay_real_fixture_smoke() {
         println!("{s}: warnings {:?}", out.warnings);
     }
 }
+
+/// A DX10 cube DDS: `size`², `mips`, dxgi `format`, misc flags and arraySize as given, `data` after the header.
+fn cube_dds(size: u32, mips: u32, format: u32, misc: u32, array: u32, data: &[u8]) -> Vec<u8> {
+    let mut h = vec![0u8; 148];
+    h[..4].copy_from_slice(b"DDS ");
+    for (o, v) in [
+        (4, 124),
+        (8, 0x1007 | 0x20000),
+        (12, size),
+        (16, size),
+        (28, mips),
+        (76, 32),
+        (80, 4),
+        (128, format),
+        (132, 3),
+        (136, misc),
+        (140, array),
+    ] {
+        h[o..o + 4].copy_from_slice(&u32::to_le_bytes(v));
+    }
+    h[84..88].copy_from_slice(b"DX10");
+    h.extend_from_slice(data);
+    h
+}
+
+#[test]
+fn read_cube_dds_accepts_cubes_and_rejects_others() {
+    use render3d::textures::read_cube_dds;
+    // R11G11B10, 4², 3 mips: (16 + 4 + 1) texels × 4 bytes per face.
+    let data = vec![7u8; 6 * 21 * 4];
+    let file = cube_dds(4, 3, 26, 4, 1, &data);
+    let (size, mips, f, d) = read_cube_dds(&file).unwrap();
+    assert_eq!((size, mips, f.0, d.len()), (4, 3, 26, data.len()));
+    // arraySize 6 without the cube flag is 6 faces too.
+    assert!(read_cube_dds(&cube_dds(4, 3, 26, 0, 6, &data)).is_ok());
+    // RGBA16F: 8 bytes per texel.
+    assert!(read_cube_dds(&cube_dds(4, 3, 10, 4, 1, &vec![0u8; 6 * 21 * 8])).is_ok());
+    let bad = [
+        ("2D", cube_dds(4, 3, 26, 0, 1, &data[..21 * 4])),
+        ("6 cubes", cube_dds(4, 3, 26, 4, 6, &data)),
+        ("unknown format", cube_dds(4, 3, 28, 4, 1, &data)),
+        (
+            "truncated",
+            cube_dds(4, 3, 26, 4, 1, &data[..data.len() - 1]),
+        ),
+        ("header only", cube_dds(4, 3, 26, 4, 1, &[])[..100].to_vec()),
+        ("not DDS", b"nope".to_vec()),
+    ];
+    for (what, b) in bad {
+        assert!(read_cube_dds(&b).is_err(), "{what}");
+    }
+    let mut non_square = cube_dds(4, 3, 26, 4, 1, &data);
+    non_square[12..16].copy_from_slice(&8u32.to_le_bytes());
+    assert!(read_cube_dds(&non_square).is_err(), "non-square");
+}
+
+/// An RGBA16F 2² cube, 2 mips: mip 0 of face f is `mip0[f]` (all 4 texels), mip 1 is `mip1[f]`.
+fn rgba16f_cube(mip0: [[f32; 3]; 6], mip1: [[f32; 3]; 6]) -> Vec<u8> {
+    let h = |c: [f32; 3]| -> Vec<u8> {
+        [c[0], c[1], c[2], 1.0]
+            .iter()
+            .flat_map(|v| half::f16::from_f32(*v).to_le_bytes())
+            .collect()
+    };
+    let mut data = vec![];
+    for f in 0..6 {
+        for _ in 0..4 {
+            data.extend(h(mip0[f]));
+        }
+        data.extend(h(mip1[f]));
+    }
+    cube_dds(2, 2, 10, 4, 1, &data)
+}
+
+/// The golden layout of a DC capture: `root/composite/` (capture level: t7.dds, extras.json with the composite's
+/// sampler) and the subject `root/ev1_subject` ([`write_fixture_deferred`] + a composite.json that compiles the
+/// stand-in with DYNAMIC_CUBEMAPS: t4 depth, t5 reflectance, t7 cube). `sampler_max_lod` is the captured maxLOD.
+fn write_fixture_dc(
+    root: &Path,
+    t7_file: Option<&str>,
+    sampler_max_lod: f32,
+) -> std::path::PathBuf {
+    let dir = root.join("ev1_subject");
+    let cap = root.join("composite");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&cap).unwrap();
+    write_fixture_deferred(&dir);
+    let mut t7 = json!({"name": "EnvReflectionsTexture", "bind": 7, "type": "TextureCubeArray", "cube": true,
+                        "format": "R16G16B16A16_FLOAT"});
+    if let Some(f) = t7_file {
+        t7["file"] = json!(f);
+        t7["saved"] = json!(true);
+    }
+    put(
+        &dir,
+        "composite.json",
+        &json!({
+            "threadGroups": [1, 1, 1],
+            "srvs": [{"name": "DepthTexture", "bind": 4, "type": "Texture2D", "cube": false},
+                     {"name": "ReflectanceTexture", "bind": 5, "type": "Texture2D", "cube": false}, t7],
+            "uavs": [{"name": "MainRW", "bind": 0}],
+            "cbuffers": [{"name": "SharedData", "bind": 5, "file": "../composite/cb_cs_b5.bin"}],
+            "definesInferred": ["DYNAMIC_CUBEMAPS"],
+            "mainrw": {"crop": [2, 2, 4, 4], "files": ["mainrw_before.f32", "mainrw_after.f32"]},
+        }),
+    );
+    fs::write(cap.join("cb_cs_b5.bin"), f32s(&[8.0, 8.0, 0.125, 0.125])).unwrap();
+    put(
+        &cap,
+        "extras.json",
+        &json!({"samplers": {"cs": [{
+            "bind": 0, "name": "LinearSampler", "minify": "Linear", "magnify": "Linear", "mip": "Linear",
+            "func": "Normal", "addressU": "ClampEdge", "addressV": "ClampEdge", "addressW": "ClampEdge",
+            "border": [0.0, 0.0, 0.0, 0.0], "compare": "Never", "minLOD": 0.0, "maxLOD": sampler_max_lod,
+            "mipBias": 0.0, "maxAniso": 0.0}]}}),
+    );
+    // Face +Z (4): mip 0 (2, 4, 1), mip 1 (1, 2, 0.5); every other face 0.
+    let (mut m0, mut m1) = ([[0.0; 3]; 6], [[0.0; 3]; 6]);
+    m0[4] = [2.0, 4.0, 1.0];
+    m1[4] = [1.0, 2.0, 0.5];
+    fs::write(cap.join("t7.dds"), rgba16f_cube(m0, m1)).unwrap();
+    let before = f32s(&[0.25, 0.5, 0.75, 0.5].repeat(16));
+    fs::write(dir.join("mainrw_before.f32"), &before).unwrap();
+    fs::write(dir.join("mainrw_after.f32"), &before).unwrap();
+    dir
+}
+
+/// The captured cube at t7 and the captured sampler: the stand-in adds RT5 (0.25, 0.125, 0.5) × the level-15 +Z
+/// sample. The captured maxLOD 0 clamps level 15 to mip 0 (2, 4, 1): with the composite's own sampler it would be mip 1.
+#[test]
+fn replay_binds_the_captured_env_cube_and_sampler() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = write_fixture_dc(root.path(), Some("../composite/t7.dds"), 0.0);
+    let r = load_fixture(&dir).unwrap();
+    let rc = r.composite.as_ref().unwrap();
+    assert_eq!(rc.missing_env(), None);
+    assert!(rc.sampler.is_some());
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let out = ren.render_replay(&r, true).unwrap();
+    let main = out.main.unwrap();
+    for p in main.chunks(4) {
+        assert_eq!(p, [0.75, 1.0, 1.25, 1.0], "{:?}", out.warnings);
+    }
+    // maxLOD = max: level 15 reaches mip 1 (1, 2, 0.5).
+    let dir = write_fixture_dc(root.path(), Some("../composite/t7.dds"), 3.4e38);
+    let out = ren
+        .render_replay(&load_fixture(&dir).unwrap(), true)
+        .unwrap();
+    for p in out.main.unwrap().chunks(4) {
+        assert_eq!(p, [0.5, 0.75, 1.0, 1.0]);
+    }
+    assert_eq!(ren.bound_cs_views(), 0);
+}
+
+#[test]
+fn replay_without_env_cube_file_reports_missing_env() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = write_fixture_dc(root.path(), None, 0.0);
+    let r = load_fixture(&dir).unwrap();
+    let why = r.composite.as_ref().unwrap().missing_env();
+    assert!(
+        why.as_deref()
+            .is_some_and(|w| w.contains("EnvReflectionsTexture")),
+        "{why:?}"
+    );
+    let cache = tempfile::tempdir().unwrap();
+    let mut ren = common::renderer(cache.path(), &[]);
+    let out = ren.render_replay(&r, true).unwrap();
+    assert!(out.main.is_none());
+    assert_eq!(out.mrt.len(), 8);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EnvReflectionsTexture")),
+        "{:?}",
+        out.warnings
+    );
+    // A named file that does not read is a load error, not a missing cube.
+    let dir = write_fixture_dc(root.path(), Some("../composite/nope.dds"), 0.0);
+    let e = load_fixture(&dir).err().expect("unreadable cube file");
+    assert!(e.contains("nope.dds"), "{e}");
+}
