@@ -525,3 +525,161 @@ fn real_file_edit_samples() {
     }
     assert!(failures.is_empty(), "failures above");
 }
+
+/// SLSF2 flag census per (BSLightingShaderProperty shader type, CS TruePBR bit 23). Research for v2 A17; asserts only
+/// that files were found. Env: SDC_ACHERUS (winners) and SDC_BSA (one archive); output also to the scratchpad file.
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn slsf_bit_census() {
+    use modscan::{mo2::Instance, scan::run, scan::Source, store::Store};
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::{atomic::AtomicBool, Arc, Mutex};
+    type Open = Arc<(vfs::bsa::Bsa, HashMap<String, usize>)>;
+    const BITS: [u32; 6] = [12, 24, 25, 26, 27, 30];
+    type Hits = Vec<((u32, bool), Vec<String>)>;
+    type Cells = BTreeMap<(u32, bool), BTreeMap<String, (u64, Vec<String>)>>;
+
+    // Counter names hit by every BSLSP block of one file.
+    fn census(b: &[u8]) -> Option<Hits> {
+        nif::scan::scan(b).ok()?;
+        let m = read_model(b).ok()?;
+        Some(
+            m.lighting
+                .values()
+                .map(|l| {
+                    let (t, f) = (l.lighting.shader_type, l.lighting.slsf2);
+                    let bit = |n: u32| (f >> n) & 1 == 1;
+                    let mut c = vec!["shapes".to_string()];
+                    c.extend(BITS.iter().filter(|&&n| bit(n)).map(|n| format!("bit{n}")));
+                    if t == 11 && !bit(24) {
+                        c.push("type11_without_bit24".into());
+                    }
+                    if t != 11 && bit(24) {
+                        c.push("bit24_with_type_not_11".into());
+                    }
+                    ((t, bit(23)), c)
+                })
+                .collect(),
+        )
+    }
+    fn merge(cells: &mut Cells, hits: Hits, origin: &str) {
+        for (k, names) in hits {
+            for n in names {
+                let e = cells.entry(k).or_default().entry(n).or_default();
+                e.0 += 1;
+                if e.1.len() < 5 && !e.1.iter().any(|x| x == origin) {
+                    e.1.push(origin.to_string());
+                }
+            }
+        }
+    }
+    fn table(title: &str, files: u64, cells: &Cells) -> String {
+        let mut s = format!("== {title}: {files} NIFs accepted ==\n");
+        for ((t, pbr), c) in cells {
+            s += &format!("\ntype {t} pbr={pbr}\n");
+            for (n, (cnt, ex)) in c {
+                s += &format!("  {n}: {cnt}\n");
+                for e in ex {
+                    s += &format!("      {e}\n");
+                }
+            }
+        }
+        s
+    }
+
+    let (Some(root), Some(bsa_path)) = (env_path("SDC_ACHERUS"), env_path("SDC_BSA")) else {
+        return;
+    };
+    let mut out = String::new();
+
+    let bsa = vfs::bsa::Bsa::open(&bsa_path).unwrap();
+    let name = bsa_path.file_name().unwrap().to_string_lossy().to_string();
+    let found: Vec<(String, Hits)> = bsa
+        .entries
+        .par_iter()
+        .filter(|e| e.norm.ends_with(".nif"))
+        .filter_map(|e| Some((e.norm.clone(), census(&bsa.read(e).ok()?)?)))
+        .collect();
+    assert!(!found.is_empty(), "no BSA nif accepted");
+    let mut cells = Cells::new();
+    let n = found.len() as u64;
+    for (p, h) in found {
+        merge(&mut cells, h, &format!("{name}:{p}"));
+    }
+    out += &table(&format!("BSA {name}"), n, &cells);
+
+    let db = std::env::temp_dir().join("sdc-v2a-corpus.db");
+    for ext in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{ext}", db.display()));
+    }
+    let mut store = Store::open(&db).unwrap();
+    run(
+        &Source::Mo2(Instance::load(&root, None).unwrap()),
+        &mut store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &modscan::win::process_names,
+    )
+    .unwrap();
+    let ids: Vec<i64> = store
+        .conn()
+        .prepare("SELECT copy_id FROM nif_winner")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let locs: Vec<(String, i32, String)> = ids
+        .into_iter()
+        .filter_map(|id| store.copy_location(id).unwrap())
+        .filter(|(p, ..)| !p.contains("facegendata/"))
+        .map(|(p, k, root, _)| (p, k, root))
+        .collect();
+    let archives: Mutex<HashMap<String, Open>> = Mutex::new(HashMap::new());
+    let found: Vec<(String, Hits)> = locs
+        .par_iter()
+        .filter_map(|(p, kind, root)| {
+            let bytes = if *kind == modscan::store::KIND_BSA {
+                let a = archives
+                    .lock()
+                    .unwrap()
+                    .entry(root.clone())
+                    .or_insert_with(|| {
+                        let b = vfs::bsa::Bsa::open(Path::new(root)).unwrap();
+                        let ix = (b.entries.iter().enumerate())
+                            .map(|(i, e)| (e.norm.clone(), i))
+                            .collect();
+                        Arc::new((b, ix))
+                    })
+                    .clone();
+                a.1.get(p).and_then(|&i| a.0.read(&a.0.entries[i]).ok())
+            } else {
+                std::fs::read(Path::new(root).join(p)).ok()
+            }?;
+            // origin = mod folder (or archive) name + data path
+            let n = if *kind == modscan::store::KIND_BSA {
+                2
+            } else {
+                1
+            };
+            let mut c: Vec<&str> = root.rsplit(['\\', '/']).take(n).collect();
+            c.reverse();
+            let tail = c.join("/");
+            Some((format!("{tail}:{p}"), census(&bytes)?))
+        })
+        .collect();
+    assert!(!found.is_empty(), "no winner nif accepted");
+    let mut cells = Cells::new();
+    let n = found.len() as u64;
+    for (o, h) in found {
+        merge(&mut cells, h, &o);
+    }
+    out += &format!("\n{}", table("mod winners", n, &cells));
+
+    println!("{out}");
+    let _ = std::fs::write(
+        r"C:\Users\Curti\AppData\Local\Temp\claude\F--ai-dds\f6e60693-b887-4019-b7a9-84fda81ca99a\scratchpad\slsf-census.txt",
+        &out,
+    );
+}
