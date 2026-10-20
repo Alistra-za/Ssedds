@@ -726,6 +726,58 @@ fn a_failed_reopen_returns_the_view_to_the_mesh() {
     assert!(m.v3.is_mesh());
 }
 
+/// One non-merged SetField on the first lit shape's shader.
+fn set_lit(m: &mut MeshesModel, field: Field, v: f32) {
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let p = &e.model.lighting[&shader].lighting.params;
+    let cur = match field {
+        Field::Glossiness => p.glossiness,
+        _ => p.specular_strength,
+    };
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetField {
+            at,
+            field,
+            value: Value::F32(v.to_bits()),
+            base: Value::F32(cur.to_bits()),
+        }],
+        None,
+    );
+}
+
+/// Final review I2, ruling P13: In game shows PGPatcher's copy; the session keeps updating, and Source shows the
+/// edit again with every edit made meanwhile.
+#[test]
+fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
+    let (_d, mut m) = session(false);
+    assert!(m.pair.is_some(), "x.nif has a PGPatcher copy");
+    m.open_edit();
+    assert!(m.view_source, "the edit preview is the Source side");
+    set_lit(&mut m, Field::Glossiness, 12.5);
+    m.set_view_source(false);
+    assert!(m.v3.is_mesh(), "In game shows the PGPatcher copy");
+    assert!(!m.v3.nif_view);
+    set_lit(&mut m, Field::SpecularStrength, 3.5);
+    assert_eq!(m.edit.as_ref().unwrap().doc.ops.len(), 2);
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Showing the PGPatcher copy: switch to Source to see your edit.");
+    let m = h.state_mut();
+    m.set_view_source(true);
+    assert!(m.v3.nif_view);
+    let Some(Content::Parsed { nif, .. }) = m.v3.content() else {
+        panic!("Source shows the edit preview again")
+    };
+    let p = &nif.shapes[0].material.params;
+    assert_eq!((p.glossiness, p.specular_strength), (12.5, 3.5));
+    h.run_steps(4);
+    assert!(h
+        .query_by_label("Showing the PGPatcher copy: switch to Source to see your edit.")
+        .is_none());
+}
+
 // ---- v2 A17: the edit panel, selection, Shader and Alpha tabs ----
 
 #[path = "../../nif/tests/builder/mod.rs"]

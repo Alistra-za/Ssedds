@@ -1246,7 +1246,11 @@ impl MeshesModel {
     pub fn set_view_source(&mut self, source: bool) {
         if self.view_source != source {
             self.view_source = source;
-            self.load_shapes();
+            // While editing, Source is the edit preview with every edit so far (ruling P13).
+            if !(source && self.show_edit_preview()) {
+                self.v3.nif_view = false;
+                self.load_shapes();
+            }
         }
     }
 

@@ -353,7 +353,7 @@ On a PBR shape, the SLSF2 flags that CS reads differently (Fit_Slope, Multi_Laye
 
 **Source changed.** If the source NIF changes on disk (a mod update), the edits are re-applied by name and role, not by position. The panel says "Source changed: N applied, M conflicts". A conflicting edit has **Take source** (drop your edit) and **Keep mine** (keep it on top of the new source).
 
-**In game.** On a NIF with a PGPatcher copy, **In game** still shows PGPatcher's output, which was made from the unedited NIF. Once you have exported, the amber line "PGPatcher output predates your edit: re-run PGPatcher." shows. **Source** shows your edit.
+**In game.** On a NIF with a PGPatcher copy, **In game** still shows PGPatcher's output, which was made from the unedited NIF. Once you have exported, the amber line "PGPatcher output predates your edit: re-run PGPatcher." shows. Opening the edit selects **Source**, which shows your edit. While **In game** shows, the line "Showing the PGPatcher copy: switch to Source to see your edit." says so; edits you make meanwhile still count, and switching back to **Source** shows them all.
 
 **LE files.** A Skyrim LE NIF opens without a 3D preview ("LE mesh: no 3D preview").
 

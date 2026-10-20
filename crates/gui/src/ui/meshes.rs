@@ -662,6 +662,9 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 "PGPatcher output predates your edit: re-run PGPatcher.",
             );
         }
+        if m.edit_preview_hidden() {
+            ui.label("Showing the PGPatcher copy: switch to Source to see your edit.");
+        }
     }
     super::viewport3d::show(ui, &mut m.v3);
 }

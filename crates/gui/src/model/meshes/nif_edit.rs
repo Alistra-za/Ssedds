@@ -626,6 +626,8 @@ impl MeshesModel {
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((e, content)) => {
                 self.edit = Some(e);
+                // The toggle reads Source while the edit preview shows (P13); In game is PGPatcher's copy (R11).
+                self.view_source |= self.pair.is_some();
                 if let Some(c) = content {
                     self.v3.set_content(Some(c), false);
                     self.v3.nif_view = true;
@@ -658,18 +660,47 @@ impl MeshesModel {
         let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
         e.copies = copies;
         e.cards = store.shapes_of(e.source_copy.copy_id).unwrap_or_default();
+        let c = self.edit_content(&e)?;
+        Ok((e, c))
+    }
+
+    /// The session's patched bytes as a new `Content::Parsed` (None for an LE NIF).
+    fn edit_content(&self, e: &NifEdit) -> Result<Option<Content>, String> {
+        let store = self.store.as_ref().ok_or("No scan store.")?;
         if e.le_mesh {
-            return Ok((e, None));
+            return Ok(None);
         }
         let mut nif = e.preview_nif();
-        nif.head_part = store.is_head_part_mesh(path).unwrap_or(false); // shading only, as mesh_spec
+        nif.head_part = store.is_head_part_mesh(&e.data_path).unwrap_or(false); // shading only, as mesh_spec
         let textures = texture_sources(store, &slot_paths(&nif)).map_err(db_err)?;
-        let c = Content::Parsed {
+        Ok(Some(Content::Parsed {
             key: next_key(),
             nif: Arc::new(nif),
             textures: Arc::new(textures),
-        };
-        Ok((e, Some(c)))
+        }))
+    }
+
+    /// Shows the open session's edit preview, rebuilt from its current edits (ruling P13: back from In game).
+    /// False when there is none to show (no session, an LE NIF, or an error, which goes to `error`).
+    pub(super) fn show_edit_preview(&mut self) -> bool {
+        let Some(e) = &self.edit else { return false };
+        match self.edit_content(e) {
+            Ok(Some(c)) => {
+                self.v3.set_content(Some(c), false);
+                self.v3.nif_view = true;
+                true
+            }
+            Ok(None) => false,
+            Err(err) => {
+                self.error = Some(err);
+                false
+            }
+        }
+    }
+
+    /// An edit is open but the 3D view shows a plain copy (In game, ruling P13): the edits are not on screen.
+    pub fn edit_preview_hidden(&self) -> bool {
+        self.edit.as_ref().is_some_and(|e| !e.le_mesh) && !self.v3.nif_view
     }
 
     /// Ends the session (an unsaved drag is saved) and shows the NIF as a mesh again.
@@ -841,6 +872,7 @@ impl MeshesModel {
         if e.le_mesh {
             return;
         }
+        // In game shows PGPatcher's copy (P13): the session is current, and Source rebuilds the preview from it.
         let Some(Content::Parsed { nif, textures, .. }) = self.v3.content() else {
             return;
         };
