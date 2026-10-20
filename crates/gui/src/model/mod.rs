@@ -43,6 +43,7 @@ pub mod shell;
 pub mod skin;
 pub mod texture_view;
 pub mod used_by;
+pub mod uv_coverage;
 pub mod view;
 pub mod viewport3d;
 
