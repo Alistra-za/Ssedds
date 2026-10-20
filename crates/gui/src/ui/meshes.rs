@@ -28,7 +28,55 @@ mod edit_panel;
 /// Problems listed under "Scan details"; the count is always shown.
 const MAX_LISTED: usize = 200;
 
+fn undo_ids() -> (egui::Id, egui::Id) {
+    (
+        egui::Id::new("nif-undo-target"),
+        egui::Id::new("nif-undo-request"),
+    )
+}
+
+/// A20 (owner option 1): which history the shared Undo / Redo (header, palette, Ctrl+Z / Ctrl+Y) act on now.
+/// `Some((can_undo, can_redo))` of the NIF history while a NIF edit is open in the Meshes view, `None` for Textures.
+pub fn undo_target(ctx: &egui::Context) -> Option<(bool, bool)> {
+    if !super::header::meshes_view_active(ctx) {
+        return None;
+    }
+    ctx.data(|d| d.get_temp::<Option<(bool, bool)>>(undo_ids().0))
+        .flatten()
+}
+
+/// Undoes (or redoes) the NIF edit when it is the [`undo_target`]; false means the Textures history is.
+pub fn request_undo(ctx: &egui::Context, undo: bool) -> bool {
+    if undo_target(ctx).is_none() {
+        return false;
+    }
+    // Run at the next `show` (this frame's for the header and the keys, the next for the palette).
+    ctx.data_mut(|d| d.insert_temp(undo_ids().1, undo));
+    ctx.request_repaint();
+    true
+}
+
 pub fn show(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let (target, request) = undo_ids();
+    match ui.ctx().data_mut(|d| d.remove_temp::<bool>(request)) {
+        Some(true) => {
+            m.undo_edit();
+        }
+        Some(false) => {
+            m.redo_edit();
+        }
+        None => {}
+    }
+    draw(ui, m);
+    // After the draw: the panel may have opened or closed the edit.
+    let state = m
+        .edit
+        .as_ref()
+        .map(|e| (e.history.can_undo(), e.history.can_redo()));
+    ui.ctx().data_mut(|d| d.insert_temp(target, state));
+}
+
+fn draw(ui: &mut egui::Ui, m: &mut MeshesModel) {
     if bar_has_content(m) {
         egui::Panel::top("meshes-bar").show(ui, |ui| bar(ui, m));
     }
