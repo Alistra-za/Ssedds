@@ -288,6 +288,7 @@ pub fn all() -> Vec<Vec<u8>> {
         animated(Some(1), 3),
         animated(None, 1),
         animated(Some(0x80), 0),
+        two_props_one_ctrl(),
     ]
 }
 
@@ -678,4 +679,22 @@ pub fn animated(bsx: Option<u32>, n: usize) -> Vec<u8> {
         b.block("NiFloatData", float_data(1));
     }
     b.bytes()
+}
+
+/// BSTriShapes "S" (0) and "T" (1) on their own BSLSPs (2, 3), whose controller refs both name one free LSCF var 11
+/// (4, target 2) -> NiFloatInterpolator 0.0 (5) -> NiFloatData LINEAR (6). Not something a tool writes.
+pub fn two_props_one_ctrl() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (s, t) = (n.string("S"), n.string("T"));
+    n.block("BSTriShape", bstri_named(s, 2, -1));
+    n.block("BSTriShape", bstri_named(t, 3, -1));
+    n.block("BSLightingShaderProperty", lsp_body(0, &[], 4, &[]));
+    n.block("BSLightingShaderProperty", lsp_body(0, &[], 4, &[]));
+    n.block(
+        "BSLightingShaderPropertyFloatController",
+        ctrl_body(-1, 0x48, 2, W::default().i32(5).u32(11)),
+    );
+    n.block("NiFloatInterpolator", W::default().f(0.0).i32(6).0);
+    n.block("NiFloatData", float_data(1));
+    n.bytes()
 }

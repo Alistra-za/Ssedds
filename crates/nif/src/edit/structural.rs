@@ -275,6 +275,20 @@ fn ctrl_ref_at(doc: &NifDoc, p: &PropModel) -> usize {
     p.net.controller_at() - doc.header().offsets()[p.block as usize]
 }
 
+/// Err unless the property's chain ends in -1. `ctrl::chain` stops at a loop, an out-of-range or unreadable next and
+/// past 256 links, so in each of those cases the last listed controller's next is not -1 (B-P31).
+fn whole_chain(m: &NifModel, p: &PropModel) -> Result<(), String> {
+    let end = match p.ctrls.last() {
+        None => p.net.controller == -1,
+        Some(c) => m.ctrls.get(c).is_some_and(|c| c.next == -1),
+    };
+    if end {
+        Ok(())
+    } else {
+        Err("This controller chain is broken: it cannot be edited.".into())
+    }
+}
+
 /// AddController (anchored on a property) and RemoveController (anchored on a controller).
 pub(crate) fn ctrl_op(
     doc: &mut NifDoc,
@@ -334,14 +348,8 @@ pub(crate) fn ctrl_op(
                 m.alphas.get(&block).map(|a| &a.prop)
             }
             .ok_or("not a readable property")?;
+            whole_chain(m, prop)?;
             let last = prop.ctrls.last();
-            let end = match last {
-                None => prop.net.controller == -1,
-                Some(c) => m.ctrls.get(c).is_some_and(|c| c.next == -1),
-            };
-            if !end {
-                return Err("The controller chain is broken.".into());
-            }
             if m.root_net.is_none() {
                 return Err("The root is not a node: the BSX Animated bit cannot be set.".into());
             }
@@ -368,13 +376,23 @@ pub(crate) fn ctrl_op(
             if m.managed(block) {
                 return Err("A manager-controlled controller cannot be removed.".into());
             }
-            let prop = m
+            let owners: Vec<&PropModel> = m
                 .lighting
                 .values()
                 .map(|l| &l.prop)
                 .chain(m.alphas.values().map(|a| &a.prop))
-                .find(|p| p.ctrls.contains(&block))
-                .ok_or("No property lists this controller.")?;
+                .filter(|p| p.ctrls.contains(&block))
+                .collect();
+            let prop =
+                match owners.as_slice() {
+                    [] => return Err("No property lists this controller.".into()),
+                    [p] => *p,
+                    _ => return Err(
+                        "This controller is shared by several properties: it cannot be removed."
+                            .into(),
+                    ),
+                };
+            whole_chain(m, prop)?;
             let k = prop.ctrls.iter().position(|&c| c == block).unwrap();
             let c = &m.ctrls[&block];
             match k {

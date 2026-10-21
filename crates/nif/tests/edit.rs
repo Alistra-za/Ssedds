@@ -2005,7 +2005,7 @@ fn add_controller_refusals() {
     check(
         &broken,
         add(shader.clone(), LSCF, Some(9), one.clone(), 0.0),
-        "The controller chain is broken.",
+        "This controller chain is broken: it cannot be edited.",
     );
 
     assert_eq!(
@@ -2050,4 +2050,64 @@ fn authored_controller_keys_are_validated() {
     )]);
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0].text, "Key times must not decrease");
+}
+
+// ---- B5 fix round 1 (B-P31) ----
+
+const BROKEN: &str = "This controller chain is broken: it cannot be edited.";
+
+/// `b` with block `k`'s Next Controller (offset 0) set to `next`.
+fn with_next(b: &[u8], k: usize, next: i32) -> Vec<u8> {
+    let mut v = b.to_vec();
+    let at = Header::parse(b).unwrap().offsets()[k];
+    v[at..at + 4].copy_from_slice(&next.to_le_bytes());
+    v
+}
+
+fn refused_unchanged(b: &[u8], op: Op, text: &str) {
+    let r = apply(b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Refused(text.into())]);
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn remove_refuses_a_controller_on_two_properties() {
+    let b = scenes::two_props_one_ctrl();
+    let m = read_model(&b).unwrap();
+    assert_eq!(m.lighting[&2].prop.ctrls, vec![4]);
+    assert_eq!(m.lighting[&3].prop.ctrls, vec![4]);
+    for shape in ["S", "T"] {
+        let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), shape);
+        assert_eq!(at.block, 4);
+        refused_unchanged(
+            &b,
+            Op::RemoveController { at },
+            "This controller is shared by several properties: it cannot be removed.",
+        );
+    }
+}
+
+#[test]
+fn broken_chains_refuse_remove_and_add() {
+    let one = lin(&[(0.0, 1.0)]);
+    // self-loop: ctrl 4 -> 4
+    let b = with_next(&scenes::animated(Some(1), 1), 4, 4);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
+    let shader = prop_anchor(&b, Role::Shader);
+    refused_unchanged(&b, add(shader, LSCF, Some(9), one.clone(), 0.0), BROKEN);
+
+    // two-link loop: 4 -> 5 -> 4
+    let b = with_next(&scenes::animated(Some(1), 2), 5, 4);
+    for var in [11, 20] {
+        let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(var), "S");
+        refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
+    }
+    let shader = prop_anchor(&b, Role::Shader);
+    refused_unchanged(&b, add(shader, LSCF, Some(9), one.clone(), 0.0), BROKEN);
+
+    // next out of range: 4 -> 99
+    let b = with_next(&scenes::animated(Some(1), 1), 4, 99);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
 }
