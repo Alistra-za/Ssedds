@@ -224,6 +224,18 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
         }
     }
 
+    // An unlisted sequence never plays: with a readable manager, keep only the sequences some manager lists (F2).
+    let mut listed: Option<BTreeSet<i32>> = None;
+    for i in (0..n).filter(|&i| h.kind(i) == b"NiControllerManager") {
+        match ctrl::read_manager(&h, b, i) {
+            Ok(mgr) => listed.get_or_insert_default().extend(mgr.sequences),
+            Err(e) => p.push(format!("block {i}: {e}")),
+        }
+    }
+    if let Some(l) = listed {
+        m.sequences.retain(|s| l.contains(&(s.block as i32)));
+    }
+
     // Shape refs and users.
     for (block, shader, alpha) in shape_refs {
         let mut r = |v: i32, what: &str| match u32::try_from(v) {

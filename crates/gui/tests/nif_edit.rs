@@ -277,6 +277,88 @@ fn add_controller_times_round_trip_as_bits() {
     assert!(matches!(old.ops[0].op, Op::AddController { freq, .. } if freq == 1.5));
 }
 
+/// v2 C2: the three clip ops survive the edit document; AddSequence's times keep their bits (a NaN stop too).
+#[test]
+fn clip_ops_survive_the_edit_document() {
+    use nif::edit::{ClipTrack, Owner};
+    let root = Anchor {
+        block: 0,
+        kind: "NiNode".into(),
+        shape: None,
+        role: Role::Root,
+    };
+    let track = |var: u32, block: u32| ClipTrack {
+        at: Anchor {
+            block,
+            kind: "BSLightingShaderPropertyFloatController".into(),
+            shape: Some("S".into()),
+            role: Role::Ctrl {
+                owner: Owner::Shader,
+                class: "BSLightingShaderPropertyFloatController".into(),
+                var: Some(var),
+                nth: 0,
+            },
+        },
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![Key {
+                time: 0.0,
+                value: 0.5,
+                forward: None,
+                backward: None,
+                tbc: None,
+            }],
+        }),
+    };
+    let ops = [
+        Op::AddSequence {
+            at: root.clone(),
+            name: "Open".into(),
+            cycle: 2,
+            freq: 1.0,
+            start: -0.0,
+            stop: f32::from_bits(0xFFC0_0001),
+            tracks: vec![track(11, 4), track(20, 5)],
+        },
+        Op::RemoveSequence {
+            at: root.clone(),
+            name: "Idle".into(),
+            nth: 1,
+        },
+        Op::RenameSequence {
+            at: root,
+            name: "Open".into(),
+            nth: 0,
+            new_name: "Close".into(),
+        },
+    ];
+    let mut d = doc();
+    d.ops = ops
+        .iter()
+        .map(|op| DocOp {
+            op: op.clone(),
+            status: OpStatus::Applied,
+        })
+        .collect();
+    let back = EditDoc::from_text(&d.to_text()).unwrap();
+    let Op::AddSequence { start, stop, .. } = &back.ops[0].op else {
+        panic!("{:?}", back.ops)
+    };
+    assert_eq!(
+        [start.to_bits(), stop.to_bits()],
+        [0x8000_0000, 0xFFC0_0001]
+    );
+    // NaN != NaN: compare the rest with the stop made equal
+    let mut back = back;
+    if let Op::AddSequence { stop, .. } = &mut back.ops[0].op {
+        *stop = 1.0;
+    }
+    if let Op::AddSequence { stop, .. } = &mut d.ops[0].op {
+        *stop = 1.0;
+    }
+    assert_eq!(back, d);
+}
+
 #[test]
 fn every_op_variant_round_trips() {
     use nif::edit::Owner;

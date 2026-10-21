@@ -2,7 +2,12 @@
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
 use super::validate::{ENV_SCALE_PBR, LSCC, LSCF, LSCF_VARS, TESTREF};
 use super::{Anchor, Op, Outcome, Role};
-use crate::ctrl::{BASE_LEN, CB_LEN};
+use crate::clips::{
+    encode_blend_interp, encode_manager, encode_mttc, encode_palette, encode_sequence,
+    encode_text_keys, read_palette, read_sequence_out, CtrlBlockOut, SequenceOut, MANAGER_FLAGS,
+    MTTC_FLAGS,
+};
+use crate::ctrl::{read_manager, Manager, TimeCtrl, BASE_LEN, CB_LEN};
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
 use crate::header::Header;
 use crate::keys::{encode_data, read_data, KeyData, KeyGroup};
@@ -432,26 +437,7 @@ pub(crate) fn ctrl_op(
             if class == LSCF && *var == Some(8) && pbr {
                 return Err(ENV_SCALE_PBR.into());
             }
-            let (data_kind, interp_kind, first, n): (&[u8], &[u8], Vec<u8>, usize) = match keys {
-                KeyData::Float(g) if float => (
-                    b"NiFloatData",
-                    b"NiFloatInterpolator",
-                    g.keys
-                        .first()
-                        .map_or(vec![], |k| k.value.to_le_bytes().to_vec()),
-                    g.keys.len(),
-                ),
-                KeyData::Pos(g) if !float => (
-                    b"NiPosData",
-                    b"NiPoint3Interpolator",
-                    g.keys.first().map_or(vec![], |k| {
-                        k.value.iter().flat_map(|f| f.to_le_bytes()).collect()
-                    }),
-                    g.keys.len(),
-                ),
-                _ => return Err("The keys do not match the controller's type.".into()),
-            };
-            if n == 0 {
+            if key_count(keys, float)? == 0 {
                 return Err("A new controller needs at least one key.".into());
             }
             let prop = if shader {
@@ -465,10 +451,7 @@ pub(crate) fn ctrl_op(
             if m.root_net.is_none() {
                 return Err("The root is not a node: the BSX Animated bit cannot be set.".into());
             }
-            let d = doc.append(data_kind, encode_data(keys));
-            let mut ib = first;
-            ib.extend((d as i32).to_le_bytes());
-            let i = doc.append(interp_kind, ib);
+            let i = append_keyed(doc, keys)?;
             let mut cb = (-1i32).to_le_bytes().to_vec();
             cb.extend(flags.to_le_bytes());
             for f in [*freq, 0.0, *start, *stop] {
@@ -517,6 +500,452 @@ pub(crate) fn ctrl_op(
         _ => return Err("not a controller op".into()),
     }
     Ok(Outcome::Applied)
+}
+
+/// The key count of `keys` when they fit a Float (`float`) or Point3 controller, else Err.
+fn key_count(keys: &KeyData, float: bool) -> Result<usize, String> {
+    match keys {
+        KeyData::Float(g) if float => Ok(g.keys.len()),
+        KeyData::Pos(g) if !float => Ok(g.keys.len()),
+        _ => Err("The keys do not match the controller's type.".into()),
+    }
+}
+
+/// Appends `keys` as NiFloatData / NiPosData and a keyed interpolator over it whose value is the first key's.
+fn append_keyed(doc: &mut NifDoc, keys: &KeyData) -> Result<u32, String> {
+    let (data_kind, interp_kind, first): (&[u8], &[u8], Vec<u8>) = match keys {
+        KeyData::Float(g) => (
+            b"NiFloatData",
+            b"NiFloatInterpolator",
+            g.keys
+                .first()
+                .map_or(vec![], |k| k.value.to_le_bytes().to_vec()),
+        ),
+        KeyData::Pos(g) => (
+            b"NiPosData",
+            b"NiPoint3Interpolator",
+            g.keys.first().map_or(vec![], |k| {
+                k.value.iter().flat_map(|f| f.to_le_bytes()).collect()
+            }),
+        ),
+        KeyData::Bool(_) => return Err("The keys do not match the controller's type.".into()),
+    };
+    let d = doc.append(data_kind, encode_data(keys));
+    let mut ib = first;
+    ib.extend((d as i32).to_le_bytes());
+    Ok(doc.append(interp_kind, ib))
+}
+
+fn enc<T>(r: Result<T, crate::NifError>) -> Result<T, String> {
+    r.map_err(|e| e.to_string())
+}
+
+/// #INV_FLT#: the Value every vanilla blend interpolator holds (C1 census, 6722 of 6722).
+const INV_FLT: u32 = 0xFF7F_FFFF;
+
+/// The first NiControllerManager on the root's controller chain.
+fn root_manager(m: &NifModel) -> Option<u32> {
+    let mut c = m.root_net.as_ref()?.controller;
+    // bounded: a looping chain is cut by `ctrl::chain`, but stay safe on any `next`
+    for _ in 0..=m.ctrls.len() {
+        let t = m.ctrls.get(&u32::try_from(c).ok()?)?;
+        if t.class == "NiControllerManager" {
+            return Some(t.block);
+        }
+        c = t.next;
+    }
+    None
+}
+
+/// The raw Name of sequence `s`; None when it does not read or has no name.
+fn clip_name<'h>(h: &'h Header, cur: &[u8], s: i32) -> Option<&'h [u8]> {
+    let s = usize::try_from(s).ok()?;
+    h.string(read_sequence_out(h, cur, s).ok()?.name)
+}
+
+/// (manager, the manager as read, list position) of the `nth` clip named `name` on the root's manager.
+fn find_clip(
+    h: &Header,
+    cur: &[u8],
+    m: &NifModel,
+    name: &str,
+    nth: u32,
+) -> Result<Option<(u32, Manager, usize)>, String> {
+    let Some(mb) = root_manager(m) else {
+        return Ok(None);
+    };
+    let man = enc(read_manager(h, cur, mb as usize))?;
+    // the Windows-1252 name the editor shows, or the model's UTF-8 view of it
+    let named = |r: &[u8]| crate::text::lossy(r) == name || String::from_utf8_lossy(r) == name;
+    let k = (0..man.sequences.len())
+        .filter(|&k| clip_name(h, cur, man.sequences[k]).is_some_and(named))
+        .nth(nth as usize);
+    Ok(k.map(|k| (mb, man, k)))
+}
+
+/// The bytes of a new clip name (F20): non-empty, Windows-1252, unique on the manager ignoring ASCII case.
+fn clip_name_bytes(
+    h: &Header,
+    cur: &[u8],
+    man: Option<&Manager>,
+    name: &str,
+    skip: Option<usize>,
+) -> Result<Vec<u8>, String> {
+    let b = win1252(name)?;
+    if b.is_empty() {
+        return Err("A clip needs a name.".into());
+    }
+    let seqs = man.map_or(&[][..], |m| &m.sequences);
+    let taken = (0..seqs.len())
+        .filter(|&k| Some(k) != skip)
+        .any(|k| clip_name(h, cur, seqs[k]).is_some_and(|r| r.eq_ignore_ascii_case(&b)));
+    if taken {
+        return Err(format!("Another clip is already named {name}."));
+    }
+    Ok(b)
+}
+
+/// The shape a clip track on controller `c` names (C2-D6, F11, F18), after its class and keys pass.
+pub(crate) fn track_shape(
+    h: &Header,
+    m: &NifModel,
+    c: u32,
+    t: &super::ClipTrack,
+) -> Result<u32, String> {
+    let ctrl = m.ctrls.get(&c).ok_or("not a readable controller")?;
+    let float = match ctrl.class.as_str() {
+        LSCF | TESTREF if ctrl.known => true,
+        LSCC if ctrl.known => false,
+        _ => return Err(format!("A {} cannot be in a clip.", ctrl.class)),
+    };
+    if key_count(&t.keys, float)? == 0 {
+        return Err("A clip track needs at least one key.".into());
+    }
+    let (prop, alpha) = m
+        .lighting
+        .values()
+        .map(|l| (&l.prop, false))
+        .chain(m.alphas.values().map(|a| (&a.prop, true)))
+        .find(|(p, _)| p.ctrls.contains(&c))
+        .ok_or("No property lists this controller.")?;
+    whole_chain(m, prop)?;
+    if alpha && prop.users.len() > 1 {
+        return Err(format!(
+            "This alpha is shared by {} shapes: split it before editing.",
+            prop.users.len()
+        ));
+    }
+    let unnamed = || "This shape has no name: a clip cannot find it.".to_string();
+    let name = t.at.shape.as_deref().ok_or_else(unnamed)?;
+    let two = || format!("Two shapes are named {name}: a clip cannot tell them apart.");
+    let users: Vec<&ShapeModel> = prop
+        .users
+        .iter()
+        .filter_map(|&u| m.shape(u))
+        .filter(|s| s.name.as_deref() == Some(name))
+        .collect();
+    let s = match users.as_slice() {
+        [s] => *s,
+        [] => return Err(format!("No shape named {name} uses this controller.")),
+        _ => return Err(two()),
+    };
+    let raw = h.string(s.net.name).ok_or_else(unnamed)?;
+    if m.shapes
+        .iter()
+        .filter(|o| h.string(o.net.name) == Some(raw))
+        .count()
+        > 1
+    {
+        return Err(two());
+    }
+    Ok(s.block)
+}
+
+/// AddSequence, RemoveSequence and RenameSequence, anchored on the root (v2 C2). A missing clip is a Conflict.
+pub(crate) fn clip_op(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    m: &NifModel,
+    root: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    let missing = |name: &str| Ok(Outcome::Conflict(format!("No clip named {name}.")));
+    match op {
+        Op::AddSequence {
+            name,
+            cycle,
+            freq,
+            start,
+            stop,
+            tracks,
+            ..
+        } => {
+            if m.root != Some(root) || m.root_net.is_none() {
+                return Err("The root is not a node: a clip needs a node root.".into());
+            }
+            let mut res = Vec::with_capacity(tracks.len());
+            for t in tracks {
+                // track anchors re-resolve on every apply; rebase never writes them back (F3)
+                let c = match super::resolve(m, &t.at) {
+                    Ok((c, _)) => c,
+                    Err(e) => return Ok(Outcome::Conflict(e)),
+                };
+                res.push((c, track_shape(doc.header(), m, c, t)?, t.keys.clone()));
+            }
+            add_sequence(doc, cur, m, name, *cycle, *freq, *start, *stop, &res)?;
+        }
+        Op::RemoveSequence { name, nth, .. } => {
+            let Some((mgr, mut man, k)) = find_clip(doc.header(), cur, m, name, *nth)? else {
+                return missing(name);
+            };
+            let removed = man.sequences.remove(k);
+            doc.set_block(mgr, enc(encode_manager(&man))?);
+            let gone = m
+                .sequences
+                .iter()
+                .find(|s| s.block as i32 == removed)
+                .filter(|_| !man.sequences.contains(&removed));
+            if let Some(rs) = gone {
+                release(doc, m, rs)?;
+            }
+        }
+        Op::RenameSequence {
+            name,
+            nth,
+            new_name,
+            ..
+        } => {
+            let Some((_, man, k)) = find_clip(doc.header(), cur, m, name, *nth)? else {
+                return missing(name);
+            };
+            let b = clip_name_bytes(doc.header(), cur, Some(&man), new_name, Some(k))?;
+            let s = doc.string(&b);
+            patch(doc, man.sequences[k] as u32, 0, s)?;
+        }
+        _ => return Err("not a clip op".into()),
+    }
+    Ok(Outcome::Applied)
+}
+
+/// G2: each known controller the removed clip `rs` drove and no other live clip drives gets 0x20 cleared and
+/// `rs`'s keyed interpolator back (when it is a plain one of the controller's kind).
+fn release(doc: &mut NifDoc, m: &NifModel, rs: &crate::ctrl::Sequence) -> Result<(), String> {
+    let mut fix = vec![];
+    {
+        let h = doc.header();
+        for (&c, ctrl) in m.ctrls.iter().filter(|(_, c)| c.known) {
+            let Some(&k) = crate::anim::bound_cbs(m, h, rs, c).first() else {
+                continue;
+            };
+            let others = m.sequences.iter().filter(|s| s.block != rs.block);
+            if others
+                .into_iter()
+                .any(|s| !crate::anim::bound_cbs(m, h, s, c).is_empty())
+            {
+                continue;
+            }
+            let ip = rs.blocks[k].interp;
+            let want: &[u8] = if ctrl.class == LSCC {
+                b"NiPoint3Interpolator"
+            } else {
+                b"NiFloatInterpolator"
+            };
+            let plain = u32::try_from(ip).is_ok_and(|i| doc.kind(i) == want);
+            fix.push((c, ctrl.flags & !0x20, plain.then_some(ip)));
+        }
+    }
+    for (c, flags, ip) in fix {
+        doc.patch(c, 4, &flags.to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        if let Some(ip) = ip {
+            patch(doc, c, BASE_LEN, ip)?;
+        }
+    }
+    Ok(())
+}
+
+/// Appends one clip to the root's manager, creating the manager, its MTTC and palette when the root has none.
+/// `tracks` are resolved and checked by [`track_shape`]: (controller block, shape block, keys).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add_sequence(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    m: &NifModel,
+    name: &str,
+    cycle: u32,
+    freq: f32,
+    start: f32,
+    stop: f32,
+    tracks: &[(u32, u32, KeyData)],
+) -> Result<(), String> {
+    let (root, net) = m
+        .root
+        .zip(m.root_net.as_ref())
+        .ok_or("The root is not a node: a clip needs a node root.")?;
+    let found = root_manager(m);
+    let old = match found {
+        Some(mb) => Some(enc(read_manager(doc.header(), cur, mb as usize))?),
+        None => None,
+    };
+    let name_b = clip_name_bytes(doc.header(), cur, old.as_ref(), name, None)?;
+    if ![freq, start, stop].iter().all(|v| v.is_finite()) {
+        return Err("Clip times must be finite numbers.".into());
+    }
+    if tracks.is_empty() {
+        return Err("A clip needs at least one track.".into());
+    }
+    if (1..tracks.len()).any(|k| tracks[..k].iter().any(|o| o.0 == tracks[k].0)) {
+        return Err("Two tracks of a clip drive the same controller.".into());
+    }
+    // (shape block, raw name) per track, read before anything is appended
+    let shapes: Vec<(u32, Vec<u8>, i32)> = tracks
+        .iter()
+        .map(|&(_, s, _)| {
+            let sm = m.shape(s).ok_or("not a shape")?;
+            let raw = doc
+                .header()
+                .string(sm.net.name)
+                .ok_or("This shape has no name: a clip cannot find it.")?;
+            Ok((s, raw.to_vec(), sm.net.name))
+        })
+        .collect::<Result<_, String>>()?;
+    let (scene, mut objs) = match &old {
+        Some(man) if man.palette >= 0 => {
+            enc(read_palette(doc.header(), cur, man.palette as usize))?
+        }
+        _ => (root as i32, vec![]),
+    };
+
+    let (mgr, mut man) = match (found, old) {
+        (Some(mb), Some(man)) => (mb, man),
+        _ => {
+            // F21: a placeholder manager, filled by set_block at the end
+            let mgr = doc.append(b"NiControllerManager", vec![]);
+            let base = |next: i32, flags: u16| TimeCtrl {
+                block: 0,
+                class: String::new(),
+                next,
+                flags,
+                frequency: 1.0,
+                phase: 0.0,
+                start: 0.0,
+                stop,
+                target: root as i32,
+                interp: None,
+                var: None,
+                known: false,
+            };
+            // C-P26: the MTTC lists the nodes the clip's blocks bind
+            let mut targets: Vec<i32> = vec![];
+            for (s, _, _) in &shapes {
+                if !targets.contains(&(*s as i32)) {
+                    targets.push(*s as i32);
+                }
+            }
+            let mttc_body = enc(encode_mttc(&base(net.controller, MTTC_FLAGS), &targets))?;
+            let mttc = doc.append(b"NiMultiTargetTransformController", mttc_body);
+            let man = Manager {
+                ctrl: base(mttc as i32, MANAGER_FLAGS),
+                cumulative: 0,
+                sequences: vec![],
+                palette: -1,
+            };
+            (mgr, man)
+        }
+    };
+
+    let before = objs.len();
+    for (s, raw, _) in &shapes {
+        if !objs.iter().any(|(_, p)| *p == *s as i32) {
+            objs.push((raw.clone(), *s as i32));
+        }
+    }
+    let pal = enc(encode_palette(scene, &objs))?;
+    if man.palette < 0 {
+        man.palette = doc.append(b"NiDefaultAVObjectPalette", pal) as i32;
+    } else if objs.len() > before {
+        doc.set_block(man.palette as u32, pal);
+    }
+
+    let mut blocks = Vec::with_capacity(tracks.len());
+    for ((c, _, keys), (_, _, node)) in tracks.iter().zip(&shapes) {
+        let ctrl = &m.ctrls[c];
+        let point3 = ctrl.class == LSCC;
+        let interp = append_keyed(doc, keys)?;
+        let blend = if point3 {
+            "NiBlendPoint3Interpolator"
+        } else {
+            "NiBlendFloatInterpolator"
+        };
+        let has_blend = ctrl
+            .interp
+            .and_then(|i| u32::try_from(i).ok())
+            .is_some_and(|i| doc.kind(i) == blend.as_bytes());
+        if !has_blend {
+            let inv = f32::from_bits(INV_FLT);
+            let v = if point3 { vec![inv; 3] } else { vec![inv] };
+            let bl = doc.append(blend.as_bytes(), enc(encode_blend_interp(blend, &v))?);
+            patch(doc, *c, BASE_LEN, bl as i32)?;
+        }
+        doc.patch(*c, 4, &(ctrl.flags | 0x20).to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        let testref = ctrl.class == TESTREF;
+        let ptype: &[u8] = if testref {
+            b"NiAlphaProperty"
+        } else {
+            b"BSLightingShaderProperty"
+        };
+        let property = doc.string(ptype);
+        let ctrl_type = doc.string(ctrl.class.as_bytes());
+        // F0: TestRef CBs carry a null Controller ID, as vanilla does
+        let ctrl_id = match ctrl.var {
+            Some(v) if !testref => doc.string(v.to_string().as_bytes()),
+            _ => -1,
+        };
+        blocks.push(CtrlBlockOut {
+            interp: interp as i32,
+            controller: *c as i32,
+            priority: 0,
+            node: *node,
+            property,
+            ctrl_type,
+            ctrl_id,
+            interp_id: -1,
+        });
+    }
+    let s_name = doc.string(&name_b);
+    let (s_start, s_end) = (doc.string(b"start"), doc.string(b"end"));
+    let tk_body = enc(encode_text_keys(-1, &[(start, s_start), (stop, s_end)]))?;
+    let tk = doc.append(b"NiTextKeyExtraData", tk_body);
+    let seq = SequenceOut {
+        name: s_name,
+        blocks,
+        array_grow_by: 1,
+        weight: 1.0,
+        text_keys: tk as i32,
+        cycle,
+        freq,
+        start,
+        stop,
+        manager: mgr as i32,
+        accum_root: net.name,
+        notes: vec![],
+    };
+    let seq = doc.append(b"NiControllerSequence", enc(encode_sequence(&seq))?);
+    man.sequences.push(seq as i32);
+    doc.set_block(mgr, enc(encode_manager(&man))?);
+    set_bsx_animated(doc, m)?;
+    if found.is_none() {
+        // after the BSX add, which may re-emit the root's NiObjectNET with one more extra ref (F4: a 4-byte patch)
+        let s = net.start - doc.header().offsets()[root as usize];
+        let n = doc
+            .block(root)
+            .get(s + 4..s + 8)
+            .map(|x| u32::from_le_bytes(x.try_into().unwrap()) as usize)
+            .ok_or("NiObjectNET outside its block")?;
+        patch(doc, root, s + 8 + 4 * n, mgr as i32)?;
+    }
+    Ok(())
 }
 
 /// Sets bit 0 (Animated) on the root's first BSXFlags, appending `BSXFlags "BSX"` = 1 to the root when it has none.

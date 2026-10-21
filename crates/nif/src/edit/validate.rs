@@ -378,43 +378,48 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
         _ => None,
     };
     for (i, op) in ops.iter().enumerate() {
-        let (Op::SetKeys { at, keys, .. } | Op::AddController { at, keys, .. }) = op else {
-            continue;
+        // (anchor, keys) pairs: one per SetKeys / AddController, one per AddSequence track (F10)
+        let pairs: Vec<(&Anchor, &KeyData)> = match op {
+            Op::SetKeys { at, keys, .. } | Op::AddController { at, keys, .. } => vec![(at, keys)],
+            Op::AddSequence { tracks, .. } => tracks.iter().map(|t| (&t.at, &t.keys)).collect(),
+            _ => continue,
         };
         if target(op).is_some() && ops[i + 1..].iter().any(|o| target(o) == target(op)) {
             continue;
         }
-        let (key_type, t, finite) = match keys {
-            KeyData::Float(g) => times(g, |v| vec![*v]),
-            KeyData::Pos(g) => times(g, |v| v.to_vec()),
-            KeyData::Bool(g) => times(g, |_| vec![]),
-        };
-        let mut err = |text: &str| {
-            out.push(Warning {
-                level: Level::Error,
-                target: Target::Block { block: at.block },
-                text: text.into(),
-                fix: None,
-            })
-        };
-        // NaN slips past the ordering check below ([0, NaN, -1]) and inf times give inf/inf when sampled
-        if !finite {
-            err("Key values must be finite numbers");
-        }
-        // B-P41: the UI writes 1/0/1; a hand-edited document could carry anything.
-        if let Op::AddController {
-            freq, start, stop, ..
-        } = op
-        {
-            if ![freq, start, stop].iter().all(|v| v.is_finite()) {
-                err("Controller times must be finite numbers");
+        for (at, keys) in pairs {
+            let (key_type, t, finite) = match keys {
+                KeyData::Float(g) => times(g, |v| vec![*v]),
+                KeyData::Pos(g) => times(g, |v| v.to_vec()),
+                KeyData::Bool(g) => times(g, |_| vec![]),
+            };
+            let mut err = |text: &str| {
+                out.push(Warning {
+                    level: Level::Error,
+                    target: Target::Block { block: at.block },
+                    text: text.into(),
+                    fix: None,
+                })
+            };
+            // NaN slips past the ordering check below ([0, NaN, -1]) and inf times give inf/inf when sampled
+            if !finite {
+                err("Key values must be finite numbers");
             }
-        }
-        if t.windows(2).any(|k| k[1] < k[0]) {
-            err("Key times must not decrease");
-        }
-        if key_type.is_some_and(|t| t != 1 && t != 2) {
-            err("Only linear and quadratic keys can be authored");
+            // B-P41: the UI writes 1/0/1; a hand-edited document could carry anything.
+            if let Op::AddController {
+                freq, start, stop, ..
+            } = op
+            {
+                if ![freq, start, stop].iter().all(|v| v.is_finite()) {
+                    err("Controller times must be finite numbers");
+                }
+            }
+            if t.windows(2).any(|k| k[1] < k[0]) {
+                err("Key times must not decrease");
+            }
+            if key_type.is_some_and(|t| t != 1 && t != 2) {
+                err("Only linear and quadratic keys can be authored");
+            }
         }
     }
     out

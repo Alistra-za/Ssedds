@@ -125,6 +125,41 @@ pub enum Op {
     RemoveController {
         at: Anchor, // Role::Ctrl
     },
+    /// Appends a clip to the root's NiControllerManager, creating the manager, an MTTC, the palette and text keys
+    /// when the root has none (v2 C2). Each track's controller becomes manager-controlled.
+    AddSequence {
+        at: Anchor, // Role::Root
+        name: String,
+        cycle: u32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        freq: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        start: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        stop: f32,
+        tracks: Vec<ClipTrack>,
+    },
+    /// Unlinks the `nth` clip named `name` from the root's manager (v2 C2, spec §5.3).
+    RemoveSequence {
+        at: Anchor, // Role::Root
+        name: String,
+        nth: u32,
+    },
+    /// Points the `nth` clip named `name` at the string `new_name`.
+    RenameSequence {
+        at: Anchor, // Role::Root
+        name: String,
+        nth: u32,
+        new_name: String,
+    },
+}
+
+/// One track of a new clip. Its anchor is resolved on every apply; `rebase` never writes it back (F3).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipTrack {
+    pub at: Anchor, // Role::Ctrl: the controller this clip drives
+    pub keys: KeyData,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -296,6 +331,9 @@ pub fn merge_key(op: &Op) -> String {
             ("AddController", at, format!("{class}/{var:?}"))
         }
         Op::RemoveController { at } => ("RemoveController", at, String::new()),
+        Op::AddSequence { at, name, .. } => ("AddSequence", at, name.clone()),
+        Op::RemoveSequence { at, name, nth } => ("RemoveSequence", at, format!("{name}/{nth}")),
+        Op::RenameSequence { at, name, nth, .. } => ("RenameSequence", at, format!("{name}/{nth}")),
     };
     format!("{v}|{}|{what}", at.block)
 }
@@ -347,6 +385,9 @@ fn anchor_of(op: &Op) -> &Anchor {
         | Op::SetKeys { at, .. }
         | Op::AddController { at, .. }
         | Op::RemoveController { at }
+        | Op::AddSequence { at, .. }
+        | Op::RemoveSequence { at, .. }
+        | Op::RenameSequence { at, .. }
         | Op::SetTexturePath { at, .. } => at,
     }
 }
@@ -369,6 +410,9 @@ pub fn rebase(new_src: &[u8], ops: &[Op]) -> Result<(Vec<Op>, Vec<Outcome>), Nif
                 | Op::SetKeys { at, .. }
                 | Op::AddController { at, .. }
                 | Op::RemoveController { at }
+                | Op::AddSequence { at, .. }
+                | Op::RemoveSequence { at, .. }
+                | Op::RenameSequence { at, .. }
                 | Op::SetTexturePath { at, .. } => at.block = *block,
             }
         }
@@ -502,6 +546,16 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     }
     if matches!(op, Op::AddController { .. } | Op::RemoveController { .. }) {
         return match structural::ctrl_op(&mut doc, &m, at, block, op) {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
+    if matches!(
+        op,
+        Op::AddSequence { .. } | Op::RemoveSequence { .. } | Op::RenameSequence { .. }
+    ) {
+        return match structural::clip_op(&mut doc, cur, &m, block, op) {
             Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
             Ok(o) => (None, o),
             Err(e) => refused(e),

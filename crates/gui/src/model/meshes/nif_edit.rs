@@ -243,6 +243,9 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::RemoveExtra { at }
         | Op::AddController { at, .. }
         | Op::RemoveController { at }
+        | Op::AddSequence { at, .. }
+        | Op::RemoveSequence { at, .. }
+        | Op::RenameSequence { at, .. }
         | Op::SetKeys { at, .. } => at,
     }
 }
