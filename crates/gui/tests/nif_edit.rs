@@ -1359,7 +1359,7 @@ fn drawing_a_colour_records_nothing_and_a_change_keeps_the_other_channels() {
     let mut m = direct(odd_colours());
     let a = select(&mut m, "A");
     let mut h = view(m);
-    h.run_steps(8);
+    h.run_steps(3);
     assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
     assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
     h.get_by_label("Specular colour B").focus();
@@ -1573,11 +1573,15 @@ fn authored_key_errors_block_export() {
 /// Shape "S" (0) -> BSLSP (1) -> free float controllers var 11 (2, interp 4) and var 20 (3, interp 5); a root NiNode
 /// (12) listing BSXFlags `bsx` (6), a BSInvMarker, a multi-line string, an int, a bool and a negative-zero float.
 fn ctrl_scene(bsx: u32) -> Vec<u8> {
+    ctrl_scene_vars(bsx, [11, 20])
+}
+
+fn ctrl_scene_vars(bsx: u32, vars: [u32; 2]) -> Vec<u8> {
     let mut n = Nif::new(100);
     let (s, r) = (n.string("S"), n.string("Root"));
     n.block("BSTriShape", scenes::bstri_named(s, 1, -1));
     n.block("BSLightingShaderProperty", scenes::lsp_body(0, &[], 2, &[]));
-    for (next, var, interp) in [(3, 11, 4), (-1, 20, 5)] {
+    for (next, var, interp) in [(3, vars[0], 4), (-1, vars[1], 5)] {
         let tail = W::default().i32(interp).u32(var);
         n.block(
             "BSLightingShaderPropertyFloatController",
@@ -4616,4 +4620,76 @@ fn the_first_in_game_build_tests_only_indexed_entries() {
         notes(&m, shape)[0],
         r"In game: PGPatcher applies PBRNIFPatcher\big.json."
     );
+}
+
+#[test]
+fn controllers_tab_names_pbr_variables_as_the_shader_tab_does() {
+    let mut m = direct(ctrl_scene_vars(0x82, [9, 10]));
+    let s = select(&mut m, "S");
+    // Tall, so the Add controller row is on screen.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1800.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Glossiness variable");
+    h.get_by_role_and_label(AkRole::ComboBox, "Specular strength variable");
+    set_slsf2(&mut h, s, 1 << 23);
+    assert!(h.query_by_label("Glossiness").is_none());
+    h.get_by_role_and_label(AkRole::ComboBox, "Specular level variable");
+    h.get_by_role_and_label(AkRole::ComboBox, "Roughness scale variable");
+    // The Add controller list offers the PBR names too.
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Specular level (9)");
+    h.get_by_role_and_label(AkRole::Button, "Roughness scale (10)");
+}
+
+#[test]
+fn controllers_tab_names_lscc_specular_colour_by_pbr_material() {
+    let cases = [
+        (1u32 << 23, "Specular colour (no effect on PBR)"),
+        ((1 << 23) | (1 << 24), "Coat colour"),
+        ((1 << 23) | (1 << 26), "Subsurface colour"),
+        (1 << 24, "Specular colour"), // not PBR: bits 24 and 26 mean nothing
+    ];
+    for (bits, want) in cases {
+        let mut m = direct(ctrl_scene(0x82));
+        let s = select(&mut m, "S");
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(s), Role::Shader).unwrap();
+        let key = |time: f32, value: [f32; 3]| Key {
+            time,
+            value,
+            forward: None,
+            backward: None,
+            tbc: None,
+        };
+        m.edit_push(
+            vec![Op::AddController {
+                at,
+                class: "BSLightingShaderPropertyColorController".into(),
+                var: Some(0),
+                keys: KeyData::Pos(KeyGroup {
+                    key_type: Some(1),
+                    keys: vec![key(0.0, [0.2, 0.4, 0.6]), key(1.0, [0.8, 0.6, 0.4])],
+                }),
+                flags: 0x48,
+                freq: 1.0,
+                start: 0.0,
+                stop: 1.0,
+            }],
+            None,
+        );
+        let mut h = view(m);
+        h.run_steps(2);
+        set_slsf2(&mut h, s, bits);
+        tab(&mut h, "Controllers");
+        h.get_by_role_and_label(AkRole::ComboBox, &format!("{want} variable"));
+    }
 }

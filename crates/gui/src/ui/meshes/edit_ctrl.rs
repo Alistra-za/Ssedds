@@ -13,6 +13,7 @@ use nif::edit::validate::Target;
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Owner, Role};
 use nif::fields::{Field, Value};
 use nif::keys::{Key, KeyData, KeyGroup};
+use nif::material::SLSF2_TRUE_PBR;
 use nif::model::{PropModel, ShapeModel};
 use nif::props::LightingTrailer;
 
@@ -23,10 +24,28 @@ const TEST_REF: &str = "BSNiAlphaPropertyTestRefController";
 const FLOAT_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
 const COLOR_VARS: [u32; 2] = [0, 1];
 const CYCLES: [&str; 3] = ["Loop", "Reverse", "Clamp"];
+/// SLSF2 bit 24 (TwoLayer) and bit 26 (Subsurface) decide what a PBR material's specular colour does.
+const SLSF2_TWO_LAYER: u32 = 1 << 24;
+const SLSF2_SUBSURFACE: u32 = 1 << 26;
 const CLIP_SHARED: &str = "Shared alpha with a clip controller: splitting needs Phase C.";
 
-fn var_name(class: &str, v: u32) -> String {
+/// The shape's shader flags, 0 without a lit shader. Only the variable labels read them.
+fn shape_slsf2(e: &NifEdit, shape: &ShapeModel) -> u32 {
+    shape
+        .shader
+        .and_then(|b| e.model.lighting.get(&b))
+        .map_or(0, |l| l.lighting.slsf2)
+}
+
+/// A variable's label. Under CS TruePBR (SLSF2 bit 23) three read differently, as on the Shader tab (B9 design §1).
+fn var_name(class: &str, v: u32, slsf2: u32) -> String {
+    let pbr = slsf2 & SLSF2_TRUE_PBR != 0;
     let known = match (class, v) {
+        (LSCF, 9) if pbr => "Specular level",
+        (LSCF, 10) if pbr => "Roughness scale",
+        (LSCC, 0) if pbr && slsf2 & SLSF2_TWO_LAYER != 0 => "Coat colour",
+        (LSCC, 0) if pbr && slsf2 & SLSF2_SUBSURFACE != 0 => "Subsurface colour",
+        (LSCC, 0) if pbr => "Specular colour (no effect on PBR)",
         (LSCF, 0) => "Refraction strength",
         (LSCF, 8) => "Env map scale",
         (LSCF, 9) => "Glossiness",
@@ -147,6 +166,7 @@ fn chain(
     prop: &PropModel,
     clock: Option<Clock>,
 ) {
+    let slsf2 = shape_slsf2(e, shape);
     let users = prop.users.len();
     let mut locked = false;
     let managed = users > 1 && prop.ctrls.iter().any(|&c| e.model.managed(c));
@@ -197,7 +217,7 @@ fn chain(
                     nth,
                 },
             };
-            ui.group(|ui| row(ui, e, act, c, &at, clock));
+            ui.group(|ui| row(ui, e, act, c, &at, clock, slsf2));
         }
     });
     // Outside the lock: a shared, unmanaged alpha adds through Split + Add.
@@ -211,11 +231,12 @@ fn row(
     c: &TimeCtrl,
     at: &Anchor,
     clock: Option<Clock>,
+    slsf2: u32,
 ) {
     let managed = e.model.managed(c.block);
     let title = match (c.known, c.var) {
         (false, _) => c.class.clone(),
-        (true, Some(v)) => var_name(&c.class, v),
+        (true, Some(v)) => var_name(&c.class, v, slsf2),
         (true, None) => "Alpha test threshold".to_string(),
     };
     egui::Sides::new().shrink_left().truncate().show(
@@ -258,7 +279,7 @@ fn row(
         return;
     }
     if let Some(v) = c.var {
-        variable(ui, e, act, c, at, &title, v, managed);
+        variable(ui, e, act, c, at, &title, v, managed, slsf2);
     }
     let cycle = (c.flags >> 1) & 3;
     ui.horizontal(|ui| {
@@ -772,6 +793,7 @@ fn add_row(
     prop: &PropModel,
     clip_shared: bool,
 ) {
+    let slsf2 = shape_slsf2(e, shape);
     let id = egui::Id::new(("meshes-edit-ctrl-add", prop.block));
     let (mut class_idx, mut var): (usize, u32) = ui.data(|d| d.get_temp(id)).unwrap_or((0, 20));
     if owner == Owner::Shader {
@@ -805,14 +827,18 @@ fn add_row(
                 0 => (LSCF, &FLOAT_VARS),
                 _ => (LSCC, &COLOR_VARS),
             };
-            let shown = format!("{} ({var})", var_name(class, var));
+            let shown = format!("{} ({var})", var_name(class, var, slsf2));
             let r = egui::ComboBox::from_id_salt(id.with("var"))
                 .width(fit_width(ui, 180.0))
                 .truncate()
                 .selected_text(&shown)
                 .show_ui(ui, |ui| {
                     for &o in offered {
-                        ui.selectable_value(&mut var, o, format!("{} ({o})", var_name(class, o)));
+                        ui.selectable_value(
+                            &mut var,
+                            o,
+                            format!("{} ({o})", var_name(class, o, slsf2)),
+                        );
                     }
                 })
                 .response;
@@ -968,6 +994,7 @@ fn variable(
     title: &str,
     v: u32,
     managed: bool,
+    slsf2: u32,
 ) {
     ui.horizontal(|ui| {
         row_label(ui, "Variable");
@@ -977,7 +1004,7 @@ fn variable(
             &FLOAT_VARS
         };
         let mut pick = v;
-        let shown = var_name(&c.class, v);
+        let shown = var_name(&c.class, v, slsf2);
         // Phase A ruling R8 lifted (v2 B7): a managed controller's clips follow the new variable.
         let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-var", c.block))
             .width(fit_width(ui, 180.0))
@@ -987,7 +1014,11 @@ fn variable(
                 // A value outside the list stays selectable, so the current one is never lost.
                 let extra = (!offered.contains(&v)).then_some(v);
                 for &o in extra.iter().chain(offered) {
-                    ui.selectable_value(&mut pick, o, format!("{} ({o})", var_name(&c.class, o)));
+                    ui.selectable_value(
+                        &mut pick,
+                        o,
+                        format!("{} ({o})", var_name(&c.class, o, slsf2)),
+                    );
                 }
             })
             .response;
