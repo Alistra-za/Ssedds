@@ -174,7 +174,7 @@ pub fn compact(b: &[u8], source_blocks: u32) -> Result<Vec<u8>, String> {
             todo.push(r);
         }
     }
-    for k in todo.iter().copied().filter(|&k| k < src) {
+    for &k in &todo {
         keep[k] = true;
     }
     while let Some(i) = todo.pop() {

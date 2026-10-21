@@ -296,6 +296,18 @@ fn hostile_input_never_panics_and_refuses() {
     assert!(compact(&g, 4).is_err());
     // a source count past the file
     assert!(compact(&out, 28).is_err());
+    // a footer root is a ref: an appended block it names stays, renumbered
+    let mut g = out.clone();
+    let at = h.footer_at + 4;
+    g[at..at + 4].copy_from_slice(&5i32.to_le_bytes()); // the first, orphaned controller's NiFloatInterpolator
+    let c = compact(&g, 4).unwrap();
+    let hc = Header::parse(&c).unwrap();
+    let root = hc.roots(&c).unwrap()[0];
+    assert_eq!(root, 5); // after its data (4), which it names
+    assert_eq!(
+        (hc.kind(4), hc.kind(5)),
+        (&b"NiFloatData"[..], &b"NiFloatInterpolator"[..])
+    );
     // every single-byte garble of the appended blocks: no panic, either result
     for at in h.offsets[4]..h.footer_at {
         for v in [0x00, 0x7F, 0xFF] {
@@ -323,7 +335,8 @@ fn owner_eye_mesh() {
     };
     let c = compact(&b, 9).unwrap();
     println!("{} -> {} blocks", nblocks(&b), nblocks(&c));
-    assert!(nblocks(&c) < nblocks(&b));
+    assert_eq!(nblocks(&c), 19);
+    assert_eq!(summary(&c), summary(&b));
     assert_eq!(compact(&c, 9).unwrap(), c);
     assert!(read_model(&c).unwrap().problems.is_empty());
 }
