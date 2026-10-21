@@ -395,6 +395,7 @@ pub fn plan_derived(
                 LegacyN => normal.unwrap_or(anchor).clone(),
                 CmM | EnvM => virtual_input_as(anchor, "m"),
             };
+            let own = input.output.clone();
             input.output = vanilla_rel(&input.output, &input.game_path);
             input.game_path = vanilla_game_path(&input.game_path);
             input.path = job.sources[0].path.clone();
@@ -417,7 +418,14 @@ pub fn plan_derived(
                     ),
                 )
                 .with_data(json!({ "output": slash(&input.output), "other": slash(other) }));
-                jobs.push(recipe_error_job(ctx, &input, &key, st, kind.id(), w));
+                // Final review TA12: keyed by the member's own (unfolded) output, so the kept job's row gets no
+                // `file_failed`. shortcut: an unfolded set's conflict (two inputs, one output) still shares the
+                // key; upgrade if one is reported.
+                let refused = InputFile {
+                    output: own,
+                    ..input.clone()
+                };
+                jobs.push(recipe_error_job(ctx, &refused, &key, st, kind.id(), w));
                 continue;
             }
             taken.insert(fold(&input.output), input.path.clone());

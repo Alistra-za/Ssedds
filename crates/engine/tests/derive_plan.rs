@@ -417,13 +417,14 @@ fn a_derived_output_on_another_jobs_path_is_a_derive_path_conflict() {
     let on_path: Vec<&ResolvedJob> = p
         .jobs
         .iter()
-        .filter(|j| slash(&j.output).ends_with("textures/a.dds"))
+        .filter(|j| slash(&j.output).ends_with("/textures/a.dds"))
         .collect();
-    assert_eq!(on_path.len(), 2, "{on_path:#?}");
-    let kept = on_path.iter().find(|j| j.derive.is_none()).unwrap();
+    assert_eq!(on_path.len(), 1, "{on_path:#?}");
+    let kept = on_path[0];
     assert_eq!(kept.input, plain);
     assert!(matches!(kept.status, JobStatus::Ready));
-    let refused = on_path.iter().find(|j| j.input != plain).unwrap();
+    // TA12 (final review): the refused job is keyed by its member's own output, apart from the plain job.
+    let refused = out_job(&p, "textures/pbr/a.dds").expect("the refused job, keyed apart");
     assert_eq!(
         refused.status,
         JobStatus::Error {
@@ -865,6 +866,16 @@ fn one_terminal_event_each(mode: DeriveMode) {
     png(&dir.join("big.png"), 32, 32, [200, 200, 200, 255]);
     png(&dir.join("big_n.png"), 32, 32, [128, 128, 255, 255]);
     png(&dir.join("big_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    // TA12: `pip`'s Vanilla diffuse lands on the plain `textures/arm/pip.png`'s output (DERIVE-PATH-CONFLICT).
+    png(&dir.join("pip.png"), 16, 16, [90, 90, 90, 255]);
+    png(&dir.join("pip_n.png"), 16, 16, [128, 128, 255, 255]);
+    png(&dir.join("pip_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    png(
+        &inputs.join("textures/arm/pip.png"),
+        16,
+        16,
+        [50, 60, 70, 255],
+    );
     png(&dir.join("crate.png"), 16, 16, [90, 90, 90, 255]);
     png(&dir.join("crate_n.png"), 16, 16, [128, 128, 255, 255]);
     fake_dds(&dir.join("crate_rmaos.dds"));
