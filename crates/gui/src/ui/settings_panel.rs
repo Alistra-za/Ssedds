@@ -4,7 +4,8 @@ use super::columns::{AMBER, RED};
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
     field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
-    provenance_text, FieldView, NOT_VALID, PARALLAX_HOVER,
+    provenance_text, weighting_option_lock, FieldView, NOT_VALID, PARALLAX_HOVER, WEIGHTING,
+    WEIGHTING_OPTIONS,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -363,6 +364,51 @@ fn threshold(
     (out.map(|v| json!(v)), r)
 }
 
+/// The BC7 weighting dropdown (DECISIONS Note CP): every option with one line of hover text; Perceptual disabled with
+/// its reason where the old Perceptual row was locked.
+fn weighting_combo(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    target: Target,
+    job: &ResolvedJob,
+    f: &FieldView,
+    mixed: bool,
+) -> (Option<Value>, egui::Response) {
+    let current = f.value.as_str().unwrap_or("linear");
+    let shown = if mixed {
+        "— mixed"
+    } else {
+        WEIGHTING_OPTIONS
+            .iter()
+            .find(|o| o.0 == current)
+            .map_or(current, |o| o.1)
+    };
+    let mut picked = None;
+    let r = egui::ComboBox::from_id_salt(id)
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            for (v, label, hover) in WEIGHTING_OPTIONS {
+                let lock = weighting_option_lock(target, &job.profile, v);
+                let r = ui.add_enabled(
+                    lock.is_none(),
+                    egui::Button::selectable(!mixed && v == current, label),
+                );
+                match lock {
+                    Some(why) => {
+                        r.on_disabled_hover_text(format!("{hover} Not here: {why}."));
+                    }
+                    None => {
+                        if r.on_hover_text(hover).clicked() && (mixed || v != current) {
+                            picked = Some(json!(v));
+                        }
+                    }
+                }
+            }
+        })
+        .response;
+    (picked, r)
+}
+
 pub(super) fn editor(
     ui: &mut egui::Ui,
     key: &str,
@@ -387,10 +433,8 @@ pub(super) fn editor(
                 .on_hover_text(PARALLAX_HOVER);
             (r.changed().then(|| json!(b)), r)
         }
-        "alpha.exact_opaque"
-        | "encoder.perceptual"
-        | "encoder.bc1_transparent_black"
-        | "drop_top_mip" => {
+        WEIGHTING => weighting_combo(ui, egui::Id::new((key, f.field)), target, job, f, mixed),
+        "alpha.exact_opaque" | "encoder.bc1_transparent_black" | "drop_top_mip" => {
             let mut b = f.value.as_bool().unwrap_or(false);
             let r = ui.add(egui::Checkbox::new(&mut b, "").indeterminate(mixed));
             (r.changed().then(|| json!(b)), r)

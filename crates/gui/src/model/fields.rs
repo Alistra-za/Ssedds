@@ -20,12 +20,64 @@ pub const FIELDS: [(&str, &str); 15] = [
     ("format", "Format"),
     ("encoder.effort", "Effort"),
     ("encoder.backend", "Encoder"),
-    ("encoder.perceptual", "Perceptual"),
+    (WEIGHTING, "BC7 weighting"),
 ];
+
+/// The BC7 weighting row (DECISIONS Note CP): one dropdown over `encoder.perceptual` and `encoder.bc7_weights`.
+pub const WEIGHTING: &str = "encoder.bc7_weights";
+
+/// The BC7 weighting row's options: the row's value, its label, its hover text.
+pub const WEIGHTING_OPTIONS: [(&str, &str, &str); 6] = [
+    ("linear", "Linear", "Linear: every channel counts the same (the default)."),
+    (
+        "perceptual",
+        "Perceptual",
+        "Perceptual: bc7e's own weights, colour error as the eye sees it; colour maps without data alpha only.",
+    ),
+    (
+        "alpha2",
+        "Alpha ×2",
+        "Alpha ×2: a light lean towards alpha accuracy, for little colour cost.",
+    ),
+    (
+        "alpha8",
+        "Alpha ×8",
+        "Alpha ×8: favours alpha accuracy over colour; an alternative to BC3 for delicate alpha. Costs about 1 dB of RGB per 3 dB of alpha.",
+    ),
+    (
+        "alpha16",
+        "Alpha ×16",
+        "Alpha ×16: the strongest alpha priority; best for a _n with specular in alpha.",
+    ),
+    (
+        "rmaos",
+        "RMAOS (R4 G1 B2 A1)",
+        "RMAOS: roughness (R) first, then AO (B), for PBR RMAOS maps. Still being measured.",
+    ),
+];
+
+/// Why the BC7 weighting option `v` cannot be picked for `p`: Perceptual keeps the old Perceptual row's lock.
+pub fn weighting_option_lock(target: Target, p: &Profile, v: &str) -> Option<&'static str> {
+    (v == "perceptual")
+        .then(|| field_lock(target, p, "encoder.perceptual"))
+        .flatten()
+}
+
+/// The BC7 weighting row's value for `p`: perceptual wins (bc7e then uses its own weights), else the weights, else
+/// `"linear"`.
+pub fn weighting_value(p: &Profile) -> Value {
+    if p.encoder.perceptual {
+        return Value::from("perceptual");
+    }
+    p.encoder
+        .bc7_weights
+        .and_then(|w| serde_json::to_value(w).ok())
+        .unwrap_or_else(|| Value::from("linear"))
+}
 
 /// The rarely changed fields the Advanced drawer edits (M3a spec §2.5).
 pub const ADVANCED_FIELDS: [(&str, &str); 7] = [
-    ("encoder.perceptual", "Perceptual"),
+    (WEIGHTING, "BC7 weighting"),
     ("encoder.bc1_transparent_black", "BC1 transparent black"),
     ("encoder.bc45_search_radius", "BC4/BC5 search radius"),
     ("encoder.rgbcx_level", "rgbcx level"),
@@ -132,6 +184,11 @@ pub fn hidden_reason(p: &Profile, field: &str) -> Option<&'static str> {
         "mips.coverage" if !is_cutout(p) => Some("used only by cutout and cutout + blend"),
         "encoder.backend" if !p.format.is_block() => {
             Some("no encoder runs for uncompressed formats")
+        }
+        // Note CP: the weights reach bc7e only; the engine warns ENC-WEIGHTS-IGNORED anywhere else.
+        WEIGHTING if p.format != Format::Bc7 => Some("BC7 only"),
+        WEIGHTING if p.encoder.backend != Backend::Bc7e => {
+            Some("used only by the built-in BC7 encoder")
         }
         "alpha.parallax" if p.subtype != Subtype::ComplexMaterial => {
             Some("complex material _m only")
@@ -300,6 +357,9 @@ pub(crate) fn views_of(
     fields
         .iter()
         .map(|&(field, label)| {
+            if field == WEIGHTING {
+                return weighting_view(target, job, label);
+            }
             let value = profile
                 .pointer(&format!("/{}", field.replace('.', "/")))
                 .cloned()
@@ -332,6 +392,28 @@ pub(crate) fn views_of(
             }
         })
         .collect()
+}
+
+/// The BC7 weighting row's view: its value and provenance come from whichever of its two fields decides it, and
+/// either one set in the texture's own entry marks it edited (Note CP).
+fn weighting_view(target: Target, job: &ResolvedJob, label: &'static str) -> FieldView {
+    let prov = |f: &str| job.provenance.get(f).map(ToString::to_string);
+    let e = &job.profile.encoder;
+    let decided_by = if !e.perceptual && e.bc7_weights.is_some() {
+        WEIGHTING
+    } else {
+        "encoder.perceptual"
+    };
+    FieldView {
+        field: WEIGHTING,
+        label,
+        value: weighting_value(&job.profile),
+        provenance: prov(decided_by).unwrap_or_else(|| "builtin".into()),
+        edited: [WEIGHTING, "encoder.perceptual"]
+            .iter()
+            .any(|f| prov(f).as_deref() == Some("project_file")),
+        lock: field_lock(target, &job.profile, WEIGHTING),
+    }
 }
 
 /// Provenance as a reader sees it.

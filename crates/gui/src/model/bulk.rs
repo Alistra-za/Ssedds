@@ -2,8 +2,8 @@
 //! commands. No egui types.
 use super::fields::encoding_options;
 use super::fields::{
-    all_fields, field_view, filter_option_lock, hidden_reason, views_of, FieldView, EDGE_FIELD,
-    FIELDS, FILTER_FIELD, LEVELS_FIELD,
+    all_fields, field_view, filter_option_lock, hidden_reason, views_of, weighting_option_lock,
+    FieldView, EDGE_FIELD, FIELDS, FILTER_FIELD, LEVELS_FIELD, WEIGHTING,
 };
 use super::sets::{
     engine_inputs, game_path_in, locked_items, member_game_path, slot_gives, slot_of, SlotCommand,
@@ -360,7 +360,11 @@ fn skip_of(
         // parsable sub-types and filters; an unparsable one is reported, not written.
         let bad = v.is_null()
             || (field == "subtype" && serde_json::from_value::<Subtype>(v.clone()).is_err())
-            || (field == "mips.filter" && serde_json::from_value::<MipFilter>(v.clone()).is_err());
+            || (field == "mips.filter" && serde_json::from_value::<MipFilter>(v.clone()).is_err())
+            || (field == WEIGHTING
+                && !super::fields::WEIGHTING_OPTIONS
+                    .iter()
+                    .any(|o| v.as_str() == Some(o.0)));
         if bad {
             return Some(INVALID.into());
         }
@@ -369,6 +373,14 @@ fn skip_of(
             .filter(|_| field == "mips.filter")
             .and_then(|f| filter_option_lock(&job.profile, f));
         if let Some(lock) = barred {
+            return Some(lock.into());
+        }
+        // Note CP: Perceptual keeps its old lock (colour without data alpha); the weightings fit any BC7 map.
+        let weighting = (field == WEIGHTING)
+            .then(|| v.as_str())
+            .flatten()
+            .and_then(|w| weighting_option_lock(target, &job.profile, w));
+        if let Some(lock) = weighting {
             return Some(lock.into());
         }
         // The Format row writes a (format, tag) pair: one this texture's sub-type does not allow is skipped.
@@ -387,6 +399,15 @@ fn skip_of(
         }
     }
     None
+}
+
+/// Texture `k`'s own value of the row `f`, as the row writes it: the BC7 weighting row reads `"perceptual"` from its
+/// other field (Note CP).
+fn own_value(p: &crate::project::ProjectDoc, k: &str, f: &str) -> Option<Value> {
+    if f == WEIGHTING && p.file_value(k, "encoder.perceptual") == Some(Value::Bool(true)) {
+        return Some(Value::from("perceptual"));
+    }
+    p.file_value(k, f)
 }
 
 /// The pair a format edit `v` writes, when it is one (the Format row's value); a bare format keeps `set_field`.
@@ -651,7 +672,7 @@ impl AppModel {
         // Owner ruling 2026-10-20 (Note CL26): a saved half size is not a tick here; the half-size question decides it.
         let fields: Vec<(String, bool)> = all_fields()
             .into_iter()
-            .filter(|(f, _)| *f != "drop_top_mip" && p.file_value(&from, f).is_some())
+            .filter(|(f, _)| *f != "drop_top_mip" && own_value(p, &from, f).is_some())
             .map(|(f, _)| (f.to_string(), true))
             .collect();
         let half = p.file_value(&from, "drop_top_mip").is_some();
@@ -721,7 +742,7 @@ impl AppModel {
             .iter()
             .filter(|f| !(pair && *f == "color.tag"))
             .filter_map(|f| {
-                let mut v = p.file_value(from, f)?;
+                let mut v = own_value(p, from, f)?;
                 if f == "format" {
                     let tag = p
                         .file_value(from, "color.tag")
@@ -1065,7 +1086,7 @@ impl AppModel {
             self.project.as_ref().is_some_and(|p| {
                 all_fields()
                     .iter()
-                    .any(|(f, _)| p.file_value(k, f).is_some())
+                    .any(|(f, _)| own_value(p, k, f).is_some())
             })
         });
         let copy_off = (n < 2)
