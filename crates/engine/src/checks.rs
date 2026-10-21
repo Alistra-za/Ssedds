@@ -3,6 +3,7 @@
 //! Check 3 (fake resolution) is measured on the export chain instead: [`detail_ratio`], [`low_detail_eligible`].
 use crate::analyse::{code8, AnalyseHints};
 use crate::config::{Category, MipKeyword, MipLevels, Profile, ResizeMode, Subtype};
+use crate::from_normal::texel_slope;
 use crate::image::Rgba32F;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -138,15 +139,6 @@ pub fn hints_for(suffix: Option<&str>, checks: bool) -> AnalyseHints {
     }
 }
 
-/// Image-space slopes `(p, q)` (y down) of an encoded normal: x and y decoded from R and G, z rebuilt (B is ignored,
-/// so BC5's zero blue reads the same) and clamped to at least 0.1.
-// shortcut: duplicates Track B's from_normal::slopes; merge when Track B lands
-fn slopes(px: [f32; 4]) -> (f64, f64) {
-    let (x, y) = (f64::from(px[0]) * 2.0 - 1.0, f64::from(px[1]) * 2.0 - 1.0);
-    let z = (1.0 - x * x - y * y).max(0.0).sqrt().max(0.1);
-    (-x / z, -y / z)
-}
-
 /// Mean squared curl `∂q/∂x − ∂p/∂y` (central differences over interior texels only, so a map that does not tile
 /// gets no seam term), as stored and with green flipped. Texels whose differences are not finite are skipped; 0 when
 /// none remain (also for images under 3x3).
@@ -157,7 +149,7 @@ pub fn curl(img: &Rgba32F) -> Curl {
         let row = |y: usize| -> Vec<(f64, f64)> {
             img.px[y * w..(y + 1) * w]
                 .iter()
-                .map(|&p| slopes(p))
+                .map(|&p| texel_slope(p))
                 .collect()
         };
         // Rolling rows y - 1, y, y + 1: each texel's slopes are decoded once.
