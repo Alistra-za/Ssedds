@@ -44,6 +44,30 @@ pub enum KeyData {
     Bool(KeyGroup<u8>),
 }
 
+/// An f32 field of an op in edit documents as its u32 bit pattern, like the key floats (F19, B-P41).
+#[cfg(feature = "serde")]
+pub(crate) mod f32_bits {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &f32, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(v.to_bits())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+        // A document saved before B-P41 holds the plain number (an integer is always bits: those wrote 1.0, not 1).
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Bits(u32),
+            Plain(f32),
+        }
+        Ok(match Wire::deserialize(d)? {
+            Wire::Bits(b) => f32::from_bits(b),
+            Wire::Plain(v) => v,
+        })
+    }
+}
+
 #[cfg(feature = "serde")]
 mod wire {
     //! KeyData in edit documents: every f32 as its u32 bit pattern (F19).

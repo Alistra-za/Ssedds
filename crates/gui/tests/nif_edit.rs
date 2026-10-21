@@ -233,6 +233,50 @@ fn history_merges_drags_caps_at_200_and_redoes() {
     assert_eq!(last, "5");
 }
 
+/// B-P41 (final review minor 6): AddController's frequency, start and stop are stored as bits, like key floats.
+#[test]
+fn add_controller_times_round_trip_as_bits() {
+    let op = Op::AddController {
+        at: Anchor {
+            block: 3,
+            kind: "BSLightingShaderProperty".into(),
+            shape: Some("S".into()),
+            role: Role::Shader,
+        },
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(9),
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![],
+        }),
+        flags: 0x48,
+        freq: f32::from_bits(0xFFC0_0001), // a NaN with a payload and the sign bit
+        start: -0.0,
+        stop: f32::INFINITY,
+    };
+    let mut d = doc();
+    d.ops = vec![DocOp {
+        op,
+        status: OpStatus::Applied,
+    }];
+    let back = EditDoc::from_text(&d.to_text()).unwrap();
+    let Op::AddController {
+        freq, start, stop, ..
+    } = &back.ops[0].op
+    else {
+        panic!("{:?}", back.ops)
+    };
+    assert_eq!(
+        [freq, start, stop].map(|f| f.to_bits()),
+        [0xFFC0_0001, 0x8000_0000, f32::INFINITY.to_bits()]
+    );
+    // A document saved before B-P41 holds plain numbers: it still opens.
+    let t = d.to_text();
+    assert!(t.contains("freq = 4290772993"), "{t}");
+    let old = EditDoc::from_text(&t.replace("freq = 4290772993", "freq = 1.5")).unwrap();
+    assert!(matches!(old.ops[0].op, Op::AddController { freq, .. } if freq == 1.5));
+}
+
 #[test]
 fn every_op_variant_round_trips() {
     use nif::edit::Owner;

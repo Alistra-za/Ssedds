@@ -114,8 +114,11 @@ pub enum Op {
         var: Option<u32>,
         keys: KeyData,
         flags: u16,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
         freq: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
         start: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
         stop: f32,
     },
     /// Unlinks the controller and clears its Active bit; its interpolator and data stay as orphans (spec §5.3).

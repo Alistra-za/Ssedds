@@ -186,11 +186,11 @@ fn controller_rules() {
             field: Field::Variable
         }
     );
-    // Known values are kept silently; 0 (refraction), 10 (Specular off here) and 20 (twice) have B-P39 warnings.
-    for v in [8, 9, 11, 12, 21, 22, 23] {
+    // Known values are kept silently; 0 (refraction), 9 and 10 (Specular off here, B-P39/B-P41) and 20 (twice) warn.
+    for v in [8, 11, 12, 21, 22, 23] {
         assert!(warnings(&put(chain.clone(), 1, Field::Variable, Value::U32(v))).is_empty());
     }
-    for v in [0, 10, 20] {
+    for v in [0, 9, 10, 20] {
         let w = warnings(&put(chain.clone(), 1, Field::Variable, Value::U32(v)));
         assert_eq!(w.len(), 1, "{w:#?}");
         assert_eq!(w[0].target, Target::Block { block: 1 });
@@ -601,6 +601,43 @@ fn non_finite_keys_block_export() {
     assert_eq!(key_errors_on(b, Some(1), lin(&[0.0, 1.0])), vec![]);
 }
 
+/// B-P41 (final review minor 6): AddController's frequency, start and stop are authored like its keys.
+#[test]
+fn add_controller_times_must_be_finite() {
+    use nif::edit::validate::validate_ops;
+    use nif::edit::{Anchor, Role};
+    let op = |freq: f32, start: f32, stop: f32| Op::AddController {
+        at: Anchor {
+            block: 1,
+            kind: "BSLightingShaderProperty".into(),
+            shape: None,
+            role: Role::Shader,
+        },
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![],
+        }),
+        flags: 0x48,
+        freq,
+        start,
+        stop,
+    };
+    assert_eq!(validate_ops(&[op(1.0, 0.0, 1.0)]), vec![]);
+    for (f, a, b) in [
+        (f32::NAN, 0.0, 1.0),
+        (1.0, f32::INFINITY, 1.0),
+        (1.0, 0.0, f32::NEG_INFINITY),
+    ] {
+        let w = validate_ops(&[op(f, a, b)]);
+        assert_eq!(w.len(), 1, "{w:#?}");
+        assert_eq!(w[0].text, "Controller times must be finite numbers");
+        assert_eq!(w[0].level, Level::Error);
+        assert_eq!(w[0].target, Target::Block { block: 1 });
+    }
+}
+
 // ---- B-P39: guards from the B9 in-game controller check ----
 
 const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
@@ -647,7 +684,8 @@ fn env_map_scale_on_pbr_is_an_error_that_is_always_new() {
 
 #[test]
 fn specular_controllers_without_the_specular_flag_warn() {
-    for (class, var) in [(LSCF, 10), (LSCC, 0)] {
+    // B-P41 (B9 I6-R10Z, CM22): glossiness does nothing there too.
+    for (class, var) in [(LSCF, 9), (LSCF, 10), (LSCC, 0)] {
         let b = chain_of(&[(class, var)]);
         let x = only(&warnings(&b), SPEC_OFF, Level::Warn);
         assert_eq!(x.target, Target::Block { block: 1 });
@@ -658,14 +696,14 @@ fn specular_controllers_without_the_specular_flag_warn() {
             Value::U32(0x8000_0000 | SLSF1_SPECULAR),
         );
         none(&warnings(&on), SPEC_OFF);
-        // PBR reads these as roughness scale and coat / subsurface colour.
+        // PBR reads these as specular level, roughness scale and coat / subsurface colour.
         none(
             &warnings(&put(b, 0, Field::Slsf2, Value::U32(1 | PBR))),
             SPEC_OFF,
         );
     }
-    // Glossiness and emissive colour are not in the rule.
-    none(&warnings(&chain_of(&[(LSCF, 9), (LSCC, 1)])), SPEC_OFF);
+    // Emissive colour is not in the rule.
+    none(&warnings(&chain_of(&[(LSCC, 1)])), SPEC_OFF);
 }
 
 #[test]
@@ -716,7 +754,7 @@ fn two_controllers_on_one_variable_warn_on_the_one_that_does_not_play() {
 #[test]
 fn specular_controllers_on_zero_strength_warn() {
     const ZERO: &str = "This controller has no effect: specular strength is 0 when the mesh loads.";
-    for (class, var) in [(LSCF, 10), (LSCC, 0)] {
+    for (class, var) in [(LSCF, 9), (LSCF, 10), (LSCC, 0)] {
         let on = put(
             chain_of(&[(class, var)]),
             0,
@@ -737,6 +775,4 @@ fn specular_controllers_on_zero_strength_warn() {
     let off = put(chain_of(&[(LSCF, 10)]), 0, Field::SpecularStrength, fl(0.0));
     only(&warnings(&off), SPEC_OFF, Level::Warn);
     none(&warnings(&off), ZERO);
-    let gloss = put(chain_of(&[(LSCF, 9)]), 0, Field::SpecularStrength, fl(0.0));
-    none(&warnings(&gloss), ZERO);
 }

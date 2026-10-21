@@ -221,10 +221,11 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             let tgt = Target::Block { block: c.block };
             match (c.class.as_str(), c.var) {
                 (LSCF, Some(8)) if pbr => push(Level::Error, tgt.clone(), ENV_SCALE_PBR, None),
-                (LSCF, Some(10)) | (LSCC, Some(0)) if !specular => {
+                // B-P41: glossiness (9) too, per B9 I6-R10Z (CM22).
+                (LSCF, Some(9 | 10)) | (LSCC, Some(0)) if !specular => {
                     push(Level::Warn, tgt.clone(), SPECULAR_OFF, None)
                 }
-                (LSCF, Some(10)) | (LSCC, Some(0)) if !pbr && p.specular_strength == 0.0 => {
+                (LSCF, Some(9 | 10)) | (LSCC, Some(0)) if !pbr && p.specular_strength == 0.0 => {
                     push(Level::Warn, tgt.clone(), SPECULAR_ZERO, None)
                 }
                 (LSCF, Some(0)) => push(Level::Warn, tgt.clone(), REFRACTION_NO_EFFECT, None),
@@ -390,6 +391,15 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
         // NaN slips past the ordering check below ([0, NaN, -1]) and inf times give inf/inf when sampled
         if !finite {
             err("Key values must be finite numbers");
+        }
+        // B-P41: the UI writes 1/0/1; a hand-edited document could carry anything.
+        if let Op::AddController {
+            freq, start, stop, ..
+        } = op
+        {
+            if ![freq, start, stop].iter().all(|v| v.is_finite()) {
+                err("Controller times must be finite numbers");
+            }
         }
         if t.windows(2).any(|k| k[1] < k[0]) {
             err("Key times must not decrease");
