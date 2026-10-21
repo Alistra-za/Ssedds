@@ -50,6 +50,9 @@ pub const ENV_SCALE_PBR: &str = "Env map scale crashes the game on PBR materials
 /// B9 I6-R10Z: the specular permutation is fixed at load.
 pub const SPECULAR_OFF: &str =
     "This controller has no effect: Specular is off when the mesh loads.";
+/// B9 I6-R10Z (B-P40): a static strength of 0 drops the specular permutation at load too.
+pub const SPECULAR_ZERO: &str =
+    "This controller has no effect: specular strength is 0 when the mesh loads.";
 /// B9 RTRB: the ref is unused without the test bit.
 pub const ALPHA_TEST_OFF: &str = "This controller has no effect: alpha test is off.";
 /// B9 R00 / I9-P00: the cbuffer follows but nothing shows on screen.
@@ -220,6 +223,9 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
                 (LSCF, Some(8)) if pbr => push(Level::Error, tgt.clone(), ENV_SCALE_PBR, None),
                 (LSCF, Some(10)) | (LSCC, Some(0)) if !specular => {
                     push(Level::Warn, tgt.clone(), SPECULAR_OFF, None)
+                }
+                (LSCF, Some(10)) | (LSCC, Some(0)) if !pbr && p.specular_strength == 0.0 => {
+                    push(Level::Warn, tgt.clone(), SPECULAR_ZERO, None)
                 }
                 (LSCF, Some(0)) => push(Level::Warn, tgt.clone(), REFRACTION_NO_EFFECT, None),
                 _ => {}

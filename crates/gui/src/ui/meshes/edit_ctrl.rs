@@ -989,11 +989,14 @@ fn variable(
                 // A value outside the list stays selectable, so the current one is never lost.
                 let extra = (!offered.contains(&v)).then_some(v);
                 for &o in extra.iter().chain(offered) {
-                    ui.selectable_value(
-                        &mut pick,
-                        o,
-                        format!("{} ({o})", var_label(&c.class, o, slsf2)),
-                    );
+                    let text = format!("{} ({o})", var_label(&c.class, o, slsf2));
+                    // B-P40: as in the Add picker. A current 8 stays shown (selected text) with its Error.
+                    if c.class == LSCF && o == 8 && slsf2 & SLSF2_TRUE_PBR != 0 {
+                        ui.add_enabled(false, egui::Button::selectable(pick == o, text))
+                            .on_disabled_hover_text(ENV_SCALE_PBR);
+                    } else {
+                        ui.selectable_value(&mut pick, o, text);
+                    }
                 }
             })
             .response;

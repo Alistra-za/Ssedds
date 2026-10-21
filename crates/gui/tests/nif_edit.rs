@@ -4798,3 +4798,40 @@ fn add_controller_offers_no_env_map_scale_on_pbr() {
     h.run_steps(30);
     h.get_by_label(ENV_PBR);
 }
+
+/// B-P40: the Variable combo of an existing controller offers no env map scale on PBR either.
+#[test]
+fn variable_combo_offers_no_env_map_scale_on_pbr() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable")
+        .click();
+    h.run_steps(3);
+    assert!(!h
+        .get_by_label("Env map scale (8)")
+        .accesskit_node()
+        .is_disabled());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable")
+        .click();
+    h.run_steps(3);
+    let env = h.get_by_label("Env map scale (8)");
+    assert!(env.accesskit_node().is_disabled());
+    env.hover();
+    h.run_steps(30);
+    h.get_by_label(ENV_PBR);
+    // A controller that already has var 8 still shows it, with its error.
+    let mut m = direct(ctrl_scene_vars(0x82, [8, 20]));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Env map scale variable");
+    h.get_by_label(ENV_PBR);
+}

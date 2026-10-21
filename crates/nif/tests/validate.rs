@@ -711,3 +711,32 @@ fn two_controllers_on_one_variable_warn_on_the_one_that_does_not_play() {
         Level::Warn,
     );
 }
+
+/// B-P40 (B9 I6-R10Z): the specular permutation is chosen at load, so a strength of 0 then stays non-specular.
+#[test]
+fn specular_controllers_on_zero_strength_warn() {
+    const ZERO: &str = "This controller has no effect: specular strength is 0 when the mesh loads.";
+    for (class, var) in [(LSCF, 10), (LSCC, 0)] {
+        let on = put(
+            chain_of(&[(class, var)]),
+            0,
+            Field::Slsf1,
+            Value::U32(0x8000_0000 | SLSF1_SPECULAR),
+        );
+        none(&warnings(&on), ZERO);
+        let zero = put(on, 0, Field::SpecularStrength, fl(0.0));
+        let x = only(&warnings(&zero), ZERO, Level::Warn);
+        assert_eq!(x.target, Target::Block { block: 1 });
+        none(&warnings(&zero), SPEC_OFF);
+        none(
+            &warnings(&put(zero, 0, Field::Slsf2, Value::U32(1 | PBR))),
+            ZERO,
+        );
+    }
+    // Flag off and strength 0: the flag warning alone.
+    let off = put(chain_of(&[(LSCF, 10)]), 0, Field::SpecularStrength, fl(0.0));
+    only(&warnings(&off), SPEC_OFF, Level::Warn);
+    none(&warnings(&off), ZERO);
+    let gloss = put(chain_of(&[(LSCF, 9)]), 0, Field::SpecularStrength, fl(0.0));
+    none(&warnings(&gloss), ZERO);
+}
