@@ -251,7 +251,8 @@ pub struct Sequence {
 }
 
 /// NiTextKeyExtraData `r` (name i32, count u32, then time f32 + value string index i32 per key, nif.xml 5180).
-fn text_keys(h: &Header, b: &[u8], r: i32) -> Vec<(f32, Option<Vec<u8>>)> {
+/// The copied strings draw on the sequence's `budget`, so one large string named by many keys cannot amplify.
+fn text_keys(h: &Header, b: &[u8], r: i32, budget: &mut usize) -> Vec<(f32, Option<Vec<u8>>)> {
     // shortcut: a malformed text-key block reads as none; the sequence itself still reads.
     let Ok(r) = usize::try_from(r) else {
         return vec![];
@@ -268,11 +269,18 @@ fn text_keys(h: &Header, b: &[u8], r: i32) -> Vec<(f32, Option<Vec<u8>>)> {
     if n.checked_mul(8).and_then(|x| x.checked_add(8)) != Some(t.len()) {
         return vec![];
     }
+    let s = |k: usize| h.string(u32_at(t, 12 + 8 * k) as i32);
+    // Check the total before cloning anything; past the budget the keys read as none.
+    let mut left = *budget;
+    for k in 0..n {
+        match left.checked_sub(s(k).map_or(0, <[u8]>::len)) {
+            Some(l) => left = l,
+            None => return vec![],
+        }
+    }
+    *budget = left;
     (0..n)
-        .map(|k| {
-            let s = h.string(u32_at(t, 12 + 8 * k) as i32);
-            (f32_at(t, 8 + 8 * k), s.map(<[u8]>::to_vec))
-        })
+        .map(|k| (f32_at(t, 8 + 8 * k), s(k).map(<[u8]>::to_vec)))
         .collect()
 }
 
@@ -349,7 +357,7 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         frequency: f32_at(d, tail + 12),
         start: f32_at(d, tail + 16),
         stop: f32_at(d, tail + 20),
-        text_keys: text_keys(h, b, u32_at(d, tail + 4) as i32),
+        text_keys: text_keys(h, b, u32_at(d, tail + 4) as i32, &mut budget),
     })
 }
 

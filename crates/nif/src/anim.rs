@@ -307,6 +307,16 @@ pub fn clips_of(m: &NifModel, b: &[u8], ctrl: u32) -> Vec<u32> {
         .collect()
 }
 
+/// The interpolator of the first CB of sequence `seq` that drives `ctrl` (B2's binding, as `bound_cbs`). Parses the
+/// header: call on a click, never per frame.
+pub fn clip_interp(m: &NifModel, b: &[u8], seq: u32, ctrl: u32) -> Option<i32> {
+    let h = Header::parse(b).ok()?;
+    let s = m.sequences.iter().find(|s| s.block == seq)?;
+    bound_cbs(m, &h, s, ctrl)
+        .first()
+        .map(|&k| s.blocks[k].interp)
+}
+
 /// Tracks for sequence block `seq` on `prop`: each controlled block binds by controller ref, else (ref -1 only)
 /// by node, property type, controller type and controller ID strings (spec §5.5). Timing comes from the sequence;
 /// the value and keys from the CB's own interpolator.
