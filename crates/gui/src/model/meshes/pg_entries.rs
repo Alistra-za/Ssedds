@@ -6,7 +6,7 @@ use nif::extra::ExtraValue;
 use nif::material::MaterialState;
 use nif::model::{NifModel, ShapeModel};
 use nif::path::TexPath;
-use pgpsim::{Badge, SimResult};
+use pgpsim::{Badge, MatchIndex, ShapeKeys, SimResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,6 +34,8 @@ const NOT_APPLIED: &str = " is not applied (";
 pub struct PgFile {
     pub file: String,
     pub entries: Vec<Value>,
+    /// `entries` by the names they can match (fix round 2, B-P38): a shape tests only its candidates.
+    pub index: MatchIndex,
 }
 
 /// Every loose `PBRNifPatcher\**\*.json` of Data, the enabled mods and overwrite (the VFS winning copy of each
@@ -93,11 +95,16 @@ pub fn pg_entries(inst: &Instance) -> Result<Vec<PgFile>, String> {
                 },
                 _ => return None,
             };
-            let entries = entries
+            let entries: Vec<Value> = entries
                 .iter()
                 .map(|e| pgpsim::prepare(e, &default))
                 .collect();
-            Some(PgFile { file, entries })
+            let index = MatchIndex::new(&entries);
+            Some(PgFile {
+                file,
+                entries,
+                index,
+            })
         })
         .collect())
 }
@@ -136,31 +143,46 @@ pub fn read_pg(target: Option<&ScanTarget>) -> Result<Vec<PgFile>, String> {
 
 /// The files with an entry that matches the shape (by its slots and the NIF path), as indices into `files`. Only
 /// these can patch it; the scan over every entry runs again only when the slots change (fix F1).
-pub fn candidates(files: &[PgFile], nif_path: &str, slots: &[TexPath]) -> Vec<usize> {
-    files
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| {
-            f.entries
-                .iter()
-                .any(|e| pgpsim::shape_matches(e, nif_path, slots))
-        })
-        .map(|(i, _)| i)
-        .collect()
+/// Each file's matching entries are listed (ascending), and only those reach `simulate_file`: it drops the others
+/// itself, so the result is the same. Fix round 2: each file's `MatchIndex` names the entries worth testing, so no
+/// file is scanned entry by entry. The second value is how many entries were tested.
+pub fn candidates(
+    files: &[PgFile],
+    nif_path: &str,
+    slots: &[TexPath],
+) -> (Vec<(usize, Vec<usize>)>, usize) {
+    let keys = ShapeKeys::of(slots);
+    let mut tested = 0;
+    let mut out = vec![];
+    for (i, f) in files.iter().enumerate() {
+        let c = f.index.candidates(&keys);
+        tested += c.len();
+        let hit: Vec<usize> = c
+            .into_iter()
+            .filter(|&j| pgpsim::shape_matches(&f.entries[j], nif_path, slots))
+            .collect();
+        if !hit.is_empty() {
+            out.push((i, hit));
+        }
+    }
+    (out, tested)
 }
 
 /// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order, the `candidates`) that
 /// patches it wins; a file that would skip it (a missing texture, a wrong-typed key) is rejected for this shape and
 /// the next may win. Returns the material and its lines.
 pub fn simulate_shape(
-    files: &[&PgFile],
+    files: &[PgFile],
+    cands: &[(usize, Vec<usize>)],
     nif_path: &str,
     source: &MaterialState,
     exists: &dyn Fn(&str) -> bool,
 ) -> (MaterialState, Vec<String>) {
     let mut skip = None;
-    for f in files {
-        match pgpsim::simulate_file(&f.entries, &Value::Null, nif_path, source, exists) {
+    for (i, hit) in cands {
+        let f = &files[*i];
+        let entries: Vec<Value> = hit.iter().map(|&j| f.entries[j].clone()).collect();
+        match pgpsim::simulate_file(&entries, &Value::Null, nif_path, source, exists) {
             SimResult::Patched {
                 material, badges, ..
             } => {

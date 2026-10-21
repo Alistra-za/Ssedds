@@ -111,6 +111,8 @@ pub struct NifEdit {
     sim_cache: BTreeMap<ShapeId, SimCache>,
     /// `simulate_shape` calls so far (the cache's misses).
     pub sim_runs: usize,
+    /// Entries `shape_matches` tested to find candidates (fix round 2: the index keeps this far below a full scan).
+    pub match_tests: usize,
     /// v2 B8: In game (simulated) is showing: each shape's simulated material and its lines. None on Edited source.
     /// `preview_nif` draws these materials, so `materials()` and every `before` follow the shown side.
     pub in_game: Option<Vec<(ShapeId, MaterialState, Vec<String>)>>,
@@ -125,7 +127,8 @@ pub struct NifEdit {
 /// for (parsed material, JSON generation, scan revision).
 #[derive(Default)]
 struct SimCache {
-    cands: Option<(Vec<nif::path::TexPath>, u64, Vec<usize>)>,
+    #[allow(clippy::type_complexity)]
+    cands: Option<(Vec<nif::path::TexPath>, u64, Vec<(usize, Vec<usize>)>)>,
     #[allow(clippy::type_complexity)]
     out: Option<(MaterialState, u64, u64, (MaterialState, Vec<String>))>,
 }
@@ -311,6 +314,7 @@ impl NifEdit {
             anim_last: vec![],
             sim_cache: BTreeMap::new(),
             sim_runs: 0,
+            match_tests: 0,
             in_game: None,
             unsaved: false,
             drag: None,
@@ -700,13 +704,13 @@ impl NifEdit {
                     let cands = match &c.cands {
                         Some((slots, g, v)) if *slots == s.material.slots && *g == gen => v.clone(),
                         _ => {
-                            let v = candidates(files, &nif_path, &s.material.slots);
+                            let (v, tested) = candidates(files, &nif_path, &s.material.slots);
+                            self.match_tests += tested;
                             c.cands = Some((s.material.slots.clone(), gen, v.clone()));
                             v
                         }
                     };
-                    let picked: Vec<&PgFile> = cands.iter().map(|&i| &files[i]).collect();
-                    let out = simulate_shape(&picked, &nif_path, &s.material, exists);
+                    let out = simulate_shape(files, &cands, &nif_path, &s.material, exists);
                     c.out = Some((s.material.clone(), gen, rev, out.clone()));
                     self.sim_runs += 1;
                     out

@@ -4543,17 +4543,77 @@ fn in_game_cost_on_the_owner_json() {
     mat.set_slot_raw(0, &format!("textures{md}.dds"));
     for (label, m) in [("no match", e.materials()[0].1.clone()), ("match", mat)] {
         let t = Instant::now();
-        let c = candidates(&files, r"meshes\x.nif", &m.slots);
+        let (c, tested) = candidates(&files, r"meshes\x.nif", &m.slots);
         let scan = t.elapsed();
-        let picked: Vec<&PgFile> = c.iter().map(|&i| &files[i]).collect();
         let t = Instant::now();
-        let (_, notes) = simulate_shape(&picked, r"meshes\x.nif", &m, &|_| true);
+        let (_, notes) = simulate_shape(&files, &c, r"meshes\x.nif", &m, &|_| true);
         println!(
-            "{label}: {} files, {entries} entries: pg_entries {read:?}; candidates {scan:?} ({} files); \
-             simulate {:?} ({notes:?})",
+            "{label}: {} files, {entries} entries: pg_entries {read:?}; candidates {scan:?} ({} files, {tested} \
+             entries tested); simulate {:?} ({notes:?})",
             files.len(),
             c.len(),
             t.elapsed()
         );
     }
+    // Fix round 2: on the owner's JSON the index gives the full scan's matches, for every match_diffuse there.
+    let t = Instant::now();
+    let mut shapes = 0;
+    for md in files
+        .iter()
+        .flat_map(|f| &f.entries)
+        .filter_map(|e| e.get("match_diffuse")?.as_str())
+    {
+        let mut m = e.materials()[0].1.clone();
+        m.set_slot_raw(0, &format!("textures{md}.dds"));
+        let scan: Vec<(usize, Vec<usize>)> = files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let hit = (0..f.entries.len())
+                    .filter(|&j| pgpsim::shape_matches(&f.entries[j], r"meshes\x.nif", &m.slots))
+                    .collect::<Vec<_>>();
+                (i, hit)
+            })
+            .filter(|(_, h)| !h.is_empty())
+            .collect();
+        assert_eq!(
+            candidates(&files, r"meshes\x.nif", &m.slots).0,
+            scan,
+            "{md}"
+        );
+        shapes += 1;
+    }
+    println!(
+        "index = full scan for {shapes} owner diffuse paths ({:?})",
+        t.elapsed()
+    );
+}
+
+/// Fix round 2 (B-P38): the first In game build of a 20-shape mesh against a 5000-entry JSON tests only each
+/// shape's indexed candidates, never every entry, on the UI thread.
+#[test]
+fn the_first_in_game_build_tests_only_indexed_entries() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&lit_shapes(20)));
+    let mut big: Vec<String> = (0..5000)
+        .map(|i| format!("{{\"match_diffuse\": \"set{i}\\\\tex{i}\"}}"))
+        .collect();
+    big.push("{\"match_diffuse\": \"white\", \"roughness_scale\": 0.2}".into());
+    let json = format!("[{}]", big.join(","));
+    put(
+        d.path(),
+        "mods/A/PBRNIFPatcher/big.json",
+        Some(json.as_bytes()),
+    );
+    let mut m = pg_session_in(d.path());
+    in_game(&mut m);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.sim_runs, 20);
+    // per shape: one candidate in each of big.json, x.json and Low's a.json (4 files read, bad.json dropped)
+    assert_eq!(e.match_tests, 20 * 3, "a full scan would test 20 x 5003");
+    let shape = e.model.shapes[0].block;
+    assert_eq!(
+        notes(&m, shape)[0],
+        r"In game: PGPatcher applies PBRNIFPatcher\big.json."
+    );
 }
