@@ -778,3 +778,49 @@ fn re_picking_the_auto_recipe_writes_nothing() {
     settle(&mut h);
     assert_eq!(texts(h.state()), before);
 }
+
+#[test]
+fn dragging_a_fill_box_and_releasing_stores_the_final_dragged_value() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = editor(fixture(d.path()));
+    h.run();
+    let start = fill_rows(h.state(), RMAOS)
+        .into_iter()
+        .find_map(|r| match r {
+            FillRow::Value {
+                role: RawMap::Ao,
+                shown,
+                ..
+            } => Some(shown),
+            _ => None,
+        })
+        .expect("an AO value row");
+    let label = h.get_by_label("AO").accesskit_node().raw_bounds().unwrap();
+    let r#box = h
+        .query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .find(|n| (n.accesskit_node().raw_bounds().unwrap().y0 - label.y0).abs() < 6.0)
+        .expect("the AO value box")
+        .rect();
+    // DragValue speed 1.0: one step per pixel. Drag 40 px left in 10 px moves, then release.
+    let p = r#box.center();
+    h.hover_at(p);
+    h.drag_at(p);
+    h.step();
+    for i in 1..=4 {
+        h.hover_at(p - eframe::egui::vec2(10.0 * i as f32, 0.0));
+        h.step();
+    }
+    h.drop_at(p - eframe::egui::vec2(40.0, 0.0));
+    settle(&mut h);
+    let want = start.saturating_sub(40);
+    assert_ne!(want, start, "the fixture's AO must be able to move down");
+    assert_eq!(
+        h.state()
+            .project
+            .as_ref()
+            .unwrap()
+            .file_value(RMAOS, "packing.fill.ao"),
+        Some(json!(want)),
+        "the released drag's final value is the fill"
+    );
+}
