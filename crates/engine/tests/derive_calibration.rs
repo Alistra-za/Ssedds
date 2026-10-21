@@ -246,6 +246,11 @@ fn recipe_defaults_against_same_author_archives() {
             .map(|pair| (pair.landscape, measure(pair, &p)))
             .collect();
         let skipped = rows.iter().filter(|(_, r)| r.is_err()).count();
+        for (pair, (_, r)) in ps.iter().zip(&rows) {
+            if let Err(e) = r {
+                println!("  skipped {}: {e}", pair.albedo.display());
+            }
+        }
         let ok: Vec<(bool, Row)> = rows
             .into_iter()
             .filter_map(|(l, r)| r.ok().map(|r| (l, r)))
