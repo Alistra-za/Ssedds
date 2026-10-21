@@ -432,18 +432,17 @@ fn idle_emissive(b: &[u8], prop: u32, t: f32) -> f32 {
         .emissive_multiple
 }
 
-/// C-P32 (IDLE-NM): with no clip playing, a managed controller holds the first key of its clip, not the property
-/// value and not the clip interpolator's own Value.
-#[test]
-fn a_managed_controller_with_no_playing_clip_holds_its_clips_first_key() {
-    use nif::edit::{anchor_role, apply, Op, Role, CONVERT_NAME};
+/// `animated(Some(1), 2)` with its shader chain converted into one clip `name` (LINEAR (0, 0) -> (1, 1) per
+/// controller), the clip data's first key of Emissive multiple (4) set to 3.0 (its interpolator's Value stays 0).
+fn converted(name: &str) -> Vec<u8> {
+    use nif::edit::{anchor_role, apply, Op, Role};
     let b = builder::scenes::animated(Some(1), 2);
     let at = anchor_role(&read_model(&b).unwrap(), Some(2), Role::Shader).unwrap();
     let r = apply(
         &b,
         &[Op::ConvertChainToClips {
             at,
-            name: CONVERT_NAME.into(),
+            name: name.into(),
         }],
     )
     .unwrap();
@@ -457,7 +456,14 @@ fn a_managed_controller_with_no_playing_clip_holds_its_clips_first_key() {
     let interp = &m.interps[&(cb.interp as u32)];
     assert_eq!(interp.value, [0.0]);
     // NiFloatData: count, key type, then key 0's time and value
-    let o = patch(&r.bytes, interp.data as u32, 12, &3.0f32.to_le_bytes());
+    patch(&r.bytes, interp.data as u32, 12, &3.0f32.to_le_bytes())
+}
+
+/// C-P32 (IDLE-NM): with no clip playing, a managed controller holds the first key of its clip, not the property
+/// value and not the clip interpolator's own Value.
+#[test]
+fn a_managed_controller_with_no_playing_clip_holds_its_clips_first_key() {
+    let o = converted("Glow");
     let base = base_of(&read_model(&o).unwrap(), 3)
         .params
         .emissive_multiple;
@@ -465,6 +471,45 @@ fn a_managed_controller_with_no_playing_clip_holds_its_clips_first_key() {
     for t in [0.0, 0.5, 1.0, 7.25] {
         assert_eq!(idle_emissive(&o, 3, t), 3.0, "t={t}");
     }
+}
+
+/// C-P34 (a), AUTO-SI: under Free chains a SpecialIdle clip (ASCII case-insensitive) plays with its own timing.
+#[test]
+fn a_special_idle_clip_plays_under_free_chains() {
+    for name in ["SpecialIdle", "specialIDLE"] {
+        let o = converted(name);
+        // keys (0, 3) -> (1, 1), Loop over 0..1
+        for (t, want) in [(0.0, 3.0), (0.5, 2.0), (1.25, 2.5)] {
+            assert_eq!(idle_emissive(&o, 3, t), want, "{name} t={t}");
+        }
+        let m = read_model(&o).unwrap();
+        let tr = free_tracks(&m, &o, 3);
+        assert!(tr.iter().all(|t| t.freq == 1.0 && t.stop == 1.0), "{tr:?}");
+    }
+}
+
+/// C-P34 (a): a controller bound by SpecialIdle and by another clip listed before it plays SpecialIdle.
+#[test]
+fn special_idle_wins_over_an_earlier_listed_clip() {
+    use nif::edit::{anchor_role, apply, Op, Role};
+    let b = patch(&managed_clip(), 10, 0, &0.25f32.to_le_bytes());
+    let b = patch(&b, 11, 0, &0.75f32.to_le_bytes());
+    let at = anchor_role(&read_model(&b).unwrap(), None, Role::Root).unwrap();
+    let r = apply(
+        &b,
+        &[Op::RenameSequence {
+            at,
+            name: "B".into(),
+            nth: 0,
+            new_name: "SpecialIdle".into(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(idle_emissive(&r.bytes, 6, 0.5), 0.75);
+    let m = read_model(&r.bytes).unwrap();
+    let tr = free_tracks(&m, &r.bytes, 6);
+    assert_eq!(tr.len(), 1);
+    assert_eq!((tr[0].freq, tr[0].start, tr[0].stop), (1.0, 0.0, 1.0));
 }
 
 /// C-P32: the first sequence in the manager's list that binds the controller gives the held value (an interpolator

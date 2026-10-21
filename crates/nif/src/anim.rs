@@ -204,8 +204,8 @@ fn chain_of(m: &NifModel, prop: u32) -> Option<(&[u32], &[u32], &'static [u8])> 
     Some((&a.prop.ctrls, &a.prop.users, b"NiAlphaProperty"))
 }
 
-/// Tracks of the controllers that run in the free preview: known, Active, not managed (G2, F13); a managed one holds
-/// its clip's first key instead (C-P32, `idle_track`). Parses the
+/// Tracks of the controllers that run in the free preview: known, Active, not managed (G2, F13); a managed one plays
+/// its SpecialIdle clip (C-P34) or else holds its clip's first key (C-P32, `idle_track`). Parses the
 /// header and reads key data on each call; call once per edit, never per frame (F23).
 pub fn free_tracks(m: &NifModel, b: &[u8], prop: u32) -> Vec<Track> {
     Header::parse(b).map_or(vec![], |h| free_tracks_in(m, &h, b, prop))
@@ -223,22 +223,37 @@ pub fn free_tracks_in(m: &NifModel, h: &Header, b: &[u8], prop: u32) -> Vec<Trac
         .flat_map(|g| g.sequences)
         .filter_map(|r| m.sequences.iter().find(|s| s.block as i32 == r))
         .collect();
+    // C-P34 (a), AUTO-SI: the game starts a SpecialIdle clip by itself, so it plays here as if selected.
+    let special: Vec<Track> = listed
+        .iter()
+        .filter(|s| {
+            s.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(crate::edit::CONVERT_NAME))
+        })
+        .flat_map(|s| clip_tracks_in(m, h, b, s.block, prop))
+        .collect();
     chain
         .iter()
-        .filter_map(|&id| {
-            let c = m.ctrls.get(&id)?;
-            if !c.known {
-                return None;
-            }
+        .flat_map(|&id| {
+            let Some(c) = m.ctrls.get(&id).filter(|c| c.known) else {
+                return vec![];
+            };
             if m.managed(id) {
-                return idle_track(m, h, b, &listed, c);
+                let si: Vec<Track> = special.iter().filter(|t| t.ctrl == id).cloned().collect();
+                if !si.is_empty() {
+                    return si;
+                }
+                return idle_track(m, h, b, &listed, c).into_iter().collect();
             }
             if c.flags & 0x08 == 0 {
-                return None;
+                return vec![];
             }
-            let target = target_of(c)?;
+            let Some(target) = target_of(c) else {
+                return vec![];
+            };
             let (value, keys) = interp_track(m, h, b, c.interp.unwrap_or(-1));
-            Some(Track {
+            vec![Track {
                 ctrl: id,
                 target,
                 flags: c.flags,
@@ -248,7 +263,7 @@ pub fn free_tracks_in(m: &NifModel, h: &Header, b: &[u8], prop: u32) -> Vec<Trac
                 stop: c.stop,
                 value,
                 keys,
-            })
+            }]
         })
         .collect()
 }

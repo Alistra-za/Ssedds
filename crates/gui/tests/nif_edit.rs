@@ -4412,49 +4412,86 @@ fn clip_preview_swaps_interpolators_only_while_selected() {
 
 // ---- v2 B7 fix round 1 (B-P36) ----
 
-/// The managed controller with_clip puts first in the lit shape's chain.
-/// C-P32 (IDLE-NM, the C5 in-game check): with no clip playing, a managed controller previews its clip's first key,
-/// not the property value; the clip itself still plays its keys.
-#[test]
-fn an_idle_clip_previews_its_first_key() {
-    let (_d, mut m, _cmds) = playing_session();
+const IDLE_FIRST: [f32; 3] = [0.9, 0.3, 0.1];
+const IDLE_LAST: [f32; 3] = [0.1, 0.2, 0.3];
+
+/// [`playing_session`] with an LSCC (key 1 `IDLE_FIRST`, key 2 `IDLE_LAST`, 0..1) added to the lit shape, then the
+/// shader chain (U offset and the LSCC) converted into one clip `name`. Returns the session, the shape and the
+/// sequence block.
+fn idle_session(name: &str) -> (tempfile::TempDir, MeshesModel, Receiver<V3Cmd>, u32, u32) {
+    let (d, mut m, cmds) = playing_session();
     let (shape, lsp) = lit_shape(m.edit.as_ref().unwrap());
-    let first = [0.9, 0.3, 0.1];
-    add_colour_ctrl(&mut m, shape, first, [0.1, 0.2, 0.3]);
+    add_colour_ctrl(&mut m, shape, IDLE_FIRST, IDLE_LAST);
     let e = m.edit.as_ref().unwrap();
     let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
     m.edit_push(
         vec![Op::ConvertChainToClips {
             at,
-            name: nif::edit::CONVERT_NAME.into(),
+            name: name.into(),
         }],
         None,
     );
     let e = m.edit.as_ref().unwrap();
     assert_eq!(e.outcomes.last(), Some(&nif::edit::Outcome::Applied));
     assert_eq!(e.playing, Playing::Free);
-    let base = e.model.lighting[&lsp].lighting.params.emissive_color;
-    assert_ne!(base, first);
+    assert_ne!(
+        e.model.lighting[&lsp].lighting.params.emissive_color,
+        IDLE_FIRST
+    );
     let seq = e.model.sequences[0].block;
-    let at = |m: &MeshesModel, t: f32| {
-        m.edit
-            .as_ref()
-            .unwrap()
-            .frame_materials(t)
-            .into_iter()
-            .find(|(id, _)| id.0 == shape)
-            .unwrap()
-            .1
-            .params
-            .emissive_color
-    };
-    for t in [0.0, 0.5, 1.0] {
-        assert_eq!(at(&m, t), first, "Free at {t}");
-    }
-    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
-    assert_eq!(at(&m, 1.0), [0.1, 0.2, 0.3], "the clip");
+    (d, m, cmds, shape, seq)
 }
 
+/// `shape`'s emissive colour in the preview at clock time `t`.
+fn emissive_at(m: &MeshesModel, shape: u32, t: f32) -> [f32; 3] {
+    m.edit
+        .as_ref()
+        .unwrap()
+        .frame_materials(t)
+        .into_iter()
+        .find(|(id, _)| id.0 == shape)
+        .unwrap()
+        .1
+        .params
+        .emissive_color
+}
+
+/// C-P32 (IDLE-NM, the C5 in-game check): with no clip playing, a managed controller previews its clip's first key,
+/// not the property value; the clip itself still plays its keys. C-P34 (b): with only held values the range has
+/// zero length, so there is no clock (no controls), and the held values still reach the viewport.
+#[test]
+fn an_idle_clip_previews_its_first_key() {
+    let (_d, mut m, cmds, shape, seq) = idle_session("Glow");
+    for t in [0.0, 0.5, 1.0] {
+        assert_eq!(emissive_at(&m, shape, t), IDLE_FIRST, "Free at {t}");
+    }
+    assert_eq!(m.edit.as_ref().unwrap().anim_range(), None, "held only");
+    cmds.try_iter().for_each(drop);
+    m.tick_anim(0.0);
+    assert!(m.v3.clock.is_none(), "no clock, no controls");
+    assert!(
+        cmds.try_iter().any(|c| matches!(c, V3Cmd::SetMaterial { material, .. } if material.params.emissive_color == IDLE_FIRST)),
+        "the held value is shown"
+    );
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    assert_eq!(emissive_at(&m, shape, 1.0), IDLE_LAST, "the clip");
+}
+
+/// C-P34 (a), AUTO-SI: under Free chains the SpecialIdle clip plays by itself, with its own timing, and the clock
+/// spans it.
+#[test]
+fn a_special_idle_clip_plays_under_free_chains() {
+    let (_d, mut m, _cmds, shape, _) = idle_session(nif::edit::CONVERT_NAME);
+    assert_eq!(emissive_at(&m, shape, 0.0), IDLE_FIRST);
+    assert_eq!(emissive_at(&m, shape, 1.0), IDLE_LAST);
+    let mid = emissive_at(&m, shape, 0.5);
+    assert!((mid[0] - 0.5).abs() < 1e-6, "{mid:?}");
+    assert_eq!(m.edit.as_ref().unwrap().anim_range(), Some((0.0, 1.0)));
+    m.tick_anim(0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 1.0));
+}
+
+/// The managed controller with_clip puts first in the lit shape's chain.
 fn clip_ctrl(e: &NifEdit) -> u32 {
     let (_, lsp) = lit_shape(e);
     e.model.lighting[&lsp].prop.ctrls[0]
