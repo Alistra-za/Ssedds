@@ -9,6 +9,7 @@ pub mod columns;
 pub mod cs_pbr;
 pub mod dialogs;
 pub mod drawer;
+pub mod from_normal;
 pub mod group;
 pub mod header;
 pub mod input_name;

@@ -1,5 +1,5 @@
 //! v2 Track B (Note CO): "Generate from normal map…". The offers and their disabled reasons, the set's normal, the
-//! offered sizes and the `[generated]` provenance records. The dialog and the jobs are Task 6.
+//! offered sizes, the `[generated]` provenance records, and the dialog's state, preview and Generate jobs (Task 6).
 use super::bulk::{MenuAction, MenuEntry};
 use super::checks::{self, HeightNeutral};
 use super::items::{ItemKind, TextureItem};
@@ -7,16 +7,25 @@ use super::sets::{SetView, SlotFill, SlotKind, SLOT_LOCKED};
 use super::shell::STAT_TTL;
 use super::AppModel;
 use crate::pgp::settings::Settings;
+use crate::worker::{or_send, spawn_guarded, WorkerMsg};
 use engine::codes::Code;
-use engine::config::RawMap;
+use engine::config::{GreenConvention, RawMap};
+use engine::dds::{may_replace, write_atomic, Kept};
 use engine::discover::InputKind;
-use engine::from_normal::{sizes, GenerateError, Neutral, Opts, HEIGHT_MAX, HEIGHT_MAX_RECIPE};
-use engine::group::{is_generated, real_rival, split_generated, split_suffix_with};
+use engine::from_normal::{
+    generate, png16, sizes, GenerateError, Generated, HeightOpts, Neutral, Opts, Tiling, AO_MAX,
+    COST_WARN_ABOVE, HEIGHT_MAX, HEIGHT_MAX_RECIPE,
+};
+use engine::group::{
+    is_generated, real_rival, split_generated, split_suffix_with, vocab_of, VocabRole,
+};
 use engine::policy::SourceStamp;
 use engine::shader::Shader;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -471,4 +480,577 @@ fn shader_of(v: &SetView) -> Shader {
     v.shader_choice
         .or(v.shader.as_ref().map(|p| p.shader))
         .unwrap_or(Shader::Default)
+}
+
+// ---- Task 6: the dialog state, the preview and the Generate job ----
+
+/// The Generate button's hover while nothing is ticked (spec-M2).
+pub const NOTHING_TICKED: &str = "tick a map to generate";
+/// The `_p` choice on a complex-material set (D5).
+pub const COMPLEX_USE_P: &str =
+    "complex material reads height from the _m alpha; a _p would be unused";
+/// Q11, D2: shown when the height is above `COST_WARN_ABOVE`.
+pub const SIZE_WARNING: &str = "Above 512 px, parallax costs more GPU time for little visible gain";
+/// The status line after Generate when `sdc-project.toml` held unsaved edits (P14).
+pub const PROVENANCE_DEFERRED: &str = "provenance recorded; written with the next Save";
+/// The preview's longer side at most (CO35).
+pub const PREVIEW_MAX: u32 = 512;
+
+/// The Generate dialog's state. It lives on `AppModel::gen`, not in `Dialog`, because `Dialog` is `Eq` and the
+/// sliders are floats.
+pub struct GenDialog {
+    pub set: String,
+    pub ticked: BTreeSet<GenMap>,
+    pub opts: Opts,
+    pub m_alpha: bool,
+    pub preview: Option<Arc<GenResult>>,
+    /// Per mille, written by the running job.
+    pub progress: Arc<AtomicU32>,
+    pub cancel: Arc<AtomicBool>,
+    /// The job in flight: its id and whether it is a preview.
+    pub running: Option<(u64, bool)>,
+    pub error: Option<String>,
+    /// Set by the UI each frame from the sliders' `Response::dragged()`: no preview starts mid-drag.
+    pub dragging: bool,
+    /// Preview jobs started (tests).
+    pub started: u32,
+    next_id: u64,
+    /// The opts of the last preview started.
+    previewed: Option<Opts>,
+}
+
+/// What a job made: the maps, and for Generate the files it wrote with their sha256.
+pub struct GenResult {
+    pub maps: Generated,
+    pub written: Vec<(GenMap, PathBuf, String)>,
+}
+
+/// A written file's item key: the normal's key with its file name swapped (they share a folder).
+fn sibling_key(normal: &str, name: &str) -> String {
+    match normal.rsplit_once('/') {
+        Some((dir, _)) => format!("{dir}/{name}"),
+        None => name.to_string(),
+    }
+}
+
+fn sha256(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(b))
+}
+
+/// `(w, h)` scaled so its longer side is `long`.
+fn scaled((w, h): (u32, u32), long: u32) -> (u32, u32) {
+    let big = w.max(h).max(1);
+    let s = |v: u32| ((u64::from(v) * u64::from(long)) / u64::from(big)).max(1) as u32;
+    (s(w), s(h))
+}
+
+fn cap_of(map: GenMap) -> u32 {
+    match map {
+        GenMap::Height => HEIGHT_MAX_RECIPE,
+        GenMap::Ao | GenMap::Curvature => AO_MAX,
+    }
+}
+
+/// Steps 3-5 of Generate (spec-S9): stop if cancelled (the last point where Cancel writes nothing); check every
+/// target with the shared may-replace helper before writing any; write each with `write_atomic`, removing this
+/// call's earlier files if one fails. `targets` are (path, bytes, the recorded sha256 when the file is ours).
+/// Returns each target's sha256. Public as the test seam for the Cancel window.
+pub fn write_all(
+    targets: &[(PathBuf, Vec<u8>, Option<String>)],
+    cancel: &AtomicBool,
+) -> Result<Vec<String>, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    for (path, bytes, own) in targets {
+        may_replace(path, bytes, |old| own.as_deref() == Some(sha256(old).as_str())).map_err(
+            |k| match k {
+                Kept::Foreign if own.is_some() => format!(
+                    "{} was edited since it was generated, so it is not overwritten; delete or rename it first",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                Kept::Foreign => format!("{} already exists; nothing was written", path.display()),
+                k => k.note(path),
+            },
+        )?;
+    }
+    // shortcut: a file created between the check above and the rename is replaced; upgrade with a hard-link
+    // publish if that is ever seen.
+    for (i, (path, bytes, _)) in targets.iter().enumerate() {
+        if let Err(e) = write_atomic(path, bytes) {
+            for (p, _, _) in &targets[..i] {
+                let _ = std::fs::remove_file(p);
+            }
+            return Err(format!("{}: {e}", path.display()));
+        }
+    }
+    Ok(targets.iter().map(|t| sha256(&t.1)).collect())
+}
+
+/// One job: decode the normal, generate, and for Generate encode and write the ticked maps.
+fn run_job(
+    normal: &Path,
+    opts: &Opts,
+    targets: Option<Vec<(GenMap, PathBuf, Option<String>)>>,
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+) -> Result<GenResult, String> {
+    let (img, _) = engine::load::load_image(normal).map_err(|e| e.to_string())?;
+    let maps = generate(&img, opts, progress, cancel).map_err(|e| e.to_string())?;
+    let Some(targets) = targets else {
+        return Ok(GenResult {
+            maps,
+            written: vec![],
+        });
+    };
+    let mut files = vec![];
+    for (map, path, own) in &targets {
+        let g = match map {
+            GenMap::Height => maps.height.as_ref(),
+            GenMap::Ao => maps.ao.as_ref(),
+            GenMap::Curvature => maps.curvature.as_ref(),
+        };
+        let bytes = g.map(png16).unwrap_or_default();
+        if bytes.is_empty() {
+            return Err(format!("no {map:?} map was made; nothing was written"));
+        }
+        files.push((path.clone(), bytes, own.clone()));
+    }
+    let shas = write_all(&files, cancel)?;
+    let written = targets
+        .into_iter()
+        .zip(shas)
+        .map(|((map, path, _), sha)| (map, path, sha))
+        .collect();
+    Ok(GenResult { maps, written })
+}
+
+impl AppModel {
+    /// Open the Generate dialog for `set`, with `pre` ticked. Regenerate (a recorded generated `pre` map) starts from
+    /// its stored opts, with the neutral the set wants now and a size the normal still offers (spec-S3).
+    pub fn open_gen(&mut self, set: &str, pre: Option<GenMap>) {
+        if self
+            .gen
+            .as_ref()
+            .is_some_and(|g| matches!(g.running, Some((_, false))))
+        {
+            // A cancelled Generate is still landing: its files get their provenance first.
+            self.status_line = "Generate is still finishing; try again in a moment".into();
+            return;
+        }
+        let Some(v) = self.view_of(set) else {
+            return;
+        };
+        let aliases = self.plan_aliases();
+        let normal = self.normal_of(&v, &aliases);
+        let dims = normal.as_deref().and_then(|n| self.normal_size(n));
+        let shader = shader_of(&v);
+        let resolved = crate::model::auto_flags::resolved(v.pbr, &v.slots, &v.settings);
+        let neutral = height_neutral(Some(shader), &resolved);
+        let size_rule = self.gen_size_of_opt(&v, pre.unwrap_or(GenMap::Height), dims, &aliases);
+        let stored = pre.and_then(|map| {
+            self.generated_items(set).into_iter().find_map(|(k, p)| {
+                (gen_role(&stem(&k)).and_then(|r| map_of(&r)) == Some(map)).then_some(p)?
+            })
+        });
+        let (opts, m_alpha) = match stored {
+            Some(p) => {
+                let mut o = p.opts;
+                if let (Some(h), Some(n)) = (o.height.as_mut(), neutral) {
+                    h.neutral = n;
+                }
+                o.size = match size_rule {
+                    Some(GenSize::Locked(s)) => s,
+                    Some(GenSize::Free { sizes, .. }) => sizes
+                        .iter()
+                        .copied()
+                        .filter(|&s| s <= o.size)
+                        .max()
+                        .or(sizes.first().copied())
+                        .unwrap_or(o.size),
+                    None => o.size,
+                };
+                (o, p.m_alpha)
+            }
+            None => {
+                let only_ao = pre == Some(GenMap::Ao);
+                let size = match size_rule {
+                    Some(GenSize::Locked(s)) | Some(GenSize::Free { default: s, .. }) => s,
+                    None => dims
+                        .map(|d| {
+                            *sizes(d, if only_ao { AO_MAX } else { HEIGHT_MAX })
+                                .last()
+                                .unwrap_or(&d.0)
+                        })
+                        .unwrap_or(0),
+                };
+                let opts = Opts {
+                    size,
+                    tiling: Tiling::Auto,
+                    relief: 0.3,
+                    green: normal.as_deref().and_then(|n| self.normal_green(n)),
+                    height: Some(HeightOpts {
+                        strength: 1.0,
+                        neutral: neutral.unwrap_or(Neutral::Half),
+                    }),
+                    ao: None,
+                    curvature: false,
+                };
+                (opts, shader == Shader::ComplexMaterial)
+            }
+        };
+        self.gen = Some(GenDialog {
+            set: set.to_string(),
+            ticked: pre.into_iter().collect(),
+            opts,
+            m_alpha,
+            preview: None,
+            progress: Arc::default(),
+            cancel: Arc::default(),
+            running: None,
+            error: None,
+            dragging: false,
+            started: 0,
+            // Ids never repeat across dialogs, so a closed dialog's late preview is dropped (stale id).
+            next_id: self.gen_ids,
+            previewed: None,
+        });
+        self.dialog = Some(crate::model::Dialog::GenerateFromNormal(set.to_string()));
+    }
+
+    /// `gen_size_of` with the normal's size possibly unknown.
+    fn gen_size_of_opt(
+        &self,
+        v: &SetView,
+        map: GenMap,
+        dims: Option<(u32, u32)>,
+        aliases: &BTreeMap<String, String>,
+    ) -> Option<GenSize> {
+        self.gen_size_of(v, map, dims?, aliases).ok()
+    }
+
+    /// The green convention to solve with: an image normal's from its settings (`None` when it states none), a DDS
+    /// normal's from its name (`_normalgl`, `_normaldx`; Note AW), else `None` (auto).
+    fn normal_green(&self, normal: &str) -> Option<GreenConvention> {
+        let i = self.item(normal)?;
+        match &i.job {
+            Some(j) if j.warnings.iter().any(|w| w.code == Code::InGreenUnstated) => None,
+            Some(j) if j.profile.channels.flip_green => Some(GreenConvention::Opengl),
+            Some(_) => Some(GreenConvention::Directx),
+            None => match vocab_of(&stem(&i.key))?.role {
+                VocabRole::Normal(c) => c,
+                _ => None,
+            },
+        }
+    }
+
+    /// The dialog's normal: (item key, path).
+    fn gen_normal(&self) -> Option<(String, PathBuf)> {
+        let g = self.gen.as_ref()?;
+        let key = self.set_normal(&g.set)?;
+        let path = self.item(&key)?.input.clone();
+        Some((key, path))
+    }
+
+    /// The ticked maps' output paths next to the normal, with their dimensions (D4).
+    pub fn gen_paths(&self) -> Vec<(GenMap, PathBuf, (u32, u32))> {
+        let (Some(g), Some((key, path))) = (self.gen.as_ref(), self.gen_normal()) else {
+            return vec![];
+        };
+        let Some(dims) = self.normal_size(&key) else {
+            return vec![];
+        };
+        let base = split_suffix_with(&stem(&key), &self.plan_aliases()).base;
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        g.ticked
+            .iter()
+            .map(|&map| {
+                let long = g.opts.size.min(cap_of(map)).min(dims.0.max(dims.1));
+                (
+                    map,
+                    dir.join(output_name(&base, map, g.m_alpha)),
+                    scaled(dims, long),
+                )
+            })
+            .collect()
+    }
+
+    /// The parallax cost warning while Height is ticked above `COST_WARN_ABOVE` (Q11, D2).
+    pub fn gen_size_warning(&self) -> Option<&'static str> {
+        let g = self.gen.as_ref()?;
+        (g.ticked.contains(&GenMap::Height) && g.opts.size > COST_WARN_ABOVE)
+            .then_some(SIZE_WARNING)
+    }
+
+    /// The read-only normal-format line (07 B3).
+    pub fn gen_format_line(&self) -> String {
+        let name = |c: GreenConvention| match c {
+            GreenConvention::Opengl => "OpenGL",
+            GreenConvention::Directx => "DirectX",
+        };
+        let Some(g) = self.gen.as_ref() else {
+            return String::new();
+        };
+        if let Some(c) = g.opts.green {
+            let has_job = self
+                .gen_normal()
+                .and_then(|(k, _)| self.item(&k).map(|i| i.job.is_some()))
+                .unwrap_or(false);
+            let from = if has_job {
+                "from the normal's settings"
+            } else {
+                "from the file name"
+            };
+            return format!("Normal: {} ({from})", name(c));
+        }
+        match g.preview.as_ref().map(|p| &p.maps.report) {
+            Some(r) if r.green_sure => format!("Normal: looks {} (detected)", name(r.green)),
+            Some(_) => "Normal: green undetermined, assumed DirectX".into(),
+            None => "Normal: green is detected with the preview".into(),
+        }
+    }
+
+    /// Called each frame while the dialog shows: when nothing runs, the opts changed since the last preview and no
+    /// slider is being dragged, start a preview job (at most `PREVIEW_MAX`, CO35).
+    pub fn gen_frame(&mut self) {
+        let normal = self.gen_normal();
+        let long = normal
+            .as_ref()
+            .and_then(|(k, _)| self.normal_size(k))
+            .map(|d| d.0.max(d.1));
+        let tx = self.tx.clone();
+        let Some(g) = self.gen.as_mut() else {
+            return;
+        };
+        if g.running.is_some() || g.dragging || g.previewed.as_ref() == Some(&g.opts) {
+            return;
+        }
+        g.previewed = Some(g.opts.clone());
+        let Some((_, path)) = normal else {
+            g.error = Some(NO_NORMAL.into());
+            return;
+        };
+        let mut opts = g.opts.clone();
+        opts.size = opts.size.min(PREVIEW_MAX).min(long.unwrap_or(PREVIEW_MAX));
+        g.started += 1;
+        self.spawn_gen(tx, path, opts, None);
+    }
+
+    /// Start a job on a worker; it lands as `WorkerMsg::Generated`.
+    fn spawn_gen(
+        &mut self,
+        tx: std::sync::mpsc::Sender<WorkerMsg>,
+        normal: PathBuf,
+        opts: Opts,
+        targets: Option<Vec<(GenMap, PathBuf, Option<String>)>>,
+    ) {
+        let Some(g) = self.gen.as_mut() else {
+            return;
+        };
+        g.next_id += 1;
+        self.gen_ids = g.next_id;
+        let (id, preview) = (g.next_id, targets.is_none());
+        g.running = Some((id, preview));
+        g.progress.store(0, Ordering::Relaxed);
+        let (progress, cancel) = (g.progress.clone(), g.cancel.clone());
+        spawn_guarded(tx, "generate-from-normal", move |tx| {
+            let result = or_send(
+                tx,
+                || run_job(&normal, &opts, targets, &progress, &cancel).map(Arc::new),
+                |e| WorkerMsg::Generated {
+                    id,
+                    preview,
+                    result: Err(format!("internal error: {e}")),
+                },
+            );
+            let _ = tx.send(WorkerMsg::Generated {
+                id,
+                preview,
+                result,
+            });
+        });
+    }
+
+    /// Generate: re-check each ticked map's offer, then write the maps on a worker. Nothing ticked: a no-op.
+    pub fn gen_generate(&mut self) {
+        let Some(g) = self.gen.as_ref() else {
+            return;
+        };
+        if g.ticked.is_empty() || g.running.is_some() {
+            return;
+        }
+        let (set, ticked) = (g.set.clone(), g.ticked.clone());
+        let refused = ticked.iter().find_map(|&m| self.gen_offer(&set, m).err());
+        let normal = self.gen_normal();
+        // `ours` only for this set's recorded generated file (Regenerate, Task 7).
+        let targets: Option<Vec<_>> = normal.as_ref().map(|(key, _)| {
+            self.gen_paths()
+                .into_iter()
+                .map(|(map, p, _)| {
+                    let name = p.file_name().unwrap_or_default().to_string_lossy();
+                    let own = self.provenance(&sibling_key(key, &name)).map(|r| r.sha256);
+                    (map, p, own)
+                })
+                .collect()
+        });
+        let tx = self.tx.clone();
+        let g = self.gen.as_mut().expect("checked above");
+        if let Some(e) = refused {
+            g.error = Some(e);
+            return;
+        }
+        let (Some((_, path)), Some(targets)) = (normal, targets) else {
+            g.error = Some(NO_NORMAL.into());
+            return;
+        };
+        let mut opts = g.opts.clone();
+        if !ticked.contains(&GenMap::Height) {
+            opts.height = None;
+        }
+        g.error = None;
+        g.cancel.store(false, Ordering::Relaxed);
+        self.spawn_gen(tx, path, opts, Some(targets));
+    }
+
+    /// Cancel: stop the job and close. A Generate that already started writing still lands, to record its files.
+    pub fn gen_cancel(&mut self) {
+        if let Some(g) = self.gen.as_ref() {
+            g.cancel.store(true, Ordering::Relaxed);
+        }
+        if !self
+            .gen
+            .as_ref()
+            .is_some_and(|g| matches!(g.running, Some((_, false))))
+        {
+            self.gen = None;
+        }
+        if matches!(
+            self.dialog,
+            Some(crate::model::Dialog::GenerateFromNormal(_))
+        ) {
+            self.dialog = None;
+        }
+    }
+
+    /// A Generate dialog job is in flight (owner answer 8: polled through `v2_jobs_pending`, never `busy`).
+    pub fn gen_pending(&self) -> bool {
+        self.gen.as_ref().is_some_and(|g| g.running.is_some())
+    }
+
+    pub(super) fn gen_landed(
+        &mut self,
+        id: u64,
+        preview: bool,
+        result: Result<Arc<GenResult>, String>,
+    ) {
+        let Some(g) = self.gen.as_mut() else {
+            return;
+        };
+        if g.running != Some((id, preview)) {
+            return;
+        }
+        g.running = None;
+        let open = matches!(
+            self.dialog,
+            Some(crate::model::Dialog::GenerateFromNormal(_))
+        );
+        if preview {
+            match result {
+                Ok(r) => {
+                    g.preview = Some(r);
+                    g.error = None;
+                }
+                Err(e) => g.error = Some(e),
+            }
+            return;
+        }
+        let result = result.and_then(|r| match r.written.is_empty() {
+            true => Err("nothing was written".to_string()),
+            false => Ok(r),
+        });
+        let r = match result {
+            Ok(r) => r,
+            Err(e) if open => {
+                g.error = Some(e);
+                return;
+            }
+            Err(_) => {
+                self.gen = None;
+                return;
+            }
+        };
+        let g = self.gen.take().expect("checked above");
+        if open {
+            self.dialog = None;
+        }
+        self.gen_record(&g, &r.written);
+    }
+
+    /// Record the written files' provenance outside the undo history (the JSON hash records' rule, P14), add them
+    /// to the set when its normal was moved in (the one undoable part), re-plan and select the first.
+    fn gen_record(&mut self, g: &GenDialog, written: &[(GenMap, PathBuf, String)]) {
+        let Some((normal, normal_path)) = self.set_normal(&g.set).and_then(|k| {
+            let p = self.item(&k)?.input.clone();
+            Some((k, p))
+        }) else {
+            return;
+        };
+        let from_sha256 = crate::model::history::sha256_of(&normal_path).unwrap_or_default();
+        let keys: Vec<String> = written
+            .iter()
+            .map(|(_, p, _)| {
+                sibling_key(
+                    &normal,
+                    &p.file_name().unwrap_or_default().to_string_lossy(),
+                )
+            })
+            .collect();
+        let Some(d) = self.sets_doc.as_mut() else {
+            return;
+        };
+        let was_dirty = d.is_dirty();
+        for ((map, _, sha), key) in written.iter().zip(&keys) {
+            let p = Provenance {
+                from: normal.clone(),
+                from_sha256: from_sha256.clone(),
+                sha256: sha.clone(),
+                kind: *map,
+                m_alpha: g.m_alpha,
+                opts: g.opts.clone(),
+            };
+            if let Ok(v) = serde_json::to_value(p) {
+                d.set_generated(key, Some(&v));
+            }
+        }
+        if self.save_record(was_dirty) {
+            self.status_note = Some(PROVENANCE_DEFERRED.into());
+        }
+        let moved_in = self
+            .sets_doc
+            .as_ref()
+            .and_then(|d| {
+                let e = d.entries();
+                let fold = normal.to_lowercase();
+                e.iter()
+                    .find(|e| engine::sets::same_id(&e.id, &g.set))
+                    .map(|e| e.add.iter().any(|f| f.to_lowercase() == fold))
+            })
+            .unwrap_or(false);
+        let before = self.sets_doc.as_ref().map(|d| d.text());
+        if moved_in {
+            let set = g.set.clone();
+            let ks = keys.clone();
+            self.edit_docs("Generate from normal map", None, true, move |_, s| {
+                for k in &ks {
+                    s.add_member(&set, k);
+                }
+            });
+        }
+        // `edit_docs` re-plans only when it changed something.
+        if self.sets_doc.as_ref().map(|d| d.text()) == before {
+            self.replan();
+        }
+        self.gen_select = keys.into_iter().next();
+    }
 }

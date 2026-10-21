@@ -164,6 +164,8 @@ pub enum Dialog {
     },
     /// Check 3, Hold mode (Note CL24): the textures held at the end of the export, ticked to write at half size.
     HalfSize(Vec<HalfRow>),
+    /// v2 Track B: "Generate from normal map…" for this set id; its state is `AppModel::gen` (floats are not `Eq`).
+    GenerateFromNormal(String),
     Error(String),
 }
 
@@ -457,8 +459,12 @@ pub struct AppModel {
     pub stats: std::cell::RefCell<shell::StatCache>,
     /// Header sizes read for the Generate offers, by (path, size, mtime) (Note CO, spec-M5).
     pub(crate) gen_dims: std::cell::RefCell<from_normal::GenDims>,
-    /// The last "Generate from normal map…" pick `(set, pre-ticked map)`. Task 6's dialog replaces it.
-    pub gen_requested: Option<(String, Option<from_normal::GenMap>)>,
+    /// The Generate dialog's state while it is open, or while a cancelled Generate that started writing lands.
+    pub gen: Option<from_normal::GenDialog>,
+    /// The first file the last Generate wrote: selected by the plan that lists it.
+    pub gen_select: Option<String>,
+    /// The last Generate job id, so a new dialog's ids never repeat a closed one's.
+    pub(crate) gen_ids: u64,
     /// A Save report write is on a worker (AG130); the app keeps frames coming until it lands.
     pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -673,7 +679,9 @@ impl AppModel {
             shell: Vec::new(),
             stats: Default::default(),
             gen_dims: Default::default(),
-            gen_requested: None,
+            gen: None,
+            gen_select: None,
+            gen_ids: 0,
             report_saving: false,
             last_inputs: None,
             auto_replans: 0,
@@ -1141,6 +1149,7 @@ impl AppModel {
             || self.uv.read_pending()
             || self.uv.all_running()
             || self.uv.probe_pending()
+            || self.gen_pending()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -1306,6 +1315,11 @@ impl AppModel {
             WorkerMsg::ScanHasRows { stamp, rows } => self.uv_rows_landed(stamp, rows),
             WorkerMsg::Dims(dims) => self.dims_landed(dims),
             WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
+            WorkerMsg::Generated {
+                id,
+                preview,
+                result,
+            } => self.gen_landed(id, preview, result),
             _ => {}
         }
     }
@@ -2133,20 +2147,29 @@ impl AppModel {
     /// Undo stay live while an export runs; Note BD2): those are the user's to save or discard, so the record waits
     /// for the next Save. A stale on-disk record only makes the next export ask before overwriting.
     fn save_hash_record(&mut self, was_dirty: bool) {
-        if was_dirty {
+        if self.save_record(was_dirty) {
             const NOTE: &str = "hash recorded; written with the next Save";
             // Up to three hash records per export (PGPatcher, CS PBR, complex material): one note.
             if !self.export.notes.iter().any(|n| n == NOTE) {
                 self.export.notes.push(NOTE.into());
             }
-            return;
+        }
+    }
+
+    /// The one save-if-clean rule for records kept outside the undo history (JSON hashes, generated-file
+    /// provenance; P14): saves `sdc-project.toml` when it had no unsaved edits, else leaves the record for the next
+    /// Save. True when it deferred.
+    pub(crate) fn save_record(&mut self, was_dirty: bool) -> bool {
+        if was_dirty {
+            return true;
         }
         let Some(d) = self.sets_doc.as_mut() else {
-            return;
+            return false;
         };
         if let Err(e) = d.save(false) {
             self.hash_record_failed(&e);
         }
+        false
     }
 
     /// A JSON hash record that did not save (audit item 16): the save question (Overwrite / Reload for a file
@@ -2322,6 +2345,13 @@ impl AppModel {
         };
         if gone {
             self.selection = Selection::None;
+        }
+        // Generate's first file, once a plan lists it.
+        if let Some(k) = self.gen_select.take() {
+            match self.item(&k).is_some() {
+                true => self.select_item(&k),
+                false => self.gen_select = Some(k),
+            }
         }
         if let Some(k) = self.expanded.clone() {
             if self.item(&k).is_none() {

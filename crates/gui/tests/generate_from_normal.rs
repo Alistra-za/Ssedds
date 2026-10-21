@@ -9,7 +9,7 @@ use sdc_gui::model::bulk::{MenuAction, MenuEntry};
 use sdc_gui::model::checks;
 use sdc_gui::model::from_normal::*;
 use sdc_gui::model::sets::SlotKind;
-use sdc_gui::model::AppModel;
+use sdc_gui::model::{AppModel, Dialog};
 use sdc_gui::sets_doc::SetsDoc;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -114,7 +114,12 @@ fn a_pbr_set_with_a_normal_and_no_height_offers_height_on_its_row_and_set_menu()
         m.set_normal(ROCK_SET).as_deref(),
         Some("landscape/rock01_normal.png")
     );
-    assert_eq!(m.run_menu(set.action), None, "a no-op until the dialog");
+    assert_eq!(m.run_menu(set.action), None);
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::GenerateFromNormal(ROCK_SET.into())),
+        "the entry opens the dialog"
+    );
 }
 
 #[test]
@@ -458,13 +463,19 @@ fn the_set_card_menu_offers_generate_with_its_reason() {
     card_menu(&mut h, ROCK_SET);
     assert!(!h.get_by_label(GENERATE).accesskit_node().is_disabled());
     h.get_by_label(GENERATE).click();
-    h.run();
+    h.run_steps(3);
     assert_eq!(
-        h.state().gen_requested,
-        Some((ROCK_SET.to_string(), None)),
-        "the set entry's own action"
+        h.state().dialog,
+        Some(Dialog::GenerateFromNormal(ROCK_SET.to_string())),
+        "the set entry's own action opens the dialog"
     );
+    let g = h.state().gen.as_ref().expect("the dialog state");
+    assert_eq!(g.set, ROCK_SET);
+    assert!(g.ticked.is_empty(), "the set entry pre-ticks nothing");
     assert!(h.query_by_label(GENERATE).is_none(), "the menu closed");
+    h.key_press(eframe::egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
     // The leaf set has no normal: off, and the hover says why.
     card_menu(&mut h, LEAF_SET);
     let b = h.get_by_label(GENERATE);
@@ -473,7 +484,7 @@ fn the_set_card_menu_offers_generate_with_its_reason() {
     h.hover_at(r.center());
     h.run();
     assert!(h.query_by_label(NO_NORMAL).is_some(), "the reason on hover");
-    assert_eq!(h.state().gen_requested, Some((ROCK_SET.to_string(), None)));
+    assert!(h.state().gen.is_none(), "a disabled entry opens nothing");
 
     // A read-only project: off (with the menu's own reason).
     let d = tempfile::tempdir().unwrap();
@@ -606,4 +617,575 @@ fn the_generated_table_round_trips_and_older_files_load() {
     assert_eq!(doc.generated().values().next(), Some(&w));
     doc.set_generated(key, None);
     assert!(doc.generated().is_empty());
+}
+
+// ---- Task 6: the dialog, preview and Generate ----
+
+const P_KEY: &str = "landscape/rock01_p_generated.png";
+
+/// `pbr_opened_plain` with a 64² relief normal in place of the flat one.
+fn relief_rock(d: &Path) -> AppModel {
+    let mut m = pbr_opened_plain(d);
+    relief_normal(&land(d), "rock01_normal.png", 64);
+    reopen(&mut m, d);
+    m
+}
+
+fn generate_height(m: &mut AppModel) {
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    idle(m);
+}
+
+fn rock_view(m: &AppModel) -> sdc_gui::model::sets::SetView {
+    sdc_gui::model::sets::views(m)
+        .iter()
+        .find(|v| v.id == ROCK_SET)
+        .expect("the rock set")
+        .clone()
+}
+
+fn generated_pngs(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("_generated"))
+        .collect()
+}
+
+fn regen_label(m: &AppModel) -> String {
+    gen_open(&m.slot_menu(ROCK_SET, SlotKind::Height))
+        .expect("the Height row's entry")
+        .label
+        .clone()
+}
+
+#[test]
+fn generate_writes_a_16_bit_p_next_to_the_normal_and_records_provenance() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    let img = image::open(&p).expect("the generated file").into_luma16();
+    assert_eq!(img.dimensions(), (64, 64), "the normal's size (< 256)");
+    let codes: Vec<u16> = img.pixels().map(|p| p.0[0]).collect();
+    let (lo, hi) = (
+        (8.0 / 255.0 * 65535.0f64).round() as u16,
+        (247.0 / 255.0 * 65535.0f64).round() as u16,
+    );
+    assert!(codes.iter().all(|&c| (lo..=hi).contains(&c)));
+    let distinct: std::collections::BTreeSet<u16> = codes.iter().copied().collect();
+    assert!(distinct.len() > 1000, "{} codes", distinct.len());
+    let mean = codes.iter().map(|&c| f64::from(c)).sum::<f64>() / codes.len() as f64 / 65535.0;
+    assert!((mean - 0.5).abs() <= 0.02, "mean {mean}");
+    let rec = &m.sets_doc.as_ref().unwrap().generated()[P_KEY];
+    assert_eq!(rec["from"], "landscape/rock01_normal.png");
+    assert_eq!(rec["kind"], "height");
+    assert_eq!(rec["opts"]["height"]["neutral"], "half");
+    assert_eq!(
+        rec["sha256"],
+        sdc_gui::model::history::sha256_of(&p).unwrap().as_str()
+    );
+    assert_eq!(
+        m.selection,
+        sdc_gui::model::Selection::Item(P_KEY.into()),
+        "selected after the re-plan"
+    );
+    assert_eq!(
+        rock_view(&m).slots.get(&SlotKind::Height),
+        Some(&sdc_gui::model::sets::SlotFill::Own { item: P_KEY.into() })
+    );
+    assert_eq!(regen_label(&m), "Regenerate…");
+    assert!(m.gen.is_none() && m.dialog.is_none(), "the dialog closed");
+
+    // The flat fixture normal gives a constant Half.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    generate_height(&mut m);
+    let img = image::open(land(d.path()).join("rock01_p_generated.png"))
+        .unwrap()
+        .into_luma16();
+    assert!(img.pixels().all(|p| p.0[0] == 32768));
+}
+
+#[test]
+fn cancel_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    let before = m.sets_doc.as_ref().unwrap().text();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_cancel();
+    idle(&mut m);
+    assert!(m.gen.is_none() && m.dialog.is_none());
+    assert!(generated_pngs(&land(d.path())).is_empty());
+    assert_eq!(m.sets_doc.as_ref().unwrap().text(), before);
+    // Cancel after `generate` but before the first write (spec-S9).
+    let t = land(d.path()).join("rock01_p_generated.png");
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    assert!(write_all(&[(t.clone(), vec![1, 2, 3], None)], &cancel).is_err());
+    assert!(!t.exists());
+    let go = std::sync::atomic::AtomicBool::new(false);
+    let shas = write_all(&[(t.clone(), vec![1, 2, 3], None)], &go).unwrap();
+    assert_eq!(std::fs::read(&t).unwrap(), [1, 2, 3]);
+    assert_eq!(shas, vec![sdc_gui::model::history::sha256_of(&t).unwrap()]);
+}
+
+#[test]
+fn write_all_checks_every_target_first_and_rolls_back() {
+    let d = tempfile::tempdir().unwrap();
+    let (a, b) = (d.path().join("a.png"), d.path().join("b.png"));
+    std::fs::write(&b, b"theirs").unwrap();
+    let go = std::sync::atomic::AtomicBool::new(false);
+    let e = write_all(
+        &[(a.clone(), vec![1], None), (b.clone(), vec![2], None)],
+        &go,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e,
+        format!("{} already exists; nothing was written", b.display())
+    );
+    assert!(!a.exists(), "nothing written");
+    assert_eq!(std::fs::read(&b).unwrap(), b"theirs");
+    // Our own recorded file is replaced; an edited one is not.
+    let own = sdc_gui::model::history::sha256_of(&b);
+    write_all(&[(b.clone(), vec![2], own)], &go).unwrap();
+    assert_eq!(std::fs::read(&b).unwrap(), [2]);
+    let e = write_all(&[(b.clone(), vec![3], Some("00".repeat(32)))], &go).unwrap_err();
+    assert!(e.contains("b.png was edited since it was generated"), "{e}");
+    // A write that fails removes the files this call wrote.
+    let dir_target = d.path().join("adir");
+    std::fs::create_dir(&dir_target).unwrap();
+    let c = d.path().join("c.png");
+    assert!(write_all(
+        &[(c.clone(), vec![1], None), (dir_target, vec![1], None)],
+        &go
+    )
+    .is_err());
+    assert!(!c.exists(), "rolled back");
+}
+
+#[test]
+fn nothing_ticked_disables_generate() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, None);
+    assert!(m.gen.as_ref().unwrap().ticked.is_empty());
+    m.gen_generate();
+    assert!(m.gen.as_ref().unwrap().running.is_none());
+    assert!(!m.gen_pending());
+    assert!(generated_pngs(&land(d.path())).is_empty());
+    assert!(!sdc_gui::ui::from_normal::gen_buttons(false, false)[1].2);
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(4);
+    let b = h.get_by_label("Generate");
+    assert!(b.accesskit_node().is_disabled());
+    let r = b.rect();
+    h.hover_at(r.center());
+    h.run_steps(30);
+    assert!(
+        h.query_by_label(NOTHING_TICKED).is_some(),
+        "the reason on hover"
+    );
+}
+
+#[test]
+fn generate_refuses_when_a_target_appeared_and_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    let before = m.sets_doc.as_ref().unwrap().text();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    let t = land(d.path()).join("rock01_p_generated.png");
+    std::fs::write(&t, b"made by hand").unwrap();
+    m.gen_generate();
+    idle(&mut m);
+    let g = m.gen.as_ref().expect("the dialog stays open");
+    assert!(
+        g.error
+            .as_deref()
+            .is_some_and(|e| e.ends_with("already exists; nothing was written")),
+        "{:?}",
+        g.error
+    );
+    assert!(matches!(
+        m.dialog,
+        Some(sdc_gui::model::Dialog::GenerateFromNormal(_))
+    ));
+    assert_eq!(std::fs::read(&t).unwrap(), b"made by hand");
+    assert!(m.sets_doc.as_ref().unwrap().generated().is_empty());
+    assert_eq!(m.sets_doc.as_ref().unwrap().text(), before);
+}
+
+#[test]
+fn undo_after_generate_keeps_the_provenance() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    let steps = m.history.undo.len();
+    generate_height(&mut m);
+    assert_eq!(m.history.undo.len(), steps, "no undo step for the file");
+    let p = land(d.path()).join("rock01_p_generated.png");
+    m.undo();
+    idle(&mut m);
+    assert!(p.exists());
+    assert!(m.sets_doc.as_ref().unwrap().generated().contains_key(P_KEY));
+    assert_eq!(regen_label(&m), "Regenerate…");
+
+    // A moved-in normal: the generated file joins the set by membership, and undo removes the membership only.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01_normal.png")).unwrap();
+    relief_normal(&land(d.path()), "stone_normal.png", 64);
+    reopen(&mut m, d.path());
+    m.edit_docs("Move into", None, true, |_, s| {
+        s.add_member(ROCK_SET, "landscape/stone_normal.png")
+    });
+    idle(&mut m);
+    assert_eq!(
+        m.set_normal(ROCK_SET).as_deref(),
+        Some("landscape/stone_normal.png")
+    );
+    let steps = m.history.undo.len();
+    generate_height(&mut m);
+    let key = "landscape/stone_p_generated.png";
+    assert!(rock_view(&m).members.iter().any(|k| k == key), "a member");
+    assert_eq!(
+        m.history.undo.len(),
+        steps + 1,
+        "the membership is one step"
+    );
+    m.undo();
+    idle(&mut m);
+    assert!(land(d.path()).join("stone_p_generated.png").exists());
+    assert!(m.sets_doc.as_ref().unwrap().generated().contains_key(key));
+    assert!(!rock_view(&m).members.iter().any(|k| k == key));
+}
+
+#[test]
+fn the_paths_and_the_size_warning_show_before_generate() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    relief_normal(&land(d.path()), "rock01_normal.png", 1024);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(
+        m.gen.as_ref().unwrap().opts.size,
+        1024,
+        "the normal's own size"
+    );
+    assert_eq!(
+        m.gen_paths(),
+        vec![(
+            GenMap::Height,
+            land(d.path()).join("rock01_p_generated.png"),
+            (1024, 1024)
+        )]
+    );
+    assert_eq!(
+        m.gen_size_warning(),
+        Some("Above 512 px, parallax costs more GPU time for little visible gain")
+    );
+    m.gen.as_mut().unwrap().opts.size = 512;
+    assert_eq!(m.gen_size_warning(), None);
+    assert_eq!(m.gen_paths()[0].2, (512, 512));
+}
+
+/// The first file named `name` under `dir`.
+fn find(dir: &Path, name: &str) -> Option<PathBuf> {
+    for e in std::fs::read_dir(dir).ok()? {
+        let p = e.ok()?.path();
+        if p.is_dir() {
+            if let Some(f) = find(&p, name) {
+                return Some(f);
+            }
+        } else if p.file_name().is_some_and(|n| n == name) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[test]
+fn use_as_m_alpha_writes_height_generated_on_a_vanilla_complex_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    relief_normal(&land(d.path()), "rock01_normal.png", 64);
+    reopen(&mut m, d.path());
+    complex_material(&mut m, "rock01");
+    assert_eq!(height(&m, ROCK_SET), Ok(()));
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert!(m.gen.as_ref().unwrap().m_alpha);
+    assert_eq!(
+        m.gen_paths(),
+        vec![(
+            GenMap::Height,
+            land(d.path()).join("rock01_height_generated.png"),
+            (64, 64)
+        )]
+    );
+    m.gen_generate();
+    idle(&mut m);
+    assert!(land(d.path()).join("rock01_height_generated.png").exists());
+    export_through(&mut m);
+    idle(&mut m);
+    let out = find(&d.path().join("export"), "rock01_m.dds").expect("rock01_m.dds exported");
+    let (img, _) = engine::load::load_image(&out).unwrap();
+    let a: Vec<f32> = img.px.iter().map(|p| p[3] * 255.0).collect();
+    assert!(
+        a.iter().all(|&v| v > 4.0 && v < 251.0),
+        "alpha inside (4, 251)"
+    );
+    let (lo, hi) = a
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(l, h), &v| (l.min(v), h.max(v)));
+    assert!(hi - lo > 8.0, "not constant: {lo}..{hi}");
+}
+
+/// An uncompressed 8-bit DDS of unit normals `n` (`size`²), green stored flipped when `gl`.
+fn normal_dds(path: &Path, n: &[[f64; 3]], size: u32, gl: bool) {
+    use engine::config::Format;
+    use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+    let d = DdsDesc {
+        width: size,
+        height: size,
+        format: Format::Rgba8,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    let level: Vec<u8> = n
+        .iter()
+        .flat_map(|&[x, y, z]| {
+            let [r, g, b] = normal_rgb([x, if gl { -y } else { y }, z]);
+            // The engine's `Rgba8` is DXGI 87, B8G8R8A8.
+            [b, g, r, 255]
+        })
+        .collect();
+    std::fs::write(path, dds_bytes(&d, &[level]).unwrap()).unwrap();
+}
+
+/// The engine's asymmetric `blobs` fixture (128²): elongated diagonal Gaussians.
+fn blob_normals() -> Vec<[f64; 3]> {
+    let w = 128usize;
+    let hf: Vec<f64> = (0..w * w)
+        .map(|i| {
+            let (x, y) = ((i % w) as f64, (i / w) as f64);
+            let mut v = 0.0;
+            for (cx, cy, a) in [(40.0, 40.0, 5.0), (90.0, 70.0, -4.0), (50.0, 100.0, 3.0)] {
+                let (u, t) = (
+                    (x - cx + y - cy) / 2f64.sqrt(),
+                    (x - cx - y + cy) / 2f64.sqrt(),
+                );
+                v += a * (-(u * u) / (2.0 * 16.0 * 16.0) - t * t / (2.0 * 4.0 * 4.0)).exp();
+            }
+            v
+        })
+        .collect();
+    slopes_to_normals(&hf, w, 2.0)
+}
+
+fn preview(m: &mut AppModel) {
+    m.gen_frame();
+    idle(m);
+    let g = m.gen.as_ref().unwrap();
+    assert!(g.preview.is_some(), "{:?}", g.error);
+}
+
+#[test]
+fn a_dds_normal_generates_with_green_detected() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01_normal.png")).unwrap();
+    let dds = land(d.path()).join("rock01_n.dds");
+    normal_dds(&dds, &blob_normals(), 128, true);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(m.gen.as_ref().unwrap().opts.green, None);
+    preview(&mut m);
+    assert_eq!(
+        m.gen_format_line(),
+        "Normal: looks OpenGL (detected)",
+        "{:?}",
+        m.gen
+            .as_ref()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap()
+            .maps
+            .report
+    );
+    m.gen_generate();
+    idle(&mut m);
+    assert!(land(d.path()).join("rock01_p_generated.png").exists());
+    // A flat DDS proves nothing about detection (spec-S7).
+    let flat = vec![[0.0, 0.0, 1.0]; 128 * 128];
+    std::fs::remove_file(land(d.path()).join("rock01_p_generated.png")).unwrap();
+    m.sets_doc.as_mut().unwrap().set_generated(P_KEY, None);
+    normal_dds(&dds, &flat, 128, false);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    preview(&mut m);
+    assert_eq!(
+        m.gen_format_line(),
+        "Normal: green undetermined, assumed DirectX"
+    );
+    m.gen_cancel();
+    // The name states the convention.
+    std::fs::remove_file(&dds).unwrap();
+    normal_dds(
+        &land(d.path()).join("rock01_normalgl.dds"),
+        &flat,
+        128,
+        false,
+    );
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(
+        m.gen.as_ref().unwrap().opts.green,
+        Some(GreenConvention::Opengl)
+    );
+    assert_eq!(m.gen_format_line(), "Normal: OpenGL (from the file name)");
+}
+
+#[test]
+fn an_image_normals_green_comes_from_its_settings() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(
+        m.gen.as_ref().unwrap().opts.green,
+        Some(GreenConvention::Directx)
+    );
+    assert_eq!(
+        m.gen_format_line(),
+        "Normal: DirectX (from the normal's settings)"
+    );
+    // `opened` states no convention: IN-GREEN-UNSTATED, so auto.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(m.gen.as_ref().unwrap().opts.green, None);
+}
+
+fn gen_harness(m: AppModel, w: f32, h: f32) -> egui_kittest::Harness<'static, AppModel> {
+    let h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(w, h))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+#[test]
+fn the_dialog_draws_and_previews_off_the_ui_thread() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().gen.as_ref().unwrap().started,
+        1,
+        "one preview job"
+    );
+    assert!(h.state().gen_pending(), "on a worker");
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(5);
+    assert!(h.query_by_label("Generate").is_some());
+    assert!(
+        h.query_by_label("Height preview").is_some(),
+        "a preview tile texture"
+    );
+    assert!(h.query_by_label_contains("Fit: mean").is_some());
+    assert_eq!(h.state().gen.as_ref().unwrap().started, 1, "settled");
+    // While a slider drags, a changed setting starts nothing.
+    let m = h.state_mut();
+    let g = m.gen.as_mut().unwrap();
+    g.dragging = true;
+    g.opts.relief = 0.7;
+    m.gen_frame();
+    assert_eq!(m.gen.as_ref().unwrap().started, 1);
+    m.gen.as_mut().unwrap().dragging = false;
+    m.gen_frame();
+    assert_eq!(m.gen.as_ref().unwrap().started, 2, "released: it previews");
+}
+
+#[test]
+fn enter_never_generates_and_a_click_outside_keeps_the_dialog() {
+    use eframe::egui::{pos2, Event, Key, Modifiers, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(3);
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let g = h.state().gen.as_ref().expect("still open");
+    assert!(!matches!(g.running, Some((_, false))), "no Generate job");
+    assert!(generated_pngs(&land(d.path())).is_empty());
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton {
+            pos: pos2(5.0, 890.0),
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+    }
+    h.run_steps(3);
+    assert!(h.state().gen.is_some(), "a click outside keeps it");
+    assert!(h.query_by_label("Generate").is_some());
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(
+        h.state().gen.is_none() && h.state().dialog.is_none(),
+        "Esc closes"
+    );
+    assert!(generated_pngs(&land(d.path())).is_empty());
+    // Neither footer button is the accent-filled Enter default.
+    for on in [false, true] {
+        for b in sdc_gui::ui::from_normal::gen_buttons(on, false) {
+            assert_eq!(b.1, sdc_gui::ui::dialogs::Role::Plain);
+        }
+    }
+}
+
+#[test]
+fn the_footer_stays_on_screen_at_1280x800() {
+    use egui_kittest::kittest::Queryable;
+    for w in [1280.0, 1100.0] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = relief_rock(d.path());
+        m.open_gen(ROCK_SET, Some(GenMap::Height));
+        let mut h = gen_harness(m, w, 800.0);
+        h.run_steps(3);
+        assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+        h.run_steps(5);
+        let win = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(w, 800.0),
+        );
+        for b in ["Generate", "Cancel"] {
+            let r = h.get_by_label(b).rect();
+            assert!(win.contains_rect(r), "{b} at {r:?} in {w}×800");
+        }
+    }
+}
+
+#[test]
+fn generate_jobs_are_polled_without_greying_advanced() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    assert!(m.gen_pending() && m.v2_jobs_pending());
+    assert!(!m.busy(), "Advanced stays live");
+    idle(&mut m);
+    assert!(land(d.path()).join("rock01_p_generated.png").exists());
+    assert!(!m.gen_pending());
 }
