@@ -4,8 +4,7 @@ use super::{cm_lines, AlsoSpec, AlsoSummary, Phase, SetNote};
 use crate::api::Plan;
 use crate::codes::Code;
 use crate::derive::{DeriveKind, DeriveSet};
-use crate::policy::{JobStatus, ResolvedJob};
-use crate::presets::AlsoTarget;
+use crate::policy::{JobStatus, Provenance, ResolvedJob};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -31,6 +30,21 @@ pub const INNER_LAYER: &str = "inner-layer `_p` copied unchanged";
 
 fn slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
+}
+
+/// I1: a plan-time error job of a derived output: a derive recipe's (`recipe:<kind>`) on a member of a PBR set.
+pub(crate) fn derive_error(j: &ResolvedJob, members: &BTreeSet<&Path>) -> bool {
+    const KINDS: [DeriveKind; 6] = [
+        DeriveKind::VanillaDiffuse,
+        DeriveKind::CmDiffuse,
+        DeriveKind::LegacyN,
+        DeriveKind::CmM,
+        DeriveKind::EnvM,
+        DeriveKind::GrassStack,
+    ];
+    matches!(j.status, JobStatus::Error { .. })
+        && members.contains(j.input.as_path())
+        && matches!(j.provenance.get("subtype"), Some(Provenance::Recipe(id)) if KINDS.iter().any(|k| k.id() == id))
 }
 
 fn is(j: &ResolvedJob, k: DeriveKind) -> bool {
@@ -127,12 +141,14 @@ pub(crate) fn vanilla_rows(
     (out, skipped)
 }
 
-/// The CM plan's error jobs (a size mismatch, a path conflict) on the rows, read before the CM phase drops them.
+/// The CM plan's derived error jobs (a size mismatch, a path conflict) on the rows; a plain error job is the
+/// Vanilla phase's already (review M2).
 pub(crate) fn add_cm_errors(rows: &mut [SetRow], plan: &Plan, sets: &[DeriveSet]) {
-    for j in &plan.jobs {
-        if !matches!(j.status, JobStatus::Error { .. }) {
-            continue;
-        }
+    let members: BTreeSet<&Path> = sets
+        .iter()
+        .flat_map(|s| s.members.iter().map(|m| m.as_path()))
+        .collect();
+    for j in plan.jobs.iter().filter(|j| derive_error(j, &members)) {
         let Some(set) = sets.iter().find(|s| s.members.contains(&j.input)) else {
             continue;
         };
@@ -207,7 +223,12 @@ pub fn render(s: &AlsoSummary, rows: &[SetRow], spec: &AlsoSpec) -> String {
     );
 
     o.push_str("\n## PBR sets\n\n");
-    if rows.is_empty() {
+    if rows.is_empty() && (s.cancelled_after.is_some() || s.error.is_some()) {
+        // Review M1: the rows come from the Vanilla plan, which a cancel or an error may have stopped first.
+        o.push_str(
+            "No set rows: the export stopped before the Vanilla phase planned the PBR sets.\n",
+        );
+    } else if rows.is_empty() {
         o.push_str("No PBR set was converted.\n");
     } else {
         o.push_str("| Set | Suggested NIF Glossiness | Specular Strength | Environment Map shader needed | env `_m` written |\n");
@@ -241,7 +262,8 @@ pub fn render(s: &AlsoSummary, rows: &[SetRow], spec: &AlsoSpec) -> String {
             let _ = writeln!(o, "- {}: {}", n.id, n.why);
         }
     }
-    if spec.cfg.also.contains(&AlsoTarget::Cm) {
+    // Review M3: only when a CM folder was written.
+    if s.phases.iter().any(|(p, _)| *p == Phase::Cm) {
         o.push_str("\n## Install\n\n");
         o.push_str(&cm_lines(&spec.cfg).join(" "));
         o.push('\n');

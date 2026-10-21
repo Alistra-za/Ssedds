@@ -161,7 +161,8 @@
         "DERIVE-NIF-SUGGEST",
         "ALSO-PHASE-FAILED",
         "ALSO-OWNED-UNREADABLE",
-        "ALSO-ZIP-FAILED"
+        "ALSO-ZIP-FAILED",
+        "ALSO-REPORT-FAILED"
       ],
       "type": "string"
     },

@@ -321,6 +321,8 @@ fn a_project_without_pbr_sets_writes_no_cm_folder() {
         "{:?}",
         s.notes
     );
+    let r = std::fs::read_to_string(loc.join("Mod conversion-report.md")).unwrap();
+    assert!(!r.contains("Install the CM folder"), "{r}");
 }
 
 #[test]
@@ -1232,6 +1234,11 @@ fn a_report_tessalith_did_not_write_is_kept() {
     assert_eq!(s.report, None);
     let note = engine::dds::Kept::Foreign.note(&path);
     assert!(s.notes.contains(&note), "{:?}", s.notes);
+    // Fix round 1 (CM51): as a kept zip, a Warning event and a partial exit.
+    assert_eq!(s.exit_code(), 1, "{s:#?}");
+    let (_, ev) = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]));
+    assert!(ev.iter().any(|e| matches!(&e.kind,
+        EventKind::Warning(w) if w.code == engine::codes::Code::AlsoReportFailed && w.message.contains("conversion-report.md"))));
 }
 
 #[test]
@@ -1277,6 +1284,11 @@ fn a_cancelled_export_writes_the_report_with_cancelled_after_pbr() {
     assert!(s.report.is_some(), "{:?}", s.notes);
     let r = report(&loc, "Mod");
     assert!(r.contains("Cancelled after PBR"), "{r}");
+    assert!(!r.contains("No PBR set was converted"), "{r}");
+    assert!(
+        !r.contains("Install the CM folder"),
+        "no CM folder was written: {r}"
+    );
     assert!(r.contains("| Mod PBR |"), "{r}");
     assert!(
         !r.contains("| Mod Vanilla |") && !r.contains("| Mod CM |"),
@@ -1366,4 +1378,109 @@ fn the_report_says_toksvig_and_inner_layer_per_set() {
     let r = report(&loc, "Mod");
     assert!(r.contains("Toksvig not applied"), "{r}");
     assert!(r.contains("inner-layer `_p` copied unchanged"), "{r}");
+}
+
+// ---- Task 9 fix round 1 (I1, M4, N1) ----
+
+/// I1: a size mismatch only the CM `_m` meets (a `_p` of another size) reaches the CM run: one `FileFailed`, a failed
+/// count and a partial exit.
+#[test]
+fn a_cm_only_size_mismatch_fails_in_the_cm_phase() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        png(
+            &m.join("textures/pbr/arm/steel_p.png"),
+            32,
+            32,
+            [100, 100, 100, 255],
+        );
+    });
+    let (s, ev) = also(request(&m, &loc), &spec(&loc, BOTH));
+    let s = s.unwrap();
+    assert_eq!(phase(&s, Phase::Vanilla).failed, 0, "{s:#?}");
+    assert_eq!(phase(&s, Phase::Cm).failed, 1, "{s:#?}");
+    let failed: Vec<String> = keys_of(&ev, |k| matches!(k, EventKind::FileFailed { .. }))
+        .into_iter()
+        .filter(|k| k.starts_with("Mod CM/"))
+        .collect();
+    assert_eq!(failed, ["Mod CM/textures/arm/steel_m.dds"], "{ev:#?}");
+    // Every CM job key ends once.
+    let mut ends = std::collections::BTreeMap::<String, u32>::new();
+    for k in keys_of(&ev, |k| {
+        matches!(
+            k,
+            EventKind::FileDone { .. }
+                | EventKind::FileSkipped { .. }
+                | EventKind::FileFailed { .. }
+        )
+    }) {
+        if k.starts_with("Mod CM/") {
+            *ends.entry(k).or_default() += 1;
+        }
+    }
+    assert!(ends.values().all(|&n| n == 1), "{ends:?}");
+    assert_eq!(s.exit_code(), 1);
+    let r = report(&loc, "Mod");
+    assert_eq!(r.matches("CM: PACK-SIZE-MISMATCH").count(), 1, "{r}");
+}
+
+/// M4: an unrounded glossiness is printed `{:.1}`, and a scanned mesh without the Environment Map shader says so.
+#[test]
+fn a_scanned_mesh_without_envmap_and_an_unrounded_glossiness() {
+    let (_d, m, loc) = project(|m| {
+        let d = m.join("textures/pbr/arm");
+        png(&d.join("steel.png"), 16, 16, [200, 200, 200, 255]);
+        png(&d.join("steel_n.png"), 16, 16, [128, 128, 255, 255]);
+        png(&d.join("steel_rmaos.png"), 16, 16, [100, 255, 200, 255]);
+    });
+    let mut req = request(&m, &loc);
+    req.mesh_shaders = std::collections::BTreeMap::from([(
+        "textures/arm/steel".to_string(),
+        vec![engine::shader::Shader::Default],
+    )]);
+    let mut sp = spec(&loc, BOTH);
+    sp.scanned = true;
+    also(req, &sp).0.unwrap();
+    let r = report(&loc, "Mod");
+    let g = engine::derive::recipe::nif_glossiness(100.0 / 255.0);
+    assert_ne!(format!("{g}"), format!("{g:.1}"));
+    let row = format!("| textures/pbr/arm/steel | {g:.1} | 1 | yes | no: mesh not env-map |");
+    assert!(r.contains(&row), "{row}: {r}");
+}
+
+/// M4, TA28: an RNM detail layer is listed once, with its own reason.
+#[test]
+fn an_rnm_detail_layer_is_listed_once_with_its_reason() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        png(
+            &m.join("textures/pbr/arm/steel_detail.png"),
+            16,
+            16,
+            [128, 128, 255, 255],
+        );
+    });
+    also(request(&m, &loc), &spec(&loc, BOTH)).0.unwrap();
+    let r = report(&loc, "Mod");
+    assert_eq!(r.matches("steel_detail.png").count(), 1, "{r}");
+    assert!(
+        r.contains("steel_detail.png is not converted: detail layer not in the vanilla _n"),
+        "{r}"
+    );
+}
+
+/// N1: the brief writes the report after a failure, so a PBR run that fails is recorded with its phase and exit
+/// code, and a report is written when it can be (here it cannot: the PBR folder's name is taken by a file).
+#[test]
+fn a_failed_pbr_run_is_recorded_not_returned() {
+    let (_d, m, loc) = project(cup);
+    std::fs::write(loc.join("Mod PBR"), b"a file").unwrap();
+    let (s, ev) = also(request(&m, &loc), &spec(&loc, BOTH));
+    let s = s.unwrap();
+    let (p, _, code) = s.error.clone().expect("the error is kept");
+    assert_eq!((p, code), (Phase::Pbr, 3));
+    assert_eq!(s.exit_code(), 3);
+    assert!(!loc.join("Mod Vanilla").exists());
+    assert!(ev.iter().any(|e| matches!(&e.kind,
+        EventKind::Warning(w) if w.code == engine::codes::Code::AlsoPhaseFailed && w.message.contains("Pbr"))));
 }

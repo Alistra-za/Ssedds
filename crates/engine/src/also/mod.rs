@@ -69,10 +69,13 @@ pub struct AlsoSummary {
     pub notes: Vec<String>,
     /// A cancel stopped the export after this phase.
     pub cancelled_after: Option<Phase>,
-    /// The phase (Vanilla or CM) an engine error stopped, its message and its exit code (`EngineError::exit_code`).
+    /// The phase an engine error stopped (the PBR run, CM56; the Vanilla or CM plan or run), its message and its exit
+    /// code (`EngineError::exit_code`).
     pub error: Option<(Phase, String, i32)>,
     /// `zip` was on and a zip or the sums file was not written (`ALSO-ZIP-FAILED` or `ALSO-OWNED-UNREADABLE`).
     pub zip_failed: bool,
+    /// The report was not written: kept as edited outside Tessalith, or an I/O error (`ALSO-REPORT-FAILED`, CM51).
+    pub report_failed: bool,
 }
 
 /// `b`'s counts added to `a`, `cancelled` concatenated.
@@ -104,7 +107,7 @@ impl AlsoSummary {
             return *code;
         }
         match self.combined().exit_code() {
-            0 | 4 if self.cancelled_after.is_some() || self.zip_failed => 1,
+            0 | 4 if self.cancelled_after.is_some() || self.zip_failed || self.report_failed => 1,
             c => c,
         }
     }
@@ -744,9 +747,10 @@ fn do_copies(
 
 /// One Also export (Note CM): check the location and the `[export]` table, then run the PBR, Vanilla and CM phases
 /// in order. Errors before the PBR phase writes anything are returned. A cancel stops the remaining phases and is
-/// recorded in `cancelled_after`; an engine error of the Vanilla or CM phase stops them too and is recorded in
-/// `error` with its exit code, plus an `ALSO-PHASE-FAILED` event. With `zip` on, an export that finished (no cancel,
-/// no phase error) and whose owned record is readable is zipped (Task 8); file-level failures don't block it.
+/// recorded in `cancelled_after`; an engine error of the PBR run (CM56) or of the Vanilla or CM phase stops them too
+/// and is recorded in `error` with its exit code, plus an `ALSO-PHASE-FAILED` event. With `zip` on, an export that
+/// finished (no cancel, no phase error) and whose owned record is readable is zipped (Task 8); file-level failures
+/// don't block it. The report (Task 9) is written last, unless it is a dry run or the owned record is unreadable.
 pub fn run_also(
     engine: &Engine,
     cache: &AnalysisCache,
@@ -821,7 +825,13 @@ pub fn run_also(
         let text = report::render(&s, &rows, spec);
         match owned.write(&path, text.as_bytes()) {
             Ok(()) => s.report = Some(path),
-            Err(e) => s.notes.push(e.note(&path)),
+            // CM51 (fix round 1): as a zip not written, a warning and a partial export.
+            Err(e) => {
+                let m = e.note(&path);
+                warn(Code::AlsoReportFailed, &m);
+                s.notes.push(m);
+                s.report_failed = true;
+            }
         }
     }
     Ok(s)
@@ -893,6 +903,7 @@ fn run_phases(
         cancelled_after: None,
         error: None,
         zip_failed: false,
+        report_failed: false,
     };
 
     // PBR phase: today's export into folder 0, unprefixed, so the GUI's PGPatcher-JSON rows match.
@@ -911,12 +922,26 @@ fn run_phases(
         .as_ref()
         .and_then(|p| p.tool())
         .map(|t| t.version.clone());
-    let pbr_sum = engine.run(pbr_plan, rep, cancel)?;
-    s.phases.push((Phase::Pbr, pbr_sum));
     // Batch-level events of the later phases go out unprefixed, under the PBR phase's batch.
     let warn = |code: Code, message: String| {
         rep.emit(None, None, EventKind::Warning(Warning::new(code, message)))
     };
+    // Review M1: a phase's error keeps its phase and exit code, and is reported as an event. N1 (CM51): the PBR
+    // phase's too, so the report is still written after it.
+    let failed = |s: &mut AlsoSummary, phase: Phase, e: EngineError| {
+        warn(
+            Code::AlsoPhaseFailed,
+            format!("{phase:?} phase failed: {e}"),
+        );
+        s.error = Some((phase, e.to_string(), e.exit_code()));
+    };
+    match engine.run(pbr_plan, rep, cancel) {
+        Ok(sum) => s.phases.push((Phase::Pbr, sum)),
+        Err(e) => {
+            failed(&mut s, Phase::Pbr, e);
+            return Ok(s);
+        }
+    }
     if !pbr_req.dry_run {
         // TA21: the owned-file record lives in the PBR folder (Tasks 8 and 9 write through it). It is created when
         // missing and never rewritten here; one that cannot be read is left as it is (review M4).
@@ -956,14 +981,6 @@ fn run_phases(
         ),
         new_batch_id(),
     );
-    // Review M1: a later phase's error keeps its phase and exit code, and is reported as an event.
-    let failed = |s: &mut AlsoSummary, phase: Phase, e: EngineError| {
-        warn(
-            Code::AlsoPhaseFailed,
-            format!("{phase:?} phase failed: {e}"),
-        );
-        s.error = Some((phase, e.to_string(), e.exit_code()));
-    };
     let vreq = phase_req(1, DeriveMode::Vanilla, &sets, &drop);
     let mut vplan = match engine.plan(vreq.clone(), &vrep, cancel) {
         Ok(p) => p,
@@ -1057,8 +1074,12 @@ fn run_phases(
         .flat_map(|d| &d.members)
         .map(PathBuf::as_path)
         .collect();
+    // I1: a derived output's plan-time error (a CM-only size mismatch or path conflict) runs too, so it is failed and
+    // counted; a plain error job, which the Vanilla phase reports already, does not.
+    cplan
+        .jobs
+        .retain(|j| j.derive.is_some() || report::derive_error(j, &members));
     report::add_cm_errors(rows, &cplan, &sets);
-    cplan.jobs.retain(|j| j.derive.is_some());
     cplan.skipped.retain(|f| members.contains(f.path.as_path()));
     cplan.failed.retain(|f| members.contains(f.path.as_path()));
     cplan.cancelled.retain(|p| members.contains(p.as_path()));
