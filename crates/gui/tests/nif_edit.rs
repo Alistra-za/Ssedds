@@ -3799,6 +3799,63 @@ fn key_table_colour_picker_is_disabled_for_hdr_values() {
 
 /// B-P35 minor (D11): TBC, XYZ and CONST keys are drawn, but their handles, table cells and buttons are disabled
 /// and a drag records nothing.
+/// Review minor: NaN and negative channels disable the swatch too (never clamped by the picker).
+#[test]
+fn key_table_colour_picker_is_disabled_for_nan_and_negative_values() {
+    let (m, _) = colour_scene([f32::NAN, 0.5, 0.5], [0.5, -0.25, 0.5]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    for k in [1, 2] {
+        let n = format!("Emissive colour key {k} colour");
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, &n);
+        assert!(sw.accesskit_node().is_disabled(), "{n}");
+    }
+}
+
+/// Review minor (D11): a TBC, XYZ or CONST colour key's swatch is disabled like its cells, though in range.
+#[test]
+fn key_table_colour_picker_is_disabled_for_tbc_xyz_and_const_keys() {
+    for t in [3, 4, 5] {
+        let (mut m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyColorController".into(),
+            var: Some(1),
+            nth: 0,
+        };
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(shape_named(e, "S")), role).unwrap();
+        let base = pos_keys(&m, ctrl);
+        let mut keys = base.clone();
+        keys.key_type = Some(t);
+        for k in &mut keys.keys {
+            k.tbc = (t == 3).then_some([0.0; 3]);
+        }
+        m.edit_push(
+            vec![Op::SetKeys {
+                at,
+                clip: None,
+                keys: KeyData::Pos(keys),
+                base: KeyData::Pos(base),
+            }],
+            None,
+        );
+        assert_eq!(
+            pos_keys(&m, ctrl).key_type,
+            Some(t),
+            "{:?}",
+            m.edit.as_ref().unwrap().outcomes
+        );
+        let mut h = view(m);
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        h.get_by_label("These keys are previewed, not edited.");
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 2 colour");
+        assert!(sw.accesskit_node().is_disabled(), "type {t}");
+    }
+}
+
 #[test]
 fn tbc_xyz_and_const_keys_are_drawn_not_edited() {
     for t in [3, 4, 5] {
