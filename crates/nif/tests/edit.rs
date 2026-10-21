@@ -3781,6 +3781,12 @@ fn add_sequence_refuses_an_unreadable_root_manager() {
         refused(&x, add),
         "The root's controller chain cannot be read."
     );
+    let remove = remove_seq(root_anchor(&x), "Open", 0);
+    assert_eq!(
+        refused(&x, remove),
+        "The root's controller chain cannot be read."
+    );
+    assert_eq!(clip_key(&x, &read_model(&x).unwrap(), n), None);
 }
 
 /// C-P35 M3: two managers that share one palette and one MTTC, each listing a clip that needs a different shape
