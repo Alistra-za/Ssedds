@@ -1,6 +1,7 @@
 //! Skyrim LE/SE NIF reader. Layer 0 (`scan`) reads only the header, shape heads and the small property blocks,
 //! seeking by the header's block-size array (plan 01 Q1). Input is always `&[u8]`; loose files, BSA entries and
 //! fixtures share one path. Layer 1 (`geom`) decodes SSE BSTriShape geometry for the 3D preview.
+pub mod anim;
 pub mod ctrl;
 pub mod cursor;
 pub mod edit;

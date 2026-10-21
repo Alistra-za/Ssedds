@@ -240,6 +240,11 @@ pub struct Sequence {
     pub name: Option<String>,
     pub blocks: Vec<CtrlBlock>,
     pub manager: i32,
+    /// CycleType: 0 loop, 1 reverse, 2 clamp (nif.xml 1022-1027), as stored.
+    pub cycle: u32,
+    pub frequency: f32,
+    pub start: f32,
+    pub stop: f32,
 }
 
 /// Copies one string-table entry. `budget` is the bytes still allowed to be copied for this sequence.
@@ -311,6 +316,10 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         name,
         blocks,
         manager: u32_at(d, tail + 24) as i32,
+        cycle: u32_at(d, tail + 8),
+        frequency: f32_at(d, tail + 12),
+        start: f32_at(d, tail + 16),
+        stop: f32_at(d, tail + 20),
     })
 }
 
