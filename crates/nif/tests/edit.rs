@@ -3107,7 +3107,12 @@ fn convert_moves_keys_into_one_clip_and_sets_0x20() {
     for c in [4, 5] {
         assert_eq!(m2.ctrls[&c].flags, 0x48 | 0x20);
     }
-    assert!(nif::anim::free_tracks(&m2, o, 3).is_empty());
+    // C-P32: the free preview holds each clip's first key (LINEAR (0, 0) -> (1, 1)), constant
+    let idle = nif::anim::free_tracks(&m2, o, 3);
+    assert_eq!(idle.iter().map(|t| t.ctrl).collect::<Vec<_>>(), [4, 5]);
+    assert!(idle
+        .iter()
+        .all(|t| t.value == nif::anim::AnimValue::F32(0.0) && t.keys.is_none() && t.freq == 0.0));
     let clip: Vec<_> = nif::anim::clip_tracks(&m2, o, seq as u32, 3)
         .into_iter()
         .map(|t| t.keys)

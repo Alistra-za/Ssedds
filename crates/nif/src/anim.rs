@@ -1,6 +1,6 @@
 //! Controller evaluation for the preview (spec §6.1-§6.2): NifSkope's ctrlTime, key sampling and the
 //! controller-target → MaterialState mapping. Pure.
-use crate::ctrl::{CtrlBlock, Sequence, TimeCtrl};
+use crate::ctrl::{read_manager, CtrlBlock, Sequence, TimeCtrl};
 use crate::header::Header;
 use crate::keys::{read_data, Key, KeyData, KeyGroup, KeyType};
 use crate::material::MaterialState;
@@ -204,7 +204,8 @@ fn chain_of(m: &NifModel, prop: u32) -> Option<(&[u32], &[u32], &'static [u8])> 
     Some((&a.prop.ctrls, &a.prop.users, b"NiAlphaProperty"))
 }
 
-/// Tracks of the controllers that run in the free preview: known, Active, not managed (G2, F13). Parses the
+/// Tracks of the controllers that run in the free preview: known, Active, not managed (G2, F13); a managed one holds
+/// its clip's first key instead (C-P32, `idle_track`). Parses the
 /// header and reads key data on each call; call once per edit, never per frame (F23).
 pub fn free_tracks(m: &NifModel, b: &[u8], prop: u32) -> Vec<Track> {
     Header::parse(b).map_or(vec![], |h| free_tracks_in(m, &h, b, prop))
@@ -215,11 +216,24 @@ pub fn free_tracks_in(m: &NifModel, h: &Header, b: &[u8], prop: u32) -> Vec<Trac
     let Some((chain, _, _)) = chain_of(m, prop) else {
         return vec![];
     };
+    // The sequences in manager-list order; empty without a readable manager (G2: the property value stays).
+    let listed: Vec<&Sequence> = (0..h.sizes.len())
+        .filter(|&i| h.kind(i) == b"NiControllerManager")
+        .filter_map(|i| read_manager(h, b, i).ok())
+        .flat_map(|g| g.sequences)
+        .filter_map(|r| m.sequences.iter().find(|s| s.block as i32 == r))
+        .collect();
     chain
         .iter()
         .filter_map(|&id| {
             let c = m.ctrls.get(&id)?;
-            if !c.known || c.flags & 0x08 == 0 || m.managed(id) {
+            if !c.known {
+                return None;
+            }
+            if m.managed(id) {
+                return idle_track(m, h, b, &listed, c);
+            }
+            if c.flags & 0x08 == 0 {
                 return None;
             }
             let target = target_of(c)?;
@@ -237,6 +251,41 @@ pub fn free_tracks_in(m: &NifModel, h: &Header, b: &[u8], prop: u32) -> Vec<Trac
             })
         })
         .collect()
+}
+
+/// C-P32 (IDLE-NM, C5 in-game check): a managed controller with no clip playing holds the first key of the first
+/// listed sequence that binds it (the CB interpolator's Value when it has no keys). A constant track: frequency 0, so
+/// it adds nothing to the Time slider's span. None when no listed sequence binds it.
+fn idle_track(
+    m: &NifModel,
+    h: &Header,
+    b: &[u8],
+    listed: &[&Sequence],
+    c: &TimeCtrl,
+) -> Option<Track> {
+    let target = target_of(c)?;
+    let interp = listed.iter().find_map(|s| {
+        bound_cbs(m, h, s, c.block)
+            .first()
+            .map(|&k| s.blocks[k].interp)
+    })?;
+    let (value, keys) = interp_track(m, h, b, interp);
+    let value = match &keys {
+        Some(KeyData::Float(g)) if !g.keys.is_empty() => AnimValue::F32(g.keys[0].value),
+        Some(KeyData::Pos(g)) if !g.keys.is_empty() => AnimValue::Vec3(g.keys[0].value),
+        _ => value,
+    };
+    (value != AnimValue::None).then_some(Track {
+        ctrl: c.block,
+        target,
+        flags: 0x08,
+        freq: 0.0,
+        phase: 0.0,
+        start: 0.0,
+        stop: 0.0,
+        value,
+        keys: None,
+    })
 }
 
 /// B2's binding (spec §5.5): the controller of `ctrls` (one property's chain) that CB `cb` drives, by its controller

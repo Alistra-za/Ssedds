@@ -378,7 +378,15 @@ fn clip_tracks_bind_by_ref_then_by_strings() {
             ..want.clone()
         }]
     );
-    assert!(free_tracks(&m, &b, 6).is_empty());
+    // C-P32: with no clip playing, the managed controller holds A's value (A is listed first, no keys)
+    assert_eq!(
+        free_tracks(&m, &b, 6),
+        [Track {
+            freq: 0.0,
+            stop: 0.0,
+            ..want.clone()
+        }]
+    );
 
     let strings = Header::parse(&b).unwrap().strings;
     let idx = |s: &[u8]| strings.iter().position(|x| x == s).unwrap() as i32;
@@ -415,6 +423,71 @@ const REAL: [&str; 5] = [
     "meshes/creationclub/bgssse067/effects/lavabubbles01.nif",
     "meshes/architecture/solitude/clutter/slighthousefire.nif",
 ];
+
+/// The emissive multiple the free preview (no clip playing) shows on `prop` at time `t`.
+fn idle_emissive(b: &[u8], prop: u32, t: f32) -> f32 {
+    let m = read_model(b).unwrap();
+    apply_anim(&base_of(&m, prop), &free_tracks(&m, b, prop), t)
+        .params
+        .emissive_multiple
+}
+
+/// C-P32 (IDLE-NM): with no clip playing, a managed controller holds the first key of its clip, not the property
+/// value and not the clip interpolator's own Value.
+#[test]
+fn a_managed_controller_with_no_playing_clip_holds_its_clips_first_key() {
+    use nif::edit::{anchor_role, apply, Op, Role, CONVERT_NAME};
+    let b = builder::scenes::animated(Some(1), 2);
+    let at = anchor_role(&read_model(&b).unwrap(), Some(2), Role::Shader).unwrap();
+    let r = apply(
+        &b,
+        &[Op::ConvertChainToClips {
+            at,
+            name: CONVERT_NAME.into(),
+        }],
+    )
+    .unwrap();
+    let m = read_model(&r.bytes).unwrap();
+    assert!(m.managed(4), "Emissive multiple is in the clip");
+    let cb = m.sequences[0]
+        .blocks
+        .iter()
+        .find(|cb| cb.controller == 4)
+        .unwrap();
+    let interp = &m.interps[&(cb.interp as u32)];
+    assert_eq!(interp.value, [0.0]);
+    // NiFloatData: count, key type, then key 0's time and value
+    let o = patch(&r.bytes, interp.data as u32, 12, &3.0f32.to_le_bytes());
+    let base = base_of(&read_model(&o).unwrap(), 3)
+        .params
+        .emissive_multiple;
+    assert_ne!(base, 3.0);
+    for t in [0.0, 0.5, 1.0, 7.25] {
+        assert_eq!(idle_emissive(&o, 3, t), 3.0, "t={t}");
+    }
+}
+
+/// C-P32: the first sequence in the manager's list that binds the controller gives the held value (an interpolator
+/// without keys holds its Value); without a manager (G2) the property value stays.
+#[test]
+fn the_first_manager_listed_clip_gives_the_held_value() {
+    let b = patch(&managed_clip(), 10, 0, &0.25f32.to_le_bytes());
+    let b = patch(&b, 11, 0, &0.75f32.to_le_bytes());
+    assert_eq!(idle_emissive(&b, 6, 0.5), 0.25, "A is listed first");
+    // manager body: 26 controller bytes, cumulative u8, count u32, then the sequence refs
+    let ba = patch(
+        &b,
+        1,
+        31,
+        &[3i32.to_le_bytes(), 2i32.to_le_bytes()].concat(),
+    );
+    assert_eq!(idle_emissive(&ba, 6, 0.5), 0.75, "B is listed first");
+
+    let p = builder::scenes::managed_pair();
+    let m = read_model(&p).unwrap();
+    assert!(m.managed(5) && !m.sequences.is_empty());
+    assert!(free_tracks(&m, &p, 4).is_empty(), "no manager: G2");
+}
 
 fn loose(root: &std::path::Path, rel: &str) -> Option<Vec<u8>> {
     std::fs::read_dir(root.join("mods"))

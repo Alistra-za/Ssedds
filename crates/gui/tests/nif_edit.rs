@@ -4413,6 +4413,48 @@ fn clip_preview_swaps_interpolators_only_while_selected() {
 // ---- v2 B7 fix round 1 (B-P36) ----
 
 /// The managed controller with_clip puts first in the lit shape's chain.
+/// C-P32 (IDLE-NM, the C5 in-game check): with no clip playing, a managed controller previews its clip's first key,
+/// not the property value; the clip itself still plays its keys.
+#[test]
+fn an_idle_clip_previews_its_first_key() {
+    let (_d, mut m, _cmds) = playing_session();
+    let (shape, lsp) = lit_shape(m.edit.as_ref().unwrap());
+    let first = [0.9, 0.3, 0.1];
+    add_colour_ctrl(&mut m, shape, first, [0.1, 0.2, 0.3]);
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::ConvertChainToClips {
+            at,
+            name: nif::edit::CONVERT_NAME.into(),
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes.last(), Some(&nif::edit::Outcome::Applied));
+    assert_eq!(e.playing, Playing::Free);
+    let base = e.model.lighting[&lsp].lighting.params.emissive_color;
+    assert_ne!(base, first);
+    let seq = e.model.sequences[0].block;
+    let at = |m: &MeshesModel, t: f32| {
+        m.edit
+            .as_ref()
+            .unwrap()
+            .frame_materials(t)
+            .into_iter()
+            .find(|(id, _)| id.0 == shape)
+            .unwrap()
+            .1
+            .params
+            .emissive_color
+    };
+    for t in [0.0, 0.5, 1.0] {
+        assert_eq!(at(&m, t), first, "Free at {t}");
+    }
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    assert_eq!(at(&m, 1.0), [0.1, 0.2, 0.3], "the clip");
+}
+
 fn clip_ctrl(e: &NifEdit) -> u32 {
     let (_, lsp) = lit_shape(e);
     e.model.lighting[&lsp].prop.ctrls[0]
