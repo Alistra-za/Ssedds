@@ -904,13 +904,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         item.kind,
         item.status.clone(),
     );
-    let (decisions, mut warnings, job) = (
+    // The texture's own list shows its check results, Info included (preflight K5, X3), and GEN-STALE (Note CO).
+    let (decisions, warnings, job) = (
         item.decisions.clone(),
-        item.warnings.clone(),
+        model.item_messages(key),
         item.job.clone(),
     );
-    // The texture's own list shows its check results, Info included (preflight K5, X3).
-    warnings.extend(model.check_warnings(key).iter().cloned());
     let packed_output = match &status {
         ItemStatus::PackedInto(j) => model
             .items

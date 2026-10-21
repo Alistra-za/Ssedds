@@ -19,6 +19,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
         Dialog::Rename(d) => super::rename_dialog::draw(ctx, model, d),
         Dialog::GenerateFromNormal(_) => super::from_normal::draw(ctx, model),
+        Dialog::ConfirmDeleteGenerated(rows) => confirm_delete_generated(ctx, model, &rows),
         Dialog::HalfSize(rows) => half_size(ctx, model, rows),
         Dialog::CopyHalfSize { from, to, .. } => copy_half_size(ctx, model, &from, to.len()),
     }
@@ -387,6 +388,55 @@ fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String])
     );
     if clicked == Some(0) {
         model.reset_all_settings(keys);
+    } else if clicked == Some(1) || k.cancel || k.enter {
+        model.dialog = None;
+    }
+}
+
+/// Note CO (CE3): the "Delete generated file" box's buttons, `name` the file's short name: a red-outlined Delete,
+/// on only when a listed file may be deleted (`any`), and Cancel, the Enter default (ui-rules 5.2).
+pub fn delete_generated_buttons(name: &str, any: bool) -> [(String, Role, bool); 2] {
+    [
+        (format!("Delete {name}"), Role::Destructive, any),
+        ("Cancel".into(), Role::Default, true),
+    ]
+}
+
+/// Note CO: "Delete generated file…" asks first; the body keeps each whole name (CE19) and says why a file is kept.
+fn confirm_delete_generated(
+    ctx: &egui::Context,
+    model: &mut AppModel,
+    rows: &[crate::model::from_normal::DeleteGenerated],
+) {
+    let name = match rows {
+        [r] => short_name(&r.name),
+        _ => format!("{} files", rows.len()),
+    };
+    let any = rows.iter().any(|r| r.refused.is_none());
+    let owned = delete_generated_buttons(&name, any);
+    let buttons: Vec<(&str, Role, bool)> =
+        owned.iter().map(|(l, r, e)| (l.as_str(), *r, *e)).collect();
+    let refused = rows.iter().find_map(|r| r.refused.as_deref());
+    let (k, clicked) = dialog_hover(
+        ctx,
+        "delete-generated",
+        true,
+        420.0,
+        "Delete generated file",
+        &buttons,
+        &[refused, None],
+        |ui| {
+            for r in rows {
+                ui.label(&r.body);
+                if let Some(why) = &r.refused {
+                    ui.weak(format!("Not deleted: {why}."));
+                }
+            }
+            ui.weak("This cannot be undone.");
+        },
+    );
+    if clicked == Some(0) {
+        model.confirm_delete_generated();
     } else if clicked == Some(1) || k.cancel || k.enter {
         model.dialog = None;
     }

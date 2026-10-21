@@ -1520,3 +1520,603 @@ fn a_running_preview_does_not_hold_up_open_or_close() {
     assert!(m.gen.is_none() && m.dialog.is_none());
     idle(&mut m);
 }
+
+// ---- Task 7: provenance on the slot row, stale, Regenerate, Delete generated file ----
+
+const NORMAL: &str = "rock01_normal.png";
+
+fn select_rock(m: &mut AppModel) {
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("landscape/rock01"))
+        .expect("the rock set")
+        .key
+        .clone();
+    m.select_set(&key);
+}
+
+/// The Height row's status dot: (its AccessKit label, its rect), the dot nearest the row label's height to its right.
+fn height_dot(h: &egui_kittest::Harness<'static, AppModel>) -> (String, eframe::egui::Rect) {
+    use egui_kittest::kittest::Queryable;
+    let row = slot_rect(h, "Height _p");
+    ["ready", "warning", "blocks export"]
+        .iter()
+        .flat_map(|l| {
+            h.query_all_by_label(l)
+                .map(move |n| (l.to_string(), n.rect()))
+        })
+        .filter(|(_, r)| r.min.x > row.max.x)
+        .min_by(|a, b| {
+            let dy = |r: &eframe::egui::Rect| (r.center().y - row.center().y).abs();
+            dy(&a.1).total_cmp(&dy(&b.1))
+        })
+        .expect("the Height row's dot")
+}
+
+/// Rewrite the normal with other content (a new stamp) and plan again; returns its old bytes.
+fn rewrite_normal(m: &mut AppModel, d: &Path) -> Vec<u8> {
+    let p = land(d).join(NORMAL);
+    let old = std::fs::read(&p).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, _| Rgb([100 + x as u8, 128u8, 240]))
+        .save(&p)
+        .unwrap();
+    reopen(m, d);
+    old
+}
+
+fn stale(m: &AppModel) -> Option<String> {
+    m.generated_info(P_KEY).expect("a generated item").stale
+}
+
+const EARLIER: &str = "generated from an earlier rock01_normal.png: Regenerate… to update it";
+const NO_HEIGHT: &str = "this set's shader reads no height map; the generated file is unused";
+
+fn delete_op(menu: &[MenuEntry]) -> Option<&MenuEntry> {
+    menu.iter().find(|e| {
+        matches!(
+            e.action,
+            MenuAction::Generated {
+                op: GenOp::Delete(_),
+                ..
+            }
+        )
+    })
+}
+
+/// The fixture plans with suggestions unaccepted (`opened`): decide the generated `_p` so its tile can be ready.
+fn decide_p(m: &mut AppModel) {
+    m.decide(
+        P_KEY,
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Height),
+    );
+    idle(m);
+}
+
+fn add_real_p(m: &mut AppModel, d: &Path) {
+    ImageBuffer::from_fn(64, 64, |_, _| Luma([128u8]))
+        .save(land(d).join("rock01_p.png"))
+        .unwrap();
+    reopen(m, d);
+}
+
+#[test]
+fn the_slot_row_says_where_a_generated_map_came_from() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    assert_eq!(
+        m.generated_info(P_KEY),
+        Some(GenInfo {
+            from: NORMAL.into(),
+            stale: None,
+            replaced_by: None
+        })
+    );
+    assert_eq!(
+        m.sets_doc.as_ref().unwrap().generated()[P_KEY]["from"],
+        "landscape/rock01_normal.png",
+        "the record keeps the item key"
+    );
+    assert_eq!(m.generated_info("landscape/rock01_normal.png"), None);
+    decide_p(&mut m);
+    select_rock(&mut m);
+    let mut h = harness(m);
+    h.run();
+    let row = slot_rect(&h, "Height _p");
+    let marker = h
+        .query_all_by_label("Generated from rock01_normal.png")
+        .map(|n| n.rect())
+        .find(|r| r.min.x > row.max.x && (r.center().y - row.center().y).abs() < 40.0)
+        .expect("the Flags cell's generated marker");
+    let (dot, _) = height_dot(&h);
+    assert_eq!(dot, "ready");
+    let file = h
+        .query_all_by_label("rock01_p_generated.png")
+        .map(|n| n.rect())
+        .filter(|r| r.min.x > row.max.x && r.max.x < marker.min.x)
+        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the File cell (right of the thumbnail)");
+    h.hover_at(file.center());
+    h.run();
+    assert!(
+        h.query_all_by_label_contains("Generated from rock01_normal.png")
+            .any(|n| {
+                let a = n.accesskit_node();
+                a.label()
+                    .or(a.value())
+                    .is_some_and(|l| l.contains("rock01_p_generated.png"))
+            }),
+        "the File cell's hover names the normal"
+    );
+}
+
+#[test]
+fn a_stale_generated_map_turns_only_its_row_dot_amber() {
+    use egui_kittest::kittest::Queryable;
+    use sdc_gui::model::bottom;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    decide_p(&mut m);
+    let set_key = rock_view(&m).key;
+    // The rows about the generated item or its set (the rewrite adds rows about the normal itself).
+    let rows = |m: &AppModel| -> Vec<bottom::Problem> {
+        bottom::problems(m)
+            .iter()
+            .filter(|p| match &p.at {
+                bottom::At::Texture(k) => k == P_KEY,
+                bottom::At::Set { key, .. } => *key == set_key,
+                _ => false,
+            })
+            .cloned()
+            .collect()
+    };
+    let rows_before = rows(&m);
+    let dots = |m: &AppModel| {
+        (
+            bottom::set_ready(m, &rock_view(m)),
+            bottom::tile_ready(m.item(P_KEY).unwrap()),
+            sdc_gui::ui::header::export_dot(m),
+        )
+    };
+    let before = dots(&m);
+    rewrite_normal(&mut m, d.path());
+    assert_eq!(stale(&m).as_deref(), Some(EARLIER));
+    assert_eq!(before, dots(&m), "set, tile and export dots do not read it");
+    assert_eq!(rows(&m), rows_before, "no Problems row for it or its set");
+    assert!(!bottom::problems(&m)
+        .iter()
+        .any(|p| p.code == Some(engine::codes::Code::GenStale)));
+    select_rock(&mut m);
+    let mut h = harness(m);
+    h.run();
+    let (dot, r) = height_dot(&h);
+    assert_eq!(dot, "warning");
+    h.hover_at(r.center());
+    h.run();
+    assert!(h
+        .query_by_label_contains(&format!("stale: {EARLIER}"))
+        .is_some());
+}
+
+#[test]
+fn gen_info_results_are_hover_only() {
+    use engine::codes::Code;
+    use sdc_gui::model::bottom;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    rewrite_normal(&mut m, d.path());
+    assert!(stale(&m).is_some());
+    add_real_p(&mut m, d.path());
+    assert!(m
+        .item(P_KEY)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::GenReplaced));
+    assert!(stale(&m).is_some());
+    let codes: Vec<_> = bottom::problems(&m).iter().filter_map(|p| p.code).collect();
+    assert!(!codes.contains(&Code::GenReplaced), "{codes:?}");
+    assert!(!codes.contains(&Code::GenStale), "{codes:?}");
+}
+
+#[test]
+fn delete_confirm_defaults_to_cancel_and_outlines_delete() {
+    use eframe::egui::Key;
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    let open = |m: &mut AppModel| {
+        m.run_menu(MenuAction::Generated {
+            set: ROCK_SET.into(),
+            op: GenOp::Delete(P_KEY.into()),
+        });
+        assert!(matches!(m.dialog, Some(Dialog::ConfirmDeleteGenerated(_))));
+    };
+    open(&mut m);
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(3);
+    assert!(h
+        .query_by_label("Delete rock01_p_generated.png? It was generated from rock01_normal.png.")
+        .is_some());
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Enter is Cancel");
+    assert!(p.exists());
+    open(h.state_mut());
+    h.run_steps(3);
+    h.get_by_label("Delete rock01_p_generated.png").click();
+    h.run_steps(3);
+    assert!(!p.exists());
+    assert!(h.state().dialog.is_none());
+    for (label, role, _) in sdc_gui::ui::dialogs::delete_generated_buttons("x.png", true) {
+        let want = if label == "Cancel" {
+            sdc_gui::ui::dialogs::Role::Default
+        } else {
+            sdc_gui::ui::dialogs::Role::Destructive
+        };
+        assert_eq!(role, want, "{label}");
+    }
+}
+
+#[test]
+fn stale_follows_the_normal_hash_and_the_neutral_flags() {
+    use engine::codes::{Code, Severity};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    assert_eq!(stale(&m), None);
+    let hashed = m.gen_hashes();
+    let gen_stale = |m: &AppModel| {
+        assert!(
+            !m.item(P_KEY)
+                .unwrap()
+                .warnings
+                .iter()
+                .any(|w| w.code == Code::GenStale),
+            "never on the item"
+        );
+        m.item_messages(P_KEY)
+            .into_iter()
+            .find(|w| w.code == Code::GenStale)
+    };
+    assert_eq!(gen_stale(&m), None);
+
+    let old = rewrite_normal(&mut m, d.path());
+    assert_eq!(stale(&m).as_deref(), Some(EARLIER));
+    let w = gen_stale(&m).expect("in the message list");
+    assert_eq!(
+        (w.message.as_str(), w.code.severity()),
+        (EARLIER, Severity::Info)
+    );
+    let n = m.gen_hashes();
+    assert_eq!(n, hashed + 1, "hashed once for the new stamp");
+    for _ in 0..50 {
+        stale(&m);
+    }
+    assert_eq!(m.gen_hashes(), n, "not once per frame");
+
+    std::fs::write(land(d.path()).join(NORMAL), old).unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(stale(&m), None, "restored");
+    assert_eq!(gen_stale(&m), None);
+
+    let n = m.gen_hashes();
+    m.set_json_values(
+        ROCK_SET,
+        vec![
+            ("multilayer".into(), Some(json!(true))),
+            ("coat_parallax".into(), Some(json!(true))),
+        ],
+    );
+    idle(&mut m);
+    let want = "generated for a height neutral of 0.5; this set now wants 1.0";
+    assert_eq!(stale(&m).as_deref(), Some(want));
+    assert_eq!(gen_stale(&m).unwrap().message, want);
+    assert_eq!(m.gen_hashes(), n, "a set edit reads no normal again");
+
+    shader(&mut m, Shader::Multilayer);
+    assert_eq!(stale(&m).as_deref(), Some(NO_HEIGHT));
+    assert_eq!(gen_stale(&m).unwrap().message, NO_HEIGHT);
+}
+
+#[test]
+fn a_missing_normal_is_stale() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    std::fs::remove_file(land(d.path()).join(NORMAL)).unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(stale(&m).as_deref(), Some("the normal map is gone"));
+}
+
+#[test]
+fn regenerate_reuses_the_stored_settings_and_replaces_only_its_own_file() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen
+        .as_mut()
+        .unwrap()
+        .opts
+        .height
+        .as_mut()
+        .unwrap()
+        .strength = 0.5;
+    m.gen_generate();
+    idle(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    let first = std::fs::read(&p).unwrap();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(
+        m.gen
+            .as_ref()
+            .unwrap()
+            .opts
+            .height
+            .as_ref()
+            .unwrap()
+            .strength,
+        0.5
+    );
+    m.gen
+        .as_mut()
+        .unwrap()
+        .opts
+        .height
+        .as_mut()
+        .unwrap()
+        .strength = 1.0;
+    m.gen_generate();
+    idle(&mut m);
+    assert!(
+        m.gen.is_none(),
+        "{:?}",
+        m.gen.as_ref().and_then(|g| g.error.clone())
+    );
+    assert_ne!(first, std::fs::read(&p).unwrap(), "replaced");
+    let rec = m.provenance(P_KEY).unwrap();
+    assert_eq!(
+        rec.sha256,
+        sdc_gui::model::history::sha256_of(&p).unwrap(),
+        "the new sha"
+    );
+    assert_eq!(rec.opts.height.unwrap().strength, 1.0);
+}
+
+#[test]
+fn regenerate_follows_the_sets_neutral_and_a_shrunk_normal() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    relief_normal(&land(d.path()), NORMAL, 1024);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen.as_mut().unwrap().opts.size = 1024;
+    assert_eq!(
+        m.gen
+            .as_ref()
+            .unwrap()
+            .opts
+            .height
+            .as_ref()
+            .unwrap()
+            .neutral,
+        Neutral::Half
+    );
+    m.gen_generate();
+    idle(&mut m);
+    assert!(m.gen.is_none());
+    m.set_json_values(
+        ROCK_SET,
+        vec![
+            ("multilayer".into(), Some(json!(true))),
+            ("coat_parallax".into(), Some(json!(true))),
+        ],
+    );
+    idle(&mut m);
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    let o = m.gen.as_ref().unwrap().opts.clone();
+    assert_eq!(o.height.unwrap().neutral, Neutral::White);
+    assert_eq!(o.size, 1024);
+    m.gen_cancel();
+    relief_normal(&land(d.path()), NORMAL, 512);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(m.gen.as_ref().unwrap().opts.size, 512, "never upsampled");
+}
+
+#[test]
+fn regenerate_refuses_a_generated_file_the_user_edited() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    let mut bytes = std::fs::read(&p).unwrap();
+    bytes.push(0);
+    std::fs::write(&p, &bytes).unwrap();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen
+        .as_mut()
+        .unwrap()
+        .opts
+        .height
+        .as_mut()
+        .unwrap()
+        .strength = 0.5;
+    m.gen_generate();
+    idle(&mut m);
+    let err = m
+        .gen
+        .as_ref()
+        .and_then(|g| g.error.clone())
+        .expect("refused");
+    assert_eq!(
+        err,
+        "rock01_p_generated.png was edited since it was generated, so it is not overwritten; delete or rename it first"
+    );
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "unchanged");
+}
+
+#[test]
+fn an_in_place_export_still_offers_regenerate() {
+    use engine::codes::Code;
+    let d = tempfile::tempdir().unwrap();
+    // A Parallax set: its `_p` exports to `textures/landscape/` (a PBR one to `textures/pbr/…`).
+    let mut m = relief_clean(d.path());
+    shader(&mut m, Shader::Parallax);
+    generate_height(&mut m);
+    let root = m.root.clone().unwrap();
+    m.sets_doc.as_mut().unwrap().set_export_folder(&root);
+    reopen(&mut m, d.path());
+    let out = m.item(P_KEY).unwrap().job.as_ref().unwrap().output.clone();
+    assert_eq!(out, land(d.path()).join("rock01_p.dds"), "next to the PNG");
+    // What an in-place export writes there (the GUI's own Export refuses the opened folder; `sdc convert` does not).
+    bc1_dds(&out, 64, 64);
+    reopen(&mut m, d.path());
+    assert!(
+        rock_view(&m)
+            .members
+            .iter()
+            .any(|k| k == "landscape/rock01_p.dds"),
+        "a set member"
+    );
+    assert!(!m
+        .item(P_KEY)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::GenReplaced));
+    let e = m.gen_entry(ROCK_SET, Some(GenMap::Height));
+    assert_eq!((e.label.as_str(), e.disabled), ("Regenerate…", None));
+}
+
+fn delete_rows(m: &AppModel) -> Vec<DeleteGenerated> {
+    match &m.dialog {
+        Some(Dialog::ConfirmDeleteGenerated(d)) => d.clone(),
+        d => panic!("{d:?}"),
+    }
+}
+
+#[test]
+fn a_real_height_added_later_replaces_the_generated_one_and_delete_is_offered() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    add_real_p(&mut m, d.path());
+    assert_eq!(
+        m.generated_info(P_KEY).unwrap().replaced_by.as_deref(),
+        Some("rock01_p.png")
+    );
+    let entry = delete_op(&m.slot_menu(ROCK_SET, SlotKind::Height))
+        .expect("Delete generated file…")
+        .clone();
+    assert_eq!(entry.label, "Delete generated file…");
+    assert_eq!(entry.disabled, None);
+    m.run_menu(entry.action.clone());
+    let rows = delete_rows(&m);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].body,
+        "Delete rock01_p_generated.png? It was generated from rock01_normal.png."
+    );
+    assert_eq!(rows[0].refused, None);
+    let steps = m.history.undo.len();
+    m.confirm_delete_generated();
+    idle(&mut m);
+    assert!(!p.exists());
+    assert!(m.provenance(P_KEY).is_none());
+    assert_eq!(m.history.undo.len(), steps, "not undoable");
+    assert!(m.dialog.is_none());
+
+    // An edited file and one with no record: the box says so, and only Cancel works (it never deletes a file
+    // Tessalith did not write as it is now).
+    for edited in [true, false] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = relief_rock(d.path());
+        generate_height(&mut m);
+        let p = land(d.path()).join("rock01_p_generated.png");
+        let want = if edited {
+            let mut b = std::fs::read(&p).unwrap();
+            b.push(0);
+            std::fs::write(&p, b).unwrap();
+            "Delete rock01_p_generated.png? It was generated from rock01_normal.png. It was edited since."
+        } else {
+            m.sets_doc.as_mut().unwrap().set_generated(P_KEY, None);
+            "Delete rock01_p_generated.png? Tessalith has no record of generating it."
+        };
+        add_real_p(&mut m, d.path());
+        let entry = delete_op(&m.slot_menu(ROCK_SET, SlotKind::Height))
+            .expect("offered")
+            .clone();
+        m.run_menu(entry.action);
+        let rows = delete_rows(&m);
+        assert_eq!(rows[0].body, want);
+        assert!(rows[0].refused.is_some());
+        m.confirm_delete_generated();
+        assert!(p.exists(), "edited {edited}: kept");
+    }
+}
+
+#[test]
+fn the_set_card_menu_lists_generated_files_to_delete() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    assert!(m.delete_generated_entries(ROCK_SET).is_empty());
+    generate_height(&mut m);
+    let es = m.delete_generated_entries(ROCK_SET);
+    assert_eq!(es.len(), 1);
+    assert_eq!(es[0].label, "rock01_p_generated.png");
+    assert_eq!(
+        es[0].action,
+        MenuAction::Generated {
+            set: ROCK_SET.into(),
+            op: GenOp::Delete(P_KEY.into())
+        }
+    );
+}
+
+#[test]
+fn an_m_alpha_height_shows_its_provenance_stale_and_delete() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    relief_normal(&land(d.path()), NORMAL, 64);
+    reopen(&mut m, d.path());
+    complex_material(&mut m, "rock01");
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen.as_mut().unwrap().opts.size = 64;
+    m.gen_generate();
+    idle(&mut m);
+    let key = "landscape/rock01_height_generated.png";
+    assert_eq!(
+        m.generated_info(key).map(|g| (g.from, g.stale)),
+        Some((NORMAL.to_string(), None))
+    );
+    assert!(m
+        .delete_generated_entries(ROCK_SET)
+        .iter()
+        .any(|e| e.label == "rock01_height_generated.png"));
+    // No longer complex material: the `_m` alpha is unused.
+    shader(&mut m, Shader::Parallax);
+    assert_eq!(
+        m.generated_info(key).unwrap().stale.as_deref(),
+        Some(NO_HEIGHT)
+    );
+    shader(&mut m, Shader::ComplexMaterial);
+    rewrite_normal(&mut m, d.path());
+    select_rock(&mut m);
+    let mut h = harness(m);
+    h.run();
+    assert!(
+        h.query_by_label(&format!("stale: {EARLIER}")).is_some(),
+        "a weak stale line in the _m block"
+    );
+}

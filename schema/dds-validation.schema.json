@@ -163,7 +163,8 @@
         "ALSO-OWNED-UNREADABLE",
         "ALSO-ZIP-FAILED",
         "ALSO-REPORT-FAILED",
-        "GEN-REPLACED"
+        "GEN-REPLACED",
+        "GEN-STALE"
       ],
       "type": "string"
     },

@@ -341,6 +341,16 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 - The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail. Supply normal AO (white = open); Tessalith inverts it.
 - Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
 
+## Generate from normal map
+
+Right-click the Height row (or open the set card's menu) and pick **Generate from normal map…** to make a height map from the set's normal. The dialog has Size, Tiling, Relief balance and Strength, with a preview; **Generate** writes `<base>_p_generated.png` (or `<base>_height_generated.png` for a complex material's `_m` alpha) as a 16-bit grey PNG next to the normal. See [Texture types](Texture-Types.md#generated-height-maps) for names and ranges.
+
+- The Height row's File hover says "Generated from {normal}", and the Flags cell shows a weak **generated** marker.
+- When the file is stale (the normal changed, the set wants the other neutral, or the shader reads no height), that row's status dot turns amber and its hover gives the reason. No Problems row is added.
+- **Regenerate…** reuses the stored settings, with the set's current neutral and a size the normal still offers. A file you edited is never overwritten.
+- **Delete generated file…** (row menu, or the set card's submenu) asks first; Cancel is the default. It deletes only an unedited file Tessalith wrote, and cannot be undone.
+- A new `_p` makes a default set Parallax (PGPatcher then patches its meshes), and turns on `parallax` on a TruePBR set.
+
 ## Advanced drawer
 
 The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the **Advanced** tab of the set panel instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.

@@ -1305,6 +1305,8 @@ impl AppModel {
         if kind == SlotKind::Height {
             menu.push(self.gen_entry(&id, Some(GenMap::Height)));
         }
+        // Task 7: after Generate (P12: tests find it by action).
+        menu.extend(self.delete_slot_entry(v, kind));
         menu
     }
 
@@ -1335,12 +1337,14 @@ impl AppModel {
                 self.clear_input_alias(&keys);
             }
             MenuAction::ShowInExplorer(key) => return self.reveal_item(&key).err(),
-            // Task 7 deletes.
             MenuAction::Generated {
                 set,
                 op: GenOp::Open(pre),
             } => self.open_gen(&set, pre),
-            MenuAction::Generated { .. } => {}
+            MenuAction::Generated {
+                op: GenOp::Delete(key),
+                ..
+            } => self.ask_delete_generated(&[key]),
         }
         None
     }

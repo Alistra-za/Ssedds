@@ -275,6 +275,16 @@ pub fn texture_checks(
     if on.parallax {
         out.extend(parallax_checks(job, a, s, neutral));
     }
+    // Note CO (X-S6): a finding on a generated map says so.
+    let stem = job.input.file_stem().unwrap_or_default().to_string_lossy();
+    if engine::group::is_generated(&stem) {
+        for w in out
+            .iter_mut()
+            .filter(|w| matches!(w.code, Code::ChkRange | Code::ChkParallax))
+        {
+            w.message = format!("generated: {}", w.message);
+        }
+    }
     out
 }
 

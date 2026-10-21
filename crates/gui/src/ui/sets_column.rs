@@ -1279,6 +1279,34 @@ fn menu(
         acts.push(Act::Bulk(generate.action));
         ui.close();
     }
+    // Note CO (P20): every generated file of the set, with its stale reason on hover.
+    let gens = model.delete_generated_entries(&v.id);
+    if !gens.is_empty() {
+        let del = ui.menu_button("Delete generated file", |ui| {
+            for e in gens {
+                let key = match &e.action {
+                    MenuAction::Generated {
+                        op: crate::model::from_normal::GenOp::Delete(k),
+                        ..
+                    } => k.as_str(),
+                    _ => "",
+                };
+                let stale = model.generated_info(key).and_then(|g| g.stale);
+                let mut r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(&e.label));
+                if let Some(s) = stale {
+                    r = r.on_hover_text(format!("stale: {s}"));
+                }
+                if let Some(why) = &e.disabled {
+                    r = r.on_disabled_hover_text(why);
+                }
+                if r.clicked() {
+                    acts.push(Act::Bulk(e.action));
+                    ui.close();
+                }
+            }
+        });
+        tip(del.response);
+    }
     let remove = ui.menu_button("Remove member", |ui| {
         for mk in &v.members {
             let name = model.item(mk).map_or(mk.as_str(), |i| i.name.as_str());

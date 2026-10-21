@@ -622,6 +622,8 @@ fn row(
         SlotFill::Empty => (None, None),
     };
     let item = item_key.as_deref().and_then(|k| model.item(k));
+    // Note CO (owner answers 2 and 7): a generated file says where it came from; stale turns only this row's dot amber.
+    let gen = item_key.as_deref().and_then(|k| model.generated_info(k));
 
     // Slot: the title, dim when empty.
     let text = if locked {
@@ -727,10 +729,16 @@ fn row(
             Some(i) => {
                 let size =
                     size.map(|e| format!("{}×{} · {}", e.width, e.height, human(e.file_bytes())));
-                let hover = match &size {
+                let mut hover = match &size {
                     Some(s) => format!("{}\n{s}", i.name),
                     None => i.name.clone(),
                 };
+                if let Some(g) = &gen {
+                    hover.push_str(&format!("\nGenerated from {}", g.from));
+                    if let Some(r) = &g.replaced_by {
+                        hover.push_str(&format!(", replaced by {r}"));
+                    }
+                }
                 ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate())
                     .on_hover_text(hover);
                 if let Some(s) = size {
@@ -801,6 +809,14 @@ fn row(
     // full label as its accessible name and leads its hover with it.
     let flags_w = ui
         .vertical(|ui| {
+            if let Some(g) = &gen {
+                let name = format!("Generated from {}", g.from);
+                let r = ui.add(egui::Label::new(
+                    egui::RichText::new("generated").small().weak(),
+                ));
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
+                r.on_hover_text(name);
+            }
             if let (Some(n), Some(_)) = (
                 match slot {
                     _ if !shows_json_panel(v, model.target) => None,
@@ -867,9 +883,14 @@ fn row(
             } else if !rnm_layers.is_empty() {
                 lines.push(format!("RNM, {} layers", rnm_layers.len()));
             }
+            let stale = gen.as_ref().and_then(|g| g.stale.as_ref());
+            if let Some(r) = stale {
+                lines.push(format!("stale: {r}"));
+            }
             if let Some(i) = item {
                 let s = match i.status {
                     ItemStatus::Failed(_) | ItemStatus::Error(_) => Status::Blocks,
+                    _ if stale.is_some() => Status::Warning,
                     _ if tile_ready(i) => Status::Ready,
                     _ => Status::Warning,
                 };
@@ -1090,13 +1111,25 @@ fn packed_controls(
 fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<Act>) {
     for row in fill_rows(model, key) {
         match row {
-            FillRow::FromFile { role, file } => {
-                ui.add(
+            FillRow::FromFile { role, file, key } => {
+                let r = ui.add(
                     egui::Label::new(
                         egui::RichText::new(format!("{}: from {file}", role_label(role))).small(),
                     )
                     .truncate(),
                 );
+                // Note CO (P20): a generated source (the `_m` alpha's height) says where it came from and if stale.
+                if let Some(g) = model.generated_info(&key) {
+                    r.on_hover_text(format!("{file}\nGenerated from {}", g.from));
+                    if let Some(s) = g.stale {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("stale: {s}")).small().weak(),
+                            )
+                            .truncate(),
+                        );
+                    }
+                }
             }
             FillRow::Value {
                 role,

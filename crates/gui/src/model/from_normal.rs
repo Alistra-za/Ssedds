@@ -1158,3 +1158,327 @@ impl AppModel {
         self.gen_select = keys.into_iter().next();
     }
 }
+
+// ---- Task 7: provenance on the slot row, stale, Delete generated file ----
+
+/// What a slot row shows of a generated file (owner answers 2 and 7): "Generated from {from}" on the File cell's
+/// hover and as the Flags marker's name, and `stale` on the row's dot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenInfo {
+    /// The normal's file name (not `Provenance::from`, which is its item key).
+    pub from: String,
+    /// GEN-STALE's reason.
+    pub stale: Option<String>,
+    /// The real map that replaced it (the engine's GEN-REPLACED, P4).
+    pub replaced_by: Option<String>,
+}
+
+pub const NORMAL_GONE: &str = "the normal map is gone";
+pub const READS_NO_HEIGHT: &str =
+    "this set's shader reads no height map; the generated file is unused";
+pub const DELETE_ENTRY: &str = "Delete generated file…";
+/// Delete is off for a file Tessalith did not write as it is now (it deletes only what it wrote).
+pub const DELETE_EDITED: &str =
+    "it was edited since it was generated; delete it outside Tessalith if you want it gone";
+pub const DELETE_UNRECORDED: &str =
+    "Tessalith has no record of writing it; delete it outside Tessalith if you want it gone";
+
+/// `AppModel::gen_info`: each normal's sha256 by path with the stamp it was read at, the hashes taken (tests), and
+/// each item's `GenInfo` with the (sets document, items) revisions it was built at.
+#[derive(Default)]
+pub struct GenInfoCache {
+    hashes: std::collections::HashMap<PathBuf, (Option<SourceStamp>, Option<String>)>,
+    hashed: u32,
+    infos: std::collections::HashMap<String, ((u64, u64), Option<GenInfo>)>,
+}
+
+/// One file in the "Delete generated file" box: the texts and the refusal are read when it opens; the hash is read
+/// again on Delete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteGenerated {
+    pub key: String,
+    pub name: String,
+    pub path: PathBuf,
+    /// "Delete {name}? …", with the whole name (CE19).
+    pub body: String,
+    /// Why this file is not deleted (`DELETE_EDITED`, `DELETE_UNRECORDED`, or it cannot be read).
+    pub refused: Option<String>,
+}
+
+fn neutral_label(n: Neutral) -> &'static str {
+    match n {
+        Neutral::Half => "0.5",
+        Neutral::White => "1.0",
+    }
+}
+
+impl AppModel {
+    /// The slot row's facts about generated item `item`: `None` for an item that is not a recorded generated file.
+    /// Cached per item on the sets document and items revisions, so a frame neither hashes nor rebuilds (ui-rules
+    /// 9.1, 9.4).
+    pub fn generated_info(&self, item: &str) -> Option<GenInfo> {
+        let rev = (
+            self.sets_doc
+                .as_ref()
+                .map_or(0, crate::sets_doc::SetsDoc::rev),
+            self.items_rev(),
+        );
+        let hit = self
+            .gen_info
+            .borrow()
+            .infos
+            .get(item)
+            .filter(|(r, _)| *r == rev)
+            .map(|(_, i)| i.clone());
+        if let Some(i) = hit {
+            return i;
+        }
+        let info = self.gen_info_now(item);
+        self.gen_info
+            .borrow_mut()
+            .infos
+            .insert(item.to_string(), (rev, info.clone()));
+        info
+    }
+
+    /// Normal hashes taken for the stale check (tests).
+    pub fn gen_hashes(&self) -> u32 {
+        self.gen_info.borrow().hashed
+    }
+
+    fn gen_info_now(&self, key: &str) -> Option<GenInfo> {
+        let i = self.item(key).filter(|_| is_generated(&stem(key)))?;
+        let p = self.provenance(key)?;
+        let normal = self.item(&p.from);
+        let from = normal.map_or_else(
+            || {
+                Path::new(&p.from)
+                    .file_name()
+                    .map_or(p.from.clone(), |n| n.to_string_lossy().into_owned())
+            },
+            |n| n.name.clone(),
+        );
+        Some(GenInfo {
+            stale: self.stale_reason(i, &p, normal, &from),
+            from,
+            replaced_by: replaced_by(i),
+        })
+    }
+
+    /// GEN-STALE's reason: the normal is gone or changed (its hash), the set's shader reads no height, or it wants
+    /// the other neutral (D7, spec-M4, P8).
+    fn stale_reason(
+        &self,
+        i: &TextureItem,
+        p: &Provenance,
+        normal: Option<&TextureItem>,
+        name: &str,
+    ) -> Option<String> {
+        let Some(n) = normal else {
+            return Some(NORMAL_GONE.into());
+        };
+        // An image normal's stamp is its job's (`TextureItem::stamp` is `None` for every item with a job, code-S2).
+        let stamp = n.job.as_ref().map_or(n.stamp, |j| j.source);
+        if self.normal_sha(&n.input, stamp).as_deref() != Some(p.from_sha256.as_str()) {
+            return Some(format!(
+                "generated from an earlier {name}: Regenerate… to update it"
+            ));
+        }
+        if p.kind != GenMap::Height {
+            return None;
+        }
+        let views = super::sets::views(self);
+        let v = views
+            .iter()
+            .find(|v| i.set_key.as_deref() == Some(v.key.as_str()))?;
+        let shader = v.shader_choice.or(v.shader.as_ref().map(|s| s.shader));
+        let resolved = super::auto_flags::resolved(v.pbr, &v.slots, &v.settings);
+        let neutral = height_neutral(shader, &resolved);
+        let unused = if p.m_alpha {
+            shader != Some(Shader::ComplexMaterial)
+        } else {
+            neutral.is_none()
+                || shader.is_some_and(|s| !super::sets::usable_slots(s).contains(&SlotKind::Height))
+        };
+        if unused {
+            return Some(READS_NO_HEIGHT.into());
+        }
+        let (was, now) = (p.opts.height.as_ref()?.neutral, neutral?);
+        (was != now).then(|| {
+            format!(
+                "generated for a height neutral of {}; this set now wants {}",
+                neutral_label(was),
+                neutral_label(now)
+            )
+        })
+    }
+
+    /// The normal's sha256, read once per (path, stamp). The stamps come from the plan, so a frame never reads the
+    /// disk; the next plan after an edit re-stamps it.
+    /// shortcut: hashed on the UI thread (a 4k PNG takes tens of ms, once per change); move to a worker if it stalls.
+    fn normal_sha(&self, path: &Path, stamp: Option<SourceStamp>) -> Option<String> {
+        let mut c = self.gen_info.borrow_mut();
+        if let Some((s, h)) = c.hashes.get(path) {
+            if *s == stamp {
+                return h.clone();
+            }
+        }
+        c.hashed += 1;
+        let h = crate::model::history::sha256_of(path);
+        c.hashes.insert(path.to_path_buf(), (stamp, h.clone()));
+        h
+    }
+
+    /// The texture's message list (the settings panel's): its warnings, its check results, and GEN-STALE as Info,
+    /// which is never pushed into `TextureItem::warnings` (owner answers 2 and 7).
+    pub fn item_messages(&self, key: &str) -> Vec<engine::codes::Warning> {
+        let mut ws = self
+            .item(key)
+            .map(|i| i.warnings.clone())
+            .unwrap_or_default();
+        ws.extend(self.check_warnings(key).iter().cloned());
+        ws.extend(
+            self.generated_info(key)
+                .and_then(|g| g.stale)
+                .map(|r| engine::codes::Warning::new(Code::GenStale, r)),
+        );
+        ws
+    }
+
+    fn project_read_only(&self) -> Option<String> {
+        self.sets_doc
+            .as_ref()
+            .and_then(|d| d.error())
+            .map(|e| format!("sdc-project.toml is read-only: {e}"))
+    }
+
+    /// The slot row's "Delete generated file…": the Height row filled by a generated file, or whose set has a
+    /// generated height the engine replaced (P5: found by set key).
+    pub(crate) fn delete_slot_entry(&self, v: &SetView, kind: SlotKind) -> Option<MenuEntry> {
+        if kind != SlotKind::Height {
+            return None;
+        }
+        let key = match v.slots.get(&kind) {
+            Some(SlotFill::Own { item }) if is_generated(&stem(item)) => Some(item.clone()),
+            _ => None,
+        }
+        .or_else(|| {
+            self.generated_of(v)
+                .into_iter()
+                .filter(|i| {
+                    gen_role(&stem(&i.key)).and_then(|r| map_of(&r)) == Some(GenMap::Height)
+                })
+                .find(|i| replaced_by(i).is_some())
+                .map(|i| i.key.clone())
+        })?;
+        Some(MenuEntry {
+            action: MenuAction::Generated {
+                set: v.id.clone(),
+                op: GenOp::Delete(key),
+            },
+            label: DELETE_ENTRY.into(),
+            disabled: self.project_read_only(),
+        })
+    }
+
+    /// The set card's "Delete generated file" submenu: one entry per generated file of the set (P20), by name.
+    pub fn delete_generated_entries(&self, set: &str) -> Vec<MenuEntry> {
+        let Some(v) = self.view_of(set) else {
+            return vec![];
+        };
+        let off = self.project_read_only();
+        self.generated_of(&v)
+            .into_iter()
+            .map(|i| MenuEntry {
+                action: MenuAction::Generated {
+                    set: set.to_string(),
+                    op: GenOp::Delete(i.key.clone()),
+                },
+                label: i.name.clone(),
+                disabled: off.clone(),
+            })
+            .collect()
+    }
+
+    /// Open the "Delete generated file" box for `keys` (CE3: user-confirmed). Each file's hash is read here, once.
+    pub fn ask_delete_generated(&mut self, keys: &[String]) {
+        let rows: Vec<DeleteGenerated> = keys
+            .iter()
+            .filter_map(|k| {
+                let i = self.item(k)?;
+                let p = self.provenance(k);
+                let now = crate::model::history::sha256_of(&i.input);
+                let (body, refused) = match &p {
+                    None => (
+                        format!(
+                            "Delete {}? Tessalith has no record of generating it.",
+                            i.name
+                        ),
+                        Some(DELETE_UNRECORDED.to_string()),
+                    ),
+                    Some(p) => {
+                        let from = self
+                            .item(&p.from)
+                            .map_or(p.from.as_str(), |n| n.name.as_str());
+                        let body = format!("Delete {}? It was generated from {from}.", i.name);
+                        match now {
+                            Some(s) if s == p.sha256 => (body, None),
+                            Some(_) => (
+                                format!("{body} It was edited since."),
+                                Some(DELETE_EDITED.into()),
+                            ),
+                            None => (body, Some(format!("{} cannot be read", i.name))),
+                        }
+                    }
+                };
+                Some(DeleteGenerated {
+                    key: k.clone(),
+                    name: i.name.clone(),
+                    path: i.input.clone(),
+                    body,
+                    refused,
+                })
+            })
+            .collect();
+        if !rows.is_empty() {
+            self.dialog = Some(crate::model::Dialog::ConfirmDeleteGenerated(rows));
+        }
+    }
+
+    /// "Delete …" in the box: delete each file that is still the one Tessalith wrote (its hash is checked again
+    /// now), then drop its record outside the undo history (P14's save-if-clean rule) and re-plan. Not undoable: the
+    /// confirm box is the safeguard.
+    pub fn confirm_delete_generated(&mut self) {
+        let Some(crate::model::Dialog::ConfirmDeleteGenerated(rows)) = self.dialog.take() else {
+            return;
+        };
+        let mut notes = vec![];
+        let mut gone = vec![];
+        for r in rows.iter().filter(|r| r.refused.is_none()) {
+            let ours = self.provenance(&r.key).map(|p| p.sha256);
+            if ours.is_none() || crate::model::history::sha256_of(&r.path) != ours {
+                notes.push(format!("{} changed since; it was not deleted", r.name));
+                continue;
+            }
+            match std::fs::remove_file(&r.path) {
+                Ok(()) => gone.push(r.key.clone()),
+                Err(e) => notes.push(format!("{}: {e}", r.path.display())),
+            }
+        }
+        if !gone.is_empty() {
+            if let Some(d) = self.sets_doc.as_mut() {
+                let was_dirty = d.is_dirty();
+                for k in &gone {
+                    d.set_generated(k, None);
+                }
+                if self.save_record(was_dirty) {
+                    self.status_note = Some(PROVENANCE_DEFERRED.into());
+                }
+            }
+            self.replan();
+        }
+        if let Some(n) = notes.into_iter().reduce(|a, b| format!("{a}; {b}")) {
+            self.gen_notice(n);
+        }
+    }
+}

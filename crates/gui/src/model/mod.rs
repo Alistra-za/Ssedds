@@ -166,6 +166,8 @@ pub enum Dialog {
     HalfSize(Vec<HalfRow>),
     /// v2 Track B: "Generate from normal map…" for this set id; its state is `AppModel::gen` (floats are not `Eq`).
     GenerateFromNormal(String),
+    /// Note CO: "Delete generated file…", asked once per file; texts and refusals read when it opened.
+    ConfirmDeleteGenerated(Vec<from_normal::DeleteGenerated>),
     Error(String),
 }
 
@@ -459,6 +461,8 @@ pub struct AppModel {
     pub stats: std::cell::RefCell<shell::StatCache>,
     /// Header sizes read for the Generate offers, by (path, size, mtime) (Note CO, spec-M5).
     pub(crate) gen_dims: std::cell::RefCell<from_normal::GenDims>,
+    /// Generated-file facts for the slot rows: the normals' hashes by (path, stamp) and `GenInfo` by item (Task 7).
+    pub(crate) gen_info: std::cell::RefCell<from_normal::GenInfoCache>,
     /// The Generate dialog's state while it is open, or while a cancelled Generate that started writing lands.
     pub gen: Option<from_normal::GenDialog>,
     /// The first file the last Generate wrote: selected by the plan that lists it.
@@ -679,6 +683,7 @@ impl AppModel {
             shell: Vec::new(),
             stats: Default::default(),
             gen_dims: Default::default(),
+            gen_info: Default::default(),
             gen: None,
             gen_select: None,
             gen_ids: 0,

@@ -312,6 +312,21 @@ Other things the checks look at:
 - **Plastic `_n` alpha.** On a vanilla `_n` the alpha is the specular. If it is missing or almost all white (at least 95 % of texels at 250 or more), the surface may look plastic (`CHK-PLASTIC`). It never fires on `pbr_normal` or `_msn`. Community Shaders does not read that alpha on hair or Advanced Skin, and the message says so.
 - **`drop_top_mip`.** A per-file field (`[files."up.png"] drop_top_mip = true`, or `--set file:<glob>.drop_top_mip=true`) that writes mip 1 as the top level: half the size, one level fewer. It is off by default and absent from the profile hash then, so existing outputs do not change. A level is dropped from what is written only, so a PBR set's `_rmaos` bake is the same. It does nothing on a texture with no mip chain. The GUI writes it from the **Export at half size?** box and from Advanced → Half size.
 
+## Generated height maps
+
+The GUI can integrate a set's normal map into a height map (**Generate from normal map…**). The result is an ordinary source file next to the normal:
+
+| File | Used as |
+|---|---|
+| `<base>_p_generated.png` | The set's `_p` |
+| `<base>_height_generated.png` | The raw height packed into a complex material `_m` alpha (vanilla target) |
+
+- 16-bit grey PNG. `_generated` after a generated role (`_p`, `_height`, `_ao`, `_curves`) is stripped when grouping, so the file joins its set by its base name.
+- **Two ranges:** 0.5 is "no shift" (Parallax, PBR, complex material, landscape); 1.0 is "no shift" for PBR multilayer with inner-layer parallax, where white is the top and nothing is raised. The `_m` alpha is kept strictly between 4/255 and 251/255 so parallax stays on.
+- **A real map always wins.** A real `_p`, `_height` or other height source for the same slot makes the generated file skipped with `GEN-REPLACED` (Info), never `IN-DUPLICATE` or `PACK-CONFLICT`. An earlier export of the generated `_p` sitting in the input folder is not a rival.
+- **Side effect:** a `_p` wins the shader auto-pick, so a default set becomes Parallax and PGPatcher patches its meshes; on a TruePBR set the `parallax` key turns on by itself (Note AJ).
+- `GEN-STALE` (Info, GUI only) marks a generated file whose normal, neutral or shader changed since; it shows on the slot row's hover, never as a problem.
+
 ## Complex grass
 
 A complex-grass texture is one image twice as tall as it is wide, with power-of-two sides (for example 1024x2048): diffuse and alpha in the top half, normal and specular in the bottom half. Community Shaders detects it from the bottom-left texel.
