@@ -1291,10 +1291,21 @@ fn menu(
                     } => k.as_str(),
                     _ => "",
                 };
-                let stale = model.generated_info(key).and_then(|g| g.stale);
+                // A replaced file fills no slot row (review M2), so its rival is named here.
+                let info = model.generated_info(key);
+                let hover: Vec<String> = info
+                    .iter()
+                    .flat_map(|g| {
+                        [
+                            g.replaced_by.as_ref().map(|r| format!("replaced by {r}")),
+                            g.stale.as_ref().map(|s| format!("stale: {s}")),
+                        ]
+                    })
+                    .flatten()
+                    .collect();
                 let mut r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(&e.label));
-                if let Some(s) = stale {
-                    r = r.on_hover_text(format!("stale: {s}"));
+                if !hover.is_empty() {
+                    r = r.on_hover_text(hover.join("\n"));
                 }
                 if let Some(why) = &e.disabled {
                     r = r.on_disabled_hover_text(why);

@@ -1754,7 +1754,7 @@ fn delete_confirm_defaults_to_cancel_and_outlines_delete() {
     h.run_steps(3);
     assert!(!p.exists());
     assert!(h.state().dialog.is_none());
-    for (label, role, _) in sdc_gui::ui::dialogs::delete_generated_buttons("x.png", true) {
+    for (label, role, _) in sdc_gui::ui::dialogs::delete_generated_buttons("x.png") {
         let want = if label == "Cancel" {
             sdc_gui::ui::dialogs::Role::Default
         } else {
@@ -1823,6 +1823,9 @@ fn stale_follows_the_normal_hash_and_the_neutral_flags() {
     shader(&mut m, Shader::Multilayer);
     assert_eq!(stale(&m).as_deref(), Some(NO_HEIGHT));
     assert_eq!(gen_stale(&m).unwrap().message, NO_HEIGHT);
+    // Review M1: a 0.5-neutral shader without a Height slot.
+    shader(&mut m, Shader::Glow);
+    assert_eq!(stale(&m).as_deref(), Some(NO_HEIGHT));
 }
 
 #[test]
@@ -2034,8 +2037,7 @@ fn a_real_height_added_later_replaces_the_generated_one_and_delete_is_offered() 
     assert_eq!(m.history.undo.len(), steps, "not undoable");
     assert!(m.dialog.is_none());
 
-    // An edited file and one with no record: the box says so, and only Cancel works (it never deletes a file
-    // Tessalith did not write as it is now).
+    // An edited file and one with no record: the box says so, and the user's confirm deletes it (spec-S8, P13).
     for edited in [true, false] {
         let d = tempfile::tempdir().unwrap();
         let mut m = relief_rock(d.path());
@@ -2057,10 +2059,184 @@ fn a_real_height_added_later_replaces_the_generated_one_and_delete_is_offered() 
         m.run_menu(entry.action);
         let rows = delete_rows(&m);
         assert_eq!(rows[0].body, want);
-        assert!(rows[0].refused.is_some());
+        assert_eq!(rows[0].refused, None);
         m.confirm_delete_generated();
-        assert!(p.exists(), "edited {edited}: kept");
+        idle(&mut m);
+        assert!(!p.exists(), "edited {edited}: deleted on confirm");
+        assert!(m.provenance(P_KEY).is_none());
     }
+
+    // A file that changes after the box opened is kept, and the status line says so.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    m.ask_delete_generated(&[P_KEY.to_string()]);
+    let mut b = std::fs::read(&p).unwrap();
+    b.push(0);
+    std::fs::write(&p, &b).unwrap();
+    m.confirm_delete_generated();
+    assert_eq!(std::fs::read(&p).unwrap(), b, "kept");
+    assert!(m.provenance(P_KEY).is_some());
+    assert_eq!(
+        m.status_line,
+        "rock01_p_generated.png changed since; it was not deleted"
+    );
+}
+
+#[test]
+fn delete_takes_a_moved_in_generated_file_out_of_the_set() {
+    // Review M4: no `add` entry is left behind for a file that is gone (SET-EDIT-STALE).
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    std::fs::remove_file(land(d.path()).join(NORMAL)).unwrap();
+    relief_normal(&land(d.path()), "stone_normal.png", 64);
+    reopen(&mut m, d.path());
+    m.edit_docs("Move into", None, true, |_, s| {
+        s.add_member(ROCK_SET, "landscape/stone_normal.png")
+    });
+    idle(&mut m);
+    generate_height(&mut m);
+    let key = "landscape/stone_p_generated.png";
+    let added = |m: &AppModel| {
+        m.sets_doc
+            .as_ref()
+            .unwrap()
+            .entries()
+            .iter()
+            .any(|e| e.add.iter().any(|f| f == key))
+    };
+    assert!(added(&m), "moved in with its normal");
+    let steps = m.history.undo.len();
+    m.ask_delete_generated(&[key.to_string()]);
+    m.confirm_delete_generated();
+    idle(&mut m);
+    assert!(!land(d.path()).join("stone_p_generated.png").exists());
+    assert!(!added(&m), "out of the set's add list");
+    assert!(!m.sets_doc.as_ref().unwrap().generated().contains_key(key));
+    assert_eq!(m.history.undo.len(), steps, "not undoable");
+}
+
+#[test]
+fn a_read_only_project_deletes_nothing() {
+    // Review M5.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    let p = land(d.path()).join("rock01_p_generated.png");
+    std::fs::write(
+        m.root.clone().unwrap().join("sdc-project.toml"),
+        "[[sets]\nbroken",
+    )
+    .unwrap();
+    m.reload_documents();
+    idle(&mut m);
+    assert!(m.sets_doc.as_ref().unwrap().read_only());
+    let e = delete_op(&m.slot_menu(ROCK_SET, SlotKind::Height))
+        .expect("listed")
+        .clone();
+    assert!(
+        e.disabled
+            .as_deref()
+            .is_some_and(|r| r.starts_with("sdc-project.toml is read-only: ")),
+        "{:?}",
+        e.disabled
+    );
+    m.ask_delete_generated(&[P_KEY.to_string()]);
+    m.confirm_delete_generated();
+    assert!(p.exists(), "kept");
+    assert!(m.status_line.starts_with("sdc-project.toml is read-only: "));
+}
+
+#[test]
+fn the_set_card_submenu_deletes_the_m_alpha_height() {
+    // Review I1: the set card's submenu is the only Delete for an `_m`-alpha height (it fills no row).
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    relief_normal(&land(d.path()), NORMAL, 64);
+    reopen(&mut m, d.path());
+    complex_material(&mut m, "rock01");
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen.as_mut().unwrap().opts.size = 64;
+    m.gen_generate();
+    idle(&mut m);
+    let key = "landscape/rock01_height_generated.png";
+    let file = land(d.path()).join("rock01_height_generated.png");
+    assert!(file.exists());
+    let mut h = harness(m);
+    h.run();
+    card_menu(&mut h, "landscape/rock01");
+    h.get_by_label("Delete generated file ⏵").hover();
+    h.run();
+    h.get_by_role_and_label(
+        eframe::egui::accesskit::Role::Button,
+        "rock01_height_generated.png",
+    )
+    .click();
+    h.run();
+    let rows = delete_rows(h.state());
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, key);
+    h.get_by_label("Delete rock01_height_generated.png").click();
+    h.run();
+    assert!(!file.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn an_unreadable_normal_is_not_called_earlier() {
+    // Review M3: a normal that cannot be read says so; it is not "generated from an earlier …".
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    rewrite_normal(&mut m, d.path());
+    // No sharing: every other open fails while this handle lives.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(land(d.path()).join(NORMAL))
+        .unwrap();
+    assert_eq!(
+        stale(&m).as_deref(),
+        Some("the normal map rock01_normal.png cannot be read")
+    );
+    drop(lock);
+    // Not cached: the next rebuild reads it.
+    m.invalidate_views();
+    assert_eq!(stale(&m).as_deref(), Some(EARLIER));
+}
+
+#[test]
+fn a_dds_normal_goes_stale_and_regenerate_makes_it_fresh() {
+    // Review M6 (a, c): the DDS stamp branch, and stale -> Regenerate -> fresh.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    std::fs::remove_file(land(d.path()).join(NORMAL)).unwrap();
+    let dds = land(d.path()).join("rock01_n.dds");
+    normal_dds(&dds, &blob_normals(), 128, true);
+    reopen(&mut m, d.path());
+    generate_height(&mut m);
+    assert_eq!(stale(&m), None);
+    let flat = vec![[0.0, 0.0, 1.0]; 128 * 128];
+    normal_dds(&dds, &flat, 128, false);
+    reopen(&mut m, d.path());
+    assert_eq!(
+        stale(&m).as_deref(),
+        Some("generated from an earlier rock01_n.dds: Regenerate… to update it")
+    );
+    let before = m.provenance(P_KEY).unwrap().from_sha256;
+    generate_height(&mut m);
+    assert!(
+        m.gen.is_none(),
+        "{:?}",
+        m.gen.as_ref().and_then(|g| g.error.clone())
+    );
+    assert_eq!(stale(&m), None, "fresh after Regenerate");
+    assert_ne!(m.provenance(P_KEY).unwrap().from_sha256, before);
 }
 
 #[test]

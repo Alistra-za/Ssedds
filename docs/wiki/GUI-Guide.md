@@ -348,7 +348,7 @@ Right-click the Height row (or open the set card's menu) and pick **Generate fro
 - The Height row's File hover says "Generated from {normal}", and the Flags cell shows a weak **generated** marker.
 - When the file is stale (the normal changed, the set wants the other neutral, or the shader reads no height), that row's status dot turns amber and its hover gives the reason. No Problems row is added.
 - **Regenerate…** reuses the stored settings, with the set's current neutral and a size the normal still offers. A file you edited is never overwritten.
-- **Delete generated file…** (row menu, or the set card's submenu) asks first; Cancel is the default. It deletes only an unedited file Tessalith wrote, and cannot be undone.
+- **Delete generated file…** (row menu, or the set card's submenu) asks first; Cancel is the default. The box says when the file was edited or has no record; your confirm deletes it. It cannot be undone.
 - A new `_p` makes a default set Parallax (PGPatcher then patches its meshes), and turns on `parallax` on a TruePBR set.
 
 ## Advanced drawer

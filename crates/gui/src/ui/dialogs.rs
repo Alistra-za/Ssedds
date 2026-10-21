@@ -393,11 +393,11 @@ fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String])
     }
 }
 
-/// Note CO (CE3): the "Delete generated file" box's buttons, `name` the file's short name: a red-outlined Delete,
-/// on only when a listed file may be deleted (`any`), and Cancel, the Enter default (ui-rules 5.2).
-pub fn delete_generated_buttons(name: &str, any: bool) -> [(String, Role, bool); 2] {
+/// Note CO (CE3, P13): the "Delete generated file" box's buttons, `name` the file's short name: a red-outlined
+/// Delete and Cancel, the Enter default (ui-rules 5.2). Both are enabled.
+pub fn delete_generated_buttons(name: &str) -> [(String, Role, bool); 2] {
     [
-        (format!("Delete {name}"), Role::Destructive, any),
+        (format!("Delete {name}"), Role::Destructive, true),
         ("Cancel".into(), Role::Default, true),
     ]
 }
@@ -412,19 +412,16 @@ fn confirm_delete_generated(
         [r] => short_name(&r.name),
         _ => format!("{} files", rows.len()),
     };
-    let any = rows.iter().any(|r| r.refused.is_none());
-    let owned = delete_generated_buttons(&name, any);
+    let owned = delete_generated_buttons(&name);
     let buttons: Vec<(&str, Role, bool)> =
         owned.iter().map(|(l, r, e)| (l.as_str(), *r, *e)).collect();
-    let refused = rows.iter().find_map(|r| r.refused.as_deref());
-    let (k, clicked) = dialog_hover(
+    let (k, clicked) = dialog(
         ctx,
         "delete-generated",
         true,
         420.0,
         "Delete generated file",
         &buttons,
-        &[refused, None],
         |ui| {
             for r in rows {
                 ui.label(&r.body);

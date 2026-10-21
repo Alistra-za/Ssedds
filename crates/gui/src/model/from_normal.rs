@@ -1177,23 +1177,18 @@ pub const NORMAL_GONE: &str = "the normal map is gone";
 pub const READS_NO_HEIGHT: &str =
     "this set's shader reads no height map; the generated file is unused";
 pub const DELETE_ENTRY: &str = "Delete generated file…";
-/// Delete is off for a file Tessalith did not write as it is now (it deletes only what it wrote).
-pub const DELETE_EDITED: &str =
-    "it was edited since it was generated; delete it outside Tessalith if you want it gone";
-pub const DELETE_UNRECORDED: &str =
-    "Tessalith has no record of writing it; delete it outside Tessalith if you want it gone";
 
 /// `AppModel::gen_info`: each normal's sha256 by path with the stamp it was read at, the hashes taken (tests), and
 /// each item's `GenInfo` with the (sets document, items) revisions it was built at.
 #[derive(Default)]
 pub struct GenInfoCache {
-    hashes: std::collections::HashMap<PathBuf, (Option<SourceStamp>, Option<String>)>,
+    hashes: std::collections::HashMap<PathBuf, (Option<SourceStamp>, String)>,
     hashed: u32,
     infos: std::collections::HashMap<String, ((u64, u64), Option<GenInfo>)>,
 }
 
-/// One file in the "Delete generated file" box: the texts and the refusal are read when it opens; the hash is read
-/// again on Delete.
+/// One file in the "Delete generated file" box: its texts and hash are read when it opens; on Delete the file must
+/// still have that hash (spec-S8: the user's confirm covers the file as the box described it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteGenerated {
     pub key: String,
@@ -1201,8 +1196,10 @@ pub struct DeleteGenerated {
     pub path: PathBuf,
     /// "Delete {name}? …", with the whole name (CE19).
     pub body: String,
-    /// Why this file is not deleted (`DELETE_EDITED`, `DELETE_UNRECORDED`, or it cannot be read).
+    /// Set only when the file cannot be read; it is then not deleted.
     pub refused: Option<String>,
+    /// The file's sha256 when the box opened.
+    pub seen: Option<String>,
 }
 
 fn neutral_label(n: Neutral) -> &'static str {
@@ -1279,10 +1276,15 @@ impl AppModel {
         };
         // An image normal's stamp is its job's (`TextureItem::stamp` is `None` for every item with a job, code-S2).
         let stamp = n.job.as_ref().map_or(n.stamp, |j| j.source);
-        if self.normal_sha(&n.input, stamp).as_deref() != Some(p.from_sha256.as_str()) {
-            return Some(format!(
-                "generated from an earlier {name}: Regenerate… to update it"
-            ));
+        match self.normal_sha(&n.input, stamp) {
+            // Review M3: unreadable is not "changed" (Task 5's wording).
+            None => return Some(format!("the normal map {name} cannot be read")),
+            Some(h) if h != p.from_sha256 => {
+                return Some(format!(
+                    "generated from an earlier {name}: Regenerate… to update it"
+                ))
+            }
+            Some(_) => {}
         }
         if p.kind != GenMap::Height {
             return None;
@@ -1320,13 +1322,14 @@ impl AppModel {
         let mut c = self.gen_info.borrow_mut();
         if let Some((s, h)) = c.hashes.get(path) {
             if *s == stamp {
-                return h.clone();
+                return Some(h.clone());
             }
         }
         c.hashed += 1;
-        let h = crate::model::history::sha256_of(path);
+        // A read that failed is not kept: the next rebuild tries again.
+        let h = crate::model::history::sha256_of(path)?;
         c.hashes.insert(path.to_path_buf(), (stamp, h.clone()));
-        h
+        Some(h)
     }
 
     /// The texture's message list (the settings panel's): its warnings, its check results, and GEN-STALE as Info,
@@ -1414,19 +1417,16 @@ impl AppModel {
                             "Delete {}? Tessalith has no record of generating it.",
                             i.name
                         ),
-                        Some(DELETE_UNRECORDED.to_string()),
+                        now.is_none().then(|| format!("{} cannot be read", i.name)),
                     ),
                     Some(p) => {
                         let from = self
                             .item(&p.from)
                             .map_or(p.from.as_str(), |n| n.name.as_str());
                         let body = format!("Delete {}? It was generated from {from}.", i.name);
-                        match now {
-                            Some(s) if s == p.sha256 => (body, None),
-                            Some(_) => (
-                                format!("{body} It was edited since."),
-                                Some(DELETE_EDITED.into()),
-                            ),
+                        match &now {
+                            Some(s) if *s == p.sha256 => (body, None),
+                            Some(_) => (format!("{body} It was edited since."), None),
                             None => (body, Some(format!("{} cannot be read", i.name))),
                         }
                     }
@@ -1437,6 +1437,7 @@ impl AppModel {
                     path: i.input.clone(),
                     body,
                     refused,
+                    seen: now,
                 })
             })
             .collect();
@@ -1452,11 +1453,15 @@ impl AppModel {
         let Some(crate::model::Dialog::ConfirmDeleteGenerated(rows)) = self.dialog.take() else {
             return;
         };
+        // Review M5: the record could not be dropped, so nothing is deleted.
+        if let Some(why) = self.project_read_only() {
+            self.gen_notice(why);
+            return;
+        }
         let mut notes = vec![];
         let mut gone = vec![];
         for r in rows.iter().filter(|r| r.refused.is_none()) {
-            let ours = self.provenance(&r.key).map(|p| p.sha256);
-            if ours.is_none() || crate::model::history::sha256_of(&r.path) != ours {
+            if crate::model::history::sha256_of(&r.path) != r.seen {
                 notes.push(format!("{} changed since; it was not deleted", r.name));
                 continue;
             }
@@ -1468,8 +1473,16 @@ impl AppModel {
         if !gone.is_empty() {
             if let Some(d) = self.sets_doc.as_mut() {
                 let was_dirty = d.is_dirty();
+                let entries = d.entries();
                 for k in &gone {
                     d.set_generated(k, None);
+                    // Review M4: a file moved in with its normal leaves the set's `add` too (no SET-EDIT-STALE).
+                    for e in entries
+                        .iter()
+                        .filter(|e| e.add.iter().any(|f| engine::sets::same_id(f, k)))
+                    {
+                        d.remove_member(&e.id, k);
+                    }
                 }
                 if self.save_record(was_dirty) {
                     self.status_note = Some(PROVENANCE_DEFERRED.into());

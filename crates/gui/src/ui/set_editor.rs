@@ -735,9 +735,6 @@ fn row(
                 };
                 if let Some(g) = &gen {
                     hover.push_str(&format!("\nGenerated from {}", g.from));
-                    if let Some(r) = &g.replaced_by {
-                        hover.push_str(&format!(", replaced by {r}"));
-                    }
                 }
                 ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate())
                     .on_hover_text(hover);
