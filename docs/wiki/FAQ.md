@@ -86,6 +86,10 @@ Yes. `sdc convert --json` writes a JSON Lines event stream to stdout, and the ex
 
 Do nothing special: `--on-existing if-changed` is the default. It compares each output with its manifest record and re-encodes only what changed. See [Validation and output](Validation-and-Output.md#re-runs-and-if-changed).
 
+### How do I start an Also export (Vanilla / CM) from scratch?
+
+Delete everything it wrote together: the `<project> PBR`, `<project> Vanilla` and `<project> CM` folders, `<project> conversion-report.md`, the zips and `<project> SHA256SUMS.txt`. The record of the report, zips and sums lives in the PBR folder (`_sdc/also.json`), so deleting only the PBR folder makes the next export keep the old report, zips and sums as files it did not write (exit 1, with a note to delete them).
+
 ### Where are my settings stored?
 
 See the table in [GUI guide](GUI-Guide.md#where-settings-live).
