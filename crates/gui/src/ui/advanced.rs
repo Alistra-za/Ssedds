@@ -220,13 +220,24 @@ fn bc1_label(c: Bc1Choice) -> &'static str {
 }
 
 /// A number box; true once its value is settled (a drag ended, or a typed value was accepted).
+/// The in-progress drag value is held in egui memory, so a caller that rebuilds `value` from the model each frame
+/// still gets the final dragged value on release, not the model's old one.
 pub(super) fn settled_drag<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     value: &mut T,
     speed: f64,
     range: std::ops::RangeInclusive<T>,
 ) -> bool {
+    let id = ui.next_auto_id().with("settled_drag");
+    if let Some(held) = ui.data(|d| d.get_temp::<f64>(id)) {
+        *value = T::from_f64(held);
+    }
     let r = ui.add(egui::DragValue::new(value).speed(speed).range(range));
+    if r.dragged() {
+        ui.data_mut(|d| d.insert_temp(id, value.to_f64()));
+    } else {
+        ui.data_mut(|d| d.remove::<f64>(id));
+    }
     r.drag_stopped() || (r.changed() && !r.dragged())
 }
 
