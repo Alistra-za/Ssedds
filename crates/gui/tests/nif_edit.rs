@@ -6313,12 +6313,13 @@ fn new_clip_ticks_clear_when_the_file_changes() {
         h.get_by_label(tick).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
     };
     assert!(on(&h), "ticked");
+    // Same path, same bytes, same shape block: only the mod differs.
     let mut other = MeshesModel::empty();
     other.edit = Some(
         NifEdit::open(
             scenes::animated(Some(1), 2),
-            copy("A", 1, false),
-            "meshes/y.nif",
+            copy("B", 2, false),
+            "meshes/x.nif",
             None,
         )
         .unwrap(),

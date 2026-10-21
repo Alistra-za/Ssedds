@@ -5,6 +5,7 @@ use super::curve::{self, Part};
 use super::edit_fields::{
     fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act, OUT_OF_RANGE,
 };
+use crate::model::meshes::edit_doc::SourceId;
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
 use crate::model::viewport3d::Clock;
@@ -387,8 +388,8 @@ struct NewClip {
     start: f32,
     stop: f32,
     picked: Vec<u32>,
-    /// (file, shape) the ticks belong to: another file or shape clears them (C-P35 M6).
-    scope: Option<(String, u32)>,
+    /// (source, shape) the ticks belong to: another source (mod, path or bytes) or shape clears them (C-P35 M6).
+    scope: Option<(SourceId, u32)>,
 }
 
 /// C5-D6: no name, Clamp (the census's most common cycle), 0 to 1 s, nothing ticked.
@@ -409,7 +410,7 @@ impl Default for NewClip {
 fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
     let id = egui::Id::new("meshes-edit-new-clip");
     let mut nc: NewClip = ui.data(|d| d.get_temp(id)).unwrap_or_default();
-    let scope = Some((e.data_path.clone(), shape.block));
+    let scope = Some((e.doc.source.clone(), shape.block));
     if nc.scope != scope {
         nc.picked.clear();
         nc.scope = scope;
