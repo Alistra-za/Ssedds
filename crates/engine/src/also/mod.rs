@@ -799,6 +799,7 @@ fn do_copies(
 /// and is recorded in `error` with its exit code, plus an `ALSO-PHASE-FAILED` event. With `zip` on, an export that
 /// finished (no cancel, no phase error) and whose owned record is readable is zipped (Task 8); file-level failures
 /// don't block it. The report (Task 9) is written last, unless it is a dry run or the owned record is unreadable.
+/// `start_also` then `finish_also` with no extra file: the CLI, which writes no JSON into the PBR folder.
 pub fn run_also(
     engine: &Engine,
     cache: &AnalysisCache,
@@ -807,6 +808,33 @@ pub fn run_also(
     sink: Arc<dyn EventSink>,
     cancel: &CancelToken,
 ) -> Result<AlsoSummary, EngineError> {
+    let run = start_also(engine, cache, base, spec, sink, cancel)?;
+    Ok(finish_also(run, spec, &[], cancel))
+}
+
+/// An Also export between its phases and its walk, zips and report (final review I2): the GUI writes the PBR
+/// folder's PGPatcher, CS and CM JSON in between, so the PBR zip holds them.
+pub struct AlsoRun {
+    /// The phases' summary: no zip, report or walk note yet.
+    pub summary: AlsoSummary,
+    keys: [Arc<Mutex<BTreeSet<String>>>; 3],
+    rows: Vec<report::SetRow>,
+    project: String,
+    grass: bool,
+    dry_run: bool,
+    /// The PBR phase's reporter: the later steps' batch-level warnings go out under its batch.
+    rep: Reporter,
+}
+
+/// The phases of `run_also`.
+pub fn start_also(
+    engine: &Engine,
+    cache: &AnalysisCache,
+    base: BatchRequest,
+    spec: &AlsoSpec,
+    sink: Arc<dyn EventSink>,
+    cancel: &CancelToken,
+) -> Result<AlsoRun, EngineError> {
     let keys: [Arc<Mutex<BTreeSet<String>>>; 3] = Default::default();
     let project = project_name(&base.inputs)?;
     let dry_run = base.dry_run;
@@ -819,11 +847,39 @@ pub fn run_also(
     // The PBR phase's reporter; the later phases' batch-level warnings and the zip step's go out under its batch.
     let rep = Reporter::new(recorder(0, sink.clone()), new_batch_id());
     let (mut rows, mut grass) = (vec![], false);
-    let mut s = run_phases(
+    let summary = run_phases(
         engine, cache, base, spec, sink, cancel, &rep, &recorder, &mut rows, &mut grass,
     )?;
+    Ok(AlsoRun {
+        summary,
+        keys,
+        rows,
+        project,
+        grass,
+        dry_run,
+        rep,
+    })
+}
+
+/// The rest of `run_also`: the walk of the folders, the zips and the report. `extra`: files this export wrote into
+/// the PBR folder after its phases (the GUI's JSON), counted as this run's outputs; any other path is ignored.
+pub fn finish_also(
+    run: AlsoRun,
+    spec: &AlsoSpec,
+    extra: &[PathBuf],
+    cancel: &CancelToken,
+) -> AlsoSummary {
+    let AlsoRun {
+        summary: mut s,
+        keys,
+        rows,
+        project,
+        grass,
+        dry_run,
+        rep,
+    } = run;
     if dry_run {
-        return Ok(s);
+        return s;
     }
     let warn = |code: Code, message: &str| {
         rep.emit(
@@ -850,7 +906,11 @@ pub fn run_also(
     // a cancel or a phase error most files were not reached, so none is listed. Decided before the zips, so a cancel
     // while zipping does not change it.
     let finished = !cancel.is_cancelled() && s.error.is_none();
-    let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
+    let mut keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
+    let pbr = format!("{}/", norm(&s.folders[0]));
+    for p in extra.iter().filter(|p| norm(p).starts_with(&pbr)) {
+        keys[0].insert(output_key(&s.folders[0], p));
+    }
     let files = match finished {
         true => this_runs_files(&mut s, &keys, spec.cfg.zip),
         false => vec![],
@@ -858,6 +918,8 @@ pub fn run_also(
     if spec.cfg.zip {
         if !finished {
             s.notes.push(ZIP_SKIPPED.into());
+            // A cancel after the last phase (the GUI's JSON step) leaves no cancelled file: still partial (CM49).
+            s.zip_failed = true;
         } else {
             let failed = match &mut owned {
                 Some(owned) => write_zips(&mut s, owned, files, &spec.location, &project, cancel),
@@ -888,7 +950,7 @@ pub fn run_also(
             }
         }
     }
-    Ok(s)
+    s
 }
 
 /// CM43: the tail of the note for an unreadable `also.json`.

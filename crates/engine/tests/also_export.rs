@@ -912,6 +912,76 @@ fn cancel_after_the_pbr_phase_writes_no_zip() {
     );
 }
 
+/// Final review I2: a file written into the PBR folder between the phases and the zips (the GUI's JSON) and passed
+/// as `extra` is zipped, with no "not zipped" note; one not passed is noted. A path outside the PBR folder is ignored.
+#[test]
+fn extra_files_written_after_the_phases_are_zipped() {
+    let (_d, m, loc) = project(steel);
+    let sp = zip_spec(&loc, &[AlsoTarget::Vanilla]);
+    let start = || {
+        start_also(
+            &Engine::new().unwrap(),
+            &engine::session::AnalysisCache::default(),
+            request(&m, &loc),
+            &sp,
+            Arc::new(VecSink::default()),
+            &CancelToken::default(),
+        )
+        .unwrap()
+    };
+    let json = loc.join("Mod PBR/PBRNIFPatcher/Mod.json");
+    let note = "Mod PBR/PBRNIFPatcher/Mod.json: not zipped: not written by this export";
+    let run = start();
+    std::fs::create_dir_all(json.parent().unwrap()).unwrap();
+    std::fs::write(&json, b"{}").unwrap();
+    let outside = loc.join("elsewhere.json");
+    let s = finish_also(run, &sp, &[json.clone(), outside], &CancelToken::default());
+    assert!(zip_names(&loc.join("Mod PBR.zip")).contains(&"Mod PBR/PBRNIFPatcher/Mod.json".into()));
+    assert!(!s.notes.iter().any(|n| n == note), "{:?}", s.notes);
+    assert_eq!(s.exit_code(), 0, "{:?}", s.notes);
+    let s = finish_also(start(), &sp, &[], &CancelToken::default());
+    assert!(s.notes.iter().any(|n| n == note), "{:?}", s.notes);
+    assert!(!zip_names(&loc.join("Mod PBR.zip")).contains(&"Mod PBR/PBRNIFPatcher/Mod.json".into()));
+}
+
+/// Final review M1: a cancel after the phases (while the GUI writes its JSON, or zips) leaves the earlier zip as it
+/// was, and no temporary file.
+#[test]
+fn a_cancel_before_the_zips_keeps_the_old_zip() {
+    let (_d, m, loc) = project(steel);
+    let sp = zip_spec(&loc, &[AlsoTarget::Vanilla]);
+    also(request(&m, &loc), &sp).0.unwrap();
+    let old = std::fs::read(loc.join("Mod PBR.zip")).unwrap();
+    std::fs::write(m.join("textures/pbr/arm/steel.png"), b"").unwrap();
+    png(
+        &m.join("textures/pbr/arm/steel.png"),
+        16,
+        16,
+        [10, 20, 30, 255],
+    );
+    let cancel = CancelToken::default();
+    let run = start_also(
+        &Engine::new().unwrap(),
+        &engine::session::AnalysisCache::default(),
+        request(&m, &loc),
+        &sp,
+        Arc::new(VecSink::default()),
+        &cancel,
+    )
+    .unwrap();
+    cancel.cancel();
+    let s = finish_also(run, &sp, &[], &cancel);
+    assert!(s.notes.contains(&ZIP_SKIPPED.to_string()), "{:?}", s.notes);
+    assert_eq!(std::fs::read(loc.join("Mod PBR.zip")).unwrap(), old);
+    assert!(zips_in(&loc).len() == 2);
+    assert!(std::fs::read_dir(&loc).unwrap().all(|e| !e
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with(".tmp")));
+    assert_eq!(s.exit_code(), 1);
+}
+
 #[test]
 fn a_zip_tessalith_did_not_write_is_kept() {
     let (_d, m, loc) = project(|m| {
