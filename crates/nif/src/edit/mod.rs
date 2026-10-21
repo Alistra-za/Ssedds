@@ -297,6 +297,17 @@ pub fn merge_key(op: &Op) -> String {
     format!("{v}|{}|{what}", at.block)
 }
 
+/// The keys `SetKeys` edits on controller `ctrl` (v2 B6, the Controllers tab): its own interpolator's (`clip: None`)
+/// exactly as `apply` compares an op's `base`. Err gives why there is nothing to edit (shown in the tab).
+pub fn keys_of(b: &[u8], m: &NifModel, ctrl: u32, clip: Option<u32>) -> Result<KeyData, String> {
+    let h = crate::header::Header::parse(b).map_err(|e| e.to_string())?;
+    match clip {
+        None => structural::ctrl_keys(&h, b, m, ctrl).map(|r| r.3),
+        // B7 implements clips; the text matches step()'s refusal.
+        Some(_) => Err("Editing a clip's keys is not supported yet.".into()),
+    }
+}
+
 /// Err only when `src` itself does not open. A later op that cannot run is a `Conflict` or `Refused` outcome and
 /// the ops after it still run.
 pub fn apply(src: &[u8], ops: &[Op]) -> Result<Applied, NifError> {

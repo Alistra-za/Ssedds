@@ -1505,6 +1505,31 @@ fn set_keys_refusals() {
     assert_eq!(merge_key(&clip(&at, 3)), "SetKeys|2|3");
 }
 
+/// v2 B6: keys_of is the base SetKeys checks: the data block's keys, the empty group for no data, an error for a
+/// blend interpolator and for a clip (until B7).
+#[test]
+fn keys_of_is_the_set_keys_base() {
+    let b = scenes::keyed_pair(Share::No, [1, 2]);
+    let m = read_model(&b).unwrap();
+    assert_eq!(nif::edit::keys_of(&b, &m, 2, None), Ok(data_of(&b, 6)));
+    assert_eq!(nif::edit::keys_of(&b, &m, 3, None), Ok(data_of(&b, 7)));
+    let c = scenes::shader_ctrl(false); // interpolator 3 has data -1
+    assert_eq!(
+        nif::edit::keys_of(&c, &read_model(&c).unwrap(), 2, None),
+        Ok(empty_float())
+    );
+    let mc = scenes::managed_clip();
+    let mm = read_model(&mc).unwrap();
+    assert_eq!(
+        nif::edit::keys_of(&mc, &mm, 7, None),
+        Err("A NiBlendFloatInterpolator has no keys to edit.".into())
+    );
+    assert_eq!(
+        nif::edit::keys_of(&b, &m, 2, Some(0)),
+        Err("Editing a clip's keys is not supported yet.".into())
+    );
+}
+
 /// Review B4 minor 1: a sequence's controlled block counts as a user of the interpolator and its data.
 #[test]
 fn sequence_users_make_key_edits_copy() {
