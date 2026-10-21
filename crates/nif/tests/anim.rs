@@ -286,6 +286,13 @@ fn apply_anim_maps_each_target() {
     assert_eq!(thr(300.0), 255);
     assert_eq!(thr(-4.0), 0);
     assert_eq!(thr(f32::NAN), 0);
+    // a nonzero base shows NaN leaves the threshold alone (NaN as u8 would be 0)
+    let mut seven = base.clone();
+    seven.alpha = Some(Alpha {
+        flags: 0x1ED,
+        threshold: 7,
+    });
+    assert_eq!(run(&seven, &[tr(AlphaRef, F32(f32::NAN))]), seven);
     let mut no_alpha = base.clone();
     no_alpha.alpha = None;
     assert_eq!(run(&no_alpha, &[tr(AlphaRef, F32(100.0))]), no_alpha);
