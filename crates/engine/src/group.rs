@@ -389,7 +389,9 @@ pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
 /// Whether a real member `real_stem` of kind `real_kind` replaces the generated member `generated_stem` of the same
 /// set (Note CO, the M9 fold). Slot files (`_p`, `_m`, `_rmaos`, `_rfaos`) count as an image or a DDS; raw maps only
 /// as an image, as `pack::plan::raw_role` reads them. A raw height is no rival of a generated `_p` on `vanilla`,
-/// where nothing is built from it. A generated stem is never a rival.
+/// where nothing is built from it. A generated stem is never a rival. Callers pass `real_stem` canonical
+/// (`<base>_<suffix>` after `split_suffix_with` with the preset aliases), as [`generated_losers`] does: an aliased
+/// stem passed raw is not recognised.
 pub fn real_rival(
     generated_stem: &str,
     real_stem: &str,
@@ -416,8 +418,9 @@ pub fn real_rival(
     }
 }
 
-/// (generated member, its first real rival) pairs within each set, by [`real_rival`]. A DDS that is the generated
-/// member's own output (an earlier export in place, `dds::same_file`) is not a rival (Note CO).
+/// (generated member, its first real rival) pairs within each set, by [`real_rival`]. A DDS that is an earlier export
+/// in place of the generated member's own output or of a packed output it feeds (`rock_p`, `rock_m`, `rock_rmaos`
+/// next to its output, `dds::same_file`) is not a rival (Note CO8, CO10).
 pub fn generated_losers(
     sets: &[TextureSet],
     files: &[InputFile],
@@ -445,7 +448,14 @@ pub fn generated_losers(
                     && !is_generated(&stem(r))
                     && real_rival(&stem(g), &canonical(r), files[r].kind, target)
                     && !(files[r].kind == InputKind::Dds
-                        && crate::dds::same_file(&files[r].path, &files[g].output))
+                        // shortcut: a packed output moved by `output_paths` is not predicted; read the set's
+                        // packed output paths here if an in-place export with redirected PBR paths needs it.
+                        && crate::dds::same_file(
+                            &files[r].path,
+                            &files[g]
+                                .output
+                                .with_file_name(files[r].path.file_name().unwrap_or_default()),
+                        ))
             });
             out.extend(rival.map(|r| (g, r)));
         }

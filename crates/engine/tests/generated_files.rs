@@ -534,6 +534,62 @@ fn an_earlier_export_of_the_generated_p_does_not_replace_it() {
     job(&p, "rock_p_generated.png");
 }
 
+/// Fix round 1 (M1): plan in place, run, re-plan; the packed output a generated member fed (`want`, now a DDS in the
+/// input folder) is not a real rival, and a packed job still reads `generated`.
+fn packed_export_is_no_rival(target: Target, sets: &[&str], generated: &str, want: &str) {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put(d.path(), "rock_roughness.png", 16, |x, _| x as u8 * 4);
+    put(d.path(), generated, 16, |x, y| 60 + (x + y) as u8 * 4);
+    let in_place = || {
+        let mut req = request(d.path(), target, sets);
+        req.output_root = d.path().join("in");
+        req.accept = AcceptSuggestions::High;
+        req
+    };
+    let reads_generated = |p: &Plan| {
+        p.jobs.iter().any(|j| {
+            j.output.ends_with(format!("textures/a/{want}"))
+                && j.provenance
+                    .values()
+                    .any(|v| *v == Provenance::Source(format!("{generated}:R")))
+        })
+    };
+    let (p, _) = plan_req(in_place());
+    assert!(
+        reads_generated(&p),
+        "{:?}",
+        p.jobs.iter().map(|j| &j.output).collect::<Vec<_>>()
+    );
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink, "generated-files");
+    Engine::new()
+        .unwrap()
+        .run(p, &rep, &CancelToken::default())
+        .unwrap();
+    assert!(d.path().join("in/textures/a").join(want).is_file());
+    let (p, _) = plan_req(in_place());
+    assert!(replaced(&p, generated).is_none(), "{want}: {:?}", p.skipped);
+    assert!(reads_generated(&p), "{want}: still packed from {generated}");
+}
+
+#[test]
+fn an_earlier_packed_export_of_a_generated_ao_does_not_replace_it() {
+    packed_export_is_no_rival(Target::Cs, &[], "rock_ao_generated.png", "rock_rmaos.dds");
+}
+
+#[test]
+fn an_earlier_packed_export_of_a_generated_height_does_not_replace_it() {
+    packed_export_is_no_rival(
+        Target::Vanilla,
+        &["set:rock.shader=complex_material"],
+        "rock_height_generated.png",
+        "rock_m.dds",
+    );
+    packed_export_is_no_rival(Target::Cs, &[], "rock_height_generated.png", "rock_p.dds");
+}
+
 #[test]
 fn a_generated_ao_loses_to_any_real_ao_source() {
     for real in ["rock_ao.png", "rock_orm.png", "rock_rmaos.png"] {
