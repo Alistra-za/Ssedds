@@ -361,7 +361,7 @@ fn the_owned_file_record_is_in_the_pbr_folder() {
         serde_json::to_vec(&serde_json::json!({ key.clone(): { "pending": pending } })).unwrap(),
     )
     .unwrap();
-    let mut owned = OwnedFiles::load(&pbr);
+    let mut owned = OwnedFiles::load(&pbr).unwrap();
     owned.write(&sums, b"new").unwrap();
     assert_eq!(std::fs::read(&sums).unwrap(), b"new");
     let saved: serde_json::Value =
@@ -373,10 +373,214 @@ fn the_owned_file_record_is_in_the_pbr_folder() {
     let foreign = loc.join("Mod conversion-report.md");
     std::fs::write(&foreign, b"mine").unwrap();
     assert!(matches!(
-        OwnedFiles::load(&pbr).write(&foreign, b"ours"),
-        Err(engine::dds::Kept::Foreign)
+        OwnedFiles::load(&pbr).unwrap().write(&foreign, b"ours"),
+        Err(OwnedWriteError::Kept(engine::dds::Kept::Foreign))
     ));
     assert_eq!(std::fs::read(&foreign).unwrap(), b"mine");
+}
+
+/// Review M5: a write that fails says so ("could not be written"), not "could not be read".
+#[test]
+fn an_owned_write_that_fails_says_could_not_be_written() {
+    let d = tempfile::tempdir().unwrap();
+    let pbr = d.path().join("Mod PBR");
+    std::fs::write(d.path().join("blocker"), b"a file, not a folder").unwrap();
+    let target = d.path().join("blocker/sums.txt");
+    let e = OwnedFiles::load(&pbr)
+        .unwrap()
+        .write(&target, b"x")
+        .unwrap_err();
+    assert!(matches!(e, OwnedWriteError::Io(_)), "{e:?}");
+    let note = e.note(&target);
+    assert!(note.contains("could not be written"), "{note}");
+}
+
+/// Review M4: a corrupt `also.json` is left as it is (never saved back as `{}`), with a warning and a note.
+#[test]
+fn a_corrupt_owned_record_is_kept_and_reported() {
+    let (_d, m, loc) = project(cup);
+    let rec = loc.join("Mod PBR/_sdc/also.json");
+    std::fs::create_dir_all(rec.parent().unwrap()).unwrap();
+    std::fs::write(&rec, b"{\"c:/x/mod sha256sums.txt\": {\"sha256\": \"ab").unwrap();
+    assert!(OwnedFiles::load(&loc.join("Mod PBR")).is_err());
+    let (s, ev) = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]));
+    let s = s.unwrap();
+    assert_eq!(
+        std::fs::read(&rec).unwrap(),
+        b"{\"c:/x/mod sha256sums.txt\": {\"sha256\": \"ab"
+    );
+    assert!(
+        s.notes.iter().any(|n| n.contains("also.json")),
+        "{:?}",
+        s.notes
+    );
+    assert!(ev.iter().any(|e| matches!(&e.kind,
+        EventKind::Warning(w) if w.code == engine::codes::Code::AlsoOwnedUnreadable)));
+}
+
+/// Review M1: an error of a later phase keeps its class: recorded with its phase, its exit code wins, it is not a
+/// cancel, and a warning event names the phase.
+#[test]
+fn a_later_phase_error_keeps_its_exit_code_and_is_reported() {
+    let (_d, m, loc) = project(cup);
+    // The Vanilla folder's name is taken by a file: its run cannot create the output root (Fatal, exit 3).
+    std::fs::create_dir_all(&loc).unwrap();
+    std::fs::write(loc.join("Mod Vanilla"), b"a file").unwrap();
+    let (s, ev) = also(request(&m, &loc), &spec(&loc, BOTH));
+    let s = s.unwrap();
+    assert_eq!(s.cancelled_after, None);
+    let (phase, _, code) = s.error.clone().expect("the error is kept");
+    assert_eq!((phase, code), (Phase::Vanilla, 3));
+    assert_eq!(s.exit_code(), 3);
+    assert!(ev.iter().any(|e| matches!(&e.kind,
+        EventKind::Warning(w) if w.code == engine::codes::Code::AlsoPhaseFailed && w.message.contains("Vanilla"))));
+}
+
+/// Review M2: the copies' events come before the Vanilla phase's `batch_done`.
+#[test]
+fn copy_events_come_before_the_vanilla_batch_done() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    let (s, ev) = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]));
+    assert_eq!(s.unwrap().copied, 2);
+    let copy = ev
+        .iter()
+        .position(|e| {
+            e.job.as_deref() == Some("Mod Vanilla/textures/clutter/cup.dds")
+                && matches!(e.kind, EventKind::FileDone { .. })
+        })
+        .unwrap();
+    let done = ev
+        .iter()
+        .position(|e| e.batch == ev[copy].batch && matches!(e.kind, EventKind::BatchDone { .. }))
+        .unwrap();
+    assert!(copy < done, "copy {copy}, batch_done {done}");
+}
+
+/// Review M7: a batch-level planning warning (here an unmatched `[files]` key) appears once, not once per phase.
+#[test]
+fn batch_level_warnings_appear_once() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    std::fs::write(
+        m.join("sdc.toml"),
+        "[files.\"textures/nothing.png\"]\nalpha.threshold = 90\n",
+    )
+    .unwrap();
+    let (s, ev) = also(request(&m, &loc), &spec(&loc, BOTH));
+    assert_eq!(s.unwrap().phases.len(), 3);
+    let n = ev
+        .iter()
+        .filter(|e| {
+            matches!(&e.kind,
+            EventKind::Warning(w) if w.code == engine::codes::Code::CfgFileUnmatched)
+        })
+        .count();
+    assert_eq!(n, 1);
+}
+
+/// Review M3: `same_identity` holds for a cs job and its vanilla clone, and fails when any compared field differs.
+#[test]
+fn same_identity_fails_when_any_compared_field_differs() {
+    use engine::config::{Format, Target};
+    use engine::policy::{JobStatus, ResolvedJob};
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+        plate(m);
+    });
+    let (cs_root, van_root) = (loc.join("Mod PBR"), loc.join("Mod Vanilla"));
+    let e = Engine::new().unwrap();
+    let rep = Reporter::new(Arc::new(NullSink), "t");
+    let cs = e
+        .plan(request(&m, &cs_root), &rep, &CancelToken::default())
+        .unwrap();
+    let job = |p: &engine::api::Plan, tail: &str| -> ResolvedJob {
+        p.jobs
+            .iter()
+            .find(|j| {
+                j.output
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .ends_with(tail)
+            })
+            .unwrap_or_else(|| panic!("{tail}"))
+            .clone()
+    };
+    let cup = job(&cs, "textures/clutter/cup.dds");
+    let packed = job(&cs, "textures/clutter/plate_p.dds");
+    let mut vreq = request(&m, &van_root);
+    vreq.target = Some(Target::Vanilla);
+    vreq.derive = Some(engine::derive::DeriveRequest {
+        mode: engine::derive::DeriveMode::Vanilla,
+        params: Default::default(),
+        sets: derive_sets(&cs, &BTreeSet::new()).0,
+        drop: vec![],
+        scanned: false,
+    });
+    let vp = e.plan(vreq, &rep, &CancelToken::default()).unwrap();
+    let derived = job(&vp, "textures/arm/steel.dds");
+    assert!(derived.derive.is_some());
+
+    let mut van = cup.clone();
+    van.profile.target = Target::Vanilla;
+    van.output = van_root.join("textures/clutter/cup.dds");
+    assert!(same_identity(&cup, &cs_root, &van, &van_root));
+    type Flip = Box<dyn Fn(&mut ResolvedJob)>;
+    let flips: Vec<(&str, Flip)> = vec![
+        ("format", Box::new(|j| j.profile.format = Format::Bc1)),
+        (
+            "input",
+            Box::new(|j| j.input = j.input.with_file_name("other.png")),
+        ),
+        (
+            "output key",
+            Box::new(|j| j.output = j.output.with_file_name("other.dds")),
+        ),
+        (
+            "status",
+            Box::new(|j| j.status = JobStatus::Blocked { codes: vec![] }),
+        ),
+        (
+            "rnm",
+            Box::new(|j| {
+                j.rnm = Some(engine::rnm::RnmJob {
+                    layers: vec![],
+                    ao: None,
+                })
+            }),
+        ),
+        (
+            "bake",
+            Box::new(|j| {
+                j.bake = Some(engine::bake::BakeJob {
+                    normal: j.input.clone(),
+                    normal_profile: j.profile.clone(),
+                    shift: 0,
+                    stamp: None,
+                    rnm: None,
+                })
+            }),
+        ),
+    ];
+    for (what, flip) in &flips {
+        let mut v = van.clone();
+        flip(&mut v);
+        assert!(!same_identity(&cup, &cs_root, &v, &van_root), "{what}");
+    }
+    let mut v = van.clone();
+    v.pack = packed.pack.clone();
+    assert!(!same_identity(&cup, &cs_root, &v, &van_root), "pack");
+    let mut v = van.clone();
+    v.derive = derived.derive.clone();
+    assert!(!same_identity(&cup, &cs_root, &v, &van_root), "derive");
+    let mut c = cup.clone();
+    c.status = JobStatus::Blocked { codes: vec![] };
+    assert!(!same_identity(&c, &cs_root, &van, &van_root), "cs status");
 }
 
 #[test]

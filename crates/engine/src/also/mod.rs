@@ -65,8 +65,21 @@ pub struct AlsoSummary {
     /// Task 8.
     pub zips: Vec<PathBuf>,
     pub notes: Vec<String>,
-    /// A cancel, or an error of a later phase, stopped the export after this phase.
+    /// A cancel stopped the export after this phase.
     pub cancelled_after: Option<Phase>,
+    /// The phase (Vanilla or CM) an engine error stopped, its message and its exit code (`EngineError::exit_code`).
+    pub error: Option<(Phase, String, i32)>,
+}
+
+/// `b`'s counts added to `a`, `cancelled` concatenated.
+fn add(a: &mut BatchSummary, b: &BatchSummary) {
+    a.converted += b.converted;
+    a.up_to_date += b.up_to_date;
+    a.skipped += b.skipped;
+    a.skipped_intentional += b.skipped_intentional;
+    a.failed += b.failed;
+    a.validation_failed += b.validation_failed;
+    a.cancelled.extend(b.cancelled.iter().cloned());
 }
 
 impl AlsoSummary {
@@ -74,22 +87,20 @@ impl AlsoSummary {
     pub fn combined(&self) -> BatchSummary {
         let mut s = BatchSummary::default();
         for (_, p) in &self.phases {
-            s.converted += p.converted;
-            s.up_to_date += p.up_to_date;
-            s.skipped += p.skipped;
-            s.skipped_intentional += p.skipped_intentional;
-            s.failed += p.failed;
-            s.validation_failed += p.validation_failed;
-            s.cancelled.extend(p.cancelled.iter().cloned());
+            add(&mut s, p);
         }
         s
     }
 
-    /// `combined().exit_code()`; an export stopped before its last phase is partial (1) even when the phases that
-    /// ran were clean.
+    /// A later phase's engine error code (2 or 3) when there is one, as a plain export that errors exits with it;
+    /// else `combined().exit_code()`, where an export a cancel stopped before its last phase is partial (1, which
+    /// beats 4 as in spec §8) even when the phases that ran were clean.
     pub fn exit_code(&self) -> i32 {
+        if let Some((_, _, code)) = &self.error {
+            return *code;
+        }
         match self.combined().exit_code() {
-            0 if self.cancelled_after.is_some() => 1,
+            0 | 4 if self.cancelled_after.is_some() => 1,
             c => c,
         }
     }
@@ -360,30 +371,57 @@ fn sha256_hex(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
 
+/// Why [`OwnedFiles::write`] wrote nothing (or, after the rename, left the new file recorded as pending).
+#[derive(Debug)]
+pub enum OwnedWriteError {
+    /// fix/pre-v2's `may_replace` kept the existing file.
+    Kept(Kept),
+    /// Writing the record or the file failed.
+    Io(std::io::Error),
+}
+
+impl OwnedWriteError {
+    /// The note a writer shows for the file.
+    pub fn note(&self, path: &Path) -> String {
+        match self {
+            OwnedWriteError::Kept(k) => k.note(path),
+            OwnedWriteError::Io(e) => format!("{} could not be written ({e})", path.display()),
+        }
+    }
+}
+
 impl OwnedFiles {
-    /// The record of `pbr_folder`; empty when missing or unreadable (then every existing file counts as foreign).
-    pub fn load(pbr_folder: &Path) -> OwnedFiles {
+    /// The record of `pbr_folder`; empty when there is none yet. A record that exists but cannot be read or parsed
+    /// is an error, never read as empty: the caller leaves it as it is and writes no owned file (review M4).
+    pub fn load(pbr_folder: &Path) -> std::io::Result<OwnedFiles> {
         let path = pbr_folder.join("_sdc").join("also.json");
-        let records = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        OwnedFiles { path, records }
+        let records = match std::fs::read(&path) {
+            Ok(b) => serde_json::from_slice(&b).map_err(std::io::Error::other)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(e),
+        };
+        Ok(OwnedFiles { path, records })
+    }
+
+    /// Where the record lives.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Write `bytes` to `path` unless fix/pre-v2's `may_replace` keeps the file there (its record or pending SHA
-    /// must match). An I/O error writing the record or the file is returned as `Kept::Unreadable` (the file is
-    /// unchanged or, after the rename, still recorded as pending).
-    pub fn write(&mut self, path: &Path, bytes: &[u8]) -> Result<(), Kept> {
+    /// must match). An I/O error is `OwnedWriteError::Io` (the file is unchanged or, after the rename, still
+    /// recorded as pending).
+    pub fn write(&mut self, path: &Path, bytes: &[u8]) -> Result<(), OwnedWriteError> {
         let key = norm(path);
         let rec = self.records.get(&key).cloned().unwrap_or_default();
         may_replace(path, bytes, |old| {
             let h = Some(sha256_hex(old));
             rec.sha256 == h || rec.pending == h
-        })?;
+        })
+        .map_err(OwnedWriteError::Kept)?;
         self.records.entry(key.clone()).or_default().pending = Some(sha256_hex(bytes));
-        self.save().map_err(Kept::Unreadable)?;
-        write_atomic(path, bytes).map_err(Kept::Unreadable)?;
+        self.save().map_err(OwnedWriteError::Io)?;
+        write_atomic(path, bytes).map_err(OwnedWriteError::Io)?;
         let r = self.records.entry(key).or_default();
         r.sha256 = r.pending.take();
         // A failed save leaves the pending SHA on disk, which still matches the file: it stays ours.
@@ -394,6 +432,18 @@ impl OwnedFiles {
     pub fn save(&self) -> std::io::Result<()> {
         let bytes = serde_json::to_vec_pretty(&self.records).map_err(std::io::Error::other)?;
         write_atomic(&self.path, &bytes)
+    }
+}
+
+/// Drops batch-level warnings (no job key) of the Vanilla and CM phases: each re-plans the same inputs, and the PBR
+/// phase already reported them (review M7).
+struct NoBatchWarnings(Arc<dyn EventSink>);
+
+impl EventSink for NoBatchWarnings {
+    fn emit(&self, ev: &EngineEvent) {
+        if !(ev.job.is_none() && matches!(ev.kind, EventKind::Warning(_))) {
+            self.0.emit(ev);
+        }
     }
 }
 
@@ -433,7 +483,10 @@ struct Copy {
 }
 
 /// The copy rule (O4, TA25): write each copy into the Vanilla folder and append its record, under `on_existing`
-/// and fix/pre-v2's `may_replace`. Each copy ends with one terminal event; counts go into `sum`.
+/// and fix/pre-v2's `may_replace`. Each copy ends with one terminal event; counts go into `sum`. The record is the
+/// twin's (cs profile, hash and preset included; Note CM33, review L1).
+// shortcut: copies write no `--sidecar`, and their up-to-date check does not look for one; upgrade by copying
+// `<twin>.dds.json` when sidecars matter for Vanilla.
 fn do_copies(
     copies: &[Copy],
     req: &BatchRequest,
@@ -560,8 +613,9 @@ fn do_copies(
 }
 
 /// One Also export (Note CM): check the location and the `[export]` table, then run the PBR, Vanilla and CM phases
-/// in order. Errors before the PBR phase writes anything are returned; a cancel, or an error of a later phase, stops
-/// the remaining phases and is recorded in `cancelled_after` (and the error in `notes`).
+/// in order. Errors before the PBR phase writes anything are returned. A cancel stops the remaining phases and is
+/// recorded in `cancelled_after`; an engine error of the Vanilla or CM phase stops them too and is recorded in
+/// `error` with its exit code, plus an `ALSO-PHASE-FAILED` event.
 pub fn run_also(
     engine: &Engine,
     cache: &AnalysisCache,
@@ -616,6 +670,7 @@ pub fn run_also(
         zips: vec![],
         notes: vec![],
         cancelled_after: None,
+        error: None,
     };
 
     // PBR phase: today's export into folder 0, unprefixed, so the GUI's PGPatcher-JSON rows match.
@@ -637,10 +692,26 @@ pub fn run_also(
         .map(|t| t.version.clone());
     let pbr_sum = engine.run(pbr_plan, &rep, cancel)?;
     s.phases.push((Phase::Pbr, pbr_sum));
+    // Batch-level events of the later phases go out unprefixed, under the PBR phase's batch.
+    let warn = |code: Code, message: String| {
+        rep.emit(None, None, EventKind::Warning(Warning::new(code, message)))
+    };
     if !pbr_req.dry_run {
-        // TA21: the owned-file record lives in the PBR folder (Tasks 8 and 9 write through it).
-        if let Err(e) = OwnedFiles::load(&folders[0]).save() {
-            s.notes.push(format!("{}: {e}", folders[0].display()));
+        // TA21: the owned-file record lives in the PBR folder (Tasks 8 and 9 write through it). It is created when
+        // missing and never rewritten here; one that cannot be read is left as it is (review M4).
+        let rec = folders[0].join("_sdc").join("also.json");
+        let made = OwnedFiles::load(&folders[0]).and_then(|o| match o.path().exists() {
+            true => Ok(()),
+            false => o.save(),
+        });
+        if let Err(e) = made {
+            let m = format!(
+                "{} cannot be read or written ({e}): it is left as it is, and no report, zip or sums file is written \
+                 until it is fixed or removed; the files it lists are not touched",
+                rec.display()
+            );
+            warn(Code::AlsoOwnedUnreadable, m.clone());
+            s.notes.push(m);
         }
     }
     if want_cm && !cfg.also.contains(&AlsoTarget::Vanilla) {
@@ -656,15 +727,25 @@ pub fn run_also(
 
     // Vanilla phase: derived jobs for the PBR sets; every other job copied from its cs twin when that is current.
     let vrep = Reporter::new(
-        Arc::new(PrefixSink::new(format!("{}/", names[1]), sink.clone())),
+        Arc::new(NoBatchWarnings(Arc::new(PrefixSink::new(
+            format!("{}/", names[1]),
+            sink.clone(),
+        )))),
         new_batch_id(),
     );
+    // Review M1: a later phase's error keeps its phase and exit code, and is reported as an event.
+    let failed = |s: &mut AlsoSummary, phase: Phase, e: EngineError| {
+        warn(
+            Code::AlsoPhaseFailed,
+            format!("{phase:?} phase failed: {e}"),
+        );
+        s.error = Some((phase, e.to_string(), e.exit_code()));
+    };
     let vreq = phase_req(1, DeriveMode::Vanilla, &sets, &drop);
     let mut vplan = match engine.plan(vreq.clone(), &vrep, cancel) {
         Ok(p) => p,
         Err(e) => {
-            s.notes.push(format!("Vanilla phase: {e}"));
-            s.cancelled_after = Some(Phase::Pbr);
+            failed(&mut s, Phase::Vanilla, e);
             return Ok(s);
         }
     };
@@ -702,17 +783,20 @@ pub fn run_also(
         }
     }
     vplan.jobs = keep;
-    let mut vsum = match engine.run(vplan, &vrep, cancel) {
-        Ok(v) => v,
-        Err(e) => {
-            s.notes.push(format!("Vanilla phase: {e}"));
-            s.cancelled_after = Some(Phase::Pbr);
-            return Ok(s);
-        }
-    };
+    // Review M2: the copies first, so their events come before the phase's `batch_done` (whose counts still leave
+    // them out; they are in this phase's summary).
+    let mut vsum = BatchSummary::default();
     s.copied = do_copies(&copies, &vreq, &vrep, cancel, &mut vsum);
+    let run = engine.run(vplan, &vrep, cancel);
+    if let Ok(r) = &run {
+        add(&mut vsum, r);
+    }
     vsum.cancelled.sort();
     s.phases.push((Phase::Vanilla, vsum));
+    if let Err(e) = run {
+        failed(&mut s, Phase::Vanilla, e);
+        return Ok(s);
+    }
     if !want_cm {
         return Ok(s);
     }
@@ -727,7 +811,10 @@ pub fn run_also(
 
     // CM phase: only the derived items, so the Vanilla phase's non-PBR outcomes are not counted (or shown) twice.
     let gate = Arc::new(Gate {
-        inner: Arc::new(PrefixSink::new(format!("{}/", names[2]), sink)),
+        inner: Arc::new(NoBatchWarnings(Arc::new(PrefixSink::new(
+            format!("{}/", names[2]),
+            sink,
+        )))),
         held: Mutex::new(Some(vec![])),
     });
     let crep = Reporter::new(gate.clone(), new_batch_id());
@@ -735,8 +822,7 @@ pub fn run_also(
         Ok(p) => p,
         Err(e) => {
             gate.release(|_| true);
-            s.notes.push(format!("CM phase: {e}"));
-            s.cancelled_after = Some(Phase::Vanilla);
+            failed(&mut s, Phase::Cm, e);
             return Ok(s);
         }
     };
@@ -767,10 +853,7 @@ pub fn run_also(
     });
     match engine.run(cplan, &crep, cancel) {
         Ok(c) => s.phases.push((Phase::Cm, c)),
-        Err(e) => {
-            s.notes.push(format!("CM phase: {e}"));
-            s.cancelled_after = Some(Phase::Vanilla);
-        }
+        Err(e) => failed(&mut s, Phase::Cm, e),
     }
     Ok(s)
 }

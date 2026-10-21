@@ -481,7 +481,9 @@
         "DERIVE-NO-ENVMAP",
         "DERIVE-PATH-CONFLICT",
         "DERIVE-NOT-CONVERTED",
-        "DERIVE-NIF-SUGGEST"
+        "DERIVE-NIF-SUGGEST",
+        "ALSO-PHASE-FAILED",
+        "ALSO-OWNED-UNREADABLE"
       ],
       "type": "string"
     },
