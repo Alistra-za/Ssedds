@@ -876,3 +876,289 @@ fn a_derived_pick_skips_the_map_notes() {
     assert_eq!(ShaderOrigin::Derived.to_string(), "derived");
     assert_eq!("derived".parse::<ShaderOrigin>(), Ok(ShaderOrigin::Derived));
 }
+
+/// Sets an engine test-hook variable for one test and removes it when dropped (as `tests/api.rs` does). The values
+/// name output files no other test has, so tests running in parallel never match them.
+struct HookVar(&'static str);
+
+impl HookVar {
+    fn set(name: &'static str, value: &str) -> HookVar {
+        std::env::set_var(name, value);
+        HookVar(name)
+    }
+}
+
+impl Drop for HookVar {
+    fn drop(&mut self) {
+        std::env::remove_var(self.0);
+    }
+}
+
+fn plan_and_run(
+    inputs: &Path,
+    out: &Path,
+    tweak: impl Fn(&mut BatchRequest, Option<&mut DeriveRequest>),
+) -> (BatchSummary, Vec<EngineEvent>) {
+    let mut r = request(inputs, &out.join("pbr"), Target::Cs);
+    tweak(&mut r, None);
+    let (cs, _) = plan(r);
+    let mut d = DeriveRequest {
+        mode: DeriveMode::Vanilla,
+        params: LegacyParams::default(),
+        sets: derive_sets(&cs),
+        drop: vec![],
+        scanned: false,
+    };
+    let mut r = request(inputs, &out.join("vanilla"), Target::Vanilla);
+    tweak(&mut r, Some(&mut d));
+    r.derive = Some(d);
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "t");
+    let e = Engine::new().unwrap();
+    let p = e.plan(r, &rep, &CancelToken::default()).unwrap();
+    let s = e.run(p, &rep, &CancelToken::default()).unwrap();
+    (s, sink.take())
+}
+
+/// Review I1: every discovered file gets exactly one terminal event, whatever the derive step did with it: read by
+/// a derived job, not read (`_g`, an RNM layer), left out (`drop`), in a set with no albedo or a DDS source, or a
+/// source of a size-mismatch error job.
+#[test]
+fn every_discovered_file_gets_one_terminal_event() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let dir = inputs.join("textures/pbr/arm");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), true);
+    png(&dir.join("steel_g.png"), 16, 16, [255, 0, 0, 255]);
+    png(&dir.join("steel_detail.png"), 16, 16, [128, 128, 255, 255]);
+    for base in ["box", "nod"] {
+        png(&dir.join(format!("{base}.png")), 16, 16, [90, 90, 90, 255]);
+        png(
+            &dir.join(format!("{base}_n.png")),
+            16,
+            16,
+            [128, 128, 255, 255],
+        );
+        png(
+            &dir.join(format!("{base}_rmaos.png")),
+            16,
+            16,
+            [128, 0, 255, 255],
+        );
+    }
+    png(&dir.join("big.png"), 32, 32, [200, 200, 200, 255]);
+    png(&dir.join("big_n.png"), 32, 32, [128, 128, 255, 255]);
+    png(&dir.join("big_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    png(&dir.join("crate.png"), 16, 16, [90, 90, 90, 255]);
+    png(&dir.join("crate_n.png"), 16, 16, [128, 128, 255, 255]);
+    fake_dds(&dir.join("crate_rmaos.dds"));
+    png(
+        &inputs.join("textures/misc/cup.png"),
+        16,
+        16,
+        [90, 90, 90, 255],
+    );
+    let (_, ev) = plan_and_run(&inputs, d.path(), |_, d| {
+        if let Some(d) = d {
+            let is = |s: &DeriveSet, b: &str| {
+                s.members
+                    .iter()
+                    .any(|m| slash(m).ends_with(&format!("/{b}_n.png")))
+            };
+            let i = d.sets.iter().position(|s| is(s, "box")).unwrap();
+            d.drop = d.sets.remove(i).members;
+            let nod = d.sets.iter_mut().find(|s| is(s, "nod")).unwrap();
+            (nod.albedo, nod.normal) = (None, None);
+            let steel = d.sets.iter_mut().find(|s| is(s, "steel")).unwrap();
+            steel.members.push(dir.join("steel_detail.png"));
+        }
+    });
+    let discovered: Vec<(String, String)> = ev
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::FileDiscovered { .. }))
+        .map(|e| (e.path.clone().unwrap(), e.job.clone().unwrap()))
+        .collect();
+    assert!(discovered.len() >= 17, "{discovered:#?}");
+    for (path, job) in &discovered {
+        let n = ev
+            .iter()
+            .filter(|e| match &e.kind {
+                EventKind::FileSkipped {
+                    kind: SkipKind::PackedSource,
+                    ..
+                } => e.path.as_ref() == Some(path),
+                EventKind::FileSkipped { .. }
+                | EventKind::FileDone { .. }
+                | EventKind::FileFailed { .. } => e.job.as_ref() == Some(job),
+                _ => false,
+            })
+            .count();
+        assert_eq!(n, 1, "{path} ({job}) has {n} terminal events");
+    }
+}
+
+/// Review M1: DERIVE-NO-ALBEDO is a note on the `_n` under Vanilla, only with a CM diffuse under CM, and a skip
+/// for a set with no albedo and no `_n`.
+#[test]
+fn no_albedo_is_noted_where_a_diffuse_is_lost() {
+    let run = |mode: DeriveMode, keep: bool, bare: bool| {
+        let d = tempfile::tempdir().unwrap();
+        let inputs = d.path().join("in");
+        let dir = inputs.join("textures/pbr/arm");
+        png(&dir.join("steel_n.png"), 16, 16, [128, 128, 255, 255]);
+        png(&dir.join("steel_rmaos.png"), 16, 16, [128, 255, 255, 255]);
+        let (p, _) = cs_then(mode, &inputs, d.path(), |_, d| {
+            if let Some(d) = d {
+                d.params.keep_metal_brightness = keep;
+                if bare {
+                    d.sets[0].normal = None;
+                }
+            }
+        });
+        (d, p)
+    };
+    let noted = |p: &Plan| p.jobs.iter().any(|j| has(j, Code::DeriveNoAlbedo));
+    let (_d, p) = run(DeriveMode::Vanilla, false, false);
+    assert!(has(
+        out_job(&p, "textures/arm/steel_n.dds").unwrap(),
+        Code::DeriveNoAlbedo
+    ));
+    let (_d, p) = run(DeriveMode::Cm, false, false);
+    assert!(out_job(&p, "textures/arm/steel_m.dds").is_some());
+    assert!(!noted(&p));
+    let (_d, p) = run(DeriveMode::Cm, true, false);
+    assert!(noted(&p));
+    let (_d, p) = run(DeriveMode::Vanilla, false, true);
+    assert!(p.jobs.is_empty(), "{:#?}", p.jobs);
+    assert!(p
+        .skipped
+        .iter()
+        .any(|s| s.code == Some(Code::DeriveNoAlbedo)));
+}
+
+/// Review M2: a DDS set's first file is skipped once (DERIVE-DDS-SOURCE replaces its IN-DDS-SKIPPED).
+#[test]
+fn a_dds_set_skips_each_file_once() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    for f in ["steel.dds", "steel_n.dds", "steel_rmaos.dds"] {
+        fake_dds(&inputs.join("textures/pbr/arm").join(f));
+    }
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let paths: Vec<&PathBuf> = p.skipped.iter().map(|s| &s.path).collect();
+    let unique: BTreeSet<&PathBuf> = paths.iter().copied().collect();
+    assert_eq!(paths.len(), 3, "{:#?}", p.skipped);
+    assert_eq!(unique.len(), 3);
+    let sink = Arc::new(VecSink::default());
+    let s = Engine::new()
+        .unwrap()
+        .run(p, &Reporter::new(sink, "t"), &CancelToken::default())
+        .unwrap();
+    assert_eq!(s.skipped, 3);
+}
+
+/// Review M3: a `[files]` key for a derived `_m` (its virtual `<base>_m`, TA15) applies and is not unmatched.
+#[test]
+fn a_files_key_for_a_derived_m_applies_and_matches() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(
+        &inputs,
+        "textures/pbr/arm",
+        Some([128, 255, 255, 255]),
+        false,
+    );
+    let (p, ev) = cs_then(DeriveMode::Cm, &inputs, d.path(), |r, _| {
+        let mut cfg = engine::presets::ConfigFile::default();
+        cfg.files.insert(
+            "textures/pbr/arm/steel_m".into(),
+            serde_json::json!({ "alpha": { "threshold": 150 } }),
+        );
+        r.project_config_inline = Some(cfg);
+    });
+    let m = out_job(&p, "textures/arm/steel_m.dds").unwrap();
+    assert_eq!(m.profile.alpha.threshold, 150);
+    assert!(
+        !event_codes(&ev).contains(&Code::CfgFileUnmatched),
+        "{:?}",
+        event_codes(&ev)
+    );
+}
+
+/// Review M4: `admit_all`'s failure arms. A derived candidate that panics at Resolve and one whose source fails to
+/// decode each fail alone (`FailedFile` at the stage reached); so does a packed recipe that panics at Load.
+#[test]
+fn derive_and_pack_candidates_fail_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let dir = inputs.join("textures/pbr/arm");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), false);
+    png(&dir.join("boomd.png"), 16, 16, [90, 90, 90, 255]);
+    png(&dir.join("boomd_n.png"), 16, 16, [128, 128, 255, 255]);
+    png(&dir.join("boomd_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    {
+        let _hook = HookVar::set("SDC_TEST_PANIC_ON_PLAN", "boomd.dds@resolve");
+        let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+        assert_eq!(p.failed.len(), 1, "{:#?}", p.failed);
+        let f = &p.failed[0];
+        assert!(f.path.ends_with("boomd.png"), "{f:?}");
+        assert_eq!(f.stage, Stage::Resolve);
+        assert!(
+            f.error.contains("internal error") && f.error.contains("test hook"),
+            "{}",
+            f.error
+        );
+        assert!(out_job(&p, "textures/arm/boomd_n.dds").is_some());
+        assert!(out_job(&p, "textures/arm/steel.dds").is_some());
+    }
+    // A source that passes the header check but does not decode: the derived jobs that read it fail at Load.
+    let bad = d.path().join("elsewhere/bad_rough.png");
+    png(&bad, 16, 16, [128, 128, 128, 255]);
+    let bytes = std::fs::read(&bad).unwrap();
+    std::fs::write(&bad, &bytes[..40]).unwrap();
+    let (p, ev) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), |_, d| {
+        if let Some(d) = d {
+            let s = d
+                .sets
+                .iter_mut()
+                .find(|s| slash(s.albedo.as_deref().unwrap()).ends_with("/steel.png"))
+                .unwrap();
+            s.rough = ChannelSource::Source {
+                path: bad.clone(),
+                role: RawMap::Roughness,
+                invert: false,
+                channel: None,
+            };
+        }
+    });
+    let steel_fails: Vec<_> = p
+        .failed
+        .iter()
+        .filter(|f| slash(&f.path).contains("/steel"))
+        .collect();
+    assert_eq!(steel_fails.len(), 2, "{:#?}", p.failed);
+    assert!(steel_fails.iter().all(|f| f.stage == Stage::Load));
+    assert!(
+        event_codes(&ev).contains(&Code::InDecode),
+        "{:?}",
+        event_codes(&ev)
+    );
+    assert!(out_job(&p, "textures/arm/boomd.dds").is_some());
+
+    // Packing pass 2: a recipe that panics at Load fails alone.
+    let pk = d.path().join("pk");
+    png(&pk.join("boomp.png"), 16, 16, [90, 90, 90, 255]);
+    png(
+        &pk.join("boomp_roughness.png"),
+        16,
+        16,
+        [120, 120, 120, 255],
+    );
+    png(&pk.join("boomp_ao.png"), 16, 16, [200, 200, 200, 255]);
+    let _hook = HookVar::set("SDC_TEST_PANIC_ON_PLAN", "boomp_rmaos.dds@load");
+    let (p, _) = plan(request(&pk, &d.path().join("pk_out"), Target::Cs));
+    assert_eq!(p.failed.len(), 1, "{:#?}", p.failed);
+    assert_eq!(p.failed[0].stage, Stage::Load);
+    assert!(p.failed[0].error.contains("test hook"));
+    assert!(p.jobs.iter().all(|j| j.pack.is_none()));
+}

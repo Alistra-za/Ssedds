@@ -119,7 +119,7 @@ pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
     virtual_stem_as(first_source, kind.suffix())
 }
 
-fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
+pub(crate) fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
     let stem = first_source
         .file_stem()
         .unwrap_or_default()

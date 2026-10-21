@@ -44,6 +44,8 @@ pub struct DerivePlan {
     pub candidates: Vec<DeriveCandidate>,
     /// One pick per derived set key (TA29), replacing the fallback pick.
     pub picks: BTreeMap<String, ShaderPick>,
+    /// The vanilla set key of each removed member's job or skip, for [`report_unread`]'s skips.
+    pub member_sets: BTreeMap<PathBuf, String>,
 }
 
 fn slash(p: &Path) -> String {
@@ -155,18 +157,21 @@ pub fn plan_derived(
     use DeriveKind::*;
     let by_path: BTreeMap<&Path, &InputFile> =
         files.iter().map(|f| (f.path.as_path(), f)).collect();
-    // The vanilla plan's key of each set, from a member's job or skip, read before the jobs go.
+    // The vanilla plan's set key of each file, from its job or skip, read before the jobs go.
+    let member_sets: BTreeMap<PathBuf, String> = jobs
+        .iter()
+        .map(|j| (&j.input, &j.set_key))
+        .chain(
+            skipped
+                .iter()
+                .filter_map(|k| Some((&k.path, k.set.as_ref()?))),
+        )
+        .map(|(p, k)| (p.clone(), k.clone()))
+        .collect();
     let keys: Vec<Option<String>> = d
         .sets
         .iter()
-        .map(|s| {
-            s.members.iter().find_map(|m| {
-                jobs.iter()
-                    .find(|j| &j.input == m)
-                    .map(|j| j.set_key.clone())
-                    .or_else(|| skipped.iter().find(|k| &k.path == m)?.set.clone())
-            })
-        })
+        .map(|s| s.members.iter().find_map(|m| member_sets.get(m).cloned()))
         .collect();
     let gone: BTreeSet<&Path> = d
         .sets
@@ -200,9 +205,17 @@ pub fn plan_derived(
         .map(|j| (fold(&j.output), j.input.clone()))
         .collect();
 
-    let mut out = DerivePlan::default();
+    let mut out = DerivePlan {
+        member_sets: member_sets
+            .into_iter()
+            .filter(|(p, _)| gone.contains(p.as_path()))
+            .collect(),
+        ..DerivePlan::default()
+    };
     for (set, key) in d.sets.iter().zip(keys) {
         if let Some(first) = set.dds.first() {
+            // One skip per file (review M2): this replaces its `IN-DDS-SKIPPED`.
+            skipped.retain(|s| s.path != *first);
             skipped.push(SkippedFile {
                 path: first.clone(),
                 output: by_path
@@ -243,6 +256,9 @@ pub fn plan_derived(
         }
 
         let metal_source = source_path(&set.metal).is_some();
+        // TA8: otherwise the CM diffuse equals the vanilla one.
+        let cm_diffuse =
+            d.params.keep_metal_brightness && metal_source && d.params.keep_metal_strength > 0.0;
         let mut kinds = vec![];
         let mut notes = vec![];
         match d.mode {
@@ -291,12 +307,7 @@ pub fn plan_derived(
             }
             DeriveMode::Cm => {
                 kinds.push(CmM);
-                // TA8: otherwise the CM diffuse equals the vanilla one.
-                if albedo.is_some()
-                    && d.params.keep_metal_brightness
-                    && metal_source
-                    && d.params.keep_metal_strength > 0.0
-                {
+                if albedo.is_some() && cm_diffuse {
                     kinds.push(CmDiffuse);
                 }
             }
@@ -306,7 +317,8 @@ pub fn plan_derived(
             DeriveMode::Vanilla if kinds.contains(&EnvM) => Shader::Envmap,
             DeriveMode::Vanilla => Shader::Default,
         };
-        if albedo.is_none() {
+        // In CM mode only a CM diffuse would need the albedo (review M1).
+        if albedo.is_none() && (d.mode == DeriveMode::Vanilla || cm_diffuse) {
             notes.push(Warning::new(
                 Code::DeriveNoAlbedo,
                 format!("set {}: no albedo, so no diffuse is written", set.id),
@@ -401,6 +413,59 @@ pub fn plan_derived(
         }
     }
     out
+}
+
+/// Review I1: a `DERIVE-NOT-CONVERTED` skip for each member of `d`'s sets and of `d.drop` that nothing else ends:
+/// no derived job in `jobs` reads it (those get a `packed_source` event in `run`), and it has no skip, no earlier
+/// failure (`failed`, before the derive admission) and was not cancelled. So every discovered file gets one
+/// terminal event, keyed by its own output: `_g` and RNM layers, members left out (C2), the other members of a set
+/// skipped for DDS or no albedo, and the sources of an error or failed derived job.
+pub fn report_unread(
+    d: &DeriveRequest,
+    member_sets: &BTreeMap<PathBuf, String>,
+    files: &[InputFile],
+    jobs: &[ResolvedJob],
+    skipped: &mut Vec<SkippedFile>,
+    failed: &[FailedFile],
+    cancelled: &[PathBuf],
+) {
+    let mut ended: BTreeSet<&Path> = jobs
+        .iter()
+        .filter_map(|j| j.derive.as_ref())
+        .flat_map(|dj| dj.sources.iter().map(|s| s.path.as_path()))
+        .chain(failed.iter().map(|f| f.path.as_path()))
+        .chain(cancelled.iter().map(PathBuf::as_path))
+        .collect();
+    let had: BTreeSet<PathBuf> = skipped.iter().map(|s| s.path.clone()).collect();
+    ended.extend(had.iter().map(PathBuf::as_path));
+    let by_path: BTreeMap<&Path, &InputFile> =
+        files.iter().map(|f| (f.path.as_path(), f)).collect();
+    let members = d
+        .sets
+        .iter()
+        .flat_map(|s| s.members.iter().map(move |m| (m, Some(s))))
+        .chain(d.drop.iter().map(|m| (m, None)));
+    let mut new = vec![];
+    for (m, set) in members {
+        // Only discovered files: a hand-built set may name a member outside the inputs.
+        let Some(f) = by_path.get(m.as_path()) else {
+            continue;
+        };
+        if !ended.insert(m.as_path()) {
+            continue;
+        }
+        new.push(SkippedFile {
+            path: m.clone(),
+            output: f.output.clone(),
+            set: member_sets.get(m).cloned(),
+            code: Some(Code::DeriveNotConverted),
+            reason: match set {
+                Some(s) => format!("{} is not converted (set {})", name(m), s.id),
+                None => format!("{} is not converted: its set is left out", name(m)),
+            },
+        });
+    }
+    skipped.extend(new);
 }
 
 /// Resolves an assembled candidate as its kind's sub-type (provenance `recipe:<kind>`), with the set's notes and

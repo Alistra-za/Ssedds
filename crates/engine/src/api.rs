@@ -213,6 +213,7 @@ impl SkippedFile {
         match self.code {
             Some(Code::InDdsSkipped | Code::DeriveDdsSource) => SkipKind::DdsInput,
             Some(Code::PackConflict) => SkipKind::PackConflict,
+            Some(Code::DeriveNotConverted) => SkipKind::PackingInput,
             _ => SkipKind::Duplicate,
         }
     }
@@ -255,6 +256,8 @@ fn admit_all<T: Sync>(
     cancel: &CancelToken,
     items: &[T],
     est: impl Fn(&T) -> u64,
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_variables))] output: impl Fn(&T) -> &Path
+        + Sync,
     work: impl Fn(&T, Admitted<'_>, &Cell<Stage>) -> Result<ResolvedJob, PlanFailure> + Sync,
 ) -> Vec<Option<Result<ResolvedJob, PlanFailure>>> {
     let slots: Vec<Mutex<Option<Result<ResolvedJob, PlanFailure>>>> =
@@ -268,12 +271,17 @@ fn admit_all<T: Sync>(
             budget.acquire(est);
             let admitted = Admitted(budget, est);
             let work = &work;
+            #[cfg(feature = "test-hooks")]
+            let output = &output;
             scope.spawn(move |_| {
                 if cancel.is_cancelled() {
                     return;
                 }
                 let stage = Cell::new(Stage::Load);
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Named by the output, so the pass-1 hook (named by the input) never fires here.
+                    #[cfg(feature = "test-hooks")]
+                    panic_while_planning_for_test(output(item), Stage::Load);
                     work(item, admitted, &stage)
                 }));
                 *lock(slot) = Some(r.unwrap_or_else(|panic| {
@@ -1453,6 +1461,7 @@ impl Engine {
             cancel,
             &packed.candidates,
             |c| estimated_bytes(&c.job.sources[0].path),
+            |c| &c.virtual_input.output,
             |c, admitted, stage| {
                 // The key includes every source's stamp, so an edited source misses the cache. A recipe
                 // without a key (a source with no stamp) is assembled every time and never stored.
@@ -1583,6 +1592,7 @@ impl Engine {
                 cancel,
                 &dp.candidates,
                 |c| c.job.sources.iter().map(|s| estimated_bytes(&s.path)).sum(),
+                |c| &c.input.output,
                 |c, admitted, stage| {
                     let (asm, mean_rough) = crate::derive::assemble::assemble_derived_rough(&c.job)
                         .map_err(PlanFailure::of_pack)?;
@@ -1596,6 +1606,8 @@ impl Engine {
                     drop(asm.image);
                     drop(admitted);
                     stage.set(Stage::Resolve);
+                    #[cfg(feature = "test-hooks")]
+                    panic_while_planning_for_test(&c.input.output, Stage::Resolve);
                     let set = sets
                         .iter()
                         .find(|s| s.key == c.set_key)
@@ -1605,6 +1617,7 @@ impl Engine {
                     ))
                 },
             );
+            let failed_before = failed.len();
             for (c, r) in dp.candidates.iter().zip(results) {
                 let path = c.input.path.clone();
                 match r {
@@ -1623,6 +1636,17 @@ impl Engine {
                         });
                     }
                 }
+            }
+            if let Some(d) = &req.derive {
+                crate::derive::plan::report_unread(
+                    d,
+                    &dp.member_sets,
+                    &files,
+                    &jobs,
+                    &mut skipped,
+                    &failed[..failed_before],
+                    &cancelled,
+                );
             }
         }
         let ctx = ResolveCtx {
@@ -1679,21 +1703,31 @@ impl Engine {
                 project_rel(root, &f)
             };
             for j in &jobs {
-                match &j.pack {
-                    // A packed output: the folder of its first source plus the virtual stem (e.g. `rock01_rmaos`,
-                    // from the first source's name, whatever output path it has), compared with the extension-less
-                    // key. Its raw sources count too.
-                    Some(pk) => {
-                        let stem = crate::pack::plan::virtual_stem(&j.input, pk.kind);
+                // A packed output, or a derived `_m` (TA15, Note CM19): the folder of its first source plus the
+                // virtual stem (e.g. `rock01_rmaos`, from the first source's name, whatever output path it has),
+                // compared with the extension-less key. A packed output's raw sources count too.
+                let stem = match (&j.pack, &j.derive) {
+                    (Some(pk), _) => Some(crate::pack::plan::virtual_stem(&j.input, pk.kind)),
+                    (None, Some(dj)) => dj
+                        .kind
+                        .suffix()
+                        .filter(|s| *s == "m")
+                        .map(|s| crate::pack::plan::virtual_stem_as(&j.input, s)),
+                    (None, None) => None,
+                };
+                match stem {
+                    Some(stem) => {
                         if let Some(r) = rel_of_path(&j.input) {
                             let dir = r
                                 .rsplit_once('/')
                                 .map_or(String::new(), |(d, _)| format!("{d}/"));
                             rels.push(format!("{dir}{stem}"));
                         }
-                        rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
                     }
                     None => rels.extend(rel_of_path(&j.input)),
+                }
+                if let Some(pk) = &j.pack {
+                    rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
                 }
             }
             rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
@@ -1906,7 +1940,12 @@ impl Engine {
             // replaced under `packing.prefer = raw` (Note M9) are deliberate, as is a PBR set left in DDS (Note CM16).
             if matches!(
                 s.code,
-                Some(Code::InDdsSkipped | Code::PackConflict | Code::DeriveDdsSource)
+                Some(
+                    Code::InDdsSkipped
+                        | Code::PackConflict
+                        | Code::DeriveDdsSource
+                        | Code::DeriveNotConverted
+                )
             ) {
                 summary.skipped_intentional += 1;
             }
@@ -1938,10 +1977,11 @@ impl Engine {
             );
         }
         let mut ready = vec![];
+        let mut derive_read: BTreeSet<&Path> = BTreeSet::new();
         for job in &plan.jobs {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
             // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output. So
-            // does each file a derived job reads (Note CM), once per derived output it feeds.
+            // does each file a derived job reads (Note CM23), once, naming the first derived output it feeds.
             let consumed = job
                 .pack
                 .iter()
@@ -1949,7 +1989,8 @@ impl Engine {
                 .chain(
                     job.derive
                         .iter()
-                        .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived"))),
+                        .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
+                        .filter(|(p, _)| derive_read.insert(p.as_path())),
                 );
             for (path, how) in consumed {
                 rep.emit_job(
