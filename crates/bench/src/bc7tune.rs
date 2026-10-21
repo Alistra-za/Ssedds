@@ -14,6 +14,8 @@ pub struct Variant {
     pub name: &'static str,
     pub level: Bc7Level,
     pub tune: Bc7Tune,
+    /// bc7e patch 0001's exact-opaque flag (mode-6 p-bits pinned to 1 on all-255 blocks).
+    pub exact_opaque: bool,
 }
 
 const V: Bc7Level = Bc7Level::Veryslow;
@@ -33,16 +35,19 @@ const T: Bc7Tune = Bc7Tune {
 pub const VARIANTS: &[Variant] = &[
     Variant {
         name: "base",
+        exact_opaque: false,
         level: V,
         tune: T,
     },
     Variant {
         name: "slowest",
+        exact_opaque: false,
         level: Bc7Level::Slowest,
         tune: T,
     },
     Variant {
         name: "parts4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(4),
@@ -51,6 +56,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts8",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(8),
@@ -59,6 +65,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts16",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(16),
@@ -67,6 +74,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts64",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(64),
@@ -75,6 +83,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "uber3",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             uber_level: Some(3),
@@ -83,6 +92,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "uber4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             uber_level: Some(4),
@@ -91,6 +101,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "refine2",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             refinement_passes: Some(2),
@@ -99,6 +110,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "refine4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             refinement_passes: Some(4),
@@ -107,6 +119,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "nopbit",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             pbit_search: Some(false),
@@ -115,6 +128,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts4_uber4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(4),
@@ -124,6 +138,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts64_uber4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(64),
@@ -133,6 +148,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts8_uber4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(8),
@@ -142,6 +158,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts8_uber4_refine2",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(8),
@@ -152,6 +169,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "parts16_uber4_refine2",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             partitions_to_try: Some(16),
@@ -164,6 +182,7 @@ pub const VARIANTS: &[Variant] = &[
     // partitions, their combinations, and the sdc_max level itself.
     Variant {
         name: "ep",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             endpoint_search: Some(true),
@@ -172,6 +191,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "rp",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             refine_partitions: Some(true),
@@ -180,6 +200,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "rp_parts4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             refine_partitions: Some(true),
@@ -189,6 +210,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "rp_parts8",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             refine_partitions: Some(true),
@@ -198,6 +220,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "ep_uber4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             endpoint_search: Some(true),
@@ -207,6 +230,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "ep_rp_parts4_uber4_refine2",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             endpoint_search: Some(true),
@@ -219,6 +243,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "ep_rp_parts8_uber4_refine2",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             endpoint_search: Some(true),
@@ -231,6 +256,7 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "max",
+        exact_opaque: false,
         level: Bc7Level::Max,
         tune: T,
     },
@@ -238,6 +264,7 @@ pub const VARIANTS: &[Variant] = &[
     // unit normal), and the plain bc7e perceptual weights for comparison on colour.
     Variant {
         name: "wxy2",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             weights: Some([2, 2, 1, 1]),
@@ -246,11 +273,47 @@ pub const VARIANTS: &[Variant] = &[
     },
     Variant {
         name: "wxy4",
+        exact_opaque: false,
         level: V,
         tune: Bc7Tune {
             weights: Some([4, 4, 1, 1]),
             ..T
         },
+    },
+    // Alpha weighting (the "Alpha weighting" section of docs/research/bc7e-tuning.md): the alpha error
+    // weight raised to 2, 4 and 8 against RGB at 1, and the exact-opaque flag for comparison.
+    Variant {
+        name: "alpha_w2",
+        exact_opaque: false,
+        level: V,
+        tune: Bc7Tune {
+            weights: Some([1, 1, 1, 2]),
+            ..T
+        },
+    },
+    Variant {
+        name: "alpha_w4",
+        exact_opaque: false,
+        level: V,
+        tune: Bc7Tune {
+            weights: Some([1, 1, 1, 4]),
+            ..T
+        },
+    },
+    Variant {
+        name: "alpha_w8",
+        exact_opaque: false,
+        level: V,
+        tune: Bc7Tune {
+            weights: Some([1, 1, 1, 8]),
+            ..T
+        },
+    },
+    Variant {
+        name: "exact_opaque",
+        exact_opaque: true,
+        level: V,
+        tune: T,
     },
 ];
 
@@ -258,7 +321,15 @@ pub fn variant(name: &str) -> Option<Variant> {
     VARIANTS.iter().copied().find(|v| v.name == name)
 }
 
-pub const CLASSES: [&str; 4] = ["diffuse", "normal", "cutout", "smooth"];
+pub const CLASSES: [&str; 7] = [
+    "diffuse",
+    "normal",
+    "cutout",
+    "smooth",
+    "n_spec",
+    "n_spec_mip2",
+    "m_height",
+];
 
 fn psnr(mse: f64) -> f64 {
     engine::validate::psnr_from_mse(mse)
@@ -273,13 +344,36 @@ pub struct Scores {
     pub premul: f64,
     /// Mean angular error in degrees between the stored (x, y, z) vectors, both normalised.
     pub angle: f64,
+    /// Largest absolute alpha error over the image.
+    pub alpha_max: f64,
+    /// Share of texels with source alpha 0 that decode to exactly 0 (NaN when there are none).
+    pub exact0: f64,
+    /// Share of texels with source alpha 255 that decode to exactly 255 (NaN when there are none).
+    pub exact255: f64,
+    /// SSIM of the alpha channel: Gaussian window sigma 1.5 (radius 5), K1 0.01, K2 0.03, L 255, valid region.
+    pub assim: f64,
+    /// Share of texels whose alpha-test result at 128 differs between source and decoded (cutout edges).
+    pub cov128: f64,
 }
 
-pub fn score(src: &[[u8; 4]], dec: &[[u8; 4]]) -> Scores {
+pub fn score(src: &[[u8; 4]], dec: &[[u8; 4]], width: u32) -> Scores {
     assert_eq!(src.len(), dec.len());
     let n = src.len() as f64;
     let (mut se_rgb, mut se_y, mut se_a, mut se_pm, mut ang) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    let (mut amax, mut z0, mut z0_ok, mut f255, mut f255_ok, mut flips) =
+        (0.0f64, 0usize, 0usize, 0usize, 0usize, 0usize);
     for (s, d) in src.iter().zip(dec) {
+        let da = (s[3] as f64 - d[3] as f64).abs();
+        amax = amax.max(da);
+        if s[3] == 0 {
+            z0 += 1;
+            z0_ok += (d[3] == 0) as usize;
+        }
+        if s[3] == 255 {
+            f255 += 1;
+            f255_ok += (d[3] == 255) as usize;
+        }
+        flips += ((s[3] >= 128) != (d[3] >= 128)) as usize;
         let mut rgb = 0.0;
         for k in 0..3 {
             let t = s[k] as f64 - d[k] as f64;
@@ -306,13 +400,90 @@ pub fn score(src: &[[u8; 4]], dec: &[[u8; 4]]) -> Scores {
         let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0);
         ang += dot.acos().to_degrees();
     }
+    let share = |ok: usize, all: usize| {
+        if all == 0 {
+            f64::NAN
+        } else {
+            ok as f64 / all as f64
+        }
+    };
     Scores {
         rgb: psnr(se_rgb / (3.0 * n)),
         luma: psnr(se_y / n),
         alpha: psnr(se_a / n),
         premul: psnr(se_pm / (3.0 * n)),
         angle: ang / n,
+        alpha_max: amax,
+        exact0: share(z0_ok, z0),
+        exact255: share(f255_ok, f255),
+        assim: alpha_ssim(src, dec, width),
+        cov128: flips as f64 / n,
     }
+}
+
+/// SSIM of the alpha channel (Wang et al. 2004): Gaussian window sigma 1.5 truncated at radius 5, K1 0.01,
+/// K2 0.03, dynamic range 255, averaged over the region where the window fits (5 texels in from each edge).
+pub fn alpha_ssim(src: &[[u8; 4]], dec: &[[u8; 4]], width: u32) -> f64 {
+    let w = width as usize;
+    let h = src.len() / w;
+    const R: usize = 5;
+    let g: Vec<f64> = {
+        let raw: Vec<f64> = (0..=2 * R)
+            .map(|i| (-((i as f64 - R as f64).powi(2)) / (2.0 * 1.5 * 1.5)).exp())
+            .collect();
+        let sum: f64 = raw.iter().sum();
+        raw.iter().map(|v| v / sum).collect()
+    };
+    if w < 2 * R + 1 || h < 2 * R + 1 {
+        return f64::NAN;
+    }
+    let a: Vec<f64> = src.iter().map(|c| c[3] as f64).collect();
+    let b: Vec<f64> = dec.iter().map(|c| c[3] as f64).collect();
+    // Separable Gaussian blur of x, y, x*x, y*y, x*y, over the valid region.
+    let blur = |img: &[f64]| -> Vec<f64> {
+        let mut tmp = vec![0.0; w * h];
+        for y in 0..h {
+            for x in R..w - R {
+                let mut s = 0.0;
+                for (k, gk) in g.iter().enumerate() {
+                    s += gk * img[y * w + x + k - R];
+                }
+                tmp[y * w + x] = s;
+            }
+        }
+        let mut out = vec![0.0; w * h];
+        for y in R..h - R {
+            for x in R..w - R {
+                let mut s = 0.0;
+                for (k, gk) in g.iter().enumerate() {
+                    s += gk * tmp[(y + k - R) * w + x];
+                }
+                out[y * w + x] = s;
+            }
+        }
+        out
+    };
+    let mu_a = blur(&a);
+    let mu_b = blur(&b);
+    let aa = blur(&a.iter().map(|v| v * v).collect::<Vec<_>>());
+    let bb = blur(&b.iter().map(|v| v * v).collect::<Vec<_>>());
+    let ab = blur(&a.iter().zip(&b).map(|(p, q)| p * q).collect::<Vec<_>>());
+    let (c1, c2) = ((0.01f64 * 255.0).powi(2), (0.03f64 * 255.0).powi(2));
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for y in R..h - R {
+        for x in R..w - R {
+            let i = y * w + x;
+            let (ma, mb) = (mu_a[i], mu_b[i]);
+            let va = aa[i] - ma * ma;
+            let vb = bb[i] - mb * mb;
+            let cov = ab[i] - ma * mb;
+            total += ((2.0 * ma * mb + c1) * (2.0 * cov + c2))
+                / ((ma * ma + mb * mb + c1) * (va + vb + c2));
+            count += 1;
+        }
+    }
+    total / count as f64
 }
 
 fn encode_variant(img: &Rgba8, v: &Variant) -> Vec<u8> {
@@ -322,7 +493,7 @@ fn encode_variant(img: &Rgba8, v: &Variant) -> Vec<u8> {
     let p = Bc7Params {
         level: v.level,
         perceptual: false,
-        exact_opaque: false,
+        exact_opaque: v.exact_opaque,
     };
     out.par_chunks_mut(row)
         .zip(blocks.par_chunks(row))
@@ -360,7 +531,7 @@ pub fn run(
     if fresh {
         writeln!(
             f,
-            "variant,class,image,width,height,rgb,luma,alpha,premul,angle,secs"
+            "variant,class,image,width,height,rgb,luma,alpha,premul,angle,alpha_max,exact0,exact255,assim,cov128,secs"
         )?;
     }
     for class in CLASSES {
@@ -392,15 +563,15 @@ pub fn run(
                     best = best.min(t.elapsed().as_secs_f64());
                 }
                 let dec = crate::codec::decode_bc7_image(&enc, img.width, img.height);
-                let s = score(&img.px, &dec);
+                let s = score(&img.px, &dec, img.width);
                 writeln!(
                     f,
-                    "{},{class},{name},{},{},{:.4},{:.4},{:.4},{:.4},{:.5},{:.4}",
-                    v.name, img.width, img.height, s.rgb, s.luma, s.alpha, s.premul, s.angle, best
+                    "{},{class},{name},{},{},{:.4},{:.4},{:.4},{:.4},{:.5},{},{:.5},{:.5},{:.5},{:.6},{:.4}",
+                    v.name, img.width, img.height, s.rgb, s.luma, s.alpha, s.premul, s.angle, s.alpha_max, s.exact0, s.exact255, s.assim, s.cov128, best
                 )?;
                 eprintln!(
-                    "{class}/{name} {}: rgb {:.3} luma {:.3} a {:.3} pm {:.3} ang {:.4} {:.2}s",
-                    v.name, s.rgb, s.luma, s.alpha, s.premul, s.angle, best
+                    "{class}/{name} {}: rgb {:.3} luma {:.3} a {:.3} pm {:.3} ang {:.4} amax {} e0 {:.3} e255 {:.3} assim {:.4} cov {:.5} {:.2}s",
+                    v.name, s.rgb, s.luma, s.alpha, s.premul, s.angle, s.alpha_max, s.exact0, s.exact255, s.assim, s.cov128, best
                 );
                 if v.name == "base" {
                     base_payload = Some(enc.clone());
@@ -411,11 +582,11 @@ pub fn run(
                 let enc = crate::bc7ref::encode_image(&img.px, img.width, img.height, ref_top);
                 let secs = t.elapsed().as_secs_f64();
                 let dec = crate::codec::decode_bc7_image(&enc, img.width, img.height);
-                let s = score(&img.px, &dec);
+                let s = score(&img.px, &dec, img.width);
                 writeln!(
                     f,
-                    "ref{ref_top},{class},{name},{},{},{:.4},{:.4},{:.4},{:.4},{:.5},{:.4}",
-                    img.width, img.height, s.rgb, s.luma, s.alpha, s.premul, s.angle, secs
+                    "ref{ref_top},{class},{name},{},{},{:.4},{:.4},{:.4},{:.4},{:.5},{},{:.5},{:.5},{:.5},{:.6},{:.4}",
+                    img.width, img.height, s.rgb, s.luma, s.alpha, s.premul, s.angle, s.alpha_max, s.exact0, s.exact255, s.assim, s.cov128, secs
                 )?;
                 eprintln!("{class}/{name} ref{ref_top}: rgb {:.3} luma {:.3} a {:.3} pm {:.3} ang {:.4} {:.1}s", s.rgb, s.luma, s.alpha, s.premul, s.angle, secs);
                 if let Some(base) = &base_payload {
