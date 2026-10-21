@@ -528,3 +528,38 @@ fn a_tick_is_refused_in_the_vanilla_mode() {
     assert_eq!(m.project.as_ref().unwrap().text(), before);
     assert_eq!(m.status_line, sdc_gui::model::also::NEEDS_CS);
 }
+
+/// Every `[export]` field set at once survives the write and the parse (prune, tables after values), as an unsaved
+/// edit; only the non-default fields are written.
+#[test]
+fn every_export_field_round_trips_through_sdc_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    let steel = steel_id(&m);
+    m.set_also_settings(|c| {
+        c.also.push(AlsoTarget::Cm);
+        c.zip = true;
+        c.skip = vec![steel.clone()];
+        c.names.vanilla = Some("Plain".into());
+        c.legacy.brightness = 0.8;
+        c.legacy.keep_metal_brightness = true;
+    });
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert!(p.is_dirty());
+    let text = p.text();
+    let parsed = engine::presets::ConfigFile::parse(&text, "sdc.toml")
+        .unwrap()
+        .export
+        .unwrap();
+    assert_eq!(parsed, m.also_config(), "{text}");
+    assert_eq!(parsed.also, [AlsoTarget::Vanilla, AlsoTarget::Cm]);
+    assert!(parsed.zip && parsed.legacy.brightness == 0.8 && parsed.legacy.keep_metal_brightness);
+    assert_eq!(parsed.names.vanilla.as_deref(), Some("Plain"));
+    assert_eq!(parsed.skip, [steel.as_str()]);
+    assert!(
+        !text.contains("ao_strength"),
+        "defaults are not written: {text}"
+    );
+}
