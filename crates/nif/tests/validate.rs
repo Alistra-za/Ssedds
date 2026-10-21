@@ -922,3 +922,31 @@ fn a_type_change_fixes_the_flags_it_needs() {
         vec!["Skin tint flag cleared: it needs the Skin Tint shader type."]
     );
 }
+
+/// S-P2: shape "S" (0) on a clean BSLSP (1), plus an orphan BSLSP (2) of type 0 with the skin tint flag.
+fn orphan_skin_tint() -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", scenes::bstri_named(s, 1, -1));
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[], -1, &[]),
+    );
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[], -1, &[]),
+    );
+    put(
+        n.bytes(),
+        2,
+        Field::Slsf1,
+        Value::U32((1 << 31) | (1 << 21)),
+    )
+}
+
+#[test]
+fn an_orphan_shader_with_a_type_bound_flag_is_not_an_error() {
+    let w = warnings(&orphan_skin_tint());
+    none(&w, SKIN_TINT);
+    assert!(new_errors(&w, &w).is_empty(), "{w:#?}");
+}

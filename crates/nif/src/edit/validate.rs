@@ -254,7 +254,12 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             .users
             .first()
             .and_then(|&s| anchor_role(m, Some(s), Role::Shader));
-        for (mask, value, text, _) in type_flag_errors(lt.shader_type, lt.slsf1) {
+        // S-P2: a shader no shape uses is never drawn, so its flags cannot crash or render black.
+        let errs = match l.prop.users.is_empty() {
+            true => vec![],
+            false => type_flag_errors(lt.shader_type, lt.slsf1),
+        };
+        for (mask, value, text, _) in errs {
             let fix = shader_at.clone().map(|at| Op::SetBits {
                 at,
                 field: Field::Slsf1,
