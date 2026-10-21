@@ -2339,3 +2339,31 @@ fn null_and_empty_cb_ids_stay_distinct() {
     assert_eq!(Header::parse(&back.bytes).unwrap().strings.len(), n);
     assert_eq!(raw_id(&back.bytes, 2, 0), raw_id(&b, 2, 0));
 }
+
+/// B-P39 (B9 I11-P08): env map scale on a PBR material crashed the game; the add is refused. Not PBR, it applies.
+#[test]
+fn add_env_map_scale_is_refused_on_pbr() {
+    let b = scenes::animated(Some(0x80), 2);
+    let at = prop_anchor(&b, Role::Shader);
+    let Value::U32(slsf2) = current(&b, 3, Field::Slsf2) else {
+        panic!("slsf2")
+    };
+    let pbr = Op::SetField {
+        at: at.clone(),
+        field: Field::Slsf2,
+        value: Value::U32(slsf2 | 1 << 23),
+        base: Value::U32(slsf2),
+    };
+    let keys = lin(&[(0.0, 1.0), (1.0, 2.0)]);
+    let r = apply(
+        &b,
+        &[pbr, add(at.clone(), LSCF, Some(8), keys.clone(), 1.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        r.outcomes[1],
+        Outcome::Refused("Env map scale crashes the game on PBR materials.".into())
+    );
+    let r = apply(&b, &[add(at, LSCF, Some(8), keys, 1.0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+}

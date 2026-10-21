@@ -1,8 +1,10 @@
 //! Validation (spec §3.3): warns, never clamps or normalises. Reads the model only.
 use super::{anchor_role, Anchor, Op, Role};
+use crate::ctrl::TimeCtrl;
 use crate::extra::ExtraValue;
 use crate::fields::Field;
 use crate::keys::{KeyData, KeyGroup};
+use crate::material::{SLSF1_SPECULAR, SLSF2_TRUE_PBR};
 use crate::model::NifModel;
 use crate::path::canon_texture;
 use crate::props::LightingTrailer;
@@ -36,6 +38,57 @@ const SLSF1_OWN_EMIT: u32 = 1 << 22;
 const SLSF1_EXTERNAL_EMITTANCE: u32 = 1 << 29;
 const BSX_EXTERNAL_EMIT: u32 = 1 << 9;
 pub(crate) const LSCF_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
+pub(crate) const LSCF: &str = "BSLightingShaderPropertyFloatController";
+pub(crate) const LSCC: &str = "BSLightingShaderPropertyColorController";
+pub(crate) const TESTREF: &str = "BSNiAlphaPropertyTestRefController";
+/// SLSF2 bit 24 (TwoLayer) and bit 26 (Subsurface) decide what a PBR material's specular colour does.
+const SLSF2_TWO_LAYER: u32 = 1 << 24;
+const SLSF2_SUBSURFACE: u32 = 1 << 26;
+
+/// B9 I11-P08: LSCF var 8 on a PBR shader crashed the game. An Error in every file, never only a new one (B-P39).
+pub const ENV_SCALE_PBR: &str = "Env map scale crashes the game on PBR materials.";
+/// B9 I6-R10Z: the specular permutation is fixed at load.
+pub const SPECULAR_OFF: &str =
+    "This controller has no effect: Specular is off when the mesh loads.";
+/// B9 RTRB: the ref is unused without the test bit.
+pub const ALPHA_TEST_OFF: &str = "This controller has no effect: alpha test is off.";
+/// B9 R00 / I9-P00: the cbuffer follows but nothing shows on screen.
+pub const REFRACTION_NO_EFFECT: &str = "Refraction strength has no visible effect in game.";
+
+/// A variable's label. Under CS TruePBR (SLSF2 bit 23) three read differently, as on the Shader tab (B9 design §1).
+pub fn var_label(class: &str, v: u32, slsf2: u32) -> String {
+    let pbr = slsf2 & SLSF2_TRUE_PBR != 0;
+    let known = match (class, v) {
+        (LSCF, 9) if pbr => "Specular level",
+        (LSCF, 10) if pbr => "Roughness scale",
+        (LSCC, 0) if pbr && slsf2 & SLSF2_TWO_LAYER != 0 => "Coat colour",
+        (LSCC, 0) if pbr && slsf2 & SLSF2_SUBSURFACE != 0 => "Subsurface colour",
+        (LSCC, 0) if pbr => "Specular colour (no effect on PBR)",
+        (LSCF, 0) => "Refraction strength",
+        (LSCF, 8) => "Env map scale",
+        (LSCF, 9) => "Glossiness",
+        (LSCF, 10) => "Specular strength",
+        (LSCF, 11) => "Emissive multiple",
+        (LSCF, 12) => "Alpha",
+        (LSCF, 20) => "U offset",
+        (LSCF, 21) => "U scale",
+        (LSCF, 22) => "V offset",
+        (LSCF, 23) => "V scale",
+        (LSCC, 0) => "Specular colour",
+        (LSCC, 1) => "Emissive colour",
+        _ => return format!("Variable {v}"),
+    };
+    known.to_string()
+}
+
+/// A controller's title: its variable's label, "Alpha test threshold" for TestRef, the class when unknown.
+pub fn ctrl_title(c: &TimeCtrl, slsf2: u32) -> String {
+    match (c.known, c.var) {
+        (false, _) => c.class.clone(),
+        (true, Some(v)) => var_label(&c.class, v, slsf2),
+        (true, None) => "Alpha test threshold".to_string(),
+    }
+}
 
 pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warning> {
     let mut out = vec![];
@@ -157,9 +210,46 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             let t = "External_Emittance does not match BSX ExternalEmit";
             push(Level::Warn, fld(block, Field::Slsf1), t, fix);
         }
+        // B-P39: what the B9 in-game check found per controller of this shader. Source files only get Warnings,
+        // except the var-8 crash.
+        let specular = pbr || lt.slsf1 & SLSF1_SPECULAR != 0;
+        let chain: Vec<_> = l.prop.ctrls.iter().filter_map(|c| m.ctrls.get(c)).collect();
+        for (i, c) in chain.iter().enumerate() {
+            let tgt = Target::Block { block: c.block };
+            match (c.class.as_str(), c.var) {
+                (LSCF, Some(8)) if pbr => push(Level::Error, tgt.clone(), ENV_SCALE_PBR, None),
+                (LSCF, Some(10)) | (LSCC, Some(0)) if !specular => {
+                    push(Level::Warn, tgt.clone(), SPECULAR_OFF, None)
+                }
+                (LSCF, Some(0)) => push(Level::Warn, tgt.clone(), REFRACTION_NO_EFFECT, None),
+                _ => {}
+            }
+            // B9 I2-RDUP: the last controller in the chain wins; warn on each one that does not play.
+            if c.known
+                && chain[i + 1..]
+                    .iter()
+                    .any(|d| d.class == c.class && d.var == c.var)
+            {
+                let t = format!(
+                    "Two controllers drive {}: only the last one plays.",
+                    ctrl_title(c, lt.slsf2)
+                );
+                push(Level::Warn, tgt, &t, None);
+            }
+        }
     }
 
     for (&block, a) in &m.alphas {
+        for &c in &a.prop.ctrls {
+            if m.ctrls.get(&c).is_some_and(|c| c.class == TESTREF) && !a.alpha.test() {
+                push(
+                    Level::Warn,
+                    Target::Block { block: c },
+                    ALPHA_TEST_OFF,
+                    None,
+                );
+            }
+        }
         for mode in [(a.alpha.flags >> 1) & 15, (a.alpha.flags >> 5) & 15] {
             if mode >= 11 {
                 let t = format!("Blend mode {mode} reads as ONE (invalid)");
@@ -331,15 +421,17 @@ fn fixed_path(text: &str, norm: &str) -> Option<String> {
     Some(text[cut..].to_string())
 }
 
-/// Errors in `edited` that `source` does not already have (R14): an untouched source error never blocks export.
+/// Errors in `edited` that `source` does not already have (R14): an untouched source error never blocks export,
+/// except [`ENV_SCALE_PBR`], which crashes the game (B-P39).
 pub fn new_errors(source: &[Warning], edited: &[Warning]) -> Vec<Warning> {
     edited
         .iter()
         .filter(|w| {
             w.level == Level::Error
-                && !source
-                    .iter()
-                    .any(|s| s.target == w.target && s.text == w.text)
+                && (w.text == ENV_SCALE_PBR
+                    || !source
+                        .iter()
+                        .any(|s| s.target == w.target && s.text == w.text))
         })
         .cloned()
         .collect()

@@ -9,7 +9,7 @@ use crate::model::viewport3d::Clock;
 use crate::ui::status::{AMBER, RED};
 use eframe::egui;
 use nif::ctrl::{Sequence, TimeCtrl};
-use nif::edit::validate::Target;
+use nif::edit::validate::{ctrl_title, var_label, Target, ENV_SCALE_PBR};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Owner, Role};
 use nif::fields::{Field, Value};
 use nif::keys::{Key, KeyData, KeyGroup};
@@ -24,43 +24,14 @@ const TEST_REF: &str = "BSNiAlphaPropertyTestRefController";
 const FLOAT_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
 const COLOR_VARS: [u32; 2] = [0, 1];
 const CYCLES: [&str; 3] = ["Loop", "Reverse", "Clamp"];
-/// SLSF2 bit 24 (TwoLayer) and bit 26 (Subsurface) decide what a PBR material's specular colour does.
-const SLSF2_TWO_LAYER: u32 = 1 << 24;
-const SLSF2_SUBSURFACE: u32 = 1 << 26;
 const CLIP_SHARED: &str = "Shared alpha with a clip controller: splitting needs Phase C.";
 
-/// The shape's shader flags, 0 without a lit shader. Only the variable labels read them.
+/// The shape's shader flags, 0 without a lit shader: the variable labels and the PBR guard (B-P39) read them.
 fn shape_slsf2(e: &NifEdit, shape: &ShapeModel) -> u32 {
     shape
         .shader
         .and_then(|b| e.model.lighting.get(&b))
         .map_or(0, |l| l.lighting.slsf2)
-}
-
-/// A variable's label. Under CS TruePBR (SLSF2 bit 23) three read differently, as on the Shader tab (B9 design §1).
-fn var_name(class: &str, v: u32, slsf2: u32) -> String {
-    let pbr = slsf2 & SLSF2_TRUE_PBR != 0;
-    let known = match (class, v) {
-        (LSCF, 9) if pbr => "Specular level",
-        (LSCF, 10) if pbr => "Roughness scale",
-        (LSCC, 0) if pbr && slsf2 & SLSF2_TWO_LAYER != 0 => "Coat colour",
-        (LSCC, 0) if pbr && slsf2 & SLSF2_SUBSURFACE != 0 => "Subsurface colour",
-        (LSCC, 0) if pbr => "Specular colour (no effect on PBR)",
-        (LSCF, 0) => "Refraction strength",
-        (LSCF, 8) => "Env map scale",
-        (LSCF, 9) => "Glossiness",
-        (LSCF, 10) => "Specular strength",
-        (LSCF, 11) => "Emissive multiple",
-        (LSCF, 12) => "Alpha",
-        (LSCF, 20) => "U offset",
-        (LSCF, 21) => "U scale",
-        (LSCF, 22) => "V offset",
-        (LSCF, 23) => "V scale",
-        (LSCC, 0) => "Specular colour",
-        (LSCC, 1) => "Emissive colour",
-        _ => return format!("Variable {v}"),
-    };
-    known.to_string()
 }
 
 /// The class without its Bethesda prefix, for the small grey tag beside a row's title.
@@ -234,11 +205,7 @@ fn row(
     slsf2: u32,
 ) {
     let managed = e.model.managed(c.block);
-    let title = match (c.known, c.var) {
-        (false, _) => c.class.clone(),
-        (true, Some(v)) => var_name(&c.class, v, slsf2),
-        (true, None) => "Alpha test threshold".to_string(),
-    };
+    let title = ctrl_title(c, slsf2);
     egui::Sides::new().shrink_left().truncate().show(
         ui,
         |ui| {
@@ -821,24 +788,32 @@ fn add_row(
                 var = if class_idx == 0 { 20 } else { 1 };
             }
         });
+        // B-P39: env map scale on PBR crashed the game. A remembered 8 falls back to the default.
+        let pbr = slsf2 & SLSF2_TRUE_PBR != 0;
+        let env_blocked = |class_idx: usize, v: u32| pbr && class_idx == 0 && v == 8;
+        if env_blocked(class_idx, var) {
+            var = 20;
+        }
         ui.horizontal(|ui| {
             row_label(ui, "Variable");
             let (class, offered): (&str, &[u32]) = match class_idx {
                 0 => (LSCF, &FLOAT_VARS),
                 _ => (LSCC, &COLOR_VARS),
             };
-            let shown = format!("{} ({var})", var_name(class, var, slsf2));
+            let shown = format!("{} ({var})", var_label(class, var, slsf2));
             let r = egui::ComboBox::from_id_salt(id.with("var"))
                 .width(fit_width(ui, 180.0))
                 .truncate()
                 .selected_text(&shown)
                 .show_ui(ui, |ui| {
                     for &o in offered {
-                        ui.selectable_value(
-                            &mut var,
-                            o,
-                            format!("{} ({o})", var_name(class, o, slsf2)),
-                        );
+                        let text = format!("{} ({o})", var_label(class, o, slsf2));
+                        if env_blocked(class_idx, o) {
+                            ui.add_enabled(false, egui::Button::selectable(false, text))
+                                .on_disabled_hover_text(ENV_SCALE_PBR);
+                        } else {
+                            ui.selectable_value(&mut var, o, text);
+                        }
                     }
                 })
                 .response;
@@ -1004,7 +979,7 @@ fn variable(
             &FLOAT_VARS
         };
         let mut pick = v;
-        let shown = var_name(&c.class, v, slsf2);
+        let shown = var_label(&c.class, v, slsf2);
         // Phase A ruling R8 lifted (v2 B7): a managed controller's clips follow the new variable.
         let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-var", c.block))
             .width(fit_width(ui, 180.0))
@@ -1017,7 +992,7 @@ fn variable(
                     ui.selectable_value(
                         &mut pick,
                         o,
-                        format!("{} ({o})", var_name(&c.class, o, slsf2)),
+                        format!("{} ({o})", var_label(&c.class, o, slsf2)),
                     );
                 }
             })

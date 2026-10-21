@@ -1,11 +1,12 @@
 //! Structural ops: shader type re-emit and alpha add/remove/split (spec §5, plan A9). Removal is unlink: the
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
-use super::validate::LSCF_VARS;
+use super::validate::{ENV_SCALE_PBR, LSCC, LSCF, LSCF_VARS, TESTREF};
 use super::{Anchor, Op, Outcome, Role};
 use crate::ctrl::{BASE_LEN, CB_LEN};
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
 use crate::header::Header;
 use crate::keys::{encode_data, read_data, KeyData, KeyGroup};
+use crate::material::SLSF2_TRUE_PBR;
 use crate::model::{NifModel, PropModel, ShapeModel};
 use crate::net::{encode_net, ObjectNet};
 use crate::props::encode_texture_set;
@@ -374,10 +375,6 @@ pub(crate) fn set_keys(
     Ok(Outcome::Applied)
 }
 
-const LSCF: &str = "BSLightingShaderPropertyFloatController";
-const LSCC: &str = "BSLightingShaderPropertyColorController";
-const TESTREF: &str = "BSNiAlphaPropertyTestRefController";
-
 /// Block-relative offset of the property's own controller ref.
 fn ctrl_ref_at(doc: &NifDoc, p: &PropModel) -> usize {
     p.net.controller_at() - doc.header().offsets()[p.block as usize]
@@ -427,6 +424,13 @@ pub(crate) fn ctrl_op(
             };
             if !var_ok {
                 return Err(format!("{class} does not take variable {var:?}."));
+            }
+            let pbr = m
+                .lighting
+                .get(&block)
+                .is_some_and(|l| l.lighting.slsf2 & SLSF2_TRUE_PBR != 0);
+            if class == LSCF && *var == Some(8) && pbr {
+                return Err(ENV_SCALE_PBR.into());
             }
             let (data_kind, interp_kind, first, n): (&[u8], &[u8], Vec<u8>, usize) = match keys {
                 KeyData::Float(g) if float => (

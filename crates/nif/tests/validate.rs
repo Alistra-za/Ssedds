@@ -186,8 +186,14 @@ fn controller_rules() {
             field: Field::Variable
         }
     );
-    for v in [0, 8, 9, 10, 11, 12, 20, 21, 22, 23] {
+    // Known values are kept silently; 0 (refraction), 10 (Specular off here) and 20 (twice) have B-P39 warnings.
+    for v in [8, 9, 11, 12, 21, 22, 23] {
         assert!(warnings(&put(chain.clone(), 1, Field::Variable, Value::U32(v))).is_empty());
+    }
+    for v in [0, 10, 20] {
+        let w = warnings(&put(chain.clone(), 1, Field::Variable, Value::U32(v)));
+        assert_eq!(w.len(), 1, "{w:#?}");
+        assert_eq!(w[0].target, Target::Block { block: 1 });
     }
 }
 
@@ -593,4 +599,115 @@ fn non_finite_keys_block_export() {
     let at = Header::parse(&b).unwrap().offsets()[7] + 12; // data 7, key 0 value
     b[at..at + 4].copy_from_slice(&f32::NAN.to_le_bytes());
     assert_eq!(key_errors_on(b, Some(1), lin(&[0.0, 1.0])), vec![]);
+}
+
+// ---- B-P39: guards from the B9 in-game controller check ----
+
+const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
+const SPEC_OFF: &str = "This controller has no effect: Specular is off when the mesh loads.";
+const TEST_OFF: &str = "This controller has no effect: alpha test is off.";
+const REFRACTION: &str = "Refraction strength has no visible effect in game.";
+const SLSF1_SPECULAR: u32 = 1;
+const PBR: u32 = 1 << 23;
+const LSCF: &str = "BSLightingShaderPropertyFloatController";
+const LSCC: &str = "BSLightingShaderPropertyColorController";
+
+/// BSLSP (0, slsf1 0x8000_0000 = Specular off, slsf2 1) with a chain of `ctrls` (class, var) at blocks 1, 2, ...
+fn chain_of(ctrls: &[(&str, u32)]) -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(1, &[], 1, &[1.0]),
+    );
+    for (i, (class, var)) in ctrls.iter().enumerate() {
+        let next = if i + 1 < ctrls.len() {
+            i as i32 + 2
+        } else {
+            -1
+        };
+        let tail = builder::W::default().i32(-1).u32(*var);
+        n.block(class, scenes::ctrl_body(next, 0x48, 0, tail));
+    }
+    n.bytes()
+}
+
+#[test]
+fn env_map_scale_on_pbr_is_an_error_that_is_always_new() {
+    let b = put(scenes::free_chain(), 1, Field::Variable, Value::U32(8));
+    none(&warnings(&b), ENV_PBR);
+    let pbr = put(b, 0, Field::Slsf2, Value::U32(1 | PBR));
+    let w = warnings(&pbr);
+    let x = only(&w, ENV_PBR, Level::Error);
+    assert_eq!(x.target, Target::Block { block: 1 });
+    // A source that already had it still blocks: the game crashes either way.
+    let n = new_errors(&w, &w);
+    assert_eq!(n.len(), 1, "{n:#?}");
+    assert_eq!(n[0].text, ENV_PBR);
+}
+
+#[test]
+fn specular_controllers_without_the_specular_flag_warn() {
+    for (class, var) in [(LSCF, 10), (LSCC, 0)] {
+        let b = chain_of(&[(class, var)]);
+        let x = only(&warnings(&b), SPEC_OFF, Level::Warn);
+        assert_eq!(x.target, Target::Block { block: 1 });
+        let on = put(
+            b.clone(),
+            0,
+            Field::Slsf1,
+            Value::U32(0x8000_0000 | SLSF1_SPECULAR),
+        );
+        none(&warnings(&on), SPEC_OFF);
+        // PBR reads these as roughness scale and coat / subsurface colour.
+        none(
+            &warnings(&put(b, 0, Field::Slsf2, Value::U32(1 | PBR))),
+            SPEC_OFF,
+        );
+    }
+    // Glossiness and emissive colour are not in the rule.
+    none(&warnings(&chain_of(&[(LSCF, 9), (LSCC, 1)])), SPEC_OFF);
+}
+
+#[test]
+fn testref_without_alpha_test_warns() {
+    let b = scenes::alpha_testref(); // flags 0x00ED: blend on, test off
+    let x = only(&warnings(&b), TEST_OFF, Level::Warn);
+    assert_eq!(x.target, Target::Block { block: 1 });
+    let on = put(b, 0, Field::AlphaFlags, Value::U16(0x00ED | 1 << 9));
+    none(&warnings(&on), TEST_OFF);
+}
+
+#[test]
+fn refraction_strength_controller_warns() {
+    let w = warnings(&chain_of(&[(LSCF, 0)]));
+    let x = only(&w, REFRACTION, Level::Warn);
+    assert_eq!(x.target, Target::Block { block: 1 });
+    assert!(w.iter().all(|w| w.level == Level::Warn));
+}
+
+#[test]
+fn two_controllers_on_one_variable_warn_on_the_one_that_does_not_play() {
+    let w = warnings(&chain_of(&[(LSCF, 11), (LSCF, 20), (LSCF, 11)]));
+    let x = only(
+        &w,
+        "Two controllers drive Emissive multiple: only the last one plays.",
+        Level::Warn,
+    );
+    assert_eq!(x.target, Target::Block { block: 1 });
+    // Same variable number, other class: different values.
+    assert!(warnings(&chain_of(&[(LSCF, 0), (LSCC, 0)]))
+        .iter()
+        .all(|w| !w.text.starts_with("Two controllers")));
+    // The label is the PBR one.
+    let pbr = put(
+        chain_of(&[(LSCF, 9), (LSCF, 9)]),
+        0,
+        Field::Slsf2,
+        Value::U32(1 | PBR),
+    );
+    only(
+        &warnings(&pbr),
+        "Two controllers drive Specular level: only the last one plays.",
+        Level::Warn,
+    );
 }

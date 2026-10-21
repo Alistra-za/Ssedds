@@ -4693,3 +4693,108 @@ fn controllers_tab_names_lscc_specular_colour_by_pbr_material() {
         h.get_by_role_and_label(AkRole::ComboBox, &format!("{want} variable"));
     }
 }
+
+// ---- B-P39: guards from the B9 in-game controller check ----
+
+const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
+
+/// An exportable session on `b` (temp edit mod).
+fn exportable(b: Vec<u8>) -> (tempfile::TempDir, NifEdit) {
+    let d = tempfile::tempdir().unwrap();
+    let edit_mod = d.path().join("mods").join(EDIT_MOD);
+    let e = NifEdit::open(b, copy("A", 1, false), "meshes/x.nif", Some(&edit_mod)).unwrap();
+    (d, e)
+}
+
+fn pbr_on(e: &NifEdit) -> Op {
+    let at = nif::edit::anchor_role(&e.model, Some(0), Role::Shader).unwrap();
+    let base = e.model.lighting[&1].lighting.slsf2;
+    Op::SetBits {
+        at,
+        field: Field::Slsf2,
+        mask: 1 << 23,
+        value: 1 << 23,
+        base,
+    }
+}
+
+#[test]
+fn env_map_scale_on_pbr_blocks_export_after_a_switch_and_in_the_source() {
+    // The shape turns PBR after the var-8 controller exists.
+    let (_d, mut e) = exportable(ctrl_scene_vars(0x82, [8, 20]));
+    assert!(e.warnings.iter().all(|w| w.text != ENV_PBR));
+    let op = pbr_on(&e);
+    e.push(vec![op], None);
+    assert_eq!(e.export_block().as_deref(), Some(ENV_PBR));
+    // A file that already has it: an unrelated edit still cannot export.
+    let (_d2, mut e2) = exportable(e.patched.to_vec());
+    let at = nif::edit::anchor_role(&e2.model, Some(0), Role::Shader).unwrap();
+    e2.push(
+        vec![Op::SetField {
+            at,
+            field: Field::Glossiness,
+            value: Value::F32(50f32.to_bits()),
+            base: Value::F32(80f32.to_bits()),
+        }],
+        None,
+    );
+    assert_eq!(e2.export_block().as_deref(), Some(ENV_PBR));
+}
+
+#[test]
+fn controllers_tab_shows_the_b9_guards() {
+    // Var 0 (refraction) and var 10 on a shape whose Specular flag is off.
+    let mut m = direct(ctrl_scene_vars(0x82, [0, 10]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Refraction strength has no visible effect in game.");
+    h.get_by_label("This controller has no effect: Specular is off when the mesh loads.");
+    // Two controllers on one variable.
+    let mut m = direct(ctrl_scene_vars(0x82, [11, 11]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Two controllers drive Emissive multiple: only the last one plays.");
+    // Var 8 on PBR: the red error under the controller.
+    let mut m = direct(ctrl_scene_vars(0x82, [8, 20]));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    tab(&mut h, "Controllers");
+    h.get_by_label(ENV_PBR);
+}
+
+#[test]
+fn add_controller_offers_no_env_map_scale_on_pbr() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1800.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    let env = h.get_by_label("Env map scale (8)");
+    assert!(!env.accesskit_node().is_disabled());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    let env = h.get_by_label("Env map scale (8)");
+    assert!(env.accesskit_node().is_disabled());
+    env.hover();
+    h.run_steps(30);
+    h.get_by_label(ENV_PBR);
+}
