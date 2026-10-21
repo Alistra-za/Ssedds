@@ -101,6 +101,7 @@ pub fn locate(h: &Header, b: &[u8], block: usize, f: Field) -> Result<(usize, Va
         b"BSLightingShaderProperty" => lsp(h, b, block, f)?,
         b"NiAlphaProperty" => alpha(h, b, block, f)?,
         k if crate::ctrl::is_ctrl(k) => ctrl(k, f),
+        b"NiBlendFloatInterpolator" | b"NiBlendPoint3Interpolator" => blend(h, b, block, f)?,
         k => interp(k, f),
     };
     let Some((rel, ty)) = found else {
@@ -149,6 +150,17 @@ fn interp(kind: &[u8], f: Field) -> Found {
         }
         _ => None,
     }
+}
+
+/// Blend Value sits after the items, so its offset depends on the flags and array size (F7).
+fn blend(h: &Header, b: &[u8], block: usize, f: Field) -> Result<Found, NifError> {
+    let x = crate::ctrl::read_blend_interp(h, b, block)?;
+    Ok(match f {
+        Field::InterpValue(i) if (i as usize) < x.value.len() => {
+            Some((x.value_at + 4 * i as usize, Ty::F32))
+        }
+        _ => None,
+    })
 }
 
 fn alpha(h: &Header, b: &[u8], block: usize, f: Field) -> Result<Found, NifError> {

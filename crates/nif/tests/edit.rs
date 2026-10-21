@@ -150,38 +150,6 @@ fn stale_base_is_a_conflict_and_later_ops_still_apply() {
 }
 
 #[test]
-fn variable_change_on_managed_controller_is_refused() {
-    let b = scenes::managed_clip();
-    let m = read_model(&b).unwrap();
-    let shape = m.shapes[0].block;
-    let at = anchor_role(
-        &m,
-        Some(shape),
-        Role::Ctrl {
-            owner: Owner::Shader,
-            class: "BSLightingShaderPropertyFloatController".into(),
-            var: Some(11),
-            nth: 0,
-        },
-    )
-    .unwrap();
-    assert!(m.managed(at.block));
-    let op = Op::SetField {
-        at,
-        field: Field::Variable,
-        value: Value::U32(20),
-        base: Value::U32(11),
-    };
-    let r = apply(&b, &[op]).unwrap();
-    assert!(
-        matches!(r.outcomes[0], Outcome::Refused(_)),
-        "{:?}",
-        r.outcomes
-    );
-    assert_eq!(r.bytes, b);
-}
-
-#[test]
 fn reordered_blocks_reanchor_by_role() {
     let (b1, b2) = (scenes::reordered(false, "S"), scenes::reordered(true, "S"));
     let at = shader_anchor(&b1);
@@ -1213,4 +1181,1189 @@ fn a_controller_edit_on_a_shared_alpha_is_a_conflict() {
         )]
     );
     assert_eq!(r.bytes, b);
+}
+
+// ---- v2 B4: SetKeys ----
+
+use nif::keys::{encode_data, Key, KeyData, KeyGroup};
+use scenes::Share;
+
+fn data_of(b: &[u8], d: usize) -> KeyData {
+    nif::keys::read_data(&Header::parse(b).unwrap(), b, d).unwrap()
+}
+
+fn key(time: f32, value: f32) -> Key<f32> {
+    Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    }
+}
+
+/// Float LINEAR keys.
+fn lin(k: &[(f32, f32)]) -> KeyData {
+    KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: k.iter().map(|&(t, v)| key(t, v)).collect(),
+    })
+}
+
+fn empty_float() -> KeyData {
+    KeyData::Float(KeyGroup {
+        key_type: None,
+        keys: vec![],
+    })
+}
+
+fn set_keys(at: &Anchor, keys: KeyData, base: KeyData) -> Op {
+    Op::SetKeys {
+        at: at.clone(),
+        clip: None,
+        keys,
+        base,
+    }
+}
+
+fn nblocks(b: &[u8]) -> usize {
+    Header::parse(b).unwrap().sizes.len()
+}
+
+fn kind_of(b: &[u8], k: usize) -> Vec<u8> {
+    Header::parse(b).unwrap().kind(k).to_vec()
+}
+
+fn with_i32(mut v: Vec<u8>, at: usize, x: i32) -> Vec<u8> {
+    v[at..at + 4].copy_from_slice(&x.to_le_bytes());
+    v
+}
+
+fn same_blocks(a: &[u8], b: &[u8], blocks: impl IntoIterator<Item = usize>) {
+    for k in blocks {
+        assert_eq!(block_bytes_of(a, k), block_bytes_of(b, k), "block {k}");
+    }
+}
+
+#[test]
+fn set_keys_reemits_only_the_data_block() {
+    let b = scenes::keyed_pair(Share::No, [1, 2]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let keys = lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 8);
+    assert_eq!(
+        nif::write::block_diff(&b, &r.bytes).unwrap(),
+        vec!["block 6 NiFloatData: 24 → 32 bytes".to_string()]
+    );
+    assert_eq!(block_bytes_of(&r.bytes, 6), encode_data(&keys));
+    same_blocks(&b, &r.bytes, (0..8).filter(|&k| k != 6));
+    assert_eq!(
+        Header::parse(&b).unwrap().strings,
+        Header::parse(&r.bytes).unwrap().strings
+    );
+
+    // same size: only the 4 value bytes of key 1 change
+    let base = data_of(&b, 6);
+    let mut same = base.clone();
+    if let KeyData::Float(g) = &mut same {
+        g.keys[1].value = 0.75;
+    }
+    let r = apply(&b, &[set_keys(&at, same, base)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let off = Header::parse(&b).unwrap().offsets()[6] + 20;
+    // 1.0 -> 0.75 (0x3F80_0000 -> 0x3F40_0000) differs in one of the 4 bytes
+    let ch = changed_ranges(&b, &r.bytes);
+    assert!(
+        !ch.is_empty() && ch.iter().all(|c| c.start >= off && c.end <= off + 4),
+        "{ch:?}"
+    );
+    assert_eq!(r.bytes[off..off + 4], 0.75f32.to_le_bytes());
+    same_blocks(&b, &r.bytes, [7]);
+}
+
+#[test]
+fn shared_data_key_edit_copies() {
+    // interps 4 and 5 share data 6
+    let b = scenes::keyed_pair(Share::Data, [1, 1]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let keys = lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 9);
+    assert_eq!(kind_of(&r.bytes, 8), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 8), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 4, 8)
+    );
+    same_blocks(&b, &r.bytes, (0..8).filter(|&k| k != 4));
+    assert_eq!(data_of(&r.bytes, 6), data_of(&b, 6));
+    assert_eq!(read_model(&r.bytes).unwrap().interps[&5].data, 6);
+
+    // ctrls 2 and 3 share interp 4 -> data 6
+    let b = scenes::keyed_pair(Share::Interp, [1, 1]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let op = set_keys(&at, keys.clone(), data_of(&b, 6));
+    let r = apply(&b, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 10);
+    assert_eq!(kind_of(&r.bytes, 8), b"NiFloatInterpolator");
+    assert_eq!(
+        block_bytes_of(&r.bytes, 8),
+        with_i32(block_bytes_of(&b, 4), 4, 9)
+    );
+    assert_eq!(kind_of(&r.bytes, 9), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 9), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 2),
+        with_i32(block_bytes_of(&b, 2), 26, 8)
+    );
+    same_blocks(&b, &r.bytes, (0..8).filter(|&k| k != 2));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&2].interp, Some(8));
+    assert_eq!(m.ctrls[&3].interp, Some(4));
+    assert_eq!(m.interps[&4].data, 6);
+
+    // the second edit finds the copy unshared and edits it in place
+    let keys2 = lin(&[(0.0, 1.0), (1.0, 0.0)]);
+    let op2 = set_keys(&at, keys2.clone(), keys);
+    let r = apply(&b, &[op, op2]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 10);
+    assert_eq!(block_bytes_of(&r.bytes, 9), encode_data(&keys2));
+}
+
+#[test]
+fn tbc_curve_is_preserved_when_untouched() {
+    // ctrl 2's data 6 is TBC
+    let b = scenes::keyed_pair(Share::No, [3, 1]);
+    let at20 = ctrl_anchor(&b, Owner::Shader, LSCF, Some(20), "S");
+    let op = set_keys(
+        &at20,
+        lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]),
+        data_of(&b, 7),
+    );
+    let r = apply(&b, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    same_blocks(&b, &r.bytes, [6]);
+    let KeyData::Float(g) = data_of(&r.bytes, 6) else {
+        panic!("not float")
+    };
+    assert_eq!(g.key_type, Some(3));
+    assert!(g.keys.iter().all(|k| k.tbc == Some([0.5, -0.25, 1.0])));
+    assert!(validate::validate_ops(&[op]).is_empty());
+
+    // keep mine reads the TBC curve as the base and carries it
+    let at11 = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let stale = set_keys(&at11, lin(&[(0.0, 3.0)]), lin(&[(0.0, 9.0)]));
+    let kept = keep_mine(&b, &[stale], 0).unwrap();
+    match &kept[0] {
+        Op::SetKeys { base, .. } => assert_eq!(*base, data_of(&b, 6)),
+        o => panic!("{o:?}"),
+    }
+    assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
+}
+
+#[test]
+fn set_keys_appends_data_when_missing() {
+    // interp 3 has data -1
+    let b = scenes::shader_ctrl(false);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let keys = lin(&[(0.0, 0.0), (1.0, 1.0)]);
+    let r = apply(&b, &[set_keys(&at, keys.clone(), empty_float())]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 5);
+    assert_eq!(kind_of(&r.bytes, 4), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 4), encode_data(&keys));
+    let mut want = 0.5f32.to_le_bytes().to_vec();
+    want.extend(4i32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 3), want);
+    same_blocks(&b, &r.bytes, 0..3);
+
+    let r = apply(&b, &[set_keys(&at, keys.clone(), lin(&[(0.0, 0.0)]))]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "changed in the source: the keys differ from the edit's base".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn set_keys_refusals() {
+    let refused = |s: &str| vec![Outcome::Refused(s.into())];
+    let b = scenes::keyed_pair(Share::No, [1, 2]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let clip = |at: &Anchor, c| Op::SetKeys {
+        at: at.clone(),
+        clip: Some(c),
+        keys: lin(&[(0.0, 1.0)]),
+        base: data_of(&b, 6),
+    };
+    let mut lost = at.clone();
+    lost.block = 99;
+    lost.shape = Some("nope".into());
+    // v2 B7 (E9): clip edits are implemented; a missing sequence is Refused, a lost anchor a Conflict.
+    let r = apply(&b, &[clip(&at, 0)]).unwrap();
+    assert_eq!(r.outcomes, refused("This clip is not in this file."));
+    assert_eq!(r.bytes, b);
+    let r = apply(&b, &[clip(&lost, 0)]).unwrap();
+    assert!(
+        matches!(r.outcomes[0], Outcome::Conflict(_)),
+        "{:?}",
+        r.outcomes
+    );
+    assert_eq!(r.bytes, b);
+    // A CB with controller -1 and null strings binds nothing.
+    let ks = scenes::keyed_with_sequence(Some(4));
+    let kat = ctrl_anchor(&ks, Owner::Shader, LSCF, Some(11), "S");
+    let op = Op::SetKeys {
+        at: kat,
+        clip: Some(8),
+        keys: lin(&[(0.0, 1.0)]),
+        base: data_of(&ks, 6),
+    };
+    let r = apply(&ks, &[op]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused("This clip does not animate this controller.")
+    );
+    assert_eq!(r.bytes, ks);
+
+    let pos = KeyData::Pos(KeyGroup {
+        key_type: Some(1),
+        keys: vec![Key {
+            time: 0.0,
+            value: [1.0, 2.0, 3.0],
+            forward: None,
+            backward: None,
+            tbc: None,
+        }],
+    });
+    let r = apply(&b, &[set_keys(&at, pos, data_of(&b, 6))]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused("The keys do not match the interpolator's type.")
+    );
+    assert_eq!(r.bytes, b);
+
+    let mc = scenes::managed_clip();
+    let m = read_model(&mc).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Shader,
+        class: LSCF.into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let mat = anchor_role(&m, Some(m.shapes[0].block), role).unwrap();
+    assert_eq!(mat.block, 7);
+    let r = apply(&mc, &[set_keys(&mat, lin(&[(0.0, 1.0)]), empty_float())]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused("A NiBlendFloatInterpolator has no keys to edit.")
+    );
+    assert_eq!(r.bytes, mc);
+    // v2 B7 (E4): A's two CBs naming different interpolators for one controller are Refused.
+    let clip_a = |keys| Op::SetKeys {
+        at: mat.clone(),
+        clip: Some(2),
+        keys,
+        base: empty_float(),
+    };
+    let mut two = mc.clone();
+    let seq_a = Header::parse(&mc).unwrap().offsets()[2];
+    let cb1 = seq_a + 12 + 29;
+    two[cb1..cb1 + 4].copy_from_slice(&11i32.to_le_bytes());
+    let r = apply(&two, &[clip_a(lin(&[(0.0, 1.0)]))]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused(
+            "This clip has several interpolators for this controller: editing them needs Phase C."
+        )
+    );
+    assert_eq!(r.bytes, two);
+    // Unpatched: both CBs name interpolator 10 (2 refs, 2 users: no copy); its data -1 gets a new NiFloatData.
+    let r = apply(&mc, &[clip_a(lin(&[(0.0, 1.0)]))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    assert_eq!(
+        (
+            m2.sequences[0].blocks[0].interp,
+            m2.sequences[0].blocks[1].interp
+        ),
+        (10, 10)
+    );
+    assert_eq!(nblocks(&r.bytes), 13);
+    assert_eq!(m2.interps[&10].data, 12);
+    assert_eq!(
+        encode_data(&data_of(&r.bytes, 12)),
+        encode_data(&lin(&[(0.0, 1.0)]))
+    );
+
+    let sa = scenes::shared_alpha_with_testref_chain();
+    let ta = ctrl_anchor(
+        &sa,
+        Owner::Alpha,
+        "BSNiAlphaPropertyTestRefController",
+        None,
+        "A",
+    );
+    let r = apply(&sa, &[set_keys(&ta, lin(&[(0.0, 1.0)]), empty_float())]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This alpha is shared by 2 shapes: split it before editing.".into()
+        )]
+    );
+    assert_eq!(r.bytes, sa);
+
+    assert_eq!(
+        merge_key(&set_keys(&at, empty_float(), empty_float())),
+        "SetKeys|2|"
+    );
+    assert_eq!(merge_key(&clip(&at, 3)), "SetKeys|2|3");
+}
+
+/// v2 B6: keys_of is the base SetKeys checks: the data block's keys, the empty group for no data, an error for a
+/// blend interpolator; v2 B7: a clip's CB interpolator keys, and an error for a missing clip.
+#[test]
+fn keys_of_is_the_set_keys_base() {
+    let b = scenes::keyed_pair(Share::No, [1, 2]);
+    let m = read_model(&b).unwrap();
+    assert_eq!(nif::edit::keys_of(&b, &m, 2, None), Ok(data_of(&b, 6)));
+    assert_eq!(nif::edit::keys_of(&b, &m, 3, None), Ok(data_of(&b, 7)));
+    let c = scenes::shader_ctrl(false); // interpolator 3 has data -1
+    assert_eq!(
+        nif::edit::keys_of(&c, &read_model(&c).unwrap(), 2, None),
+        Ok(empty_float())
+    );
+    let mc = scenes::managed_clip();
+    let mm = read_model(&mc).unwrap();
+    assert_eq!(
+        nif::edit::keys_of(&mc, &mm, 7, None),
+        Err("A NiBlendFloatInterpolator has no keys to edit.".into())
+    );
+    // v2 B7 (E9): clips are implemented.
+    assert_eq!(
+        nif::edit::keys_of(&b, &m, 2, Some(0)),
+        Err("This clip is not in this file.".into())
+    );
+    let mp = scenes::managed_pair();
+    let mpm = read_model(&mp).unwrap();
+    assert_eq!(
+        nif::edit::keys_of(&mp, &mpm, 5, Some(1)),
+        Ok(data_of(&mp, 13))
+    );
+}
+
+/// Review B4 minor 1: a sequence's controlled block counts as a user of the interpolator and its data.
+#[test]
+fn sequence_users_make_key_edits_copy() {
+    let keys = lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+
+    // controlled block 0 of sequence 8 shares ctrl 2's interpolator 4
+    let b = scenes::keyed_with_sequence(Some(4));
+    assert_eq!(read_model(&b).unwrap().sequences[0].blocks[0].interp, 4);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 11);
+    assert_eq!(kind_of(&r.bytes, 9), b"NiFloatInterpolator");
+    assert_eq!(
+        block_bytes_of(&r.bytes, 9),
+        with_i32(block_bytes_of(&b, 4), 4, 10)
+    );
+    assert_eq!(block_bytes_of(&r.bytes, 10), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 2),
+        with_i32(block_bytes_of(&b, 2), 26, 9)
+    );
+    same_blocks(&b, &r.bytes, (0..9).filter(|&k| k != 2));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&2].interp, Some(9));
+    assert_eq!(m.sequences[0].blocks[0].interp, 4);
+    assert_eq!(m.interps[&4].data, 6);
+
+    // sequence-only interpolator 9 shares ctrl 2's data 6
+    let b = scenes::keyed_with_sequence(None);
+    assert_eq!(read_model(&b).unwrap().interps[&9].data, 6);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 11);
+    assert_eq!(kind_of(&r.bytes, 10), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 10), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 4, 10)
+    );
+    same_blocks(&b, &r.bytes, (0..10).filter(|&k| k != 4));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.sequences[0].blocks[0].interp, 9);
+    assert_eq!(m.interps[&9].data, 6);
+    assert_eq!(data_of(&r.bytes, 6), data_of(&b, 6));
+}
+
+// ---- B5: AddController / RemoveController (D9) ----
+
+const LSCC: &str = "BSLightingShaderPropertyColorController";
+const TESTREF: &str = "BSNiAlphaPropertyTestRefController";
+/// Block-relative controller ref of a `lsp_body` BSLSP with no extra data: shader type, name, extra count.
+const LSP_CTRL_AT: usize = 12;
+
+fn add(at: Anchor, class: &str, var: Option<u32>, keys: KeyData, stop: f32) -> Op {
+    Op::AddController {
+        at,
+        class: class.into(),
+        var,
+        keys,
+        flags: 0x48,
+        freq: 1.0,
+        start: 0.0,
+        stop,
+    }
+}
+
+fn prop_anchor(b: &[u8], role: Role) -> Anchor {
+    let m = read_model(b).unwrap();
+    anchor_role(&m, Some(shape_named(&m, "S")), role).unwrap()
+}
+
+/// The root's first BSXFlags value.
+fn bsx_of(b: &[u8]) -> u32 {
+    let m = read_model(b).unwrap();
+    m.extras_of(m.root_net.as_ref().unwrap())
+        .into_iter()
+        .find_map(|e| match e.value {
+            Some(nif::extra::ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some(v),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// The 30- or 34-byte controller the add writes (next -1, phase 0, start 0, freq 1).
+fn new_ctrl(flags: u16, stop: f32, target: i32, interp: i32, var: Option<u32>) -> Vec<u8> {
+    let mut v = (-1i32).to_le_bytes().to_vec();
+    v.extend(flags.to_le_bytes());
+    for f in [1.0f32, 0.0, 0.0, stop] {
+        v.extend(f.to_le_bytes());
+    }
+    v.extend(target.to_le_bytes());
+    v.extend(interp.to_le_bytes());
+    v.extend(var.map(u32::to_le_bytes).into_iter().flatten());
+    v
+}
+
+fn with_flags(mut v: Vec<u8>, flags: u16) -> Vec<u8> {
+    v[4..6].copy_from_slice(&flags.to_le_bytes());
+    v
+}
+
+fn pos_keys(k: &[(f32, [f32; 3])]) -> KeyData {
+    KeyData::Pos(KeyGroup {
+        key_type: Some(1),
+        keys: k
+            .iter()
+            .map(|&(time, value)| Key {
+                time,
+                value,
+                forward: None,
+                backward: None,
+                tbc: None,
+            })
+            .collect(),
+    })
+}
+
+fn lscf_role(var: u32) -> Role {
+    Role::Ctrl {
+        owner: Owner::Shader,
+        class: LSCF.into(),
+        var: Some(var),
+        nth: 0,
+    }
+}
+
+#[test]
+fn add_float_controller_links_at_chain_end_and_sets_bsx() {
+    let b = scenes::animated(Some(0x80), 2);
+    let keys = lin(&[(0.0, 10.0), (2.0, 50.0)]);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(9),
+        keys.clone(),
+        2.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 13);
+    assert_eq!(kind_of(&r.bytes, 10), b"NiFloatData");
+    assert_eq!(kind_of(&r.bytes, 11), b"NiFloatInterpolator");
+    assert_eq!(kind_of(&r.bytes, 12), LSCF.as_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 10), encode_data(&keys));
+    let mut interp = 10.0f32.to_le_bytes().to_vec();
+    interp.extend(10i32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 11), interp);
+    let c = new_ctrl(0x48, 2.0, 3, 11, Some(9));
+    assert_eq!(c.len(), 34);
+    assert_eq!(block_bytes_of(&r.bytes, 12), c);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 5),
+        with_i32(block_bytes_of(&b, 5), 0, 12)
+    );
+    assert_eq!(
+        block_bytes_of(&r.bytes, 1),
+        with_i32(block_bytes_of(&b, 1), 4, 0x81)
+    );
+    same_blocks(&b, &r.bytes, (0..10).filter(|&k| k != 1 && k != 5));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.lighting[&3].prop.ctrls, vec![4, 5, 12]);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert!(!m.managed(12));
+    assert_eq!(anchor_role(&m, Some(2), lscf_role(9)).unwrap().block, 12);
+
+    // empty chain: the property's own controller ref; bit 0 already set leaves the BSX block alone
+    let b = scenes::animated(Some(1), 0);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(9),
+        keys.clone(),
+        2.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 7);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 3),
+        with_i32(block_bytes_of(&b, 3), LSP_CTRL_AT, 6)
+    );
+    same_blocks(&b, &r.bytes, [0, 1, 2]);
+    assert_eq!(
+        read_model(&r.bytes).unwrap().lighting[&3].prop.ctrls,
+        vec![6]
+    );
+
+    // colour controller: Pos data and a Point3 interpolator
+    let pos = pos_keys(&[(0.0, [1.0, 0.5, 0.25]), (1.0, [0.0, 0.0, 0.0])]);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCC,
+        Some(1),
+        pos.clone(),
+        1.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(kind_of(&r.bytes, 4), b"NiPosData");
+    assert_eq!(kind_of(&r.bytes, 5), b"NiPoint3Interpolator");
+    assert_eq!(kind_of(&r.bytes, 6), LSCC.as_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 4), encode_data(&pos));
+    let mut interp: Vec<u8> = [1.0f32, 0.5, 0.25]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    interp.extend(4i32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 5), interp);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 6),
+        new_ctrl(0x48, 1.0, 3, 5, Some(1))
+    );
+    let m = read_model(&r.bytes).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.ctrls[&6].var, Some(1));
+}
+
+#[test]
+fn add_creates_bsx_when_missing() {
+    use nif::extra::ExtraValue;
+    let b = scenes::animated(None, 1);
+    let (h0, m0) = (Header::parse(&b).unwrap(), read_model(&b).unwrap());
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(11),
+        lin(&[(0.0, 1.0)]),
+        0.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 11);
+    assert_eq!(kind_of(&r.bytes, 10), b"BSXFlags");
+    // the existing "BSX" string (index 1) is reused
+    let h1 = Header::parse(&r.bytes).unwrap();
+    assert_eq!(h1.strings, h0.strings);
+    let mut bsx = 1i32.to_le_bytes().to_vec();
+    bsx.extend(1u32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 10), bsx);
+    let net = m0.root_net.clone().unwrap();
+    let old = block_bytes_of(&b, 0);
+    let (s, e) = (net.start - h0.offsets()[0], net.end - h0.offsets()[0]);
+    let mut want = old[..s].to_vec();
+    want.extend(nif::net::encode_net(net.name, &[10], net.controller));
+    want.extend(&old[e..]);
+    assert_eq!(block_bytes_of(&r.bytes, 0), want);
+    same_blocks(&b, &r.bytes, 1..4);
+    let m = read_model(&r.bytes).unwrap();
+    let x: Vec<_> = m
+        .extras_of(m.root_net.as_ref().unwrap())
+        .into_iter()
+        .filter(|e| e.kind == "BSXFlags")
+        .collect();
+    assert_eq!(x.len(), 1);
+    assert_eq!(x[0].name.as_deref(), Some(&b"BSX"[..]));
+    assert_eq!(x[0].value, Some(ExtraValue::Bsx(1)));
+
+    // a BSTriShape root has no extra list to hold BSXFlags
+    let b = scenes::shader_ctrl(false);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(9),
+        lin(&[(0.0, 1.0)]),
+        0.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused(
+            "The root is not a node: the BSX Animated bit cannot be set.".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn remove_middle_controller_relinks_chain() {
+    let b = scenes::animated(Some(1), 3);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(20), "S");
+    assert_eq!(at.block, 5);
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 13);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 0, 6)
+    );
+    // only the Active bit goes; the removed controller keeps its next (6)
+    assert_eq!(
+        block_bytes_of(&r.bytes, 5),
+        with_flags(block_bytes_of(&b, 5), 0x40)
+    );
+    same_blocks(&b, &r.bytes, (0..13).filter(|&k| k != 4 && k != 5));
+    assert_eq!(
+        read_model(&r.bytes).unwrap().lighting[&3].prop.ctrls,
+        vec![4, 6]
+    );
+
+    // the first: the property's ref moves to the second
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 3),
+        with_i32(block_bytes_of(&b, 3), LSP_CTRL_AT, 5)
+    );
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_flags(block_bytes_of(&b, 4), 0x40)
+    );
+    same_blocks(&b, &r.bytes, (0..13).filter(|&k| k != 3 && k != 4));
+
+    let mc = scenes::managed_clip();
+    let m = read_model(&mc).unwrap();
+    let at = anchor_role(&m, Some(m.shapes[0].block), lscf_role(11)).unwrap();
+    assert_eq!(at.block, 7);
+    let r = apply(&mc, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused(
+            "A manager-controlled controller cannot be removed.".into()
+        )]
+    );
+    assert_eq!(r.bytes, mc);
+}
+
+/// Review Focus 2: removal never clears BSX bit 0 and leaves the interpolator and data as orphans.
+#[test]
+fn remove_last_controller_keeps_bsx_and_clears_active() {
+    let b = scenes::animated(Some(1), 1);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 3),
+        with_i32(block_bytes_of(&b, 3), LSP_CTRL_AT, -1)
+    );
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_flags(block_bytes_of(&b, 4), 0x40)
+    );
+    same_blocks(&b, &r.bytes, [0, 1, 2, 5, 6]);
+    assert_eq!(bsx_of(&r.bytes), 1);
+    assert!(read_model(&r.bytes).unwrap().lighting[&3]
+        .prop
+        .ctrls
+        .is_empty());
+
+    let b = scenes::animated(Some(1), 2);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(20), "S");
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 0, -1)
+    );
+
+    let b = scenes::animated(Some(0), 0);
+    let rm = Op::RemoveController {
+        at: Anchor {
+            block: 6,
+            kind: LSCF.into(),
+            shape: Some("S".into()),
+            role: lscf_role(11),
+        },
+    };
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(11),
+        lin(&[(0.0, 1.0)]),
+        0.0,
+    );
+    let r = apply(&b, &[op, rm]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(bsx_of(&r.bytes), 1);
+    assert!(read_model(&r.bytes).unwrap().lighting[&3]
+        .prop
+        .ctrls
+        .is_empty());
+}
+
+#[test]
+fn add_on_shared_alpha_splits_first() {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let a = shape_named(&m, "A");
+    let at_alpha = anchor_role(&m, Some(a), Role::Alpha).unwrap();
+    assert_eq!(at_alpha.block, 4);
+    let keys = lin(&[(0.0, 0.0), (1.0, 255.0)]);
+    let ops = [
+        Op::SplitAlpha {
+            at: anchor_shape(&m, a),
+        },
+        add(at_alpha.clone(), TESTREF, None, keys.clone(), 1.0),
+    ];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Applied, Outcome::ReAnchored { block: 8 }]
+    );
+    assert_eq!(nblocks(&r.bytes), 16);
+    assert_eq!(kind_of(&r.bytes, 12), b"NiFloatData");
+    assert_eq!(kind_of(&r.bytes, 13), b"NiFloatInterpolator");
+    assert_eq!(kind_of(&r.bytes, 14), TESTREF.as_bytes());
+    assert_eq!(kind_of(&r.bytes, 15), b"BSXFlags");
+    let c = new_ctrl(0x48, 1.0, 8, 13, None);
+    assert_eq!(c.len(), 30);
+    assert_eq!(block_bytes_of(&r.bytes, 14), c);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.alphas[&8].prop.ctrls, vec![9, 14]);
+    assert_eq!(m.alphas[&4].prop.ctrls, vec![5]);
+    assert_eq!(m.ctrls[&5].next, -1);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    same_blocks(&b, &r.bytes, 2..8);
+    assert_eq!(bsx_of(&r.bytes), 1);
+
+    let r = apply(&b, &[add(at_alpha, TESTREF, None, keys, 1.0)]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This alpha is shared by 2 shapes: split it before editing.".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn add_controller_refusals() {
+    let b = scenes::animated(Some(1), 1);
+    let shader = prop_anchor(&b, Role::Shader);
+    let one = lin(&[(0.0, 1.0)]);
+    let check = |b: &[u8], op: Op, text: &str| {
+        let r = apply(b, &[op]).unwrap();
+        assert_eq!(r.outcomes, vec![Outcome::Refused(text.into())]);
+        assert_eq!(r.bytes, b);
+    };
+    check(
+        &b,
+        add(shader.clone(), "NiAlphaController", None, one.clone(), 0.0),
+        "NiAlphaController cannot be added.",
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCF, Some(3), one.clone(), 0.0),
+        &format!("{LSCF} does not take variable Some(3)."),
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCF, None, one.clone(), 0.0),
+        &format!("{LSCF} does not take variable None."),
+    );
+    // alpha_shape's root is a BSTriShape: the class and role checks run before the root check
+    let al = scenes::alpha_shape(0x12EC);
+    check(
+        &al,
+        add(alpha_anchor(&al), TESTREF, Some(0), one.clone(), 0.0),
+        &format!("{TESTREF} does not take variable Some(0)."),
+    );
+    check(
+        &al,
+        add(alpha_anchor(&al), LSCF, Some(9), one.clone(), 0.0),
+        &format!("{LSCF} goes on a shader property."),
+    );
+    check(
+        &b,
+        add(shader.clone(), TESTREF, None, one.clone(), 0.0),
+        &format!("{TESTREF} goes on an alpha property."),
+    );
+    check(
+        &b,
+        add(
+            shader.clone(),
+            LSCF,
+            Some(9),
+            pos_keys(&[(0.0, [1.0; 3])]),
+            0.0,
+        ),
+        "The keys do not match the controller's type.",
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCC, Some(0), one.clone(), 0.0),
+        "The keys do not match the controller's type.",
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCF, Some(9), lin(&[]), 0.0),
+        "A new controller needs at least one key.",
+    );
+    // ctrl 4's next points at block 99: linking after it would orphan the unread tail
+    let mut broken = b.clone();
+    let at = Header::parse(&b).unwrap().offsets()[4];
+    broken[at..at + 4].copy_from_slice(&99i32.to_le_bytes());
+    check(
+        &broken,
+        add(shader.clone(), LSCF, Some(9), one.clone(), 0.0),
+        "This controller chain is broken: it cannot be edited.",
+    );
+
+    assert_eq!(
+        merge_key(&add(shader, LSCF, Some(9), one, 0.0)),
+        "AddController|3|BSLightingShaderPropertyFloatController/Some(9)"
+    );
+    let ctrl5 = Anchor {
+        block: 5,
+        kind: LSCF.into(),
+        shape: Some("S".into()),
+        role: lscf_role(20),
+    };
+    assert_eq!(
+        merge_key(&Op::RemoveController { at: ctrl5 }),
+        "RemoveController|5|"
+    );
+}
+
+/// B-P29: the keys an AddController authors get the same checks as SetKeys.
+#[test]
+fn authored_controller_keys_are_validated() {
+    use nif::edit::validate::{validate_ops, Level, Target};
+    let b = scenes::animated(Some(1), 0);
+    let shader = prop_anchor(&b, Role::Shader);
+    let w = validate_ops(&[add(
+        shader.clone(),
+        LSCF,
+        Some(9),
+        lin(&[(0.0, 1.0), (f32::NAN, 2.0), (-1.0, 0.0)]),
+        0.0,
+    )]);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].level, Level::Error);
+    assert_eq!(w[0].target, Target::Block { block: 3 });
+    assert_eq!(w[0].text, "Key values must be finite numbers");
+    let w = validate_ops(&[add(
+        shader,
+        LSCF,
+        Some(9),
+        lin(&[(1.0, 1.0), (0.0, 2.0)]),
+        0.0,
+    )]);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].text, "Key times must not decrease");
+}
+
+// ---- B5 fix round 1 (B-P31) ----
+
+const BROKEN: &str = "This controller chain is broken: it cannot be edited.";
+
+/// `b` with block `k`'s Next Controller (offset 0) set to `next`.
+fn with_next(b: &[u8], k: usize, next: i32) -> Vec<u8> {
+    let mut v = b.to_vec();
+    let at = Header::parse(b).unwrap().offsets()[k];
+    v[at..at + 4].copy_from_slice(&next.to_le_bytes());
+    v
+}
+
+fn refused_unchanged(b: &[u8], op: Op, text: &str) {
+    let r = apply(b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Refused(text.into())]);
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn remove_refuses_a_controller_on_two_properties() {
+    let b = scenes::two_props_one_ctrl();
+    let m = read_model(&b).unwrap();
+    assert_eq!(m.lighting[&2].prop.ctrls, vec![4]);
+    assert_eq!(m.lighting[&3].prop.ctrls, vec![4]);
+    for shape in ["S", "T"] {
+        let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), shape);
+        assert_eq!(at.block, 4);
+        refused_unchanged(
+            &b,
+            Op::RemoveController { at },
+            "This controller is shared by several properties: it cannot be removed.",
+        );
+    }
+}
+
+#[test]
+fn broken_chains_refuse_remove_and_add() {
+    let one = lin(&[(0.0, 1.0)]);
+    // self-loop: ctrl 4 -> 4
+    let b = with_next(&scenes::animated(Some(1), 1), 4, 4);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
+    let shader = prop_anchor(&b, Role::Shader);
+    refused_unchanged(&b, add(shader, LSCF, Some(9), one.clone(), 0.0), BROKEN);
+
+    // two-link loop: 4 -> 5 -> 4
+    let b = with_next(&scenes::animated(Some(1), 2), 5, 4);
+    for var in [11, 20] {
+        let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(var), "S");
+        refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
+    }
+    let shader = prop_anchor(&b, Role::Shader);
+    refused_unchanged(&b, add(shader, LSCF, Some(9), one.clone(), 0.0), BROKEN);
+
+    // next out of range: 4 -> 99
+    let b = with_next(&scenes::animated(Some(1), 1), 4, 99);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
+}
+
+// ---- v2 B7: clip key edits and the Controller ID rewrite (R8 lifted) ----
+
+/// SetKeys on clip A edits only A's CB interpolator data for that controller; B, the other controller, the blend
+/// interpolators and every other block keep their bytes. A shared CB interpolator is copied for A.
+#[test]
+fn clip_key_edit_changes_only_that_clips_data() {
+    let b = scenes::managed_pair();
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S"); // ctrl 5
+    assert_eq!(at.block, 5);
+    let keys = lin(&[(0.0, 0.0), (1.0, 5.0)]);
+    let op = Op::SetKeys {
+        at: at.clone(),
+        clip: Some(1),
+        keys: keys.clone(),
+        base: data_of(&b, 13),
+    };
+    let r = apply(&b, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let h = Header::parse(&b).unwrap();
+    same_blocks(&b, &r.bytes, (0..h.sizes.len()).filter(|&i| i != 13));
+    assert_eq!(
+        encode_data(&data_of(&r.bytes, 13)),
+        encode_data(&keys),
+        "A's var-11 data, re-emitted in place"
+    );
+    let m = read_model(&r.bytes).unwrap();
+    let a = nif::anim::clip_tracks(&m, &r.bytes, 1, 4);
+    let b_ = nif::anim::clip_tracks(&m, &r.bytes, 2, 4);
+    assert_eq!(
+        a.iter().find(|t| t.ctrl == 5).unwrap().keys,
+        Some(keys.clone())
+    );
+    assert_eq!(
+        b_.iter().find(|t| t.ctrl == 5).unwrap().keys,
+        Some(data_of(&b, 15)),
+        "clip B unchanged"
+    );
+    // Stale base: Conflict; Keep mine takes the current keys; then it applies.
+    let stale = Op::SetKeys {
+        at: at.clone(),
+        clip: Some(1),
+        keys: keys.clone(),
+        base: lin(&[(0.0, 9.0)]),
+    };
+    assert!(matches!(
+        apply(&b, std::slice::from_ref(&stale)).unwrap().outcomes[0],
+        Outcome::Conflict(_)
+    ));
+    let fixed = nif::edit::keep_mine(&b, &[stale], 0).unwrap();
+    assert_eq!(apply(&b, &fixed).unwrap().outcomes, vec![Outcome::Applied]);
+    // B's var-11 CB shares A's interpolator 9: A's edit copies it (E5).
+    let mut s = b.clone();
+    let seq_b = h.offsets()[2];
+    s[seq_b + 12..seq_b + 16].copy_from_slice(&9i32.to_le_bytes());
+    let r = apply(&s, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    let (sa, sb) = (&m.sequences[0], &m.sequences[1]);
+    assert_eq!(sa.blocks[0].interp, 18, "A's CB names the copy");
+    assert_eq!(sb.blocks[0].interp, 9, "B still names the original");
+    assert_eq!(m.interps[&18].data, 19);
+    assert_eq!(encode_data(&data_of(&r.bytes, 19)), encode_data(&keys));
+    assert_eq!(
+        data_of(&r.bytes, 13),
+        data_of(&b, 13),
+        "the original data is untouched"
+    );
+}
+
+/// R8 lifted: Variable 11 -> 12 on managed ctrl 5 rewrites the ID of A's by-ref CB and of B's string-bound CB to
+/// one appended "12"; ctrl 6's CBs and B's CB on node "T" keep theirs. Only 4 bytes per CB and the controller's
+/// variable change, plus the header's string table.
+#[test]
+fn variable_change_rewrites_cb_ids_by_ref_and_by_string() {
+    let mut b = scenes::managed_pair();
+    let h = Header::parse(&b).unwrap();
+    let seq_b = h.offsets()[2];
+    b[seq_b + 16..seq_b + 20].copy_from_slice(&(-1i32).to_le_bytes()); // B's CB 0: bound by strings only
+    let strings = h.strings.len();
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let op = Op::SetField {
+        at,
+        field: Field::Variable,
+        value: Value::U32(12),
+        base: Value::U32(11),
+    };
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&5].var, Some(12));
+    let id = |s: usize, k: usize| m.sequences[s].blocks[k].ctrl_id.clone();
+    assert_eq!(id(0, 0), Some(b"12".to_vec()), "A, by ref");
+    assert_eq!(id(1, 0), Some(b"12".to_vec()), "B, by strings");
+    assert_eq!(
+        (id(0, 1), id(1, 1)),
+        (Some(b"20".to_vec()), Some(b"20".to_vec())),
+        "ctrl 6's CBs"
+    );
+    assert_eq!(id(1, 2), Some(b"11".to_vec()), "node T binds nothing");
+    let h2 = Header::parse(&r.bytes).unwrap();
+    assert_eq!(
+        h2.strings.len(),
+        strings + 1,
+        "one string appended, shared by both CBs"
+    );
+    // Locality: the controller's variable and each rewritten CB's Controller ID index.
+    let n = h.sizes.len();
+    same_blocks(&b, &r.bytes, (0..n).filter(|i| ![1, 2, 5].contains(i)));
+    let id_at = 12 + 21;
+    for (blk, allowed) in [(1, id_at..id_at + 4), (2, id_at..id_at + 4), (5, 30..34)] {
+        for c in changed_ranges(&block_bytes_of(&b, blk), &block_bytes_of(&r.bytes, blk)) {
+            assert!(
+                allowed.start <= c.start && c.end <= allowed.end,
+                "block {blk}: {c:?}"
+            );
+        }
+    }
+    // The preview still binds both CBs to ctrl 5 with the new ID.
+    assert!(nif::anim::clip_tracks(&m, &r.bytes, 2, 4)
+        .iter()
+        .any(|t| t.ctrl == 5));
+}
+
+/// E2/E3 on managed_clip (all three CBs name ctrl 7 by ref; IDs "11", null, ""): 11 -> 20 rewrites only "11";
+/// null stays -1 and "" keeps its own index. 20 -> 11 then reuses the existing "11" entry.
+#[test]
+fn null_and_empty_cb_ids_stay_distinct() {
+    let b = scenes::managed_clip();
+    let h = Header::parse(&b).unwrap();
+    let raw_id = |bytes: &[u8], seq: usize, k: usize| {
+        let o = Header::parse(bytes).unwrap().offsets()[seq] + 12 + k * 29 + 21;
+        i32::from_le_bytes(bytes[o..o + 4].try_into().unwrap())
+    };
+    let empty_idx = raw_id(&b, 3, 0);
+    // managed_clip's BSTriShape is unnamed: anchor as set_keys_refusals does.
+    let anchor = |bytes: &[u8], var: u32| {
+        let m = read_model(bytes).unwrap();
+        let role = Role::Ctrl {
+            owner: Owner::Shader,
+            class: LSCF.into(),
+            var: Some(var),
+            nth: 0,
+        };
+        anchor_role(&m, Some(m.shapes[0].block), role).unwrap()
+    };
+    let at = anchor(&b, 11);
+    let set = |at: &Anchor, v, o| Op::SetField {
+        at: at.clone(),
+        field: Field::Variable,
+        value: Value::U32(v),
+        base: Value::U32(o),
+    };
+    let r = apply(&b, &[set(&at, 20, 11)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.sequences[0].blocks[0].ctrl_id, Some(b"20".to_vec()));
+    assert_eq!(m.sequences[0].blocks[1].ctrl_id, None, "null stays null");
+    assert_eq!(raw_id(&r.bytes, 2, 1), -1);
+    assert_eq!(
+        m.sequences[1].blocks[0].ctrl_id,
+        Some(vec![]),
+        "empty stays empty"
+    );
+    assert_eq!(raw_id(&r.bytes, 3, 0), empty_idx, "with its own index");
+    let n = Header::parse(&r.bytes).unwrap().strings.len();
+    assert_eq!(n, h.strings.len() + 1);
+    // Back: "11" exists, so no new entry; A's CB 0 names the original "11" index again.
+    let at2 = anchor(&r.bytes, 20);
+    let back = apply(&r.bytes, &[set(&at2, 11, 20)]).unwrap();
+    assert_eq!(back.outcomes, vec![Outcome::Applied]);
+    assert_eq!(Header::parse(&back.bytes).unwrap().strings.len(), n);
+    assert_eq!(raw_id(&back.bytes, 2, 0), raw_id(&b, 2, 0));
+}
+
+/// B-P39 (B9 I11-P08): env map scale on a PBR material crashed the game; the add is refused. Not PBR, it applies.
+#[test]
+fn add_env_map_scale_is_refused_on_pbr() {
+    let b = scenes::animated(Some(0x80), 2);
+    let at = prop_anchor(&b, Role::Shader);
+    let Value::U32(slsf2) = current(&b, 3, Field::Slsf2) else {
+        panic!("slsf2")
+    };
+    let pbr = Op::SetField {
+        at: at.clone(),
+        field: Field::Slsf2,
+        value: Value::U32(slsf2 | 1 << 23),
+        base: Value::U32(slsf2),
+    };
+    let keys = lin(&[(0.0, 1.0), (1.0, 2.0)]);
+    let r = apply(
+        &b,
+        &[pbr, add(at.clone(), LSCF, Some(8), keys.clone(), 1.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        r.outcomes[1],
+        Outcome::Refused("Env map scale crashes the game on PBR materials.".into())
+    );
+    let r = apply(&b, &[add(at, LSCF, Some(8), keys, 1.0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
 }

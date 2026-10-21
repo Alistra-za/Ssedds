@@ -329,14 +329,14 @@ A texture path that is a texture of the open folder has an **Open in Textures** 
 **Tabs.**
 - **Shader** edits the BSLightingShaderProperty of the selected shape: shader type, SLSF1 and SLSF2 flags, glossiness, specular, emissive, UV scale and offset, the per-type fields, and the texture slots (type a path, **Browse**, or pick from the scanned textures; **Check that files exist** and **Filter textures** help). A texture path change shows in the 3D view at once.
 - **Alpha** edits the NiAlphaProperty: **Blend**, source and destination, **Test**, function, threshold, plus **Add alpha** and **Remove alpha**. "Shown as the engine draws it" and "Shown as CS evaluates it (alpha ≥ threshold)" say how the preview treats the test. A blend pair the engine mapping does not cover is drawn as stored and marked "Not verified in game".
-- **Controllers** lists the shape's controllers (alpha, shader float and colour, texture transform) with their start, stop, frequency, phase, cycle and the animated value. A controller driven by a clip is read-only ("Driven by a clip").
+- **Controllers** lists the shape's controllers (alpha, shader float and colour, texture transform) with their start, stop, frequency, phase, cycle and the animated value, and edits their keys. See **Animation** below. Controllers of other classes are read-only.
 - **Extra data** lists the extra data of the root or the selected shape: BSXFlags bits, string, integer, boolean and float values, BSInvMarker. **Add to root**, **Add to shape** and **Remove** change the list.
 
 **Shared blocks.** The panel says when a block has more than one user.
 - A shared alpha: "Shared by N shapes: editing will split." The first edit splits it, so only this shape changes. On the Controllers tab you click **Split alpha** first. If a clip also drives that alpha, it cannot be split yet.
 - A shared texture set: "Shared by N shapes: editing makes a copy for this shape."
 - A shared shader: "Shared by N shapes: shader edits change all of them." A texture path edit on a shared shader is refused, because it would change the other shapes.
-- A shared interpolator: an edit is a conflict ("This interpolator is shared by N controllers"). The row is greyed.
+- A shared interpolator: a value edit is a conflict ("This interpolator is shared by N controllers"), and the value row is greyed. A key edit copies the interpolator and its keys first, so the other controller's curve does not change.
 
 On a PBR shape, the SLSF2 flags that CS reads differently (Fit_Slope, Multi_Layer_Parallax, Soft, Back, Rim and Effect lighting) get a dimmer "PBR: <meaning>" label, and the same text in their hover; a non-PBR shape shows only the vanilla names.
 
@@ -354,11 +354,42 @@ On a PBR shape, the SLSF2 flags that CS reads differently (Fit_Slope, Multi_Laye
 
 **Source changed.** If the source NIF changes on disk (a mod update), the edits are re-applied by name and role, not by position. The panel says "Source changed: N applied, M conflicts". A conflicting edit has **Take source** (drop your edit) and **Keep mine** (keep it on top of the new source).
 
-**In game.** On a NIF with a PGPatcher copy, **In game** still shows PGPatcher's output, which was made from the unedited NIF. Once you have exported, the amber line "PGPatcher output predates your edit: re-run PGPatcher." shows. Opening the edit selects **Source**, which shows your edit. While **In game** shows, the line "Showing the PGPatcher copy: switch to Source to see your edit." says so; edits you make meanwhile still count, and switching back to **Source** shows them all.
+**In game.** While an edit is open, the toggle reads **In game (simulated)** and **Edited source**; see **Animation** below. Once you have exported, the amber line "PGPatcher output predates your edit: re-run PGPatcher." shows: the game still loads PGPatcher's copy, which was made from the unedited NIF, until you re-run PGPatcher. If the edit preview cannot be shown, the line "Your edit could not be shown. Switch to In game (simulated) or Edited source to retry." says so; edits you make meanwhile still count.
 
 **LE files.** A Skyrim LE NIF opens without a 3D preview ("LE mesh: no 3D preview").
 
-**Not yet.** Adding or removing controllers and animation clips; splitting a shared shader or a shared interpolator (the edit is refused or is a conflict); a preview of PGPatcher's result on the edited NIF; an outline for the selected shape.
+**Not yet.** Adding or removing animation clips; splitting a shared shader, or a shared interpolator for a value edit (the edit is refused or is a conflict); an outline for the selected shape.
+
+#### Animation
+
+The edit preview plays the shader and alpha controllers of the NIF you are editing. A NIF shown without **Edit** does not animate.
+
+**Playback.** When the edited NIF has a controller that animates, two rows sit under the 3D view: **Play** (or **Pause**), **Loop** ("Start again at the end"), **Speed** (0.1× to 4×; 1× is game speed), then the **Time** slider in seconds. Moving the slider jumps to that time and pauses. Without Loop, playback stops at the end, and Play starts again from the start. The slider runs from 0 to the end of the longest controller at its frequency (twice as long for a Reverse cycle). Below 30 frames a second the animation slows down instead of skipping. Playback only changes material values, so the mesh is never reloaded. A controller whose times are not numbers gets no controls, only the amber line "This animation has invalid times: playback is off." If you switch to the Textures view, the clock keeps its time and carries on when you come back. **In game (simulated)** pauses the clock and hides these rows; after switching back to **Edited source**, press **Play** again.
+
+**The Controllers tab.** Each shader and alpha property lists its controllers, then **Add controller**. A float, colour or alpha-test controller has:
+- A header with its name, its class, "Managed by a clip" when a clip drives it, and **Remove**. Remove unlinks the controller; the BSX Animated bit stays set. It is off for a controller a clip drives ("Driven by a clip: it cannot be removed.").
+- **Variable**, **Cycle** (Loop, Reverse, Clamp), **Active**, **Play backwards**, **Frequency**, **Phase**, **Start**, **Stop** and the interpolator's value. You can change the Variable of a controller a clip drives: "Its clips follow the new variable."
+- **Interpolation**: Linear or Quadratic. Linear to Quadratic adds tangents that keep the curve's shape; Quadratic to Linear drops them.
+- The curve graph: the keys as handles, Quadratic tangent handles, and a cursor at the current time. Drag a key to change its time and value; drag a tangent handle up or down. One drag is one undo step. Click or drag the background to move the preview time. Times are never clamped: a key dragged past its neighbour gives the red error "Key times must not decrease". A curve too large to draw says "These keys are out of range for the graph."; the table still works.
+- The key table: Time, Value (R, G and B for a colour), Forward and Backward for Quadratic keys, typed as exact numbers, and **Remove** for each key.
+- **Add key**: a key at the cursor time with the curve's value there (with no clock, half-way between the last two keys). It is off when a key is already at that time ("A key is already at this time.").
+
+TBC, XYZ and CONST keys are drawn but cannot be edited: "These keys are previewed, not edited." Keys you edit must be Linear or Quadratic, in time order and finite numbers. Otherwise a red error ("Key times must not decrease", "Only linear and quadratic keys can be authored", "Key values must be finite numbers") stops **Export NIF**. A key edit on a curve that another controller or clip shares makes a copy first.
+
+**Add controller.** On a shader property, pick **Float** or **Colour** and the **Variable**. An alpha property adds an alpha-test controller. The new controller has two Linear keys, at 0 and 1 s, that hold the property's current value, so nothing changes until you move a key; it loops at frequency 1. Adding sets the BSX Animated bit (a root without BSXFlags gets one). On the Extra data tab that box stays ticked and locked while a controller outside any clip animates the model. The button is off, with the reason on hover, when the root is not a node, the property cannot be found again in the file, or the alpha is shared and a clip drives it. On a shared alpha, Add controller splits it first (one undo step).
+
+**PBR names.** On a PBR shape, as on the Shader tab, glossiness reads **Specular level**, specular strength **Roughness scale**, and specular colour **Coat colour**, **Subsurface colour** or "Specular colour (no effect on PBR)".
+
+**Warnings.** These come from an in-game check of each controller and show under the controller.
+- Red: "Env map scale crashes the game on PBR materials." On a PBR shape, Env map scale (8) is greyed in both Variable lists with this text. A controller that already has it blocks **Export NIF**, even when the source file had it.
+- Amber, from the last In game simulation: on a shape that is not PBR but that PGPatcher makes PBR, an Env map scale controller gets "PGPatcher makes this shape PBR: its Env map scale controller will crash the game." It does not block export, since PGPatcher's output depends on the JSON at play time.
+- Amber, no effect in game: "This controller has no effect: Specular is off when the mesh loads." and "…specular strength is 0 when the mesh loads." (glossiness, specular strength or colour on a non-PBR shape); "This controller has no effect: alpha test is off."; "Refraction strength has no visible effect in game."; "Two controllers drive <name>: only the last one plays."
+
+**Clips.** When the file has animation clips, a **Preview** list at the top of the tab picks **Free chains** or one clip. A clip shows alone: the other controllers keep their file value while it plays. Under a controller a clip drives, each clip shows its name, cycle, time span and text keys (one line; hover for all of them). The selected clip's keys get the same graph, table and Add key; the others say "Pick this clip in Preview to see and edit its keys." A clip with several interpolators for one controller cannot be edited yet. "No clip in this file drives it." marks a controller flagged as managed that no clip uses; it holds its property value.
+
+**In game (simulated) and Edited source.** While an edit is open, the toggle above the view reads **In game (simulated)** and **Edited source**, and the edit opens on Edited source. In game (simulated) runs Tessalith's PGPatcher simulation on your edited NIF and shows still materials (the clock pauses). PGPatcher's real output, made from the unedited NIF, is not shown while you edit. The line under the toggle says "Simulated from loose PGPatcher JSON, in MO2 mod order. JSON inside BSAs is not read." The JSON is read in the background ("Reading PGPatcher JSON…") and kept until the next scan or another scan source. A folder scan has no MO2 instance: "In game needs an MO2 instance: no PGPatcher JSON was read." For the selected shape a line says what happened: no JSON matches it, PGPatcher skips it (PG_IGNORE, amber), a file is not applied and why (amber; the next file can still match), it is already PBR, or which keys are not previewed. A red line says when PGPatcher makes the shape PBR while it has an Env map scale controller, which crashes the game.
+
+The simulation does not cover: JSON inside BSAs; PGPatcher's own mod priority (`modrules.json`; the MO2 order stands in); plugin alternate textures (TXST); the plugin and mesh-blocklist rules that decide which meshes PGPatcher patches; complex-material and parallax competition; shapes with no texture set; JSON changed on disk since it was read (rescan). It follows PGPatcher 1.2.0 with 2.2's alpha-property keys, so PGPatcher 2.2 can differ.
 
 ## Artist checks
 

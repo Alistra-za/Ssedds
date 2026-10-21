@@ -1,9 +1,13 @@
 //! Structural ops: shader type re-emit and alpha add/remove/split (spec §5, plan A9). Removal is unlink: the
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
+use super::validate::{ENV_SCALE_PBR, LSCC, LSCF, LSCF_VARS, TESTREF};
 use super::{Anchor, Op, Outcome, Role};
-use crate::ctrl::BASE_LEN;
+use crate::ctrl::{BASE_LEN, CB_LEN};
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
-use crate::model::{NifModel, ShapeModel};
+use crate::header::Header;
+use crate::keys::{encode_data, read_data, KeyData, KeyGroup};
+use crate::material::SLSF2_TRUE_PBR;
+use crate::model::{NifModel, PropModel, ShapeModel};
 use crate::net::{encode_net, ObjectNet};
 use crate::props::encode_texture_set;
 use crate::write::NifDoc;
@@ -154,6 +158,395 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
         patch(doc, new, at, *first as i32)?;
     }
     Ok(Some(new))
+}
+
+/// The controller's own keyed interpolator: (interpolator block, pose float count, data block, current keys).
+/// A data ref of -1 reads as the empty group of the interpolator's kind (`key_type: None, keys: []`).
+pub(crate) fn ctrl_keys(
+    h: &Header,
+    b: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+) -> Result<(u32, usize, Option<u32>, KeyData), String> {
+    let c = m.ctrls.get(&ctrl).ok_or("not a readable controller")?;
+    let i = match c.interp {
+        Some(i) if i >= 0 => i as usize,
+        _ => return Err("The controller has no interpolator.".into()),
+    };
+    let (floats, data, keys) = interp_keys(h, b, m, i)?;
+    Ok((i as u32, floats, data, keys))
+}
+
+/// Interpolator `i`'s keys: (pose float count, data block, current keys). A data ref of -1 reads as the empty group
+/// of the interpolator's kind.
+pub(crate) fn interp_keys(
+    h: &Header,
+    b: &[u8],
+    m: &NifModel,
+    i: usize,
+) -> Result<(usize, Option<u32>, KeyData), String> {
+    if i >= h.sizes.len() {
+        return Err("The interpolator ref is outside the file.".into()); // before h.kind, which does not check
+    }
+    let ip = match m.interps.get(&(i as u32)) {
+        Some(ip) if ip.known => ip,
+        ip => {
+            let class = ip.map_or_else(
+                || String::from_utf8_lossy(h.kind(i)).into_owned(),
+                |ip| ip.class.clone(),
+            );
+            return Err(format!("A {class} has no keys to edit."));
+        }
+    };
+    let floats = ip.value.len();
+    let mismatch = || "The keys do not match the interpolator's type.".to_string();
+    if ip.data == -1 {
+        let empty = match floats {
+            1 => KeyData::Float(KeyGroup {
+                key_type: None,
+                keys: vec![],
+            }),
+            3 => KeyData::Pos(KeyGroup {
+                key_type: None,
+                keys: vec![],
+            }),
+            _ => return Err(mismatch()),
+        };
+        return Ok((floats, None, empty));
+    }
+    if ip.data < -1 || ip.data as usize >= h.sizes.len() {
+        return Err("The interpolator's data ref is outside the file.".into());
+    }
+    let d = ip.data as usize;
+    let keys = read_data(h, b, d).map_err(|e| e.to_string())?;
+    match (&keys, floats) {
+        (KeyData::Float(_), 1) | (KeyData::Pos(_), 3) => Ok((floats, Some(d as u32), keys)),
+        _ => Err(mismatch()),
+    }
+}
+
+/// What one SetKeys edits: the interpolator, the refs that name it for this op, its float count, data and keys.
+pub(crate) struct KeyTarget {
+    pub interp: u32,
+    /// (block, block-relative offset) of every ref this op re-points when it copies the interpolator.
+    pub refs: Vec<(u32, usize)>,
+    pub floats: usize,
+    pub data: Option<u32>,
+    pub keys: KeyData,
+}
+
+/// The interpolator SetKeys edits on controller `ctrl`: its own (`clip: None`), or the CB interpolator of sequence
+/// `seq` bound to it (v2 B7, E1, E4).
+pub(crate) fn key_target(
+    h: &Header,
+    b: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+    clip: Option<u32>,
+) -> Result<KeyTarget, String> {
+    let Some(seq) = clip else {
+        let (interp, floats, data, keys) = ctrl_keys(h, b, m, ctrl)?;
+        return Ok(KeyTarget {
+            interp,
+            refs: vec![(ctrl, BASE_LEN)],
+            floats,
+            data,
+            keys,
+        });
+    };
+    let s = m
+        .sequences
+        .iter()
+        .find(|s| s.block == seq)
+        .ok_or("This clip is not in this file.")?;
+    let ks = crate::anim::bound_cbs(m, h, s, ctrl);
+    let first = match ks.first() {
+        None => return Err("This clip does not animate this controller.".into()),
+        Some(&k) => s.blocks[k].interp,
+    };
+    if ks.iter().any(|&k| s.blocks[k].interp != first) {
+        return Err(
+            "This clip has several interpolators for this controller: editing them needs Phase C."
+                .into(),
+        );
+    }
+    let i =
+        usize::try_from(first).map_err(|_| "This clip has no interpolator for this controller.")?;
+    let (floats, data, keys) = interp_keys(h, b, m, i)?;
+    Ok(KeyTarget {
+        interp: i as u32,
+        refs: ks.iter().map(|&k| (seq, 12 + k * CB_LEN)).collect(),
+        floats,
+        data,
+        keys,
+    })
+}
+
+/// Variable `old` -> `new` on managed controller `ctrl` (spec §5.5, E2, E3): every CB bound to it whose Controller
+/// ID is `old` in decimal gets `new` in decimal; null, empty and other IDs stay. Patches each CB's 4-byte index only.
+pub(crate) fn rewrite_cb_ids(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    ctrl: u32,
+    old: u32,
+    new: u32,
+) -> Result<(), String> {
+    let old_id = old.to_string().into_bytes();
+    // `Header` is not Clone: collect under the shared borrow, mutate after it ends.
+    let targets: Vec<(u32, usize)> = {
+        let h = doc.header();
+        m.sequences
+            .iter()
+            .flat_map(|s| {
+                crate::anim::bound_cbs(m, h, s, ctrl)
+                    .into_iter()
+                    .filter(|&k| s.blocks[k].ctrl_id.as_deref() == Some(&old_id[..]))
+                    .map(|k| (s.block, 12 + k * CB_LEN + 21))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    if targets.is_empty() {
+        return Ok(()); // 0x20 with no clip, or only null/empty IDs: nothing names the variable
+    }
+    let idx = doc.string(new.to_string().as_bytes());
+    for (seq, at) in targets {
+        patch(doc, seq, at, idx)?;
+    }
+    Ok(())
+}
+
+/// SetKeys on the controller `ctrl`, its own keys or (clip Some) a clip's. Ok(Conflict) for a stale base.
+pub(crate) fn set_keys(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    let Op::SetKeys {
+        keys, base, clip, ..
+    } = op
+    else {
+        return Err("not a key op".into());
+    };
+    let t = key_target(doc.header(), cur, m, ctrl, *clip)?;
+    let (i, floats, data, now) = (t.interp, t.floats, t.data, &t.keys);
+    let kind: &[u8] = match (keys, now) {
+        (KeyData::Float(_), KeyData::Float(_)) => b"NiFloatData",
+        (KeyData::Pos(_), KeyData::Pos(_)) => b"NiPosData",
+        _ => return Err("The keys do not match the interpolator's type.".into()),
+    };
+    // bytes, not KeyData ==: NaN != NaN (F19)
+    if encode_data(base) != encode_data(now) {
+        return Ok(Outcome::Conflict(
+            "changed in the source: the keys differ from the edit's base".into(),
+        ));
+    }
+    let interp_users = m
+        .ctrls
+        .values()
+        .filter(|c| c.interp == Some(i as i32))
+        .count()
+        + m.sequences
+            .iter()
+            .flat_map(|s| &s.blocks)
+            .filter(|cb| cb.interp == i as i32)
+            .count();
+    // shortcut: m.interps holds only interpolators a controller or controlled block names, so an
+    // orphan interpolator on the same data is not counted; count raw refs if orphans ever come back to life.
+    let data_users = data.map_or(0, |d| {
+        m.interps.values().filter(|x| x.data == d as i32).count()
+    });
+    // E5: copy when something other than the refs this op re-points also names the interpolator.
+    if interp_users > t.refs.len() {
+        let ni = copy(doc, i);
+        for &(blk, at) in &t.refs {
+            patch(doc, blk, at, ni as i32)?;
+        }
+        let nd = doc.append(kind, encode_data(keys));
+        patch(doc, ni, 4 * floats, nd as i32)?;
+    } else if let Some(d) = data.filter(|_| data_users <= 1) {
+        doc.set_block(d, encode_data(keys));
+    } else {
+        let nd = doc.append(kind, encode_data(keys));
+        patch(doc, i, 4 * floats, nd as i32)?;
+    }
+    Ok(Outcome::Applied)
+}
+
+/// Block-relative offset of the property's own controller ref.
+fn ctrl_ref_at(doc: &NifDoc, p: &PropModel) -> usize {
+    p.net.controller_at() - doc.header().offsets()[p.block as usize]
+}
+
+/// Err unless the property's chain ends in -1. `ctrl::chain` stops at a loop, an out-of-range or unreadable next and
+/// past 256 links, so in each of those cases the last listed controller's next is not -1 (B-P31).
+fn whole_chain(m: &NifModel, p: &PropModel) -> Result<(), String> {
+    let end = match p.ctrls.last() {
+        None => p.net.controller == -1,
+        Some(c) => m.ctrls.get(c).is_some_and(|c| c.next == -1),
+    };
+    if end {
+        Ok(())
+    } else {
+        Err("This controller chain is broken: it cannot be edited.".into())
+    }
+}
+
+/// AddController (anchored on a property) and RemoveController (anchored on a controller).
+pub(crate) fn ctrl_op(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    at: &Anchor,
+    block: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    match op {
+        Op::AddController {
+            class,
+            var,
+            keys,
+            flags,
+            freq,
+            start,
+            stop,
+            ..
+        } => {
+            let shader = matches!(at.role, Role::Shader);
+            let (var_ok, float) = match class.as_str() {
+                LSCF if shader => (var.is_some_and(|v| LSCF_VARS.contains(&v)), true),
+                LSCC if shader => (matches!(var, Some(0 | 1)), false),
+                TESTREF if at.role == Role::Alpha => (var.is_none(), true),
+                LSCF | LSCC => return Err(format!("{class} goes on a shader property.")),
+                TESTREF => return Err(format!("{class} goes on an alpha property.")),
+                _ => return Err(format!("{class} cannot be added.")),
+            };
+            if !var_ok {
+                return Err(format!("{class} does not take variable {var:?}."));
+            }
+            let pbr = m
+                .lighting
+                .get(&block)
+                .is_some_and(|l| l.lighting.slsf2 & SLSF2_TRUE_PBR != 0);
+            if class == LSCF && *var == Some(8) && pbr {
+                return Err(ENV_SCALE_PBR.into());
+            }
+            let (data_kind, interp_kind, first, n): (&[u8], &[u8], Vec<u8>, usize) = match keys {
+                KeyData::Float(g) if float => (
+                    b"NiFloatData",
+                    b"NiFloatInterpolator",
+                    g.keys
+                        .first()
+                        .map_or(vec![], |k| k.value.to_le_bytes().to_vec()),
+                    g.keys.len(),
+                ),
+                KeyData::Pos(g) if !float => (
+                    b"NiPosData",
+                    b"NiPoint3Interpolator",
+                    g.keys.first().map_or(vec![], |k| {
+                        k.value.iter().flat_map(|f| f.to_le_bytes()).collect()
+                    }),
+                    g.keys.len(),
+                ),
+                _ => return Err("The keys do not match the controller's type.".into()),
+            };
+            if n == 0 {
+                return Err("A new controller needs at least one key.".into());
+            }
+            let prop = if shader {
+                m.lighting.get(&block).map(|l| &l.prop)
+            } else {
+                m.alphas.get(&block).map(|a| &a.prop)
+            }
+            .ok_or("not a readable property")?;
+            whole_chain(m, prop)?;
+            let last = prop.ctrls.last();
+            if m.root_net.is_none() {
+                return Err("The root is not a node: the BSX Animated bit cannot be set.".into());
+            }
+            let d = doc.append(data_kind, encode_data(keys));
+            let mut ib = first;
+            ib.extend((d as i32).to_le_bytes());
+            let i = doc.append(interp_kind, ib);
+            let mut cb = (-1i32).to_le_bytes().to_vec();
+            cb.extend(flags.to_le_bytes());
+            for f in [*freq, 0.0, *start, *stop] {
+                cb.extend(f.to_le_bytes());
+            }
+            cb.extend((block as i32).to_le_bytes());
+            cb.extend((i as i32).to_le_bytes());
+            cb.extend(var.map(u32::to_le_bytes).into_iter().flatten());
+            let c = doc.append(class.as_bytes(), cb);
+            match last {
+                None => patch(doc, block, ctrl_ref_at(doc, prop), c as i32)?,
+                Some(&l) => patch(doc, l, 0, c as i32)?,
+            }
+            set_bsx_animated(doc, m)?;
+        }
+        Op::RemoveController { .. } => {
+            if m.managed(block) {
+                return Err("A manager-controlled controller cannot be removed.".into());
+            }
+            let owners: Vec<&PropModel> = m
+                .lighting
+                .values()
+                .map(|l| &l.prop)
+                .chain(m.alphas.values().map(|a| &a.prop))
+                .filter(|p| p.ctrls.contains(&block))
+                .collect();
+            let prop =
+                match owners.as_slice() {
+                    [] => return Err("No property lists this controller.".into()),
+                    [p] => *p,
+                    _ => return Err(
+                        "This controller is shared by several properties: it cannot be removed."
+                            .into(),
+                    ),
+                };
+            whole_chain(m, prop)?;
+            let k = prop.ctrls.iter().position(|&c| c == block).unwrap();
+            let c = &m.ctrls[&block];
+            match k {
+                0 => patch(doc, prop.block, ctrl_ref_at(doc, prop), c.next)?,
+                _ => patch(doc, prop.ctrls[k - 1], 0, c.next)?,
+            }
+            doc.patch(block, 4, &(c.flags & !0x08).to_le_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        _ => return Err("not a controller op".into()),
+    }
+    Ok(Outcome::Applied)
+}
+
+/// Sets bit 0 (Animated) on the root's first BSXFlags, appending `BSXFlags "BSX"` = 1 to the root when it has none.
+fn set_bsx_animated(doc: &mut NifDoc, m: &NifModel) -> Result<(), String> {
+    let (root, net) = m
+        .root
+        .zip(m.root_net.as_ref())
+        .ok_or("The root is not a node: the BSX Animated bit cannot be set.")?;
+    // the first BSXFlags whatever its name, as validate::root_bsx picks it
+    let found = m.extras_of(net).into_iter().find_map(|e| match e.value {
+        Some(ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some((e.block, v)),
+        _ => None,
+    });
+    match found {
+        Some((_, v)) if v & 1 == 1 => Ok(()),
+        Some((x, v)) => doc
+            .patch(x, 4, &(v | 1).to_le_bytes())
+            .map_err(|e| e.to_string()),
+        None => {
+            let nm = doc.string(b"BSX");
+            let (_, body) = encode_extra(nm, &ExtraValue::Bsx(1), -1);
+            let x = doc.append(b"BSXFlags", body);
+            set_extra_list(
+                doc,
+                root,
+                net,
+                &[net.extra.clone(), vec![x as i32]].concat(),
+            )
+        }
+    }
 }
 
 fn win1252(s: &str) -> Result<Vec<u8>, String> {

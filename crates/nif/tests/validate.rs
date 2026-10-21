@@ -186,8 +186,14 @@ fn controller_rules() {
             field: Field::Variable
         }
     );
-    for v in [0, 8, 9, 10, 11, 12, 20, 21, 22, 23] {
+    // Known values are kept silently; 0 (refraction), 9 and 10 (Specular off here, B-P39/B-P41) and 20 (twice) warn.
+    for v in [8, 11, 12, 21, 22, 23] {
         assert!(warnings(&put(chain.clone(), 1, Field::Variable, Value::U32(v))).is_empty());
+    }
+    for v in [0, 9, 10, 20] {
+        let w = warnings(&put(chain.clone(), 1, Field::Variable, Value::U32(v)));
+        assert_eq!(w.len(), 1, "{w:#?}");
+        assert_eq!(w[0].target, Target::Block { block: 1 });
     }
 }
 
@@ -488,4 +494,285 @@ fn slsf_vanilla_lighting_bits_do_not_warn() {
     }
     // PBR type 11 without bit 24 is common.
     assert!(slsf_scene(11, 1 << 23).is_empty());
+}
+
+// ---- v2 B4: authored keys ----
+
+use nif::keys::{Key, KeyData, KeyGroup};
+
+/// New errors after a SetKeys of `keys` (type `key_type`) on var 11 of `keyed_pair(Share::No, [1, 2])`.
+fn key_errors(key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<Warning> {
+    key_errors_on(
+        scenes::keyed_pair(scenes::Share::No, [1, 2]),
+        key_type,
+        keys,
+    )
+}
+
+/// Same, on the keyed_pair-shaped file `b`.
+fn key_errors_on(b: Vec<u8>, key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<Warning> {
+    use nif::edit::validate::validate_ops;
+    use nif::edit::{anchor_role, Outcome, Owner, Role};
+    let m = read_model(&b).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let base = nif::keys::read_data(&Header::parse(&b).unwrap(), &b, 6).unwrap();
+    let ops = vec![Op::SetKeys {
+        at: anchor_role(&m, Some(0), role).unwrap(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup { key_type, keys }),
+        base,
+    }];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Applied],
+        "validation never refuses"
+    );
+    let mut edited = warnings(&r.bytes);
+    edited.extend(validate_ops(&ops));
+    new_errors(&warnings(&b), &edited)
+}
+
+fn k(time: f32, extra: Option<f32>, tbc: bool) -> Key<f32> {
+    Key {
+        time,
+        value: 1.0,
+        forward: extra,
+        backward: extra,
+        tbc: tbc.then_some([0.0, 0.0, 0.0]),
+    }
+}
+
+fn error(text: &str) -> Vec<Warning> {
+    vec![Warning {
+        level: Level::Error,
+        target: Target::Block { block: 2 },
+        text: text.into(),
+        fix: None,
+    }]
+}
+
+#[test]
+fn decreasing_times_block_export() {
+    let lin = |t: &[f32]| t.iter().map(|&t| k(t, None, false)).collect();
+    assert_eq!(
+        key_errors(Some(1), lin(&[0.0, 2.0, 1.0])),
+        error("Key times must not decrease")
+    );
+    assert_eq!(key_errors(Some(1), lin(&[0.0, 1.0, 1.0])), vec![]);
+    let tbc = vec![k(0.0, None, true), k(1.0, None, true)];
+    assert_eq!(
+        key_errors(Some(3), tbc),
+        error("Only linear and quadratic keys can be authored")
+    );
+    let quad = vec![k(0.0, Some(0.5), false), k(1.0, Some(0.5), false)];
+    assert_eq!(key_errors(Some(2), quad), vec![]);
+    assert_eq!(key_errors(None, vec![]), vec![]);
+}
+
+/// Ruling B-P29: NaN or infinite authored times, values and tangents block export.
+#[test]
+fn non_finite_keys_block_export() {
+    let finite = || error("Key values must be finite numbers");
+    let lin = |t: &[f32]| t.iter().map(|&t| k(t, None, false)).collect();
+    // NaN hides the decrease from every adjacent comparison
+    assert_eq!(key_errors(Some(1), lin(&[0.0, f32::NAN, -1.0])), finite());
+    assert_eq!(key_errors(Some(1), lin(&[0.0, f32::INFINITY])), finite());
+    assert_eq!(
+        key_errors(Some(1), lin(&[f32::NEG_INFINITY, f32::INFINITY])),
+        finite()
+    );
+    let mut v = k(0.0, None, false);
+    v.value = f32::NAN;
+    assert_eq!(key_errors(Some(1), vec![v]), finite());
+    let mut q = k(0.0, Some(0.5), false);
+    q.backward = Some(f32::INFINITY);
+    assert_eq!(key_errors(Some(2), vec![q]), finite());
+
+    // an untouched source curve with a NaN value is never checked
+    let mut b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
+    let at = Header::parse(&b).unwrap().offsets()[7] + 12; // data 7, key 0 value
+    b[at..at + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert_eq!(key_errors_on(b, Some(1), lin(&[0.0, 1.0])), vec![]);
+}
+
+/// B-P41 (final review minor 6): AddController's frequency, start and stop are authored like its keys.
+#[test]
+fn add_controller_times_must_be_finite() {
+    use nif::edit::validate::validate_ops;
+    use nif::edit::{Anchor, Role};
+    let op = |freq: f32, start: f32, stop: f32| Op::AddController {
+        at: Anchor {
+            block: 1,
+            kind: "BSLightingShaderProperty".into(),
+            shape: None,
+            role: Role::Shader,
+        },
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![],
+        }),
+        flags: 0x48,
+        freq,
+        start,
+        stop,
+    };
+    assert_eq!(validate_ops(&[op(1.0, 0.0, 1.0)]), vec![]);
+    for (f, a, b) in [
+        (f32::NAN, 0.0, 1.0),
+        (1.0, f32::INFINITY, 1.0),
+        (1.0, 0.0, f32::NEG_INFINITY),
+    ] {
+        let w = validate_ops(&[op(f, a, b)]);
+        assert_eq!(w.len(), 1, "{w:#?}");
+        assert_eq!(w[0].text, "Controller times must be finite numbers");
+        assert_eq!(w[0].level, Level::Error);
+        assert_eq!(w[0].target, Target::Block { block: 1 });
+    }
+}
+
+// ---- B-P39: guards from the B9 in-game controller check ----
+
+const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
+const SPEC_OFF: &str = "This controller has no effect: Specular is off when the mesh loads.";
+const TEST_OFF: &str = "This controller has no effect: alpha test is off.";
+const REFRACTION: &str = "Refraction strength has no visible effect in game.";
+const SLSF1_SPECULAR: u32 = 1;
+const PBR: u32 = 1 << 23;
+const LSCF: &str = "BSLightingShaderPropertyFloatController";
+const LSCC: &str = "BSLightingShaderPropertyColorController";
+
+/// BSLSP (0, slsf1 0x8000_0000 = Specular off, slsf2 1) with a chain of `ctrls` (class, var) at blocks 1, 2, ...
+fn chain_of(ctrls: &[(&str, u32)]) -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(1, &[], 1, &[1.0]),
+    );
+    for (i, (class, var)) in ctrls.iter().enumerate() {
+        let next = if i + 1 < ctrls.len() {
+            i as i32 + 2
+        } else {
+            -1
+        };
+        let tail = builder::W::default().i32(-1).u32(*var);
+        n.block(class, scenes::ctrl_body(next, 0x48, 0, tail));
+    }
+    n.bytes()
+}
+
+#[test]
+fn env_map_scale_on_pbr_is_an_error_that_is_always_new() {
+    let b = put(scenes::free_chain(), 1, Field::Variable, Value::U32(8));
+    none(&warnings(&b), ENV_PBR);
+    let pbr = put(b, 0, Field::Slsf2, Value::U32(1 | PBR));
+    let w = warnings(&pbr);
+    let x = only(&w, ENV_PBR, Level::Error);
+    assert_eq!(x.target, Target::Block { block: 1 });
+    // A source that already had it still blocks: the game crashes either way.
+    let n = new_errors(&w, &w);
+    assert_eq!(n.len(), 1, "{n:#?}");
+    assert_eq!(n[0].text, ENV_PBR);
+}
+
+#[test]
+fn specular_controllers_without_the_specular_flag_warn() {
+    // B-P41 (B9 I6-R10Z, CM22): glossiness does nothing there too.
+    for (class, var) in [(LSCF, 9), (LSCF, 10), (LSCC, 0)] {
+        let b = chain_of(&[(class, var)]);
+        let x = only(&warnings(&b), SPEC_OFF, Level::Warn);
+        assert_eq!(x.target, Target::Block { block: 1 });
+        let on = put(
+            b.clone(),
+            0,
+            Field::Slsf1,
+            Value::U32(0x8000_0000 | SLSF1_SPECULAR),
+        );
+        none(&warnings(&on), SPEC_OFF);
+        // PBR reads these as specular level, roughness scale and coat / subsurface colour.
+        none(
+            &warnings(&put(b, 0, Field::Slsf2, Value::U32(1 | PBR))),
+            SPEC_OFF,
+        );
+    }
+    // Emissive colour is not in the rule.
+    none(&warnings(&chain_of(&[(LSCC, 1)])), SPEC_OFF);
+}
+
+#[test]
+fn testref_without_alpha_test_warns() {
+    let b = scenes::alpha_testref(); // flags 0x00ED: blend on, test off
+    let x = only(&warnings(&b), TEST_OFF, Level::Warn);
+    assert_eq!(x.target, Target::Block { block: 1 });
+    let on = put(b, 0, Field::AlphaFlags, Value::U16(0x00ED | 1 << 9));
+    none(&warnings(&on), TEST_OFF);
+}
+
+#[test]
+fn refraction_strength_controller_warns() {
+    let w = warnings(&chain_of(&[(LSCF, 0)]));
+    let x = only(&w, REFRACTION, Level::Warn);
+    assert_eq!(x.target, Target::Block { block: 1 });
+    assert!(w.iter().all(|w| w.level == Level::Warn));
+}
+
+#[test]
+fn two_controllers_on_one_variable_warn_on_the_one_that_does_not_play() {
+    let w = warnings(&chain_of(&[(LSCF, 11), (LSCF, 20), (LSCF, 11)]));
+    let x = only(
+        &w,
+        "Two controllers drive Emissive multiple: only the last one plays.",
+        Level::Warn,
+    );
+    assert_eq!(x.target, Target::Block { block: 1 });
+    // Same variable number, other class: different values.
+    assert!(warnings(&chain_of(&[(LSCF, 0), (LSCC, 0)]))
+        .iter()
+        .all(|w| !w.text.starts_with("Two controllers")));
+    // The label is the PBR one.
+    let pbr = put(
+        chain_of(&[(LSCF, 9), (LSCF, 9)]),
+        0,
+        Field::Slsf2,
+        Value::U32(1 | PBR),
+    );
+    only(
+        &warnings(&pbr),
+        "Two controllers drive Specular level: only the last one plays.",
+        Level::Warn,
+    );
+}
+
+/// B-P40 (B9 I6-R10Z): the specular permutation is chosen at load, so a strength of 0 then stays non-specular.
+#[test]
+fn specular_controllers_on_zero_strength_warn() {
+    const ZERO: &str = "This controller has no effect: specular strength is 0 when the mesh loads.";
+    for (class, var) in [(LSCF, 9), (LSCF, 10), (LSCC, 0)] {
+        let on = put(
+            chain_of(&[(class, var)]),
+            0,
+            Field::Slsf1,
+            Value::U32(0x8000_0000 | SLSF1_SPECULAR),
+        );
+        none(&warnings(&on), ZERO);
+        let zero = put(on, 0, Field::SpecularStrength, fl(0.0));
+        let x = only(&warnings(&zero), ZERO, Level::Warn);
+        assert_eq!(x.target, Target::Block { block: 1 });
+        none(&warnings(&zero), SPEC_OFF);
+        none(
+            &warnings(&put(zero, 0, Field::Slsf2, Value::U32(1 | PBR))),
+            ZERO,
+        );
+    }
+    // Flag off and strength 0: the flag warning alone.
+    let off = put(chain_of(&[(LSCF, 10)]), 0, Field::SpecularStrength, fl(0.0));
+    only(&warnings(&off), SPEC_OFF, Level::Warn);
+    none(&warnings(&off), ZERO);
 }

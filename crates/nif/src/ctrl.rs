@@ -5,16 +5,16 @@ use crate::{header::Header, NifError};
 
 /// next i32, flags u16, frequency, phase, start, stop f32, target i32.
 pub const BASE_LEN: usize = 26;
-const CB_LEN: usize = 29;
+pub(crate) const CB_LEN: usize = 29;
 
-fn geo(block: usize, msg: &str) -> NifError {
+pub(crate) fn geo(block: usize, msg: &str) -> NifError {
     NifError::Geometry {
         block: block as u32,
         msg: msg.into(),
     }
 }
 
-fn body<'a>(h: &Header, b: &'a [u8], block: usize) -> Result<&'a [u8], NifError> {
+pub(crate) fn body<'a>(h: &Header, b: &'a [u8], block: usize) -> Result<&'a [u8], NifError> {
     if block >= h.sizes.len() {
         return Err(geo(block, "no such block"));
     }
@@ -26,7 +26,7 @@ fn body<'a>(h: &Header, b: &'a [u8], block: usize) -> Result<&'a [u8], NifError>
     })
 }
 
-fn exact(h: &Header, block: usize, want: usize, got: usize) -> Result<(), NifError> {
+pub(crate) fn exact(h: &Header, block: usize, want: usize, got: usize) -> Result<(), NifError> {
     if want == got {
         return Ok(());
     }
@@ -171,6 +171,58 @@ pub(crate) fn interp_floats(kind: &[u8]) -> usize {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlendInterp {
+    pub block: u32,
+    pub class: String,
+    pub flags: u8,
+    pub array_size: u8,
+    pub weight_threshold: f32,
+    /// Raw bytes from Interp Count through the last item (20 + 17 * array_size) when flags bit 0 is clear; None when set.
+    pub items: Option<Vec<u8>>,
+    /// 1 value (Float) or 3 (Point3), bit patterns as stored.
+    pub value: Vec<f32>,
+    /// Block-relative offset of Value.
+    pub value_at: usize,
+}
+
+/// NiBlendFloatInterpolator or NiBlendPoint3Interpolator; any other class is an Err. Exact size.
+/// Layout: flags u8, array size u8, threshold f32, then (bit 0 clear) 20 counter bytes and 17-byte items, then Value.
+pub fn read_blend_interp(h: &Header, b: &[u8], block: usize) -> Result<BlendInterp, NifError> {
+    let d = body(h, b, block)?;
+    let kind = h.kind(block);
+    let n = match kind {
+        b"NiBlendFloatInterpolator" => 1,
+        b"NiBlendPoint3Interpolator" => 3,
+        _ => return Err(geo(block, "not a blend interpolator")),
+    };
+    if d.len() < 6 {
+        return Err(geo(
+            block,
+            "blend interpolator shorter than its fixed fields",
+        ));
+    }
+    let (flags, array_size) = (d[0], d[1]);
+    let managed = flags & 1 != 0;
+    let value_at = if managed {
+        6
+    } else {
+        26 + 17 * array_size as usize
+    };
+    // also guards the slices below
+    exact(h, block, value_at + 4 * n, d.len())?;
+    Ok(BlendInterp {
+        block: block as u32,
+        class: String::from_utf8_lossy(kind).into(),
+        flags,
+        array_size,
+        weight_threshold: f32_at(d, 2),
+        items: (!managed).then(|| d[6..value_at].to_vec()),
+        value: (0..n).map(|i| f32_at(d, value_at + 4 * i)).collect(),
+        value_at,
+    })
+}
+
 /// String fields are raw string-table entries: None = index -1, Some(empty) = the empty string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CtrlBlock {
@@ -188,6 +240,48 @@ pub struct Sequence {
     pub name: Option<String>,
     pub blocks: Vec<CtrlBlock>,
     pub manager: i32,
+    /// CycleType: 0 loop, 1 reverse, 2 clamp (nif.xml 1022-1027), as stored.
+    pub cycle: u32,
+    pub frequency: f32,
+    pub start: f32,
+    pub stop: f32,
+    /// The NiTextKeyExtraData the sequence names: (time, raw string or None for -1); empty when there is none or it
+    /// does not read.
+    pub text_keys: Vec<(f32, Option<Vec<u8>>)>,
+}
+
+/// NiTextKeyExtraData `r` (name i32, count u32, then time f32 + value string index i32 per key, nif.xml 5180).
+/// The copied strings draw on the sequence's `budget`, so one large string named by many keys cannot amplify.
+fn text_keys(h: &Header, b: &[u8], r: i32, budget: &mut usize) -> Vec<(f32, Option<Vec<u8>>)> {
+    // shortcut: a malformed text-key block reads as none; the sequence itself still reads.
+    let Ok(r) = usize::try_from(r) else {
+        return vec![];
+    };
+    if r >= h.sizes.len() || h.kind(r) != b"NiTextKeyExtraData" {
+        return vec![];
+    }
+    let Ok(t) = body(h, b, r) else { return vec![] };
+    if t.len() < 8 {
+        return vec![];
+    }
+    let n = u32_at(t, 4) as usize;
+    // the length check bounds n by the block before anything is allocated
+    if n.checked_mul(8).and_then(|x| x.checked_add(8)) != Some(t.len()) {
+        return vec![];
+    }
+    let s = |k: usize| h.string(u32_at(t, 12 + 8 * k) as i32);
+    // Check the total before cloning anything; past the budget the keys read as none.
+    let mut left = *budget;
+    for k in 0..n {
+        match left.checked_sub(s(k).map_or(0, <[u8]>::len)) {
+            Some(l) => left = l,
+            None => return vec![],
+        }
+    }
+    *budget = left;
+    (0..n)
+        .map(|k| (f32_at(t, 8 + 8 * k), s(k).map(<[u8]>::to_vec)))
+        .collect()
 }
 
 /// Copies one string-table entry. `budget` is the bytes still allowed to be copied for this sequence.
@@ -259,6 +353,11 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         name,
         blocks,
         manager: u32_at(d, tail + 24) as i32,
+        cycle: u32_at(d, tail + 8),
+        frequency: f32_at(d, tail + 12),
+        start: f32_at(d, tail + 16),
+        stop: f32_at(d, tail + 20),
+        text_keys: text_keys(h, b, u32_at(d, tail + 4) as i32, &mut budget),
     })
 }
 

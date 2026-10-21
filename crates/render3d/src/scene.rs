@@ -111,6 +111,9 @@ pub struct Scene {
     /// Environment turn about world +Z, radians, in the sun's sense (a feature at azimuth φ shows at φ + yaw). Turns the
     /// HDRI backdrop and the ambient taken from it; 0 = the image as bundled. No effect with a solid background.
     pub env_yaw: f32,
+    /// Seconds on the preview's animation clock, written to CS's `Timer` (v2 B3). 1.0 when nothing plays (the
+    /// constant the preview always wrote).
+    pub time: f32,
 }
 
 fn norm(v: [f32; 3]) -> [f32; 3] {
@@ -175,6 +178,7 @@ impl Scene {
                 [0.12; 3], // −Z
             ],
             env_yaw: 0.0,
+            time: 1.0,
         }
     }
 }
@@ -496,7 +500,7 @@ impl Scene {
             "CameraData",
             &[v.far, v.near, v.far - v.near, v.far * v.near],
         );
-        put(w, "Timer", &[1.0]);
+        put(w, "Timer", &[self.time]);
         put(w, "WaterSystemHeight", &[f32::MIN]);
         put(w, "WaterData", &[0.58, 0.58, 0.58, f32::MIN].repeat(25));
         for (n, vals) in POINT_NAMES.iter().zip(PointValues::new(self, v).values) {
@@ -556,14 +560,15 @@ pub const VIEW_NAMES: [&str; 17] = [
     "CameraPreviousPosAdjust",
 ];
 
-/// Fields that change with the scene's lights, in [`LightValues`] order.
-pub const LIGHT_NAMES: [&str; 6] = [
+/// Fields that change with the scene (lights and the clock's `Timer`), in [`LightValues`] order.
+pub const LIGHT_NAMES: [&str; 7] = [
     "DirLightDirection",
     "DirLightColor",
     "DirectionalAmbient",
     "AmbientSHR",
     "AmbientSHG",
     "AmbientSHB",
+    "Timer",
 ];
 
 /// The values of [`VIEW_NAMES`] for one frame, computed once per frame (the four inverses included) instead of
@@ -620,6 +625,7 @@ impl LightValues {
                 sh[0].to_vec(),
                 sh[1].to_vec(),
                 sh[2].to_vec(),
+                vec![s.time],
             ],
         }
     }
@@ -728,7 +734,8 @@ impl SceneFields {
 
 /// Every field [`Scene::write`] writes that depends on neither the camera nor the lights: constants and the
 /// FeatureData block (03 §7 "static"). Written when a draw is built and after every material rewrite (the
-/// rewrite zeroes the whole writer).
+/// rewrite zeroes the whole writer). `Timer` is not static (v2 B3): it is a light row, and comes back with the light
+/// fields on the next `update`, because `rewrite_material` sets `stale`.
 pub fn write_static(w: &mut CbWriter, feature_values: &[(String, Vec<f64>)]) {
     // Camera-relative: the eye is the origin.
     w.set("EyePosition", &[0.0, 0.0, 0.0, 0.0]);
@@ -737,7 +744,6 @@ pub fn write_static(w: &mut CbWriter, feature_values: &[(String, Vec<f64>)]) {
     w.set("ColourOutputClamp", &[1.0, 1.0, 1.0, 0.0]);
     w.set("AmbientSpecularTintAndFresnelPower", &[0.0, 0.0, 0.0, 1.0]);
     w.set("SSRParams", &[0.1, 0.1, 1.0, 1.0]);
-    w.set("Timer", &[1.0]);
     w.set("WaterSystemHeight", &[f32::MIN]);
     w.set("WaterData", &[0.58, 0.58, 0.58, f32::MIN].repeat(25));
     w.set("FrameParams", &[1.0, 0.0, 0.0, 0.0]);
