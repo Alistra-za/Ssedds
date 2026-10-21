@@ -4160,3 +4160,34 @@ fn pg_ignore_shape_is_not_simulated() {
         }
     }
 }
+
+/// Owner data (B8 brief, not a gate): pg_entries over the instance, then simulate_shape for one lit shape against
+/// that list, the per-shape cost of one In game change.
+#[test]
+#[ignore]
+fn in_game_cost_on_the_owner_json() {
+    let Ok(root) = std::env::var("SDC_ACHERUS") else {
+        println!("skipped: set SDC_ACHERUS");
+        return;
+    };
+    let inst = modscan::mo2::Instance::load(Path::new(&root), Some("Nexus")).unwrap();
+    let t = Instant::now();
+    let files = pg_entries(&inst);
+    let read = t.elapsed();
+    let entries: usize = files.iter().map(|f| f.entries.len()).sum();
+    let e = NifEdit::open(
+        fixture("TestNifFile_Skinned_SE.nif"),
+        copy("A", 1, false),
+        "meshes/x.nif",
+        None,
+    )
+    .unwrap();
+    let mat = e.materials()[0].1.clone();
+    let t = Instant::now();
+    let (_, notes) = simulate_shape(&files, r"meshes\x.nif", &mat, &|_| true);
+    println!(
+        "{} files, {entries} entries: pg_entries {read:?}, simulate_shape {:?} ({notes:?})",
+        files.len(),
+        t.elapsed()
+    );
+}
