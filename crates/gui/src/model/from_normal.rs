@@ -1008,6 +1008,13 @@ impl AppModel {
             }
             return;
         }
+        self.generate_landed(open, result);
+        // Every way a Generate ends runs the close or open that waited for it, exactly once (fix round 2, N1).
+        self.gen_after_job();
+    }
+
+    /// The end of a Generate job: its error, or its record (or the notice that it has none).
+    fn generate_landed(&mut self, open: bool, result: Result<Arc<GenResult>, String>) {
         let result = result.and_then(|r| match r.written.is_empty() {
             true => Err("nothing was written".to_string()),
             false => Ok(r),
@@ -1015,7 +1022,9 @@ impl AppModel {
         let r = match result {
             Ok(r) => r,
             Err(e) if open => {
-                g.error = Some(e);
+                if let Some(g) = self.gen.as_mut() {
+                    g.error = Some(e);
+                }
                 return;
             }
             Err(e) => {
@@ -1024,11 +1033,12 @@ impl AppModel {
                 if e != "cancelled" {
                     self.gen_notice(format!("Generate from normal map failed: {e}"));
                 }
-                self.gen_after_job();
                 return;
             }
         };
-        let g = self.gen.take().expect("checked above");
+        let Some(g) = self.gen.take() else {
+            return;
+        };
         if open {
             self.dialog = None;
         }
@@ -1047,7 +1057,6 @@ impl AppModel {
         } else {
             self.gen_record(&g, &normal, &r);
         }
-        self.gen_after_job();
     }
 
     /// A Generate that writes is running: Open and Close wait for it (I1), as they wait for an export.

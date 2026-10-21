@@ -1476,3 +1476,47 @@ fn a_preview_is_at_most_512_and_a_closed_dialogs_preview_is_dropped() {
     assert_eq!(width(&m), 256, "the new dialog's own preview");
     assert_eq!(m.gen.as_ref().unwrap().started, 1);
 }
+
+#[test]
+fn a_close_asked_while_a_refused_generate_runs_still_closes() {
+    // Fix round 2, N1: the job fails with its dialog open; the close waiting for it runs, and nothing stays armed.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    std::fs::write(land(d.path()).join("rock01_p_generated.png"), b"theirs").unwrap();
+    m.gen_generate();
+    assert!(!m.request_close(), "waits for Generate");
+    idle(&mut m);
+    assert!(
+        m.gen.as_ref().is_some_and(|g| g.error.is_some()),
+        "refused in the open dialog"
+    );
+    assert!(m.take_close_ready(), "the close runs");
+    assert!(!m.take_close_ready(), "once");
+    // The same for an Open.
+    let (d, other) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut m = relief_clean(d.path());
+    let root_b = mod_folder(other.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    std::fs::write(land(d.path()).join("rock01_p_generated.png"), b"theirs").unwrap();
+    m.gen_generate();
+    assert!(!m.request_open(root_b.clone()));
+    idle(&mut m);
+    assert_eq!(m.root.as_ref(), Some(&root_b), "the open runs");
+}
+
+#[test]
+fn a_running_preview_does_not_hold_up_open_or_close() {
+    // Fix round 2, N3: only a Generate that writes makes Open and Close wait.
+    let (d, other) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut m = relief_clean(d.path());
+    let root_b = mod_folder(other.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_frame();
+    assert!(m.gen_pending(), "a preview runs");
+    assert!(m.request_close(), "close is not held");
+    assert!(m.request_open(root_b.clone()), "open is not held");
+    assert_eq!(m.root.as_ref(), Some(&root_b));
+    assert!(m.gen.is_none() && m.dialog.is_none());
+    idle(&mut m);
+}

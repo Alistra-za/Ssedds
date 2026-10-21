@@ -1528,8 +1528,6 @@ impl AppModel {
             || matches!(self.continue_after_plan, Some(Continue::HalfSize { .. }))
     }
 
-    /// K12: a close or open asked while the box is open or its pass waits: done after that pass; an open box is
-    /// answered as full size (owner answer 4).
     /// I1: a close or open asked while a Generate writes: done when it has landed and recorded its files, so a file
     /// Tessalith wrote is never left unrecorded or recorded into another project.
     fn defer_until_generated(&mut self, action: AfterExport) {
@@ -1541,6 +1539,8 @@ impl AppModel {
         self.after_export = Some(action);
     }
 
+    /// K12: a close or open asked while the box is open or its pass waits: done after that pass; an open box is
+    /// answered as full size (owner answer 4).
     fn defer_until_half_size(&mut self, action: AfterExport) {
         let why = match action {
             AfterExport::Close => "before closing",
