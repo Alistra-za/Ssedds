@@ -45,7 +45,13 @@ fn clean_scene_has_no_warnings() {
 #[test]
 fn soft_ranges_warn_outside_and_not_inside() {
     for (f, v, label, lo, hi) in [
-        (Field::EmissiveMultiple, 11.0, "Emissive Multiple 11", 0, 10),
+        (
+            Field::EmissiveMultiple,
+            101.0,
+            "Emissive Multiple 101",
+            0,
+            100,
+        ),
         (Field::SpecularStrength, -1.0, "Specular Strength -1", 0, 10),
         (Field::Glossiness, 1000.0, "Glossiness 1000", 0, 999),
         (Field::Alpha, 128.5, "Alpha 128.5", 0, 128),
@@ -808,4 +814,16 @@ fn specular_controllers_on_zero_strength_warn() {
     let off = put(chain_of(&[(LSCF, 10)]), 0, Field::SpecularStrength, fl(0.0));
     only(&warnings(&off), SPEC_OFF, Level::Warn);
     none(&warnings(&off), ZERO);
+}
+
+#[test]
+fn emissive_multiple_up_to_100_is_quiet() {
+    // Real mods use values up to 100 (corpus max); 0-10 was nif.xml's editing range, not a game limit.
+    let w = warnings(&put(
+        scenes::lsp_shape(0, &[]),
+        1,
+        Field::EmissiveMultiple,
+        fl(42.0),
+    ));
+    assert!(w.is_empty(), "{w:#?}");
 }
