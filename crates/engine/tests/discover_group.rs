@@ -244,7 +244,12 @@ fn an_unreadable_folder_is_skipped_not_fatal() {
     };
     icacls(&["/deny", "*S-1-1-0:(OI)(CI)(RX)"]);
     let effective = std::fs::read_dir(&locked).is_err();
-    let r = discover_reporting(std::slice::from_ref(&src), &d.path().join("out"), true);
+    let r = discover_reporting(
+        std::slice::from_ref(&src),
+        &d.path().join("out"),
+        true,
+        None,
+    );
     icacls(&["/remove:d", "*S-1-1-0"]);
     if !effective {
         eprintln!("ACL deny had no effect for this account; skipping");
@@ -284,7 +289,7 @@ fn an_unreadable_root_is_still_an_error() {
     let out = d.path().join("out");
     deny(&src, true);
     let effective = std::fs::read_dir(&src).is_err();
-    let root = discover_reporting(std::slice::from_ref(&src), &out, true);
+    let root = discover_reporting(std::slice::from_ref(&src), &out, true, None);
     deny(&src, false);
     if !effective {
         eprintln!("ACL deny had no effect for this account; skipping");

@@ -1,6 +1,6 @@
 //! Track A Task 4 (DECISIONS Note CM): with `BatchRequest::derive`, the vanilla plan replaces each PBR set's jobs
-//! with derived jobs. `cs_then` plans `cs`, builds the `DeriveSet`s by hand from that plan (Task 7 replaces this with
-//! `also::derive_sets`) and plans `vanilla` with `derive`.
+//! with derived jobs. `cs_then` plans `cs`, builds the `DeriveSet`s from that plan with `also::derive_sets` (Task 7)
+//! and plans `vanilla` with `derive`.
 use engine::analyse::analyse;
 use engine::api::*;
 use engine::codes::{Code, Severity};
@@ -17,11 +17,11 @@ use engine::discover::{InputFile, InputKind};
 use engine::events::*;
 use engine::group::TextureSet;
 use engine::overrides::{parse_set, NO_FILE_SCOPES};
-use engine::pack::{rmaos_channel, ChannelSource, RecipeKind, Slot};
+use engine::pack::{ChannelSource, RecipeKind};
 use engine::policy::*;
 use engine::presets::default_preset_for;
 use engine::session::AnalysisCache;
-use engine::shader::{assign, MemberMap, Shader, ShaderOrigin};
+use engine::shader::{MemberMap, Shader, ShaderOrigin};
 use image::{ImageBuffer, Rgba};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -75,101 +75,9 @@ fn slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
-/// The `DeriveSet`s of a `cs` plan by the slot rule (Task 4 Step 3): albedo and normal by `assign` on the set's
-/// own shader spec; the scalars from a packed `_rmaos`, else the `_rmaos` member by channel, else the defaults;
-/// the height from a packed `_p`, else the `_p` member's R.
+/// The `DeriveSet`s of a `cs` plan by the slot rule (Task 4 Step 3), as the Also export builds them.
 fn derive_sets(cs: &Plan) -> Vec<DeriveSet> {
-    let mut out = vec![];
-    for (key, pick) in &cs.shaders {
-        if !matches!(
-            pick.shader,
-            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
-        ) {
-            continue;
-        }
-        let jobs: Vec<&ResolvedJob> = cs.jobs.iter().filter(|j| &j.set_key == key).collect();
-        let mut members: Vec<PathBuf> = vec![];
-        for j in &jobs {
-            match &j.pack {
-                Some(pk) => members.extend(pk.sources.iter().map(|s| s.path.clone())),
-                None => members.push(j.input.clone()),
-            }
-        }
-        members.extend(
-            cs.skipped
-                .iter()
-                .filter(|s| s.set.as_deref() == Some(key))
-                .map(|s| s.path.clone()),
-        );
-        members.sort();
-        members.dedup();
-        let plain: Vec<&&ResolvedJob> = jobs.iter().filter(|j| j.pack.is_none()).collect();
-        let maps: Vec<MemberMap> = plain
-            .iter()
-            .map(|j| MemberMap {
-                name: j.output.file_name().unwrap().to_string_lossy().into_owned(),
-                suffix: None,
-                subtype: Some(j.profile.subtype),
-            })
-            .collect();
-        let roles = assign(pick.shader.spec_for(Target::Cs), &maps);
-        let role = |label: &str| {
-            plain
-                .iter()
-                .zip(&roles)
-                .find(|(_, r)| r.is_some_and(|r| r.label == label))
-                .map(|(j, _)| (**j).clone())
-        };
-        let albedo = role("albedo");
-        let rmaos_member = role("_rmaos");
-        let packed = |k: RecipeKind| {
-            jobs.iter()
-                .find_map(|j| j.pack.as_ref().filter(|p| p.kind == k))
-        };
-        let channel = |slot: Slot, default: f32| match (packed(RecipeKind::Rmaos), &rmaos_member) {
-            (Some(pk), _) => pk.channels[rmaos_channel(slot).unwrap() as usize].clone(),
-            (None, Some(j)) => ChannelSource::Source {
-                path: j.input.clone(),
-                role: RawMap::Rmaos,
-                invert: false,
-                channel: rmaos_channel(slot),
-            },
-            (None, None) => ChannelSource::Default { value: default },
-        };
-        let rough_default = albedo
-            .as_ref()
-            .map_or(0.5, |a| a.profile.packing.roughness_default);
-        let height = match (packed(RecipeKind::Parallax), role("_p")) {
-            (Some(pk), _) => Some(pk.channels[0].clone()),
-            (None, Some(j)) => Some(ChannelSource::Source {
-                path: j.input.clone(),
-                role: RawMap::Height,
-                invert: false,
-                channel: None,
-            }),
-            _ => None,
-        };
-        out.push(DeriveSet {
-            id: engine::sets::set_id(&cs.request.output_root, key),
-            shader: pick.shader,
-            dds: members
-                .iter()
-                .filter(|m| m.extension().is_some_and(|e| e.eq_ignore_ascii_case("dds")))
-                .cloned()
-                .collect(),
-            members,
-            albedo: albedo.map(|j| j.input.clone()),
-            normal: role("_n").map(|j| j.input.clone()),
-            rough: channel(Slot::Roughness, rough_default as f32),
-            metal: channel(Slot::Metallic, 0.0),
-            ao: channel(Slot::Ao, 1.0),
-            height,
-            curves: None,
-            cavity: None,
-            gray: GraySource::R,
-        });
-    }
-    out
+    engine::also::derive_sets(cs, &BTreeSet::new()).0
 }
 
 /// Plans `cs` on `inputs`, then `vanilla` with a derive request built from it; `tweak` edits both.

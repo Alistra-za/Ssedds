@@ -36,6 +36,7 @@ fn record(
             wanted: Some(Shader::Pbr),
         }),
         output_stamp: None,
+        copied_from: None,
     }
 }
 

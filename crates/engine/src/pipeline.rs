@@ -628,6 +628,7 @@ pub fn process_file(
         bc1_model: Some(bc1_model_id(req.bc1_model).into()),
         shader: job.shader.clone(),
         output_stamp: None,
+        copied_from: None,
     };
     stop()?;
 

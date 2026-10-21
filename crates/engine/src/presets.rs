@@ -204,9 +204,28 @@ impl ExportConfig {
         let n = &self.names;
         for (key, v) in [("pbr", &n.pbr), ("vanilla", &n.vanilla), ("cm", &n.cm)] {
             let Some(v) = v else { continue };
-            if v.is_empty() || v.contains(['/', '\\']) || v.ends_with(['.', ' ']) {
+            if v.is_empty()
+                || v.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+                || v.chars().any(char::is_control)
+                || v.ends_with(['.', ' '])
+            {
                 return Err(format!(
-                    "export.names.{key} = {v:?}: must be a folder name (not empty, no / or \\, not ending in a dot or space)"
+                    "export.names.{key} = {v:?}: must be a folder name (not empty, none of / \\ : * ? \" < > |, not ending in a dot or space)"
+                ));
+            }
+            // Windows reserves these device names, with any extension (`nul.txt`).
+            let stem = v.split('.').next().unwrap_or_default().trim_end();
+            let reserved = ["CON", "PRN", "AUX", "NUL"]
+                .iter()
+                .any(|r| stem.eq_ignore_ascii_case(r))
+                || (stem.len() == 4
+                    && stem.get(..3).is_some_and(|p| {
+                        p.eq_ignore_ascii_case("COM") || p.eq_ignore_ascii_case("LPT")
+                    })
+                    && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+            if reserved {
+                return Err(format!(
+                    "export.names.{key} = {v:?}: a name Windows reserves for a device"
                 ));
             }
         }

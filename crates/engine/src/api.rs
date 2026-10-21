@@ -130,6 +130,9 @@ pub struct BatchRequest {
     /// Track A (DECISIONS Note CM): replace each PBR set's jobs with derived vanilla or complex-material jobs. `None`
     /// (the default) plans as before (C6).
     pub derive: Option<crate::derive::DeriveRequest>,
+    /// Track A (Note CM): the folder discovery skips in place of `output_root` (the Also export location, which
+    /// holds the PBR, Vanilla and CM folders). `None` skips `output_root` as before.
+    pub skip_root: Option<PathBuf>,
 }
 
 /// What a run does with a texture whose mip 0 adds little detail over mip 1 (`CHK-LOW-DETAIL`).
@@ -191,6 +194,7 @@ impl BatchRequest {
             plan_progress: None,
             low_detail: LowDetailMode::Off,
             derive: None,
+            skip_root: None,
         }
     }
 }
@@ -728,7 +732,7 @@ fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
 /// failed output is re-encoded and reported again rather than counted as up to date
 /// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
 /// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
-fn is_up_to_date(
+pub(crate) fn is_up_to_date(
     e: &ManifestEntry,
     job: &ResolvedJob,
     encoders: &EncoderVersions,
@@ -977,9 +981,13 @@ impl Engine {
                 )));
             }
         }
-        let (mut files, unreadable) =
-            discover_reporting(&req.inputs, &req.output_root, req.recursive)
-                .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
+        let (mut files, unreadable) = discover_reporting(
+            &req.inputs,
+            &req.output_root,
+            req.recursive,
+            req.skip_root.as_deref(),
+        )
+        .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
         // F3b: `[inputs]` aliases rename files before anything reads their names.
         let read_as_warnings = match (&project_config, project_root(&req)) {
             (Some(c), Some(root)) if !c.inputs.is_empty() => {
@@ -3065,6 +3073,7 @@ mod tests {
             preset: PresetRef::for_preset(&reg, "cs-quality", None),
             bc1_model: Some("ideal".into()),
             output_stamp: SourceStamp::of(&job.output),
+            copied_from: None,
             raw: serde_json::json!({ "validation": { "passed": true } }),
         };
         let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| {

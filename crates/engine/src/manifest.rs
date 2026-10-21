@@ -232,6 +232,10 @@ pub struct ManifestRecord {
     /// Size and mtime of the output as written (audit 5, DECISIONS Note Y1); `None` in records written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_stamp: Option<crate::policy::SourceStamp>,
+    /// Track A (Note CM): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was
+    /// copied from, so the copy is redone when the PBR file changes. Absent on every encoded output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_from: Option<crate::policy::SourceStamp>,
 }
 
 /// The stable id of a BC1 decoder model, as `--bc1-decoder` spells it (spec §8).
@@ -261,6 +265,8 @@ pub struct ManifestEntry {
     pub preset: Option<PresetRef>,
     pub bc1_model: Option<String>,
     pub output_stamp: Option<crate::policy::SourceStamp>,
+    /// `ManifestRecord::copied_from`.
+    pub copied_from: Option<crate::policy::SourceStamp>,
     pub raw: serde_json::Value,
 }
 
@@ -296,6 +302,7 @@ impl ManifestEntry {
             preset: lenient(&raw, "preset"),
             bc1_model: lenient(&raw, "bc1_model"),
             output_stamp: lenient(&raw, "output_stamp"),
+            copied_from: lenient(&raw, "copied_from"),
             raw,
         })
     }

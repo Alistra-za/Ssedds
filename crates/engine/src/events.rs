@@ -195,6 +195,27 @@ impl EventSink for NullSink {
     fn emit(&self, _: &EngineEvent) {}
 }
 
+/// Track A (Note CM): forwards every event with its job key prefixed (`"<Vanilla folder>/"`), so the three folders'
+/// rows of one Also export never share a key. Batch-level events (no job) pass unchanged.
+pub struct PrefixSink {
+    prefix: String,
+    inner: Arc<dyn EventSink>,
+}
+
+impl PrefixSink {
+    pub fn new(prefix: String, inner: Arc<dyn EventSink>) -> Self {
+        PrefixSink { prefix, inner }
+    }
+}
+
+impl EventSink for PrefixSink {
+    fn emit(&self, ev: &EngineEvent) {
+        let mut ev = ev.clone();
+        ev.job = ev.job.map(|k| format!("{}{k}", self.prefix));
+        self.inner.emit(&ev);
+    }
+}
+
 pub struct JsonLinesSink<W: Write + Send>(Mutex<W>);
 
 impl<W: Write + Send> JsonLinesSink<W> {
