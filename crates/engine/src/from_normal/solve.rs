@@ -146,9 +146,9 @@ pub(crate) fn fit(s: &Slopes, h: &[f64]) -> (f32, f32) {
                 .to_degrees()
         })
         .collect();
-    ang.sort_by(f64::total_cmp);
     let mean = ang.iter().sum::<f64>() / ang.len() as f64;
-    let p95 = ang[((ang.len() - 1) as f64 * 0.95).round() as usize];
+    let i = ((ang.len() - 1) as f64 * 0.95).round() as usize;
+    let p95 = *ang.select_nth_unstable_by(i, f64::total_cmp).1;
     (mean as f32, p95 as f32)
 }
 

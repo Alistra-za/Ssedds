@@ -256,11 +256,13 @@ fn flipped(s: &Slopes) -> Slopes {
     }
 }
 
-/// The sorted value at index `round(q·(n − 1))` (as `fit`'s p95); 0 when empty.
+/// The sorted value at index `round(q·(n − 1))` (as `fit`'s p95); 0 when empty. Selection, not a full sort.
 fn percentile(mut v: Vec<f64>, q: f64) -> f64 {
-    v.sort_by(f64::total_cmp);
+    if v.is_empty() {
+        return 0.0;
+    }
     let i = (v.len().saturating_sub(1) as f64 * q).round() as usize;
-    v.get(i).copied().unwrap_or(0.0)
+    *v.select_nth_unstable_by(i, f64::total_cmp).1
 }
 
 /// Maps a zero-mean height to stored values (spec "Height range"); returns the image and the clamped share.
@@ -306,10 +308,36 @@ fn map_height(
     ))
 }
 
-/// `g` resampled to `size` with `rnm::blend::resample` (area down, bilinear up).
-fn resample_gray(g: Gray, size: (u32, u32)) -> Gray {
+/// `g` resampled to `size`: a wrapped tile upsamples with a periodic bilinear (no seam line at the tile edge, review
+/// M1); otherwise `rnm::blend::resample` (area down, bilinear up with clamped edges, exact for the mirror solve).
+fn resample_gray(g: Gray, size: (u32, u32), wrap: bool) -> Gray {
     if (g.width, g.height) == size {
         return g;
+    }
+    if wrap && size.0 >= g.width && size.1 >= g.height {
+        let axis = |o: u32, n: u32, m: u32| {
+            let f = (f64::from(o) + 0.5) * f64::from(n) / f64::from(m) - 0.5;
+            let i = f.floor();
+            let i0 = (i as i64).rem_euclid(i64::from(n)) as usize;
+            (i0, (i0 + 1) % n as usize, (f - i) as f32)
+        };
+        let xs: Vec<_> = (0..size.0).map(|x| axis(x, g.width, size.0)).collect();
+        let w = g.width as usize;
+        let mut px = Vec::with_capacity(size.0 as usize * size.1 as usize);
+        for y in 0..size.1 {
+            let (y0, y1, ty) = axis(y, g.height, size.1);
+            for &(x0, x1, tx) in &xs {
+                let at = |xx: usize, yy: usize| g.px[yy * w + xx];
+                let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+                let bot = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+                px.push(top + (bot - top) * ty);
+            }
+        }
+        return Gray {
+            width: size.0,
+            height: size.1,
+            px,
+        };
     }
     let img = Rgba32F {
         width: g.width,
@@ -353,6 +381,10 @@ pub fn generate(
     if !w.is_power_of_two() || !h.is_power_of_two() {
         return Err(GenerateError::NotPowerOfTwo(w, h));
     }
+    if opts.size > w.max(h) {
+        // Spec: never upsample beyond the normal (Note CO).
+        return Err(InvalidOpts("the size is above the normal map's own size"));
+    }
     let step = |pm: u32| {
         progress.store(pm, Ordering::Relaxed);
         if cancel.load(Ordering::Relaxed) {
@@ -363,9 +395,13 @@ pub fn generate(
     };
     step(0)?;
     let longer = w.max(h);
+    // shortcut: cancel is read between stages and rows, not inside one FFT solve (up to ~0.3 s at 1024); pass `cancel`
+    // into `solve` if a longer solve ever makes that wait noticeable.
     let full = slopes(stored, GreenConvention::Directx);
     step(100)?;
     // Detection runs at fixed sizes, never the requested one, so the 512 preview and Generate agree (07 B2).
+    // `det` keeps the tiling field when it was resampled, for the solve to reuse at the same size.
+    let mut det = None;
     let (wrap, seam_ratio, ambiguous) = match opts.tiling {
         Tiling::Wrap => (true, 0.0, false),
         Tiling::Mirror => (false, 0.0, false),
@@ -375,7 +411,8 @@ pub fn generate(
                 // Too few seam texels to judge: wrap, flagged ambiguous (Note CO).
                 (true, 0.0, true)
             } else {
-                let (wrap, ratio, ambiguous) = detect_tiling(&resize(&full, d));
+                det = (d != (w, h)).then(|| resize(&full, d));
+                let (wrap, ratio, ambiguous) = detect_tiling(det.as_ref().unwrap_or(&full));
                 (wrap, ratio as f32, ambiguous)
             }
         }
@@ -387,7 +424,9 @@ pub fn generate(
         None => {
             let dx = resize(&full, dims((w, h), longer.min(GREEN_SIZE)));
             let err = |s: &Slopes| fit(s, &solve(s, wrap, GREEN_RELIEF)).0;
-            let (e_dx, e_gl) = (err(&dx), err(&flipped(&dx)));
+            let e_dx = err(&dx);
+            step(350)?;
+            let e_gl = err(&flipped(&dx));
             let (lo, hi) = (e_dx.min(e_gl), e_dx.max(e_gl));
             let margin = if hi == 0.0 { 1.0 } else { hi / lo };
             if margin >= GREEN_MARGIN {
@@ -405,7 +444,10 @@ pub fn generate(
     step(450)?;
     let long = opts.size.min(HEIGHT_MAX_RECIPE);
     let solve_size = dims((w, h), long.min(SOLVE_MAX));
-    let mut s = resize(&full, solve_size);
+    let mut s = match det {
+        Some(d) if (d.width, d.height) == solve_size => d,
+        _ => resize(&full, solve_size),
+    };
     if green == GreenConvention::Opengl {
         s = flipped(&s);
     }
@@ -416,7 +458,7 @@ pub fn generate(
     let (height, clamped_share) = match &opts.height {
         Some(o) => {
             let (g, share) = map_height(&hs, solve_size, o, cancel)?;
-            (Some(resample_gray(g, dims((w, h), long))), share)
+            (Some(resample_gray(g, dims((w, h), long), wrap)), share)
         }
         None => (None, 0.0),
     };
@@ -443,19 +485,29 @@ pub fn generate(
     })
 }
 
-/// A 16-bit grey PNG: codes `round(clamp(v, 0, 1)·65535)`.
+/// A 16-bit grey PNG: codes `round(clamp(v, 0, 1)·65535)`. Empty for a malformed `Gray` (a 0 side, or not one
+/// value per texel), never a panic.
 pub fn png16(g: &Gray) -> Vec<u8> {
+    if g.width == 0
+        || g.height == 0
+        || g.px.len() as u64 != u64::from(g.width) * u64::from(g.height)
+    {
+        return Vec::new();
+    }
     let codes: Vec<u16> =
         g.px.iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16)
             .collect();
-    let img =
+    let Some(img) =
         ::image::ImageBuffer::<::image::Luma<u16>, Vec<u16>>::from_raw(g.width, g.height, codes)
-            .expect("one code per texel");
+    else {
+        return Vec::new();
+    };
     let mut out = Cursor::new(Vec::new());
-    img.write_to(&mut out, ::image::ImageFormat::Png)
-        .expect("a PNG encodes into memory");
-    out.into_inner()
+    match img.write_to(&mut out, ::image::ImageFormat::Png) {
+        Ok(()) => out.into_inner(),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -584,6 +636,33 @@ mod tests {
         let span = |g: &Gray| pct(&g.px, 0.995) - pct(&g.px, 0.005);
         let (sw, sh) = (span(&white), span(&half));
         assert!((sw / sh - 1.0).abs() < 0.02, "White span {sw} vs Half {sh}");
+        // Both formulas per texel at S = 1 and S = 0.5: pins Half's sign and the Strength factor (review I1).
+        for strength in [1.0f32, 0.5] {
+            let k = f64::from(strength) * 0.45 / r;
+            for neutral in [Neutral::Half, Neutral::White] {
+                o.height = Some(HeightOpts { strength, neutral });
+                let g = height(&n, &o);
+                for (&hv, &out) in h.iter().zip(&g.px) {
+                    let want = match neutral {
+                        Neutral::Half => {
+                            (0.5 + k * hv).clamp(f64::from(HALF_LO), f64::from(HALF_HI))
+                        }
+                        Neutral::White => (1.0 - k * (t - hv)).clamp(0.0, 1.0),
+                    };
+                    assert!(
+                        (f64::from(out) - want).abs() < 1e-5,
+                        "S {strength} {neutral:?} h {hv}: {out} vs {want}"
+                    );
+                }
+            }
+        }
+        o.height = Some(HeightOpts {
+            strength: 0.5,
+            neutral: Neutral::Half,
+        });
+        let dev: Vec<f32> = height(&n, &o).px.iter().map(|v| (v - 0.5).abs()).collect();
+        let p = pct(&dev, 0.995);
+        assert!((p - 0.225).abs() < 0.005, "S 0.5: p99.5 |out - 0.5| {p}");
     }
 
     #[test]
@@ -617,10 +696,12 @@ mod tests {
         let n = torus_n(2048, 2048);
         let g = height(&n, &opts(2048, Neutral::Half));
         assert_eq!((g.width, g.height), (2048, 2048));
-        let g = height(&n, &opts(4096, Neutral::Half));
+        // A 4096 x 1 strip keeps the cap check cheap.
+        let strip = constant(4096, 1, [0.5, 0.5, 1.0, 1.0]);
+        let g = height(&strip, &opts(4096, Neutral::Half));
         assert_eq!(
             (g.width, g.height),
-            (2048, 2048),
+            (2048, 1),
             "capped at HEIGHT_MAX_RECIPE"
         );
     }
@@ -748,9 +829,62 @@ mod tests {
     }
 
     #[test]
+    fn a_size_above_the_normal_is_refused() {
+        // Spec: never upsample beyond the normal (review M2).
+        assert!(invalid(&torus_n(256, 256), &opts(512, Neutral::Half)));
+        assert!(invalid(&torus_n(256, 128), &opts(512, Neutral::Half)));
+        assert!(run(&torus_n(256, 128), &opts(256, Neutral::Half)).is_ok());
+    }
+
+    #[test]
+    fn a_wrapped_upsample_has_no_seam() {
+        // A 1024 solve upsampled to 2048 (review M1). Output texels 2k+1 and 2k+2 straddle source k and k+1, so their
+        // step is half the source step; across the tile edge (k = 1023, next = 0) it must be the same, not a full step.
+        let n = 1024;
+        let hs = solve(&slopes(&torus_n(n, n), Directx), true, 0.0);
+        let row: Vec<f32> = hs[..n].iter().map(|&v| v as f32).collect();
+        let col: Vec<f32> = (0..n).map(|y| hs[y * n + 7] as f32).collect();
+        for (line, size) in [(row, (2048, 1)), (col, (1, 2048))] {
+            let (w, h) = if size.0 == 1 {
+                (1, n as u32)
+            } else {
+                (n as u32, 1)
+            };
+            let up = resample_gray(
+                Gray {
+                    width: w,
+                    height: h,
+                    px: line.clone(),
+                },
+                size,
+                true,
+            )
+            .px;
+            for k in [0, 300, 1022, 1023] {
+                let (a, b) = (2 * k + 1, (2 * k + 2) % 2048);
+                let want = 0.5 * (f64::from(line[(k + 1) % n]) - f64::from(line[k]));
+                let got = f64::from(up[b]) - f64::from(up[a]);
+                assert!((got - want).abs() < 1e-6, "{size:?} k {k}: {got} vs {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn png16_of_a_malformed_gray_is_empty_not_a_panic() {
+        for (w, h, n) in [(0, 0, 0), (0, 4, 0), (2, 2, 3), (2, 2, 5)] {
+            let g = Gray {
+                width: w,
+                height: h,
+                px: vec![0.5; n],
+            };
+            assert!(png16(&g).is_empty(), "{w}x{h} with {n} px");
+        }
+    }
+
+    #[test]
     fn a_detection_field_16_px_or_narrower_is_wrap_and_ambiguous() {
         for (w, h) in [(16, 16), (64, 8), (2048, 32)] {
-            let r = report(&torus_n(w, h), &opts(64, Neutral::Half));
+            let r = report(&torus_n(w, h), &opts(w.max(h) as u32, Neutral::Half));
             assert!(
                 r.wrap && r.ambiguous && r.seam_ratio == 0.0,
                 "{w}x{h}: {r:?}"

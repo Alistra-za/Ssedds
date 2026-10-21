@@ -55,6 +55,11 @@ fn owner_height_timing_and_fit() {
     for f in &files {
         let (img, _) = engine::load::load_image(f).expect("loads");
         let t0 = Instant::now();
+        // Never above the normal's own size (Note CO).
+        let opts = Opts {
+            size: opts.size.min(img.width.max(img.height)),
+            ..opts.clone()
+        };
         let r = generate(&img, &opts, &AtomicU32::new(0), &AtomicBool::new(false));
         let el = t0.elapsed().as_secs_f64() * 1000.0;
         let Ok(g) = r else {
@@ -67,6 +72,10 @@ fn owner_height_timing_and_fit() {
             );
             continue;
         };
+        let height_finite = g
+            .height
+            .as_ref()
+            .is_some_and(|h| h.px.iter().all(|v| v.is_finite()));
         let r = g.report;
         println!(
             "{}: {}x{} {:.0} ms fit {:.2}/{:.2} deg tilt {:.2} deg {} ratio {:.2}{} green {:?} sure {} margin {:.2}",
@@ -85,9 +94,17 @@ fn owner_height_timing_and_fit() {
             r.green_margin
         );
         // P22: a NaN path fails, not just prints.
-        for v in [r.fit_mean_deg, r.fit_p95_deg, r.tilt_deg, r.green_margin] {
+        // seam_ratio is not asserted: it is legitimately infinite for a flat interior (`detect_tiling`).
+        for v in [
+            r.fit_mean_deg,
+            r.fit_p95_deg,
+            r.tilt_deg,
+            r.green_margin,
+            r.clamped_share,
+        ] {
             assert!(v.is_finite(), "{}: non-finite value in {r:?}", f.display());
         }
+        assert!(height_finite, "{}: a non-finite height texel", f.display());
         ms.push(el);
         unsure += usize::from(!r.green_sure);
         done += 1;
