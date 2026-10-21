@@ -2189,6 +2189,130 @@ fn export_writes_the_patched_nif_and_records_its_hash() {
     assert!(!e.doc.pending());
 }
 
+/// Adds a float controller on the first lit shape's shader (`remove`: and removes it again, leaving three orphans).
+fn add_then_remove_ctrl(m: &mut MeshesModel, remove: bool) {
+    const LSCF: &str = "BSLightingShaderPropertyFloatController";
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let key = |time, value| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    let add = Op::AddController {
+        at: nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap(),
+        class: LSCF.into(),
+        var: Some(11),
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![key(0.0, 1.0), key(1.0, 2.0)],
+        }),
+        flags: 0x48,
+        freq: 1.0,
+        start: 0.0,
+        stop: 1.0,
+    };
+    m.edit_push(vec![add], None);
+    if remove {
+        let e = m.edit.as_ref().unwrap();
+        let (shape, shader) = lit_shape(e);
+        let nth = e.model.lighting[&shader]
+            .prop
+            .ctrls
+            .iter()
+            .filter(|c| e.model.ctrls[c].class == LSCF && e.model.ctrls[c].var == Some(11))
+            .count() as u32
+            - 1;
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: LSCF.into(),
+            var: Some(11),
+            nth,
+        };
+        let at = nif::edit::anchor_role(&e.model, Some(shape), role).unwrap();
+        m.edit_push(vec![Op::RemoveController { at }], None);
+    }
+}
+
+#[test]
+fn export_drops_orphan_blocks_and_records_the_written_hash() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    add_then_remove_ctrl(&mut m, true);
+    assert_eq!(m.edit.as_ref().unwrap().blocked, None);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let e = m.edit.as_ref().unwrap();
+    let n = nif::header::Header::parse(&e.source).unwrap().sizes.len();
+    let blocks = |b: &[u8]| nif::header::Header::parse(b).unwrap().sizes.len();
+    let written = std::fs::read(exported(&d)).unwrap();
+    assert!(blocks(&e.patched) >= n + 3, "the session keeps the orphans");
+    assert!(
+        blocks(&written) <= n + 1,
+        "at most the root's new BSXFlags stays"
+    );
+    assert_eq!(
+        written,
+        nif::edit::compact(&e.patched, n as u32).unwrap(),
+        "the export is the compacted patch"
+    );
+    assert_eq!(
+        load(&e.doc_path).unwrap().unwrap().export.sha256.as_deref(),
+        Some(sha256_hex(&written).as_str())
+    );
+    assert_eq!(e.cleanup_note, None);
+    // the recorded hash is the file's: the next export replaces it without asking (and clears an old cleanup line)
+    add_then_remove_ctrl(&mut m, false);
+    m.edit.as_mut().unwrap().cleanup_note = Some("Exported without cleanup: x.".into());
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert_eq!(m.edit.as_ref().unwrap().cleanup_note, None);
+    let e = m.edit.as_ref().unwrap();
+    let written = std::fs::read(exported(&d)).unwrap();
+    assert_eq!(written, nif::edit::compact(&e.patched, n as u32).unwrap());
+    assert!(blocks(&written) < blocks(&e.patched));
+}
+
+/// Note CQ5: when the cleanup cannot read the file, the export writes the patch as it is and says why.
+#[test]
+fn export_without_cleanup_writes_the_patch_and_says_why() {
+    // scenes::animated(Some(1), 0) plus a source NiFloatData (4) nothing names, whose key count runs past it
+    let mut b = builder::Nif::new(100);
+    let (r, x, s) = (b.string("Root"), b.string("BSX"), b.string("S"));
+    let net = builder::W::default().i32(r).u32(1).i32(1).i32(-1);
+    b.block("NiNode", scenes::avobj(net).u32(1).i32(2).u32(0).0);
+    b.block("BSXFlags", builder::W::default().i32(x).u32(1).0);
+    b.block("BSTriShape", scenes::bstri_named(s, 3, -1));
+    b.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[], -1, &[]),
+    );
+    b.block("NiFloatData", builder::W::default().u32(u32::MAX).u32(1).0);
+    let src = b.bytes();
+    let d = files_with(false, "+PGP\n+sdc NIF Edits\n+A\n");
+    std::fs::create_dir_all(d.path().join("mods").join(EDIT_MOD)).unwrap();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&src));
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    add_then_remove_ctrl(&mut m, true);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let e = m.edit.as_ref().unwrap();
+    let why = nif::edit::compact(&e.patched, 5).unwrap_err();
+    assert_eq!(std::fs::read(exported(&d)).unwrap(), *e.patched);
+    assert_eq!(
+        load(&e.doc_path).unwrap().unwrap().export.sha256.as_deref(),
+        Some(sha256_hex(&e.patched).as_str())
+    );
+    let line = format!("Exported without cleanup: {why}.");
+    assert_eq!(e.cleanup_note.as_deref(), Some(line.as_str()));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(&line);
+}
+
 #[test]
 fn hand_edited_export_asks_before_overwrite() {
     let (d, mut m) = export_session();

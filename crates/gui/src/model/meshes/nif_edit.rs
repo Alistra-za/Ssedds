@@ -96,6 +96,8 @@ pub struct NifEdit {
     pub guard: Option<GuardAsk>,
     /// The last export's result line, and whether it is an error.
     pub export_note: Option<(String, bool)>,
+    /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
+    pub cleanup_note: Option<String>,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -326,6 +328,7 @@ impl NifEdit {
             notice: None,
             guard: None,
             export_note: None,
+            cleanup_note: None,
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -438,13 +441,19 @@ impl NifEdit {
         if let Some(why) = self.blocked.clone() {
             return ExportOutcome::Blocked(why);
         }
+        // Note CQ: the file drops the blocks our edits appended that nothing reaches; on any doubt it is the patch
+        let n = nif::header::Header::parse(&self.source).map_or(0, |h| h.sizes.len() as u32);
+        let (out, skipped) = match nif::edit::compact(&self.patched, n) {
+            Ok(out) => (out, None),
+            Err(why) => (self.patched.to_vec(), Some(why)),
+        };
         let path = self.export_path.clone();
         let cannot_read = |e: std::io::Error| {
             ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
         };
         let last = self.doc.export.sha256.clone();
         let ours = |b: &[u8]| last.as_deref() == Some(edit_doc::sha256_hex(b).as_str());
-        match engine::dds::may_replace(&path, &self.patched, ours) {
+        match engine::dds::may_replace(&path, &out, ours) {
             Ok(()) => {}
             Err(Kept::Unreadable(e)) => return cannot_read(e),
             Err(Kept::Foreign) => {
@@ -456,10 +465,9 @@ impl NifEdit {
                 match choice {
                     Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
                     _ => {
-                        let diff =
-                            nif::write::block_diff(&on_disk, &self.patched).unwrap_or_else(|e| {
-                                vec![format!("The file on disk does not read as a NIF: {e}")]
-                            });
+                        let diff = nif::write::block_diff(&on_disk, &out).unwrap_or_else(|e| {
+                            vec![format!("The file on disk does not read as a NIF: {e}")]
+                        });
                         self.guard = Some(GuardAsk {
                             diff: diff.clone(),
                             show_diff: false,
@@ -471,18 +479,19 @@ impl NifEdit {
                 }
             }
         }
-        if let Err(e) = engine::dds::write_atomic(&path, &self.patched) {
+        if let Err(e) = engine::dds::write_atomic(&path, &out) {
             return ExportOutcome::Blocked(format!("Cannot write {}: {e}", path.display()));
         }
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         self.doc.export = ExportRec {
-            sha256: Some(edit_doc::sha256_hex(&self.patched)),
+            sha256: Some(edit_doc::sha256_hex(&out)),
             at: Some(at),
             ops_hash: Some(self.doc.ops_hash()),
         };
         self.save();
+        self.cleanup_note = skipped.map(|why| format!("Exported without cleanup: {why}."));
         ExportOutcome::Written {
             rerun_pgpatcher: self.copies.iter().any(|c| c.derived),
         }
@@ -503,6 +512,7 @@ impl NifEdit {
         };
         self.apply_err = None;
         self.export_note = None; // the last export's line no longer describes these edits
+        self.cleanup_note = None;
         for (d, o) in self.doc.ops.iter_mut().zip(&a.outcomes) {
             if let Outcome::ReAnchored { block } = o {
                 anchor_mut(&mut d.op).block = *block;
