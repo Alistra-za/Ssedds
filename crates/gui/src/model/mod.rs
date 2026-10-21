@@ -1,4 +1,5 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
+pub mod also;
 pub mod auto_flags;
 pub mod bottom;
 pub mod bulk;
@@ -475,6 +476,12 @@ pub struct AppModel {
     pub half_size_unwritable: Option<String>,
     /// The running (or last) export pass is a held export's second pass (Note CL24).
     half_pass: bool,
+    /// Note CM: the running (or last) export is an Also export (`run_also`).
+    also_pass: bool,
+    /// Note CM: the last Also export's phase error (CM56), so its end is logged as an error, not a success.
+    also_error: Option<String>,
+    /// Note CM: the three folders the last Also export wrote (`also_file`).
+    also_written: Option<[PathBuf; 3]>,
     /// The Review asks (texts) when the last fresh export started: a held pass stops on any new one (M1).
     export_asked: Vec<String>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
@@ -632,6 +639,9 @@ impl AppModel {
             pending_json_answer: None,
             half_size_unwritable: None,
             half_pass: false,
+            also_pass: false,
+            also_error: None,
+            also_written: None,
             export_asked: Vec::new(),
             ignored_by_plan: false,
             close_ready: false,
@@ -767,6 +777,7 @@ impl AppModel {
         self.invalidate_views();
         self.sets.clear();
         self.sets_root = None;
+        self.also_written = None;
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -827,7 +838,11 @@ impl AppModel {
     pub fn request(&self) -> Option<BatchRequest> {
         let root = self.root.clone()?;
         let project = self.project.as_ref()?;
-        let mut req = BatchRequest::new(vec![root], self.export_root(), Target::Cs);
+        let mut req = BatchRequest::new(vec![root], self.output_root(), Target::Cs);
+        // TA10, P15: while a tick is on the plan is the PBR phase's (its folder, the whole location skipped).
+        if self.also_on() {
+            req.skip_root = Some(self.also_location());
+        }
         req.target = None;
         req.recursive = true;
         req.accept = self.accept;
@@ -866,15 +881,7 @@ impl AppModel {
     /// No database means no evidence (applied at once): the suffix rules decide and the alpha is asked. A read
     /// error keeps the previous values (a Messages warning). `after_plan`: the result continues `apply_plan`'s tail.
     pub fn refresh_mesh_votes(&mut self, after_plan: bool) {
-        let keys: std::collections::BTreeSet<String> = self
-            .items
-            .iter()
-            .filter_map(|i| i.job.as_ref())
-            .filter(|j| j.pack.is_none())
-            .filter_map(|j| {
-                engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
-            })
-            .collect();
+        let keys = self.mesh_vote_keys();
         // A scan-finished refresh must not drop the continuation of a pending post-plan read.
         if !after_plan {
             // A finished scan (or another database): the "Used by meshes" list reads again.
@@ -915,6 +922,26 @@ impl AppModel {
                 .unwrap_or_else(|p| Err(format!("panic: {}", crate::worker::panic_text(&*p))));
             let _ = tx.send(WorkerMsg::MeshVotes { generation, result });
         });
+    }
+
+    /// The mesh keys `refresh_mesh_votes` reads: each colour member's (by `shader::colour_mesh_key`); while a tick
+    /// is on also its vanilla key (`derive::vanilla_game_path`, TA13), the one the env-map gate looks up.
+    pub fn mesh_vote_keys(&self) -> std::collections::BTreeSet<String> {
+        let also = self.also_on();
+        self.items
+            .iter()
+            .filter_map(|i| i.job.as_ref())
+            .filter(|j| j.pack.is_none())
+            .flat_map(|j| {
+                let key = |g: &str| {
+                    engine::shader::colour_mesh_key(g, &j.output, Some(j.profile.subtype))
+                };
+                let vanilla = also
+                    .then(|| key(&engine::derive::vanilla_game_path(&j.game_path)))
+                    .flatten();
+                key(&j.game_path).into_iter().chain(vanilla)
+            })
+            .collect()
     }
 
     /// A newer plan or another folder makes the pending scan-database read stale: its result is dropped.
@@ -1232,6 +1259,7 @@ impl AppModel {
         match msg {
             WorkerMsg::ReportSaved { path, result } => self.report_saved(&path, result),
             WorkerMsg::Event(e) => self.export.on_event(e),
+            WorkerMsg::AlsoFinished(s) => self.also_finished(*s),
             WorkerMsg::ExportDone(result) => self.export_ended(result),
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
@@ -1259,7 +1287,19 @@ impl AppModel {
     /// The export ended: its result, or a worker panic as an error (audit GM-4: one path for both). The pace clock
     /// stops, the JSON/CS/CM files are written or noted, and an error is always logged.
     fn export_ended(&mut self, result: Result<engine::api::BatchSummary, String>) {
-        self.export.running = None;
+        let cancelled = self.export.running.take().is_some_and(|c| c.is_cancelled());
+        if self.also_pass {
+            // Note CM: every row ends, whatever ended the export (a refusal or plan error leaves planned rows with no
+            // `BatchDone`; a cancelled copy has no event).
+            let why = match &result {
+                Err(e) => Some(e.clone()),
+                Ok(s) => (!cancelled && s.cancelled.is_empty())
+                    .then(|| self.also_error.clone())
+                    .flatten(),
+            };
+            let cancelled = cancelled || result.as_ref().is_ok_and(|s| !s.cancelled.is_empty());
+            self.export.end_unfinished(cancelled, why.as_deref());
+        }
         if let Some(p) = self.export.pace.as_mut() {
             p.stop(Instant::now());
         }
@@ -1269,7 +1309,10 @@ impl AppModel {
         let mut completed = false;
         match result {
             Ok(summary) => {
-                let sev = if summary.failed > 0 {
+                let sev = if self.also_error.is_some() {
+                    // Note CM: a Vanilla or CM phase failed; the PBR folder is complete, its JSON is still written.
+                    messages::Severity::Error
+                } else if summary.failed > 0 {
                     messages::Severity::Warning
                 } else {
                     messages::Severity::Info
@@ -1486,7 +1529,11 @@ impl AppModel {
         if self.plan_unsettled() {
             return true;
         }
-        if let Some(problem) = export::export_folder_problem(&root, &self.export_root()) {
+        // P14: with a tick on, Review's gate checks the location and the three folders instead (TA19).
+        if let Some(problem) = (!self.also_on())
+            .then(|| export::export_folder_problem(&root, &self.export_root()))
+            .flatten()
+        {
             self.dialog = Some(Dialog::Error(problem));
             return true;
         }
@@ -1507,7 +1554,8 @@ impl AppModel {
         }
         let asks = !pbr_export::export_asks(self).is_empty();
         // R6: an edited PGPatcher JSON is asked about in Review, before the export (C4).
-        if asks || self.undecided() > 0 || self.pgp_json_edited() {
+        // Note CM (C1, owner answer 5): a tick opens Review; its Export is the only way to an Also export.
+        if asks || self.undecided() > 0 || self.pgp_json_edited() || self.also_on() {
             self.open_review();
             return;
         }
@@ -1665,6 +1713,11 @@ impl AppModel {
                 if self.export_stopped() {
                     return;
                 }
+                // P9: `sdc.toml`'s writability again, once per Export click.
+                let unwritable = self.also_toml_unwritable();
+                if let Some(r) = self.review.as_mut() {
+                    r.toml_unwritable = unwritable;
+                }
                 match self.review_gate() {
                     Ok(_) => {
                         self.start_export_pass(true, true);
@@ -1812,7 +1865,16 @@ impl AppModel {
             // A second pass never holds again.
             _ => engine::api::LowDetailMode::Warn,
         };
+        // P10 (TA24): an Also export holds nothing (a held texture would be missing from all three folders); a held
+        // export's second pass is never an Also export.
+        let also = fresh && self.also_on();
+        if also && req.low_detail == engine::api::LowDetailMode::Hold {
+            req.low_detail = engine::api::LowDetailMode::Warn;
+        }
         if fresh {
+            self.also_pass = also;
+            self.also_error = None;
+            self.also_written = None;
             self.pending_json = pbr_export::prepare(self);
             self.pending_cs = cs_pbr_export::prepare(self);
             self.pending_cm = cm_json::prepare(self);
@@ -1845,7 +1907,15 @@ impl AppModel {
         self.half_pass = !fresh;
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
-        spawn_export(self.tx.clone(), session, req, cancel);
+        if also {
+            // P8: one `drawer_epoch` for the three phases (bumped above); progress is the rows, counted model-side.
+            // shortcut: the first phase's `BatchDone` stops the pace clock, so files/s and the ETA cover the PBR
+            // phase only; upgrade to an ETA across phases if users ask.
+            let spec = self.also_spec();
+            crate::worker::spawn_export_also(self.tx.clone(), session, req, spec, cancel);
+        } else {
+            spawn_export(self.tx.clone(), session, req, cancel);
+        }
         true
     }
 
@@ -1871,14 +1941,14 @@ impl AppModel {
             return;
         }
         self.copy_files(&p);
-        let root = self.export_root();
+        let root = p.root.clone();
         let key = history::record_key(&p.path);
         let shas = self
             .sets_doc
             .as_ref()
             .map(|d| history::records_at(&d.pgp_json_shas(), &root))
             .unwrap_or_default();
-        let last = self.pgp_record(&p.path);
+        let last = self.pgp_record(&root, &p.path);
         let named: Vec<String> = vec![p
             .path
             .strip_prefix(&root)
@@ -1898,7 +1968,7 @@ impl AppModel {
             last.as_deref(),
             &mut self.export.notes,
         ) {
-            pbr_export::Finish::Written(sha) => self.record_json_sha(&key, &sha),
+            pbr_export::Finish::Written(sha) => self.record_json_sha(&root, &key, &sha),
             // C4: answered in Review for this very file (same path, same bytes); a file changed since asks again.
             pbr_export::Finish::Overwrite(text)
                 if answer.as_ref().is_some_and(|a| {
@@ -1908,7 +1978,7 @@ impl AppModel {
                 if answer.is_some_and(|a| a.overwrite) {
                     if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes)
                     {
-                        self.record_json_sha(&key, &sha);
+                        self.record_json_sha(&root, &key, &sha);
                     }
                 } else {
                     self.export.notes.push(format!(
@@ -1972,9 +2042,9 @@ impl AppModel {
 
     /// The hash recorded for Tessalith's last PGPatcher JSON at `path` (#43: per name; a project from before
     /// per-name records has only the legacy one).
-    fn pgp_record(&self, path: &std::path::Path) -> Option<String> {
+    fn pgp_record(&self, root: &std::path::Path, path: &std::path::Path) -> Option<String> {
         let d = self.sets_doc.as_ref()?;
-        let shas = history::records_at(&d.pgp_json_shas(), &self.export_root());
+        let shas = history::records_at(&d.pgp_json_shas(), root);
         if shas.is_empty() {
             d.last_json_sha256()
         } else {
@@ -1985,8 +2055,8 @@ impl AppModel {
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
     /// the project file is read-only (a bad `sdc-project.toml`, ruling P8) the JSON is still written but no hash is
     /// recorded: the next export then asks before overwriting it.
-    fn record_json_sha(&mut self, key: &str, sha: &str) {
-        let root = self.export_root();
+    fn record_json_sha(&mut self, root: &std::path::Path, key: &str, sha: &str) {
+        let root = root.to_path_buf();
         let Some(d) = self.sets_doc.as_mut() else {
             return;
         };
@@ -2045,7 +2115,7 @@ impl AppModel {
         };
         if overwrite {
             if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
-                self.record_json_sha(&history::record_key(&p.path), &sha);
+                self.record_json_sha(&p.root, &history::record_key(&p.path), &sha);
             }
         } else {
             self.export.notes.push(format!(
@@ -2323,7 +2393,8 @@ impl AppModel {
                 .as_ref()
                 .map_or(0, crate::sets_doc::SetsDoc::rev),
             root: self.root.clone(),
-            export_root: self.export_root(),
+            // Note CM: the PBR folder while a tick is on, so the JSON paths follow a tick at once.
+            export_root: self.output_root(),
             target: self.target,
             scan_db: self.scan_db.clone(),
             scan: self.scan_stamp,

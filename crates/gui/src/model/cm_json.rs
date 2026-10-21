@@ -229,7 +229,7 @@ pub fn clashes<'a>(rels: impl Iterator<Item = &'a str>) -> BTreeSet<String> {
 /// and packed complex `_m` follow). The output is not `item.job_key`, which is case-folded. Members of exporting sets
 /// that share a path are refused.
 pub fn targets(m: &AppModel) -> Vec<CmTarget> {
-    let root = m.export_root();
+    let root = m.output_root();
     let mut out = vec![];
     for v in views(m).iter() {
         for key in cm_members(m, v) {
@@ -317,7 +317,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingCm> {
     let entries = m.sets_doc.as_ref()?.entries();
     let ts = targets(m);
     let mut p = PendingCm {
-        root: m.export_root(),
+        root: m.output_root(),
         ..Default::default()
     };
     for (i, e) in entries.iter().enumerate() {

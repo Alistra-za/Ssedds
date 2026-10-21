@@ -267,6 +267,28 @@ impl ExportModel {
         }
     }
 
+    /// Note CM: end every row still queued or running when an Also export ends: failed with `why` ("not run: …"),
+    /// else cancelled after a cancel, else failed "not run".
+    pub fn end_unfinished(&mut self, cancelled: bool, why: Option<&str>) {
+        let state = match why {
+            Some(w) => RowState::Failed(format!("not run: {w}")),
+            None if cancelled => RowState::Cancelled,
+            None => RowState::Failed("not run".into()),
+        };
+        let mut any = false;
+        for r in self
+            .rows
+            .iter_mut()
+            .filter(|r| matches!(r.state, RowState::Queued | RowState::Running))
+        {
+            r.state = state.clone();
+            any = true;
+        }
+        if any {
+            self.revision = REV.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// The rows held for half size (Hold mode): job key and the source size their `CHK-LOW-DETAIL` warning names.
     pub fn held(&self) -> Vec<(String, (u32, u32))> {
         self.rows
@@ -347,24 +369,10 @@ impl ExportModel {
     }
 }
 
-fn norm(p: &Path) -> String {
-    std::path::absolute(p)
-        .unwrap_or_else(|_| p.to_path_buf())
-        .to_string_lossy()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_lowercase()
-}
-
 /// Review Focus 2: discovery skips everything under the output root, so the export folder must not be the opened
-/// folder or contain it. A subfolder of the opened folder is fine.
+/// folder or contain it. A subfolder of the opened folder is fine. P19: one rule, the engine's (TA19 uses it too).
 pub fn export_folder_problem(root: &Path, export: &Path) -> Option<String> {
-    let (r, e) = (norm(root), norm(export));
-    (r == e || r.starts_with(&format!("{e}/"))).then(|| {
-        "The export folder must not be the opened folder or contain it: Tessalith would not find the sources next time. \
-         Choose another folder."
-            .to_string()
-    })
+    engine::also::export_folder_problem(root, export)
 }
 
 /// The `sdc convert` command that reproduces the export from the saved `sdc.toml` (M3a spec §2.5). The GUI plans

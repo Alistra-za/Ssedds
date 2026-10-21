@@ -337,7 +337,8 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         // a switch change reaches this build through `refresh_checks`' `invalidate_views()`.
         let on = &m.settings.checks;
         for r in &m.export.rows {
-            for w in &r.warnings {
+            // P11 (owner answer 2): Info stays on the row's hover, as for item and set rows (`DERIVE-*` included).
+            for w in r.warnings.iter().filter(|w| counts_toward_badge(w)) {
                 let level = match checks::check_of(w.code) {
                     Some(c) if !checks::switch_on(on, c) => continue,
                     Some(_) => Level::Check,

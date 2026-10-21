@@ -14,6 +14,9 @@ pub struct Review {
     pub acknowledged: BTreeSet<String>,
     /// C4, R6: the answer, given in Review, for the edited PGPatcher JSON.
     pub json_answer: Option<JsonAnswer>,
+    /// Note CM (Review Focus 5, P9): with a tick on, why `sdc.toml` cannot be saved; taken when Review opens and
+    /// again on its Export, never per frame. `None`: writable (or no tick).
+    pub toml_unwritable: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +73,10 @@ fn plural(n: usize) -> &'static str {
 impl AppModel {
     /// Open Review (its ticks are kept when it is already open) and show its tab.
     pub fn open_review(&mut self) {
-        self.review.get_or_insert_with(Review::default);
+        let unwritable = self.also_toml_unwritable();
+        self.review
+            .get_or_insert_with(Review::default)
+            .toml_unwritable = unwritable;
         self.show_tab(BottomTab::Review);
     }
 
@@ -86,7 +92,7 @@ impl AppModel {
         let mut lines = vec![];
         // K13: vanilla (and a project without a PBR set) writes no PGPatcher JSON.
         if let Some(p) = pbr_export::prepare(self).filter(|p| !p.entries.is_empty()) {
-            let state = disk_state(&p.path, self.pgp_record(&p.path).as_deref());
+            let state = disk_state(&p.path, self.pgp_record(&p.root, &p.path).as_deref());
             lines.push(JsonLine {
                 kind: JsonKind::PgPatcher,
                 path: p.path,
@@ -139,7 +145,8 @@ impl AppModel {
         pbr_export::prepare(self)
             .filter(|p| !p.entries.is_empty())
             .is_some_and(|p| {
-                disk_state(&p.path, self.pgp_record(&p.path).as_deref()) == DiskState::Edited
+                disk_state(&p.path, self.pgp_record(&p.root, &p.path).as_deref())
+                    == DiskState::Edited
             })
     }
 
@@ -250,6 +257,10 @@ impl AppModel {
         if n > 0 {
             return Err(format!("Fix {n} blocker{} first", plural(n)));
         }
+        // Note CM: the Also rows, after the blocks and before the acknowledgements (A9); nothing writes (7.1, 7.2).
+        if self.also_on() {
+            self.also_gate()?;
+        }
         let acked = self.review.as_ref().map(|r| &r.acknowledged);
         let k = pbr_export::export_asks(self)
             .iter()
@@ -266,6 +277,10 @@ impl AppModel {
         let files = self.export_files();
         let skipped = self.undecided();
         let mut t = format!("Export {files} file{}", plural(files));
+        // Re-check A7 (TA30): this project's planned files, written to the PBR folder and copied or derived on.
+        if self.also_on() {
+            t.push_str(&format!(" to {} folders", self.also_folder_count()));
+        }
         if skipped > 0 {
             t.push_str(&format!(" (skip {skipped} undecided)"));
         }

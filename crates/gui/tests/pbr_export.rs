@@ -499,6 +499,7 @@ fn finish_leaves_out_sets_whose_outputs_did_not_export() {
     use sdc_gui::pgp::writer::EntryInput;
     let dir = tempfile::tempdir().unwrap();
     let p = PendingJson {
+        root: Default::default(),
         path: dir.path().join("PBRNIFPatcher/x.json"),
         entries: vec![
             (
@@ -569,6 +570,7 @@ fn finish_with_every_set_failed_keeps_the_old_json_even_with_a_delete_section() 
         ..Default::default()
     };
     let p = PendingJson {
+        root: Default::default(),
         path: path.clone(),
         entries: vec![
             ("a/one".into(), vec!["a/one.dds".into()], set),
@@ -596,6 +598,7 @@ fn finish_with_every_set_failed_keeps_the_old_json_even_with_a_delete_section() 
     );
     // Zero sets at all: a sections-only plan writes nothing either.
     let only = PendingJson {
+        root: Default::default(),
         path: path.clone(),
         entries: vec![("delete section 1".into(), vec![], section)],
         copies: vec![],
@@ -623,6 +626,7 @@ fn finish_copies_borrowed_slots_and_skips_what_did_not_export() {
     let stale = dir.path().join("stale.dds");
     std::fs::write(&stale, b"old").unwrap();
     let p = PendingJson {
+        root: Default::default(),
         path: std::path::PathBuf::new(),
         entries: vec![],
         copies: vec![
@@ -748,6 +752,7 @@ fn an_unfinished_export_writes_no_json_and_says_why() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("PBRNIFPatcher/x.json");
     let p = PendingJson {
+        root: Default::default(),
         path: path.clone(),
         entries: vec![("a/one".into(), vec![], Default::default())],
         copies: vec![],
@@ -763,6 +768,7 @@ fn an_unfinished_export_writes_no_json_and_says_why() {
     assert!(!path.exists());
     // Vanilla/CPM exports have no JSON, so no note.
     let v = PendingJson {
+        root: Default::default(),
         path: Default::default(),
         entries: vec![],
         copies: vec![],
@@ -776,6 +782,7 @@ fn an_identical_file_on_disk_is_not_asked_about() {
     use sdc_gui::pgp::writer::EntryInput;
     let dir = tempfile::tempdir().unwrap();
     let p = PendingJson {
+        root: Default::default(),
         path: dir.path().join("x.json"),
         entries: vec![(
             "a/one".into(),
@@ -1271,6 +1278,7 @@ fn a_recorded_copy_follows_its_owner() {
 #[test]
 fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
     let p = PendingJson {
+        root: Default::default(),
         path: std::path::PathBuf::new(),
         entries: vec![],
         copies: vec![("a.dds".into(), "b_n.dds".into(), "a.dds".into())],

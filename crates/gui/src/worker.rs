@@ -63,6 +63,8 @@ pub enum WorkerMsg {
     KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
+    /// Note CM: an Also export's summary; sent just before its `ExportDone`.
+    AlsoFinished(Box<engine::also::AlsoSummary>),
     Source {
         token: u64,
         result: Result<Arc<SourcePreview>, String>,
@@ -234,6 +236,47 @@ pub fn spawn_export(
             .and_then(|plan| session.run(plan, &rep, &cancel))
             .map_err(|e| e.to_string());
         let _ = tx.send(WorkerMsg::ExportDone(result));
+    });
+}
+
+/// Note CM: the Also export (`run_also`: the PBR, Vanilla and CM phases), tagged "export" like `spawn_export`, so the
+/// `Panicked` router ends it. Sends `AlsoFinished`, then `ExportDone`: an `Err` when the run failed or its PBR phase
+/// did (CM56: `run_also` returns `Ok` then, and nothing must be written after it); otherwise every phase's counts,
+/// with the copies (left out of `batch_done`) counted as written.
+pub fn spawn_export_also(
+    tx: Sender<WorkerMsg>,
+    session: Arc<Session>,
+    req: BatchRequest,
+    spec: engine::also::AlsoSpec,
+    cancel: CancelToken,
+) {
+    spawn_guarded(tx, "export", move |tx| {
+        let mut req = req;
+        req.bc1_model = session.bc1_model();
+        let result = engine::also::run_also(
+            session.engine(),
+            session.cache(),
+            req,
+            &spec,
+            Arc::new(ChannelSink(tx.clone())),
+            &cancel,
+        );
+        let done = match result {
+            Err(e) => Err(e.to_string()),
+            Ok(s) => {
+                let done = match &s.error {
+                    Some((engine::also::Phase::Pbr, msg, _)) => Err(msg.clone()),
+                    _ => {
+                        let mut b = s.combined();
+                        b.converted += s.copied;
+                        Ok(b)
+                    }
+                };
+                let _ = tx.send(WorkerMsg::AlsoFinished(Box::new(s)));
+                done
+            }
+        };
+        let _ = tx.send(WorkerMsg::ExportDone(done));
     });
 }
 

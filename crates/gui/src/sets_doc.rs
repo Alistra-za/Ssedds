@@ -327,6 +327,18 @@ impl SetsDoc {
         );
     }
 
+    /// TA10: `[project] also_location`, where this project's Also export writes its three folders.
+    pub fn also_location(&self) -> Option<std::path::PathBuf> {
+        self.project_str("also_location")
+            .map(std::path::PathBuf::from)
+    }
+    pub fn set_also_location(&mut self, path: &std::path::Path) {
+        self.set_project(
+            "also_location",
+            Some(Value::from(path.to_string_lossy().as_ref())),
+        );
+    }
+
     pub fn json_name(&self) -> Option<String> {
         self.project_str("json_name")
     }

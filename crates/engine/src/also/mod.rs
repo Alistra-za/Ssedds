@@ -982,7 +982,7 @@ fn run_phases(
         new_batch_id(),
     );
     let vreq = phase_req(1, DeriveMode::Vanilla, &sets, &drop);
-    let mut vplan = match engine.plan(vreq.clone(), &vrep, cancel) {
+    let mut vplan = match engine.plan_cached(vreq.clone(), &vrep, cancel, cache) {
         Ok(p) => p,
         Err(e) => {
             failed(&mut s, Phase::Vanilla, e);
@@ -1061,7 +1061,12 @@ fn run_phases(
         held: Mutex::new(Some(vec![])),
     });
     let crep = Reporter::new(recorder(2, gate.clone()), new_batch_id());
-    let mut cplan = match engine.plan(phase_req(2, DeriveMode::Cm, &sets, &drop), &crep, cancel) {
+    let mut cplan = match engine.plan_cached(
+        phase_req(2, DeriveMode::Cm, &sets, &drop),
+        &crep,
+        cancel,
+        cache,
+    ) {
         Ok(p) => p,
         Err(e) => {
             gate.release(|_| true);

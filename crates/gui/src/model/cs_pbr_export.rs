@@ -135,7 +135,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingCs> {
     let entries = m.sets_doc.as_ref()?.entries();
     let refused = refusals(&entries);
     let mut p = PendingCs {
-        root: m.export_root(),
+        root: m.output_root(),
         ..Default::default()
     };
     let mut done = BTreeSet::new();
