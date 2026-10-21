@@ -133,13 +133,19 @@ pub struct ProjectDoc {
     export_cache: std::cell::RefCell<Option<(u64, ExportConfig)>>,
 }
 
-/// `v` without the fields equal to `d`'s, recursively; an object left empty goes too.
-fn prune(v: &mut Json, d: &Json) {
+/// `v` without the fields equal to `d`'s, recursively; an object left empty goes too. A field that `written` (the
+/// table as it is in the file) holds with the same value stays, even at its default: the edit did not touch it, so
+/// the user may have pinned it (final review M3). A field the edit sets to its default goes, as before (CM60).
+fn prune(v: &mut Json, d: &Json, written: Option<&Json>) {
     if let (Json::Object(o), Json::Object(d)) = (v, d) {
         o.retain(|k, x| {
             let Some(dx) = d.get(k) else { return true };
-            prune(x, dx);
-            x != dx && !matches!(x, Json::Object(m) if m.is_empty())
+            let w = written.and_then(|w| w.get(k));
+            if x.is_object() {
+                prune(x, dx, w);
+                return !matches!(x, Json::Object(m) if m.is_empty());
+            }
+            x != dx || w == Some(&*x)
         });
     }
 }
@@ -635,14 +641,17 @@ impl ProjectDoc {
         if self.read_only() || self.export_config() == *cfg {
             return;
         }
-        let root = self.f.doc.as_table_mut();
         let (Ok(mut v), Ok(d)) = (
             serde_json::to_value(cfg),
             serde_json::to_value(ExportConfig::default()),
         ) else {
             return;
         };
-        prune(&mut v, &d);
+        let written = toml::from_str::<Json>(&self.f.doc.to_string())
+            .ok()
+            .and_then(|mut t| t.get_mut("export").map(Json::take));
+        prune(&mut v, &d, written.as_ref());
+        let root = self.f.doc.as_table_mut();
         if v.as_object().is_none_or(|o| o.is_empty()) {
             root.remove("export");
         } else {
