@@ -496,9 +496,17 @@ use nif::keys::{Key, KeyData, KeyGroup};
 
 /// New errors after a SetKeys of `keys` (type `key_type`) on var 11 of `keyed_pair(Share::No, [1, 2])`.
 fn key_errors(key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<Warning> {
+    key_errors_on(
+        scenes::keyed_pair(scenes::Share::No, [1, 2]),
+        key_type,
+        keys,
+    )
+}
+
+/// Same, on the keyed_pair-shaped file `b`.
+fn key_errors_on(b: Vec<u8>, key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<Warning> {
     use nif::edit::validate::validate_ops;
     use nif::edit::{anchor_role, Outcome, Owner, Role};
-    let b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
     let m = read_model(&b).unwrap();
     let role = Role::Ctrl {
         owner: Owner::Shader,
@@ -559,4 +567,30 @@ fn decreasing_times_block_export() {
     let quad = vec![k(0.0, Some(0.5), false), k(1.0, Some(0.5), false)];
     assert_eq!(key_errors(Some(2), quad), vec![]);
     assert_eq!(key_errors(None, vec![]), vec![]);
+}
+
+/// Ruling B-P29: NaN or infinite authored times, values and tangents block export.
+#[test]
+fn non_finite_keys_block_export() {
+    let finite = || error("Key values must be finite numbers");
+    let lin = |t: &[f32]| t.iter().map(|&t| k(t, None, false)).collect();
+    // NaN hides the decrease from every adjacent comparison
+    assert_eq!(key_errors(Some(1), lin(&[0.0, f32::NAN, -1.0])), finite());
+    assert_eq!(key_errors(Some(1), lin(&[0.0, f32::INFINITY])), finite());
+    assert_eq!(
+        key_errors(Some(1), lin(&[f32::NEG_INFINITY, f32::INFINITY])),
+        finite()
+    );
+    let mut v = k(0.0, None, false);
+    v.value = f32::NAN;
+    assert_eq!(key_errors(Some(1), vec![v]), finite());
+    let mut q = k(0.0, Some(0.5), false);
+    q.backward = Some(f32::INFINITY);
+    assert_eq!(key_errors(Some(2), vec![q]), finite());
+
+    // an untouched source curve with a NaN value is never checked
+    let mut b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
+    let at = Header::parse(&b).unwrap().offsets()[7] + 12; // data 7, key 0 value
+    b[at..at + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert_eq!(key_errors_on(b, Some(1), lin(&[0.0, 1.0])), vec![]);
 }

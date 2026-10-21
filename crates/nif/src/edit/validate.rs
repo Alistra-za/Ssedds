@@ -257,21 +257,31 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
     out
 }
 
-/// Errors in the keys the ops author (spec §3.3): times must not decrease; only LINEAR (1) and QUADRATIC (2) keys
-/// are authored. A source curve that is not edited is never checked (R14).
+/// Errors in the keys the ops author (spec §3.3): times, values and tangents must be finite (B-P29); times must not
+/// decrease; only LINEAR (1) and QUADRATIC (2) keys are authored. A source curve that is not edited is never checked (R14).
 pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
-    fn times<T>(g: &KeyGroup<T>) -> (Option<u32>, Vec<f32>) {
-        (g.key_type, g.keys.iter().map(|k| k.time).collect())
+    /// (key type, times, every time, value and tangent finite); `floats` lists a value's f32s.
+    fn times<T>(g: &KeyGroup<T>, floats: fn(&T) -> Vec<f32>) -> (Option<u32>, Vec<f32>, bool) {
+        let finite = g.keys.iter().all(|k| {
+            let vals = [Some(&k.value), k.forward.as_ref(), k.backward.as_ref()];
+            k.time.is_finite()
+                && vals
+                    .into_iter()
+                    .flatten()
+                    .flat_map(floats)
+                    .all(f32::is_finite)
+        });
+        (g.key_type, g.keys.iter().map(|k| k.time).collect(), finite)
     }
     let mut out = vec![];
     for op in ops {
         let Op::SetKeys { at, keys, .. } = op else {
             continue;
         };
-        let (key_type, t) = match keys {
-            KeyData::Float(g) => times(g),
-            KeyData::Pos(g) => times(g),
-            KeyData::Bool(g) => times(g),
+        let (key_type, t, finite) = match keys {
+            KeyData::Float(g) => times(g, |v| vec![*v]),
+            KeyData::Pos(g) => times(g, |v| v.to_vec()),
+            KeyData::Bool(g) => times(g, |_| vec![]),
         };
         let mut err = |text: &str| {
             out.push(Warning {
@@ -281,6 +291,10 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
                 fix: None,
             })
         };
+        // NaN slips past the ordering check below ([0, NaN, -1]) and inf times give inf/inf when sampled
+        if !finite {
+            err("Key values must be finite numbers");
+        }
         if t.windows(2).any(|k| k[1] < k[0]) {
             err("Key times must not decrease");
         }

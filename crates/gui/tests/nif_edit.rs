@@ -1480,7 +1480,8 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
 
 use builder::{Nif, W};
 
-/// Ruling B-P28: an authored TBC key or decreasing key times block export (the `validate_ops` wiring).
+/// Rulings B-P28, B-P29: an authored TBC key, decreasing or non-finite key times block export (the `validate_ops`
+/// wiring).
 #[test]
 fn authored_key_errors_block_export() {
     let b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
@@ -1492,6 +1493,7 @@ fn authored_key_errors_block_export() {
             "Only linear and quadratic keys can be authored",
         ),
         (1, [1.0, 0.0], "Key times must not decrease"),
+        (1, [0.0, f32::NAN], "Key values must be finite numbers"),
     ] {
         let d = tempfile::tempdir().unwrap();
         let edit_mod = d.path().join("mods").join(EDIT_MOD);
