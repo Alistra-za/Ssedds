@@ -38,7 +38,7 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
             .show(ui, |ui| match tab {
                 0 => edit_fields::shader_tab(ui, m, e, &mut act),
                 1 => edit_fields::alpha_tab(ui, e, &mut act),
-                2 => edit_ctrl::controllers_tab(ui, e, &mut act),
+                2 => edit_ctrl::controllers_tab(ui, m, e, &mut act),
                 _ => edit_extra::extra_tab(ui, e, &mut act),
             });
     }
@@ -237,6 +237,9 @@ fn op_label(op: &Op) -> String {
         Op::AddExtra { at, name, .. } => (format!("Add extra data {name}"), at),
         Op::EditExtra { at, .. } => ("Edit extra data".into(), at),
         Op::RemoveExtra { at } => ("Remove extra data".into(), at),
+        Op::SetKeys { at, .. } => ("Edit keys".into(), at),
+        Op::AddController { at, .. } => ("Add controller".into(), at),
+        Op::RemoveController { at } => ("Remove controller".into(), at),
     };
     match &at.shape {
         Some(s) => format!("{s}: {what}"),
@@ -250,6 +253,14 @@ fn apply(m: &mut MeshesModel, act: Act) {
     }
     if let (true, Some(e)) = (act.flush, &mut m.edit) {
         e.flush();
+    }
+    // v2 B6: a curve click jumps the clock (B3) and pauses it; tick_anim later this frame sends the materials.
+    if let (Some(t), Some(c)) = (act.scrub, m.v3.clock.as_mut()) {
+        c.scrub(t);
+    }
+    // v2 B7: edit_with sends nothing for an unchanged static material; the next tick_anim sends the animated ones.
+    if let Some(p) = act.playing {
+        m.edit_with(|e| e.set_playing(p));
     }
     if act.undo {
         m.undo_edit();

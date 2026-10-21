@@ -3,8 +3,8 @@
 use crate::model::meshes::LE_WARNING;
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::viewport3d::{
-    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, DEFERRED_LABEL, FEATURES_LABEL,
-    FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
+    moved_text, off_line, Clock, Look, V3State, Viewport3d, CHOOSE_FOLDER, DEFERRED_LABEL,
+    FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
 use render3d::locate::Change;
@@ -91,10 +91,54 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
     if !le_mesh(v) {
         image(ui, v);
     }
-    if v.busy() {
+    if v.busy() || v.clock.is_some_and(|c| c.playing) {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
     }
+}
+
+/// The animation controls of the NIF edit preview (v2 B3): Play or Pause, Loop, Speed and the Time slider.
+pub fn clock_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
+    let Some(c) = v.clock.as_mut() else { return };
+    // Two rows, the first wrapped: at 1100 px the centre column is about 150 px wide (rule 3.1).
+    ui.horizontal_wrapped(|ui| {
+        let (label, hover) = if c.playing {
+            ("Pause", "Pause the animation")
+        } else {
+            ("Play", "Play the shader and alpha controllers")
+        };
+        if ui.button(label).on_hover_text(hover).clicked() {
+            if c.playing {
+                c.playing = false;
+            } else {
+                c.play();
+            }
+        }
+        ui.checkbox(&mut c.looping, "Loop")
+            .on_hover_text("Start again at the end");
+        let speed = ui.label("Speed");
+        ui.add(
+            egui::DragValue::new(&mut c.rate)
+                .range(Clock::RATE_RANGE.0..=Clock::RATE_RANGE.1)
+                .speed(0.01)
+                .suffix("×"),
+        )
+        .labelled_by(speed.id)
+        .on_hover_text("Playback speed; 1× is game speed");
+    });
+    ui.horizontal(|ui| {
+        let mut t = c.t;
+        // 110: room for the value box and the "Time" text.
+        ui.spacing_mut().slider_width = (ui.available_width() - 110.0).max(24.0);
+        let r = ui.add(
+            egui::Slider::new(&mut t, c.range.0..=c.range.1)
+                .suffix(" s")
+                .text("Time"),
+        );
+        if r.changed() {
+            c.scrub(t);
+        }
+    });
 }
 
 /// The Moved popup and the panel's keys: first, before the panel's widgets.

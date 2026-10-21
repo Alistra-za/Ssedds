@@ -2,6 +2,7 @@
 //! Rules: the PGPatcher 1.2.0 TruePBR rule notes ("01", NIF team plan p1). Pure: no GPU, no egui, no IO.
 //! It stops at "the NIF as PGPatcher leaves it", a `MaterialState`; CS's load-time remap belongs to render3d.
 mod check;
+mod index;
 mod json;
 mod matching;
 mod patch;
@@ -10,6 +11,7 @@ mod slots;
 mod text;
 
 pub use check::range_warnings;
+pub use index::{MatchIndex, ShapeKeys};
 pub use matching::{matched_path, shape_matches};
 pub use nif::material::MaterialState;
 pub use prep::prepare;

@@ -2,17 +2,20 @@
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
+use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
-use crate::model::viewport3d::{read_file, Content, FileSource};
+use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
-use nif::edit::validate::{new_errors, validate, Warning};
+use nif::anim::{apply_anim, clip_tracks_in, free_tracks_in, Track};
+use nif::edit::validate::{new_errors, validate, validate_ops, Level, Target, Warning};
 use nif::edit::{Anchor, Op, Outcome};
+use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
-use nif::model::{read_model, NifModel};
+use nif::model::{read_model, NifModel, ShapeModel};
 use render3d::{ParsedNif, ShapeId};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -22,6 +25,18 @@ use std::sync::Arc;
 pub enum Selection {
     Root,
     Shape(u32),
+}
+
+/// The panel line when a controller's times are not finite (B-P33): no clock, no Time slider.
+pub const ANIM_INVALID: &str = "This animation has invalid times: playback is off.";
+
+/// What the preview animates (v2 B3): the free controller chains, or one manager clip by its sequence block (the
+/// Controllers tab's Preview selector, B7). A clip pauses the free chains: they show the file value (E6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Playing {
+    #[default]
+    Free,
+    Clip(u32),
 }
 
 /// Origin-name hints of tool-generated output (OD3): editable, with a warning.
@@ -49,6 +64,13 @@ pub struct NifEdit {
     pub model: NifModel,
     pub outcomes: Vec<Outcome>,
     pub warnings: Vec<Warning>,
+    /// validate_ops over the document's ops (B4/B5 key errors), recomputed with the ops in `reapply`.
+    pub op_warnings: Vec<Warning>,
+    /// B-P41: `PGP_ENV_SCALE` Warnings from the cached In game simulation (never blocking, never a new simulation).
+    pub pg_warnings: Vec<Warning>,
+    /// Every controller's editable keys by (controller, clip), `nif::edit::keys_of`; rebuilt in `reapply`, never
+    /// per frame (F23). B7 adds the clip entries.
+    pub keys: BTreeMap<(u32, Option<u32>), Result<KeyData, String>>,
     pub source_warnings: Vec<Warning>,
     pub selection: Selection,
     pub solo: bool,
@@ -76,12 +98,46 @@ pub struct NifEdit {
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
     parsed: Arc<ParsedNif>,
+    /// What the preview animates.
+    pub playing: Playing,
+    /// Per animated shape: its parsed material and its tracks for `playing`. Rebuilt by `reapply` and
+    /// `set_playing`, never per frame (F22, F23).
+    anim: Vec<(ShapeId, MaterialState, Vec<Track>)>,
+    /// The clock time whose materials the viewport shows; None after anything sent un-animated materials.
+    anim_shown: Option<f32>,
+    /// The shapes the last `tick_anim` animated (D15: one that leaves gets its file material back).
+    anim_last: Vec<ShapeId>,
+    /// v2 B8 fix F1: per shape, the files that can patch it (keyed on its slots and the JSON generation) and its
+    /// last simulation (keyed on its parsed material, the JSON generation and the scan). The NIF path is the
+    /// session's own, so it needs no key.
+    sim_cache: BTreeMap<ShapeId, SimCache>,
+    /// `simulate_shape` calls so far (the cache's misses).
+    pub sim_runs: usize,
+    /// Entries `shape_matches` tested to find candidates (fix round 2: the index keeps this far below a full scan).
+    pub match_tests: usize,
+    /// v2 B8: In game (simulated) is showing: each shape's simulated material and its lines. None on Edited source.
+    /// `preview_nif` draws these materials, so `materials()` and every `before` follow the shown side.
+    pub in_game: Option<Vec<(ShapeId, MaterialState, Vec<String>)>>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
     /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
     /// replaces those ops.
     drag: Option<(String, usize)>,
 }
+
+/// One shape's cached In game work (fix F1): the candidate files for (slots, JSON generation) and the simulation
+/// for (parsed material, JSON generation, scan revision).
+#[derive(Default)]
+struct SimCache {
+    #[allow(clippy::type_complexity)]
+    cands: Option<(Vec<nif::path::TexPath>, u64, Vec<(usize, Vec<usize>)>)>,
+    #[allow(clippy::type_complexity)]
+    out: Option<(MaterialState, u64, u64, (MaterialState, Vec<String>))>,
+}
+
+/// Under the toggle when `show_edit_preview` failed and a plain copy shows (fix F8).
+pub const EDIT_HIDDEN: &str =
+    "Your edit could not be shown. Switch to In game (simulated) or Edited source to retry.";
 
 /// The open guard dialog: the block diff, whether Diff is showing it, and the hash of the file it was asked about
 /// (Overwrite applies only while the file still has it).
@@ -164,6 +220,16 @@ pub fn edit_slot_label(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) ->
     }
 }
 
+/// The shape's lighting shader's LSCF var-8 (Env map scale) controller, if its chain has one.
+fn env_scale_ctrl(m: &NifModel, sm: &ShapeModel) -> Option<u32> {
+    let l = m.lighting.get(&sm.shader?)?;
+    l.prop.ctrls.iter().copied().find(|c| {
+        m.ctrls.get(c).is_some_and(|c| {
+            c.class == "BSLightingShaderPropertyFloatController" && c.var == Some(8)
+        })
+    })
+}
+
 fn anchor_mut(op: &mut Op) -> &mut Anchor {
     match op {
         Op::SetField { at, .. }
@@ -174,7 +240,10 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::RemoveAlpha { at }
         | Op::AddExtra { at, .. }
         | Op::EditExtra { at, .. }
-        | Op::RemoveExtra { at } => at,
+        | Op::RemoveExtra { at }
+        | Op::AddController { at, .. }
+        | Op::RemoveController { at }
+        | Op::SetKeys { at, .. } => at,
     }
 }
 
@@ -185,6 +254,7 @@ fn keep_base(op: &mut Op, old: &Op) {
         (Op::SetBits { base, .. }, Op::SetBits { base: b, .. }) => *base = *b,
         (Op::SetTexturePath { base, .. }, Op::SetTexturePath { base: b, .. }) => base.clone_from(b),
         (Op::EditExtra { base, .. }, Op::EditExtra { base: b, .. }) => base.clone_from(b),
+        (Op::SetKeys { base, .. }, Op::SetKeys { base: b, .. }) => base.clone_from(b),
         _ => {}
     }
 }
@@ -232,6 +302,9 @@ impl NifEdit {
             model,
             outcomes: vec![],
             warnings: vec![],
+            op_warnings: vec![],
+            pg_warnings: vec![],
+            keys: BTreeMap::new(),
             selection: Selection::Root,
             solo: false,
             check_exists: false,
@@ -248,6 +321,14 @@ impl NifEdit {
             export_note: None,
             apply_err: None,
             parsed: Arc::default(),
+            playing: Playing::Free,
+            anim: vec![],
+            anim_shown: None,
+            anim_last: vec![],
+            sim_cache: BTreeMap::new(),
+            sim_runs: 0,
+            match_tests: 0,
+            in_game: None,
             unsaved: false,
             drag: None,
         };
@@ -313,6 +394,9 @@ impl NifEdit {
             return Some("Resolve the conflicts first.".into());
         }
         if let Some(w) = new_errors(&self.source_warnings, &self.warnings).first() {
+            return Some(w.text.clone());
+        }
+        if let Some(w) = self.op_warnings.first() {
             return Some(w.text.clone());
         }
         read_back(&self.patched).err()
@@ -427,8 +511,69 @@ impl NifEdit {
             Err(e) => self.error = Some(e.to_string()),
         }
         self.warnings = validate(&self.model, None);
+        // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
+        self.op_warnings = validate_ops(&self.doc.ops());
+        // B-P41: one header parse per change; one per controller cost 266 ms a drag tick on a 608-controller NIF.
+        let header = nif::header::Header::parse(&self.patched).map_err(|e| e.to_string());
+        self.keys =
+            self.model
+                .ctrls
+                .keys()
+                .map(|&c| {
+                    let k = header.as_ref().map_err(Clone::clone).and_then(|h| {
+                        nif::edit::keys_of_in(h, &self.patched, &self.model, c, None)
+                    });
+                    ((c, None), k)
+                })
+                .collect();
+        // v2 B7: the keys of each clip a managed controller is driven by (once per change).
+        // shortcut: clips_of_in walks every property per (sequence, controller): ~18 ms a drag tick on a 608-controller,
+        // 818-shape NIF (CM32); invert it per sequence if a file the owner edits passes 16 ms.
+        if let Ok(h) = &header {
+            for &c in self.model.ctrls.keys().filter(|&&c| self.model.managed(c)) {
+                for seq in nif::anim::clips_of_in(&self.model, h, c) {
+                    let k = nif::edit::keys_of_in(h, &self.patched, &self.model, c, Some(seq));
+                    self.keys.insert((c, Some(seq)), k);
+                }
+            }
+        }
         self.parsed = Arc::new(render3d::parse(&self.patched));
+        // A clip the edits or a source reload removed: back to the free chains (with the last sequence gone, the
+        // Preview selector is gone too).
+        if let Playing::Clip(seq) = self.playing {
+            if !self.model.sequences.iter().any(|s| s.block == seq) {
+                self.playing = Playing::Free;
+            }
+        }
+        self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, self.playing);
+        self.anim_shown = None;
+        self.refresh_pg_warnings();
         self.refresh_blocked();
+    }
+
+    /// B-P41: a Warning under each LSCF var-8 controller of a non-PBR shape that the last cached In game simulation
+    /// (for the shape's current slots) made PBR. PG_IGNORE shapes are skipped, as the simulation skips them.
+    fn refresh_pg_warnings(&mut self) {
+        let m = &self.model;
+        self.pg_warnings = self
+            .parsed
+            .shapes
+            .iter()
+            .filter(|s| s.material.slsf2 & SLSF2_TRUE_PBR == 0)
+            .filter_map(|s| {
+                let sm = m.shape(s.id.0).filter(|sm| !pg_ignore(m, sm))?;
+                let block = env_scale_ctrl(m, sm)?;
+                let (input, _, _, (out, _)) = self.sim_cache.get(&s.id)?.out.as_ref()?;
+                (input.slots == s.material.slots && out.slsf2 & SLSF2_TRUE_PBR != 0).then(|| {
+                    Warning {
+                        level: Level::Warn,
+                        target: Target::Block { block },
+                        text: PGP_ENV_SCALE.into(),
+                        fix: None,
+                    }
+                })
+            })
+            .collect();
     }
 
     fn save(&mut self) {
@@ -442,33 +587,47 @@ impl NifEdit {
     }
 
     /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
-    /// drag) with as many ops replaces the drag's ops instead, each keeping its original `base`: a drag is one op
-    /// (or one op per colour channel).
+    /// drag) replaces the drag's ops instead, each keeping the `base` of the drag's op with its merge key: a drag
+    /// is one op (or one op per colour channel), plus the controller's start / stop while they follow the keys
+    /// (B-P44), which come and go during the drag.
     pub fn push(&mut self, ops: Vec<Op>, merge: Option<String>) {
         let merging = merge.is_some();
         let n = ops.len();
-        let same_drag = merging
-            && self.drag.as_ref().map(|(k, c)| (Some(k), *c)) == Some((merge.as_ref(), n))
-            && self.doc.ops.len() >= n;
+        let tail = self.drag_ops(merge.as_deref().unwrap_or_default()).len();
+        let same_drag = merging && tail > 0;
         self.drag = merge.clone().map(|k| (k, n));
         self.history.record(self.doc.to_text(), merge);
-        if same_drag {
-            let start = self.doc.ops.len() - n;
-            for (d, mut op) in self.doc.ops[start..].iter_mut().zip(ops) {
+        let old: Vec<DocOp> = match same_drag {
+            true => self.doc.ops.split_off(self.doc.ops.len() - tail),
+            false => vec![],
+        };
+        let key = |op: &Op| nif::edit::merge_key(op);
+        for (i, mut op) in ops.into_iter().enumerate() {
+            let same = old.get(i).filter(|d| key(&d.op) == key(&op));
+            if let Some(d) = same.or_else(|| old.iter().find(|d| key(&d.op) == key(&op))) {
                 keep_base(&mut op, &d.op);
-                d.op = op;
             }
-        } else {
-            self.doc.ops.extend(ops.into_iter().map(|op| DocOp {
+            self.doc.ops.push(DocOp {
                 op,
                 status: OpStatus::Applied,
-            }));
+            });
         }
         self.reapply();
         if merging {
             self.unsaved = true;
         } else {
             self.save();
+        }
+    }
+
+    /// The ops of the drag with merge key `merge` while it runs (empty otherwise): their bases are the values from
+    /// before the drag.
+    pub fn drag_ops(&self, merge: &str) -> &[DocOp] {
+        match &self.drag {
+            Some((k, n)) if k == merge && self.doc.ops.len() >= *n => {
+                &self.doc.ops[self.doc.ops.len() - n..]
+            }
+            _ => &[],
         }
     }
 
@@ -546,9 +705,17 @@ impl NifEdit {
         self.revert(i);
     }
 
-    /// The parsed patched NIF as the preview draws it: with Solo, every shape but the selected one is hidden.
+    /// The parsed patched NIF as the preview draws it: In game, each shape's simulated material (v2 B8); with Solo,
+    /// every shape but the selected one is hidden.
     fn preview_nif(&self) -> ParsedNif {
         let mut p = (*self.parsed).clone();
+        if let Some(rows) = &self.in_game {
+            for s in &mut p.shapes {
+                if let Some((_, m, _)) = rows.iter().find(|(id, _, _)| *id == s.id) {
+                    s.material = m.clone();
+                }
+            }
+        }
         if self.solo {
             for s in &mut p.shapes {
                 if self.selection != Selection::Shape(s.id.0) {
@@ -559,6 +726,80 @@ impl NifEdit {
         p
     }
 
+    /// v2 B8 (closes R11): each shape's material as PGPatcher would leave the edited NIF (`pg_entries::simulate_shape`
+    /// over `files`, the JSON of read `gen`), with its lines. Shapes without a texture set keep their material and get no
+    /// line; PG_IGNORE ones keep it with `PG_IGNORED`. Those two checks run every time; only the simulation is cached
+    /// (fix F1, keyed on the parsed material, `gen` and the scan `rev`). From the parsed edit (not `preview_nif`).
+    pub fn in_game_materials(
+        &mut self,
+        files: &[PgFile],
+        gen: u64,
+        rev: u64,
+        exists: &dyn Fn(&str) -> bool,
+    ) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
+        let nif_path = self.data_path.replace('/', "\\");
+        let parsed = self.parsed.clone();
+        let mut rows = Vec::with_capacity(parsed.shapes.len());
+        for s in &parsed.shapes {
+            let shape = self.model.shape(s.id.0);
+            let lit = shape
+                .and_then(|sm| sm.shader)
+                .and_then(|b| self.model.lighting.get(&b))
+                .is_some_and(|l| l.texture_set.is_some());
+            if !lit {
+                rows.push((s.id, s.material.clone(), vec![]));
+                continue;
+            }
+            if shape.is_some_and(|sm| pg_ignore(&self.model, sm)) {
+                rows.push((s.id, s.material.clone(), vec![PG_IGNORED.to_string()]));
+                continue;
+            }
+            // B-P41: outside the cache, whose key (the material) does not change when a controller is added.
+            let env = shape
+                .and_then(|sm| env_scale_ctrl(&self.model, sm))
+                .is_some()
+                && s.material.slsf2 & SLSF2_TRUE_PBR == 0;
+            let c = self.sim_cache.entry(s.id).or_default();
+            let hit = c
+                .out
+                .as_ref()
+                .filter(|(m, g, r, _)| *m == s.material && *g == gen && *r == rev);
+            let (m, mut notes) = match hit {
+                Some((_, _, _, out)) => out.clone(),
+                None => {
+                    let cands = match &c.cands {
+                        Some((slots, g, v)) if *slots == s.material.slots && *g == gen => v.clone(),
+                        _ => {
+                            let (v, tested) = candidates(files, &nif_path, &s.material.slots);
+                            self.match_tests += tested;
+                            c.cands = Some((s.material.slots.clone(), gen, v.clone()));
+                            v
+                        }
+                    };
+                    let out = simulate_shape(files, &cands, &nif_path, &s.material, exists);
+                    c.out = Some((s.material.clone(), gen, rev, out.clone()));
+                    self.sim_runs += 1;
+                    out
+                }
+            };
+            if env && m.slsf2 & SLSF2_TRUE_PBR != 0 {
+                notes.push(PGP_ENV_SCALE.to_string());
+            }
+            rows.push((s.id, m, notes));
+        }
+        self.refresh_pg_warnings();
+        rows
+    }
+
+    /// In game before the JSON lands, or when it could not be read: every shape as edited, no line.
+    pub fn plain_rows(&self) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
+        self.parsed
+            .shapes
+            .iter()
+            .map(|s| (s.id, s.material.clone(), vec![]))
+            .collect()
+    }
+
     pub fn materials(&self) -> Vec<(ShapeId, MaterialState)> {
         self.preview_nif()
             .shapes
@@ -566,6 +807,103 @@ impl NifEdit {
             .map(|s| (s.id, s.material))
             .collect()
     }
+
+    /// Switches what the preview animates (B7's clip selector) and rebuilds the track cache.
+    pub fn set_playing(&mut self, p: Playing) {
+        self.playing = p;
+        self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, p);
+        self.anim_shown = None;
+    }
+
+    /// The Time slider's span in scene time (B-P33): from 0 to the longest cycle, `span / |freq|`, where a Reverse
+    /// cycle counts both legs. `ctrl_time` still does each controller's own wrapping, phase included. A clip uses
+    /// its sequence's timing. None when nothing is animated or a controller's times are not finite.
+    pub fn anim_range(&self) -> Option<(f32, f32)> {
+        self.anim_end().filter(|e| e.is_finite()).map(|e| (0.0, e))
+    }
+
+    /// A controller's times are not finite (+inf, NaN): playback is off and the panel says so.
+    pub fn anim_invalid(&self) -> bool {
+        self.anim_end().is_some_and(|e| !e.is_finite())
+    }
+
+    /// The longest cycle in scene time, NaN or inf when a contributing controller's times are not finite.
+    fn anim_end(&self) -> Option<f32> {
+        if self.anim.is_empty() {
+            return None;
+        }
+        // freq 0 or a span <= 0 contributes nothing; a NaN span or freq passes through to the result.
+        let cycle = |start: f32, stop: f32, freq: f32, reverse: bool| {
+            let span = (stop - start) * if reverse { 2.0 } else { 1.0 };
+            if freq == 0.0 || span <= 0.0 {
+                0.0
+            } else {
+                span / freq.abs()
+            }
+        };
+        let ends: Vec<f32> = match self.playing {
+            Playing::Clip(seq) => {
+                let s = self.model.sequences.iter().find(|s| s.block == seq)?;
+                vec![cycle(s.start, s.stop, s.frequency, s.cycle == 1)]
+            }
+            Playing::Free => self
+                .anim
+                .iter()
+                .flat_map(|(_, _, t)| t)
+                .map(|t| cycle(t.start, t.stop, t.freq, (t.flags >> 1) & 3 == 1))
+                .collect(),
+        };
+        // f32::max would drop a NaN: keep it, so the range is rejected.
+        Some(ends.into_iter().fold(0.0, |a: f32, e| {
+            if a.is_nan() || e.is_nan() {
+                f32::NAN
+            } else {
+                a.max(e)
+            }
+        }))
+    }
+
+    /// Each animated shape's material at clock time `t`: `apply_anim` over the cached tracks, nothing parsed.
+    pub fn frame_materials(&self, t: f32) -> Vec<(ShapeId, MaterialState)> {
+        self.anim
+            .iter()
+            .map(|(id, base, tracks)| {
+                let mut m = apply_anim(base, tracks, t);
+                // Solo hides every other shape (preview_nif): a tick must not show it again.
+                m.hidden |= self.solo && self.selection != Selection::Shape(id.0);
+                (*id, m)
+            })
+            .collect()
+    }
+}
+
+/// The tracks of every shape in `p` (its shader's and its alpha property's), for `playing`; shapes with none are
+/// left out.
+fn anim_tracks(
+    m: &NifModel,
+    b: &[u8],
+    p: &ParsedNif,
+    playing: Playing,
+) -> Vec<(ShapeId, MaterialState, Vec<Track>)> {
+    // B-P41: one header parse, not one per property.
+    let Ok(h) = nif::header::Header::parse(b) else {
+        return vec![];
+    };
+    p.shapes
+        .iter()
+        .filter_map(|s| {
+            let sm = m.shape(s.id.0)?;
+            let tracks: Vec<Track> = [sm.shader, sm.alpha]
+                .into_iter()
+                .flatten()
+                .flat_map(|prop| match playing {
+                    Playing::Free => free_tracks_in(m, &h, b, prop),
+                    Playing::Clip(seq) => clip_tracks_in(m, &h, b, seq, prop),
+                })
+                .collect();
+            (!tracks.is_empty()).then(|| (s.id, s.material.clone(), tracks))
+        })
+        .collect()
 }
 
 fn read_source(source: &[u8]) -> Result<(nif::scan::NifScan, NifModel), String> {
@@ -642,8 +980,8 @@ impl MeshesModel {
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((e, content)) => {
                 self.edit = Some(e);
-                // The toggle reads Source while the edit preview shows (P13); In game is PGPatcher's copy (R11).
-                self.view_source |= self.pair.is_some();
+                // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
+                self.view_source = true;
                 if let Some(c) = content {
                     self.v3.set_content(Some(c), false);
                     self.v3.nif_view = true;
@@ -696,14 +1034,19 @@ impl MeshesModel {
         }))
     }
 
-    /// Shows the open session's edit preview, rebuilt from its current edits (ruling P13: back from In game).
+    /// Shows the open session's edit preview, rebuilt from its current edits, on the toggle's side (v2 B8: In game
+    /// overlays the simulated materials).
     /// False when there is none to show (no session, an LE NIF, or an error, which goes to `error`).
     pub(super) fn show_edit_preview(&mut self) -> bool {
+        self.refresh_in_game();
         let Some(e) = &self.edit else { return false };
         match self.edit_content(e) {
             Ok(Some(c)) => {
                 self.v3.set_content(Some(c), false);
                 self.v3.nif_view = true;
+                if let Some(e) = &mut self.edit {
+                    e.anim_shown = None;
+                }
                 true
             }
             Ok(None) => false,
@@ -714,7 +1057,7 @@ impl MeshesModel {
         }
     }
 
-    /// An edit is open but the 3D view shows a plain copy (In game, ruling P13): the edits are not on screen.
+    /// An edit is open but the 3D view shows a plain copy (`show_edit_preview` failed): the edits are not on screen.
     pub fn edit_preview_hidden(&self) -> bool {
         self.edit.as_ref().is_some_and(|e| !e.le_mesh) && !self.v3.nif_view
     }
@@ -737,6 +1080,59 @@ impl MeshesModel {
             }
         }
         self.v3.nif_view = false;
+        self.v3.clock = None;
+    }
+
+    /// One drawn frame of the animation (v2 B3). Call once per frame the Meshes 3D view is drawn, before
+    /// `ui::viewport3d::show`, so that frame's Render carries the new time. Keeps the clock in step with the
+    /// session's tracks, advances it, and sends each animated shape's material (cbuffer only) when the time moved.
+    pub fn tick_anim(&mut self, dt: f32) {
+        // A shape animated last frame that no longer is (a removed controller, B7's clip switch) shows its file
+        // material again: nothing else resends it, its static material did not change.
+        if let Some(e) = self.edit.as_mut() {
+            let now: Vec<ShapeId> = e.anim.iter().map(|(id, _, _)| *id).collect();
+            if e.anim_last.iter().any(|id| !now.contains(id)) {
+                let gone: Vec<_> = e
+                    .materials() // clones the parse (F22): only on the frame a shape leaves the set
+                    .into_iter()
+                    .filter(|(id, _)| e.anim_last.contains(id) && !now.contains(id))
+                    .collect();
+                for (id, m) in gone {
+                    // false: no load sent yet; the next load carries the file material
+                    self.v3.set_material(id, m);
+                }
+            }
+            e.anim_last = now;
+        }
+        let in_game = self.edit.as_ref().is_some_and(|e| e.in_game.is_some());
+        let Some(range) = self.edit.as_ref().and_then(NifEdit::anim_range) else {
+            self.v3.clock = None;
+            return;
+        };
+        let c = self.v3.clock.get_or_insert(Clock::new(range));
+        if c.range != range {
+            c.range = range;
+            c.t = c.t.clamp(range.0, range.1);
+        }
+        // In game (simulated) shows static PGPatcher materials (F21): the clock pauses there.
+        if !self.v3.nif_view || in_game {
+            c.playing = false;
+            return;
+        }
+        self.v3.tick(dt);
+        let (Some(e), Some(c)) = (self.edit.as_mut(), self.v3.clock) else {
+            return;
+        };
+        if e.anim_shown == Some(c.t) {
+            return;
+        }
+        for (id, m) in e.frame_materials(c.t) {
+            // false: no load of this content sent yet (a reload); the next frame tries again.
+            if !self.v3.set_material(id, m) {
+                return;
+            }
+        }
+        e.anim_shown = Some(c.t);
     }
 
     pub fn edit_push(&mut self, ops: Vec<Op>, merge: Option<String>) {
@@ -914,15 +1310,21 @@ impl MeshesModel {
     /// The preview after a change (R10): each changed shape's material goes to the loaded content; a texture path
     /// the content's map lacks (and the store has), or a material the viewport refuses, reloads the same view with
     /// the map extended.
-    fn edit_changed(&mut self, before: Vec<(ShapeId, MaterialState)>) {
+    pub(super) fn edit_changed(&mut self, before: Vec<(ShapeId, MaterialState)>) {
+        // It sends static materials: the next tick_anim resends the animated ones.
+        if let Some(e) = &mut self.edit {
+            e.anim_shown = None;
+        }
         self.edit_checks();
+        self.refresh_in_game();
         let (Some(e), Some(store)) = (&self.edit, &self.store) else {
             return;
         };
         if e.le_mesh {
             return;
         }
-        // In game shows PGPatcher's copy (P13): the session is current, and Source rebuilds the preview from it.
+        // A failed show_edit_preview left a plain copy on screen: the session is current, and the next switch
+        // rebuilds the preview from it.
         let Some(Content::Parsed { nif, textures, .. }) = self.v3.content() else {
             return;
         };

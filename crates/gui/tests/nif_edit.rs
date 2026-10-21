@@ -74,6 +74,57 @@ fn negative_zero_survives_the_document() {
     }
 }
 
+use nif::keys::{Key, KeyData, KeyGroup};
+
+fn fkey(time: f32, value: f32, tbc: Option<[f32; 3]>) -> Key<f32> {
+    Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc,
+    }
+}
+
+#[test]
+fn key_bits_survive_the_document() {
+    let mut d = doc();
+    let op = Op::SetKeys {
+        at: sample_op_anchor(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![fkey(-0.0, f32::from_bits(0x7FC0_0001), None)],
+        }),
+        base: KeyData::Float(KeyGroup {
+            key_type: None,
+            keys: vec![],
+        }),
+    };
+    d.ops.push(DocOp {
+        op,
+        status: OpStatus::Applied,
+    });
+    let back = EditDoc::from_text(&d.to_text()).unwrap();
+    match &back.ops[0].op {
+        Op::SetKeys {
+            keys: KeyData::Float(g),
+            ..
+        } => {
+            assert_eq!(g.keys[0].time.to_bits(), 0x8000_0000);
+            assert_eq!(g.keys[0].value.to_bits(), 0x7FC0_0001);
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+fn sample_op_anchor() -> Anchor {
+    match sample_op() {
+        Op::SetField { at, .. } => at,
+        _ => unreachable!(),
+    }
+}
+
 #[test]
 fn doc_and_export_paths_follow_the_spec() {
     let m = Path::new(r"C:\I\mods\sdc NIF Edits");
@@ -182,6 +233,50 @@ fn history_merges_drags_caps_at_200_and_redoes() {
     assert_eq!(last, "5");
 }
 
+/// B-P41 (final review minor 6): AddController's frequency, start and stop are stored as bits, like key floats.
+#[test]
+fn add_controller_times_round_trip_as_bits() {
+    let op = Op::AddController {
+        at: Anchor {
+            block: 3,
+            kind: "BSLightingShaderProperty".into(),
+            shape: Some("S".into()),
+            role: Role::Shader,
+        },
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(9),
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![],
+        }),
+        flags: 0x48,
+        freq: f32::from_bits(0xFFC0_0001), // a NaN with a payload and the sign bit
+        start: -0.0,
+        stop: f32::INFINITY,
+    };
+    let mut d = doc();
+    d.ops = vec![DocOp {
+        op,
+        status: OpStatus::Applied,
+    }];
+    let back = EditDoc::from_text(&d.to_text()).unwrap();
+    let Op::AddController {
+        freq, start, stop, ..
+    } = &back.ops[0].op
+    else {
+        panic!("{:?}", back.ops)
+    };
+    assert_eq!(
+        [freq, start, stop].map(|f| f.to_bits()),
+        [0xFFC0_0001, 0x8000_0000, f32::INFINITY.to_bits()]
+    );
+    // A document saved before B-P41 holds plain numbers: it still opens.
+    let t = d.to_text();
+    assert!(t.contains("freq = 4290772993"), "{t}");
+    let old = EditDoc::from_text(&t.replace("freq = 4290772993", "freq = 1.5")).unwrap();
+    assert!(matches!(old.ops[0].op, Op::AddController { freq, .. } if freq == 1.5));
+}
+
 #[test]
 fn every_op_variant_round_trips() {
     use nif::edit::Owner;
@@ -242,6 +337,69 @@ fn every_op_variant_round_trips() {
             base: E::Int(2),
         },
         Op::RemoveExtra { at: extra.clone() },
+        Op::SetKeys {
+            at: ctrl.clone(),
+            clip: Some(2),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(-0.0, 1e38, None), fkey(1.0, -0.0, None)],
+            }),
+            base: KeyData::Pos(KeyGroup {
+                key_type: Some(2),
+                keys: vec![Key {
+                    time: 0.5,
+                    value: [1.0, -2.0, 3.0],
+                    forward: Some([0.1, 0.2, 0.3]),
+                    backward: Some([-0.1, -0.2, -0.3]),
+                    tbc: None,
+                }],
+            }),
+        },
+        Op::SetKeys {
+            at: ctrl.clone(),
+            clip: None,
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(3),
+                keys: vec![fkey(0.0, 2.0, Some([0.5, -0.25, 1.0]))],
+            }),
+            base: KeyData::Bool(KeyGroup {
+                key_type: None,
+                keys: vec![],
+            }),
+        },
+        Op::AddController {
+            at: shader.clone(),
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(9),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(0.0, 1.0, None), fkey(2.0, -0.0, None)],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 2.0,
+        },
+        Op::AddController {
+            at: shader.clone(),
+            class: "BSNiAlphaPropertyTestRefController".into(),
+            var: None,
+            keys: KeyData::Pos(KeyGroup {
+                key_type: Some(1),
+                keys: vec![Key {
+                    time: 0.0,
+                    value: [1.0, 0.5, 0.25],
+                    forward: None,
+                    backward: None,
+                    tbc: None,
+                }],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 2.0,
+        },
+        Op::RemoveController { at: ctrl.clone() },
     ];
     for v in [
         E::Bsx(7),
@@ -763,8 +921,7 @@ fn set_lit(m: &mut MeshesModel, field: Field, v: f32) {
     );
 }
 
-/// Final review I2, ruling P13: In game shows PGPatcher's copy; the session keeps updating, and Source shows the
-/// edit again with every edit made meanwhile.
+/// v2 B8 (supersedes P13's In game half): In game (simulated) keeps the session and shows every edit.
 #[test]
 fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     let (_d, mut m) = session(false);
@@ -773,13 +930,27 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     assert!(m.view_source, "the edit preview is the Source side");
     set_lit(&mut m, Field::Glossiness, 12.5);
     m.set_view_source(false);
-    assert!(m.v3.is_mesh(), "In game shows the PGPatcher copy");
-    assert!(!m.v3.nif_view);
+    assert!(!m.v3.is_mesh(), "In game is the simulated edit preview");
+    assert!(m.v3.nif_view);
+    assert!(m.edit.as_ref().unwrap().in_game.is_some());
     set_lit(&mut m, Field::SpecularStrength, 3.5);
     assert_eq!(m.edit.as_ref().unwrap().doc.ops.len(), 2);
+    let Some(Content::Parsed { nif, .. }) = m.v3.content() else {
+        panic!("In game shows the edit preview")
+    };
+    let p = &nif.shapes[0].material.params;
+    assert_eq!(
+        (p.glossiness, p.specular_strength),
+        (12.5, 3.5),
+        "no JSON: in game too"
+    );
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    wait_pg(&mut m);
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("Showing the PGPatcher copy: switch to Source to see your edit.");
+    h.get_by_label("In game (simulated)");
+    h.get_by_label(NO_MATCH);
     let m = h.state_mut();
     m.set_view_source(true);
     assert!(m.v3.nif_view);
@@ -789,9 +960,8 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     let p = &nif.shapes[0].material.params;
     assert_eq!((p.glossiness, p.specular_strength), (12.5, 3.5));
     h.run_steps(4);
-    assert!(h
-        .query_by_label("Showing the PGPatcher copy: switch to Source to see your edit.")
-        .is_none());
+    assert!(!h.state().edit_preview_hidden());
+    assert!(h.query_by_label(EDIT_HIDDEN).is_none());
 }
 
 // ---- v2 A17: the edit panel, selection, Shader and Alpha tabs ----
@@ -1399,14 +1569,63 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
 
 use builder::{Nif, W};
 
+/// Rulings B-P28, B-P29: an authored TBC key, decreasing or non-finite key times block export (the `validate_ops`
+/// wiring).
+#[test]
+fn authored_key_errors_block_export() {
+    let b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
+    let base = nif::keys::read_data(&nif::header::Header::parse(&b).unwrap(), &b, 6).unwrap();
+    for (key_type, times, want) in [
+        (
+            3,
+            [0.0, 1.0],
+            "Only linear and quadratic keys can be authored",
+        ),
+        (1, [1.0, 0.0], "Key times must not decrease"),
+        (1, [0.0, f32::NAN], "Key values must be finite numbers"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let edit_mod = d.path().join("mods").join(EDIT_MOD);
+        let mut e = NifEdit::open(
+            b.clone(),
+            copy("A", 1, false),
+            "meshes/x.nif",
+            Some(&edit_mod),
+        )
+        .unwrap();
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(11),
+            nth: 0,
+        };
+        let tbc = (key_type == 3).then_some([0.5, -0.25, 1.0]);
+        let op = Op::SetKeys {
+            at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
+            clip: None,
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(key_type),
+                keys: times.iter().map(|&t| fkey(t, 1.0, tbc)).collect(),
+            }),
+            base: base.clone(),
+        };
+        e.push(vec![op], None);
+        assert_eq!(e.export_block().as_deref(), Some(want));
+    }
+}
+
 /// Shape "S" (0) -> BSLSP (1) -> free float controllers var 11 (2, interp 4) and var 20 (3, interp 5); a root NiNode
 /// (12) listing BSXFlags `bsx` (6), a BSInvMarker, a multi-line string, an int, a bool and a negative-zero float.
 fn ctrl_scene(bsx: u32) -> Vec<u8> {
+    ctrl_scene_vars(bsx, [11, 20])
+}
+
+fn ctrl_scene_vars(bsx: u32, vars: [u32; 2]) -> Vec<u8> {
     let mut n = Nif::new(100);
     let (s, r) = (n.string("S"), n.string("Root"));
     n.block("BSTriShape", scenes::bstri_named(s, 1, -1));
     n.block("BSLightingShaderProperty", scenes::lsp_body(0, &[], 2, &[]));
-    for (next, var, interp) in [(3, 11, 4), (-1, 20, 5)] {
+    for (next, var, interp) in [(3, vars[0], 4), (-1, vars[1], 5)] {
         let tail = W::default().i32(interp).u32(var);
         n.block(
             "BSLightingShaderPropertyFloatController",
@@ -1505,8 +1724,10 @@ fn controller_rows_show_variable_cycle_and_edit_frequency() {
     assert_eq!(e.model.interps[&5].value, vec![0.75], "{:?}", e.outcomes);
 }
 
+/// R8 lifted (v2 B7, E9: replaces `managed_variable_combo_is_disabled`): the Variable combo of a managed controller
+/// is enabled; a pick rewrites the clip's ID.
 #[test]
-fn managed_variable_combo_is_disabled() {
+fn managed_variable_change_rewrites_clip_ids() {
     let mut m = MeshesModel::empty();
     m.edit = Some(
         NifEdit::open(
@@ -1524,10 +1745,29 @@ fn managed_variable_combo_is_disabled() {
     tab(&mut h, "Controllers");
     h.get_by_label("Managed by a clip");
     let var = h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable");
-    assert!(var.accesskit_node().is_disabled());
+    assert!(!var.accesskit_node().is_disabled());
     var.click();
     h.run_steps(3);
-    assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
+    h.get_by_role_and_label(AkRole::Button, "U offset (20)")
+        .click();
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert!(
+        matches!(
+            &got[..],
+            [Op::SetField {
+                field: Field::Variable,
+                value: Value::U32(20),
+                base: Value::U32(11),
+                ..
+            }]
+        ),
+        "{got:?}"
+    );
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    assert_eq!(e.model.sequences[0].blocks[0].ctrl_id, Some(b"20".to_vec()));
+    assert_eq!(e.model.sequences[0].blocks[1].ctrl_id, None);
 }
 
 #[test]
@@ -2597,4 +2837,2714 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
         1,
         "saved where it was"
     );
+}
+
+// ---- v2 B3: the clock, the per-frame cbuffer path ----
+
+use render3d::{EditKind, ShapeId};
+use sdc_gui::model::viewport3d::V3Reply;
+
+/// `bytes` with a free BSLightingShaderPropertyFloatController var 20 (U offset), Loop + Active (0x48), start 0,
+/// stop 1, LINEAR keys (0, 0) → (1, 1), put first in the first lit shape's controller chain.
+fn with_uv_ctrl(bytes: &[u8]) -> Vec<u8> {
+    with_uv_ctrl_timed(bytes, 0x48, [1.0, 0.0, 0.0, 1.0])
+}
+
+/// [`with_uv_ctrl`] with the controller's `flags` and (frequency, phase, start, stop).
+fn with_uv_ctrl_timed(bytes: &[u8], flags: u16, timing: [f32; 4]) -> Vec<u8> {
+    let m = nif::model::read_model(bytes).unwrap();
+    let lsp = m
+        .shapes
+        .iter()
+        .find_map(|s| s.shader.filter(|b| m.lighting.contains_key(b)))
+        .unwrap();
+    let net = m.lighting[&lsp].prop.net.clone();
+    let mut doc = nif::write::NifDoc::open(bytes).unwrap();
+    let at = net.controller_at() - doc.header().offsets()[lsp as usize];
+    let key = |time: f32, value: f32| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![key(0.0, 0.0), key(1.0, 1.0)],
+    });
+    let data = doc.append(b"NiFloatData", nif::keys::encode_data(&keys));
+    let interp = doc.append(
+        b"NiFloatInterpolator",
+        builder::W::default().f(0.0).i32(data as i32).0,
+    );
+    let ctrl = doc.append(
+        b"BSLightingShaderPropertyFloatController",
+        builder::W::default()
+            .i32(net.controller)
+            .u16(flags)
+            .fs(&timing)
+            .i32(lsp as i32)
+            .i32(interp as i32)
+            .u32(20)
+            .0,
+    );
+    doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
+    let out = doc.bytes();
+    let back = nif::model::read_model(&out).unwrap();
+    assert!(back.lighting[&lsp].prop.ctrls.contains(&ctrl));
+    assert!(back.ctrls[&ctrl].known, "{:?}", back.ctrls[&ctrl]);
+    out
+}
+
+/// A scanned session whose x.nif has `with_uv_ctrl`, the edit open, the first load sent and answered.
+fn playing_session() -> (tempfile::TempDir, MeshesModel, Receiver<V3Cmd>) {
+    session_on(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")))
+}
+
+/// [`playing_session`] on the given x.nif bytes.
+fn session_on(nif: &[u8]) -> (tempfile::TempDir, MeshesModel, Receiver<V3Cmd>) {
+    let d = files(false);
+    put(d.path(), "mods/A/meshes/x.nif", Some(nif));
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    let cmds = attach(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    m.tick_anim(0.0); // makes the clock
+    m.v3.request_frame(64, 64);
+    let Some(V3Cmd::LoadParsed { id, nif, .. }) = cmds
+        .try_iter()
+        .find(|c| matches!(c, V3Cmd::LoadParsed { .. }))
+    else {
+        panic!("the first LoadParsed")
+    };
+    m.v3.handle(V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: nif.shapes.len(),
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    cmds.try_iter().for_each(drop);
+    (d, m, cmds)
+}
+
+/// Review Focus 5: 300 playing ticks send only SetMaterial and Render (no load, no shader, feature or deferred
+/// command), and every material differs from the static one only in cbuffer fields.
+#[test]
+fn playback_is_cbuffer_only() {
+    let (_d, mut m, cmds) = playing_session();
+    let c = m.v3.clock.expect("an animated session has a clock");
+    assert_eq!((c.t, c.playing, c.range), (0.0, false, (0.0, 1.0)));
+    let animated = m.edit.as_ref().unwrap().frame_materials(0.0);
+    assert!(!animated.is_empty());
+    let base: std::collections::BTreeMap<ShapeId, nif::material::MaterialState> =
+        m.edit.as_ref().unwrap().materials().into_iter().collect();
+    m.v3.clock.as_mut().unwrap().play();
+    let (mut sets, mut renders) = (vec![], vec![]);
+    for _ in 0..300 {
+        m.tick_anim(1.0 / 60.0);
+        m.v3.request_frame(64, 64);
+        for c in cmds.try_iter() {
+            match c {
+                V3Cmd::SetMaterial { id, material, .. } => sets.push((id, material)),
+                V3Cmd::Render { time, .. } => renders.push(time),
+                _ => panic!("only SetMaterial and Render during playback"),
+            }
+        }
+    }
+    assert_eq!(renders.len(), 300, "one Render per tick");
+    assert_eq!(
+        sets.len(),
+        300 * animated.len(),
+        "one SetMaterial per animated shape per tick"
+    );
+    assert!(
+        renders.iter().all(|t| (0.0..=1.0).contains(t)),
+        "looping stays in range"
+    );
+    let mut cbuffer = 0;
+    for (id, mat) in &sets {
+        let k = render3d::classify(&base[id], mat, &[], false);
+        assert!(
+            matches!(k, EditKind::Cbuffer | EditKind::Same),
+            "{id:?}: {k:?}"
+        );
+        cbuffer += (k == EditKind::Cbuffer) as usize;
+        let mut back = mat.clone();
+        back.params.uv_offset[0] = base[id].params.uv_offset[0];
+        assert_eq!(&back, &base[id], "only U offset is animated");
+    }
+    assert!(cbuffer > 0);
+    // The 30th tick is t = 0.5 (dt 1/60 < MAX_DT): U offset follows the LINEAR curve.
+    assert!((sets[29 * animated.len()].1.params.uv_offset[0] - renders[29]).abs() < 1e-5);
+    assert!((renders[29] - 0.5).abs() < 1e-4);
+}
+
+#[test]
+fn scrub_sets_time_and_pauses() {
+    let (_d, mut m, cmds) = playing_session();
+    m.v3.clock.as_mut().unwrap().play();
+    m.tick_anim(0.02);
+    m.v3.request_frame(64, 64);
+    cmds.try_iter().for_each(drop);
+    m.v3.clock.as_mut().unwrap().scrub(0.25);
+    m.tick_anim(0.02);
+    let c = m.v3.clock.unwrap();
+    assert_eq!(
+        (c.t, c.playing),
+        (0.25, false),
+        "a paused clock does not move"
+    );
+    m.v3.request_frame(64, 64);
+    let got: Vec<V3Cmd> = cmds.try_iter().collect();
+    assert!(got.iter().any(
+        |c| matches!(c, V3Cmd::SetMaterial { material, .. } if material.params.uv_offset[0] == 0.25)
+    ));
+    assert!(got
+        .iter()
+        .any(|c| matches!(c, V3Cmd::Render { time, .. } if *time == 0.25)));
+    m.tick_anim(0.02);
+    m.v3.request_frame(64, 64);
+    assert!(
+        cmds.try_recv().is_err(),
+        "paused and shown: nothing more is sent"
+    );
+}
+
+/// F6 and F21: In game pauses the clock and sends nothing; closing the session drops the clock.
+#[test]
+fn the_clock_pauses_in_game_and_goes_with_the_session() {
+    let (_d, mut m, cmds) = playing_session();
+    m.v3.clock.as_mut().unwrap().play();
+    m.set_view_source(false);
+    assert!(m.v3.nif_view, "In game (simulated) is the edit preview too");
+    assert!(m.v3.clock.is_some());
+    m.tick_anim(0.02);
+    assert!(!m.v3.clock.unwrap().playing);
+    assert!(!cmds
+        .try_iter()
+        .any(|c| matches!(c, V3Cmd::SetMaterial { .. })));
+    m.close_edit();
+    assert_eq!(m.v3.clock, None);
+}
+
+/// The controls under the 3D view drive the clock.
+#[test]
+fn play_and_pause_buttons_drive_the_clock() {
+    let (_d, m, _cmds) = playing_session();
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Play").click();
+    h.run_steps(3);
+    let c = h.state().v3.clock.unwrap();
+    assert!(c.playing && c.t > 0.0, "{c:?}");
+    h.get_by_label("Pause").click();
+    h.run_steps(2);
+    assert!(!h.state().v3.clock.unwrap().playing);
+    h.get_by_label("Loop");
+    h.get_by_role_and_label(AkRole::Slider, "Time");
+}
+
+/// Rule 3.1: at 1100, 1280 and 1600 px the clock rows (Play, Loop, Speed, the Time slider and its text) stay
+/// inside the centre column.
+#[test]
+fn the_clock_row_fits_the_centre_column() {
+    for w in [1100.0, 1280.0, 1600.0] {
+        let (_d, m, _cmds) = playing_session();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(w, 800.0))
+            .build_ui_state(
+                |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+                m,
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run_steps(3);
+        let rect = |id: &str| {
+            egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new(id))
+                .unwrap_or_else(|| panic!("{id} is drawn"))
+                .outer_rect
+        };
+        rect("meshes-3d-anim");
+        // A panel grows to its content, so the bound is the centre column: between the tree and the edit panel.
+        let (lo, hi) = (rect("meshes-tree").max.x, rect("meshes-edit").min.x);
+        let mut nodes = h.query_all_by_label("Time").collect::<Vec<_>>();
+        nodes.push(h.get_by_label("Play"));
+        nodes.push(h.get_by_label("Loop"));
+        // v2 B8: the edit-mode toggle above them, too.
+        nodes.push(h.get_by_label("In game (simulated)"));
+        nodes.push(h.get_by_label("Edited source"));
+        let speed: Vec<_> = h.query_all_by_label("Speed").collect();
+        assert!(!speed.is_empty(), "the Speed label and its value");
+        nodes.extend(speed);
+        assert!(nodes.len() >= 4);
+        for n in nodes {
+            let r = n.rect();
+            assert!(
+                r.max.x <= hi + 0.5 && r.min.x >= lo - 0.5,
+                "{w} px: {r:?} outside {lo}..{hi}"
+            );
+        }
+    }
+}
+
+// ---- v2 B3 fix round 1 (B-P33): the clock range is in scene time ----
+
+/// The U offset sent for clock time `t` (scrubbed, then one tick).
+fn u_at(m: &mut MeshesModel, cmds: &Receiver<V3Cmd>, t: f32) -> f32 {
+    cmds.try_iter().for_each(drop);
+    m.v3.clock.as_mut().unwrap().scrub(t);
+    m.tick_anim(0.0);
+    cmds.try_iter()
+        .find_map(|c| match c {
+            V3Cmd::SetMaterial { material, .. } => Some(material.params.uv_offset[0]),
+            _ => None,
+        })
+        .expect("a SetMaterial")
+}
+
+/// A 0-1 controller at frequency 0.5 takes 2 s of scene time: the clock plays the whole curve.
+#[test]
+fn half_speed_plays_the_whole_curve() {
+    let nif = with_uv_ctrl_timed(
+        &fixture("TestNifFile_Skinned_SE.nif"),
+        0x48,
+        [0.5, 0.0, 0.0, 1.0],
+    );
+    let (_d, mut m, cmds) = session_on(&nif);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 2.0));
+    assert!((u_at(&mut m, &cmds, 1.9) - 0.95).abs() < 1e-5);
+}
+
+/// A frequency-1 Reverse (ping-pong) controller over 0-1 needs 2 s for both legs: the clock reaches the way back.
+#[test]
+fn ping_pong_reaches_its_reverse_leg() {
+    let nif = with_uv_ctrl_timed(
+        &fixture("TestNifFile_Skinned_SE.nif"),
+        0x48 | (1 << 1),
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    let (_d, mut m, cmds) = session_on(&nif);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 2.0));
+    assert!((u_at(&mut m, &cmds, 0.5) - 0.5).abs() < 1e-5);
+    assert!(
+        (u_at(&mut m, &cmds, 1.75) - 0.25).abs() < 1e-5,
+        "the reverse leg"
+    );
+}
+
+/// B-P33 Important 2: a controller whose stop is +inf or NaN gets no clock and no slider, and the panel says why.
+#[test]
+fn invalid_controller_times_turn_playback_off() {
+    for stop in [f32::INFINITY, f32::NAN] {
+        let nif = with_uv_ctrl_timed(
+            &fixture("TestNifFile_Skinned_SE.nif"),
+            0x48,
+            [1.0, 0.0, 0.0, stop],
+        );
+        let (_d, m, _cmds) = session_on(&nif);
+        assert_eq!(m.v3.clock, None, "stop {stop}");
+        assert!(m.edit.as_ref().unwrap().anim_invalid());
+        let mut h = view(m);
+        h.run_steps(2);
+        h.get_by_label(ANIM_INVALID);
+        assert!(h.query_by_label("Play").is_none(), "stop {stop}");
+        assert_eq!(h.query_all_by_label("Time").count(), 0, "stop {stop}");
+        assert_eq!(h.state().v3.clock, None);
+    }
+}
+
+// ---- v2 B6: the Controllers tab (curve, key table, scrub, add and remove) ----
+
+use nif::keys::encode_data;
+
+fn float_keys(m: &MeshesModel, ctrl: u32) -> KeyGroup<f32> {
+    match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
+        Ok(KeyData::Float(g)) => g.clone(),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// Press on the node labelled `label`, move `dy` px up in three steps, release.
+fn drag_up(h: &mut Harness<'static, MeshesModel>, label: &str, dy: f32) {
+    h.get_by_label(label).scroll_to_me();
+    h.run_steps(2);
+    let c = h.get_by_label(label).rect().center();
+    drag_from(h, c, dy);
+}
+
+/// Press at `c`, move `dy` px up in three steps, release.
+fn drag_from(h: &mut Harness<'static, MeshesModel>, c: egui::Pos2, dy: f32) {
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=3 {
+        h.hover_at(c - egui::vec2(0.0, dy * k as f32 / 3.0)); // the first step is past max_click_dist (6 px)
+        h.run_steps(1);
+    }
+    h.drop_at(c - egui::vec2(0.0, dy));
+    h.run_steps(3);
+}
+
+/// A handle drag is one SetKeys with the base it started from, one undo step; the release flushes, so the next
+/// drag is a second op.
+#[test]
+fn dragging_a_key_records_one_undo_step() {
+    let b = scenes::keyed_pair(scenes::Share::No, [1, 2]); // ctrl 2: var 11, LINEAR (0,0) (1,1), data 6
+    let orig = nif::keys::read_data(&nif::header::Header::parse(&b).unwrap(), &b, 6).unwrap();
+    let mut m = direct(b);
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    assert!(
+        ops(h.state()).is_empty(),
+        "drawing the curve records nothing"
+    );
+    drag_up(&mut h, "Emissive multiple key 2", 30.0);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    let Op::SetKeys {
+        clip, keys, base, ..
+    } = &got[0]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*clip, None);
+    assert_eq!(
+        encode_data(base),
+        encode_data(&orig),
+        "the op keeps the keys the drag started from"
+    );
+    let g = float_keys(h.state(), 2);
+    assert_eq!(
+        &KeyData::Float(g.clone()),
+        keys,
+        "the patched file has the op's keys"
+    );
+    assert_eq!(
+        (g.keys[0].time, g.keys[0].value),
+        (0.0, 0.0),
+        "the other key is untouched"
+    );
+    assert_eq!(g.keys[1].time, 1.0, "a vertical drag keeps the time");
+    assert!(g.keys[1].value > 1.0, "dragged up: {}", g.keys[1].value);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().outcomes,
+        vec![nif::edit::Outcome::Applied]
+    );
+    // The release flushed: a second drag is a second op. (Before any undo: `restore` also ends a drag, so a drag
+    // after an undo/redo would be a new op even without the release's flush.)
+    drag_up(&mut h, "Emissive multiple key 2", 30.0);
+    assert_eq!(ops(h.state()).len(), 2, "{:?}", ops(h.state()));
+    // One undo step per drag, back to the source.
+    assert!(h.state_mut().undo_edit());
+    assert_eq!(ops(h.state()).len(), 1);
+    assert!(h.state_mut().undo_edit());
+    assert!(ops(h.state()).is_empty());
+    assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
+}
+
+/// A typed key value is stored with its exact bits; a typed decreasing time is kept (never clamped) and its
+/// validate_ops error shows under the controller.
+#[test]
+fn key_table_edit_sets_exact_value() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    edit_number(&mut h, "Emissive multiple key 2 value", "0.3");
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    let g = float_keys(h.state(), 2);
+    assert_eq!(g.keys[1].value.to_bits(), 0.3f32.to_bits());
+    assert_eq!(g.keys[1].time, 1.0);
+    // The bytes on file: data block 6 (unshared, re-emitted in place, B4).
+    let e = h.state().edit.as_ref().unwrap();
+    let on_file = nif::keys::read_data(
+        &nif::header::Header::parse(&e.patched).unwrap(),
+        &e.patched,
+        6,
+    )
+    .unwrap();
+    assert_eq!(encode_data(&on_file), encode_data(&KeyData::Float(g)));
+    // A QUADRATIC tangent (ctrl 3, var 20).
+    edit_number(&mut h, "U offset key 1 backward", "-2.5");
+    let KeyData::Float(q) = h.state().edit.as_ref().unwrap().keys[&(3, None)]
+        .clone()
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        q.keys[0].backward.map(f32::to_bits),
+        Some((-2.5f32).to_bits())
+    );
+    // Decreasing time: kept as typed, Error shown, no clamp.
+    edit_number(&mut h, "Emissive multiple key 2 time", "-1");
+    assert_eq!(float_keys(h.state(), 2).keys[1].time, -1.0);
+    h.get_by_label("Key times must not decrease");
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(
+        e.op_warnings
+            .iter()
+            .any(|w| w.target == Target::Block { block: 2 }),
+        "{:?}",
+        e.op_warnings
+    );
+    // 3 typed edits; the time edit also moves the stop to the last key (B-P44) in the same step.
+    assert_eq!(ops(h.state()).len(), 4, "each typed edit is its own step");
+}
+
+/// D9: Add controller appends a free controller and sets BSX bit 0; the Extra data tab then shows Animated ticked
+/// and locked. Remove unlinks it; the bit stays (add-only) and is no longer locked.
+#[test]
+fn add_controller_ticks_and_locks_bsx_animated() {
+    let mut m = direct(scenes::emit_scene("BSX", 0x82, true)); // S -> BSLSP 2, no controllers; root BSX 0x82
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(!h
+        .get_by_role_and_label(AkRole::CheckBox, "Animated")
+        .accesskit_node()
+        .is_disabled());
+    tab(&mut h, "Controllers");
+    h.get_by_label("No controllers.");
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Emissive multiple (11)")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Add controller to shader property").click();
+    h.run_steps(4);
+    let got = ops(h.state());
+    let e = h.state().edit.as_ref().unwrap();
+    let v = e
+        .model
+        .lighting
+        .values()
+        .next()
+        .unwrap()
+        .lighting
+        .params
+        .emissive_multiple;
+    let Some(Op::AddController {
+        class,
+        var,
+        keys,
+        flags,
+        freq,
+        start,
+        stop,
+        ..
+    }) = got.first()
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(
+        (class.as_str(), *var),
+        ("BSLightingShaderPropertyFloatController", Some(11))
+    );
+    assert_eq!((*flags, *freq, *start, *stop), (0x48, 1.0, 0.0, 1.0));
+    let KeyData::Float(g) = keys else {
+        panic!("{keys:?}")
+    };
+    assert_eq!(g.key_type, Some(1));
+    assert_eq!(
+        g.keys.iter().map(|k| (k.time, k.value)).collect::<Vec<_>>(),
+        [(0.0, v), (1.0, v)]
+    );
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    assert_eq!(
+        e.model.lighting.values().next().unwrap().prop.ctrls.len(),
+        1
+    );
+    let bsx = e
+        .model
+        .extras
+        .values()
+        .find(|x| x.kind == "BSXFlags")
+        .and_then(|x| x.value.clone());
+    assert_eq!(bsx, Some(ExtraValue::Bsx(0x83)));
+    tab(&mut h, "Extra data");
+    let a = h.get_by_role_and_label(AkRole::CheckBox, "Animated");
+    assert!(
+        a.accesskit_node().is_disabled(),
+        "locked while a free controller exists"
+    );
+    assert_eq!(
+        a.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    tab(&mut h, "Controllers");
+    h.get_by_label("Remove Emissive multiple controller")
+        .click();
+    h.run_steps(4);
+    assert!(matches!(
+        ops(h.state()).last(),
+        Some(Op::RemoveController { .. })
+    ));
+    assert!(h
+        .state()
+        .edit
+        .as_ref()
+        .unwrap()
+        .model
+        .lighting
+        .values()
+        .next()
+        .unwrap()
+        .prop
+        .ctrls
+        .is_empty());
+    tab(&mut h, "Extra data");
+    let a = h.get_by_role_and_label(AkRole::CheckBox, "Animated");
+    assert!(
+        !a.accesskit_node().is_disabled(),
+        "no free controller: unlocked"
+    );
+    assert_eq!(
+        a.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "D9 is add-only"
+    );
+}
+
+/// A click on the curve moves the clock (B3) to that time and pauses it; the next frame sends the material at
+/// that time and renders with it.
+#[test]
+fn scrub_moves_the_preview_time() {
+    let (_d, mut m, cmds) = playing_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    m.v3.clock.as_mut().unwrap().play();
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("U offset curve").scroll_to_me();
+    h.run_steps(2);
+    let r = h.get_by_label("U offset curve").rect();
+    // curve.rs PAD = 6 px; the var-20 controller spans [0, 1] (start 0, stop 1, keys at 0 and 1).
+    let p = egui::pos2(r.left() + 6.0 + 0.25 * (r.width() - 12.0), r.top() + 10.0);
+    cmds.try_iter().for_each(drop);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let c = h.state().v3.clock.unwrap();
+    assert!(!c.playing, "a scrub pauses");
+    assert!((c.t - 0.25).abs() < 0.01, "{c:?}");
+    let sent: Vec<V3Cmd> = cmds.try_iter().collect();
+    assert!(
+        sent.iter().any(|x| matches!(x, V3Cmd::SetMaterial { material, .. } if material.params.uv_offset[0] == c.t)),
+        "the animated material at the scrubbed time"
+    );
+    assert!(sent
+        .iter()
+        .any(|x| matches!(x, V3Cmd::Render { time, .. } if *time == c.t)));
+}
+
+/// Removing a playing shape's only controller sends its file material once: the viewport must not keep the last
+/// animated frame.
+#[test]
+fn a_removed_controller_restores_the_file_material() {
+    let (_d, mut m, cmds) = playing_session();
+    let (shape, lsp) = lit_shape(m.edit.as_ref().unwrap());
+    let file_u = m.edit.as_ref().unwrap().model.lighting[&lsp]
+        .lighting
+        .params
+        .uv_offset[0];
+    m.v3.clock.as_mut().unwrap().scrub(0.5);
+    m.tick_anim(0.0);
+    assert!(cmds.try_iter().any(
+        |c| matches!(c, V3Cmd::SetMaterial { material, .. } if material.params.uv_offset[0] == 0.5)
+    ));
+    let e = m.edit.as_ref().unwrap();
+    let ctrl = e.model.lighting[&lsp].prop.ctrls[0];
+    let c = &e.model.ctrls[&ctrl];
+    let at = Anchor {
+        block: ctrl,
+        kind: c.class.clone(),
+        shape: e.model.shape(shape).and_then(|s| s.name.clone()),
+        role: Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: c.class.clone(),
+            var: c.var,
+            nth: 0,
+        },
+    };
+    m.edit_push(vec![Op::RemoveController { at }], None);
+    assert_eq!(
+        m.edit.as_ref().unwrap().outcomes.last(),
+        Some(&nif::edit::Outcome::Applied)
+    );
+    cmds.try_iter().for_each(drop);
+    m.tick_anim(0.0);
+    let sent: Vec<V3Cmd> = cmds.try_iter().collect();
+    assert!(
+        sent.iter().any(|c| matches!(c, V3Cmd::SetMaterial { id, material, .. } if id.0 == shape && material.params.uv_offset[0] == file_u)),
+        "no file material in {} commands (V3Cmd is not Debug)",
+        sent.len()
+    );
+    assert_eq!(m.v3.clock, None, "nothing animated: no clock");
+}
+
+// ---- v2 B6 fix round 1 (B-P35) ----
+
+/// Replaces the keys of shape "S"'s float controller `var` (one undo step), before any drawing.
+fn set_float_keys(m: &mut MeshesModel, var: u32, keys: KeyData) {
+    let e = m.edit.as_ref().unwrap();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(var),
+        nth: 0,
+    };
+    let at = nif::edit::anchor_role(&e.model, Some(shape_named(e, "S")), role).unwrap();
+    let base = e.keys[&(at.block, None)].clone().unwrap();
+    m.edit_push(
+        vec![Op::SetKeys {
+            at,
+            clip: None,
+            keys,
+            base,
+        }],
+        None,
+    );
+}
+
+fn lin2(a: f32, b: f32) -> KeyData {
+    KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![fkey(0.0, a, None), fkey(1.0, b, None)],
+    })
+}
+
+/// B-P35 I1: the clip-shared guard is the alpha's (D9); a shared shader with a managed controller still adds.
+#[test]
+fn a_shared_shader_with_a_managed_controller_keeps_add_enabled() {
+    // A and B share BSLSP 3; the added U offset controller has bit 0x20 (managed).
+    let b = with_uv_ctrl_timed(
+        &scenes::shared_alpha_with_testref_chain(),
+        0x68,
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    let mut m = direct(b);
+    select(&mut m, "A");
+    let e = m.edit.as_ref().unwrap();
+    let lsp = e.model.lighting.values().next().unwrap();
+    assert!(lsp.prop.users.len() > 1 && lsp.prop.ctrls.iter().any(|&c| e.model.managed(c)));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let add = h.get_by_label("Add controller to shader property");
+    assert!(!add.accesskit_node().is_disabled());
+}
+
+/// B-P35 I2: a tangent handle that projects outside the graph cannot start a drag there.
+#[test]
+fn a_drag_where_a_tangent_handle_projects_outside_the_graph_changes_no_keys() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    let KeyData::Float(mut q) = m.edit.as_ref().unwrap().keys[&(3, None)].clone().unwrap() else {
+        panic!()
+    };
+    q.keys[0].backward = Some(100.0); // ctrl 3: QUADRATIC (0,0) -> (1,1)
+    set_float_keys(&mut m, 20, KeyData::Float(q));
+    let mut h = view(m);
+    // Tall enough that nothing scrolls: an animated scroll_to_me would move the content under the drag.
+    h.set_size(egui::vec2(1400.0, 1400.0));
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.run_steps(2);
+    let graph = h.get_by_label("U offset curve").rect();
+    let p = h
+        .get_by_label("U offset key 1 backward handle")
+        .rect()
+        .center();
+    assert!(
+        p.y < graph.top() && p.y > 150.0,
+        "the handle projects above the graph, on screen: {p:?} {graph:?}"
+    );
+    let before = (
+        ops(h.state()),
+        h.state().edit.as_ref().unwrap().keys.clone(),
+    );
+    drag_from(&mut h, p, 20.0);
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(ops(h.state()), before.0, "no op");
+    assert_eq!(e.keys, before.1, "no key changed");
+}
+
+/// B-P35 I3: a flat curve at 1e8 maps to finite handle positions inside the graph.
+#[test]
+fn a_flat_curve_at_1e8_has_finite_handles() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    set_float_keys(&mut m, 11, lin2(1e8, 1e8));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let graph = h.get_by_label("Emissive multiple curve").rect();
+    for k in ["Emissive multiple key 1", "Emissive multiple key 2"] {
+        let c = h.get_by_label(k).rect().center();
+        assert!(
+            c.x.is_finite() && c.y.is_finite() && graph.contains(c),
+            "{k}: {c:?} in {graph:?}"
+        );
+    }
+}
+
+/// B-P35 I3: keys the graph cannot map (an infinite value) show a line instead of the graph; the table stays.
+#[test]
+fn an_infinite_key_shows_the_out_of_range_line() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    set_float_keys(&mut m, 11, lin2(0.0, f32::INFINITY));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("These keys are out of range for the graph.");
+    assert!(h.query_by_label("Emissive multiple curve").is_none());
+    h.get_by_label("U offset curve");
+    h.get_by_label("Emissive multiple key 2 value");
+}
+
+/// Adds an LSCC "Emissive colour" (var 1, LINEAR keys `k1` at 0 and `k2` at 1) to `shape`'s shader as the last
+/// op; returns the new controller's block.
+fn add_colour_ctrl(m: &mut MeshesModel, shape: u32, k1: [f32; 3], k2: [f32; 3]) -> u32 {
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    let key = |time: f32, value: [f32; 3]| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    m.edit_push(
+        vec![Op::AddController {
+            at: at.clone(),
+            class: "BSLightingShaderPropertyColorController".into(),
+            var: Some(1),
+            keys: KeyData::Pos(KeyGroup {
+                key_type: Some(1),
+                keys: vec![key(0.0, k1), key(1.0, k2)],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 1.0,
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+    let ctrls = &e.model.lighting[&at.block].prop.ctrls;
+    *ctrls.last().unwrap()
+}
+
+/// `emit_scene` with an LSCC on S (see `add_colour_ctrl`).
+fn colour_scene(k1: [f32; 3], k2: [f32; 3]) -> (MeshesModel, u32) {
+    let mut m = direct(scenes::emit_scene("BSX", 0x82, true));
+    let s = select(&mut m, "S");
+    let ctrl = add_colour_ctrl(&mut m, s, k1, k2);
+    (m, ctrl)
+}
+
+fn pos_keys(m: &MeshesModel, ctrl: u32) -> KeyGroup<[f32; 3]> {
+    match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
+        Ok(KeyData::Pos(g)) => g.clone(),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// B-P35 minor: a colour key's handle moves its own channel only.
+#[test]
+fn dragging_one_colour_channel_changes_only_it() {
+    let (m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+    let pos = |m: &MeshesModel| pos_keys(m, ctrl);
+    let before = pos(&m);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    drag_up(&mut h, "Emissive colour key 2 G", 30.0);
+    assert_eq!(ops(h.state()).len(), 2, "{:?}", ops(h.state()));
+    let after = pos(h.state());
+    let bits = |k: &Key<[f32; 3]>| (k.time.to_bits(), k.value.map(f32::to_bits));
+    assert_eq!(
+        bits(&after.keys[0]),
+        bits(&before.keys[0]),
+        "key 1 untouched"
+    );
+    assert_eq!(after.keys[1].time.to_bits(), before.keys[1].time.to_bits());
+    assert_eq!(
+        after.keys[1].value[0].to_bits(),
+        before.keys[1].value[0].to_bits(),
+        "R"
+    );
+    assert_eq!(
+        after.keys[1].value[2].to_bits(),
+        before.keys[1].value[2].to_bits(),
+        "B"
+    );
+    assert!(
+        after.keys[1].value[1] > 0.6,
+        "G dragged up: {:?}",
+        after.keys[1]
+    );
+}
+
+/// Sets the popup DragValue (sRGB byte) of the open colour picker at `index` (0 R, 1 G, 2 B) to `byte`.
+fn type_picker_byte(h: &mut Harness<'static, MeshesModel>, index: usize, byte: u8) {
+    // The picker's own R/G/B DragValues are the only unnamed ones on screen.
+    let mut spins: Vec<_> = h
+        .query_all(egui_kittest::kittest::by().role(AkRole::SpinButton))
+        .filter(|n| n.accesskit_node().label().is_none())
+        .map(|n| (n.rect().min.x, n.accesskit_node().id()))
+        .collect();
+    assert_eq!(spins.len(), 3, "the picker's R, G and B");
+    spins.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let id = spins[index].1;
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .type_text(&byte.to_string());
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+}
+
+/// Owner follow-up: a colour key row has a picker swatch. A picker change is one merged SetKeys on that key (the
+/// same path as an R/G/B drag) until the popup closes; channels the picker did not change keep their exact bits.
+#[test]
+fn key_table_colour_picker_sets_the_key_colour() {
+    let (m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+    let before = pos_keys(&m, ctrl);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let sw = "Emissive colour key 2 colour";
+    let n = h.get_by_role_and_label(AkRole::ColorWell, sw);
+    assert!(!n.accesskit_node().is_disabled());
+    n.click();
+    h.run_steps(3);
+    type_picker_byte(&mut h, 1, 51); // G
+    type_picker_byte(&mut h, 1, 102); // G again, same popup: merged
+    h.key_press(egui::Key::Escape); // closes the popup: the step ends
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 2, "AddController + one SetKeys: {got:?}");
+    let Op::SetKeys { clip, base, .. } = &got[1] else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*clip, None);
+    assert_eq!(
+        encode_data(base),
+        encode_data(&KeyData::Pos(before.clone())),
+        "the step keeps the keys it started from"
+    );
+    let after = pos_keys(h.state(), ctrl);
+    let bits = |k: &Key<[f32; 3]>| (k.time.to_bits(), k.value.map(f32::to_bits));
+    assert_eq!(
+        bits(&after.keys[0]),
+        bits(&before.keys[0]),
+        "key 1 untouched"
+    );
+    let (b, a) = (&before.keys[1], &after.keys[1]);
+    assert_eq!(a.time.to_bits(), b.time.to_bits());
+    assert_eq!(a.value[0].to_bits(), b.value[0].to_bits(), "R");
+    assert_eq!(a.value[2].to_bits(), b.value[2].to_bits(), "B");
+    assert_eq!(egui::ecolor::gamma_u8_from_linear_f32(a.value[1]), 102, "G");
+    // The popup closed and flushed: a second picker change is a second step.
+    h.get_by_role_and_label(AkRole::ColorWell, sw).click();
+    h.run_steps(3);
+    type_picker_byte(&mut h, 2, 51); // B
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(ops(h.state()).len(), 3, "{:?}", ops(h.state()));
+    assert!(h.state_mut().undo_edit());
+    assert!(h.state_mut().undo_edit());
+    assert_eq!(ops(h.state()).len(), 1, "one undo step per popup");
+    assert_eq!(bits(&pos_keys(h.state(), ctrl).keys[1]), bits(b));
+}
+
+/// Owner follow-up: a key outside 0-1 (an HDR emissive colour) gets a disabled swatch with the reason on hover; the
+/// picker would clamp it. The in-range key on the same table keeps its picker.
+#[test]
+fn key_table_colour_picker_is_disabled_for_hdr_values() {
+    let (m, _) = colour_scene([2.0, 0.5, 0.5], [0.8, 0.6, 0.4]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let hdr = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 1 colour");
+    assert!(hdr.accesskit_node().is_disabled());
+    let c = hdr.rect().center();
+    let ok = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 2 colour");
+    assert!(!ok.accesskit_node().is_disabled());
+    h.hover_at(c);
+    h.run();
+    h.get_by_label("Values outside 0-1: edit R, G and B directly.");
+}
+
+/// B-P35 minor (D11): TBC, XYZ and CONST keys are drawn, but their handles, table cells and buttons are disabled
+/// and a drag records nothing.
+/// Review minor: NaN and negative channels disable the swatch too (never clamped by the picker).
+#[test]
+fn key_table_colour_picker_is_disabled_for_nan_and_negative_values() {
+    let (m, _) = colour_scene([f32::NAN, 0.5, 0.5], [0.5, -0.25, 0.5]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    for k in [1, 2] {
+        let n = format!("Emissive colour key {k} colour");
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, &n);
+        assert!(sw.accesskit_node().is_disabled(), "{n}");
+    }
+}
+
+/// Review minor (D11): a TBC, XYZ or CONST colour key's swatch is disabled like its cells, though in range.
+#[test]
+fn key_table_colour_picker_is_disabled_for_tbc_xyz_and_const_keys() {
+    for t in [3, 4, 5] {
+        let (mut m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyColorController".into(),
+            var: Some(1),
+            nth: 0,
+        };
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(shape_named(e, "S")), role).unwrap();
+        let base = pos_keys(&m, ctrl);
+        let mut keys = base.clone();
+        keys.key_type = Some(t);
+        for k in &mut keys.keys {
+            k.tbc = (t == 3).then_some([0.0; 3]);
+        }
+        m.edit_push(
+            vec![Op::SetKeys {
+                at,
+                clip: None,
+                keys: KeyData::Pos(keys),
+                base: KeyData::Pos(base),
+            }],
+            None,
+        );
+        assert_eq!(
+            pos_keys(&m, ctrl).key_type,
+            Some(t),
+            "{:?}",
+            m.edit.as_ref().unwrap().outcomes
+        );
+        let mut h = view(m);
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        h.get_by_label("These keys are previewed, not edited.");
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 2 colour");
+        assert!(sw.accesskit_node().is_disabled(), "type {t}");
+    }
+}
+
+#[test]
+fn tbc_xyz_and_const_keys_are_drawn_not_edited() {
+    for t in [3, 4, 5] {
+        let mut m = direct(scenes::keyed_pair(scenes::Share::No, [t, 1]));
+        select(&mut m, "S");
+        let mut h = view(m);
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        h.get_by_label("Emissive multiple curve");
+        h.get_by_label("These keys are previewed, not edited.");
+        assert!(
+            h.query_by_label("Emissive multiple interpolation")
+                .is_none(),
+            "type {t}"
+        );
+        for l in [
+            "Emissive multiple key 1",
+            "Emissive multiple key 1 time",
+            "Emissive multiple key 1 value",
+            "Remove Emissive multiple key 1",
+            "Add key to Emissive multiple",
+        ] {
+            assert!(
+                h.get_by_label(l).accesskit_node().is_disabled(),
+                "type {t}: {l}"
+            );
+        }
+        drag_up(&mut h, "Emissive multiple key 2", 30.0);
+        assert!(ops(h.state()).is_empty(), "type {t}: {:?}", ops(h.state()));
+    }
+}
+
+// ---- v2 B7: managed clips (the Preview selector, the clip list, clip key edits) ----
+
+/// `with_uv_ctrl(bytes)` plus, first in the same chain, a manager-controlled LSCF var 11 (Emissive multiple, flags
+/// 0x68, a NiBlendFloatInterpolator), and a NiControllerSequence "Glow" whose one CB names it by ref with a keyed
+/// NiFloatInterpolator LINEAR (0, 0) -> (1, 4); Loop, frequency 1, start 0, stop 1; text keys "start" at 0, "end"
+/// at 1. Returns the bytes and the sequence block.
+fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: [(0.0, 0.0), (1.0, 4.0)]
+            .map(|(time, value)| Key {
+                time,
+                value,
+                forward: None,
+                backward: None,
+                tbc: None,
+            })
+            .into(),
+    });
+    with_clip_at(bytes, true, 0.0, Some(keys), [1.0, 0.0, 1.0])
+}
+
+/// [`with_clip`] with the CB bound by ref or (ref -1) by strings only, the CB interpolator's value, its keys (None:
+/// data -1, the empty group) and the sequence's (frequency, start, stop).
+fn with_clip_at(
+    bytes: &[u8],
+    by_ref: bool,
+    value: f32,
+    keys: Option<KeyData>,
+    timing: [f32; 3],
+) -> (Vec<u8>, u32) {
+    let m = nif::model::read_model(bytes).unwrap();
+    let (shape, lsp) = m
+        .shapes
+        .iter()
+        .find_map(|s| {
+            s.shader
+                .filter(|b| m.lighting.contains_key(b))
+                .map(|b| (s, b))
+        })
+        .unwrap();
+    let net = m.lighting[&lsp].prop.net.clone();
+    let mut doc = nif::write::NifDoc::open(bytes).unwrap();
+    let at = net.controller_at() - doc.header().offsets()[lsp as usize];
+    let blend = doc.append(
+        b"NiBlendFloatInterpolator",
+        builder::W::default().u8(1).u8(0).f(0.0).f(0.0).0,
+    );
+    let ctrl = doc.append(
+        b"BSLightingShaderPropertyFloatController",
+        scenes::ctrl_body(
+            net.controller,
+            0x68,
+            lsp as i32,
+            builder::W::default().i32(blend as i32).u32(11),
+        ),
+    );
+    doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
+    let data = keys.map_or(-1, |k| {
+        doc.append(b"NiFloatData", nif::keys::encode_data(&k)) as i32
+    });
+    let interp = doc.append(
+        b"NiFloatInterpolator",
+        builder::W::default().f(value).i32(data).0,
+    );
+    let s = |doc: &mut nif::write::NifDoc, x: &[u8]| doc.string(x);
+    let (start, end) = (s(&mut doc, b"start"), s(&mut doc, b"end"));
+    let tk = doc.append(
+        b"NiTextKeyExtraData",
+        builder::W::default()
+            .i32(-1)
+            .u32(2)
+            .f(0.0)
+            .i32(start)
+            .f(1.0)
+            .i32(end)
+            .0,
+    );
+    let (name, prop, ctype, cid) = (
+        s(&mut doc, b"Glow"),
+        s(&mut doc, b"BSLightingShaderProperty"),
+        s(&mut doc, b"BSLightingShaderPropertyFloatController"),
+        s(&mut doc, b"11"),
+    );
+    let seq = builder::W::default()
+        .i32(name)
+        .u32(1)
+        .u32(0)
+        .i32(interp as i32)
+        .i32(if by_ref { ctrl as i32 } else { -1 })
+        .u8(0)
+        .i32(shape.net.name)
+        .i32(prop)
+        .i32(ctype)
+        .i32(cid)
+        .i32(-1)
+        .f(1.0)
+        .i32(tk as i32)
+        .u32(0)
+        .fs(&timing)
+        .i32(-1)
+        .i32(-1)
+        .u16(0)
+        .0;
+    let seq = doc.append(b"NiControllerSequence", seq);
+    let out = doc.bytes();
+    let back = nif::model::read_model(&out).unwrap();
+    assert!(back.problems.is_empty(), "{:?}", back.problems);
+    assert!(back.managed(ctrl));
+    assert_eq!(back.lighting[&lsp].prop.ctrls[0], ctrl);
+    assert_eq!(back.sequences.len(), 1);
+    assert_eq!(back.sequences[0].text_keys.len(), 2);
+    assert_eq!(
+        nif::anim::clips_of(&back, &out, ctrl),
+        vec![seq],
+        "the CB binds"
+    );
+    (out, seq)
+}
+
+/// G6, D4: Free runs the free chain and keeps the managed emissive at the property value; selecting the clip runs
+/// the CB interpolator and pauses the free chain; back to Free swaps back. The UI selector and the clip's key table
+/// drive the same model.
+#[test]
+fn clip_preview_swaps_interpolators_only_while_selected() {
+    let (nif, seq) = with_clip(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (_d, mut m, cmds) = session_on(&nif);
+    let (shape, lsp) = lit_shape(m.edit.as_ref().unwrap());
+    let base = m.edit.as_ref().unwrap().model.lighting[&lsp]
+        .lighting
+        .params
+        .clone();
+    let at = |m: &MeshesModel, t: f32| {
+        let f = m.edit.as_ref().unwrap().frame_materials(t);
+        f.into_iter()
+            .find(|(id, _)| id.0 == shape)
+            .unwrap()
+            .1
+            .params
+    };
+    let p = at(&m, 0.5);
+    assert_eq!(
+        (p.uv_offset[0], p.emissive_multiple),
+        (0.5, base.emissive_multiple),
+        "Free"
+    );
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let p = at(&m, 0.5);
+    assert_eq!(
+        (p.uv_offset[0], p.emissive_multiple),
+        (base.uv_offset[0], 2.0),
+        "the clip"
+    );
+    assert_eq!(
+        m.edit.as_ref().unwrap().anim_range(),
+        Some((0.0, 1.0)),
+        "the clip's start and stop"
+    );
+    m.edit_with(|e| e.set_playing(Playing::Free));
+    let p = at(&m, 0.5);
+    assert_eq!(
+        (p.uv_offset[0], p.emissive_multiple),
+        (0.5, base.emissive_multiple),
+        "Free again"
+    );
+    // The UI.
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Glow");
+    h.get_by_label("Loop · 0 to 1 s");
+    h.get_by_label("Text keys: start at 0 s, end at 1 s");
+    h.get_by_label("Pick this clip in Preview to see and edit its keys.");
+    h.get_by_role_and_label(AkRole::ComboBox, "Preview animation")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Glow").click();
+    h.run_steps(3);
+    assert_eq!(h.state().edit.as_ref().unwrap().playing, Playing::Clip(seq));
+    // The clip's own key table edits that clip (SetKeys with clip Some).
+    edit_number(&mut h, "Emissive multiple in Glow key 2 value", "3");
+    let last = ops(h.state()).pop();
+    assert!(
+        matches!(last, Some(Op::SetKeys { clip: Some(s), .. }) if s == seq),
+        "{last:?}"
+    );
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().outcomes.last(),
+        Some(&nif::edit::Outcome::Applied)
+    );
+    assert_eq!(
+        at(h.state(), 0.5).emissive_multiple,
+        1.5,
+        "the edited clip curve: (0,0) -> (1,3)"
+    );
+    h.get_by_role_and_label(AkRole::ComboBox, "Preview animation")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Free chains")
+        .click();
+    h.run_steps(3);
+    assert_eq!(h.state().edit.as_ref().unwrap().playing, Playing::Free);
+    drop(cmds);
+}
+
+// ---- v2 B7 fix round 1 (B-P36) ----
+
+/// The managed controller with_clip puts first in the lit shape's chain.
+fn clip_ctrl(e: &NifEdit) -> u32 {
+    let (_, lsp) = lit_shape(e);
+    e.model.lighting[&lsp].prop.ctrls[0]
+}
+
+/// Review I2: a source reload that removes the selected clip's sequence returns the preview to the free chains, so
+/// they still play (the selector is gone with the last sequence).
+#[test]
+fn losing_the_selected_clip_returns_to_the_free_chains() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (nif, seq) = with_clip(&plain);
+    let (_d, mut m, _cmds) = session_on(&nif);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    m.edit_with(|e| e.reload_source(plain.clone()).unwrap());
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.model.sequences.is_empty());
+    assert_eq!(e.playing, Playing::Free);
+    assert_eq!(
+        e.anim_range(),
+        Some((0.0, 1.0)),
+        "the free U offset chain plays"
+    );
+    m.tick_anim(0.0);
+    assert!(m.v3.clock.is_some());
+}
+
+/// Review I3: Add key on a string-bound clip with an empty key group starts at its CB interpolator's value (5).
+#[test]
+fn add_key_on_a_string_bound_empty_clip_starts_at_its_interpolator_value() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (nif, seq) = with_clip_at(&plain, false, 5.0, None, [1.0, 0.0, 1.0]);
+    let mut m = direct(nif);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let e = m.edit.as_ref().unwrap();
+    let ctrl = clip_ctrl(e);
+    assert!(
+        matches!(&e.keys[&(ctrl, Some(seq))], Ok(KeyData::Float(g)) if g.keys.is_empty()),
+        "{:?}",
+        e.keys.get(&(ctrl, Some(seq)))
+    );
+    let (shape, _) = lit_shape(e);
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple in Glow")
+        .click();
+    h.run_steps(3);
+    let last = ops(h.state()).pop();
+    let Some(Op::SetKeys {
+        clip: Some(s),
+        keys: KeyData::Float(g),
+        ..
+    }) = &last
+    else {
+        panic!("{last:?}")
+    };
+    assert_eq!(*s, seq);
+    assert_eq!(g.keys.len(), 1);
+    assert_eq!((g.keys[0].time, g.keys[0].value), (0.0, 5.0));
+}
+
+/// Review I4: every combo of the Controllers tab (Preview, the Variable combos, Add controller) ends inside the edit
+/// panel at 1100 px.
+#[test]
+fn controllers_tab_combos_fit_the_edit_panel() {
+    let (nif, _) = with_clip(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (_d, mut m, _cmds) = session_on(&nif);
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    // A colour controller: its key rows (with the picker swatch) must fit too.
+    add_colour_ctrl(&mut m, shape, [0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1100.0, 1600.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.run_steps(3);
+    let panel = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
+        .expect("the edit panel")
+        .outer_rect;
+    let combos: Vec<_> = h
+        .query_all(egui_kittest::kittest::by().role(AkRole::ComboBox))
+        .filter(|n| n.rect().min.x >= panel.min.x)
+        .collect();
+    let names: Vec<String> = combos
+        .iter()
+        .map(|n| n.accesskit_node().label().unwrap_or_default())
+        .collect();
+    for want in [
+        "Preview animation",
+        "Emissive multiple variable",
+        "U offset variable",
+        "Add controller variable",
+    ] {
+        assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
+    }
+    for n in &combos {
+        let r = n.rect();
+        assert!(
+            r.max.x <= panel.max.x + 0.5,
+            "{:?}: {r:?} past the edit panel's right edge {}",
+            n.accesskit_node().label(),
+            panel.max.x
+        );
+    }
+    // The colour key rows: swatch and Remove end inside the panel (AccessKit rects are not clipped).
+    for (role, name) in [
+        (AkRole::ColorWell, "Emissive colour key 2 colour"),
+        (AkRole::Button, "Remove Emissive colour key 2"),
+    ] {
+        let r = h.get_by_role_and_label(role, name).rect();
+        assert!(
+            r.max.x <= panel.max.x + 0.5,
+            "{name}: {r:?} past the edit panel's right edge {}",
+            panel.max.x
+        );
+    }
+}
+
+/// Review minor: a clip whose timing differs from the free chain (0 to 3 s) sets the clock's range when picked;
+/// Free sets it back.
+#[test]
+fn picking_a_clip_sets_the_clock_range_to_its_timing() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let key = |time: f32, value: f32| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![key(0.0, 0.0), key(3.0, 3.0)],
+    });
+    let (nif, seq) = with_clip_at(&plain, true, 0.0, Some(keys), [1.0, 0.0, 3.0]);
+    let (_d, mut m, _cmds) = session_on(&nif);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 1.0), "Free");
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    m.tick_anim(0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 3.0), "the clip");
+    m.edit_with(|e| e.set_playing(Playing::Free));
+    m.tick_anim(0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 1.0), "Free again");
+}
+
+// ---- v2 B8: In game (simulated) through pgpsim ----
+
+use sdc_gui::model::meshes::pg_entries::*;
+use sdc_gui::model::meshes::ScanTarget;
+
+/// Mods (highest first) PGP, A, Low. A: x.nif, the PBR textures of `white`, PBRNIFPatcher\x.json (object form, BOM,
+/// roughness 0.5 from `default`, a `smooth_angle` the preview does not show) and bad.json (no `default`: PGPatcher
+/// skips the file). Low: a lower copy of the same path (hidden by A's) and a.json (sorts first, but Low is below A).
+fn pg_files() -> tempfile::TempDir {
+    let d = files_with(false, "+PGP\n+A\n+Low\n");
+    for t in ["white", "white_n", "white_rmaos"] {
+        put(
+            d.path(),
+            &format!("mods/A/textures/pbr/{t}.dds"),
+            Some(b"dds"),
+        );
+    }
+    put_x_json(d.path(), 0.5);
+    put(
+        d.path(),
+        "mods/A/PBRNIFPatcher/bad.json",
+        Some(br#"{"entries": [{"match_diffuse": "white", "roughness_scale": 0.7}]}"#),
+    );
+    put(
+        d.path(),
+        "mods/Low/PBRNifPatcher/x.json",
+        Some(br#"[{"match_diffuse": "white", "roughness_scale": 0.1}]"#),
+    );
+    put(
+        d.path(),
+        "mods/Low/PBRNifPatcher/a.json",
+        Some(br#"[{"match_diffuse": "white", "roughness_scale": 0.9}]"#),
+    );
+    d
+}
+
+/// A's x.json with `roughness` as its default roughness_scale.
+fn put_x_json(root: &Path, roughness: f32) {
+    let x = format!(
+        "\u{feff}{{\"$schema\": \"x\", \"default\": {{\"roughness_scale\": {roughness}}}, \"entries\": [{{\"match_diffuse\": \"white\", \"smooth_angle\": 60}}]}}"
+    );
+    put(root, "mods/A/PBRNIFPatcher/x.json", Some(x.as_bytes()));
+}
+
+fn pg_session() -> (tempfile::TempDir, MeshesModel) {
+    let d = pg_files();
+    let m = pg_session_in(d.path());
+    (d, m)
+}
+
+/// Scans `root`, selects A's x.nif and opens an edit session on it.
+fn pg_session_in(root: &Path) -> MeshesModel {
+    let mut m = MeshesModel::new(Some(root.join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, root);
+    m.open_edit();
+    assert_eq!(m.error, None);
+    m
+}
+
+/// Polls until the PGPatcher JSON read lands (fix F2: it runs on a worker thread).
+fn wait_pg(m: &mut MeshesModel) {
+    let t = Instant::now();
+    m.poll();
+    while m.pg_reading() {
+        assert!(
+            t.elapsed() < Duration::from_secs(30),
+            "the JSON read did not end"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        m.poll();
+    }
+}
+
+/// In game for `m`: switch, then wait for the JSON.
+fn in_game(m: &mut MeshesModel) {
+    m.set_view_source(false);
+    wait_pg(m);
+}
+
+/// The Parsed content's material of shape block `b`.
+fn shown(m: &MeshesModel, b: u32) -> nif::material::MaterialState {
+    let Some(Content::Parsed { nif, .. }) = m.v3.content() else {
+        panic!("the edit preview shows")
+    };
+    nif.shapes
+        .iter()
+        .find(|s| s.id.0 == b)
+        .expect("the shape")
+        .material
+        .clone()
+}
+
+/// The In game lines of shape block `b`.
+fn notes(m: &MeshesModel, b: u32) -> Vec<String> {
+    let rows = m.edit.as_ref().unwrap().in_game.clone().expect("In game");
+    rows.into_iter().find(|(id, _, _)| id.0 == b).unwrap().2
+}
+
+#[test]
+fn in_game_mode_applies_pgpatcher_json_from_mods() {
+    let d = pg_files();
+    let inst = modscan::mo2::Instance::load(d.path(), Some("Default")).unwrap();
+    let files: Vec<String> = pg_entries(&inst)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.file)
+        .collect();
+    assert_eq!(files, [r"PBRNIFPatcher\x.json", r"PBRNifPatcher\a.json"]);
+    drop(d);
+
+    let (_d, mut m) = pg_session();
+    assert!(m.view_source, "the edit opens on Edited source");
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\white.dds");
+    let cur = e.model.lighting[&shader].lighting.params.uv_offset[0];
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::UvOffset(0),
+            value: Value::F32(0.25f32.to_bits()),
+            base: Value::F32(cur.to_bits()),
+        }],
+        None,
+    );
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("In game (simulated)").click();
+    h.run_steps(4);
+    wait_pg(h.state_mut());
+    h.run_steps(4);
+    h.get_by_label(r"In game: PGPatcher applies PBRNIFPatcher\x.json.");
+    h.get_by_label("Not previewed: smooth_angle.");
+    h.get_by_label(IN_GAME_SCOPE);
+    let m = h.state();
+    assert!(!m.view_source);
+    assert!(m.v3.nif_view);
+    assert!(m.edit.as_ref().unwrap().in_game.is_some());
+    let g = shown(m, shape);
+    assert_eq!(g.slots[0].raw, r"textures\pbr\white.dds");
+    assert_ne!(g.slsf2 & nif::material::SLSF2_TRUE_PBR, 0);
+    assert_eq!(
+        g.params.specular_strength, 0.5,
+        "A's x.json, through its default"
+    );
+    assert_eq!(g.params.uv_offset[0], 0.25, "the edit survives the sim");
+
+    h.get_by_label("Edited source").click();
+    h.run_steps(4);
+    let m = h.state();
+    assert!(m.view_source);
+    assert!(m.edit.as_ref().unwrap().in_game.is_none());
+    let s = shown(m, shape);
+    assert_eq!(s.slots[0].raw, r"textures\white.dds");
+    assert_eq!(s.params.uv_offset[0], 0.25);
+}
+
+/// Fix F2: the JSON is read on a worker ("Reading PGPatcher JSON…" until it lands) and kept across switches.
+#[test]
+fn a_second_switch_to_in_game_does_not_read_the_json_again() {
+    let (_d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    m.set_view_source(false);
+    assert!(m.pg_reading(), "the read runs on a worker");
+    assert!(notes(&m, shape).is_empty(), "no line before the JSON lands");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label(READING_JSON);
+    wait_pg(h.state_mut());
+    h.run_steps(3);
+    assert!(h.query_by_label(READING_JSON).is_none());
+    h.get_by_label(r"In game: PGPatcher applies PBRNIFPatcher\x.json.");
+    let m = h.state_mut();
+    let reads = m.pg_reads;
+    m.set_view_source(true);
+    m.set_view_source(false);
+    assert!(!m.pg_reading());
+    assert_eq!(m.pg_reads, reads, "a second switch does not read again");
+    assert_eq!(
+        notes(m, shape)[0],
+        r"In game: PGPatcher applies PBRNIFPatcher\x.json."
+    );
+}
+
+/// `n` BSTriShapes, each with its own BSLSP and a texture set naming `textures\white.dds`.
+fn lit_shapes(n: u32) -> Vec<u8> {
+    let mut b = builder::Nif::new(100);
+    let names: Vec<i32> = (0..n).map(|i| b.string(&format!("S{i}"))).collect();
+    for (i, name) in names.iter().enumerate() {
+        b.block("BSTriShape", one_tri(*name, (n as usize + i) as i32));
+    }
+    for i in 0..n {
+        b.block(
+            "BSLightingShaderProperty",
+            scenes::lsp(0, (2 * n + i) as i32),
+        );
+    }
+    for _ in 0..n {
+        b.block(
+            "BSShaderTextureSet",
+            scenes::texset(&["textures\\white.dds"]),
+        );
+    }
+    b.bytes()
+}
+
+/// Fix F1: rows are cached on the source material, the JSON generation and the scan. A drag tick In game on a
+/// 20-shape mesh re-simulates the edited shape only; selection and switching back simulate nothing.
+#[test]
+fn a_drag_tick_in_game_resimulates_only_the_edited_shape() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&lit_shapes(20)));
+    let mut m = pg_session_in(d.path());
+    in_game(&mut m);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.sim_runs, 20, "one simulation per lit shape");
+    let shape = e.model.shapes[3].block;
+    let shader = e.model.shapes[3].shader.unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    for (i, v) in [0.1f32, 0.2].into_iter().enumerate() {
+        m.edit_push(
+            vec![Op::SetField {
+                at: at.clone(),
+                field: Field::UvOffset(0),
+                value: Value::F32(v.to_bits()),
+                base: Value::F32(0f32.to_bits()),
+            }],
+            Some(format!("uv-{shader}")),
+        );
+        assert_eq!(m.error, None);
+        assert_eq!(m.edit.as_ref().unwrap().sim_runs, 21 + i, "tick {i}");
+    }
+    assert_eq!(shown(&m, shape).params.uv_offset[0], 0.2);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
+    m.select_edit(Selection::Shape(shape));
+    m.set_view_source(true);
+    m.set_view_source(false);
+    assert_eq!(m.edit.as_ref().unwrap().sim_runs, 22, "nothing else");
+}
+
+/// H4 (fix F6): a file PGPatcher rejects for a shape (a missing texture) lets the next file win; when every file
+/// is rejected, the first skip line shows.
+#[test]
+fn a_skipped_file_lets_the_next_one_win() {
+    for renamed in [true, false] {
+        let d = pg_files();
+        std::fs::remove_file(d.path().join("mods/A/textures/pbr/white_rmaos.dds")).unwrap();
+        if renamed {
+            for t in ["other", "other_n", "other_rmaos"] {
+                put(
+                    d.path(),
+                    &format!("mods/Low/textures/pbr/{t}.dds"),
+                    Some(b"dds"),
+                );
+            }
+            put(
+                d.path(),
+                "mods/Low/PBRNifPatcher/a.json",
+                Some(br#"[{"match_diffuse": "white", "rename": "other", "roughness_scale": 0.9}]"#),
+            );
+        }
+        let mut m = pg_session_in(d.path());
+        let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+        in_game(&mut m);
+        let s = shown(&m, shape);
+        if renamed {
+            assert_eq!(
+                notes(&m, shape),
+                [r"In game: PGPatcher applies PBRNifPatcher\a.json."]
+            );
+            assert_eq!(s.slots[0].raw, r"textures\pbr\other.dds");
+            assert_eq!(s.params.specular_strength, 0.9);
+        } else {
+            let n = notes(&m, shape);
+            assert_eq!(n.len(), 1);
+            assert!(
+                n[0].starts_with(r"In game: PBRNIFPatcher\x.json is not applied ("),
+                "{n:?}"
+            );
+            assert!(is_warning(&n[0]), "the skip line is amber");
+            assert_eq!(s.slots[0].raw, r"textures\white.dds");
+        }
+    }
+}
+
+/// PG_IGNORE (value true) on the shape or its shader: In game keeps the edited material and says why; value 0
+/// does not count.
+#[test]
+fn pg_ignore_shape_is_not_simulated() {
+    for (role, v, ignored) in [(Role::Shape, 1u8, true), (Role::Shape, 0, false)] {
+        let (_d, mut m) = pg_session();
+        let e = m.edit.as_ref().unwrap();
+        let (shape, _) = lit_shape(e);
+        let at = nif::edit::anchor_role(&e.model, Some(shape), role.clone()).unwrap();
+        m.edit_push(
+            vec![Op::AddExtra {
+                at,
+                kind: "NiBooleanExtraData".into(),
+                name: "PG_IGNORE".into(),
+                value: ExtraValue::Bool(v),
+            }],
+            None,
+        );
+        assert_eq!(m.error, None);
+        let edited = m.edit.as_ref().unwrap().materials();
+        in_game(&mut m);
+        let s = shown(&m, shape);
+        if ignored {
+            let rows = m.edit.as_ref().unwrap().in_game.clone().unwrap();
+            let (_, mat, notes) = rows.iter().find(|(id, _, _)| id.0 == shape).unwrap();
+            let before = &edited.iter().find(|(id, _)| id.0 == shape).unwrap().1;
+            assert_eq!(mat, before, "{role:?}");
+            assert_eq!(notes, &vec![PG_IGNORED.to_string()]);
+            assert_eq!(s.slots[0].raw, r"textures\white.dds");
+            assert_eq!(s.slsf2 & nif::material::SLSF2_TRUE_PBR, 0);
+        } else {
+            assert_eq!(
+                s.slots[0].raw, r"textures\pbr\white.dds",
+                "value 0 is simulated"
+            );
+        }
+    }
+}
+
+/// One BSTriShape (0) whose BSLSP (1, texture set 2 naming `textures\white.dds`) carries NiBooleanExtraData
+/// PG_IGNORE = `v` (3). The editor adds extra data to shapes and the root only, so the shader's is built in.
+fn shader_pg_ignore(v: u8) -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let (s, pg) = (n.string("S"), n.string("PG_IGNORE"));
+    n.block("BSTriShape", one_tri(s, 1));
+    let lsp = scenes::lsp(0, 2);
+    // shader type, name | extra count 1, the extra | controller and the rest
+    let mut body = lsp[..8].to_vec();
+    body.extend(W::default().u32(1).i32(3).0);
+    body.extend(&lsp[12..]);
+    n.block("BSLightingShaderProperty", body);
+    n.block(
+        "BSShaderTextureSet",
+        scenes::texset(&["textures\\white.dds"]),
+    );
+    n.block("NiBooleanExtraData", W::default().i32(pg).u8(v).0);
+    n.bytes()
+}
+
+/// PG_IGNORE on the shader counts as on the shape (fix F6); value 0 does not.
+#[test]
+fn pg_ignore_on_the_shader_is_not_simulated() {
+    for (v, ignored) in [(1u8, true), (0, false)] {
+        let d = pg_files();
+        put(d.path(), "mods/A/meshes/x.nif", Some(&shader_pg_ignore(v)));
+        let mut m = pg_session_in(d.path());
+        let e = m.edit.as_ref().unwrap();
+        let (shape, shader) = lit_shape(e);
+        assert_eq!(
+            e.model.extras_of(&e.model.lighting[&shader].prop.net).len(),
+            1,
+            "the fixture's shader extra"
+        );
+        in_game(&mut m);
+        let s = shown(&m, shape);
+        if ignored {
+            assert_eq!(notes(&m, shape), [PG_IGNORED]);
+            assert_eq!(s.slots[0].raw, r"textures\white.dds");
+        } else {
+            assert_eq!(s.slots[0].raw, r"textures\pbr\white.dds");
+        }
+    }
+}
+
+/// A PG_IGNORE pushed while In game shows takes effect at once (the cache keeps the check outside).
+#[test]
+fn pg_ignore_pushed_in_game_takes_effect() {
+    let (_d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shape).unwrap();
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "NiBooleanExtraData".into(),
+            name: "PG_IGNORE".into(),
+            value: ExtraValue::Bool(1),
+        }],
+        None,
+    );
+    assert_eq!(notes(&m, shape), [PG_IGNORED]);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\white.dds");
+}
+
+/// A folder scan reads no JSON and says so (fix F6).
+#[test]
+fn a_folder_scan_says_in_game_needs_an_instance() {
+    let (d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.target = Some(ScanTarget::Folder(d.path().into()));
+    m.select_edit(Selection::Shape(shape));
+    in_game(&mut m);
+    assert_eq!(notes(&m, shape), [NO_MATCH]);
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(NO_INSTANCE);
+    h.get_by_label(NO_MATCH);
+    assert!(h.query_by_label(IN_GAME_SCOPE).is_none());
+}
+
+/// Fix F3: an instance that cannot be read says so, in place of the scope line; no shape claims "no match".
+#[test]
+fn an_unreadable_instance_has_its_own_line() {
+    let (d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    std::fs::remove_file(d.path().join("ModOrganizer.ini")).unwrap();
+    m.select_edit(Selection::Shape(shape));
+    in_game(&mut m);
+    assert!(notes(&m, shape).is_empty());
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label_contains(INSTANCE_UNREADABLE);
+    assert!(h.query_by_label(IN_GAME_SCOPE).is_none());
+    assert!(h.query_by_label(NO_MATCH).is_none());
+}
+
+/// Fix F5: a rescan re-reads the JSON (a session reopened after it sees the new file).
+#[test]
+fn a_rescan_reads_the_json_again() {
+    let (d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    assert_eq!(shown(&m, shape).params.specular_strength, 0.5);
+    put_x_json(d.path(), 0.3);
+    m.set_view_source(true);
+    in_game(&mut m);
+    assert_eq!(
+        shown(&m, shape).params.specular_strength,
+        0.5,
+        "not watched"
+    );
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    in_game(&mut m);
+    assert_eq!(shown(&m, shape).params.specular_strength, 0.3);
+}
+
+/// Fix F9: a mesh PGPatcher already made PBR (no entry matches, slot 5 is an existing `_rmaos`) says so.
+#[test]
+fn an_already_pbr_shape_says_so() {
+    let (_d, mut m) = pg_session();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let raw = |i: usize| {
+        e.model.texsets[&set]
+            .raw
+            .slots
+            .get(i)
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .unwrap_or_default()
+    };
+    let at = nif::edit::anchor_shape(&e.model, shape);
+    let ops = vec![
+        Op::SetTexturePath {
+            at: at.clone(),
+            slot: 0,
+            path: r"textures\stone.dds".into(),
+            base: raw(0),
+        },
+        Op::SetTexturePath {
+            at,
+            slot: 5,
+            path: r"textures\pbr\white_rmaos.dds".into(),
+            base: raw(5),
+        },
+    ];
+    m.edit_push(ops, None);
+    assert!(
+        m.edit
+            .as_ref()
+            .unwrap()
+            .doc
+            .ops
+            .iter()
+            .all(|o| o.status == OpStatus::Applied),
+        "{:?}",
+        m.edit.as_ref().unwrap().outcomes
+    );
+    in_game(&mut m);
+    assert_eq!(notes(&m, shape), [ALREADY_PBR]);
+}
+
+/// Owner data (B8 brief, not a gate): the JSON read, then per shape the candidate scan (once per slot change) and
+/// one simulation over the candidates (each change), for a shape that matches an owner entry.
+#[test]
+#[ignore]
+fn in_game_cost_on_the_owner_json() {
+    let Ok(root) = std::env::var("SDC_ACHERUS") else {
+        println!("skipped: set SDC_ACHERUS");
+        return;
+    };
+    let inst = modscan::mo2::Instance::load(Path::new(&root), Some("Nexus")).unwrap();
+    let t = Instant::now();
+    let files = pg_entries(&inst).unwrap();
+    let read = t.elapsed();
+    let entries: usize = files.iter().map(|f| f.entries.len()).sum();
+    let e = NifEdit::open(
+        fixture("TestNifFile_Skinned_SE.nif"),
+        copy("A", 1, false),
+        "meshes/x.nif",
+        None,
+    )
+    .unwrap();
+    let mut mat = e.materials()[0].1.clone();
+    // A diffuse the owner's JSON names: the last file's first string match_diffuse.
+    let md = files
+        .iter()
+        .rev()
+        .flat_map(|f| &f.entries)
+        .find_map(|e| e.get("match_diffuse")?.as_str().map(String::from))
+        .expect("a match_diffuse");
+    mat.set_slot_raw(0, &format!("textures{md}.dds"));
+    for (label, m) in [("no match", e.materials()[0].1.clone()), ("match", mat)] {
+        let t = Instant::now();
+        let (c, tested) = candidates(&files, r"meshes\x.nif", &m.slots);
+        let scan = t.elapsed();
+        let t = Instant::now();
+        let (_, notes) = simulate_shape(&files, &c, r"meshes\x.nif", &m, &|_| true);
+        println!(
+            "{label}: {} files, {entries} entries: pg_entries {read:?}; candidates {scan:?} ({} files, {tested} \
+             entries tested); simulate {:?} ({notes:?})",
+            files.len(),
+            c.len(),
+            t.elapsed()
+        );
+    }
+    // Fix round 2: on the owner's JSON the index gives the full scan's matches, for every match_diffuse there.
+    let t = Instant::now();
+    let mut shapes = 0;
+    for md in files
+        .iter()
+        .flat_map(|f| &f.entries)
+        .filter_map(|e| e.get("match_diffuse")?.as_str())
+    {
+        let mut m = e.materials()[0].1.clone();
+        m.set_slot_raw(0, &format!("textures{md}.dds"));
+        let scan: Vec<(usize, Vec<usize>)> = files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let hit = (0..f.entries.len())
+                    .filter(|&j| pgpsim::shape_matches(&f.entries[j], r"meshes\x.nif", &m.slots))
+                    .collect::<Vec<_>>();
+                (i, hit)
+            })
+            .filter(|(_, h)| !h.is_empty())
+            .collect();
+        assert_eq!(
+            candidates(&files, r"meshes\x.nif", &m.slots).0,
+            scan,
+            "{md}"
+        );
+        shapes += 1;
+    }
+    println!(
+        "index = full scan for {shapes} owner diffuse paths ({:?})",
+        t.elapsed()
+    );
+}
+
+/// Fix round 2 (B-P38): the first In game build of a 20-shape mesh against a 5000-entry JSON tests only each
+/// shape's indexed candidates, never every entry, on the UI thread.
+#[test]
+fn the_first_in_game_build_tests_only_indexed_entries() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&lit_shapes(20)));
+    let mut big: Vec<String> = (0..5000)
+        .map(|i| format!("{{\"match_diffuse\": \"set{i}\\\\tex{i}\"}}"))
+        .collect();
+    big.push("{\"match_diffuse\": \"white\", \"roughness_scale\": 0.2}".into());
+    let json = format!("[{}]", big.join(","));
+    put(
+        d.path(),
+        "mods/A/PBRNIFPatcher/big.json",
+        Some(json.as_bytes()),
+    );
+    let mut m = pg_session_in(d.path());
+    in_game(&mut m);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.sim_runs, 20);
+    // per shape: one candidate in each of big.json, x.json and Low's a.json (4 files read, bad.json dropped)
+    assert_eq!(e.match_tests, 20 * 3, "a full scan would test 20 x 5003");
+    let shape = e.model.shapes[0].block;
+    assert_eq!(
+        notes(&m, shape)[0],
+        r"In game: PGPatcher applies PBRNIFPatcher\big.json."
+    );
+}
+
+#[test]
+fn controllers_tab_names_pbr_variables_as_the_shader_tab_does() {
+    let mut m = direct(ctrl_scene_vars(0x82, [9, 10]));
+    let s = select(&mut m, "S");
+    // Tall, so the Add controller row is on screen.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1800.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Glossiness variable");
+    h.get_by_role_and_label(AkRole::ComboBox, "Specular strength variable");
+    set_slsf2(&mut h, s, 1 << 23);
+    assert!(h.query_by_label("Glossiness").is_none());
+    h.get_by_role_and_label(AkRole::ComboBox, "Specular level variable");
+    h.get_by_role_and_label(AkRole::ComboBox, "Roughness scale variable");
+    // The Add controller list offers the PBR names too.
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Specular level (9)");
+    h.get_by_role_and_label(AkRole::Button, "Roughness scale (10)");
+}
+
+#[test]
+fn controllers_tab_names_lscc_specular_colour_by_pbr_material() {
+    let cases = [
+        (1u32 << 23, "Specular colour (no effect on PBR)"),
+        ((1 << 23) | (1 << 24), "Coat colour"),
+        ((1 << 23) | (1 << 26), "Subsurface colour"),
+        (1 << 24, "Specular colour"), // not PBR: bits 24 and 26 mean nothing
+    ];
+    for (bits, want) in cases {
+        let mut m = direct(ctrl_scene(0x82));
+        let s = select(&mut m, "S");
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(s), Role::Shader).unwrap();
+        let key = |time: f32, value: [f32; 3]| Key {
+            time,
+            value,
+            forward: None,
+            backward: None,
+            tbc: None,
+        };
+        m.edit_push(
+            vec![Op::AddController {
+                at,
+                class: "BSLightingShaderPropertyColorController".into(),
+                var: Some(0),
+                keys: KeyData::Pos(KeyGroup {
+                    key_type: Some(1),
+                    keys: vec![key(0.0, [0.2, 0.4, 0.6]), key(1.0, [0.8, 0.6, 0.4])],
+                }),
+                flags: 0x48,
+                freq: 1.0,
+                start: 0.0,
+                stop: 1.0,
+            }],
+            None,
+        );
+        let mut h = view(m);
+        h.run_steps(2);
+        set_slsf2(&mut h, s, bits);
+        tab(&mut h, "Controllers");
+        h.get_by_role_and_label(AkRole::ComboBox, &format!("{want} variable"));
+    }
+}
+
+// ---- B-P39: guards from the B9 in-game controller check ----
+
+const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
+
+/// An exportable session on `b` (temp edit mod).
+fn exportable(b: Vec<u8>) -> (tempfile::TempDir, NifEdit) {
+    let d = tempfile::tempdir().unwrap();
+    let edit_mod = d.path().join("mods").join(EDIT_MOD);
+    let e = NifEdit::open(b, copy("A", 1, false), "meshes/x.nif", Some(&edit_mod)).unwrap();
+    (d, e)
+}
+
+fn pbr_on(e: &NifEdit) -> Op {
+    let at = nif::edit::anchor_role(&e.model, Some(0), Role::Shader).unwrap();
+    let base = e.model.lighting[&1].lighting.slsf2;
+    Op::SetBits {
+        at,
+        field: Field::Slsf2,
+        mask: 1 << 23,
+        value: 1 << 23,
+        base,
+    }
+}
+
+#[test]
+fn env_map_scale_on_pbr_blocks_export_after_a_switch_and_in_the_source() {
+    // The shape turns PBR after the var-8 controller exists.
+    let (_d, mut e) = exportable(ctrl_scene_vars(0x82, [8, 20]));
+    assert!(e.warnings.iter().all(|w| w.text != ENV_PBR));
+    let op = pbr_on(&e);
+    e.push(vec![op], None);
+    assert_eq!(e.export_block().as_deref(), Some(ENV_PBR));
+    // A file that already has it: an unrelated edit still cannot export.
+    let (_d2, mut e2) = exportable(e.patched.to_vec());
+    let at = nif::edit::anchor_role(&e2.model, Some(0), Role::Shader).unwrap();
+    e2.push(
+        vec![Op::SetField {
+            at,
+            field: Field::Glossiness,
+            value: Value::F32(50f32.to_bits()),
+            base: Value::F32(80f32.to_bits()),
+        }],
+        None,
+    );
+    assert_eq!(e2.export_block().as_deref(), Some(ENV_PBR));
+}
+
+#[test]
+fn controllers_tab_shows_the_b9_guards() {
+    // Var 0 (refraction) and var 10 on a shape whose Specular flag is off.
+    let mut m = direct(ctrl_scene_vars(0x82, [0, 10]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Refraction strength has no visible effect in game.");
+    h.get_by_label("This controller has no effect: Specular is off when the mesh loads.");
+    // Two controllers on one variable.
+    let mut m = direct(ctrl_scene_vars(0x82, [11, 11]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Two controllers drive Emissive multiple: only the last one plays.");
+    // Var 8 on PBR: the red error under the controller.
+    let mut m = direct(ctrl_scene_vars(0x82, [8, 20]));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    tab(&mut h, "Controllers");
+    h.get_by_label(ENV_PBR);
+}
+
+#[test]
+fn add_controller_offers_no_env_map_scale_on_pbr() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 1800.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    let env = h.get_by_label("Env map scale (8)");
+    assert!(!env.accesskit_node().is_disabled());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    let env = h.get_by_label("Env map scale (8)");
+    assert!(env.accesskit_node().is_disabled());
+    env.hover();
+    h.run_steps(30);
+    h.get_by_label(ENV_PBR);
+}
+
+/// B-P40: the Variable combo of an existing controller offers no env map scale on PBR either.
+#[test]
+fn variable_combo_offers_no_env_map_scale_on_pbr() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable")
+        .click();
+    h.run_steps(3);
+    assert!(!h
+        .get_by_label("Env map scale (8)")
+        .accesskit_node()
+        .is_disabled());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable")
+        .click();
+    h.run_steps(3);
+    let env = h.get_by_label("Env map scale (8)");
+    assert!(env.accesskit_node().is_disabled());
+    env.hover();
+    h.run_steps(30);
+    h.get_by_label(ENV_PBR);
+    // A controller that already has var 8 still shows it, with its error.
+    let mut m = direct(ctrl_scene_vars(0x82, [8, 20]));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, s, 1 << 23);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ComboBox, "Env map scale variable");
+    h.get_by_label(ENV_PBR);
+}
+
+// ---- B-P41: the var-8 crash through PGPatcher (final review I1) ----
+
+const PG_ENV: &str =
+    "PGPatcher makes this shape PBR: its Env map scale controller will crash the game.";
+
+/// x.nif is not PBR, so the editor adds var 8; A's x.json makes the shape PBR in game. In game shows a red line, the
+/// edit view a Warning from the cached simulation, and export stays open (PGPatcher's output depends on play-time JSON).
+#[test]
+fn env_map_scale_warns_when_pgpatcher_makes_the_shape_pbr() {
+    let (_d, mut m) = pg_session();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::AddController {
+            at,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(8),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(0.0, 1.0, None), fkey(1.0, 0.5, None)],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 1.0,
+        }],
+        None,
+    );
+    m.select_edit(Selection::Shape(shape));
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.doc.ops.iter().all(|d| d.status == OpStatus::Applied));
+    assert!(
+        notes_or_none(&m, shape).is_none(),
+        "Edited source: no In game rows"
+    );
+    in_game(&mut m);
+    let n = notes(&m, shape);
+    assert!(n.iter().any(|l| l == PG_ENV), "{n:?}");
+    // Back on Edited source: the Warning under the controller comes from the cached simulation.
+    let runs = m.edit.as_ref().unwrap().sim_runs;
+    m.set_view_source(true);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.sim_runs, runs, "no new simulation");
+    assert_eq!(e.blocked, None, "export is not blocked");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label(PG_ENV);
+    // Without the controller, the Warning goes.
+    let m = h.state_mut();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(8),
+        nth: 0,
+    };
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, Some(shape), role).unwrap();
+    m.edit_push(vec![Op::RemoveController { at }], None);
+    h.run_steps(3);
+    assert!(h.query_by_label(PG_ENV).is_none());
+}
+
+fn notes_or_none(m: &MeshesModel, b: u32) -> Option<Vec<String>> {
+    let rows = m.edit.as_ref().unwrap().in_game.clone()?;
+    rows.into_iter().find(|(id, _, _)| id.0 == b).map(|r| r.2)
+}
+
+// ---- B-P41: key-drag cost on a many-controller owner NIF (final review minor 5) ----
+
+/// One key-drag tick (`push` with the drag's merge key: `reapply`) on the owner NIF with the most lighting controllers a
+/// scan of the loose meshes\effects, actors and magic folders found (2026-10-21): vanilla fxtg09nocturnalbirds.nif,
+/// 608 controllers and 2 sequences. The loose extract of it is disabled, so it is read from the vanilla mesh BSAs
+/// (the winning copy). Release build; not a gate.
+#[test]
+#[ignore]
+fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
+    let Ok(root) = std::env::var("SDC_ACHERUS") else {
+        println!("skipped: set SDC_ACHERUS");
+        return;
+    };
+    const PATH: &str = r"meshes\effects\fxtg09nocturnalbirds.nif";
+    let data = Path::new(&root).join("Stock Game").join("Data");
+    let bytes = ["Skyrim - Meshes0.bsa", "Skyrim - Meshes1.bsa"]
+        .iter()
+        .find_map(|n| {
+            let b = vfs::bsa::Bsa::open(&data.join(n)).ok()?;
+            let e = b
+                .entries
+                .iter()
+                .find(|e| e.norm.replace('/', "\\").eq_ignore_ascii_case(PATH))?;
+            b.read(e).ok()
+        })
+        .expect("the NIF in the vanilla mesh BSAs");
+    let mut e = NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap();
+    // The first controller (free or in a clip) with two float or colour keys or more, on a shape's shader or alpha.
+    let (at, clip, keys) = e
+        .keys
+        .iter()
+        .filter_map(|((c, clip), k)| match k {
+            Ok(k @ KeyData::Float(g)) if g.keys.len() >= 2 => Some((*c, *clip, k.clone())),
+            Ok(k @ KeyData::Pos(g)) if g.keys.len() >= 2 => Some((*c, *clip, k.clone())),
+            _ => None,
+        })
+        .find_map(|(c, clip, k)| {
+            let m = &e.model;
+            let (s, owner, prop) = m.shapes.iter().find_map(|s| {
+                let lit = s.shader.and_then(|b| m.lighting.get(&b)).map(|l| &l.prop);
+                let alpha = s.alpha.and_then(|b| m.alphas.get(&b)).map(|a| &a.prop);
+                [
+                    (nif::edit::Owner::Shader, lit),
+                    (nif::edit::Owner::Alpha, alpha),
+                ]
+                .into_iter()
+                .find_map(|(o, p)| p.filter(|p| p.ctrls.contains(&c)).map(|p| (s, o, p)))
+            })?;
+            let cm = &m.ctrls[&c];
+            let i = prop.ctrls.iter().position(|&b| b == c)?;
+            let nth = prop.ctrls[..i]
+                .iter()
+                .filter_map(|b| m.ctrls.get(b))
+                .filter(|p| p.class == cm.class && p.var == cm.var)
+                .count() as u32;
+            let at = Anchor {
+                block: c,
+                kind: cm.class.clone(),
+                shape: s.name.clone(),
+                role: Role::Ctrl {
+                    owner,
+                    class: cm.class.clone(),
+                    var: cm.var,
+                    nth,
+                },
+            };
+            Some((at, clip, k))
+        })
+        .expect("a keyed controller");
+    let tick = |v: f32| {
+        let mut k = keys.clone();
+        match &mut k {
+            KeyData::Float(g) => g.keys[1].value = v,
+            KeyData::Pos(g) => g.keys[1].value[0] = v,
+            KeyData::Bool(_) => unreachable!(),
+        }
+        Op::SetKeys {
+            at: at.clone(),
+            clip,
+            keys: k,
+            base: keys.clone(),
+        }
+    };
+    let merge = Some(nif::edit::merge_key(&tick(0.0)));
+    e.push(vec![tick(0.0)], merge.clone());
+    let n = 20;
+    let t = Instant::now();
+    for i in 1..=n {
+        e.push(vec![tick(i as f32 * 0.01)], merge.clone());
+    }
+    let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    assert_eq!(e.doc.ops.len(), 1, "one drag, one op");
+    assert_eq!(e.outcomes, [nif::edit::Outcome::Applied]);
+    println!(
+        "{} controllers, {} sequences, {} shapes, clip {clip:?}: {per:.2} ms per drag tick",
+        e.model.ctrls.len(),
+        e.model.sequences.len(),
+        e.model.shapes.len()
+    );
+}
+
+// ---- Key fixes: stale key errors (Note CM33), Add key after the last key (B-P43), stop follows keys (B-P44) ----
+
+fn ctrl_times(m: &MeshesModel, ctrl: u32) -> (f32, f32) {
+    let c = &m.edit.as_ref().unwrap().model.ctrls[&ctrl];
+    (c.start, c.stop)
+}
+
+/// keyed_pair's ctrl 2 (Emissive multiple: LINEAR (0, 0) (1, 1), start 0, stop 1) in the Controllers tab.
+fn keyed_view() -> Harness<'static, MeshesModel> {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h
+}
+
+/// A scanned session (export folder, real shapes, the clock) on `with_uv_ctrl`, in the Controllers tab of the
+/// shape whose chain starts with the U offset controller (LINEAR (0, 0) (1, 1), start 0, stop 1).
+fn uv_view() -> (tempfile::TempDir, Harness<'static, MeshesModel>) {
+    let (d, mut m, _cmds) = session_on(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    (d, h)
+}
+
+fn click_add_key(h: &mut Harness<'static, MeshesModel>) {
+    h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple")
+        .click();
+    h.run_steps(3);
+}
+
+/// A SetKeys that a later SetKeys replaced is not validated: fixing the times clears the error everywhere.
+#[test]
+fn stale_key_order_error_clears_when_keys_are_fixed() {
+    const ERR: &str = "Key times must not decrease";
+    let (_d, mut h) = uv_view();
+    edit_number(&mut h, "U offset key 2 time", "-1");
+    assert!(h.query_all_by_label(ERR).count() > 0);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().export_block().as_deref(),
+        Some(ERR)
+    );
+    edit_number(&mut h, "U offset key 2 time", "2");
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label(ERR).count(), 0);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(e.op_warnings.is_empty(), "{:?}", e.op_warnings);
+    assert_ne!(e.export_block().as_deref(), Some(ERR));
+}
+
+/// B-P43: Add key appends at the last time plus the average spacing, with the last key's value.
+#[test]
+fn add_key_appends_after_the_last_key() {
+    let mut h = keyed_view();
+    for _ in 0..3 {
+        click_add_key(&mut h);
+    }
+    let g = float_keys(h.state(), 2);
+    let got: Vec<(f32, f32)> = g.keys.iter().map(|k| (k.time, k.value)).collect();
+    assert_eq!(
+        got,
+        [(0.0, 0.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (4.0, 1.0)]
+    );
+}
+
+/// B-P43/B-P44: past the stop, the same undo step moves the stop to the new key.
+#[test]
+fn add_key_past_stop_raises_stop_in_one_step() {
+    let mut h = keyed_view();
+    click_add_key(&mut h);
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 2.0));
+    let got = ops(h.state());
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(
+        matches!(&got[1], Op::SetField { field: Field::StopTime, value: Value::F32(v), .. } if f32::from_bits(*v) == 2.0),
+        "{got:?}"
+    );
+    assert!(h.state_mut().undo_edit());
+    assert!(ops(h.state()).is_empty());
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 1.0));
+    assert_eq!(float_keys(h.state(), 2).keys.len(), 2);
+}
+
+/// B-P43: the old rule (the cursor, or half-way between the last two keys) gave 1 on (0, 1, 1) and disabled Add
+/// key with "A key is already at this time."; now the key lands after the last one.
+#[test]
+fn add_key_never_duplicates_a_time() {
+    let mut h = keyed_view();
+    {
+        let m = h.state_mut();
+        let e = m.edit.as_ref().unwrap();
+        let mut g = float_keys(m, 2);
+        let base = KeyData::Float(g.clone());
+        g.keys.push(g.keys[1].clone());
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(11),
+            nth: 0,
+        };
+        let at = nif::edit::anchor_role(&e.model, Some(0), role).unwrap();
+        let op = Op::SetKeys {
+            at,
+            clip: None,
+            keys: KeyData::Float(g),
+            base,
+        };
+        m.edit_push(vec![op], None);
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("A key is already at this time.").is_none());
+    click_add_key(&mut h);
+    let t: Vec<f32> = float_keys(h.state(), 2)
+        .keys
+        .iter()
+        .map(|k| k.time)
+        .collect();
+    assert_eq!(t.len(), 4, "{t:?}");
+    assert!(t[3] > t[2], "{t:?}");
+    assert!(t[..3].iter().all(|&x| x != t[3]), "{t:?}");
+}
+
+/// B-P44: dragging the last key moves the stop with it; one undo reverts both.
+#[test]
+fn stop_follows_the_last_key_on_drag() {
+    let mut h = keyed_view();
+    // The key 2 handle (t 1, the right end) dragged left: a time drag of several ticks, one merged step.
+    let c = h.get_by_label("Emissive multiple key 2").rect().center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=3 {
+        h.hover_at(c - egui::vec2(40.0 * k as f32 / 3.0, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(c - egui::vec2(40.0, 0.0));
+    h.run_steps(3);
+    let last = float_keys(h.state(), 2).keys[1].time;
+    assert!(last < 1.0, "{last} {:?}", ops(h.state()));
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, last));
+    assert_eq!(ops(h.state()).len(), 2, "{:?}", ops(h.state()));
+    assert!(h.state_mut().undo_edit());
+    assert!(ops(h.state()).is_empty());
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 1.0));
+}
+
+/// B-P44: removing the last key brings the stop back to the new last key; a first key moved before the start
+/// pulls the start with it.
+#[test]
+fn remove_last_key_shrinks_stop() {
+    let mut h = keyed_view();
+    click_add_key(&mut h);
+    assert_eq!(ctrl_times(h.state(), 2).1, 2.0);
+    h.get_by_label("Remove Emissive multiple key 3").click();
+    h.run_steps(3);
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 1.0));
+    edit_number(&mut h, "Emissive multiple key 1 time", "-0.5");
+    assert_eq!(ctrl_times(h.state(), 2), (-0.5, 1.0));
+}
+
+/// B-P44: a clip's keys never move its sequence's start and stop.
+#[test]
+fn clip_stop_is_not_changed() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (nif, seq) = with_clip(&plain);
+    let mut m = direct(nif);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple in Glow")
+        .click();
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(matches!(&got[0], Op::SetKeys { clip: Some(_), .. }));
+    let e = h.state().edit.as_ref().unwrap();
+    let s = e.model.sequences.iter().find(|s| s.block == seq).unwrap();
+    assert_eq!((s.start, s.stop), (0.0, 1.0));
+}
+
+/// The owner's "end time stayed at 1": a typed Stop is stored, and the clock's range follows it without a reopen.
+#[test]
+fn typed_stop_is_stored_and_moves_the_clock_range() {
+    let (_d, mut h) = uv_view();
+    edit_number(&mut h, "U offset stop", "3");
+    let e = h.state().edit.as_ref().unwrap();
+    let stops: Vec<f32> = e.model.ctrls.values().map(|c| c.stop).collect();
+    assert!(stops.contains(&3.0), "{stops:?}");
+    assert_eq!(e.anim_range(), Some((0.0, 3.0)));
+    h.state_mut().tick_anim(0.0);
+    assert_eq!(h.state().v3.clock.map(|c| c.range), Some((0.0, 3.0)));
+}
+
+/// B-P44: the stop op comes and goes during one drag (the last key passes the stop and comes back); the drag stays
+/// one undo step, the stop op keeps the stop from before the drag as its base and leaves when it is not needed.
+#[test]
+fn a_drag_whose_stop_op_comes_and_goes_is_one_step() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    let base = KeyData::Float(float_keys(&m, 2));
+    let e = m.edit.as_mut().unwrap();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let at = nif::edit::anchor_role(&e.model, Some(0), role).unwrap();
+    let keys = |t: f32| {
+        let KeyData::Float(mut g) = base.clone() else {
+            unreachable!()
+        };
+        g.keys[1].time = t;
+        Op::SetKeys {
+            at: at.clone(),
+            clip: None,
+            keys: KeyData::Float(g),
+            base: base.clone(),
+        }
+    };
+    let stop = |to: f32, from: f32| Op::SetField {
+        at: at.clone(),
+        field: Field::StopTime,
+        value: Value::F32(to.to_bits()),
+        base: Value::F32(from.to_bits()),
+    };
+    let merge = Some(nif::edit::merge_key(&keys(1.0)));
+    e.push(vec![keys(1.0)], merge.clone());
+    e.push(vec![keys(1.5), stop(1.5, 1.0)], merge.clone());
+    // The UI reads the base from the drag's op: here a later tick names the current stop, which push replaces.
+    e.push(vec![keys(2.0), stop(2.0, 1.5)], merge.clone());
+    let got: Vec<Op> = e.doc.ops().to_vec();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[1], stop(2.0, 1.0), "the base from before the drag");
+    assert_eq!(e.model.ctrls[&2].stop, 2.0);
+    e.push(vec![keys(1.0)], merge.clone());
+    assert_eq!(e.doc.ops().len(), 1, "{:?}", e.doc.ops());
+    assert_eq!(e.model.ctrls[&2].stop, 1.0);
+    e.flush();
+    assert!(e.undo());
+    assert!(e.doc.ops().is_empty());
+    assert!(!e.history.can_undo());
+}
+
+/// keyed_view with ctrl 2's keys replaced by LINEAR keys at `times` (value 1), as one pushed SetKeys.
+fn keyed_view_at(times: &[f32]) -> Harness<'static, MeshesModel> {
+    let mut h = keyed_view();
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    let g = float_keys(m, 2);
+    let base = KeyData::Float(g.clone());
+    let keys = times
+        .iter()
+        .map(|&time| Key {
+            time,
+            value: 1.0,
+            forward: None,
+            backward: None,
+            tbc: None,
+        })
+        .collect();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let op = Op::SetKeys {
+        at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup {
+            key_type: g.key_type,
+            keys,
+        }),
+        base,
+    };
+    m.edit_push(vec![op], None);
+    h.run_steps(2);
+    h
+}
+
+/// B-P45: at 2^21 a 0.1 step rounds back to the last time; Add key takes the next f32 above it instead.
+#[test]
+fn add_key_past_a_large_time_still_increases() {
+    let mut h = keyed_view_at(&[2097152.0]);
+    click_add_key(&mut h);
+    click_add_key(&mut h);
+    let t: Vec<f32> = float_keys(h.state(), 2)
+        .keys
+        .iter()
+        .map(|k| k.time)
+        .collect();
+    assert_eq!(t.len(), 3, "{t:?}");
+    assert!(t.windows(2).all(|w| w[1] > w[0]), "{t:?}");
+    assert!(t.iter().all(|x| x.is_finite()), "{t:?}");
+}
+
+/// B-P45: no finite time is above f32::MAX: Add key is off and says why on hover.
+#[test]
+fn add_key_is_off_when_no_later_time_exists() {
+    let mut h = keyed_view_at(&[0.0, f32::MAX]);
+    let b = h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple");
+    assert!(b.accesskit_node().is_disabled());
+    b.hover();
+    h.run();
+    h.get_by_label("No later time is possible for a new key.");
+    assert_eq!(float_keys(h.state(), 2).keys.len(), 2);
 }

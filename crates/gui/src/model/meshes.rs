@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 pub mod edit_doc;
 pub mod export;
 pub mod nif_edit;
+pub mod pg_entries;
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
@@ -548,6 +549,12 @@ pub struct MeshesModel {
     cancel: Option<Arc<AtomicBool>>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
+    /// v2 B8 fix F2: the PGPatcher JSON In game reads, for one scan target and scan; it outlives edit sessions.
+    pub pg: Option<pg_entries::PgJson>,
+    /// JSON reads started so far (each is a new generation of the cached In game rows).
+    pub pg_reads: u64,
+    /// Completed scans so far: a rescan reads the JSON again and drops the cached In game rows (fix F5).
+    scan_rev: u64,
 }
 
 impl MeshesModel {
@@ -623,6 +630,9 @@ impl MeshesModel {
             cancel: None,
             tx,
             rx,
+            pg: None,
+            pg_reads: 0,
+            scan_rev: 0,
         }
     }
 
@@ -862,6 +872,7 @@ impl MeshesModel {
     /// Drain worker messages. True when anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.v3.poll();
+        changed |= self.poll_pg();
         for d in self.picker.take() {
             changed = true;
             if let Some(p) = d.path {
@@ -900,6 +911,7 @@ impl MeshesModel {
         self.scan_completed = r.is_ok();
         match r {
             Ok(report) => {
+                self.scan_rev += 1;
                 self.status = report_summary(&report);
                 log_plugins(&report);
                 self.file_refs = None;
@@ -1250,8 +1262,8 @@ impl MeshesModel {
     pub fn set_view_source(&mut self, source: bool) {
         if self.view_source != source {
             self.view_source = source;
-            // While editing, Source is the edit preview with every edit so far (ruling P13).
-            if !(source && self.show_edit_preview()) {
+            // While editing (v2 B8): Source is the edit preview, In game is pgpsim over it (the JSON is kept, fix F2).
+            if !self.show_edit_preview() {
                 self.v3.nif_view = false;
                 self.load_shapes();
             }

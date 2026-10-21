@@ -1182,6 +1182,77 @@ fn the_spinner_needs_300_ms_of_continuous_work_and_resets_when_idle() {
     assert!(v.show_spinner(t1 + Duration::from_millis(300)));
 }
 
+/// v2 B3 perf gate (spec §6.3): a playback frame (new clock time + a cbuffer SetMaterial per shape + the Render) stays
+/// under 33.3 ms (30 fps) at 1600×900 and the Meshes default size, deferred (the default look) and forward.
+/// `cargo test -p sdc-gui --release --offline --test viewport3d -- --ignored --nocapture femalebody_playback`
+#[test]
+#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
+fn femalebody_playback_holds_30_fps() {
+    let cache = tempfile::tempdir().unwrap();
+    let Some(mut v) = femalebody_viewport(cache.path()) else {
+        return;
+    };
+    let Some(v3::Content::Mesh(spec)) = v.content().cloned() else {
+        panic!("a mesh")
+    };
+    let nif = Arc::new(render3d::parse(&v3::read_file(&spec.nif).unwrap()));
+    assert!(!nif.shapes.is_empty());
+    v.set_content(
+        Some(v3::Content::Parsed {
+            key: 2,
+            nif: nif.clone(),
+            textures: Arc::new(spec.textures.clone()),
+        }),
+        false,
+    );
+    v.clock = Some(v3::Clock::new((0.0, 1.0)));
+    for deferred in [true, false] {
+        v.set_deferred(deferred);
+        for (w, h) in [(1600, 900), MESHES_DEFAULT] {
+            v.request_frame(w, h);
+            wait_idle(&mut v);
+            v.request_frame(w, h);
+            wait_idle(&mut v);
+            println!("adapter: {:?}", v.adapter);
+            let (mut wall, mut render, n) = (0.0, 0.0, 60);
+            for i in 0..n + 5 {
+                v.clock.as_mut().unwrap().scrub((i as f32 / 60.0).fract());
+                let t0 = Instant::now();
+                for s in &nif.shapes {
+                    let mut m = s.material.clone();
+                    m.params.uv_offset[0] = v.clock.unwrap().t;
+                    assert!(v.set_material(s.id, m));
+                }
+                v.request_frame(w, h);
+                wait_idle(&mut v);
+                let (f, tm) = fresh_sample(&v, (w, h))
+                    .unwrap_or_else(|e| panic!("frame {i} at {w}x{h}: {e}"));
+                let img = eframe::egui::ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize],
+                    &f.rgba,
+                );
+                std::hint::black_box(img);
+                if i >= 5 {
+                    wall += t0.elapsed().as_secs_f64() * 1000.0;
+                    render += tm.draw_ms + tm.gpu_ms + tm.readback_ms;
+                }
+            }
+            let (wall, render) = (wall / n as f64, render / n as f64);
+            println!(
+                "deferred {deferred}, {w}x{h}: playback {wall:.2} ms/frame wall, {render:.2} ms render (FrameTiming)"
+            );
+            assert_eq!(
+                v.last_edit.map(|e| e.0),
+                Some(render3d::EditKind::Cbuffer),
+                "cbuffer edits only"
+            );
+            assert!(
+                wall < 33.3,
+                "deferred {deferred}, {w}x{h}: {wall:.2} ms is under 30 fps"
+            );
+        }
+    }
+}
 // ---- M2: background and light controls ----
 
 /// A viewport with a loaded mesh and its first Render already sent and drained.
@@ -3286,5 +3357,75 @@ fn deferred_on_with_the_standin_draws_and_goes_idle() {
     assert!(
         v.report.is_none(),
         "no Loaded reply: nothing was loaded again"
+    );
+}
+
+// ---- v2 B3: the animation clock ----
+
+#[test]
+fn the_clock_wraps_clamps_and_caps_dt() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    assert!(!v.tick(0.1), "no clock");
+    v.clock = Some(v3::Clock::new((1.0, 2.0)));
+    assert!(!v.tick(0.1), "paused");
+    v.clock.as_mut().unwrap().play();
+    assert!(v.tick(1.0));
+    assert!(
+        (v.clock.unwrap().t - (1.0 + v3::Clock::MAX_DT)).abs() < 1e-5,
+        "one frame advances at most MAX_DT"
+    );
+    let c = v.clock.as_mut().unwrap();
+    c.t = 1.99;
+    c.rate = 2.0;
+    v.tick(0.01);
+    assert!(
+        (v.clock.unwrap().t - 1.01).abs() < 1e-5,
+        "looping wraps: {:?}",
+        v.clock
+    );
+    let c = v.clock.as_mut().unwrap();
+    c.looping = false;
+    c.t = 1.99;
+    v.tick(0.01);
+    assert_eq!(
+        (v.clock.unwrap().t, v.clock.unwrap().playing),
+        (2.0, false),
+        "stops at the end"
+    );
+    v.clock.as_mut().unwrap().play();
+    assert_eq!(v.clock.unwrap().t, 1.0, "Play at the end starts again");
+    v.clock.as_mut().unwrap().scrub(9.0);
+    assert_eq!(
+        (v.clock.unwrap().t, v.clock.unwrap().playing),
+        (2.0, false),
+        "scrub clamps and pauses"
+    );
+    v.clock.as_mut().unwrap().play();
+    assert!(
+        !v.busy(),
+        "a playing clock alone is not work in flight (F6: the app may sleep)"
+    );
+}
+
+#[test]
+fn the_clock_time_joins_the_render_dedupe() {
+    let (mut v, cmds) = rendered();
+    v.clock = Some(v3::Clock::new((0.0, 1.0)));
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { time, .. }) if time == 0.0),
+        "1.0 → 0.0 is a change"
+    );
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "same time: nothing sent");
+    v.clock.as_mut().unwrap().scrub(0.5);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { time, .. }) if time == 0.5));
+    assert!(cmds.try_recv().is_err(), "exactly one command");
+    v.clock = None;
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { time, .. }) if time == 1.0),
+        "no clock: 1.0"
     );
 }

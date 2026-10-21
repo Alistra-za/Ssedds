@@ -1,6 +1,7 @@
 //! The edit panel's Shader and Alpha tabs (spec §7, plan A17). Widgets only read the session; every change is
 //! collected in an [`Act`] that `edit_panel::panel` applies after drawing.
 use crate::model::meshes::nif_edit::{edit_slot_label, NifEdit, Selection};
+use crate::model::meshes::pg_entries::pg_ignore;
 use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::ui::status::{AMBER, RED};
@@ -9,7 +10,7 @@ use nif::edit::validate::{Level, Target};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::fields::{Field, Value};
 use nif::material::{SLSF1_NAMES, SLSF2_NAMES, SLSF2_TRUE_PBR};
-use nif::model::{NifModel, ShapeModel};
+use nif::model::ShapeModel;
 use nif::props::LightingTrailer;
 use render3d::material::{engine_blend, verified_blend};
 
@@ -33,6 +34,10 @@ pub(super) struct Act {
     pub guard_close: bool,
     /// Diff pressed in the guard dialog.
     pub guard_diff: bool,
+    /// A click or drag on a curve: the scene time the clock jumps to (it pauses, B3's `Clock::scrub`).
+    pub scrub: Option<f32>,
+    /// The Preview selector picked free chains or a clip (v2 B7).
+    pub playing: Option<crate::model::meshes::nif_edit::Playing>,
 }
 
 const LABEL_W: f32 = 132.0;
@@ -54,9 +59,21 @@ pub(super) fn row_label(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+/// A combo width that ends at the visible right edge (egui-ui-rules 3.5, 3.8): `want`, or what the row has left
+/// after its label. Pair it with `.truncate()` so a long value cannot widen the combo again.
+pub(super) fn fit_width(ui: &egui::Ui, want: f32) -> f32 {
+    let right = ui.max_rect().right().min(ui.clip_rect().right()) - ui.spacing().item_spacing.x;
+    want.min(right - ui.cursor().left()).max(40.0)
+}
+
 /// Warnings of `target` under their field: amber, red for errors, with "Fix" when the warning carries a fix.
 pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
-    for w in e.warnings.iter().filter(|w| w.target == *target) {
+    let all = e
+        .warnings
+        .iter()
+        .chain(&e.op_warnings)
+        .chain(&e.pg_warnings);
+    for w in all.filter(|w| w.target == *target) {
         let color = if w.level == Level::Error { RED } else { AMBER };
         ui.horizontal(|ui| {
             ui.add_space(LABEL_W);
@@ -267,13 +284,6 @@ fn trailer_fields(t: &LightingTrailer) -> Vec<(String, f32)> {
             ],
         ),
     }
-}
-
-/// A shape whose extra data has `NiBooleanExtraData` "PG_IGNORE": PGPatcher leaves it alone.
-fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
-    m.extras_of(&s.net)
-        .iter()
-        .any(|x| x.kind == "NiBooleanExtraData" && x.name.as_deref() == Some(b"PG_IGNORE"))
 }
 
 /// The selected shape, or a line saying why there is none.

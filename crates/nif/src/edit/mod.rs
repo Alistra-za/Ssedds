@@ -3,6 +3,7 @@
 //! write over a value that changed underneath it. Every op runs on the bytes the previous op produced (R1).
 use crate::extra::ExtraValue;
 use crate::fields::{locate, Field, Value};
+use crate::keys::KeyData;
 use crate::model::{read_model, NifModel, ShapeModel};
 use crate::write::NifDoc;
 use crate::NifError;
@@ -96,6 +97,33 @@ pub enum Op {
     },
     RemoveExtra {
         at: Anchor,
+    },
+    /// Replaces the keys of the anchored controller's own interpolator (`clip: None`), or of a sequence's
+    /// controlled-block interpolator bound to that controller (`clip: Some(sequence block)`, v2 B7).
+    SetKeys {
+        at: Anchor, // Role::Ctrl
+        clip: Option<u32>,
+        keys: KeyData,
+        base: KeyData,
+    },
+    /// Appends data, interpolator and controller, links them at the end of the property's chain, and sets root
+    /// BSXFlags bit 0 (D9, G1). `at` is Role::Shader or Role::Alpha of a shape.
+    AddController {
+        at: Anchor,
+        class: String,
+        var: Option<u32>,
+        keys: KeyData,
+        flags: u16,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        freq: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        start: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        stop: f32,
+    },
+    /// Unlinks the controller and clears its Active bit; its interpolator and data stay as orphans (spec §5.3).
+    RemoveController {
+        at: Anchor, // Role::Ctrl
     },
 }
 
@@ -260,8 +288,34 @@ pub fn merge_key(op: &Op) -> String {
         Op::AddExtra { at, kind, name, .. } => ("AddExtra", at, format!("{kind}/{name}")),
         Op::EditExtra { at, .. } => ("EditExtra", at, String::new()),
         Op::RemoveExtra { at } => ("RemoveExtra", at, String::new()),
+        // a clip drag never merges with a free-curve drag
+        Op::SetKeys { at, clip, .. } => {
+            ("SetKeys", at, clip.map_or(String::new(), |c| c.to_string()))
+        }
+        Op::AddController { at, class, var, .. } => {
+            ("AddController", at, format!("{class}/{var:?}"))
+        }
+        Op::RemoveController { at } => ("RemoveController", at, String::new()),
     };
     format!("{v}|{}|{what}", at.block)
+}
+
+/// The keys `SetKeys` edits on controller `ctrl` (v2 B6, the Controllers tab): its own interpolator's (`clip: None`)
+/// exactly as `apply` compares an op's `base`. Err gives why there is nothing to edit (shown in the tab).
+pub fn keys_of(b: &[u8], m: &NifModel, ctrl: u32, clip: Option<u32>) -> Result<KeyData, String> {
+    let h = crate::header::Header::parse(b).map_err(|e| e.to_string())?;
+    keys_of_in(&h, b, m, ctrl, clip)
+}
+
+/// [`keys_of`] with `b`'s header parsed once by the caller (B-P41: one parse per edit, not per controller).
+pub fn keys_of_in(
+    h: &crate::header::Header,
+    b: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+    clip: Option<u32>,
+) -> Result<KeyData, String> {
+    structural::key_target(h, b, m, ctrl, clip).map(|t| t.keys)
 }
 
 /// Err only when `src` itself does not open. A later op that cannot run is a `Conflict` or `Refused` outcome and
@@ -290,6 +344,9 @@ fn anchor_of(op: &Op) -> &Anchor {
         | Op::AddExtra { at, .. }
         | Op::EditExtra { at, .. }
         | Op::RemoveExtra { at }
+        | Op::SetKeys { at, .. }
+        | Op::AddController { at, .. }
+        | Op::RemoveController { at }
         | Op::SetTexturePath { at, .. } => at,
     }
 }
@@ -309,6 +366,9 @@ pub fn rebase(new_src: &[u8], ops: &[Op]) -> Result<(Vec<Op>, Vec<Outcome>), Nif
                 | Op::AddExtra { at, .. }
                 | Op::EditExtra { at, .. }
                 | Op::RemoveExtra { at }
+                | Op::SetKeys { at, .. }
+                | Op::AddController { at, .. }
+                | Op::RemoveController { at }
                 | Op::SetTexturePath { at, .. } => at.block = *block,
             }
         }
@@ -362,6 +422,11 @@ pub fn keep_mine(new_src: &[u8], ops: &[Op], i: usize) -> Result<Vec<Op>, NifErr
                 *base = v;
             }
         }
+        Op::SetKeys { base, clip, .. } => {
+            if let Ok(t) = structural::key_target(doc.header(), &cur, &m, block, *clip) {
+                *base = t.keys;
+            }
+        }
         _ => {}
     }
     Ok(out)
@@ -404,6 +469,44 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     } else {
         Outcome::Applied
     };
+    // Ruling P8: an alpha field edit on a shared alpha would change every user; it needs a split first.
+    // The same holds for a controller on a shared alpha's chain.
+    let alpha_users = match at.role {
+        Role::Alpha => m.alphas.get(&block).map(|a| a.prop.users.len()),
+        Role::Ctrl {
+            owner: Owner::Alpha,
+            ..
+        } => m
+            .alphas
+            .values()
+            .find(|a| a.prop.ctrls.contains(&block))
+            .map(|a| a.prop.users.len()),
+        _ => None,
+    };
+    if let Some(users) = alpha_users {
+        if users > 1 {
+            return (
+                None,
+                Outcome::Conflict(format!(
+                    "This alpha is shared by {users} shapes: split it before editing."
+                )),
+            );
+        }
+    }
+    if matches!(op, Op::SetKeys { .. }) {
+        return match structural::set_keys(&mut doc, cur, &m, block, op) {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
+    if matches!(op, Op::AddController { .. } | Op::RemoveController { .. }) {
+        return match structural::ctrl_op(&mut doc, &m, at, block, op) {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
     if matches!(op, Op::SetTexturePath { .. }) {
         let r = match m.shape(block).filter(|_| at.role == Role::Shape) {
             Some(s) => structural::texture_path_op(&mut doc, &m, s, op),
@@ -439,35 +542,8 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         Op::SetField { field, .. } | Op::SetBits { field, .. } => *field,
         _ => unreachable!("filtered above"),
     };
-    // Ruling P8: an alpha field edit on a shared alpha would change every user; it needs a split first.
-    // The same holds for a controller on a shared alpha's chain.
-    let alpha_users = match at.role {
-        Role::Alpha => m.alphas.get(&block).map(|a| a.prop.users.len()),
-        Role::Ctrl {
-            owner: Owner::Alpha,
-            ..
-        } => m
-            .alphas
-            .values()
-            .find(|a| a.prop.ctrls.contains(&block))
-            .map(|a| a.prop.users.len()),
-        _ => None,
-    };
-    if let Some(users) = alpha_users {
-        if users > 1 {
-            return (
-                None,
-                Outcome::Conflict(format!(
-                    "This alpha is shared by {users} shapes: split it before editing."
-                )),
-            );
-        }
-    }
     if field == Field::ShaderType && matches!(op, Op::SetBits { .. }) {
         return refused("the shader type is not a bit field".into());
-    }
-    if field == Field::Variable && m.managed(block) {
-        return refused("the variable of a manager-controlled controller cannot change".into());
     }
     let ctrl = block;
     let block = field_block(&m, block, field);
@@ -538,6 +614,22 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     };
     if let Err(e) = doc.patch(block, rel, &new) {
         return refused(e.to_string());
+    }
+    // Phase A ruling R8 lifted (v2 B7): a managed controller's clips follow its new variable.
+    if let (
+        Field::Variable,
+        Op::SetField {
+            value: Value::U32(v),
+            base: Value::U32(o),
+            ..
+        },
+    ) = (field, op)
+    {
+        if m.managed(ctrl) && v != o {
+            if let Err(e) = structural::rewrite_cb_ids(&mut doc, &m, ctrl, *o, *v) {
+                return refused(e);
+            }
+        }
     }
     (Some(doc.bytes()), outcome)
 }

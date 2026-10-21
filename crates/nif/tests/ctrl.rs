@@ -286,3 +286,62 @@ fn sequence_strings_past_file_length_are_an_error() {
         Err(NifError::Geometry { .. })
     ));
 }
+
+/// v2 B7: a sequence's text keys come from the NiTextKeyExtraData it names; a -1 ref gives none.
+#[test]
+fn sequence_text_keys_are_read() {
+    // managed_clip's sequences name no text keys.
+    let m = nif::model::read_model(&scenes::managed_clip()).unwrap();
+    assert!(m.sequences.iter().all(|s| s.text_keys.is_empty()));
+    let b = scenes::managed_pair(); // sequence A (1) names text keys 17: "start" at 0, "end" at 1
+    let m = nif::model::read_model(&b).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.lighting[&4].prop.ctrls, vec![5, 6]);
+    assert!(m.managed(5) && m.managed(6));
+    let a = m.sequences.iter().find(|s| s.block == 1).unwrap();
+    assert_eq!(
+        a.text_keys,
+        vec![(0.0, Some(b"start".to_vec())), (1.0, Some(b"end".to_vec()))]
+    );
+    let b_ = m.sequences.iter().find(|s| s.block == 2).unwrap();
+    assert!(b_.text_keys.is_empty());
+}
+
+/// B7 fix round 1 (B-P36): text keys share the sequence's byte budget. One 64 KiB string named by 256 keys would copy
+/// 16 MiB from a ~70 KiB file: the copied bytes stay within the file length (the keys read as none).
+#[test]
+fn text_keys_cannot_amplify_one_large_string() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(64 * 1024));
+    let seq = W::default()
+        .i32(-1)
+        .u32(0)
+        .u32(0)
+        .f(1.0) // weight
+        .i32(1) // text keys
+        .u32(0)
+        .fs(&[1.0, 0.0, 1.0])
+        .i32(-1)
+        .i32(-1)
+        .u16(0)
+        .0;
+    n.block("NiControllerSequence", seq);
+    let mut tk = W::default().i32(-1).u32(256);
+    for k in 0..256 {
+        tk = tk.f(k as f32).i32(big);
+    }
+    n.block("NiTextKeyExtraData", tk.0);
+    let b = n.bytes();
+    let h = Header::parse(&b).unwrap();
+    let s = read_sequence(&h, &b, 0).expect("the sequence itself still reads");
+    let copied: usize = s
+        .text_keys
+        .iter()
+        .map(|(_, v)| v.as_ref().map_or(0, Vec::len))
+        .sum();
+    assert!(
+        copied <= b.len(),
+        "{copied} bytes copied from a {}-byte file",
+        b.len()
+    );
+}
