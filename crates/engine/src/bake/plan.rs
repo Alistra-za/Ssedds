@@ -465,6 +465,16 @@ pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
     baking
 }
 
+/// CL40's opt-in test on a set's `_n` job: an explicit (not built-in) `mips.normal = renormalize_bake`. Also read by
+/// the Also export report (TA26, P22).
+pub(crate) fn gloss_bake_opted(nj: &ResolvedJob) -> bool {
+    nj.profile.mips.normal == NormalMips::RenormalizeBake
+        && nj
+            .provenance
+            .get("mips.normal")
+            .is_some_and(|p| *p != Provenance::Builtin)
+}
+
 /// Opt-in gloss bake (DECISIONS Note CL40, superseding R6 for this case only), any target: a set whose `normal` has
 /// an explicit `mips.normal = renormalize_bake` (provenance not built-in) bakes that `_n`'s footprint variance into
 /// the gloss (G) of each writable, non-DDS `complex_material` job of the set, a packed one included. Sizes follow
@@ -485,12 +495,7 @@ pub fn plan_gloss_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<Stri
             continue;
         };
         let nj = &jobs[n];
-        let opted = nj.profile.mips.normal == NormalMips::RenormalizeBake
-            && nj
-                .provenance
-                .get("mips.normal")
-                .is_some_and(|p| *p != Provenance::Builtin);
-        if !opted || !decided(nj) {
+        if !gloss_bake_opted(nj) || !decided(nj) {
             continue;
         }
         let members: Vec<usize> = idx

@@ -1128,3 +1128,242 @@ fn a_corrupt_owned_record_is_warned_once_with_zip_on() {
         .count();
     assert_eq!(warned, 1);
 }
+
+// ---- Task 9: the conversion report (C5, TA16, TA21, TA26-TA28, TA30) ----
+
+fn report(loc: &Path, project: &str) -> String {
+    std::fs::read_to_string(loc.join(format!("{project} conversion-report.md"))).unwrap()
+}
+
+fn fake_dds(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"DDS not a real texture").unwrap();
+}
+
+/// A DDS-only PBR set `textures/pbr/arm/iron` (DERIVE-DDS-SOURCE).
+fn iron(m: &Path) {
+    for f in ["iron.dds", "iron_n.dds", "iron_rmaos.dds"] {
+        fake_dds(&m.join("textures/pbr/arm").join(f));
+    }
+}
+
+fn envmap_request(m: &Path, loc: &Path) -> BatchRequest {
+    let mut req = request(m, loc);
+    req.mesh_shaders = std::collections::BTreeMap::from([(
+        "textures/arm/steel".to_string(),
+        vec![engine::shader::Shader::Envmap],
+    )]);
+    req
+}
+
+#[test]
+fn the_report_lists_suggestions_skips_and_settings() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        iron(m);
+        cup(m);
+    });
+    let mut sp = spec(&loc, BOTH);
+    sp.scanned = true;
+    let s = also(envmap_request(&m, &loc), &sp).0.unwrap();
+    assert_eq!(
+        s.report,
+        Some(loc.join("Mod conversion-report.md")),
+        "{:?}",
+        s.notes
+    );
+    let r = report(&loc, "Mod");
+    assert!(
+        r.starts_with("<!-- written by Tessalith; regenerated on every Also export -->\n"),
+        "{r}"
+    );
+    assert!(
+        r.contains("| textures/pbr/arm/steel | 29.5 | 1 | yes | yes |"),
+        "{r}"
+    );
+    assert!(r.contains("brightness = 0.9"), "{r}");
+    let skipped = r
+        .lines()
+        .find(|l| l.contains("textures/pbr/arm/iron"))
+        .unwrap_or_default();
+    assert!(skipped.contains("is DDS"), "{r}");
+    assert!(
+        !r.contains("| textures/pbr/arm/iron |"),
+        "a skipped set has no row: {r}"
+    );
+    for f in ["| Mod PBR |", "| Mod Vanilla |", "| Mod CM |"] {
+        assert!(r.contains(f), "{f}: {r}");
+    }
+    assert!(r.contains("Install the CM folder on top of the Vanilla folder."));
+    assert!(r.contains("It holds only the `_m` files."));
+    assert!(!r.contains('\r'));
+    // The same inputs give the same set table (the counts differ: all up to date the second time).
+    also(envmap_request(&m, &loc), &sp).0.unwrap();
+    let rows = |r: &str| -> Vec<String> {
+        r.lines()
+            .filter(|l| l.starts_with("| textures/"))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(rows(&r), rows(&report(&loc, "Mod")));
+}
+
+#[test]
+fn without_a_scan_the_report_says_why_no_env_m_was_written() {
+    let (_d, m, loc) = project(steel);
+    also(request(&m, &loc), &spec(&loc, BOTH)).0.unwrap();
+    let r = report(&loc, "Mod");
+    let row = r
+        .lines()
+        .find(|l| l.starts_with("| textures/pbr/arm/steel |"))
+        .unwrap_or_else(|| panic!("{r}"));
+    assert!(row.contains("| yes | no: no scan |"), "{row}");
+}
+
+#[test]
+fn a_report_tessalith_did_not_write_is_kept() {
+    let (_d, m, loc) = project(cup);
+    let path = loc.join("Mod conversion-report.md");
+    std::fs::write(&path, b"my own notes").unwrap();
+    let s = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]))
+        .0
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"my own notes");
+    assert_eq!(s.report, None);
+    let note = engine::dds::Kept::Foreign.note(&path);
+    assert!(s.notes.contains(&note), "{:?}", s.notes);
+}
+
+#[test]
+fn two_projects_in_one_location_each_get_their_own_report() {
+    let d = tempfile::tempdir().unwrap();
+    let loc = d.path().join("mods");
+    for p in ["Iron", "Steel"] {
+        cup(&loc.join(p));
+    }
+    for p in ["Iron", "Steel"] {
+        let s = also(request(&loc.join(p), &loc), &zip_spec(&loc, BOTH))
+            .0
+            .unwrap();
+        assert!(
+            s.notes.iter().all(|n| !n.contains(" kept")),
+            "{p}: {:?}",
+            s.notes
+        );
+        assert!(s.report.is_some(), "{p}");
+    }
+    for (p, other) in [("Iron", "Steel"), ("Steel", "Iron")] {
+        let r = report(&loc, p);
+        assert!(r.contains(&format!("| {p} PBR |")), "{r}");
+        assert!(!r.contains(&format!("{other} PBR")), "{r}");
+        assert!(loc.join(format!("{p} SHA256SUMS.txt")).exists());
+    }
+}
+
+#[test]
+fn a_cancelled_export_writes_the_report_with_cancelled_after_pbr() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    let cancel = CancelToken::default();
+    let s = also_with(
+        request(&m, &loc),
+        &spec(&loc, BOTH),
+        Arc::new(CancelOnPbrDone(cancel.clone())),
+        &cancel,
+    )
+    .unwrap();
+    assert!(s.report.is_some(), "{:?}", s.notes);
+    let r = report(&loc, "Mod");
+    assert!(r.contains("Cancelled after PBR"), "{r}");
+    assert!(r.contains("| Mod PBR |"), "{r}");
+    assert!(
+        !r.contains("| Mod Vanilla |") && !r.contains("| Mod CM |"),
+        "{r}"
+    );
+}
+
+#[test]
+fn the_install_line_is_printed_with_keep_metal_on_too() {
+    let (_d, m, loc) = project(steel);
+    let mut sp = spec(&loc, BOTH);
+    sp.cfg.legacy.keep_metal_brightness = true;
+    also(request(&m, &loc), &sp).0.unwrap();
+    let r = report(&loc, "Mod");
+    assert!(r.contains("on top of the Vanilla folder"), "{r}");
+    assert!(!r.contains("only the `_m`"), "{r}");
+    assert_eq!(
+        cm_lines(&sp.cfg),
+        vec!["Install the CM folder on top of the Vanilla folder."]
+    );
+    sp.cfg.legacy.keep_metal_brightness = false;
+    assert_eq!(cm_lines(&sp.cfg).len(), 2);
+}
+
+/// Carried into Task 9: a member with no recipe role is both a set-level `DERIVE-NOT-CONVERTED` note and a per-file
+/// skip; the report lists it once.
+#[test]
+fn a_member_not_converted_is_listed_once() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        png(
+            &m.join("textures/pbr/arm/steel_g.png"),
+            16,
+            16,
+            [10, 10, 10, 255],
+        );
+    });
+    also(request(&m, &loc), &spec(&loc, BOTH)).0.unwrap();
+    let r = report(&loc, "Mod");
+    assert_eq!(r.matches("steel_g.png").count(), 1, "{r}");
+    assert!(
+        r.contains("no vanilla or complex-material map uses it"),
+        "{r}"
+    );
+}
+
+/// Carried into Task 9 (CM43): with `ALSO-OWNED-UNREADABLE` raised, no report is written.
+#[test]
+fn a_corrupt_owned_record_writes_no_report() {
+    let (_d, m, loc) = project(cup);
+    let rec = loc.join("Mod PBR/_sdc/also.json");
+    std::fs::create_dir_all(rec.parent().unwrap()).unwrap();
+    std::fs::write(&rec, b"{ not json").unwrap();
+    let s = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]))
+        .0
+        .unwrap();
+    assert!(!loc.join("Mod conversion-report.md").exists());
+    assert_eq!(s.report, None);
+    assert_eq!(std::fs::read(&rec).unwrap(), b"{ not json");
+}
+
+#[test]
+fn the_report_names_a_failed_phase_and_every_note() {
+    let (_d, m, loc) = project(cup);
+    std::fs::write(loc.join("Mod Vanilla"), b"a file").unwrap();
+    let s = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    let r = report(&loc, "Mod");
+    assert!(r.contains("Vanilla phase failed"), "{r}");
+    assert!(!s.notes.is_empty());
+    for n in &s.notes {
+        assert!(r.contains(n.as_str()), "{n}: {r}");
+    }
+    assert!(r.contains("zip skipped: the export did not finish"), "{r}");
+}
+
+#[test]
+fn the_report_says_toksvig_and_inner_layer_per_set() {
+    let (_d, m, loc) = project(steel);
+    std::fs::write(
+        m.join("sdc.toml"),
+        "[files.\"textures/pbr/arm/steel_n.png\"]\nmips.normal = \"renormalize_bake\"\n",
+    )
+    .unwrap();
+    let mut sp = spec(&loc, BOTH);
+    sp.inner_layer_sets = set(&["Textures/PBR/Arm/Steel"]);
+    also(request(&m, &loc), &sp).0.unwrap();
+    let r = report(&loc, "Mod");
+    assert!(r.contains("Toksvig not applied"), "{r}");
+    assert!(r.contains("inner-layer `_p` copied unchanged"), "{r}");
+}

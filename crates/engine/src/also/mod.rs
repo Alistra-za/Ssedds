@@ -23,6 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub mod report;
+
 /// One of the three runs of an Also export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -115,6 +117,16 @@ pub const CM_NEEDS_VANILLA: &str =
 pub const NO_PBR_SETS: &str = "no PBR sets: Vanilla holds copies only; no CM folder written";
 /// C2: a set the user left out.
 pub const SKIPPED_SET: &str = "skipped (Skip vanilla/CM for this set)";
+
+/// P2: the CM install text, the one copy the report and the GUI's Review print. CM never holds `_n` or plain sets
+/// (TA7, O4); with Keep metal brightness off it holds only the `_m` files.
+pub fn cm_lines(cfg: &ExportConfig) -> Vec<&'static str> {
+    let mut v = vec!["Install the CM folder on top of the Vanilla folder."];
+    if !cfg.legacy.keep_metal_brightness {
+        v.push("It holds only the `_m` files.");
+    }
+    v
+}
 
 /// A path as hash records and folder rules compare it: absolute, `/`-separated, lower-cased (fix/pre-v2's
 /// `record_key`). `shortcut:` a junction or 8.3 name is not resolved (no `canonicalize`: the folders may not exist
@@ -754,8 +766,11 @@ pub fn run_also(
     };
     // The PBR phase's reporter; the later phases' batch-level warnings and the zip step's go out under its batch.
     let rep = Reporter::new(recorder(0, sink.clone()), new_batch_id());
-    let mut s = run_phases(engine, cache, base, spec, sink, cancel, &rep, &recorder)?;
-    if !spec.cfg.zip || dry_run {
+    let mut rows = vec![];
+    let mut s = run_phases(
+        engine, cache, base, spec, sink, cancel, &rep, &recorder, &mut rows,
+    )?;
+    if dry_run {
         return Ok(s);
     }
     let warn = |code: Code, message: &str| {
@@ -765,17 +780,10 @@ pub fn run_also(
             EventKind::Warning(Warning::new(code, message.to_string())),
         )
     };
-    if cancel.is_cancelled() || s.error.is_some() {
-        s.notes.push(ZIP_SKIPPED.into());
-        return Ok(s);
-    }
-    let failed = match OwnedFiles::load(&s.folders[0]) {
-        Ok(mut owned) => {
-            let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
-            write_zips(&mut s, &mut owned, &keys, &spec.location, &project)
-        }
-        // CM43: a record found unreadable at the start was reported then; one that broke since is reported here.
-        Err(_) if s.notes.iter().any(|n| n.contains(OWNED_UNREADABLE)) => vec![],
+    // CM43: a record found unreadable at the start was reported then; one that broke since is reported here, once.
+    let mut owned = match OwnedFiles::load(&s.folders[0]) {
+        Ok(o) => Some(o),
+        Err(_) if s.notes.iter().any(|n| n.contains(OWNED_UNREADABLE)) => None,
         Err(e) => {
             let m = format!(
                 "{} cannot be read ({e}): {OWNED_UNREADABLE}",
@@ -783,15 +791,39 @@ pub fn run_also(
             );
             warn(Code::AlsoOwnedUnreadable, &m);
             s.notes.push(m);
-            vec![]
+            None
         }
     };
-    for m in &failed {
-        warn(Code::AlsoZipFailed, m);
+    if spec.cfg.zip {
+        if cancel.is_cancelled() || s.error.is_some() {
+            s.notes.push(ZIP_SKIPPED.into());
+        } else {
+            let failed = match &mut owned {
+                Some(owned) => {
+                    let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
+                    write_zips(&mut s, owned, &keys, &spec.location, &project)
+                }
+                None => vec![],
+            };
+            for m in &failed {
+                warn(Code::AlsoZipFailed, m);
+            }
+            // Review M1: a zip or the sums file not written (or no zip at all) is a partial export.
+            s.zip_failed = !failed.is_empty() || s.zips.len() < s.phases.len();
+            s.notes.extend(failed);
+        }
     }
-    // Review M1: a zip or the sums file not written (or no zip at all) is a partial export.
-    s.zip_failed = !failed.is_empty() || s.zips.len() < s.phases.len();
-    s.notes.extend(failed);
+    // C5 (Task 9): the report comes last, so it carries every note above; after a cancel or a phase error too.
+    if let Some(owned) = &mut owned {
+        let path = spec
+            .location
+            .join(format!("{project} conversion-report.md"));
+        let text = report::render(&s, &rows, spec);
+        match owned.write(&path, text.as_bytes()) {
+            Ok(()) => s.report = Some(path),
+            Err(e) => s.notes.push(e.note(&path)),
+        }
+    }
     Ok(s)
 }
 
@@ -799,7 +831,8 @@ pub fn run_also(
 const OWNED_UNREADABLE: &str =
     "it is left as it is, and no report, zip or sums file is written until it is fixed or removed";
 
-/// `run_also` without the zips; `rep` is the PBR phase's reporter, `recorder` wraps each later phase's sink (P4).
+/// `run_also` without the zips and the report; `rep` is the PBR phase's reporter, `recorder` wraps each later
+/// phase's sink (P4). The report's set rows go into `rows`, read from the plans before they run.
 #[allow(clippy::too_many_arguments)]
 fn run_phases(
     engine: &Engine,
@@ -810,6 +843,7 @@ fn run_phases(
     cancel: &CancelToken,
     rep: &Reporter,
     recorder: &dyn Fn(usize, Arc<dyn EventSink>) -> Arc<dyn EventSink>,
+    rows: &mut Vec<report::SetRow>,
 ) -> Result<AlsoSummary, EngineError> {
     let cfg = &spec.cfg;
     let project = project_name(&base.inputs)?;
@@ -938,6 +972,9 @@ fn run_phases(
             return Ok(s);
         }
     };
+    let (r, whole) = report::vanilla_rows(&vplan, &sets, want_cm, &spec.inner_layer_sets);
+    *rows = r;
+    s.sets.extend(whole);
     let pbr_root = &folders[0];
     let pbr_records = Manifest::at(pbr_root).read().unwrap_or_default();
     let encoders = EncoderVersions::current();
@@ -1020,6 +1057,7 @@ fn run_phases(
         .flat_map(|d| &d.members)
         .map(PathBuf::as_path)
         .collect();
+    report::add_cm_errors(rows, &cplan, &sets);
     cplan.jobs.retain(|j| j.derive.is_some());
     cplan.skipped.retain(|f| members.contains(f.path.as_path()));
     cplan.failed.retain(|f| members.contains(f.path.as_path()));
