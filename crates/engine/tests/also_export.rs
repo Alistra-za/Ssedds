@@ -816,3 +816,200 @@ fn derive_sets_skip_by_id() {
     assert_eq!(drop.len(), 3);
     assert_eq!(notes.len(), 1);
 }
+
+// ---- Task 8: zips and SHA-256 lines (C8, TA17, TA21, TA23) ----
+
+fn zip_spec(loc: &Path, also: &[AlsoTarget]) -> AlsoSpec {
+    let mut sp = spec(loc, also);
+    sp.cfg.zip = true;
+    sp
+}
+
+/// The entry names of a zip, from its central directory.
+fn zip_names(path: &Path) -> Vec<String> {
+    let z = std::fs::read(path).unwrap();
+    let u16le = |at: usize| u16::from_le_bytes([z[at], z[at + 1]]) as usize;
+    let u32le = |at: usize| u32::from_le_bytes(z[at..at + 4].try_into().unwrap()) as usize;
+    let eocd = z.len() - 22;
+    let mut at = u32le(eocd + 16);
+    (0..u16le(eocd + 10))
+        .map(|_| {
+            let (n, x, c) = (u16le(at + 28), u16le(at + 30), u16le(at + 32));
+            let name = String::from_utf8(z[at + 46..at + 46 + n].to_vec()).unwrap();
+            at += 46 + n + x + c;
+            name
+        })
+        .collect()
+}
+
+fn sums(loc: &Path) -> Vec<String> {
+    std::fs::read_to_string(loc.join("Mod SHA256SUMS.txt"))
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn zips_in(loc: &Path) -> Vec<String> {
+    std::fs::read_dir(loc)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".zip"))
+        .collect()
+}
+
+#[test]
+fn zip_on_writes_a_zip_per_folder_and_sha256sums() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    let s = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    let names = ["Mod PBR.zip", "Mod Vanilla.zip", "Mod CM.zip"];
+    assert_eq!(s.zips, names.map(|n| loc.join(n)).to_vec(), "{:?}", s.notes);
+    let want: Vec<String> = names
+        .iter()
+        .map(|n| format!("{}  {n}", sha256_file(&loc.join(n)).unwrap()))
+        .collect();
+    assert_eq!(sums(&loc), want);
+    let raw = std::fs::read(loc.join("Mod SHA256SUMS.txt")).unwrap();
+    assert!(raw.is_ascii() && !raw.contains(&b'\r'));
+    assert!(zip_names(&loc.join("Mod CM.zip")).contains(&"Mod CM/textures/arm/steel_m.dds".into()));
+    assert!(zip_names(&loc.join("Mod PBR.zip"))
+        .iter()
+        .all(|n| !n.contains("_sdc") && n.starts_with("Mod PBR/")));
+
+    // A second, all up-to-date export zips the same files to the same bytes, over its own zips.
+    let s2 = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    assert_eq!(s2.zips.len(), 3, "{:?}", s2.notes);
+    assert_eq!(sums(&loc), want);
+}
+
+#[test]
+fn cancel_after_the_pbr_phase_writes_no_zip() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    let cancel = CancelToken::default();
+    let s = also_with(
+        request(&m, &loc),
+        &zip_spec(&loc, BOTH),
+        Arc::new(CancelOnPbrDone(cancel.clone())),
+        &cancel,
+    )
+    .unwrap();
+    assert!(zips_in(&loc).is_empty());
+    assert!(s.zips.is_empty());
+    assert!(!loc.join("Mod SHA256SUMS.txt").exists());
+    assert!(
+        s.notes
+            .contains(&"zip skipped: the export did not finish".to_string()),
+        "{:?}",
+        s.notes
+    );
+}
+
+#[test]
+fn a_zip_tessalith_did_not_write_is_kept() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    std::fs::write(loc.join("Mod PBR.zip"), b"mine").unwrap();
+    let s = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    assert_eq!(std::fs::read(loc.join("Mod PBR.zip")).unwrap(), b"mine");
+    assert!(
+        s.notes.iter().any(|n| n.contains("Mod PBR.zip")),
+        "{:?}",
+        s.notes
+    );
+    assert_eq!(s.zips.len(), 2);
+    let lines = sums(&loc);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines.iter().all(|l| !l.ends_with("Mod PBR.zip")));
+}
+
+#[test]
+fn the_zip_holds_only_this_runs_outputs() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    let mut sp = spec(&loc, BOTH);
+    sp.cfg.legacy.keep_metal_brightness = true;
+    also(request(&m, &loc), &sp).0.unwrap();
+    let stale = "Mod CM/textures/arm/steel.dds";
+    assert!(loc.join(stale).exists(), "the keep-metal CM diffuse");
+    let unknown = "Mod Vanilla/textures/x.dds";
+    std::fs::write(loc.join(unknown), b"mine").unwrap();
+
+    let s = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    assert_eq!(std::fs::read(loc.join(unknown)).unwrap(), b"mine");
+    let van = zip_names(&loc.join("Mod Vanilla.zip"));
+    let cm = zip_names(&loc.join("Mod CM.zip"));
+    assert!(!van.contains(&unknown.to_string()), "{van:?}");
+    assert!(van.contains(&"Mod Vanilla/textures/clutter/cup.dds".to_string()));
+    assert_eq!(cm, ["Mod CM/textures/arm/steel_m.dds"]);
+    for f in [unknown, stale] {
+        let want = format!("{f}: not zipped: not written by this export");
+        assert!(s.notes.contains(&want), "{want}: {:?}", s.notes);
+    }
+}
+
+#[test]
+fn a_failed_file_does_not_block_the_zips() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+        let g = m.join("textures/landscape/grass");
+        png(&g.join("g.png"), 24, 24, [90, 140, 60, 255]);
+        png(&g.join("g_n.png"), 24, 24, [128, 128, 255, 255]);
+        png(&g.join("g_rmaos.png"), 24, 24, [128, 0, 255, 255]);
+    });
+    let mut req = request(&m, &loc);
+    req.gras_all_diffuses
+        .insert("textures/landscape/grass/g".to_string());
+    let (s, ev) = also(req, &zip_spec(&loc, BOTH));
+    let s = s.unwrap();
+    let grass_shape = ev.iter().any(|e| match &e.kind {
+        EventKind::Warning(w) => w.code == engine::codes::Code::GrassShape,
+        EventKind::FileSkipped { code, .. } => *code == Some(engine::codes::Code::GrassShape),
+        EventKind::FileFailed { error, .. } => error.contains("GRASS-SHAPE"),
+        _ => false,
+    });
+    assert!(grass_shape, "{s:#?}");
+    assert!(s.combined().failed > 0, "{s:#?}");
+    assert_eq!(s.zips.len(), 3, "{:?}", s.notes);
+    assert_eq!(sums(&loc).len(), 3);
+}
+
+#[test]
+fn vanilla_alone_writes_two_sums_lines() {
+    let (_d, m, loc) = project(|m| {
+        steel(m);
+        cup(m);
+    });
+    also(request(&m, &loc), &zip_spec(&loc, &[AlsoTarget::Vanilla]))
+        .0
+        .unwrap();
+    let lines = sums(&loc);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].ends_with("  Mod PBR.zip") && lines[1].ends_with("  Mod Vanilla.zip"));
+}
+
+/// Carried from Task 7 (CM43): with `ALSO-OWNED-UNREADABLE` raised, no zip and no sums file is written.
+#[test]
+fn a_corrupt_owned_record_writes_no_zip_or_sums() {
+    let (_d, m, loc) = project(cup);
+    let rec = loc.join("Mod PBR/_sdc/also.json");
+    std::fs::create_dir_all(rec.parent().unwrap()).unwrap();
+    std::fs::write(&rec, b"{ not json").unwrap();
+    let s = also(request(&m, &loc), &zip_spec(&loc, &[AlsoTarget::Vanilla]))
+        .0
+        .unwrap();
+    assert!(zips_in(&loc).is_empty());
+    assert!(s.zips.is_empty());
+    assert!(!loc.join("Mod SHA256SUMS.txt").exists());
+    assert_eq!(std::fs::read(&rec).unwrap(), b"{ not json");
+}

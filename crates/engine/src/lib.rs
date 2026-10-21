@@ -43,3 +43,4 @@ pub mod shader;
 pub mod suggest;
 pub mod sysmem;
 pub mod validate;
+pub mod zip;

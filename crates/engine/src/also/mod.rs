@@ -447,6 +447,115 @@ impl EventSink for NoBatchWarnings {
     }
 }
 
+/// P4: the job keys (relative to the phase's folder, lower-cased) a phase wrote or found up to date, copies included:
+/// TA23's zip list. It is the first sink under the phase's `Reporter`, so the keys are not yet prefixed.
+struct Recorder {
+    inner: Arc<dyn EventSink>,
+    keys: Arc<Mutex<BTreeSet<String>>>,
+}
+
+impl EventSink for Recorder {
+    fn emit(&self, ev: &EngineEvent) {
+        let done = matches!(
+            ev.kind,
+            EventKind::FileDone { .. }
+                | EventKind::FileSkipped {
+                    kind: SkipKind::UpToDate,
+                    ..
+                }
+        );
+        if let (true, Some(k)) = (done, &ev.job) {
+            crate::api::lock(&self.keys).insert(k.clone());
+        }
+        self.inner.emit(ev);
+    }
+}
+
+/// C8: why no zip was written.
+pub const ZIP_SKIPPED: &str = "zip skipped: the export did not finish";
+/// TA23: a file in a zipped folder that this run did not write or find up to date.
+pub const NOT_ZIPPED: &str = "not zipped: not written by this export";
+
+/// Every file under `folder` but `_sdc` and leftover `.sdc-*.tmp` files (08d-3).
+fn folder_files(folder: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let (mut out, mut todo) = (vec![], vec![folder.to_path_buf()]);
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d)? {
+            let p = e?.path();
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            if p.is_dir() {
+                if !(d == folder && name.eq_ignore_ascii_case("_sdc")) {
+                    todo.push(p);
+                }
+            } else if !(name.starts_with(".sdc-") && name.ends_with(".tmp")) {
+                out.push(p);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// C8 (Note CM): each folder that ran becomes `<location>/<folder name>.zip` of this run's outputs (TA23), and
+/// `<location>/<project> SHA256SUMS.txt` gets a line per zip written, all through `OwnedFiles` (TA21).
+fn write_zips(
+    s: &mut AlsoSummary,
+    owned: &mut OwnedFiles,
+    keys: &[BTreeSet<String>; 3],
+    location: &Path,
+    project: &str,
+) {
+    let mut lines = String::new();
+    let ran: Vec<usize> = s.phases.iter().map(|(p, _)| *p as usize).collect();
+    for i in ran {
+        let folder = &s.folders[i];
+        let name = folder
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let zip = location.join(format!("{name}.zip"));
+        let files = match folder_files(folder) {
+            Ok(f) => f,
+            Err(e) => {
+                s.notes.push(format!("{} not written ({e})", zip.display()));
+                continue;
+            }
+        };
+        let (mut take, mut left) = (vec![], vec![]);
+        for f in files {
+            match keys[i].contains(&output_key(folder, &f)) {
+                true => take.push(f),
+                false => left.push(f),
+            }
+        }
+        left.sort();
+        for f in left {
+            let rel = slash(f.strip_prefix(folder).unwrap_or(&f));
+            s.notes.push(format!("{name}/{rel}: {NOT_ZIPPED}"));
+        }
+        let bytes = match crate::zip::write_zip(folder, &take) {
+            Ok(b) => b,
+            Err(e) => {
+                s.notes.push(format!("{} not written: {e}", zip.display()));
+                continue;
+            }
+        };
+        match owned.write(&zip, &bytes) {
+            Ok(()) => {
+                lines.push_str(&format!("{}  {name}.zip\n", sha256_hex(&bytes)));
+                s.zips.push(zip);
+            }
+            Err(e) => s.notes.push(e.note(&zip)),
+        }
+    }
+    if !lines.is_empty() {
+        let sums = location.join(format!("{project} SHA256SUMS.txt"));
+        if let Err(e) = owned.write(&sums, lines.as_bytes()) {
+            s.notes.push(e.note(&sums));
+        }
+    }
+}
+
 /// Buffers a phase's planning events until the plan is filtered, then forwards the kept ones and everything after.
 struct Gate {
     inner: Arc<dyn EventSink>,
@@ -615,7 +724,8 @@ fn do_copies(
 /// One Also export (Note CM): check the location and the `[export]` table, then run the PBR, Vanilla and CM phases
 /// in order. Errors before the PBR phase writes anything are returned. A cancel stops the remaining phases and is
 /// recorded in `cancelled_after`; an engine error of the Vanilla or CM phase stops them too and is recorded in
-/// `error` with its exit code, plus an `ALSO-PHASE-FAILED` event.
+/// `error` with its exit code, plus an `ALSO-PHASE-FAILED` event. With `zip` on, an export that finished (no cancel,
+/// no phase error) and whose owned record is readable is zipped (Task 8); file-level failures don't block it.
 pub fn run_also(
     engine: &Engine,
     cache: &AnalysisCache,
@@ -624,6 +734,38 @@ pub fn run_also(
     sink: Arc<dyn EventSink>,
     cancel: &CancelToken,
 ) -> Result<AlsoSummary, EngineError> {
+    let keys: [Arc<Mutex<BTreeSet<String>>>; 3] = Default::default();
+    let project = project_name(&base.inputs)?;
+    let dry_run = base.dry_run;
+    let mut s = run_phases(engine, cache, base, spec, sink, cancel, &keys)?;
+    if spec.cfg.zip && !dry_run {
+        if cancel.is_cancelled() || s.error.is_some() {
+            s.notes.push(ZIP_SKIPPED.into());
+        } else if let Ok(mut owned) = OwnedFiles::load(&s.folders[0]) {
+            // An unreadable record already raised ALSO-OWNED-UNREADABLE: no zip, no sums file (CM43).
+            let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
+            write_zips(&mut s, &mut owned, &keys, &spec.location, &project);
+        }
+    }
+    Ok(s)
+}
+
+/// `run_also` without the zips; `keys` collects each phase's zip list (P4).
+fn run_phases(
+    engine: &Engine,
+    cache: &AnalysisCache,
+    base: BatchRequest,
+    spec: &AlsoSpec,
+    sink: Arc<dyn EventSink>,
+    cancel: &CancelToken,
+    keys: &[Arc<Mutex<BTreeSet<String>>>; 3],
+) -> Result<AlsoSummary, EngineError> {
+    let recorder = |i: usize, inner: Arc<dyn EventSink>| -> Arc<dyn EventSink> {
+        Arc::new(Recorder {
+            inner,
+            keys: keys[i].clone(),
+        })
+    };
     let cfg = &spec.cfg;
     let project = project_name(&base.inputs)?;
     let folders = folders(spec, &project);
@@ -674,7 +816,7 @@ pub fn run_also(
     };
 
     // PBR phase: today's export into folder 0, unprefixed, so the GUI's PGPatcher-JSON rows match.
-    let rep = Reporter::new(sink.clone(), new_batch_id());
+    let rep = Reporter::new(recorder(0, sink.clone()), new_batch_id());
     let pbr_plan = engine.plan_cached(pbr_req.clone(), &rep, cancel, cache)?;
     if pbr_plan.target != Target::Cs {
         return Err(EngineError::Usage(
@@ -727,10 +869,13 @@ pub fn run_also(
 
     // Vanilla phase: derived jobs for the PBR sets; every other job copied from its cs twin when that is current.
     let vrep = Reporter::new(
-        Arc::new(NoBatchWarnings(Arc::new(PrefixSink::new(
-            format!("{}/", names[1]),
-            sink.clone(),
-        )))),
+        recorder(
+            1,
+            Arc::new(NoBatchWarnings(Arc::new(PrefixSink::new(
+                format!("{}/", names[1]),
+                sink.clone(),
+            )))),
+        ),
         new_batch_id(),
     );
     // Review M1: a later phase's error keeps its phase and exit code, and is reported as an event.
@@ -817,7 +962,7 @@ pub fn run_also(
         )))),
         held: Mutex::new(Some(vec![])),
     });
-    let crep = Reporter::new(gate.clone(), new_batch_id());
+    let crep = Reporter::new(recorder(2, gate.clone()), new_batch_id());
     let mut cplan = match engine.plan(phase_req(2, DeriveMode::Cm, &sets, &drop), &crep, cancel) {
         Ok(p) => p,
         Err(e) => {
