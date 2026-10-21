@@ -2261,13 +2261,56 @@ fn export_drops_orphan_blocks_and_records_the_written_hash() {
         load(&e.doc_path).unwrap().unwrap().export.sha256.as_deref(),
         Some(sha256_hex(&written).as_str())
     );
-    // the recorded hash is the file's: the next export replaces it without asking
+    assert_eq!(e.cleanup_note, None);
+    // the recorded hash is the file's: the next export replaces it without asking (and clears an old cleanup line)
     add_then_remove_ctrl(&mut m, false);
+    m.edit.as_mut().unwrap().cleanup_note = Some("Exported without cleanup: x.".into());
     assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert_eq!(m.edit.as_ref().unwrap().cleanup_note, None);
     let e = m.edit.as_ref().unwrap();
     let written = std::fs::read(exported(&d)).unwrap();
     assert_eq!(written, nif::edit::compact(&e.patched, n as u32).unwrap());
     assert!(blocks(&written) < blocks(&e.patched));
+}
+
+/// Note CQ5: when the cleanup cannot read the file, the export writes the patch as it is and says why.
+#[test]
+fn export_without_cleanup_writes_the_patch_and_says_why() {
+    // scenes::animated(Some(1), 0) plus a source NiFloatData (4) nothing names, whose key count runs past it
+    let mut b = builder::Nif::new(100);
+    let (r, x, s) = (b.string("Root"), b.string("BSX"), b.string("S"));
+    let net = builder::W::default().i32(r).u32(1).i32(1).i32(-1);
+    b.block("NiNode", scenes::avobj(net).u32(1).i32(2).u32(0).0);
+    b.block("BSXFlags", builder::W::default().i32(x).u32(1).0);
+    b.block("BSTriShape", scenes::bstri_named(s, 3, -1));
+    b.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[], -1, &[]),
+    );
+    b.block("NiFloatData", builder::W::default().u32(u32::MAX).u32(1).0);
+    let src = b.bytes();
+    let d = files_with(false, "+PGP\n+sdc NIF Edits\n+A\n");
+    std::fs::create_dir_all(d.path().join("mods").join(EDIT_MOD)).unwrap();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&src));
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    add_then_remove_ctrl(&mut m, true);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let e = m.edit.as_ref().unwrap();
+    let why = nif::edit::compact(&e.patched, 5).unwrap_err();
+    assert_eq!(std::fs::read(exported(&d)).unwrap(), *e.patched);
+    assert_eq!(
+        load(&e.doc_path).unwrap().unwrap().export.sha256.as_deref(),
+        Some(sha256_hex(&e.patched).as_str())
+    );
+    let line = format!("Exported without cleanup: {why}.");
+    assert_eq!(e.cleanup_note.as_deref(), Some(line.as_str()));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(&line);
 }
 
 #[test]

@@ -174,6 +174,9 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
         let t = egui::RichText::new(note);
         ui.add(egui::Label::new(if *err { t.color(RED) } else { t }).wrap());
     }
+    if let Some(note) = &e.cleanup_note {
+        ui.add(egui::Label::new(note).wrap());
+    }
     if let Some(p) = &e.placement {
         let color = if *p == Placement::Ok { GREEN } else { AMBER };
         let mod_name = e.edit_mod.file_name().unwrap_or_default().to_string_lossy();

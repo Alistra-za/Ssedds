@@ -96,6 +96,8 @@ pub struct NifEdit {
     pub guard: Option<GuardAsk>,
     /// The last export's result line, and whether it is an error.
     pub export_note: Option<(String, bool)>,
+    /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
+    pub cleanup_note: Option<String>,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -326,6 +328,7 @@ impl NifEdit {
             notice: None,
             guard: None,
             export_note: None,
+            cleanup_note: None,
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -440,7 +443,10 @@ impl NifEdit {
         }
         // Note CQ: the file drops the blocks our edits appended that nothing reaches; on any doubt it is the patch
         let n = nif::header::Header::parse(&self.source).map_or(0, |h| h.sizes.len() as u32);
-        let out = nif::edit::compact(&self.patched, n).unwrap_or_else(|_| self.patched.to_vec());
+        let (out, skipped) = match nif::edit::compact(&self.patched, n) {
+            Ok(out) => (out, None),
+            Err(why) => (self.patched.to_vec(), Some(why)),
+        };
         let path = self.export_path.clone();
         let cannot_read = |e: std::io::Error| {
             ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
@@ -485,6 +491,7 @@ impl NifEdit {
             ops_hash: Some(self.doc.ops_hash()),
         };
         self.save();
+        self.cleanup_note = skipped.map(|why| format!("Exported without cleanup: {why}."));
         ExportOutcome::Written {
             rerun_pgpatcher: self.copies.iter().any(|c| c.derived),
         }
@@ -505,6 +512,7 @@ impl NifEdit {
         };
         self.apply_err = None;
         self.export_note = None; // the last export's line no longer describes these edits
+        self.cleanup_note = None;
         for (d, o) in self.doc.ops.iter_mut().zip(&a.outcomes) {
             if let Outcome::ReAnchored { block } = o {
                 anchor_mut(&mut d.op).block = *block;
