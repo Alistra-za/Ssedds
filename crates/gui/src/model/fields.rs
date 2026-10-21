@@ -24,13 +24,14 @@ pub const FIELDS: [(&str, &str); 15] = [
 ];
 
 /// The rarely changed fields the Advanced drawer edits (M3a spec §2.5).
-pub const ADVANCED_FIELDS: [(&str, &str); 6] = [
+pub const ADVANCED_FIELDS: [(&str, &str); 7] = [
     ("encoder.perceptual", "Perceptual"),
     ("encoder.bc1_transparent_black", "BC1 transparent black"),
     ("encoder.bc45_search_radius", "BC4/BC5 search radius"),
     ("encoder.rgbcx_level", "rgbcx level"),
     ("header", "DDS header"),
     ("resize", "Resize"),
+    ("drop_top_mip", "Half size (drop mip 0)"),
 ];
 
 /// The mip level count: shown as the basic Mipmaps tick box, edited as a count in the Advanced drawer.
@@ -163,6 +164,15 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
             Some("no encoder runs for uncompressed formats")
         }
         "color.tag" if target != Target::Cs => Some("_SRGB is only written under cs"),
+        // M6: one level has no mip 1 to write from (the engine ignores the field there, Note CL23).
+        "drop_top_mip"
+            if matches!(
+                p.mips.levels,
+                MipLevels::Keyword(MipKeyword::None) | MipLevels::Count(0..=1)
+            ) =>
+        {
+            Some("No mips to drop")
+        }
         "encoder.perceptual"
             if !(p.subtype.category() == Category::Color
                 && p.alpha.policy != AlphaPolicy::Data
@@ -297,6 +307,7 @@ pub(crate) fn views_of(
                 .unwrap_or_else(|| match field {
                     "mips.edge" => Value::from("wrap"),
                     "resize" => Value::from("none"),
+                    "drop_top_mip" => Value::from(false),
                     _ => Value::Null,
                 });
             let provenance = job

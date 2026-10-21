@@ -78,6 +78,8 @@ pub struct ViewState {
     pub lens: bool,
     /// Repeat the picture 3×3 to check seams.
     pub tile: bool,
+    /// The overlay painted over the source pane (Note CL); not saved in `gui.toml`, like the heatmap (AG59).
+    pub overlay: Option<crate::model::overlay::OverlayKind>,
 }
 
 impl Default for ViewState {
@@ -95,6 +97,7 @@ impl Default for ViewState {
             full_scale: FULL_SCALE_DEFAULT,
             lens: false,
             tile: false,
+            overlay: None,
         }
     }
 }

@@ -245,7 +245,7 @@ Each set is made for one Skyrim shader. The shader decides which maps the set sh
 | `glow` | diffuse, `_n`, `_g` | |
 | `parallax` | diffuse, `_n`, `_p` | |
 | `skin` | diffuse, `_n`/`_msn` | `_sk`, `_s` (with `_msn`) |
-| `hair` | diffuse, `_n` | |
+| `hair` | diffuse, `_n` | `_flow` (`cs` only; vanilla hair does not read it) |
 | `eye` | diffuse, `_n` (model-space) | `_sk`, `_m`, `_e` |
 | `multilayer` | diffuse, `_n`, `_i` | `_m`, `_e`, `_b` |
 | `landscape` | diffuse, `_n` | |
@@ -264,7 +264,7 @@ You can pick a set's shader in the GUI's set editor, or with `--set set:<id>.sha
 5. A `_p`: `parallax`.
 6. In the GUI, after a mesh scan: the shader most of the meshes using the diffuse have (a strict majority).
 7. An `_m` env mask: `envmap`.
-8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`.
+8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`. `_flow`: `hair`, on both targets, unless the path has a `water` or `landscape` folder.
 9. A `hair` folder in the path: `hair`. An `eyes` folder: `eye`.
 10. Landscape textures: `landscape`.
 11. Otherwise `default`.
@@ -285,6 +285,30 @@ A shader the target lacks falls back to `default` (`SHADER-UNAVAILABLE`).
 | `complex_grass` | Colour becomes `complex_grass`. |
 
 In the GUI, when a sub-type changes this way, a format or tag you set that the new type does not allow is reset to the new type's default. On the command line the value you set stays, and the file is blocked or reports an error.
+
+### Gloss bake for a complex `_m` (opt-in)
+
+The same bake can also feed a complex-material `_m`'s green channel (its glossiness). It is off by default. Set `mips.normal = "renormalize_bake"` (the GUI's *Normal handling: Renormalise and bake*) on the set's `_n` to turn it on: every smaller mip of the `_m` gets the detail its normal map loses, so distant surfaces shimmer less. Mip 0 is not changed unless the normal is larger than the `_m`. Without the setting the `_m` is written as before. It needs the `_n` in the batch with power-of-two sizes of the same aspect, and otherwise reports `SET-BAKE-RATIO` and writes the `_m` unbaked. The choice lives in `sdc.toml`, so the CLI writes the same bytes. A project that already had this value on a vanilla `_n` changes its complex `_m` on the next export.
+
+## Height maps and the artist checks
+
+The Parallax check judges a height map against the neutral height (the value that shifts nothing) for the set's shader. White is raised and black is deepest on every path.
+
+| Path | Neutral | Where the height lives |
+|---|---|---|
+| Vanilla parallax | 0.5 | `_p`, red |
+| Complex material | 0.5 | `_m` alpha. Parallax is on only where alpha is strictly between 4/255 and 251/255; 4/255 or less keeps complex material on with no parallax |
+| PBR parallax | 0.5 | `_p`, red |
+| PBR multilayer with inner-layer (coat) parallax | 1.0 (white); black is the deepest recess and nothing is raised | `_p`, red |
+| Landscape, vanilla and PBR | 0.5 per layer | The layer alpha or displacement map |
+| Vanilla multilayer | Not a height map: the layer texture's alpha is a depth, so the height checks are skipped | The layer texture's alpha |
+
+A mostly white `_p` is normal for the coat path and a warning on the 0.5 paths. Landscape sets whose `displacementScale` differs by more than 2x from the others are flagged too (`CHK-PARALLAX-SCALE`).
+
+Other things the checks look at:
+- **Green direction.** A normal map that curls like OpenGL when it is read as DirectX gets the Info hint `CHK-GREEN-GUESS`, which suggests *Treat as OpenGL (flip green)* and never flips by itself. The test is weak on straight ridges, so look at the map. A blue channel that points the wrong way raises `CHK-Z-SIGN`.
+- **Plastic `_n` alpha.** On a vanilla `_n` the alpha is the specular. If it is missing or almost all white (at least 95 % of texels at 250 or more), the surface may look plastic (`CHK-PLASTIC`). It never fires on `pbr_normal` or `_msn`. Community Shaders does not read that alpha on hair or Advanced Skin, and the message says so.
+- **`drop_top_mip`.** A per-file field (`[files."up.png"] drop_top_mip = true`, or `--set file:<glob>.drop_top_mip=true`) that writes mip 1 as the top level: half the size, one level fewer. It is off by default and absent from the profile hash then, so existing outputs do not change. A level is dropped from what is written only, so a PBR set's `_rmaos` bake is the same. It does nothing on a texture with no mip chain. The GUI writes it from the **Export at half size?** box and from Advanced → Half size.
 
 ## Complex grass
 

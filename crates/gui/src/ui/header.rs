@@ -207,10 +207,11 @@ pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> 
     true
 }
 
-/// A12: the green dot on Export: a folder is open, something would be written and no problem is listed.
+/// A12: the green dot on Export: a folder is open, something would be written and no problem that takes "ready"
+/// away is listed (artist checks never do, owner answer 1).
 pub fn export_dot(model: &AppModel) -> bool {
     model.root.is_some()
-        && crate::model::bottom::problems(model).is_empty()
+        && crate::model::bottom::flagged(model).ready_rows == 0
         && model.export_files() > 0
 }
 
@@ -255,7 +256,7 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
         // A12: the hover counts the files and the problems; a green dot says there are none.
-        let n = crate::model::bottom::problems(model).len();
+        let n = crate::model::bottom::flagged(model).ready_rows;
         let hover = |ui: &mut egui::Ui| {
             ui.label(format!("{} files, {n} problems", model.export_files()));
         };

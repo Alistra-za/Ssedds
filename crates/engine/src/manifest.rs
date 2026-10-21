@@ -429,9 +429,12 @@ pub fn sha256_json<T: Serialize>(v: &T) -> Result<String, serde_json::Error> {
 /// The manifest's `profile_sha256` for an output written with `p` (spec §8 `if-changed`). A `pbr_normal`'s
 /// `mips.normal = renormalize_bake` hashes as `renormalize`: whether its set bakes changes none of the `_n`'s own
 /// bytes (only its roughness member's), so the bake turning on or off does not re-encode the `_n` (DECISIONS R12,
-/// M4 final review Minor 2). A `coat_normal`'s self-bake does change its bytes and keeps its own hash.
+/// M4 final review Minor 2). A `normal`'s opt-in gloss bake (Note CL40) hashes the same way, for the same reason. A
+/// `coat_normal`'s self-bake does change its bytes and keeps its own hash.
 pub fn profile_sha256(p: &Profile) -> Result<String, serde_json::Error> {
-    if p.subtype == Subtype::PbrNormal && p.mips.normal == NormalMips::RenormalizeBake {
+    if matches!(p.subtype, Subtype::PbrNormal | Subtype::Normal)
+        && p.mips.normal == NormalMips::RenormalizeBake
+    {
         let mut q = p.clone();
         q.mips.normal = NormalMips::Renormalize;
         return sha256_json(&q);
@@ -456,5 +459,23 @@ mod tests {
         let q: Profile = serde_json::from_value(v).unwrap();
         assert_eq!(q, p);
         assert_eq!(profile_sha256(&p).unwrap(), profile_sha256(&q).unwrap());
+    }
+
+    /// Note CL40: a `normal`'s `renormalize_bake` (the opt-in gloss bake) hashes as `renormalize`; a `coat_normal`'s
+    /// does not (its self-bake changes its bytes).
+    #[test]
+    fn a_normal_hashes_renormalize_bake_as_renormalize() {
+        let reg = PresetRegistry::builtin().unwrap();
+        for (st, same) in [(Subtype::Normal, true), (Subtype::CoatNormal, false)] {
+            let mut p = reg.profile("cs-quality", Target::Cs, st).unwrap();
+            p.mips.normal = NormalMips::Renormalize;
+            let mut q = p.clone();
+            q.mips.normal = NormalMips::RenormalizeBake;
+            assert_eq!(
+                profile_sha256(&p).unwrap() == profile_sha256(&q).unwrap(),
+                same,
+                "{st:?}"
+            );
+        }
     }
 }

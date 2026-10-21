@@ -2,6 +2,7 @@
 //! viewport cut by a divider), the notes and readouts under them, and the compact settings strip beside them.
 //! All state lives in the model (`AppModel::view`, `AppModel::preview`); this file maps input to model calls.
 use crate::model::items::ItemKind;
+use crate::model::overlay::OverlayKind;
 use crate::model::preview::NO_GPU;
 use crate::model::preview::{EncodedState, PreviewOut, SourceState};
 use crate::model::view::{self, readouts, skipped_note, Channel, Layout, ViewState};
@@ -49,6 +50,8 @@ pub struct PreviewUi {
     readout: Option<Vec<String>>,
     /// The settings were opened from their strip: they stay open until the preview closes (A10).
     settings_open: bool,
+    /// The overlay on the GPU and the image it was uploaded from (uploaded again only when that `Arc` changes).
+    overlay_tex: Option<(Arc<egui::ColorImage>, egui::TextureHandle)>,
 }
 
 /// The facts about the expanded texture's mips that the toolbar, the viewports and the notes share.
@@ -279,6 +282,30 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
             "Repeat the picture 3×3 to check the seams ({})",
             super::actions::keys_text("tile")
         ));
+    // Only for a texture with a per-texel value-range warning (owner, spec "Value-range overlay").
+    if model
+        .expanded
+        .as_deref()
+        .is_some_and(|k| model.range_overlay_offered(k))
+    {
+        let on = model.view.overlay == Some(OverlayKind::Range);
+        // Review M3: the overlay is drawn on the source pane, which a compared pin replaces.
+        let r = ui
+            .add_enabled(
+                !model.comparing_pin(),
+                egui::Button::selectable(on, "Range"),
+            )
+            .on_hover_text("Paint the source texels outside the expected value range in magenta")
+            .on_disabled_hover_text("Hidden while comparing");
+        // ui-rules 8.4: distinct from any other "Range".
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, "Range overlay")
+        });
+        if r.clicked() {
+            model.view.overlay = (!on).then_some(OverlayKind::Range);
+        }
+    }
+    uv_toggle(ui, model);
     requests.fit = ui
         .button("Fit")
         .on_hover_text("Zoom to fit the viewport")
@@ -590,7 +617,8 @@ fn viewports(
     let left_draw = if model.comparing_pin() {
         draw_pinned_pane(ui, model, gpu, left, left_vis, size)
     } else {
-        draw_source_pane(ui, model, info, gpu, left, left_vis, size)
+        let overlay = overlay_texture(ui, model, state, key);
+        draw_source_pane(ui, model, info, gpu, left, left_vis, size, overlay)
     };
     let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
     if let Some((pinned, current)) = model.pin_captions() {
@@ -727,6 +755,133 @@ fn paint_clipped(ui: &mut egui::Ui, viewport: Rect, visible: Rect, slot: Slot, p
     });
 }
 
+/// "UV coverage" (Task 8): drawn for every texture (K7), one `add_enabled` widget (CE20), disabled with
+/// `uv_offered`'s reason. The hover names the coverage once it has been read (on click only, owner).
+fn uv_toggle(ui: &mut egui::Ui, model: &mut AppModel) {
+    let key = model.expanded.clone().unwrap_or_default();
+    let offered = model.uv_offered(&key);
+    let on = model.view.overlay == Some(OverlayKind::Uv);
+    let comparing = model.comparing_pin();
+    // Review I2: a failed read (cached, K18) disables the toggle with its error lines, and paints nothing.
+    let failed = model.uv_failed(&key);
+    let reason = match offered {
+        Err(why) => why.to_string(),
+        // Review M3 (as Range): the overlay is drawn on the source pane, which a compared pin replaces.
+        Ok(()) if comparing => "Hidden while comparing".to_string(),
+        Ok(()) => failed
+            .as_deref()
+            .map(crate::model::uv_coverage::summary)
+            .unwrap_or_default(),
+    };
+    let r = ui
+        .add_enabled(
+            reason.is_empty(),
+            egui::Button::selectable(on, "UV coverage"),
+        )
+        .on_disabled_hover_text(reason);
+    let r = if on {
+        let c = model.uv_coverage(&key);
+        r.on_hover_ui(|ui| {
+            ui.label(c.as_deref().map_or_else(
+                || "Reading which meshes use this texture…".to_string(),
+                crate::model::uv_coverage::summary,
+            ));
+        })
+    } else {
+        r.on_hover_text("Dim the texels no mesh uses, from the meshes in your scan")
+    };
+    // ui-rules 8.4: distinct from the Checks section's "UV coverage check".
+    r.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            r.enabled(),
+            on,
+            "UV coverage overlay",
+        )
+    });
+    if r.clicked() {
+        model.view.overlay = (!on).then_some(OverlayKind::Uv);
+    }
+}
+
+/// The overlay's texture while its toggle is on and offered: the range overlay from its worker job (`overlay_for`),
+/// UV coverage from its cached mask, by an overlay job too (`uv_coverage`, `uv_overlay`, CL44).
+fn overlay_texture(
+    ui: &egui::Ui,
+    model: &mut AppModel,
+    state: &mut PreviewUi,
+    key: &str,
+) -> Option<egui::TextureId> {
+    let offered = match model.view.overlay {
+        Some(OverlayKind::Range) => model.range_overlay_offered(key),
+        Some(OverlayKind::Uv) => model.uv_offered(key).is_ok() && model.uv_failed(key).is_none(),
+        None => false,
+    };
+    if !offered {
+        // Review M7: off frees the full-size image and its texture.
+        state.overlay_tex = None;
+        if model.overlay.key.is_some() {
+            model.overlay.clear();
+        }
+        return None;
+    }
+    let SourceState::Ready(s) = &model.preview.source else {
+        return None;
+    };
+    let mip = model.view.mip.saturating_sub(s.first_level);
+    let img = if model.view.overlay == Some(OverlayKind::Uv) {
+        model.uv_coverage(key)?;
+        model.uv_overlay(key)?
+    } else {
+        model.overlay_for(key, mip, OverlayKind::Range)?
+    };
+    if !state
+        .overlay_tex
+        .as_ref()
+        .is_some_and(|(a, _)| Arc::ptr_eq(a, &img))
+    {
+        // Review I1, M4: the worker built the ColorImage; the upload shares its `Arc` (no per-texel work here), and
+        // Nearest both ways keeps a single bad texel visible when zoomed out.
+        let options = egui::TextureOptions {
+            magnification: egui::TextureFilter::Nearest,
+            minification: egui::TextureFilter::Nearest,
+            wrap_mode: egui::TextureWrapMode::Repeat,
+            ..Default::default()
+        };
+        let data = egui::ImageData::Color(img.clone());
+        let tex = match state.overlay_tex.take() {
+            Some((_, mut tex)) => {
+                tex.set(data, options);
+                tex
+            }
+            None => ui.ctx().load_texture("overlay", data, options),
+        };
+        state.overlay_tex = Some((img, tex));
+    }
+    state.overlay_tex.as_ref().map(|(_, t)| t.id())
+}
+
+/// K8: the screen rect of the picture (uv `[0, 1]²`, or `[-1, 2)²` with Tile 3×3, as the shader shows it) and that uv
+/// rect. An overlay painted there with Repeat wrap lines up with the picture and never draws past it.
+pub fn picture_rects(
+    view: &ViewState,
+    viewport: Rect,
+    size: [f32; 2],
+    mip_size: (u32, u32),
+) -> (Rect, Rect) {
+    let (lo, hi) = if view.tile { (-1.0, 2.0) } else { (0.0, 1.0) };
+    let (offset, scale) = view.uv_rect(size, mip_size);
+    let at = |u: f32, i: usize| viewport.min[i] + (u - offset[i]) / scale[i] * size[i];
+    (
+        Rect::from_min_max(
+            egui::pos2(at(lo, 0), at(lo, 1)),
+            egui::pos2(at(hi, 0), at(hi, 1)),
+        ),
+        Rect::from_min_max(egui::pos2(lo, lo), egui::pos2(hi, hi)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_source_pane(
     ui: &mut egui::Ui,
     model: &AppModel,
@@ -735,6 +890,7 @@ fn draw_source_pane(
     viewport: Rect,
     visible: Rect,
     size: [f32; 2],
+    overlay: Option<egui::TextureId>,
 ) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let text = match &model.preview.source {
@@ -760,6 +916,12 @@ fn draw_source_pane(
         );
         paint_clipped(ui, viewport, visible, Slot::Source, params);
         drawn = Some((Slot::Source, params));
+        if let Some(id) = overlay {
+            let (pic, uv) = picture_rects(&model.view, viewport, size, info.size_of(mip));
+            ui.painter()
+                .with_clip_rect(visible.intersect(ui.clip_rect()))
+                .image(id, pic, uv, Color32::WHITE);
+        }
     }
     pane_overlay(ui, visible, "Source", None, text.as_deref(), false);
     drawn

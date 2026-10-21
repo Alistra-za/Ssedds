@@ -282,6 +282,20 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     {
         return false;
     }
+    let any = attach(jobs, n, members);
+    if any && jobs[n].profile.mips.normal != NormalMips::RenormalizeBake {
+        jobs[n].profile.mips.normal = NormalMips::RenormalizeBake;
+        jobs[n]
+            .provenance
+            .insert("mips.normal".into(), Provenance::Set);
+    }
+    any
+}
+
+/// Attach a `BakeJob` from the `_n` at `n` to every member whose size allows it; `SET-BAKE-RATIO` on the others.
+/// Returns whether any member bakes.
+fn attach(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
+    let nj = &jobs[n];
     // S-mips-7: both sizes are the post-resize ones Preprocess writes, so SET-BAKE-RATIO's data reports those too.
     let Some(ndims) = post_resize_dims(nj) else {
         return false;
@@ -290,7 +304,8 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     let rnm = nj.active_rnm().cloned();
     let mut any = false;
     for &m in members {
-        // DECISIONS R10: `check_profile` already raised TAG-CONTENT-MISMATCH for an sRGB roughness.
+        // DECISIONS R10: an sRGB member never bakes. `check_profile` raised TAG-CONTENT-MISMATCH for a roughness
+        // member; an sRGB complex `_m` (Note CL40) is skipped with no code.
         if jobs[m].profile.color.content == ColorContent::Srgb {
             continue;
         }
@@ -318,12 +333,6 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
             }
         }
     }
-    if any && jobs[n].profile.mips.normal != NormalMips::RenormalizeBake {
-        jobs[n].profile.mips.normal = NormalMips::RenormalizeBake;
-        jobs[n]
-            .provenance
-            .insert("mips.normal".into(), Provenance::Set);
-    }
     any
 }
 
@@ -337,11 +346,16 @@ fn is_dds(j: &ResolvedJob) -> bool {
 
 /// The set's `_n`: its first `pbr_normal` job by path that did not fail (DECISIONS R9).
 fn own_normal(jobs: &[ResolvedJob], idx: &[usize]) -> Option<usize> {
+    first_of(jobs, idx, Subtype::PbrNormal)
+}
+
+/// The set's first job of sub-type `st` by path that is not a DDS and did not fail.
+fn first_of(jobs: &[ResolvedJob], idx: &[usize], st: Subtype) -> Option<usize> {
     idx.iter()
         .copied()
         .filter(|&i| {
             !is_dds(&jobs[i])
-                && jobs[i].profile.subtype == Subtype::PbrNormal
+                && jobs[i].profile.subtype == st
                 && !matches!(jobs[i].status, JobStatus::Error { .. })
         })
         .min_by(|&a, &b| jobs[a].input.cmp(&jobs[b].input))
@@ -446,6 +460,50 @@ pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
                     baking.insert(set.key.clone());
                 }
             }
+        }
+    }
+    baking
+}
+
+/// Opt-in gloss bake (DECISIONS Note CL40, superseding R6 for this case only), any target: a set whose `normal` has
+/// an explicit `mips.normal = renormalize_bake` (provenance not built-in) bakes that `_n`'s footprint variance into
+/// the gloss (G) of each writable, non-DDS `complex_material` job of the set, a packed one included. Sizes follow
+/// `bake_shift` (`SET-BAKE-RATIO` on the `_m`, as `bake_set`). The `_n`'s profile is left as the user set it. An
+/// undecided `_n` bakes nothing, silently; a derived CM `_m` (Track A) has no `_n` in its plan, so it never bakes.
+/// A borrowed Normal slot is not followed. Returns the keys of the sets that bake (`set_resolved.bake`).
+pub fn plan_gloss_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
+    let mut baking = BTreeSet::new();
+    let mut by_set: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, j) in jobs.iter().enumerate() {
+        by_set.entry(j.set_key.clone()).or_default().push(i);
+    }
+    for set in cx.sets {
+        let Some(idx) = by_set.get(&set.key) else {
+            continue;
+        };
+        let Some(n) = first_of(jobs, idx, Subtype::Normal) else {
+            continue;
+        };
+        let nj = &jobs[n];
+        let opted = nj.profile.mips.normal == NormalMips::RenormalizeBake
+            && nj
+                .provenance
+                .get("mips.normal")
+                .is_some_and(|p| *p != Provenance::Builtin);
+        if !opted || !decided(nj) {
+            continue;
+        }
+        let members: Vec<usize> = idx
+            .iter()
+            .copied()
+            .filter(|&i| {
+                !is_dds(&jobs[i])
+                    && jobs[i].profile.subtype == Subtype::ComplexMaterial
+                    && writable(&jobs[i])
+            })
+            .collect();
+        if !members.is_empty() && attach(jobs, n, &members) {
+            baking.insert(set.key.clone());
         }
     }
     baking

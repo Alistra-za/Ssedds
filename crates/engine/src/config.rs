@@ -711,6 +711,10 @@ pub struct Profile {
     /// Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D).
     #[serde(default, skip_serializing_if = "ResizeMode::is_none")]
     pub resize: ResizeMode,
+    /// Write the texture at half size, from its mip 1; every lower level is unchanged.
+    // Not serialised at its default, so existing profile hashes hold (v2 artist checks, DECISIONS Note CL21).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drop_top_mip: bool,
     pub encoder: EncoderSpec,
     pub validation: ValidationSpec,
     pub packing: PackingSpec,

@@ -7,7 +7,7 @@ use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::{AppModel, Selection};
-use crate::settings::{Bc1Choice, PREVIEW_SIZES};
+use crate::settings::{Bc1Choice, ChecksSettings, PREVIEW_SIZES};
 use eframe::egui;
 use engine::policy::ResolvedJob;
 use serde_json::Value;
@@ -32,7 +32,14 @@ enum Action {
     Bc1(Bc1Choice),
     ReduceMotion(bool),
     NvttPath(Option<std::path::PathBuf>),
+    Checks(ChecksSettings),
+    CheckAllUv,
+    CancelCheckAllUv,
 }
+
+/// K10: Check-all progress epochs are disjoint from the export's `drawer_epoch`, so the two bars never share one
+/// `shown_progress` animation.
+const UV_EPOCH: u64 = 1 << 63;
 
 /// The drawer: a 24 px "Advanced" strip while closed, the panel while `settings.advanced_open`.
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) {
@@ -85,6 +92,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     legacy_fills(ui, model, &mut actions);
     preview_settings(ui, model, &mut actions);
     interface(ui, model, &mut actions);
+    checks(ui, model, &mut actions);
     mipmaps(ui, model, &mut actions);
     texture_fields(ui, model, &mut actions);
     unmatched(ui, model, &mut actions);
@@ -100,6 +108,9 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::Bc1(c) => model.set_bc1_choice(c),
             Action::ReduceMotion(on) => model.set_reduce_motion(on),
             Action::NvttPath(p) => model.set_nvtt_path(p),
+            Action::Checks(c) => model.set_checks(c),
+            Action::CheckAllUv => model.check_all_uv(),
+            Action::CancelCheckAllUv => model.cancel_check_all_uv(),
         }
     }
 }
@@ -372,6 +383,90 @@ fn interface(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             actions.push(Action::ReduceMotion(on));
         }
     });
+}
+
+/// The artist checks' switches (DECISIONS Note CL). Each box's AccessKit name ends in "check", apart from same-text
+/// controls such as the shader's "Parallax" (K22, ui-rules 8.4).
+fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    section(ui, "Checks", |ui| {
+        let now = model.settings.checks;
+        let mut c = now;
+        let boxes: [(&mut bool, &str, &str); 6] = [
+            (&mut c.range, "Value range", "Value range check"),
+            (&mut c.plastic, "Plastic look", "Plastic look check"),
+            (
+                &mut c.low_detail,
+                "Fake resolution",
+                "Fake resolution check",
+            ),
+            (&mut c.green, "Green direction", "Green direction check"),
+            (&mut c.parallax, "Parallax", "Parallax check"),
+            (&mut c.uv, "UV coverage", "UV coverage check"),
+        ];
+        for (on, text, name) in boxes {
+            let r = ui.checkbox(on, text);
+            let v = *on;
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, v, name));
+        }
+        // K22: without Fake resolution there is nothing to drop.
+        ui.add_enabled(
+            c.low_detail,
+            egui::Checkbox::new(&mut c.drop_top_mip, "Drop mip 0 when it adds nothing"),
+        )
+        .on_hover_text(
+            "Hold textures whose top mip adds almost nothing; choose at the end of the export which to write at half size",
+        )
+        .on_disabled_hover_text("Turn on Fake resolution first");
+        if c != now {
+            actions.push(Action::Checks(c));
+        }
+        check_all_uv(ui, model, actions);
+    });
+}
+
+/// "Check all UV coverage" for the open folder, or while it runs its bar (gliding only through `shown_progress`,
+/// CF12, with its own epoch, K10) and the button that stops it. Never greyed by `busy()` (owner answer 8).
+fn check_all_uv(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    if let (Some((done, total)), Some(run)) = (model.uv.all_progress(), model.uv.all_run()) {
+        let frac = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
+        let bar = ui.add(
+            egui::ProgressBar::new(super::header::shown_progress(
+                ui.ctx(),
+                UV_EPOCH | run,
+                frac,
+            ))
+            .text(format!("{done} / {total}"))
+            .animate(false),
+        );
+        // Review M3: the visible "3 / 72" alone names nothing.
+        bar.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::ProgressIndicator,
+                true,
+                format!("Checking UV coverage: {done} of {total}"),
+            )
+        });
+        // After Stop, the reads in flight still finish (a big NIF can take seconds).
+        if model.uv.all_stopping() {
+            ui.add_enabled(false, egui::Button::new("Stopping…"));
+        } else if ui.button("Stop checking UV coverage").clicked() {
+            actions.push(Action::CancelCheckAllUv);
+        }
+        return;
+    }
+    let offered = model.uv_check_all_offered();
+    if ui
+        .add_enabled(offered.is_ok(), egui::Button::new("Check all UV coverage"))
+        .on_hover_text("Read the UV coverage of every colour texture in this folder from the meshes in your scan")
+        .on_disabled_hover_text(offered.err().unwrap_or_default())
+        .clicked()
+    {
+        actions.push(Action::CheckAllUv);
+    }
 }
 
 /// The mip level count (Full chain, None or 2..N levels); the basic panel only has the on/off tick box.

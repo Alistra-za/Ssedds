@@ -345,6 +345,12 @@ fn the_export_dot_needs_an_open_folder_with_something_to_export() {
     let mut m = opened(d.path());
     assert!(!sdc_gui::ui::header::export_dot(&m), "problems exist");
     decide_all(&mut m);
+    // K3: the fixture's flat, alpha-less rock01_normal raises CHK-PLASTIC; this test is about the other rows.
+    m.set_checks(sdc_gui::settings::ChecksSettings {
+        plastic: false,
+        ..Default::default()
+    });
+    m.poll();
     for i in m.items.iter_mut() {
         i.warnings.clear();
     }
@@ -507,7 +513,10 @@ fn export_files_follows_a_decision_without_a_frame_of_lag() {
     assert_eq!(m.export_files(), files);
     assert_eq!(
         sdc_gui::ui::header::export_dot(m),
-        problems(m).is_empty() && files > 0
+        problems(m)
+            .iter()
+            .all(|p| !sdc_gui::model::bottom::counts_as_ready_problem(p))
+            && files > 0
     );
     // Undo until a texture is undecided again: the count drops on the next frame too.
     for _ in 0..7 {
@@ -558,4 +567,75 @@ fn a_ready_set_that_gains_a_warning_loses_its_green_dot() {
     h.run();
     assert!(!set_ready(h.state(), &rock01(h.state())));
     assert!(h.query_all_by_label("ready").count() < ready);
+}
+
+/// Owner 2026-10-20 ("1 yes"): "Checks {n}" narrows Problems to the artist checks' rows, "Checks only ×" clears it.
+#[test]
+fn the_checks_filter_shows_only_check_rows() {
+    use engine::codes::{Code, Warning};
+    use sdc_gui::model::bottom::{problems, Level, ProblemsFilter};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    decide_all(&mut m);
+    // Only the plastic check: the fixture's flat, alpha-less rock01_normal raises it.
+    let plastic = sdc_gui::settings::ChecksSettings {
+        range: false,
+        plastic: true,
+        low_detail: false,
+        green: false,
+        parallax: false,
+        uv: false,
+        drop_top_mip: false,
+    };
+    m.set_checks(plastic);
+    m.poll();
+    for i in m.items.iter_mut() {
+        i.warnings.clear();
+    }
+    for st in m.sets.iter_mut() {
+        st.warnings.clear();
+    }
+    m.items
+        .iter_mut()
+        .find(|i| i.key == "landscape/rock01.png")
+        .unwrap()
+        .warnings = vec![Warning::new(Code::ChanNotGray, "a plain warning row")];
+    m.invalidate_views();
+    let levels: Vec<Level> = problems(&m).iter().map(|p| p.level).collect();
+    assert_eq!(
+        levels,
+        vec![Level::Warning, Level::Check],
+        "{:?}",
+        problems(&m)
+    );
+    let check = problems(&m)[1].text.clone();
+    m.open_problems(None);
+    let mut h = harness(m);
+    h.run();
+    let shown = |h: &Harness<'static, AppModel>, t: &str| h.query_all_by_label(t).count();
+    assert_eq!(shown(&h, "a plain warning row"), 1);
+    assert_eq!(shown(&h, &check), 1);
+    h.get_by_label("Checks 1").click();
+    h.run();
+    assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Checks));
+    assert_eq!(shown(&h, "a plain warning row"), 0);
+    assert_eq!(shown(&h, &check), 1);
+    assert!(
+        h.query_by_label("Checks 1").is_none(),
+        "the chip replaces the button"
+    );
+    h.get_by_label("Checks only ×").click();
+    h.run();
+    assert_eq!(h.state().bottom.filter, None);
+    assert_eq!(shown(&h, "a plain warning row"), 1);
+    assert_eq!(shown(&h, &check), 1);
+    // With no check rows there is no Checks button.
+    h.state_mut().set_checks(sdc_gui::settings::ChecksSettings {
+        plastic: false,
+        ..plastic
+    });
+    h.state_mut().poll();
+    h.run();
+    assert_eq!(shown(&h, &check), 0);
+    assert!(h.query_by_label_contains("Checks").is_none());
 }

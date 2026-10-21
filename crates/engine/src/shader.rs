@@ -195,6 +195,11 @@ static HAIR: ShaderSpec = ShaderSpec {
     required: &[role("diffuse", D), role("_n", N)],
     optional: &[],
 };
+/// Note CL35: CS hair also reads a `_flow`; vanilla hair does not (`HAIR`). By suffix, so a skipped DDS fills it.
+static HAIR_CS: ShaderSpec = ShaderSpec {
+    required: HAIR.required,
+    optional: &[sfx("_flow", &[], &["flow"])],
+};
 static EYE: ShaderSpec = ShaderSpec {
     required: &[
         role("diffuse", D),
@@ -303,6 +308,14 @@ impl Shader {
         match t {
             Target::Cs => Shader::Pbr,
             Target::Vanilla => Shader::Default,
+        }
+    }
+
+    /// `spec` as `t` reads it: CS hair also reads `_flow` (Note CL35).
+    pub fn spec_for(self, t: Target) -> &'static ShaderSpec {
+        match (self, t) {
+            (Shader::Hair, Target::Cs) => &HAIR_CS,
+            _ => self.spec(),
         }
     }
 
@@ -449,6 +462,7 @@ pub enum AutoRule {
     G,
     I,
     Sk,
+    Flow,
     HairPath,
     EyesPath,
     ComplexGrass,
@@ -457,7 +471,7 @@ pub enum AutoRule {
 }
 
 impl AutoRule {
-    const ALL: [AutoRule; 16] = [
+    const ALL: [AutoRule; 17] = [
         AutoRule::AdvancedSkin,
         AutoRule::Pbr,
         AutoRule::PbrGrass,
@@ -470,6 +484,7 @@ impl AutoRule {
         AutoRule::G,
         AutoRule::I,
         AutoRule::Sk,
+        AutoRule::Flow,
         AutoRule::HairPath,
         AutoRule::EyesPath,
         AutoRule::Landscape,
@@ -489,6 +504,7 @@ impl AutoRule {
             AutoRule::G => "g",
             AutoRule::I => "i",
             AutoRule::Sk => "sk",
+            AutoRule::Flow => "flow",
             AutoRule::HairPath => "hair_path",
             AutoRule::EyesPath => "eyes_path",
             AutoRule::Landscape => "landscape",
@@ -591,7 +607,7 @@ fn mesh_majority(i: &PickInput) -> Option<Shader> {
 /// Spec §4.1-4.3: explicit choice, else the first matching auto rule; a shader the target lacks falls back to
 /// `default_for(target)`. Order (owner answer 2026-10-11, "map wins, assume the user runs PGPatcher"): advanced
 /// skin, PBR (PBR grass, then CS PBR landscape, then plain PBR; Note BM), then the PGPatcher-patchable maps (complex `_m`, `_p`), which beat the mesh, then the mesh majority
-/// (S-shader-10), then envmap `_m`, `_g`, `_i`, `_sk`, hair/eyes/landscape paths and the default.
+/// (S-shader-10), then envmap `_m`, `_g`, `_i`, `_sk`, `_flow` (Note CL35), hair/eyes/landscape paths and the default.
 pub fn pick(i: &PickInput) -> ShaderPick {
     use Subtype::*;
     let has = |t: &[Subtype]| i.subtypes.iter().any(|s| t.contains(s));
@@ -644,6 +660,10 @@ pub fn pick(i: &PickInput) -> ShaderPick {
         (Shader::Multilayer, AutoRule::I)
     } else if sfx("sk") {
         (Shader::Skin, AutoRule::Sk)
+    } else if sfx("flow") && !path("water") && !landscape_path() {
+        // Note CL35 (owner 2026-10-20): a `_flow` outside water and landscape is a hair flow map; a suffix rule, so
+        // it beats the hair/eyes path rules. Water and landscape sets fall through to the rules below as before.
+        (Shader::Hair, AutoRule::Flow)
     } else if path("hair") {
         (Shader::Hair, AutoRule::HairPath)
     } else if path("eyes") {
@@ -818,7 +838,7 @@ pub fn assign<'s>(spec: &'s ShaderSpec, members: &[MemberMap]) -> Vec<Option<&'s
 
 /// SHADER-EXTRA-MAP per unused member (data `{"member", "shader"}`) and SHADER-MISSING-MAP per required role no
 /// member fills (data `{"map", "shader"}`), members first, then roles in table order.
-pub fn check_maps(pick: &ShaderPick, members: &[MemberMap]) -> Vec<Warning> {
+pub fn check_maps(pick: &ShaderPick, target: Target, members: &[MemberMap]) -> Vec<Warning> {
     // Complex grass is drawn by the grass shader, which reads diffuse and normal from the one file (DECISIONS X9).
     if members
         .iter()
@@ -827,7 +847,7 @@ pub fn check_maps(pick: &ShaderPick, members: &[MemberMap]) -> Vec<Warning> {
         return vec![];
     }
     let id = pick.shader.id();
-    let spec = pick.shader.spec();
+    let spec = pick.shader.spec_for(target);
     let filled = assign(spec, members);
     let extra = members
         .iter()
@@ -1481,7 +1501,7 @@ mod tests {
             m("lamp.dds", None, Some(Subtype::Diffuse)),
             m("lamp_p.dds", Some("p"), Some(Subtype::Height)),
         ];
-        let w = check_maps(&glow, &ms);
+        let w = check_maps(&glow, Target::Cs, &ms);
         assert_eq!(
             codes(&w),
             vec![ShaderExtraMap, ShaderMissingMap, ShaderMissingMap]
@@ -1499,7 +1519,7 @@ mod tests {
             wanted: None,
         };
         let ms = [m("g.dds", None, Some(Subtype::ComplexGrass))];
-        assert!(check_maps(&p, &ms).is_empty());
+        assert!(check_maps(&p, Target::Cs, &ms).is_empty());
     }
 
     #[test]
@@ -1513,7 +1533,7 @@ mod tests {
             m("a.dds", None, Some(Subtype::Diffuse)),
             m("a_n.dds", Some("n"), Some(Subtype::Normal)),
         ];
-        assert!(check_maps(&p, &ms).is_empty());
+        assert!(check_maps(&p, Target::Cs, &ms).is_empty());
     }
 
     #[test]
@@ -1527,7 +1547,7 @@ mod tests {
             m("g_i.dds", Some("i"), Some(Subtype::Diffuse)),
             m("g_n.dds", Some("n"), Some(Subtype::Normal)),
         ];
-        let w = check_maps(&p, &ms);
+        let w = check_maps(&p, Target::Cs, &ms);
         assert_eq!(codes(&w), vec![crate::codes::Code::ShaderMissingMap]);
         assert_eq!(w[0].data["map"], "diffuse");
     }
@@ -1565,7 +1585,95 @@ mod tests {
         ];
         let filled = assign(p.shader.spec(), &ms);
         assert_eq!(filled[2].map(|r| r.label), Some("_e"));
-        assert!(check_maps(&p, &ms).is_empty());
+        assert!(check_maps(&p, Target::Cs, &ms).is_empty());
+    }
+
+    /// Task 11 (Note CL35): `_flow` picks Hair on both targets, ahead of the path rules.
+    #[test]
+    fn a_flow_member_picks_hair_on_both_targets() {
+        use Subtype::*;
+        let s = sx(&["flow", "n"]);
+        let st = [Flow, Diffuse, Normal];
+        for t in [Target::Cs, Target::Vanilla] {
+            assert_eq!(
+                auto(&pick(&input(t, &s, &st, &["textures/a/x.png"]))),
+                (Shader::Hair, ShaderOrigin::Auto(AutoRule::Flow)),
+                "{t:?}"
+            );
+            // The eyes path rule loses to the suffix rule.
+            let p = ["textures/actors/eyes/x.png"];
+            assert_eq!(pick(&input(t, &s, &st, &p)).shader, Shader::Hair);
+        }
+        // Fix M2: the suffix rules above `_flow` still win.
+        for (sf, want) in [("g", Shader::Glow), ("sk", Shader::Skin)] {
+            let s = sx(&["flow", sf]);
+            assert_eq!(
+                pick(&input(Target::Vanilla, &s, &st, &["textures/a/x.png"])).shader,
+                want,
+                "{sf}"
+            );
+        }
+        // Fix I1 (Note CL35): a water or landscape `_flow` is not hair; the later rules decide as before.
+        for (p, want) in [
+            (
+                "textures/water/water.png",
+                (Shader::Default, AutoRule::Otherwise),
+            ),
+            (
+                "textures/a/water/x.png",
+                (Shader::Default, AutoRule::Otherwise),
+            ),
+            (
+                "textures/landscape/x.png",
+                (Shader::Landscape, AutoRule::Landscape),
+            ),
+            (
+                "textures/a/landscape/x.png",
+                (Shader::Landscape, AutoRule::Landscape),
+            ),
+        ] {
+            assert_eq!(
+                auto(&pick(&input(Target::Vanilla, &s, &st, &[p]))),
+                (want.0, ShaderOrigin::Auto(want.1)),
+                "{p}"
+            );
+        }
+        // A skipped DDS `_flow` has no sub-type; the suffix alone picks.
+        assert_eq!(
+            pick(&input(
+                Target::Cs,
+                &s,
+                &[Diffuse, Normal],
+                &["textures/a/x.png"]
+            ))
+            .shader,
+            Shader::Hair
+        );
+        assert_eq!(
+            "auto:flow".parse::<ShaderOrigin>().unwrap(),
+            ShaderOrigin::Auto(AutoRule::Flow)
+        );
+    }
+
+    /// Task 11 (Note CL35, CL36): CS hair reads `_flow`; vanilla hair does not, so it stays an extra map there.
+    #[test]
+    fn flow_is_a_cs_hair_map_and_extra_on_vanilla() {
+        let p = ShaderPick {
+            shader: Shader::Hair,
+            provenance: ShaderOrigin::Auto(AutoRule::Flow),
+            wanted: None,
+        };
+        let ms = [
+            m("x.dds", None, Some(Subtype::Diffuse)),
+            m("x_n.dds", Some("n"), Some(Subtype::Normal)),
+            m("x_flow.dds", Some("flow"), Some(Subtype::Flow)),
+            m("y_flow.dds", Some("flow"), None),
+        ];
+        assert!(check_maps(&p, Target::Cs, &ms).is_empty());
+        let w = check_maps(&p, Target::Vanilla, &ms);
+        assert_eq!(codes(&w), vec![crate::codes::Code::ShaderExtraMap; 2]);
+        assert_eq!(w[0].data["member"], "x_flow.dds");
+        assert_eq!(w[1].data["member"], "y_flow.dds");
     }
 
     #[test]
@@ -1822,7 +1930,12 @@ mod tests {
             provenance: ShaderOrigin::Set,
             wanted: None,
         };
-        assert!(check_maps(&p, &[mm("d", LandscapeDiffuse), mm("n", Normal)]).is_empty());
+        assert!(check_maps(
+            &p,
+            Target::Cs,
+            &[mm("d", LandscapeDiffuse), mm("n", Normal)]
+        )
+        .is_empty());
     }
 
     /// PBR grass design §4.1-4.2: four maps; a PBR set with GRAS evidence picks it; an explicit choice wins; CS only.
@@ -1889,6 +2002,7 @@ mod tests {
         };
         let w = check_maps(
             &p,
+            Target::Cs,
             &[
                 m("g", Subtype::PbrAlbedo),
                 m("g_n", Subtype::PbrNormal),

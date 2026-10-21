@@ -27,6 +27,26 @@ channels.green_convention = "opengl"   # or "directx"
 
 Or rename the file `_normalgl`, `_normaldx` or `_n` (`_n` means DirectX). Nothing is blocked, so there is nothing to allow.
 
+### A texture is black under torchlight
+
+Look for `CHK-GREEN-GUESS` on its normal map (the ⓘ badge on the set card, or the texture's settings panel). A normal map whose green channel points the wrong way lights from the wrong side, and a face that should catch the torch looks black. The check reads the map's slopes and says it "looks OpenGL"; it is a hint, not a fix, and it is weak on straight ridges. If it is right, press **Treat as OpenGL (flip green)**, or set `channels.green_convention = "opengl"` on the file. A `CHK-Z-SIGN` row on the same map means its blue channel points the wrong way too.
+
+### A surface looks too shiny or plastic
+
+Look for `CHK-PLASTIC` on its `_n`. On a vanilla `_n` the alpha is the specular: with no alpha, or an alpha that is almost all white, the whole surface gets full specular. Add an alpha that varies, or ignore the warning when the mesh sets its own specular. It never applies to an `_msn`, and on hair and Advanced Skin the message says Community Shaders does not read that alpha. Also check `CHK-RANGE` on an `_rmaos` (extreme roughness) or on an albedo that is too bright; the preview's **Range** toggle shows which texels break the rule.
+
+### Dark seams at a distance
+
+Look for `CHK-UV-GUTTER`. UV islands that sit closer than 8 texels let a smaller mip blend one island's colour into its neighbour, which shows as dark or bright seams from far away. Move the islands apart in the mesh, or ignore it for a tightly packed atlas that looks fine in game. The warning needs a Meshes scan. **Check all UV coverage** in Advanced reads every colour texture of the folder; a texture that no scanned mesh uses raises nothing.
+
+### UV coverage is greyed out
+
+The overlay and the check read your Meshes scan, so scan first: scan your MO2 instance in the Meshes view. The toggle's hover gives the reason: a scan that is running or was stopped (let it finish, or scan again), no scan database, or a scan with no rows (an empty scan counts as none). Only colour textures (diffuse, PBR albedo, skin albedo) have UV coverage, and landscape diffuses are left out. The toggle is also off while a pin is compared ("Hidden while comparing") and after a failed read (its hover lists the errors), and **Check all UV coverage** stays off until the **UV coverage** check is turned on ("Turn on UV coverage check first").
+
+### A texture was held for half size
+
+With **Drop mip 0 when it adds nothing** on, Export holds back a texture whose top mip carries little detail (`CHK-LOW-DETAIL`) and asks **Export at half size?** at the end. Tick the ones to write at half size, or choose **Export all at full size**. An unticked texture is asked about again on the next export. If the box could not open (another dialog was open), the texture was written at full size and a note says so.
+
 ### A normal map came out as a diffuse
 
 Its name has no normal suffix (for example `rock_nm.png`), so it was read as the colour map of a set called `rock_nm`. Rename it, add an `[inputs]` alias, or set `subtype = "normal"` in a `[files]` entry.
@@ -269,6 +289,21 @@ Every warning has a code and a severity:
 | `GRASS-TOP-OPAQUE` | warning | The top half is fully opaque: no cutout. | Check the alpha. |
 | `GRASS-NORMALS` | warning | Under 99% of the bottom half is unit-length normals. | Check the bottom half is a normal map. |
 | `GRASS-DETECT-SOURCE` | warning | The source's bottom-left texel already fails Community Shaders' detection test. | Fix the corner texel. |
+
+### Artist checks
+
+These come from the GUI's artist checks, plus `CHK-LOW-DETAIL`, which convert measures only when the GUI asks. They only warn: they never block an export or change "ready", and each has a switch in Advanced → Checks. The CLI raises none of them, but it honours a saved `drop_top_mip`.
+
+| Code | Severity | Meaning | Fix |
+|---|---|---|---|
+| `CHK-RANGE` | warning | Albedo too dark or bright, metal that is not black or white, extreme roughness, a dark AO channel, dark metal, or a mostly bright emissive background. | Check the map; the preview's **Range** toggle shows the texels. |
+| `CHK-PLASTIC` | warning | A vanilla `_n` with no alpha or an almost all-white alpha: flat, full specular. | Add a varying alpha, or ignore. |
+| `CHK-GREEN-GUESS` | info | The normal map's slopes look like OpenGL green. | **Treat as OpenGL (flip green)**, or ignore. |
+| `CHK-Z-SIGN` | warning | A normal map's blue channel points the wrong way. | Check the source. |
+| `CHK-PARALLAX` | warning | A height map, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), uses little range, clips, is mostly white or is too steep. | Check the height map. |
+| `CHK-PARALLAX-SCALE` | warning | A landscape set's displacement scale is more than 2x from the others. | Make the scales match. |
+| `CHK-LOW-DETAIL` | warning | Mip 0 adds little detail over mip 1. | Export at half size, or ignore. |
+| `CHK-UV-GUTTER` | warning | UV islands closer than 8 texels for more than 2 % of used texels. | Space the islands out. |
 
 ## In-game checklist
 
