@@ -422,7 +422,9 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
 /// pre-packed job gets `PACK-CONFLICT` or (with `packing.prefer = raw`) moves to `skipped`, and a recipe whose
 /// sources differ in size becomes an error job. `failed` holds the paths that failed planning and `cancelled` those
 /// whose Load never started because the batch was cancelled: a recipe with a member in either is `Failed` (Note M11).
-/// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b.
+/// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b. `derive_heights`
+/// holds the raw heights of the landscape sets a Vanilla derive converts (Note CM26, O6): each gets the cs
+/// `Parallax` recipe, which the vanilla target otherwise never plans. It is empty without `derive` (C6).
 #[allow(clippy::too_many_arguments)]
 pub fn plan_packing(
     ctx: &ResolveCtx,
@@ -433,6 +435,7 @@ pub fn plan_packing(
     cancelled: &[PathBuf],
     skipped: &mut Vec<SkippedFile>,
     packed_outputs: &BTreeMap<(String, String), PathBuf>,
+    derive_heights: &BTreeSet<PathBuf>,
 ) -> PackPlan {
     let (pa, pinfo) = placeholder();
     let mut out = PackPlan {
@@ -475,7 +478,28 @@ pub fn plan_packing(
             .shaders
             .get(&set.key)
             .is_some_and(|p| p.shader == crate::shader::Shader::ComplexMaterial);
-        let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice, complex);
+        let (mut recipes, mut unused) = recipes_for_with(ctx.target, &raw, choice, complex);
+        if let Some(i) = unused
+            .iter()
+            .position(|u| u.role == RawMap::Height && derive_heights.contains(&u.path))
+        {
+            let h = unused.remove(i);
+            recipes.push(super::Recipe {
+                kind: RecipeKind::Parallax,
+                channels: [
+                    super::ChannelNeed::Source {
+                        path: h.path,
+                        role: RawMap::Height,
+                        invert: false,
+                        channel: None,
+                    },
+                    super::ChannelNeed::MirrorR,
+                    super::ChannelNeed::MirrorR,
+                    super::ChannelNeed::Opaque,
+                ],
+                notes: vec![],
+            });
+        }
         heads.push((set, members, recipe_note, recipes, unused));
     }
     // Every recipe's output (explicit or default) before any is planned: an explicit packed path is compared with

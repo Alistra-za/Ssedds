@@ -1440,6 +1440,22 @@ impl Engine {
         // Spec §6.4 (M2.5): channel packing. Pass 1 decides the recipes; pass 2 assembles, analyses and resolves
         // each under the same memory admission and panic isolation as the files above.
         let failed_paths: Vec<PathBuf> = failed.iter().map(|f| f.path.clone()).collect();
+        // Note CM26 (O6): the raw heights whose landscape `_p` a Vanilla derive keeps.
+        let derive_heights: BTreeSet<PathBuf> = req
+            .derive
+            .iter()
+            .filter(|d| d.mode == crate::derive::DeriveMode::Vanilla)
+            .flat_map(|d| &d.sets)
+            .filter(|s| s.shader == crate::shader::Shader::PbrLandscape)
+            .filter_map(|s| match &s.height {
+                Some(pack::ChannelSource::Source {
+                    path,
+                    role: crate::config::RawMap::Height,
+                    ..
+                }) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
         let mut packed = pack::plan::plan_packing(
             &ctx,
             &sets,
@@ -1449,6 +1465,7 @@ impl Engine {
             &cancelled,
             &mut skipped,
             &packed_outputs,
+            &derive_heights,
         );
         // Pass 1 may add a recipe job it fails at once (sources of different sizes); like every job it records the
         // target's origin (`BatchRequest::target`, ruling W1).
@@ -2004,8 +2021,18 @@ impl Engine {
             );
         }
         let mut ready = vec![];
-        let mut derive_read: BTreeSet<&Path> =
-            plan.derive_own.iter().map(PathBuf::as_path).collect();
+        // A file a recipe packs (the kept landscape `_p`'s raw height, Note CM26) already ends with that event.
+        let mut derive_read: BTreeSet<&Path> = plan
+            .derive_own
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(
+                plan.jobs
+                    .iter()
+                    .filter_map(|j| j.pack.as_ref())
+                    .flat_map(|pk| pk.sources.iter().map(|s| s.path.as_path())),
+            )
+            .collect();
         for job in &plan.jobs {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
             // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output. So

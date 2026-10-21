@@ -969,10 +969,38 @@ fn one_terminal_event_each(mode: DeriveMode) {
     dirt(&inputs, true);
     // A landscape set with no albedo: its kept `_p` (O6) is read by nothing.
     landscape(&inputs, "rock", true);
+    // A landscape set whose height is a raw `_height`: packed into the kept Vanilla `_p` and read by the diffuse.
+    landscape(&inputs, "mud", false);
+    png(
+        &inputs.join("textures/landscape/mud_height.png"),
+        16,
+        16,
+        [100, 100, 100, 255],
+    );
     grass(&inputs, "textures/landscape/grass", 16);
+    // An unfolded set (no `textures/pbr/`) whose derived jobs fail at Load: a truncated rough source (review M1).
+    let misc = inputs.join("textures/misc");
+    png(&misc.join("ore.png"), 16, 16, [90, 90, 90, 255]);
+    png(&misc.join("ore_n.png"), 16, 16, [128, 128, 255, 255]);
+    png(&misc.join("ore_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    let bad = d.path().join("elsewhere/bad_rough.png");
+    png(&bad, 16, 16, [128, 128, 128, 255]);
+    let bytes = std::fs::read(&bad).unwrap();
+    std::fs::write(&bad, &bytes[..40]).unwrap();
     let (_, ev) = plan_and_run(mode, &inputs, d.path(), |r, d| {
         gras(r, None);
         if let Some(d) = d {
+            let ore = d
+                .sets
+                .iter_mut()
+                .find(|s| s.members.iter().any(|m| slash(m).ends_with("/ore_n.png")))
+                .unwrap();
+            ore.rough = ChannelSource::Source {
+                path: bad.clone(),
+                role: RawMap::Roughness,
+                invert: false,
+                channel: None,
+            };
             let rock = d
                 .sets
                 .iter_mut()
@@ -997,7 +1025,12 @@ fn one_terminal_event_each(mode: DeriveMode) {
         .filter(|e| matches!(e.kind, EventKind::FileDiscovered { .. }))
         .map(|e| (e.path.clone().unwrap(), e.job.clone().unwrap()))
         .collect();
-    assert!(discovered.len() >= 28, "{discovered:#?}");
+    assert!(discovered.len() >= 36, "{discovered:#?}");
+    // The unfolded failure ends `ore.png` with its own `file_failed` (the derived output is its own key).
+    assert!(ev
+        .iter()
+        .any(|e| matches!(e.kind, EventKind::FileFailed { .. })
+            && e.path.as_deref().is_some_and(|p| p.ends_with("/ore.png"))));
     for (path, job) in &discovered {
         let n = ev
             .iter()
@@ -1375,13 +1408,26 @@ fn grass_is_a_plain_diffuse_under_vanilla_and_a_stack_under_cm() {
     assert!(!codes.contains(&Code::DeriveNifSuggest), "{codes:?}");
     assert!(!codes.contains(&Code::DeriveNoScan), "{codes:?}");
 
-    let (p, _) = cs_then(DeriveMode::Cm, &inputs, &d.path().join("cm"), gras);
+    // `[files]` forces `remove`; only the CM14 hook in `finish_derived` turns it into `cutout` (review M2).
+    let (p, _) = cs_then(DeriveMode::Cm, &inputs, &d.path().join("cm"), |r, d| {
+        gras(r, d);
+        let mut cfg = engine::presets::ConfigFile::default();
+        cfg.files.insert(
+            "textures/landscape/grass/g".into(),
+            serde_json::json!({ "alpha": { "policy": "remove" } }),
+        );
+        r.project_config_inline = Some(cfg);
+    });
     assert_eq!(kinds(&p), [DeriveKind::GrassStack], "{:#?}", p.jobs);
     assert_eq!(p.jobs.len(), 1);
     let j = out_job(&p, "textures/landscape/grass/g.dds").unwrap();
     assert_eq!(j.profile.subtype, Subtype::ComplexGrass);
     assert_eq!(j.shader.as_ref().unwrap().shader, Shader::ComplexGrass);
-    assert_ne!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Cutout);
+    assert_eq!(
+        j.provenance["alpha.policy"].to_string(),
+        "recipe:grass_stack"
+    );
     assert!(matches!(j.status, JobStatus::Ready), "{j:#?}");
     let a = engine::derive::assemble::assemble_derived(j.derive.as_ref().unwrap()).unwrap();
     assert_eq!((a.image.width, a.image.height), (64, 128));
@@ -1397,4 +1443,56 @@ fn a_grass_stack_of_the_wrong_shape_is_grass_shape() {
     let j = out_job(&p, "textures/landscape/grass/g.dds").unwrap();
     assert_eq!(j.derive.as_ref().unwrap().kind, DeriveKind::GrassStack);
     assert!(has(j, Code::GrassShape), "{:?}", j.warnings);
+    assert!(!matches!(j.status, JobStatus::Ready), "{j:#?}");
+}
+
+/// O6 with a raw `_height` (review I1): a Vanilla derive plans the cs `Parallax` recipe for a landscape set's raw
+/// height, so the Vanilla folder gets `dirt_p.dds` and the height is not an unused input. A plan without derive has
+/// no such recipe (C6), and the CM folder no `_p`.
+#[test]
+fn a_landscape_height_becomes_the_vanilla_p() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    dirt(&inputs, false);
+    png(
+        &inputs.join("textures/landscape/dirt_height.png"),
+        16,
+        16,
+        [100, 100, 100, 255],
+    );
+    let (p, ev) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let kept = out_job(&p, "textures/landscape/dirt_p.dds").expect("the vanilla _p (O6)");
+    assert_eq!(
+        kept.pack.as_ref().map(|pk| pk.kind),
+        Some(RecipeKind::Parallax)
+    );
+    assert!(matches!(kept.status, JobStatus::Ready), "{kept:#?}");
+    let pick = kept.shader.as_ref().unwrap();
+    assert_eq!(
+        (pick.shader, &pick.provenance),
+        (Shader::Landscape, &ShaderOrigin::Derived)
+    );
+    let dj = out_job(&p, "textures/landscape/dirt.dds")
+        .unwrap()
+        .derive
+        .clone()
+        .unwrap();
+    let a = engine::derive::assemble::assemble_derived(&dj).unwrap();
+    assert!((a.image.px[0][3] - 100.0 / 255.0).abs() < 1e-6);
+    assert!(!event_codes(&ev).contains(&Code::PackUnusedInput));
+    assert!(p.jobs.iter().all(|j| !has(j, Code::PackUnusedInput)));
+    assert!(p
+        .skipped
+        .iter()
+        .all(|s| s.code != Some(Code::PackUnusedInput)));
+
+    let (p, _) = cs_then(DeriveMode::Cm, &inputs, &d.path().join("cm"), no_tweak);
+    assert!(out_job(&p, "textures/landscape/dirt_p.dds").is_none());
+    assert!(p.jobs.iter().all(|j| j.pack.is_none()), "{:#?}", p.jobs);
+
+    let (p, _) = plan(request(&inputs, &d.path().join("plain"), Target::Vanilla));
+    assert!(p.jobs.iter().all(|j| j
+        .pack
+        .as_ref()
+        .is_none_or(|pk| pk.kind != RecipeKind::Parallax)));
 }
