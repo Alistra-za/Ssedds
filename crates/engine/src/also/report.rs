@@ -177,8 +177,8 @@ fn phase_name(p: Phase) -> &'static str {
     }
 }
 
-/// The report's Markdown.
-pub fn render(s: &AlsoSummary, rows: &[SetRow], spec: &AlsoSpec) -> String {
+/// The report's Markdown. `grass`: a PBR grass set was exported, so the CM text names the complex-grass stacks.
+pub fn render(s: &AlsoSummary, rows: &[SetRow], spec: &AlsoSpec, grass: bool) -> String {
     let mut o = String::from("<!-- written by Tessalith; regenerated on every Also export -->\n");
     o.push_str("# Conversion report\n\n## Folders\n\n");
     o.push_str("| Folder | Converted | Copied | Up to date | Skipped | Failed |\n");
@@ -265,7 +265,12 @@ pub fn render(s: &AlsoSummary, rows: &[SetRow], spec: &AlsoSpec) -> String {
     // Review M3: only when a CM folder was written.
     if s.phases.iter().any(|(p, _)| *p == Phase::Cm) {
         o.push_str("\n## Install\n\n");
-        o.push_str(&cm_lines(&spec.cfg).join(" "));
+        let cm = format!("{}/", super::folder_name(&s.folders[2]));
+        let stale = s.notes.iter().any(|n| {
+            n.starts_with(&cm)
+                && (n.ends_with(super::NOT_WRITTEN) || n.ends_with(super::NOT_ZIPPED))
+        });
+        o.push_str(&cm_lines(&spec.cfg, grass, stale).join(" "));
         o.push('\n');
     }
     if !s.notes.is_empty() {

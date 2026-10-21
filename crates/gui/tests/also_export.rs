@@ -800,14 +800,14 @@ fn the_dialog_free_cm_lines_follow_keep_metal_brightness() {
         also: vec![AlsoTarget::Vanilla, AlsoTarget::Cm],
         ..ExportConfig::default()
     };
-    let off = also_cm_lines(&c);
+    let off = also_cm_lines(&c, false);
     assert!(off[0].contains("on top of the Vanilla folder"), "{off:?}");
     assert!(off.iter().any(|l| l.contains("only the `_m` files")));
     c.legacy.keep_metal_brightness = true;
-    let on = also_cm_lines(&c);
+    let on = also_cm_lines(&c, false);
     assert_eq!(on.len(), 1, "{on:?}");
     c.also = vec![AlsoTarget::Cm];
-    assert!(also_cm_lines(&c)
+    assert!(also_cm_lines(&c, true)
         .iter()
         .any(|l| l.contains("the Vanilla folder is written too")));
 }

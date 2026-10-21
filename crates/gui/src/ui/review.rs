@@ -230,10 +230,10 @@ fn column(ui: &mut egui::Ui, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
         .show(ui, body);
 }
 
-/// P2 / TA30: the CM lines Review shows: the engine's install text (the report prints the same), plus "the Vanilla
-/// folder is written too" when only CM is ticked.
-pub fn also_cm_lines(cfg: &ExportConfig) -> Vec<&'static str> {
-    let mut v = engine::also::cm_lines(cfg);
+/// P2 / TA30: the CM lines Review shows: the engine's install text (the report prints the same; `grass`: a PBR grass
+/// set is not skipped), plus "the Vanilla folder is written too" when only CM is ticked.
+pub fn also_cm_lines(cfg: &ExportConfig, grass: bool) -> Vec<&'static str> {
+    let mut v = engine::also::cm_lines(cfg, grass, false);
     if !cfg.also.contains(&AlsoTarget::Vanilla) {
         v.push(engine::also::CM_NEEDS_VANILLA);
     }
@@ -396,7 +396,7 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
                     }
                 });
             });
-            for l in also_cm_lines(&cfg) {
+            for l in also_cm_lines(&cfg, m.also_grass()) {
                 // The engine's text is Markdown (the report prints it); no backticks on screen.
                 ui.add(egui::Label::new(egui::RichText::new(l.replace('`', "")).weak()).wrap());
             }

@@ -225,7 +225,7 @@ brightness = 0.9
 | `spec_metal_boost` | 2.0 | 1–3 | The `_n` alpha boost at full metal. |
 | `landscape_spec` | 2.5 | 0–5 | A landscape `_n` alpha is multiplied by this before the clamp (no metal boost). |
 | `cm_dielectric_env` | 0 | 0–1 | CM `_m` R = gloss × max(metal, this). 0 = no env on non-metals; 0.35 is the spec's option. |
-| `keep_metal_brightness` | `false` | | The CM folder gets its own diffuses without the metal darkening. Off: CM holds only `_m` files. |
+| `keep_metal_brightness` | `false` | | The CM folder gets its own diffuses without the metal darkening. Off: CM holds only `_m` files (plus the complex-grass stack of each PBR grass set). |
 | `keep_metal_strength` | 1.0 | 0–1 | How much of the metal darkening Keep metal brightness undoes. |
 
 The CM `_m` is R = gloss × metal (see `cm_dielectric_env`), G = gloss (at least 5/255, so complex material stays on), B = metal, A = the `_p` height clamped to 5/255–250/255 (0 without a `_p`: parallax off). A landscape `_m` has R = B = 0. The vanilla env `_m` is metal × gloss, written only when a Meshes scan shows the set's meshes use the environment-map shader; the CLI reads no scan, so it writes none.

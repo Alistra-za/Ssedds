@@ -196,6 +196,17 @@ impl AppModel {
         self.also_written.as_ref()
     }
 
+    /// Task 13 M3: a PBR grass set is not skipped, so the CM folder gets its complex-grass stack (Review's CM text).
+    pub fn also_grass(&self) -> bool {
+        let skip = self.also_config().skip;
+        sets::views(self).iter().any(|v| {
+            v.shader
+                .as_ref()
+                .is_some_and(|p| p.shader == Shader::PbrGrass)
+                && !skip.iter().any(|s| engine::sets::same_id(s, &v.id))
+        })
+    }
+
     /// What `run_also` needs besides the request: the config, the location, TA13's `scanned` and TA27's sets.
     pub fn also_spec(&self) -> AlsoSpec {
         // P21: Track C's test for a 1.0-neutral `_p` (PBR multilayer with coat parallax).

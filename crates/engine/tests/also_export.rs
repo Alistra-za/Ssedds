@@ -964,6 +964,59 @@ fn the_zip_holds_only_this_runs_outputs() {
     }
 }
 
+/// Final review I3: with zip off, a file an earlier export left (the CM diffuse of Keep metal brightness, now off) is
+/// kept and reported, and the install text says the CM folder holds such files.
+#[test]
+fn an_earlier_exports_cm_diffuse_is_reported_with_zip_off() {
+    let (_d, m, loc) = project(steel);
+    let mut sp = spec(&loc, BOTH);
+    sp.cfg.legacy.keep_metal_brightness = true;
+    also(request(&m, &loc), &sp).0.unwrap();
+    let stale = "Mod CM/textures/arm/steel.dds";
+    assert!(loc.join(stale).exists(), "the keep-metal CM diffuse");
+    sp.cfg.legacy.keep_metal_brightness = false;
+    let s = also(request(&m, &loc), &sp).0.unwrap();
+    assert!(loc.join(stale).exists(), "never deleted");
+    let want = format!("{stale}: {NOT_WRITTEN}");
+    assert!(s.notes.contains(&want), "{want}: {:?}", s.notes);
+    assert!(
+        !s.notes.iter().any(|n| n.contains("steel_m.dds")),
+        "{:?}",
+        s.notes
+    );
+    let r = report(&loc, "Mod");
+    assert!(r.contains(&want), "{r}");
+    assert!(r.contains(cm_lines(&sp.cfg, false, true)[2]), "{r}");
+}
+
+/// Task 13 M3 / final review I3: the CM text names the complex-grass stacks when a PBR grass set is exported.
+#[test]
+fn the_cm_text_names_the_grass_stacks() {
+    let mut c = ExportConfig::default();
+    assert_eq!(
+        cm_lines(&c, false, false),
+        [
+            "Install the CM folder on top of the Vanilla folder.",
+            "It holds only the `_m` files."
+        ]
+    );
+    assert!(cm_lines(&c, true, false)[1].contains("complex-grass"));
+    c.legacy.keep_metal_brightness = true;
+    assert_eq!(cm_lines(&c, true, false).len(), 1);
+    let (_d, m, loc) = project(|m| {
+        let g = m.join("textures/landscape/grass");
+        png(&g.join("g.png"), 16, 16, [90, 140, 60, 255]);
+        png(&g.join("g_n.png"), 16, 16, [128, 128, 255, 255]);
+        png(&g.join("g_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    });
+    let mut req = request(&m, &loc);
+    req.gras_all_diffuses
+        .insert("textures/landscape/grass/g".to_string());
+    also(req, &spec(&loc, BOTH)).0.unwrap();
+    let r = report(&loc, "Mod");
+    assert!(r.contains("complex-grass"), "{r}");
+}
+
 #[test]
 fn a_failed_file_does_not_block_the_zips() {
     let (_d, m, loc) = project(|m| {
@@ -1306,11 +1359,11 @@ fn the_install_line_is_printed_with_keep_metal_on_too() {
     assert!(r.contains("on top of the Vanilla folder"), "{r}");
     assert!(!r.contains("only the `_m`"), "{r}");
     assert_eq!(
-        cm_lines(&sp.cfg),
+        cm_lines(&sp.cfg, false, false),
         vec!["Install the CM folder on top of the Vanilla folder."]
     );
     sp.cfg.legacy.keep_metal_brightness = false;
-    assert_eq!(cm_lines(&sp.cfg).len(), 2);
+    assert_eq!(cm_lines(&sp.cfg, false, false).len(), 2);
 }
 
 /// Carried into Task 9: a member with no recipe role is both a set-level `DERIVE-NOT-CONVERTED` note and a per-file

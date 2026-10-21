@@ -122,11 +122,24 @@ pub const NO_PBR_SETS: &str = "no PBR sets: Vanilla holds copies only; no CM fol
 pub const SKIPPED_SET: &str = "skipped (Skip vanilla/CM for this set)";
 
 /// P2: the CM install text, the one copy the report and the GUI's Review print. CM never holds `_n` or plain sets
-/// (TA7, O4); with Keep metal brightness off it holds only the `_m` files.
-pub fn cm_lines(cfg: &ExportConfig) -> Vec<&'static str> {
+/// (TA7, O4); with Keep metal brightness off it holds only the `_m` files, plus the complex-grass stacks when a PBR
+/// grass set is exported (`grass`). `stale`: the folder also holds files this export did not write (final review I3;
+/// known after a run only, so Review passes `false`).
+pub fn cm_lines(cfg: &ExportConfig, grass: bool, stale: bool) -> Vec<&'static str> {
     let mut v = vec!["Install the CM folder on top of the Vanilla folder."];
     if !cfg.legacy.keep_metal_brightness {
-        v.push("It holds only the `_m` files.");
+        v.push(match grass {
+            true => {
+                "It holds only the `_m` files and the complex-grass stacks of the PBR grass sets."
+            }
+            false => "It holds only the `_m` files.",
+        });
+    }
+    if stale {
+        v.push(
+            "It also holds files this export did not write, listed under Notes: one with the name of a Vanilla file \
+             overrides it until you delete it.",
+        );
     }
     v
 }
@@ -504,6 +517,8 @@ impl EventSink for Recorder {
 pub const ZIP_SKIPPED: &str = "zip skipped: the export did not finish";
 /// TA23: a file in a zipped folder that this run did not write or find up to date.
 pub const NOT_ZIPPED: &str = "not zipped: not written by this export";
+/// Final review I3: the same, with zip off. Such a file is kept (Tessalith never deletes) and reported.
+pub const NOT_WRITTEN: &str = "not written by this export; kept as it is";
 
 /// Every file under `folder` but `_sdc` and leftover `.sdc-*.tmp` files (08d-3).
 fn folder_files(folder: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -524,46 +539,66 @@ fn folder_files(folder: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// C8 (Note CM): each folder that ran becomes `<location>/<folder name>.zip` of this run's outputs (TA23), and
-/// `<location>/<project> SHA256SUMS.txt` gets a line per zip written, all through `OwnedFiles` (TA21). Returns what
-/// was not written, one message each (review M1).
+fn folder_name(folder: &Path) -> String {
+    folder
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Final review I3: each folder that ran, as this run's files (TA23's zip list: `keys`) or the walk's error. Every
+/// other file is kept and gets a note: `NOT_ZIPPED` with `zip` on, else `NOT_WRITTEN`.
+fn this_runs_files(
+    s: &mut AlsoSummary,
+    keys: &[BTreeSet<String>; 3],
+    zip: bool,
+) -> Vec<(usize, std::io::Result<Vec<PathBuf>>)> {
+    let ran: Vec<usize> = s.phases.iter().map(|(p, _)| *p as usize).collect();
+    let mut out = vec![];
+    for i in ran {
+        let folder = s.folders[i].clone();
+        let name = folder_name(&folder);
+        let files = folder_files(&folder).map(|files| {
+            let (take, mut left): (Vec<_>, Vec<_>) = files
+                .into_iter()
+                .partition(|f| keys[i].contains(&output_key(&folder, f)));
+            left.sort();
+            for f in left {
+                let rel = slash(f.strip_prefix(&folder).unwrap_or(&f));
+                let why = if zip { NOT_ZIPPED } else { NOT_WRITTEN };
+                s.notes.push(format!("{name}/{rel}: {why}"));
+            }
+            take
+        });
+        out.push((i, files));
+    }
+    out
+}
+
+/// C8 (Note CM): each folder that ran becomes `<location>/<folder name>.zip` of this run's outputs (TA23, `files`
+/// from `this_runs_files`), and `<location>/<project> SHA256SUMS.txt` gets a line per zip written, all through
+/// `OwnedFiles` (TA21). Returns what was not written, one message each (review M1).
 fn write_zips(
     s: &mut AlsoSummary,
     owned: &mut OwnedFiles,
-    keys: &[BTreeSet<String>; 3],
+    files: Vec<(usize, std::io::Result<Vec<PathBuf>>)>,
     location: &Path,
     project: &str,
     cancel: &CancelToken,
 ) -> Vec<String> {
     let (mut lines, mut failed) = (String::new(), vec![]);
-    let ran: Vec<usize> = s.phases.iter().map(|(p, _)| *p as usize).collect();
-    for i in ran {
+    for (i, take) in files {
+        let name = folder_name(&s.folders[i]);
         let folder = &s.folders[i];
-        let name = folder
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
         let zip = location.join(format!("{name}.zip"));
-        let files = match folder_files(folder) {
+        let take = match take {
             Ok(f) => f,
             Err(e) => {
                 failed.push(format!("{} not written ({e})", zip.display()));
                 continue;
             }
         };
-        let (mut take, mut left) = (vec![], vec![]);
-        for f in files {
-            match keys[i].contains(&output_key(folder, &f)) {
-                true => take.push(f),
-                false => left.push(f),
-            }
-        }
-        left.sort();
-        for f in left {
-            let rel = slash(f.strip_prefix(folder).unwrap_or(&f));
-            s.notes.push(format!("{name}/{rel}: {NOT_ZIPPED}"));
-        }
         let bytes = match crate::zip::write_zip(folder, &take, cancel) {
             Ok(b) => b,
             Err(e) => {
@@ -783,9 +818,9 @@ pub fn run_also(
     };
     // The PBR phase's reporter; the later phases' batch-level warnings and the zip step's go out under its batch.
     let rep = Reporter::new(recorder(0, sink.clone()), new_batch_id());
-    let mut rows = vec![];
+    let (mut rows, mut grass) = (vec![], false);
     let mut s = run_phases(
-        engine, cache, base, spec, sink, cancel, &rep, &recorder, &mut rows,
+        engine, cache, base, spec, sink, cancel, &rep, &recorder, &mut rows, &mut grass,
     )?;
     if dry_run {
         return Ok(s);
@@ -811,15 +846,21 @@ pub fn run_also(
             None
         }
     };
+    // Final review I3: an export that finished lists the files it did not write, zip on or off (they are kept). After
+    // a cancel or a phase error most files were not reached, so none is listed. Decided before the zips, so a cancel
+    // while zipping does not change it.
+    let finished = !cancel.is_cancelled() && s.error.is_none();
+    let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
+    let files = match finished {
+        true => this_runs_files(&mut s, &keys, spec.cfg.zip),
+        false => vec![],
+    };
     if spec.cfg.zip {
-        if cancel.is_cancelled() || s.error.is_some() {
+        if !finished {
             s.notes.push(ZIP_SKIPPED.into());
         } else {
             let failed = match &mut owned {
-                Some(owned) => {
-                    let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
-                    write_zips(&mut s, owned, &keys, &spec.location, &project, cancel)
-                }
+                Some(owned) => write_zips(&mut s, owned, files, &spec.location, &project, cancel),
                 None => vec![],
             };
             for m in &failed {
@@ -835,7 +876,7 @@ pub fn run_also(
         let path = spec
             .location
             .join(format!("{project} conversion-report.md"));
-        let text = report::render(&s, &rows, spec);
+        let text = report::render(&s, &rows, spec, grass);
         match owned.write(&path, text.as_bytes()) {
             Ok(()) => s.report = Some(path),
             // CM51 (fix round 1): as a zip not written, a warning and a partial export.
@@ -867,6 +908,7 @@ fn run_phases(
     rep: &Reporter,
     recorder: &dyn Fn(usize, Arc<dyn EventSink>) -> Arc<dyn EventSink>,
     rows: &mut Vec<report::SetRow>,
+    grass: &mut bool,
 ) -> Result<AlsoSummary, EngineError> {
     let cfg = &spec.cfg;
     let project = project_name(&base.inputs)?;
@@ -929,6 +971,7 @@ fn run_phases(
     let skip: BTreeSet<String> = cfg.skip.iter().cloned().collect();
     let (sets, drop, set_notes) = derive_sets(&pbr_plan, &skip);
     s.sets = set_notes;
+    *grass = sets.iter().any(|d| d.shader == Shader::PbrGrass);
     let pbr_jobs = pbr_plan.jobs.clone();
     let nvtt = pbr_plan
         .nvtt
