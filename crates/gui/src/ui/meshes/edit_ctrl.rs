@@ -2,7 +2,9 @@
 //! shape's shader and alpha chains, and (v2 B6) each controller's keys: a curve, a key table, Add and Remove key,
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
-use super::edit_fields::{fit_width, float_named, row_label, selected, set_name, warnings, Act};
+use super::edit_fields::{
+    fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act,
+};
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
 use crate::model::viewport3d::Clock;
@@ -539,7 +541,8 @@ fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<Ke
     let v: [f32; 3] = std::array::from_fn(|ch| curve::get(keys, k, ch, Part::Value));
     let hdr = v.iter().any(|x| !(0.0..=1.0).contains(x));
     // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
-    let mut picked = v;
+    let lin = v.map(egui::ecolor::linear_from_gamma);
+    let mut picked = lin;
     let (r, was, open) = ui
         .add_enabled_ui(!hdr, |ui| {
             // The id egui's colour button gives its popup (auto_id_with does not advance the id).
@@ -558,14 +561,12 @@ fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<Ke
     if !changed {
         return (None, done);
     }
-    // A channel whose sRGB byte the picker kept was not touched: it keeps its exact bits (the HSV round trip and the
-    // popup's byte fields move it a little).
-    let byte = egui::ecolor::gamma_u8_from_linear_f32;
+    let x = from_picker(v, lin, picked);
     let mut d = keys.clone();
     let mut any = false;
     for ch in 0..3 {
-        if byte(picked[ch]) != byte(v[ch]) {
-            curve::set(&mut d, k, ch, Part::Value, picked[ch]);
+        if x[ch].to_bits() != v[ch].to_bits() {
+            curve::set(&mut d, k, ch, Part::Value, x[ch]);
             any = true;
         }
     }

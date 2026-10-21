@@ -160,6 +160,17 @@ pub(super) fn set_name(
     });
 }
 
+/// C-P17': NIF colours are sRGB but egui's `color_edit_button_rgb` takes linear, so the pickers get
+/// `v.map(linear_from_gamma)` (= `lin`). This maps the picked linear colour back to sRGB; a channel whose shown byte
+/// the picker kept was not touched and keeps its exact bits (the HSV round trip and popup bytes move it a little).
+pub(super) fn from_picker(v: [f32; 3], lin: [f32; 3], picked: [f32; 3]) -> [f32; 3] {
+    let byte = egui::ecolor::gamma_u8_from_linear_f32;
+    std::array::from_fn(|ch| match byte(picked[ch]) == byte(lin[ch]) {
+        true => v[ch],
+        false => egui::ecolor::gamma_from_linear(picked[ch]),
+    })
+}
+
 /// An RGB colour: a picker and the three exact floats. A real change pushes all three channels (an untouched
 /// channel with its own bits, so −0.0 survives) as one merged step.
 fn color(
@@ -176,11 +187,12 @@ fn color(
     ui.horizontal(|ui| {
         row_label(ui, name);
         // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
-        let mut picked = v;
+        let lin = v.map(egui::ecolor::linear_from_gamma);
+        let mut picked = lin;
         let r = ui.color_edit_button_rgb(&mut picked);
         set_name(&r, egui::WidgetType::ColorButton, name, None, None);
         if r.changed() {
-            x = picked;
+            x = from_picker(v, lin, picked);
             changed = true;
         }
         for (i, c) in ["R", "G", "B"].into_iter().enumerate() {

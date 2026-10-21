@@ -3766,7 +3766,12 @@ fn key_table_colour_picker_sets_the_key_colour() {
     assert_eq!(a.time.to_bits(), b.time.to_bits());
     assert_eq!(a.value[0].to_bits(), b.value[0].to_bits(), "R");
     assert_eq!(a.value[2].to_bits(), b.value[2].to_bits(), "B");
-    assert_eq!(egui::ecolor::gamma_u8_from_linear_f32(a.value[1]), 102, "G");
+    // C-P17': the key stores sRGB, so the picker's byte 102 is the stored value itself (0.4), not its linear.
+    assert!(
+        (a.value[1] * 255.0 - 102.0).abs() < 0.01,
+        "G: {}",
+        a.value[1]
+    );
     // The popup closed and flushed: a second picker change is a second step.
     h.get_by_role_and_label(AkRole::ColorWell, sw).click();
     h.run_steps(3);
@@ -3778,6 +3783,85 @@ fn key_table_colour_picker_sets_the_key_colour() {
     assert!(h.state_mut().undo_edit());
     assert_eq!(ops(h.state()).len(), 1, "one undo step per popup");
     assert_eq!(bits(&pos_keys(h.state(), ctrl).keys[1]), bits(b));
+}
+
+/// The open colour picker's R, G and B bytes (its own unnamed DragValues), left to right.
+fn picker_bytes(h: &Harness<'static, MeshesModel>) -> Vec<f64> {
+    let mut spins: Vec<_> = h
+        .query_all(egui_kittest::kittest::by().role(AkRole::SpinButton))
+        .filter(|n| n.accesskit_node().label().is_none())
+        .map(|n| (n.rect().min.x, n.accesskit_node().numeric_value().unwrap()))
+        .collect();
+    spins.sort_by(|a, b| a.0.total_cmp(&b.0));
+    spins.into_iter().map(|s| s.1).collect()
+}
+
+/// sRGB 0.5 is byte 127.5 (ecolor rounds it to 127); as linear it would show 188.
+fn assert_srgb_half(bytes: &[f64]) {
+    assert_eq!(bytes.len(), 3, "{bytes:?}");
+    assert!(
+        bytes.iter().all(|b| (127.0..=128.0).contains(b)),
+        "{bytes:?}"
+    );
+}
+
+/// C-P17': NIF colours are sRGB, so a key of 0.5 shows sRGB byte ~128 in the picker (not 188, its value as linear).
+#[test]
+fn key_table_colour_picker_shows_the_key_as_srgb() {
+    let (m, _) = colour_scene([0.2, 0.4, 0.6], [0.5, 0.5, 0.5]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 2 colour")
+        .click();
+    h.run_steps(3);
+    assert_srgb_half(&picker_bytes(&h));
+}
+
+/// C-P17': the Shader tab's colour picker shows the stored colour as sRGB and stores what is picked as sRGB; the
+/// channels the picker did not change keep their exact bits, and the R/G/B fields show the raw stored floats.
+#[test]
+fn shader_colour_picker_shows_and_stores_srgb() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let spec = |m: &MeshesModel| {
+        let e = m.edit.as_ref().unwrap();
+        e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
+            .lighting
+            .params
+            .specular_color
+    };
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(a), Role::Shader).unwrap();
+    let base = spec(&m);
+    let ops = (0..3usize)
+        .map(|i| Op::SetField {
+            at: at.clone(),
+            field: Field::SpecularColor(i as u8),
+            value: Value::F32(0.5f32.to_bits()),
+            base: Value::F32(base[i].to_bits()),
+        })
+        .collect();
+    m.edit_push(ops, None);
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::ColorWell, "Specular colour")
+        .click();
+    h.run_steps(3);
+    assert_srgb_half(&picker_bytes(&h));
+    type_picker_byte(&mut h, 1, 102); // G
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    let c = spec(h.state());
+    assert_eq!(c[0].to_bits(), 0.5f32.to_bits(), "R untouched");
+    assert_eq!(c[2].to_bits(), 0.5f32.to_bits(), "B untouched");
+    assert!(
+        (c[1] * 255.0 - 102.0).abs() < 0.01,
+        "G stored as sRGB: {}",
+        c[1]
+    );
+    let g = h.get_by_label("Specular colour G");
+    assert_eq!(g.accesskit_node().numeric_value(), Some(c[1] as f64));
 }
 
 /// Owner follow-up: a key outside 0-1 (an HDR emissive colour) gets a disabled swatch with the reason on hover; the
