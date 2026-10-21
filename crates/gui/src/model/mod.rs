@@ -2154,6 +2154,19 @@ impl AppModel {
         }
     }
 
+    /// Re-review N1: before `ExportRunning` replaces it, an open (or pending) overwrite question is answered "keep",
+    /// with its note, also as a message (opening another folder clears the notes), as #44 does at the export's end.
+    /// It can be open while an Also export's zips run.
+    fn keep_pending_json(&mut self) {
+        if self.pending_text.is_none() {
+            return;
+        }
+        self.resolve_overwrite_json(false);
+        if let Some(n) = self.export.notes.last().cloned() {
+            self.messages.notify(messages::Severity::Warning, n);
+        }
+    }
+
     /// The answer to `Dialog::OverwriteJson`.
     pub fn resolve_overwrite_json(&mut self, overwrite: bool) {
         self.dialog = None;
@@ -3206,6 +3219,7 @@ impl AppModel {
     /// Open `root`, or ask first when unsaved edits would be lost. True when the folder was opened.
     pub fn request_open(&mut self, root: PathBuf) -> bool {
         if self.export.running.is_some() {
+            self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             false
         } else if self.half_size_waiting() {
@@ -3248,6 +3262,7 @@ impl AppModel {
         // Audit 08f-1: an export started while the question was up; opening now would drop its JSON. Ask to stop
         // it first, as Open does; the question comes back once it has ended.
         if self.export.running.is_some() {
+            self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             return;
         }
@@ -3277,6 +3292,7 @@ impl AppModel {
 
     pub fn request_close(&mut self) -> bool {
         if self.export.running.is_some() {
+            self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Close));
             false
         } else if self.half_size_waiting() {
@@ -3496,6 +3512,47 @@ mod tests {
                 }
             }
             m.handle(msg);
+        }
+    }
+
+    /// Re-review N1: the overwrite question is open while an Also export's zips still run (`running` re-armed). A
+    /// close, an open or a dropped folder answers it "keep", with its note, before asking about the export.
+    #[test]
+    fn a_close_or_open_during_the_zip_step_keeps_the_edited_json_with_note() {
+        for how in 0..3 {
+            let d = tempfile::tempdir().unwrap();
+            let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
+            run_export(&mut m, |_| {});
+            assert!(
+                matches!(m.dialog, Some(Dialog::OverwriteJson(_))),
+                "{:?}",
+                m.dialog
+            );
+            // As `finish_export` leaves an Also export while its zips run.
+            m.export.running = Some(CancelToken::default());
+            let other = d.path().join("other");
+            match how {
+                0 => assert!(!m.request_close()),
+                1 => assert!(!m.request_open(other)),
+                _ => m.resolve_open_unsaved(other, false),
+            }
+            assert!(
+                matches!(m.dialog, Some(Dialog::ExportRunning(_))),
+                "{how}: {:?}",
+                m.dialog
+            );
+            assert!(
+                m.pending_text.is_none() && m.pending_json.is_none(),
+                "{how}"
+            );
+            assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+            let note = |t: &str| t.contains("PGPatcher JSON kept as edited");
+            assert!(
+                m.export.notes.iter().any(|n| note(n)),
+                "{how}: {:?}",
+                m.export.notes
+            );
+            assert!(m.messages.entries().any(|e| note(&e.text)), "{how}");
         }
     }
 
