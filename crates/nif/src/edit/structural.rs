@@ -3,6 +3,8 @@
 use super::{Anchor, Op, Outcome, Role};
 use crate::ctrl::BASE_LEN;
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
+use crate::header::Header;
+use crate::keys::{encode_data, read_data, KeyData, KeyGroup};
 use crate::model::{NifModel, ShapeModel};
 use crate::net::{encode_net, ObjectNet};
 use crate::props::encode_texture_set;
@@ -154,6 +156,113 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
         patch(doc, new, at, *first as i32)?;
     }
     Ok(Some(new))
+}
+
+/// The controller's own keyed interpolator: (interpolator block, pose float count, data block, current keys).
+/// A data ref of -1 reads as the empty group of the interpolator's kind (`key_type: None, keys: []`).
+pub(crate) fn ctrl_keys(
+    h: &Header,
+    b: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+) -> Result<(u32, usize, Option<u32>, KeyData), String> {
+    let c = m.ctrls.get(&ctrl).ok_or("not a readable controller")?;
+    let i = match c.interp {
+        Some(i) if i >= 0 => i as usize,
+        _ => return Err("The controller has no interpolator.".into()),
+    };
+    if i >= h.sizes.len() {
+        return Err("The interpolator ref is outside the file.".into()); // before h.kind, which does not check
+    }
+    let ip = match m.interps.get(&(i as u32)) {
+        Some(ip) if ip.known => ip,
+        ip => {
+            let class = ip.map_or_else(
+                || String::from_utf8_lossy(h.kind(i)).into_owned(),
+                |ip| ip.class.clone(),
+            );
+            return Err(format!("A {class} has no keys to edit."));
+        }
+    };
+    let floats = ip.value.len();
+    let mismatch = || "The keys do not match the interpolator's type.".to_string();
+    if ip.data == -1 {
+        let empty = match floats {
+            1 => KeyData::Float(KeyGroup {
+                key_type: None,
+                keys: vec![],
+            }),
+            3 => KeyData::Pos(KeyGroup {
+                key_type: None,
+                keys: vec![],
+            }),
+            _ => return Err(mismatch()),
+        };
+        return Ok((i as u32, floats, None, empty));
+    }
+    if ip.data < -1 || ip.data as usize >= h.sizes.len() {
+        return Err("The interpolator's data ref is outside the file.".into());
+    }
+    let d = ip.data as usize;
+    let keys = read_data(h, b, d).map_err(|e| e.to_string())?;
+    match (&keys, floats) {
+        (KeyData::Float(_), 1) | (KeyData::Pos(_), 3) => {
+            Ok((i as u32, floats, Some(d as u32), keys))
+        }
+        _ => Err(mismatch()),
+    }
+}
+
+/// SetKeys with clip None on the controller `ctrl`. Ok(Conflict) for a stale base.
+pub(crate) fn set_keys(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    let Op::SetKeys { keys, base, .. } = op else {
+        return Err("not a key op".into());
+    };
+    let (i, floats, data, now) = ctrl_keys(doc.header(), cur, m, ctrl)?;
+    let kind: &[u8] = match (keys, &now) {
+        (KeyData::Float(_), KeyData::Float(_)) => b"NiFloatData",
+        (KeyData::Pos(_), KeyData::Pos(_)) => b"NiPosData",
+        _ => return Err("The keys do not match the interpolator's type.".into()),
+    };
+    // bytes, not KeyData ==: NaN != NaN (F19)
+    if encode_data(base) != encode_data(&now) {
+        return Ok(Outcome::Conflict(
+            "changed in the source: the keys differ from the edit's base".into(),
+        ));
+    }
+    let interp_users = m
+        .ctrls
+        .values()
+        .filter(|c| c.interp == Some(i as i32))
+        .count()
+        + m.sequences
+            .iter()
+            .flat_map(|s| &s.blocks)
+            .filter(|cb| cb.interp == i as i32)
+            .count();
+    // shortcut: m.interps holds only interpolators a controller or controlled block names, so an
+    // orphan interpolator on the same data is not counted; count raw refs if orphans ever come back to life.
+    let data_users = data.map_or(0, |d| {
+        m.interps.values().filter(|x| x.data == d as i32).count()
+    });
+    if interp_users > 1 {
+        let ni = copy(doc, i);
+        patch(doc, ctrl, BASE_LEN, ni as i32)?;
+        let nd = doc.append(kind, encode_data(keys));
+        patch(doc, ni, 4 * floats, nd as i32)?;
+    } else if let Some(d) = data.filter(|_| data_users <= 1) {
+        doc.set_block(d, encode_data(keys));
+    } else {
+        let nd = doc.append(kind, encode_data(keys));
+        patch(doc, i, 4 * floats, nd as i32)?;
+    }
+    Ok(Outcome::Applied)
 }
 
 fn win1252(s: &str) -> Result<Vec<u8>, String> {

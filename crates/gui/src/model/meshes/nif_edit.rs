@@ -7,7 +7,7 @@ use crate::model::viewport3d::{read_file, Content, FileSource};
 use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
-use nif::edit::validate::{new_errors, validate, Warning};
+use nif::edit::validate::{new_errors, validate, validate_ops, Warning};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel};
@@ -174,7 +174,8 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::RemoveAlpha { at }
         | Op::AddExtra { at, .. }
         | Op::EditExtra { at, .. }
-        | Op::RemoveExtra { at } => at,
+        | Op::RemoveExtra { at }
+        | Op::SetKeys { at, .. } => at,
     }
 }
 
@@ -185,6 +186,7 @@ fn keep_base(op: &mut Op, old: &Op) {
         (Op::SetBits { base, .. }, Op::SetBits { base: b, .. }) => *base = *b,
         (Op::SetTexturePath { base, .. }, Op::SetTexturePath { base: b, .. }) => base.clone_from(b),
         (Op::EditExtra { base, .. }, Op::EditExtra { base: b, .. }) => base.clone_from(b),
+        (Op::SetKeys { base, .. }, Op::SetKeys { base: b, .. }) => base.clone_from(b),
         _ => {}
     }
 }
@@ -313,6 +315,9 @@ impl NifEdit {
             return Some("Resolve the conflicts first.".into());
         }
         if let Some(w) = new_errors(&self.source_warnings, &self.warnings).first() {
+            return Some(w.text.clone());
+        }
+        if let Some(w) = validate_ops(&self.doc.ops()).first() {
             return Some(w.text.clone());
         }
         read_back(&self.patched).err()

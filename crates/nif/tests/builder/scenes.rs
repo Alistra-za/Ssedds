@@ -112,6 +112,9 @@ fn float_data(key_type: u32) -> Vec<u8> {
         if key_type == 2 {
             w = w.fs(&[0.0, 0.0]);
         }
+        if key_type == 3 {
+            w = w.fs(&[0.5, -0.25, 1.0]); // t, b, c
+        }
     }
     w.0
 }
@@ -276,6 +279,10 @@ pub fn all() -> Vec<Vec<u8>> {
         emit_scene("BSX", 0x83, true),
         shader_ctrl(false),
         shader_ctrl(true),
+        keyed_pair(Share::No, [1, 2]),
+        keyed_pair(Share::Data, [1, 1]),
+        keyed_pair(Share::Interp, [1, 1]),
+        keyed_pair(Share::No, [3, 1]),
     ]
 }
 
@@ -582,5 +589,34 @@ pub fn shader_ctrl(shared: bool) -> Vec<u8> {
         );
     }
     n.block("NiFloatInterpolator", W::default().f(0.5).i32(-1).0);
+    n.bytes()
+}
+
+pub enum Share {
+    No,
+    Data,
+    Interp,
+}
+
+/// BSTriShape "S" (0) -> BSLSP (1, controller 2) -> LSCF var 11 (2, next 3, interp 4) -> LSCF var 20 (3, next -1,
+/// interp 5; 4 with Share::Interp). NiFloatInterpolator 0.5 (4, data 6) and 0.25 (5, data 7; 6 with Share::Data).
+/// NiFloatData of `types[0]` (6) and `types[1]` (7). All 8 blocks always exist; unreferenced ones are orphans.
+pub fn keyed_pair(share: Share, types: [u32; 2]) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", bstri_named(s, 1, -1));
+    n.block("BSLightingShaderProperty", lsp_body(0, &[], 2, &[]));
+    let second = if matches!(share, Share::Interp) { 4 } else { 5 };
+    for (next, var, interp) in [(3, 11, 4), (-1, 20, second)] {
+        n.block(
+            "BSLightingShaderPropertyFloatController",
+            ctrl_body(next, 0x48, 1, W::default().i32(interp).u32(var)),
+        );
+    }
+    let data = if matches!(share, Share::Data) { 6 } else { 7 };
+    n.block("NiFloatInterpolator", W::default().f(0.5).i32(6).0);
+    n.block("NiFloatInterpolator", W::default().f(0.25).i32(data).0);
+    n.block("NiFloatData", float_data(types[0]));
+    n.block("NiFloatData", float_data(types[1]));
     n.bytes()
 }

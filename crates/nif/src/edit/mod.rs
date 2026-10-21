@@ -3,6 +3,7 @@
 //! write over a value that changed underneath it. Every op runs on the bytes the previous op produced (R1).
 use crate::extra::ExtraValue;
 use crate::fields::{locate, Field, Value};
+use crate::keys::KeyData;
 use crate::model::{read_model, NifModel, ShapeModel};
 use crate::write::NifDoc;
 use crate::NifError;
@@ -96,6 +97,14 @@ pub enum Op {
     },
     RemoveExtra {
         at: Anchor,
+    },
+    /// Replaces the keys of the anchored controller's own interpolator (`clip: None`), or of a sequence's
+    /// controlled-block interpolator (`clip: Some(sequence block)`, B7; Refused until then).
+    SetKeys {
+        at: Anchor, // Role::Ctrl
+        clip: Option<u32>,
+        keys: KeyData,
+        base: KeyData,
     },
 }
 
@@ -260,6 +269,10 @@ pub fn merge_key(op: &Op) -> String {
         Op::AddExtra { at, kind, name, .. } => ("AddExtra", at, format!("{kind}/{name}")),
         Op::EditExtra { at, .. } => ("EditExtra", at, String::new()),
         Op::RemoveExtra { at } => ("RemoveExtra", at, String::new()),
+        // a clip drag never merges with a free-curve drag
+        Op::SetKeys { at, clip, .. } => {
+            ("SetKeys", at, clip.map_or(String::new(), |c| c.to_string()))
+        }
     };
     format!("{v}|{}|{what}", at.block)
 }
@@ -290,6 +303,7 @@ fn anchor_of(op: &Op) -> &Anchor {
         | Op::AddExtra { at, .. }
         | Op::EditExtra { at, .. }
         | Op::RemoveExtra { at }
+        | Op::SetKeys { at, .. }
         | Op::SetTexturePath { at, .. } => at,
     }
 }
@@ -309,6 +323,7 @@ pub fn rebase(new_src: &[u8], ops: &[Op]) -> Result<(Vec<Op>, Vec<Outcome>), Nif
                 | Op::AddExtra { at, .. }
                 | Op::EditExtra { at, .. }
                 | Op::RemoveExtra { at }
+                | Op::SetKeys { at, .. }
                 | Op::SetTexturePath { at, .. } => at.block = *block,
             }
         }
@@ -362,6 +377,13 @@ pub fn keep_mine(new_src: &[u8], ops: &[Op], i: usize) -> Result<Vec<Op>, NifErr
                 *base = v;
             }
         }
+        Op::SetKeys {
+            base, clip: None, ..
+        } => {
+            if let Ok((.., now)) = structural::ctrl_keys(doc.header(), &cur, &m, block) {
+                *base = now;
+            }
+        }
         _ => {}
     }
     Ok(out)
@@ -387,6 +409,10 @@ fn field_block(m: &NifModel, block: u32, field: Field) -> u32 {
 fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     let refused = |s: String| (None, Outcome::Refused(s));
     let at = anchor_of(op);
+    // before resolve: a clip edit is always Refused, never a Conflict (B7 removes this)
+    if let Op::SetKeys { clip: Some(_), .. } = op {
+        return refused("Editing a clip's keys is not supported yet.".into());
+    }
     let m = match read_model(cur) {
         Ok(m) => m,
         Err(e) => return refused(e.to_string()),
@@ -404,6 +430,37 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     } else {
         Outcome::Applied
     };
+    // Ruling P8: an alpha field edit on a shared alpha would change every user; it needs a split first.
+    // The same holds for a controller on a shared alpha's chain.
+    let alpha_users = match at.role {
+        Role::Alpha => m.alphas.get(&block).map(|a| a.prop.users.len()),
+        Role::Ctrl {
+            owner: Owner::Alpha,
+            ..
+        } => m
+            .alphas
+            .values()
+            .find(|a| a.prop.ctrls.contains(&block))
+            .map(|a| a.prop.users.len()),
+        _ => None,
+    };
+    if let Some(users) = alpha_users {
+        if users > 1 {
+            return (
+                None,
+                Outcome::Conflict(format!(
+                    "This alpha is shared by {users} shapes: split it before editing."
+                )),
+            );
+        }
+    }
+    if matches!(op, Op::SetKeys { .. }) {
+        return match structural::set_keys(&mut doc, cur, &m, block, op) {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
     if matches!(op, Op::SetTexturePath { .. }) {
         let r = match m.shape(block).filter(|_| at.role == Role::Shape) {
             Some(s) => structural::texture_path_op(&mut doc, &m, s, op),
@@ -439,30 +496,6 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         Op::SetField { field, .. } | Op::SetBits { field, .. } => *field,
         _ => unreachable!("filtered above"),
     };
-    // Ruling P8: an alpha field edit on a shared alpha would change every user; it needs a split first.
-    // The same holds for a controller on a shared alpha's chain.
-    let alpha_users = match at.role {
-        Role::Alpha => m.alphas.get(&block).map(|a| a.prop.users.len()),
-        Role::Ctrl {
-            owner: Owner::Alpha,
-            ..
-        } => m
-            .alphas
-            .values()
-            .find(|a| a.prop.ctrls.contains(&block))
-            .map(|a| a.prop.users.len()),
-        _ => None,
-    };
-    if let Some(users) = alpha_users {
-        if users > 1 {
-            return (
-                None,
-                Outcome::Conflict(format!(
-                    "This alpha is shared by {users} shapes: split it before editing."
-                )),
-            );
-        }
-    }
     if field == Field::ShaderType && matches!(op, Op::SetBits { .. }) {
         return refused("the shader type is not a bit field".into());
     }

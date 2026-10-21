@@ -2,6 +2,7 @@
 use super::{anchor_role, Anchor, Op, Role};
 use crate::extra::ExtraValue;
 use crate::fields::Field;
+use crate::keys::{KeyData, KeyGroup};
 use crate::model::NifModel;
 use crate::path::canon_texture;
 use crate::props::LightingTrailer;
@@ -251,6 +252,40 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             if exists.is_some_and(|f| !f(&canon_texture(raw).norm)) {
                 warn("Not found in the scanned mods or BSAs", None);
             }
+        }
+    }
+    out
+}
+
+/// Errors in the keys the ops author (spec §3.3): times must not decrease; only LINEAR (1) and QUADRATIC (2) keys
+/// are authored. A source curve that is not edited is never checked (R14).
+pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
+    fn times<T>(g: &KeyGroup<T>) -> (Option<u32>, Vec<f32>) {
+        (g.key_type, g.keys.iter().map(|k| k.time).collect())
+    }
+    let mut out = vec![];
+    for op in ops {
+        let Op::SetKeys { at, keys, .. } = op else {
+            continue;
+        };
+        let (key_type, t) = match keys {
+            KeyData::Float(g) => times(g),
+            KeyData::Pos(g) => times(g),
+            KeyData::Bool(g) => times(g),
+        };
+        let mut err = |text: &str| {
+            out.push(Warning {
+                level: Level::Error,
+                target: Target::Block { block: at.block },
+                text: text.into(),
+                fix: None,
+            })
+        };
+        if t.windows(2).any(|k| k[1] < k[0]) {
+            err("Key times must not decrease");
+        }
+        if key_type.is_some_and(|t| t != 1 && t != 2) {
+            err("Only linear and quadratic keys can be authored");
         }
     }
     out

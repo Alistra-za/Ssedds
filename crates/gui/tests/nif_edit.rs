@@ -74,6 +74,57 @@ fn negative_zero_survives_the_document() {
     }
 }
 
+use nif::keys::{Key, KeyData, KeyGroup};
+
+fn fkey(time: f32, value: f32, tbc: Option<[f32; 3]>) -> Key<f32> {
+    Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc,
+    }
+}
+
+#[test]
+fn key_bits_survive_the_document() {
+    let mut d = doc();
+    let op = Op::SetKeys {
+        at: sample_op_anchor(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![fkey(-0.0, f32::from_bits(0x7FC0_0001), None)],
+        }),
+        base: KeyData::Float(KeyGroup {
+            key_type: None,
+            keys: vec![],
+        }),
+    };
+    d.ops.push(DocOp {
+        op,
+        status: OpStatus::Applied,
+    });
+    let back = EditDoc::from_text(&d.to_text()).unwrap();
+    match &back.ops[0].op {
+        Op::SetKeys {
+            keys: KeyData::Float(g),
+            ..
+        } => {
+            assert_eq!(g.keys[0].time.to_bits(), 0x8000_0000);
+            assert_eq!(g.keys[0].value.to_bits(), 0x7FC0_0001);
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+fn sample_op_anchor() -> Anchor {
+    match sample_op() {
+        Op::SetField { at, .. } => at,
+        _ => unreachable!(),
+    }
+}
+
 #[test]
 fn doc_and_export_paths_follow_the_spec() {
     let m = Path::new(r"C:\I\mods\sdc NIF Edits");
@@ -242,6 +293,36 @@ fn every_op_variant_round_trips() {
             base: E::Int(2),
         },
         Op::RemoveExtra { at: extra.clone() },
+        Op::SetKeys {
+            at: ctrl.clone(),
+            clip: Some(2),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(-0.0, 1e38, None), fkey(1.0, -0.0, None)],
+            }),
+            base: KeyData::Pos(KeyGroup {
+                key_type: Some(2),
+                keys: vec![Key {
+                    time: 0.5,
+                    value: [1.0, -2.0, 3.0],
+                    forward: Some([0.1, 0.2, 0.3]),
+                    backward: Some([-0.1, -0.2, -0.3]),
+                    tbc: None,
+                }],
+            }),
+        },
+        Op::SetKeys {
+            at: ctrl.clone(),
+            clip: None,
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(3),
+                keys: vec![fkey(0.0, 2.0, Some([0.5, -0.25, 1.0]))],
+            }),
+            base: KeyData::Bool(KeyGroup {
+                key_type: None,
+                keys: vec![],
+            }),
+        },
     ];
     for v in [
         E::Bsx(7),
@@ -1398,6 +1479,49 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
 // ---- v2 A18: Controllers (scalars) and Extra data tabs ----
 
 use builder::{Nif, W};
+
+/// Ruling B-P28: an authored TBC key or decreasing key times block export (the `validate_ops` wiring).
+#[test]
+fn authored_key_errors_block_export() {
+    let b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
+    let base = nif::keys::read_data(&nif::header::Header::parse(&b).unwrap(), &b, 6).unwrap();
+    for (key_type, times, want) in [
+        (
+            3,
+            [0.0, 1.0],
+            "Only linear and quadratic keys can be authored",
+        ),
+        (1, [1.0, 0.0], "Key times must not decrease"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let edit_mod = d.path().join("mods").join(EDIT_MOD);
+        let mut e = NifEdit::open(
+            b.clone(),
+            copy("A", 1, false),
+            "meshes/x.nif",
+            Some(&edit_mod),
+        )
+        .unwrap();
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(11),
+            nth: 0,
+        };
+        let tbc = (key_type == 3).then_some([0.5, -0.25, 1.0]);
+        let op = Op::SetKeys {
+            at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
+            clip: None,
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(key_type),
+                keys: times.iter().map(|&t| fkey(t, 1.0, tbc)).collect(),
+            }),
+            base: base.clone(),
+        };
+        e.push(vec![op], None);
+        assert_eq!(e.export_block().as_deref(), Some(want));
+    }
+}
 
 /// Shape "S" (0) -> BSLSP (1) -> free float controllers var 11 (2, interp 4) and var 20 (3, interp 5); a root NiNode
 /// (12) listing BSXFlags `bsx` (6), a BSInvMarker, a multi-line string, an int, a bool and a negative-zero float.

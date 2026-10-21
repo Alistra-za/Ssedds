@@ -1214,3 +1214,293 @@ fn a_controller_edit_on_a_shared_alpha_is_a_conflict() {
     );
     assert_eq!(r.bytes, b);
 }
+
+// ---- v2 B4: SetKeys ----
+
+use nif::keys::{encode_data, Key, KeyData, KeyGroup};
+use scenes::Share;
+
+fn data_of(b: &[u8], d: usize) -> KeyData {
+    nif::keys::read_data(&Header::parse(b).unwrap(), b, d).unwrap()
+}
+
+fn key(time: f32, value: f32) -> Key<f32> {
+    Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    }
+}
+
+/// Float LINEAR keys.
+fn lin(k: &[(f32, f32)]) -> KeyData {
+    KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: k.iter().map(|&(t, v)| key(t, v)).collect(),
+    })
+}
+
+fn empty_float() -> KeyData {
+    KeyData::Float(KeyGroup {
+        key_type: None,
+        keys: vec![],
+    })
+}
+
+fn set_keys(at: &Anchor, keys: KeyData, base: KeyData) -> Op {
+    Op::SetKeys {
+        at: at.clone(),
+        clip: None,
+        keys,
+        base,
+    }
+}
+
+fn nblocks(b: &[u8]) -> usize {
+    Header::parse(b).unwrap().sizes.len()
+}
+
+fn kind_of(b: &[u8], k: usize) -> Vec<u8> {
+    Header::parse(b).unwrap().kind(k).to_vec()
+}
+
+fn with_i32(mut v: Vec<u8>, at: usize, x: i32) -> Vec<u8> {
+    v[at..at + 4].copy_from_slice(&x.to_le_bytes());
+    v
+}
+
+fn same_blocks(a: &[u8], b: &[u8], blocks: impl IntoIterator<Item = usize>) {
+    for k in blocks {
+        assert_eq!(block_bytes_of(a, k), block_bytes_of(b, k), "block {k}");
+    }
+}
+
+#[test]
+fn set_keys_reemits_only_the_data_block() {
+    let b = scenes::keyed_pair(Share::No, [1, 2]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let keys = lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 8);
+    assert_eq!(
+        nif::write::block_diff(&b, &r.bytes).unwrap(),
+        vec!["block 6 NiFloatData: 24 → 32 bytes".to_string()]
+    );
+    assert_eq!(block_bytes_of(&r.bytes, 6), encode_data(&keys));
+    same_blocks(&b, &r.bytes, (0..8).filter(|&k| k != 6));
+    assert_eq!(
+        Header::parse(&b).unwrap().strings,
+        Header::parse(&r.bytes).unwrap().strings
+    );
+
+    // same size: only the 4 value bytes of key 1 change
+    let base = data_of(&b, 6);
+    let mut same = base.clone();
+    if let KeyData::Float(g) = &mut same {
+        g.keys[1].value = 0.75;
+    }
+    let r = apply(&b, &[set_keys(&at, same, base)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let off = Header::parse(&b).unwrap().offsets()[6] + 20;
+    // 1.0 -> 0.75 (0x3F80_0000 -> 0x3F40_0000) differs in one of the 4 bytes
+    let ch = changed_ranges(&b, &r.bytes);
+    assert!(
+        !ch.is_empty() && ch.iter().all(|c| c.start >= off && c.end <= off + 4),
+        "{ch:?}"
+    );
+    assert_eq!(r.bytes[off..off + 4], 0.75f32.to_le_bytes());
+    same_blocks(&b, &r.bytes, [7]);
+}
+
+#[test]
+fn shared_data_key_edit_copies() {
+    // interps 4 and 5 share data 6
+    let b = scenes::keyed_pair(Share::Data, [1, 1]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let keys = lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 9);
+    assert_eq!(kind_of(&r.bytes, 8), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 8), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 4, 8)
+    );
+    same_blocks(&b, &r.bytes, (0..8).filter(|&k| k != 4));
+    assert_eq!(data_of(&r.bytes, 6), data_of(&b, 6));
+    assert_eq!(read_model(&r.bytes).unwrap().interps[&5].data, 6);
+
+    // ctrls 2 and 3 share interp 4 -> data 6
+    let b = scenes::keyed_pair(Share::Interp, [1, 1]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let op = set_keys(&at, keys.clone(), data_of(&b, 6));
+    let r = apply(&b, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 10);
+    assert_eq!(kind_of(&r.bytes, 8), b"NiFloatInterpolator");
+    assert_eq!(
+        block_bytes_of(&r.bytes, 8),
+        with_i32(block_bytes_of(&b, 4), 4, 9)
+    );
+    assert_eq!(kind_of(&r.bytes, 9), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 9), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 2),
+        with_i32(block_bytes_of(&b, 2), 26, 8)
+    );
+    same_blocks(&b, &r.bytes, (0..8).filter(|&k| k != 2));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&2].interp, Some(8));
+    assert_eq!(m.ctrls[&3].interp, Some(4));
+    assert_eq!(m.interps[&4].data, 6);
+
+    // the second edit finds the copy unshared and edits it in place
+    let keys2 = lin(&[(0.0, 1.0), (1.0, 0.0)]);
+    let op2 = set_keys(&at, keys2.clone(), keys);
+    let r = apply(&b, &[op, op2]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 10);
+    assert_eq!(block_bytes_of(&r.bytes, 9), encode_data(&keys2));
+}
+
+#[test]
+fn tbc_curve_is_preserved_when_untouched() {
+    // ctrl 2's data 6 is TBC
+    let b = scenes::keyed_pair(Share::No, [3, 1]);
+    let at20 = ctrl_anchor(&b, Owner::Shader, LSCF, Some(20), "S");
+    let op = set_keys(
+        &at20,
+        lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]),
+        data_of(&b, 7),
+    );
+    let r = apply(&b, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    same_blocks(&b, &r.bytes, [6]);
+    let KeyData::Float(g) = data_of(&r.bytes, 6) else {
+        panic!("not float")
+    };
+    assert_eq!(g.key_type, Some(3));
+    assert!(g.keys.iter().all(|k| k.tbc == Some([0.5, -0.25, 1.0])));
+    assert!(validate::validate_ops(&[op]).is_empty());
+
+    // keep mine reads the TBC curve as the base and carries it
+    let at11 = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let stale = set_keys(&at11, lin(&[(0.0, 3.0)]), lin(&[(0.0, 9.0)]));
+    let kept = keep_mine(&b, &[stale], 0).unwrap();
+    match &kept[0] {
+        Op::SetKeys { base, .. } => assert_eq!(*base, data_of(&b, 6)),
+        o => panic!("{o:?}"),
+    }
+    assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
+}
+
+#[test]
+fn set_keys_appends_data_when_missing() {
+    // interp 3 has data -1
+    let b = scenes::shader_ctrl(false);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let keys = lin(&[(0.0, 0.0), (1.0, 1.0)]);
+    let r = apply(&b, &[set_keys(&at, keys.clone(), empty_float())]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 5);
+    assert_eq!(kind_of(&r.bytes, 4), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 4), encode_data(&keys));
+    let mut want = 0.5f32.to_le_bytes().to_vec();
+    want.extend(4i32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 3), want);
+    same_blocks(&b, &r.bytes, 0..3);
+
+    let r = apply(&b, &[set_keys(&at, keys.clone(), lin(&[(0.0, 0.0)]))]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "changed in the source: the keys differ from the edit's base".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn set_keys_refusals() {
+    let refused = |s: &str| vec![Outcome::Refused(s.into())];
+    let b = scenes::keyed_pair(Share::No, [1, 2]);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let clip = |at: &Anchor, c| Op::SetKeys {
+        at: at.clone(),
+        clip: Some(c),
+        keys: lin(&[(0.0, 1.0)]),
+        base: data_of(&b, 6),
+    };
+    let mut lost = at.clone();
+    lost.block = 99;
+    lost.shape = Some("nope".into());
+    for a in [&at, &lost] {
+        let r = apply(&b, &[clip(a, 0)]).unwrap();
+        assert_eq!(
+            r.outcomes,
+            refused("Editing a clip's keys is not supported yet.")
+        );
+        assert_eq!(r.bytes, b);
+    }
+
+    let pos = KeyData::Pos(KeyGroup {
+        key_type: Some(1),
+        keys: vec![Key {
+            time: 0.0,
+            value: [1.0, 2.0, 3.0],
+            forward: None,
+            backward: None,
+            tbc: None,
+        }],
+    });
+    let r = apply(&b, &[set_keys(&at, pos, data_of(&b, 6))]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused("The keys do not match the interpolator's type.")
+    );
+    assert_eq!(r.bytes, b);
+
+    let mc = scenes::managed_clip();
+    let m = read_model(&mc).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Shader,
+        class: LSCF.into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let mat = anchor_role(&m, Some(m.shapes[0].block), role).unwrap();
+    assert_eq!(mat.block, 7);
+    let r = apply(&mc, &[set_keys(&mat, lin(&[(0.0, 1.0)]), empty_float())]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused("A NiBlendFloatInterpolator has no keys to edit.")
+    );
+    assert_eq!(r.bytes, mc);
+
+    let sa = scenes::shared_alpha_with_testref_chain();
+    let ta = ctrl_anchor(
+        &sa,
+        Owner::Alpha,
+        "BSNiAlphaPropertyTestRefController",
+        None,
+        "A",
+    );
+    let r = apply(&sa, &[set_keys(&ta, lin(&[(0.0, 1.0)]), empty_float())]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This alpha is shared by 2 shapes: split it before editing.".into()
+        )]
+    );
+    assert_eq!(r.bytes, sa);
+
+    assert_eq!(
+        merge_key(&set_keys(&at, empty_float(), empty_float())),
+        "SetKeys|2|"
+    );
+    assert_eq!(merge_key(&clip(&at, 3)), "SetKeys|2|3");
+}

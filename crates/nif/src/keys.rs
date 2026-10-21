@@ -32,11 +32,126 @@ pub struct KeyGroup<T> {
     pub keys: Vec<Key<T>>,
 }
 
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(into = "wire::KeyDataWire", from = "wire::KeyDataWire")
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyData {
     Float(KeyGroup<f32>),
     Pos(KeyGroup<[f32; 3]>),
     Bool(KeyGroup<u8>),
+}
+
+#[cfg(feature = "serde")]
+mod wire {
+    //! KeyData in edit documents: every f32 as its u32 bit pattern (F19).
+    use super::{Key, KeyData, KeyGroup};
+    use serde::{Deserialize, Serialize};
+
+    trait Bits {
+        type B;
+        fn bits(&self) -> Self::B;
+        fn unbits(b: Self::B) -> Self;
+    }
+    impl Bits for f32 {
+        type B = u32;
+        fn bits(&self) -> u32 {
+            self.to_bits()
+        }
+        fn unbits(b: u32) -> f32 {
+            f32::from_bits(b)
+        }
+    }
+    impl Bits for [f32; 3] {
+        type B = [u32; 3];
+        fn bits(&self) -> [u32; 3] {
+            self.map(f32::to_bits)
+        }
+        fn unbits(b: [u32; 3]) -> [f32; 3] {
+            b.map(f32::from_bits)
+        }
+    }
+    impl Bits for u8 {
+        type B = u8;
+        fn bits(&self) -> u8 {
+            *self
+        }
+        fn unbits(b: u8) -> u8 {
+            b
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) struct KeyWire<B> {
+        time: u32,
+        value: B,
+        forward: Option<B>,
+        backward: Option<B>,
+        tbc: Option<[u32; 3]>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) struct GroupWire<B> {
+        key_type: Option<u32>,
+        keys: Vec<KeyWire<B>>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) enum KeyDataWire {
+        Float(GroupWire<u32>),
+        Pos(GroupWire<[u32; 3]>),
+        Bool(GroupWire<u8>),
+    }
+
+    fn out<T: Bits>(g: KeyGroup<T>) -> GroupWire<T::B> {
+        let keys = g.keys.iter().map(|k| KeyWire {
+            time: k.time.to_bits(),
+            value: k.value.bits(),
+            forward: k.forward.as_ref().map(T::bits),
+            backward: k.backward.as_ref().map(T::bits),
+            tbc: k.tbc.map(|t| t.bits()),
+        });
+        GroupWire {
+            key_type: g.key_type,
+            keys: keys.collect(),
+        }
+    }
+
+    fn back<T: Bits>(g: GroupWire<T::B>) -> KeyGroup<T> {
+        let keys = g.keys.into_iter().map(|k| Key {
+            time: f32::from_bits(k.time),
+            value: T::unbits(k.value),
+            forward: k.forward.map(T::unbits),
+            backward: k.backward.map(T::unbits),
+            tbc: k.tbc.map(<[f32; 3]>::unbits),
+        });
+        KeyGroup {
+            key_type: g.key_type,
+            keys: keys.collect(),
+        }
+    }
+
+    impl From<KeyData> for KeyDataWire {
+        fn from(d: KeyData) -> Self {
+            match d {
+                KeyData::Float(g) => KeyDataWire::Float(out(g)),
+                KeyData::Pos(g) => KeyDataWire::Pos(out(g)),
+                KeyData::Bool(g) => KeyDataWire::Bool(out(g)),
+            }
+        }
+    }
+
+    impl From<KeyDataWire> for KeyData {
+        fn from(d: KeyDataWire) -> Self {
+            match d {
+                KeyDataWire::Float(g) => KeyData::Float(back(g)),
+                KeyDataWire::Pos(g) => KeyData::Pos(back(g)),
+                KeyDataWire::Bool(g) => KeyData::Bool(back(g)),
+            }
+        }
+    }
 }
 
 /// A key value type: its size, and exact (bit-preserving) read and write.

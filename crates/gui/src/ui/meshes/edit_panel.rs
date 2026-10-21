@@ -237,6 +237,7 @@ fn op_label(op: &Op) -> String {
         Op::AddExtra { at, name, .. } => (format!("Add extra data {name}"), at),
         Op::EditExtra { at, .. } => ("Edit extra data".into(), at),
         Op::RemoveExtra { at } => ("Remove extra data".into(), at),
+        Op::SetKeys { at, .. } => ("Edit keys".into(), at),
     };
     match &at.shape {
         Some(s) => format!("{s}: {what}"),

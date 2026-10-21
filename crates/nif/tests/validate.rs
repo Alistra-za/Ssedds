@@ -489,3 +489,74 @@ fn slsf_vanilla_lighting_bits_do_not_warn() {
     // PBR type 11 without bit 24 is common.
     assert!(slsf_scene(11, 1 << 23).is_empty());
 }
+
+// ---- v2 B4: authored keys ----
+
+use nif::keys::{Key, KeyData, KeyGroup};
+
+/// New errors after a SetKeys of `keys` (type `key_type`) on var 11 of `keyed_pair(Share::No, [1, 2])`.
+fn key_errors(key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<Warning> {
+    use nif::edit::validate::validate_ops;
+    use nif::edit::{anchor_role, Outcome, Owner, Role};
+    let b = scenes::keyed_pair(scenes::Share::No, [1, 2]);
+    let m = read_model(&b).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let base = nif::keys::read_data(&Header::parse(&b).unwrap(), &b, 6).unwrap();
+    let ops = vec![Op::SetKeys {
+        at: anchor_role(&m, Some(0), role).unwrap(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup { key_type, keys }),
+        base,
+    }];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Applied],
+        "validation never refuses"
+    );
+    let mut edited = warnings(&r.bytes);
+    edited.extend(validate_ops(&ops));
+    new_errors(&warnings(&b), &edited)
+}
+
+fn k(time: f32, extra: Option<f32>, tbc: bool) -> Key<f32> {
+    Key {
+        time,
+        value: 1.0,
+        forward: extra,
+        backward: extra,
+        tbc: tbc.then_some([0.0, 0.0, 0.0]),
+    }
+}
+
+fn error(text: &str) -> Vec<Warning> {
+    vec![Warning {
+        level: Level::Error,
+        target: Target::Block { block: 2 },
+        text: text.into(),
+        fix: None,
+    }]
+}
+
+#[test]
+fn decreasing_times_block_export() {
+    let lin = |t: &[f32]| t.iter().map(|&t| k(t, None, false)).collect();
+    assert_eq!(
+        key_errors(Some(1), lin(&[0.0, 2.0, 1.0])),
+        error("Key times must not decrease")
+    );
+    assert_eq!(key_errors(Some(1), lin(&[0.0, 1.0, 1.0])), vec![]);
+    let tbc = vec![k(0.0, None, true), k(1.0, None, true)];
+    assert_eq!(
+        key_errors(Some(3), tbc),
+        error("Only linear and quadratic keys can be authored")
+    );
+    let quad = vec![k(0.0, Some(0.5), false), k(1.0, Some(0.5), false)];
+    assert_eq!(key_errors(Some(2), quad), vec![]);
+    assert_eq!(key_errors(None, vec![]), vec![]);
+}
