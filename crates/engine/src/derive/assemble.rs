@@ -51,17 +51,22 @@ fn channels_image(
 pub fn assemble_derived(job: &DeriveJob) -> Result<Assembled, PackError> {
     use DeriveKind::*;
     let paths: Vec<PathBuf> = job.sources.iter().map(|s| s.path.clone()).collect();
+    // A malformed job (the planner never builds one) fails rather than panicking a worker.
+    let first = paths.first().cloned().ok_or_else(|| LoadError::Decode {
+        path: PathBuf::new(),
+        msg: format!("a {} job has no sources", job.kind.id()),
+    })?;
     let (w, h) = check_sizes(&paths)?;
     let colour = |slot: &Option<PathBuf>, what: &str| {
         let p = slot.as_ref().ok_or_else(|| LoadError::Decode {
-            path: paths[0].clone(),
+            path: first.clone(),
             msg: format!("a {} job has no {what}", job.kind.id()),
         })?;
         let (img, info) = load_image(p)?;
         // `check_sizes` read the headers; a file replaced since then is caught here.
         if (img.width, img.height) != (w, h) {
             return Err(PackError::SizeMismatch(vec![
-                (paths[0].clone(), w, h),
+                (first.clone(), w, h),
                 (p.clone(), img.width, img.height),
             ]));
         }
@@ -179,7 +184,14 @@ pub fn assemble_derived(job: &DeriveJob) -> Result<Assembled, PackError> {
         bit_depth: infos.clone().map(|i| i.bit_depth).max().unwrap_or(8),
         channels: 4,
         has_alpha: !(k == EnvM || (matches!(k, VanillaDiffuse | CmDiffuse) && land && !has_p)),
-        is_float: infos.clone().any(|i| i.is_float),
+        // The RGB is in the colour map's coding; the scalars are [0, 1] data whatever their file type, so a float
+        // `_p` or roughness must not pick the linear source transfer (review I1). `false` for `cm_m`/`env_m`.
+        // shortcut: a float (EXR) colour map is taken as stored values; the recipe was calibrated on coded 8-bit
+        // maps, so convert or refuse it in planning if such sets turn up.
+        is_float: albedo
+            .as_ref()
+            .or(normal.as_ref())
+            .is_some_and(|c| c.1.is_float),
     };
     let mut non_gray = scalars.non_gray;
     non_gray.extend(detail.into_iter().flat_map(|d| d.non_gray));
@@ -238,5 +250,113 @@ mod tests {
         let a = assemble_derived(&env).unwrap();
         assert!(a.image.px.iter().all(|q| (q[0] - 0.5).abs() < 1e-6));
         assert!(!a.info.has_alpha);
+    }
+
+    /// A `VanillaDiffuse` of an 8×8 PNG albedo (alpha 77) with default scalars.
+    fn diffuse_job(dir: &std::path::Path) -> DeriveJob {
+        let a = dir.join("x.png");
+        ImageBuffer::from_pixel(8, 8, Rgba([200u8, 200, 200, 77]))
+            .save(&a)
+            .unwrap();
+        DeriveJob {
+            kind: DeriveKind::VanillaDiffuse,
+            landscape: false,
+            albedo: Some(a.clone()),
+            normal: None,
+            rough: ChannelSource::Default { value: 0.5 },
+            metal: ChannelSource::Default { value: 0.0 },
+            ao: ChannelSource::Default { value: 1.0 },
+            height: None,
+            curves: None,
+            cavity: None,
+            gray: crate::config::GraySource::R,
+            params: LegacyParams::default(),
+            sources: vec![DeriveSource {
+                path: a,
+                role: "albedo".into(),
+                stamp: None,
+            }],
+        }
+    }
+
+    /// TA5: a landscape diffuse's alpha is the `_p` R, opaque (and alpha-free) without a `_p`; an object keeps the
+    /// albedo's alpha.
+    #[test]
+    fn a_landscape_diffuse_alpha_is_the_p_r_or_opaque() {
+        let d = tempfile::tempdir().unwrap();
+        let object = diffuse_job(d.path());
+        let a = assemble_derived(&object).unwrap();
+        assert!(a
+            .image
+            .px
+            .iter()
+            .all(|q| (q[3] - 77.0 / 255.0).abs() < 1e-6));
+        assert!(a.info.has_alpha);
+        let bare = DeriveJob {
+            landscape: true,
+            ..object.clone()
+        };
+        let a = assemble_derived(&bare).unwrap();
+        assert!(a.image.px.iter().all(|q| q[3] == 1.0));
+        assert!(!a.info.has_alpha);
+        let with_p = DeriveJob {
+            height: Some(ChannelSource::Default { value: 0.4 }),
+            ..bare
+        };
+        let a = assemble_derived(&with_p).unwrap();
+        assert!(a.image.px.iter().all(|q| (q[3] - 0.4).abs() < 1e-6));
+        assert!(a.info.has_alpha);
+    }
+
+    /// Review M1: a malformed job (no sources) fails, it does not panic.
+    #[test]
+    fn a_job_without_sources_is_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let job = DeriveJob {
+            albedo: None,
+            sources: vec![],
+            ..diffuse_job(d.path())
+        };
+        let e = assemble_derived(&job).err().expect("an error");
+        assert!(e.to_string().contains("no sources"), "{e}");
+    }
+
+    /// Review I1: a float scalar map (EXR roughness) leaves the image in the colour map's coding (`is_float` picks
+    /// the source transfer), for the diffuse and the grass stack.
+    #[test]
+    fn a_float_scalar_map_does_not_make_the_image_float() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().join("x_rough.exr");
+        image::DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(8, 8, image::Rgb([0.5f32; 3])))
+            .save(&r)
+            .unwrap();
+        let n = d.path().join("x_n.png");
+        ImageBuffer::from_pixel(8, 8, Rgba([128u8, 128, 255, 255]))
+            .save(&n)
+            .unwrap();
+        let mut job = diffuse_job(d.path());
+        job.rough = ChannelSource::Source {
+            path: r.clone(),
+            role: crate::config::RawMap::Roughness,
+            invert: false,
+            channel: None,
+        };
+        job.sources.push(DeriveSource {
+            path: r,
+            role: "rough".into(),
+            stamp: None,
+        });
+        assert!(!assemble_derived(&job).unwrap().info.is_float);
+        job.kind = DeriveKind::GrassStack;
+        job.normal = Some(n.clone());
+        job.sources.insert(
+            1,
+            DeriveSource {
+                path: n,
+                role: "normal".into(),
+                stamp: None,
+            },
+        );
+        assert!(!assemble_derived(&job).unwrap().info.is_float);
     }
 }

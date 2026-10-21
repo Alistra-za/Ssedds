@@ -298,6 +298,51 @@ fn a_grass_stack_is_twice_as_tall_and_passes_the_grass_corner_test() {
     }
 }
 
+/// Review I1: an EXR `_rmaos` (float) with a PNG albedo still writes the diffuse in the albedo's coding: 135, not
+/// the ~194 of treating the stored result as linear. The grass stack's top half likewise.
+#[test]
+fn a_float_scalar_map_keeps_the_diffuse_in_the_albedos_coding() {
+    let d = tempfile::tempdir().unwrap();
+    let albedo = png(d.path(), "in/iron_albedo.png", 64, 64, [200, 200, 200, 255]);
+    let normal = png(d.path(), "maps/iron_n.png", 64, 64, [128, 128, 255, 255]);
+    let rmaos = d.path().join("maps/iron_rmaos.exr");
+    image::DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(
+        64,
+        64,
+        image::Rgb([128.0f32 / 255.0, 0.0, 128.0 / 255.0]),
+    ))
+    .save(&rmaos)
+    .unwrap();
+    let dj = derive(
+        DeriveKind::VanillaDiffuse,
+        false,
+        Some(&albedo),
+        None,
+        &rmaos,
+        LegacyParams::default(),
+    );
+    let (s, ev) = run(plan(d.path(), dj, "iron.dds"));
+    assert_eq!(s.converted, 1, "{ev:#?}");
+    for q in &mip0(&d.path().join("out/iron.dds")).3 {
+        near(q[0], 135, 2, "diffuse");
+    }
+    let dj = derive(
+        DeriveKind::GrassStack,
+        false,
+        Some(&albedo),
+        Some(&normal),
+        &rmaos,
+        LegacyParams::default(),
+    );
+    let mut p = plan(d.path(), dj, "grass.dds");
+    p.jobs[0].profile.alpha.policy = AlphaPolicy::Cutout;
+    let (s, ev) = run(p);
+    assert_eq!(s.converted, 1, "{ev:#?}");
+    for q in &mip0(&d.path().join("out/grass.dds")).3[..64 * 64] {
+        near(q[0], 135, 2, "grass top");
+    }
+}
+
 #[test]
 fn a_second_run_is_up_to_date_and_a_changed_setting_re_encodes() {
     let d = tempfile::tempdir().unwrap();

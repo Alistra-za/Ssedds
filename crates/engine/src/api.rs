@@ -2696,6 +2696,36 @@ mod tests {
         assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
+    /// Note CM13: a derived job adds 16 B/texel per colour map, the scalars and the output (twice for the grass
+    /// stack, which reads the albedo and the normal).
+    #[test]
+    fn a_derived_job_is_admitted_for_its_colour_scalars_and_output() {
+        use crate::derive::{DeriveJob, DeriveKind};
+        use crate::pack::ChannelSource::Default;
+        let d = tempfile::tempdir().unwrap();
+        let mut j = png_job(d.path(), "a_n.png", (32, 32), Subtype::Normal);
+        let base = job_bytes(&j);
+        let dj = |kind| DeriveJob {
+            kind,
+            landscape: false,
+            albedo: None,
+            normal: None,
+            rough: Default { value: 0.5 },
+            metal: Default { value: 0.0 },
+            ao: Default { value: 1.0 },
+            height: None,
+            curves: None,
+            cavity: None,
+            gray: crate::config::GraySource::R,
+            params: crate::derive::recipe::LegacyParams::default(),
+            sources: vec![],
+        };
+        j.derive = Some(dj(DeriveKind::LegacyN));
+        assert_eq!(job_bytes(&j), base + 32 * 32 * 16 * 3);
+        j.derive = Some(dj(DeriveKind::GrassStack));
+        assert_eq!(job_bytes(&j), base + 32 * 32 * 16 * 5);
+    }
+
     /// S-mips-11: a non-box filter adds its 8 B/texel intermediate, a resize its 32 B/texel; a DDS is sized from
     /// its header for both (ruling F4).
     #[test]

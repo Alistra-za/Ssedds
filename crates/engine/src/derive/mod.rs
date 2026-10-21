@@ -96,6 +96,7 @@ pub struct DeriveJob {
 impl DeriveJob {
     /// SHA-256 of the job without its sources' stamps: every setting, slot and path (Note CM12). Recorded on each
     /// source (`SourceRef::derive`), so `if-changed` re-encodes when any changes.
+    // shortcut: absolute paths are hashed, so a moved project re-encodes once; clear them before release (CM12).
     pub fn identity_sha256(&self) -> String {
         let mut j = self.clone();
         for s in &mut j.sources {
