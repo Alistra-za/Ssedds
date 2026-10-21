@@ -160,6 +160,9 @@ pub(super) fn set_name(
     });
 }
 
+/// The hover text of a colour picker disabled because a channel is outside 0-1 (C-P25).
+pub(super) const OUT_OF_RANGE: &str = "Values outside 0-1: edit R, G and B directly.";
+
 /// C-P17': NIF colours are sRGB but egui's `color_edit_button_rgb` takes linear, so the pickers get
 /// `v.map(linear_from_gamma)` (= `lin`). This maps the picked linear colour back to sRGB; a channel whose shown byte
 /// the picker kept was not touched and keeps its exact bits (the HSV round trip and popup bytes move it a little).
@@ -189,8 +192,13 @@ fn color(
         // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
         let lin = v.map(egui::ecolor::linear_from_gamma);
         let mut picked = lin;
-        let r = ui.color_edit_button_rgb(&mut picked);
+        // C-P25: disabled outside 0-1 (NaN included): the picker would clamp.
+        let hdr = v.iter().any(|x| !(0.0..=1.0).contains(x));
+        let r = ui
+            .add_enabled_ui(!hdr, |ui| ui.color_edit_button_rgb(&mut picked))
+            .inner;
         set_name(&r, egui::WidgetType::ColorButton, name, None, None);
+        let r = r.on_disabled_hover_text(OUT_OF_RANGE);
         if r.changed() {
             x = from_picker(v, lin, picked);
             changed = true;

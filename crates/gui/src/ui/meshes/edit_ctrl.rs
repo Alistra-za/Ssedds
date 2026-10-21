@@ -3,7 +3,7 @@
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
 use super::edit_fields::{
-    fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act,
+    fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act, OUT_OF_RANGE,
 };
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
@@ -556,7 +556,7 @@ fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<Ke
     let done = (was && !open) || (open && ui.input(|i| i.pointer.any_released()));
     let changed = r.changed();
     if hdr {
-        r.on_disabled_hover_text("Values outside 0-1: edit R, G and B directly.");
+        r.on_disabled_hover_text(OUT_OF_RANGE);
     }
     if !changed {
         return (None, done);

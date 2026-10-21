@@ -3818,31 +3818,56 @@ fn key_table_colour_picker_shows_the_key_as_srgb() {
     assert_srgb_half(&picker_bytes(&h));
 }
 
-/// C-P17': the Shader tab's colour picker shows the stored colour as sRGB and stores what is picked as sRGB; the
-/// channels the picker did not change keep their exact bits, and the R/G/B fields show the raw stored floats.
-#[test]
-fn shader_colour_picker_shows_and_stores_srgb() {
+fn specular(m: &MeshesModel, a: u32) -> [f32; 3] {
+    let e = m.edit.as_ref().unwrap();
+    e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
+        .lighting
+        .params
+        .specular_color
+}
+
+/// `shared_alpha_and_set` with shape A selected and its Specular colour set to `v`; returns A.
+fn specular_scene(v: [f32; 3]) -> (MeshesModel, u32) {
     let mut m = direct(scenes::shared_alpha_and_set());
     let a = select(&mut m, "A");
-    let spec = |m: &MeshesModel| {
-        let e = m.edit.as_ref().unwrap();
-        e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
-            .lighting
-            .params
-            .specular_color
-    };
     let e = m.edit.as_ref().unwrap();
     let at = nif::edit::anchor_role(&e.model, Some(a), Role::Shader).unwrap();
-    let base = spec(&m);
+    let base = specular(&m, a);
     let ops = (0..3usize)
         .map(|i| Op::SetField {
             at: at.clone(),
             field: Field::SpecularColor(i as u8),
-            value: Value::F32(0.5f32.to_bits()),
+            value: Value::F32(v[i].to_bits()),
             base: Value::F32(base[i].to_bits()),
         })
         .collect();
     m.edit_push(ops, None);
+    (m, a)
+}
+
+/// C-P25: a Shader tab colour outside 0-1 (or NaN) gets a disabled swatch with the reason on hover, like the key
+/// swatch; the picker would clamp it.
+#[test]
+fn shader_colour_picker_is_disabled_outside_0_1() {
+    for v in [[2.0, 0.5, 0.5], [0.5, -0.25, 0.5], [0.5, 0.5, f32::NAN]] {
+        let (m, _) = specular_scene(v);
+        let mut h = view(m);
+        h.run_steps(2);
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, "Specular colour");
+        assert!(sw.accesskit_node().is_disabled(), "{v:?}");
+        let c = sw.rect().center();
+        h.hover_at(c);
+        h.run_steps(3);
+        h.get_by_label("Values outside 0-1: edit R, G and B directly.");
+    }
+}
+
+/// C-P17': the Shader tab's colour picker shows the stored colour as sRGB and stores what is picked as sRGB; the
+/// channels the picker did not change keep their exact bits, and the R/G/B fields show the raw stored floats.
+#[test]
+fn shader_colour_picker_shows_and_stores_srgb() {
+    let (m, a) = specular_scene([0.5; 3]);
+    let spec = |m: &MeshesModel| specular(m, a);
     let mut h = view(m);
     h.run_steps(2);
     h.get_by_role_and_label(AkRole::ColorWell, "Specular colour")
