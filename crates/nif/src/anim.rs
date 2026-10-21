@@ -101,9 +101,9 @@ fn sample<T, const N: usize>(
     if t >= last.time {
         return Some(arr(&last.value));
     }
-    // last.time > t, so a later key exists; with duplicate times this lands on the later key
-    let j = 1 + k[1..].iter().position(|x| x.time > t)?;
-    let i = j - 1;
+    // the largest i with time <= t (the later key on duplicate times); last.time <= t is false here, so i + 1 exists
+    let i = k.iter().rposition(|x| x.time <= t)?;
+    let j = i + 1;
     let (vi, vj) = (arr(&k[i].value), arr(&k[j].value));
     let d = k[j].time - k[i].time;
     // exactly on a key, or decreasing times (invalid file): the key itself, never NaN
@@ -246,9 +246,10 @@ pub fn clip_tracks(m: &NifModel, b: &[u8], seq: u32, prop: u32) -> Vec<Track> {
         return vec![];
     };
     let ctrls: Vec<&TimeCtrl> = chain.iter().filter_map(|id| m.ctrls.get(id)).collect();
-    let names: Vec<&str> = users
+    // raw string-table bytes: a lossy-decoded name would never match a non-UTF-8 node name
+    let names: Vec<&[u8]> = users
         .iter()
-        .filter_map(|&u| m.shape(u)?.name.as_deref())
+        .filter_map(|&u| h.string(m.shape(u)?.net.name))
         .collect();
     s.blocks
         .iter()
@@ -263,10 +264,7 @@ pub fn clip_tracks(m: &NifModel, b: &[u8], seq: u32, prop: u32) -> Vec<Track> {
                     };
                     cb.ctrl_type.as_deref() == Some(c.class.as_bytes())
                         && cb.property.as_deref() == Some(ptype)
-                        && cb
-                            .node
-                            .as_deref()
-                            .is_some_and(|n| names.iter().any(|s| s.as_bytes() == n))
+                        && cb.node.as_deref().is_some_and(|n| names.contains(&n))
                         && cb.ctrl_id == id
                 })?
             } else {

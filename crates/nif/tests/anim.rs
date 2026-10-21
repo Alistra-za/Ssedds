@@ -188,6 +188,47 @@ fn tbc_tension_flattens_the_tangents() {
 }
 
 #[test]
+fn tbc_bias_and_continuity_on_an_asymmetric_curve() {
+    // Keys (0,0), (1,2), (2,3), every key tbc [T 0, B 0.5, C -0.25].
+    // out coefficients: (1+B)(1+C)/2 = 1.5*0.75/2 = 0.5625 on prev, (1-B)(1-C)/2 = 0.5*1.25/2 = 0.3125 on next.
+    // in coefficients:  (1+B)(1-C)/2 = 1.5*1.25/2 = 0.9375 on prev, (1-B)(1+C)/2 = 0.5*0.75/2 = 0.1875 on next.
+    // key 0: prev := next = 2         -> out0 = (0.5625 + 0.3125) * 2 = 1.75
+    // key 1: prev = 2, next = 1       -> in1 = 0.9375*2 + 0.1875*1 = 2.0625; out1 = 0.5625*2 + 0.3125*1 = 1.4375
+    // key 2: next := prev = 1         -> in2 = 0.9375 + 0.1875 = 1.125
+    // Hermite at x = 0.5: h00 = 0.5, h01 = 0.5, h10 = 0.125, h11 = -0.125.
+    // t = 0.5: 0*0.5 + 2*0.5 + 1.75*0.125 - 2.0625*0.125 = 1 + 0.21875 - 0.2578125 = 0.9609375
+    // t = 1.5: 2*0.5 + 3*0.5 + 1.4375*0.125 - 1.125*0.125 = 2.5 + 0.1796875 - 0.140625 = 2.5390625
+    let g = group(
+        3,
+        [(0.0, 0.0), (1.0, 2.0), (2.0, 3.0)]
+            .into_iter()
+            .map(|(t, v)| Key {
+                tbc: Some([0.0, 0.5, -0.25]),
+                ..key(t, v)
+            })
+            .collect(),
+    );
+    assert_eq!(sample_f32(&g, 0.5), Some(0.9609375));
+    assert_eq!(sample_f32(&g, 1.5), Some(2.5390625));
+}
+
+#[test]
+fn decreasing_times_use_the_largest_index_at_or_before_t() {
+    // largest i with time <= 1.5 is key 2 (time 1); segment (1,100)-(3,300) at x 0.25 -> 150
+    let g = group(
+        1,
+        vec![
+            key(0.0, 0.0),
+            key(2.0, 20.0),
+            key(1.0, 100.0),
+            key(3.0, 300.0),
+        ],
+    );
+    assert_eq!(sample_f32(&g, 1.5), Some(150.0));
+    assert_eq!(sample_f32(&g, 1.0), Some(100.0));
+}
+
+#[test]
 fn null_interpolator_changes_nothing() {
     let b = patch(&free_chain(), 1, 26, &(-1i32).to_le_bytes());
     let m = read_model(&b).unwrap();
@@ -348,6 +389,23 @@ fn clip_tracks_bind_by_ref_then_by_strings() {
     let b = patch(&b, 2, 33, &idx(b"").to_le_bytes());
     let m = read_model(&b).unwrap();
     assert_eq!(clip_tracks(&m, &b, 2, 6).len(), 1);
+}
+
+#[test]
+fn string_binding_compares_raw_name_bytes() {
+    // "shape" -> "shap\xFF" in the header string table (first occurrence; the palette's copy comes later)
+    let mut b = managed_clip();
+    let at = b.windows(9).position(|w| w == b"\x05\0\0\0shape").unwrap();
+    b[at + 8] = 0xFF;
+    let strings = Header::parse(&b).unwrap().strings;
+    let idx = strings.iter().position(|x| x == b"shap\xFF").unwrap() as i32;
+    let b = patch(&b, 5, 0, &idx.to_le_bytes());
+    let b = patch(&b, 2, 16, &(-1i32).to_le_bytes());
+    let m = read_model(&b).unwrap();
+    let a = &m.sequences.iter().find(|s| s.block == 2).unwrap().blocks[0];
+    assert_eq!(a.node.as_deref(), Some(&b"shap\xFF"[..]));
+    // CB 0 binds by strings, CB 1 by ref
+    assert_eq!(clip_tracks(&m, &b, 2, 6).len(), 2);
 }
 
 const REAL: [&str; 5] = [
