@@ -8,7 +8,7 @@ use super::edit_fields::{
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
 use crate::model::viewport3d::Clock;
-use crate::ui::status::{AMBER, RED};
+use crate::ui::status::AMBER;
 use eframe::egui;
 use nif::ctrl::{Sequence, TimeCtrl};
 use nif::edit::validate::{ctrl_title, var_label, Target, ENV_SCALE_PBR};
@@ -26,7 +26,6 @@ const TEST_REF: &str = "BSNiAlphaPropertyTestRefController";
 const FLOAT_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
 const COLOR_VARS: [u32; 2] = [0, 1];
 const CYCLES: [&str; 3] = ["Loop", "Reverse", "Clamp"];
-const CLIP_SHARED: &str = "Shared alpha with a clip controller: splitting needs Phase C.";
 
 /// The shape's shader flags, 0 without a lit shader: the variable labels and the PBR guard (B-P39) read them.
 fn shape_slsf2(e: &NifEdit, shape: &ShapeModel) -> u32 {
@@ -142,24 +141,18 @@ fn chain(
     let slsf2 = shape_slsf2(e, shape);
     let users = prop.users.len();
     let mut locked = false;
-    let managed = users > 1 && prop.ctrls.iter().any(|&c| e.model.managed(c));
-    // D9: only a shared alpha must split before an add, and a clip controller on it blocks the split. A shared
-    // shader adds in place (its banner says the edit changes every shape).
-    let clip_shared = owner == Owner::Alpha && managed;
+    // D9: only a shared alpha must split before an add (clip controllers included, C4). A shared shader adds in
+    // place (its banner says the edit changes every shape).
     if users > 1 {
         if owner == Owner::Alpha {
             // An alpha edit on a shared alpha is a conflict: the split comes first (as on the Alpha tab).
             locked = true;
-            if managed {
-                ui.add(egui::Label::new(egui::RichText::new(CLIP_SHARED).color(RED)).wrap());
-            } else {
-                let text =
-                    format!("Shared by {users} shapes: split the alpha to edit its controllers.");
-                ui.add(egui::Label::new(egui::RichText::new(text).color(AMBER)).wrap());
-                if ui.button("Split alpha").clicked() {
-                    let at = anchor_shape(&e.model, shape.block);
-                    act.push = Some((vec![Op::SplitAlpha { at }], None));
-                }
+            let text =
+                format!("Shared by {users} shapes: split the alpha to edit its controllers.");
+            ui.add(egui::Label::new(egui::RichText::new(text).color(AMBER)).wrap());
+            if ui.button("Split alpha").clicked() {
+                let at = anchor_shape(&e.model, shape.block);
+                act.push = Some((vec![Op::SplitAlpha { at }], None));
             }
         } else {
             let text = format!("Shared by {users} shapes: controller edits change all of them.");
@@ -193,8 +186,8 @@ fn chain(
             ui.group(|ui| row(ui, e, act, c, &at, clock, slsf2));
         }
     });
-    // Outside the lock: a shared, unmanaged alpha adds through Split + Add.
-    add_row(ui, e, act, shape, owner, prop, clip_shared);
+    // Outside the lock: a shared alpha adds through Split + Add.
+    add_row(ui, e, act, shape, owner, prop);
 }
 
 fn row(
@@ -852,8 +845,6 @@ fn push_keys(
 }
 
 /// Adds a controller to `prop` (D9). Shader: a class (Float | Colour) and variable picker; alpha: TestRef only.
-/// `clip_shared`: a shared alpha with a clip controller (the red line above says why nothing is added).
-#[allow(clippy::too_many_arguments)]
 fn add_row(
     ui: &mut egui::Ui,
     e: &NifEdit,
@@ -861,7 +852,6 @@ fn add_row(
     shape: &ShapeModel,
     owner: Owner,
     prop: &PropModel,
-    clip_shared: bool,
 ) {
     let slsf2 = shape_slsf2(e, shape);
     let id = egui::Id::new(("meshes-edit-ctrl-add", prop.block));
@@ -937,7 +927,7 @@ fn add_row(
     let at = anchor_role(&e.model, Some(shape.block), role);
     let no_root = e.model.root_net.is_none();
     let r = ui.add_enabled(
-        at.is_some() && !clip_shared && !no_root,
+        at.is_some() && !no_root,
         egui::Button::new("Add controller"),
     );
     set_name(
@@ -952,8 +942,6 @@ fn add_row(
         r.on_disabled_hover_text("The root is not a node: the BSX Animated bit cannot be set.");
     } else if at.is_none() {
         r.on_disabled_hover_text("This property cannot be found again in the file.");
-    } else if clip_shared {
-        r.on_disabled_hover_text(CLIP_SHARED);
     }
     if let (true, Some(at)) = (clicked, at) {
         let (class, var, value) = match owner {

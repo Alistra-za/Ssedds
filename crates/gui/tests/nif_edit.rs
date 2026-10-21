@@ -1418,31 +1418,75 @@ fn own_emit_badge_shows_for_emissive_without_own_emit() {
     h.get_by_label("No effect in game: Own_Emit is off");
 }
 
-/// A shared alpha whose split is refused (a clip controller) is not editable: an edit would land on every user.
+/// Ruling change C4-D7 (replaces `a_shared_alpha_that_cannot_split_is_not_edited`): a shared alpha with a clip
+/// controller splits on edit like any shared alpha.
 #[test]
-fn a_shared_alpha_that_cannot_split_is_not_edited() {
+fn a_shared_alpha_with_a_clip_controller_splits_on_edit() {
     let mut m = direct(scenes::shared_alpha_with_managed_ctrl());
-    select(&mut m, "A");
+    let a = select(&mut m, "A");
     let e = m.edit.as_ref().unwrap();
     let b = shape_named(e, "B");
-    let before = e.model.alphas[&e.model.shape(b).unwrap().alpha.unwrap()]
-        .alpha
-        .flags;
+    let (alpha_a, before) = {
+        let ab = e.model.shape(b).unwrap().alpha.unwrap();
+        (
+            e.model.shape(a).unwrap().alpha.unwrap(),
+            e.model.alphas[&ab].alpha.flags,
+        )
+    };
     let mut h = view(m);
     h.run_steps(2);
     h.get_by_label("Alpha").click();
     h.run_steps(2);
-    h.get_by_label("Shared alpha with a clip controller: splitting needs Phase C.");
-    if let Some(n) = h.query_by_label("Blend") {
-        n.click();
-    }
+    assert!(h
+        .query_by_label("Shared alpha with a clip controller: splitting needs Phase C.")
+        .is_none());
+    h.get_by_label("Shared by 2 shapes: editing will split.");
+    h.get_by_label("Blend").click();
     h.run_steps(2);
-    let e = h.state().edit.as_ref().unwrap();
-    let after = e.model.alphas[&e.model.shape(b).unwrap().alpha.unwrap()]
-        .alpha
-        .flags;
-    assert_eq!(before, after, "B's alpha changed: {:?}", e.outcomes);
-    assert!(e.doc.ops.is_empty(), "{:?}", e.doc.ops);
+    let m = h.state();
+    let got = ops(m);
+    assert!(
+        matches!(got.as_slice(), [Op::SplitAlpha { .. }, Op::SetBits { .. }]),
+        "{got:?}"
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.outcomes.iter().all(|o| matches!(
+            o,
+            nif::edit::Outcome::Applied | nif::edit::Outcome::ReAnchored { .. }
+        )),
+        "{:?}",
+        e.outcomes
+    );
+    let ab = e.model.shape(b).unwrap().alpha.unwrap();
+    assert_eq!(e.model.alphas[&ab].alpha.flags, before, "B is untouched");
+    let aa = e.model.shape(a).unwrap().alpha.unwrap();
+    assert_ne!(aa, alpha_a, "A has its own alpha now");
+    assert_ne!(e.model.alphas[&aa].alpha.flags, before);
+}
+
+/// C4-D7: the Controllers tab offers Split alpha on a clip-shared alpha, and Add stays enabled.
+#[test]
+fn controllers_tab_offers_split_on_a_clip_shared_alpha() {
+    let mut m = direct(scenes::shared_alpha_with_managed_ctrl());
+    let a = select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Shared by 2 shapes: split the alpha to edit its controllers.");
+    assert!(!h
+        .get_by_label("Add controller to alpha property")
+        .accesskit_node()
+        .is_disabled());
+    h.get_by_label("Split alpha").click();
+    h.run_steps(3);
+    let m = h.state();
+    let got = ops(m);
+    assert!(matches!(got.as_slice(), [Op::SplitAlpha { .. }]), "{got:?}");
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    let aa = e.model.shape(a).unwrap().alpha.unwrap();
+    assert_eq!(e.model.alphas[&aa].prop.users.len(), 1);
 }
 
 /// `shared_alpha_and_set` with shape A's emissive [0.8, 0.6, −0.0] and specular [0.8, 0.6, 0.4]: colours the egui

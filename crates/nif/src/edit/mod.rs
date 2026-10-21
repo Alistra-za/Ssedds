@@ -612,7 +612,7 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
         Op::SplitAlpha { .. } | Op::AddAlpha { .. } | Op::RemoveAlpha { .. }
     ) {
         let r = match m.shape(block).filter(|_| at.role == Role::Shape) {
-            Some(s) => structural::alpha_op(&mut doc, &m, s, op),
+            Some(s) => structural::alpha_op(&mut doc, cur, &m, s, op),
             None => Err("alpha ops anchor on a shape".into()),
         };
         return finish(doc, r, outcome);

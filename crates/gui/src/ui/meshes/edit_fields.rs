@@ -795,19 +795,6 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             .wrap(),
         );
     }
-    // `nif::edit` refuses that split, and the edit after it would re-anchor on the shared block (every user).
-    let blocked = shared && a.prop.ctrls.iter().any(|&c| e.model.managed(c));
-    if blocked {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(
-                    "Shared alpha with a clip controller: splitting needs Phase C.",
-                )
-                .color(RED),
-            )
-            .wrap(),
-        );
-    }
     // Built only when an edit is pushed. After a split this shape's alpha is the block the split appends: the end
     // of the file.
     let at = || {
@@ -880,51 +867,49 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
         });
     };
 
-    ui.add_enabled_ui(!blocked, |ui| {
-        check(ui, act, "Blend", 0);
-        combo(ui, act, "Source", 1, 4, fl.src, 16, &blend_name);
-        combo(ui, act, "Destination", 5, 4, fl.dst, 16, &blend_name);
-        if fl.blend {
-            let ((_, _), mapped) = engine_blend(fl.src, fl.dst);
-            if mapped {
-                ui.weak("Shown as the engine draws it");
-            }
-            if !verified_blend(fl.src, fl.dst) {
-                ui.weak("Not verified in game");
-            }
+    check(ui, act, "Blend", 0);
+    combo(ui, act, "Source", 1, 4, fl.src, 16, &blend_name);
+    combo(ui, act, "Destination", 5, 4, fl.dst, 16, &blend_name);
+    if fl.blend {
+        let ((_, _), mapped) = engine_blend(fl.src, fl.dst);
+        if mapped {
+            ui.weak("Shown as the engine draws it");
         }
-        check(ui, act, "Test", 9);
-        combo(ui, act, "Function", 10, 3, fl.func, 8, &|c| {
-            TEST_FUNCS[c as usize].to_string()
-        });
-        ui.weak("Shown as CS evaluates it (alpha ≥ threshold)");
-        ui.horizontal(|ui| {
-            row_label(ui, "Threshold");
-            let mut t = a.alpha.threshold;
-            let r = ui.add(egui::Slider::new(&mut t, 0..=255));
-            set_name(
-                &r,
-                egui::WidgetType::Slider,
-                "Threshold",
-                Some(t as f64),
-                None,
-            );
-            if t != a.alpha.threshold {
-                let op = Op::SetField {
-                    at: at(),
-                    field: Field::AlphaThreshold,
-                    value: Value::U8(t),
-                    base: Value::U8(a.alpha.threshold),
-                };
-                let key = merge_key(&op);
-                edit(act, op, Some(key));
-            }
-            act.flush |= r.drag_stopped() || r.lost_focus();
-        });
-        check(ui, act, "No sorter", 13);
-        check(ui, act, "Clone unique", 14);
-        check(ui, act, "Editor threshold", 15);
+        if !verified_blend(fl.src, fl.dst) {
+            ui.weak("Not verified in game");
+        }
+    }
+    check(ui, act, "Test", 9);
+    combo(ui, act, "Function", 10, 3, fl.func, 8, &|c| {
+        TEST_FUNCS[c as usize].to_string()
     });
+    ui.weak("Shown as CS evaluates it (alpha ≥ threshold)");
+    ui.horizontal(|ui| {
+        row_label(ui, "Threshold");
+        let mut t = a.alpha.threshold;
+        let r = ui.add(egui::Slider::new(&mut t, 0..=255));
+        set_name(
+            &r,
+            egui::WidgetType::Slider,
+            "Threshold",
+            Some(t as f64),
+            None,
+        );
+        if t != a.alpha.threshold {
+            let op = Op::SetField {
+                at: at(),
+                field: Field::AlphaThreshold,
+                value: Value::U8(t),
+                base: Value::U8(a.alpha.threshold),
+            };
+            let key = merge_key(&op);
+            edit(act, op, Some(key));
+        }
+        act.flush |= r.drag_stopped() || r.lost_focus();
+    });
+    check(ui, act, "No sorter", 13);
+    check(ui, act, "Clone unique", 14);
+    check(ui, act, "Editor threshold", 15);
     ui.label(format!("Flags 0x{flags:04X} ({flags})"));
     let w = Target::Field {
         block: a.prop.block,

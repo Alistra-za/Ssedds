@@ -73,6 +73,7 @@ fn patch(doc: &mut NifDoc, block: u32, at: usize, v: i32) -> Result<(), String> 
 /// SplitAlpha, AddAlpha and RemoveAlpha on the shape `shape`.
 pub(crate) fn alpha_op(
     doc: &mut NifDoc,
+    cur: &[u8],
     m: &NifModel,
     shape: &ShapeModel,
     op: &Op,
@@ -104,7 +105,7 @@ pub(crate) fn alpha_op(
             patch(doc, shape.block, ref_at, -1)
         }
         Op::SplitAlpha { .. } => {
-            let new = split(doc, m, shape)?;
+            let new = split(doc, cur, m, shape)?;
             match new {
                 Some(new) => patch(doc, shape.block, ref_at, new as i32),
                 None => Ok(()),
@@ -119,9 +120,15 @@ fn copy(doc: &mut NifDoc, block: u32) -> u32 {
     doc.append(&kind, body)
 }
 
-/// Appends a private copy of the shape's alpha with deep copies of its free controller chain; returns the new
-/// alpha block, or None when the alpha has a single user.
-fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u32>, String> {
+/// Appends a private copy of the shape's alpha with deep copies of its controller chain, managed ones included;
+/// every live sequence that drives the chain gets CBs for both alphas (C4-D1). Returns the new alpha block, or None
+/// when the alpha has a single user.
+fn split(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    m: &NifModel,
+    shape: &ShapeModel,
+) -> Result<Option<u32>, String> {
     let a = shape
         .alpha
         .and_then(|a| m.alphas.get(&a))
@@ -129,10 +136,11 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
     if a.prop.users.len() <= 1 {
         return Ok(None);
     }
-    if a.prop.ctrls.iter().any(|&c| m.managed(c)) {
-        return Err("Shared alpha with a clip controller: splitting needs Phase C.".into());
-    }
-    let source_blocks = doc.len(); // refs are bounded by the source, not the growing doc
+    // every check runs here, before the first append
+    let plan = cb_plan(doc.header(), cur, m, shape, &a.prop)?;
+    // refs are bounded by the source, not the growing doc
+    let source_blocks = doc.len();
+    // C4-D6: the alpha copy stays the first appended block: the edit after a split anchors there (edit_fields.rs)
     let new = copy(doc, a.prop.block);
     // (controller copy, Some((interpolator copy, data copy, pose floats))) in chain order
     let mut copies = vec![];
@@ -162,7 +170,171 @@ fn split(doc: &mut NifDoc, m: &NifModel, shape: &ShapeModel) -> Result<Option<u3
         let at = a.prop.net.controller_at() - doc.header().offsets()[a.prop.block as usize];
         patch(doc, new, at, *first as i32)?;
     }
+    let pairs: Vec<(u32, u32)> = a
+        .prop
+        .ctrls
+        .iter()
+        .zip(&copies)
+        .map(|(&c, k)| (c, k.0))
+        .collect();
+    split_cbs(doc, cur, plan, &pairs)?;
     Ok(Some(new))
+}
+
+/// (CB index, original controller) pairs: each CB takes that controller's copy.
+type Moves = Vec<(usize, u32)>;
+/// A shape a CB names: (block, raw name, name index).
+type Named = (u32, Vec<u8>, i32);
+
+/// The sequence and palette work of a split, planned before anything is appended.
+struct CbPlan {
+    /// (sequence, its re-emit, the CBs that move to a copy)
+    seqs: Vec<(u32, SequenceOut, Moves)>,
+    /// (palette, the shapes new CBs name)
+    palettes: Vec<(i32, Vec<Named>)>,
+}
+
+/// The Node Name a new CB gives shape `s` (C4-D3, C4-D4): its raw Name index, which must name no other shape.
+fn cb_node(h: &Header, m: &NifModel, s: u32) -> Result<Named, String> {
+    let sm = m.shape(s).ok_or("not a shape")?;
+    let raw = h
+        .string(sm.net.name)
+        .ok_or("This shape has no name: a clip cannot find it.")?;
+    if m.shapes
+        .iter()
+        .filter(|o| h.string(o.net.name) == Some(raw))
+        .count()
+        > 1
+    {
+        return Err(format!(
+            "Two shapes are named {}: a clip cannot tell them apart.",
+            crate::text::lossy(raw)
+        ));
+    }
+    Ok((s, raw.to_vec(), sm.net.name))
+}
+
+/// C4-D1: for each CB of a live sequence bound to a controller of `prop`. A CB naming the edited shape (raw bytes)
+/// moves to the copy and a new CB keeps the original on the first remaining user; any other CB gets a new CB for the
+/// copy naming the edited shape. New CBs share the CB's interpolator and strings (C4-D2).
+fn cb_plan(
+    h: &Header,
+    cur: &[u8],
+    m: &NifModel,
+    shape: &ShapeModel,
+    prop: &PropModel,
+) -> Result<CbPlan, String> {
+    let edited = h.string(shape.net.name);
+    let rest = prop.users.iter().copied().find(|&u| u != shape.block);
+    let mut plan = CbPlan {
+        seqs: vec![],
+        palettes: vec![],
+    };
+    for s in &m.sequences {
+        let mut out: Option<SequenceOut> = None;
+        let (mut to_copy, mut named) = (vec![], vec![]);
+        for &c in &prop.ctrls {
+            for k in crate::anim::bound_cbs(m, h, s, c) {
+                if out.is_none() {
+                    out = Some(enc(read_sequence_out(h, cur, s.block as usize))?);
+                }
+                let o = out.as_mut().unwrap();
+                let cb = o.blocks.get(k).ok_or("a CB outside its sequence")?.clone();
+                if edited.is_some() && h.string(cb.node) == edited {
+                    // by ref now: this CB no longer needs its strings to find the copy
+                    to_copy.push((k, c));
+                    let n = cb_node(h, m, rest.ok_or("The alpha has no other user.")?)?;
+                    o.blocks.push(CtrlBlockOut {
+                        controller: c as i32,
+                        node: n.2,
+                        ..cb
+                    });
+                    named.push(n);
+                } else {
+                    let n = cb_node(h, m, shape.block)?;
+                    to_copy.push((o.blocks.len(), c));
+                    o.blocks.push(CtrlBlockOut { node: n.2, ..cb });
+                    named.push(n);
+                }
+            }
+        }
+        let Some(o) = out else { continue };
+        // C4-D5: only the palette of a manager that lists this sequence
+        let pal = u32::try_from(o.manager)
+            .ok()
+            .and_then(|g| read_manager(h, cur, g as usize).ok())
+            .filter(|man| man.sequences.contains(&(s.block as i32)) && man.palette >= 0)
+            .map(|man| man.palette);
+        if let Some(pal) = pal {
+            let k = match plan.palettes.iter().position(|p| p.0 == pal) {
+                Some(k) => k,
+                None => {
+                    plan.palettes.push((pal, vec![]));
+                    plan.palettes.len() - 1
+                }
+            };
+            for n in named {
+                if !plan.palettes[k].1.iter().any(|x| x.0 == n.0) {
+                    plan.palettes[k].1.push(n);
+                }
+            }
+        }
+        plan.seqs.push((s.block, o, to_copy));
+    }
+    Ok(plan)
+}
+
+/// After the chain copy: re-emits the planned sequences with each marked CB on its controller's copy (`pairs`:
+/// original, copy), then grows the palettes.
+fn split_cbs(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    plan: CbPlan,
+    pairs: &[(u32, u32)],
+) -> Result<(), String> {
+    for (seq, mut out, to_copy) in plan.seqs {
+        for (k, c) in to_copy {
+            let nc = pairs
+                .iter()
+                .find(|p| p.0 == c)
+                .ok_or("a controller without a copy")?;
+            out.blocks[k].controller = nc.1 as i32;
+        }
+        doc.set_block(seq, enc(encode_sequence(&out))?);
+    }
+    for (pal, shapes) in plan.palettes {
+        ensure_palette(doc, cur, pal, -1, &shapes)?;
+    }
+    Ok(())
+}
+
+/// C2-D11: adds each of `shapes` (block, raw name, name index) the palette `pal` lacks, matched by AV Object ptr,
+/// and re-emits it only when it grew. `pal` < 0 appends a new palette with Scene `scene`. Returns the palette.
+fn ensure_palette(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    pal: i32,
+    scene: i32,
+    shapes: &[Named],
+) -> Result<i32, String> {
+    let (scene, mut objs) = match pal {
+        p if p >= 0 => enc(read_palette(doc.header(), cur, p as usize))?,
+        _ => (scene, vec![]),
+    };
+    let before = objs.len();
+    for (s, raw, _) in shapes {
+        if !objs.iter().any(|(_, p)| *p == *s as i32) {
+            objs.push((raw.clone(), *s as i32));
+        }
+    }
+    let body = enc(encode_palette(scene, &objs))?;
+    if pal < 0 {
+        return Ok(doc.append(b"NiDefaultAVObjectPalette", body) as i32);
+    }
+    if objs.len() > before {
+        doc.set_block(pal as u32, body);
+    }
+    Ok(pal)
 }
 
 /// The controller's own keyed interpolator: (interpolator block, pose float count, data block, current keys).
@@ -968,12 +1140,6 @@ pub(crate) fn add_sequence(
             Ok((s, raw.to_vec(), sm.net.name))
         })
         .collect::<Result<_, String>>()?;
-    let (scene, mut objs) = match &old {
-        Some(man) if man.palette >= 0 => {
-            enc(read_palette(doc.header(), cur, man.palette as usize))?
-        }
-        _ => (root as i32, vec![]),
-    };
 
     // C-P26/C-P29: the MTTC lists the nodes the clips bind; existing targets stay, missing ones are appended
     let with_shapes = |mut targets: Vec<i32>| {
@@ -1030,18 +1196,7 @@ pub(crate) fn add_sequence(
         }
     };
 
-    let before = objs.len();
-    for (s, raw, _) in &shapes {
-        if !objs.iter().any(|(_, p)| *p == *s as i32) {
-            objs.push((raw.clone(), *s as i32));
-        }
-    }
-    let pal = enc(encode_palette(scene, &objs))?;
-    if man.palette < 0 {
-        man.palette = doc.append(b"NiDefaultAVObjectPalette", pal) as i32;
-    } else if objs.len() > before {
-        doc.set_block(man.palette as u32, pal);
-    }
+    man.palette = ensure_palette(doc, cur, man.palette, root as i32, &shapes)?;
 
     let mut blocks = Vec::with_capacity(tracks.len());
     for ((c, _, keys), (_, _, node)) in tracks.iter().zip(&shapes) {

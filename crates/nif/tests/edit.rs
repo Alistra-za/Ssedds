@@ -767,18 +767,26 @@ fn split_with_one_user_is_a_no_op() {
     assert_eq!(r.bytes, b);
 }
 
+/// Ruling change C4-D7 (replaces `split_with_a_managed_controller_is_refused`): a managed chain with no clip is
+/// deep-copied like a free one.
 #[test]
-fn split_with_a_managed_controller_is_refused() {
+fn managed_split_without_clips_copies_the_chain() {
     let b = scenes::shared_alpha_with_managed_ctrl();
     let m = read_model(&b).unwrap();
+    let n = nblocks(&b) as u32;
     let r = apply(&b, &[split(&m, "A")]).unwrap();
-    assert_eq!(
-        r.outcomes,
-        vec![Outcome::Refused(
-            "Shared alpha with a clip controller: splitting needs Phase C.".into()
-        )]
-    );
-    assert_eq!(r.bytes, b);
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    assert_eq!(nblocks(o) as u32, n + 4);
+    let m2 = read_model(o).unwrap();
+    assert!(m2.problems.is_empty(), "{:?}", m2.problems);
+    assert_eq!(m2.shape(shape_named(&m2, "A")).unwrap().alpha, Some(n));
+    let c = &m2.ctrls[&(n + 1)];
+    assert_eq!((c.flags, c.target), (0x68, n as i32));
+    assert_eq!(c.interp, Some(n as i32 + 2));
+    assert_eq!(m2.interps[&(n + 2)].data, n as i32 + 3);
+    assert_eq!(block_bytes_of(o, n as usize + 3), block_bytes_of(&b, 7));
+    assert_eq!(count_kind(o, "NiControllerSequence"), 0);
 }
 
 #[test]
@@ -789,6 +797,8 @@ fn split_then_undo_restores_source_bytes() {
     let r = apply(&b, &[split(&m, "A")]).unwrap();
     assert_ne!(r.bytes, b);
     assert_eq!(apply(&b, &[]).unwrap().bytes, b);
+    let (x, _, _) = clip_on_shared_alpha(true);
+    assert_eq!(apply(&x, &[]).unwrap().bytes, x);
     // splitting again is a no-op: A is the only user of its new alpha
     let again = apply(&r.bytes, &[split(&m, "A")]).unwrap();
     assert_eq!(again.outcomes, vec![Outcome::Applied]);
@@ -3338,4 +3348,269 @@ fn convert_refuses_invalid_controller_times() {
         let m = read_model(&b).unwrap();
         assert_eq!(convert_check(&m, 3, Some("S")), Err(BAD_TIMES.into()));
     }
+}
+
+// ---- v2 C4: SplitAlpha with clip-driven controllers ----
+
+use nif::clips::CtrlBlockOut;
+
+fn c4_open() -> KeyData {
+    lin(&[(0.0, 20.0), (1.0, 200.0)])
+}
+
+fn c4_close() -> KeyData {
+    lin(&[(0.0, 200.0), (1.0, 20.0)])
+}
+
+/// `shared_alpha_with_testref_chain()` (Root 0, "A" 1, "B" 2, BSLSP 3, alpha 4 -> free TestRef 5 -> interp 6 -> data 7)
+/// after SplitAlpha A (A's alpha 8, TestRef copy 9, interp 10, data 11) and two clips on 9: "Open" keys (0,20),(1,200)
+/// and "Close" keys (0,200),(1,20), both cycle 2, 0..1. Then B's alpha ref is patched to 8, so 8 is shared by A and B
+/// and 9 is driven by two clips whose CBs name "A". `by_ref: false` patches Open's CB controller ref to -1 (bound by
+/// strings only). Returns (bytes, open, close).
+fn clip_on_shared_alpha(by_ref: bool) -> (Vec<u8>, u32, u32) {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Alpha,
+        class: TESTREF.into(),
+        var: None,
+        nth: 0,
+    };
+    let t = |keys| ClipTrack {
+        at: anchor_role(&m, Some(1), role.clone()).unwrap(),
+        keys,
+    };
+    let ops = [
+        split(&m, "A"),
+        add_seq(root_anchor(&b), "Open", vec![t(c4_open())]),
+        add_seq(root_anchor(&b), "Close", vec![t(c4_close())]),
+    ];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 3]);
+    let mut x = r.bytes;
+    let (open, close, open_at) = {
+        let h = Header::parse(&x).unwrap();
+        let man = read_manager(&h, &x, root_ctrl(&x)).unwrap();
+        let open = man.sequences[0] as u32;
+        (open, man.sequences[1] as u32, h.offsets()[open as usize])
+    };
+    let alpha_at = read_model(&x).unwrap().shape(2).unwrap().at.alpha;
+    x = with_i32(x, alpha_at, 8);
+    if !by_ref {
+        x = with_i32(x, open_at + 12 + 4, -1);
+    }
+    let mx = read_model(&x).unwrap();
+    assert!(mx.problems.is_empty(), "{:?}", mx.problems);
+    assert_eq!(mx.alphas[&8].prop.users, vec![1, 2]);
+    assert!(mx.managed(9));
+    assert_eq!(nif::anim::clip_tracks(&mx, &x, open, 8).len(), 1);
+    (x, open, close)
+}
+
+/// The keys of the one track sequence `seq` gives on `prop`.
+fn one_track(m: &nif::model::NifModel, b: &[u8], seq: u32, prop: u32) -> KeyData {
+    let t = nif::anim::clip_tracks(m, b, seq, prop);
+    assert_eq!(t.len(), 1, "seq {seq} prop {prop}");
+    t[0].keys.clone().unwrap()
+}
+
+fn palette_of(b: &[u8]) -> Vec<(Vec<u8>, i32)> {
+    let h = Header::parse(b).unwrap();
+    let man = read_manager(&h, b, root_ctrl(b)).unwrap();
+    read_palette(&h, b, man.palette as usize).unwrap().1
+}
+
+fn cbs(b: &[u8], seq: u32) -> Vec<CtrlBlockOut> {
+    read_sequence_out(&Header::parse(b).unwrap(), b, seq as usize)
+        .unwrap()
+        .blocks
+}
+
+#[test]
+fn managed_split_adds_cbs_to_every_sequence() {
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let r = apply(&x, &[split(&mx, "B")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    assert!(m3.problems.is_empty(), "{:?}", m3.problems);
+    assert_eq!(nblocks(out) as u32, n + 3);
+    assert_eq!(
+        m3.shape(2).unwrap().alpha,
+        Some(n),
+        "C4-D6: the alpha copy is first"
+    );
+    assert_eq!(m3.alphas[&n].prop.ctrls, vec![n + 1]);
+    let c = &m3.ctrls[&(n + 1)];
+    assert_eq!((c.flags, c.target), (0x48 | 0x20, n as i32));
+    assert_eq!(c.interp, Some(n as i32 + 2));
+    let blend = mx.ctrls[&9].interp.unwrap() as usize;
+    assert_eq!(kind_of(out, n as usize + 2), b"NiBlendFloatInterpolator");
+    assert_eq!(
+        block_bytes_of(out, n as usize + 2),
+        block_bytes_of(&x, blend)
+    );
+    let b_name = mx.shape(2).unwrap().net.name;
+    for (seq, keys) in [(open, c4_open()), (close, c4_close())] {
+        let before = cbs(&x, seq);
+        let after = cbs(out, seq);
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0], before[0]);
+        let want = CtrlBlockOut {
+            controller: n as i32 + 1,
+            node: b_name,
+            ..before[0].clone()
+        };
+        assert_eq!(after[1], want, "C4-D2: same interpolator and strings");
+        assert_eq!(one_track(&m3, out, seq, 8), keys);
+        assert_eq!(one_track(&m3, out, seq, n), keys);
+    }
+    assert!(palette_of(out).contains(&(b"B".to_vec(), 2)));
+    let h = Header::parse(out).unwrap();
+    let pal = read_manager(&h, out, root_ctrl(out)).unwrap().palette as usize;
+    let changed = [2, open as usize, close as usize, pal];
+    same_blocks(&x, out, (0..n as usize).filter(|k| !changed.contains(k)));
+}
+
+#[test]
+fn managed_split_repoints_the_named_shapes_cb() {
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let r = apply(&x, &[split(&mx, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    assert!(m3.problems.is_empty(), "{:?}", m3.problems);
+    assert_eq!(m3.shape(1).unwrap().alpha, Some(n));
+    let b_name = mx.shape(2).unwrap().net.name;
+    for (seq, keys) in [(open, c4_open()), (close, c4_close())] {
+        let before = cbs(&x, seq);
+        let after = cbs(out, seq);
+        assert_eq!(after.len(), 2);
+        let moved = CtrlBlockOut {
+            controller: n as i32 + 1,
+            ..before[0].clone()
+        };
+        assert_eq!(after[0], moved);
+        let kept = CtrlBlockOut {
+            controller: 9,
+            node: b_name,
+            ..before[0].clone()
+        };
+        assert_eq!(after[1], kept);
+        assert_eq!(one_track(&m3, out, seq, 8), keys);
+        assert_eq!(one_track(&m3, out, seq, n), keys);
+    }
+    assert!(palette_of(out).contains(&(b"B".to_vec(), 2)));
+}
+
+#[test]
+fn managed_split_repoints_a_string_bound_cb() {
+    let (x, open, _) = clip_on_shared_alpha(false);
+    assert_eq!(cbs(&x, open)[0].controller, -1);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let r = apply(&x, &[split(&mx, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    assert!(m3.problems.is_empty(), "{:?}", m3.problems);
+    let after = cbs(out, open);
+    assert_eq!(after[0].controller, n as i32 + 1, "now bound by ref");
+    assert_eq!(after[1].controller, 9);
+    assert_eq!(one_track(&m3, out, open, n), c4_open());
+    assert_eq!(one_track(&m3, out, open, 8), c4_open());
+}
+
+#[test]
+fn managed_split_leaves_other_shape_clips_unchanged() {
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let r = apply(&x, &[split(&mx, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    let mut same = vec![9, mx.ctrls[&9].interp.unwrap() as usize];
+    for seq in [open, close] {
+        assert_eq!(
+            nif::anim::clip_tracks(&m3, out, seq, 8),
+            nif::anim::clip_tracks(&mx, &x, seq, 8)
+        );
+        for cb in cbs(&x, seq) {
+            same.push(cb.interp as usize);
+            same.push(mx.interps[&(cb.interp as u32)].data as usize);
+        }
+    }
+    let mgr = root_ctrl(&x);
+    let mttc = read_manager(&Header::parse(&x).unwrap(), &x, mgr)
+        .unwrap()
+        .ctrl
+        .next as usize;
+    assert_eq!(kind_of(&x, mttc), b"NiMultiTargetTransformController");
+    same.extend([mgr, mttc]);
+    same_blocks(&x, out, same);
+}
+
+#[test]
+fn managed_split_refuses_an_unnamed_target() {
+    let (x, _, _) = clip_on_shared_alpha(true);
+    let at = read_model(&x).unwrap().shape(2).unwrap().net.start;
+    let x = with_i32(x, at, -1);
+    let m = read_model(&x).unwrap();
+    assert_eq!(
+        refused(&x, split(&m, "A")),
+        "This shape has no name: a clip cannot find it."
+    );
+}
+
+#[test]
+fn managed_split_refuses_duplicate_target_names() {
+    let (x, _, _) = clip_on_shared_alpha(true);
+    let m = read_model(&x).unwrap();
+    let (at, a_name) = (m.shape(2).unwrap().net.start, m.shape(1).unwrap().net.name);
+    let x = with_i32(x, at, a_name);
+    let m = read_model(&x).unwrap();
+    let op = Op::SplitAlpha {
+        at: anchor_shape(&m, 1),
+    };
+    assert_eq!(
+        refused(&x, op),
+        "Two shapes are named A: a clip cannot tell them apart."
+    );
+}
+
+#[test]
+fn editing_one_split_clip_leaves_the_other() {
+    let (x, open, _) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let s = apply(&x, &[split(&mx, "A")]).unwrap().bytes;
+    let ms = read_model(&s).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Alpha,
+        class: TESTREF.into(),
+        var: None,
+        nth: 0,
+    };
+    let at = anchor_role(&ms, Some(1), role).unwrap();
+    assert_eq!(at.block, n + 1);
+    let keys = lin(&[(0.0, 50.0), (1.0, 60.0)]);
+    let op = Op::SetKeys {
+        at,
+        clip: Some(open),
+        keys: keys.clone(),
+        base: c4_open(),
+    };
+    let r = apply(&s, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m3 = read_model(&r.bytes).unwrap();
+    assert_eq!(one_track(&m3, &r.bytes, open, n), keys);
+    assert_eq!(
+        one_track(&m3, &r.bytes, open, 8),
+        c4_open(),
+        "E5 copied the shared interpolator"
+    );
 }
