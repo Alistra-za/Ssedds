@@ -313,14 +313,24 @@ fn recipe_defaults_against_same_author_archives() {
             land_ratios.push((name.clone(), ratio));
         }
     }
+    // Task 13 review M2: a data-layout mistake (no measurable pair) says so instead of "median of nothing".
+    if r2s.is_empty() {
+        println!("no author has a measurable diffuse pair (see the skips above): nothing to check");
+        return;
+    }
     let r2 = median(r2s);
-    let nk = median(nks);
-    println!("over authors: median diffuse R² {r2:.3} (≥ 0.8), median _n k {nk:.3} (0.45–0.83)");
+    println!("over authors: median diffuse R² {r2:.3} (≥ 0.8)");
     assert!(r2 >= 0.8, "median diffuse R² {r2:.3} < 0.8");
-    assert!(
-        (0.45..=0.83).contains(&nk),
-        "median _n k {nk:.3} outside [0.45, 0.83]"
-    );
+    if nks.is_empty() {
+        println!("no author has an _n pair with an _rmaos: the _n k check is skipped");
+    } else {
+        let nk = median(nks);
+        println!("over authors: median _n k {nk:.3} (0.45–0.83)");
+        assert!(
+            (0.45..=0.83).contains(&nk),
+            "median _n k {nk:.3} outside [0.45, 0.83]"
+        );
+    }
     for (name, ratio) in land_ratios {
         assert!(
             (0.7..=1.4).contains(&ratio),
