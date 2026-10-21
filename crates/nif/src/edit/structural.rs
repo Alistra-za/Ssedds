@@ -799,6 +799,13 @@ pub fn convert_check(m: &NifModel, prop: u32, shape: Option<&str>) -> Result<Vec
             "These controllers run on different timings: they cannot share one clip.".into(),
         );
     }
+    // C-P30: the union fold's f32::min/max would hide a NaN or infinite bound behind a finite neighbour
+    if !free
+        .iter()
+        .all(|c| c.start.is_finite() && c.stop.is_finite())
+    {
+        return Err("This animation has invalid times: it cannot be converted.".into());
+    }
     Ok(free.iter().map(|c| c.block).collect())
 }
 

@@ -3322,3 +3322,20 @@ fn convert_check_matches_the_op() {
     let m = read_model(&b).unwrap();
     assert_eq!(convert_check(&m, 3, Some("S")), Ok(vec![4, 5]));
 }
+
+// ---- v2 C3 fix round 1 (C-P30) ----
+
+const BAD_TIMES: &str = "This animation has invalid times: it cannot be converted.";
+
+#[test]
+fn convert_refuses_invalid_controller_times() {
+    let a = scenes::animated(Some(1), 2);
+    // f32::min and f32::max would hide both: min(NaN, 0) = 0, max(-inf, 1) = 1
+    let nan_start = patched(&a, 4, 14, &f32::NAN.to_le_bytes());
+    let inf_stop = patched(&a, 5, 18, &f32::NEG_INFINITY.to_le_bytes());
+    for b in [nan_start, inf_stop] {
+        refused_unchanged(&b, conv(&conv_at(&b), "X"), BAD_TIMES);
+        let m = read_model(&b).unwrap();
+        assert_eq!(convert_check(&m, 3, Some("S")), Err(BAD_TIMES.into()));
+    }
+}
