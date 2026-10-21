@@ -9,7 +9,7 @@ use crate::write::NifDoc;
 use crate::NifError;
 
 mod structural;
-pub use structural::{convert_check, trailer_defaults};
+pub use structural::{clip_key, convert_check, trailer_defaults};
 pub mod validate;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

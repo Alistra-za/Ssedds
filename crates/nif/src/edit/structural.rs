@@ -779,13 +779,33 @@ fn find_clip(
         return Ok(None);
     };
     let man = enc(read_manager(h, cur, mb as usize))?;
-    // the Windows-1252 name the editor shows, or the model's UTF-8 view of it
-    let named = |r: &[u8]| crate::text::lossy(r) == name || String::from_utf8_lossy(r) == name;
     let names = clip_names(h, cur, &man.sequences)?;
     let k = (0..names.len())
-        .filter(|&k| names[k].is_some_and(named))
+        .filter(|&k| names[k].is_some_and(|r| clip_named(r, name)))
         .nth(nth as usize);
     Ok(k.map(|k| (mb, man, k)))
+}
+
+/// `find_clip`'s match: the Windows-1252 name the editor shows, or the model's UTF-8 view of it.
+fn clip_named(r: &[u8], name: &str) -> bool {
+    crate::text::lossy(r) == name || String::from_utf8_lossy(r) == name
+}
+
+/// The (name, nth) that Remove and Rename find sequence `seq` by on the root's manager (plan C5-D2): its
+/// Windows-1252 name and how many earlier list entries match that name too. None when the root's manager does not
+/// list it, it has no name, or the manager or a listed sequence does not read. Parses the header: call it on a click.
+pub fn clip_key(b: &[u8], m: &NifModel, seq: u32) -> Option<(String, u32)> {
+    let h = Header::parse(b).ok()?;
+    let man = read_manager(&h, b, root_manager(m)? as usize).ok()?;
+    let names = clip_names(&h, b, &man.sequences).ok()?;
+    let k = man.sequences.iter().position(|&s| s == seq as i32)?;
+    let name = crate::text::lossy(names[k]?);
+    let nth = names[..k]
+        .iter()
+        .flatten()
+        .filter(|r| clip_named(r, &name))
+        .count();
+    Some((name, nth as u32))
 }
 
 /// The bytes of a new clip name (F20): non-empty, Windows-1252, unique on the manager ignoring ASCII case.

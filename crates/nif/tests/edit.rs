@@ -3634,3 +3634,43 @@ fn editing_one_split_clip_leaves_the_other() {
         "E5 copied the shared interpolator"
     );
 }
+
+/// C5-D2: `clip_key` gives the (name, nth) `find_clip` resolves back to the same block, in the manager's list order.
+#[test]
+fn clip_key_follows_the_manager_list() {
+    let mut b = scenes::managed_clip();
+    let h = Header::parse(&b).unwrap();
+    let (mgr, s2, s3) = (h.offsets()[1], h.offsets()[2], h.offsets()[3]);
+    let list: Vec<u8> = [2i32, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let at = mgr + b[mgr..s2].windows(12).position(|w| w == list).unwrap();
+    b[at..at + 8].copy_from_slice(&[3i32, 2].map(i32::to_le_bytes).concat());
+    let name_a: [u8; 4] = b[s2..s2 + 4].try_into().unwrap();
+    b[s3..s3 + 4].copy_from_slice(&name_a); // clip 3 is now "A" too
+    let m = read_model(&b).unwrap();
+    assert_eq!(clip_key(&b, &m, 3), Some(("A".into(), 0)));
+    assert_eq!(clip_key(&b, &m, 2), Some(("A".into(), 1)));
+    assert_eq!(
+        clip_key(&b, &m, 7),
+        None,
+        "a controller, not a listed sequence"
+    );
+    // the key finds the same block back: a rename of ("A", 1) renames block 2
+    let rename = Op::RenameSequence {
+        at: anchor_role(&m, None, Role::Root).unwrap(),
+        name: "A".into(),
+        nth: 1,
+        new_name: "Z".into(),
+    };
+    let r = apply(&b, &[rename]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    let name = |s: u32| {
+        m2.sequences
+            .iter()
+            .find(|q| q.block == s)
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert_eq!((name(2), name(3)), (Some("Z".into()), Some("A".into())));
+}
