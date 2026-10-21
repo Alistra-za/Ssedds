@@ -476,7 +476,20 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         let layers = job.active_rnm().map_or(0, |r| {
             r.admission_bytes(&p.rnm, crate::resize::target_dims((w, h), p.resize))
         });
-        texels * (filter + resize) + grass + layers
+        // Note CM13: a derived job also holds the colour maps it reads, its scalars (and `_curves`/cavity) image and
+        // the recipe's output, twice the input for the grass stack.
+        let derived = job.derive.as_ref().map_or(0, |dj| {
+            use crate::derive::DeriveKind::*;
+            let colour = match dj.kind {
+                VanillaDiffuse | CmDiffuse | LegacyN => 1,
+                CmM | EnvM => 0,
+                GrassStack => 2,
+            };
+            let detail = u64::from(dj.curves.is_some() || dj.cavity.is_some());
+            let output = if dj.kind == GrassStack { 2 } else { 1 };
+            texels * 16 * (colour + 1 + detail + output)
+        });
+        texels * (filter + resize) + grass + layers + derived
     });
     estimated_bytes(&job.input)
         + extra
@@ -546,8 +559,8 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// (SHA-256, bake identity, RNM role) of one recorded source.
-type SourceKey = (String, Option<String>, Option<String>);
+/// (SHA-256, bake identity, RNM role, derive identity) of one recorded source.
+type SourceKey = (String, Option<String>, Option<String>, Option<String>);
 
 /// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), then
 /// the RNM inputs (M6 Track F2), as `SourceKey`s. Empty for an ordinary file that does not bake; `None` when a
@@ -556,13 +569,26 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
     let mut v = vec![];
     if let Some(pk) = &job.pack {
         for s in &pk.sources {
-            v.push((sha256_file(&s.path).ok()?, None, None));
+            v.push((sha256_file(&s.path).ok()?, None, None, None));
+        }
+    }
+    // Note CM12: a derived job's sources, each with the job's identity, so a changed setting re-encodes.
+    if let Some(dj) = &job.derive {
+        let identity = dj.identity_sha256();
+        for s in &dj.sources {
+            v.push((
+                sha256_file(&s.path).ok()?,
+                None,
+                None,
+                Some(identity.clone()),
+            ));
         }
     }
     if let Some(b) = &job.bake {
         v.push((
             sha256_file(&b.normal).ok()?,
             Some(b.identity_sha256()),
+            None,
             None,
         ));
         if let Some(r) = &b.rnm {
@@ -571,13 +597,14 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                     sha256_file(&f.path).ok()?,
                     None,
                     Some(format!("bake.{role}")),
+                    None,
                 ));
             }
         }
     }
     if let Some(r) = job.active_rnm() {
         for (f, role) in r.inputs(&job.profile.rnm) {
-            v.push((sha256_file(&f.path).ok()?, None, Some(role)));
+            v.push((sha256_file(&f.path).ok()?, None, Some(role), None));
         }
     }
     Some(v)
@@ -674,10 +701,14 @@ fn is_up_to_date(
     passed
         && e.engine_version == ENGINE_VERSION
         && current_sources(job).is_some_and(|now| {
-            now.into_iter().eq(e
-                .sources
-                .iter()
-                .map(|r| (r.sha256.clone(), r.bake.clone(), r.rnm.clone())))
+            now.into_iter().eq(e.sources.iter().map(|r| {
+                (
+                    r.sha256.clone(),
+                    r.bake.clone(),
+                    r.rnm.clone(),
+                    r.derive.clone(),
+                )
+            }))
         })
         && pack_roles_match(e, job)
         && profile_sha256(&job.profile).is_ok_and(|h| h == e.profile_sha256)
@@ -2576,6 +2607,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         }
     }
@@ -2688,6 +2720,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         };
         let texels = 48 * 40;
@@ -2739,6 +2772,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         };
         std::fs::write(&job.output, b"dds").unwrap();
@@ -2801,6 +2835,8 @@ mod tests {
                         invert: false,
                         bake: None,
                         rnm: None,
+                        derive: None,
+                        derive_role: None,
                     }]
                 }),
             ),

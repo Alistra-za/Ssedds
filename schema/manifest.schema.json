@@ -839,6 +839,20 @@
             "null"
           ]
         },
+        "derive": {
+          "description": "Track A (DECISIONS Note CM12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on\nevery other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "derive_role": {
+          "description": "The slots that source fills in a derived job (`albedo`, `rough+metal+ao`, ...), as `rnm` holds its role.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "invert": {
           "description": "The source is stored inverted (a gloss map in a roughness channel).",
           "type": "boolean"

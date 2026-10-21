@@ -143,6 +143,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 pack: None,
                 bake: None,
                 rnm: None,
+                derive: None,
                 shader: None,
             }),
         },
@@ -517,6 +518,8 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             invert: true,
             bake: None,
             rnm: None,
+            derive: None,
+            derive_role: None,
         },
         SourceRef {
             path: "in/x_m.png".into(),
@@ -525,6 +528,8 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             invert: false,
             bake: None,
             rnm: None,
+            derive: None,
+            derive_role: None,
         },
     ];
     m.append(&r).unwrap();

@@ -62,6 +62,16 @@ fn grey(q: &[f32; 4]) -> bool {
     r.max(g).max(b) - r.min(g).min(b) <= 4
 }
 
+/// The value a channel holds on every texel; `None` for a channel read from a source or mirrored.
+pub(crate) fn constant(ch: &ChannelSource) -> Option<f32> {
+    match ch {
+        ChannelSource::Default { value } => Some(*value),
+        ChannelSource::Fill { code, .. } => Some(f32::from(*code) / 255.0),
+        ChannelSource::Opaque => Some(1.0),
+        ChannelSource::Source { .. } | ChannelSource::MirrorR => None,
+    }
+}
+
 /// Builds the packed image of `job`.
 pub fn assemble(job: &PackJob, gray: GraySource) -> Result<Assembled, PackError> {
     assemble_channels(&job.channels, &job.sources, gray)
@@ -84,13 +94,7 @@ pub fn assemble_channels(
         is_float: false,
     };
     for (c, ch) in channels.iter().enumerate() {
-        let value = match ch {
-            ChannelSource::Default { value } => Some(*value),
-            ChannelSource::Fill { code, .. } => Some(f32::from(*code) / 255.0),
-            ChannelSource::Opaque => Some(1.0),
-            ChannelSource::Source { .. } | ChannelSource::MirrorR => None,
-        };
-        if let Some(v) = value {
+        if let Some(v) = constant(ch) {
             for p in &mut image.px {
                 p[c] = v;
             }

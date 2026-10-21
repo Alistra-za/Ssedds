@@ -1722,6 +1722,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         }
     }

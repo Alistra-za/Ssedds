@@ -69,6 +69,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         }),
         bake: None,
         rnm: None,
+        derive: None,
         shader: None,
     };
     Plan {

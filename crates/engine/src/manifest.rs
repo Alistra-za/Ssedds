@@ -141,6 +141,13 @@ pub struct SourceRef {
     /// every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rnm: Option<String>,
+    /// Track A (DECISIONS Note CM12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on
+    /// every other source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive: Option<String>,
+    /// The slots that source fills in a derived job (`albedo`, `rough+metal+ao`, ...), as `rnm` holds its role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive_role: Option<String>,
 }
 
 impl SourceRef {
@@ -153,6 +160,8 @@ impl SourceRef {
             invert: false,
             bake: None,
             rnm: None,
+            derive: None,
+            derive_role: None,
         })
     }
 
@@ -177,6 +186,15 @@ impl SourceRef {
     pub fn of_rnm(path: &Path, role: String) -> io::Result<SourceRef> {
         Ok(SourceRef {
             rnm: Some(role),
+            ..SourceRef::of(path)?
+        })
+    }
+
+    /// A derived job's source, with the slots it fills and the job's identity (Note CM12).
+    pub fn of_derive(path: &Path, role: &str, identity: String) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            derive: Some(identity),
+            derive_role: Some(role.into()),
             ..SourceRef::of(path)?
         })
     }
