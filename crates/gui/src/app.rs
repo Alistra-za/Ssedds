@@ -330,7 +330,7 @@ impl eframe::App for SdcApp {
         self.sync_renderer();
         self.meshes.set_nif_export_root(
             (self.model.settings.export_folder.is_some() || self.model.root.is_some())
-                .then(|| self.model.export_root()),
+                .then(|| self.model.output_root()),
         );
         let scanning = self.meshes.scanning();
         self.meshes.poll();
