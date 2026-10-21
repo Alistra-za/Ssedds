@@ -1084,7 +1084,7 @@ fn clear_slot(s: &mut SetsDoc, id: &str, slot: Option<SlotKind>, existing: &Opti
 
 impl AppModel {
     pub(super) fn view_of(&self, id: &str) -> Option<SetView> {
-        set_views(self).into_iter().find(|v| same_id(&v.id, id))
+        views(self).iter().find(|v| same_id(&v.id, id)).cloned()
     }
 
     fn set_of_item(&self, item: &str) -> Option<SetView> {

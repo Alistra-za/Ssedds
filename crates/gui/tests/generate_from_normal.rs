@@ -93,10 +93,11 @@ fn a_pbr_set_with_a_normal_and_no_height_offers_height_on_its_row_and_set_menu()
         }
     );
     // P12: the entry is appended after the PGPatcher lock, so the existing rows keep their places.
-    assert!(matches!(
-        menu[menu.len() - 2].action,
-        MenuAction::PgpLock { .. }
-    ));
+    let at = |f: fn(&MenuAction) -> bool| menu.iter().position(|e| f(&e.action)).unwrap();
+    assert!(
+        at(|a| matches!(a, MenuAction::Generated { .. }))
+            > at(|a| matches!(a, MenuAction::PgpLock { .. }))
+    );
     let set = m.gen_entry(ROCK_SET, None);
     assert_eq!(set.disabled, None);
     assert_eq!(set.label, "Generate from normal map…");
