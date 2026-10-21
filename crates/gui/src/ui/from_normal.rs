@@ -176,15 +176,15 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                                 r.tilt_deg
                             ));
                         }
-                        // 12. Progress while generating.
-                        if matches!(running, Some((_, false))) {
-                            ui.label(format!("Generating… {} %", progress / 10));
-                        }
-                        if let Some(e) = &error {
-                            ui.colored_label(super::status::RED, e);
-                        }
                     });
             });
+            // 12. Progress, and a refusal, below the scrolled body: always on screen beside the footer (CO61).
+            if matches!(running, Some((_, false))) {
+                ui.label(format!("Generating… {} %", progress / 10));
+            }
+            if let Some(e) = &error {
+                ui.colored_label(super::status::RED, e);
+            }
         },
     );
     if let Some(g) = model.gen.as_mut() {

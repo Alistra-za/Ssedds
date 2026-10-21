@@ -664,7 +664,15 @@ fn regen_label(m: &AppModel) -> String {
 fn generate_writes_a_16_bit_p_next_to_the_normal_and_records_provenance() {
     let d = tempfile::tempdir().unwrap();
     let mut m = relief_rock(d.path());
+    assert!(
+        m.sets_doc.as_ref().unwrap().is_dirty(),
+        "the unsaved shader pick"
+    );
     generate_height(&mut m);
+    // P14: unsaved edits are the user's; the record waits for the next Save.
+    assert_eq!(m.status_note.as_deref(), Some(PROVENANCE_DEFERRED));
+    assert!(m.status_line.starts_with(PROVENANCE_DEFERRED));
+    assert!(m.sets_doc.as_ref().unwrap().is_dirty());
     let p = land(d.path()).join("rock01_p_generated.png");
     let img = image::open(&p).expect("the generated file").into_luma16();
     assert_eq!(img.dimensions(), (64, 64), "the normal's size (< 256)");
@@ -753,15 +761,19 @@ fn write_all_checks_every_target_first_and_rolls_back() {
     assert_eq!(std::fs::read(&b).unwrap(), [2]);
     let e = write_all(&[(b.clone(), vec![3], Some("00".repeat(32)))], &go).unwrap_err();
     assert!(e.contains("b.png was edited since it was generated"), "{e}");
-    // A write that fails removes the files this call wrote.
-    let dir_target = d.path().join("adir");
-    std::fs::create_dir(&dir_target).unwrap();
+    // A write that fails (its folder is a file: absent to the check, unwritable) removes the files this call wrote.
+    std::fs::write(d.path().join("afile"), b"x").unwrap();
+    let bad = d.path().join("afile").join("x.png");
     let c = d.path().join("c.png");
-    assert!(write_all(
-        &[(c.clone(), vec![1], None), (dir_target, vec![1], None)],
-        &go
+    let e = write_all(
+        &[(c.clone(), vec![1], None), (bad.clone(), vec![1], None)],
+        &go,
     )
-    .is_err());
+    .unwrap_err();
+    assert!(
+        e.starts_with(&bad.display().to_string()),
+        "the write failed: {e}"
+    );
     assert!(!c.exists(), "rolled back");
 }
 
@@ -1016,9 +1028,14 @@ fn a_dds_normal_generates_with_green_detected() {
             .maps
             .report
     );
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
     m.gen_generate();
     idle(&mut m);
     assert!(land(d.path()).join("rock01_p_generated.png").exists());
+    // P14: a clean sdc-project.toml is saved at once with the record.
+    let saved = std::fs::read_to_string(m.root.clone().unwrap().join("sdc-project.toml")).unwrap();
+    assert!(saved.contains("[generated]"), "{saved}");
+    assert_eq!(m.status_note, None);
     // A flat DDS proves nothing about detection (spec-S7).
     let flat = vec![[0.0, 0.0, 1.0]; 128 * 128];
     std::fs::remove_file(land(d.path()).join("rock01_p_generated.png")).unwrap();

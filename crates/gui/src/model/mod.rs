@@ -2346,12 +2346,9 @@ impl AppModel {
         if gone {
             self.selection = Selection::None;
         }
-        // Generate's first file, once a plan lists it.
-        if let Some(k) = self.gen_select.take() {
-            match self.item(&k).is_some() {
-                true => self.select_item(&k),
-                false => self.gen_select = Some(k),
-            }
+        // Generate's first file, by the plan Generate started (it lists the file); never a later one.
+        if let Some(k) = self.gen_select.take().filter(|k| self.item(k).is_some()) {
+            self.select_item(&k);
         }
         if let Some(k) = self.expanded.clone() {
             if self.item(&k).is_none() {
