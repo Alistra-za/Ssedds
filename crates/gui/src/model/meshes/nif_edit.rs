@@ -175,6 +175,8 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::AddExtra { at, .. }
         | Op::EditExtra { at, .. }
         | Op::RemoveExtra { at }
+        | Op::AddController { at, .. }
+        | Op::RemoveController { at }
         | Op::SetKeys { at, .. } => at,
     }
 }

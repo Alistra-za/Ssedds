@@ -323,6 +323,39 @@ fn every_op_variant_round_trips() {
                 keys: vec![],
             }),
         },
+        Op::AddController {
+            at: shader.clone(),
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(9),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(0.0, 1.0, None), fkey(2.0, -0.0, None)],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 2.0,
+        },
+        Op::AddController {
+            at: shader.clone(),
+            class: "BSNiAlphaPropertyTestRefController".into(),
+            var: None,
+            keys: KeyData::Pos(KeyGroup {
+                key_type: Some(1),
+                keys: vec![Key {
+                    time: 0.0,
+                    value: [1.0, 0.5, 0.25],
+                    forward: None,
+                    backward: None,
+                    tbc: None,
+                }],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 2.0,
+        },
+        Op::RemoveController { at: ctrl.clone() },
     ];
     for v in [
         E::Bsx(7),

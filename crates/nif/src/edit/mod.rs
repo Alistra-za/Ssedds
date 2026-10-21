@@ -106,6 +106,22 @@ pub enum Op {
         keys: KeyData,
         base: KeyData,
     },
+    /// Appends data, interpolator and controller, links them at the end of the property's chain, and sets root
+    /// BSXFlags bit 0 (D9, G1). `at` is Role::Shader or Role::Alpha of a shape.
+    AddController {
+        at: Anchor,
+        class: String,
+        var: Option<u32>,
+        keys: KeyData,
+        flags: u16,
+        freq: f32,
+        start: f32,
+        stop: f32,
+    },
+    /// Unlinks the controller and clears its Active bit; its interpolator and data stay as orphans (spec §5.3).
+    RemoveController {
+        at: Anchor, // Role::Ctrl
+    },
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -273,6 +289,10 @@ pub fn merge_key(op: &Op) -> String {
         Op::SetKeys { at, clip, .. } => {
             ("SetKeys", at, clip.map_or(String::new(), |c| c.to_string()))
         }
+        Op::AddController { at, class, var, .. } => {
+            ("AddController", at, format!("{class}/{var:?}"))
+        }
+        Op::RemoveController { at } => ("RemoveController", at, String::new()),
     };
     format!("{v}|{}|{what}", at.block)
 }
@@ -304,6 +324,8 @@ fn anchor_of(op: &Op) -> &Anchor {
         | Op::EditExtra { at, .. }
         | Op::RemoveExtra { at }
         | Op::SetKeys { at, .. }
+        | Op::AddController { at, .. }
+        | Op::RemoveController { at }
         | Op::SetTexturePath { at, .. } => at,
     }
 }
@@ -324,6 +346,8 @@ pub fn rebase(new_src: &[u8], ops: &[Op]) -> Result<(Vec<Op>, Vec<Outcome>), Nif
                 | Op::EditExtra { at, .. }
                 | Op::RemoveExtra { at }
                 | Op::SetKeys { at, .. }
+                | Op::AddController { at, .. }
+                | Op::RemoveController { at }
                 | Op::SetTexturePath { at, .. } => at.block = *block,
             }
         }
@@ -456,6 +480,13 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     }
     if matches!(op, Op::SetKeys { .. }) {
         return match structural::set_keys(&mut doc, cur, &m, block, op) {
+            Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
+            Ok(o) => (None, o),
+            Err(e) => refused(e),
+        };
+    }
+    if matches!(op, Op::AddController { .. } | Op::RemoveController { .. }) {
+        return match structural::ctrl_op(&mut doc, &m, at, block, op) {
             Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),
             Ok(o) => (None, o),
             Err(e) => refused(e),

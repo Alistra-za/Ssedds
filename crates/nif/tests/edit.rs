@@ -1552,3 +1552,502 @@ fn sequence_users_make_key_edits_copy() {
     assert_eq!(m.interps[&9].data, 6);
     assert_eq!(data_of(&r.bytes, 6), data_of(&b, 6));
 }
+
+// ---- B5: AddController / RemoveController (D9) ----
+
+const LSCC: &str = "BSLightingShaderPropertyColorController";
+const TESTREF: &str = "BSNiAlphaPropertyTestRefController";
+/// Block-relative controller ref of a `lsp_body` BSLSP with no extra data: shader type, name, extra count.
+const LSP_CTRL_AT: usize = 12;
+
+fn add(at: Anchor, class: &str, var: Option<u32>, keys: KeyData, stop: f32) -> Op {
+    Op::AddController {
+        at,
+        class: class.into(),
+        var,
+        keys,
+        flags: 0x48,
+        freq: 1.0,
+        start: 0.0,
+        stop,
+    }
+}
+
+fn prop_anchor(b: &[u8], role: Role) -> Anchor {
+    let m = read_model(b).unwrap();
+    anchor_role(&m, Some(shape_named(&m, "S")), role).unwrap()
+}
+
+/// The root's first BSXFlags value.
+fn bsx_of(b: &[u8]) -> u32 {
+    let m = read_model(b).unwrap();
+    m.extras_of(m.root_net.as_ref().unwrap())
+        .into_iter()
+        .find_map(|e| match e.value {
+            Some(nif::extra::ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some(v),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// The 30- or 34-byte controller the add writes (next -1, phase 0, start 0, freq 1).
+fn new_ctrl(flags: u16, stop: f32, target: i32, interp: i32, var: Option<u32>) -> Vec<u8> {
+    let mut v = (-1i32).to_le_bytes().to_vec();
+    v.extend(flags.to_le_bytes());
+    for f in [1.0f32, 0.0, 0.0, stop] {
+        v.extend(f.to_le_bytes());
+    }
+    v.extend(target.to_le_bytes());
+    v.extend(interp.to_le_bytes());
+    v.extend(var.map(u32::to_le_bytes).into_iter().flatten());
+    v
+}
+
+fn with_flags(mut v: Vec<u8>, flags: u16) -> Vec<u8> {
+    v[4..6].copy_from_slice(&flags.to_le_bytes());
+    v
+}
+
+fn pos_keys(k: &[(f32, [f32; 3])]) -> KeyData {
+    KeyData::Pos(KeyGroup {
+        key_type: Some(1),
+        keys: k
+            .iter()
+            .map(|&(time, value)| Key {
+                time,
+                value,
+                forward: None,
+                backward: None,
+                tbc: None,
+            })
+            .collect(),
+    })
+}
+
+fn lscf_role(var: u32) -> Role {
+    Role::Ctrl {
+        owner: Owner::Shader,
+        class: LSCF.into(),
+        var: Some(var),
+        nth: 0,
+    }
+}
+
+#[test]
+fn add_float_controller_links_at_chain_end_and_sets_bsx() {
+    let b = scenes::animated(Some(0x80), 2);
+    let keys = lin(&[(0.0, 10.0), (2.0, 50.0)]);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(9),
+        keys.clone(),
+        2.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 13);
+    assert_eq!(kind_of(&r.bytes, 10), b"NiFloatData");
+    assert_eq!(kind_of(&r.bytes, 11), b"NiFloatInterpolator");
+    assert_eq!(kind_of(&r.bytes, 12), LSCF.as_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 10), encode_data(&keys));
+    let mut interp = 10.0f32.to_le_bytes().to_vec();
+    interp.extend(10i32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 11), interp);
+    let c = new_ctrl(0x48, 2.0, 3, 11, Some(9));
+    assert_eq!(c.len(), 34);
+    assert_eq!(block_bytes_of(&r.bytes, 12), c);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 5),
+        with_i32(block_bytes_of(&b, 5), 0, 12)
+    );
+    assert_eq!(
+        block_bytes_of(&r.bytes, 1),
+        with_i32(block_bytes_of(&b, 1), 4, 0x81)
+    );
+    same_blocks(&b, &r.bytes, (0..10).filter(|&k| k != 1 && k != 5));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.lighting[&3].prop.ctrls, vec![4, 5, 12]);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert!(!m.managed(12));
+    assert_eq!(anchor_role(&m, Some(2), lscf_role(9)).unwrap().block, 12);
+
+    // empty chain: the property's own controller ref; bit 0 already set leaves the BSX block alone
+    let b = scenes::animated(Some(1), 0);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(9),
+        keys.clone(),
+        2.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 7);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 3),
+        with_i32(block_bytes_of(&b, 3), LSP_CTRL_AT, 6)
+    );
+    same_blocks(&b, &r.bytes, [0, 1, 2]);
+    assert_eq!(
+        read_model(&r.bytes).unwrap().lighting[&3].prop.ctrls,
+        vec![6]
+    );
+
+    // colour controller: Pos data and a Point3 interpolator
+    let pos = pos_keys(&[(0.0, [1.0, 0.5, 0.25]), (1.0, [0.0, 0.0, 0.0])]);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCC,
+        Some(1),
+        pos.clone(),
+        1.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(kind_of(&r.bytes, 4), b"NiPosData");
+    assert_eq!(kind_of(&r.bytes, 5), b"NiPoint3Interpolator");
+    assert_eq!(kind_of(&r.bytes, 6), LSCC.as_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 4), encode_data(&pos));
+    let mut interp: Vec<u8> = [1.0f32, 0.5, 0.25]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    interp.extend(4i32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 5), interp);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 6),
+        new_ctrl(0x48, 1.0, 3, 5, Some(1))
+    );
+    let m = read_model(&r.bytes).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.ctrls[&6].var, Some(1));
+}
+
+#[test]
+fn add_creates_bsx_when_missing() {
+    use nif::extra::ExtraValue;
+    let b = scenes::animated(None, 1);
+    let (h0, m0) = (Header::parse(&b).unwrap(), read_model(&b).unwrap());
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(11),
+        lin(&[(0.0, 1.0)]),
+        0.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 11);
+    assert_eq!(kind_of(&r.bytes, 10), b"BSXFlags");
+    // the existing "BSX" string (index 1) is reused
+    let h1 = Header::parse(&r.bytes).unwrap();
+    assert_eq!(h1.strings, h0.strings);
+    let mut bsx = 1i32.to_le_bytes().to_vec();
+    bsx.extend(1u32.to_le_bytes());
+    assert_eq!(block_bytes_of(&r.bytes, 10), bsx);
+    let net = m0.root_net.clone().unwrap();
+    let old = block_bytes_of(&b, 0);
+    let (s, e) = (net.start - h0.offsets()[0], net.end - h0.offsets()[0]);
+    let mut want = old[..s].to_vec();
+    want.extend(nif::net::encode_net(net.name, &[10], net.controller));
+    want.extend(&old[e..]);
+    assert_eq!(block_bytes_of(&r.bytes, 0), want);
+    same_blocks(&b, &r.bytes, 1..4);
+    let m = read_model(&r.bytes).unwrap();
+    let x: Vec<_> = m
+        .extras_of(m.root_net.as_ref().unwrap())
+        .into_iter()
+        .filter(|e| e.kind == "BSXFlags")
+        .collect();
+    assert_eq!(x.len(), 1);
+    assert_eq!(x[0].name.as_deref(), Some(&b"BSX"[..]));
+    assert_eq!(x[0].value, Some(ExtraValue::Bsx(1)));
+
+    // a BSTriShape root has no extra list to hold BSXFlags
+    let b = scenes::shader_ctrl(false);
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(9),
+        lin(&[(0.0, 1.0)]),
+        0.0,
+    );
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused(
+            "The root is not a node: the BSX Animated bit cannot be set.".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn remove_middle_controller_relinks_chain() {
+    let b = scenes::animated(Some(1), 3);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(20), "S");
+    assert_eq!(at.block, 5);
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 13);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 0, 6)
+    );
+    // only the Active bit goes; the removed controller keeps its next (6)
+    assert_eq!(
+        block_bytes_of(&r.bytes, 5),
+        with_flags(block_bytes_of(&b, 5), 0x40)
+    );
+    same_blocks(&b, &r.bytes, (0..13).filter(|&k| k != 4 && k != 5));
+    assert_eq!(
+        read_model(&r.bytes).unwrap().lighting[&3].prop.ctrls,
+        vec![4, 6]
+    );
+
+    // the first: the property's ref moves to the second
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 3),
+        with_i32(block_bytes_of(&b, 3), LSP_CTRL_AT, 5)
+    );
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_flags(block_bytes_of(&b, 4), 0x40)
+    );
+    same_blocks(&b, &r.bytes, (0..13).filter(|&k| k != 3 && k != 4));
+
+    let mc = scenes::managed_clip();
+    let m = read_model(&mc).unwrap();
+    let at = anchor_role(&m, Some(m.shapes[0].block), lscf_role(11)).unwrap();
+    assert_eq!(at.block, 7);
+    let r = apply(&mc, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused(
+            "A manager-controlled controller cannot be removed.".into()
+        )]
+    );
+    assert_eq!(r.bytes, mc);
+}
+
+/// Review Focus 2: removal never clears BSX bit 0 and leaves the interpolator and data as orphans.
+#[test]
+fn remove_last_controller_keeps_bsx_and_clears_active() {
+    let b = scenes::animated(Some(1), 1);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 3),
+        with_i32(block_bytes_of(&b, 3), LSP_CTRL_AT, -1)
+    );
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_flags(block_bytes_of(&b, 4), 0x40)
+    );
+    same_blocks(&b, &r.bytes, [0, 1, 2, 5, 6]);
+    assert_eq!(bsx_of(&r.bytes), 1);
+    assert!(read_model(&r.bytes).unwrap().lighting[&3]
+        .prop
+        .ctrls
+        .is_empty());
+
+    let b = scenes::animated(Some(1), 2);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(20), "S");
+    let r = apply(&b, &[Op::RemoveController { at }]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 0, -1)
+    );
+
+    let b = scenes::animated(Some(0), 0);
+    let rm = Op::RemoveController {
+        at: Anchor {
+            block: 6,
+            kind: LSCF.into(),
+            shape: Some("S".into()),
+            role: lscf_role(11),
+        },
+    };
+    let op = add(
+        prop_anchor(&b, Role::Shader),
+        LSCF,
+        Some(11),
+        lin(&[(0.0, 1.0)]),
+        0.0,
+    );
+    let r = apply(&b, &[op, rm]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(bsx_of(&r.bytes), 1);
+    assert!(read_model(&r.bytes).unwrap().lighting[&3]
+        .prop
+        .ctrls
+        .is_empty());
+}
+
+#[test]
+fn add_on_shared_alpha_splits_first() {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let a = shape_named(&m, "A");
+    let at_alpha = anchor_role(&m, Some(a), Role::Alpha).unwrap();
+    assert_eq!(at_alpha.block, 4);
+    let keys = lin(&[(0.0, 0.0), (1.0, 255.0)]);
+    let ops = [
+        Op::SplitAlpha {
+            at: anchor_shape(&m, a),
+        },
+        add(at_alpha.clone(), TESTREF, None, keys.clone(), 1.0),
+    ];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Applied, Outcome::ReAnchored { block: 8 }]
+    );
+    assert_eq!(nblocks(&r.bytes), 16);
+    assert_eq!(kind_of(&r.bytes, 12), b"NiFloatData");
+    assert_eq!(kind_of(&r.bytes, 13), b"NiFloatInterpolator");
+    assert_eq!(kind_of(&r.bytes, 14), TESTREF.as_bytes());
+    assert_eq!(kind_of(&r.bytes, 15), b"BSXFlags");
+    let c = new_ctrl(0x48, 1.0, 8, 13, None);
+    assert_eq!(c.len(), 30);
+    assert_eq!(block_bytes_of(&r.bytes, 14), c);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.alphas[&8].prop.ctrls, vec![9, 14]);
+    assert_eq!(m.alphas[&4].prop.ctrls, vec![5]);
+    assert_eq!(m.ctrls[&5].next, -1);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    same_blocks(&b, &r.bytes, 2..8);
+    assert_eq!(bsx_of(&r.bytes), 1);
+
+    let r = apply(&b, &[add(at_alpha, TESTREF, None, keys, 1.0)]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict(
+            "This alpha is shared by 2 shapes: split it before editing.".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
+fn add_controller_refusals() {
+    let b = scenes::animated(Some(1), 1);
+    let shader = prop_anchor(&b, Role::Shader);
+    let one = lin(&[(0.0, 1.0)]);
+    let check = |b: &[u8], op: Op, text: &str| {
+        let r = apply(b, &[op]).unwrap();
+        assert_eq!(r.outcomes, vec![Outcome::Refused(text.into())]);
+        assert_eq!(r.bytes, b);
+    };
+    check(
+        &b,
+        add(shader.clone(), "NiAlphaController", None, one.clone(), 0.0),
+        "NiAlphaController cannot be added.",
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCF, Some(3), one.clone(), 0.0),
+        &format!("{LSCF} does not take variable Some(3)."),
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCF, None, one.clone(), 0.0),
+        &format!("{LSCF} does not take variable None."),
+    );
+    // alpha_shape's root is a BSTriShape: the class and role checks run before the root check
+    let al = scenes::alpha_shape(0x12EC);
+    check(
+        &al,
+        add(alpha_anchor(&al), TESTREF, Some(0), one.clone(), 0.0),
+        &format!("{TESTREF} does not take variable Some(0)."),
+    );
+    check(
+        &al,
+        add(alpha_anchor(&al), LSCF, Some(9), one.clone(), 0.0),
+        &format!("{LSCF} goes on a shader property."),
+    );
+    check(
+        &b,
+        add(shader.clone(), TESTREF, None, one.clone(), 0.0),
+        &format!("{TESTREF} goes on an alpha property."),
+    );
+    check(
+        &b,
+        add(
+            shader.clone(),
+            LSCF,
+            Some(9),
+            pos_keys(&[(0.0, [1.0; 3])]),
+            0.0,
+        ),
+        "The keys do not match the controller's type.",
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCC, Some(0), one.clone(), 0.0),
+        "The keys do not match the controller's type.",
+    );
+    check(
+        &b,
+        add(shader.clone(), LSCF, Some(9), lin(&[]), 0.0),
+        "A new controller needs at least one key.",
+    );
+    // ctrl 4's next points at block 99: linking after it would orphan the unread tail
+    let mut broken = b.clone();
+    let at = Header::parse(&b).unwrap().offsets()[4];
+    broken[at..at + 4].copy_from_slice(&99i32.to_le_bytes());
+    check(
+        &broken,
+        add(shader.clone(), LSCF, Some(9), one.clone(), 0.0),
+        "The controller chain is broken.",
+    );
+
+    assert_eq!(
+        merge_key(&add(shader, LSCF, Some(9), one, 0.0)),
+        "AddController|3|BSLightingShaderPropertyFloatController/Some(9)"
+    );
+    let ctrl5 = Anchor {
+        block: 5,
+        kind: LSCF.into(),
+        shape: Some("S".into()),
+        role: lscf_role(20),
+    };
+    assert_eq!(
+        merge_key(&Op::RemoveController { at: ctrl5 }),
+        "RemoveController|5|"
+    );
+}
+
+/// B-P29: the keys an AddController authors get the same checks as SetKeys.
+#[test]
+fn authored_controller_keys_are_validated() {
+    use nif::edit::validate::{validate_ops, Level, Target};
+    let b = scenes::animated(Some(1), 0);
+    let shader = prop_anchor(&b, Role::Shader);
+    let w = validate_ops(&[add(
+        shader.clone(),
+        LSCF,
+        Some(9),
+        lin(&[(0.0, 1.0), (f32::NAN, 2.0), (-1.0, 0.0)]),
+        0.0,
+    )]);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].level, Level::Error);
+    assert_eq!(w[0].target, Target::Block { block: 3 });
+    assert_eq!(w[0].text, "Key values must be finite numbers");
+    let w = validate_ops(&[add(
+        shader,
+        LSCF,
+        Some(9),
+        lin(&[(1.0, 1.0), (0.0, 2.0)]),
+        0.0,
+    )]);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].text, "Key times must not decrease");
+}

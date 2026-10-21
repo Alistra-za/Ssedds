@@ -285,6 +285,9 @@ pub fn all() -> Vec<Vec<u8>> {
         keyed_pair(Share::No, [3, 1]),
         keyed_with_sequence(Some(4)),
         keyed_with_sequence(None),
+        animated(Some(1), 3),
+        animated(None, 1),
+        animated(Some(0x80), 0),
     ]
 }
 
@@ -639,4 +642,40 @@ fn keyed_nif(share: Share, types: [u32; 2]) -> Nif {
     n.block("NiFloatData", float_data(types[0]));
     n.block("NiFloatData", float_data(types[1]));
     n
+}
+
+/// NiNode "Root" (0; roots [0]; extra list [1] when `bsx` is Some, else empty; children [2]) ; BSXFlags "BSX" (1,
+/// value bsx.unwrap_or(0)) ; BSTriShape "S" (2) -> BSLSP (3, controller 4 when n > 0, else -1) ; n free LSCF
+/// controllers 4.. (vars 11, 20, 21; flags 0x48; target 3; next = the following one, last -1), controller k ->
+/// NiFloatInterpolator 0.0 (4+n+k) -> NiFloatData LINEAR (4+2n+k). n <= 3.
+pub fn animated(bsx: Option<u32>, n: usize) -> Vec<u8> {
+    assert!(n <= 3);
+    let mut b = Nif::new(100);
+    let (r, x, s) = (b.string("Root"), b.string("BSX"), b.string("S"));
+    let extra: &[i32] = if bsx.is_some() { &[1] } else { &[] };
+    let mut w = W::default().i32(r).u32(extra.len() as u32);
+    for e in extra {
+        w = w.i32(*e);
+    }
+    b.block("NiNode", avobj(w.i32(-1)).u32(1).i32(2).u32(0).0);
+    b.block("BSXFlags", W::default().i32(x).u32(bsx.unwrap_or(0)).0);
+    b.block("BSTriShape", bstri_named(s, 3, -1));
+    let first = if n > 0 { 4 } else { -1 };
+    b.block("BSLightingShaderProperty", lsp_body(0, &[], first, &[]));
+    for (k, var) in [11, 20, 21].into_iter().take(n).enumerate() {
+        let next = if k + 1 < n { 5 + k as i32 } else { -1 };
+        let interp = (4 + n + k) as i32;
+        b.block(
+            "BSLightingShaderPropertyFloatController",
+            ctrl_body(next, 0x48, 3, W::default().i32(interp).u32(var)),
+        );
+    }
+    for k in 0..n {
+        let data = (4 + 2 * n + k) as i32;
+        b.block("NiFloatInterpolator", W::default().f(0.0).i32(data).0);
+    }
+    for _ in 0..n {
+        b.block("NiFloatData", float_data(1));
+    }
+    b.bytes()
 }

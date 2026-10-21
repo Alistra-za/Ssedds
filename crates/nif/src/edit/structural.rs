@@ -1,11 +1,12 @@
 //! Structural ops: shader type re-emit and alpha add/remove/split (spec §5, plan A9). Removal is unlink: the
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
+use super::validate::LSCF_VARS;
 use super::{Anchor, Op, Outcome, Role};
 use crate::ctrl::BASE_LEN;
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
 use crate::header::Header;
 use crate::keys::{encode_data, read_data, KeyData, KeyGroup};
-use crate::model::{NifModel, ShapeModel};
+use crate::model::{NifModel, PropModel, ShapeModel};
 use crate::net::{encode_net, ObjectNet};
 use crate::props::encode_texture_set;
 use crate::write::NifDoc;
@@ -263,6 +264,159 @@ pub(crate) fn set_keys(
         patch(doc, i, 4 * floats, nd as i32)?;
     }
     Ok(Outcome::Applied)
+}
+
+const LSCF: &str = "BSLightingShaderPropertyFloatController";
+const LSCC: &str = "BSLightingShaderPropertyColorController";
+const TESTREF: &str = "BSNiAlphaPropertyTestRefController";
+
+/// Block-relative offset of the property's own controller ref.
+fn ctrl_ref_at(doc: &NifDoc, p: &PropModel) -> usize {
+    p.net.controller_at() - doc.header().offsets()[p.block as usize]
+}
+
+/// AddController (anchored on a property) and RemoveController (anchored on a controller).
+pub(crate) fn ctrl_op(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    at: &Anchor,
+    block: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    match op {
+        Op::AddController {
+            class,
+            var,
+            keys,
+            flags,
+            freq,
+            start,
+            stop,
+            ..
+        } => {
+            let shader = matches!(at.role, Role::Shader);
+            let (var_ok, float) = match class.as_str() {
+                LSCF if shader => (var.is_some_and(|v| LSCF_VARS.contains(&v)), true),
+                LSCC if shader => (matches!(var, Some(0 | 1)), false),
+                TESTREF if at.role == Role::Alpha => (var.is_none(), true),
+                LSCF | LSCC => return Err(format!("{class} goes on a shader property.")),
+                TESTREF => return Err(format!("{class} goes on an alpha property.")),
+                _ => return Err(format!("{class} cannot be added.")),
+            };
+            if !var_ok {
+                return Err(format!("{class} does not take variable {var:?}."));
+            }
+            let (data_kind, interp_kind, first, n): (&[u8], &[u8], Vec<u8>, usize) = match keys {
+                KeyData::Float(g) if float => (
+                    b"NiFloatData",
+                    b"NiFloatInterpolator",
+                    g.keys
+                        .first()
+                        .map_or(vec![], |k| k.value.to_le_bytes().to_vec()),
+                    g.keys.len(),
+                ),
+                KeyData::Pos(g) if !float => (
+                    b"NiPosData",
+                    b"NiPoint3Interpolator",
+                    g.keys.first().map_or(vec![], |k| {
+                        k.value.iter().flat_map(|f| f.to_le_bytes()).collect()
+                    }),
+                    g.keys.len(),
+                ),
+                _ => return Err("The keys do not match the controller's type.".into()),
+            };
+            if n == 0 {
+                return Err("A new controller needs at least one key.".into());
+            }
+            let prop = if shader {
+                m.lighting.get(&block).map(|l| &l.prop)
+            } else {
+                m.alphas.get(&block).map(|a| &a.prop)
+            }
+            .ok_or("not a readable property")?;
+            let last = prop.ctrls.last();
+            let end = match last {
+                None => prop.net.controller == -1,
+                Some(c) => m.ctrls.get(c).is_some_and(|c| c.next == -1),
+            };
+            if !end {
+                return Err("The controller chain is broken.".into());
+            }
+            if m.root_net.is_none() {
+                return Err("The root is not a node: the BSX Animated bit cannot be set.".into());
+            }
+            let d = doc.append(data_kind, encode_data(keys));
+            let mut ib = first;
+            ib.extend((d as i32).to_le_bytes());
+            let i = doc.append(interp_kind, ib);
+            let mut cb = (-1i32).to_le_bytes().to_vec();
+            cb.extend(flags.to_le_bytes());
+            for f in [*freq, 0.0, *start, *stop] {
+                cb.extend(f.to_le_bytes());
+            }
+            cb.extend((block as i32).to_le_bytes());
+            cb.extend((i as i32).to_le_bytes());
+            cb.extend(var.map(u32::to_le_bytes).into_iter().flatten());
+            let c = doc.append(class.as_bytes(), cb);
+            match last {
+                None => patch(doc, block, ctrl_ref_at(doc, prop), c as i32)?,
+                Some(&l) => patch(doc, l, 0, c as i32)?,
+            }
+            set_bsx_animated(doc, m)?;
+        }
+        Op::RemoveController { .. } => {
+            if m.managed(block) {
+                return Err("A manager-controlled controller cannot be removed.".into());
+            }
+            let prop = m
+                .lighting
+                .values()
+                .map(|l| &l.prop)
+                .chain(m.alphas.values().map(|a| &a.prop))
+                .find(|p| p.ctrls.contains(&block))
+                .ok_or("No property lists this controller.")?;
+            let k = prop.ctrls.iter().position(|&c| c == block).unwrap();
+            let c = &m.ctrls[&block];
+            match k {
+                0 => patch(doc, prop.block, ctrl_ref_at(doc, prop), c.next)?,
+                _ => patch(doc, prop.ctrls[k - 1], 0, c.next)?,
+            }
+            doc.patch(block, 4, &(c.flags & !0x08).to_le_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        _ => return Err("not a controller op".into()),
+    }
+    Ok(Outcome::Applied)
+}
+
+/// Sets bit 0 (Animated) on the root's first BSXFlags, appending `BSXFlags "BSX"` = 1 to the root when it has none.
+fn set_bsx_animated(doc: &mut NifDoc, m: &NifModel) -> Result<(), String> {
+    let (root, net) = m
+        .root
+        .zip(m.root_net.as_ref())
+        .ok_or("The root is not a node: the BSX Animated bit cannot be set.")?;
+    // the first BSXFlags whatever its name, as validate::root_bsx picks it
+    let found = m.extras_of(net).into_iter().find_map(|e| match e.value {
+        Some(ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some((e.block, v)),
+        _ => None,
+    });
+    match found {
+        Some((_, v)) if v & 1 == 1 => Ok(()),
+        Some((x, v)) => doc
+            .patch(x, 4, &(v | 1).to_le_bytes())
+            .map_err(|e| e.to_string()),
+        None => {
+            let nm = doc.string(b"BSX");
+            let (_, body) = encode_extra(nm, &ExtraValue::Bsx(1), -1);
+            let x = doc.append(b"BSXFlags", body);
+            set_extra_list(
+                doc,
+                root,
+                net,
+                &[net.extra.clone(), vec![x as i32]].concat(),
+            )
+        }
+    }
 }
 
 fn win1252(s: &str) -> Result<Vec<u8>, String> {

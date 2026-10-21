@@ -35,7 +35,7 @@ pub struct Warning {
 const SLSF1_OWN_EMIT: u32 = 1 << 22;
 const SLSF1_EXTERNAL_EMITTANCE: u32 = 1 << 29;
 const BSX_EXTERNAL_EMIT: u32 = 1 << 9;
-const LSCF_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
+pub(crate) const LSCF_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
 
 pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warning> {
     let mut out = vec![];
@@ -275,7 +275,7 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
     }
     let mut out = vec![];
     for op in ops {
-        let Op::SetKeys { at, keys, .. } = op else {
+        let (Op::SetKeys { at, keys, .. } | Op::AddController { at, keys, .. }) = op else {
             continue;
         };
         let (key_type, t, finite) = match keys {
