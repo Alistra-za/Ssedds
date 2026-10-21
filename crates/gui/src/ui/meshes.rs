@@ -3,7 +3,7 @@
 use crate::model::meshes::export::DocBadge;
 use crate::model::meshes::nif_edit::{Selection, ANIM_INVALID, EDIT_HIDDEN};
 use crate::model::meshes::pg_entries::{
-    is_warning, INSTANCE_UNREADABLE, IN_GAME_SCOPE, NO_INSTANCE, READING_JSON,
+    is_warning, INSTANCE_UNREADABLE, IN_GAME_SCOPE, NO_INSTANCE, PGP_ENV_SCALE, READING_JSON,
 };
 use crate::model::meshes::{
     alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
@@ -690,7 +690,9 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     .flat_map(|(_, _, n)| n)
                 {
                     let mut t = egui::RichText::new(n.as_str());
-                    if is_warning(n) {
+                    if n == PGP_ENV_SCALE {
+                        t = t.color(RED);
+                    } else if is_warning(n) {
                         t = t.color(AMBER);
                     }
                     ui.add(egui::Label::new(t).wrap());

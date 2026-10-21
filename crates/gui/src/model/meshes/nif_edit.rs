@@ -2,18 +2,18 @@
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
-use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PG_IGNORED};
+use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
 use nif::anim::{apply_anim, clip_tracks, free_tracks, Track};
-use nif::edit::validate::{new_errors, validate, validate_ops, Warning};
+use nif::edit::validate::{new_errors, validate, validate_ops, Level, Target, Warning};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
-use nif::model::{read_model, NifModel};
+use nif::model::{read_model, NifModel, ShapeModel};
 use render3d::{ParsedNif, ShapeId};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -66,6 +66,8 @@ pub struct NifEdit {
     pub warnings: Vec<Warning>,
     /// validate_ops over the document's ops (B4/B5 key errors), recomputed with the ops in `reapply`.
     pub op_warnings: Vec<Warning>,
+    /// B-P41: `PGP_ENV_SCALE` Warnings from the cached In game simulation (never blocking, never a new simulation).
+    pub pg_warnings: Vec<Warning>,
     /// Every controller's editable keys by (controller, clip), `nif::edit::keys_of`; rebuilt in `reapply`, never
     /// per frame (F23). B7 adds the clip entries.
     pub keys: BTreeMap<(u32, Option<u32>), Result<KeyData, String>>,
@@ -218,6 +220,16 @@ pub fn edit_slot_label(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) ->
     }
 }
 
+/// The shape's lighting shader's LSCF var-8 (Env map scale) controller, if its chain has one.
+fn env_scale_ctrl(m: &NifModel, sm: &ShapeModel) -> Option<u32> {
+    let l = m.lighting.get(&sm.shader?)?;
+    l.prop.ctrls.iter().copied().find(|c| {
+        m.ctrls.get(c).is_some_and(|c| {
+            c.class == "BSLightingShaderPropertyFloatController" && c.var == Some(8)
+        })
+    })
+}
+
 fn anchor_mut(op: &mut Op) -> &mut Anchor {
     match op {
         Op::SetField { at, .. }
@@ -291,6 +303,7 @@ impl NifEdit {
             outcomes: vec![],
             warnings: vec![],
             op_warnings: vec![],
+            pg_warnings: vec![],
             keys: BTreeMap::new(),
             selection: Selection::Root,
             solo: false,
@@ -526,7 +539,33 @@ impl NifEdit {
         }
         self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, self.playing);
         self.anim_shown = None;
+        self.refresh_pg_warnings();
         self.refresh_blocked();
+    }
+
+    /// B-P41: a Warning under each LSCF var-8 controller of a non-PBR shape that the last cached In game simulation
+    /// (for the shape's current slots) made PBR. PG_IGNORE shapes are skipped, as the simulation skips them.
+    fn refresh_pg_warnings(&mut self) {
+        let m = &self.model;
+        self.pg_warnings = self
+            .parsed
+            .shapes
+            .iter()
+            .filter(|s| s.material.slsf2 & SLSF2_TRUE_PBR == 0)
+            .filter_map(|s| {
+                let sm = m.shape(s.id.0).filter(|sm| !pg_ignore(m, sm))?;
+                let block = env_scale_ctrl(m, sm)?;
+                let (input, _, _, (out, _)) = self.sim_cache.get(&s.id)?.out.as_ref()?;
+                (input.slots == s.material.slots && out.slsf2 & SLSF2_TRUE_PBR != 0).then(|| {
+                    Warning {
+                        level: Level::Warn,
+                        target: Target::Block { block },
+                        text: PGP_ENV_SCALE.into(),
+                        fix: None,
+                    }
+                })
+            })
+            .collect();
     }
 
     fn save(&mut self) {
@@ -693,12 +732,17 @@ impl NifEdit {
                 rows.push((s.id, s.material.clone(), vec![PG_IGNORED.to_string()]));
                 continue;
             }
+            // B-P41: outside the cache, whose key (the material) does not change when a controller is added.
+            let env = shape
+                .and_then(|sm| env_scale_ctrl(&self.model, sm))
+                .is_some()
+                && s.material.slsf2 & SLSF2_TRUE_PBR == 0;
             let c = self.sim_cache.entry(s.id).or_default();
             let hit = c
                 .out
                 .as_ref()
                 .filter(|(m, g, r, _)| *m == s.material && *g == gen && *r == rev);
-            let (m, notes) = match hit {
+            let (m, mut notes) = match hit {
                 Some((_, _, _, out)) => out.clone(),
                 None => {
                     let cands = match &c.cands {
@@ -716,8 +760,12 @@ impl NifEdit {
                     out
                 }
             };
+            if env && m.slsf2 & SLSF2_TRUE_PBR != 0 {
+                notes.push(PGP_ENV_SCALE.to_string());
+            }
             rows.push((s.id, m, notes));
         }
+        self.refresh_pg_warnings();
         rows
     }
 

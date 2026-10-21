@@ -19,6 +19,11 @@ pub const IN_GAME_SCOPE: &str =
 pub const NO_INSTANCE: &str = "In game needs an MO2 instance: no PGPatcher JSON was read.";
 pub const PG_IGNORED: &str = "In game: PGPatcher skips this shape (PG_IGNORE).";
 pub const NO_MATCH: &str = "In game: no PGPatcher JSON matches this shape.";
+/// B-P41: a red In game line, and a Warning in the edit view, when the simulation makes a non-PBR shape with an
+/// LSCF var-8 controller PBR (B9: var 8 on PBR crashed the game). Export stays open: PGPatcher's output depends on
+/// the JSON at play time.
+pub const PGP_ENV_SCALE: &str =
+    "PGPatcher makes this shape PBR: its Env map scale controller will crash the game.";
 /// 01 §1.4's pre-patched case (fix F9).
 pub const ALREADY_PBR: &str = "In game: already PBR. PGPatcher leaves it as is.";
 /// Under the toggle while the worker reads the JSON (fix F2).

@@ -4879,3 +4879,71 @@ fn variable_combo_offers_no_env_map_scale_on_pbr() {
     h.get_by_role_and_label(AkRole::ComboBox, "Env map scale variable");
     h.get_by_label(ENV_PBR);
 }
+
+// ---- B-P41: the var-8 crash through PGPatcher (final review I1) ----
+
+const PG_ENV: &str =
+    "PGPatcher makes this shape PBR: its Env map scale controller will crash the game.";
+
+/// x.nif is not PBR, so the editor adds var 8; A's x.json makes the shape PBR in game. In game shows a red line, the
+/// edit view a Warning from the cached simulation, and export stays open (PGPatcher's output depends on play-time JSON).
+#[test]
+fn env_map_scale_warns_when_pgpatcher_makes_the_shape_pbr() {
+    let (_d, mut m) = pg_session();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::AddController {
+            at,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(8),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(0.0, 1.0, None), fkey(1.0, 0.5, None)],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 1.0,
+        }],
+        None,
+    );
+    m.select_edit(Selection::Shape(shape));
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.doc.ops.iter().all(|d| d.status == OpStatus::Applied));
+    assert!(
+        notes_or_none(&m, shape).is_none(),
+        "Edited source: no In game rows"
+    );
+    in_game(&mut m);
+    let n = notes(&m, shape);
+    assert!(n.iter().any(|l| l == PG_ENV), "{n:?}");
+    // Back on Edited source: the Warning under the controller comes from the cached simulation.
+    let runs = m.edit.as_ref().unwrap().sim_runs;
+    m.set_view_source(true);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.sim_runs, runs, "no new simulation");
+    assert_eq!(e.blocked, None, "export is not blocked");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label(PG_ENV);
+    // Without the controller, the Warning goes.
+    let m = h.state_mut();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(8),
+        nth: 0,
+    };
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, Some(shape), role).unwrap();
+    m.edit_push(vec![Op::RemoveController { at }], None);
+    h.run_steps(3);
+    assert!(h.query_by_label(PG_ENV).is_none());
+}
+
+fn notes_or_none(m: &MeshesModel, b: u32) -> Option<Vec<String>> {
+    let rows = m.edit.as_ref().unwrap().in_game.clone()?;
+    rows.into_iter().find(|(id, _, _)| id.0 == b).map(|r| r.2)
+}

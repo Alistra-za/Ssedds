@@ -68,7 +68,11 @@ pub(super) fn fit_width(ui: &egui::Ui, want: f32) -> f32 {
 
 /// Warnings of `target` under their field: amber, red for errors, with "Fix" when the warning carries a fix.
 pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
-    let all = e.warnings.iter().chain(&e.op_warnings);
+    let all = e
+        .warnings
+        .iter()
+        .chain(&e.op_warnings)
+        .chain(&e.pg_warnings);
     for w in all.filter(|w| w.target == *target) {
         let color = if w.level == Level::Error { RED } else { AMBER };
         ui.horizontal(|ui| {
