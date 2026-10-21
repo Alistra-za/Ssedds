@@ -173,6 +173,7 @@
     },
     "Bc7Weights": {
       "enum": [
+        "linear",
         "alpha2",
         "alpha8",
         "alpha16",

@@ -1730,7 +1730,8 @@ pub fn check_profile(
         );
     }
     // DECISIONS Note CP: the weights reach bc7e only, and only without perceptual (bc7e's own weights win there).
-    if let Some(w) = p.encoder.bc7_weights {
+    // `linear` is the plain encode everywhere, so it is never "ignored".
+    if let Some(w) = p.encoder.bc7_weights.filter(|w| *w != Bc7Weights::Linear) {
         let why = if p.format != Format::Bc7 {
             Some("the format is not BC7")
         } else if p.encoder.backend != Backend::Bc7e {

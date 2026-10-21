@@ -505,12 +505,12 @@ fn weighted(w: Option<Bc7Weights>) -> Profile {
     p
 }
 
-const WEIGHTINGS: [Bc7Weights; 4] = [
-    Bc7Weights::Alpha2,
-    Bc7Weights::Alpha8,
-    Bc7Weights::Alpha16,
-    Bc7Weights::Rmaos,
-];
+/// Every weighting but `linear` (from `Bc7Weights::ALL`, which a unit test ties to the enum).
+fn weightings() -> impl Iterator<Item = Bc7Weights> {
+    Bc7Weights::ALL
+        .into_iter()
+        .filter(|w| *w != Bc7Weights::Linear)
+}
 
 /// Note CP: unset is the plain bc7e call (Linear is byte-identical to before); every option changes the bytes; with
 /// `perceptual` on, the weights are ignored.
@@ -532,9 +532,17 @@ fn bc7_weighting_options_change_the_bytes_and_unset_is_the_plain_call() {
         },
     );
     assert_eq!(linear, raw, "no block is opaque, so no fix-up runs");
-    for o in WEIGHTINGS {
+    // Fix round 1: an explicit `linear` is the plain call too.
+    assert_eq!(
+        encode(&input, w, h, &weighted(Some(Bc7Weights::Linear))),
+        linear
+    );
+    let mut n = 0;
+    for o in weightings() {
         assert_ne!(encode(&input, w, h, &weighted(Some(o))), linear, "{o:?}");
+        n += 1;
     }
+    assert!(n >= 4);
     let mut q = weighted(Some(Bc7Weights::Alpha8));
     q.encoder.perceptual = true;
     let mut r = weighted(None);

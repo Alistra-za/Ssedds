@@ -529,18 +529,16 @@ fn bc7_weights_set_resolves_and_warns_where_it_has_no_effect() {
     use engine::config::{Bc7Weights, Format};
     let d = tempfile::tempdir().unwrap();
     fixtures(d.path());
-    let plan = |sets: &[&str]| {
+    let try_plan = |sets: &[&str]| {
         let mut req = request(d.path());
         req.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
-        Engine::new()
-            .unwrap()
-            .plan(
-                req,
-                &Reporter::new(Arc::new(NullSink), "t"),
-                &CancelToken::default(),
-            )
-            .unwrap()
+        Engine::new().unwrap().plan(
+            req,
+            &Reporter::new(Arc::new(NullSink), "t"),
+            &CancelToken::default(),
+        )
     };
+    let plan = |sets: &[&str]| try_plan(sets).unwrap();
     let iron = |p: &Plan| {
         p.jobs
             .iter()
@@ -565,6 +563,28 @@ fn bc7_weights_set_resolves_and_warns_where_it_has_no_effect() {
     ] {
         let j = iron(&plan(&["encoder.bc7_weights=rmaos", extra]));
         assert!(ignored(&j), "{extra}: {:?}", j.warnings);
+    }
+    // Fix round 1: `linear` overrides an inherited weighting and is never "ignored".
+    for extra in ["", "file:**/iron.png.format=bc1"] {
+        let sets: Vec<&str> = [
+            "encoder.bc7_weights=alpha8",
+            "file:**/iron.png.encoder.bc7_weights=linear",
+            extra,
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+        let j = iron(&plan(&sets));
+        assert_eq!(j.profile.encoder.bc7_weights, Some(Bc7Weights::Linear));
+        assert!(!ignored(&j), "{extra}: {:?}", j.warnings);
+    }
+    // M3: an unknown value is refused, naming the key and the valid values.
+    let text = match try_plan(&["encoder.bc7_weights=alpha4"]) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("alpha4 planned"),
+    };
+    for want in ["alpha4", "encoder.bc7_weights", "linear", "alpha8", "rmaos"] {
+        assert!(text.contains(want), "{want}: {text}");
     }
 }
 

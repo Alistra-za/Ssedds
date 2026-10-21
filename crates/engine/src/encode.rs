@@ -80,8 +80,11 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
                 .chunks_mut(BC7_BLOCKS_PER_CALL * BC7_BLOCK_BYTES)
                 .zip(b.chunks(BC7_BLOCKS_PER_CALL * BLOCK_TEXELS))
             {
-                // Note CP: perceptual mode uses bc7e's own weights, so it wins; unset keeps the plain call's bytes.
-                match e.bc7_weights.filter(|_| !e.perceptual) {
+                // Note CP: perceptual mode uses bc7e's own weights, so it wins; unset and `linear` keep the plain call.
+                match e
+                    .bc7_weights
+                    .filter(|w| !e.perceptual && *w != Bc7Weights::Linear)
+                {
                     Some(w) => bc7e_compress_blocks_tuned(
                         bc,
                         oc,
