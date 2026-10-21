@@ -356,6 +356,8 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
 
 /// Errors in the keys the ops author (spec §3.3): times, values and tangents must be finite (B-P29); times must not
 /// decrease; only LINEAR (1) and QUADRATIC (2) keys are authored. A source curve that is not edited is never checked (R14).
+/// Only the keys that are exported are checked: a SetKeys that a later SetKeys on the same (controller, clip)
+/// replaced is skipped (Note CM33), or a fixed curve would keep its old error.
 pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
     /// (key type, times, every time, value and tangent finite); `floats` lists a value's f32s.
     fn times<T>(g: &KeyGroup<T>, floats: fn(&T) -> Vec<f32>) -> (Option<u32>, Vec<f32>, bool) {
@@ -371,10 +373,17 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
         (g.key_type, g.keys.iter().map(|k| k.time).collect(), finite)
     }
     let mut out = vec![];
-    for op in ops {
+    let target = |op: &Op| match op {
+        Op::SetKeys { at, clip, .. } => Some((at.block, *clip)),
+        _ => None,
+    };
+    for (i, op) in ops.iter().enumerate() {
         let (Op::SetKeys { at, keys, .. } | Op::AddController { at, keys, .. }) = op else {
             continue;
         };
+        if target(op).is_some() && ops[i + 1..].iter().any(|o| target(o) == target(op)) {
+            continue;
+        }
         let (key_type, t, finite) = match keys {
             KeyData::Float(g) => times(g, |v| vec![*v]),
             KeyData::Pos(g) => times(g, |v| v.to_vec()),

@@ -601,6 +601,39 @@ fn non_finite_keys_block_export() {
     assert_eq!(key_errors_on(b, Some(1), lin(&[0.0, 1.0])), vec![]);
 }
 
+/// Only the keys that are exported are checked: a SetKeys that a later SetKeys on the same (controller, clip)
+/// replaced never errors; another clip's SetKeys still does.
+#[test]
+fn superseded_set_keys_are_not_checked() {
+    use nif::edit::validate::validate_ops;
+    use nif::edit::{Anchor, Role};
+    let op = |clip: Option<u32>, times: &[f32]| Op::SetKeys {
+        at: Anchor {
+            block: 2,
+            kind: "BSLightingShaderPropertyFloatController".into(),
+            shape: None,
+            role: Role::Shape,
+        },
+        clip,
+        keys: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: times.iter().map(|&t| k(t, None, false)).collect(),
+        }),
+        base: KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![],
+        }),
+    };
+    let bad = op(None, &[0.0, -1.0]);
+    assert_eq!(validate_ops(&[bad.clone(), op(None, &[0.0, 1.0])]), vec![]);
+    assert_eq!(
+        validate_ops(&[bad, op(Some(8), &[0.0, 1.0])]),
+        error("Key times must not decrease")
+    );
+    let nan = op(None, &[0.0, f32::NAN]);
+    assert_eq!(validate_ops(&[nan, op(None, &[0.0, 1.0])]), vec![]);
+}
+
 /// B-P41 (final review minor 6): AddController's frequency, start and stop are authored like its keys.
 #[test]
 fn add_controller_times_must_be_finite() {

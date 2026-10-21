@@ -5231,3 +5231,36 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
         e.model.shapes.len()
     );
 }
+
+// ---- Key fixes: stale key errors (Note CM33) ----
+
+/// A scanned session (export folder, real shapes, the clock) on `with_uv_ctrl`, in the Controllers tab of the
+/// shape whose chain starts with the U offset controller (LINEAR (0, 0) (1, 1), start 0, stop 1).
+fn uv_view() -> (tempfile::TempDir, Harness<'static, MeshesModel>) {
+    let (d, mut m, _cmds) = session_on(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    (d, h)
+}
+
+/// A SetKeys that a later SetKeys replaced is not validated: fixing the times clears the error everywhere.
+#[test]
+fn stale_key_order_error_clears_when_keys_are_fixed() {
+    const ERR: &str = "Key times must not decrease";
+    let (_d, mut h) = uv_view();
+    edit_number(&mut h, "U offset key 2 time", "-1");
+    assert!(h.query_all_by_label(ERR).count() > 0);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().export_block().as_deref(),
+        Some(ERR)
+    );
+    edit_number(&mut h, "U offset key 2 time", "2");
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label(ERR).count(), 0);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(e.op_warnings.is_empty(), "{:?}", e.op_warnings);
+    assert_ne!(e.export_block().as_deref(), Some(ERR));
+}
