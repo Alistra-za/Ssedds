@@ -49,6 +49,12 @@ fn channels_image(
 
 /// Builds the image of `job`. Every source shares one size (`PackError::SizeMismatch`, as packing; TA22).
 pub fn assemble_derived(job: &DeriveJob) -> Result<Assembled, PackError> {
+    assemble_derived_rough(job).map(|(a, _)| a)
+}
+
+/// [`assemble_derived`] and the plain mean of the roughness slot (TA16, `DERIVE-NIF-SUGGEST`), read from the
+/// scalars it builds anyway, so planning decodes nothing twice.
+pub fn assemble_derived_rough(job: &DeriveJob) -> Result<(Assembled, f64), PackError> {
     use DeriveKind::*;
     let paths: Vec<PathBuf> = job.sources.iter().map(|s| s.path.clone()).collect();
     // A malformed job (the planner never builds one) fails rather than panicking a worker.
@@ -193,13 +199,23 @@ pub fn assemble_derived(job: &DeriveJob) -> Result<Assembled, PackError> {
             .or(normal.as_ref())
             .is_some_and(|c| c.1.is_float),
     };
+    let mean_rough = scalars
+        .image
+        .px
+        .iter()
+        .map(|q| f64::from(q[0]))
+        .sum::<f64>()
+        / n.max(1) as f64;
     let mut non_gray = scalars.non_gray;
     non_gray.extend(detail.into_iter().flat_map(|d| d.non_gray));
-    Ok(Assembled {
-        image,
-        info,
-        non_gray,
-    })
+    Ok((
+        Assembled {
+            image,
+            info,
+            non_gray,
+        },
+        mean_rough,
+    ))
 }
 
 #[cfg(test)]

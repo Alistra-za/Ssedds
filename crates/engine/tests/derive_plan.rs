@@ -1,0 +1,877 @@
+//! Track A Task 4 (DECISIONS Note CM): with `BatchRequest::derive`, the vanilla plan replaces each PBR set's jobs
+//! with derived jobs. `cs_then` plans `cs`, builds the `DeriveSet`s by hand from that plan (Task 7 replaces this with
+//! `also::derive_sets`) and plans `vanilla` with `derive`.
+use engine::analyse::analyse;
+use engine::api::*;
+use engine::codes::{Code, Severity};
+use engine::config::*;
+use engine::dds::read_dds;
+use engine::decode::{decode_level, Decoded};
+use engine::derive::plan::{finish_derived, DeriveCandidate};
+use engine::derive::recipe::LegacyParams;
+use engine::derive::{
+    vanilla_game_path, vanilla_rel, DeriveJob, DeriveKind, DeriveMode, DeriveRequest, DeriveSet,
+    DeriveSource,
+};
+use engine::discover::{InputFile, InputKind};
+use engine::events::*;
+use engine::group::TextureSet;
+use engine::overrides::{parse_set, NO_FILE_SCOPES};
+use engine::pack::{rmaos_channel, ChannelSource, RecipeKind, Slot};
+use engine::policy::*;
+use engine::presets::default_preset_for;
+use engine::session::AnalysisCache;
+use engine::shader::{assign, MemberMap, Shader, ShaderOrigin};
+use image::{ImageBuffer, Rgba};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+fn png(path: &Path, w: u32, h: u32, px: [u8; 4]) -> PathBuf {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    ImageBuffer::from_pixel(w, h, Rgba(px)).save(path).unwrap();
+    path.to_path_buf()
+}
+
+fn fake_dds(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"DDS not a real texture").unwrap();
+}
+
+/// `<dir>/<rel>/steel{,_n,_rmaos}.png` (16², opaque), plus `_p` when `p`. `rmaos` = R rough, G metal, B AO.
+fn steel(dir: &Path, rel: &str, rmaos: Option<[u8; 4]>, p: bool) {
+    let d = dir.join(rel);
+    png(&d.join("steel.png"), 16, 16, [200, 200, 200, 255]);
+    png(&d.join("steel_n.png"), 16, 16, [128, 128, 255, 255]);
+    if let Some(px) = rmaos {
+        png(&d.join("steel_rmaos.png"), 16, 16, px);
+    }
+    if p {
+        png(&d.join("steel_p.png"), 16, 16, [100, 100, 100, 255]);
+    }
+}
+
+fn request(inputs: &Path, out: &Path, target: Target) -> BatchRequest {
+    let mut r = BatchRequest::new(vec![inputs.to_path_buf()], out.to_path_buf(), target);
+    r.recursive = true;
+    r.accept = AcceptSuggestions::High;
+    r
+}
+
+fn plan(r: BatchRequest) -> (Plan, Vec<EngineEvent>) {
+    let sink = Arc::new(VecSink::default());
+    let p = Engine::new()
+        .unwrap()
+        .plan(
+            r,
+            &Reporter::new(sink.clone(), "t"),
+            &CancelToken::default(),
+        )
+        .unwrap();
+    (p, sink.take())
+}
+
+fn slash(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+/// The `DeriveSet`s of a `cs` plan by the slot rule (Task 4 Step 3): albedo and normal by `assign` on the set's
+/// own shader spec; the scalars from a packed `_rmaos`, else the `_rmaos` member by channel, else the defaults;
+/// the height from a packed `_p`, else the `_p` member's R.
+fn derive_sets(cs: &Plan) -> Vec<DeriveSet> {
+    let mut out = vec![];
+    for (key, pick) in &cs.shaders {
+        if !matches!(
+            pick.shader,
+            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
+        ) {
+            continue;
+        }
+        let jobs: Vec<&ResolvedJob> = cs.jobs.iter().filter(|j| &j.set_key == key).collect();
+        let mut members: Vec<PathBuf> = vec![];
+        for j in &jobs {
+            match &j.pack {
+                Some(pk) => members.extend(pk.sources.iter().map(|s| s.path.clone())),
+                None => members.push(j.input.clone()),
+            }
+        }
+        members.extend(
+            cs.skipped
+                .iter()
+                .filter(|s| s.set.as_deref() == Some(key))
+                .map(|s| s.path.clone()),
+        );
+        members.sort();
+        members.dedup();
+        let plain: Vec<&&ResolvedJob> = jobs.iter().filter(|j| j.pack.is_none()).collect();
+        let maps: Vec<MemberMap> = plain
+            .iter()
+            .map(|j| MemberMap {
+                name: j.output.file_name().unwrap().to_string_lossy().into_owned(),
+                suffix: None,
+                subtype: Some(j.profile.subtype),
+            })
+            .collect();
+        let roles = assign(pick.shader.spec_for(Target::Cs), &maps);
+        let role = |label: &str| {
+            plain
+                .iter()
+                .zip(&roles)
+                .find(|(_, r)| r.is_some_and(|r| r.label == label))
+                .map(|(j, _)| (**j).clone())
+        };
+        let albedo = role("albedo");
+        let rmaos_member = role("_rmaos");
+        let packed = |k: RecipeKind| {
+            jobs.iter()
+                .find_map(|j| j.pack.as_ref().filter(|p| p.kind == k))
+        };
+        let channel = |slot: Slot, default: f32| match (packed(RecipeKind::Rmaos), &rmaos_member) {
+            (Some(pk), _) => pk.channels[rmaos_channel(slot).unwrap() as usize].clone(),
+            (None, Some(j)) => ChannelSource::Source {
+                path: j.input.clone(),
+                role: RawMap::Rmaos,
+                invert: false,
+                channel: rmaos_channel(slot),
+            },
+            (None, None) => ChannelSource::Default { value: default },
+        };
+        let rough_default = albedo
+            .as_ref()
+            .map_or(0.5, |a| a.profile.packing.roughness_default);
+        let height = match (packed(RecipeKind::Parallax), role("_p")) {
+            (Some(pk), _) => Some(pk.channels[0].clone()),
+            (None, Some(j)) => Some(ChannelSource::Source {
+                path: j.input.clone(),
+                role: RawMap::Height,
+                invert: false,
+                channel: None,
+            }),
+            _ => None,
+        };
+        out.push(DeriveSet {
+            id: engine::sets::set_id(&cs.request.output_root, key),
+            shader: pick.shader,
+            dds: members
+                .iter()
+                .filter(|m| m.extension().is_some_and(|e| e.eq_ignore_ascii_case("dds")))
+                .cloned()
+                .collect(),
+            members,
+            albedo: albedo.map(|j| j.input.clone()),
+            normal: role("_n").map(|j| j.input.clone()),
+            rough: channel(Slot::Roughness, rough_default as f32),
+            metal: channel(Slot::Metallic, 0.0),
+            ao: channel(Slot::Ao, 1.0),
+            height,
+            curves: None,
+            cavity: None,
+            gray: GraySource::R,
+        });
+    }
+    out
+}
+
+/// Plans `cs` on `inputs`, then `vanilla` with a derive request built from it; `tweak` edits both.
+fn cs_then(
+    mode: DeriveMode,
+    inputs: &Path,
+    out: &Path,
+    tweak: impl Fn(&mut BatchRequest, Option<&mut DeriveRequest>),
+) -> (Plan, Vec<EngineEvent>) {
+    let mut r = request(inputs, &out.join("pbr"), Target::Cs);
+    tweak(&mut r, None);
+    let (cs, _) = plan(r);
+    let mut d = DeriveRequest {
+        mode,
+        params: LegacyParams::default(),
+        sets: derive_sets(&cs),
+        drop: vec![],
+        scanned: false,
+    };
+    let mut r = request(inputs, &out.join("vanilla"), Target::Vanilla);
+    tweak(&mut r, Some(&mut d));
+    r.derive = Some(d);
+    plan(r)
+}
+
+fn no_tweak(_: &mut BatchRequest, _: Option<&mut DeriveRequest>) {}
+
+/// The job writing `<output root>/<tail>`.
+fn out_job<'a>(p: &'a Plan, tail: &str) -> Option<&'a ResolvedJob> {
+    let want = slash(&p.request.output_root.join(tail));
+    p.jobs.iter().find(|j| slash(&j.output) == want)
+}
+
+fn has(j: &ResolvedJob, c: Code) -> bool {
+    j.warnings.iter().any(|w| w.code == c)
+}
+
+fn event_codes(ev: &[EngineEvent]) -> Vec<Code> {
+    let mut out = vec![];
+    for e in ev {
+        match &e.kind {
+            EventKind::Warning(w) => out.push(w.code),
+            EventKind::SetResolved { warnings, .. } => out.extend(warnings.iter().map(|w| w.code)),
+            _ => {}
+        }
+    }
+    out
+}
+
+#[test]
+fn vanilla_paths_fold_the_pbr_folder_below_textures() {
+    let gp = "textures/pbr/arm/steel.png";
+    assert_eq!(
+        vanilla_rel(Path::new("textures/PBR/arm/steel.png"), gp),
+        PathBuf::from("textures/arm/steel.png")
+    );
+    assert_eq!(
+        vanilla_rel(Path::new("pbr/arm/steel.png"), gp),
+        PathBuf::from("arm/steel.png")
+    );
+    // Not directly below `textures/`, or no `textures/`: nothing folds.
+    for (rel, gp) in [
+        ("textures/arm/pbr/steel.png", "textures/arm/pbr/steel.png"),
+        ("pbr/steel.png", "pbr/steel.png"),
+        ("textures/pbr.png", "textures/pbr.png"),
+    ] {
+        assert_eq!(vanilla_rel(Path::new(rel), gp), PathBuf::from(rel));
+    }
+    assert_eq!(
+        vanilla_game_path("textures/pbr/arm/steel"),
+        "textures/arm/steel"
+    );
+    assert_eq!(
+        vanilla_game_path("textures/arm/pbr/steel"),
+        "textures/arm/pbr/steel"
+    );
+}
+
+#[test]
+fn a_pbr_set_becomes_diffuse_and_n_under_vanilla_and_its_pbr_jobs_are_gone() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), true);
+    let (p, ev) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let diffuse = out_job(&p, "textures/arm/steel.dds").expect("the derived diffuse");
+    let dj = diffuse.derive.as_ref().unwrap();
+    assert_eq!(dj.kind, DeriveKind::VanillaDiffuse);
+    assert_eq!(diffuse.profile.subtype, Subtype::Diffuse);
+    assert_eq!(
+        diffuse.provenance["subtype"].to_string(),
+        "recipe:vanilla_diffuse"
+    );
+    assert!(matches!(diffuse.status, JobStatus::Ready), "{diffuse:#?}");
+    let n = out_job(&p, "textures/arm/steel_n.dds").expect("the derived _n");
+    assert_eq!(n.derive.as_ref().unwrap().kind, DeriveKind::LegacyN);
+    assert_eq!(n.profile.subtype, Subtype::Normal);
+    // No PBR output and no fallback job of a member is left.
+    assert_eq!(p.jobs.len(), 2, "{:#?}", p.jobs);
+    for j in &p.jobs {
+        assert!(j.derive.is_some());
+        assert!(!slash(&j.output).contains("/pbr/"), "{}", slash(&j.output));
+        assert!(j.provenance.contains_key("target"));
+        let pick = j.shader.as_ref().unwrap();
+        assert_eq!(
+            (pick.shader, &pick.provenance),
+            (Shader::Default, &ShaderOrigin::Derived)
+        );
+        assert!(
+            j.game_path.starts_with("textures/arm/steel"),
+            "{}",
+            j.game_path
+        );
+    }
+    let codes = event_codes(&ev);
+    assert!(!codes.contains(&Code::ShaderUnavailable), "{codes:?}");
+    assert!(!codes.contains(&Code::ShaderMissingMap), "{codes:?}");
+    assert!(!codes.contains(&Code::InDuplicate), "{codes:?}");
+}
+
+#[test]
+fn a_project_opened_at_textures_folds_pbr_too() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("MyMod/textures");
+    steel(&inputs, "pbr/arm", Some([128, 255, 255, 255]), false);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), |r, d| {
+        r.mesh_shaders = BTreeMap::from([("textures/arm/steel".to_string(), vec![Shader::Envmap])]);
+        if let Some(d) = d {
+            d.scanned = true;
+        }
+    });
+    assert!(out_job(&p, "arm/steel.dds").is_some(), "{:#?}", p.jobs);
+    assert!(out_job(&p, "arm/steel_n.dds").is_some());
+    // The vote was read at textures/arm/steel, not textures/pbr/arm/steel.
+    let m = out_job(&p, "arm/steel_m.dds").expect("the env _m");
+    assert_eq!(m.derive.as_ref().unwrap().kind, DeriveKind::EnvM);
+}
+
+#[test]
+fn env_m_needs_an_envmap_vote_and_metal() {
+    let run = |votes: Option<Vec<Shader>>, metal: bool| {
+        let d = tempfile::tempdir().unwrap();
+        let inputs = d.path().join("in");
+        steel(
+            &inputs,
+            "textures/pbr/arm",
+            metal.then_some([128, 255, 255, 255]),
+            false,
+        );
+        let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), |r, d| {
+            if let Some(v) = &votes {
+                r.mesh_shaders = BTreeMap::from([("textures/arm/steel".to_string(), v.clone())]);
+            }
+            if let Some(d) = d {
+                d.scanned = votes.is_some();
+            }
+        });
+        (d, p)
+    };
+    let (_d, p) = run(Some(vec![Shader::Envmap]), true);
+    let m = out_job(&p, "textures/arm/steel_m.dds").expect("the env _m");
+    assert_eq!(m.derive.as_ref().unwrap().kind, DeriveKind::EnvM);
+    assert_eq!(m.profile.subtype, Subtype::Envmask);
+    assert_eq!(m.shader.as_ref().unwrap().shader, Shader::Envmap);
+
+    let (_d, p) = run(Some(vec![Shader::Default]), true);
+    assert!(out_job(&p, "textures/arm/steel_m.dds").is_none());
+    let diffuse = out_job(&p, "textures/arm/steel.dds").unwrap();
+    assert!(has(diffuse, Code::DeriveNoEnvmap), "{:?}", diffuse.warnings);
+    assert_eq!(diffuse.shader.as_ref().unwrap().shader, Shader::Default);
+
+    let (_d, p) = run(None, true);
+    assert!(out_job(&p, "textures/arm/steel_m.dds").is_none());
+    assert!(has(
+        out_job(&p, "textures/arm/steel.dds").unwrap(),
+        Code::DeriveNoScan
+    ));
+
+    let (_d, p) = run(None, false);
+    assert!(out_job(&p, "textures/arm/steel_m.dds").is_none());
+    let diffuse = out_job(&p, "textures/arm/steel.dds").unwrap();
+    assert!(!has(diffuse, Code::DeriveNoScan) && !has(diffuse, Code::DeriveNoEnvmap));
+}
+
+#[test]
+fn cm_mode_writes_only_the_m_unless_keep_metal_brightness() {
+    let run = |metal: bool, keep: bool, strength: f64| {
+        let d = tempfile::tempdir().unwrap();
+        let inputs = d.path().join("in");
+        steel(
+            &inputs,
+            "textures/pbr/arm",
+            metal.then_some([128, 255, 255, 255]),
+            false,
+        );
+        let (p, _) = cs_then(DeriveMode::Cm, &inputs, d.path(), |_, d| {
+            if let Some(d) = d {
+                d.params.keep_metal_brightness = keep;
+                d.params.keep_metal_strength = strength;
+            }
+        });
+        let kinds: Vec<DeriveKind> = p
+            .jobs
+            .iter()
+            .map(|j| j.derive.as_ref().unwrap().kind)
+            .collect();
+        (d, p, kinds)
+    };
+    let (_d, p, kinds) = run(true, false, 1.0);
+    assert_eq!(kinds, [DeriveKind::CmM]);
+    let m = out_job(&p, "textures/arm/steel_m.dds").unwrap();
+    assert_eq!(m.profile.subtype, Subtype::ComplexMaterial);
+    assert_eq!(m.shader.as_ref().unwrap().shader, Shader::ComplexMaterial);
+    let (_d, p, kinds) = run(true, true, 1.0);
+    assert_eq!(kinds, [DeriveKind::CmM, DeriveKind::CmDiffuse]);
+    assert!(out_job(&p, "textures/arm/steel.dds").is_some());
+    // TA8: the metal slot is a default (no _rmaos), or the strength is 0.
+    assert_eq!(run(false, true, 1.0).2, [DeriveKind::CmM]);
+    assert_eq!(run(true, true, 0.0).2, [DeriveKind::CmM]);
+}
+
+#[test]
+fn a_dds_only_pbr_set_is_skipped_with_derive_dds_source() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    for f in ["steel.dds", "steel_n.dds", "steel_rmaos.dds"] {
+        fake_dds(&inputs.join("textures/pbr/arm").join(f));
+    }
+    png(
+        &inputs.join("textures/misc/cup.png"),
+        16,
+        16,
+        [90, 90, 90, 255],
+    );
+    let (cs, _) = plan(request(&inputs, &d.path().join("pbr"), Target::Cs));
+    let mut sets = derive_sets(&cs);
+    assert_eq!(sets.len(), 1, "the DDS set is a PBR set");
+    assert_eq!(sets[0].dds.len(), 3);
+    let mut r = request(&inputs, &d.path().join("vanilla"), Target::Vanilla);
+    r.derive = Some(DeriveRequest {
+        mode: DeriveMode::Vanilla,
+        params: LegacyParams::default(),
+        sets: std::mem::take(&mut sets),
+        drop: vec![],
+        scanned: false,
+    });
+    let (p, _) = plan(r);
+    let skip = p
+        .skipped
+        .iter()
+        .find(|s| s.code == Some(Code::DeriveDdsSource))
+        .expect("DERIVE-DDS-SOURCE");
+    assert!(slash(&skip.path).contains("/pbr/arm/steel"), "{skip:?}");
+    assert!(p.jobs.iter().all(|j| j.derive.is_none()));
+    assert!(out_job(&p, "textures/misc/cup.dds").is_some());
+    assert!(!p
+        .shaders
+        .values()
+        .any(|s| s.provenance == ShaderOrigin::Derived));
+}
+
+#[test]
+fn a_set_without_rmaos_uses_the_slot_defaults() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    // Albedo and `_n` only: the `textures/pbr/` path keeps the set PBR.
+    steel(&inputs, "textures/pbr/arm", None, false);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let diffuse = out_job(&p, "textures/arm/steel.dds").expect("diffuse");
+    let dj = diffuse.derive.as_ref().unwrap();
+    assert_eq!(dj.metal, ChannelSource::Default { value: 0.0 });
+    assert_eq!(dj.ao, ChannelSource::Default { value: 1.0 });
+    assert_eq!(dj.sources.len(), 1);
+    let n = out_job(&p, "textures/arm/steel_n.dds").expect("_n");
+    let r = diffuse.profile.packing.roughness_default as f32;
+    assert_eq!(
+        n.derive.as_ref().unwrap().rough,
+        ChannelSource::Default { value: r }
+    );
+    // The images: diffuse = 0.9 · albedo; `_n` alpha = 0.66 · (1 − r_default).
+    let a = engine::derive::assemble::assemble_derived(dj).unwrap();
+    assert!((a.image.px[0][0] - 0.9 * 200.0 / 255.0).abs() < 1e-5);
+    let a = engine::derive::assemble::assemble_derived(n.derive.as_ref().unwrap()).unwrap();
+    assert!((a.image.px[0][3] - 0.66 * (1.0 - r)).abs() < 1e-5);
+}
+
+#[test]
+fn sources_of_different_sizes_fail_only_that_set() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let dir = inputs.join("textures/pbr/arm");
+    png(&dir.join("big.png"), 64, 64, [200, 200, 200, 255]);
+    png(&dir.join("big_n.png"), 64, 64, [128, 128, 255, 255]);
+    png(&dir.join("big_rmaos.png"), 32, 32, [128, 0, 255, 255]);
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), false);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let big = out_job(&p, "textures/arm/big.dds").expect("an error job");
+    assert_eq!(
+        big.status,
+        JobStatus::Error {
+            codes: vec![Code::PackSizeMismatch]
+        }
+    );
+    let w = big
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::PackSizeMismatch)
+        .unwrap();
+    let named: Vec<String> = w.data["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(named.iter().any(|p| p.ends_with("big.png")), "{named:?}");
+    assert!(
+        named.iter().any(|p| p.ends_with("big_rmaos.png")),
+        "{named:?}"
+    );
+    assert!(big.provenance.contains_key("target"));
+    assert!(matches!(
+        out_job(&p, "textures/arm/steel.dds").unwrap().status,
+        JobStatus::Ready
+    ));
+}
+
+#[test]
+fn a_derived_output_on_another_jobs_path_is_a_derive_path_conflict() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let dir = inputs.join("textures/pbr");
+    png(&dir.join("a.png"), 16, 16, [200, 200, 200, 255]);
+    png(&dir.join("a_n.png"), 16, 16, [128, 128, 255, 255]);
+    png(&dir.join("a_rmaos.png"), 16, 16, [128, 0, 255, 255]);
+    let plain = png(&inputs.join("textures/a.png"), 16, 16, [50, 60, 70, 255]);
+    let (p, ev) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let on_path: Vec<&ResolvedJob> = p
+        .jobs
+        .iter()
+        .filter(|j| slash(&j.output).ends_with("textures/a.dds"))
+        .collect();
+    assert_eq!(on_path.len(), 2, "{on_path:#?}");
+    let kept = on_path.iter().find(|j| j.derive.is_none()).unwrap();
+    assert_eq!(kept.input, plain);
+    assert!(matches!(kept.status, JobStatus::Ready));
+    let refused = on_path.iter().find(|j| j.input != plain).unwrap();
+    assert_eq!(
+        refused.status,
+        JobStatus::Error {
+            codes: vec![Code::DerivePathConflict]
+        }
+    );
+    assert!(out_job(&p, "textures/a_n.dds").unwrap().derive.is_some());
+    assert!(!event_codes(&ev).contains(&Code::InDuplicate));
+    assert!(p.skipped.iter().all(|s| s.code != Some(Code::InDuplicate)));
+}
+
+#[test]
+fn a_skipped_set_leaves_no_fallback_job() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), true);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), |_, d| {
+        if let Some(d) = d {
+            let s = d.sets.remove(0);
+            d.drop = s.members;
+        }
+    });
+    assert!(
+        p.jobs.iter().all(|j| !slash(&j.input).contains("/steel")),
+        "{:#?}",
+        p.jobs
+    );
+}
+
+#[test]
+fn a_member_with_no_recipe_role_is_reported_not_written() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), false);
+    let dir = inputs.join("textures/pbr/arm");
+    png(&dir.join("steel_g.png"), 16, 16, [255, 0, 0, 255]);
+    png(&dir.join("steel_detail.png"), 16, 16, [128, 128, 255, 255]);
+    let (cs, _) = plan(request(&inputs, &d.path().join("pbr"), Target::Cs));
+    let mut sets = derive_sets(&cs);
+    // An RNM layer has no job role under `cs` either; the PBR set lists it as a member (Task 7 reads it so).
+    sets[0].members.push(dir.join("steel_detail.png"));
+    let mut r = request(&inputs, &d.path().join("vanilla"), Target::Vanilla);
+    r.derive = Some(DeriveRequest {
+        mode: DeriveMode::Vanilla,
+        params: LegacyParams::default(),
+        sets,
+        drop: vec![],
+        scanned: false,
+    });
+    let (p, _) = plan(r);
+    let diffuse = out_job(&p, "textures/arm/steel.dds").unwrap();
+    let notes: Vec<(&str, &str)> = diffuse
+        .warnings
+        .iter()
+        .filter(|w| w.code == Code::DeriveNotConverted)
+        .map(|w| {
+            (
+                w.data["member"].as_str().unwrap(),
+                w.data["reason"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|(m, r)| m.ends_with("steel_g.png") && *r != "detail layer not in the vanilla _n"),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|(m, r)| m.ends_with("steel_detail.png")
+                && *r == "detail layer not in the vanilla _n"),
+        "{notes:?}"
+    );
+    assert!(p.jobs.iter().all(
+        |j| !slash(&j.output).contains("steel_g") && !slash(&j.output).contains("steel_detail")
+    ));
+}
+
+#[test]
+fn nif_suggestion_rides_on_the_set_with_glossiness_from_mean_roughness() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(
+        &inputs,
+        "textures/pbr/arm",
+        Some([128, 255, 255, 255]),
+        false,
+    );
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let n = out_job(&p, "textures/arm/steel_n.dds").unwrap();
+    let w = n
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::DeriveNifSuggest)
+        .expect("DERIVE-NIF-SUGGEST on the _n");
+    assert_eq!(w.severity, Severity::Info);
+    let g = w.data["glossiness"].as_f64().unwrap();
+    assert!((g - 29.5).abs() < 0.1, "{g}");
+    assert_eq!(w.data["specular_strength"].as_f64(), Some(1.0));
+    assert_eq!(w.data["env_map"].as_bool(), Some(true));
+    // Once per set.
+    let all: usize = p
+        .jobs
+        .iter()
+        .map(|j| {
+            j.warnings
+                .iter()
+                .filter(|w| w.code == Code::DeriveNifSuggest)
+                .count()
+        })
+        .sum();
+    assert_eq!(all, 1);
+}
+
+#[test]
+fn without_derive_the_vanilla_plan_is_unchanged() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), true);
+    let r = || request(&inputs, &d.path().join("vanilla"), Target::Vanilla);
+    let (p, ev) = plan(r());
+    // The members' own fallback jobs, under the PBR path; no derived job, origin or code (C6).
+    assert!(
+        out_job(&p, "textures/pbr/arm/steel.dds").is_some(),
+        "{:#?}",
+        p.jobs
+    );
+    assert!(p.jobs.iter().all(|j| j.derive.is_none()));
+    assert!(!p
+        .shaders
+        .values()
+        .any(|s| s.provenance == ShaderOrigin::Derived));
+    assert!(!event_codes(&ev)
+        .iter()
+        .any(|c| c.as_str().starts_with("DERIVE-")));
+    // A derive request with no set changes nothing either.
+    let mut empty = r();
+    empty.derive = Some(DeriveRequest {
+        mode: DeriveMode::Vanilla,
+        params: LegacyParams::default(),
+        sets: vec![],
+        drop: vec![],
+        scanned: false,
+    });
+    let (q, _) = plan(empty);
+    assert_eq!(
+        serde_json::to_string(&p.jobs).unwrap(),
+        serde_json::to_string(&q.jobs).unwrap()
+    );
+}
+
+/// P25: a derived job has no cached analysis; the albedo's own stays the albedo's.
+#[test]
+fn a_derived_job_has_no_cached_analysis() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), false);
+    let (cs, _) = plan(request(&inputs, &d.path().join("pbr"), Target::Cs));
+    let mut r = request(&inputs, &d.path().join("vanilla"), Target::Vanilla);
+    r.derive = Some(DeriveRequest {
+        mode: DeriveMode::Vanilla,
+        params: LegacyParams::default(),
+        sets: derive_sets(&cs),
+        drop: vec![],
+        scanned: false,
+    });
+    let c = AnalysisCache::default();
+    let p = Engine::new()
+        .unwrap()
+        .plan_cached(
+            r,
+            &Reporter::new(Arc::new(NullSink), "t"),
+            &CancelToken::default(),
+            &c,
+        )
+        .unwrap();
+    let diffuse = out_job(&p, "textures/arm/steel.dds").unwrap();
+    assert!(c.analysis(diffuse).is_none());
+    let mut plain = diffuse.clone();
+    plain.derive = None;
+    let a = c.analysis(&plain).expect("the albedo's own analysis");
+    assert_eq!((a.width, a.height), (16, 16));
+}
+
+/// The derived jobs' inputs get a terminal event naming the derived output, as packed sources do.
+#[test]
+fn a_run_reports_each_derive_source_as_consumed() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    steel(&inputs, "textures/pbr/arm", Some([128, 0, 255, 255]), false);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let sink = Arc::new(VecSink::default());
+    let s = Engine::new()
+        .unwrap()
+        .run(
+            p,
+            &Reporter::new(sink.clone(), "t"),
+            &CancelToken::default(),
+        )
+        .unwrap();
+    assert_eq!(s.converted, 2);
+    let consumed: BTreeSet<(String, String)> = sink
+        .take()
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EventKind::FileSkipped {
+                    kind: SkipKind::PackedSource,
+                    ..
+                }
+            )
+        })
+        .map(|e| {
+            let name = |p: &Path| p.file_name().unwrap().to_string_lossy().into_owned();
+            (
+                name(Path::new(e.path.as_deref().unwrap())),
+                e.job.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let names: BTreeSet<&str> = consumed.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["steel.png", "steel_n.png", "steel_rmaos.png"])
+    );
+}
+
+/// CM14: a derived grass stack is never planned with `remove`, which would drop the `_n` spec alpha in its bottom
+/// half, even on an opaque albedo with an explicit `alpha.policy = remove`. (Task 5 plans grass sets; this drives
+/// `finish_derived`, the step every derived job resolves through, directly.)
+#[test]
+fn a_grass_stack_on_an_opaque_albedo_keeps_its_spec_alpha() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/landscape/grass");
+    let albedo = png(&dir.join("g.png"), 16, 16, [90, 140, 60, 255]);
+    let normal = png(&dir.join("g_n.png"), 16, 16, [128, 128, 255, 255]);
+    let src = |p: &Path, role: &str| DeriveSource {
+        path: p.to_path_buf(),
+        role: role.into(),
+        stamp: SourceStamp::of(p),
+    };
+    let job = DeriveJob {
+        kind: DeriveKind::GrassStack,
+        landscape: false,
+        albedo: Some(albedo.clone()),
+        normal: Some(normal.clone()),
+        // rough 0.5, metal 1, AO 1: 0.66 · 0.5 · 2 = 0.66 → 168.
+        rough: ChannelSource::Default { value: 0.5 },
+        metal: ChannelSource::Default { value: 1.0 },
+        ao: ChannelSource::Default { value: 1.0 },
+        height: None,
+        curves: None,
+        cavity: None,
+        gray: GraySource::R,
+        params: LegacyParams::default(),
+        sources: vec![src(&albedo, "albedo"), src(&normal, "normal")],
+    };
+    let out = d.path().join("out");
+    let input = InputFile {
+        path: albedo.clone(),
+        rel: PathBuf::from("textures/landscape/grass/g.png"),
+        game_path: "textures/landscape/grass/g.png".into(),
+        output: out.join("textures/landscape/grass/g.dds"),
+        kind: InputKind::Image,
+        real_rel: None,
+    };
+    let c = DeriveCandidate {
+        set_key: "k".into(),
+        input,
+        job: job.clone(),
+        notes: vec![],
+        nif: None,
+    };
+    let set = TextureSet {
+        key: "k".into(),
+        members: vec![0],
+        suffixes: BTreeSet::new(),
+    };
+    let asm = engine::derive::assemble::assemble_derived(&job).unwrap();
+    let analysis = analyse(&asm.image, &asm.info);
+    let reg = engine::presets::PresetRegistry::builtin().unwrap();
+    let allow = BTreeSet::new();
+    let resolve = |overrides: &[engine::overrides::SetOverride]| {
+        let ctx = ResolveCtx {
+            target: Target::Vanilla,
+            registry: &reg,
+            preset: default_preset_for(Target::Vanilla),
+            user_config: None,
+            project_config: None,
+            overrides,
+            accept: AcceptSuggestions::High,
+            allow: &allow,
+            files: &NO_FILE_SCOPES,
+            shaders: &NO_SHADERS,
+            mesh_alpha: &NO_MESH_ALPHA,
+            nvtt: None,
+        };
+        finish_derived(&ctx, &c, &set, &analysis, &asm.info, 0.5)
+    };
+    let explicit = resolve(&[parse_set("alpha.policy=remove").unwrap()]);
+    assert_ne!(explicit.profile.alpha.policy, AlphaPolicy::Remove);
+    let job = resolve(&[]);
+    assert_ne!(job.profile.alpha.policy, AlphaPolicy::Remove);
+    assert_eq!(job.profile.subtype, Subtype::ComplexGrass);
+
+    // Encoded: the bottom half (the `_n`) keeps the spec alpha.
+    let mut p = plan(request(&d.path().join("in"), &out, Target::Vanilla)).0;
+    p.jobs = vec![ResolvedJob {
+        status: JobStatus::Ready,
+        ..job
+    }];
+    let sink = Arc::new(VecSink::default());
+    let s = Engine::new()
+        .unwrap()
+        .run(
+            p,
+            &Reporter::new(sink.clone(), "t"),
+            &CancelToken::default(),
+        )
+        .unwrap();
+    assert_eq!(s.converted, 1, "{:#?}", sink.take());
+    let f = read_dds(&std::fs::read(out.join("textures/landscape/grass/g.dds")).unwrap()).unwrap();
+    let (w, h, r) = f.levels[0].clone();
+    assert_eq!((w, h), (16, 32));
+    let Decoded::Ldr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
+        panic!("LDR expected")
+    };
+    for q in &px[(16 * 16)..] {
+        assert!((i32::from(q[3]) - 168).abs() <= 2, "bottom alpha {}", q[3]);
+    }
+    for q in &px[..(16 * 16)] {
+        assert_eq!(q[3], 255);
+    }
+}
+
+/// TA29: a derived pick names no map notes (a kept landscape `_p` has no vanilla role) and round-trips as `derived`.
+#[test]
+fn a_derived_pick_skips_the_map_notes() {
+    let maps = [MemberMap {
+        name: "dirt_p.dds".into(),
+        suffix: Some("p".into()),
+        subtype: Some(Subtype::Height),
+    }];
+    let pick = |provenance| engine::shader::ShaderPick {
+        shader: Shader::Landscape,
+        provenance,
+        wanted: None,
+    };
+    assert!(
+        !engine::shader::check_maps(&pick(ShaderOrigin::Set), Target::Vanilla, &maps).is_empty()
+    );
+    assert!(
+        engine::shader::check_maps(&pick(ShaderOrigin::Derived), Target::Vanilla, &maps).is_empty()
+    );
+    assert_eq!(ShaderOrigin::Derived.to_string(), "derived");
+    assert_eq!("derived".parse::<ShaderOrigin>(), Ok(ShaderOrigin::Derived));
+}

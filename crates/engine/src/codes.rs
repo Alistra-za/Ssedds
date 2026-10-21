@@ -151,6 +151,21 @@ codes! {
     ChkLowDetail = "CHK-LOW-DETAIL" => Warning,
     // UV coverage (GUI): UV islands of a meshed colour texture sit closer than the mip-bleed distance.
     ChkUvGutter = "CHK-UV-GUTTER" => Warning,
+    // Track A derive step (DECISIONS Note CM): PBR sets converted to vanilla and complex-material maps.
+    // Set skipped: a source it needs is DDS (never re-encoded, M9).
+    DeriveDdsSource = "DERIVE-DDS-SOURCE" => Warning,
+    // No albedo: no diffuse (and no CM diffuse).
+    DeriveNoAlbedo = "DERIVE-NO-ALBEDO" => Warning,
+    // Metal found, env `_m` not written: no scan.
+    DeriveNoScan = "DERIVE-NO-SCAN" => Info,
+    // Metal found, no scanned mesh uses the Environment Map shader.
+    DeriveNoEnvmap = "DERIVE-NO-ENVMAP" => Info,
+    // A derived output lands on another job's output (TA12); the other job is kept.
+    DerivePathConflict = "DERIVE-PATH-CONFLICT" => Error,
+    // A member with no recipe role (TA11), or an RNM detail layer (TA28; its own reason).
+    DeriveNotConverted = "DERIVE-NOT-CONVERTED" => Info,
+    // Data {glossiness, specular_strength, env_map}: suggested NIF values for the set.
+    DeriveNifSuggest = "DERIVE-NIF-SUGGEST" => Info,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -217,7 +232,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 101);
+        assert_eq!(Code::ALL.len(), 108);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -225,7 +240,7 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::ChkUvGutter));
+        assert_eq!(Code::ALL.last(), Some(&Code::DeriveNifSuggest));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));

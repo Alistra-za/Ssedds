@@ -1,14 +1,102 @@
 //! Track A: turn PBR inputs into vanilla and complex-material maps (DECISIONS Note CM).
 pub mod assemble;
+pub mod plan;
 pub mod recipe;
 
 use crate::config::{GraySource, Subtype};
 use crate::pack::ChannelSource;
 use crate::policy::SourceStamp;
+use crate::shader::Shader;
 use recipe::LegacyParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
+
+/// Which folder a derive plan writes (Note CM).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeriveMode {
+    Vanilla,
+    Cm,
+}
+
+/// One PBR set to convert, read from the PBR phase's plan (TA11).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeriveSet {
+    /// The set id relative to the output root (`--set set:<id>` form).
+    pub id: String,
+    pub shader: Shader,
+    /// Every input of the set, so the vanilla plan can drop them.
+    pub members: Vec<PathBuf>,
+    pub albedo: Option<PathBuf>,
+    pub normal: Option<PathBuf>,
+    pub rough: ChannelSource,
+    pub metal: ChannelSource,
+    pub ao: ChannelSource,
+    pub height: Option<ChannelSource>,
+    pub curves: Option<ChannelSource>,
+    pub cavity: Option<ChannelSource>,
+    pub gray: GraySource,
+    /// Members the recipe needs that are DDS (never re-encoded, M9): the set is skipped.
+    pub dds: Vec<PathBuf>,
+}
+
+/// `BatchRequest::derive`: replace each PBR set's jobs with derived jobs (Note CM).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeriveRequest {
+    pub mode: DeriveMode,
+    pub params: LegacyParams,
+    pub sets: Vec<DeriveSet>,
+    /// Members of PBR sets left out (C2 opt-out): their jobs are removed as a derived set's are.
+    pub drop: Vec<PathBuf>,
+    /// The mesh votes were read (TA13): tells "no scan" from "no env-map mesh".
+    pub scanned: bool,
+}
+
+/// How many trailing components of a path mirror `game_path` and sit below a `textures/pbr/` fold (TA12), or
+/// `None` when the game path has no `pbr` folder directly below `textures/`.
+fn pbr_depth(game_path: &str) -> Option<usize> {
+    let tail: Vec<&str> = game_path.split('/').collect();
+    (tail.len() > 2
+        && tail[0].eq_ignore_ascii_case("textures")
+        && tail[1].eq_ignore_ascii_case("pbr"))
+    .then(|| tail.len() - 1)
+}
+
+/// TA12: `rel` (or any path that ends with the game path's tail, such as an output) without the `pbr` component
+/// that sits directly below the game path's `textures/`. Unchanged when the game path has no such folder, or the
+/// component at that position is not `pbr` (ASCII case-insensitive).
+pub fn vanilla_rel(rel: &Path, game_path: &str) -> PathBuf {
+    let comps: Vec<Component> = rel.components().collect();
+    match pbr_depth(game_path) {
+        Some(n)
+            if comps.len() >= n
+                && comps[comps.len() - n]
+                    .as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("pbr") =>
+        {
+            let cut = comps.len() - n;
+            comps
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| i != cut)
+                .map(|(_, c)| c.as_os_str())
+                .collect()
+        }
+        _ => rel.to_path_buf(),
+    }
+}
+
+/// TA12 on a `/` game path: `textures/pbr/arm/steel` → `textures/arm/steel`.
+pub fn vanilla_game_path(game_path: &str) -> String {
+    match pbr_depth(game_path) {
+        Some(_) => {
+            let (head, rest) = game_path.split_at("textures/".len());
+            format!("{head}{}", &rest["pbr/".len()..])
+        }
+        None => game_path.to_string(),
+    }
+}
 
 /// What a derived job writes (Note CM11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -151,7 +151,14 @@
         "CHK-PARALLAX",
         "CHK-PARALLAX-SCALE",
         "CHK-LOW-DETAIL",
-        "CHK-UV-GUTTER"
+        "CHK-UV-GUTTER",
+        "DERIVE-DDS-SOURCE",
+        "DERIVE-NO-ALBEDO",
+        "DERIVE-NO-SCAN",
+        "DERIVE-NO-ENVMAP",
+        "DERIVE-PATH-CONFLICT",
+        "DERIVE-NOT-CONVERTED",
+        "DERIVE-NIF-SUGGEST"
       ],
       "type": "string"
     },

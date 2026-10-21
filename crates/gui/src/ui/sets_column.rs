@@ -1167,6 +1167,7 @@ fn shader_combo(
             ShaderOrigin::Set => "",
             ShaderOrigin::Auto(_) => " (auto)",
             ShaderOrigin::Fallback => " (fallback)",
+            ShaderOrigin::Derived => " (derived)",
         };
         format!("{}{tag}", p.shader.label())
     });

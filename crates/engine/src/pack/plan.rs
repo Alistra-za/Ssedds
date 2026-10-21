@@ -84,7 +84,12 @@ pub fn raw_role(f: &InputFile) -> Option<RawMap> {
 /// the output's name `<base>_<suffix>.<ext>` in `rel` and `game_path` (rule globs and `file:` scopes match it)
 /// and the packed `output` next to the source's.
 pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
-    let stem = virtual_stem(&first.rel, kind);
+    virtual_input_as(first, kind.suffix())
+}
+
+/// [`virtual_input`] for an output whose suffix is `suffix` (a derived `_m`, Note CM).
+pub(crate) fn virtual_input_as(first: &InputFile, suffix: &str) -> InputFile {
+    let stem = virtual_stem_as(&first.rel, suffix);
     let ext = first
         .rel
         .extension()
@@ -111,13 +116,17 @@ pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
 /// shortcut: only the built-in §6.1 suffixes are cut, not preset aliases (the GUI calls this without a registry);
 /// pass the alias table when a recipe can take an aliased pre-packed source.
 pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
+    virtual_stem_as(first_source, kind.suffix())
+}
+
+fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
     let stem = first_source
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
     let base = split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b);
-    format!("{base}_{}", kind.suffix())
+    format!("{base}_{suffix}")
 }
 
 /// A recipe that passed pass 1: assembled, analysed and resolved in pass 2.
@@ -209,44 +218,50 @@ fn prepacked_member<'a>(
     })
 }
 
-/// A recipe whose sources differ in size (spec §6.4 "Dimensions"): an error job, so `run` fails it. Its sub-type
-/// and category come from the recipe (`recipe:<kind>`), as for a recipe job that runs; the caller adds
-/// `provenance["target"]`, as for every job.
-fn size_mismatch_job(
-    ctx: &ResolveCtx,
-    vin: &InputFile,
-    set: &TextureSet,
-    kind: RecipeKind,
-    found: &[(PathBuf, u32, u32)],
-) -> ResolvedJob {
-    let text = sizes(found);
+/// PACK-SIZE-MISMATCH for `output`, whose sources differ in size (spec §6.4 "Dimensions"; derive TA22).
+pub(crate) fn size_mismatch_warning(output: &Path, found: &[(PathBuf, u32, u32)]) -> Warning {
     let data: Vec<_> = found
         .iter()
         .map(|(p, w, h)| json!({ "path": slash(p), "width": w, "height": h }))
         .collect();
-    let recipe = Provenance::Recipe(kind.id().into());
+    Warning::new(
+        Code::PackSizeMismatch,
+        format!(
+            "sources of {} differ in size: {}; no resizing in v1",
+            name(output),
+            sizes(found)
+        ),
+    )
+    .with_data(json!({ "sources": data }))
+}
+
+/// A recipe (packed or derived) that cannot be built: an error job carrying `w`, so `run` fails it. Its sub-type
+/// and category come from the recipe (`recipe:<id>`), as for a recipe job that runs; the caller adds
+/// `provenance["target"]`, as for every job.
+pub(crate) fn recipe_error_job(
+    ctx: &ResolveCtx,
+    vin: &InputFile,
+    set_key: &str,
+    subtype: crate::config::Subtype,
+    recipe_id: &str,
+    w: Warning,
+) -> ResolvedJob {
+    let recipe = Provenance::Recipe(recipe_id.into());
     ResolvedJob {
         input: vin.path.clone(),
         output: vin.output.clone(),
         game_path: vin.game_path.clone(),
-        set_key: set.key.clone(),
-        profile: ctx.registry.base_profile(ctx.target, kind.subtype()),
+        set_key: set_key.to_string(),
+        profile: ctx.registry.base_profile(ctx.target, subtype),
         provenance: BTreeMap::from([
             ("subtype".to_string(), recipe.clone()),
             ("category".to_string(), recipe),
         ]),
         suggestions: vec![],
-        warnings: vec![Warning::new(
-            Code::PackSizeMismatch,
-            format!(
-                "sources of {} differ in size: {text}; no resizing in v1",
-                name(&vin.output)
-            ),
-        )
-        .with_data(json!({ "sources": data }))],
         status: JobStatus::Error {
-            codes: vec![Code::PackSizeMismatch],
+            codes: vec![w.code],
         },
+        warnings: vec![w],
         suffix_alias: None,
         source: None,
         pack: None,
@@ -653,7 +668,14 @@ pub fn plan_packing(
                     None => "sources differ in size".into(),
                 });
                 reports.push(report);
-                jobs.push(size_mismatch_job(ctx, &vin, set, recipe.kind, &found));
+                jobs.push(recipe_error_job(
+                    ctx,
+                    &vin,
+                    &set.key,
+                    st,
+                    recipe.kind.id(),
+                    size_mismatch_warning(&vin.output, &found),
+                ));
                 continue;
             }
             reports.push(report);
