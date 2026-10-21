@@ -153,26 +153,26 @@ pub(crate) fn fit(s: &Slopes, h: &[f64]) -> (f32, f32) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::config::GreenConvention::{Directx, Opengl};
     use crate::from_normal::{slopes, tilt_deg};
     use crate::image::Rgba32F;
     use std::f64::consts::PI;
 
-    fn lcg(s: &mut u64) -> f64 {
+    pub(crate) fn lcg(s: &mut u64) -> f64 {
         *s = s
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         (*s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
     }
 
-    fn gauss(x: f64, y: f64, cx: f64, cy: f64, sigma: f64) -> f64 {
+    pub(crate) fn gauss(x: f64, y: f64, cx: f64, cy: f64, sigma: f64) -> f64 {
         (-((x - cx).powi(2) + (y - cy).powi(2)) / (2.0 * sigma * sigma)).exp()
     }
 
     /// Periodic: sines of periods W, W/2, W/4, W/8 in x (H… in y) plus a wrapped Gaussian bump (σ 8).
-    fn torus(w: usize, h: usize) -> Vec<f64> {
+    pub(crate) fn torus(w: usize, h: usize) -> Vec<f64> {
         let (wf, hf) = (w as f64, h as f64);
         let mut out = vec![0.0; w * h];
         for y in 0..h {
@@ -207,7 +207,7 @@ mod tests {
     }
 
     /// Stored codes of `unit(−p, −q, 1)`.
-    fn encode(p: &[f64], q: &[f64], w: usize, h: usize) -> Rgba32F {
+    pub(crate) fn encode(p: &[f64], q: &[f64], w: usize, h: usize) -> Rgba32F {
         let px = p
             .iter()
             .zip(q)
@@ -229,7 +229,13 @@ mod tests {
     }
 
     /// W8's central difference `k·(h[x+1] − h[x−1])`, with wrapped or mirrored (edge-repeating) indices.
-    fn diffs(hf: &[f64], w: usize, h: usize, k: f64, wrap: bool) -> (Vec<f64>, Vec<f64>) {
+    pub(crate) fn diffs(
+        hf: &[f64],
+        w: usize,
+        h: usize,
+        k: f64,
+        wrap: bool,
+    ) -> (Vec<f64>, Vec<f64>) {
         let at = |i: isize, n: usize| -> usize {
             if wrap {
                 i.rem_euclid(n as isize) as usize
@@ -248,12 +254,12 @@ mod tests {
         (p, q)
     }
 
-    fn bump(hf: &[f64], w: usize, h: usize, k: f64, wrap: bool) -> Rgba32F {
+    pub(crate) fn bump(hf: &[f64], w: usize, h: usize, k: f64, wrap: bool) -> Rgba32F {
         let (p, q) = diffs(hf, w, h, k, wrap);
         encode(&p, &q, w, h)
     }
 
-    fn range(v: &[f64]) -> f64 {
+    pub(crate) fn range(v: &[f64]) -> f64 {
         v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
     }
 
@@ -284,7 +290,7 @@ mod tests {
             .fold(0.0, f64::max)
     }
 
-    fn constant(w: usize, h: usize, px: [f32; 4]) -> Rgba32F {
+    pub(crate) fn constant(w: usize, h: usize, px: [f32; 4]) -> Rgba32F {
         Rgba32F {
             width: w as u32,
             height: h as u32,
@@ -315,6 +321,32 @@ mod tests {
             seam_y <= 1.5 * int_y,
             "row seam {seam_y} vs interior {int_y}"
         );
+    }
+
+    /// Three anisotropic diagonal blobs (sigma 16 x 4): green-sensitive, as their x and y slopes differ.
+    pub(crate) fn blobs(w: usize, h: usize) -> Vec<f64> {
+        let mut hf = vec![0.0; w * h];
+        for (i, v) in hf.iter_mut().enumerate() {
+            let (x, y) = ((i % w) as f64, (i / w) as f64);
+            for (cx, cy, a) in [(40.0, 40.0, 5.0), (90.0, 70.0, -4.0), (50.0, 100.0, 3.0)] {
+                let (u, t) = (
+                    (x - cx + y - cy) / 2f64.sqrt(),
+                    (x - cx - y + cy) / 2f64.sqrt(),
+                );
+                *v += a * (-(u * u) / (2.0 * 16.0 * 16.0) - t * t / (2.0 * 4.0 * 4.0)).exp();
+            }
+        }
+        hf
+    }
+
+    /// A ramp plus a bump cut by the left edge: a map that does not tile.
+    pub(crate) fn ramp(w: usize, h: usize) -> Vec<f64> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64, (i / w) as f64);
+                0.05 * x + 0.03 * y + 4.0 * gauss(x, y, 4.0, 100.0, 8.0)
+            })
+            .collect()
     }
 
     #[test]
@@ -418,14 +450,9 @@ mod tests {
         let (wrap, ratio, _) =
             detect_tiling(&slopes(&bump(&torus(w, h), w, h, 4.0, true), Directx));
         assert!(wrap && ratio <= 2.0, "torus ratio {ratio}");
-        // A ramp plus a bump cut by the left edge, with normals made without wrapping (a map that does not tile).
-        let ramp: Vec<f64> = (0..w * h)
-            .map(|i| {
-                let (x, y) = ((i % w) as f64, (i / w) as f64);
-                0.05 * x + 0.03 * y + 4.0 * gauss(x, y, 4.0, 100.0, 8.0)
-            })
-            .collect();
-        let (wrap, ratio, _) = detect_tiling(&slopes(&bump(&ramp, w, h, 4.0, false), Directx));
+        // Normals made without wrapping (a map that does not tile).
+        let (wrap, ratio, _) =
+            detect_tiling(&slopes(&bump(&ramp(w, h), w, h, 4.0, false), Directx));
         assert!(!wrap && ratio > 3.0, "ramp ratio {ratio}");
     }
 
@@ -486,18 +513,7 @@ mod tests {
     #[test]
     fn the_wrong_green_fits_much_worse() {
         let (w, h) = (128, 128);
-        let mut hf = vec![0.0; w * h];
-        for (i, v) in hf.iter_mut().enumerate() {
-            let (x, y) = ((i % w) as f64, (i / w) as f64);
-            for (cx, cy, a) in [(40.0, 40.0, 5.0), (90.0, 70.0, -4.0), (50.0, 100.0, 3.0)] {
-                let (u, t) = (
-                    (x - cx + y - cy) / 2f64.sqrt(),
-                    (x - cx - y + cy) / 2f64.sqrt(),
-                );
-                *v += a * (-(u * u) / (2.0 * 16.0 * 16.0) - t * t / (2.0 * 4.0 * 4.0)).exp();
-            }
-        }
-        let n = bump(&hf, w, h, 2.0, true);
+        let n = bump(&blobs(w, h), w, h, 2.0, true);
         let fits: Vec<f32> = [Directx, Opengl]
             .into_iter()
             .map(|g| {
