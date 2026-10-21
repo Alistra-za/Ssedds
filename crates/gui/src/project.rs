@@ -3,7 +3,7 @@
 use engine::codes::Code;
 use engine::config::{RawMap, Target};
 use engine::policy::SourceStamp;
-use engine::presets::ConfigFile;
+use engine::presets::{ConfigFile, ExportConfig};
 use serde_json::Value as Json;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -129,6 +129,25 @@ pub struct ProjectDoc {
     f: TomlFile,
     /// The document and dirty flag `set_error` dropped, kept until `unblame` or `reload` (trace-debug #9).
     stash: Option<(DocumentMut, bool)>,
+    /// `[export]` as last parsed, by `rev` (Note CN: Review and `view_key` read it every frame).
+    export_cache: std::cell::RefCell<Option<(u64, ExportConfig)>>,
+}
+
+/// `v` without the fields equal to `d`'s, recursively; an object left empty goes too. A field that `written` (the
+/// table as it is in the file) holds with the same value stays, even at its default: the edit did not touch it, so
+/// the user may have pinned it (final review M3). A field the edit sets to its default goes, as before (CN60).
+fn prune(v: &mut Json, d: &Json, written: Option<&Json>) {
+    if let (Json::Object(o), Json::Object(d)) = (v, d) {
+        o.retain(|k, x| {
+            let Some(dx) = d.get(k) else { return true };
+            let w = written.and_then(|w| w.get(k));
+            if x.is_object() {
+                prune(x, dx, w);
+                return !matches!(x, Json::Object(m) if m.is_empty());
+            }
+            x != dx || w == Some(&*x)
+        });
+    }
 }
 
 pub(crate) fn json_to_toml(v: &Json) -> Option<Value> {
@@ -225,6 +244,7 @@ impl ProjectDoc {
         let mut d = ProjectDoc {
             f: TomlFile::open(root.join("sdc.toml")),
             stash: None,
+            export_cache: Default::default(),
         };
         d.check();
         d
@@ -594,6 +614,77 @@ impl ProjectDoc {
         if self.drop_entry(key) {
             self.touch();
         }
+    }
+
+    /// `[export]` (Track A, TA9), the default when absent or unparsable. Cached by `rev`.
+    pub fn export_config(&self) -> ExportConfig {
+        let rev = self.rev();
+        if let Some((r, c)) = &*self.export_cache.borrow() {
+            if *r == rev {
+                return c.clone();
+            }
+        }
+        let c = self
+            .config()
+            .ok()
+            .and_then(|c| c.export)
+            .unwrap_or_default();
+        *self.export_cache.borrow_mut() = Some((rev, c.clone()));
+        c
+    }
+
+    /// Write `[export]` as `cfg`: only the fields that differ from the default, so a tick does not freeze today's
+    /// recipe defaults into the file (CN60); none at all removes the table. No edit when nothing changes.
+    // shortcut: the table is rewritten, so comments inside `[export]` are lost on a GUI edit; upgrade to per-key
+    // `set_value` if users hand-annotate it.
+    pub fn set_export_config(&mut self, cfg: &ExportConfig) {
+        if self.read_only() || self.export_config() == *cfg {
+            return;
+        }
+        let (Ok(mut v), Ok(d)) = (
+            serde_json::to_value(cfg),
+            serde_json::to_value(ExportConfig::default()),
+        ) else {
+            return;
+        };
+        let written = toml::from_str::<Json>(&self.f.doc.to_string())
+            .ok()
+            .and_then(|mut t| t.get_mut("export").map(Json::take));
+        prune(&mut v, &d, written.as_ref());
+        let root = self.f.doc.as_table_mut();
+        if v.as_object().is_none_or(|o| o.is_empty()) {
+            root.remove("export");
+        } else {
+            let text = toml::to_string(&serde_json::json!({ "export": v })).unwrap_or_default();
+            let Some(item) = text
+                .parse::<DocumentMut>()
+                .ok()
+                .and_then(|mut d| d.remove("export"))
+            else {
+                return;
+            };
+            root.insert("export", item);
+        }
+        self.touch();
+    }
+
+    /// C2 (TA9): leave set `set_id` out of Vanilla and CM (`on`), or put it back.
+    pub fn set_skip_also(&mut self, set_id: &str, on: bool) {
+        let mut c = self.export_config();
+        c.skip.retain(|s| !engine::sets::same_id(s, set_id));
+        if on {
+            c.skip.push(set_id.to_string());
+        }
+        self.set_export_config(&c);
+    }
+
+    /// TA31: a renamed set keeps its opt-out.
+    pub fn rename_skip_also(&mut self, old: &str, new: &str) {
+        let mut c = self.export_config();
+        for s in c.skip.iter_mut().filter(|s| engine::sets::same_id(s, old)) {
+            *s = new.to_string();
+        }
+        self.set_export_config(&c);
     }
 
     pub fn changed_on_disk(&self) -> bool {

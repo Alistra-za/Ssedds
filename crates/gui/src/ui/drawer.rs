@@ -142,7 +142,7 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         if let Some(root) = &model.root {
             let cmd = cli_command(
                 root,
-                &model.export_root(),
+                &model.cli_output(),
                 model.session_bc1(),
                 model.settings.jobs,
             );

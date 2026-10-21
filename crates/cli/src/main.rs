@@ -16,17 +16,25 @@ mod verbs;
 
 use args::*;
 use clap::Parser;
+use engine::also::{run_also, AlsoSpec};
 use engine::api::{CancelToken, Engine, EngineError};
 use engine::events::{new_batch_id, EventSink, JsonLinesSink, Reporter};
+use engine::session::AnalysisCache;
+use std::collections::BTreeSet;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-fn reporter(json: bool) -> Reporter {
+/// Human output on stderr, plus JSON Lines on stdout with `--json`. `run_also` takes this and makes its own reporters.
+fn tee_sink(json: bool) -> Arc<dyn EventSink> {
     let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(human::HumanSink::new())];
     if json {
         sinks.push(Arc::new(JsonLinesSink::new(std::io::stdout())));
     }
-    Reporter::new(Arc::new(human::TeeSink(sinks)), new_batch_id())
+    Arc::new(human::TeeSink(sinks))
+}
+
+fn reporter(json: bool) -> Reporter {
+    Reporter::new(tee_sink(json), new_batch_id())
 }
 
 fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
@@ -56,8 +64,31 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
             "warning: could not install the Ctrl-C handler ({e}); Ctrl-C will end sdc immediately"
         );
     }
-    let rep = reporter(a.batch.json);
     let engine = Engine::new()?;
+    // Track A (Note CN): `[export] also` in the project `sdc.toml` writes the three folders under `-o`. A bad
+    // `[export.legacy]` value is an error on this path only (O2): `run_also` checks it, `export_config` does not.
+    let cfg = engine.export_config(&req)?;
+    if !cfg.also.is_empty() {
+        let spec = AlsoSpec {
+            cfg,
+            location: req.output_root.clone(),
+            // The CLI reads no scan (TA13, TA18), so the env `_m` says "no scan".
+            scanned: false,
+            // shortcut: the CLI has no resolved PGP flags (TA27), so no set is marked inner-layer.
+            inner_layer_sets: BTreeSet::new(),
+        };
+        // `run_also` returns Ok even when the PBR phase failed (CN56), so the exit code is the summary's.
+        let sum = run_also(
+            &engine,
+            &AnalysisCache::default(),
+            req,
+            &spec,
+            tee_sink(a.batch.json),
+            &cancel,
+        )?;
+        return Ok(sum.exit_code());
+    }
+    let rep = reporter(a.batch.json);
     let plan = engine.plan(req, &rep, &cancel)?;
     Ok(engine.run(plan, &rep, &cancel)?.exit_code())
 }

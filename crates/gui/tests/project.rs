@@ -265,3 +265,21 @@ fn a_hand_written_key_is_found_case_insensitively() {
     doc.remove_file_entry("landscape/ROCK01_N.png");
     assert!(doc.file_keys().is_empty());
 }
+
+/// Final review M3: a GUI Also edit keeps an `[export]` key the user wrote, even one equal to the default (a pin, C4);
+/// it prunes only default values it would add itself.
+#[test]
+fn an_explicit_default_valued_export_pin_survives_an_also_edit() {
+    let k = engine::derive::recipe::LegacyParams::default().brightness;
+    let (_d, mut doc) = doc_with(&format!(
+        "[export]\nalso = [\"vanilla\"]\n\n[export.legacy]\nbrightness = {k:?}\n"
+    ));
+    doc.set_skip_also("textures/pbr/arm/steel", true);
+    let t = doc.text();
+    assert!(t.contains(&format!("brightness = {k:?}")), "{t}");
+    assert!(t.contains("skip"), "{t}");
+    assert!(
+        !t.contains("zip"),
+        "a default the GUI would add is pruned: {t}"
+    );
+}

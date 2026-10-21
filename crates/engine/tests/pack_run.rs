@@ -69,6 +69,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         }),
         bake: None,
         rnm: None,
+        derive: None,
         shader: None,
     };
     Plan {
@@ -83,6 +84,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         cancelled: vec![],
         shaders: Default::default(),
         nvtt: None,
+        derive_own: Default::default(),
     }
 }
 

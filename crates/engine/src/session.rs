@@ -195,8 +195,12 @@ impl AnalysisCache {
         }
     }
     /// The job's analysis: its packed image's for a packed job, else its source's. Like [`Self::thumbnail`], it
-    /// ignores stamps.
+    /// ignores stamps. `None` for a derived job: its image is never cached, and its input's analysis is the
+    /// albedo's, not its own (preflight P25).
     pub fn analysis(&self, job: &ResolvedJob) -> Option<Analysis> {
+        if job.derive.is_some() {
+            return None;
+        }
         match &job.pack {
             Some(pk) => {
                 let key = pack_cache_key(pk)?;

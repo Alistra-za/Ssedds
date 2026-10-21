@@ -198,6 +198,20 @@ While it runs the Files tab shows done/total, elapsed time, files per second and
 
 If an export is blocked, Review's *Blockers* column lists what to fix; **Go to set** selects the set.
 
+### Also export as Vanilla and CM
+
+In the cs mode one export can also write a vanilla and a complex-material (CM) version of a PBR mod.
+
+- **Switch it on** with **Export to ▾ → Also export as Vanilla** or **Also export as Complex material** (checkable, no dialog; "Open a folder first" without a project), or with the ticks in Review's **Also export as** column. The column shows in the cs mode or while a tick is on; its red reason line shows only while a tick is on.
+- **While a tick is on, Export always opens Review.** Review's Export writes three folders side by side: `<project> PBR` (the normal cs export, with its JSON), `<project> Vanilla` and `<project> CM`. Ticking only CM writes Vanilla too.
+- **Review's column** also holds the **Export location** (per project, `[project] also_location` in `sdc-project.toml`; by default the export folder), the three folder names, **Keep metal brightness** and its strength (CM), **Also write a zip of each folder** and **Skip these sets**.
+- **Install** the PBR folder or the Vanilla folder. For CM, install the CM folder on top of the Vanilla folder. With Keep metal brightness off, the CM folder holds only `_m` files (plus the complex-grass stack of each PBR grass set). Files an earlier export left in the folders are kept and listed in the report as "not written by this export"; delete them yourself.
+- **Vanilla** gets a converted diffuse, a `_n` with the specular mask in alpha and, where the meshes use the environment-map shader, an env `_m`. That needs a Meshes scan; without one no env `_m` is written. A PBR Landscape set's `_p` goes into Vanilla too (Terrain Helper). Textures that are not PBR are copied from the PBR folder when they would be the same. **CM** gets one `_m` per PBR set.
+- **Skip a set** with Review's **Skip these sets**, or, in 2D, **Skip vanilla/CM for this set** in the set panel's Material tab.
+- **NIF edits** go into the PBR folder while a tick is on.
+- **The recipe** is the **Also export recipe** section in Advanced (closed at first; Review's **Recipe settings are in Advanced** opens it). See [Project Config](Project-Config.md#export) for each value.
+- **After the export** `<project> conversion-report.md` sits next to the folders: counts per folder, the recipe, a row per PBR set with a suggested NIF Glossiness and Specular Strength and whether it needs the Environment Map shader, the sets not converted, and how to install. With the zip on, `<folder>.zip` per folder and `<project> SHA256SUMS.txt`; the PBR zip includes the PGPatcher JSON.
+
 ## Sets and the set editor
 
 ### Editing sets
@@ -341,6 +355,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | Mipmaps | Levels for the selected texture. |
 | Advanced texture fields | Perceptual, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size (drop mip 0). |
 | Checks | The switches for the artist checks, **Drop mip 0 when it adds nothing** and **Check all UV coverage**. See *Artist checks* below. |
+| Also export recipe | One box per `[export.legacy]` value of [Also export as Vanilla and CM](#also-export-as-vanilla-and-cm). Starts closed; Review's link opens it. |
 | Unmatched [files] entries | `[files]` entries that name no file under the current target, with **Remove**. |
 
 ## Artist checks

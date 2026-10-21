@@ -720,7 +720,10 @@
         "height",
         "opacity",
         "fuzz",
-        "orm"
+        "orm",
+        "curves",
+        "cavity",
+        "rmaos"
       ],
       "type": "string"
     },
@@ -831,6 +834,20 @@
       "properties": {
         "bake": {
           "description": "The `_n` a roughness member baked its variance from (DECISIONS R12): the SHA-256 of its decode settings and\nlevel shift (`BakeJob::identity_sha256`). Absent on every other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "derive": {
+          "description": "Track A (DECISIONS Note CN12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on\nevery other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "derive_role": {
+          "description": "The slots that source fills in a derived job (`albedo`, `rough+metal+ao`, ...), as `rnm` holds its role.",
           "type": [
             "string",
             "null"
@@ -1041,6 +1058,17 @@
         "string",
         "null"
       ]
+    },
+    "copied_from": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceStamp"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Track A (Note CN): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was\ncopied from, so the copy is redone when the PBR file changes. Absent on every encoded output."
     },
     "encoders": {
       "$ref": "#/$defs/EncoderVersions"

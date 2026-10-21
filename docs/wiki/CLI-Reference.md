@@ -101,7 +101,7 @@ Plans the batch, then encodes every file whose status is ready.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-o, --output <dir>` | `.\sdc-out` | Output root. Each output goes to `<output>\<path relative to the input folder>` with a `.dds` extension. The output root is never read as input. |
+| `-o, --output <dir>` | `.\sdc-out` | Output root. Each output goes to `<output>\<path relative to the input folder>` with a `.dds` extension. The output root is never read as input. With `[export] also` in the project `sdc.toml`, the folder the PBR, Vanilla and CM folders go in (see below). |
 | `--jobs <n>` | `0` (all cores) | Worker threads. |
 | `--mem-budget <size>` | 50% of RAM | Memory budget for files in flight. Bytes, or a `G`/`M` suffix (binary): `8G`, `512M`. `0` is an error; leave the flag out for the default. |
 | `--on-existing if-changed\|skip\|overwrite` | `if-changed` | What to do when an output exists. See below. |
@@ -109,6 +109,15 @@ Plans the batch, then encodes every file whose status is ready.
 | `--sidecar` | off | Also write `<name>.dds.json` next to each output with its record. |
 | `--nvtt <path>` | `PATH`, then the NVIDIA install folder | Path to `nvcompress.exe` for textures with `encoder.backend = "nvtt"`. NVTT is looked for only when a texture uses it. See [NVTT backend](NVTT-Backend.md). |
 | `--bc1-decoder ideal\|ideal-round4\|nvidia\|amd` | `ideal` | Which hardware decoder model is used when BC1/BC3 output is decoded for validation. |
+
+### Also export as Vanilla / CM
+
+When the project `sdc.toml` has `[export] also` (see [Project Config](Project-Config.md#export)), `sdc convert` runs three passes and writes `<project> PBR`, `<project> Vanilla` and `<project> CM` under `-o`. `<project>` is the first input folder's name (or the folder of the first input file). The PBR folder is the plain cs export; the other two are converted from its PBR sets. Then it writes `<project> conversion-report.md` under `-o` and, with `zip = true`, the zips and `<project> SHA256SUMS.txt`.
+
+- It needs the `cs` target: "Also export needs the cs mode: the PBR folder is the cs export" (exit 2).
+- A bad `[export.legacy]` value or folder name is an error (exit 2) on this path only; a plain run does not check them.
+- The CLI reads no Meshes scan, so it writes no vanilla env `_m`, and the report says "no: no scan".
+- The GUI's **Copy CLI command** passes the Also export location as `-o`.
 
 ### --on-existing
 

@@ -141,6 +141,13 @@ pub struct SourceRef {
     /// every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rnm: Option<String>,
+    /// Track A (DECISIONS Note CN12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on
+    /// every other source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive: Option<String>,
+    /// The slots that source fills in a derived job (`albedo`, `rough+metal+ao`, ...), as `rnm` holds its role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive_role: Option<String>,
 }
 
 impl SourceRef {
@@ -153,6 +160,8 @@ impl SourceRef {
             invert: false,
             bake: None,
             rnm: None,
+            derive: None,
+            derive_role: None,
         })
     }
 
@@ -177,6 +186,15 @@ impl SourceRef {
     pub fn of_rnm(path: &Path, role: String) -> io::Result<SourceRef> {
         Ok(SourceRef {
             rnm: Some(role),
+            ..SourceRef::of(path)?
+        })
+    }
+
+    /// A derived job's source, with the slots it fills and the job's identity (Note CN12).
+    pub fn of_derive(path: &Path, role: &str, identity: String) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            derive: Some(identity),
+            derive_role: Some(role.into()),
             ..SourceRef::of(path)?
         })
     }
@@ -214,6 +232,10 @@ pub struct ManifestRecord {
     /// Size and mtime of the output as written (audit 5, DECISIONS Note Y1); `None` in records written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_stamp: Option<crate::policy::SourceStamp>,
+    /// Track A (Note CN): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was
+    /// copied from, so the copy is redone when the PBR file changes. Absent on every encoded output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_from: Option<crate::policy::SourceStamp>,
 }
 
 /// The stable id of a BC1 decoder model, as `--bc1-decoder` spells it (spec §8).
@@ -243,6 +265,8 @@ pub struct ManifestEntry {
     pub preset: Option<PresetRef>,
     pub bc1_model: Option<String>,
     pub output_stamp: Option<crate::policy::SourceStamp>,
+    /// `ManifestRecord::copied_from`.
+    pub copied_from: Option<crate::policy::SourceStamp>,
     pub raw: serde_json::Value,
 }
 
@@ -278,6 +302,7 @@ impl ManifestEntry {
             preset: lenient(&raw, "preset"),
             bc1_model: lenient(&raw, "bc1_model"),
             output_stamp: lenient(&raw, "output_stamp"),
+            copied_from: lenient(&raw, "copied_from"),
             raw,
         })
     }

@@ -1,10 +1,10 @@
 //! The packed float image of a recipe (spec §6.4 "Sources", "Dimensions", "Precision"). Each source contributes
-//! its R channel (luma with `channels.grayscale_source = luma`), an `_orm` the channel each slot names (Note AL);
-//! its alpha is ignored. Values stay as decoded
+//! its R channel (luma with `channels.grayscale_source = luma`), an `_orm` or `_rmaos` the channel each slot names
+//! (Notes AL, CM; an `_rmaos` A is read too); any other alpha is ignored. Values stay as decoded
 //! floats, so 16-bit sources keep their precision until Quantise. Sources are decoded **one at a time**: the peak
 //! is the output plus one decoded source, inside the 3x per-file estimate of `api::estimated_bytes`, which reads
 //! the first source (every source has its size).
-use super::{ChannelSource, PackJob};
+use super::{ChannelSource, PackJob, PackSource};
 use crate::analyse::code8;
 use crate::config::GraySource;
 use crate::image::{Rgba32F, SourceInfo};
@@ -62,34 +62,47 @@ fn grey(q: &[f32; 4]) -> bool {
     r.max(g).max(b) - r.min(g).min(b) <= 4
 }
 
+/// The value a channel holds on every texel; `None` for a channel read from a source or mirrored.
+pub(crate) fn constant(ch: &ChannelSource) -> Option<f32> {
+    match ch {
+        ChannelSource::Default { value } => Some(*value),
+        ChannelSource::Fill { code, .. } => Some(f32::from(*code) / 255.0),
+        ChannelSource::Opaque => Some(1.0),
+        ChannelSource::Source { .. } | ChannelSource::MirrorR => None,
+    }
+}
+
 /// Builds the packed image of `job`.
 pub fn assemble(job: &PackJob, gray: GraySource) -> Result<Assembled, PackError> {
-    let paths: Vec<PathBuf> = job.sources.iter().map(|s| s.path.clone()).collect();
+    assemble_channels(&job.channels, &job.sources, gray)
+}
+
+/// Builds the image whose R, G, B, A are `channels`, read from `sources` (Note CN: derive builds its images here
+/// without a `PackJob`).
+pub fn assemble_channels(
+    channels: &[ChannelSource; 4],
+    sources: &[PackSource],
+    gray: GraySource,
+) -> Result<Assembled, PackError> {
+    let paths: Vec<PathBuf> = sources.iter().map(|s| s.path.clone()).collect();
     let (w, h) = check_sizes(&paths)?;
     let mut image = Rgba32F::new(w, h, [0.0, 0.0, 0.0, 1.0]);
     let mut info = SourceInfo {
         bit_depth: 8,
         channels: 4,
-        has_alpha: !matches!(job.channels[3], ChannelSource::Opaque),
+        has_alpha: !matches!(channels[3], ChannelSource::Opaque),
         is_float: false,
     };
-    for (c, ch) in job.channels.iter().enumerate() {
-        let value = match ch {
-            ChannelSource::Default { value } => Some(*value),
-            ChannelSource::Fill { code, .. } => Some(f32::from(*code) / 255.0),
-            ChannelSource::Opaque => Some(1.0),
-            ChannelSource::Source { .. } | ChannelSource::MirrorR => None,
-        };
-        if let Some(v) = value {
+    for (c, ch) in channels.iter().enumerate() {
+        if let Some(v) = constant(ch) {
             for p in &mut image.px {
                 p[c] = v;
             }
         }
     }
     let mut non_gray = vec![];
-    for s in &job.sources {
-        let targets: Vec<(usize, bool, Option<u8>)> = job
-            .channels
+    for s in sources {
+        let targets: Vec<(usize, bool, Option<u8>)> = channels
             .iter()
             .enumerate()
             .filter_map(|(c, ch)| match ch {
@@ -131,7 +144,7 @@ pub fn assemble(job: &PackJob, gray: GraySource) -> Result<Assembled, PackError>
         }
     }
     let mirrored: Vec<usize> = (0..4)
-        .filter(|&c| matches!(job.channels[c], ChannelSource::MirrorR))
+        .filter(|&c| matches!(channels[c], ChannelSource::MirrorR))
         .collect();
     for p in &mut image.px {
         for &c in &mirrored {

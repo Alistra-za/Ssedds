@@ -7,7 +7,7 @@ use engine::events::*;
 use engine::overrides::parse_set;
 use engine::overrides::project_rel;
 use engine::policy::{JobStatus, ResolvedJob};
-use engine::presets::ConfigFile;
+use engine::presets::{AlsoTarget, ConfigFile, ExportConfig};
 use image::{ImageBuffer, Luma, Rgb};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -375,4 +375,104 @@ fn a_config_rule_override_of_the_subtype_stops_the_plan() {
         Err(EngineError::Config(m)) => assert!(m.contains("not in overrides"), "{m}"),
         other => panic!("expected a config error, got {:?}", other.map(|_| ())),
     }
+}
+
+// Track A Task 6: the `[export]` table (C3, C4, C2; Note CN).
+
+#[test]
+fn export_table_parses_with_defaults_and_round_trips() {
+    let c = ConfigFile::parse(
+        "[export]\nalso = [\"vanilla\", \"cm\"]\n[export.legacy]\nbrightness = 0.65\n",
+        "t",
+    )
+    .unwrap();
+    let e = c.export.clone().unwrap();
+    assert_eq!(e.also, vec![AlsoTarget::Vanilla, AlsoTarget::Cm]);
+    assert!(!e.zip && e.skip.is_empty());
+    assert_eq!(e.legacy.brightness, 0.65);
+    assert_eq!(e.legacy.ao_strength, 0.5);
+    let text = toml::to_string(&e).unwrap();
+    assert_eq!(toml::from_str::<ExportConfig>(&text).unwrap(), e);
+    // A config without [export] writes no "export" key, so a GUI-written sdc.toml is unchanged.
+    let plain =
+        serde_json::to_string(&ConfigFile::parse("preset = \"cs-quality\"\n", "t").unwrap());
+    assert!(!plain.unwrap().contains("export"));
+}
+
+#[test]
+fn bad_export_values_are_config_errors() {
+    let parse = |t: &str| ConfigFile::parse(t, "t");
+    let check = |t: &str| parse(t).unwrap().export.unwrap_or_default().check();
+    assert!(check("[export.legacy]\nbrightness = 2\n")
+        .unwrap_err()
+        .contains("export.legacy.brightness"));
+    assert!(check("[export.legacy]\nlandscape_spec = 6\n").is_err());
+    assert!(parse("[export]\nbogus = 1\n").is_err());
+    assert!(parse("[export.legacy]\nbogus = 1\n").is_err());
+    assert!(parse("[export.names]\nbogus = \"x\"\n").is_err());
+    assert!(check("[export.names]\nvanilla = \"a/b\"\n").is_err());
+    assert!(check("[export.names]\ncm = \"a\\\\b\"\n").is_err());
+    assert!(check("[export.names]\ncm = \"\"\n").is_err());
+    assert!(check("[export.names]\ncm = \"x.\"\n").is_err());
+    assert!(check("[export.names]\ncm = \"x \"\n").is_err());
+    assert!(check("[export.names]\npbr = \"X\"\ncm = \"x\"\n").is_err());
+    assert!(check("[export.names]\nvanilla = \"ok\"\n").is_ok());
+    assert!(check("").is_ok());
+}
+
+#[test]
+fn a_bad_legacy_value_does_not_break_a_plain_export() {
+    let bad = fixture("[export.legacy]\nbrightness = 2\n");
+    let plain = fixture("");
+    let eng = Engine::new().unwrap();
+    // export_config parses only; check() is run by run_also.
+    let cfg = eng.export_config(&req(&bad)).unwrap();
+    assert!(cfg.also.is_empty() && cfg.check().is_err());
+    let outs = |d: &TempDir| -> Vec<String> {
+        let mut v: Vec<String> = plan(req(d))
+            .jobs
+            .iter()
+            .map(|j| {
+                j.output
+                    .strip_prefix(d.path())
+                    .unwrap()
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(outs(&bad), outs(&plain));
+    assert_eq!(
+        eng.export_config(&req(&plain)).unwrap(),
+        ExportConfig::default()
+    );
+}
+
+#[test]
+fn export_in_the_user_config_is_refused() {
+    let d = fixture("");
+    let user = d.path().join("user.toml");
+    std::fs::write(&user, "[export]\nzip = true\n").unwrap();
+    let mut r = req(&d);
+    r.user_config = Some(user);
+    match plan_events(r).0 {
+        Err(EngineError::Config(m)) => {
+            assert!(m.contains("[export] is only valid in a project sdc.toml"));
+            assert!(m.contains("user.toml"));
+        }
+        other => panic!("expected a config error, got {:?}", other.map(|_| ())),
+    }
+}
+
+#[test]
+fn default_folder_names_follow_the_project_name() {
+    let mut e = ExportConfig::default();
+    assert_eq!(
+        e.folder_names("Iron"),
+        ["Iron PBR", "Iron Vanilla", "Iron CM"]
+    );
+    e.names.cm = Some("Iron Lite".into());
+    assert_eq!(e.folder_names("Iron")[2], "Iron Lite");
 }

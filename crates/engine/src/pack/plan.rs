@@ -84,7 +84,12 @@ pub fn raw_role(f: &InputFile) -> Option<RawMap> {
 /// the output's name `<base>_<suffix>.<ext>` in `rel` and `game_path` (rule globs and `file:` scopes match it)
 /// and the packed `output` next to the source's.
 pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
-    let stem = virtual_stem(&first.rel, kind);
+    virtual_input_as(first, kind.suffix())
+}
+
+/// [`virtual_input`] for an output whose suffix is `suffix` (a derived `_m`, Note CN).
+pub(crate) fn virtual_input_as(first: &InputFile, suffix: &str) -> InputFile {
+    let stem = virtual_stem_as(&first.rel, suffix);
     let ext = first
         .rel
         .extension()
@@ -111,13 +116,17 @@ pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
 /// shortcut: only the built-in §6.1 suffixes are cut, not preset aliases (the GUI calls this without a registry);
 /// pass the alias table when a recipe can take an aliased pre-packed source.
 pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
+    virtual_stem_as(first_source, kind.suffix())
+}
+
+pub(crate) fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
     let stem = first_source
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
     let base = split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b);
-    format!("{base}_{}", kind.suffix())
+    format!("{base}_{suffix}")
 }
 
 /// A recipe that passed pass 1: assembled, analysed and resolved in pass 2.
@@ -209,49 +218,56 @@ fn prepacked_member<'a>(
     })
 }
 
-/// A recipe whose sources differ in size (spec §6.4 "Dimensions"): an error job, so `run` fails it. Its sub-type
-/// and category come from the recipe (`recipe:<kind>`), as for a recipe job that runs; the caller adds
-/// `provenance["target"]`, as for every job.
-fn size_mismatch_job(
-    ctx: &ResolveCtx,
-    vin: &InputFile,
-    set: &TextureSet,
-    kind: RecipeKind,
-    found: &[(PathBuf, u32, u32)],
-) -> ResolvedJob {
-    let text = sizes(found);
+/// PACK-SIZE-MISMATCH for `output`, whose sources differ in size (spec §6.4 "Dimensions"; derive TA22).
+pub(crate) fn size_mismatch_warning(output: &Path, found: &[(PathBuf, u32, u32)]) -> Warning {
     let data: Vec<_> = found
         .iter()
         .map(|(p, w, h)| json!({ "path": slash(p), "width": w, "height": h }))
         .collect();
-    let recipe = Provenance::Recipe(kind.id().into());
+    Warning::new(
+        Code::PackSizeMismatch,
+        format!(
+            "sources of {} differ in size: {}; no resizing in v1",
+            name(output),
+            sizes(found)
+        ),
+    )
+    .with_data(json!({ "sources": data }))
+}
+
+/// A recipe (packed or derived) that cannot be built: an error job carrying `w`, so `run` fails it. Its sub-type
+/// and category come from the recipe (`recipe:<id>`), as for a recipe job that runs; the caller adds
+/// `provenance["target"]`, as for every job.
+pub(crate) fn recipe_error_job(
+    ctx: &ResolveCtx,
+    vin: &InputFile,
+    set_key: &str,
+    subtype: crate::config::Subtype,
+    recipe_id: &str,
+    w: Warning,
+) -> ResolvedJob {
+    let recipe = Provenance::Recipe(recipe_id.into());
     ResolvedJob {
         input: vin.path.clone(),
         output: vin.output.clone(),
         game_path: vin.game_path.clone(),
-        set_key: set.key.clone(),
-        profile: ctx.registry.base_profile(ctx.target, kind.subtype()),
+        set_key: set_key.to_string(),
+        profile: ctx.registry.base_profile(ctx.target, subtype),
         provenance: BTreeMap::from([
             ("subtype".to_string(), recipe.clone()),
             ("category".to_string(), recipe),
         ]),
         suggestions: vec![],
-        warnings: vec![Warning::new(
-            Code::PackSizeMismatch,
-            format!(
-                "sources of {} differ in size: {text}; no resizing in v1",
-                name(&vin.output)
-            ),
-        )
-        .with_data(json!({ "sources": data }))],
         status: JobStatus::Error {
-            codes: vec![Code::PackSizeMismatch],
+            codes: vec![w.code],
         },
+        warnings: vec![w],
         suffix_alias: None,
         source: None,
         pack: None,
         bake: None,
         rnm: None,
+        derive: None,
         shader: None,
     }
 }
@@ -406,7 +422,9 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
 /// pre-packed job gets `PACK-CONFLICT` or (with `packing.prefer = raw`) moves to `skipped`, and a recipe whose
 /// sources differ in size becomes an error job. `failed` holds the paths that failed planning and `cancelled` those
 /// whose Load never started because the batch was cancelled: a recipe with a member in either is `Failed` (Note M11).
-/// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b.
+/// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b. `derive_heights`
+/// holds the raw heights of the landscape sets a Vanilla derive converts (Note CN26, O6): each gets the cs
+/// `Parallax` recipe, which the vanilla target otherwise never plans. It is empty without `derive` (C6).
 #[allow(clippy::too_many_arguments)]
 pub fn plan_packing(
     ctx: &ResolveCtx,
@@ -417,6 +435,7 @@ pub fn plan_packing(
     cancelled: &[PathBuf],
     skipped: &mut Vec<SkippedFile>,
     packed_outputs: &BTreeMap<(String, String), PathBuf>,
+    derive_heights: &BTreeSet<PathBuf>,
 ) -> PackPlan {
     let (pa, pinfo) = placeholder();
     let mut out = PackPlan {
@@ -459,7 +478,28 @@ pub fn plan_packing(
             .shaders
             .get(&set.key)
             .is_some_and(|p| p.shader == crate::shader::Shader::ComplexMaterial);
-        let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice, complex);
+        let (mut recipes, mut unused) = recipes_for_with(ctx.target, &raw, choice, complex);
+        if let Some(i) = unused
+            .iter()
+            .position(|u| u.role == RawMap::Height && derive_heights.contains(&u.path))
+        {
+            let h = unused.remove(i);
+            recipes.push(super::Recipe {
+                kind: RecipeKind::Parallax,
+                channels: [
+                    super::ChannelNeed::Source {
+                        path: h.path,
+                        role: RawMap::Height,
+                        invert: false,
+                        channel: None,
+                    },
+                    super::ChannelNeed::MirrorR,
+                    super::ChannelNeed::MirrorR,
+                    super::ChannelNeed::Opaque,
+                ],
+                notes: vec![],
+            });
+        }
         heads.push((set, members, recipe_note, recipes, unused));
     }
     // Every recipe's output (explicit or default) before any is planned: an explicit packed path is compared with
@@ -652,7 +692,14 @@ pub fn plan_packing(
                     None => "sources differ in size".into(),
                 });
                 reports.push(report);
-                jobs.push(size_mismatch_job(ctx, &vin, set, recipe.kind, &found));
+                jobs.push(recipe_error_job(
+                    ctx,
+                    &vin,
+                    &set.key,
+                    st,
+                    recipe.kind.id(),
+                    size_mismatch_warning(&vin.output, &found),
+                ));
                 continue;
             }
             reports.push(report);

@@ -1544,8 +1544,10 @@ impl AppModel {
             return Err(format!("a set {new_id} already exists"));
         }
         let (a, b) = (v.id.clone(), new_id);
-        self.edit_docs(&format!("Rename {a}"), None, true, move |_, s| {
-            s.rename_set(&a, &b)
+        // TA31: the Also export opt-out (`[export] skip`, set ids) follows, in the same step.
+        self.edit_docs(&format!("Rename {a}"), None, true, move |p, s| {
+            s.rename_set(&a, &b);
+            p.rename_skip_also(&a, &b);
         });
         Ok(())
     }

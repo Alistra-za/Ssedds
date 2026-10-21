@@ -22,6 +22,8 @@ pub enum PickerPurpose {
     SaveReport,
     /// 3D preview: the Community Shaders folder.
     ShaderFolder,
+    /// Review's Also section: where the PBR, Vanilla and CM folders go (TA10).
+    AlsoLocation,
 }
 
 /// The hover text of every picker button while one is open.
@@ -225,7 +227,7 @@ impl PickerPurpose {
     fn folder_scoped(self) -> bool {
         matches!(
             self,
-            PickerPurpose::ExportFolder | PickerPurpose::SaveReport
+            PickerPurpose::ExportFolder | PickerPurpose::SaveReport | PickerPurpose::AlsoLocation
         )
     }
 }
@@ -289,6 +291,8 @@ impl AppModel {
                     .notify(super::messages::Severity::Warning, note);
             }
             PickerPurpose::ExportFolder => self.set_export_folder(path),
+            // Refused (with the status line) while an export runs, as every Also edit is.
+            PickerPurpose::AlsoLocation => self.set_also_location(&path),
             PickerPurpose::NvttPath => self.set_nvtt_path(Some(path)),
             PickerPurpose::SaveReport => self.save_report(path),
             // The meshes and 3D models handle their own.

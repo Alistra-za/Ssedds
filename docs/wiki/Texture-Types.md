@@ -79,6 +79,8 @@ Tessalith also understands the names that texturing tools commonly export:
 | `_height`, `_displacement`, `_disp` | Raw height | packed |
 | `_opacity` | Raw opacity | not packed by any recipe |
 | `_fuzz`, `_sheen` | Raw fuzz | packed |
+| `_curves`, `_curvature` | Raw curvature (0.5 is flat) | read only by Also export as (Vanilla / Complex material) |
+| `_cavity` | Raw cavity | read only by Also export as (Vanilla / Complex material) |
 
 A normal map named only `_normal`, `_nrm` or `_norm` does not say which way its green channel points. Tessalith assumes DirectX, which is what Skyrim uses, converts it without a flip and notes `IN-GREEN-UNSTATED` as information. If the map is OpenGL, set `channels.green_convention = "opengl"` on the file (the GUI offers a *Treat as OpenGL* button on that note) or name it `_normalgl`.
 
@@ -317,6 +319,21 @@ A complex-grass texture is one image twice as tall as it is wide, with power-of-
 - Set the set's shader to `complex_grass`, set `subtype = "complex_grass"` on the file's `[files]` entry, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half gets a High-confidence `complex_grass` suggestion, which the GUI accepts. The GUI's sub-type picker does not offer `complex_grass`.
 - The CLI never tags it automatically. If you convert the same folder with `sdc convert`, add `subtype = "complex_grass"` to the file's `[files]` entry, or it is converted as a diffuse.
 - Codes: `GRASS-SHAPE` (error: not 1:2 or not power of two), `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE` (the source corner already fails the CS test), and `VAL-GRASS-DETECT` (error: the encoded corner still fails after a slowest re-encode).
+
+## Also export as Vanilla and CM
+
+With `[export] also` (see [Project Config](Project-Config.md#export)), a cs export also writes a Vanilla folder and a Complex material (CM) folder. Each PBR set (by its shader in the PBR export) is converted from its albedo, `_n`, `_rmaos` (or raw roughness, metallic and AO maps) and `_p`; every other texture is copied from the PBR folder, or encoded when the copy would differ. The values below use the `[export.legacy]` defaults; gloss is 1 − roughness.
+
+| Shader | Vanilla folder | CM folder |
+|---|---|---|
+| PBR | `<name>.dds` diffuse = 0.9 × albedo × lerp(1, AO, 0.5) × lerp(1, 0.3, metal); `_n` = the normal, alpha = 0.66 × gloss × AO × lerp(1, 2, metal); env `_m` = metal × gloss when the meshes use the environment-map shader (needs a Meshes scan) | `_m`: R = gloss × metal, G = gloss (at least 5/255), B = metal, A = `_p` height (5/255–250/255, 0 without a `_p`); with Keep metal brightness, also a diffuse without the metal darkening |
+| PBR Landscape | landscape diffuse with AO strength 0.3 and no metal factor, alpha = the `_p`; landscape `_n`, alpha = 2.5 × 0.66 × gloss × AO; the set's `_p` (for Terrain Helper) | `_m` with R = B = 0 |
+| PBR grass | the converted diffuse only | the complex-grass stack (diffuse on top, `_n` below) |
+
+- **Install** Vanilla alone, or CM on top of Vanilla. With Keep metal brightness off, the CM folder holds only `_m` files (plus the complex-grass stack of each PBR grass set). Files an earlier export left in the folders are kept and listed in the report as "not written by this export"; delete them yourself.
+- **`_curves` / `_curvature` and `_cavity`** maps (see [Suffixes](#suffixes)) shade the diffuse: a soft light with the curves map (0.5 = no change), then a multiply with the cavity map, both at `curves_opacity` (0.4). They are read only by Also export; a plain export writes nothing for them (`PACK-UNUSED-INPUT`).
+- A set is not converted when a source it needs is a DDS (`DERIVE-DDS-SOURCE`), or when you skip it (`[export] skip`). The report lists such sets with the reason.
+- The defaults were checked against mods that ship both a PBR and a vanilla version by the same author (DECISIONS Note CN).
 
 ## Alpha policies
 

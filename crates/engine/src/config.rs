@@ -319,10 +319,12 @@ impl RnmSpec {
         self.bent.ao_power.unwrap_or(1.5)
     }
 }
-cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm });
+cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm, Curves, Cavity, Rmaos });
 
 impl RawMap {
-    /// The single-channel roles, each with a `packing.fill.<role>`. `Orm` is not one (DECISIONS Note AL).
+    /// The single-channel roles, each with a `packing.fill.<role>`. `Orm` is not one (DECISIONS Note AL), nor are
+    /// `Curves` (a 0.5-centred curvature map), `Cavity` and the multi-channel `Rmaos`, read only by Also export
+    /// (Note CN).
     pub const ALL: [RawMap; 8] = {
         use RawMap::*;
         [
@@ -330,11 +332,14 @@ impl RawMap {
         ]
     };
 
-    /// Every raw-map role a file name can carry: [`RawMap::ALL`] and the multi-channel `Orm` (Note AL).
-    pub const INPUTS: [RawMap; 9] = {
+    /// Every raw-map role a file name can carry: [`RawMap::ALL`], the multi-channel `Orm` (Note AL), `Curves` and
+    /// `Cavity` (Note CN). Not `Rmaos`: `"rmaos"` is also the §6.1 suffix of a pre-packed file, and callers match
+    /// `set.suffixes` on `id()`.
+    pub const INPUTS: [RawMap; 11] = {
         use RawMap::*;
         [
-            Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm,
+            Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm, Curves,
+            Cavity,
         ]
     };
 
@@ -435,7 +440,7 @@ impl FillSpec {
             RawMap::Height => self.height,
             RawMap::Opacity => self.opacity,
             RawMap::Fuzz => self.fuzz,
-            RawMap::Orm => None,
+            RawMap::Orm | RawMap::Curves | RawMap::Cavity | RawMap::Rmaos => None,
         }
     }
 }

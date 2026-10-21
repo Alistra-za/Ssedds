@@ -104,16 +104,19 @@ pub fn discover(
     output_root: &Path,
     recursive: bool,
 ) -> std::io::Result<Vec<InputFile>> {
-    discover_reporting(inputs, output_root, recursive).map(|(f, _)| f)
+    discover_reporting(inputs, output_root, recursive, None).map(|(f, _)| f)
 }
 
-/// `discover`, plus each folder entry it could not read (walkdir's message, which names the path).
+/// `discover`, plus each folder entry it could not read (walkdir's message, which names the path). `skip`, when
+/// `Some`, is the folder skipped in place of `output_root` (Track A: the Also export location holding all three
+/// output folders, Note CN); outputs are still built from `output_root`.
 pub fn discover_reporting(
     inputs: &[PathBuf],
     output_root: &Path,
     recursive: bool,
+    skip: Option<&Path>,
 ) -> std::io::Result<(Vec<InputFile>, Vec<String>)> {
-    let out_abs = std::path::absolute(output_root)?;
+    let out_abs = std::path::absolute(skip.unwrap_or(output_root))?;
     let mut files = vec![];
     let mut skipped = vec![];
     // Trace-debug #13 (Note BQ): a file reached through two inputs is kept once, through the first.

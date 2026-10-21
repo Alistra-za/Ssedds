@@ -127,6 +127,12 @@ pub struct BatchRequest {
     /// GUI (v2 artist checks, check 3, DECISIONS Note CL20): measure each eligible texture's detail ratio during the
     /// run. `Off` for the CLI.
     pub low_detail: LowDetailMode,
+    /// Track A (DECISIONS Note CN): replace each PBR set's jobs with derived vanilla or complex-material jobs. `None`
+    /// (the default) plans as before (C6).
+    pub derive: Option<crate::derive::DeriveRequest>,
+    /// Track A (Note CN): the folder discovery skips in place of `output_root` (the Also export location, which
+    /// holds the PBR, Vanilla and CM folders). `None` skips `output_root` as before.
+    pub skip_root: Option<PathBuf>,
 }
 
 /// What a run does with a texture whose mip 0 adds little detail over mip 1 (`CHK-LOW-DETAIL`).
@@ -187,6 +193,8 @@ impl BatchRequest {
             dry_run: false,
             plan_progress: None,
             low_detail: LowDetailMode::Off,
+            derive: None,
+            skip_root: None,
         }
     }
 }
@@ -203,11 +211,13 @@ pub struct SkippedFile {
 }
 
 impl SkippedFile {
-    /// What the skip means for a consumer of events: `IN-DDS-SKIPPED`, `PACK-CONFLICT`, else `IN-DUPLICATE`.
+    /// What the skip means for a consumer of events: `IN-DDS-SKIPPED` (and `DERIVE-DDS-SOURCE`, a set whose DDS sources are
+    /// not re-read, Note CN16), `PACK-CONFLICT`, else `IN-DUPLICATE`.
     pub fn kind(&self) -> SkipKind {
         match self.code {
-            Some(Code::InDdsSkipped) => SkipKind::DdsInput,
+            Some(Code::InDdsSkipped | Code::DeriveDdsSource) => SkipKind::DdsInput,
             Some(Code::PackConflict) => SkipKind::PackConflict,
+            Some(Code::DeriveNotConverted) => SkipKind::PackingInput,
             _ => SkipKind::Duplicate,
         }
     }
@@ -229,6 +239,68 @@ enum PlanFailure {
     /// Assembling a packed image failed other than by a load error (spec §6.4): a source changed size after
     /// pass 1. A load error of a source is a `PlanFailure::Load`, handled like a pass-1 load failure.
     Pack(String),
+}
+
+impl PlanFailure {
+    /// An assembly failure: a source's load error is a `Load`, anything else a `Pack`.
+    fn of_pack(e: pack::assemble::PackError) -> Self {
+        match e {
+            pack::assemble::PackError::Load(e) => PlanFailure::Load(e),
+            e => PlanFailure::Pack(e.to_string()),
+        }
+    }
+}
+
+/// Packing pass 2 and the derive step (spec §5.9, §6.4; Note CN): each item is admitted on the calling thread at
+/// `est(item)` bytes, then `work` runs on the pool under `catch_unwind`, so a panic fails that item alone at the stage
+/// it had entered (preflight P18). One result per item, in order; `None` = cancelled before its Load started.
+fn admit_all<T: Sync>(
+    pool: &rayon::ThreadPool,
+    budget: &Budget,
+    cancel: &CancelToken,
+    items: &[T],
+    est: impl Fn(&T) -> u64,
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_variables))] output: impl Fn(&T) -> &Path
+        + Sync,
+    work: impl Fn(&T, Admitted<'_>, &Cell<Stage>) -> Result<ResolvedJob, PlanFailure> + Sync,
+) -> Vec<Option<Result<ResolvedJob, PlanFailure>>> {
+    let slots: Vec<Mutex<Option<Result<ResolvedJob, PlanFailure>>>> =
+        items.iter().map(|_| Mutex::new(None)).collect();
+    pool.in_place_scope(|scope| {
+        for (item, slot) in items.iter().zip(&slots) {
+            if cancel.is_cancelled() {
+                continue;
+            }
+            let est = est(item);
+            budget.acquire(est);
+            let admitted = Admitted(budget, est);
+            let work = &work;
+            #[cfg(feature = "test-hooks")]
+            let output = &output;
+            scope.spawn(move |_| {
+                if cancel.is_cancelled() {
+                    return;
+                }
+                let stage = Cell::new(Stage::Load);
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Named by the output, so the pass-1 hook (named by the input) never fires here.
+                    #[cfg(feature = "test-hooks")]
+                    panic_while_planning_for_test(output(item), Stage::Load);
+                    work(item, admitted, &stage)
+                }));
+                *lock(slot) = Some(r.unwrap_or_else(|panic| {
+                    Err(PlanFailure::Panic(
+                        stage.get(),
+                        format!("internal error: {}", panic_message(&*panic)),
+                    ))
+                }));
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|s| s.into_inner().unwrap_or_else(|e| e.into_inner()))
+        .collect()
 }
 
 /// The §10 code of a load failure.
@@ -263,6 +335,10 @@ pub struct Plan {
     pub shaders: BTreeMap<String, ShaderPick>,
     /// The NVTT probe, if any profile on `encoder.backend = "nvtt"` asked for it while planning (DECISIONS Note NV3).
     pub nvtt: Option<crate::nvtt::NvttProbe>,
+    /// Note CN23: members of derived or dropped sets whose own output a job of this plan writes (no TA12 fold: a
+    /// derived diffuse on its albedo's path, a kept landscape `_p`). That job's event ends them, so `run` emits no
+    /// `packed_source` for them.
+    pub derive_own: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -476,7 +552,20 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         let layers = job.active_rnm().map_or(0, |r| {
             r.admission_bytes(&p.rnm, crate::resize::target_dims((w, h), p.resize))
         });
-        texels * (filter + resize) + grass + layers
+        // Note CN13: a derived job also holds the colour maps it reads, its scalars (and `_curves`/cavity) image and
+        // the recipe's output, twice the input for the grass stack.
+        let derived = job.derive.as_ref().map_or(0, |dj| {
+            use crate::derive::DeriveKind::*;
+            let colour = match dj.kind {
+                VanillaDiffuse | CmDiffuse | LegacyN => 1,
+                CmM | EnvM => 0,
+                GrassStack => 2,
+            };
+            let detail = u64::from(dj.curves.is_some() || dj.cavity.is_some());
+            let output = if dj.kind == GrassStack { 2 } else { 1 };
+            texels * 16 * (colour + 1 + detail + output)
+        });
+        texels * (filter + resize) + grass + layers + derived
     });
     estimated_bytes(&job.input)
         + extra
@@ -546,8 +635,8 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// (SHA-256, bake identity, RNM role) of one recorded source.
-type SourceKey = (String, Option<String>, Option<String>);
+/// (SHA-256, bake identity, RNM role, derive identity) of one recorded source.
+type SourceKey = (String, Option<String>, Option<String>, Option<String>);
 
 /// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), then
 /// the RNM inputs (M6 Track F2), as `SourceKey`s. Empty for an ordinary file that does not bake; `None` when a
@@ -556,13 +645,26 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
     let mut v = vec![];
     if let Some(pk) = &job.pack {
         for s in &pk.sources {
-            v.push((sha256_file(&s.path).ok()?, None, None));
+            v.push((sha256_file(&s.path).ok()?, None, None, None));
+        }
+    }
+    // Note CN12: a derived job's sources, each with the job's identity, so a changed setting re-encodes.
+    if let Some(dj) = &job.derive {
+        let identity = dj.identity_sha256();
+        for s in &dj.sources {
+            v.push((
+                sha256_file(&s.path).ok()?,
+                None,
+                None,
+                Some(identity.clone()),
+            ));
         }
     }
     if let Some(b) = &job.bake {
         v.push((
             sha256_file(&b.normal).ok()?,
             Some(b.identity_sha256()),
+            None,
             None,
         ));
         if let Some(r) = &b.rnm {
@@ -571,13 +673,14 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                     sha256_file(&f.path).ok()?,
                     None,
                     Some(format!("bake.{role}")),
+                    None,
                 ));
             }
         }
     }
     if let Some(r) = job.active_rnm() {
         for (f, role) in r.inputs(&job.profile.rnm) {
-            v.push((sha256_file(&f.path).ok()?, None, Some(role)));
+            v.push((sha256_file(&f.path).ok()?, None, Some(role), None));
         }
     }
     Some(v)
@@ -629,7 +732,7 @@ fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
 /// failed output is re-encoded and reported again rather than counted as up to date
 /// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
 /// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
-fn is_up_to_date(
+pub(crate) fn is_up_to_date(
     e: &ManifestEntry,
     job: &ResolvedJob,
     encoders: &EncoderVersions,
@@ -674,10 +777,14 @@ fn is_up_to_date(
     passed
         && e.engine_version == ENGINE_VERSION
         && current_sources(job).is_some_and(|now| {
-            now.into_iter().eq(e
-                .sources
-                .iter()
-                .map(|r| (r.sha256.clone(), r.bake.clone(), r.rnm.clone())))
+            now.into_iter().eq(e.sources.iter().map(|r| {
+                (
+                    r.sha256.clone(),
+                    r.bake.clone(),
+                    r.rnm.clone(),
+                    r.derive.clone(),
+                )
+            }))
         })
         && pack_roles_match(e, job)
         && profile_sha256(&job.profile).is_ok_and(|h| h == e.profile_sha256)
@@ -701,6 +808,25 @@ pub fn project_root(req: &BatchRequest) -> Option<PathBuf> {
     }
 }
 
+/// The project config: the inline one, `--config`, or the first input folder's `sdc.toml`.
+fn load_project_config(req: &BatchRequest) -> Result<Option<ConfigFile>, EngineError> {
+    if let Some(c) = &req.project_config_inline {
+        return Ok(Some(c.clone()));
+    }
+    let project_path = req.project_config.clone().or_else(|| {
+        req.inputs
+            .first()
+            .filter(|p| p.is_dir())
+            .map(|p| p.join("sdc.toml"))
+            .filter(|p| p.exists())
+    });
+    project_path
+        .as_deref()
+        .map(ConfigFile::load)
+        .transpose()
+        .map_err(config_err)
+}
+
 /// What [`Engine::preflight`]'s checks resolve, kept for planning.
 struct Setup {
     registry: PresetRegistry,
@@ -721,6 +847,14 @@ impl Engine {
 
     pub fn registry(&self) -> &PresetRegistry {
         &self.registry
+    }
+
+    /// The project config's `[export]`, else the default. Parses only: no `check()`, so a bad `[export.legacy]`
+    /// value cannot break a plain export (O2). `run_also` checks it before anything else.
+    pub fn export_config(&self, req: &BatchRequest) -> Result<ExportConfig, EngineError> {
+        Ok(load_project_config(req)?
+            .and_then(|c| c.export)
+            .unwrap_or_default())
     }
 
     /// Spec §8 up-front checks without reading any input: load the preset files and the configs (the user
@@ -755,6 +889,12 @@ impl Engine {
                     p.display()
                 )));
             }
+            if c.export.is_some() {
+                return Err(EngineError::Config(format!(
+                    "[export] is only valid in a project sdc.toml, not in {}",
+                    p.display()
+                )));
+            }
             if !c.inputs.is_empty() {
                 return Err(EngineError::Config(format!(
                     "[inputs] is only valid in a project sdc.toml, not in {}",
@@ -762,23 +902,7 @@ impl Engine {
                 )));
             }
         }
-        let project_config = match &req.project_config_inline {
-            Some(c) => Some(c.clone()),
-            None => {
-                let project_path = req.project_config.clone().or_else(|| {
-                    req.inputs
-                        .first()
-                        .filter(|p| p.is_dir())
-                        .map(|p| p.join("sdc.toml"))
-                        .filter(|p| p.exists())
-                });
-                project_path
-                    .as_deref()
-                    .map(ConfigFile::load)
-                    .transpose()
-                    .map_err(config_err)?
-            }
-        };
+        let project_config = load_project_config(req)?;
 
         // Target and preset. An explicitly chosen preset may state the target; otherwise the target picks the
         // default preset.
@@ -857,9 +981,13 @@ impl Engine {
                 )));
             }
         }
-        let (mut files, unreadable) =
-            discover_reporting(&req.inputs, &req.output_root, req.recursive)
-                .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
+        let (mut files, unreadable) = discover_reporting(
+            &req.inputs,
+            &req.output_root,
+            req.recursive,
+            req.skip_root.as_deref(),
+        )
+        .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
         // F3b: `[inputs]` aliases rename files before anything reads their names.
         let read_as_warnings = match (&project_config, project_root(&req)) {
             (Some(c), Some(root)) if !c.inputs.is_empty() => {
@@ -1254,7 +1382,7 @@ impl Engine {
             .iter()
             .map(|t| crate::sets::fold_id(t))
             .collect();
-        let picks: BTreeMap<String, ShaderPick> = sets
+        let mut picks: BTreeMap<String, ShaderPick> = sets
             .iter()
             .map(|s| {
                 let pick = crate::shader::pick_for_set(
@@ -1273,9 +1401,11 @@ impl Engine {
                 (s.key.clone(), pick)
             })
             .collect();
+        // The pass-1 context (no picks) is kept, so the derive step can rebuild it after adding its picks.
+        let base_ctx = ctx;
         let ctx = ResolveCtx {
             shaders: &picks,
-            ..ctx
+            ..base_ctx
         };
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
@@ -1335,6 +1465,22 @@ impl Engine {
         // Spec §6.4 (M2.5): channel packing. Pass 1 decides the recipes; pass 2 assembles, analyses and resolves
         // each under the same memory admission and panic isolation as the files above.
         let failed_paths: Vec<PathBuf> = failed.iter().map(|f| f.path.clone()).collect();
+        // Note CN26 (O6): the raw heights whose landscape `_p` a Vanilla derive keeps.
+        let derive_heights: BTreeSet<PathBuf> = req
+            .derive
+            .iter()
+            .filter(|d| d.mode == crate::derive::DeriveMode::Vanilla)
+            .flat_map(|d| &d.sets)
+            .filter(|s| s.shader == crate::shader::Shader::PbrLandscape)
+            .filter_map(|s| match &s.height {
+                Some(pack::ChannelSource::Source {
+                    path,
+                    role: crate::config::RawMap::Height,
+                    ..
+                }) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
         let mut packed = pack::plan::plan_packing(
             &ctx,
             &sets,
@@ -1344,6 +1490,7 @@ impl Engine {
             &cancelled,
             &mut skipped,
             &packed_outputs,
+            &derive_heights,
         );
         // Pass 1 may add a recipe job it fails at once (sources of different sizes); like every job it records the
         // target's origin (`BatchRequest::target`, ruling W1).
@@ -1352,95 +1499,86 @@ impl Engine {
                 .entry("target".into())
                 .or_insert_with(|| target_src.clone());
         }
-        // This admission/spawn/`catch_unwind`/slot block mirrors the pass-1 block above (`resolve_one` and its
-        // loop) on purpose: the two differ in the work item, the stage they start at and what they return, so one
-        // helper would need as many parameters as it saves lines.
-        let pack_slots: Vec<Mutex<Option<Result<ResolvedJob, PlanFailure>>>> =
-            packed.candidates.iter().map(|_| Mutex::new(None)).collect();
-        pool.in_place_scope(|scope| {
-            for (c, slot) in packed.candidates.iter().zip(&pack_slots) {
-                if cancel.is_cancelled() {
-                    continue;
-                }
-                let est = estimated_bytes(&c.job.sources[0].path);
-                budget.acquire(est);
-                let admitted = Admitted(&budget, est);
-                let (ctx, sets) = (&ctx, &sets);
-                scope.spawn(move |_| {
-                    if cancel.is_cancelled() {
-                        return;
+        // Pass 2 and the derive step share `admit_all`; the pass-1 block above keeps its own loop (it returns an
+        // analysis and source info with each job, and counts progress).
+        let pack_results = admit_all(
+            &pool,
+            &budget,
+            cancel,
+            &packed.candidates,
+            |c| estimated_bytes(&c.job.sources[0].path),
+            |c| &c.virtual_input.output,
+            |c, admitted, stage| {
+                // The key includes every source's stamp, so an edited source misses the cache. A recipe
+                // without a key (a source with no stamp) is assembled every time and never stored.
+                let key = pack_cache_key(&c.job);
+                let entry = match key.as_deref().and_then(|k| cache.pack(k)) {
+                    Some(e) => {
+                        drop(admitted);
+                        e
                     }
-                    let stage = Cell::new(Stage::Load);
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // The key includes every source's stamp, so an edited source misses the cache. A recipe
-                        // without a key (a source with no stamp) is assembled every time and never stored.
-                        let key = pack_cache_key(&c.job);
-                        let entry =
-                            match key.as_deref().and_then(|k| cache.pack(k)) {
-                                Some(e) => {
-                                    drop(admitted);
-                                    e
-                                }
-                                None => {
-                                    // `check_sizes` (in `assemble`) enforces MAX_DIM per source before the canvas
-                                    // is allocated; its `TooLarge` maps to DIM-TOO-LARGE like `load_image`'s.
-                                    let asm = pack::assemble::assemble(&c.job, c.job.gray)
-                                        .map_err(|e| match e {
-                                            pack::assemble::PackError::Load(e) => {
-                                                PlanFailure::Load(e)
-                                            }
-                                            e => PlanFailure::Pack(e.to_string()),
-                                        })?;
-                                    cache.count_loads(c.job.sources.len() as u64);
-                                    stage.set(Stage::Analyse);
-                                    let e = PackEntry {
-                                        analysis: analyse_with(
-                                            &asm.image,
-                                            &asm.info,
-                                            crate::checks::hints_for(
-                                                Some(c.job.kind.suffix()),
-                                                cache.checks,
-                                            ),
-                                        ),
-                                        info: asm.info,
-                                        non_gray: asm.non_gray,
-                                        thumb: cache.make_thumb(&asm.image, &asm.info),
-                                    };
-                                    drop(asm.image);
-                                    drop(admitted);
-                                    if let Some(key) = key {
-                                        cache.put_pack(key, e.clone());
-                                    }
-                                    e
-                                }
-                            };
-                        stage.set(Stage::Resolve);
-                        let set = sets
-                            .iter()
-                            .find(|s| s.key == c.set_key)
-                            .expect("a candidate's set is planned");
-                        Ok(pack::plan::finish_recipe(
-                            ctx,
-                            c,
-                            set,
-                            &entry.analysis,
-                            &entry.info,
-                            &entry.non_gray,
-                        ))
-                    }));
-                    *lock(slot) = Some(r.unwrap_or_else(|panic| {
-                        Err(PlanFailure::Panic(
-                            stage.get(),
-                            format!("internal error: {}", panic_message(&*panic)),
-                        ))
-                    }));
-                });
+                    None => {
+                        // `check_sizes` (in `assemble`) enforces MAX_DIM per source before the canvas
+                        // is allocated; its `TooLarge` maps to DIM-TOO-LARGE like `load_image`'s.
+                        let asm = pack::assemble::assemble(&c.job, c.job.gray)
+                            .map_err(PlanFailure::of_pack)?;
+                        cache.count_loads(c.job.sources.len() as u64);
+                        stage.set(Stage::Analyse);
+                        let e = PackEntry {
+                            analysis: analyse_with(
+                                &asm.image,
+                                &asm.info,
+                                crate::checks::hints_for(Some(c.job.kind.suffix()), cache.checks),
+                            ),
+                            info: asm.info,
+                            non_gray: asm.non_gray,
+                            thumb: cache.make_thumb(&asm.image, &asm.info),
+                        };
+                        drop(asm.image);
+                        drop(admitted);
+                        if let Some(key) = key {
+                            cache.put_pack(key, e.clone());
+                        }
+                        e
+                    }
+                };
+                stage.set(Stage::Resolve);
+                let set = sets
+                    .iter()
+                    .find(|s| s.key == c.set_key)
+                    .expect("a candidate's set is planned");
+                Ok(pack::plan::finish_recipe(
+                    &ctx,
+                    c,
+                    set,
+                    &entry.analysis,
+                    &entry.info,
+                    &entry.non_gray,
+                ))
+            },
+        );
+        // A pass-2 or derive failure as (stage, error).
+        let failure = |output: &Path, f: PlanFailure| match f {
+            PlanFailure::Load(e) => {
+                // The same §10 warning as a pass-1 load failure, so a JSON consumer sees the code; it names the
+                // source that failed, the `file_failed` the caller records names the recipe's input.
+                let (LoadError::TooLarge { path: bad, .. } | LoadError::Decode { path: bad, .. }) =
+                    &e;
+                rep.emit_job(
+                    Some(&key(output)),
+                    None,
+                    Some(bad),
+                    EventKind::Warning(Warning::new(load_code(&e), e.to_string())),
+                );
+                (Stage::Load, e.to_string())
             }
-        });
-        for (c, slot) in packed.candidates.iter().zip(pack_slots) {
+            PlanFailure::Pack(e) => (Stage::Load, e),
+            PlanFailure::Panic(stage, e) => (stage, e),
+        };
+        for (c, r) in packed.candidates.iter().zip(pack_results) {
             let path = c.job.sources[0].path.clone();
             let output = c.virtual_input.output.clone();
-            let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
+            let Some(r) = r else {
                 // Cancelled before its sources were loaded: the recipe has no job (Note M11, ruling W7).
                 pack::plan::fail_report(&mut packed.reports, c, "cancelled".into());
                 cancelled.push(path);
@@ -1453,23 +1591,7 @@ impl Engine {
                     jobs.push(job);
                 }
                 Err(f) => {
-                    let (stage, error) = match f {
-                        PlanFailure::Load(e) => {
-                            // The same §10 warning as a pass-1 load failure, so a JSON consumer sees the code;
-                            // it names the source that failed, the `file_failed` below names the recipe's input.
-                            let (LoadError::TooLarge { path: bad, .. }
-                            | LoadError::Decode { path: bad, .. }) = &e;
-                            rep.emit_job(
-                                Some(&key(&output)),
-                                None,
-                                Some(bad),
-                                EventKind::Warning(Warning::new(load_code(&e), e.to_string())),
-                            );
-                            (Stage::Load, e.to_string())
-                        }
-                        PlanFailure::Pack(e) => (Stage::Load, e),
-                        PlanFailure::Panic(stage, e) => (stage, e),
-                    };
+                    let (stage, error) = failure(&output, f);
                     pack::plan::fail_report(&mut packed.reports, c, error.clone());
                     failed.push(FailedFile {
                         path,
@@ -1480,6 +1602,125 @@ impl Engine {
                 }
             }
         }
+        // Track A (DECISIONS Note CN): the derive step replaces each PBR set's jobs with derived jobs, after packing
+        // (a packed member's job goes too) and before the shader assignment, so a derived set carries its vanilla
+        // shader (TA29). Without `derive` nothing below runs (C6).
+        let mut derive_own = BTreeSet::new();
+        let derived = req.derive.as_ref().map(|d| {
+            crate::derive::plan::plan_derived(
+                &ctx,
+                d,
+                &req.mesh_shaders,
+                &files,
+                &mut jobs,
+                &mut skipped,
+                &failed,
+            )
+        });
+        if let Some(dp) = derived {
+            // The derived jobs resolve under their derived pick.
+            picks.extend(dp.picks);
+            let ctx = ResolveCtx {
+                shaders: &picks,
+                ..base_ctx
+            };
+            // Error jobs (sources of different sizes, TA12 conflicts) record the target, as pass 1's do.
+            for j in &mut jobs {
+                j.provenance
+                    .entry("target".into())
+                    .or_insert_with(|| target_src.clone());
+            }
+            // shortcut: P25: a derived image's analysis is not cached (never under its albedo's path, which would
+            // replace the albedo's own), so each plan assembles it again; key it on `identity_sha256` if
+            // re-planning an Also export gets slow.
+            let results = admit_all(
+                &pool,
+                &budget,
+                cancel,
+                &dp.candidates,
+                |c| c.job.sources.iter().map(|s| estimated_bytes(&s.path)).sum(),
+                |c| &c.input.output,
+                |c, admitted, stage| {
+                    let (asm, mean_rough) = crate::derive::assemble::assemble_derived_rough(&c.job)
+                        .map_err(PlanFailure::of_pack)?;
+                    cache.count_loads(c.job.sources.len() as u64);
+                    stage.set(Stage::Analyse);
+                    let analysis = analyse_with(
+                        &asm.image,
+                        &asm.info,
+                        crate::checks::hints_for(c.job.kind.suffix(), cache.checks),
+                    );
+                    drop(asm.image);
+                    drop(admitted);
+                    stage.set(Stage::Resolve);
+                    #[cfg(feature = "test-hooks")]
+                    panic_while_planning_for_test(&c.input.output, Stage::Resolve);
+                    let set = sets
+                        .iter()
+                        .find(|s| s.key == c.set_key)
+                        .expect("a candidate's set is planned");
+                    Ok(crate::derive::plan::finish_derived(
+                        &ctx, c, set, &analysis, &asm.info, mean_rough,
+                    ))
+                },
+            );
+            let failed_before = failed.len();
+            for (c, r) in dp.candidates.iter().zip(results) {
+                let path = c.input.path.clone();
+                match r {
+                    None => cancelled.push(path),
+                    Some(Ok(mut job)) => {
+                        job.provenance.insert("target".into(), target_src.clone());
+                        jobs.push(job);
+                    }
+                    Some(Err(f)) => {
+                        let (stage, error) = failure(&c.input.output, f);
+                        failed.push(FailedFile {
+                            path,
+                            output: c.input.output.clone(),
+                            stage,
+                            error,
+                        });
+                    }
+                }
+            }
+            if let Some(d) = &req.derive {
+                // A derived candidate that failed here ends its own-key source with its `file_failed`.
+                let written: BTreeSet<String> = jobs
+                    .iter()
+                    .map(|j| key(&j.output))
+                    .chain(failed[failed_before..].iter().map(|f| key(&f.output)))
+                    .collect();
+                let members: BTreeSet<&Path> = d
+                    .sets
+                    .iter()
+                    .flat_map(|s| &s.members)
+                    .chain(&d.drop)
+                    .map(PathBuf::as_path)
+                    .collect();
+                derive_own = files
+                    .iter()
+                    .filter(|f| {
+                        members.contains(f.path.as_path()) && written.contains(&key(&f.output))
+                    })
+                    .map(|f| f.path.clone())
+                    .collect();
+                crate::derive::plan::report_unread(
+                    d,
+                    &dp.member_sets,
+                    &files,
+                    &jobs,
+                    &mut skipped,
+                    &failed[..failed_before],
+                    &cancelled,
+                    &derive_own,
+                );
+            }
+        }
+        let ctx = ResolveCtx {
+            shaders: &picks,
+            ..base_ctx
+        };
         // Spec §6.2–6.3 (M4): the set-level variance bake, after packing so a packed roughness member counts, and
         // before `set_resolved` and `file_planned` so both carry the decision.
         let shared: BTreeSet<String> = req
@@ -1530,24 +1771,39 @@ impl Engine {
                 project_rel(root, &f)
             };
             for j in &jobs {
-                match &j.pack {
-                    // A packed output: the folder of its first source plus the virtual stem (e.g. `rock01_rmaos`,
-                    // from the first source's name, whatever output path it has), compared with the extension-less
-                    // key. Its raw sources count too.
-                    Some(pk) => {
-                        let stem = crate::pack::plan::virtual_stem(&j.input, pk.kind);
+                // A packed output, or a derived `_m` (TA15, Note CN19): the folder of its first source plus the
+                // virtual stem (e.g. `rock01_rmaos`, from the first source's name, whatever output path it has),
+                // compared with the extension-less key. A packed output's raw sources count too.
+                let stem = match (&j.pack, &j.derive) {
+                    (Some(pk), _) => Some(crate::pack::plan::virtual_stem(&j.input, pk.kind)),
+                    (None, Some(dj)) => dj
+                        .kind
+                        .suffix()
+                        .filter(|s| *s == "m")
+                        .map(|s| crate::pack::plan::virtual_stem_as(&j.input, s)),
+                    (None, None) => None,
+                };
+                match stem {
+                    Some(stem) => {
                         if let Some(r) = rel_of_path(&j.input) {
                             let dir = r
                                 .rsplit_once('/')
                                 .map_or(String::new(), |(d, _)| format!("{d}/"));
                             rels.push(format!("{dir}{stem}"));
                         }
-                        rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
                     }
                     None => rels.extend(rel_of_path(&j.input)),
                 }
+                if let Some(pk) = &j.pack {
+                    rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
+                }
             }
             rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
+            // The derive step removed the jobs of PBR set members (Note CN); their keys still name planned files.
+            if let Some(d) = &req.derive {
+                let members = d.sets.iter().flat_map(|s| &s.members).chain(&d.drop);
+                rels.extend(members.filter_map(|p| rel_of_path(p)));
+            }
             rels.extend(failed.iter().filter_map(|f| rel_of_path(&f.path)));
             rels.extend(cancelled.iter().filter_map(|p| rel_of_path(p)));
         }
@@ -1680,6 +1936,7 @@ impl Engine {
             cancelled,
             shaders: picks,
             nvtt: nvtt.into_probed(),
+            derive_own,
         })
     }
 
@@ -1749,8 +2006,16 @@ impl Engine {
                 &mut summary,
             );
             // IN-DUPLICATE is a conflict the user must resolve; IN-DDS-SKIPPED (Note I) and a pre-packed file
-            // replaced under `packing.prefer = raw` (Note M9) are deliberate.
-            if matches!(s.code, Some(Code::InDdsSkipped | Code::PackConflict)) {
+            // replaced under `packing.prefer = raw` (Note M9) are deliberate, as is a PBR set left in DDS (Note CN16).
+            if matches!(
+                s.code,
+                Some(
+                    Code::InDdsSkipped
+                        | Code::PackConflict
+                        | Code::DeriveDdsSource
+                        | Code::DeriveNotConverted
+                )
+            ) {
                 summary.skipped_intentional += 1;
             }
         }
@@ -1781,22 +2046,43 @@ impl Engine {
             );
         }
         let mut ready = vec![];
+        // A file a recipe packs (the kept landscape `_p`'s raw height, Note CN26) already ends with that event.
+        let mut derive_read: BTreeSet<&Path> = plan
+            .derive_own
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(
+                plan.jobs
+                    .iter()
+                    .filter_map(|j| j.pack.as_ref())
+                    .flat_map(|pk| pk.sources.iter().map(|s| s.path.as_path())),
+            )
+            .collect();
         for job in &plan.jobs {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
-            // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output.
-            if let Some(pk) = &job.pack {
-                for s in &pk.sources {
-                    rep.emit_job(
-                        Some(&key(&job.output)),
-                        set,
-                        Some(&s.path),
-                        EventKind::FileSkipped {
-                            kind: SkipKind::PackedSource,
-                            code: None,
-                            reason: format!("packed into {}", slash(&job.output)),
-                        },
-                    );
-                }
+            // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output. So
+            // does each file a derived job reads (Note CN23), once, naming the first derived output it feeds.
+            let consumed = job
+                .pack
+                .iter()
+                .flat_map(|pk| pk.sources.iter().map(|s| (&s.path, "packed")))
+                .chain(
+                    job.derive
+                        .iter()
+                        .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
+                        .filter(|(p, _)| derive_read.insert(p.as_path())),
+                );
+            for (path, how) in consumed {
+                rep.emit_job(
+                    Some(&key(&job.output)),
+                    set,
+                    Some(path),
+                    EventKind::FileSkipped {
+                        kind: SkipKind::PackedSource,
+                        code: None,
+                        reason: format!("{how} into {}", slash(&job.output)),
+                    },
+                );
             }
             match &job.status {
                 JobStatus::Ready => ready.push(job),
@@ -2576,6 +2862,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         }
     }
@@ -2664,6 +2951,36 @@ mod tests {
         assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
+    /// Note CN13: a derived job adds 16 B/texel per colour map, the scalars and the output (twice for the grass
+    /// stack, which reads the albedo and the normal).
+    #[test]
+    fn a_derived_job_is_admitted_for_its_colour_scalars_and_output() {
+        use crate::derive::{DeriveJob, DeriveKind};
+        use crate::pack::ChannelSource::Default;
+        let d = tempfile::tempdir().unwrap();
+        let mut j = png_job(d.path(), "a_n.png", (32, 32), Subtype::Normal);
+        let base = job_bytes(&j);
+        let dj = |kind| DeriveJob {
+            kind,
+            landscape: false,
+            albedo: None,
+            normal: None,
+            rough: Default { value: 0.5 },
+            metal: Default { value: 0.0 },
+            ao: Default { value: 1.0 },
+            height: None,
+            curves: None,
+            cavity: None,
+            gray: crate::config::GraySource::R,
+            params: crate::derive::recipe::LegacyParams::default(),
+            sources: vec![],
+        };
+        j.derive = Some(dj(DeriveKind::LegacyN));
+        assert_eq!(job_bytes(&j), base + 32 * 32 * 16 * 3);
+        j.derive = Some(dj(DeriveKind::GrassStack));
+        assert_eq!(job_bytes(&j), base + 32 * 32 * 16 * 5);
+    }
+
     /// S-mips-11: a non-box filter adds its 8 B/texel intermediate, a resize its 32 B/texel; a DDS is sized from
     /// its header for both (ruling F4).
     #[test]
@@ -2688,6 +3005,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         };
         let texels = 48 * 40;
@@ -2739,6 +3057,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         };
         std::fs::write(&job.output, b"dds").unwrap();
@@ -2754,6 +3073,7 @@ mod tests {
             preset: PresetRef::for_preset(&reg, "cs-quality", None),
             bc1_model: Some("ideal".into()),
             output_stamp: SourceStamp::of(&job.output),
+            copied_from: None,
             raw: serde_json::json!({ "validation": { "passed": true } }),
         };
         let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| {
@@ -2801,6 +3121,8 @@ mod tests {
                         invert: false,
                         bake: None,
                         rnm: None,
+                        derive: None,
+                        derive_role: None,
                     }]
                 }),
             ),

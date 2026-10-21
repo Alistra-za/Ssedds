@@ -66,6 +66,7 @@ as = "textures/armor/iron/iron_n.png"
 | `[[rules]]` | array of tables | none | Conditional settings. |
 | `[files."<path>"]` | partial profile plus `allow` | none | Settings for one file. Project config only. |
 | `[inputs."<path>"]` | table with `as` | none | Read a file under another name. Project config only. |
+| `[export]` | table | none | Also export as Vanilla / CM. Project config only. See [[export]](#export). |
 
 A user config that contains `[files]` or `[inputs]` is rejected: `[files] is only valid in a project sdc.toml, not in <path>`.
 
@@ -186,6 +187,50 @@ as = "textures/armor/iron/iron_n.png"
 The file is grouped, typed, named and written as if it were at the `as` path. The file on disk is not renamed. `as` is relative to the folder holding `sdc.toml` and keeps the same extension; you can leave the extension out. The file keeps its own `[files]` entry, under its real name.
 
 An alias must stay under the project folder (no absolute path, no `..`), keep the file's extension, not be empty, and not equal another file's real or aliased path (compared case-insensitively). An alias that breaks these rules is ignored and reported as `IN-ALIAS-INVALID` (warning); the file is planned under its real name. An `[inputs]` key that matches no file is reported as `IN-ALIAS-STALE` (info). The GUI's rename dialog writes these entries in its Inputs mode.
+
+## [export]
+
+```toml
+[export]
+also = ["vanilla", "cm"]
+zip = true
+skip = ["textures/pbr/armor/iron/iron"]
+
+[export.names]
+vanilla = "Iron Armour SE"
+
+[export.legacy]
+brightness = 0.9
+```
+
+"Also export as" Vanilla and Complex material (CM): besides the PBR (cs) export, write a vanilla folder and a CM folder converted from the PBR sets. Project `sdc.toml` only: a user config with `[export]` is rejected. Needs the `cs` target. The GUI writes this table (Review's *Also export as* column and Advanced → *Also export recipe*); `sdc convert` reads it (see [CLI Reference](CLI-Reference.md#sdc-convert)). Unknown keys are an error. A value out of range is an error when an Also export runs, naming the key (for example `export.legacy.brightness = 2: must be between 0 and 1.5`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `also` | `[]` | `"vanilla"`, `"cm"` or both. Empty is a plain export. `"cm"` alone writes Vanilla too: CM installs on top of it. |
+| `zip` | `false` | Also zip each folder that ran into `<folder>.zip`, with a line per zip in `<project> SHA256SUMS.txt`. |
+| `skip` | `[]` | Set ids (as `--set set:<id>` names them) left out of Vanilla and CM. |
+| `names.pbr`, `names.vanilla`, `names.cm` | `<project> PBR`, `<project> Vanilla`, `<project> CM` | The folder names. `<project>` is the opened folder's name (the CLI: the input folder's). Must be usable folder names, not a Windows device name, and all three different. |
+
+`[export.legacy]` is the recipe (all numbers are fractions of the stored value; "gloss" is 1 − roughness):
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `brightness` | 0.9 | 0–1.5 | Diffuse = brightness × albedo × lerp(1, AO, AO strength). |
+| `ao_strength` | 0.5 | 0–1 | How much AO darkens an object's diffuse. |
+| `ao_strength_landscape` | 0.3 | 0–1 | The same for a PBR Landscape set. |
+| `curves_opacity` | 0.4 | 0–1 | Opacity of a `_curves` map's soft light and a `_cavity` map's multiply on the diffuse. |
+| `metal_darken` | 0.3 | 0–1 | The vanilla diffuse's factor at full metal (lerp(1, this, metal)). Landscape has no metal. |
+| `spec_scale` | 0.66 | 0–2 | `_n` alpha = spec_scale × gloss × AO × the metal boost, clamped to 1. |
+| `spec_metal_boost` | 2.0 | 1–3 | The `_n` alpha boost at full metal. |
+| `landscape_spec` | 2.5 | 0–5 | A landscape `_n` alpha is multiplied by this before the clamp (no metal boost). |
+| `cm_dielectric_env` | 0 | 0–1 | CM `_m` R = gloss × max(metal, this). 0 = no env on non-metals; 0.35 is the spec's option. |
+| `keep_metal_brightness` | `false` | | The CM folder gets its own diffuses without the metal darkening. Off: CM holds only `_m` files (plus the complex-grass stack of each PBR grass set). |
+| `keep_metal_strength` | 1.0 | 0–1 | How much of the metal darkening Keep metal brightness undoes. |
+
+The CM `_m` is R = gloss × metal (see `cm_dielectric_env`), G = gloss (at least 5/255, so complex material stays on), B = metal, A = the `_p` height clamped to 5/255–250/255 (0 without a `_p`: parallax off). A landscape `_m` has R = B = 0. The vanilla env `_m` is metal × gloss, written only when a Meshes scan shows the set's meshes use the environment-map shader; the CLI reads no scan, so it writes none.
+
+The GUI keeps the folders' location in `sdc-project.toml` as `[project] also_location` (by default the export folder); the CLI writes them under `-o`.
 
 ## Field reference
 

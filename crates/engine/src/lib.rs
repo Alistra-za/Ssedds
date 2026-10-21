@@ -1,4 +1,5 @@
 //! sdc engine: configuration, policy, pipeline, DDS I/O, validation, events.
+pub mod also;
 pub mod analyse;
 pub mod api;
 mod archive;
@@ -10,6 +11,7 @@ pub mod coverage;
 pub mod dds;
 pub mod dds_patch;
 pub mod decode;
+pub mod derive;
 pub mod dilate;
 pub mod discover;
 pub mod encode;
@@ -41,3 +43,4 @@ pub mod shader;
 pub mod suggest;
 pub mod sysmem;
 pub mod validate;
+pub mod zip;

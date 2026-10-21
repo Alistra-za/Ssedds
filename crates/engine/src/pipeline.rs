@@ -154,13 +154,18 @@ pub(crate) struct Prepared {
 /// Source stamps (final review I7): the plan's decisions (alpha policy, sub-type facts, ...) hold only for the
 /// file it analysed; a packed job checks every source, and a baking roughness member its `_n` too (M4 carry).
 fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
-    let mut stamps: Vec<(&Path, Option<SourceStamp>)> = match &job.pack {
-        Some(pk) => pk
+    let mut stamps: Vec<(&Path, Option<SourceStamp>)> = match (&job.pack, &job.derive) {
+        (Some(pk), _) => pk
             .sources
             .iter()
             .map(|s| (s.path.as_path(), s.stamp))
             .collect(),
-        None => vec![(job.input.as_path(), job.source)],
+        (None, Some(dj)) => dj
+            .sources
+            .iter()
+            .map(|s| (s.path.as_path(), s.stamp))
+            .collect(),
+        (None, None) => vec![(job.input.as_path(), job.source)],
     };
     if let Some(b) = &job.bake {
         stamps.push((b.normal.as_path(), b.stamp));
@@ -179,7 +184,10 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
             stamps.push((f.path.as_path(), f.stamp));
         }
     }
-    let named = job.pack.is_some() || job.bake.is_some() || job.active_rnm().is_some();
+    let named = job.pack.is_some()
+        || job.derive.is_some()
+        || job.bake.is_some()
+        || job.active_rnm().is_some();
     for (src, planned) in stamps {
         if let Some(planned) = planned {
             if SourceStamp::of(src) != Some(planned) {
@@ -242,13 +250,19 @@ fn prepare_then<T>(
         None => None,
     };
     stop()?;
-    let (mut img, info) = match &job.pack {
-        Some(pk) => {
+    let (mut img, info) = match (&job.pack, &job.derive) {
+        (Some(pk), _) => {
             // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
             let asm = assemble(pk, pk.gray).map_err(|e| fail(Stage::Load)(e.to_string()))?;
             (asm.image, asm.info)
         }
-        None => load_image_as(&job.input, p.alpha.exr_straight)
+        // Note CN11: the recipe's image, encoded as any other.
+        (None, Some(dj)) => {
+            let asm = crate::derive::assemble::assemble_derived(dj)
+                .map_err(|e| fail(Stage::Load)(e.to_string()))?;
+            (asm.image, asm.info)
+        }
+        (None, None) => load_image_as(&job.input, p.alpha.exr_straight)
             .map_err(|e| fail(Stage::Load)(e.to_string()))?,
     };
     let transfer = SourceTransfer::of(&info);
@@ -508,6 +522,16 @@ pub fn process_file(
                     .map_err(|e| fail(Stage::Load)(e.to_string()))?,
                 None => vec![],
             };
+            // Note CN12: a derived output records every file it read, with its slots and the job's identity.
+            if let Some(dj) = &job.derive {
+                let identity = dj.identity_sha256();
+                for s in &dj.sources {
+                    sources.push(
+                        SourceRef::of_derive(&s.path, &s.role, identity.clone())
+                            .map_err(|e| fail(Stage::Load)(format!("{}: {e}", s.path.display())))?,
+                    );
+                }
+            }
             // DECISIONS R12: the baked `_n`, with the identity of its decode settings.
             if let Some(b) = &job.bake {
                 sources.push(
@@ -604,6 +628,7 @@ pub fn process_file(
         bc1_model: Some(bc1_model_id(req.bc1_model).into()),
         shader: job.shader.clone(),
         output_stamp: None,
+        copied_from: None,
     };
     stop()?;
 

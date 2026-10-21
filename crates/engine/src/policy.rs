@@ -1254,6 +1254,10 @@ pub struct ResolvedJob {
     /// M6 Track F2: a base normal's RNM layers (`rnm::plan::plan_rnm`); `None` for every other job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rnm: Option<crate::rnm::RnmJob>,
+    /// Track A (DECISIONS Note CN11): how a derived output is built from a PBR set's inputs; `None` for every other
+    /// job. For a derived job `input` is `derive.sources[0].path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive: Option<crate::derive::DeriveJob>,
 }
 
 impl ResolvedJob {
@@ -2083,6 +2087,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         pack: None,
         bake: None,
         rnm: None,
+        derive: None,
         shader: None,
     }
 }
@@ -2105,6 +2110,7 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
         pack: None,
         bake: None,
         rnm: None,
+        derive: None,
         shader: None,
     }
 }
@@ -2242,6 +2248,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     pack: None,
                     bake: None,
                     rnm: None,
+                    derive: None,
                     shader: None,
                 };
             }
@@ -2361,6 +2368,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         pack: None,
         bake: None,
         rnm: None,
+        derive: None,
         shader: None,
     }
 }

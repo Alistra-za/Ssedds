@@ -524,3 +524,114 @@ fn virtual_stem_strips_a_vocabulary_term_or_a_suffix() {
         "rock_rmaos"
     );
 }
+
+/// Track A Task 1 (DECISIONS Note CN): the CS `_rmaos` layout, R roughness, G metallic, B AO, A specular.
+#[test]
+fn rmaos_channel_follows_the_cs_layout() {
+    assert_eq!(
+        [Slot::Roughness, Slot::Metallic, Slot::Ao, Slot::Specular].map(rmaos_channel),
+        [Some(0), Some(1), Some(2), Some(3)]
+    );
+    for s in [Slot::Height, Slot::Glossiness, Slot::EnvMask, Slot::Fuzz] {
+        assert_eq!(rmaos_channel(s), None, "{s:?}");
+    }
+}
+
+#[test]
+fn provenance_names_channel_a() {
+    let c = ChannelSource::Source {
+        path: PathBuf::from("x_rmaos.png"),
+        role: Rmaos,
+        invert: false,
+        channel: Some(3),
+    };
+    assert_eq!(
+        c.provenance(GraySource::R),
+        Some(Provenance::Source("x_rmaos.png:A".into()))
+    );
+}
+
+const ALSO_ONLY: &str = "read only by Also export as (Vanilla / Complex material)";
+
+/// Track A Task 1 (DECISIONS Note CN): `_curves`/`_cavity` join the set as packing inputs but no recipe reads them;
+/// they are `PACK-UNUSED-INPUT`, the `_rmaos` recipe is unchanged, and neither becomes its own colour set.
+#[test]
+fn curves_and_cavity_are_unused_inputs_in_a_plain_run() {
+    use engine::api::*;
+    use engine::codes::Code;
+    use engine::events::*;
+    use std::path::Path;
+    use std::sync::Arc;
+    let maps = [
+        ("wall_roughness.png", Roughness),
+        ("wall_curves.png", Curves),
+        ("wall_cavity.png", Cavity),
+    ];
+    for target in [Target::Cs, Target::Vanilla] {
+        let (r, u) = recipes_for(target, &raw(&maps));
+        let (r0, _) = recipes_for(target, &raw(&maps[..1]));
+        assert_eq!(r, r0, "{target:?}: the recipes are unchanged");
+        for f in ["wall_curves.png", "wall_cavity.png"] {
+            let u = u.iter().find(|u| u.path == Path::new(f)).expect(f);
+            assert_eq!(u.reason, ALSO_ONLY, "{target:?} {f}");
+        }
+
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("in");
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "wall.png",
+            "wall_roughness.png",
+            "wall_curves.png",
+            "wall_cavity.png",
+        ] {
+            image::ImageBuffer::from_fn(8, 8, |x, _| image::Luma([(x * 30) as u8]))
+                .save(dir.join(f))
+                .unwrap();
+        }
+        let mut req = BatchRequest::new(vec![dir], d.path().join("out"), target);
+        req.recursive = true;
+        req.accept = engine::policy::AcceptSuggestions::High;
+        let p = Engine::new()
+            .unwrap()
+            .plan(
+                req,
+                &Reporter::new(Arc::new(VecSink::default()), "t"),
+                &CancelToken::default(),
+            )
+            .unwrap();
+        // A job that writes `n`; a packing input keeps its own job, which writes nothing.
+        let out = |n: &str| {
+            p.jobs.iter().any(|j| {
+                j.status == engine::policy::JobStatus::Ready
+                    && j.output
+                        .file_name()
+                        .is_some_and(|o| o.to_string_lossy() == n)
+            })
+        };
+        assert!(out("wall.dds"), "{target:?}: the colour map still plans");
+        assert!(
+            !out("wall_curves.dds") && !out("wall_cavity.dds"),
+            "{target:?}"
+        );
+        assert_eq!(out("wall_rmaos.dds"), target == Target::Cs, "{target:?}");
+        for f in ["wall_curves.png", "wall_cavity.png"] {
+            let named = |path: &Path| path.file_name().is_some_and(|n| n.to_string_lossy() == f);
+            let reason = p
+                .jobs
+                .iter()
+                .filter(|j| named(&j.input))
+                .flat_map(|j| &j.warnings)
+                .find(|w| w.code == Code::PackUnusedInput)
+                .map(|w| w.message.clone())
+                .or_else(|| {
+                    p.skipped
+                        .iter()
+                        .find(|s| named(&s.path) && s.code == Some(Code::PackUnusedInput))
+                        .map(|s| s.reason.clone())
+                })
+                .unwrap_or_else(|| panic!("{target:?}: {f} is not reported unused"));
+            assert!(reason.contains(ALSO_ONLY), "{target:?} {f}: {reason}");
+        }
+    }
+}

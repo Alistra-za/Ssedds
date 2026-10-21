@@ -511,6 +511,9 @@ fn build_asks(m: &AppModel) -> Vec<ExportIssue> {
 /// What an export about to start writes once it has ended: the PGPatcher JSON and the vanilla copies.
 #[derive(Debug, Clone)]
 pub struct PendingJson {
+    /// The folder the JSON's hash records are kept against: the PBR folder while a tick is on (Note CN, re-check
+    /// A4), else the export folder, as `PendingCs.root` and `PendingCm.root`.
+    pub root: PathBuf,
     pub path: PathBuf,
     /// Set id, the job keys its entry depends on, and the entry.
     pub entries: Vec<(String, Vec<String>, EntryInput)>,
@@ -568,6 +571,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
             }
         }
         return (!copies.is_empty()).then(|| PendingJson {
+            root: m.output_root(),
             path: PathBuf::new(),
             entries: vec![],
             copies,
@@ -604,13 +608,14 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
     if entries.is_empty() {
         return None;
     }
+    let root = m.output_root();
     Some(PendingJson {
-        path: m
-            .export_root()
+        path: root
             .join("PBRNIFPatcher")
             .join(format!("{}.json", json_name(m))),
         entries,
         copies: vec![],
+        root,
     })
 }
 

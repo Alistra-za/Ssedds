@@ -64,6 +64,14 @@
       ],
       "type": "object"
     },
+    "AlsoTarget": {
+      "description": "A folder `[export] also` writes besides the PBR export (C3).",
+      "enum": [
+        "vanilla",
+        "cm"
+      ],
+      "type": "string"
+    },
     "Backend": {
       "enum": [
         "bc7e",
@@ -253,6 +261,55 @@
       ],
       "type": "object"
     },
+    "ExportConfig": {
+      "additionalProperties": false,
+      "description": "The `[export]` table of a project `sdc.toml` (Track A, C3, C4, C2): \"also export\" as Vanilla and/or CM.",
+      "properties": {
+        "also": {
+          "default": [],
+          "description": "Folders to write besides the PBR export. Empty = a plain export.",
+          "items": {
+            "$ref": "#/$defs/AlsoTarget"
+          },
+          "type": "array"
+        },
+        "legacy": {
+          "$ref": "#/$defs/LegacyParams",
+          "default": {
+            "ao_strength": 0.5,
+            "ao_strength_landscape": 0.3,
+            "brightness": 0.9,
+            "cm_dielectric_env": 0.0,
+            "curves_opacity": 0.4,
+            "keep_metal_brightness": false,
+            "keep_metal_strength": 1.0,
+            "landscape_spec": 2.5,
+            "metal_darken": 0.3,
+            "spec_metal_boost": 2.0,
+            "spec_scale": 0.66
+          },
+          "description": "The recipe settings (C4)."
+        },
+        "names": {
+          "$ref": "#/$defs/FolderNames",
+          "default": {}
+        },
+        "skip": {
+          "default": [],
+          "description": "Set ids (as `--set set:<id>` uses) left out of Vanilla and CM (C2).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "zip": {
+          "default": false,
+          "description": "Zip each folder, with a SHA-256 sums file.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "FileEntry": {
       "additionalProperties": false,
       "properties": {
@@ -429,6 +486,31 @@
       },
       "type": "object"
     },
+    "FolderNames": {
+      "additionalProperties": false,
+      "description": "`[export.names]`: the three output folder names; absent = `<project> PBR / Vanilla / CM` (TA10).",
+      "properties": {
+        "cm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pbr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vanilla": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Format": {
       "enum": [
         "bc1",
@@ -496,6 +578,78 @@
             "number",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "LegacyParams": {
+      "additionalProperties": false,
+      "description": "`[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CN5).",
+      "properties": {
+        "ao_strength": {
+          "default": 0.5,
+          "description": "AO strength s for objects (Q3).",
+          "format": "double",
+          "type": "number"
+        },
+        "ao_strength_landscape": {
+          "default": 0.3,
+          "description": "AO strength s for landscape (calibration).",
+          "format": "double",
+          "type": "number"
+        },
+        "brightness": {
+          "default": 0.9,
+          "description": "Diffuse brightness k (owner answer 1: 0.9; Q1's 0.65 stays available).",
+          "format": "double",
+          "type": "number"
+        },
+        "cm_dielectric_env": {
+          "default": 0.0,
+          "description": "CM `_m` R floor for non-metals, × gloss (Q5; 0 = off, option 0.35).",
+          "format": "double",
+          "type": "number"
+        },
+        "curves_opacity": {
+          "default": 0.4,
+          "description": "Opacity of the `_curves` soft light and the cavity multiply (Q2, TA4).",
+          "format": "double",
+          "type": "number"
+        },
+        "keep_metal_brightness": {
+          "default": false,
+          "description": "CM diffuse keeps metal brightness instead of reusing the vanilla diffuse.",
+          "type": "boolean"
+        },
+        "keep_metal_strength": {
+          "default": 1.0,
+          "description": "How much of the metal darkening Keep metal brightness undoes.",
+          "format": "double",
+          "type": "number"
+        },
+        "landscape_spec": {
+          "default": 2.5,
+          "description": "Landscape `_n` alpha factor, applied before saturation (O5).",
+          "format": "double",
+          "type": "number"
+        },
+        "metal_darken": {
+          "default": 0.3,
+          "description": "Vanilla diffuse factor at full metal (Q4).",
+          "format": "double",
+          "type": "number"
+        },
+        "spec_metal_boost": {
+          "default": 2.0,
+          "description": "`_n` alpha boost at full metal (round 2).",
+          "format": "double",
+          "type": "number"
+        },
+        "spec_scale": {
+          "default": 0.66,
+          "description": "`_n` alpha scale (round 2).",
+          "format": "double",
+          "type": "number"
         }
       },
       "type": "object"
@@ -1381,6 +1535,17 @@
     "defaults": {
       "$ref": "#/$defs/PartialProfile",
       "default": null
+    },
+    "export": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExportConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Also export as Vanilla / CM (Track A). Only a project config may hold it."
     },
     "files": {
       "additionalProperties": {

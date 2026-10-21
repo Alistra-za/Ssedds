@@ -74,6 +74,7 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
         }),
         shader: None,
         rnm: None,
+        derive: None,
     };
     Plan {
         request,
@@ -87,6 +88,7 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
         cancelled: vec![],
         shaders: Default::default(),
         nvtt: None,
+        derive_own: Default::default(),
     }
 }
 

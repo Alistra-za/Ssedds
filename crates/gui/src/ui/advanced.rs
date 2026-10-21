@@ -9,6 +9,7 @@ use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::{AppModel, Selection};
 use crate::settings::{Bc1Choice, ChecksSettings, PREVIEW_SIZES};
 use eframe::egui;
+use engine::derive::recipe::LegacyParams;
 use engine::policy::ResolvedJob;
 use serde_json::Value;
 
@@ -35,6 +36,7 @@ enum Action {
     Checks(ChecksSettings),
     CheckAllUv,
     CancelCheckAllUv,
+    AlsoRecipe(LegacyParams),
 }
 
 /// K10: Check-all progress epochs are disjoint from the export's `drawer_epoch`, so the two bars never share one
@@ -93,6 +95,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     preview_settings(ui, model, &mut actions);
     interface(ui, model, &mut actions);
     checks(ui, model, &mut actions);
+    also_recipe(ui, model, &mut actions);
     mipmaps(ui, model, &mut actions);
     texture_fields(ui, model, &mut actions);
     unmatched(ui, model, &mut actions);
@@ -111,6 +114,7 @@ pub fn body(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::Checks(c) => model.set_checks(c),
             Action::CheckAllUv => model.check_all_uv(),
             Action::CancelCheckAllUv => model.cancel_check_all_uv(),
+            Action::AlsoRecipe(p) => model.set_also_settings(|c| c.legacy = p),
         }
     }
 }
@@ -432,6 +436,179 @@ fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             actions.push(Action::Checks(c));
         }
         check_all_uv(ui, model, actions);
+    });
+}
+
+/// A number widget over a model value that is only written once it settles: the value in flight lives in egui
+/// memory under `id` while it is dragged, so the drag follows the pointer and ends in exactly one edit (one undo
+/// step). `Some(value)` on the frame it settles (a drag ended, a click, a typed value accepted).
+pub(super) fn held_value(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    current: f64,
+    add: impl FnOnce(&mut egui::Ui, &mut f64) -> egui::Response,
+) -> (egui::Response, Option<f64>) {
+    let id = egui::Id::new(id);
+    let mut x = ui.data(|d| d.get_temp::<f64>(id)).unwrap_or(current);
+    let r = add(ui, &mut x);
+    let settled = r.drag_stopped() || (r.changed() && !r.dragged());
+    if r.dragged() {
+        ui.data_mut(|d| d.insert_temp(id, x));
+    } else {
+        ui.data_mut(|d| d.remove::<f64>(id));
+    }
+    (r, (settled && x != current).then_some(x))
+}
+
+const OPEN_RECIPE: &str = "advanced-open-recipe";
+
+/// Open "Also export recipe" the next time it is drawn (Review's link).
+pub fn open_recipe(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(OPEN_RECIPE), true));
+}
+
+/// "Also export recipe" (owner answer 5, C4): one number box per `[export.legacy]` value, ranges as
+/// `LegacyParams::check`. P17: Keep metal brightness and its strength are only in Review (with the CM tick), and
+/// Dielectric env is one box (0 = off), not a box plus a checkbox.
+fn also_recipe(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    // Review M4 (ruled): closed until asked for; Review's "Recipe settings are in Advanced" opens it.
+    let asked = ui
+        .ctx()
+        .data_mut(|d| d.remove_temp::<bool>(egui::Id::new(OPEN_RECIPE)))
+        .is_some();
+    let header = egui::CollapsingHeader::new(egui::RichText::new("Also export recipe").strong())
+        .default_open(false)
+        .open(asked.then_some(true));
+    header.show(ui, |ui| {
+        let off = if model.project.is_none() {
+            Some("Open a folder first".to_string())
+        } else if model.export.running.is_some() {
+            Some(crate::model::also::EXPORT_RUNNING.to_string())
+        } else {
+            toml_read_only_reason(model)
+        };
+        let now = model.also_config().legacy;
+        let mut p = now;
+        let rows: [(&mut f64, &str, &str, f64, f64, &str); 9] = [
+            (
+                &mut p.brightness,
+                "Diffuse brightness",
+                "brightness",
+                0.0,
+                1.5,
+                "The vanilla diffuse's brightness factor",
+            ),
+            (
+                &mut p.ao_strength,
+                "AO strength",
+                "ao_strength",
+                0.0,
+                1.0,
+                "How much AO darkens an object's diffuse",
+            ),
+            (
+                &mut p.ao_strength_landscape,
+                "AO strength (landscape)",
+                "ao_strength_landscape",
+                0.0,
+                1.0,
+                "How much AO darkens a landscape diffuse",
+            ),
+            (
+                &mut p.curves_opacity,
+                "Curves opacity",
+                "curves_opacity",
+                0.0,
+                1.0,
+                "Opacity of the curves soft light and the cavity multiply",
+            ),
+            (
+                &mut p.metal_darken,
+                "Metal darkening",
+                "metal_darken",
+                0.0,
+                1.0,
+                "The vanilla diffuse's factor at full metal",
+            ),
+            (
+                &mut p.spec_scale,
+                "Specular scale",
+                "spec_scale",
+                0.0,
+                2.0,
+                "Scale of the specular in the _n alpha",
+            ),
+            (
+                &mut p.spec_metal_boost,
+                "Specular boost at full metal",
+                "spec_metal_boost",
+                1.0,
+                3.0,
+                "Boost of the _n alpha at full metal",
+            ),
+            (
+                &mut p.landscape_spec,
+                "Landscape spec factor",
+                "landscape_spec",
+                0.0,
+                5.0,
+                "Landscape _n alpha factor, applied before saturation",
+            ),
+            (
+                &mut p.cm_dielectric_env,
+                "Dielectric env from gloss",
+                "cm_dielectric_env",
+                0.0,
+                1.0,
+                "0 = off; the spec's option is 0.35",
+            ),
+        ];
+        let mut settled = false;
+        ui.add_enabled_ui(off.is_none(), |ui| {
+            egui::Grid::new("also-recipe")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    // The number box first: in a narrow drawer the text is cut, never the box.
+                    for (v, label, key, lo, hi, hover) in rows {
+                        let (r, done) = held_value(ui, ("also-recipe", key), *v, |ui, x| {
+                            ui.add(
+                                egui::DragValue::new(x)
+                                    .speed(0.01)
+                                    .range(lo..=hi)
+                                    .max_decimals(3)
+                                    .update_while_editing(false),
+                            )
+                        });
+                        let shown = r.enabled();
+                        r.widget_info(|| {
+                            let mut i = egui::WidgetInfo::drag_value(shown, *v);
+                            i.label = Some(label.to_string());
+                            i
+                        });
+                        if let Some(x) = done {
+                            *v = x;
+                            settled = true;
+                        }
+                        // Built only while hovered (ui-rules 9.3).
+                        let tip = |ui: &mut egui::Ui| {
+                            ui.label(format!("{hover} (sdc.toml export.legacy.{key})"));
+                        };
+                        r.on_hover_ui(tip);
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            ui.label(egui::RichText::new(key).small().weak());
+                        })
+                        .response
+                        .on_hover_ui(tip);
+                        ui.end_row();
+                    }
+                });
+        })
+        .response
+        .on_disabled_hover_text(off.as_deref().unwrap_or_default());
+        if settled && p != now {
+            actions.push(Action::AlsoRecipe(p));
+        }
     });
 }
 

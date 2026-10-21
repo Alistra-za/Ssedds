@@ -521,6 +521,8 @@ pub enum ShaderOrigin {
     Set,
     Auto(AutoRule),
     Fallback,
+    // Track A (TA29): a PBR set converted by the derive step; its vanilla shader.
+    Derived,
 }
 
 impl fmt::Display for ShaderOrigin {
@@ -529,6 +531,7 @@ impl fmt::Display for ShaderOrigin {
             ShaderOrigin::Set => f.write_str("set"),
             ShaderOrigin::Auto(r) => write!(f, "auto:{}", r.id()),
             ShaderOrigin::Fallback => f.write_str("fallback"),
+            ShaderOrigin::Derived => f.write_str("derived"),
         }
     }
 }
@@ -539,6 +542,7 @@ impl FromStr for ShaderOrigin {
         match s {
             "set" => Ok(ShaderOrigin::Set),
             "fallback" => Ok(ShaderOrigin::Fallback),
+            "derived" => Ok(ShaderOrigin::Derived),
             _ => s
                 .strip_prefix("auto:")
                 .and_then(|id| AutoRule::ALL.into_iter().find(|r| r.id() == id))
@@ -839,6 +843,10 @@ pub fn assign<'s>(spec: &'s ShaderSpec, members: &[MemberMap]) -> Vec<Option<&'s
 /// SHADER-EXTRA-MAP per unused member (data `{"member", "shader"}`) and SHADER-MISSING-MAP per required role no
 /// member fills (data `{"map", "shader"}`), members first, then roles in table order.
 pub fn check_maps(pick: &ShaderPick, target: Target, members: &[MemberMap]) -> Vec<Warning> {
+    // TA29: a derived set's members were replaced by derived jobs, so its maps are not the shader's.
+    if pick.provenance == ShaderOrigin::Derived {
+        return vec![];
+    }
     // Complex grass is drawn by the grass shader, which reads diffuse and normal from the one file (DECISIONS X9).
     if members
         .iter()
@@ -1722,6 +1730,7 @@ mod tests {
             pack: None,
             bake: None,
             rnm: None,
+            derive: None,
             shader: None,
         }
     }

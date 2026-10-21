@@ -63,6 +63,11 @@ pub enum WorkerMsg {
     KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
+    /// Note CN: an Also export's phases' summary; sent just before its `ExportDone`. The worker then waits on the
+    /// sender for the files the JSON finishers wrote into the PBR folder (final review I2; dropped = none).
+    AlsoFinished(Box<engine::also::AlsoSummary>, Sender<Vec<PathBuf>>),
+    /// Final review I2: the walk, zips and report ran after the JSON; only their notes, zips and report.
+    AlsoZipped(Box<engine::also::AlsoSummary>),
     Source {
         token: u64,
         result: Result<Arc<SourcePreview>, String>,
@@ -235,6 +240,64 @@ pub fn spawn_export(
             .map_err(|e| e.to_string());
         let _ = tx.send(WorkerMsg::ExportDone(result));
     });
+}
+
+/// Note CN: the Also export (`start_also`: the PBR, Vanilla and CM phases), tagged "export" like `spawn_export`, so
+/// the `Panicked` router ends it. Sends `AlsoFinished`, then `ExportDone`: an `Err` when the run failed or its PBR
+/// phase did (CN56: `start_also` returns `Ok` then, and nothing must be written after it); otherwise every phase's
+/// counts, with the copies (left out of `batch_done`) counted as written. Then (final review I2) it waits for the
+/// JSON the model wrote into the PBR folder, runs `finish_also` (walk, zips, report) and sends `AlsoZipped`.
+pub fn spawn_export_also(
+    tx: Sender<WorkerMsg>,
+    session: Arc<Session>,
+    req: BatchRequest,
+    spec: engine::also::AlsoSpec,
+    cancel: CancelToken,
+) {
+    spawn_guarded(tx, "export", move |tx| {
+        let mut req = req;
+        req.bc1_model = session.bc1_model();
+        let result = engine::also::start_also(
+            session.engine(),
+            session.cache(),
+            req,
+            &spec,
+            Arc::new(ChannelSink(tx.clone())),
+            &cancel,
+        );
+        let run = match result {
+            Err(e) => {
+                let _ = tx.send(WorkerMsg::ExportDone(Err(e.to_string())));
+                return;
+            }
+            Ok(run) => run,
+        };
+        let (json_tx, json_rx) = std::sync::mpsc::channel();
+        let before = run.summary.notes.len();
+        let _ = tx.send(WorkerMsg::AlsoFinished(
+            Box::new(run.summary.clone()),
+            json_tx,
+        ));
+        let _ = tx.send(WorkerMsg::ExportDone(also_done(&run.summary)));
+        // A model that dropped the sender (a panic, a new export) sends nothing: no extra file, never a hang.
+        let extra = json_rx.recv().unwrap_or_default();
+        let mut s = engine::also::finish_also(run, &spec, &extra, &cancel);
+        s.notes.drain(..before);
+        let _ = tx.send(WorkerMsg::AlsoZipped(Box::new(s)));
+    });
+}
+
+/// An Also export's `ExportDone`: `Err` when its PBR phase failed (CN56), else every phase's counts with the copies
+/// (left out of `batch_done`) counted as written.
+pub(crate) fn also_done(s: &engine::also::AlsoSummary) -> Result<BatchSummary, String> {
+    match &s.error {
+        Some((engine::also::Phase::Pbr, msg, _)) => Err(msg.clone()),
+        _ => {
+            let mut b = s.combined();
+            b.converted += s.copied;
+            Ok(b)
+        }
+    }
 }
 
 /// A plan, with a panic turned into this plan's failure, so a superseded plan's panic is dropped by its

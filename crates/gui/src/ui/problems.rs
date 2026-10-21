@@ -167,10 +167,18 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             model.select_set(&k);
             to_textures(ui);
         }
-        Some(Act::File(k)) => {
-            model.select_job(&k);
-            to_textures(ui);
-        }
+        // Re-check A5: a Vanilla or CM row of the last Also export names no texture; its file is shown in Explorer.
+        Some(Act::File(k)) => match model.also_file(&k) {
+            Some(f) => {
+                if let Err(e) = model.reveal(&f) {
+                    model.status_line = e;
+                }
+            }
+            None => {
+                model.select_job(&k);
+                to_textures(ui);
+            }
+        },
         Some(Act::Fix(r)) => apply(model, r),
         Some(Act::Filter(f)) => model.bottom.filter = f,
         None => {}

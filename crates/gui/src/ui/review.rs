@@ -4,10 +4,12 @@ use super::settings_panel::{alpha_options, offered_groups, subtype_label};
 use super::status::{AMBER, RED};
 use crate::model::bottom::{problems, Level};
 use crate::model::items::Decision;
+use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::review::{DiskState, JsonKind, JsonLine};
-use crate::model::{pbr_export, Answer, AppModel};
+use crate::model::{also, pbr_export, sets, Answer, AppModel};
 use eframe::egui;
-use engine::config::{AlphaPolicy, Subtype};
+use engine::config::{AlphaPolicy, Subtype, Target};
+use engine::presets::{AlsoTarget, ExportConfig};
 
 /// What a click on an undecided row asks for.
 pub enum RowPick {
@@ -181,6 +183,11 @@ pub fn fix_buttons(
 }
 
 enum Act {
+    AlsoTick(AlsoTarget, bool),
+    AlsoSet(Box<dyn FnOnce(&mut ExportConfig)>),
+    AlsoLocation,
+    Skip(String, bool),
+    Recipe,
     GoTo(String),
     Row(RowPick),
     AcceptAll,
@@ -215,10 +222,248 @@ fn json_line_text(l: &JsonLine) -> String {
 /// A column: its heading, then `body` in a scroll area of its own.
 fn column(ui: &mut egui::Ui, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
     ui.strong(heading);
+    // ui-rules 3.2: a bar drawn without hover, so a column that overflows says so.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
     egui::ScrollArea::vertical()
         .id_salt(("review", heading))
         .auto_shrink([false, true])
         .show(ui, body);
+}
+
+/// P2 / TA30: the CM lines Review shows: the engine's install text (the report prints the same; `grass`: a PBR grass
+/// set is not skipped), plus "the Vanilla folder is written too" when only CM is ticked.
+pub fn also_cm_lines(cfg: &ExportConfig, grass: bool) -> Vec<&'static str> {
+    let mut v = engine::also::cm_lines(cfg, grass, false);
+    if !cfg.also.contains(&AlsoTarget::Vanilla) {
+        v.push(engine::also::CM_NEEDS_VANILLA);
+    }
+    v
+}
+
+/// One `[export.names]` field (PBR, Vanilla or CM), committed on focus loss (ui-rules 7.5); Esc cancels. Empty means
+/// the default name, shown as the hint.
+fn name_field(
+    ui: &mut egui::Ui,
+    root: Option<&std::path::Path>,
+    which: usize,
+    saved: Option<&str>,
+    hint: &str,
+    act: &mut Option<Act>,
+) {
+    // Keyed by the opened folder too: a draft never carries into another project (review M2).
+    let id = egui::Id::new(("also-name", which, root));
+    let saved = saved.unwrap_or_default().to_string();
+    let mut t: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| saved.clone());
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut t)
+            .hint_text(hint)
+            .desired_width(f32::INFINITY),
+    );
+    let name = format!("{} folder name", ["PBR", "Vanilla", "CM"][which]);
+    let enabled = ui.is_enabled();
+    r.widget_info(|| {
+        let mut i = egui::WidgetInfo::text_edit(enabled, saved.clone(), t.clone(), hint);
+        i.label = Some(name.clone());
+        i
+    });
+    if r.changed() {
+        ui.data_mut(|d| d.insert_temp(id, t.clone()));
+    }
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        if t != saved && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let v = (!t.is_empty()).then_some(t);
+            *act = Some(Act::AlsoSet(Box::new(move |c| match which {
+                0 => c.names.pbr = v,
+                1 => c.names.vanilla = v,
+                _ => c.names.cm = v,
+            })));
+        }
+    }
+}
+
+/// Review's "Also export as" column (Note CN, owner answers 5 and 6): the ticks, the location, the folder names, Keep
+/// metal brightness and the CM lines, the zip, the sets to skip, and the gate's Also reason (`gate`). It names what
+/// is written and why it cannot be yet, never that it will succeed (Task 11 M5). The recipe is in Advanced.
+fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut Option<Act>) {
+    let cfg = m.also_config();
+    let (v, c) = m.also_ticks();
+    let off = m
+        .export
+        .running
+        .is_some()
+        .then(|| also::EXPORT_RUNNING.to_string())
+        .or_else(|| m.toml_read_only_reason());
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+    ui.add_enabled_ui(off.is_none(), |ui| {
+        ui.horizontal(|ui| {
+            for (t, on, text) in [
+                (AlsoTarget::Vanilla, v, "Vanilla"),
+                (AlsoTarget::Cm, c, "Complex material"),
+            ] {
+                // A tick left from the cs mode stays clickable, so it can be cleared.
+                let cs = (!on && m.target != Target::Cs).then_some(also::NEEDS_CS);
+                let mut now = on;
+                let r = ui.add_enabled(cs.is_none(), egui::Checkbox::new(&mut now, text));
+                if r
+                    .on_disabled_hover_text(off.as_deref().or(cs).unwrap_or_default())
+                    .changed()
+                {
+                    *act = Some(Act::AlsoTick(t, now));
+                }
+            }
+        });
+        ui.weak("Export location");
+        let loc = m.also_location().display().to_string();
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                let glyph = ui.fonts_mut(|f| {
+                    f.glyph_width(&egui::TextStyle::Body.resolve(ui.style()), '0')
+                });
+                let chars = (ui.available_width() / glyph).floor().max(8.0) as usize;
+                let r = ui.add(egui::Label::new(super::header::elide_middle(&loc, chars)));
+                let name = format!("Export location: {loc}");
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
+                r.on_hover_text(&loc);
+            },
+            |ui| {
+                let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        r.enabled(),
+                        "Choose the Also export location…",
+                    )
+                });
+                let r = r
+                    .on_hover_text("Where the PBR, Vanilla and CM folders are written")
+                    .on_disabled_hover_text(off.as_deref().unwrap_or(picker::BUSY_HOVER));
+                if r.clicked() {
+                    *act = Some(Act::AlsoLocation);
+                }
+            },
+        );
+        let folders = m.also_folders();
+        let hint = |i: usize| {
+            folders[i]
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        egui::Grid::new("also-names").num_columns(2).show(ui, |ui| {
+            let names = [&cfg.names.pbr, &cfg.names.vanilla, &cfg.names.cm];
+            for (i, label) in ["PBR", "Vanilla", "CM"].into_iter().enumerate() {
+                ui.label(label);
+                name_field(ui, m.root.as_deref(), i, names[i].as_deref(), &hint(i), act);
+                ui.end_row();
+            }
+        });
+        if c {
+            let mut keep = cfg.legacy.keep_metal_brightness;
+            if ui
+                .checkbox(&mut keep, "Keep metal brightness")
+                .on_hover_text("The CM diffuse keeps the metals' brightness instead of reusing the Vanilla diffuse")
+                .changed()
+            {
+                *act = Some(Act::AlsoSet(Box::new(move |c| {
+                    c.legacy.keep_metal_brightness = keep
+                })));
+            }
+            ui.add_enabled_ui(keep, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Strength");
+                    let now = cfg.legacy.keep_metal_strength;
+                    // One edit (one undo step) per drag, not per frame.
+                    let (r, done) =
+                        super::advanced::held_value(ui, "also-keep-strength", now, |ui, s| {
+                            let r = ui.add(egui::Slider::new(s, 0.0..=1.0));
+                            let v = *s;
+                            r.widget_info(|| {
+                                egui::WidgetInfo::slider(
+                                    r.enabled(),
+                                    v,
+                                    "Keep metal brightness strength",
+                                )
+                            });
+                            r
+                        });
+                    r.on_hover_text("How much of the metal darkening it undoes");
+                    if let Some(s) = done {
+                        *act = Some(Act::AlsoSet(Box::new(move |c| {
+                            c.legacy.keep_metal_strength = s
+                        })));
+                    }
+                });
+            });
+            for l in also_cm_lines(&cfg, m.also_grass()) {
+                // The engine's text is Markdown (the report prints it); no backticks on screen.
+                ui.add(egui::Label::new(egui::RichText::new(l.replace('`', "")).weak()).wrap());
+            }
+        }
+        let mut zip = cfg.zip;
+        if ui
+            .checkbox(&mut zip, "Also write a zip of each folder")
+            .on_hover_text("With a SHA-256 sums file")
+            .changed()
+        {
+            *act = Some(Act::AlsoSet(Box::new(move |c| c.zip = zip)));
+        }
+        skip_list(ui, m, &cfg, act);
+    })
+    .response
+    .on_disabled_hover_text(off.as_deref().unwrap_or_default());
+    if let Some(why) = gate {
+        ui.add(egui::Label::new(egui::RichText::new(why).color(RED)).wrap());
+    }
+    if ui
+        .link("Recipe settings are in Advanced")
+        .on_hover_text("Brightness, AO, specular and the other [export.legacy] values")
+        .clicked()
+    {
+        *act = Some(Act::Recipe);
+    }
+}
+
+/// "Skip these sets" (C2, owner answer 6): one row per PBR set, checked = left out of Vanilla and CM. Reachable from
+/// the 3D view too, where the set panel is not. At most 8 rows tall; only the rows on screen are drawn.
+fn skip_list(ui: &mut egui::Ui, m: &AppModel, cfg: &ExportConfig, act: &mut Option<Act>) {
+    ui.label("Skip these sets")
+        .on_hover_text("Checked sets are left out of the Vanilla and CM folders");
+    let views = sets::views(m);
+    let pbr: Vec<_> = views.iter().filter(|v| also::is_pbr_set(v)).collect();
+    if pbr.is_empty() {
+        ui.weak("No PBR sets");
+        return;
+    }
+    let rows = |ui: &mut egui::Ui, range: std::ops::Range<usize>, act: &mut Option<Act>| {
+        for v in &pbr[range] {
+            let on = cfg.skip.iter().any(|s| engine::sets::same_id(s, &v.id));
+            let mut now = on;
+            let r = ui.checkbox(&mut now, super::dialogs::short_name(&v.label));
+            r.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, r.enabled(), now, &v.label)
+            });
+            if r.on_hover_text(&v.id).changed() {
+                *act = Some(Act::Skip(v.id.clone(), now));
+            }
+        }
+    };
+    // Up to 8 rows are drawn inline, so the column's own scroll (and scroll-to-focus) reaches them: a nested area
+    // takes every scroll target set inside it (ui-rules gotcha, CC18).
+    if pbr.len() <= 8 {
+        rows(ui, 0..pbr.len(), act);
+        return;
+    }
+    let row_h = ui.spacing().interact_size.y;
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+        egui::ScrollArea::vertical()
+            .id_salt("also-skip")
+            .max_height(8.0 * (row_h + ui.spacing().item_spacing.y))
+            .auto_shrink([false, true])
+            .show_rows(ui, row_h, pbr.len(), |ui, range| rows(ui, range, act));
+    });
 }
 
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
@@ -242,6 +487,13 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
     let gate = m.review_gate();
     let json = m.review_json();
+    // Note CN85: a fourth column in the cs mode or while a tick is on; the Also reason only with a tick, as the gate.
+    let also_on = m.also_on() || m.target == Target::Cs;
+    let also_err = if m.also_on() {
+        m.also_gate().err()
+    } else {
+        None
+    };
     let mut act = None;
     // The footer first, pinned to the bottom, so the columns scroll above it and it is never clipped.
     egui::Panel::bottom("review-footer")
@@ -315,7 +567,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         });
     // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
     ui.allocate_ui(ui.available_size(), |ui| {
-        ui.columns(3, |cols| {
+        ui.columns(if also_on { 4 } else { 3 }, |cols| {
             column(&mut cols[0], "Blockers", |ui| {
                 if blocks.is_empty() {
                     ui.weak("None");
@@ -385,9 +637,25 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     act = Some(Act::Others);
                 }
             });
+            if also_on {
+                column(&mut cols[3], "Also export as", |ui| {
+                    also_section(ui, m, also_err.as_deref(), &mut act)
+                });
+            }
         })
     });
     match act {
+        Some(Act::AlsoTick(t, on)) => model.set_also_tick(t, on),
+        Some(Act::AlsoSet(f)) => model.set_also_settings(f),
+        Some(Act::AlsoLocation) => {
+            model.pick(ui.ctx(), PickerPurpose::AlsoLocation, PickerSpec::folder());
+        }
+        Some(Act::Skip(id, on)) => model.set_skip_also(&id, on),
+        Some(Act::Recipe) => {
+            super::advanced::open_recipe(ui.ctx());
+            model.settings.advanced_open = true;
+            model.save_settings();
+        }
         Some(Act::GoTo(k)) => {
             model.select_set(&k);
             super::header::set_meshes_view(ui.ctx(), false);

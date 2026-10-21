@@ -91,6 +91,17 @@ impl Slot {
     }
 }
 
+/// The channel of a CS `_rmaos` that holds `slot` (R roughness, G metallic, B AO, A specular; DECISIONS Note CN).
+pub fn rmaos_channel(slot: Slot) -> Option<u8> {
+    match slot {
+        Slot::Roughness => Some(0),
+        Slot::Metallic => Some(1),
+        Slot::Ao => Some(2),
+        Slot::Specular => Some(3),
+        _ => None,
+    }
+}
+
 /// A raw map of one set waiting for a recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawInput {
@@ -173,6 +184,10 @@ fn unused_reason(
     };
     match (target, role) {
         (_, RawMap::Orm) => "a loose map is used for each channel it could supply".into(),
+        // `Rmaos` is never a file-name role (`raw_role`), so its arm is a fallback only.
+        (_, RawMap::Curves | RawMap::Cavity | RawMap::Rmaos) => {
+            "read only by Also export as (Vanilla / Complex material)".into()
+        }
         (_, RawMap::Opacity) => "no recipe packs opacity yet (spec §14 #19)".into(),
         (Target::Cs, RawMap::Glossiness) if has(RawMap::Roughness) => {
             "roughness is used: the _rmaos/_rfaos R channel is roughness".into()
@@ -428,8 +443,9 @@ pub fn predicted_suffixes(
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "from", rename_all = "snake_case")]
 pub enum ChannelSource {
-    /// R (or luma) of a raw source; `invert` stores 1 − x. `channel` (0..=2) reads that channel of an `_orm`
-    /// instead (DECISIONS Note AL); absent otherwise, so no other job's JSON changes.
+    /// R (or luma) of a raw source; `invert` stores 1 − x. `channel` reads that channel of an `_orm` (0..=2,
+    /// DECISIONS Note AL) or an `_rmaos` (0..=3, alpha included, Note CN) instead; absent otherwise, so no other
+    /// job's JSON changes.
     Source {
         path: PathBuf,
         role: RawMap,
@@ -461,7 +477,7 @@ impl ChannelSource {
                 if *invert { "1-" } else { "" },
                 file_name(path),
                 match (channel, gray) {
-                    (Some(c), _) => ["R", "G", "B"][usize::from(*c)],
+                    (Some(c), _) => ["R", "G", "B", "A"][usize::from(*c)],
                     (None, GraySource::R) => "R",
                     (None, GraySource::Luma) => "luma",
                 }
