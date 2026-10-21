@@ -804,6 +804,25 @@ pub fn project_root(req: &BatchRequest) -> Option<PathBuf> {
     }
 }
 
+/// The project config: the inline one, `--config`, or the first input folder's `sdc.toml`.
+fn load_project_config(req: &BatchRequest) -> Result<Option<ConfigFile>, EngineError> {
+    if let Some(c) = &req.project_config_inline {
+        return Ok(Some(c.clone()));
+    }
+    let project_path = req.project_config.clone().or_else(|| {
+        req.inputs
+            .first()
+            .filter(|p| p.is_dir())
+            .map(|p| p.join("sdc.toml"))
+            .filter(|p| p.exists())
+    });
+    project_path
+        .as_deref()
+        .map(ConfigFile::load)
+        .transpose()
+        .map_err(config_err)
+}
+
 /// What [`Engine::preflight`]'s checks resolve, kept for planning.
 struct Setup {
     registry: PresetRegistry,
@@ -824,6 +843,14 @@ impl Engine {
 
     pub fn registry(&self) -> &PresetRegistry {
         &self.registry
+    }
+
+    /// The project config's `[export]`, else the default. Parses only: no `check()`, so a bad `[export.legacy]`
+    /// value cannot break a plain export (O2). `run_also` checks it before anything else.
+    pub fn export_config(&self, req: &BatchRequest) -> Result<ExportConfig, EngineError> {
+        Ok(load_project_config(req)?
+            .and_then(|c| c.export)
+            .unwrap_or_default())
     }
 
     /// Spec §8 up-front checks without reading any input: load the preset files and the configs (the user
@@ -858,6 +885,12 @@ impl Engine {
                     p.display()
                 )));
             }
+            if c.export.is_some() {
+                return Err(EngineError::Config(format!(
+                    "[export] is only valid in a project sdc.toml, not in {}",
+                    p.display()
+                )));
+            }
             if !c.inputs.is_empty() {
                 return Err(EngineError::Config(format!(
                     "[inputs] is only valid in a project sdc.toml, not in {}",
@@ -865,23 +898,7 @@ impl Engine {
                 )));
             }
         }
-        let project_config = match &req.project_config_inline {
-            Some(c) => Some(c.clone()),
-            None => {
-                let project_path = req.project_config.clone().or_else(|| {
-                    req.inputs
-                        .first()
-                        .filter(|p| p.is_dir())
-                        .map(|p| p.join("sdc.toml"))
-                        .filter(|p| p.exists())
-                });
-                project_path
-                    .as_deref()
-                    .map(ConfigFile::load)
-                    .transpose()
-                    .map_err(config_err)?
-            }
-        };
+        let project_config = load_project_config(req)?;
 
         // Target and preset. An explicitly chosen preset may state the target; otherwise the target picks the
         // default preset.

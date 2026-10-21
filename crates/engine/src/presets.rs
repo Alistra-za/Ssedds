@@ -157,6 +157,77 @@ pub struct ConfigFile {
     /// as. Only a project config may hold it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, ReadAs>,
+    /// Also export as Vanilla / CM (Track A). Only a project config may hold it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<ExportConfig>,
+}
+
+/// A folder `[export] also` writes besides the PBR export (C3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AlsoTarget {
+    Vanilla,
+    Cm,
+}
+
+/// `[export.names]`: the three output folder names; absent = `<project> PBR / Vanilla / CM` (TA10).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct FolderNames {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pbr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vanilla: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cm: Option<String>,
+}
+
+/// The `[export]` table of a project `sdc.toml` (Track A, C3, C4, C2): "also export" as Vanilla and/or CM.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExportConfig {
+    /// Folders to write besides the PBR export. Empty = a plain export.
+    pub also: Vec<AlsoTarget>,
+    /// Zip each folder, with a SHA-256 sums file.
+    pub zip: bool,
+    /// Set ids (as `--set set:<id>` uses) left out of Vanilla and CM (C2).
+    pub skip: Vec<String>,
+    pub names: FolderNames,
+    /// The recipe settings (C4).
+    pub legacy: crate::derive::recipe::LegacyParams,
+}
+
+impl ExportConfig {
+    /// Every value in range and the three folder names usable and distinct. Run by `run_also`, not by planning.
+    pub fn check(&self) -> Result<(), String> {
+        self.legacy.check()?;
+        let n = &self.names;
+        for (key, v) in [("pbr", &n.pbr), ("vanilla", &n.vanilla), ("cm", &n.cm)] {
+            let Some(v) = v else { continue };
+            if v.is_empty() || v.contains(['/', '\\']) || v.ends_with(['.', ' ']) {
+                return Err(format!(
+                    "export.names.{key} = {v:?}: must be a folder name (not empty, no / or \\, not ending in a dot or space)"
+                ));
+            }
+        }
+        let names = self.folder_names("").map(|s| s.to_lowercase());
+        if names[0] == names[1] || names[0] == names[2] || names[1] == names[2] {
+            return Err("export.names: two of the three folders would have the same name".into());
+        }
+        Ok(())
+    }
+
+    /// The PBR, Vanilla and CM folder names for `project`.
+    pub fn folder_names(&self, project: &str) -> [String; 3] {
+        let n = &self.names;
+        [
+            n.pbr.clone().unwrap_or_else(|| format!("{project} PBR")),
+            n.vanilla
+                .clone()
+                .unwrap_or_else(|| format!("{project} Vanilla")),
+            n.cm.clone().unwrap_or_else(|| format!("{project} CM")),
+        ]
+    }
 }
 
 /// One `[inputs."<real path>"]` entry: the file is grouped, named and written as if it were at `as`. The file on
