@@ -119,7 +119,7 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             "Emissive Multiple",
             p.emissive_multiple,
             0.0,
-            10.0,
+            100.0,
             Field::EmissiveMultiple,
         );
         range(
