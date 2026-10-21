@@ -294,6 +294,14 @@ fn hostile_input_never_panics_and_refuses() {
     let mut g = out.clone();
     g[seq + 12..seq + 16].copy_from_slice(&1000i32.to_le_bytes());
     assert!(compact(&g, 4).is_err());
+    // a live ref-free block that does not read: the live clip's NiFloatData (22) and NiTextKeyExtraData (25)
+    for (block, kind) in [(22, &b"NiFloatData"[..]), (25, b"NiTextKeyExtraData")] {
+        assert_eq!(h.kind(block), kind);
+        let at = h.offsets[block] + if block == 25 { 4 } else { 0 };
+        let mut g = out.clone();
+        g[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(compact(&g, 4).is_err(), "garbled block {block}");
+    }
     // a source count past the file
     assert!(compact(&out, 28).is_err());
     // a footer root is a ref: an appended block it names stays, renumbered

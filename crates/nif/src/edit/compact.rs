@@ -6,13 +6,17 @@
 //! interpolators, managers, sequences, palettes); their other fields only name source blocks. An appended block of
 //! a kind listed here is read whole; a reachable one of any other kind, a block that does not read, or a ref past
 //! the file stops the compaction (Err), and the caller exports the bytes as they are.
+use crate::clips::read_text_keys;
 use crate::clips::{read_mttc, read_palette, read_sequence_out};
 use crate::ctrl::{
     body, interp_floats, is_ctrl, known_len, read_blend_interp, read_manager, BASE_LEN, CB_LEN,
 };
+use crate::extra::read_extra;
 use crate::graph::NODE_TYPES;
 use crate::header::Header;
+use crate::keys::read_data;
 use crate::net::read_net;
+use crate::props::decode_texture_set_raw;
 use crate::shape_head::{decode_head_at, ShapeKind};
 
 /// Where a block's refs are.
@@ -56,6 +60,14 @@ fn refs_of(h: &Header, b: &[u8], i: usize, root: Option<usize>) -> Result<Refs, 
         Ok((v, n.end - start))
     };
     let r = if NO_REFS.contains(&kind) {
+        // ref-free only when the block reads at its exact size
+        match kind {
+            b"NiFloatData" | b"NiPosData" => read_data(h, b, i).map(drop),
+            b"BSShaderTextureSet" => decode_texture_set_raw(h, b, i).map(drop),
+            b"NiTextKeyExtraData" => read_text_keys(h, b, i).map(drop),
+            _ => read_extra(h, b, i).map(drop),
+        }
+        .map_err(e)?;
         Refs::All(vec![])
     } else if let Some(k) = ShapeKind::from_name(kind) {
         let (_, at) = decode_head_at(h, b, i, k).map_err(e)?;
@@ -218,9 +230,11 @@ pub fn compact(b: &[u8], source_blocks: u32) -> Result<Vec<u8>, String> {
         Ok(r) if r >= src => new[r] as i32,
         _ => r,
     };
-    let used: Vec<bool> = (0..h.block_types.len())
-        .map(|t| (0..n).any(|k| keep[k] && h.type_index[k] as usize == t))
-        .collect();
+    // one pass over the kept blocks, one over the types (a hostile header lists up to 65535 types)
+    let mut used = vec![false; h.block_types.len()];
+    for k in (0..n).filter(|&k| keep[k]) {
+        used[h.type_index[k] as usize] = true;
+    }
     let mut type_new = vec![0u16; used.len()];
     let mut nt = 0u16;
     for t in (0..used.len()).filter(|&t| used[t]) {
