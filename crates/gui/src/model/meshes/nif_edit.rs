@@ -29,8 +29,8 @@ pub enum Selection {
 /// The panel line when a controller's times are not finite (B-P33): no clock, no Time slider.
 pub const ANIM_INVALID: &str = "This animation has invalid times: playback is off.";
 
-/// What the preview animates (v2 B3): the free controller chains, or one manager clip by its sequence block (B7
-/// adds the clip selector).
+/// What the preview animates (v2 B3): the free controller chains, or one manager clip by its sequence block (the
+/// Controllers tab's Preview selector, B7). A clip pauses the free chains: they show the file value (E6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Playing {
     #[default]
@@ -479,6 +479,13 @@ impl NifEdit {
                 ((c, None), k)
             })
             .collect();
+        // v2 B7: the keys of each clip a managed controller is driven by (a header parse per call, once per change).
+        for &c in self.model.ctrls.keys().filter(|&&c| self.model.managed(c)) {
+            for seq in nif::anim::clips_of(&self.model, &self.patched, c) {
+                let k = nif::edit::keys_of(&self.patched, &self.model, c, Some(seq));
+                self.keys.insert((c, Some(seq)), k);
+            }
+        }
         self.parsed = Arc::new(render3d::parse(&self.patched));
         self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, self.playing);
         self.anim_shown = None;

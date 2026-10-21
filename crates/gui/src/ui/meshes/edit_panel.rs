@@ -258,6 +258,10 @@ fn apply(m: &mut MeshesModel, act: Act) {
     if let (Some(t), Some(c)) = (act.scrub, m.v3.clock.as_mut()) {
         c.scrub(t);
     }
+    // v2 B7: edit_with sends nothing for an unchanged static material; the next tick_anim sends the animated ones.
+    if let Some(p) = act.playing {
+        m.edit_with(|e| e.set_playing(p));
+    }
     if act.undo {
         m.undo_edit();
     }

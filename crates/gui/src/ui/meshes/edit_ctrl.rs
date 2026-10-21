@@ -3,12 +3,12 @@
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
 use super::edit_fields::{float_named, row_label, selected, set_name, warnings, Act};
-use crate::model::meshes::nif_edit::NifEdit;
+use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
 use crate::model::viewport3d::Clock;
 use crate::ui::status::{AMBER, RED};
 use eframe::egui;
-use nif::ctrl::TimeCtrl;
+use nif::ctrl::{Sequence, TimeCtrl};
 use nif::edit::validate::Target;
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Owner, Role};
 use nif::fields::{Field, Value};
@@ -23,7 +23,6 @@ const TEST_REF: &str = "BSNiAlphaPropertyTestRefController";
 const FLOAT_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
 const COLOR_VARS: [u32; 2] = [0, 1];
 const CYCLES: [&str; 3] = ["Loop", "Reverse", "Clamp"];
-const MANAGED_HOVER: &str = "Driven by a clip: change it in Phase B.";
 const CLIP_SHARED: &str = "Shared alpha with a clip controller: splitting needs Phase C.";
 
 fn var_name(class: &str, v: u32) -> String {
@@ -62,7 +61,9 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
     let Some(shape) = selected(ui, e, "controllers") else {
         return;
     };
-    // B7: the "Preview" selector (Free chains | clip names) goes here.
+    if !e.model.sequences.is_empty() {
+        preview(ui, e, act);
+    }
     let clock = m.v3.clock;
     let shader = shape
         .shader
@@ -82,6 +83,59 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
         chain(ui, e, act, shape, owner, prop, clock);
         ui.separator();
     }
+}
+
+/// A clip's name, or "Clip {block}" for a null name.
+fn clip_name(s: &Sequence) -> String {
+    s.name
+        .clone()
+        .unwrap_or_else(|| format!("Clip {}", s.block))
+}
+
+fn cycle_name(c: u32) -> String {
+    CYCLES
+        .get(c as usize)
+        .map_or(format!("Cycle {c}"), |s| s.to_string())
+}
+
+/// The Preview selector (v2 B7, E7): free chains or one clip. A clip pauses the free chains (E6).
+fn preview(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
+    ui.horizontal(|ui| {
+        row_label(ui, "Preview");
+        let mut pick = e.playing;
+        let shown = match e.playing {
+            Playing::Free => "Free chains".to_string(),
+            Playing::Clip(b) => e
+                .model
+                .sequences
+                .iter()
+                .find(|s| s.block == b)
+                .map_or(format!("Clip {b}"), clip_name),
+        };
+        let r = egui::ComboBox::from_id_salt("meshes-edit-preview")
+            .width(200.0)
+            .truncate()
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut pick, Playing::Free, "Free chains");
+                for s in &e.model.sequences {
+                    ui.selectable_value(&mut pick, Playing::Clip(s.block), clip_name(s));
+                }
+            })
+            .response;
+        set_name(
+            &r,
+            egui::WidgetType::ComboBox,
+            "Preview animation",
+            None,
+            Some(shown),
+        );
+        r.on_hover_text("Shows one clip at a time; the free controllers pause while a clip shows.");
+        if pick != e.playing {
+            act.playing = Some(pick);
+        }
+    });
+    ui.separator();
 }
 
 fn chain(
@@ -210,9 +264,7 @@ fn row(
     ui.horizontal(|ui| {
         row_label(ui, "Cycle");
         let mut pick = cycle;
-        let shown = CYCLES
-            .get(cycle as usize)
-            .map_or(format!("Cycle {cycle}"), |s| s.to_string());
+        let shown = cycle_name(cycle as u32);
         let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-cycle", c.block))
             .width(120.0)
             .selected_text(&shown)
@@ -321,7 +373,7 @@ fn row(
 }
 
 /// The keys of controller `c` (v2 B6): Interpolation, the curve, the key table and Add key. `managed`: its keys are
-/// in the clips (B7); nothing here.
+/// in the clips that drive it (v2 B7).
 #[allow(clippy::too_many_arguments)]
 fn keys_section(
     ui: &mut egui::Ui,
@@ -334,19 +386,106 @@ fn keys_section(
     clock: Option<Clock>,
 ) {
     if managed {
-        ui.weak("Its keys are in the clips that drive it.");
+        clips(ui, e, act, c, at, title, clock);
         return;
     }
-    let Some(keys) = e.keys.get(&(c.block, None)) else {
-        return;
-    };
-    let keys = match keys {
-        Ok(k) => k,
-        Err(why) => {
+    match e.keys.get(&(c.block, None)) {
+        Some(Ok(keys)) => keys_body(ui, e, act, c, at, title, keys, None, clock),
+        Some(Err(why)) => {
             ui.weak(why);
-            return;
         }
+        None => {}
+    }
+}
+
+/// The clips that drive managed controller `c` (spec §7, v2 B7): each with its cycle, start and stop and text keys;
+/// the selected clip's curve and keys.
+fn clips(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    c: &TimeCtrl,
+    at: &Anchor,
+    title: &str,
+    clock: Option<Clock>,
+) {
+    let mut any = false;
+    for s in &e.model.sequences {
+        let Some(entry) = e.keys.get(&(c.block, Some(s.block))) else {
+            continue;
+        };
+        any = true;
+        let name = clip_name(s);
+        ui.strong(&name);
+        ui.weak(format!(
+            "{} · {} to {} s",
+            cycle_name(s.cycle),
+            s.start,
+            s.stop
+        ));
+        if !s.text_keys.is_empty() {
+            let list: Vec<String> = s
+                .text_keys
+                .iter()
+                .map(|(t, n)| {
+                    let n = n.as_deref().map_or("(none)".into(), nif::text::lossy);
+                    format!("{n} at {t} s")
+                })
+                .collect();
+            let text = format!("Text keys: {}", list.join(", "));
+            ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate())
+                .on_hover_text(&text);
+        }
+        match entry {
+            Err(why) => {
+                ui.weak(why);
+            }
+            Ok(keys) if e.playing == Playing::Clip(s.block) => {
+                let title = format!("{title} in {name}");
+                keys_body(ui, e, act, c, at, &title, keys, Some(s), clock);
+            }
+            Ok(_) => {
+                ui.weak("Pick this clip in Preview to see and edit its keys.");
+            }
+        }
+    }
+    if !any {
+        // 0x20 set and no CB: the preview holds the property value (G2).
+        ui.weak("No clip in this file drives it.");
+    }
+}
+
+/// Interpolation, the curve, the key table and Add key on `keys`: controller `c`'s own (`clip: None`), or clip
+/// `clip`'s, timed by its sequence (frequency, start, stop, cycle; phase 0, as `clip_tracks`).
+#[allow(clippy::too_many_arguments)]
+fn keys_body(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    c: &TimeCtrl,
+    at: &Anchor,
+    title: &str,
+    keys: &KeyData,
+    clip: Option<&Sequence>,
+    clock: Option<Clock>,
+) {
+    let (span, freq, phase, flags, interp) = match clip {
+        Some(s) => {
+            // shortcut: the empty-group start value comes from a by-ref CB only; a string-bound clip with no keys
+            // starts at 0. Upgrade if such files show up.
+            let cb = s.blocks.iter().find(|b| b.controller == c.block as i32);
+            let flags = 0x08 | ((s.cycle.min(3) as u16) << 1);
+            (
+                (s.start, s.stop),
+                s.frequency,
+                0.0,
+                flags,
+                cb.map(|b| b.interp),
+            )
+        }
+        None => ((c.start, c.stop), c.frequency, c.phase, c.flags, c.interp),
     };
+    let seq = clip.map(|s| s.block);
     let kt = curve::key_type(keys);
     // D11: TBC, XYZ, CONST and any other stored type are previewed, never authored.
     let editable = curve::channels(keys) > 0 && matches!(kt, None | Some(1) | Some(2));
@@ -360,7 +499,7 @@ fn keys_section(
             let quad = kt == Some(2);
             let mut pick = quad;
             let shown = if quad { "Quadratic" } else { "Linear" };
-            let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-interp", c.block))
+            let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-interp", c.block, seq))
                 .width(120.0)
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
@@ -376,29 +515,30 @@ fn keys_section(
                 Some(shown.into()),
             );
             if pick != quad {
-                push_keys(act, at, curve::convert(keys, pick), keys, false);
+                push_keys(act, at, seq, curve::convert(keys, pick), keys, false);
             }
         });
     }
-    let cursor =
-        clock.map(|k| nif::anim::ctrl_time(k.t, c.frequency, c.phase, c.start, c.stop, c.flags));
-    let id = egui::Id::new(("meshes-edit-curve", c.block));
-    let out = curve::curve(ui, id, title, keys, (c.start, c.stop), cursor, editable);
+    let cursor = clock.map(|k| nif::anim::ctrl_time(k.t, freq, phase, span.0, span.1, flags));
+    let id = egui::Id::new(("meshes-edit-curve", c.block, seq));
+    let out = curve::curve(ui, id, title, keys, span, cursor, editable);
     if let Some(k) = out.keys {
-        push_keys(act, at, k, keys, true);
+        push_keys(act, at, seq, k, keys, true);
     }
     act.flush |= out.released;
     if let Some(kt) = out.scrub {
         // shortcut: the first-cycle inverse of ctrl_time; a scrub on a looping or reversed controller past its first
         // cycle lands in the first one. Upgrade if users scrub multi-cycle curves.
-        act.scrub = Some(if c.frequency != 0.0 && c.frequency.is_finite() {
-            (kt - c.phase) / c.frequency
+        act.scrub = Some(if freq != 0.0 && freq.is_finite() {
+            (kt - phase) / freq
         } else {
             kt
         });
     }
-    key_table(ui, act, c, at, title, keys, editable);
-    add_key(ui, e, act, c, at, title, keys, editable, cursor);
+    key_table(ui, act, c, at, seq, title, keys, editable);
+    add_key(
+        ui, e, act, at, seq, title, keys, editable, cursor, span, interp,
+    );
 }
 
 /// One exact float cell: f32's shortest round-trip text, so what is shown is the stored float. Returns the new value
@@ -417,11 +557,13 @@ fn cell(ui: &mut egui::Ui, v: f32, name: &str) -> (Option<f32>, bool) {
 }
 
 /// The key table: one row per key with its time, value(s) and, for QUADRATIC, tangents, and a Remove button.
+#[allow(clippy::too_many_arguments)]
 fn key_table(
     ui: &mut egui::Ui,
     act: &mut Act,
     c: &TimeCtrl,
     at: &Anchor,
+    clip: Option<u32>,
     title: &str,
     keys: &KeyData,
     editable: bool,
@@ -450,7 +592,7 @@ fn key_table(
         // Grid cells keep last frame's width: truncation would never let "Remove" grow. The panel scrolls sideways.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         // shortcut: every key is a row; corpus curves have <= 8 keys. Use show_rows past a few hundred.
-        egui::Grid::new(("meshes-edit-keys", c.block))
+        egui::Grid::new(("meshes-edit-keys", c.block, clip))
             .striped(true)
             .show(ui, |ui| {
                 ui.label("Key");
@@ -507,7 +649,7 @@ fn key_table(
             });
     });
     if let Some((d, merge)) = next {
-        push_keys(act, at, d, keys, merge);
+        push_keys(act, at, clip, d, keys, merge);
     }
 }
 
@@ -528,25 +670,28 @@ fn without_key(keys: &KeyData, k: usize) -> KeyData {
     }
 }
 
-/// Add key (D10): at the cursor time, else half-way between the last two keys (start / stop for 0 / 1 keys), with
-/// the curve's value there; QUADRATIC tangents 0. An empty group starts LINEAR at the interpolator's value.
+/// Add key (D10): at the cursor time, else half-way between the last two keys (start / stop of `span` for 0 / 1
+/// keys), with the curve's value there; QUADRATIC tangents 0. An empty group starts LINEAR at interpolator
+/// `interp`'s value.
 #[allow(clippy::too_many_arguments)]
 fn add_key(
     ui: &mut egui::Ui,
     e: &NifEdit,
     act: &mut Act,
-    c: &TimeCtrl,
     at: &Anchor,
+    clip: Option<u32>,
     title: &str,
     keys: &KeyData,
     editable: bool,
     cursor: Option<f32>,
+    span: (f32, f32),
+    interp: Option<i32>,
 ) {
     let n = curve::len(keys);
     let t = match (cursor, n) {
         (Some(t), _) => t,
-        (None, 0) => c.start,
-        (None, 1) => c.stop,
+        (None, 0) => span.0,
+        (None, 1) => span.1,
         (None, _) => (curve::time(keys, n - 2) + curve::time(keys, n - 1)) / 2.0,
     };
     let taken = (0..n).any(|k| curve::time(keys, k) == t);
@@ -565,8 +710,7 @@ fn add_key(
     if !clicked {
         return;
     }
-    let interp = c
-        .interp
+    let interp = interp
         .and_then(|i| u32::try_from(i).ok())
         .and_then(|i| e.model.interps.get(&i))
         .map(|i| i.value.clone())
@@ -600,13 +744,21 @@ fn add_key(
         KeyData::Pos(g) => KeyData::Pos(insert(g, t, v, [0.0; 3])),
         KeyData::Bool(_) => return,
     };
-    push_keys(act, at, next, keys, false);
+    push_keys(act, at, clip, next, keys, false);
 }
 
-fn push_keys(act: &mut Act, at: &Anchor, keys: KeyData, base: &KeyData, merge: bool) {
+/// One SetKeys on the anchored controller's own keys (`clip: None`) or a clip's.
+fn push_keys(
+    act: &mut Act,
+    at: &Anchor,
+    clip: Option<u32>,
+    keys: KeyData,
+    base: &KeyData,
+    merge: bool,
+) {
     let op = Op::SetKeys {
         at: at.clone(),
-        clip: None,
+        clip,
         keys,
         base: base.clone(),
     };
@@ -831,25 +983,18 @@ fn variable(
         };
         let mut pick = v;
         let shown = var_name(&c.class, v);
-        let r = ui
-            .add_enabled_ui(!managed, |ui| {
-                egui::ComboBox::from_id_salt(("meshes-edit-ctrl-var", c.block))
-                    .width(180.0)
-                    .selected_text(&shown)
-                    .show_ui(ui, |ui| {
-                        // A value outside the list stays selectable, so the current one is never lost.
-                        let extra = (!offered.contains(&v)).then_some(v);
-                        for &o in extra.iter().chain(offered) {
-                            ui.selectable_value(
-                                &mut pick,
-                                o,
-                                format!("{} ({o})", var_name(&c.class, o)),
-                            );
-                        }
-                    })
-                    .response
+        // Phase A ruling R8 lifted (v2 B7): a managed controller's clips follow the new variable.
+        let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-var", c.block))
+            .width(180.0)
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                // A value outside the list stays selectable, so the current one is never lost.
+                let extra = (!offered.contains(&v)).then_some(v);
+                for &o in extra.iter().chain(offered) {
+                    ui.selectable_value(&mut pick, o, format!("{} ({o})", var_name(&c.class, o)));
+                }
             })
-            .inner;
+            .response;
         set_name(
             &r,
             egui::WidgetType::ComboBox,
@@ -858,7 +1003,7 @@ fn variable(
             Some(shown),
         );
         if managed {
-            r.on_disabled_hover_text(MANAGED_HOVER);
+            r.on_hover_text("Its clips follow the new variable.");
         }
         if pick != v {
             act.push = Some((

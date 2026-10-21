@@ -35,6 +35,8 @@ pub(super) struct Act {
     pub guard_diff: bool,
     /// A click or drag on a curve: the scene time the clock jumps to (it pauses, B3's `Clock::scrub`).
     pub scrub: Option<f32>,
+    /// The Preview selector picked free chains or a clip (v2 B7).
+    pub playing: Option<crate::model::meshes::nif_edit::Playing>,
 }
 
 const LABEL_W: f32 = 132.0;

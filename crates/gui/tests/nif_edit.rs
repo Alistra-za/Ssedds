@@ -1664,8 +1664,10 @@ fn controller_rows_show_variable_cycle_and_edit_frequency() {
     assert_eq!(e.model.interps[&5].value, vec![0.75], "{:?}", e.outcomes);
 }
 
+/// R8 lifted (v2 B7, E9: replaces `managed_variable_combo_is_disabled`): the Variable combo of a managed controller
+/// is enabled; a pick rewrites the clip's ID.
 #[test]
-fn managed_variable_combo_is_disabled() {
+fn managed_variable_change_rewrites_clip_ids() {
     let mut m = MeshesModel::empty();
     m.edit = Some(
         NifEdit::open(
@@ -1683,10 +1685,29 @@ fn managed_variable_combo_is_disabled() {
     tab(&mut h, "Controllers");
     h.get_by_label("Managed by a clip");
     let var = h.get_by_role_and_label(AkRole::ComboBox, "Emissive multiple variable");
-    assert!(var.accesskit_node().is_disabled());
+    assert!(!var.accesskit_node().is_disabled());
     var.click();
     h.run_steps(3);
-    assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
+    h.get_by_role_and_label(AkRole::Button, "U offset (20)")
+        .click();
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert!(
+        matches!(
+            &got[..],
+            [Op::SetField {
+                field: Field::Variable,
+                value: Value::U32(20),
+                base: Value::U32(11),
+                ..
+            }]
+        ),
+        "{got:?}"
+    );
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    assert_eq!(e.model.sequences[0].blocks[0].ctrl_id, Some(b"20".to_vec()));
+    assert_eq!(e.model.sequences[0].blocks[1].ctrl_id, None);
 }
 
 #[test]
@@ -3631,4 +3652,190 @@ fn tbc_xyz_and_const_keys_are_drawn_not_edited() {
         drag_up(&mut h, "Emissive multiple key 2", 30.0);
         assert!(ops(h.state()).is_empty(), "type {t}: {:?}", ops(h.state()));
     }
+}
+
+// ---- v2 B7: managed clips (the Preview selector, the clip list, clip key edits) ----
+
+/// `with_uv_ctrl(bytes)` plus, first in the same chain, a manager-controlled LSCF var 11 (Emissive multiple, flags
+/// 0x68, a NiBlendFloatInterpolator), and a NiControllerSequence "Glow" whose one CB names it by ref with a keyed
+/// NiFloatInterpolator LINEAR (0, 0) -> (1, 4); Loop, frequency 1, start 0, stop 1; text keys "start" at 0, "end"
+/// at 1. Returns the bytes and the sequence block.
+fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
+    let m = nif::model::read_model(bytes).unwrap();
+    let (shape, lsp) = m
+        .shapes
+        .iter()
+        .find_map(|s| {
+            s.shader
+                .filter(|b| m.lighting.contains_key(b))
+                .map(|b| (s, b))
+        })
+        .unwrap();
+    let net = m.lighting[&lsp].prop.net.clone();
+    let mut doc = nif::write::NifDoc::open(bytes).unwrap();
+    let at = net.controller_at() - doc.header().offsets()[lsp as usize];
+    let blend = doc.append(
+        b"NiBlendFloatInterpolator",
+        builder::W::default().u8(1).u8(0).f(0.0).f(0.0).0,
+    );
+    let ctrl = doc.append(
+        b"BSLightingShaderPropertyFloatController",
+        scenes::ctrl_body(
+            net.controller,
+            0x68,
+            lsp as i32,
+            builder::W::default().i32(blend as i32).u32(11),
+        ),
+    );
+    doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
+    let key = |time: f32, value: f32| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![key(0.0, 0.0), key(1.0, 4.0)],
+    });
+    let data = doc.append(b"NiFloatData", nif::keys::encode_data(&keys));
+    let interp = doc.append(
+        b"NiFloatInterpolator",
+        builder::W::default().f(0.0).i32(data as i32).0,
+    );
+    let s = |doc: &mut nif::write::NifDoc, x: &[u8]| doc.string(x);
+    let (start, end) = (s(&mut doc, b"start"), s(&mut doc, b"end"));
+    let tk = doc.append(
+        b"NiTextKeyExtraData",
+        builder::W::default()
+            .i32(-1)
+            .u32(2)
+            .f(0.0)
+            .i32(start)
+            .f(1.0)
+            .i32(end)
+            .0,
+    );
+    let (name, prop, ctype, cid) = (
+        s(&mut doc, b"Glow"),
+        s(&mut doc, b"BSLightingShaderProperty"),
+        s(&mut doc, b"BSLightingShaderPropertyFloatController"),
+        s(&mut doc, b"11"),
+    );
+    let seq = builder::W::default()
+        .i32(name)
+        .u32(1)
+        .u32(0)
+        .i32(interp as i32)
+        .i32(ctrl as i32)
+        .u8(0)
+        .i32(shape.net.name)
+        .i32(prop)
+        .i32(ctype)
+        .i32(cid)
+        .i32(-1)
+        .f(1.0)
+        .i32(tk as i32)
+        .u32(0)
+        .fs(&[1.0, 0.0, 1.0])
+        .i32(-1)
+        .i32(-1)
+        .u16(0)
+        .0;
+    let seq = doc.append(b"NiControllerSequence", seq);
+    let out = doc.bytes();
+    let back = nif::model::read_model(&out).unwrap();
+    assert!(back.problems.is_empty(), "{:?}", back.problems);
+    assert!(back.managed(ctrl));
+    assert_eq!(back.lighting[&lsp].prop.ctrls[0], ctrl);
+    assert_eq!(back.sequences.len(), 1);
+    assert_eq!(back.sequences[0].text_keys.len(), 2);
+    (out, seq)
+}
+
+/// G6, D4: Free runs the free chain and keeps the managed emissive at the property value; selecting the clip runs
+/// the CB interpolator and pauses the free chain; back to Free swaps back. The UI selector and the clip's key table
+/// drive the same model.
+#[test]
+fn clip_preview_swaps_interpolators_only_while_selected() {
+    let (nif, seq) = with_clip(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (_d, mut m, cmds) = session_on(&nif);
+    let (shape, lsp) = lit_shape(m.edit.as_ref().unwrap());
+    let base = m.edit.as_ref().unwrap().model.lighting[&lsp]
+        .lighting
+        .params
+        .clone();
+    let at = |m: &MeshesModel, t: f32| {
+        let f = m.edit.as_ref().unwrap().frame_materials(t);
+        f.into_iter()
+            .find(|(id, _)| id.0 == shape)
+            .unwrap()
+            .1
+            .params
+    };
+    let p = at(&m, 0.5);
+    assert_eq!(
+        (p.uv_offset[0], p.emissive_multiple),
+        (0.5, base.emissive_multiple),
+        "Free"
+    );
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let p = at(&m, 0.5);
+    assert_eq!(
+        (p.uv_offset[0], p.emissive_multiple),
+        (base.uv_offset[0], 2.0),
+        "the clip"
+    );
+    assert_eq!(
+        m.edit.as_ref().unwrap().anim_range(),
+        Some((0.0, 1.0)),
+        "the clip's start and stop"
+    );
+    m.edit_with(|e| e.set_playing(Playing::Free));
+    let p = at(&m, 0.5);
+    assert_eq!(
+        (p.uv_offset[0], p.emissive_multiple),
+        (0.5, base.emissive_multiple),
+        "Free again"
+    );
+    // The UI.
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Glow");
+    h.get_by_label("Loop · 0 to 1 s");
+    h.get_by_label("Text keys: start at 0 s, end at 1 s");
+    h.get_by_label("Pick this clip in Preview to see and edit its keys.");
+    h.get_by_role_and_label(AkRole::ComboBox, "Preview animation")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Glow").click();
+    h.run_steps(3);
+    assert_eq!(h.state().edit.as_ref().unwrap().playing, Playing::Clip(seq));
+    // The clip's own key table edits that clip (SetKeys with clip Some).
+    edit_number(&mut h, "Emissive multiple in Glow key 2 value", "3");
+    let last = ops(h.state()).pop();
+    assert!(
+        matches!(last, Some(Op::SetKeys { clip: Some(s), .. }) if s == seq),
+        "{last:?}"
+    );
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().outcomes.last(),
+        Some(&nif::edit::Outcome::Applied)
+    );
+    assert_eq!(
+        at(h.state(), 0.5).emissive_multiple,
+        1.5,
+        "the edited clip curve: (0,0) -> (1,3)"
+    );
+    h.get_by_role_and_label(AkRole::ComboBox, "Preview animation")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Free chains")
+        .click();
+    h.run_steps(3);
+    assert_eq!(h.state().edit.as_ref().unwrap().playing, Playing::Free);
+    drop(cmds);
 }
