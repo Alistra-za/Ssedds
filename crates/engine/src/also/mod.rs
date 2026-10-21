@@ -533,6 +533,7 @@ fn write_zips(
     keys: &[BTreeSet<String>; 3],
     location: &Path,
     project: &str,
+    cancel: &CancelToken,
 ) -> Vec<String> {
     let (mut lines, mut failed) = (String::new(), vec![]);
     let ran: Vec<usize> = s.phases.iter().map(|(p, _)| *p as usize).collect();
@@ -563,7 +564,7 @@ fn write_zips(
             let rel = slash(f.strip_prefix(folder).unwrap_or(&f));
             s.notes.push(format!("{name}/{rel}: {NOT_ZIPPED}"));
         }
-        let bytes = match crate::zip::write_zip(folder, &take) {
+        let bytes = match crate::zip::write_zip(folder, &take, cancel) {
             Ok(b) => b,
             Err(e) => {
                 failed.push(format!("{} not written: {e}", zip.display()));
@@ -817,7 +818,7 @@ pub fn run_also(
             let failed = match &mut owned {
                 Some(owned) => {
                     let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
-                    write_zips(&mut s, owned, &keys, &spec.location, &project)
+                    write_zips(&mut s, owned, &keys, &spec.location, &project, cancel)
                 }
                 None => vec![],
             };

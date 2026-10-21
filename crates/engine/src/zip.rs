@@ -9,13 +9,20 @@ pub enum ZipError {
     Io(#[from] io::Error),
     #[error("over the ZIP limits (4 GiB or 65,535 files); ZIP64 is not written")]
     TooLarge,
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// The archive of exactly `files` (paths under `folder`, TA23), entries named `<folder name>/<rel>` with `/`.
-// shortcut: the whole zip is buffered in RAM, so TA17's 4 GiB ceiling is also a RAM ceiling; upgrade to a temp file
-// plus rename (same flush) if a real mod gets near it.
+// shortcut: the whole zip is buffered in RAM, and `may_replace` then reads the old zip to compare, so peak RAM is about
+// twice the zip size (near 8 GiB at TA17's 4 GiB ceiling); upgrade to a temp file plus rename (same flush) and a
+// streaming compare if a real mod gets near it. A cancel is seen between entries (`ZipError::Cancelled`).
 // shortcut: no ZIP64 (TA17): 65,535 entries, or 4 GiB - 1 bytes, or more is `TooLarge`; upgrade if a real mod hits it.
-pub fn write_zip(folder: &Path, files: &[PathBuf]) -> Result<Vec<u8>, ZipError> {
+pub fn write_zip(
+    folder: &Path,
+    files: &[PathBuf],
+    cancel: &crate::api::CancelToken,
+) -> Result<Vec<u8>, ZipError> {
     let top = folder
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -40,6 +47,9 @@ pub fn write_zip(folder: &Path, files: &[PathBuf]) -> Result<Vec<u8>, ZipError> 
     let fit = |n: usize| u32::try_from(n).ok().filter(|&n| n != u32::MAX);
     let (mut out, mut cd) = (vec![], vec![]);
     for (name, path) in &named {
+        if cancel.is_cancelled() {
+            return Err(ZipError::Cancelled);
+        }
         let data = std::fs::read(path)?;
         let mut crc = flate2::Crc::new();
         crc.update(&data);
@@ -105,6 +115,7 @@ pub fn write_zip(folder: &Path, files: &[PathBuf]) -> Result<Vec<u8>, ZipError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::CancelToken;
     use flate2::read::DeflateDecoder;
     use std::io::Read;
 
@@ -175,6 +186,23 @@ mod tests {
                 x as u8
             })
             .collect()
+    }
+
+    fn write_zip(folder: &Path, files: &[PathBuf]) -> Result<Vec<u8>, ZipError> {
+        super::write_zip(folder, files, &CancelToken::default())
+    }
+
+    /// Final review M1: a cancel is seen between entries; nothing is returned to write.
+    #[test]
+    fn a_cancel_stops_the_zip_between_entries() {
+        let d = tempfile::tempdir().unwrap();
+        put(&d.path().join("a.bin"), b"a");
+        let c = CancelToken::default();
+        c.cancel();
+        assert!(matches!(
+            super::write_zip(d.path(), &[d.path().join("a.bin")], &c),
+            Err(ZipError::Cancelled)
+        ));
     }
 
     fn put(p: &Path, b: &[u8]) {
