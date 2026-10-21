@@ -196,13 +196,14 @@ pub fn plan_derived(
         })
         .filter_map(|s| s.height.as_ref().and_then(source_path))
         .collect();
-    let kept = |j: &ResolvedJob| match &j.pack {
+    let holds = |keep: &BTreeSet<&Path>, j: &ResolvedJob| match &j.pack {
         None => keep.contains(j.input.as_path()),
         Some(p) => {
             p.kind == crate::pack::RecipeKind::Parallax
                 && p.sources.iter().any(|s| keep.contains(s.path.as_path()))
         }
     };
+    let kept = |j: &ResolvedJob| holds(&keep, j);
     jobs.retain(|j| {
         kept(j)
             || !(gone.contains(j.input.as_path())
@@ -240,6 +241,7 @@ pub fn plan_derived(
             .collect(),
         ..DerivePlan::default()
     };
+    let set_keys = keys.clone();
     for (set, key) in d.sets.iter().zip(keys) {
         if let Some(first) = set.dds.first() {
             // One skip per file (review M2): this replaces its `IN-DDS-SKIPPED`.
@@ -462,6 +464,18 @@ pub fn plan_derived(
             }
         }
     }
+    // Final review M4b: a kept `_p` follows its set. A set with no derived candidate (a failed member, only error
+    // jobs) drops it, and `report_unread` ends it as not converted.
+    let derived: BTreeSet<&str> = out.candidates.iter().map(|c| c.set_key.as_str()).collect();
+    let lost: BTreeSet<&Path> = d
+        .sets
+        .iter()
+        .zip(&set_keys)
+        .filter(|(_, k)| k.as_deref().is_none_or(|k| !derived.contains(k)))
+        .filter_map(|(s, _)| s.height.as_ref().and_then(source_path))
+        .filter(|p| keep.contains(p))
+        .collect();
+    jobs.retain(|j| !holds(&lost, j));
     out
 }
 
@@ -489,6 +503,19 @@ pub fn report_unread(
         .chain(failed.iter().map(|f| f.path.as_path()))
         .chain(cancelled.iter().map(PathBuf::as_path))
         .chain(own.iter().map(PathBuf::as_path))
+        // Final review M4a: a kept landscape `_p` (O6) is ended by its own job under the folded key, or by the
+        // `packed_source` of its kept `Parallax` recipe.
+        .chain(
+            jobs.iter()
+                .filter(|j| j.derive.is_none() && !matches!(j.status, JobStatus::Error { .. }))
+                .flat_map(|j| {
+                    std::iter::once(j.input.as_path()).chain(
+                        j.pack
+                            .iter()
+                            .flat_map(|p| p.sources.iter().map(|s| s.path.as_path())),
+                    )
+                }),
+        )
         .collect();
     let had: BTreeSet<PathBuf> = skipped.iter().map(|s| s.path.clone()).collect();
     ended.extend(had.iter().map(PathBuf::as_path));

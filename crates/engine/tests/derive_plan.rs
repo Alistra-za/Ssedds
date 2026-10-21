@@ -1415,3 +1415,66 @@ fn a_landscape_height_becomes_the_vanilla_p() {
         .as_ref()
         .is_none_or(|pk| pk.kind != RecipeKind::Parallax)));
 }
+
+/// Final review M4a: a no-albedo PBR landscape set under `textures/pbr/` keeps its `_p` (O6), and that `_p` gets no
+/// misleading `DERIVE-NOT-CONVERTED`: its kept job ends it.
+#[test]
+fn a_kept_p_of_a_no_albedo_set_is_not_called_not_converted() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let dir = inputs.join("textures/pbr/landscape");
+    png(&dir.join("rock.png"), 16, 16, [200, 200, 200, 255]);
+    png(&dir.join("rock_n.png"), 16, 16, [128, 128, 255, 255]);
+    png(&dir.join("rock_rmaos.png"), 16, 16, [204, 255, 128, 255]);
+    png(&dir.join("rock_p.png"), 16, 16, [100, 100, 100, 255]);
+    let (s, ev) = plan_and_run(DeriveMode::Vanilla, &inputs, d.path(), |_, d| {
+        if let Some(d) = d {
+            assert_eq!(d.sets[0].shader, Shader::PbrLandscape);
+            d.sets[0].albedo = None;
+        }
+    });
+    let p_events: Vec<&EngineEvent> = ev
+        .iter()
+        .filter(|e| {
+            e.path
+                .as_deref()
+                .is_some_and(|p| p.ends_with("/rock_p.png"))
+        })
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EventKind::FileSkipped { .. } | EventKind::FileDone { .. }
+            )
+        })
+        .collect();
+    assert_eq!(p_events.len(), 1, "{p_events:#?}");
+    assert!(
+        matches!(p_events[0].kind, EventKind::FileDone { .. }),
+        "{p_events:#?}"
+    );
+    assert_eq!(s.failed, 0);
+}
+
+/// Final review M4b: a landscape set whose every derived job fails at plan time (sources of different sizes) does
+/// not keep its `_p`: the `_p` follows its set.
+#[test]
+fn a_p_follows_its_set_when_the_set_does_not_derive() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let dir = inputs.join("textures/landscape");
+    png(&dir.join("rock.png"), 32, 32, [200, 200, 200, 255]);
+    png(&dir.join("rock_n.png"), 32, 32, [128, 128, 255, 255]);
+    png(&dir.join("rock_rmaos.png"), 16, 16, [204, 255, 128, 255]);
+    png(&dir.join("rock_p.png"), 16, 16, [100, 100, 100, 255]);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    assert!(p.jobs.iter().all(|j| j.derive.is_none()), "{:#?}", p.jobs);
+    assert!(
+        out_job(&p, "textures/landscape/rock_p.dds").is_none(),
+        "{:#?}",
+        p.jobs
+    );
+    assert!(p
+        .skipped
+        .iter()
+        .any(|s| s.path.ends_with("rock_p.png") && s.code == Some(Code::DeriveNotConverted)));
+}
