@@ -449,11 +449,26 @@ pub(super) fn held_value(
     (r, (settled && x != current).then_some(x))
 }
 
+const OPEN_RECIPE: &str = "advanced-open-recipe";
+
+/// Open "Also export recipe" the next time it is drawn (Review's link).
+pub fn open_recipe(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(OPEN_RECIPE), true));
+}
+
 /// "Also export recipe" (owner answer 5, C4): one number box per `[export.legacy]` value, ranges as
 /// `LegacyParams::check`. P17: Keep metal brightness and its strength are only in Review (with the CM tick), and
 /// Dielectric env is one box (0 = off), not a box plus a checkbox.
 fn also_recipe(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
-    section(ui, "Also export recipe", |ui| {
+    // Review M4 (ruled): closed until asked for; Review's "Recipe settings are in Advanced" opens it.
+    let asked = ui
+        .ctx()
+        .data_mut(|d| d.remove_temp::<bool>(egui::Id::new(OPEN_RECIPE)))
+        .is_some();
+    let header = egui::CollapsingHeader::new(egui::RichText::new("Also export recipe").strong())
+        .default_open(false)
+        .open(asked.then_some(true));
+    header.show(ui, |ui| {
         let off = if model.project.is_none() {
             Some("Open a folder first".to_string())
         } else if model.export.running.is_some() {

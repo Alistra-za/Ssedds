@@ -855,6 +855,7 @@ fn recipe_drags_in_advanced_write_export_legacy() {
     m.settings.advanced_open = true;
     let mut h = ui_harness(m, 1600.0);
     settle(&mut h);
+    open_recipe(&mut h);
     fn spin(h: &H) -> egui_kittest::Node<'_> {
         h.get_by_role_and_label(Role::SpinButton, "Diffuse brightness")
     }
@@ -936,6 +937,7 @@ fn a_recipe_drag_is_one_edit() {
     m.settings.advanced_open = true;
     let mut h = ui_harness(m, 1600.0);
     settle(&mut h);
+    open_recipe(&mut h);
     h.get_by_role_and_label(Role::SpinButton, "Diffuse brightness")
         .scroll_to_me();
     h.run();
@@ -978,4 +980,288 @@ fn a_recipe_drag_is_one_edit() {
         0.9,
         "one undo step"
     );
+}
+
+// ---- Task 12 fix round 1 ----
+
+fn ui_harness_sized(m: AppModel, w: f32, hgt: f32) -> H {
+    let mut h = egui_kittest::Harness::builder()
+        .with_step_dt(0.25)
+        .with_size(eframe::egui::vec2(w, hgt))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+/// Hover `node` and say whether a tooltip containing `text` shows.
+fn hover_says(h: &mut H, node: impl Fn(&H) -> egui_kittest::Node<'_>, text: &str) -> bool {
+    node(h).hover();
+    h.run_steps(6);
+    h.query_all_by_label_contains(text).next().is_some()
+}
+
+/// I1 (review ruling): in the cs mode Review has the Also column without a tick (unchecked, no reason line);
+/// in the vanilla mode it has none.
+#[test]
+fn cs_review_without_a_tick_has_the_also_column() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    assert!(!m.also_on());
+    m.open_review();
+    let mut h = ui_harness(m, 1600.0);
+    settle(&mut h);
+    assert!(has_label(&h, "Also export as"));
+    let v = checkbox(&h, "Vanilla");
+    assert_ne!(
+        v.accesskit_node().toggled(),
+        Some(eframe::egui::accesskit::Toggled::True)
+    );
+    assert!(!v.accesskit_node().is_disabled());
+    assert!(
+        h.query_all_by_label_contains("Also export needs")
+            .next()
+            .is_none(),
+        "no reason line without a tick"
+    );
+    h.state_mut().set_target(engine::config::Target::Vanilla);
+    settle(&mut h);
+    assert!(!has_label(&h, "Also export as"));
+}
+
+/// CM76: a tick left from the cs mode stays clickable in the vanilla mode, in Export to ▾ and in Review.
+#[test]
+fn a_stale_tick_can_be_cleared_in_the_vanilla_mode() {
+    for from_review in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = project(d.path());
+        tick(&mut m, AlsoTarget::Vanilla);
+        m.set_target(engine::config::Target::Vanilla);
+        idle(&mut m);
+        assert!(m.also_on());
+        let label = if from_review {
+            m.open_review();
+            "Vanilla"
+        } else {
+            "Also export as Vanilla"
+        };
+        let mut h = ui_harness(m, 1600.0);
+        settle(&mut h);
+        if !from_review {
+            h.get_by_label_contains("Export to: ").click();
+            h.run();
+        }
+        assert!(
+            !checkbox(&h, label).accesskit_node().is_disabled(),
+            "{label}"
+        );
+        press(&mut h, |h| checkbox(h, label));
+        settle(&mut h);
+        assert!(!h.state().also_on(), "{label} cleared the tick");
+    }
+}
+
+/// While an export runs every Also control is off, with the export as the reason (M1: "Choose…" too).
+#[test]
+fn the_also_controls_are_off_while_an_export_runs() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    let steel_key = sdc_gui::model::sets::views(&m)
+        .iter()
+        .find(|v| v.key.ends_with("steel"))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&steel_key);
+    m.open_review();
+    m.export.running = Some(Default::default());
+    let mut h = ui_harness(m, 1600.0);
+    h.run_steps(4);
+    for l in ["Vanilla", "Skip vanilla/CM for this set"] {
+        assert!(checkbox(&h, l).accesskit_node().is_disabled(), "{l}");
+    }
+    let running = sdc_gui::model::also::EXPORT_RUNNING;
+    assert!(hover_says(
+        &mut h,
+        |h| h.get_by_label("Choose the Also export location…"),
+        running
+    ));
+    // M1: the export is the reason, not a file dialog.
+    assert!(
+        h.query_all_by_label_contains(sdc_gui::model::picker::BUSY_HOVER)
+            .next()
+            .is_none(),
+        "Choose… blames a file dialog"
+    );
+    h.get_by_label_contains("Export to: ").click();
+    h.run_steps(4);
+    for l in ["Also export as Vanilla", "Also export as Complex material"] {
+        assert!(checkbox(&h, l).accesskit_node().is_disabled(), "{l}");
+    }
+    assert!(hover_says(
+        &mut h,
+        |h| checkbox(h, "Also export as Complex material"),
+        sdc_gui::ui::header::EXPORT_RUNNING_HOVER
+    ));
+    h.state_mut().export.running = None;
+}
+
+/// 1e56e4b: with no folder open the menu items are off and say why.
+#[test]
+fn the_menu_items_need_an_open_folder() {
+    let m = AppModel::new(
+        sdc_gui::settings::GuiSettings::default(),
+        None,
+        support::session(),
+    );
+    let mut h = ui_harness(m, 1600.0);
+    h.get_by_label_contains("Export to: ").click();
+    h.run();
+    for l in ["Also export as Vanilla", "Also export as Complex material"] {
+        assert!(checkbox(&h, l).accesskit_node().is_disabled(), "{l}");
+    }
+    assert!(hover_says(
+        &mut h,
+        |h| checkbox(h, "Also export as Vanilla"),
+        "Open a folder first"
+    ));
+}
+
+/// More than 8 PBR sets: the list scrolls in its own area, and its last row is reachable and writes `skip`.
+#[test]
+fn a_long_skip_list_scrolls_and_its_last_row_works() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("mods/Many");
+    for i in 0..10 {
+        let t = root.join(format!("textures/pbr/arm/set{i:02}"));
+        png(&t.with_extension("png"), [200, 200, 200, 255]);
+        png(
+            &root.join(format!("textures/pbr/arm/set{i:02}_n.png")),
+            [128, 128, 255, 255],
+        );
+        png(
+            &root.join(format!("textures/pbr/arm/set{i:02}_rmaos.png")),
+            [128, 255, 200, 255],
+        );
+    }
+    let mut m = support::opened_as_the_app(root, d.path().join("out"));
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.open_review();
+    let last = sdc_gui::model::sets::views(&m)
+        .iter()
+        .find(|v| v.id.ends_with("set09"))
+        .expect("set09")
+        .id
+        .clone();
+    let mut h = ui_harness_sized(m, 1600.0, 1400.0);
+    settle(&mut h);
+    // Only the rows on screen are drawn (show_rows): set09 has no node until the list scrolls.
+    let ends = |h: &H, end: &str| {
+        h.query_all_by_role(Role::CheckBox)
+            .any(|n| n.accesskit_node().label().is_some_and(|l| l.ends_with(end)))
+    };
+    assert!(ends(&h, "set00") && !ends(&h, "set09"), "8 rows, not 10");
+    // A wheel over `label`'s widget, as a user scrolls: first the column, then the list inside it.
+    let wheel = |h: &mut H, label: &str| {
+        let at = h
+            .query_all_by_role(Role::CheckBox)
+            .find(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|l| l.ends_with(label))
+            })
+            .unwrap()
+            .rect()
+            .center();
+        h.input_mut()
+            .events
+            .push(eframe::egui::Event::PointerMoved(at));
+        h.run();
+        h.input_mut().events.push(eframe::egui::Event::MouseWheel {
+            unit: eframe::egui::MouseWheelUnit::Point,
+            delta: eframe::egui::vec2(0.0, -400.0),
+            phase: eframe::egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(10);
+    };
+
+    wheel(&mut h, "Vanilla");
+    wheel(&mut h, "set00");
+    assert!(ends(&h, "set09"), "the inner list scrolled to its end");
+    fn row(h: &H) -> egui_kittest::Node<'_> {
+        h.query_all_by_role(Role::CheckBox)
+            .find(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|l| l.ends_with("set09"))
+            })
+            .expect("the set09 row")
+    }
+    press(&mut h, row);
+    settle(&mut h);
+    assert_eq!(h.state().also_config().skip, [last.as_str()]);
+}
+
+/// Esc cancels a name field; a draft never carries into another project (M2).
+#[test]
+fn a_name_draft_is_cancelled_by_esc_and_stays_with_its_project() {
+    fn field(h: &H) -> egui_kittest::Node<'_> {
+        h.get_by_role_and_label(Role::TextInput, "Vanilla folder name")
+    }
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing(d.path(), 1600.0);
+    field(&h).focus();
+    h.run();
+    field(&h).type_text("Plain");
+    h.run();
+    h.key_press(Key::Escape);
+    settle(&mut h);
+    assert_eq!(h.state().also_config().names.vanilla, None, "Esc cancels");
+    // A draft left in the field while another folder opens.
+    field(&h).focus();
+    h.run();
+    field(&h).type_text("Plain");
+    h.run();
+    let other = tempfile::tempdir().unwrap();
+    let mut b = project(other.path());
+    tick(&mut b, AlsoTarget::Vanilla);
+    b.save().unwrap();
+    let b_root = b.root.clone().unwrap();
+    drop(b);
+    h.state_mut().open_folder(b_root);
+    settle(&mut h);
+    h.state_mut().export_clicked();
+    settle(&mut h);
+    assert!(h.state().review.is_some());
+    assert_ne!(
+        field(&h).accesskit_node().value().as_deref(),
+        Some("Plain"),
+        "the other project's draft is not shown"
+    );
+    field(&h).focus();
+    h.run();
+    h.key_press(Key::Tab);
+    settle(&mut h);
+    assert_eq!(h.state().also_config().names.vanilla, None);
+}
+
+/// M4 (ruled): the recipe section starts closed; Review's link opens it.
+#[test]
+fn the_recipe_section_starts_closed() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    m.settings.advanced_open = true;
+    let mut h = ui_harness(m, 1600.0);
+    settle(&mut h);
+    assert!(has_label(&h, "Also export recipe"));
+    assert!(!has_label(&h, "Diffuse brightness"));
+}
+
+/// M4: the recipe section starts closed; open it as a user does.
+fn open_recipe(h: &mut H) {
+    if !has_label(h, "Diffuse brightness") {
+        press(h, |h| h.get_by_label("Also export recipe"));
+    }
 }

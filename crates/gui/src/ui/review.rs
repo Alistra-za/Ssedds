@@ -222,6 +222,8 @@ fn json_line_text(l: &JsonLine) -> String {
 /// A column: its heading, then `body` in a scroll area of its own.
 fn column(ui: &mut egui::Ui, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
     ui.strong(heading);
+    // ui-rules 3.2: a bar drawn without hover, so a column that overflows says so.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
     egui::ScrollArea::vertical()
         .id_salt(("review", heading))
         .auto_shrink([false, true])
@@ -242,12 +244,14 @@ pub fn also_cm_lines(cfg: &ExportConfig) -> Vec<&'static str> {
 /// the default name, shown as the hint.
 fn name_field(
     ui: &mut egui::Ui,
+    root: Option<&std::path::Path>,
     which: usize,
     saved: Option<&str>,
     hint: &str,
     act: &mut Option<Act>,
 ) {
-    let id = egui::Id::new(("also-name", which));
+    // Keyed by the opened folder too: a draft never carries into another project (review M2).
+    let id = egui::Id::new(("also-name", which, root));
     let saved = saved.unwrap_or_default().to_string();
     let mut t: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| saved.clone());
     let r = ui.add(
@@ -334,7 +338,7 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
                 });
                 let r = r
                     .on_hover_text("Where the PBR, Vanilla and CM folders are written")
-                    .on_disabled_hover_text(picker::BUSY_HOVER);
+                    .on_disabled_hover_text(off.as_deref().unwrap_or(picker::BUSY_HOVER));
                 if r.clicked() {
                     *act = Some(Act::AlsoLocation);
                 }
@@ -351,7 +355,7 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
             let names = [&cfg.names.pbr, &cfg.names.vanilla, &cfg.names.cm];
             for (i, label) in ["PBR", "Vanilla", "CM"].into_iter().enumerate() {
                 ui.label(label);
-                name_field(ui, i, names[i].as_deref(), &hint(i), act);
+                name_field(ui, m.root.as_deref(), i, names[i].as_deref(), &hint(i), act);
                 ui.end_row();
             }
         });
@@ -483,9 +487,13 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
     let gate = m.review_gate();
     let json = m.review_json();
-    // Note CM: a fourth column only while a tick is on; without one Review is as before.
-    let also_on = m.also_on();
-    let also_err = if also_on { m.also_gate().err() } else { None };
+    // Note CM85: a fourth column in the cs mode or while a tick is on; the Also reason only with a tick, as the gate.
+    let also_on = m.also_on() || m.target == Target::Cs;
+    let also_err = if m.also_on() {
+        m.also_gate().err()
+    } else {
+        None
+    };
     let mut act = None;
     // The footer first, pinned to the bottom, so the columns scroll above it and it is never clipped.
     egui::Panel::bottom("review-footer")
@@ -644,6 +652,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         }
         Some(Act::Skip(id, on)) => model.set_skip_also(&id, on),
         Some(Act::Recipe) => {
+            super::advanced::open_recipe(ui.ctx());
             model.settings.advanced_open = true;
             model.save_settings();
         }
