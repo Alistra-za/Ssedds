@@ -6205,3 +6205,126 @@ fn render_the_clips_tab() {
         }
     }
 }
+
+// ---- Note CO: SLSF1 bits that need a shader type (owner) ----
+
+const SKIN_TINT: &str =
+    "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
+const FACEGEN_DETAIL: &str =
+    "FaceGen detail flag needs the Face Tint shader type: the mesh renders black otherwise.";
+
+/// Shape "S" (0) on a BSLSP (1) of `shader_type` with SLSF1 = Zbuffer_Test | `bits`.
+fn typed(shader_type: u32, bits: u32) -> Vec<u8> {
+    let trailer: &[f32] = if shader_type == 5 { &[1.0; 3] } else { &[] };
+    let mut b = scenes::lsp_shape(shader_type, trailer);
+    let h = nif::header::Header::parse(&b).unwrap();
+    let (rel, _) = nif::fields::locate(&h, &b, 1, Field::Slsf1).unwrap();
+    let at = h.offsets()[1] + rel;
+    b[at..at + 4].copy_from_slice(&((1u32 << 31) | bits).to_le_bytes());
+    b
+}
+
+fn slsf1(m: &MeshesModel) -> u32 {
+    m.edit.as_ref().unwrap().model.lighting[&1].lighting.slsf1
+}
+
+#[test]
+fn a_type_bound_flag_shows_its_error_and_clears_in_one_undo_step() {
+    let mut m = direct(typed(0, 1 << 21));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label(SKIN_TINT);
+    h.get_by_label("Clear the flag").scroll_to_me();
+    h.run();
+    h.get_by_label("Clear the flag").click();
+    h.run_steps(2);
+    assert!(h.query_by_label(SKIN_TINT).is_none());
+    let m = h.state_mut();
+    assert_eq!(ops(m).len(), 1);
+    assert_eq!(slsf1(m), 1 << 31);
+    assert!(m.undo_edit());
+    assert!(ops(m).is_empty(), "the fix is one undo step");
+    // Face Tint without the detail flag offers "Set the flag".
+    let mut m = direct(typed(4, 0));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Set the flag").scroll_to_me();
+    h.run();
+    h.get_by_label("Set the flag").click();
+    h.run_steps(2);
+    assert_eq!(slsf1(h.state()), (1 << 31) | (1 << 10));
+}
+
+#[test]
+fn a_shader_type_change_clears_the_flag_in_the_same_undo_step() {
+    let mut m = direct(typed(5, 1 << 21));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::ComboBox, "Shader type")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Default (0)").click();
+    h.run_steps(3);
+    h.get_by_label("Skin tint flag cleared: it needs the Skin Tint shader type.");
+    assert!(h.query_by_label(SKIN_TINT).is_none());
+    let m = h.state_mut();
+    let got = ops(m);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(slsf1(m), 1 << 31);
+    assert_eq!(
+        m.edit.as_ref().unwrap().model.lighting[&1]
+            .lighting
+            .shader_type,
+        0
+    );
+    assert!(m.undo_edit());
+    assert!(ops(m).is_empty(), "type and flag are one undo step");
+    assert!(m.edit.as_ref().unwrap().notice.is_none());
+}
+
+#[test]
+fn flags_that_need_another_type_are_greyed_with_the_reason() {
+    let mut m = direct(typed(0, 0));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    let skin = h.get_by_label("FaceGen_RGB_Tint");
+    assert!(skin.accesskit_node().is_disabled());
+    assert!(h
+        .get_by_label("Facegen_Detail_Map")
+        .accesskit_node()
+        .is_disabled());
+    h.get_by_label("FaceGen_RGB_Tint").scroll_to_me();
+    h.run();
+    h.get_by_label("FaceGen_RGB_Tint").hover();
+    h.run_steps(30);
+    h.get_by_label("Needs the Skin Tint shader type.");
+    // On its own type the flag is editable.
+    let mut m = direct(typed(5, 1 << 21));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    assert!(!h
+        .get_by_label("FaceGen_RGB_Tint")
+        .accesskit_node()
+        .is_disabled());
+}
+
+#[test]
+fn a_type_bound_flag_blocks_export_even_in_an_untouched_source() {
+    let (_d, mut e) = exportable(typed(0, 1 << 10));
+    let at = nif::edit::anchor_role(&e.model, Some(0), Role::Shader).unwrap();
+    e.push(
+        vec![Op::SetField {
+            at,
+            field: Field::Glossiness,
+            value: Value::F32(50f32.to_bits()),
+            base: Value::F32(80f32.to_bits()),
+        }],
+        None,
+    );
+    assert_eq!(e.export_block().as_deref(), Some(FACEGEN_DETAIL));
+}

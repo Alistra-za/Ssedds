@@ -876,3 +876,126 @@ fn add_sequence_track_keys_are_checked() {
         error("Key values must be finite numbers")
     );
 }
+
+// ---- Note CO: SLSF1 bits that need a shader type (owner) ----
+
+const SKIN_TINT: &str =
+    "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
+const FACEGEN_DETAIL: &str =
+    "FaceGen detail flag needs the Face Tint shader type: the mesh renders black otherwise.";
+const FACE_TINT: &str =
+    "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
+
+/// `lsp_shape(shader_type)` with SLSF1 = `slsf1`.
+fn typed(shader_type: u32, slsf1: u32) -> Vec<u8> {
+    let trailer: &[f32] = if shader_type == 5 { &[1.0; 3] } else { &[] };
+    put(
+        scenes::lsp_shape(shader_type, trailer),
+        1,
+        Field::Slsf1,
+        Value::U32(slsf1),
+    )
+}
+
+#[test]
+fn type_bound_flags_are_errors_with_a_one_click_fix_that_always_blocks() {
+    let slsf1 = 1 << 31;
+    for (ty, bits, text, value) in [
+        (0, 1 << 21, SKIN_TINT, 0),
+        (4, (1 << 21) | (1 << 10), SKIN_TINT, 0),
+        (0, 1 << 10, FACEGEN_DETAIL, 0),
+        (5, (1 << 10) | (1 << 21), FACEGEN_DETAIL, 0),
+        (4, 0, FACE_TINT, 1 << 10),
+    ] {
+        let b = typed(ty, slsf1 | bits);
+        let w = warnings(&b);
+        let x = only(&w, text, Level::Error);
+        assert_eq!(
+            x.target,
+            Target::Field {
+                block: 1,
+                field: Field::Slsf1
+            }
+        );
+        let Some(Op::SetBits {
+            field,
+            mask,
+            value: v,
+            base,
+            ..
+        }) = x.fix.clone()
+        else {
+            panic!("{x:#?}")
+        };
+        let bit = if text == SKIN_TINT { 1 << 21 } else { 1 << 10 };
+        assert_eq!(
+            (field, mask, v, base),
+            (Field::Slsf1, bit, value, slsf1 | bits)
+        );
+        // The fix applies and clears it; an untouched source still blocks export.
+        let fixed = apply(&b, &[x.fix.unwrap()]).unwrap();
+        none(&warnings(&fixed.bytes), text);
+        assert!(
+            new_errors(&w, &w).iter().any(|n| n.text == text),
+            "{ty} {text}"
+        );
+    }
+    // The matching pairs are clean.
+    for (ty, bits) in [(5, 1 << 21), (4, 1 << 10), (5, 0), (0, 0)] {
+        let w = warnings(&typed(ty, slsf1 | bits));
+        for t in [SKIN_TINT, FACEGEN_DETAIL, FACE_TINT] {
+            none(&w, t);
+        }
+    }
+}
+
+#[test]
+fn a_type_change_fixes_the_flags_it_needs() {
+    use nif::edit::validate::type_flag_errors;
+    let f = |ty, slsf1| -> Vec<(u32, u32)> {
+        type_flag_errors(ty, slsf1)
+            .into_iter()
+            .map(|e| (e.0, e.1))
+            .collect()
+    };
+    assert_eq!(f(0, 1 << 21), vec![(1 << 21, 0)]);
+    assert_eq!(f(4, 1 << 21), vec![(1 << 21, 0), (1 << 10, 1 << 10)]);
+    assert_eq!(f(5, 1 << 10), vec![(1 << 10, 0)]);
+    assert_eq!(f(5, 1 << 21), vec![]);
+    let notice: Vec<_> = type_flag_errors(0, 1 << 21)
+        .into_iter()
+        .map(|e| e.3)
+        .collect();
+    assert_eq!(
+        notice,
+        vec!["Skin tint flag cleared: it needs the Skin Tint shader type."]
+    );
+}
+
+/// S-P2: shape "S" (0) on a clean BSLSP (1), plus an orphan BSLSP (2) of type 0 with the skin tint flag.
+fn orphan_skin_tint() -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", scenes::bstri_named(s, 1, -1));
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[], -1, &[]),
+    );
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[], -1, &[]),
+    );
+    put(
+        n.bytes(),
+        2,
+        Field::Slsf1,
+        Value::U32((1 << 31) | (1 << 21)),
+    )
+}
+
+#[test]
+fn an_orphan_shader_with_a_type_bound_flag_is_not_an_error() {
+    let w = warnings(&orphan_skin_tint());
+    none(&w, SKIN_TINT);
+    assert!(new_errors(&w, &w).is_empty(), "{w:#?}");
+}

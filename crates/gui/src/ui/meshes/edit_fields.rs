@@ -6,7 +6,7 @@ use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::ui::status::{AMBER, RED};
 use eframe::egui;
-use nif::edit::validate::{Level, Target};
+use nif::edit::validate::{type_flag_errors, type_flag_lock, Level, Target};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::fields::{Field, Value};
 use nif::material::{SLSF1_NAMES, SLSF2_NAMES, SLSF2_TRUE_PBR};
@@ -38,6 +38,8 @@ pub(super) struct Act {
     pub scrub: Option<f32>,
     /// The Preview selector picked free chains or a clip (v2 B7).
     pub playing: Option<crate::model::meshes::nif_edit::Playing>,
+    /// Note CO: the line shown after `push` (a shader type change that also fixed a flag).
+    pub notice: Option<String>,
 }
 
 const LABEL_W: f32 = 132.0;
@@ -79,7 +81,13 @@ pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mu
             ui.add_space(LABEL_W);
             ui.add(egui::Label::new(egui::RichText::new(&w.text).color(color)).wrap());
             if let Some(fix) = &w.fix {
-                if ui.small_button("Fix").clicked() {
+                // Note CO: a flag fix names what it does.
+                let label = match fix {
+                    Op::SetBits { value: 0, .. } => "Clear the flag",
+                    Op::SetBits { .. } => "Set the flag",
+                    _ => "Fix",
+                };
+                if ui.small_button(label).clicked() {
                     act.push = Some((vec![fix.clone()], None));
                 }
             }
@@ -370,17 +378,36 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
         set_name(&r, typ, "Shader type", None, Some(shown));
         r.on_hover_text(TYPE_HOVER);
         if t != lt.shader_type {
-            act.push = Some((
-                vec![Op::SetField {
+            let mut ops = vec![Op::SetField {
+                at: at.clone(),
+                field: Field::ShaderType,
+                value: Value::U32(t),
+                base: Value::U32(lt.shader_type),
+            }];
+            // Note CO: the flags the new type needs change in the same undo step.
+            let fixes = type_flag_errors(t, lt.slsf1);
+            if !fixes.is_empty() {
+                let mask = fixes.iter().fold(0, |a, f| a | f.0);
+                let value = fixes.iter().fold(0, |a, f| a | f.1);
+                ops.push(Op::SetBits {
                     at: at.clone(),
-                    field: Field::ShaderType,
-                    value: Value::U32(t),
-                    base: Value::U32(lt.shader_type),
-                }],
-                None,
-            ));
+                    field: Field::Slsf1,
+                    mask,
+                    value,
+                    base: lt.slsf1,
+                });
+                let notice: Vec<_> = fixes.iter().map(|f| f.3).collect();
+                act.notice = Some(notice.join(" "));
+            }
+            act.push = Some((ops, None));
         }
     });
+    if let Some(n) = &e.notice {
+        ui.horizontal(|ui| {
+            ui.add_space(LABEL_W);
+            ui.add(egui::Label::new(n).wrap());
+        });
+    }
     warnings(
         ui,
         e,
@@ -520,6 +547,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                     let locked = match field {
                         Field::Slsf1 if bit == 1 => Some(SKINNED_HOVER),
                         Field::Slsf2 if bit == 23 => Some(PBR_HOVER),
+                        Field::Slsf1 => type_flag_lock(lt.shader_type, bit as u32),
                         _ => None,
                     };
                     let pbr_meaning = if field == Field::Slsf2 {

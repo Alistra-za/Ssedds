@@ -90,6 +90,8 @@ pub struct NifEdit {
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
     pub blocked: Option<String>,
+    /// Note CO: what a shader type change also did to the flags, until the next change.
+    pub notice: Option<String>,
     /// The guard dialog's question, while it is open.
     pub guard: Option<GuardAsk>,
     /// The last export's result line, and whether it is an error.
@@ -321,6 +323,7 @@ impl NifEdit {
             cards: vec![],
             placement: None,
             blocked: None,
+            notice: None,
             guard: None,
             export_note: None,
             apply_err: None,
@@ -488,6 +491,7 @@ impl NifEdit {
     /// Applies the ops to the source: patched bytes, outcomes (each `ReAnchored` block written back into its op),
     /// statuses (a conflict or a refusal blocks export), the model, the warnings and the parsed preview.
     fn reapply(&mut self) {
+        self.notice = None;
         let a = match nif::edit::apply(&self.source, &self.doc.ops()) {
             Ok(a) => a,
             Err(e) => {
