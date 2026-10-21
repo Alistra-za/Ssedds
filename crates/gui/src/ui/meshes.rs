@@ -1,8 +1,10 @@
 //! The Meshes view (plan A Task 12): mods, with the NIFs of the open mod under it (GUI tweaks G9) | shapes of the
 //! selected NIF. Draws `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::export::DocBadge;
-use crate::model::meshes::nif_edit::{Selection, ANIM_INVALID};
-use crate::model::meshes::pg_entries::{IN_GAME_SCOPE, NO_INSTANCE};
+use crate::model::meshes::nif_edit::{Selection, ANIM_INVALID, EDIT_HIDDEN};
+use crate::model::meshes::pg_entries::{
+    is_warning, INSTANCE_UNREADABLE, IN_GAME_SCOPE, NO_INSTANCE, READING_JSON,
+};
 use crate::model::meshes::{
     alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
     slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING,
@@ -662,18 +664,36 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         });
         if let Some(e) = m.edit.as_ref().filter(|_| editing && !m.view_source) {
-            let scope = match m.target {
-                Some(ScanTarget::Mo2 { .. }) => IN_GAME_SCOPE,
-                _ => NO_INSTANCE,
-            };
-            ui.add(egui::Label::new(scope).wrap());
+            if m.pg_reading() {
+                ui.add(egui::Label::new(READING_JSON).wrap());
+                // The worker's result arrives through `poll`, which needs a frame to run.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            } else if let Some(err) = m.pg_error() {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{INSTANCE_UNREADABLE} {err}")).color(AMBER),
+                    )
+                    .wrap(),
+                );
+            } else {
+                let scope = match m.target {
+                    Some(ScanTarget::Mo2 { .. }) => IN_GAME_SCOPE,
+                    _ => NO_INSTANCE,
+                };
+                ui.add(egui::Label::new(scope).wrap());
+            }
             if let (Selection::Shape(b), Some(rows)) = (e.selection, &e.in_game) {
                 for n in rows
                     .iter()
                     .filter(|(id, _, _)| id.0 == b)
                     .flat_map(|(_, _, n)| n)
                 {
-                    ui.add(egui::Label::new(n.as_str()).wrap());
+                    let mut t = egui::RichText::new(n.as_str());
+                    if is_warning(n) {
+                        t = t.color(AMBER);
+                    }
+                    ui.add(egui::Label::new(t).wrap());
                 }
             }
         }
@@ -688,7 +708,7 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             );
         }
         if m.edit_preview_hidden() {
-            ui.label("Showing the PGPatcher copy: switch to Source to see your edit.");
+            ui.label(EDIT_HIDDEN);
         }
     }
     // v2 B3: the controls first (a click this frame is ticked this frame), then the tick, then the 3D view, whose

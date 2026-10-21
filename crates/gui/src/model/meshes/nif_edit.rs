@@ -2,7 +2,7 @@
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
-use super::pg_entries::{pg_ignore, simulate_shape, PgFile, PG_IGNORED};
+use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PG_IGNORED};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
@@ -105,9 +105,12 @@ pub struct NifEdit {
     anim_shown: Option<f32>,
     /// The shapes the last `tick_anim` animated (D15: one that leaves gets its file material back).
     anim_last: Vec<ShapeId>,
-    /// v2 B8: the PGPatcher JSON In game reads, and the scan target it was read for. Cleared on each switch of the
-    /// toggle, so a switch re-reads the files.
-    pub pg: Option<(Option<ScanTarget>, Vec<PgFile>)>,
+    /// v2 B8 fix F1: per shape, the files that can patch it (keyed on its slots and the JSON generation) and its
+    /// last simulation (keyed on its parsed material, the JSON generation and the scan). The NIF path is the
+    /// session's own, so it needs no key.
+    sim_cache: BTreeMap<ShapeId, SimCache>,
+    /// `simulate_shape` calls so far (the cache's misses).
+    pub sim_runs: usize,
     /// v2 B8: In game (simulated) is showing: each shape's simulated material and its lines. None on Edited source.
     /// `preview_nif` draws these materials, so `materials()` and every `before` follow the shown side.
     pub in_game: Option<Vec<(ShapeId, MaterialState, Vec<String>)>>,
@@ -117,6 +120,19 @@ pub struct NifEdit {
     /// replaces those ops.
     drag: Option<(String, usize)>,
 }
+
+/// One shape's cached In game work (fix F1): the candidate files for (slots, JSON generation) and the simulation
+/// for (parsed material, JSON generation, scan revision).
+#[derive(Default)]
+struct SimCache {
+    cands: Option<(Vec<nif::path::TexPath>, u64, Vec<usize>)>,
+    #[allow(clippy::type_complexity)]
+    out: Option<(MaterialState, u64, u64, (MaterialState, Vec<String>))>,
+}
+
+/// Under the toggle when `show_edit_preview` failed and a plain copy shows (fix F8).
+pub const EDIT_HIDDEN: &str =
+    "Your edit could not be shown. Switch to In game (simulated) or Edited source to retry.";
 
 /// The open guard dialog: the block diff, whether Diff is showing it, and the hash of the file it was asked about
 /// (Overwrite applies only while the file still has it).
@@ -293,7 +309,8 @@ impl NifEdit {
             anim: vec![],
             anim_shown: None,
             anim_last: vec![],
-            pg: None,
+            sim_cache: BTreeMap::new(),
+            sim_runs: 0,
             in_game: None,
             unsaved: false,
             drag: None,
@@ -645,32 +662,67 @@ impl NifEdit {
     }
 
     /// v2 B8 (closes R11): each shape's material as PGPatcher would leave the edited NIF (`pg_entries::simulate_shape`
-    /// over `pg`), with its lines. Shapes without a texture set keep their material and get no line; PG_IGNORE ones keep
-    /// it with `PG_IGNORED`. From the parsed edit (not `preview_nif`), so no shape is simulated twice.
+    /// over `files`, the JSON of read `gen`), with its lines. Shapes without a texture set keep their material and get no
+    /// line; PG_IGNORE ones keep it with `PG_IGNORED`. Those two checks run every time; only the simulation is cached
+    /// (fix F1, keyed on the parsed material, `gen` and the scan `rev`). From the parsed edit (not `preview_nif`).
     pub fn in_game_materials(
-        &self,
+        &mut self,
+        files: &[PgFile],
+        gen: u64,
+        rev: u64,
         exists: &dyn Fn(&str) -> bool,
     ) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
         let nif_path = self.data_path.replace('/', "\\");
-        let files = self.pg.as_ref().map_or(&[][..], |(_, f)| &f[..]);
+        let parsed = self.parsed.clone();
+        let mut rows = Vec::with_capacity(parsed.shapes.len());
+        for s in &parsed.shapes {
+            let shape = self.model.shape(s.id.0);
+            let lit = shape
+                .and_then(|sm| sm.shader)
+                .and_then(|b| self.model.lighting.get(&b))
+                .is_some_and(|l| l.texture_set.is_some());
+            if !lit {
+                rows.push((s.id, s.material.clone(), vec![]));
+                continue;
+            }
+            if shape.is_some_and(|sm| pg_ignore(&self.model, sm)) {
+                rows.push((s.id, s.material.clone(), vec![PG_IGNORED.to_string()]));
+                continue;
+            }
+            let c = self.sim_cache.entry(s.id).or_default();
+            let hit = c
+                .out
+                .as_ref()
+                .filter(|(m, g, r, _)| *m == s.material && *g == gen && *r == rev);
+            let (m, notes) = match hit {
+                Some((_, _, _, out)) => out.clone(),
+                None => {
+                    let cands = match &c.cands {
+                        Some((slots, g, v)) if *slots == s.material.slots && *g == gen => v.clone(),
+                        _ => {
+                            let v = candidates(files, &nif_path, &s.material.slots);
+                            c.cands = Some((s.material.slots.clone(), gen, v.clone()));
+                            v
+                        }
+                    };
+                    let picked: Vec<&PgFile> = cands.iter().map(|&i| &files[i]).collect();
+                    let out = simulate_shape(&picked, &nif_path, &s.material, exists);
+                    c.out = Some((s.material.clone(), gen, rev, out.clone()));
+                    self.sim_runs += 1;
+                    out
+                }
+            };
+            rows.push((s.id, m, notes));
+        }
+        rows
+    }
+
+    /// In game before the JSON lands, or when it could not be read: every shape as edited, no line.
+    pub fn plain_rows(&self) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
         self.parsed
             .shapes
             .iter()
-            .map(|s| {
-                let shape = self.model.shape(s.id.0);
-                let lit = shape
-                    .and_then(|sm| sm.shader)
-                    .and_then(|b| self.model.lighting.get(&b))
-                    .is_some_and(|l| l.texture_set.is_some());
-                let (m, notes) = match shape {
-                    _ if !lit => (s.material.clone(), vec![]),
-                    Some(sm) if pg_ignore(&self.model, sm) => {
-                        (s.material.clone(), vec![PG_IGNORED.to_string()])
-                    }
-                    _ => simulate_shape(files, &nif_path, &s.material, exists),
-                };
-                (s.id, m, notes)
-            })
+            .map(|s| (s.id, s.material.clone(), vec![]))
             .collect()
     }
 
@@ -1180,7 +1232,7 @@ impl MeshesModel {
     /// The preview after a change (R10): each changed shape's material goes to the loaded content; a texture path
     /// the content's map lacks (and the store has), or a material the viewport refuses, reloads the same view with
     /// the map extended.
-    fn edit_changed(&mut self, before: Vec<(ShapeId, MaterialState)>) {
+    pub(super) fn edit_changed(&mut self, before: Vec<(ShapeId, MaterialState)>) {
         // It sends static materials: the next tick_anim resends the animated ones.
         if let Some(e) = &mut self.edit {
             e.anim_shown = None;

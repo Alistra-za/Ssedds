@@ -900,9 +900,13 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
         (12.5, 3.5),
         "no JSON: in game too"
     );
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    wait_pg(&mut m);
     let mut h = view(m);
     h.run_steps(4);
     h.get_by_label("In game (simulated)");
+    h.get_by_label(NO_MATCH);
     let m = h.state_mut();
     m.set_view_source(true);
     assert!(m.v3.nif_view);
@@ -911,6 +915,9 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     };
     let p = &nif.shapes[0].material.params;
     assert_eq!((p.glossiness, p.specular_strength), (12.5, 3.5));
+    h.run_steps(4);
+    assert!(!h.state().edit_preview_hidden());
+    assert!(h.query_by_label(EDIT_HIDDEN).is_none());
 }
 
 // ---- v2 A17: the edit panel, selection, Shader and Alpha tabs ----
@@ -4013,10 +4020,11 @@ fn picking_a_clip_sets_the_clock_range_to_its_timing() {
 // ---- v2 B8: In game (simulated) through pgpsim ----
 
 use sdc_gui::model::meshes::pg_entries::*;
+use sdc_gui::model::meshes::ScanTarget;
 
 /// Mods (highest first) PGP, A, Low. A: x.nif, the PBR textures of `white`, PBRNIFPatcher\x.json (object form, BOM,
-/// roughness 0.5 from `default`) and bad.json (no `default`: PGPatcher skips the file). Low: a lower copy of the same
-/// path (hidden by A's) and a.json (sorts first, but Low is below A).
+/// roughness 0.5 from `default`, a `smooth_angle` the preview does not show) and bad.json (no `default`: PGPatcher
+/// skips the file). Low: a lower copy of the same path (hidden by A's) and a.json (sorts first, but Low is below A).
 fn pg_files() -> tempfile::TempDir {
     let d = files_with(false, "+PGP\n+A\n+Low\n");
     for t in ["white", "white_n", "white_rmaos"] {
@@ -4026,8 +4034,7 @@ fn pg_files() -> tempfile::TempDir {
             Some(b"dds"),
         );
     }
-    let x = "\u{feff}{\"$schema\": \"x\", \"default\": {\"roughness_scale\": 0.5}, \"entries\": [{\"match_diffuse\": \"white\"}]}";
-    put(d.path(), "mods/A/PBRNIFPatcher/x.json", Some(x.as_bytes()));
+    put_x_json(d.path(), 0.5);
     put(
         d.path(),
         "mods/A/PBRNIFPatcher/bad.json",
@@ -4046,14 +4053,48 @@ fn pg_files() -> tempfile::TempDir {
     d
 }
 
+/// A's x.json with `roughness` as its default roughness_scale.
+fn put_x_json(root: &Path, roughness: f32) {
+    let x = format!(
+        "\u{feff}{{\"$schema\": \"x\", \"default\": {{\"roughness_scale\": {roughness}}}, \"entries\": [{{\"match_diffuse\": \"white\", \"smooth_angle\": 60}}]}}"
+    );
+    put(root, "mods/A/PBRNIFPatcher/x.json", Some(x.as_bytes()));
+}
+
 fn pg_session() -> (tempfile::TempDir, MeshesModel) {
     let d = pg_files();
-    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    let m = pg_session_in(d.path());
+    (d, m)
+}
+
+/// Scans `root`, selects A's x.nif and opens an edit session on it.
+fn pg_session_in(root: &Path) -> MeshesModel {
+    let mut m = MeshesModel::new(Some(root.join("scan.db")), MeshesSettings::default());
     m.procs = sdc_gui::model::meshes::no_procs;
-    scan_and_select(&mut m, d.path());
+    scan_and_select(&mut m, root);
     m.open_edit();
     assert_eq!(m.error, None);
-    (d, m)
+    m
+}
+
+/// Polls until the PGPatcher JSON read lands (fix F2: it runs on a worker thread).
+fn wait_pg(m: &mut MeshesModel) {
+    let t = Instant::now();
+    m.poll();
+    while m.pg_reading() {
+        assert!(
+            t.elapsed() < Duration::from_secs(30),
+            "the JSON read did not end"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        m.poll();
+    }
+}
+
+/// In game for `m`: switch, then wait for the JSON.
+fn in_game(m: &mut MeshesModel) {
+    m.set_view_source(false);
+    wait_pg(m);
 }
 
 /// The Parsed content's material of shape block `b`.
@@ -4069,11 +4110,21 @@ fn shown(m: &MeshesModel, b: u32) -> nif::material::MaterialState {
         .clone()
 }
 
+/// The In game lines of shape block `b`.
+fn notes(m: &MeshesModel, b: u32) -> Vec<String> {
+    let rows = m.edit.as_ref().unwrap().in_game.clone().expect("In game");
+    rows.into_iter().find(|(id, _, _)| id.0 == b).unwrap().2
+}
+
 #[test]
 fn in_game_mode_applies_pgpatcher_json_from_mods() {
     let d = pg_files();
     let inst = modscan::mo2::Instance::load(d.path(), Some("Default")).unwrap();
-    let files: Vec<String> = pg_entries(&inst).into_iter().map(|f| f.file).collect();
+    let files: Vec<String> = pg_entries(&inst)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.file)
+        .collect();
     assert_eq!(files, [r"PBRNIFPatcher\x.json", r"PBRNifPatcher\a.json"]);
     drop(d);
 
@@ -4098,7 +4149,10 @@ fn in_game_mode_applies_pgpatcher_json_from_mods() {
     h.run_steps(4);
     h.get_by_label("In game (simulated)").click();
     h.run_steps(4);
+    wait_pg(h.state_mut());
+    h.run_steps(4);
     h.get_by_label(r"In game: PGPatcher applies PBRNIFPatcher\x.json.");
+    h.get_by_label("Not previewed: smooth_angle.");
     h.get_by_label(IN_GAME_SCOPE);
     let m = h.state();
     assert!(!m.view_source);
@@ -4123,14 +4177,144 @@ fn in_game_mode_applies_pgpatcher_json_from_mods() {
     assert_eq!(s.params.uv_offset[0], 0.25);
 }
 
-/// PG_IGNORE (value true) on the shape: In game keeps the edited material and says why; value 0 does not count.
+/// Fix F2: the JSON is read on a worker ("Reading PGPatcher JSON…" until it lands) and kept across switches.
+#[test]
+fn a_second_switch_to_in_game_does_not_read_the_json_again() {
+    let (_d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    m.set_view_source(false);
+    assert!(m.pg_reading(), "the read runs on a worker");
+    assert!(notes(&m, shape).is_empty(), "no line before the JSON lands");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label(READING_JSON);
+    wait_pg(h.state_mut());
+    h.run_steps(3);
+    assert!(h.query_by_label(READING_JSON).is_none());
+    h.get_by_label(r"In game: PGPatcher applies PBRNIFPatcher\x.json.");
+    let m = h.state_mut();
+    let reads = m.pg_reads;
+    m.set_view_source(true);
+    m.set_view_source(false);
+    assert!(!m.pg_reading());
+    assert_eq!(m.pg_reads, reads, "a second switch does not read again");
+    assert_eq!(
+        notes(m, shape)[0],
+        r"In game: PGPatcher applies PBRNIFPatcher\x.json."
+    );
+}
+
+/// `n` BSTriShapes, each with its own BSLSP and a texture set naming `textures\white.dds`.
+fn lit_shapes(n: u32) -> Vec<u8> {
+    let mut b = builder::Nif::new(100);
+    let names: Vec<i32> = (0..n).map(|i| b.string(&format!("S{i}"))).collect();
+    for (i, name) in names.iter().enumerate() {
+        b.block("BSTriShape", one_tri(*name, (n as usize + i) as i32));
+    }
+    for i in 0..n {
+        b.block(
+            "BSLightingShaderProperty",
+            scenes::lsp(0, (2 * n + i) as i32),
+        );
+    }
+    for _ in 0..n {
+        b.block(
+            "BSShaderTextureSet",
+            scenes::texset(&["textures\\white.dds"]),
+        );
+    }
+    b.bytes()
+}
+
+/// Fix F1: rows are cached on the source material, the JSON generation and the scan. A drag tick In game on a
+/// 20-shape mesh re-simulates the edited shape only; selection and switching back simulate nothing.
+#[test]
+fn a_drag_tick_in_game_resimulates_only_the_edited_shape() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&lit_shapes(20)));
+    let mut m = pg_session_in(d.path());
+    in_game(&mut m);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.sim_runs, 20, "one simulation per lit shape");
+    let shape = e.model.shapes[3].block;
+    let shader = e.model.shapes[3].shader.unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    for (i, v) in [0.1f32, 0.2].into_iter().enumerate() {
+        m.edit_push(
+            vec![Op::SetField {
+                at: at.clone(),
+                field: Field::UvOffset(0),
+                value: Value::F32(v.to_bits()),
+                base: Value::F32(0f32.to_bits()),
+            }],
+            Some(format!("uv-{shader}")),
+        );
+        assert_eq!(m.error, None);
+        assert_eq!(m.edit.as_ref().unwrap().sim_runs, 21 + i, "tick {i}");
+    }
+    assert_eq!(shown(&m, shape).params.uv_offset[0], 0.2);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
+    m.select_edit(Selection::Shape(shape));
+    m.set_view_source(true);
+    m.set_view_source(false);
+    assert_eq!(m.edit.as_ref().unwrap().sim_runs, 22, "nothing else");
+}
+
+/// H4 (fix F6): a file PGPatcher rejects for a shape (a missing texture) lets the next file win; when every file
+/// is rejected, the first skip line shows.
+#[test]
+fn a_skipped_file_lets_the_next_one_win() {
+    for renamed in [true, false] {
+        let d = pg_files();
+        std::fs::remove_file(d.path().join("mods/A/textures/pbr/white_rmaos.dds")).unwrap();
+        if renamed {
+            for t in ["other", "other_n", "other_rmaos"] {
+                put(
+                    d.path(),
+                    &format!("mods/Low/textures/pbr/{t}.dds"),
+                    Some(b"dds"),
+                );
+            }
+            put(
+                d.path(),
+                "mods/Low/PBRNifPatcher/a.json",
+                Some(br#"[{"match_diffuse": "white", "rename": "other", "roughness_scale": 0.9}]"#),
+            );
+        }
+        let mut m = pg_session_in(d.path());
+        let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+        in_game(&mut m);
+        let s = shown(&m, shape);
+        if renamed {
+            assert_eq!(
+                notes(&m, shape),
+                [r"In game: PGPatcher applies PBRNifPatcher\a.json."]
+            );
+            assert_eq!(s.slots[0].raw, r"textures\pbr\other.dds");
+            assert_eq!(s.params.specular_strength, 0.9);
+        } else {
+            let n = notes(&m, shape);
+            assert_eq!(n.len(), 1);
+            assert!(
+                n[0].starts_with(r"In game: PBRNIFPatcher\x.json is not applied ("),
+                "{n:?}"
+            );
+            assert!(is_warning(&n[0]), "the skip line is amber");
+            assert_eq!(s.slots[0].raw, r"textures\white.dds");
+        }
+    }
+}
+
+/// PG_IGNORE (value true) on the shape or its shader: In game keeps the edited material and says why; value 0
+/// does not count.
 #[test]
 fn pg_ignore_shape_is_not_simulated() {
-    for (v, ignored) in [(1u8, true), (0, false)] {
+    for (role, v, ignored) in [(Role::Shape, 1u8, true), (Role::Shape, 0, false)] {
         let (_d, mut m) = pg_session();
         let e = m.edit.as_ref().unwrap();
         let (shape, _) = lit_shape(e);
-        let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shape).unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(shape), role.clone()).unwrap();
         m.edit_push(
             vec![Op::AddExtra {
                 at,
@@ -4142,13 +4326,13 @@ fn pg_ignore_shape_is_not_simulated() {
         );
         assert_eq!(m.error, None);
         let edited = m.edit.as_ref().unwrap().materials();
-        m.set_view_source(false);
+        in_game(&mut m);
         let s = shown(&m, shape);
         if ignored {
             let rows = m.edit.as_ref().unwrap().in_game.clone().unwrap();
             let (_, mat, notes) = rows.iter().find(|(id, _, _)| id.0 == shape).unwrap();
             let before = &edited.iter().find(|(id, _)| id.0 == shape).unwrap().1;
-            assert_eq!(mat, before);
+            assert_eq!(mat, before, "{role:?}");
             assert_eq!(notes, &vec![PG_IGNORED.to_string()]);
             assert_eq!(s.slots[0].raw, r"textures\white.dds");
             assert_eq!(s.slsf2 & nif::material::SLSF2_TRUE_PBR, 0);
@@ -4161,8 +4345,174 @@ fn pg_ignore_shape_is_not_simulated() {
     }
 }
 
-/// Owner data (B8 brief, not a gate): pg_entries over the instance, then simulate_shape for one lit shape against
-/// that list, the per-shape cost of one In game change.
+/// One BSTriShape (0) whose BSLSP (1, texture set 2 naming `textures\white.dds`) carries NiBooleanExtraData
+/// PG_IGNORE = `v` (3). The editor adds extra data to shapes and the root only, so the shader's is built in.
+fn shader_pg_ignore(v: u8) -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let (s, pg) = (n.string("S"), n.string("PG_IGNORE"));
+    n.block("BSTriShape", one_tri(s, 1));
+    let lsp = scenes::lsp(0, 2);
+    // shader type, name | extra count 1, the extra | controller and the rest
+    let mut body = lsp[..8].to_vec();
+    body.extend(W::default().u32(1).i32(3).0);
+    body.extend(&lsp[12..]);
+    n.block("BSLightingShaderProperty", body);
+    n.block(
+        "BSShaderTextureSet",
+        scenes::texset(&["textures\\white.dds"]),
+    );
+    n.block("NiBooleanExtraData", W::default().i32(pg).u8(v).0);
+    n.bytes()
+}
+
+/// PG_IGNORE on the shader counts as on the shape (fix F6); value 0 does not.
+#[test]
+fn pg_ignore_on_the_shader_is_not_simulated() {
+    for (v, ignored) in [(1u8, true), (0, false)] {
+        let d = pg_files();
+        put(d.path(), "mods/A/meshes/x.nif", Some(&shader_pg_ignore(v)));
+        let mut m = pg_session_in(d.path());
+        let e = m.edit.as_ref().unwrap();
+        let (shape, shader) = lit_shape(e);
+        assert_eq!(
+            e.model.extras_of(&e.model.lighting[&shader].prop.net).len(),
+            1,
+            "the fixture's shader extra"
+        );
+        in_game(&mut m);
+        let s = shown(&m, shape);
+        if ignored {
+            assert_eq!(notes(&m, shape), [PG_IGNORED]);
+            assert_eq!(s.slots[0].raw, r"textures\white.dds");
+        } else {
+            assert_eq!(s.slots[0].raw, r"textures\pbr\white.dds");
+        }
+    }
+}
+
+/// A PG_IGNORE pushed while In game shows takes effect at once (the cache keeps the check outside).
+#[test]
+fn pg_ignore_pushed_in_game_takes_effect() {
+    let (_d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shape).unwrap();
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "NiBooleanExtraData".into(),
+            name: "PG_IGNORE".into(),
+            value: ExtraValue::Bool(1),
+        }],
+        None,
+    );
+    assert_eq!(notes(&m, shape), [PG_IGNORED]);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\white.dds");
+}
+
+/// A folder scan reads no JSON and says so (fix F6).
+#[test]
+fn a_folder_scan_says_in_game_needs_an_instance() {
+    let (d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.target = Some(ScanTarget::Folder(d.path().into()));
+    m.select_edit(Selection::Shape(shape));
+    in_game(&mut m);
+    assert_eq!(notes(&m, shape), [NO_MATCH]);
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(NO_INSTANCE);
+    h.get_by_label(NO_MATCH);
+    assert!(h.query_by_label(IN_GAME_SCOPE).is_none());
+}
+
+/// Fix F3: an instance that cannot be read says so, in place of the scope line; no shape claims "no match".
+#[test]
+fn an_unreadable_instance_has_its_own_line() {
+    let (d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    std::fs::remove_file(d.path().join("ModOrganizer.ini")).unwrap();
+    m.select_edit(Selection::Shape(shape));
+    in_game(&mut m);
+    assert!(notes(&m, shape).is_empty());
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label_contains(INSTANCE_UNREADABLE);
+    assert!(h.query_by_label(IN_GAME_SCOPE).is_none());
+    assert!(h.query_by_label(NO_MATCH).is_none());
+}
+
+/// Fix F5: a rescan re-reads the JSON (a session reopened after it sees the new file).
+#[test]
+fn a_rescan_reads_the_json_again() {
+    let (d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    assert_eq!(shown(&m, shape).params.specular_strength, 0.5);
+    put_x_json(d.path(), 0.3);
+    m.set_view_source(true);
+    in_game(&mut m);
+    assert_eq!(
+        shown(&m, shape).params.specular_strength,
+        0.5,
+        "not watched"
+    );
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    in_game(&mut m);
+    assert_eq!(shown(&m, shape).params.specular_strength, 0.3);
+}
+
+/// Fix F9: a mesh PGPatcher already made PBR (no entry matches, slot 5 is an existing `_rmaos`) says so.
+#[test]
+fn an_already_pbr_shape_says_so() {
+    let (_d, mut m) = pg_session();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let raw = |i: usize| {
+        e.model.texsets[&set]
+            .raw
+            .slots
+            .get(i)
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .unwrap_or_default()
+    };
+    let at = nif::edit::anchor_shape(&e.model, shape);
+    let ops = vec![
+        Op::SetTexturePath {
+            at: at.clone(),
+            slot: 0,
+            path: r"textures\stone.dds".into(),
+            base: raw(0),
+        },
+        Op::SetTexturePath {
+            at,
+            slot: 5,
+            path: r"textures\pbr\white_rmaos.dds".into(),
+            base: raw(5),
+        },
+    ];
+    m.edit_push(ops, None);
+    assert!(
+        m.edit
+            .as_ref()
+            .unwrap()
+            .doc
+            .ops
+            .iter()
+            .all(|o| o.status == OpStatus::Applied),
+        "{:?}",
+        m.edit.as_ref().unwrap().outcomes
+    );
+    in_game(&mut m);
+    assert_eq!(notes(&m, shape), [ALREADY_PBR]);
+}
+
+/// Owner data (B8 brief, not a gate): the JSON read, then per shape the candidate scan (once per slot change) and
+/// one simulation over the candidates (each change), for a shape that matches an owner entry.
 #[test]
 #[ignore]
 fn in_game_cost_on_the_owner_json() {
@@ -4172,7 +4522,7 @@ fn in_game_cost_on_the_owner_json() {
     };
     let inst = modscan::mo2::Instance::load(Path::new(&root), Some("Nexus")).unwrap();
     let t = Instant::now();
-    let files = pg_entries(&inst);
+    let files = pg_entries(&inst).unwrap();
     let read = t.elapsed();
     let entries: usize = files.iter().map(|f| f.entries.len()).sum();
     let e = NifEdit::open(
@@ -4182,12 +4532,28 @@ fn in_game_cost_on_the_owner_json() {
         None,
     )
     .unwrap();
-    let mat = e.materials()[0].1.clone();
-    let t = Instant::now();
-    let (_, notes) = simulate_shape(&files, r"meshes\x.nif", &mat, &|_| true);
-    println!(
-        "{} files, {entries} entries: pg_entries {read:?}, simulate_shape {:?} ({notes:?})",
-        files.len(),
-        t.elapsed()
-    );
+    let mut mat = e.materials()[0].1.clone();
+    // A diffuse the owner's JSON names: the last file's first string match_diffuse.
+    let md = files
+        .iter()
+        .rev()
+        .flat_map(|f| &f.entries)
+        .find_map(|e| e.get("match_diffuse")?.as_str().map(String::from))
+        .expect("a match_diffuse");
+    mat.set_slot_raw(0, &format!("textures{md}.dds"));
+    for (label, m) in [("no match", e.materials()[0].1.clone()), ("match", mat)] {
+        let t = Instant::now();
+        let c = candidates(&files, r"meshes\x.nif", &m.slots);
+        let scan = t.elapsed();
+        let picked: Vec<&PgFile> = c.iter().map(|&i| &files[i]).collect();
+        let t = Instant::now();
+        let (_, notes) = simulate_shape(&picked, r"meshes\x.nif", &m, &|_| true);
+        println!(
+            "{label}: {} files, {entries} entries: pg_entries {read:?}; candidates {scan:?} ({} files); \
+             simulate {:?} ({notes:?})",
+            files.len(),
+            c.len(),
+            t.elapsed()
+        );
+    }
 }

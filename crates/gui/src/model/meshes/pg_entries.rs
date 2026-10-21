@@ -5,10 +5,12 @@ use modscan::mo2::{loose_origins, Instance};
 use nif::extra::ExtraValue;
 use nif::material::MaterialState;
 use nif::model::{NifModel, ShapeModel};
+use nif::path::TexPath;
 use pgpsim::{Badge, SimResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 /// The line under the toggle in In game (simulated).
 pub const IN_GAME_SCOPE: &str =
@@ -17,6 +19,14 @@ pub const IN_GAME_SCOPE: &str =
 pub const NO_INSTANCE: &str = "In game needs an MO2 instance: no PGPatcher JSON was read.";
 pub const PG_IGNORED: &str = "In game: PGPatcher skips this shape (PG_IGNORE).";
 pub const NO_MATCH: &str = "In game: no PGPatcher JSON matches this shape.";
+/// 01 §1.4's pre-patched case (fix F9).
+pub const ALREADY_PBR: &str = "In game: already PBR. PGPatcher leaves it as is.";
+/// Under the toggle while the worker reads the JSON (fix F2).
+pub const READING_JSON: &str = "Reading PGPatcher JSON…";
+/// The start of the line that replaces the scope line when the instance cannot be read (fix F3).
+pub const INSTANCE_UNREADABLE: &str = "In game: the MO2 instance could not be read:";
+/// The middle of a skip line, "In game: {file} is not applied ({why}).".
+const NOT_APPLIED: &str = " is not applied (";
 
 /// One PGPatcher config file: its data-relative path as the winning copy spells it, and its entries already
 /// prepared with the file's `default` (so they go to pgpsim with `Value::Null`).
@@ -29,10 +39,8 @@ pub struct PgFile {
 /// Every loose `PBRNifPatcher\**\*.json` of Data, the enabled mods and overwrite (the VFS winning copy of each
 /// path), highest MO2 priority first, then path A→Z. Files PGPatcher would skip (parse error, an object without
 /// `default` and `entries`) are left out.
-pub fn pg_entries(inst: &Instance) -> Vec<PgFile> {
-    let Ok((origins, _)) = loose_origins(inst) else {
-        return vec![];
-    };
+pub fn pg_entries(inst: &Instance) -> Result<Vec<PgFile>, String> {
+    let (origins, _) = loose_origins(inst).map_err(|e| e.to_string())?;
     let mut found: HashMap<String, (i32, String, PathBuf)> = HashMap::new();
     for o in &origins {
         let Ok(rd) = std::fs::read_dir(&o.root) else {
@@ -72,7 +80,7 @@ pub fn pg_entries(inst: &Instance) -> Vec<PgFile> {
     // shortcut: MO2 priority stands in for PGPatcher's own mod priority (modrules.json, 01 §1.5); read that file if the owner's orders differ.
     files.sort_by(|(ka, a), (kb, b)| b.0.cmp(&a.0).then_with(|| ka.cmp(kb)));
     // shortcut: loose files only; JSON packed in a BSA is not read (the UI says so).
-    files
+    Ok(files
         .into_iter()
         .filter_map(|(_, (_, file, path))| {
             let text = String::from_utf8(std::fs::read(path).ok()?).ok()?;
@@ -91,7 +99,7 @@ pub fn pg_entries(inst: &Instance) -> Vec<PgFile> {
                 .collect();
             Some(PgFile { file, entries })
         })
-        .collect()
+        .collect())
 }
 
 /// PGPatcher's PG_IGNORE (01 §1.2 item 3): an `NiBooleanExtraData` "PG_IGNORE" with a true value on the shape or
@@ -111,24 +119,47 @@ pub fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
         })
 }
 
-/// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order) that patches it wins; a
-/// file that would skip it (a missing texture, a wrong-typed key) is rejected for this shape and the next may win.
-/// Returns the material and its lines.
+/// Lines drawn amber (fix F4): a file PGPatcher rejects for the shape, and PG_IGNORE.
+pub fn is_warning(note: &str) -> bool {
+    note == PG_IGNORED || note.contains(NOT_APPLIED)
+}
+
+/// The JSON for `target`, as the worker reads it: an MO2 instance's files, nothing for a folder scan.
+pub fn read_pg(target: Option<&ScanTarget>) -> Result<Vec<PgFile>, String> {
+    match target {
+        Some(ScanTarget::Mo2 { root, profile }) => Instance::load(root, Some(profile))
+            .map_err(|e| e.to_string())
+            .and_then(|i| pg_entries(&i)),
+        _ => Ok(vec![]),
+    }
+}
+
+/// The files with an entry that matches the shape (by its slots and the NIF path), as indices into `files`. Only
+/// these can patch it; the scan over every entry runs again only when the slots change (fix F1).
+pub fn candidates(files: &[PgFile], nif_path: &str, slots: &[TexPath]) -> Vec<usize> {
+    files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| {
+            f.entries
+                .iter()
+                .any(|e| pgpsim::shape_matches(e, nif_path, slots))
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order, the `candidates`) that
+/// patches it wins; a file that would skip it (a missing texture, a wrong-typed key) is rejected for this shape and
+/// the next may win. Returns the material and its lines.
 pub fn simulate_shape(
-    files: &[PgFile],
+    files: &[&PgFile],
     nif_path: &str,
     source: &MaterialState,
     exists: &dyn Fn(&str) -> bool,
 ) -> (MaterialState, Vec<String>) {
     let mut skip = None;
     for f in files {
-        if !f
-            .entries
-            .iter()
-            .any(|e| pgpsim::shape_matches(e, nif_path, &source.slots))
-        {
-            continue;
-        }
         match pgpsim::simulate_file(&f.entries, &Value::Null, nif_path, source, exists) {
             SimResult::Patched {
                 material, badges, ..
@@ -146,37 +177,106 @@ pub fn simulate_shape(
                 return (material, notes);
             }
             SimResult::Skip(why) => {
-                skip.get_or_insert_with(|| format!("In game: {} is not applied ({why}).", f.file));
+                skip.get_or_insert_with(|| format!("In game: {}{NOT_APPLIED}{why}).", f.file));
             }
             SimResult::NoMatch => {}
         }
     }
-    (
-        source.clone(),
-        vec![skip.unwrap_or_else(|| NO_MATCH.to_string())],
-    )
+    let line = skip.unwrap_or_else(|| {
+        // 01 §1.4 pre-patched case: no entry matched and slot 5 is an existing `_rmaos`: PGPatcher changes nothing.
+        let rmaos = source
+            .slots
+            .get(5)
+            .map(|s| s.raw.to_ascii_lowercase())
+            .filter(|s| s.ends_with("_rmaos.dds") && exists(s));
+        match rmaos {
+            Some(_) => ALREADY_PBR.to_string(),
+            None => NO_MATCH.to_string(),
+        }
+    });
+    (source.clone(), vec![line])
+}
+
+/// The JSON In game reads (fix F2): read on a worker once per scan target and scan, kept across switches.
+pub struct PgJson {
+    key: (Option<ScanTarget>, u64),
+    /// Which read this is (`MeshesModel::pg_reads` when it started): part of every cached row's key.
+    pub gen: u64,
+    pub state: PgState,
+}
+
+pub enum PgState {
+    Reading(Receiver<Result<Vec<PgFile>, String>>),
+    Done(Result<Vec<PgFile>, String>),
 }
 
 impl MeshesModel {
-    /// v2 B8: `edit.in_game` for the side shown: computed while In game shows (the JSON read once per switch and per
-    /// scan target), None on Edited source. Per change, never per frame: the clock is paused In game (F21).
-    pub(super) fn refresh_in_game(&mut self) {
-        let show = !self.view_source;
-        let target = self.target.clone();
-        let store = &self.store;
-        let Some(e) = self.edit.as_mut() else { return };
-        if e.le_mesh || !show {
-            e.in_game = None;
+    /// The PGPatcher JSON read is running ("Reading PGPatcher JSON…").
+    pub fn pg_reading(&self) -> bool {
+        matches!(
+            self.pg.as_ref().map(|p| &p.state),
+            Some(PgState::Reading(_))
+        )
+    }
+
+    /// Why the JSON could not be read (the instance or its mod list), if it could not.
+    pub fn pg_error(&self) -> Option<&str> {
+        match self.pg.as_ref().map(|p| &p.state) {
+            Some(PgState::Done(Err(e))) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// Starts the read on a worker unless the JSON on hand (or being read) is for this scan target and scan.
+    fn ensure_pg(&mut self) {
+        let key = (self.target.clone(), self.scan_rev);
+        if self.pg.as_ref().is_some_and(|p| p.key == key) {
             return;
         }
-        if e.pg.as_ref().is_none_or(|(t, _)| *t != target) {
-            let files = match &target {
-                Some(ScanTarget::Mo2 { root, profile }) => Instance::load(root, Some(profile))
-                    .map(|i| pg_entries(&i))
-                    .unwrap_or_default(),
-                _ => vec![],
-            };
-            e.pg = Some((target, files));
+        self.pg_reads += 1;
+        let (tx, rx) = channel();
+        let target = key.0.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_pg(target.as_ref()));
+        });
+        self.pg = Some(PgJson {
+            key,
+            gen: self.pg_reads,
+            state: PgState::Reading(rx),
+        });
+    }
+
+    /// Takes a finished read; In game then shows its rows. True when one landed.
+    pub(super) fn poll_pg(&mut self) -> bool {
+        let Some(p) = &mut self.pg else { return false };
+        let PgState::Reading(rx) = &p.state else {
+            return false;
+        };
+        p.state = PgState::Done(match rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => Err("the read stopped".into()),
+        });
+        if let Some(e) = self.edit.as_ref().filter(|e| e.in_game.is_some()) {
+            let before = e.materials();
+            self.edit_changed(before);
+        }
+        true
+    }
+
+    /// v2 B8: `edit.in_game` for the side shown: computed while In game shows, None on Edited source. Until the JSON
+    /// lands (or when it could not be read) each shape keeps its edited material with no line. Per change, never per
+    /// frame (the clock is paused In game, F21); unchanged shapes reuse their cached row (fix F1).
+    pub(super) fn refresh_in_game(&mut self) {
+        let show = !self.view_source && self.edit.as_ref().is_some_and(|e| !e.le_mesh);
+        if show {
+            self.ensure_pg();
+        }
+        let (store, rev) = (&self.store, self.scan_rev);
+        let Some(e) = self.edit.as_mut() else { return };
+        if !show {
+            e.in_game = None;
+            return;
         }
         // Unknown (a store error) counts as existing: an error must never show a false skip (as set_preview).
         let exists = |p: &str| {
@@ -184,7 +284,14 @@ impl MeshesModel {
                 .as_ref()
                 .is_none_or(|s| !matches!(s.texture_location(&canon(p)), Ok(None)))
         };
-        let rows = e.in_game_materials(&exists);
+        let rows = match &self.pg {
+            Some(PgJson {
+                gen,
+                state: PgState::Done(Ok(files)),
+                ..
+            }) => e.in_game_materials(files, *gen, rev, &exists),
+            _ => e.plain_rows(),
+        };
         e.in_game = Some(rows);
     }
 }
