@@ -338,8 +338,15 @@ fn also_items(
             "Also write a Complex material folder (and the Vanilla folder it installs on)",
         ),
     ] {
+        // Without a project the model's edit is a silent no-op: say why instead.
         let why = busy
             .map(str::to_string)
+            .or_else(|| {
+                model
+                    .project
+                    .is_none()
+                    .then(|| "Open a folder first".to_string())
+            })
             .or_else(|| model.toml_read_only_reason())
             .or_else(|| (!on && model.target != Target::Cs).then(|| also::NEEDS_CS.to_string()));
         let mut now = on;
