@@ -3,10 +3,11 @@
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
-use crate::model::viewport3d::{read_file, Content, FileSource};
+use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
+use nif::anim::{apply_anim, clip_tracks, free_tracks, Track};
 use nif::edit::validate::{new_errors, validate, validate_ops, Warning};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
@@ -22,6 +23,15 @@ use std::sync::Arc;
 pub enum Selection {
     Root,
     Shape(u32),
+}
+
+/// What the preview animates (v2 B3): the free controller chains, or one manager clip by its sequence block (B7
+/// adds the clip selector).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Playing {
+    #[default]
+    Free,
+    Clip(u32),
 }
 
 /// Origin-name hints of tool-generated output (OD3): editable, with a warning.
@@ -76,6 +86,13 @@ pub struct NifEdit {
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
     parsed: Arc<ParsedNif>,
+    /// What the preview animates.
+    pub playing: Playing,
+    /// Per animated shape: its parsed material and its tracks for `playing`. Rebuilt by `reapply` and
+    /// `set_playing`, never per frame (F22, F23).
+    anim: Vec<(ShapeId, MaterialState, Vec<Track>)>,
+    /// The clock time whose materials the viewport shows; None after anything sent un-animated materials.
+    anim_shown: Option<f32>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
     /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
@@ -252,6 +269,9 @@ impl NifEdit {
             export_note: None,
             apply_err: None,
             parsed: Arc::default(),
+            playing: Playing::Free,
+            anim: vec![],
+            anim_shown: None,
             unsaved: false,
             drag: None,
         };
@@ -435,6 +455,8 @@ impl NifEdit {
         }
         self.warnings = validate(&self.model, None);
         self.parsed = Arc::new(render3d::parse(&self.patched));
+        self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, self.playing);
+        self.anim_shown = None;
         self.refresh_blocked();
     }
 
@@ -573,6 +595,71 @@ impl NifEdit {
             .map(|s| (s.id, s.material))
             .collect()
     }
+
+    /// Switches what the preview animates (B7's clip selector) and rebuilds the track cache.
+    pub fn set_playing(&mut self, p: Playing) {
+        self.playing = p;
+        self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, p);
+        self.anim_shown = None;
+    }
+
+    /// The Time slider's span: the clip's start and stop, or the earliest start and latest stop of the free
+    /// tracks. None when nothing is animated.
+    pub fn anim_range(&self) -> Option<(f32, f32)> {
+        let (lo, hi) = match self.playing {
+            Playing::Clip(seq) => {
+                let s = self.model.sequences.iter().find(|s| s.block == seq)?;
+                (s.start, s.stop)
+            }
+            Playing::Free => self
+                .anim
+                .iter()
+                .flat_map(|(_, _, t)| t)
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), t| {
+                    (a.min(t.start), b.max(t.stop))
+                }),
+        };
+        // f32::max ignores NaN, so a NaN start or stop drops out; hi < lo gives a zero-length clock.
+        (!self.anim.is_empty() && lo.is_finite()).then(|| (lo, hi.max(lo)))
+    }
+
+    /// Each animated shape's material at clock time `t`: `apply_anim` over the cached tracks, nothing parsed.
+    pub fn frame_materials(&self, t: f32) -> Vec<(ShapeId, MaterialState)> {
+        self.anim
+            .iter()
+            .map(|(id, base, tracks)| {
+                let mut m = apply_anim(base, tracks, t);
+                // Solo hides every other shape (preview_nif): a tick must not show it again.
+                m.hidden |= self.solo && self.selection != Selection::Shape(id.0);
+                (*id, m)
+            })
+            .collect()
+    }
+}
+
+/// The tracks of every shape in `p` (its shader's and its alpha property's), for `playing`; shapes with none are
+/// left out.
+fn anim_tracks(
+    m: &NifModel,
+    b: &[u8],
+    p: &ParsedNif,
+    playing: Playing,
+) -> Vec<(ShapeId, MaterialState, Vec<Track>)> {
+    p.shapes
+        .iter()
+        .filter_map(|s| {
+            let sm = m.shape(s.id.0)?;
+            let tracks: Vec<Track> = [sm.shader, sm.alpha]
+                .into_iter()
+                .flatten()
+                .flat_map(|prop| match playing {
+                    Playing::Free => free_tracks(m, b, prop),
+                    Playing::Clip(seq) => clip_tracks(m, b, seq, prop),
+                })
+                .collect();
+            (!tracks.is_empty()).then(|| (s.id, s.material.clone(), tracks))
+        })
+        .collect()
 }
 
 fn read_source(source: &[u8]) -> Result<(nif::scan::NifScan, NifModel), String> {
@@ -711,6 +798,9 @@ impl MeshesModel {
             Ok(Some(c)) => {
                 self.v3.set_content(Some(c), false);
                 self.v3.nif_view = true;
+                if let Some(e) = &mut self.edit {
+                    e.anim_shown = None;
+                }
                 true
             }
             Ok(None) => false,
@@ -744,6 +834,41 @@ impl MeshesModel {
             }
         }
         self.v3.nif_view = false;
+        self.v3.clock = None;
+    }
+
+    /// One drawn frame of the animation (v2 B3). Call once per frame the Meshes 3D view is drawn, before
+    /// `ui::viewport3d::show`, so that frame's Render carries the new time. Keeps the clock in step with the
+    /// session's tracks, advances it, and sends each animated shape's material (cbuffer only) when the time moved.
+    pub fn tick_anim(&mut self, dt: f32) {
+        let Some(range) = self.edit.as_ref().and_then(NifEdit::anim_range) else {
+            self.v3.clock = None;
+            return;
+        };
+        let c = self.v3.clock.get_or_insert(Clock::new(range));
+        if c.range != range {
+            c.range = range;
+            c.t = c.t.clamp(range.0, range.1);
+        }
+        // In game shows PGPatcher's copy of the unedited NIF (F21): the clock pauses there.
+        if !self.v3.nif_view {
+            c.playing = false;
+            return;
+        }
+        self.v3.tick(dt);
+        let (Some(e), Some(c)) = (self.edit.as_mut(), self.v3.clock) else {
+            return;
+        };
+        if e.anim_shown == Some(c.t) {
+            return;
+        }
+        for (id, m) in e.frame_materials(c.t) {
+            // false: no load of this content sent yet (a reload); the next frame tries again.
+            if !self.v3.set_material(id, m) {
+                return;
+            }
+        }
+        e.anim_shown = Some(c.t);
     }
 
     pub fn edit_push(&mut self, ops: Vec<Op>, merge: Option<String>) {
@@ -922,6 +1047,10 @@ impl MeshesModel {
     /// the content's map lacks (and the store has), or a material the viewport refuses, reloads the same view with
     /// the map extended.
     fn edit_changed(&mut self, before: Vec<(ShapeId, MaterialState)>) {
+        // It sends static materials: the next tick_anim resends the animated ones.
+        if let Some(e) = &mut self.edit {
+            e.anim_shown = None;
+        }
         self.edit_checks();
         let (Some(e), Some(store)) = (&self.edit, &self.store) else {
             return;

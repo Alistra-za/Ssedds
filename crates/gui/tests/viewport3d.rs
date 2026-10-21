@@ -3288,3 +3288,73 @@ fn deferred_on_with_the_standin_draws_and_goes_idle() {
         "no Loaded reply: nothing was loaded again"
     );
 }
+
+// ---- v2 B3: the animation clock ----
+
+#[test]
+fn the_clock_wraps_clamps_and_caps_dt() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    assert!(!v.tick(0.1), "no clock");
+    v.clock = Some(v3::Clock::new((1.0, 2.0)));
+    assert!(!v.tick(0.1), "paused");
+    v.clock.as_mut().unwrap().play();
+    assert!(v.tick(1.0));
+    assert!(
+        (v.clock.unwrap().t - (1.0 + v3::Clock::MAX_DT)).abs() < 1e-5,
+        "one frame advances at most MAX_DT"
+    );
+    let c = v.clock.as_mut().unwrap();
+    c.t = 1.99;
+    c.rate = 2.0;
+    v.tick(0.01);
+    assert!(
+        (v.clock.unwrap().t - 1.01).abs() < 1e-5,
+        "looping wraps: {:?}",
+        v.clock
+    );
+    let c = v.clock.as_mut().unwrap();
+    c.looping = false;
+    c.t = 1.99;
+    v.tick(0.01);
+    assert_eq!(
+        (v.clock.unwrap().t, v.clock.unwrap().playing),
+        (2.0, false),
+        "stops at the end"
+    );
+    v.clock.as_mut().unwrap().play();
+    assert_eq!(v.clock.unwrap().t, 1.0, "Play at the end starts again");
+    v.clock.as_mut().unwrap().scrub(9.0);
+    assert_eq!(
+        (v.clock.unwrap().t, v.clock.unwrap().playing),
+        (2.0, false),
+        "scrub clamps and pauses"
+    );
+    v.clock.as_mut().unwrap().play();
+    assert!(
+        !v.busy(),
+        "a playing clock alone is not work in flight (F6: the app may sleep)"
+    );
+}
+
+#[test]
+fn the_clock_time_joins_the_render_dedupe() {
+    let (mut v, cmds) = rendered();
+    v.clock = Some(v3::Clock::new((0.0, 1.0)));
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { time, .. }) if time == 0.0),
+        "1.0 → 0.0 is a change"
+    );
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "same time: nothing sent");
+    v.clock.as_mut().unwrap().scrub(0.5);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { time, .. }) if time == 0.5));
+    assert!(cmds.try_recv().is_err(), "exactly one command");
+    v.clock = None;
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { time, .. }) if time == 1.0),
+        "no clock: 1.0"
+    );
+}

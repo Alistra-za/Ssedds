@@ -2757,3 +2757,235 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
         "saved where it was"
     );
 }
+
+// ---- v2 B3: the clock, the per-frame cbuffer path ----
+
+use render3d::{EditKind, ShapeId};
+use sdc_gui::model::viewport3d::V3Reply;
+
+/// `bytes` with a free BSLightingShaderPropertyFloatController var 20 (U offset), Loop + Active (0x48), start 0,
+/// stop 1, LINEAR keys (0, 0) → (1, 1), put first in the first lit shape's controller chain.
+fn with_uv_ctrl(bytes: &[u8]) -> Vec<u8> {
+    let m = nif::model::read_model(bytes).unwrap();
+    let lsp = m
+        .shapes
+        .iter()
+        .find_map(|s| s.shader.filter(|b| m.lighting.contains_key(b)))
+        .unwrap();
+    let net = m.lighting[&lsp].prop.net.clone();
+    let mut doc = nif::write::NifDoc::open(bytes).unwrap();
+    let at = net.controller_at() - doc.header().offsets()[lsp as usize];
+    let key = |time: f32, value: f32| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![key(0.0, 0.0), key(1.0, 1.0)],
+    });
+    let data = doc.append(b"NiFloatData", nif::keys::encode_data(&keys));
+    let interp = doc.append(
+        b"NiFloatInterpolator",
+        builder::W::default().f(0.0).i32(data as i32).0,
+    );
+    let ctrl = doc.append(
+        b"BSLightingShaderPropertyFloatController",
+        scenes::ctrl_body(
+            net.controller,
+            0x48,
+            lsp as i32,
+            builder::W::default().i32(interp as i32).u32(20),
+        ),
+    );
+    doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
+    let out = doc.bytes();
+    let back = nif::model::read_model(&out).unwrap();
+    assert!(back.lighting[&lsp].prop.ctrls.contains(&ctrl));
+    assert!(back.ctrls[&ctrl].known, "{:?}", back.ctrls[&ctrl]);
+    out
+}
+
+/// A scanned session whose x.nif has `with_uv_ctrl`, the edit open, the first load sent and answered.
+fn playing_session() -> (tempfile::TempDir, MeshesModel, Receiver<V3Cmd>) {
+    let d = files(false);
+    let nif = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    put(d.path(), "mods/A/meshes/x.nif", Some(&nif));
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    let cmds = attach(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    m.tick_anim(0.0); // makes the clock
+    m.v3.request_frame(64, 64);
+    let Some(V3Cmd::LoadParsed { id, nif, .. }) = cmds
+        .try_iter()
+        .find(|c| matches!(c, V3Cmd::LoadParsed { .. }))
+    else {
+        panic!("the first LoadParsed")
+    };
+    m.v3.handle(V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: nif.shapes.len(),
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    cmds.try_iter().for_each(drop);
+    (d, m, cmds)
+}
+
+/// Review Focus 5: 300 playing ticks send only SetMaterial and Render (no load, no shader, feature or deferred
+/// command), and every material differs from the static one only in cbuffer fields.
+#[test]
+fn playback_is_cbuffer_only() {
+    let (_d, mut m, cmds) = playing_session();
+    let c = m.v3.clock.expect("an animated session has a clock");
+    assert_eq!((c.t, c.playing, c.range), (0.0, false, (0.0, 1.0)));
+    let animated = m.edit.as_ref().unwrap().frame_materials(0.0);
+    assert!(!animated.is_empty());
+    let base: std::collections::BTreeMap<ShapeId, nif::material::MaterialState> =
+        m.edit.as_ref().unwrap().materials().into_iter().collect();
+    m.v3.clock.as_mut().unwrap().play();
+    let (mut sets, mut renders) = (vec![], vec![]);
+    for _ in 0..300 {
+        m.tick_anim(1.0 / 60.0);
+        m.v3.request_frame(64, 64);
+        for c in cmds.try_iter() {
+            match c {
+                V3Cmd::SetMaterial { id, material, .. } => sets.push((id, material)),
+                V3Cmd::Render { time, .. } => renders.push(time),
+                _ => panic!("only SetMaterial and Render during playback"),
+            }
+        }
+    }
+    assert_eq!(renders.len(), 300, "one Render per tick");
+    assert_eq!(
+        sets.len(),
+        300 * animated.len(),
+        "one SetMaterial per animated shape per tick"
+    );
+    assert!(
+        renders.iter().all(|t| (0.0..=1.0).contains(t)),
+        "looping stays in range"
+    );
+    let mut cbuffer = 0;
+    for (id, mat) in &sets {
+        let k = render3d::classify(&base[id], mat, &[], false);
+        assert!(
+            matches!(k, EditKind::Cbuffer | EditKind::Same),
+            "{id:?}: {k:?}"
+        );
+        cbuffer += (k == EditKind::Cbuffer) as usize;
+        let mut back = mat.clone();
+        back.params.uv_offset[0] = base[id].params.uv_offset[0];
+        assert_eq!(&back, &base[id], "only U offset is animated");
+    }
+    assert!(cbuffer > 0);
+    // The 30th tick is t = 0.5 (dt 1/60 < MAX_DT): U offset follows the LINEAR curve.
+    assert!((sets[29 * animated.len()].1.params.uv_offset[0] - renders[29]).abs() < 1e-5);
+    assert!((renders[29] - 0.5).abs() < 1e-4);
+}
+
+#[test]
+fn scrub_sets_time_and_pauses() {
+    let (_d, mut m, cmds) = playing_session();
+    m.v3.clock.as_mut().unwrap().play();
+    m.tick_anim(0.02);
+    m.v3.request_frame(64, 64);
+    cmds.try_iter().for_each(drop);
+    m.v3.clock.as_mut().unwrap().scrub(0.25);
+    m.tick_anim(0.02);
+    let c = m.v3.clock.unwrap();
+    assert_eq!(
+        (c.t, c.playing),
+        (0.25, false),
+        "a paused clock does not move"
+    );
+    m.v3.request_frame(64, 64);
+    let got: Vec<V3Cmd> = cmds.try_iter().collect();
+    assert!(got.iter().any(
+        |c| matches!(c, V3Cmd::SetMaterial { material, .. } if material.params.uv_offset[0] == 0.25)
+    ));
+    assert!(got
+        .iter()
+        .any(|c| matches!(c, V3Cmd::Render { time, .. } if *time == 0.25)));
+    m.tick_anim(0.02);
+    m.v3.request_frame(64, 64);
+    assert!(
+        cmds.try_recv().is_err(),
+        "paused and shown: nothing more is sent"
+    );
+}
+
+/// F6 and F21: In game pauses the clock and sends nothing; closing the session drops the clock.
+#[test]
+fn the_clock_pauses_in_game_and_goes_with_the_session() {
+    let (_d, mut m, cmds) = playing_session();
+    m.v3.clock.as_mut().unwrap().play();
+    m.v3.nif_view = false; // what set_view_source(false) does when the 3D view shows PGPatcher's copy
+    m.tick_anim(0.02);
+    assert!(!m.v3.clock.unwrap().playing);
+    assert!(!cmds
+        .try_iter()
+        .any(|c| matches!(c, V3Cmd::SetMaterial { .. })));
+    m.close_edit();
+    assert_eq!(m.v3.clock, None);
+}
+
+/// The controls under the 3D view drive the clock.
+#[test]
+fn play_and_pause_buttons_drive_the_clock() {
+    let (_d, m, _cmds) = playing_session();
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Play").click();
+    h.run_steps(3);
+    let c = h.state().v3.clock.unwrap();
+    assert!(c.playing && c.t > 0.0, "{c:?}");
+    h.get_by_label("Pause").click();
+    h.run_steps(2);
+    assert!(!h.state().v3.clock.unwrap().playing);
+    h.get_by_label("Loop");
+    h.get_by_role_and_label(AkRole::Slider, "Time");
+}
+
+/// Rule 3.1: at 1100, 1280 and 1600 px the clock rows (Play to the slider's "Time" text) stay inside the centre
+/// column.
+#[test]
+fn the_clock_row_fits_the_centre_column() {
+    for w in [1100.0, 1280.0, 1600.0] {
+        let (_d, m, _cmds) = playing_session();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(w, 800.0))
+            .build_ui_state(
+                |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+                m,
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run_steps(3);
+        let rect = |id: &str| {
+            egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new(id))
+                .unwrap_or_else(|| panic!("{id} is drawn"))
+                .outer_rect
+        };
+        rect("meshes-3d-anim");
+        // A panel grows to its content, so the bound is the centre column: between the tree and the edit panel.
+        let (lo, hi) = (rect("meshes-tree").max.x, rect("meshes-edit").min.x);
+        let mut nodes = h.query_all_by_label("Time").collect::<Vec<_>>();
+        nodes.push(h.get_by_label("Play"));
+        nodes.push(h.get_by_label("Loop"));
+        assert!(nodes.len() >= 3);
+        for n in nodes {
+            let r = n.rect();
+            assert!(
+                r.max.x <= hi + 0.5 && r.min.x >= lo - 0.5,
+                "{w} px: {r:?} outside {lo}..{hi}"
+            );
+        }
+    }
+}

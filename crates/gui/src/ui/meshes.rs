@@ -666,6 +666,23 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             ui.label("Showing the PGPatcher copy: switch to Source to see your edit.");
         }
     }
+    // v2 B3: the controls first (a click this frame is ticked this frame), then the tick, then the 3D view, whose
+    // request_frame then carries the new time and materials: one Render per frame.
+    if m.v3.clock.is_some() && m.v3.nif_view {
+        egui::Panel::bottom("meshes-3d-anim")
+            .frame(egui::Frame::new())
+            .resizable(false)
+            .show(ui, |ui| super::viewport3d::clock_controls(ui, &mut m.v3));
+    } else {
+        ui.skip_ahead_auto_ids(1);
+    }
+    // One step per frame: a discarded first pass must not advance the clock twice.
+    let dt = if ui.ctx().current_pass_index() == 0 {
+        ui.input(|i| i.stable_dt)
+    } else {
+        0.0
+    };
+    m.tick_anim(dt);
     super::viewport3d::show(ui, &mut m.v3);
 }
 

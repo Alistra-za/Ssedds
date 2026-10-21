@@ -352,6 +352,71 @@ impl Orbit {
     }
 }
 
+/// The edit preview's animation clock (v2 B3, spec §6.3). `t` is scene time in seconds; each track maps it through
+/// its own controller time (`nif::anim::apply_anim`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clock {
+    pub t: f32,
+    pub playing: bool,
+    pub looping: bool,
+    /// Playback speed, [`Clock::RATE_RANGE`]; 1 = game speed.
+    pub rate: f32,
+    /// The Time slider's span: (earliest start, latest stop) of the animated tracks.
+    pub range: (f32, f32),
+}
+
+impl Clock {
+    pub const RATE_RANGE: (f32, f32) = (0.1, 4.0);
+    /// The most time one frame may advance (the rate cap, spec §6.3): below 30 fps the animation slows down
+    /// instead of skipping states.
+    pub const MAX_DT: f32 = 1.0 / 30.0;
+
+    /// Paused at the start, looping, at game speed.
+    pub fn new(range: (f32, f32)) -> Clock {
+        Clock {
+            t: range.0,
+            playing: false,
+            looping: true,
+            rate: 1.0,
+            range,
+        }
+    }
+
+    /// Plays; at the end of a non-looping clip it starts again from the start.
+    pub fn play(&mut self) {
+        if !self.looping && self.t >= self.range.1 {
+            self.t = self.range.0;
+        }
+        self.playing = true;
+    }
+
+    /// The Time slider: jumps to `t` (clamped to the range) and pauses.
+    pub fn scrub(&mut self, t: f32) {
+        self.t = t.clamp(self.range.0, self.range.1);
+        self.playing = false;
+    }
+
+    /// Advances a playing clock by `dt` (capped at `MAX_DT`) × `rate`: wraps when looping, else stops at the end.
+    /// True when `t` changed.
+    fn advance(&mut self, dt: f32) -> bool {
+        if !self.playing {
+            return false;
+        }
+        let (a, b) = self.range;
+        let old = self.t;
+        let t = self.t + dt.clamp(0.0, Self::MAX_DT) * self.rate;
+        self.t = if t <= b {
+            t
+        } else if self.looping && b > a {
+            a + (t - a) % (b - a)
+        } else {
+            self.playing = false;
+            b
+        };
+        self.t != old
+    }
+}
+
 /// The "View" controls of the panel: background and lights. Saved in `gui.toml` (`[layout.look]`, AG17); a fresh
 /// install begins at the defaults (the look the preview always had).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -620,6 +685,8 @@ pub enum V3Cmd {
         w: u32,
         h: u32,
         look: Look,
+        /// Scene time (`Scene.time`, CS's `Timer`): the clock's, else 1.0.
+        time: f32,
     },
     /// A finished background compile, sent by the pool into the render loop's own queue.
     Compiled(CompileDone),
@@ -763,6 +830,9 @@ pub struct Viewport3d {
     pub shapes: Vec<ShapeInfo>,
     /// The `Parsed` content is the NIF editor's (v2 A16): its failed shapes are listed like a mesh's.
     pub nif_view: bool,
+    /// The edit preview's animation clock; `None` when the content has no animated controller (v2 B3). Owned by
+    /// `MeshesModel::tick_anim`.
+    pub clock: Option<Clock>,
     /// The last material edit: its kind and render-thread time in ms.
     pub last_edit: Option<(EditKind, f64)>,
     /// Texture swaps the render thread refused (a bad DDS, a kind the slot does not read); the set preview lists them.
@@ -792,7 +862,7 @@ pub struct Viewport3d {
     held_frame: bool,
     loaded: Option<u64>,
     pending_load: Option<u64>,
-    last_sent: Option<(Camera, u32, u32, u64, Look)>,
+    last_sent: Option<(Camera, u32, u32, u64, Look, f32)>,
     render_sent: u64,
     render_done: u64,
     edits_sent: u64,
@@ -855,6 +925,7 @@ impl Viewport3d {
             content: None,
             shapes: vec![],
             nif_view: false,
+            clock: None,
             last_edit: None,
             swap_errors: vec![],
             status: None,
@@ -956,6 +1027,11 @@ impl Viewport3d {
 
     pub fn locating(&self) -> bool {
         self.locating
+    }
+
+    /// One drawn frame of the clock (v2 B3): advances it when playing. True when its time changed.
+    pub fn tick(&mut self, dt: f32) -> bool {
+        self.clock.as_mut().is_some_and(|c| c.advance(dt))
     }
 
     /// A load, a render, a material edit, a locate or a background compile is in flight.
@@ -1560,7 +1636,8 @@ impl Viewport3d {
         }
         let camera = self.orbit.camera(self.bounds);
         let look = self.look;
-        let want = (camera, w, h, loaded, look);
+        let time = self.clock.map_or(1.0, |c| c.t);
+        let want = (camera, w, h, loaded, look, time);
         if self.last_sent == Some(want) {
             return;
         }
@@ -1572,6 +1649,7 @@ impl Viewport3d {
                 w,
                 h,
                 look,
+                time,
             })
             .is_ok()
         {
@@ -2215,7 +2293,7 @@ fn render_loop(
     let mut edits: BTreeMap<ShapeId, MaterialState> = BTreeMap::new();
     let mut tex = TexState::default();
     // The last camera, size and look drawn: what a compile-triggered refresh renders with.
-    let mut view: Option<(Camera, u32, u32, Look)> = None;
+    let mut view: Option<(Camera, u32, u32, Look, f32)> = None;
     let mut refresh_id: u64 = 1 << 62;
     let mut stats = FrameStats::default();
     let mut backdrop_told = false;
@@ -2359,8 +2437,9 @@ fn render_loop(
                     w,
                     h,
                     look,
+                    time,
                 } => {
-                    render = Some((id, camera, w, h, look));
+                    render = Some((id, camera, w, h, look, time));
                     None
                 }
             };
@@ -2464,11 +2543,11 @@ fn render_loop(
         // A landed program changed a shape and nothing above reported it: tell the panel.
         // Sent after the refresh frame: the panel stays busy (Pending) until it reads this, so it also reads the frame.
         let shapes_due = compiled_changed && !reload && pending_was_empty;
-        let (id, camera, w, h, look, refresh) = match (render, view) {
-            (Some((id, camera, w, h, look)), _) => (id, camera, w, h, look, false),
-            (None, Some((camera, w, h, look))) if compiled_changed => {
+        let (id, camera, w, h, look, time, refresh) = match (render, view) {
+            (Some((id, camera, w, h, look, time)), _) => (id, camera, w, h, look, time, false),
+            (None, Some((camera, w, h, look, time))) if compiled_changed => {
                 refresh_id += 1;
-                (refresh_id, camera, w, h, look, true)
+                (refresh_id, camera, w, h, look, time, true)
             }
             _ => {
                 if shapes_due {
@@ -2477,8 +2556,9 @@ fn render_loop(
                 continue;
             }
         };
-        view = Some((camera, w, h, look));
-        let scene = look.scene(camera, r.bounds());
+        view = Some((camera, w, h, look, time));
+        let mut scene = look.scene(camera, r.bounds());
+        scene.time = time;
         let mut result = r.render(&scene, w, h);
         if let Err(e) = &result {
             if e.starts_with(render3d::device::DEVICE_REMOVED) {
