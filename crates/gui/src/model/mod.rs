@@ -457,6 +457,8 @@ pub struct AppModel {
     pub stats: std::cell::RefCell<shell::StatCache>,
     /// Header sizes read for the Generate offers, by (path, size, mtime) (Note CO, spec-M5).
     pub(crate) gen_dims: std::cell::RefCell<from_normal::GenDims>,
+    /// The last "Generate from normal map…" pick `(set, pre-ticked map)`. Task 6's dialog replaces it.
+    pub gen_requested: Option<(String, Option<from_normal::GenMap>)>,
     /// A Save report write is on a worker (AG130); the app keeps frames coming until it lands.
     pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -671,6 +673,7 @@ impl AppModel {
             shell: Vec::new(),
             stats: Default::default(),
             gen_dims: Default::default(),
+            gen_requested: None,
             report_saving: false,
             last_inputs: None,
             auto_replans: 0,

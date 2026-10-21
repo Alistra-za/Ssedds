@@ -1336,6 +1336,10 @@ impl AppModel {
             }
             MenuAction::ShowInExplorer(key) => return self.reveal_item(&key).err(),
             // Task 6 opens the dialog here, Task 7 deletes.
+            MenuAction::Generated {
+                set,
+                op: GenOp::Open(pre),
+            } => self.gen_requested = Some((set, pre)),
             MenuAction::Generated { .. } => {}
         }
         None

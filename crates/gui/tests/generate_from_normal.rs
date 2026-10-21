@@ -279,6 +279,51 @@ fn an_npot_normal_disables_the_entry_with_its_size() {
     assert_eq!(height(&m, ROCK_SET), Err(why.into()));
     let row = m.slot_menu(ROCK_SET, SlotKind::Height);
     assert_eq!(gen_open(&row).unwrap().disabled.as_deref(), Some(why));
+    // Review M5: the size comes before the shader rules.
+    shader(&mut m, Shader::Glow);
+    assert_eq!(height(&m, ROCK_SET), Err(why.into()));
+}
+
+#[test]
+fn an_unreadable_dds_normal_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01_normal.png")).unwrap();
+    std::fs::write(land(d.path()).join("rock01_n.dds"), [7u8; 16]).unwrap();
+    reopen(&mut m, d.path());
+    shader(&mut m, Shader::Default);
+    assert_eq!(
+        height(&m, ROCK_SET),
+        Err("the normal map rock01_n.dds cannot be read".into())
+    );
+}
+
+#[test]
+fn a_height_under_a_user_alias_is_a_real_rival() {
+    // Review M1: an alias names only a §6.1 suffix (`hgt = "height"` is CFG-INVALID), so an aliased height is a
+    // `_p` slot file with a job, and its canonical suffix comes from the plan's alias use.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    let presets = d.path().join("presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    std::fs::write(
+        presets.join("mine.toml"),
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n\n[suffix_aliases]\nhgt = \"p\"\n",
+    )
+    .unwrap();
+    ImageBuffer::from_fn(64, 64, |x, _| Luma([x as u8]))
+        .save(land(d.path()).join("rock01_hgt.png"))
+        .unwrap();
+    m.user_presets = Some(presets);
+    m.set_preset(Some("mine".into()));
+    reopen(&mut m, d.path());
+    assert!(
+        m.item("landscape/rock01_hgt.png")
+            .and_then(|i| i.job.as_ref()?.suffix_alias.as_ref())
+            .is_some(),
+        "the engine reads the alias"
+    );
+    assert_eq!(height(&m, ROCK_SET), has_real("rock01_hgt.png"));
 }
 
 #[test]
@@ -368,8 +413,83 @@ fn a_dds_normals_size_is_read_once() {
     assert_eq!(height(&m, ROCK_SET), why);
     assert_eq!(m.gen_dims_len(), 1, "one header read, cached");
     bc1_dds(&dds, 64, 64);
+    // Review M2: within the 1 s TTL the cached answer stands without a stat.
+    assert_eq!(height(&m, ROCK_SET), why);
+    m.clear_gen_dims();
     assert_eq!(height(&m, ROCK_SET), Ok(()), "a new stamp is read again");
-    assert_eq!(m.gen_dims_len(), 2);
+    assert_eq!(m.gen_dims_len(), 1, "one entry per file");
+}
+
+fn harness(m: AppModel) -> egui_kittest::Harness<'static, AppModel> {
+    let h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(1500.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// Right-click set `id`'s card; the card menu opens.
+fn card_menu(h: &mut egui_kittest::Harness<'static, AppModel>, id: &str) {
+    use egui_kittest::kittest::Queryable;
+    let card = |h: &egui_kittest::Harness<'static, AppModel>| {
+        h.query_all_by_label(id)
+            .find(|n| in_sets_column(h, n.rect()))
+            .unwrap_or_else(|| panic!("{id}'s card"))
+            .rect()
+    };
+    let r = card(h);
+    h.hover_at(r.center());
+    h.run();
+    h.query_all_by_label(id)
+        .find(|n| in_sets_column(h, n.rect()))
+        .unwrap()
+        .click_secondary();
+    h.run();
+}
+
+const GENERATE: &str = "Generate from normal map…";
+
+#[test]
+fn the_set_card_menu_offers_generate_with_its_reason() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened_plain(d.path()));
+    h.run();
+    card_menu(&mut h, ROCK_SET);
+    assert!(!h.get_by_label(GENERATE).accesskit_node().is_disabled());
+    h.get_by_label(GENERATE).click();
+    h.run();
+    assert_eq!(
+        h.state().gen_requested,
+        Some((ROCK_SET.to_string(), None)),
+        "the set entry's own action"
+    );
+    assert!(h.query_by_label(GENERATE).is_none(), "the menu closed");
+    // The leaf set has no normal: off, and the hover says why.
+    card_menu(&mut h, LEAF_SET);
+    let b = h.get_by_label(GENERATE);
+    assert!(b.accesskit_node().is_disabled());
+    let r = b.rect();
+    h.hover_at(r.center());
+    h.run();
+    assert!(h.query_by_label(NO_NORMAL).is_some(), "the reason on hover");
+    assert_eq!(h.state().gen_requested, Some((ROCK_SET.to_string(), None)));
+
+    // A read-only project: off (with the menu's own reason).
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    std::fs::write(
+        m.root.clone().unwrap().join("sdc-project.toml"),
+        "[[sets]\nbroken",
+    )
+    .unwrap();
+    m.reload_documents();
+    idle(&mut m);
+    assert!(m.sets_doc.as_ref().unwrap().read_only());
+    let mut h = harness(m);
+    h.run();
+    card_menu(&mut h, ROCK_SET);
+    assert!(h.get_by_label(GENERATE).accesskit_node().is_disabled());
 }
 
 #[test]

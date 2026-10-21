@@ -4,6 +4,7 @@ use super::bulk::{MenuAction, MenuEntry};
 use super::checks::{self, HeightNeutral};
 use super::items::{ItemKind, TextureItem};
 use super::sets::{SetView, SlotFill, SlotKind, SLOT_LOCKED};
+use super::shell::STAT_TTL;
 use super::AppModel;
 use crate::pgp::settings::Settings;
 use engine::codes::Code;
@@ -16,6 +17,7 @@ use engine::shader::Shader;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,9 +54,11 @@ pub enum GenSize {
     Locked(u32),
 }
 
-/// Header sizes read for the offers, by (path, size, mtime): `AppModel::gen_dims`.
-pub(crate) type GenDims =
-    std::collections::HashMap<(std::path::PathBuf, u64, u64), Option<(u32, u32)>>;
+/// Header sizes read for the offers, by path: (stat time, stamp, size). `AppModel::gen_dims`.
+pub(crate) type GenDims = std::collections::HashMap<
+    std::path::PathBuf,
+    (Instant, Option<SourceStamp>, Option<(u32, u32)>),
+>;
 
 pub const NO_NORMAL: &str = "this set has no tangent-space normal map";
 pub const MULTILAYER: &str =
@@ -135,8 +139,9 @@ fn size_locked((w, h): (u32, u32), what: &str, why: String) -> String {
 impl AppModel {
     /// The suffix aliases the last plan matched (each job's `suffix_alias`), so member suffixes read canonical as
     /// the engine's (Task 2: `real_rival` takes a canonical stem).
-    /// shortcut: an alias used only by raw packing sources or DDS inputs (no job) is not seen; read the plan's
-    /// preset registry here if a user alias for a raw height or `_m` ever needs it.
+    /// An alias names only a §6.1 suffix (never a raw role), so every aliased image is a slot file with a job.
+    /// shortcut: an alias used only by DDS inputs (no job) is not seen; read the plan's preset registry here if a
+    /// DDS `_m` or normal under a user alias ever needs it.
     fn plan_aliases(&self) -> BTreeMap<String, String> {
         self.items
             .iter()
@@ -161,16 +166,16 @@ impl AppModel {
     /// The item key of the set's normal: the Normal slot's own member, else the first file-backed member whose
     /// canonical suffix is `n` (P16; `_msn` is not).
     pub fn set_normal(&self, set: &str) -> Option<String> {
-        self.view_of(set).and_then(|v| self.normal_of(&v))
+        self.view_of(set)
+            .and_then(|v| self.normal_of(&v, &self.plan_aliases()))
     }
 
-    fn normal_of(&self, v: &SetView) -> Option<String> {
+    fn normal_of(&self, v: &SetView, aliases: &BTreeMap<String, String>) -> Option<String> {
         if let Some(SlotFill::Own { item }) = v.slots.get(&SlotKind::Normal) {
             return Some(item.clone());
         }
-        let aliases = self.plan_aliases();
         let normal = self
-            .real_members(v, &aliases)
+            .real_members(v, aliases)
             .find(|(_, s)| s.as_deref() == Some("n"))
             .map(|(i, _)| i.key.clone());
         normal
@@ -186,18 +191,33 @@ impl AppModel {
         }
     }
 
+    /// A header size by path, re-stated at most once per `STAT_TTL` and read again only when the stamp moved.
     fn header_dims(&self, path: &Path) -> Option<(u32, u32)> {
-        let s = SourceStamp::of(path)?;
-        *self
-            .gen_dims
-            .borrow_mut()
-            .entry((path.to_path_buf(), s.size, s.mtime_ns))
-            .or_insert_with(|| engine::load::image_size(path).ok())
+        let now = Instant::now();
+        let mut cache = self.gen_dims.borrow_mut();
+        let old = cache.get(path).copied();
+        if let Some((at, _, dims)) = old {
+            if now.saturating_duration_since(at) < STAT_TTL {
+                return dims;
+            }
+        }
+        let stamp = SourceStamp::of(path);
+        let dims = match old {
+            Some((_, s, dims)) if stamp.is_some() && s == stamp => dims,
+            _ => stamp.and_then(|_| engine::load::image_size(path).ok()),
+        };
+        cache.insert(path.to_path_buf(), (now, stamp, dims));
+        dims
     }
 
     /// Header sizes kept for the offers (tests).
     pub fn gen_dims_len(&self) -> usize {
         self.gen_dims.borrow().len()
+    }
+
+    /// Forget every header size (tests: the disk changed and the clock did not move).
+    pub fn clear_gen_dims(&self) {
+        self.gen_dims.borrow_mut().clear();
     }
 
     /// The recorded provenance of item `key` (keys match by Unicode lowercase).
@@ -244,12 +264,12 @@ impl AppModel {
         if v.locks.contains(&SlotKind::Height.slot_number()) {
             return Err(SLOT_LOCKED.into());
         }
-        let normal = self.normal_of(v).ok_or(NO_NORMAL)?;
+        let aliases = self.plan_aliases();
+        let normal = self.normal_of(v, &aliases).ok_or(NO_NORMAL)?;
         let dims = self.normal_dims(&normal)?;
         if !dims.0.is_power_of_two() || !dims.1.is_power_of_two() {
             return Err(GenerateError::NotPowerOfTwo(dims.0, dims.1).to_string());
         }
-        let aliases = self.plan_aliases();
         let shader = shader_of(v);
         match shader {
             Shader::Default | Shader::Parallax | Shader::Pbr | Shader::PbrLandscape => {}
@@ -322,7 +342,7 @@ impl AppModel {
                 i.name
             ));
         }
-        self.gen_size_of(v, map, dims).map(|_| ())
+        self.gen_size_of(v, map, dims, &aliases).map(|_| ())
     }
 
     fn normal_dims(&self, normal: &str) -> Result<(u32, u32), String> {
@@ -335,9 +355,10 @@ impl AppModel {
     /// The Size control of `map` (P6, OWNER-Q1). The dialog (Task 6) only renders it.
     pub fn gen_size(&self, set: &str, map: GenMap) -> Result<GenSize, String> {
         let v = self.view_of(set).ok_or_else(|| format!("no set {set}"))?;
-        let normal = self.normal_of(&v).ok_or(NO_NORMAL)?;
+        let aliases = self.plan_aliases();
+        let normal = self.normal_of(&v, &aliases).ok_or(NO_NORMAL)?;
         let dims = self.normal_dims(&normal)?;
-        self.gen_size_of(&v, map, dims)
+        self.gen_size_of(&v, map, dims, &aliases)
     }
 
     fn gen_size_of(
@@ -345,6 +366,7 @@ impl AppModel {
         v: &SetView,
         map: GenMap,
         (nw, nh): (u32, u32),
+        aliases: &BTreeMap<String, String>,
     ) -> Result<GenSize, String> {
         let free = |cap: u32, want: Option<u32>| {
             let s = sizes((nw, nh), cap);
@@ -358,7 +380,7 @@ impl AppModel {
         }
         match shader_of(v) {
             // OWNER-Q1: the `_m` alpha takes the size of the `_m` recipe's other sources, up to 2048.
-            Shader::ComplexMaterial => match self.m_recipe_size(v) {
+            Shader::ComplexMaterial => match self.m_recipe_size(v, aliases) {
                 None => Ok(free(HEIGHT_MAX_RECIPE, None)),
                 Some((w, h)) => {
                     if nw < w
@@ -395,14 +417,13 @@ impl AppModel {
     }
 
     /// The size of the vanilla complex `_m` recipe's sources other than the height (P6), from the first readable one.
-    fn m_recipe_size(&self, v: &SetView) -> Option<(u32, u32)> {
-        let aliases = self.plan_aliases();
+    fn m_recipe_size(&self, v: &SetView, aliases: &BTreeMap<String, String>) -> Option<(u32, u32)> {
         let pk = v
             .members
             .iter()
             .filter_map(|k| self.item(k))
             .filter(|i| i.kind == ItemKind::Packed)
-            .find(|i| split_suffix_with(&stem(&i.key), &aliases).suffix.as_deref() == Some("m"))?
+            .find(|i| split_suffix_with(&stem(&i.key), aliases).suffix.as_deref() == Some("m"))?
             .job
             .as_ref()?
             .pack
