@@ -457,6 +457,8 @@ impl AppModel {
             None => return,
         };
         let shas = finish(&p, &recorded, &mut self.export.notes);
+        self.also_json
+            .extend(super::also::current_files(&p.root, &p.files));
         if shas == recorded {
             return;
         }

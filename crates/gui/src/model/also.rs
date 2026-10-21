@@ -276,11 +276,6 @@ impl AppModel {
                 if s.copied == 1 { "" } else { "s" }
             ));
         }
-        for z in &s.zips {
-            self.export
-                .notes
-                .push(format!("Zip written: {}", z.display()));
-        }
         if let Some(p) = s.cancelled_after {
             self.export.notes.push(format!(
                 "Also export cancelled after the {} phase",
@@ -299,13 +294,47 @@ impl AppModel {
             self.export.notes.push(t.clone());
             self.also_error = Some(t);
         }
+        self.also_written = Some(s.folders);
+    }
+
+    /// Final review I2: the worker's `AlsoZipped`, after the JSON: the walk's, zips' and report's notes (only theirs),
+    /// then the export ends. A late one, after a panic or a new export, is dropped.
+    pub(super) fn also_zipped(&mut self, s: AlsoSummary) {
+        let Some(failure) = self.also_tail.take() else {
+            return;
+        };
+        self.export.running = None;
+        self.export.notes.extend(s.notes.iter().cloned());
+        for z in &s.zips {
+            self.export
+                .notes
+                .push(format!("Zip written: {}", z.display()));
+        }
+        // The "Export finished" line was decided before the zips: a zip or report not written is said here.
+        if s.zip_failed || s.report_failed {
+            self.messages.notify(
+                messages::Severity::Warning,
+                "Also export: a zip, the sums file or the report was not written (see the notes)",
+            );
+        }
         if let Some(r) = &s.report {
             let t = format!("Conversion report: {}", r.display());
             self.messages.notify(messages::Severity::Info, t.clone());
             self.export.notes.push(t);
         }
-        self.also_written = Some(s.folders);
+        self.after_export(failure);
     }
+}
+
+/// Final review I2: the files of `files` (`/`-separated paths under `root`, with their text) that now hold exactly
+/// that text: written by this export or found current. Their paths go to the Also export's zip step.
+pub(super) fn current_files(root: &Path, files: &[(String, String)]) -> Vec<PathBuf> {
+    files
+        .iter()
+        .map(|(rel, text)| (root.join(rel), text))
+        .filter(|(p, text)| std::fs::read(p).is_ok_and(|b| b == text.as_bytes()))
+        .map(|(p, _)| p)
+        .collect()
 }
 
 #[cfg(test)]
@@ -441,6 +470,29 @@ mod tests {
             .text
             .contains("the Vanilla phase failed (exit 3): plan broke")));
         assert!(matches!(&m.export.rows[0].state, RowState::Failed(e) if e.contains("plan broke")));
+    }
+
+    /// Final review I2: a panic while the zips run ends the export once; a late `AlsoZipped` is then dropped.
+    #[test]
+    fn a_panic_while_zipping_ends_the_export_and_a_late_zip_result_is_dropped() {
+        let mut m = bare_model();
+        m.also_pass = true;
+        m.export.running = Some(Default::default());
+        m.also_tail = Some(None);
+        m.handle(panicked("export"));
+        assert!(m.export.running.is_none() && m.also_tail.is_none());
+        let n = m
+            .messages
+            .entries()
+            .filter(|e| e.text.starts_with("Export failed"))
+            .count();
+        assert_eq!(n, 1);
+        m.export.running = Some(Default::default());
+        let mut s = summary(None);
+        s.notes = vec!["late".into()];
+        m.also_zipped(s);
+        assert!(m.export.running.is_some(), "another export's token stays");
+        assert!(!m.export.notes.contains(&"late".to_string()));
     }
 
     /// The worker tags its panic "export": an Also export's panic ends the export, so Export works again.

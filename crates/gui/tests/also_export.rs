@@ -533,6 +533,57 @@ fn a_tick_is_refused_in_the_vanilla_mode() {
 
 /// Every `[export]` field set at once survives the write and the parse (prune, tables after values), as an unsaved
 /// edit; only the non-default fields are written.
+/// The entry names of a zip, from its central directory (as the engine's also_export test reads them).
+fn zip_names(path: &Path) -> Vec<String> {
+    let z = std::fs::read(path).unwrap();
+    let u16le = |at: usize| u16::from_le_bytes([z[at], z[at + 1]]) as usize;
+    let u32le = |at: usize| u32::from_le_bytes(z[at..at + 4].try_into().unwrap()) as usize;
+    let eocd = z.len() - 22;
+    let mut at = u32le(eocd + 16);
+    (0..u16le(eocd + 10))
+        .map(|_| {
+            let (n, x, c) = (u16le(at + 28), u16le(at + 30), u16le(at + 32));
+            let name = String::from_utf8(z[at + 46..at + 46 + n].to_vec()).unwrap();
+            at += 46 + n + x + c;
+            name
+        })
+        .collect()
+}
+
+/// Final review I2: the PBR zip holds the PGPatcher JSON the export wrote into the PBR folder, from the first run,
+/// with no "not zipped" note for it.
+#[test]
+fn the_pbr_zip_holds_the_pgpatcher_json_from_the_first_run() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.set_also_settings(|c| c.zip = true);
+    idle(&mut m);
+    export(&mut m);
+    all_rows_ended(&m);
+    let json = sdc_gui::model::pbr_export::prepare(&m).unwrap().path;
+    assert!(json.is_file(), "{:?}", m.export.notes);
+    let pbr = m.also_folders()[0].clone();
+    let name = pbr.file_name().unwrap().to_string_lossy().into_owned();
+    let entry = format!(
+        "{name}/{}",
+        json.strip_prefix(&pbr)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/")
+    );
+    let zip = m.also_location().join(format!("{name}.zip"));
+    let names = zip_names(&zip);
+    assert!(names.contains(&entry), "{entry}: {names:?}");
+    assert!(
+        !m.export.notes.iter().any(|n| n.starts_with(&entry)),
+        "{:?}",
+        m.export.notes
+    );
+    assert!(m.export.notes.iter().any(|n| n.starts_with("Zip written:")));
+    assert!(m.export.running.is_none());
+}
+
 #[test]
 fn every_export_field_round_trips_through_sdc_toml() {
     let d = tempfile::tempdir().unwrap();

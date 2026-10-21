@@ -482,6 +482,14 @@ pub struct AppModel {
     also_error: Option<String>,
     /// Note CM: the three folders the last Also export wrote (`also_file`).
     also_written: Option<[PathBuf; 3]>,
+    /// Final review I2: the Also worker waits on this for the files the JSON finishers wrote into the PBR folder.
+    also_reply: Option<Sender<Vec<PathBuf>>>,
+    /// Final review I2: the files the JSON finishers wrote (or found current) in this export.
+    also_json: Vec<PathBuf>,
+    /// Final review I2: the token `export_ended` took, re-armed while the walk, zips and report run.
+    also_cancel: Option<CancelToken>,
+    /// Final review I2: `Some` while the walk, zips and report run: the export's failure, shown when they end.
+    also_tail: Option<Option<String>>,
     /// The Review asks (texts) when the last fresh export started: a held pass stops on any new one (M1).
     export_asked: Vec<String>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
@@ -642,6 +650,10 @@ impl AppModel {
             also_pass: false,
             also_error: None,
             also_written: None,
+            also_reply: None,
+            also_json: Vec::new(),
+            also_cancel: None,
+            also_tail: None,
             export_asked: Vec::new(),
             ignored_by_plan: false,
             close_ready: false,
@@ -1178,6 +1190,9 @@ impl AppModel {
                     // Audit 08f-9: one error dialog. `export_ended` shows it unless the user was leaving (then the
                     // panic arm shows its own, Note BI6) or a dialog is open, which stays (review m1, 08f-6).
                     "export" => {
+                        // Final review I2: the worker is gone; nothing waits for the JSON and no `AlsoZipped` comes.
+                        self.also_reply = None;
+                        self.also_tail = None;
                         self.export_ended(Err(format!("internal error: {message}")));
                         if self.dialog.is_some() {
                             return;
@@ -1259,7 +1274,11 @@ impl AppModel {
         match msg {
             WorkerMsg::ReportSaved { path, result } => self.report_saved(&path, result),
             WorkerMsg::Event(e) => self.export.on_event(e),
-            WorkerMsg::AlsoFinished(s) => self.also_finished(*s),
+            WorkerMsg::AlsoFinished(s, reply) => {
+                self.also_reply = Some(reply);
+                self.also_finished(*s)
+            }
+            WorkerMsg::AlsoZipped(s) => self.also_zipped(*s),
             WorkerMsg::ExportDone(result) => self.export_ended(result),
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
@@ -1287,7 +1306,11 @@ impl AppModel {
     /// The export ended: its result, or a worker panic as an error (audit GM-4: one path for both). The pace clock
     /// stops, the JSON/CS/CM files are written or noted, and an error is always logged.
     fn export_ended(&mut self, result: Result<engine::api::BatchSummary, String>) {
-        let cancelled = self.export.running.take().is_some_and(|c| c.is_cancelled());
+        let token = self.export.running.take();
+        let cancelled = token.as_ref().is_some_and(|c| c.is_cancelled());
+        if self.also_reply.is_some() {
+            self.also_cancel = token;
+        }
         if self.also_pass {
             // Note CM: every row ends, whatever ended the export (a refusal or plan error leaves planned rows with no
             // `BatchDone`; a cancelled copy has no event).
@@ -1372,6 +1395,21 @@ impl AppModel {
         self.finish_cs_pbr(cs);
         let cm = self.pending_cm.take();
         self.finish_cm_json(cm);
+        // Final review I2: an Also export's walk, zips and report run now, on its worker, so the PBR zip holds the
+        // JSON above. The export stays running (Cancel reaches the zips); `also_zipped` does the rest.
+        let json = std::mem::take(&mut self.also_json);
+        if let Some(tx) = self.also_reply.take() {
+            if tx.send(json).is_ok() {
+                self.export.running = Some(self.also_cancel.take().unwrap_or_default());
+                self.also_tail = Some(failure);
+                return;
+            }
+        }
+        self.after_export(failure);
+    }
+
+    /// The end of an export: what was asked while it ran (close, or open another folder), else its error as a dialog.
+    fn after_export(&mut self, failure: Option<String>) {
         // A user who cancelled the export to leave does not need its error as a dialog.
         if !self.run_after_export() {
             // Audit 08f-6: an open dialog stays; the error is in the Files tab and the Messages log.
@@ -1875,6 +1913,11 @@ impl AppModel {
             self.also_pass = also;
             self.also_error = None;
             self.also_written = None;
+            // Final review I2: dropping an earlier export's sender releases its worker (no extra file).
+            self.also_reply = None;
+            self.also_json.clear();
+            self.also_cancel = None;
+            self.also_tail = None;
             self.pending_json = pbr_export::prepare(self);
             self.pending_cs = cs_pbr_export::prepare(self);
             self.pending_cm = cm_json::prepare(self);
@@ -1968,7 +2011,10 @@ impl AppModel {
             last.as_deref(),
             &mut self.export.notes,
         ) {
-            pbr_export::Finish::Written(sha) => self.record_json_sha(&root, &key, &sha),
+            pbr_export::Finish::Written(sha) => {
+                self.also_json.push(p.path.clone());
+                self.record_json_sha(&root, &key, &sha)
+            }
             // C4: answered in Review for this very file (same path, same bytes); a file changed since asks again.
             pbr_export::Finish::Overwrite(text)
                 if answer.as_ref().is_some_and(|a| {
@@ -1978,6 +2024,7 @@ impl AppModel {
                 if answer.is_some_and(|a| a.overwrite) {
                     if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes)
                     {
+                        self.also_json.push(p.path.clone());
                         self.record_json_sha(&root, &key, &sha);
                     }
                 } else {

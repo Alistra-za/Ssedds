@@ -210,7 +210,7 @@ In the cs mode one export can also write a vanilla and a complex-material (CM) v
 - **Skip a set** with Review's **Skip these sets**, or, in 2D, **Skip vanilla/CM for this set** in the set panel's Material tab.
 - **NIF edits** go into the PBR folder while a tick is on.
 - **The recipe** is the **Also export recipe** section in Advanced (closed at first; Review's **Recipe settings are in Advanced** opens it). See [Project Config](Project-Config.md#export) for each value.
-- **After the export** `<project> conversion-report.md` sits next to the folders: counts per folder, the recipe, a row per PBR set with a suggested NIF Glossiness and Specular Strength and whether it needs the Environment Map shader, the sets not converted, and how to install. With the zip on, `<folder>.zip` per folder and `<project> SHA256SUMS.txt`.
+- **After the export** `<project> conversion-report.md` sits next to the folders: counts per folder, the recipe, a row per PBR set with a suggested NIF Glossiness and Specular Strength and whether it needs the Environment Map shader, the sets not converted, and how to install. With the zip on, `<folder>.zip` per folder and `<project> SHA256SUMS.txt`; the PBR zip includes the PGPatcher JSON.
 
 ## Sets and the set editor
 
