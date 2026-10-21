@@ -51,9 +51,9 @@ The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, C
 | Coverage, Exact opaque alpha | Auto / On / Off; on or off. |
 | Normal handling, Normal base level | Renormalise or Renormalise and bake; Renormalise to unit length or Keep as authored. |
 | Mipmaps: Levels, Filter, Edge | Full chain or None (base level only); Box, Tent, Mitchell, Kaiser; Wrap or Clamp. |
-| Format, Effort, Encoder, Perceptual | The block formats plus RGBA8, R8, RG8 and (under `cs`) RGBA16F; bc7e effort; Built-in or NVTT Production; perceptual metric. |
+| Format, Effort, Encoder, BC7 weighting | The block formats plus RGBA8, R8, RG8 and (under `cs`) RGBA16F; bc7e effort; Built-in or NVTT Production; Linear, Perceptual, Alpha ×2, ×8, ×16 or RMAOS (BC7 with the built-in encoder only). |
 
-Options a texture cannot use are greyed out, with the reason on hover. For example, Tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting; HDR textures may use Box or Tent; Edge is locked while the filter is Box; Effort and Perceptual are locked for uncompressed formats; the Encoder row is locked for BC1 to BC5 and hidden for uncompressed formats.
+Options a texture cannot use are greyed out, with the reason on hover. For example, Tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting; HDR textures may use Box or Tent; Edge is locked while the filter is Box; Effort is locked for uncompressed formats; BC7 weighting shows only for BC7 with the built-in encoder, and its Perceptual option only for colour without data alpha; the Encoder row is locked for BC1 to BC5 and hidden for uncompressed formats.
 
 A texture's settings start with its output size ("Output: BC7 · 2048x2048 · 12 mips · 5.3 MiB"), and the status line adds a folder total (a VRAM estimate). After a mod scan, **Used by meshes (N)** lists the meshes that use the texture, with their mod and priority. A complex `_m` has an **Enable parallax** box: ticked keeps its alpha as the height, unticked writes alpha 0.
 
@@ -353,7 +353,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | Project-wide fills (legacy) | One line, shown only while `sdc.toml` holds fills in `defaults.packing.fill.*`. **Clear** removes them; set fills on each packed output's card instead. |
 | Preview | Largest previewed side, Allow 16384 previews, Live encode. |
 | Mipmaps | Levels for the selected texture. |
-| Advanced texture fields | Perceptual, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size (drop mip 0). |
+| Advanced texture fields | BC7 weighting, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size (drop mip 0). |
 | Checks | The switches for the artist checks, **Drop mip 0 when it adds nothing** and **Check all UV coverage**. See *Artist checks* below. |
 | Also export recipe | One box per `[export.legacy]` value of [Also export as Vanilla and CM](#also-export-as-vanilla-and-cm). Starts closed; Review's link opens it. |
 | Unmatched [files] entries | `[files]` entries that name no file under the current target, with **Remove**. |

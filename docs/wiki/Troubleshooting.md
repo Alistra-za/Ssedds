@@ -254,6 +254,7 @@ Every warning has a code and a severity:
 | `ENC-NVTT-MISSING` | blocking | NVTT chosen but not found. | Install it, give the path, or use the built-in encoder. |
 | `ENC-NVTT-VERSION` | blocking | NVTT version other than 3.2.5. | Acknowledge. |
 | `ENC-NVTT-FAILED` | error | `nvcompress` failed; no fallback. | Check NVTT, or use the built-in encoder. |
+| `ENC-WEIGHTS-IGNORED` | warning | `encoder.bc7_weights` has no effect: the format is not BC7, the backend is not bc7e, or `encoder.perceptual` is on. | Remove `encoder.bc7_weights`, or turn perceptual off. |
 | `OUT-UNKNOWN-EXISTING` | warning | An existing output with no manifest record was kept. | `--on-existing overwrite`. |
 | `OUT-SIDECAR-KEPT` | warning | The `.dds.json` next to the output was not changed, and the new DDS was written. Either an old sidecar sdc wrote for the previous output could not be removed or replaced (locked or protected), or with `--sidecar` the file there is not one sdc wrote, so it was kept. | Unlock or delete the old `.dds.json` and run again (with `--sidecar` to write a new one). A file that is not sdc's is yours: move it away if you want the sidecar. |
 | `DDS-HEADER-PATCHED` | info | `patch-header` (or the GUI) rewrote a header; the payload is byte-identical. | |

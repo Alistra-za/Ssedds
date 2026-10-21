@@ -191,6 +191,8 @@ excludes 0.
   `encoders_sys::BC7E_MAX_NATIVE` is true and `effort = "max"` works. `level_identity.rs` now pins every level
   per ISPC target (see the Windows re-check below).
 - **The measurement path stays**: `sdc-bench bc7-tune` and the reference encoder, for the next question.
+- **Per-channel weights** are opt-in as `encoder.bc7_weights` (the GUI's *BC7 weighting*, DECISIONS Note CP),
+  from the alpha-weighting study on branch `research/bc7-alpha-vs-bc3` (local report "BC7 alpha weighting vs BC3").
 
 ## Windows re-check on Skyrim textures (2026-10-18)
 

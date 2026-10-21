@@ -72,6 +72,9 @@ Examples:
 # Every texture at fast effort
 sdc convert src --recursive --accept-suggestions high --set encoder.effort=fast
 
+# BC7 with alpha weighted x8 (bc7e only; ENC-WEIGHTS-IGNORED elsewhere)
+sdc convert src --recursive --accept-suggestions high --set encoder.bc7_weights=alpha8
+
 # All diffuse maps as BC1 (a diffuse that keeps its alpha then raises FMT-BC1-ALPHA)
 sdc convert src --recursive --accept-suggestions high --set subtype:diffuse.format=bc1
 
