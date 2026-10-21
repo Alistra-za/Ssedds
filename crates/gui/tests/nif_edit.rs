@@ -3617,13 +3617,11 @@ fn an_infinite_key_shows_the_out_of_range_line() {
     h.get_by_label("Emissive multiple key 2 value");
 }
 
-/// B-P35 minor: a colour key's handle moves its own channel only.
-#[test]
-fn dragging_one_colour_channel_changes_only_it() {
-    let mut m = direct(scenes::emit_scene("BSX", 0x82, true));
-    let s = select(&mut m, "S");
+/// Adds an LSCC "Emissive colour" (var 1, LINEAR keys `k1` at 0 and `k2` at 1) to `shape`'s shader as the last
+/// op; returns the new controller's block.
+fn add_colour_ctrl(m: &mut MeshesModel, shape: u32, k1: [f32; 3], k2: [f32; 3]) -> u32 {
     let e = m.edit.as_ref().unwrap();
-    let at = nif::edit::anchor_role(&e.model, Some(s), Role::Shader).unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
     let key = |time: f32, value: [f32; 3]| Key {
         time,
         value,
@@ -3633,12 +3631,12 @@ fn dragging_one_colour_channel_changes_only_it() {
     };
     m.edit_push(
         vec![Op::AddController {
-            at,
+            at: at.clone(),
             class: "BSLightingShaderPropertyColorController".into(),
             var: Some(1),
             keys: KeyData::Pos(KeyGroup {
                 key_type: Some(1),
-                keys: vec![key(0.0, [0.2, 0.4, 0.6]), key(1.0, [0.8, 0.6, 0.4])],
+                keys: vec![key(0.0, k1), key(1.0, k2)],
             }),
             flags: 0x48,
             freq: 1.0,
@@ -3648,12 +3646,31 @@ fn dragging_one_colour_channel_changes_only_it() {
         None,
     );
     let e = m.edit.as_ref().unwrap();
-    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
-    let ctrl = e.model.lighting.values().next().unwrap().prop.ctrls[0];
-    let pos = |m: &MeshesModel| match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
+    assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+    let ctrls = &e.model.lighting[&at.block].prop.ctrls;
+    *ctrls.last().unwrap()
+}
+
+/// `emit_scene` with an LSCC on S (see `add_colour_ctrl`).
+fn colour_scene(k1: [f32; 3], k2: [f32; 3]) -> (MeshesModel, u32) {
+    let mut m = direct(scenes::emit_scene("BSX", 0x82, true));
+    let s = select(&mut m, "S");
+    let ctrl = add_colour_ctrl(&mut m, s, k1, k2);
+    (m, ctrl)
+}
+
+fn pos_keys(m: &MeshesModel, ctrl: u32) -> KeyGroup<[f32; 3]> {
+    match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
         Ok(KeyData::Pos(g)) => g.clone(),
         k => panic!("{k:?}"),
-    };
+    }
+}
+
+/// B-P35 minor: a colour key's handle moves its own channel only.
+#[test]
+fn dragging_one_colour_channel_changes_only_it() {
+    let (m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+    let pos = |m: &MeshesModel| pos_keys(m, ctrl);
     let before = pos(&m);
     let mut h = view(m);
     h.run_steps(2);
@@ -3685,8 +3702,160 @@ fn dragging_one_colour_channel_changes_only_it() {
     );
 }
 
+/// Sets the popup DragValue (sRGB byte) of the open colour picker at `index` (0 R, 1 G, 2 B) to `byte`.
+fn type_picker_byte(h: &mut Harness<'static, MeshesModel>, index: usize, byte: u8) {
+    // The picker's own R/G/B DragValues are the only unnamed ones on screen.
+    let mut spins: Vec<_> = h
+        .query_all(egui_kittest::kittest::by().role(AkRole::SpinButton))
+        .filter(|n| n.accesskit_node().label().is_none())
+        .map(|n| (n.rect().min.x, n.accesskit_node().id()))
+        .collect();
+    assert_eq!(spins.len(), 3, "the picker's R, G and B");
+    spins.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let id = spins[index].1;
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .type_text(&byte.to_string());
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+}
+
+/// Owner follow-up: a colour key row has a picker swatch. A picker change is one merged SetKeys on that key (the
+/// same path as an R/G/B drag) until the popup closes; channels the picker did not change keep their exact bits.
+#[test]
+fn key_table_colour_picker_sets_the_key_colour() {
+    let (m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+    let before = pos_keys(&m, ctrl);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let sw = "Emissive colour key 2 colour";
+    let n = h.get_by_role_and_label(AkRole::ColorWell, sw);
+    assert!(!n.accesskit_node().is_disabled());
+    n.click();
+    h.run_steps(3);
+    type_picker_byte(&mut h, 1, 51); // G
+    type_picker_byte(&mut h, 1, 102); // G again, same popup: merged
+    h.key_press(egui::Key::Escape); // closes the popup: the step ends
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 2, "AddController + one SetKeys: {got:?}");
+    let Op::SetKeys { clip, base, .. } = &got[1] else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*clip, None);
+    assert_eq!(
+        encode_data(base),
+        encode_data(&KeyData::Pos(before.clone())),
+        "the step keeps the keys it started from"
+    );
+    let after = pos_keys(h.state(), ctrl);
+    let bits = |k: &Key<[f32; 3]>| (k.time.to_bits(), k.value.map(f32::to_bits));
+    assert_eq!(
+        bits(&after.keys[0]),
+        bits(&before.keys[0]),
+        "key 1 untouched"
+    );
+    let (b, a) = (&before.keys[1], &after.keys[1]);
+    assert_eq!(a.time.to_bits(), b.time.to_bits());
+    assert_eq!(a.value[0].to_bits(), b.value[0].to_bits(), "R");
+    assert_eq!(a.value[2].to_bits(), b.value[2].to_bits(), "B");
+    assert_eq!(egui::ecolor::gamma_u8_from_linear_f32(a.value[1]), 102, "G");
+    // The popup closed and flushed: a second picker change is a second step.
+    h.get_by_role_and_label(AkRole::ColorWell, sw).click();
+    h.run_steps(3);
+    type_picker_byte(&mut h, 2, 51); // B
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(ops(h.state()).len(), 3, "{:?}", ops(h.state()));
+    assert!(h.state_mut().undo_edit());
+    assert!(h.state_mut().undo_edit());
+    assert_eq!(ops(h.state()).len(), 1, "one undo step per popup");
+    assert_eq!(bits(&pos_keys(h.state(), ctrl).keys[1]), bits(b));
+}
+
+/// Owner follow-up: a key outside 0-1 (an HDR emissive colour) gets a disabled swatch with the reason on hover; the
+/// picker would clamp it. The in-range key on the same table keeps its picker.
+#[test]
+fn key_table_colour_picker_is_disabled_for_hdr_values() {
+    let (m, _) = colour_scene([2.0, 0.5, 0.5], [0.8, 0.6, 0.4]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let hdr = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 1 colour");
+    assert!(hdr.accesskit_node().is_disabled());
+    let c = hdr.rect().center();
+    let ok = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 2 colour");
+    assert!(!ok.accesskit_node().is_disabled());
+    h.hover_at(c);
+    h.run();
+    h.get_by_label("Values outside 0-1: edit R, G and B directly.");
+}
+
 /// B-P35 minor (D11): TBC, XYZ and CONST keys are drawn, but their handles, table cells and buttons are disabled
 /// and a drag records nothing.
+/// Review minor: NaN and negative channels disable the swatch too (never clamped by the picker).
+#[test]
+fn key_table_colour_picker_is_disabled_for_nan_and_negative_values() {
+    let (m, _) = colour_scene([f32::NAN, 0.5, 0.5], [0.5, -0.25, 0.5]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    for k in [1, 2] {
+        let n = format!("Emissive colour key {k} colour");
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, &n);
+        assert!(sw.accesskit_node().is_disabled(), "{n}");
+    }
+}
+
+/// Review minor (D11): a TBC, XYZ or CONST colour key's swatch is disabled like its cells, though in range.
+#[test]
+fn key_table_colour_picker_is_disabled_for_tbc_xyz_and_const_keys() {
+    for t in [3, 4, 5] {
+        let (mut m, ctrl) = colour_scene([0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyColorController".into(),
+            var: Some(1),
+            nth: 0,
+        };
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(shape_named(e, "S")), role).unwrap();
+        let base = pos_keys(&m, ctrl);
+        let mut keys = base.clone();
+        keys.key_type = Some(t);
+        for k in &mut keys.keys {
+            k.tbc = (t == 3).then_some([0.0; 3]);
+        }
+        m.edit_push(
+            vec![Op::SetKeys {
+                at,
+                clip: None,
+                keys: KeyData::Pos(keys),
+                base: KeyData::Pos(base),
+            }],
+            None,
+        );
+        assert_eq!(
+            pos_keys(&m, ctrl).key_type,
+            Some(t),
+            "{:?}",
+            m.edit.as_ref().unwrap().outcomes
+        );
+        let mut h = view(m);
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        h.get_by_label("These keys are previewed, not edited.");
+        let sw = h.get_by_role_and_label(AkRole::ColorWell, "Emissive colour key 2 colour");
+        assert!(sw.accesskit_node().is_disabled(), "type {t}");
+    }
+}
+
 #[test]
 fn tbc_xyz_and_const_keys_are_drawn_not_edited() {
     for t in [3, 4, 5] {
@@ -3998,6 +4167,8 @@ fn controllers_tab_combos_fit_the_edit_panel() {
     let (_d, mut m, _cmds) = session_on(&nif);
     let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
     m.select_edit(Selection::Shape(shape));
+    // A colour controller: its key rows (with the picker swatch) must fit too.
+    add_colour_ctrl(&mut m, shape, [0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
     let mut h = Harness::builder()
         .with_size(egui::vec2(1100.0, 1600.0))
         .build_ui_state(
@@ -4033,6 +4204,18 @@ fn controllers_tab_combos_fit_the_edit_panel() {
             r.max.x <= panel.max.x + 0.5,
             "{:?}: {r:?} past the edit panel's right edge {}",
             n.accesskit_node().label(),
+            panel.max.x
+        );
+    }
+    // The colour key rows: swatch and Remove end inside the panel (AccessKit rects are not clipped).
+    for (role, name) in [
+        (AkRole::ColorWell, "Emissive colour key 2 colour"),
+        (AkRole::Button, "Remove Emissive colour key 2"),
+    ] {
+        let r = h.get_by_role_and_label(role, name).rect();
+        assert!(
+            r.max.x <= panel.max.x + 0.5,
+            "{name}: {r:?} past the edit panel's right edge {}",
             panel.max.x
         );
     }

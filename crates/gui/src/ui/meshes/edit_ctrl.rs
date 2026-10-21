@@ -533,6 +533,45 @@ fn cell(ui: &mut egui::Ui, v: f32, name: &str) -> (Option<f32>, bool) {
     (changed, r.drag_stopped() || r.lost_focus())
 }
 
+/// Colour key `k`'s picker swatch. Returns the keys with the picked colour when it changed, and whether the step
+/// ended (the popup closed, or a drag in it was released). Disabled outside 0-1: the picker would clamp.
+fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<KeyData>, bool) {
+    let v: [f32; 3] = std::array::from_fn(|ch| curve::get(keys, k, ch, Part::Value));
+    let hdr = v.iter().any(|x| !(0.0..=1.0).contains(x));
+    // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
+    let mut picked = v;
+    let (r, was, open) = ui
+        .add_enabled_ui(!hdr, |ui| {
+            // The id egui's colour button gives its popup (auto_id_with does not advance the id).
+            let popup = ui.auto_id_with("popup");
+            let was = egui::Popup::is_id_open(ui.ctx(), popup);
+            let r = ui.color_edit_button_rgb(&mut picked);
+            (r, was, egui::Popup::is_id_open(ui.ctx(), popup))
+        })
+        .inner;
+    set_name(&r, egui::WidgetType::ColorButton, name, None, None);
+    let done = (was && !open) || (open && ui.input(|i| i.pointer.any_released()));
+    let changed = r.changed();
+    if hdr {
+        r.on_disabled_hover_text("Values outside 0-1: edit R, G and B directly.");
+    }
+    if !changed {
+        return (None, done);
+    }
+    // A channel whose sRGB byte the picker kept was not touched: it keeps its exact bits (the HSV round trip and the
+    // popup's byte fields move it a little).
+    let byte = egui::ecolor::gamma_u8_from_linear_f32;
+    let mut d = keys.clone();
+    let mut any = false;
+    for ch in 0..3 {
+        if byte(picked[ch]) != byte(v[ch]) {
+            curve::set(&mut d, k, ch, Part::Value, picked[ch]);
+            any = true;
+        }
+    }
+    (any.then_some(d), done)
+}
+
 /// The key table: one row per key with its time, value(s) and, for QUADRATIC, tangents, and a Remove button.
 #[allow(clippy::too_many_arguments)]
 fn key_table(
@@ -568,12 +607,17 @@ fn key_table(
     ui.add_enabled_ui(editable, |ui| {
         // Grid cells keep last frame's width: truncation would never let "Remove" grow. The panel scrolls sideways.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        // Narrow minimum cells (grid columns, DragValues, the swatch): a LINEAR colour row fits the panel at 1100 px.
+        ui.spacing_mut().interact_size.x = 24.0;
         // shortcut: every key is a row; corpus curves have <= 8 keys. Use show_rows past a few hundred.
         egui::Grid::new(("meshes-edit-keys", c.block, clip))
             .striped(true)
             .show(ui, |ui| {
                 ui.label("Key");
                 ui.label("Time");
+                if nch == 3 {
+                    ui.label("Colour");
+                }
                 for &p in &parts {
                     for ch in 0..nch {
                         let head = match (p, nch) {
@@ -597,6 +641,13 @@ fn key_table(
                         let mut d = keys.clone();
                         curve::set_time(&mut d, k, t);
                         next = Some((d, true));
+                    }
+                    if nch == 3 {
+                        let (d, done) = swatch(ui, keys, k, &format!("{title} key {num} colour"));
+                        act.flush |= done;
+                        if d.is_some() {
+                            next = d.map(|d| (d, true));
+                        }
                     }
                     for &p in &parts {
                         for ch in 0..nch {
