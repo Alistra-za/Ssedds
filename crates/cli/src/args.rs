@@ -137,7 +137,7 @@ pub struct BatchArgs {
 pub struct ConvertArgs {
     #[command(flatten)]
     pub batch: BatchArgs,
-    /// Output root (default: ./sdc-out).
+    /// Output root (default: ./sdc-out). With `[export] also` in `sdc.toml`, the folder the PBR, Vanilla and CM folders go in.
     #[arg(short = 'o', long)]
     pub output: Option<PathBuf>,
     /// Worker threads (0 = all cores).
