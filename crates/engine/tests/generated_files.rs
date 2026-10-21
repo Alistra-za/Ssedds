@@ -250,3 +250,370 @@ fn a_preset_alias_named_generated_is_refused() {
         ("rock_pp_generated", None, None)
     );
 }
+
+// ---- Task 2: a real map replaces a generated one (GEN-REPLACED, Note CO) ----
+
+fn put_rgb(dir: &Path, name: &str, w: u32, f: impl Fn(u32, u32) -> [u8; 3]) {
+    let p = dir.join("in/textures/a").join(name);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    ImageBuffer::from_fn(w, w, |x, y| image::Rgb(f(x, y)))
+        .save(p)
+        .unwrap();
+}
+
+fn put_dds(dir: &Path, name: &str) {
+    let p = dir.join("in/textures/a").join(name);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, b"DDS not a real texture").unwrap();
+}
+
+fn plan_req(req: BatchRequest) -> (Plan, Vec<EngineEvent>) {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "generated-files");
+    let p = Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    (p, sink.take())
+}
+
+fn replaced<'a>(p: &'a Plan, name: &str) -> Option<&'a SkippedFile> {
+    p.skipped.iter().find(|s| {
+        s.code == Some(Code::GenReplaced) && s.path.file_name().is_some_and(|n| n == name)
+    })
+}
+
+fn warning_codes(ev: &[EngineEvent]) -> Vec<Code> {
+    ev.iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Warning(w) => Some(w.code),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_rival_table() {
+    use engine::discover::InputKind::{Dds, Image};
+    use engine::group::real_rival;
+    let (cs, va) = (Target::Cs, Target::Vanilla);
+    // generated _p
+    assert!(real_rival("rock_p_generated", "rock_p", Image, va));
+    assert!(real_rival("rock_p_generated", "rock_p", Dds, va));
+    for h in ["rock_height", "rock_displacement", "rock_disp"] {
+        assert!(real_rival("rock_p_generated", h, Image, cs), "{h}");
+        assert!(
+            !real_rival("rock_p_generated", h, Image, va),
+            "{h} on vanilla"
+        );
+        assert!(!real_rival("rock_p_generated", h, Dds, cs), "{h}.dds");
+    }
+    assert!(!real_rival("rock_p_generated", "rock_m", Image, va));
+    assert!(!real_rival("rock_p_generated", "rock_n", Image, cs));
+    // generated _height
+    for t in [cs, va] {
+        assert!(real_rival("rock_height_generated", "rock_p", Image, t));
+        assert!(real_rival("rock_height_generated", "rock_p", Dds, t));
+        assert!(real_rival("rock_height_generated", "rock_m", Dds, t));
+        assert!(real_rival("rock_height_generated", "rock_height", Image, t));
+        assert!(!real_rival("rock_height_generated", "rock_height", Dds, t));
+    }
+    // generated _ao
+    for r in [
+        "rock_ao",
+        "rock_occlusion",
+        "rock_ambientocclusion",
+        "rock_orm",
+    ] {
+        assert!(real_rival("rock_ao_generated", r, Image, cs), "{r}");
+        assert!(!real_rival("rock_ao_generated", r, Dds, cs), "{r}.dds");
+    }
+    for r in ["rock_rmaos", "rock_rfaos"] {
+        assert!(real_rival("rock_ao_generated", r, Image, cs), "{r}");
+        assert!(real_rival("rock_ao_generated", r, Dds, va), "{r}.dds");
+    }
+    assert!(!real_rival(
+        "rock_ao_generated",
+        "rock_roughness",
+        Image,
+        cs
+    ));
+    // generated _curves (P10): a real _curves / _curvature image; _cavity is no rival
+    assert!(real_rival(
+        "rock_curves_generated",
+        "rock_curves",
+        Image,
+        cs
+    ));
+    assert!(real_rival(
+        "rock_curves_generated",
+        "rock_curvature",
+        Image,
+        va
+    ));
+    assert!(!real_rival("rock_curves_generated", "rock_curves", Dds, cs));
+    assert!(!real_rival(
+        "rock_curves_generated",
+        "rock_cavity",
+        Image,
+        cs
+    ));
+    // a generated file is never a real rival
+    assert!(!real_rival(
+        "rock_height_generated",
+        "rock_p_generated",
+        Image,
+        cs
+    ));
+    assert!(!real_rival(
+        "rock_p_generated",
+        "rock_height_generated",
+        Image,
+        cs
+    ));
+    assert!(!real_rival(
+        "rock_ao_generated",
+        "rock_ao_generated",
+        Image,
+        cs
+    ));
+}
+
+#[test]
+fn a_real_p_replaces_the_generated_p_with_an_info_skip() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put(d.path(), "rock_p_generated.png", 16, |x, y| {
+        (x * 8 + y) as u8
+    });
+    put(d.path(), "rock_p.png", 16, |x, _| 100 + x as u8);
+    let (p, ev) = plan(d.path(), Target::Vanilla, &[]);
+    assert!(
+        !all_codes(&p).contains(&Code::InDuplicate),
+        "{:?}",
+        p.skipped
+    );
+    assert!(!warning_codes(&ev).contains(&Code::InDuplicate));
+    let s = replaced(&p, "rock_p_generated.png").expect("GEN-REPLACED skip");
+    assert_eq!(s.kind(), SkipKind::GeneratedReplaced);
+    assert_eq!(Code::GenReplaced.severity(), engine::codes::Severity::Info);
+    assert_eq!(
+        s.reason,
+        "generated rock_p_generated.png replaced by rock_p.png"
+    );
+    assert_eq!(s.set.as_deref(), Some(job(&p, "rock.png").set_key.as_str()));
+    assert!(job(&p, "rock_p.png")
+        .output
+        .ends_with("textures/a/rock_p.dds"));
+    assert!(!p.jobs.iter().any(|j| j
+        .input
+        .file_name()
+        .is_some_and(|n| n == "rock_p_generated.png")));
+}
+
+#[test]
+fn a_real_raw_height_beats_a_generated_p_without_pack_conflict() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put(d.path(), "rock_height.png", 16, |x, _| 50 + x as u8 * 4);
+    put(d.path(), "rock_p_generated.png", 16, |x, y| {
+        (x * 8 + y) as u8
+    });
+    let (p, ev) = plan(d.path(), Target::Cs, &[]);
+    let j = p
+        .jobs
+        .iter()
+        .find(|j| j.output.ends_with("textures/a/rock_p.dds"))
+        .expect("a rock_p.dds job");
+    assert!(j.pack.is_some(), "the Parallax recipe packs rock_p.dds");
+    assert_eq!(
+        j.provenance["pack.r"],
+        Provenance::Source("rock_height.png:R".into())
+    );
+    assert!(!all_codes(&p).contains(&Code::PackConflict));
+    assert!(!warning_codes(&ev).contains(&Code::PackConflict));
+    let s = replaced(&p, "rock_p_generated.png").expect("GEN-REPLACED");
+    assert!(
+        s.set.as_deref().is_some_and(|k| k.ends_with("/rock")),
+        "{:?}",
+        s.set
+    );
+    assert_eq!(s.set.as_deref(), Some(j.set_key.as_str()));
+}
+
+#[test]
+fn a_raw_height_on_vanilla_does_not_replace_a_generated_p() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put(d.path(), "rock_height.png", 16, |x, _| 50 + x as u8 * 4);
+    put(d.path(), "rock_p_generated.png", 16, |x, y| {
+        (x * 8 + y) as u8
+    });
+    let (p, ev) = plan(d.path(), Target::Vanilla, &[]);
+    assert!(
+        !all_codes(&p).contains(&Code::GenReplaced),
+        "{:?}",
+        p.skipped
+    );
+    assert!(job(&p, "rock_p_generated.png")
+        .output
+        .ends_with("textures/a/rock_p.dds"));
+    assert!(warning_codes(&ev).contains(&Code::PackUnusedInput));
+}
+
+#[test]
+fn a_dds_p_is_a_real_rival_but_the_generated_files_own_export_is_not() {
+    // (a) output root elsewhere: a hand-placed rock_p.dds beside the generated file is the user's real map.
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put(d.path(), "rock_p_generated.png", 16, |x, y| {
+        (x * 8 + y) as u8
+    });
+    put_dds(d.path(), "rock_p.dds");
+    let (p, _) = plan(d.path(), Target::Cs, &[]);
+    let s = replaced(&p, "rock_p_generated.png").expect("GEN-REPLACED by the DDS");
+    assert_eq!(
+        s.reason,
+        "generated rock_p_generated.png replaced by rock_p.dds (a DDS: not written to the output unless DDS inputs are re-encoded)"
+    );
+    // (b) output root == input folder: that rock_p.dds is the generated member's own output.
+    let mut req = request(d.path(), Target::Cs, &[]);
+    req.output_root = d.path().join("in");
+    let (p, _) = plan_req(req);
+    assert!(
+        replaced(&p, "rock_p_generated.png").is_none(),
+        "{:?}",
+        p.skipped
+    );
+    assert!(job(&p, "rock_p_generated.png")
+        .output
+        .ends_with("textures/a/rock_p.dds"));
+    // (c) the same folder spelled differently: still the same file (same_file, not string folding).
+    let mut req = request(d.path(), Target::Cs, &[]);
+    req.output_root = d.path().join("in").join("..").join("in");
+    let (p, _) = plan_req(req);
+    assert!(
+        replaced(&p, "rock_p_generated.png").is_none(),
+        "{:?}",
+        p.skipped
+    );
+    job(&p, "rock_p_generated.png");
+}
+
+#[test]
+fn an_earlier_export_of_the_generated_p_does_not_replace_it() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put(d.path(), "rock_p_generated.png", 16, |x, y| {
+        (x * 8 + y) as u8
+    });
+    let in_place = || {
+        let mut req = request(d.path(), Target::Cs, &[]);
+        req.output_root = d.path().join("in");
+        req.accept = AcceptSuggestions::High;
+        req
+    };
+    let (p, _) = plan_req(in_place());
+    job(&p, "rock_p_generated.png");
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink, "generated-files");
+    let summary = Engine::new()
+        .unwrap()
+        .run(p, &rep, &CancelToken::default())
+        .unwrap();
+    assert!(summary.converted >= 1, "{summary:?}");
+    assert!(d.path().join("in/textures/a/rock_p.dds").is_file());
+    let (p, _) = plan_req(in_place());
+    assert!(
+        !all_codes(&p).contains(&Code::GenReplaced),
+        "{:?}",
+        p.skipped
+    );
+    job(&p, "rock_p_generated.png");
+}
+
+#[test]
+fn a_generated_ao_loses_to_any_real_ao_source() {
+    for real in ["rock_ao.png", "rock_orm.png", "rock_rmaos.png"] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+        // no raw roughness: a real _rmaos beside it would be an M9 PACK-CONFLICT of its own
+        put(d.path(), "rock_ao_generated.png", 16, |_, y| {
+            100 + y as u8 * 8
+        });
+        // P11: a varying B, so the _rmaos stays a real AO source once Task 11 reads its content
+        put_rgb(d.path(), real, 16, |x, y| {
+            [x as u8 * 8, 30, 100 + (x + y) as u8 * 4]
+        });
+        let (p, ev) = plan(d.path(), Target::Cs, &[]);
+        assert!(
+            replaced(&p, "rock_ao_generated.png").is_some(),
+            "{real}: {:?}",
+            p.skipped
+        );
+        assert!(!all_codes(&p).contains(&Code::PackConflict), "{real}");
+        assert!(!warning_codes(&ev).contains(&Code::PackConflict), "{real}");
+        assert!(!p.jobs.iter().any(|j| j
+            .provenance
+            .values()
+            .any(|v| *v == Provenance::Source("rock_ao_generated.png:R".into()))));
+    }
+    // the bent layer's AO is the real one
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put_rgb(d.path(), "rock_bent.png", 16, |x, y| {
+        [(x * 8) as u8, (y * 8) as u8, 255]
+    });
+    put(d.path(), "rock_ao_generated.png", 16, |_, y| {
+        100 + y as u8 * 8
+    });
+    put(d.path(), "rock_ao.png", 16, |x, _| 120 + x as u8);
+    let (p, _) = plan(d.path(), Target::Cs, &[]);
+    let ao = job(&p, "rock_n.png")
+        .rnm
+        .as_ref()
+        .unwrap()
+        .ao
+        .clone()
+        .unwrap();
+    assert!(
+        ao.file.path.ends_with("rock_ao.png"),
+        "{}",
+        ao.file.path.display()
+    );
+}
+
+#[test]
+fn a_skip_summary_counts_gen_replaced_as_intentional() {
+    let run = |generated: bool| {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+        put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+        put(d.path(), "rock_p.png", 16, |x, _| 100 + x as u8);
+        if generated {
+            put(d.path(), "rock_p_generated.png", 16, |x, y| {
+                (x * 8 + y) as u8
+            });
+        }
+        let mut req = request(d.path(), Target::Vanilla, &[]);
+        req.dry_run = true;
+        let (p, _) = plan_req(req);
+        let sink = Arc::new(VecSink::default());
+        let rep = Reporter::new(sink, "generated-files");
+        Engine::new()
+            .unwrap()
+            .run(p, &rep, &CancelToken::default())
+            .unwrap()
+    };
+    let (with, without) = (run(true), run(false));
+    assert_eq!(
+        with.skipped_intentional,
+        without.skipped_intentional + 1,
+        "{with:?}"
+    );
+    assert_eq!(with.skipped, without.skipped + 1);
+    assert_eq!(with.exit_code(), without.exit_code());
+}

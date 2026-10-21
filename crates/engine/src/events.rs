@@ -81,6 +81,8 @@ pub enum SkipKind {
     PackedSource,
     /// `CHK-LOW-DETAIL`: held by `BatchRequest::low_detail = hold`, not written (v2 artist checks, check 3).
     LowDetail,
+    /// A generated member that a real source for its slot replaced (`GEN-REPLACED`, Note CO).
+    GeneratedReplaced,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

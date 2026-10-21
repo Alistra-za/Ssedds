@@ -386,6 +386,73 @@ pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
     duplicate_outputs_with(files, |f| f.kind != InputKind::Dds)
 }
 
+/// Whether a real member `real_stem` of kind `real_kind` replaces the generated member `generated_stem` of the same
+/// set (Note CO, the M9 fold). Slot files (`_p`, `_m`, `_rmaos`, `_rfaos`) count as an image or a DDS; raw maps only
+/// as an image, as `pack::plan::raw_role` reads them. A raw height is no rival of a generated `_p` on `vanilla`,
+/// where nothing is built from it. A generated stem is never a rival.
+pub fn real_rival(
+    generated_stem: &str,
+    real_stem: &str,
+    real_kind: InputKind,
+    target: crate::config::Target,
+) -> bool {
+    let (rest, generated) = split_generated(generated_stem);
+    if !generated || is_generated(real_stem) {
+        return false;
+    }
+    let role = rest
+        .rsplit_once('_')
+        .map_or("", |(_, r)| r)
+        .to_ascii_lowercase();
+    let real = split_suffix_with(real_stem, &BTreeMap::new()).suffix;
+    let image = real_kind == InputKind::Image;
+    match (role.as_str(), real.as_deref()) {
+        ("p", Some("p")) | ("height", Some("p" | "m")) | ("ao", Some("rmaos" | "rfaos")) => true,
+        ("p", Some("height")) => image && target == crate::config::Target::Cs,
+        ("height", Some("height")) | ("ao", Some("ao" | "orm")) | ("curves", Some("curves")) => {
+            image
+        }
+        _ => false,
+    }
+}
+
+/// (generated member, its first real rival) pairs within each set, by [`real_rival`]. A DDS that is the generated
+/// member's own output (an earlier export in place, `dds::same_file`) is not a rival (Note CO).
+pub fn generated_losers(
+    sets: &[TextureSet],
+    files: &[InputFile],
+    aliases: &BTreeMap<String, String>,
+    target: crate::config::Target,
+) -> Vec<(usize, usize)> {
+    let stem = |i: usize| {
+        files[i]
+            .rel
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+    };
+    // Canonical stems, so an aliased real map counts under its canonical suffix.
+    let canonical = |i: usize| {
+        let s = split_suffix_with(&stem(i), aliases);
+        s.suffix
+            .map_or(stem(i).into_owned(), |x| format!("{}_{x}", s.base))
+    };
+    let mut out = vec![];
+    for set in sets {
+        for &g in set.members.iter().filter(|&&g| is_generated(&stem(g))) {
+            let rival = set.members.iter().copied().find(|&r| {
+                r != g
+                    && !is_generated(&stem(r))
+                    && real_rival(&stem(g), &canonical(r), files[r].kind, target)
+                    && !(files[r].kind == InputKind::Dds
+                        && crate::dds::same_file(&files[r].path, &files[g].output))
+            });
+            out.extend(rival.map(|r| (g, r)));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     /// Audit 08e-10: set keys fold Unicode (Note BF), so the skin `_wet` join must too.

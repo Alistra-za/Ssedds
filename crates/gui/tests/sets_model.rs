@@ -1977,3 +1977,59 @@ fn review_export_queued_behind_a_scan_finished_read_starts_when_it_lands() {
     idle(&mut m);
     assert!(m.export.summary.is_none() && m.export.running.is_none());
 }
+
+/// v2 Generate from normal map, Task 2 (Note CO, reconciliation S8): a generated `_p` fills the Height slot until a
+/// real `_p` replaces it; the replaced item keeps its GEN-REPLACED Info warning (preflight P4), never a Problems row.
+#[test]
+fn a_generated_p_fills_the_height_slot_until_a_real_p_replaces_it() {
+    use engine::codes::{Code, Severity};
+    use image::{ImageBuffer, Luma};
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    let grey = |name: &str, v: u8| {
+        ImageBuffer::from_fn(64, 64, |x, _| Luma([v.wrapping_add(x as u8)]))
+            .save(r.join(name))
+            .unwrap()
+    };
+    grey("rock01_p_generated.png", 60);
+    let mut m = opened(d.path());
+    let generated = key_of(&m, "rock01_p_generated.png");
+    let v = set_views(&m);
+    assert_eq!(
+        view(&v, "landscape/rock01").slots.get(&SlotKind::Height),
+        Some(&SlotFill::Own {
+            item: generated.clone()
+        })
+    );
+    grey("rock01_p.png", 90);
+    m.reload_changed();
+    idle(&mut m);
+    let real = key_of(&m, "rock01_p.png");
+    let v = set_views(&m);
+    let rock = view(&v, "landscape/rock01");
+    assert_eq!(
+        rock.slots.get(&SlotKind::Height),
+        Some(&SlotFill::Own { item: real })
+    );
+    assert!(
+        !rock
+            .slots
+            .values()
+            .any(|f| matches!(f, SlotFill::Own { item } if *item == generated)),
+        "{:?}",
+        rock.slots
+    );
+    let it = m.item(&generated).unwrap();
+    assert_eq!(it.set_key.as_deref(), Some(rock.key.as_str()));
+    assert_eq!(it.warnings.len(), 1, "{:?}", it.warnings);
+    assert_eq!(it.warnings[0].code, Code::GenReplaced);
+    assert_eq!(it.warnings[0].severity, Severity::Info);
+    assert_eq!(
+        it.warnings[0].message,
+        "generated rock01_p_generated.png replaced by rock01_p.png"
+    );
+    assert!(!sdc_gui::model::bottom::problems(&m)
+        .iter()
+        .any(|p| format!("{p:?}").contains("GEN-REPLACED")));
+}

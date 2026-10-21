@@ -174,6 +174,8 @@ codes! {
     AlsoZipFailed = "ALSO-ZIP-FAILED" => Warning,
     // The Also export report was not written (kept as edited outside Tessalith, I/O): the export is partial (1).
     AlsoReportFailed = "ALSO-REPORT-FAILED" => Warning,
+    // v2 Generate from normal map (Note CO): a generated member skipped because a real map fills its slot.
+    GenReplaced = "GEN-REPLACED" => Info,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -240,7 +242,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 112);
+        assert_eq!(Code::ALL.len(), 113);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -248,7 +250,7 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::AlsoReportFailed));
+        assert_eq!(Code::ALL.last(), Some(&Code::GenReplaced));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));

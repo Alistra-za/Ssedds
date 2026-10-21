@@ -259,7 +259,11 @@ impl PlanView {
                 job: None,
                 status: ItemStatus::Skipped(s.reason.clone()),
                 decisions: vec![],
-                warnings: vec![],
+                // Preflight P4: GEN-REPLACED stays on the item (Info: never a Problems row) for the rival's name.
+                warnings: match s.code {
+                    Some(c @ Code::GenReplaced) => vec![Warning::new(c, s.reason.clone())],
+                    _ => vec![],
+                },
                 thumb: None,
                 analysis: None,
                 changed_on_disk: false,
