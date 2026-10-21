@@ -269,6 +269,8 @@ mod tests {
             bb += (y - mb) * (y - mb);
         }
         let s = ab / bb;
+        // A bump stays a bump: the solve's sign is pinned, not absorbed by the scale.
+        assert!(s > 0.0, "height came out inverted (scale {s})");
         a.iter()
             .zip(b)
             .map(|(x, y)| ((x - ma) - s * (y - mb)).abs())
@@ -455,6 +457,30 @@ mod tests {
         assert!(fit(&s, &hs).0 < 0.5, "fit {:?}", fit(&s, &hs));
         assert!(scaled_err(&t, &hs) < range(&t) / 255.0);
         assert_no_seam(&hs, w, h);
+        let ha = half_cosine(w, h);
+        let hm = solve(&slopes(&bump(&ha, w, h, 4.0, false), Directx), false, 0.0);
+        let err = scaled_err(&ha, &hm);
+        assert!(
+            err < range(&ha) / 255.0,
+            "mirror error {err}, range {}",
+            range(&ha)
+        );
+    }
+
+    #[test]
+    fn a_non_finite_texel_does_not_poison_the_height() {
+        let (w, h) = (64, 64);
+        let mut n = bump(&torus(w, h), w, h, 4.0, true);
+        n.px[100][0] = f32::NAN;
+        n.px[200][1] = f32::INFINITY;
+        let s = slopes(&n, Directx);
+        assert!(s.p.iter().chain(&s.q).all(|v| v.is_finite()));
+        for wrap in [true, false] {
+            assert!(
+                solve(&s, wrap, 0.3).iter().all(|v| v.is_finite()),
+                "wrap {wrap}"
+            );
+        }
     }
 
     #[test]
@@ -491,32 +517,27 @@ mod tests {
     fn relief_balance_follows_its_analytic_gain() {
         let (w, h) = (256, 256);
         let periods = [256.0, 32.0, 4.0];
+        // cos(2π(x + ½)/P) with P | 2W is periodic over W and even about both edges, so it is one exact bin in
+        // either mode, and the mirror's 2W field keeps the same gain (λ is set by the original width).
+        let basis = |x: usize, p: f64| (2.0 * PI * (x as f64 + 0.5) / p).cos();
         let hf: Vec<f64> = (0..w * h)
-            .map(|i| {
-                let x = (i % w) as f64;
-                periods
-                    .iter()
-                    .map(|p| (2.0 * PI * x / p).sin())
-                    .sum::<f64>()
-                    * 0.5
-            })
+            .map(|i| periods.iter().map(|&p| basis(i % w, p)).sum::<f64>() * 0.5)
             .collect();
-        let s = slopes(&bump(&hf, w, h, 1.0, true), Directx);
-        let (h0, h1) = (solve(&s, true, 0.0), solve(&s, true, 1.0));
         let proj = |v: &[f64], p: f64| -> f64 {
-            v.iter()
-                .enumerate()
-                .map(|(i, a)| a * (2.0 * PI * (i % w) as f64 / p).sin())
-                .sum()
+            v.iter().enumerate().map(|(i, a)| a * basis(i % w, p)).sum()
         };
         let lambda = 4.0 * (8.0 * PI / 256.0).sin().powi(2);
-        for p in periods {
-            let den = 4.0 * (PI * (256.0 / p) / 256.0).sin().powi(2);
-            let (got, want) = (proj(&h1, p) / proj(&h0, p), den / (den + lambda));
-            assert!(
-                (got / want - 1.0).abs() < 0.01,
-                "period {p}: {got} vs {want}"
-            );
+        for wrap in [true, false] {
+            let s = slopes(&bump(&hf, w, h, 1.0, wrap), Directx);
+            let (h0, h1) = (solve(&s, wrap, 0.0), solve(&s, wrap, 1.0));
+            for p in periods {
+                let den = 4.0 * (PI * (256.0 / p) / 256.0).sin().powi(2);
+                let (got, want) = (proj(&h1, p) / proj(&h0, p), den / (den + lambda));
+                assert!(
+                    (got / want - 1.0).abs() < 0.01,
+                    "wrap {wrap}, period {p}: {got} vs {want}"
+                );
+            }
         }
     }
 }

@@ -56,7 +56,12 @@ pub(crate) fn slopes(stored: &Rgba32F, green: GreenConvention) -> Slopes {
         .iter()
         .map(|&px| {
             let (p, q) = texel_slope(px);
-            (p, flip * q)
+            // A non-finite texel reads as flat, so it cannot poison the mean and the whole solve (as curl skips it).
+            if p.is_finite() && q.is_finite() {
+                (p, flip * q)
+            } else {
+                (0.0, 0.0)
+            }
         })
         .unzip();
     let n = p.len().max(1) as f64;
