@@ -138,6 +138,11 @@ fn elide_middle_keeps_the_drive_and_the_tail() {
 fn the_header_is_one_row_in_the_spec_order() {
     let d = tempfile::tempdir().unwrap();
     let h = harness_sized(pbr_opened(d.path()), egui::vec2(1600.0, 1000.0), false);
+    assert_one_row_in_the_spec_order(&h);
+}
+
+/// The assertions of `the_header_is_one_row_in_the_spec_order`, on a 1600 px harness (P20: shared, not restated).
+fn assert_one_row_in_the_spec_order(h: &H) {
     let order = [
         ("Open", h.get_by_label("Open").rect()),
         ("Undo", h.get_by_label("Undo").rect()),
@@ -173,6 +178,27 @@ fn the_header_is_one_row_in_the_spec_order() {
     }
     // Export ends the row at the right edge, only the panel margin past it.
     assert!(1600.0 - order[9].1.right() <= 16.5, "{:?}", order[9].1);
+}
+
+/// Task 12 (Note CM, owner answer 5): with an "Also export as" tick on, the header is the same one row, and the
+/// ticks are not in it (they are Export to ▾ items and a Review section).
+#[test]
+fn the_header_row_is_unchanged_by_also_export() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_also_tick(engine::presets::AlsoTarget::Vanilla, true);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(m.also_on(), "the tick took: {}", m.status_line);
+    let h = harness_sized(m, egui::vec2(1600.0, 1000.0), false);
+    assert_one_row_in_the_spec_order(&h);
+    let header = outer(&h, "header");
+    for l in ["Vanilla", "Complex material", "Also export as Vanilla"] {
+        assert!(
+            !h.query_all_by_label(l)
+                .any(|n| header.contains_rect(n.rect())),
+            "{l} is in the header"
+        );
+    }
 }
 
 /// A4: Save sits right before Export, as tall as it (two rows).

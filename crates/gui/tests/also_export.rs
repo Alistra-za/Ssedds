@@ -1,6 +1,8 @@
 //! Track A Task 11 (DECISIONS Note CM): the GUI model of "Also export as" Vanilla / CM: the ticks, Review's gate,
 //! the worker and the Files rows (C1 under layout v2: Review opens while a tick is on; its Export is the only way out).
 mod support;
+use eframe::egui::{accesskit::Role, Key, Modifiers};
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use engine::codes::{Code, Warning};
 use engine::events::{EngineEvent, EventKind, EVENT_SCHEMA};
 use engine::presets::{AlsoTarget, FolderNames};
@@ -601,4 +603,379 @@ fn a_folder_name_collision_is_the_reviews_reason() {
     m.export_clicked();
     let why = m.review_gate().unwrap_err();
     assert!(why.contains("export.names.vanilla"), "{why}");
+}
+
+// ---- Task 12: the controls (kittest) ----
+
+type H = egui_kittest::Harness<'static, AppModel>;
+
+fn ui_harness(m: AppModel, w: f32) -> H {
+    let mut h = egui_kittest::Harness::builder()
+        .with_step_dt(0.25)
+        .with_size(eframe::egui::vec2(w, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+fn settle(h: &mut H) {
+    assert!(h.state_mut().wait_idle(WAIT), "the model did not settle");
+    h.run();
+}
+
+fn checkbox<'a>(h: &'a H, label: &'a str) -> egui_kittest::Node<'a> {
+    h.get_by_role_and_label(Role::CheckBox, label)
+}
+
+fn has_label(h: &H, label: &str) -> bool {
+    h.query_all_by_label(label).next().is_some()
+}
+
+/// Click as a pointer does: settle on the widget first (egui hit-tests against the previous frame).
+fn press(h: &mut H, node: impl Fn(&H) -> egui_kittest::Node<'_>) {
+    node(h).scroll_to_me();
+    h.run();
+    node(h).hover();
+    h.run();
+    node(h).click();
+    h.run();
+}
+
+/// `project` with Vanilla ticked and Review open (Export), drawn at `w`.
+fn reviewing(d: &Path, w: f32) -> H {
+    let mut m = project(d);
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.export_clicked();
+    idle(&mut m);
+    assert!(m.review.is_some());
+    let mut h = ui_harness(m, w);
+    settle(&mut h);
+    h
+}
+
+#[test]
+fn the_export_to_menu_toggles_the_ticks() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = ui_harness(project(d.path()), 1600.0);
+    h.get_by_label_contains("Export to: ").click();
+    h.run();
+    press(&mut h, |h| checkbox(h, "Also export as Vanilla"));
+    settle(&mut h);
+    assert_eq!(h.state().also_ticks(), (true, false));
+    assert!(
+        has_label(&h, "Also export as Complex material"),
+        "the menu stays open after a tick"
+    );
+    assert_eq!(h.state().undo_label(), Some("Also export as"));
+    // Untick, then the vanilla mode: both items are off, with TA20's reason on hover.
+    press(&mut h, |h| checkbox(h, "Also export as Vanilla"));
+    settle(&mut h);
+    assert!(!h.state().also_on());
+    h.key_press(Key::Escape);
+    h.run();
+    h.state_mut().set_target(engine::config::Target::Vanilla);
+    settle(&mut h);
+    h.get_by_label_contains("Export to: ").click();
+    h.run();
+    for l in ["Also export as Vanilla", "Also export as Complex material"] {
+        assert!(checkbox(&h, l).accesskit_node().is_disabled(), "{l}");
+    }
+    checkbox(&h, "Also export as Vanilla").hover();
+    h.run();
+    assert!(
+        h.query_all_by_label_contains("needs the cs mode")
+            .next()
+            .is_some(),
+        "TA20's reason on hover"
+    );
+}
+
+#[test]
+fn reviews_also_section_shows_the_ticks_location_and_skip_list() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing(d.path(), 1600.0);
+    for l in ["Vanilla", "Complex material"] {
+        checkbox(&h, l);
+    }
+    let loc = h.state().also_location().display().to_string();
+    let node = h.get_by_label_contains("Export location: ");
+    // egui gives a Label's text to AccessKit as its value, which is its accessible name.
+    let a = node.accesskit_node();
+    assert_eq!(
+        a.label().or(a.value()).unwrap_or_default(),
+        format!("Export location: {loc}")
+    );
+    // No recipe drags in Review: a link to Advanced instead.
+    assert!(!has_label(&h, "Diffuse brightness"));
+    assert!(has_label(&h, "Recipe settings are in Advanced"));
+    let steel = steel_id(h.state());
+    let ends = |n: &egui_kittest::Node<'_>, end: &str| {
+        n.accesskit_node().label().is_some_and(|l| l.ends_with(end))
+    };
+    // Only PBR sets are listed: the plain cup set is not.
+    assert!(!h.query_all_by_role(Role::CheckBox).any(|n| ends(&n, "cup")));
+    press(&mut h, |h| {
+        h.query_all_by_role(Role::CheckBox)
+            .find(|n| ends(n, "steel"))
+            .expect("a Skip these sets row for steel")
+    });
+    settle(&mut h);
+    assert_eq!(h.state().also_config().skip, [steel.as_str()]);
+    assert_eq!(h.state().undo_label(), Some("Skip vanilla/CM for this set"));
+    h.state_mut().undo();
+    settle(&mut h);
+    assert!(h.state().also_config().skip.is_empty(), "one undo step");
+    // The link opens the Advanced drawer, where the recipe is.
+    press(&mut h, |h| {
+        h.get_by_label("Recipe settings are in Advanced")
+    });
+    assert!(h.state().settings.advanced_open);
+    assert!(has_label(&h, "Diffuse brightness"));
+}
+
+#[test]
+fn reviews_name_field_commits_on_focus_loss() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = reviewing(d.path(), 1600.0);
+    fn field(h: &H) -> egui_kittest::Node<'_> {
+        h.get_by_role_and_label(Role::TextInput, "Vanilla folder name")
+    }
+    field(&h).focus();
+    h.run();
+    field(&h).type_text("Plain");
+    h.run();
+    assert_eq!(
+        h.state().also_config().names.vanilla,
+        None,
+        "not while typing"
+    );
+    h.key_press(Key::Tab);
+    settle(&mut h);
+    assert_eq!(
+        h.state().also_config().names.vanilla.as_deref(),
+        Some("Plain")
+    );
+    assert_eq!(h.state().undo_label(), Some("Also export settings"));
+}
+
+#[test]
+fn reviews_export_stays_disabled_with_the_also_reason() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.save().unwrap();
+    let path = sdc_toml(&m);
+    let set_ro = |on: bool| {
+        let mut p = std::fs::metadata(&path).unwrap().permissions();
+        p.set_readonly(on);
+        std::fs::set_permissions(&path, p).unwrap();
+    };
+    set_ro(true);
+    m.export_clicked();
+    idle(&mut m);
+    let reason = sdc_gui::model::also::TOML_READ_ONLY;
+    assert_eq!(m.review_gate(), Err(reason.to_string()));
+    let mut h = ui_harness(m, 1600.0);
+    settle(&mut h);
+    let button = h
+        .query_all_by_role(Role::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Export ") && l.contains("folders"))
+        })
+        .expect("Review's Export");
+    assert!(button.accesskit_node().is_disabled());
+    // The reason is drawn beside the button (as before) and in the Also section.
+    assert!(h.query_all_by_label(reason).count() >= 2);
+    set_ro(false);
+}
+
+#[test]
+fn the_dialog_free_cm_lines_follow_keep_metal_brightness() {
+    use engine::presets::ExportConfig;
+    use sdc_gui::ui::review::also_cm_lines;
+    let mut c = ExportConfig {
+        also: vec![AlsoTarget::Vanilla, AlsoTarget::Cm],
+        ..ExportConfig::default()
+    };
+    let off = also_cm_lines(&c);
+    assert!(off[0].contains("on top of the Vanilla folder"), "{off:?}");
+    assert!(off.iter().any(|l| l.contains("only the `_m` files")));
+    c.legacy.keep_metal_brightness = true;
+    let on = also_cm_lines(&c);
+    assert_eq!(on.len(), 1, "{on:?}");
+    c.also = vec![AlsoTarget::Cm];
+    assert!(also_cm_lines(&c)
+        .iter()
+        .any(|l| l.contains("the Vanilla folder is written too")));
+}
+
+#[test]
+fn the_set_panel_skip_group_shows_only_on_pbr_sets() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    let views = sdc_gui::model::sets::views(&m);
+    let key = |end: &str| {
+        views
+            .iter()
+            .find(|v| v.key.ends_with(end))
+            .unwrap()
+            .key
+            .clone()
+    };
+    let (steel_key, cup_key) = (key("steel"), key("cup"));
+    let steel = steel_id(&m);
+    m.select_set(&steel_key);
+    let mut h = ui_harness(m, 1600.0);
+    settle(&mut h);
+    assert!(has_label(&h, "Also export"));
+    assert!(has_label(&h, "converted"));
+    press(&mut h, |h| checkbox(h, "Skip vanilla/CM for this set"));
+    settle(&mut h);
+    assert_eq!(h.state().also_config().skip, [steel.as_str()]);
+    assert!(has_label(&h, "skipped"));
+    // A plain set has no group.
+    h.state_mut().select_set(&cup_key);
+    settle(&mut h);
+    assert!(!has_label(&h, "Skip vanilla/CM for this set"));
+    // No tick: no group on the PBR set either.
+    h.state_mut().select_set(&steel_key);
+    h.state_mut().set_also_tick(AlsoTarget::Vanilla, false);
+    settle(&mut h);
+    assert!(!has_label(&h, "Skip vanilla/CM for this set"));
+}
+
+#[test]
+fn recipe_drags_in_advanced_write_export_legacy() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    m.settings.advanced_open = true;
+    let mut h = ui_harness(m, 1600.0);
+    settle(&mut h);
+    fn spin(h: &H) -> egui_kittest::Node<'_> {
+        h.get_by_role_and_label(Role::SpinButton, "Diffuse brightness")
+    }
+    spin(&h).scroll_to_me();
+    h.run();
+    spin(&h).focus();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run();
+    h.event(eframe::egui::Event::Text("0.7".into()));
+    h.run();
+    assert_eq!(
+        h.state().also_config().legacy.brightness,
+        0.9,
+        "not while typing"
+    );
+    h.key_press(Key::Enter);
+    settle(&mut h);
+    assert_eq!(h.state().also_config().legacy.brightness, 0.7);
+    assert_eq!(h.state().undo_label(), Some("Also export settings"));
+    h.state_mut().undo();
+    settle(&mut h);
+    assert_eq!(
+        h.state().also_config().legacy.brightness,
+        0.9,
+        "one undo step"
+    );
+    // P17: Keep metal brightness is not in Advanced; Dielectric env is one number box.
+    assert!(!has_label(&h, "Keep metal brightness"));
+    h.get_by_role_and_label(Role::SpinButton, "Dielectric env from gloss");
+}
+
+#[test]
+fn an_also_file_click_in_problems_reveals_the_file() {
+    use sdc_gui::model::shell::ShellRequest;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    export(&mut m);
+    let key = "Mod Vanilla/textures/arm/steel.dds";
+    m.export.on_event(EngineEvent {
+        schema: EVENT_SCHEMA,
+        seq: 0,
+        ts: String::new(),
+        batch: "b".into(),
+        job: Some(key.into()),
+        set: None,
+        path: None,
+        kind: EventKind::Warning(Warning::new(Code::OutUnknownExisting, "kept")),
+    });
+    m.invalidate_views();
+    m.open_problems(None);
+    m.take_shell();
+    let sel = m.selection.clone();
+    let mut h = ui_harness(m, 1600.0);
+    press(&mut h, |h| h.get_by_label(key));
+    let file = d.path().join("out/Mod Vanilla/textures/arm/steel.dds");
+    assert_eq!(h.state_mut().take_shell(), [ShellRequest::Reveal(file)]);
+    assert_eq!(h.state().selection, sel, "nothing selected");
+}
+
+#[test]
+fn the_header_export_hover_names_the_folders() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    let plain = sdc_gui::ui::header::export_hover(&m);
+    assert!(!plain.contains("folders"), "{plain}");
+    tick(&mut m, AlsoTarget::Cm);
+    let t = sdc_gui::ui::header::export_hover(&m);
+    assert!(t.contains(" files to 3 folders, "), "{t}");
+}
+
+/// A drag of a recipe box follows the pointer and ends in one edit (one undo step), not one per frame.
+#[test]
+fn a_recipe_drag_is_one_edit() {
+    use eframe::egui::{pos2, Event, PointerButton};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    m.settings.advanced_open = true;
+    let mut h = ui_harness(m, 1600.0);
+    settle(&mut h);
+    h.get_by_role_and_label(Role::SpinButton, "Diffuse brightness")
+        .scroll_to_me();
+    h.run();
+    let at = h
+        .get_by_role_and_label(Role::SpinButton, "Diffuse brightness")
+        .rect()
+        .center();
+    let ev = |h: &mut H, e: Event| {
+        h.input_mut().events.push(e);
+        h.step();
+    };
+    let button = |pos, pressed| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    ev(&mut h, Event::PointerMoved(at));
+    ev(&mut h, button(at, true));
+    for i in 1..=10 {
+        ev(
+            &mut h,
+            Event::PointerMoved(pos2(at.x + 2.0 * i as f32, at.y)),
+        );
+    }
+    assert_eq!(
+        h.state().also_config().legacy.brightness,
+        0.9,
+        "nothing written during the drag"
+    );
+    ev(&mut h, button(pos2(at.x + 20.0, at.y), false));
+    settle(&mut h);
+    let b = h.state().also_config().legacy.brightness;
+    assert!(b > 1.0, "the drag moved the value: {b}");
+    assert_eq!(h.state().undo_label(), Some("Also export settings"));
+    h.state_mut().undo();
+    settle(&mut h);
+    assert_eq!(
+        h.state().also_config().legacy.brightness,
+        0.9,
+        "one undo step"
+    );
 }

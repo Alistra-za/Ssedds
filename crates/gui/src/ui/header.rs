@@ -1,9 +1,10 @@
 //! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the column eyes,
 //! then Export to ▾ · Save · Export at the right edge; then the status line and banner. Drawn in both views (C7).
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
-use crate::model::AppModel;
+use crate::model::{also, AppModel};
 use eframe::egui;
 use engine::config::Target;
+use engine::presets::AlsoTarget;
 
 /// The Export to ▾ entry that opens the PGPatcher JSON editor (R14; was the header's PG JSON Editor, Note BH7).
 pub const JSON_EDITOR: &str = "PGPatcher JSON editor…";
@@ -256,9 +257,9 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
         // A12: the hover counts the files and the problems; a green dot says there are none.
-        let n = crate::model::bottom::flagged(model).ready_rows;
+        // Built lazily, only while hovered (ui-rules 9.3).
         let hover = |ui: &mut egui::Ui| {
-            ui.label(format!("{} files, {n} problems", model.export_files()));
+            ui.label(export_hover(model));
         };
         let r = ui
             .add_enabled(can_export, export)
@@ -297,6 +298,61 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
                 .request_repaint_after(std::time::Duration::from_millis(500));
         }
     });
+}
+
+/// Export's hover (A12): "{n} files, {m} problems"; with an "Also export as" tick on, "{n} files to {k} folders, {m}
+/// problems" (re-check A7, Note CM).
+pub fn export_hover(model: &AppModel) -> String {
+    let n = crate::model::bottom::flagged(model).ready_rows;
+    let files = model.export_files();
+    if model.also_on() {
+        format!(
+            "{files} files to {} folders, {n} problems",
+            model.also_folder_count()
+        )
+    } else {
+        format!("{files} files, {n} problems")
+    }
+}
+
+/// Export to ▾'s two "Also export as" items (owner answer 5): checkable, and the menu stays open on a tick. Ticking
+/// needs the cs mode (TA20); a tick left on stays clickable so it can be cleared (the model allows the untick).
+fn also_items(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    busy: Option<&str>,
+) -> Option<(AlsoTarget, bool)> {
+    let (v, c) = model.also_ticks();
+    let mut out = None;
+    for (t, on, text, hover) in [
+        (
+            AlsoTarget::Vanilla,
+            v,
+            "Also export as Vanilla",
+            "Also write a Vanilla folder: the PBR sets converted to vanilla textures, the rest copied",
+        ),
+        (
+            AlsoTarget::Cm,
+            c,
+            "Also export as Complex material",
+            "Also write a Complex material folder (and the Vanilla folder it installs on)",
+        ),
+    ] {
+        let why = busy
+            .map(str::to_string)
+            .or_else(|| model.toml_read_only_reason())
+            .or_else(|| (!on && model.target != Target::Cs).then(|| also::NEEDS_CS.to_string()));
+        let mut now = on;
+        let r = ui.add_enabled(why.is_none(), egui::Checkbox::new(&mut now, text));
+        let r = match &why {
+            Some(w) => r.on_disabled_hover_text(w),
+            None => r.on_hover_text(hover),
+        };
+        if r.changed() {
+            out = Some((t, now));
+        }
+    }
+    out
 }
 
 /// The PGPatcher JSON editor is offered: cs mode, a folder open and its `sdc-project.toml` loaded.
@@ -652,7 +708,10 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
     let mut choose = false;
     let mut open = false;
     let mut json = false;
-    let r = ui.menu_button(text, |ui| {
+    let mut tick = None;
+    // A click inside keeps it open (egui's default closes on any click), so the ticks can be set without reopening;
+    // the three entries below close it themselves.
+    let r = super::path_picker::menu(ui, &text, |ui| {
         // AG129: the drawer's links point at the export folder, so it stays put while an export runs.
         let off = if model.picker.busy() {
             Some(picker::BUSY_HOVER)
@@ -675,6 +734,12 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
             Err(why) => r.on_disabled_hover_text(why),
         }
         .clicked();
+        let running = model
+            .export
+            .running
+            .is_some()
+            .then_some(EXPORT_RUNNING_HOVER);
+        tick = also_items(ui, model, running);
         if shows_json_editor(model) {
             json = ui
                 .button(JSON_EDITOR)
@@ -701,6 +766,9 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
     }
     if json {
         model.json_editor_open = true;
+    }
+    if let Some((t, on)) = tick {
+        model.set_also_tick(t, on);
     }
 }
 

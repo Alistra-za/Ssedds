@@ -340,12 +340,48 @@ fn set_panel(
                     super::skin_card::card(ui, model, v);
                 }
                 super::cm_card::section(ui, model, v);
+                also_skip(ui, model, v);
                 if !split {
                     super::cs_pbr::section(ui, model, v);
                 }
                 super::plugin_refs::set_section(ui, model, v);
             });
     });
+}
+
+/// C2 (owner answer 6): the "Also export" group of a PBR set while a tick is on: "converted" or "skipped", and the
+/// opt-out. 2D only; Review's "Skip these sets" covers the 3D view.
+fn also_skip(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
+    if !model.also_on() || !crate::model::also::is_pbr_set(v) {
+        return;
+    }
+    let skipped = model.also_skipped(&v.id);
+    let off = if model.export.running.is_some() {
+        Some(crate::model::also::EXPORT_RUNNING.to_string())
+    } else {
+        model.toml_read_only_reason()
+    };
+    let value = egui::RichText::new(if skipped { "skipped" } else { "converted" }).weak();
+    let mut now = skipped;
+    let changed = super::group::group(
+        ui,
+        ("also-export", v.id.as_str()),
+        "Also export",
+        Some(value),
+        true,
+        |ui| {
+            ui.add_enabled(
+                off.is_none(),
+                egui::Checkbox::new(&mut now, "Skip vanilla/CM for this set"),
+            )
+            .on_hover_text("Leave this set out of the Vanilla and Complex material folders")
+            .on_disabled_hover_text(off.as_deref().unwrap_or_default())
+            .changed()
+        },
+    );
+    if changed == Some(true) {
+        model.set_skip_also(&v.id, now);
+    }
 }
 
 /// Item 17: a file from Explorer dropped on slot `slot` of `set`. The drop is taken (its folder is not opened); a

@@ -6,12 +6,25 @@ use crate::project::ProjectDoc;
 use engine::also::{AlsoSpec, AlsoSummary, Phase};
 use engine::config::Target;
 use engine::presets::{AlsoTarget, ExportConfig};
+use engine::shader::Shader;
 use std::path::{Path, PathBuf};
 
 /// TA20, the engine's refusal text: a project in the vanilla mode has no PBR folder to derive from.
 pub const NEEDS_CS: &str = "Also export needs the cs mode: the PBR folder is the cs export";
 /// Review Focus 5 (P9): the gate's reason while `sdc.toml` has the read-only flag and a tick is on.
 pub const TOML_READ_ONLY: &str = "sdc.toml is read-only: Also export settings could not be saved";
+/// Every Also edit is refused while an export runs; the status line, and the hover of the disabled controls.
+pub const EXPORT_RUNNING: &str = "Wait for the export to finish";
+
+/// TA11: a set Vanilla and CM derive from, by its PBR-phase shader pick (as `engine::also::derive_sets` reads it).
+pub fn is_pbr_set(v: &sets::SetView) -> bool {
+    v.shader.as_ref().is_some_and(|p| {
+        matches!(
+            p.shader,
+            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
+        )
+    })
+}
 
 fn phase_name(p: Phase) -> &'static str {
     match p {
@@ -51,7 +64,7 @@ impl AppModel {
         // So the plan on screen and the NIF root match the running export (the finishers use roots captured at its
         // start). Undo and Redo are not guarded: harmless for the same reason (review M4).
         if self.export.running.is_some() {
-            self.status_line = "Wait for the export to finish".into();
+            self.status_line = EXPORT_RUNNING.into();
             return;
         }
         self.edit(label, f);
@@ -92,10 +105,18 @@ impl AppModel {
         });
     }
 
+    /// C2: set `id` is in `[export] skip`.
+    pub fn also_skipped(&self, id: &str) -> bool {
+        self.also_config()
+            .skip
+            .iter()
+            .any(|s| engine::sets::same_id(s, id))
+    }
+
     /// TA10: `[project] also_location`, one undo step (with the `sdc-project.toml` text), planned again.
     pub fn set_also_location(&mut self, p: &Path) {
         if self.export.running.is_some() {
-            self.status_line = "Wait for the export to finish".into();
+            self.status_line = EXPORT_RUNNING.into();
             return;
         }
         let p = p.to_path_buf();
@@ -209,7 +230,7 @@ impl AppModel {
 
     /// Review's Also rows, in A9's order: the read-only `sdc.toml`, the cs mode (TA20), the location (TA19), the
     /// `[export]` values. The first `Err` is the button's reason.
-    pub(super) fn also_gate(&self) -> Result<(), String> {
+    pub fn also_gate(&self) -> Result<(), String> {
         if let Some(why) = self.review.as_ref().and_then(|r| r.toml_unwritable.clone()) {
             return Err(why);
         }
@@ -225,7 +246,7 @@ impl AppModel {
     }
 
     /// "to {k} folders": 3 with CM (it needs Vanilla, TA30), else 2.
-    pub(super) fn also_folder_count(&self) -> usize {
+    pub fn also_folder_count(&self) -> usize {
         if self.also_ticks().1 {
             3
         } else {
