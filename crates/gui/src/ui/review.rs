@@ -282,7 +282,7 @@ fn name_field(
     }
 }
 
-/// Review's "Also export as" column (Note CM, owner answers 5 and 6): the ticks, the location, the folder names, Keep
+/// Review's "Also export as" column (Note CN, owner answers 5 and 6): the ticks, the location, the folder names, Keep
 /// metal brightness and the CM lines, the zip, the sets to skip, and the gate's Also reason (`gate`). It names what
 /// is written and why it cannot be yet, never that it will succeed (Task 11 M5). The recipe is in Advanced.
 fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut Option<Act>) {
@@ -487,7 +487,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
     let gate = m.review_gate();
     let json = m.review_json();
-    // Note CM85: a fourth column in the cs mode or while a tick is on; the Also reason only with a tick, as the gate.
+    // Note CN85: a fourth column in the cs mode or while a tick is on; the Also reason only with a tick, as the gate.
     let also_on = m.also_on() || m.target == Target::Cs;
     let also_err = if m.also_on() {
         m.also_gate().err()

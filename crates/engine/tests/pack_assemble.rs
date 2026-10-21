@@ -263,7 +263,7 @@ fn an_oversized_source_is_refused_before_the_canvas_is_allocated() {
     ));
 }
 
-/// Track A Task 1 (DECISIONS Note CM): an `_rmaos` is read by channel, alpha included, and is colour by design
+/// Track A Task 1 (DECISIONS Note CN): an `_rmaos` is read by channel, alpha included, and is colour by design
 /// (never `CHAN-NOT-GRAY`).
 #[test]
 fn an_rmaos_source_is_read_by_channel_including_alpha() {

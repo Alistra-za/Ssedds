@@ -1,4 +1,4 @@
-//! Track A Task 8 (DECISIONS Note CM): an in-house ZIP writer for the Also export's folder zips (C8). Method 8 (raw
+//! Track A Task 8 (DECISIONS Note CN): an in-house ZIP writer for the Also export's folder zips (C8). Method 8 (raw
 //! Deflate), entries sorted by name, the DOS time fixed at 1980-01-01, so the same files give the same bytes.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

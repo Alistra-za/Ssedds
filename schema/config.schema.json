@@ -584,7 +584,7 @@
     },
     "LegacyParams": {
       "additionalProperties": false,
-      "description": "`[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CM5).",
+      "description": "`[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CN5).",
       "properties": {
         "ao_strength": {
           "default": 0.5,

@@ -1,4 +1,4 @@
-//! Track A Task 3 (DECISIONS Note CM): a derived job runs the recipe on a PBR set's inputs, encodes the result as a
+//! Track A Task 3 (DECISIONS Note CN): a derived job runs the recipe on a PBR set's inputs, encodes the result as a
 //! normal output and records every source with the job's identity. Jobs are built by hand from the plan of one
 //! colour file (Task 4 makes the planner do this).
 use engine::api::*;

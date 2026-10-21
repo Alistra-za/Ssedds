@@ -1,4 +1,4 @@
-//! Track A: turn PBR inputs into vanilla and complex-material maps (DECISIONS Note CM).
+//! Track A: turn PBR inputs into vanilla and complex-material maps (DECISIONS Note CN).
 pub mod assemble;
 pub mod plan;
 pub mod recipe;
@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
-/// Which folder a derive plan writes (Note CM).
+/// Which folder a derive plan writes (Note CN).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeriveMode {
     Vanilla,
@@ -40,7 +40,7 @@ pub struct DeriveSet {
     pub dds: Vec<PathBuf>,
 }
 
-/// `BatchRequest::derive`: replace each PBR set's jobs with derived jobs (Note CM).
+/// `BatchRequest::derive`: replace each PBR set's jobs with derived jobs (Note CN).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeriveRequest {
     pub mode: DeriveMode,
@@ -98,7 +98,7 @@ pub fn vanilla_game_path(game_path: &str) -> String {
     }
 }
 
-/// What a derived job writes (Note CM11).
+/// What a derived job writes (Note CN11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeriveKind {
@@ -161,7 +161,7 @@ pub struct DeriveSource {
     pub stamp: Option<SourceStamp>,
 }
 
-/// How a derived output is built (`ResolvedJob::derive`, Note CM11). `sources[0].path` is the job's `input`.
+/// How a derived output is built (`ResolvedJob::derive`, Note CN11). `sources[0].path` is the job's `input`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DeriveJob {
     pub kind: DeriveKind,
@@ -182,9 +182,9 @@ pub struct DeriveJob {
 }
 
 impl DeriveJob {
-    /// SHA-256 of the job without its sources' stamps: every setting, slot and path (Note CM12). Recorded on each
+    /// SHA-256 of the job without its sources' stamps: every setting, slot and path (Note CN12). Recorded on each
     /// source (`SourceRef::derive`), so `if-changed` re-encodes when any changes.
-    // shortcut: absolute paths are hashed, so a moved project re-encodes once; clear them before release (CM12).
+    // shortcut: absolute paths are hashed, so a moved project re-encodes once; clear them before release (CN12).
     pub fn identity_sha256(&self) -> String {
         let mut j = self.clone();
         for s in &mut j.sources {

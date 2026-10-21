@@ -1,4 +1,4 @@
-//! Track A (DECISIONS Note CM): "Also export as" Vanilla and Complex Material in the GUI model (Task 11, C1 under
+//! Track A (DECISIONS Note CN): "Also export as" Vanilla and Complex Material in the GUI model (Task 11, C1 under
 //! layout v2). The ticks and settings are `[export]` in `sdc.toml` (TA9), the location is `[project] also_location`
 //! in `sdc-project.toml` (TA10). Review opens whenever a tick is on, and its Export is the only way out (CA2).
 use super::{auto_flags, checks, messages, sets, AppModel};
@@ -265,11 +265,11 @@ impl AppModel {
         }
     }
 
-    /// The worker's `AlsoFinished`: the summary becomes notes, never a dialog. A phase error is an error (CM56: a
+    /// The worker's `AlsoFinished`: the summary becomes notes, never a dialog. A phase error is an error (CN56: a
     /// PBR-run failure is `Ok` from `run_also`), not a success.
     pub(super) fn also_finished(&mut self, s: AlsoSummary) {
         self.export.notes.extend(s.notes.iter().cloned());
-        // CM99: why a PBR set got no Vanilla or CM files (left out, undecided, DDS, ...), as the report says.
+        // CN99: why a PBR set got no Vanilla or CM files (left out, undecided, DDS, ...), as the report says.
         self.export
             .notes
             .extend(s.sets.iter().map(|n| format!("{}: {}", n.id, n.why)));
@@ -416,7 +416,7 @@ mod tests {
         }
     }
 
-    /// CM56 in the worker: a PBR-phase error is the export's `Err` (nothing written after it); a later phase's is
+    /// CN56 in the worker: a PBR-phase error is the export's `Err` (nothing written after it); a later phase's is
     /// `Ok` with the copies counted as written.
     #[test]
     fn the_worker_maps_a_pbr_phase_error_to_err() {
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(m.export.rows[0].state, RowState::Queued);
     }
 
-    /// CM56 carried: a later phase's error in `AlsoSummary::error` is an error, and the export's end is logged as
+    /// CN56 carried: a later phase's error in `AlsoSummary::error` is an error, and the export's end is logged as
     /// one, not as a success; the PBR folder's finishers still run (the summary is `Ok`).
     #[test]
     fn a_later_phase_error_is_shown_as_an_error() {

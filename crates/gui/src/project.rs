@@ -129,13 +129,13 @@ pub struct ProjectDoc {
     f: TomlFile,
     /// The document and dirty flag `set_error` dropped, kept until `unblame` or `reload` (trace-debug #9).
     stash: Option<(DocumentMut, bool)>,
-    /// `[export]` as last parsed, by `rev` (Note CM: Review and `view_key` read it every frame).
+    /// `[export]` as last parsed, by `rev` (Note CN: Review and `view_key` read it every frame).
     export_cache: std::cell::RefCell<Option<(u64, ExportConfig)>>,
 }
 
 /// `v` without the fields equal to `d`'s, recursively; an object left empty goes too. A field that `written` (the
 /// table as it is in the file) holds with the same value stays, even at its default: the edit did not touch it, so
-/// the user may have pinned it (final review M3). A field the edit sets to its default goes, as before (CM60).
+/// the user may have pinned it (final review M3). A field the edit sets to its default goes, as before (CN60).
 fn prune(v: &mut Json, d: &Json, written: Option<&Json>) {
     if let (Json::Object(o), Json::Object(d)) = (v, d) {
         o.retain(|k, x| {
@@ -634,7 +634,7 @@ impl ProjectDoc {
     }
 
     /// Write `[export]` as `cfg`: only the fields that differ from the default, so a tick does not freeze today's
-    /// recipe defaults into the file (CM60); none at all removes the table. No edit when nothing changes.
+    /// recipe defaults into the file (CN60); none at all removes the table. No edit when nothing changes.
     // shortcut: the table is rewritten, so comments inside `[export]` are lost on a GUI edit; upgrade to per-key
     // `set_value` if users hand-annotate it.
     pub fn set_export_config(&mut self, cfg: &ExportConfig) {

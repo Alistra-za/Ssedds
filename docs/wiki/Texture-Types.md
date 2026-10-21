@@ -333,7 +333,7 @@ With `[export] also` (see [Project Config](Project-Config.md#export)), a cs expo
 - **Install** Vanilla alone, or CM on top of Vanilla. With Keep metal brightness off, the CM folder holds only `_m` files (plus the complex-grass stack of each PBR grass set). Files an earlier export left in the folders are kept and listed in the report as "not written by this export"; delete them yourself.
 - **`_curves` / `_curvature` and `_cavity`** maps (see [Suffixes](#suffixes)) shade the diffuse: a soft light with the curves map (0.5 = no change), then a multiply with the cavity map, both at `curves_opacity` (0.4). They are read only by Also export; a plain export writes nothing for them (`PACK-UNUSED-INPUT`).
 - A set is not converted when a source it needs is a DDS (`DERIVE-DDS-SOURCE`), or when you skip it (`[export] skip`). The report lists such sets with the reason.
-- The defaults were checked against mods that ship both a PBR and a vanilla version by the same author (DECISIONS Note CM).
+- The defaults were checked against mods that ship both a PBR and a vanilla version by the same author (DECISIONS Note CN).
 
 ## Alpha policies
 

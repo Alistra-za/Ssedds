@@ -1,4 +1,4 @@
-//! Track A Task 11 (DECISIONS Note CM): the GUI model of "Also export as" Vanilla / CM: the ticks, Review's gate,
+//! Track A Task 11 (DECISIONS Note CN): the GUI model of "Also export as" Vanilla / CM: the ticks, Review's gate,
 //! the worker and the Files rows (C1 under layout v2: Review opens while a tick is on; its Export is the only way out).
 mod support;
 use eframe::egui::{accesskit::Role, Key, Modifiers};
@@ -1080,7 +1080,7 @@ fn cs_review_without_a_tick_has_the_also_column() {
     assert!(!has_label(&h, "Also export as"));
 }
 
-/// CM76: a tick left from the cs mode stays clickable in the vanilla mode, in Export to ▾ and in Review.
+/// CN76: a tick left from the cs mode stays clickable in the vanilla mode, in Export to ▾ and in Review.
 #[test]
 fn a_stale_tick_can_be_cleared_in_the_vanilla_mode() {
     for from_review in [false, true] {

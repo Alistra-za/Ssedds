@@ -141,7 +141,7 @@ pub struct SourceRef {
     /// every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rnm: Option<String>,
-    /// Track A (DECISIONS Note CM12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on
+    /// Track A (DECISIONS Note CN12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on
     /// every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derive: Option<String>,
@@ -190,7 +190,7 @@ impl SourceRef {
         })
     }
 
-    /// A derived job's source, with the slots it fills and the job's identity (Note CM12).
+    /// A derived job's source, with the slots it fills and the job's identity (Note CN12).
     pub fn of_derive(path: &Path, role: &str, identity: String) -> io::Result<SourceRef> {
         Ok(SourceRef {
             derive: Some(identity),
@@ -232,7 +232,7 @@ pub struct ManifestRecord {
     /// Size and mtime of the output as written (audit 5, DECISIONS Note Y1); `None` in records written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_stamp: Option<crate::policy::SourceStamp>,
-    /// Track A (Note CM): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was
+    /// Track A (Note CN): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was
     /// copied from, so the copy is redone when the PBR file changes. Absent on every encoded output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copied_from: Option<crate::policy::SourceStamp>,

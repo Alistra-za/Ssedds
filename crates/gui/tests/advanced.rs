@@ -289,7 +289,7 @@ fn remove_drops_an_unmatched_entry() {
     let mut h = harness(model);
     h.run();
     h.get_by_label("landscape/rock01_rmaos");
-    // Note CM: the "Also export recipe" section above pushes the entry below the drawer's fold.
+    // Note CN: the "Also export recipe" section above pushes the entry below the drawer's fold.
     h.get_by_label("Remove").scroll_to_me();
     h.run();
     h.get_by_label("Remove").click();

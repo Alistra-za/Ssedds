@@ -65,7 +65,7 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
         );
     }
     let engine = Engine::new()?;
-    // Track A (Note CM): `[export] also` in the project `sdc.toml` writes the three folders under `-o`. A bad
+    // Track A (Note CN): `[export] also` in the project `sdc.toml` writes the three folders under `-o`. A bad
     // `[export.legacy]` value is an error on this path only (O2): `run_also` checks it, `export_config` does not.
     let cfg = engine.export_config(&req)?;
     if !cfg.also.is_empty() {
@@ -77,7 +77,7 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
             // shortcut: the CLI has no resolved PGP flags (TA27), so no set is marked inner-layer.
             inner_layer_sets: BTreeSet::new(),
         };
-        // `run_also` returns Ok even when the PBR phase failed (CM56), so the exit code is the summary's.
+        // `run_also` returns Ok even when the PBR phase failed (CN56), so the exit code is the summary's.
         let sum = run_also(
             &engine,
             &AnalysisCache::default(),

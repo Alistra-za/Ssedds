@@ -63,7 +63,7 @@ pub enum WorkerMsg {
     KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
-    /// Note CM: an Also export's phases' summary; sent just before its `ExportDone`. The worker then waits on the
+    /// Note CN: an Also export's phases' summary; sent just before its `ExportDone`. The worker then waits on the
     /// sender for the files the JSON finishers wrote into the PBR folder (final review I2; dropped = none).
     AlsoFinished(Box<engine::also::AlsoSummary>, Sender<Vec<PathBuf>>),
     /// Final review I2: the walk, zips and report ran after the JSON; only their notes, zips and report.
@@ -242,9 +242,9 @@ pub fn spawn_export(
     });
 }
 
-/// Note CM: the Also export (`start_also`: the PBR, Vanilla and CM phases), tagged "export" like `spawn_export`, so
+/// Note CN: the Also export (`start_also`: the PBR, Vanilla and CM phases), tagged "export" like `spawn_export`, so
 /// the `Panicked` router ends it. Sends `AlsoFinished`, then `ExportDone`: an `Err` when the run failed or its PBR
-/// phase did (CM56: `start_also` returns `Ok` then, and nothing must be written after it); otherwise every phase's
+/// phase did (CN56: `start_also` returns `Ok` then, and nothing must be written after it); otherwise every phase's
 /// counts, with the copies (left out of `batch_done`) counted as written. Then (final review I2) it waits for the
 /// JSON the model wrote into the PBR folder, runs `finish_also` (walk, zips, report) and sends `AlsoZipped`.
 pub fn spawn_export_also(
@@ -287,7 +287,7 @@ pub fn spawn_export_also(
     });
 }
 
-/// An Also export's `ExportDone`: `Err` when its PBR phase failed (CM56), else every phase's counts with the copies
+/// An Also export's `ExportDone`: `Err` when its PBR phase failed (CN56), else every phase's counts with the copies
 /// (left out of `batch_done`) counted as written.
 pub(crate) fn also_done(s: &engine::also::AlsoSummary) -> Result<BatchSummary, String> {
     match &s.error {

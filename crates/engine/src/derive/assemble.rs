@@ -1,4 +1,4 @@
-//! The image of a derived job (DECISIONS Note CM11): the recipe maths (`recipe`) per texel on the set's albedo or
+//! The image of a derived job (DECISIONS Note CN11): the recipe maths (`recipe`) per texel on the set's albedo or
 //! normal and its scalars. The scalars (rough, metal, AO, `_p` R) and the `_curves`/cavity pair are built by
 //! `assemble_channels`, each from only the files its four channels name, so a colour map is never decoded twice.
 use super::recipe::{self, DiffuseFlavour};

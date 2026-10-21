@@ -708,7 +708,7 @@ fn upper_case_suffixes_resolve_like_lower_case_and_nothing_asks_a_sub_type() {
     }
 }
 
-/// Track A Task 1 (DECISIONS Note CM): `_curves`, `_curvature` and `_cavity` are packing inputs; `Rmaos` is a
+/// Track A Task 1 (DECISIONS Note CN): `_curves`, `_curvature` and `_cavity` are packing inputs; `Rmaos` is a
 /// role but never a file-name one, and none of the three starts the cs `_rmaos` recipe.
 #[test]
 fn curves_curvature_and_cavity_are_packing_input_terms() {

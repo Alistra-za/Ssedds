@@ -525,7 +525,7 @@ fn virtual_stem_strips_a_vocabulary_term_or_a_suffix() {
     );
 }
 
-/// Track A Task 1 (DECISIONS Note CM): the CS `_rmaos` layout, R roughness, G metallic, B AO, A specular.
+/// Track A Task 1 (DECISIONS Note CN): the CS `_rmaos` layout, R roughness, G metallic, B AO, A specular.
 #[test]
 fn rmaos_channel_follows_the_cs_layout() {
     assert_eq!(
@@ -553,7 +553,7 @@ fn provenance_names_channel_a() {
 
 const ALSO_ONLY: &str = "read only by Also export as (Vanilla / Complex material)";
 
-/// Track A Task 1 (DECISIONS Note CM): `_curves`/`_cavity` join the set as packing inputs but no recipe reads them;
+/// Track A Task 1 (DECISIONS Note CN): `_curves`/`_cavity` join the set as packing inputs but no recipe reads them;
 /// they are `PACK-UNUSED-INPUT`, the `_rmaos` recipe is unchanged, and neither becomes its own colour set.
 #[test]
 fn curves_and_cavity_are_unused_inputs_in_a_plain_run() {

@@ -377,7 +377,7 @@ fn a_config_rule_override_of_the_subtype_stops_the_plan() {
     }
 }
 
-// Track A Task 6: the `[export]` table (C3, C4, C2; Note CM).
+// Track A Task 6: the `[export]` table (C3, C4, C2; Note CN).
 
 #[test]
 fn export_table_parses_with_defaults_and_round_trips() {

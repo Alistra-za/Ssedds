@@ -1,4 +1,4 @@
-//! Track A Task 4 (DECISIONS Note CM): with `BatchRequest::derive`, the vanilla plan replaces each PBR set's jobs
+//! Track A Task 4 (DECISIONS Note CN): with `BatchRequest::derive`, the vanilla plan replaces each PBR set's jobs
 //! with derived jobs. `cs_then` plans `cs`, builds the `DeriveSet`s from that plan with `also::derive_sets` (Task 7)
 //! and plans `vanilla` with `derive`.
 use engine::analyse::analyse;
@@ -655,7 +655,7 @@ fn a_run_reports_each_derive_source_as_consumed() {
     );
 }
 
-/// CM14: a derived grass stack is never planned with `remove`, which would drop the `_n` spec alpha in its bottom
+/// CN14: a derived grass stack is never planned with `remove`, which would drop the `_n` spec alpha in its bottom
 /// half, even on an opaque albedo with an explicit `alpha.policy = remove`. (Task 5 plans grass sets; this drives
 /// `finish_derived`, the step every derived job resolves through, directly.)
 #[test]
@@ -1310,7 +1310,7 @@ fn grass_under_textures_landscape_is_still_grass() {
     }
 }
 
-/// O3, CM14: Vanilla gets the plain converted diffuse only; CM gets the stack only (64x128), planned through
+/// O3, CN14: Vanilla gets the plain converted diffuse only; CM gets the stack only (64x128), planned through
 /// `finish_derived`, so an opaque albedo does not `remove` the `_n` spec alpha.
 #[test]
 fn grass_is_a_plain_diffuse_under_vanilla_and_a_stack_under_cm() {
@@ -1327,7 +1327,7 @@ fn grass_is_a_plain_diffuse_under_vanilla_and_a_stack_under_cm() {
     assert!(!codes.contains(&Code::DeriveNifSuggest), "{codes:?}");
     assert!(!codes.contains(&Code::DeriveNoScan), "{codes:?}");
 
-    // `[files]` forces `remove`; only the CM14 hook in `finish_derived` turns it into `cutout` (review M2).
+    // `[files]` forces `remove`; only the CN14 hook in `finish_derived` turns it into `cutout` (review M2).
     let (p, _) = cs_then(DeriveMode::Cm, &inputs, &d.path().join("cm"), |r, d| {
         gras(r, d);
         let mut cfg = engine::presets::ConfigFile::default();
@@ -1358,7 +1358,7 @@ fn a_grass_stack_of_the_wrong_shape_is_grass_shape() {
     let d = tempfile::tempdir().unwrap();
     let inputs = d.path().join("in");
     grass(&inputs, "textures/landscape/grass", 24);
-    // 24² is DIM-NPOT, a blocking code: acknowledged, so the PBR export converts the set and it is derived (CM99).
+    // 24² is DIM-NPOT, a blocking code: acknowledged, so the PBR export converts the set and it is derived (CN99).
     let (p, _) = cs_then(DeriveMode::Cm, &inputs, d.path(), |r, _| {
         gras(r, None);
         r.allow.insert(Code::DimNpot);

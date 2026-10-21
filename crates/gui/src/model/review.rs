@@ -14,7 +14,7 @@ pub struct Review {
     pub acknowledged: BTreeSet<String>,
     /// C4, R6: the answer, given in Review, for the edited PGPatcher JSON.
     pub json_answer: Option<JsonAnswer>,
-    /// Note CM (Review Focus 5, P9): with a tick on, why `sdc.toml` cannot be saved; taken when Review opens and
+    /// Note CN (Review Focus 5, P9): with a tick on, why `sdc.toml` cannot be saved; taken when Review opens and
     /// again on its Export, never per frame. `None`: writable (or no tick).
     pub toml_unwritable: Option<String>,
 }
@@ -257,7 +257,7 @@ impl AppModel {
         if n > 0 {
             return Err(format!("Fix {n} blocker{} first", plural(n)));
         }
-        // Note CM: the Also rows, after the blocks and before the acknowledgements (A9); nothing writes (7.1, 7.2).
+        // Note CN: the Also rows, after the blocks and before the acknowledgements (A9); nothing writes (7.1, 7.2).
         if self.also_on() {
             self.also_gate()?;
         }

@@ -256,7 +256,7 @@ fn prepare_then<T>(
             let asm = assemble(pk, pk.gray).map_err(|e| fail(Stage::Load)(e.to_string()))?;
             (asm.image, asm.info)
         }
-        // Note CM11: the recipe's image, encoded as any other.
+        // Note CN11: the recipe's image, encoded as any other.
         (None, Some(dj)) => {
             let asm = crate::derive::assemble::assemble_derived(dj)
                 .map_err(|e| fail(Stage::Load)(e.to_string()))?;
@@ -522,7 +522,7 @@ pub fn process_file(
                     .map_err(|e| fail(Stage::Load)(e.to_string()))?,
                 None => vec![],
             };
-            // Note CM12: a derived output records every file it read, with its slots and the job's identity.
+            // Note CN12: a derived output records every file it read, with its slots and the job's identity.
             if let Some(dj) = &job.derive {
                 let identity = dj.identity_sha256();
                 for s in &dj.sources {

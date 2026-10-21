@@ -230,7 +230,7 @@
       "description": "What a packed channel holds; serialised in `file_planned` (`job.pack.channels`) and the manifest.",
       "oneOf": [
         {
-          "description": "R (or luma) of a raw source; `invert` stores 1 − x. `channel` reads that channel of an `_orm` (0..=2,\nDECISIONS Note AL) or an `_rmaos` (0..=3, alpha included, Note CM) instead; absent otherwise, so no other\njob's JSON changes.",
+          "description": "R (or luma) of a raw source; `invert` stores 1 − x. `channel` reads that channel of an `_orm` (0..=2,\nDECISIONS Note AL) or an `_rmaos` (0..=3, alpha included, Note CN) instead; absent otherwise, so no other\njob's JSON changes.",
           "properties": {
             "channel": {
               "format": "uint8",
@@ -537,7 +537,7 @@
       "type": "string"
     },
     "DeriveJob": {
-      "description": "How a derived output is built (`ResolvedJob::derive`, Note CM11). `sources[0].path` is the job's `input`.",
+      "description": "How a derived output is built (`ResolvedJob::derive`, Note CN11). `sources[0].path` is the job's `input`.",
       "properties": {
         "albedo": {
           "type": [
@@ -624,7 +624,7 @@
       "type": "object"
     },
     "DeriveKind": {
-      "description": "What a derived job writes (Note CM11).",
+      "description": "What a derived job writes (Note CN11).",
       "enum": [
         "vanilla_diffuse",
         "cm_diffuse",
@@ -1003,7 +1003,7 @@
     },
     "LegacyParams": {
       "additionalProperties": false,
-      "description": "`[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CM5).",
+      "description": "`[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CN5).",
       "properties": {
         "ao_strength": {
           "default": 0.5,
@@ -1493,7 +1493,7 @@
               "type": "null"
             }
           ],
-          "description": "Track A (DECISIONS Note CM11): how a derived output is built from a PBR set's inputs; `None` for every other\njob. For a derived job `input` is `derive.sources[0].path`."
+          "description": "Track A (DECISIONS Note CN11): how a derived output is built from a PBR set's inputs; `None` for every other\njob. For a derived job `input` is `derive.sources[0].path`."
         },
         "game_path": {
           "type": "string"

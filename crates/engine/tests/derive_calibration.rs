@@ -1,5 +1,5 @@
 //! Track A, Task 13: the PBR → vanilla recipe defaults against same-author mods that ship both a PBR and a vanilla
-//! variant (DECISIONS Note CM). Owner data: `#[ignore]`, gated on `SDC_TRACK_A_ARCHIVES`, which names a folder laid
+//! variant (DECISIONS Note CN). Owner data: `#[ignore]`, gated on `SDC_TRACK_A_ARCHIVES`, which names a folder laid
 //! out as `<root>/<author>/vanilla/…` and `<root>/<author>/pbr/…`, each holding that variant's extracted archive(s).
 //! Run with `cargo test -p engine --release --test derive_calibration -- --ignored --nocapture`.
 //!

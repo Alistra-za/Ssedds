@@ -77,7 +77,7 @@ pub fn assemble(job: &PackJob, gray: GraySource) -> Result<Assembled, PackError>
     assemble_channels(&job.channels, &job.sources, gray)
 }
 
-/// Builds the image whose R, G, B, A are `channels`, read from `sources` (Note CM: derive builds its images here
+/// Builds the image whose R, G, B, A are `channels`, read from `sources` (Note CN: derive builds its images here
 /// without a `PackJob`).
 pub fn assemble_channels(
     channels: &[ChannelSource; 4],

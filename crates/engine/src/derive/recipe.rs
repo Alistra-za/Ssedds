@@ -1,9 +1,9 @@
-//! Track A recipe maths: pure per-texel functions on stored values (DECISIONS Note CM5-CM10).
+//! Track A recipe maths: pure per-texel functions on stored values (DECISIONS Note CN5-CN10).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// `[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CM5).
+/// `[export.legacy]`: the PBR → vanilla / complex-material recipe settings (C4, Note CN5).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LegacyParams {
@@ -129,7 +129,7 @@ pub fn diffuse(
     };
     let base = p.brightness as f32 * lerp(1.0, ao, s);
     rgb.map(|v| {
-        // Clamped before the soft light, whose domain is [0, 1] (k may exceed 1; CM10).
+        // Clamped before the soft light, whose domain is [0, 1] (k may exceed 1; CN10).
         let mut c = (v * base).clamp(0.0, 1.0);
         if let Some(b) = curves {
             c = lerp(c, soft_light(c, b), op);
@@ -285,7 +285,7 @@ mod tests {
             diffuse([1.0; 3], 1.0, 0.0, None, None, &hot, Vanilla),
             [1.0; 3]
         );
-        // k > 1 (CM10): c is clamped before the soft light, so a darkening curve cannot brighten.
+        // k > 1 (CN10): c is clamped before the soft light, so a darkening curve cannot brighten.
         // k 1.5, albedo 0.9 → 1.35 → 1; soft_light(1, 0.2) = 1; full metal × 0.3 = 0.3.
         let c = diffuse([0.9; 3], 1.0, 1.0, Some(0.2), None, &hot, Vanilla);
         close(c[0], 0.3, 1e-6);
@@ -309,7 +309,7 @@ mod tests {
         close(spec_alpha(0.5, 1.0, 0.0, &p, false), 0.33, 1e-6); // 0.66·0.5
         close(spec_alpha(0.5, 1.0, 1.0, &p, false), 0.66, 1e-6); // ×2.0
         close(spec_alpha(0.5, 1.0, 0.5, &p, false), 0.495, 1e-6); // ×1.5 at half metal (M1)
-                                                                  // Landscape ignores metal (TA5, CM8): metal 1 gets the metal-0 value, 2.5·0.66·0.2 = 0.33.
+                                                                  // Landscape ignores metal (TA5, CN8): metal 1 gets the metal-0 value, 2.5·0.66·0.2 = 0.33.
         close(spec_alpha(0.8, 1.0, 1.0, &p, true), 0.33, 1e-6);
         assert_eq!(
             spec_alpha(0.8, 1.0, 1.0, &p, true),

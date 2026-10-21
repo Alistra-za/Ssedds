@@ -127,10 +127,10 @@ pub struct BatchRequest {
     /// GUI (v2 artist checks, check 3, DECISIONS Note CL20): measure each eligible texture's detail ratio during the
     /// run. `Off` for the CLI.
     pub low_detail: LowDetailMode,
-    /// Track A (DECISIONS Note CM): replace each PBR set's jobs with derived vanilla or complex-material jobs. `None`
+    /// Track A (DECISIONS Note CN): replace each PBR set's jobs with derived vanilla or complex-material jobs. `None`
     /// (the default) plans as before (C6).
     pub derive: Option<crate::derive::DeriveRequest>,
-    /// Track A (Note CM): the folder discovery skips in place of `output_root` (the Also export location, which
+    /// Track A (Note CN): the folder discovery skips in place of `output_root` (the Also export location, which
     /// holds the PBR, Vanilla and CM folders). `None` skips `output_root` as before.
     pub skip_root: Option<PathBuf>,
 }
@@ -212,7 +212,7 @@ pub struct SkippedFile {
 
 impl SkippedFile {
     /// What the skip means for a consumer of events: `IN-DDS-SKIPPED` (and `DERIVE-DDS-SOURCE`, a set whose DDS sources are
-    /// not re-read, Note CM16), `PACK-CONFLICT`, else `IN-DUPLICATE`.
+    /// not re-read, Note CN16), `PACK-CONFLICT`, else `IN-DUPLICATE`.
     pub fn kind(&self) -> SkipKind {
         match self.code {
             Some(Code::InDdsSkipped | Code::DeriveDdsSource) => SkipKind::DdsInput,
@@ -251,7 +251,7 @@ impl PlanFailure {
     }
 }
 
-/// Packing pass 2 and the derive step (spec §5.9, §6.4; Note CM): each item is admitted on the calling thread at
+/// Packing pass 2 and the derive step (spec §5.9, §6.4; Note CN): each item is admitted on the calling thread at
 /// `est(item)` bytes, then `work` runs on the pool under `catch_unwind`, so a panic fails that item alone at the stage
 /// it had entered (preflight P18). One result per item, in order; `None` = cancelled before its Load started.
 fn admit_all<T: Sync>(
@@ -335,7 +335,7 @@ pub struct Plan {
     pub shaders: BTreeMap<String, ShaderPick>,
     /// The NVTT probe, if any profile on `encoder.backend = "nvtt"` asked for it while planning (DECISIONS Note NV3).
     pub nvtt: Option<crate::nvtt::NvttProbe>,
-    /// Note CM23: members of derived or dropped sets whose own output a job of this plan writes (no TA12 fold: a
+    /// Note CN23: members of derived or dropped sets whose own output a job of this plan writes (no TA12 fold: a
     /// derived diffuse on its albedo's path, a kept landscape `_p`). That job's event ends them, so `run` emits no
     /// `packed_source` for them.
     pub derive_own: BTreeSet<PathBuf>,
@@ -552,7 +552,7 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         let layers = job.active_rnm().map_or(0, |r| {
             r.admission_bytes(&p.rnm, crate::resize::target_dims((w, h), p.resize))
         });
-        // Note CM13: a derived job also holds the colour maps it reads, its scalars (and `_curves`/cavity) image and
+        // Note CN13: a derived job also holds the colour maps it reads, its scalars (and `_curves`/cavity) image and
         // the recipe's output, twice the input for the grass stack.
         let derived = job.derive.as_ref().map_or(0, |dj| {
             use crate::derive::DeriveKind::*;
@@ -648,7 +648,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
             v.push((sha256_file(&s.path).ok()?, None, None, None));
         }
     }
-    // Note CM12: a derived job's sources, each with the job's identity, so a changed setting re-encodes.
+    // Note CN12: a derived job's sources, each with the job's identity, so a changed setting re-encodes.
     if let Some(dj) = &job.derive {
         let identity = dj.identity_sha256();
         for s in &dj.sources {
@@ -1465,7 +1465,7 @@ impl Engine {
         // Spec §6.4 (M2.5): channel packing. Pass 1 decides the recipes; pass 2 assembles, analyses and resolves
         // each under the same memory admission and panic isolation as the files above.
         let failed_paths: Vec<PathBuf> = failed.iter().map(|f| f.path.clone()).collect();
-        // Note CM26 (O6): the raw heights whose landscape `_p` a Vanilla derive keeps.
+        // Note CN26 (O6): the raw heights whose landscape `_p` a Vanilla derive keeps.
         let derive_heights: BTreeSet<PathBuf> = req
             .derive
             .iter()
@@ -1602,7 +1602,7 @@ impl Engine {
                 }
             }
         }
-        // Track A (DECISIONS Note CM): the derive step replaces each PBR set's jobs with derived jobs, after packing
+        // Track A (DECISIONS Note CN): the derive step replaces each PBR set's jobs with derived jobs, after packing
         // (a packed member's job goes too) and before the shader assignment, so a derived set carries its vanilla
         // shader (TA29). Without `derive` nothing below runs (C6).
         let mut derive_own = BTreeSet::new();
@@ -1771,7 +1771,7 @@ impl Engine {
                 project_rel(root, &f)
             };
             for j in &jobs {
-                // A packed output, or a derived `_m` (TA15, Note CM19): the folder of its first source plus the
+                // A packed output, or a derived `_m` (TA15, Note CN19): the folder of its first source plus the
                 // virtual stem (e.g. `rock01_rmaos`, from the first source's name, whatever output path it has),
                 // compared with the extension-less key. A packed output's raw sources count too.
                 let stem = match (&j.pack, &j.derive) {
@@ -1799,7 +1799,7 @@ impl Engine {
                 }
             }
             rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
-            // The derive step removed the jobs of PBR set members (Note CM); their keys still name planned files.
+            // The derive step removed the jobs of PBR set members (Note CN); their keys still name planned files.
             if let Some(d) = &req.derive {
                 let members = d.sets.iter().flat_map(|s| &s.members).chain(&d.drop);
                 rels.extend(members.filter_map(|p| rel_of_path(p)));
@@ -2006,7 +2006,7 @@ impl Engine {
                 &mut summary,
             );
             // IN-DUPLICATE is a conflict the user must resolve; IN-DDS-SKIPPED (Note I) and a pre-packed file
-            // replaced under `packing.prefer = raw` (Note M9) are deliberate, as is a PBR set left in DDS (Note CM16).
+            // replaced under `packing.prefer = raw` (Note M9) are deliberate, as is a PBR set left in DDS (Note CN16).
             if matches!(
                 s.code,
                 Some(
@@ -2046,7 +2046,7 @@ impl Engine {
             );
         }
         let mut ready = vec![];
-        // A file a recipe packs (the kept landscape `_p`'s raw height, Note CM26) already ends with that event.
+        // A file a recipe packs (the kept landscape `_p`'s raw height, Note CN26) already ends with that event.
         let mut derive_read: BTreeSet<&Path> = plan
             .derive_own
             .iter()
@@ -2061,7 +2061,7 @@ impl Engine {
         for job in &plan.jobs {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
             // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output. So
-            // does each file a derived job reads (Note CM23), once, naming the first derived output it feeds.
+            // does each file a derived job reads (Note CN23), once, naming the first derived output it feeds.
             let consumed = job
                 .pack
                 .iter()
@@ -2951,7 +2951,7 @@ mod tests {
         assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
-    /// Note CM13: a derived job adds 16 B/texel per colour map, the scalars and the output (twice for the grass
+    /// Note CN13: a derived job adds 16 B/texel per colour map, the scalars and the output (twice for the grass
     /// stack, which reads the albedo and the normal).
     #[test]
     fn a_derived_job_is_admitted_for_its_colour_scalars_and_output() {

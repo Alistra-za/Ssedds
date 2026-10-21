@@ -151,7 +151,7 @@ codes! {
     ChkLowDetail = "CHK-LOW-DETAIL" => Warning,
     // UV coverage (GUI): UV islands of a meshed colour texture sit closer than the mip-bleed distance.
     ChkUvGutter = "CHK-UV-GUTTER" => Warning,
-    // Track A derive step (DECISIONS Note CM): PBR sets converted to vanilla and complex-material maps.
+    // Track A derive step (DECISIONS Note CN): PBR sets converted to vanilla and complex-material maps.
     // Set skipped: a source it needs is DDS (never re-encoded, M9).
     DeriveDdsSource = "DERIVE-DDS-SOURCE" => Warning,
     // No albedo: no diffuse (and no CM diffuse).
@@ -166,7 +166,7 @@ codes! {
     DeriveNotConverted = "DERIVE-NOT-CONVERTED" => Info,
     // Data {glossiness, specular_strength, env_map}: suggested NIF values for the set.
     DeriveNifSuggest = "DERIVE-NIF-SUGGEST" => Info,
-    // Track A Also export (Note CM): the Vanilla or CM phase stopped with an engine error; its exit code is kept.
+    // Track A Also export (Note CN): the Vanilla or CM phase stopped with an engine error; its exit code is kept.
     AlsoPhaseFailed = "ALSO-PHASE-FAILED" => Error,
     // `<PBR folder>/_sdc/also.json` cannot be read: left as it is, and no owned file is written until it is fixed.
     AlsoOwnedUnreadable = "ALSO-OWNED-UNREADABLE" => Warning,

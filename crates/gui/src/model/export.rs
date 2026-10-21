@@ -267,7 +267,7 @@ impl ExportModel {
         }
     }
 
-    /// Note CM: end every row still queued or running when an Also export ends: failed with `why` ("not run: …"),
+    /// Note CN: end every row still queued or running when an Also export ends: failed with `why` ("not run: …"),
     /// else cancelled after a cancel, else failed "not run".
     pub fn end_unfinished(&mut self, cancelled: bool, why: Option<&str>) {
         let state = match why {

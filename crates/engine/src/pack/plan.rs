@@ -87,7 +87,7 @@ pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
     virtual_input_as(first, kind.suffix())
 }
 
-/// [`virtual_input`] for an output whose suffix is `suffix` (a derived `_m`, Note CM).
+/// [`virtual_input`] for an output whose suffix is `suffix` (a derived `_m`, Note CN).
 pub(crate) fn virtual_input_as(first: &InputFile, suffix: &str) -> InputFile {
     let stem = virtual_stem_as(&first.rel, suffix);
     let ext = first
@@ -423,7 +423,7 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
 /// sources differ in size becomes an error job. `failed` holds the paths that failed planning and `cancelled` those
 /// whose Load never started because the batch was cancelled: a recipe with a member in either is `Failed` (Note M11).
 /// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b. `derive_heights`
-/// holds the raw heights of the landscape sets a Vanilla derive converts (Note CM26, O6): each gets the cs
+/// holds the raw heights of the landscape sets a Vanilla derive converts (Note CN26, O6): each gets the cs
 /// `Parallax` recipe, which the vanilla target otherwise never plans. It is empty without `derive` (C6).
 #[allow(clippy::too_many_arguments)]
 pub fn plan_packing(

@@ -1358,7 +1358,7 @@ fn earlier_outputs_in_place_are_one_counted_line() {
     );
 }
 
-// ---- Track A Task 10 (Note CM): `[export] also` in sdc.toml drives `engine::also` ----
+// ---- Track A Task 10 (Note CN): `[export] also` in sdc.toml drives `engine::also` ----
 
 impl Fx {
     /// A PBR set `textures/pbr/arm/steel` (albedo, `_n`, `_rmaos`) and a plain set `textures/clutter/cup`.
@@ -1546,7 +1546,7 @@ fn a_cancel_on_the_also_path_exits_1_and_stops_the_later_phases() {
     assert!(r.to_lowercase().contains("cancel"), "{r}");
 }
 
-/// Task 10 M2, CM99 (owner ruling): the Also path with the default acceptance (no `--accept-suggestions`). Every
+/// Task 10 M2, CN99 (owner ruling): the Also path with the default acceptance (no `--accept-suggestions`). Every
 /// file stays undecided, so the PBR folder gets no texture, and Also derives nothing from the PBR set: no Vanilla or
 /// CM file, and the report says why. The undecided files make it partial (exit 1).
 #[test]

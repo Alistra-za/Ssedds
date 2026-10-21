@@ -511,7 +511,7 @@ fn build_asks(m: &AppModel) -> Vec<ExportIssue> {
 /// What an export about to start writes once it has ended: the PGPatcher JSON and the vanilla copies.
 #[derive(Debug, Clone)]
 pub struct PendingJson {
-    /// The folder the JSON's hash records are kept against: the PBR folder while a tick is on (Note CM, re-check
+    /// The folder the JSON's hash records are kept against: the PBR folder while a tick is on (Note CN, re-check
     /// A4), else the export folder, as `PendingCs.root` and `PendingCm.root`.
     pub root: PathBuf,
     pub path: PathBuf,

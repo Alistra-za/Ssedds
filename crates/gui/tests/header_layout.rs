@@ -180,7 +180,7 @@ fn assert_one_row_in_the_spec_order(h: &H) {
     assert!(1600.0 - order[9].1.right() <= 16.5, "{:?}", order[9].1);
 }
 
-/// Task 12 (Note CM, owner answer 5): with an "Also export as" tick on, the header is the same one row, and the
+/// Task 12 (Note CN, owner answer 5): with an "Also export as" tick on, the header is the same one row, and the
 /// ticks are not in it (they are Export to ▾ items and a Review section).
 #[test]
 fn the_header_row_is_unchanged_by_also_export() {

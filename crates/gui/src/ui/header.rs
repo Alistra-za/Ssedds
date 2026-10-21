@@ -301,7 +301,7 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
 }
 
 /// Export's hover (A12): "{n} files, {m} problems"; with an "Also export as" tick on, "{n} files to {k} folders, {m}
-/// problems" (re-check A7, Note CM).
+/// problems" (re-check A7, Note CN).
 pub fn export_hover(model: &AppModel) -> String {
     let n = crate::model::bottom::flagged(model).ready_rows;
     let files = model.export_files();

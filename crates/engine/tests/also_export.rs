@@ -1,4 +1,4 @@
-//! Track A Task 7 (DECISIONS Note CM): `also::run_also` writes `<name> PBR`, `<name> Vanilla` and `<name> CM` side by
+//! Track A Task 7 (DECISIONS Note CN): `also::run_also` writes `<name> PBR`, `<name> Vanilla` and `<name> CM` side by
 //! side, as three engine runs. Fixtures are generated: a PBR set `textures/pbr/arm/steel`, a plain set
 //! `textures/clutter/cup`, a PBR landscape set `textures/landscape/dirt` and a complex-material set
 //! `textures/clutter/plate` (a raw `_height`: cs packs a `_p`, vanilla a complex `_m`, Note AZ2). The byte-identity test
@@ -1090,7 +1090,7 @@ fn the_cm_text_names_the_grass_stacks() {
 #[test]
 fn a_failed_file_does_not_block_the_zips() {
     // A CM-only size mismatch fails the CM `_m`. (This used a 24² grass set whose stack failed GRASS-SHAPE; since
-    // CM99 that set is undecided in the PBR export and is not derived at all.)
+    // CN99 that set is undecided in the PBR export and is not derived at all.)
     let (_d, m, loc) = project(|m| {
         steel(m);
         cup(m);
@@ -1122,7 +1122,7 @@ fn vanilla_alone_writes_two_sums_lines() {
     assert!(lines[0].ends_with("  Mod PBR.zip") && lines[1].ends_with("  Mod Vanilla.zip"));
 }
 
-/// Carried from Task 7 (CM43): with `ALSO-OWNED-UNREADABLE` raised, no zip and no sums file is written.
+/// Carried from Task 7 (CN43): with `ALSO-OWNED-UNREADABLE` raised, no zip and no sums file is written.
 #[test]
 fn a_corrupt_owned_record_writes_no_zip_or_sums() {
     let (_d, m, loc) = project(cup);
@@ -1351,7 +1351,7 @@ fn a_report_tessalith_did_not_write_is_kept() {
     assert_eq!(s.report, None);
     let note = engine::dds::Kept::Foreign.note(&path);
     assert!(s.notes.contains(&note), "{:?}", s.notes);
-    // Fix round 1 (CM51): as a kept zip, a Warning event and a partial exit.
+    // Fix round 1 (CN51): as a kept zip, a Warning event and a partial exit.
     assert_eq!(s.exit_code(), 1, "{s:#?}");
     let (_, ev) = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]));
     assert!(ev.iter().any(|e| matches!(&e.kind,
@@ -1452,7 +1452,7 @@ fn a_member_not_converted_is_listed_once() {
     );
 }
 
-/// Carried into Task 9 (CM43): with `ALSO-OWNED-UNREADABLE` raised, no report is written.
+/// Carried into Task 9 (CN43): with `ALSO-OWNED-UNREADABLE` raised, no report is written.
 #[test]
 fn a_corrupt_owned_record_writes_no_report() {
     let (_d, m, loc) = project(cup);
@@ -1602,7 +1602,7 @@ fn a_failed_pbr_run_is_recorded_not_returned() {
         EventKind::Warning(w) if w.code == engine::codes::Code::AlsoPhaseFailed && w.message.contains("Pbr"))));
 }
 
-/// Final review I1: a set's `_curves` member reaches the Vanilla diffuse (spec step 3, CM3), and is not reported as
+/// Final review I1: a set's `_curves` member reaches the Vanilla diffuse (spec step 3, CN3), and is not reported as
 /// not converted.
 #[test]
 fn a_curves_member_changes_the_vanilla_diffuse() {

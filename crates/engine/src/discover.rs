@@ -109,7 +109,7 @@ pub fn discover(
 
 /// `discover`, plus each folder entry it could not read (walkdir's message, which names the path). `skip`, when
 /// `Some`, is the folder skipped in place of `output_root` (Track A: the Also export location holding all three
-/// output folders, Note CM); outputs are still built from `output_root`.
+/// output folders, Note CN); outputs are still built from `output_root`.
 pub fn discover_reporting(
     inputs: &[PathBuf],
     output_root: &Path,

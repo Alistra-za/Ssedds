@@ -1,4 +1,4 @@
-//! The derive step of `Engine::plan` (DECISIONS Note CM): with `BatchRequest::derive`, each PBR set's jobs are
+//! The derive step of `Engine::plan` (DECISIONS Note CN): with `BatchRequest::derive`, each PBR set's jobs are
 //! replaced by derived jobs. [`plan_derived`] runs after packing pass 2 and returns the candidates; the caller
 //! assembles, analyses and resolves each with [`finish_derived`] under pass 2's admission.
 use super::recipe::nif_glossiness;
@@ -143,7 +143,7 @@ fn derive_job(kind: DeriveKind, set: &DeriveSet, d: &DeriveRequest, anchor: &Pat
     job
 }
 
-/// Replaces the jobs of every set in `d` (and of `d.drop`) with derived candidates (DECISIONS Note CM). Jobs whose
+/// Replaces the jobs of every set in `d` (and of `d.drop`) with derived candidates (DECISIONS Note CN). Jobs whose
 /// input or packed source is a member are removed, with the members' `PACK-CONFLICT` skips. A set that cannot be
 /// derived becomes a `SkippedFile` (`DERIVE-DDS-SOURCE`, `DERIVE-NO-ALBEDO`) or error jobs (`PACK-SIZE-MISMATCH`,
 /// `DERIVE-PATH-CONFLICT`), pushed here; the caller adds their target provenance. A set with a member that failed
@@ -287,7 +287,7 @@ pub fn plan_derived(
 
         let metal_source = source_path(&set.metal).is_some();
         let grass = set.shader == Shader::PbrGrass;
-        // Landscape and grass have no metal, env `_m` or NIF suggestion (TA5, O3; Note CM).
+        // Landscape and grass have no metal, env `_m` or NIF suggestion (TA5, O3; Note CN).
         let object = !grass && set.shader != Shader::PbrLandscape;
         // TA8: otherwise the CM diffuse equals the vanilla one.
         let cm_diffuse = object
@@ -575,7 +575,7 @@ pub fn finish_derived(
         suggestions: vec![],
     };
     let mut job = resolve_decided(ctx, &facts, decision);
-    // CM14: the stack's bottom half is the `_n`, whose specular alpha `remove` would drop (an opaque albedo, mesh
+    // CN14: the stack's bottom half is the `_n`, whose specular alpha `remove` would drop (an opaque albedo, mesh
     // evidence or an explicit layer).
     if kind == DeriveKind::GrassStack && job.profile.alpha.policy == AlphaPolicy::Remove {
         job.profile.alpha.policy = AlphaPolicy::Cutout;

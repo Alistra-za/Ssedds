@@ -324,7 +324,7 @@ cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, H
 impl RawMap {
     /// The single-channel roles, each with a `packing.fill.<role>`. `Orm` is not one (DECISIONS Note AL), nor are
     /// `Curves` (a 0.5-centred curvature map), `Cavity` and the multi-channel `Rmaos`, read only by Also export
-    /// (Note CM).
+    /// (Note CN).
     pub const ALL: [RawMap; 8] = {
         use RawMap::*;
         [
@@ -333,7 +333,7 @@ impl RawMap {
     };
 
     /// Every raw-map role a file name can carry: [`RawMap::ALL`], the multi-channel `Orm` (Note AL), `Curves` and
-    /// `Cavity` (Note CM). Not `Rmaos`: `"rmaos"` is also the §6.1 suffix of a pre-packed file, and callers match
+    /// `Cavity` (Note CN). Not `Rmaos`: `"rmaos"` is also the §6.1 suffix of a pre-packed file, and callers match
     /// `set.suffixes` on `id()`.
     pub const INPUTS: [RawMap; 11] = {
         use RawMap::*;

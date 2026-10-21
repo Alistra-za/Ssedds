@@ -1,4 +1,4 @@
-//! C5 (Note CM): `<location>/<project name> conversion-report.md`, written last by every Also export that is not a
+//! C5 (Note CN): `<location>/<project name> conversion-report.md`, written last by every Also export that is not a
 //! dry run, a cancelled or failed one included. LF endings and no timestamp: the same inputs give the same bytes.
 use super::{cm_lines, AlsoSpec, AlsoSummary, Phase, SetNote};
 use crate::api::Plan;

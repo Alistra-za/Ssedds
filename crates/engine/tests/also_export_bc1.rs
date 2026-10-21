@@ -1,4 +1,4 @@
-//! Track A Task 7 (DECISIONS Note CM): the PBR folder of an Also export equals a plain export byte for byte, with
+//! Track A Task 7 (DECISIONS Note CN): the PBR folder of an Also export equals a plain export byte for byte, with
 //! `bc1_model = Nvidia` (not the default Ideal, so a dropped model would show). Its own binary: the BC1 model is
 //! process-global rgbcx state (see `api_init.rs`).
 mod also_support;

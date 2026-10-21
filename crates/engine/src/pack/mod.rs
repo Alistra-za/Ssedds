@@ -91,7 +91,7 @@ impl Slot {
     }
 }
 
-/// The channel of a CS `_rmaos` that holds `slot` (R roughness, G metallic, B AO, A specular; DECISIONS Note CM).
+/// The channel of a CS `_rmaos` that holds `slot` (R roughness, G metallic, B AO, A specular; DECISIONS Note CN).
 pub fn rmaos_channel(slot: Slot) -> Option<u8> {
     match slot {
         Slot::Roughness => Some(0),
@@ -444,7 +444,7 @@ pub fn predicted_suffixes(
 #[serde(tag = "from", rename_all = "snake_case")]
 pub enum ChannelSource {
     /// R (or luma) of a raw source; `invert` stores 1 − x. `channel` reads that channel of an `_orm` (0..=2,
-    /// DECISIONS Note AL) or an `_rmaos` (0..=3, alpha included, Note CM) instead; absent otherwise, so no other
+    /// DECISIONS Note AL) or an `_rmaos` (0..=3, alpha included, Note CN) instead; absent otherwise, so no other
     /// job's JSON changes.
     Source {
         path: PathBuf,

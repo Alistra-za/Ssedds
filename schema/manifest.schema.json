@@ -840,7 +840,7 @@
           ]
         },
         "derive": {
-          "description": "Track A (DECISIONS Note CM12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on\nevery other source.",
+          "description": "Track A (DECISIONS Note CN12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on\nevery other source.",
           "type": [
             "string",
             "null"
@@ -1068,7 +1068,7 @@
           "type": "null"
         }
       ],
-      "description": "Track A (Note CM): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was\ncopied from, so the copy is redone when the PBR file changes. Absent on every encoded output."
+      "description": "Track A (Note CN): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was\ncopied from, so the copy is redone when the PBR file changes. Absent on every encoded output."
     },
     "encoders": {
       "$ref": "#/$defs/EncoderVersions"

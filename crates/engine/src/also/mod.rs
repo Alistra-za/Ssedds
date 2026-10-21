@@ -1,4 +1,4 @@
-//! Track A (DECISIONS Note CM): "Also export as" Vanilla and Complex Material. One export writes `<name> PBR` (the
+//! Track A (DECISIONS Note CN): "Also export as" Vanilla and Complex Material. One export writes `<name> PBR` (the
 //! plain cs export, byte for byte), `<name> Vanilla` and `<name> CM` side by side, as three engine runs in sequence.
 use crate::api::{
     is_up_to_date, BatchRequest, BatchSummary, CancelToken, Engine, EngineError, LowDetailMode,
@@ -69,12 +69,12 @@ pub struct AlsoSummary {
     pub notes: Vec<String>,
     /// A cancel stopped the export after this phase.
     pub cancelled_after: Option<Phase>,
-    /// The phase an engine error stopped (the PBR run, CM56; the Vanilla or CM plan or run), its message and its exit
+    /// The phase an engine error stopped (the PBR run, CN56; the Vanilla or CM plan or run), its message and its exit
     /// code (`EngineError::exit_code`).
     pub error: Option<(Phase, String, i32)>,
     /// `zip` was on and a zip or the sums file was not written (`ALSO-ZIP-FAILED` or `ALSO-OWNED-UNREADABLE`).
     pub zip_failed: bool,
-    /// The report was not written: kept as edited outside Tessalith, or an I/O error (`ALSO-REPORT-FAILED`, CM51).
+    /// The report was not written: kept as edited outside Tessalith, or an I/O error (`ALSO-REPORT-FAILED`, CN51).
     pub report_failed: bool,
 }
 
@@ -215,7 +215,7 @@ fn project_name(inputs: &[PathBuf]) -> Result<String, EngineError> {
 }
 
 /// The final folder names, compared pairwise ASCII/Unicode case-folded once the project name is known (closes the
-/// CM31 shortcut): a custom name equal to another folder's default is refused, naming the custom key.
+/// CN31 shortcut): a custom name equal to another folder's default is refused, naming the custom key.
 pub fn check_names(cfg: &ExportConfig, project: &str) -> Result<(), String> {
     let names = cfg.folder_names(project);
     let custom = [
@@ -287,7 +287,7 @@ pub fn derive_sets(
             });
             continue;
         }
-        // CM99 (owner ruling): Also derives only from a set the PBR export converts. A member still waiting for a
+        // CN99 (owner ruling): Also derives only from a set the PBR export converts. A member still waiting for a
         // decision (`Unresolved`, or `Blocked` by an unacknowledged code: the GUI's "undecided") leaves the set out,
         // as a skipped set is.
         let undecided = jobs
@@ -359,7 +359,7 @@ pub fn derive_sets(
             }),
             _ => None,
         };
-        // Final review I1: `_curves` and cavity are raw maps, planned as packing inputs (CM3).
+        // Final review I1: `_curves` and cavity are raw maps, planned as packing inputs (CN3).
         let raw = |want: RawMap| {
             plain.iter().find_map(|j| match j.status {
                 JobStatus::PackingInput { role } if role == want => Some(ChannelSource::Source {
@@ -599,7 +599,7 @@ fn this_runs_files(
     out
 }
 
-/// C8 (Note CM): each folder that ran becomes `<location>/<folder name>.zip` of this run's outputs (TA23, `files`
+/// C8 (Note CN): each folder that ran becomes `<location>/<folder name>.zip` of this run's outputs (TA23, `files`
 /// from `this_runs_files`), and `<location>/<project> SHA256SUMS.txt` gets a line per zip written, all through
 /// `OwnedFiles` (TA21). Returns what was not written, one message each (review M1).
 fn write_zips(
@@ -688,7 +688,7 @@ struct Copy {
 
 /// The copy rule (O4, TA25): write each copy into the Vanilla folder and append its record, under `on_existing`
 /// and fix/pre-v2's `may_replace`. Each copy ends with one terminal event; counts go into `sum`. The record is the
-/// twin's (cs profile, hash and preset included; Note CM33, review L1).
+/// twin's (cs profile, hash and preset included; Note CN33, review L1).
 // shortcut: copies write no `--sidecar`, and their up-to-date check does not look for one; upgrade by copying
 // `<twin>.dds.json` when sidecars matter for Vanilla.
 fn do_copies(
@@ -816,9 +816,9 @@ fn do_copies(
     copied
 }
 
-/// One Also export (Note CM): check the location and the `[export]` table, then run the PBR, Vanilla and CM phases
+/// One Also export (Note CN): check the location and the `[export]` table, then run the PBR, Vanilla and CM phases
 /// in order. Errors before the PBR phase writes anything are returned. A cancel stops the remaining phases and is
-/// recorded in `cancelled_after`; an engine error of the PBR run (CM56) or of the Vanilla or CM phase stops them too
+/// recorded in `cancelled_after`; an engine error of the PBR run (CN56) or of the Vanilla or CM phase stops them too
 /// and is recorded in `error` with its exit code, plus an `ALSO-PHASE-FAILED` event. With `zip` on, an export that
 /// finished (no cancel, no phase error) and whose owned record is readable is zipped (Task 8); file-level failures
 /// don't block it. The report (Task 9) is written last, unless it is a dry run or the owned record is unreadable.
@@ -911,7 +911,7 @@ pub fn finish_also(
             EventKind::Warning(Warning::new(code, message.to_string())),
         )
     };
-    // CM43: a record found unreadable at the start was reported then; one that broke since is reported here, once.
+    // CN43: a record found unreadable at the start was reported then; one that broke since is reported here, once.
     let mut owned = match OwnedFiles::load(&s.folders[0]) {
         Ok(o) => Some(o),
         Err(_) if s.notes.iter().any(|n| n.contains(OWNED_UNREADABLE)) => None,
@@ -941,7 +941,7 @@ pub fn finish_also(
     if spec.cfg.zip {
         if !finished {
             s.notes.push(ZIP_SKIPPED.into());
-            // A cancel after the last phase (the GUI's JSON step) leaves no cancelled file: still partial (CM49).
+            // A cancel after the last phase (the GUI's JSON step) leaves no cancelled file: still partial (CN49).
             s.zip_failed = true;
         } else {
             let failed = match &mut owned {
@@ -964,7 +964,7 @@ pub fn finish_also(
         let text = report::render(&s, &rows, spec, grass);
         match owned.write(&path, text.as_bytes()) {
             Ok(()) => s.report = Some(path),
-            // CM51 (fix round 1): as a zip not written, a warning and a partial export.
+            // CN51 (fix round 1): as a zip not written, a warning and a partial export.
             Err(e) => {
                 let m = e.note(&path);
                 warn(Code::AlsoReportFailed, &m);
@@ -976,7 +976,7 @@ pub fn finish_also(
     s
 }
 
-/// CM43: the tail of the note for an unreadable `also.json`.
+/// CN43: the tail of the note for an unreadable `also.json`.
 const OWNED_UNREADABLE: &str =
     "it is left as it is, and no report, zip or sums file is written until it is fixed or removed";
 
@@ -1067,7 +1067,7 @@ fn run_phases(
     let warn = |code: Code, message: String| {
         rep.emit(None, None, EventKind::Warning(Warning::new(code, message)))
     };
-    // Review M1: a phase's error keeps its phase and exit code, and is reported as an event. N1 (CM51): the PBR
+    // Review M1: a phase's error keeps its phase and exit code, and is reported as an event. N1 (CN51): the PBR
     // phase's too, so the report is still written after it.
     let failed = |s: &mut AlsoSummary, phase: Phase, e: EngineError| {
         warn(

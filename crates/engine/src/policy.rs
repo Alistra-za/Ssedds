@@ -1254,7 +1254,7 @@ pub struct ResolvedJob {
     /// M6 Track F2: a base normal's RNM layers (`rnm::plan::plan_rnm`); `None` for every other job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rnm: Option<crate::rnm::RnmJob>,
-    /// Track A (DECISIONS Note CM11): how a derived output is built from a PBR set's inputs; `None` for every other
+    /// Track A (DECISIONS Note CN11): how a derived output is built from a PBR set's inputs; `None` for every other
     /// job. For a derived job `input` is `derive.sources[0].path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derive: Option<crate::derive::DeriveJob>,

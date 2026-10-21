@@ -195,7 +195,7 @@ impl EventSink for NullSink {
     fn emit(&self, _: &EngineEvent) {}
 }
 
-/// Track A (Note CM): forwards every event with its job key prefixed (`"<Vanilla folder>/"`), so the three folders'
+/// Track A (Note CN): forwards every event with its job key prefixed (`"<Vanilla folder>/"`), so the three folders'
 /// rows of one Also export never share a key. Batch-level events (no job) pass unchanged.
 pub struct PrefixSink {
     prefix: String,

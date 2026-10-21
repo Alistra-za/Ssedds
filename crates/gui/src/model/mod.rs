@@ -476,11 +476,11 @@ pub struct AppModel {
     pub half_size_unwritable: Option<String>,
     /// The running (or last) export pass is a held export's second pass (Note CL24).
     half_pass: bool,
-    /// Note CM: the running (or last) export is an Also export (`run_also`).
+    /// Note CN: the running (or last) export is an Also export (`run_also`).
     also_pass: bool,
-    /// Note CM: the last Also export's phase error (CM56), so its end is logged as an error, not a success.
+    /// Note CN: the last Also export's phase error (CN56), so its end is logged as an error, not a success.
     also_error: Option<String>,
-    /// Note CM: the three folders the last Also export wrote (`also_file`).
+    /// Note CN: the three folders the last Also export wrote (`also_file`).
     also_written: Option<[PathBuf; 3]>,
     /// Final review I2: the Also worker waits on this for the files the JSON finishers wrote into the PBR folder.
     also_reply: Option<Sender<Vec<PathBuf>>>,
@@ -1312,7 +1312,7 @@ impl AppModel {
             self.also_cancel = token;
         }
         if self.also_pass {
-            // Note CM: every row ends, whatever ended the export (a refusal or plan error leaves planned rows with no
+            // Note CN: every row ends, whatever ended the export (a refusal or plan error leaves planned rows with no
             // `BatchDone`; a cancelled copy has no event).
             let why = match &result {
                 Err(e) => Some(e.clone()),
@@ -1333,7 +1333,7 @@ impl AppModel {
         match result {
             Ok(summary) => {
                 let sev = if self.also_error.is_some() {
-                    // Note CM: a Vanilla or CM phase failed; the PBR folder is complete, its JSON is still written.
+                    // Note CN: a Vanilla or CM phase failed; the PBR folder is complete, its JSON is still written.
                     messages::Severity::Error
                 } else if summary.failed > 0 {
                     messages::Severity::Warning
@@ -1592,7 +1592,7 @@ impl AppModel {
         }
         let asks = !pbr_export::export_asks(self).is_empty();
         // R6: an edited PGPatcher JSON is asked about in Review, before the export (C4).
-        // Note CM (C1, owner answer 5): a tick opens Review; its Export is the only way to an Also export.
+        // Note CN (C1, owner answer 5): a tick opens Review; its Export is the only way to an Also export.
         if asks || self.undecided() > 0 || self.pgp_json_edited() || self.also_on() {
             self.open_review();
             return;
@@ -2453,7 +2453,7 @@ impl AppModel {
                 .as_ref()
                 .map_or(0, crate::sets_doc::SetsDoc::rev),
             root: self.root.clone(),
-            // Note CM: the PBR folder while a tick is on, so the JSON paths follow a tick at once.
+            // Note CN: the PBR folder while a tick is on, so the JSON paths follow a tick at once.
             export_root: self.output_root(),
             target: self.target,
             scan_db: self.scan_db.clone(),
