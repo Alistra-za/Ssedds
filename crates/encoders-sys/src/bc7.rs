@@ -126,8 +126,8 @@ fn compress(pixels: &[[u8; 4]], out: &mut [u8], p: Bc7Params, target: i32) {
     }
 }
 
-/// Per-field overrides of a level's bc7e parameters. Measurement only (the sdc-bench BC7 tuning study,
-/// docs/research/bc7e-tuning.md); the engine never uses it. `None` keeps the level's value.
+/// Per-field overrides of a level's bc7e parameters, for the sdc-bench BC7 tuning study (docs/research/bc7e-tuning.md).
+/// The engine sets only `weights` (`encoder.bc7_weights`, DECISIONS Note CP). `None` keeps the level's value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Bc7Tune {
     /// Partitions given a full encode after the cheap estimate (modes 0, 1/3, 2 and 7 together).

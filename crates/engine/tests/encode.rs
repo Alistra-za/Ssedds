@@ -480,3 +480,113 @@ fn effort_and_radius_mappings() {
     assert_eq!(radius(SearchRadius::Max), 10);
     assert_eq!(radius(SearchRadius::Fast), 4);
 }
+
+/// Note CP: random RGB over a smooth alpha ramp, the case alpha weighting is for.
+fn colour_smooth_alpha(w: u32, h: u32) -> Vec<[u8; 4]> {
+    let mut s = 0x2545_f491_u32;
+    (0..w * h)
+        .map(|i| {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            let (x, y) = (i % w, i / w);
+            let a = (40 + (x * 3 + y * 2) % 180) as u8;
+            [s as u8, (s >> 8) as u8, (s >> 16) as u8, a]
+        })
+        .collect()
+}
+
+fn weighted(w: Option<Bc7Weights>) -> Profile {
+    let mut p = profile(Subtype::Diffuse);
+    p.alpha.policy = AlphaPolicy::Blend;
+    p.alpha.exact_opaque = false;
+    p.encoder.perceptual = false;
+    p.encoder.bc7_weights = w;
+    p
+}
+
+const WEIGHTINGS: [Bc7Weights; 4] = [
+    Bc7Weights::Alpha2,
+    Bc7Weights::Alpha8,
+    Bc7Weights::Alpha16,
+    Bc7Weights::Rmaos,
+];
+
+/// Note CP: unset is the plain bc7e call (Linear is byte-identical to before); every option changes the bytes; with
+/// `perceptual` on, the weights are ignored.
+#[test]
+fn bc7_weighting_options_change_the_bytes_and_unset_is_the_plain_call() {
+    let (w, h) = (64, 64);
+    let px = colour_smooth_alpha(w, h);
+    let input = EncoderInput::Ldr(px.clone());
+    let p = weighted(None);
+    let linear = encode(&input, w, h, &p);
+    let raw = raw_bc7e(
+        &px,
+        w,
+        h,
+        encoders_sys::Bc7Params {
+            level: bc7_level(p.encoder.effort),
+            perceptual: false,
+            exact_opaque: false,
+        },
+    );
+    assert_eq!(linear, raw, "no block is opaque, so no fix-up runs");
+    for o in WEIGHTINGS {
+        assert_ne!(encode(&input, w, h, &weighted(Some(o))), linear, "{o:?}");
+    }
+    let mut q = weighted(Some(Bc7Weights::Alpha8));
+    q.encoder.perceptual = true;
+    let mut r = weighted(None);
+    r.encoder.perceptual = true;
+    assert_eq!(encode(&input, w, h, &q), encode(&input, w, h, &r));
+}
+
+fn alpha_psnr(bc7: &[u8], px: &[[u8; 4]], w: u32, h: u32) -> f64 {
+    let blocks = encoders_sys::gather_blocks(px, w, h);
+    let mut se = 0f64;
+    for (b, src) in bc7.chunks(16).zip(blocks.chunks(16)) {
+        let mut d = [0u8; 64];
+        bcdec_rs::bc7(b, &mut d, 16);
+        for (t, s) in d.chunks(4).zip(src) {
+            se += (f64::from(t[3]) - f64::from(s[3])).powi(2);
+        }
+    }
+    let mse = se / blocks.len() as f64;
+    10.0 * (255.0f64 * 255.0 / mse.max(1e-9)).log10()
+}
+
+/// Note CP: Alpha x8 raises alpha PSNR over Linear on a smooth alpha under noisy colour.
+#[test]
+fn bc7_alpha8_raises_alpha_psnr_on_smooth_alpha() {
+    let (w, h) = (64, 64);
+    let px = colour_smooth_alpha(w, h);
+    let input = EncoderInput::Ldr(px.clone());
+    let lin = alpha_psnr(&encode(&input, w, h, &weighted(None)), &px, w, h);
+    let a8 = alpha_psnr(
+        &encode(&input, w, h, &weighted(Some(Bc7Weights::Alpha8))),
+        &px,
+        w,
+        h,
+    );
+    assert!(
+        a8 > lin + 1.0,
+        "alpha PSNR linear {lin:.2} dB, alpha8 {a8:.2} dB"
+    );
+}
+
+/// Note CP: the field is not serialised when unset, so every existing profile hash holds.
+#[test]
+fn bc7_weights_change_the_profile_hash_only_when_set() {
+    let p = weighted(None);
+    let v = serde_json::to_value(&p).unwrap();
+    assert!(v["encoder"].get("bc7_weights").is_none());
+    let q = weighted(Some(Bc7Weights::Alpha8));
+    assert_eq!(
+        serde_json::to_value(&q).unwrap()["encoder"]["bc7_weights"],
+        "alpha8"
+    );
+    let h = |p: &Profile| engine::manifest::profile_sha256(p).unwrap();
+    assert_ne!(h(&p), h(&q));
+    assert_eq!(h(&p), h(&weighted(None)));
+}

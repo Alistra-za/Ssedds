@@ -104,6 +104,19 @@ cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 // refused with `CFG-INVALID` without them (docs/research/bc7e-tuning.md).
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest, Max });
 cfg_enum!(SearchRadius, "lowercase" { Default, Max, Fast });
+// BC7 linear error weights for bc7e (DECISIONS Note CP): alpha priority, or roughness then AO for an RMAOS map.
+cfg_enum!(Bc7Weights, "lowercase" { Alpha2, Alpha8, Alpha16, Rmaos });
+impl Bc7Weights {
+    /// The R, G, B, A weights bc7e is given.
+    pub fn weights(self) -> [u32; 4] {
+        match self {
+            Bc7Weights::Alpha2 => [1, 1, 1, 2],
+            Bc7Weights::Alpha8 => [1, 1, 1, 8],
+            Bc7Weights::Alpha16 => [1, 1, 1, 16],
+            Bc7Weights::Rmaos => [4, 1, 2, 1],
+        }
+    }
+}
 cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
 cfg_enum!(
     /// One RNM normal layer (M6 Track F2 spec §2.1).
@@ -683,6 +696,10 @@ pub struct EncoderSpec {
     pub effort: Effort,
     pub rgbcx_level: u32,
     pub perceptual: bool,
+    /// BC7 linear error weights (bc7e only; ignored when `perceptual` is on). Not serialised when unset, so existing
+    /// profile hashes hold (DECISIONS Note CP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bc7_weights: Option<Bc7Weights>,
     pub bc1_transparent_black: bool,
     pub bc45_search_radius: SearchRadius,
 }

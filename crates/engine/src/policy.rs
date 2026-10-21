@@ -1729,6 +1729,25 @@ pub fn check_profile(
             "perceptual BC7 is allowed only for colour without data alpha [B2 §1]".into(),
         );
     }
+    // DECISIONS Note CP: the weights reach bc7e only, and only without perceptual (bc7e's own weights win there).
+    if let Some(w) = p.encoder.bc7_weights {
+        let why = if p.format != Format::Bc7 {
+            Some("the format is not BC7")
+        } else if p.encoder.backend != Backend::Bc7e {
+            Some("only the built-in BC7 encoder (bc7e) reads them")
+        } else if p.encoder.perceptual {
+            Some("encoder.perceptual is on, and bc7e then uses its own weights")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            let w = serde_json::to_value(w).unwrap_or_default();
+            add(
+                EncWeightsIgnored,
+                format!("encoder.bc7_weights = {w} has no effect: {why}"),
+            );
+        }
+    }
     // Owner 2026-10-11 (DECISIONS P25): an alpha the user explicitly removed is their decision, not a loss; a
     // PBR normal's alpha is vanilla specular that PBR does not use, so dropping it is an info. Any other
     // discarded varying alpha (an inferred remove, or a format that cannot store it) still blocks.
