@@ -230,7 +230,7 @@
       "description": "What a packed channel holds; serialised in `file_planned` (`job.pack.channels`) and the manifest.",
       "oneOf": [
         {
-          "description": "R (or luma) of a raw source; `invert` stores 1 − x. `channel` (0..=2) reads that channel of an `_orm`\ninstead (DECISIONS Note AL); absent otherwise, so no other job's JSON changes.",
+          "description": "R (or luma) of a raw source; `invert` stores 1 − x. `channel` reads that channel of an `_orm` (0..=2,\nDECISIONS Note AL) or an `_rmaos` (0..=3, alpha included, Note CM) instead; absent otherwise, so no other\njob's JSON changes.",
           "properties": {
             "channel": {
               "format": "uint8",
@@ -1160,7 +1160,10 @@
         "height",
         "opacity",
         "fuzz",
-        "orm"
+        "orm",
+        "curves",
+        "cavity",
+        "rmaos"
       ],
       "type": "string"
     },

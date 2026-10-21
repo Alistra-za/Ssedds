@@ -262,3 +262,37 @@ fn an_oversized_source_is_refused_before_the_canvas_is_allocated() {
         assemble(&j, GraySource::R).map(|a| (a.image.width, a.image.height))
     ));
 }
+
+/// Track A Task 1 (DECISIONS Note CM): an `_rmaos` is read by channel, alpha included, and is colour by design
+/// (never `CHAN-NOT-GRAY`).
+#[test]
+fn an_rmaos_source_is_read_by_channel_including_alpha() {
+    use image::Rgba;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("x_rmaos.png");
+    let px = [[10u8, 20, 30, 40], [50, 60, 70, 80]];
+    ImageBuffer::from_fn(2, 1, |x, _| Rgba(px[x as usize]))
+        .save(&p)
+        .unwrap();
+    let ch = |c: u8| ChannelSource::Source {
+        path: p.clone(),
+        role: RawMap::Rmaos,
+        invert: false,
+        channel: Some(c),
+    };
+    let sources = [PackSource {
+        path: p.clone(),
+        role: RawMap::Rmaos,
+        stamp: None,
+    }];
+    let a = assemble_channels(
+        &[ch(0), ch(2), ch(3), ChannelSource::Opaque],
+        &sources,
+        GraySource::R,
+    )
+    .unwrap();
+    for (got, want) in a.image.px[0].iter().zip([10.0, 30.0, 40.0, 255.0]) {
+        close(*got, want / 255.0);
+    }
+    assert!(a.non_gray.is_empty());
+}

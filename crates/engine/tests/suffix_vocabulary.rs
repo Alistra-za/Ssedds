@@ -184,7 +184,7 @@ fn vocabulary_splits_to_skyrim_roles() {
     );
     assert_eq!(SUFFIXES.len(), 20);
     // longest first, so `_base_color` is one term
-    assert_eq!(VOCABULARY.len(), 34);
+    assert_eq!(VOCABULARY.len(), 37);
     assert!(VOCABULARY
         .windows(2)
         .all(|w| w[0].term.len() >= w[1].term.len()));
@@ -518,6 +518,7 @@ fn aliases_may_not_shadow_the_vocabulary() {
         "basecolor = \"d\"",
         "spec = \"s\"",
         "orm = \"m\"",
+        "curvature = \"m\"",
     ] {
         let toml = format!("schema_version = 1\nid = \"bad\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[suffix_aliases]\n{bad}\n");
         let e = r.add_toml(&toml);
@@ -704,5 +705,33 @@ fn upper_case_suffixes_resolve_like_lower_case_and_nothing_asks_a_sub_type() {
             "{input}: {:?}",
             j.status
         );
+    }
+}
+
+/// Track A Task 1 (DECISIONS Note CM): `_curves`, `_curvature` and `_cavity` are packing inputs; `Rmaos` is a
+/// role but never a file-name one, and none of the three starts the cs `_rmaos` recipe.
+#[test]
+fn curves_curvature_and_cavity_are_packing_input_terms() {
+    for (stem, role) in [
+        ("rock_curves", RawMap::Curves),
+        ("rock_curvature", RawMap::Curves),
+        ("rock_cavity", RawMap::Cavity),
+    ] {
+        let (base, v) = split_vocab(stem).unwrap();
+        assert_eq!(
+            (base.as_str(), &v.role),
+            ("rock", &VocabRole::PackingInput(role)),
+            "{stem}"
+        );
+    }
+    assert_eq!(RawMap::INPUTS.len(), 11);
+    assert_eq!(RawMap::ALL.len(), 8);
+    assert!(!RawMap::INPUTS.contains(&RawMap::Rmaos));
+    assert_eq!(
+        [RawMap::Curves, RawMap::Cavity, RawMap::Rmaos].map(RawMap::id),
+        ["curves", "cavity", "rmaos"]
+    );
+    for r in [RawMap::Curves, RawMap::Cavity, RawMap::Rmaos] {
+        assert!(!r.starts_rmaos(), "{r:?}");
     }
 }

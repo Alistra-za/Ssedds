@@ -720,7 +720,10 @@
         "height",
         "opacity",
         "fuzz",
-        "orm"
+        "orm",
+        "curves",
+        "cavity",
+        "rmaos"
       ],
       "type": "string"
     },
