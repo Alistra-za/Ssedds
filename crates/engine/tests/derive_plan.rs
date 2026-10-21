@@ -1358,7 +1358,11 @@ fn a_grass_stack_of_the_wrong_shape_is_grass_shape() {
     let d = tempfile::tempdir().unwrap();
     let inputs = d.path().join("in");
     grass(&inputs, "textures/landscape/grass", 24);
-    let (p, _) = cs_then(DeriveMode::Cm, &inputs, d.path(), gras);
+    // 24² is DIM-NPOT, a blocking code: acknowledged, so the PBR export converts the set and it is derived (CM99).
+    let (p, _) = cs_then(DeriveMode::Cm, &inputs, d.path(), |r, _| {
+        gras(r, None);
+        r.allow.insert(Code::DimNpot);
+    });
     let j = out_job(&p, "textures/landscape/grass/g.dds").unwrap();
     assert_eq!(j.derive.as_ref().unwrap().kind, DeriveKind::GrassStack);
     assert!(has(j, Code::GrassShape), "{:?}", j.warnings);

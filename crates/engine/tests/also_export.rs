@@ -1089,27 +1089,21 @@ fn the_cm_text_names_the_grass_stacks() {
 
 #[test]
 fn a_failed_file_does_not_block_the_zips() {
+    // A CM-only size mismatch fails the CM `_m`. (This used a 24² grass set whose stack failed GRASS-SHAPE; since
+    // CM99 that set is undecided in the PBR export and is not derived at all.)
     let (_d, m, loc) = project(|m| {
         steel(m);
         cup(m);
-        let g = m.join("textures/landscape/grass");
-        png(&g.join("g.png"), 24, 24, [90, 140, 60, 255]);
-        png(&g.join("g_n.png"), 24, 24, [128, 128, 255, 255]);
-        png(&g.join("g_rmaos.png"), 24, 24, [128, 0, 255, 255]);
+        png(
+            &m.join("textures/pbr/arm/steel_p.png"),
+            32,
+            32,
+            [100, 100, 100, 255],
+        );
     });
-    let mut req = request(&m, &loc);
-    req.gras_all_diffuses
-        .insert("textures/landscape/grass/g".to_string());
-    let (s, ev) = also(req, &zip_spec(&loc, BOTH));
+    let (s, _) = also(request(&m, &loc), &zip_spec(&loc, BOTH));
     let s = s.unwrap();
-    let grass_shape = ev.iter().any(|e| match &e.kind {
-        EventKind::Warning(w) => w.code == engine::codes::Code::GrassShape,
-        EventKind::FileSkipped { code, .. } => *code == Some(engine::codes::Code::GrassShape),
-        EventKind::FileFailed { error, .. } => error.contains("GRASS-SHAPE"),
-        _ => false,
-    });
-    assert!(grass_shape, "{s:#?}");
-    assert!(s.combined().failed > 0, "{s:#?}");
+    assert!(phase(&s, Phase::Cm).failed > 0, "{s:#?}");
     assert_eq!(s.zips.len(), 3, "{:?}", s.notes);
     assert_eq!(sums(&loc).len(), 3);
 }

@@ -1546,10 +1546,9 @@ fn a_cancel_on_the_also_path_exits_1_and_stops_the_later_phases() {
     assert!(r.to_lowercase().contains("cancel"), "{r}");
 }
 
-/// Task 10 M2 (pinned as measured, CM99): the Also path with the default acceptance (no `--accept-suggestions`).
-/// Every plain file stays undecided, so the PBR folder gets no texture and the plain set is neither copied nor
-/// encoded; the PBR set is still picked `pbr`, and its derived jobs are decided by their recipe, so Vanilla and CM
-/// get the derived files. The undecided files make it partial (exit 1).
+/// Task 10 M2, CM99 (owner ruling): the Also path with the default acceptance (no `--accept-suggestions`). Every
+/// file stays undecided, so the PBR folder gets no texture, and Also derives nothing from the PBR set: no Vanilla or
+/// CM file, and the report says why. The undecided files make it partial (exit 1).
 #[test]
 fn the_default_flow_with_undecided_sets() {
     let fx = Fx::new();
@@ -1559,11 +1558,15 @@ fn the_default_flow_with_undecided_sets() {
     let r = std::fs::read_to_string(fx.dds("in conversion-report.md")).unwrap();
     assert_eq!(code(&o), 1, "{}\n{r}", text(&o.stderr));
     assert!(r.contains("| in PBR | 0 | - | 0 | 5 | 0 |"), "{r}");
-    assert!(r.contains("| textures/pbr/arm/steel |"), "{r}");
+    assert!(
+        r.contains("- textures/pbr/arm/steel: not derived: 3 maps undecided in the PBR export"),
+        "{r}"
+    );
     assert!(!fx.dds("in PBR/textures/pbr/arm/steel.dds").exists());
-    assert!(fx.dds("in Vanilla/textures/arm/steel.dds").exists());
+    assert!(!fx.dds("in Vanilla/textures/arm/steel.dds").exists());
+    assert!(!fx.dds("in Vanilla/textures/arm/steel_n.dds").exists());
     assert!(!fx.dds("in Vanilla/textures/clutter/cup.dds").exists());
-    assert!(fx.dds("in CM/textures/arm/steel_m.dds").exists());
+    assert!(!fx.dds("in CM/textures/arm/steel_m.dds").exists());
 }
 
 /// Task 10 M3: `[export]` is read on every convert, but without `also` a valid table changes nothing, and a

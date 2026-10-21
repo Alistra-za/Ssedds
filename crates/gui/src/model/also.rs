@@ -269,6 +269,10 @@ impl AppModel {
     /// PBR-run failure is `Ok` from `run_also`), not a success.
     pub(super) fn also_finished(&mut self, s: AlsoSummary) {
         self.export.notes.extend(s.notes.iter().cloned());
+        // CM99: why a PBR set got no Vanilla or CM files (left out, undecided, DDS, ...), as the report says.
+        self.export
+            .notes
+            .extend(s.sets.iter().map(|n| format!("{}: {}", n.id, n.why)));
         if s.copied > 0 {
             self.export.notes.push(format!(
                 "{} Vanilla file{} copied from the PBR folder",

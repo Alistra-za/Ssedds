@@ -287,6 +287,29 @@ pub fn derive_sets(
             });
             continue;
         }
+        // CM99 (owner ruling): Also derives only from a set the PBR export converts. A member still waiting for a
+        // decision (`Unresolved`, or `Blocked` by an unacknowledged code: the GUI's "undecided") leaves the set out,
+        // as a skipped set is.
+        let undecided = jobs
+            .iter()
+            .filter(|j| {
+                matches!(
+                    j.status,
+                    JobStatus::Unresolved { .. } | JobStatus::Blocked { .. }
+                )
+            })
+            .count();
+        if undecided > 0 {
+            drop.extend(members);
+            notes.push(SetNote {
+                id,
+                why: format!(
+                    "not derived: {undecided} map{} undecided in the PBR export",
+                    if undecided == 1 { "" } else { "s" }
+                ),
+            });
+            continue;
+        }
         let plain: Vec<&&ResolvedJob> = jobs.iter().filter(|j| j.pack.is_none()).collect();
         let maps: Vec<MemberMap> = plain
             .iter()
