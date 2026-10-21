@@ -61,9 +61,9 @@ pub const REFRACTION_NO_EFFECT: &str = "Refraction strength has no visible effec
 /// Note CO (owner): SLSF1 bit 21 FaceGen_RGB_Tint off shader type 5 (Skin Tint) crashes the game.
 pub const SKIN_TINT_TYPE: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
-/// Note CO (owner): SLSF1 bit 10 Facegen_Detail_Map off shader type 4 (Face Tint) renders black.
+/// Note CO (owner): SLSF1 bit 10 Facegen_Detail_Map off shader types 4 (Face Tint) and 5 (Skin Tint, CO3) renders black.
 pub const FACEGEN_DETAIL_TYPE: &str =
-    "FaceGen detail flag needs the Face Tint shader type: the mesh renders black otherwise.";
+    "FaceGen detail flag needs the Face Tint or Skin Tint shader type: the mesh renders black otherwise.";
 /// Note CO (owner): type 4 without bit 10 is wrong too (every vanilla Face Tint shape has it).
 pub const FACE_TINT_FLAG: &str =
     "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
@@ -86,12 +86,12 @@ pub fn type_flag_errors(
         let n = "Skin tint flag cleared: it needs the Skin Tint shader type.";
         out.push((skin, 0, SKIN_TINT_TYPE, n));
     }
-    match (slsf1 & detail != 0, shader_type == 4) {
-        (true, false) => {
-            let n = "FaceGen detail flag cleared: it needs the Face Tint shader type.";
+    match (slsf1 & detail != 0, shader_type) {
+        (true, t) if t != 4 && t != 5 => {
+            let n = "FaceGen detail flag cleared: it needs the Face Tint or Skin Tint shader type.";
             out.push((detail, 0, FACEGEN_DETAIL_TYPE, n));
         }
-        (false, true) => {
+        (false, 4) => {
             let n = "FaceGen detail flag set: the Face Tint shader type needs it.";
             out.push((detail, detail, FACE_TINT_FLAG, n));
         }
@@ -104,7 +104,9 @@ pub fn type_flag_errors(
 pub fn type_flag_lock(shader_type: u32, bit: u32) -> Option<&'static str> {
     match bit {
         21 if shader_type != 5 => Some("Needs the Skin Tint shader type."),
-        10 if shader_type != 4 => Some("Needs the Face Tint shader type."),
+        10 if shader_type != 4 && shader_type != 5 => {
+            Some("Needs the Face Tint or Skin Tint shader type.")
+        }
         _ => None,
     }
 }
