@@ -3790,6 +3790,82 @@ fn colour_scene(k1: [f32; 3], k2: [f32; 3]) -> (MeshesModel, u32) {
     (m, ctrl)
 }
 
+/// C5b: a colour curve has a colour strip under its graph (the graph keeps its height); a float curve has none.
+#[test]
+fn colour_strip_shows_on_colour_curves_only() {
+    let (m, _) = colour_scene([0.2, 0.4, 0.6], [0.5, 0.5, 0.5]);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let graph = h.get_by_label("Emissive colour curve").rect();
+    let strip = h.get_by_label("Emissive colour colour strip").rect();
+    assert!(strip.top() >= graph.bottom(), "{strip:?} under {graph:?}");
+    assert_eq!(graph.height(), 120.0, "the graph is unchanged");
+
+    let mut h = view(clip_scene());
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("Emissive multiple curve");
+    h.get_by_label("U offset curve");
+    assert!(h.query_by_label("Emissive multiple colour strip").is_none());
+    assert!(h.query_by_label("U offset colour strip").is_none());
+}
+
+/// C5b-D5: a click or drag on the colour strip scrubs like the graph.
+#[test]
+fn clicking_the_colour_strip_scrubs() {
+    let (_d, mut m, _cmds) = playing_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    add_colour_ctrl(&mut m, shape, [0.2, 0.4, 0.6], [0.8, 0.6, 0.4]);
+    m.select_edit(Selection::Shape(shape));
+    m.tick_anim(0.0);
+    m.v3.clock.as_mut().unwrap().play();
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    // the strip sits further down than the scrub test's curve: wait for the scroll to settle
+    reveal(&mut h, "Emissive colour colour strip");
+    let r = h.get_by_label("Emissive colour colour strip").rect();
+    // curve.rs PAD = 6 px; the colour controller spans [0, 1].
+    let p = egui::pos2(r.left() + 6.0 + 0.25 * (r.width() - 12.0), r.center().y);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let c = h.state().v3.clock.unwrap();
+    assert!(!c.playing, "a scrub pauses");
+    assert!((c.t - 0.25).abs() < 0.01, "{c:?}");
+}
+
+/// C5b screenshots: the colour strip with an HDR key at 1100 and 1600 px, saved to `SDC_C5B_SHOTS` (default: the
+/// temp dir). Needs a GPU: `cargo test -p sdc-gui --test nif_edit -- --ignored render_the_colour_strip`.
+#[test]
+#[ignore]
+fn render_the_colour_strip() {
+    let out = std::env::var("SDC_C5B_SHOTS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    for w in [1100.0, 1600.0] {
+        let (m, _) = colour_scene([2.0, 0.5, 0.0], [0.2, 0.4, 0.6]);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(w, 1000.0))
+            .wgpu()
+            .build_ui_state(
+                |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+                m,
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        reveal(&mut h, "Emissive colour colour strip");
+        let img = h.render().expect("render");
+        img.save(out.join(format!("c5b-strip-{w}.png")))
+            .expect("save png");
+    }
+}
+
 fn pos_keys(m: &MeshesModel, ctrl: u32) -> KeyGroup<[f32; 3]> {
     match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
         Ok(KeyData::Pos(g)) => g.clone(),
