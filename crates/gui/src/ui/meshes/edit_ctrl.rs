@@ -35,6 +35,8 @@ const NO_TRACK: &str = "Tick at least one controller.";
 const BAD_RANGE: &str = "Stop must be after start.";
 const NOT_ROOT_CLIP: &str =
     "This clip is not on the root's manager: it cannot be renamed or removed here.";
+/// Remove and Rename find a clip by its name (C2-D1), so a null Name cannot be addressed.
+const NAMELESS_CLIP: &str = "This clip has no name: it cannot be renamed or removed here.";
 /// C2's root refusal (`nif::edit` keeps it private), shown before the click.
 const NO_ROOT: &str = "The root is not a node: a clip needs a node root.";
 
@@ -223,6 +225,10 @@ fn clip_actions(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             None,
             Some(buf.clone()),
         );
+        if r.changed() {
+            // C5-D3: a refusal is about the name it was given; a new one clears it
+            ui.data_mut(|d| d.remove::<(String, String)>(err));
+        }
         if r.lost_focus() {
             ui.data_mut(|d| d.remove::<String>(id));
             if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -255,15 +261,21 @@ fn clip_actions(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                 None => "Remove clip".into(),
             };
             set_name(&r, egui::WidgetType::Button, &label, None, None);
-            remove = r.clicked();
+            // rule 5.2: Enter never removes; a mouse click or an AccessKit click still does
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            remove = r.clicked() && !enter;
             r.on_disabled_hover_text(PICK_CLIP);
         },
     );
     if let Some(s) = seq {
         let root = anchor_role(&e.model, None, Role::Root).ok_or(NO_ROOT.to_string());
         // C5-D2: the manager's list order, read on the click only
-        let key =
-            || nif::edit::clip_key(&e.patched, &e.model, s.block).ok_or(NOT_ROOT_CLIP.to_string());
+        let key = || match s.name {
+            None => Err(NAMELESS_CLIP.to_string()),
+            Some(_) => {
+                nif::edit::clip_key(&e.patched, &e.model, s.block).ok_or(NOT_ROOT_CLIP.to_string())
+            }
+        };
         match commit {
             Some(new) if new.is_empty() => {
                 try_push(ui, e, act, err, inputs.clone(), Err(NO_NAME.into()));

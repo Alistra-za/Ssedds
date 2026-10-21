@@ -6106,6 +6106,74 @@ fn clips_ui_fits_the_panel_at_1100() {
     }
 }
 
+/// `clip_scene` converted, with the clip picked in Preview and the Controllers tab open.
+fn playing_clip_view() -> Harness<'static, MeshesModel> {
+    let mut m = clip_scene();
+    let seq = convert(&mut m);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h
+}
+
+/// C-P33 (rule 5.2): Enter on a focused Remove clip button removes nothing; a mouse click still does.
+#[test]
+fn enter_never_removes_a_clip() {
+    let mut h = playing_clip_view();
+    reveal(&mut h, "Remove clip SpecialIdle");
+    h.get_by_label("Remove clip SpecialIdle").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(ops(h.state()).len(), 1, "{:?}", ops(h.state()));
+    assert_eq!(clip_names(h.state()), vec![Some("SpecialIdle".into())]);
+    click(&mut h, "Remove clip SpecialIdle");
+    assert!(
+        matches!(ops(h.state()).last(), Some(Op::RemoveSequence { .. })),
+        "a click still removes"
+    );
+}
+
+/// C-P33 (C5-D3): a rename refusal clears as soon as the name changes; the change alone records nothing.
+#[test]
+fn a_rename_refusal_clears_when_the_name_changes() {
+    let mut h = playing_clip_view();
+    h.get_by_label("Clip name").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    h.get_by_label("Type a name for the clip.");
+    h.get_by_label("Clip name").focus();
+    h.run_steps(2);
+    h.get_by_label("Clip name").type_text("Open");
+    h.run_steps(3);
+    assert!(h.query_by_label("Type a name for the clip.").is_none());
+    assert_eq!(ops(h.state()).len(), 1, "typing records nothing");
+}
+
+/// C-P33: a clip with a null Name says so instead of "not on the root's manager".
+#[test]
+fn a_nameless_clip_says_it_has_no_name() {
+    let mut m = clip_scene();
+    let seq = convert(&mut m);
+    let mut b = m.edit.as_ref().unwrap().patched.to_vec();
+    let at = nif::header::Header::parse(&b).unwrap().offsets()[seq as usize];
+    b[at..at + 4].copy_from_slice(&(-1i32).to_le_bytes()); // the sequence's Name index
+    let mut m = direct(b);
+    select(&mut m, "S");
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    click(&mut h, &format!("Remove clip Clip {seq}"));
+    assert!(ops(h.state()).is_empty());
+    h.get_by_label("This clip has no name: it cannot be renamed or removed here.");
+}
+
 /// C5 screenshots (egui-ui-rules step 5): the Controllers tab with a clip picked at 1100, 1280 and 1600 px, saved
 /// to `SDC_C5_SHOTS` (default: the temp dir). Needs a GPU:
 /// `cargo test -p sdc-gui --test nif_edit -- --ignored render_the_clips_tab`.
