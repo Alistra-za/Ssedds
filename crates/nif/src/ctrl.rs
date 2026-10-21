@@ -364,6 +364,8 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manager {
     pub ctrl: TimeCtrl,
+    /// Cumulative as the raw byte, so a 2 round-trips.
+    pub cumulative: u8,
     pub sequences: Vec<i32>,
     pub palette: i32,
 }
@@ -386,6 +388,7 @@ pub fn read_manager(h: &Header, b: &[u8], block: usize) -> Result<Manager, NifEr
     exact(h, block, end, d.len())?;
     Ok(Manager {
         ctrl,
+        cumulative: d[BASE_LEN],
         sequences: (0..n).map(|i| u32_at(d, at + 4 + 4 * i) as i32).collect(),
         palette: u32_at(d, end - 4) as i32,
     })

@@ -245,6 +245,10 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::RemoveExtra { at }
         | Op::AddController { at, .. }
         | Op::RemoveController { at }
+        | Op::AddSequence { at, .. }
+        | Op::RemoveSequence { at, .. }
+        | Op::RenameSequence { at, .. }
+        | Op::ConvertChainToClips { at, .. }
         | Op::SetKeys { at, .. } => at,
     }
 }
@@ -821,9 +825,12 @@ impl NifEdit {
 
     /// The Time slider's span in scene time (B-P33): from 0 to the longest cycle, `span / |freq|`, where a Reverse
     /// cycle counts both legs. `ctrl_time` still does each controller's own wrapping, phase included. A clip uses
-    /// its sequence's timing. None when nothing is animated or a controller's times are not finite.
+    /// its sequence's timing. None when nothing is animated, a controller's times are not finite, or the span is zero
+    /// (C-P34 (b): only held values, no clock; `tick_anim` still shows them).
     pub fn anim_range(&self) -> Option<(f32, f32)> {
-        self.anim_end().filter(|e| e.is_finite()).map(|e| (0.0, e))
+        self.anim_end()
+            .filter(|e| e.is_finite() && *e > 0.0)
+            .map(|e| (0.0, e))
     }
 
     /// A controller's times are not finite (+inf, NaN): playback is off and the panel says so.
@@ -1111,6 +1118,14 @@ impl MeshesModel {
         let in_game = self.edit.as_ref().is_some_and(|e| e.in_game.is_some());
         let Some(range) = self.edit.as_ref().and_then(NifEdit::anim_range) else {
             self.v3.clock = None;
+            // C-P34 (b): a zero-length range (held values only) has no clock, but its values still show.
+            let held = self
+                .edit
+                .as_ref()
+                .is_some_and(|e| !e.anim.is_empty() && !e.anim_invalid());
+            if held && self.v3.nif_view && !in_game {
+                self.show_anim_frame(0.0);
+            }
             return;
         };
         let c = self.v3.clock.get_or_insert(Clock::new(range));
@@ -1124,19 +1139,26 @@ impl MeshesModel {
             return;
         }
         self.v3.tick(dt);
-        let (Some(e), Some(c)) = (self.edit.as_mut(), self.v3.clock) else {
+        if let Some(c) = self.v3.clock {
+            self.show_anim_frame(c.t);
+        }
+    }
+
+    /// Sends each animated shape's material at time `t`, once per new `t`.
+    fn show_anim_frame(&mut self, t: f32) {
+        let Some(e) = self.edit.as_mut() else {
             return;
         };
-        if e.anim_shown == Some(c.t) {
+        if e.anim_shown == Some(t) {
             return;
         }
-        for (id, m) in e.frame_materials(c.t) {
+        for (id, m) in e.frame_materials(t) {
             // false: no load of this content sent yet (a reload); the next frame tries again.
             if !self.v3.set_material(id, m) {
                 return;
             }
         }
-        e.anim_shown = Some(c.t);
+        e.anim_shown = Some(t);
     }
 
     pub fn edit_push(&mut self, ops: Vec<Op>, merge: Option<String>) {

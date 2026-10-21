@@ -530,6 +530,7 @@ fn key_errors_on(b: Vec<u8>, key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<
     let ops = vec![Op::SetKeys {
         at: anchor_role(&m, Some(0), role).unwrap(),
         clip: None,
+        clip_name: None,
         keys: KeyData::Float(KeyGroup { key_type, keys }),
         base,
     }];
@@ -621,6 +622,7 @@ fn superseded_set_keys_are_not_checked() {
             role: Role::Shape,
         },
         clip,
+        clip_name: None,
         keys: KeyData::Float(KeyGroup {
             key_type: Some(1),
             keys: times.iter().map(|&t| k(t, None, false)).collect(),
@@ -826,6 +828,55 @@ fn emissive_multiple_up_to_100_is_quiet() {
         fl(42.0),
     ));
     assert!(w.is_empty(), "{w:#?}");
+}
+
+/// v2 C2 (F10): AddSequence track keys get the same three Errors as AddController, on the track's controller.
+#[test]
+fn add_sequence_track_keys_are_checked() {
+    use nif::edit::validate::validate_ops;
+    use nif::edit::{Anchor, ClipTrack, Role};
+    let op = |key_type: u32, keys: Vec<Key<f32>>| Op::AddSequence {
+        at: Anchor {
+            block: 0,
+            kind: "NiNode".into(),
+            shape: None,
+            role: Role::Root,
+        },
+        name: "Open".into(),
+        cycle: 2,
+        freq: 1.0,
+        start: 0.0,
+        stop: 1.0,
+        tracks: vec![ClipTrack {
+            at: Anchor {
+                block: 2,
+                kind: "BSLightingShaderPropertyFloatController".into(),
+                shape: Some("S".into()),
+                role: Role::Shape,
+            },
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(key_type),
+                keys,
+            }),
+        }],
+    };
+    let lin = |t: &[f32]| t.iter().map(|&t| k(t, None, false)).collect();
+    assert_eq!(validate_ops(&[op(1, lin(&[0.0, 1.0]))]), vec![]);
+    assert_eq!(
+        validate_ops(&[op(1, lin(&[0.0, 2.0, 1.0]))]),
+        error("Key times must not decrease")
+    );
+    let tbc = vec![k(0.0, None, true), k(1.0, None, true)];
+    assert_eq!(
+        validate_ops(&[op(3, tbc)]),
+        error("Only linear and quadratic keys can be authored")
+    );
+    let mut v = k(0.0, None, false);
+    v.value = f32::NAN;
+    assert_eq!(
+        validate_ops(&[op(1, vec![v])]),
+        error("Key values must be finite numbers")
+    );
 }
 
 // ---- Note CO: SLSF1 bits that need a shader type (owner) ----

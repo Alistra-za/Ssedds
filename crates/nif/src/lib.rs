@@ -2,6 +2,7 @@
 //! seeking by the header's block-size array (plan 01 Q1). Input is always `&[u8]`; loose files, BSA entries and
 //! fixtures share one path. Layer 1 (`geom`) decodes SSE BSTriShape geometry for the 3D preview.
 pub mod anim;
+pub mod clips;
 pub mod ctrl;
 pub mod cursor;
 pub mod edit;
@@ -44,4 +45,7 @@ pub enum NifError {
     },
     #[error("block {block}: {msg}")]
     Geometry { block: u32, msg: String },
+    /// An encoder was given a value the format cannot hold (a count past its field width, mismatched arrays).
+    #[error("cannot encode: {0}")]
+    Encode(String),
 }

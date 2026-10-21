@@ -2,7 +2,10 @@
 //! shape's shader and alpha chains, and (v2 B6) each controller's keys: a curve, a key table, Add and Remove key,
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
-use super::edit_fields::{fit_width, float_named, row_label, selected, set_name, warnings, Act};
+use super::edit_fields::{
+    fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act, OUT_OF_RANGE,
+};
+use crate::model::meshes::edit_doc::SourceId;
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
 use crate::model::viewport3d::Clock;
@@ -10,7 +13,10 @@ use crate::ui::status::{AMBER, RED};
 use eframe::egui;
 use nif::ctrl::{Sequence, TimeCtrl};
 use nif::edit::validate::{ctrl_title, var_label, Target, ENV_SCALE_PBR};
-use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Owner, Role};
+use nif::edit::{
+    anchor_role, anchor_shape, convert_check, merge_key, Anchor, ClipTrack, Op, Outcome, Owner,
+    Role, CONVERT_HOVER, CONVERT_NAME,
+};
 use nif::fields::{Field, Value};
 use nif::keys::{Key, KeyData, KeyGroup};
 use nif::material::SLSF2_TRUE_PBR;
@@ -24,7 +30,18 @@ const TEST_REF: &str = "BSNiAlphaPropertyTestRefController";
 const FLOAT_VARS: [u32; 10] = [0, 8, 9, 10, 11, 12, 20, 21, 22, 23];
 const COLOR_VARS: [u32; 2] = [0, 1];
 const CYCLES: [&str; 3] = ["Loop", "Reverse", "Clamp"];
-const CLIP_SHARED: &str = "Shared alpha with a clip controller: splitting needs Phase C.";
+const PICK_CLIP: &str = "Pick a clip in Preview to rename or remove it.";
+const NO_NAME: &str = "Type a name for the clip.";
+const NO_TRACK: &str = "Tick at least one controller.";
+const BAD_RANGE: &str = "Stop must be after start.";
+/// C-P35 I2: TBC, XYZ and CONST keys are never authored, so New clip starts such a controller flat.
+const FLAT_ONLY: &str = "Its keys are not linear or quadratic: the clip starts flat.";
+const NOT_ROOT_CLIP: &str =
+    "This clip is not on the root's manager: it cannot be renamed or removed here.";
+/// Remove and Rename find a clip by its name (C2-D1), so a null Name cannot be addressed.
+const NAMELESS_CLIP: &str = "This clip has no name: it cannot be renamed or removed here.";
+/// C2's root refusal (`nif::edit` keeps it private), shown before the click.
+const NO_ROOT: &str = "The root is not a node: a clip needs a node root.";
 
 /// The shape's shader flags, 0 without a lit shader: the variable labels and the PBR guard (B-P39) read them.
 fn shape_slsf2(e: &NifEdit, shape: &ShapeModel) -> u32 {
@@ -53,6 +70,7 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
     };
     if !e.model.sequences.is_empty() {
         preview(ui, e, act);
+        clip_actions(ui, e, act);
     }
     let clock = m.v3.clock;
     let shader = shape
@@ -73,6 +91,8 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
         chain(ui, e, act, shape, owner, prop, clock);
         ui.separator();
     }
+    ui.strong("New clip");
+    new_clip(ui, e, act, shape);
 }
 
 /// A clip's name, or "Clip {block}" for a null name.
@@ -125,7 +145,440 @@ fn preview(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             act.playing = Some(pick);
         }
     });
+}
+
+/// C5-D3: Some(why) when `ops` would not apply to the current bytes. Parses the file: call it on a click only.
+fn refusal(e: &NifEdit, ops: &[Op]) -> Option<String> {
+    match nif::edit::apply(&e.patched, ops) {
+        Err(err) => Some(err.to_string()),
+        Ok(a) => a.outcomes.into_iter().find_map(|o| match o {
+            Outcome::Applied | Outcome::ReAnchored { .. } => None,
+            Outcome::Conflict(s) | Outcome::Refused(s) => Some(s),
+        }),
+    }
+}
+
+/// C5-D3: pushes `ops` (one undo step) when they apply; otherwise keeps why under `id` for [`refused_line`],
+/// tagged with the row's `inputs`.
+fn try_push(
+    ui: &egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    id: egui::Id,
+    inputs: String,
+    ops: Result<Vec<Op>, String>,
+) -> bool {
+    match ops.and_then(|ops| refusal(e, &ops).map_or(Ok(ops), Err)) {
+        Ok(ops) => {
+            act.push = Some((ops, None));
+            ui.data_mut(|d| d.remove::<(String, String)>(id));
+            true
+        }
+        Err(why) => {
+            ui.data_mut(|d| d.insert_temp(id, (inputs, why)));
+            false
+        }
+    }
+}
+
+/// The red refusal under a row, while its `inputs` (and the file's bytes) are still those of the refused click.
+fn refused_line(ui: &mut egui::Ui, id: egui::Id, inputs: &str) {
+    let Some((i, why)) = ui.data(|d| d.get_temp::<(String, String)>(id)) else {
+        return;
+    };
+    if i == inputs {
+        ui.add(egui::Label::new(egui::RichText::new(why).color(RED)).wrap());
+    } else {
+        ui.data_mut(|d| d.remove::<(String, String)>(id));
+    }
+}
+
+/// The current bytes' identity: a refusal shown for one file state is cleared by any edit, undo or reload.
+fn bytes_tag(e: &NifEdit) -> String {
+    format!("{:p}", std::sync::Arc::as_ptr(&e.patched))
+}
+
+/// Rename and Remove for the clip the Preview shows, with its cycle and range (C5-D1, F14).
+fn clip_actions(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
+    let seq = match e.playing {
+        Playing::Clip(b) => e.model.sequences.iter().find(|s| s.block == b),
+        Playing::Free => None,
+    };
+    let name = seq.map(clip_name).unwrap_or_default();
+    let id = egui::Id::new("meshes-edit-clip");
+    let err = id.with("refused");
+    let inputs = format!("{}|{:?}", bytes_tag(e), seq.map(|s| s.block));
+    // C5-D8: path_field's pattern; the buffer lives only while the field has focus.
+    let mut commit = None;
+    ui.horizontal(|ui| {
+        row_label(ui, "Clip name");
+        let mut buf = ui
+            .data(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| name.clone());
+        let r = ui.add_enabled(
+            seq.is_some(),
+            egui::TextEdit::singleline(&mut buf)
+                .id(id.with("field"))
+                .desired_width(fit_width(ui, 200.0)),
+        );
+        set_name(
+            &r,
+            egui::WidgetType::TextEdit,
+            "Clip name",
+            None,
+            Some(buf.clone()),
+        );
+        if r.changed() {
+            // C5-D3: a refusal is about the name it was given; a new one clears it
+            ui.data_mut(|d| d.remove::<(String, String)>(err));
+        }
+        if r.lost_focus() {
+            ui.data_mut(|d| d.remove::<String>(id));
+            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                commit = Some(buf);
+            }
+        } else if r.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, buf));
+        } else {
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+        r.on_disabled_hover_text(PICK_CLIP);
+    });
+    let mut remove = false;
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            if let Some(s) = seq {
+                ui.weak(format!(
+                    "{} · {} to {} s",
+                    cycle_name(s.cycle),
+                    s.start,
+                    s.stop
+                ));
+            }
+        },
+        |ui| {
+            let r = ui.add_enabled(seq.is_some(), egui::Button::new("Remove clip"));
+            let label = match seq {
+                Some(_) => format!("Remove clip {name}"),
+                None => "Remove clip".into(),
+            };
+            set_name(&r, egui::WidgetType::Button, &label, None, None);
+            // rule 5.2: Enter never removes; a mouse click or an AccessKit click still does
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            remove = r.clicked() && !enter;
+            r.on_disabled_hover_text(PICK_CLIP);
+        },
+    );
+    if let Some(s) = seq {
+        let root = anchor_role(&e.model, None, Role::Root).ok_or(NO_ROOT.to_string());
+        // C5-D2: the manager's list order, read on the click only
+        let key = || match s.name {
+            None => Err(NAMELESS_CLIP.to_string()),
+            Some(_) => {
+                nif::edit::clip_key(&e.patched, &e.model, s.block).ok_or(NOT_ROOT_CLIP.to_string())
+            }
+        };
+        match commit {
+            Some(new) if new.is_empty() => {
+                try_push(ui, e, act, err, inputs.clone(), Err(NO_NAME.into()));
+            }
+            Some(new) if new != name => {
+                let ops = root.clone().and_then(|at| {
+                    let (name, nth) = key()?;
+                    Ok(vec![Op::RenameSequence {
+                        at,
+                        name,
+                        nth,
+                        new_name: new,
+                    }])
+                });
+                try_push(ui, e, act, err, inputs.clone(), ops);
+            }
+            _ => {}
+        }
+        if remove {
+            let ops = root.and_then(|at| {
+                let (name, nth) = key()?;
+                Ok(vec![Op::RemoveSequence { at, name, nth }])
+            });
+            try_push(ui, e, act, err, inputs.clone(), ops);
+        }
+    }
+    refused_line(ui, err, &inputs);
     ui.separator();
+}
+
+/// Convert to clips for one property chain (C5-D4): a name field and the button.
+fn convert_row(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    shape: &ShapeModel,
+    owner: Owner,
+    prop: &PropModel,
+) {
+    let (role, what) = match owner {
+        Owner::Shader => (Role::Shader, "shader"),
+        Owner::Alpha => (Role::Alpha, "alpha"),
+    };
+    let check = convert_check(&e.model, prop.block, shape.name.as_deref());
+    let id = egui::Id::new(("meshes-edit-convert", prop.block));
+    let mut name: String = ui
+        .data(|d| d.get_temp(id))
+        .unwrap_or_else(|| CONVERT_NAME.to_string());
+    let mut clicked = false;
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            let r = ui.add_enabled(
+                check.is_ok(),
+                egui::TextEdit::singleline(&mut name)
+                    .desired_width(ui.available_width().min(200.0)),
+            );
+            set_name(
+                &r,
+                egui::WidgetType::TextEdit,
+                &format!("Convert {what} clip name"),
+                None,
+                Some(name.clone()),
+            );
+            match &check {
+                Ok(_) => r.on_hover_text(CONVERT_HOVER),
+                Err(why) => r.on_disabled_hover_text(why),
+            };
+        },
+        |ui| {
+            let r = ui.add_enabled(check.is_ok(), egui::Button::new("Convert to clips"));
+            set_name(
+                &r,
+                egui::WidgetType::Button,
+                &format!("Convert {what} controllers to clips"),
+                None,
+                None,
+            );
+            clicked = r.clicked();
+            match &check {
+                Ok(_) => r.on_hover_text(CONVERT_HOVER),
+                Err(why) => r.on_disabled_hover_text(why),
+            };
+        },
+    );
+    let err = id.with("refused");
+    let inputs = format!("{}|{name}", bytes_tag(e));
+    if clicked {
+        let ops = anchor_role(&e.model, Some(shape.block), role)
+            .map(|at| {
+                vec![Op::ConvertChainToClips {
+                    at,
+                    name: name.clone(),
+                }]
+            })
+            .ok_or_else(|| "This property cannot be found again in the file.".to_string());
+        try_push(ui, e, act, err, inputs.clone(), ops);
+    }
+    ui.data_mut(|d| d.insert_temp(id, name));
+    refused_line(ui, err, &inputs);
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct NewClip {
+    name: String,
+    cycle: u32,
+    start: f32,
+    stop: f32,
+    picked: Vec<u32>,
+    /// (source, shape) the ticks belong to: another source (mod, path or bytes) or shape clears them (C-P35 M6).
+    scope: Option<(SourceId, u32)>,
+}
+
+/// C5-D6: no name, Clamp (the census's most common cycle), 0 to 1 s, nothing ticked.
+impl Default for NewClip {
+    fn default() -> Self {
+        NewClip {
+            name: String::new(),
+            cycle: 2,
+            start: 0.0,
+            stop: 1.0,
+            picked: vec![],
+            scope: None,
+        }
+    }
+}
+
+/// The New clip form (C5-D5..D7). State in temp data under `Id::new("meshes-edit-new-clip")`.
+fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
+    let id = egui::Id::new("meshes-edit-new-clip");
+    let mut nc: NewClip = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let scope = Some((e.doc.source.clone(), shape.block));
+    if nc.scope != scope {
+        nc.picked.clear();
+        nc.scope = scope;
+    }
+    let root = anchor_role(&e.model, None, Role::Root).filter(|_| e.model.root_net.is_some());
+    let no_root = root.is_none().then_some(NO_ROOT);
+    let slsf2 = shape_slsf2(e, shape);
+    ui.horizontal(|ui| {
+        row_label(ui, "Name");
+        let r = ui.add_enabled(
+            no_root.is_none(),
+            egui::TextEdit::singleline(&mut nc.name).desired_width(fit_width(ui, 200.0)),
+        );
+        set_name(
+            &r,
+            egui::WidgetType::TextEdit,
+            "New clip name",
+            None,
+            Some(nc.name.clone()),
+        );
+        if let Some(why) = no_root {
+            r.on_disabled_hover_text(why);
+        }
+    });
+    ui.horizontal(|ui| {
+        row_label(ui, "Cycle");
+        let shown = cycle_name(nc.cycle);
+        let r = egui::ComboBox::from_id_salt(id.with("cycle"))
+            .width(120.0)
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                for (i, n) in CYCLES.iter().enumerate() {
+                    ui.selectable_value(&mut nc.cycle, i as u32, *n);
+                }
+            })
+            .response;
+        set_name(
+            &r,
+            egui::WidgetType::ComboBox,
+            "New clip cycle",
+            None,
+            Some(shown),
+        );
+    });
+    for (label, name, v) in [
+        ("Start", "New clip start", &mut nc.start),
+        ("Stop", "New clip stop", &mut nc.stop),
+    ] {
+        ui.horizontal(|ui| {
+            row_label(ui, label);
+            let r = ui.add(egui::DragValue::new(v).speed(0.01).suffix(" s"));
+            set_name(&r, egui::WidgetType::DragValue, name, Some(*v as f64), None);
+        });
+    }
+    // C5-D7: the selected shape's shader and alpha chains, editable classes only
+    let props = [
+        shape
+            .shader
+            .and_then(|b| e.model.lighting.get(&b))
+            .map(|l| (Owner::Shader, &l.prop)),
+        shape
+            .alpha
+            .and_then(|b| e.model.alphas.get(&b))
+            .map(|a| (Owner::Alpha, &a.prop)),
+    ];
+    let mut tracks = vec![];
+    for (owner, prop) in props.into_iter().flatten() {
+        let shared = (owner == Owner::Alpha && prop.users.len() > 1).then(|| {
+            format!(
+                "This alpha is shared by {} shapes: split it before editing.",
+                prop.users.len()
+            )
+        });
+        for i in 0..prop.ctrls.len() {
+            let Some((c, at)) = ctrl_anchor(e, shape, owner, prop, i).filter(|(c, _)| editable(c))
+            else {
+                continue;
+            };
+            let title = ctrl_title(c, slsf2);
+            let flat_only =
+                matches!(e.keys.get(&(c.block, None)), Some(Ok(k)) if has_keys(k) && !authored(k));
+            ui.horizontal(|ui| {
+                let mut on = nc.picked.contains(&c.block);
+                let r = ui.add_enabled(shared.is_none(), egui::Checkbox::new(&mut on, &title));
+                let (name, enabled, sel) =
+                    (format!("Add {title} to the new clip"), r.enabled(), on);
+                r.widget_info(move || {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::Checkbox,
+                        enabled,
+                        sel,
+                        name.clone(),
+                    )
+                });
+                if r.changed() {
+                    nc.picked.retain(|&b| b != c.block);
+                    if on {
+                        nc.picked.push(c.block);
+                    }
+                }
+                if let Some(why) = &shared {
+                    r.on_disabled_hover_text(why);
+                } else if flat_only {
+                    r.on_hover_text(FLAT_ONLY);
+                }
+                ui.weak(short_class(&c.class));
+            });
+            if shared.is_none() && nc.picked.contains(&c.block) {
+                tracks.push((prop, c, at));
+            }
+        }
+    }
+    let why = no_root
+        .or(nc.name.is_empty().then_some(NO_NAME))
+        .or(tracks.is_empty().then_some(NO_TRACK))
+        .or(
+            (nc.stop.partial_cmp(&nc.start) != Some(std::cmp::Ordering::Greater))
+                .then_some(BAD_RANGE),
+        );
+    let r = ui.add_enabled(why.is_none(), egui::Button::new("Add clip"));
+    set_name(&r, egui::WidgetType::Button, "Add clip", None, None);
+    let clicked = r.clicked();
+    if let Some(why) = why {
+        r.on_disabled_hover_text(why);
+    }
+    let err = id.with("refused");
+    let inputs = format!("{}|{nc:?}", bytes_tag(e));
+    if let (true, Some(at)) = (clicked, root) {
+        let tracks = tracks
+            .into_iter()
+            .map(|(prop, c, at)| {
+                // C5-D5: the controller's own keys; a managed, keyless or TBC/XYZ/CONST one (C-P35 I2) starts flat
+                // over the clip's range
+                let keys = match e.keys.get(&(c.block, None)) {
+                    Some(Ok(k)) if has_keys(k) && authored(k) => k.clone(),
+                    _ => flat_keys(e, prop, &c.class, c.var, [nc.start, nc.stop]),
+                };
+                ClipTrack { at, keys }
+            })
+            .collect();
+        let ops = vec![Op::AddSequence {
+            at,
+            name: nc.name.clone(),
+            cycle: nc.cycle,
+            freq: 1.0,
+            start: nc.start,
+            stop: nc.stop,
+            tracks,
+        }];
+        if try_push(ui, e, act, err, inputs.clone(), Ok(ops)) {
+            nc = NewClip::default();
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(id, nc));
+    refused_line(ui, err, &inputs);
+}
+
+/// LINEAR or QUADRATIC: the key types New clip copies (D11).
+fn authored(k: &KeyData) -> bool {
+    matches!(curve::key_type(k), Some(1 | 2))
+}
+
+fn has_keys(k: &KeyData) -> bool {
+    match k {
+        KeyData::Float(g) => !g.keys.is_empty(),
+        KeyData::Pos(g) => !g.keys.is_empty(),
+        KeyData::Bool(g) => !g.keys.is_empty(),
+    }
 }
 
 fn chain(
@@ -140,24 +593,18 @@ fn chain(
     let slsf2 = shape_slsf2(e, shape);
     let users = prop.users.len();
     let mut locked = false;
-    let managed = users > 1 && prop.ctrls.iter().any(|&c| e.model.managed(c));
-    // D9: only a shared alpha must split before an add, and a clip controller on it blocks the split. A shared
-    // shader adds in place (its banner says the edit changes every shape).
-    let clip_shared = owner == Owner::Alpha && managed;
+    // D9: only a shared alpha must split before an add (clip controllers included, C4). A shared shader adds in
+    // place (its banner says the edit changes every shape).
     if users > 1 {
         if owner == Owner::Alpha {
             // An alpha edit on a shared alpha is a conflict: the split comes first (as on the Alpha tab).
             locked = true;
-            if managed {
-                ui.add(egui::Label::new(egui::RichText::new(CLIP_SHARED).color(RED)).wrap());
-            } else {
-                let text =
-                    format!("Shared by {users} shapes: split the alpha to edit its controllers.");
-                ui.add(egui::Label::new(egui::RichText::new(text).color(AMBER)).wrap());
-                if ui.button("Split alpha").clicked() {
-                    let at = anchor_shape(&e.model, shape.block);
-                    act.push = Some((vec![Op::SplitAlpha { at }], None));
-                }
+            let text =
+                format!("Shared by {users} shapes: split the alpha to edit its controllers.");
+            ui.add(egui::Label::new(egui::RichText::new(text).color(AMBER)).wrap());
+            if ui.button("Split alpha").clicked() {
+                let at = anchor_shape(&e.model, shape.block);
+                act.push = Some((vec![Op::SplitAlpha { at }], None));
             }
         } else {
             let text = format!("Shared by {users} shapes: controller edits change all of them.");
@@ -168,31 +615,45 @@ fn chain(
         ui.weak("No controllers.");
     }
     ui.add_enabled_ui(!locked, |ui| {
-        for (i, &id) in prop.ctrls.iter().enumerate() {
-            let Some(c) = e.model.ctrls.get(&id) else {
-                continue;
-            };
-            let nth = prop.ctrls[..i]
-                .iter()
-                .filter_map(|b| e.model.ctrls.get(b))
-                .filter(|p| p.class == c.class && p.var == c.var)
-                .count() as u32;
-            let at = Anchor {
-                block: c.block,
-                kind: c.class.clone(),
-                shape: shape.name.clone(),
-                role: Role::Ctrl {
-                    owner,
-                    class: c.class.clone(),
-                    var: c.var,
-                    nth,
-                },
-            };
-            ui.group(|ui| row(ui, e, act, c, &at, clock, slsf2));
+        for i in 0..prop.ctrls.len() {
+            if let Some((c, at)) = ctrl_anchor(e, shape, owner, prop, i) {
+                ui.group(|ui| row(ui, e, act, c, &at, clock, slsf2));
+            }
         }
     });
-    // Outside the lock: a shared, unmanaged alpha adds through Split + Add.
-    add_row(ui, e, act, shape, owner, prop, clip_shared);
+    // Outside the lock: a shared alpha shows convert_check's reason; it adds through Split + Add.
+    if !prop.ctrls.is_empty() {
+        convert_row(ui, e, act, shape, owner, prop);
+    }
+    add_row(ui, e, act, shape, owner, prop);
+}
+
+/// Controller `i` of `prop` and its row's anchor: class, variable, and how many earlier controllers share both.
+fn ctrl_anchor<'a>(
+    e: &'a NifEdit,
+    shape: &ShapeModel,
+    owner: Owner,
+    prop: &PropModel,
+    i: usize,
+) -> Option<(&'a TimeCtrl, Anchor)> {
+    let c = e.model.ctrls.get(prop.ctrls.get(i)?)?;
+    let nth = prop.ctrls[..i]
+        .iter()
+        .filter_map(|b| e.model.ctrls.get(b))
+        .filter(|p| p.class == c.class && p.var == c.var)
+        .count() as u32;
+    let at = Anchor {
+        block: c.block,
+        kind: c.class.clone(),
+        shape: shape.name.clone(),
+        role: Role::Ctrl {
+            owner,
+            class: c.class.clone(),
+            var: c.var,
+            nth,
+        },
+    };
+    Some((c, at))
 }
 
 fn row(
@@ -539,7 +1000,8 @@ fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<Ke
     let v: [f32; 3] = std::array::from_fn(|ch| curve::get(keys, k, ch, Part::Value));
     let hdr = v.iter().any(|x| !(0.0..=1.0).contains(x));
     // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
-    let mut picked = v;
+    let lin = v.map(egui::ecolor::linear_from_gamma);
+    let mut picked = lin;
     let (r, was, open) = ui
         .add_enabled_ui(!hdr, |ui| {
             // The id egui's colour button gives its popup (auto_id_with does not advance the id).
@@ -553,19 +1015,17 @@ fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<Ke
     let done = (was && !open) || (open && ui.input(|i| i.pointer.any_released()));
     let changed = r.changed();
     if hdr {
-        r.on_disabled_hover_text("Values outside 0-1: edit R, G and B directly.");
+        r.on_disabled_hover_text(OUT_OF_RANGE);
     }
     if !changed {
         return (None, done);
     }
-    // A channel whose sRGB byte the picker kept was not touched: it keeps its exact bits (the HSV round trip and the
-    // popup's byte fields move it a little).
-    let byte = egui::ecolor::gamma_u8_from_linear_f32;
+    let x = from_picker(v, lin, picked);
     let mut d = keys.clone();
     let mut any = false;
     for ch in 0..3 {
-        if byte(picked[ch]) != byte(v[ch]) {
-            curve::set(&mut d, k, ch, Part::Value, picked[ch]);
+        if x[ch].to_bits() != v[ch].to_bits() {
+            curve::set(&mut d, k, ch, Part::Value, x[ch]);
             any = true;
         }
     }
@@ -808,6 +1268,9 @@ fn push_keys(
     let op = Op::SetKeys {
         at: at.clone(),
         clip,
+        clip_name: clip
+            .and_then(|s| e.model.sequences.iter().find(|q| q.block == s))
+            .and_then(|s| s.name.clone()),
         keys,
         base: base.clone(),
     };
@@ -851,8 +1314,6 @@ fn push_keys(
 }
 
 /// Adds a controller to `prop` (D9). Shader: a class (Float | Colour) and variable picker; alpha: TestRef only.
-/// `clip_shared`: a shared alpha with a clip controller (the red line above says why nothing is added).
-#[allow(clippy::too_many_arguments)]
 fn add_row(
     ui: &mut egui::Ui,
     e: &NifEdit,
@@ -860,7 +1321,6 @@ fn add_row(
     shape: &ShapeModel,
     owner: Owner,
     prop: &PropModel,
-    clip_shared: bool,
 ) {
     let slsf2 = shape_slsf2(e, shape);
     let id = egui::Id::new(("meshes-edit-ctrl-add", prop.block));
@@ -936,7 +1396,7 @@ fn add_row(
     let at = anchor_role(&e.model, Some(shape.block), role);
     let no_root = e.model.root_net.is_none();
     let r = ui.add_enabled(
-        at.is_some() && !clip_shared && !no_root,
+        at.is_some() && !no_root,
         egui::Button::new("Add controller"),
     );
     set_name(
@@ -951,47 +1411,14 @@ fn add_row(
         r.on_disabled_hover_text("The root is not a node: the BSX Animated bit cannot be set.");
     } else if at.is_none() {
         r.on_disabled_hover_text("This property cannot be found again in the file.");
-    } else if clip_shared {
-        r.on_disabled_hover_text(CLIP_SHARED);
     }
     if let (true, Some(at)) = (clicked, at) {
-        let (class, var, value) = match owner {
-            Owner::Shader if class_idx == 0 => (LSCF, Some(var), float_value(e, prop.block, var)),
-            Owner::Shader => (LSCC, Some(var), color_value(e, prop.block, var)),
-            Owner::Alpha => {
-                let t = e
-                    .model
-                    .alphas
-                    .get(&prop.block)
-                    .map_or(0.0, |a| a.alpha.threshold as f32);
-                (TEST_REF, None, [t, 0.0, 0.0])
-            }
+        let (class, var) = match owner {
+            Owner::Shader if class_idx == 0 => (LSCF, Some(var)),
+            Owner::Shader => (LSCC, Some(var)),
+            Owner::Alpha => (TEST_REF, None),
         };
-        let key = |time: f32| Key {
-            time,
-            value: value[0],
-            forward: None,
-            backward: None,
-            tbc: None,
-        };
-        let keys = match class {
-            LSCC => KeyData::Pos(KeyGroup {
-                key_type: Some(1),
-                keys: [0.0, 1.0]
-                    .map(|time| Key {
-                        time,
-                        value,
-                        forward: None,
-                        backward: None,
-                        tbc: None,
-                    })
-                    .into(),
-            }),
-            _ => KeyData::Float(KeyGroup {
-                key_type: Some(1),
-                keys: vec![key(0.0), key(1.0)],
-            }),
-        };
+        let keys = flat_keys(e, prop, class, var, [0.0, 1.0]);
         let add = Op::AddController {
             at,
             class: class.into(),
@@ -1017,6 +1444,49 @@ fn add_row(
     }
     // AddController's validate_ops errors target the property.
     warnings(ui, e, &Target::Block { block: prop.block }, act);
+}
+
+/// Two LINEAR keys at `times` holding the property's current value for (`class`, `var`): D9's flat start, and
+/// C5-D5's track for a controller without keys of its own. TestRef holds the alpha threshold.
+fn flat_keys(
+    e: &NifEdit,
+    prop: &PropModel,
+    class: &str,
+    var: Option<u32>,
+    times: [f32; 2],
+) -> KeyData {
+    let var = var.unwrap_or(0);
+    let value = match class {
+        LSCF => float_value(e, prop.block, var),
+        LSCC => color_value(e, prop.block, var),
+        _ => {
+            let t = e
+                .model
+                .alphas
+                .get(&prop.block)
+                .map_or(0.0, |a| a.alpha.threshold as f32);
+            [t, 0.0, 0.0]
+        }
+    };
+    fn linear<T>(time: f32, value: T) -> Key<T> {
+        Key {
+            time,
+            value,
+            forward: None,
+            backward: None,
+            tbc: None,
+        }
+    }
+    match class {
+        LSCC => KeyData::Pos(KeyGroup {
+            key_type: Some(1),
+            keys: times.map(|t| linear(t, value)).into(),
+        }),
+        _ => KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: times.map(|t| linear(t, value[0])).into(),
+        }),
+    }
 }
 
 /// D9: the property's current value of float variable `var` (the curve starts flat at it).

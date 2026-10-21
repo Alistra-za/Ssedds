@@ -388,6 +388,7 @@ pub fn all() -> Vec<Vec<u8>> {
         animated(Some(0x80), 0),
         two_props_one_ctrl(),
         managed_pair(),
+        two_animated(),
     ]
 }
 
@@ -796,4 +797,37 @@ pub fn two_props_one_ctrl() -> Vec<u8> {
     n.block("NiFloatInterpolator", W::default().f(0.0).i32(6).0);
     n.block("NiFloatData", float_data(1));
     n.bytes()
+}
+
+/// NiNode "Root" (0; extra [1]; children [2, 3]) ; BSXFlags "BSX" 1 (1) ; BSTriShape "S" (2) -> BSLSP (4) and
+/// BSTriShape "T" (3) -> BSLSP (5) ; each BSLSP has one free LSCF var 11 (6 on 4, 7 on 5; flags 0x48) ->
+/// NiFloatInterpolator 0.0 (8, 9) -> NiFloatData LINEAR (10, 11).
+pub fn two_animated() -> Vec<u8> {
+    let mut b = Nif::new(100);
+    let (r, x, s, t) = (
+        b.string("Root"),
+        b.string("BSX"),
+        b.string("S"),
+        b.string("T"),
+    );
+    let w = W::default().i32(r).u32(1).i32(1).i32(-1);
+    b.block("NiNode", avobj(w).u32(2).i32(2).i32(3).u32(0).0);
+    b.block("BSXFlags", W::default().i32(x).u32(1).0);
+    b.block("BSTriShape", bstri_named(s, 4, -1));
+    b.block("BSTriShape", bstri_named(t, 5, -1));
+    b.block("BSLightingShaderProperty", lsp_body(0, &[], 6, &[]));
+    b.block("BSLightingShaderProperty", lsp_body(0, &[], 7, &[]));
+    for (target, interp) in [(4, 8), (5, 9)] {
+        b.block(
+            "BSLightingShaderPropertyFloatController",
+            ctrl_body(-1, 0x48, target, W::default().i32(interp).u32(11)),
+        );
+    }
+    for data in [10, 11] {
+        b.block("NiFloatInterpolator", W::default().f(0.0).i32(data).0);
+    }
+    for _ in 0..2 {
+        b.block("NiFloatData", float_data(1));
+    }
+    b.bytes()
 }

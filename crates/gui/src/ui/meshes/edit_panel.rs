@@ -240,6 +240,12 @@ fn op_label(op: &Op) -> String {
         Op::SetKeys { at, .. } => ("Edit keys".into(), at),
         Op::AddController { at, .. } => ("Add controller".into(), at),
         Op::RemoveController { at } => ("Remove controller".into(), at),
+        Op::AddSequence { at, name, .. } => (format!("Add clip {name}"), at),
+        Op::RemoveSequence { at, name, .. } => (format!("Remove clip {name}"), at),
+        Op::RenameSequence {
+            at, name, new_name, ..
+        } => (format!("Rename clip {name} to {new_name}"), at),
+        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
     };
     match &at.shape {
         Some(s) => format!("{s}: {what}"),

@@ -70,3 +70,24 @@ fn every_scene_reads() {
     }
     assert!(read_model(&[0u8; 8]).is_err());
 }
+
+/// v2 C2 (F2): a sequence no manager lists never plays, so the model drops it; with no manager, all stay.
+#[test]
+fn unlisted_sequence_is_not_live() {
+    let b = scenes::managed_clip();
+    let h = nif::header::Header::parse(&b).unwrap();
+    let mut man = nif::ctrl::read_manager(&h, &b, 1).unwrap();
+    man.sequences = vec![2];
+    let mut doc = nif::write::NifDoc::open(&b).unwrap();
+    doc.set_block(1, nif::clips::encode_manager(&man).unwrap());
+    let one = doc.bytes();
+    let m = read_model(&one).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    let blocks = |m: &nif::model::NifModel| m.sequences.iter().map(|s| s.block).collect::<Vec<_>>();
+    assert_eq!(blocks(&m), [2]);
+    assert_eq!(blocks(&read_model(&b).unwrap()), [2, 3]);
+    assert_eq!(
+        blocks(&read_model(&scenes::managed_pair()).unwrap()),
+        [1, 2]
+    );
+}

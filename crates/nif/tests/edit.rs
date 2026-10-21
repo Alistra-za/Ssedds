@@ -767,18 +767,26 @@ fn split_with_one_user_is_a_no_op() {
     assert_eq!(r.bytes, b);
 }
 
+/// Ruling change C4-D7 (replaces `split_with_a_managed_controller_is_refused`): a managed chain with no clip is
+/// deep-copied like a free one.
 #[test]
-fn split_with_a_managed_controller_is_refused() {
+fn managed_split_without_clips_copies_the_chain() {
     let b = scenes::shared_alpha_with_managed_ctrl();
     let m = read_model(&b).unwrap();
+    let n = nblocks(&b) as u32;
     let r = apply(&b, &[split(&m, "A")]).unwrap();
-    assert_eq!(
-        r.outcomes,
-        vec![Outcome::Refused(
-            "Shared alpha with a clip controller: splitting needs Phase C.".into()
-        )]
-    );
-    assert_eq!(r.bytes, b);
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    assert_eq!(nblocks(o) as u32, n + 4);
+    let m2 = read_model(o).unwrap();
+    assert!(m2.problems.is_empty(), "{:?}", m2.problems);
+    assert_eq!(m2.shape(shape_named(&m2, "A")).unwrap().alpha, Some(n));
+    let c = &m2.ctrls[&(n + 1)];
+    assert_eq!((c.flags, c.target), (0x68, n as i32));
+    assert_eq!(c.interp, Some(n as i32 + 2));
+    assert_eq!(m2.interps[&(n + 2)].data, n as i32 + 3);
+    assert_eq!(block_bytes_of(o, n as usize + 3), block_bytes_of(&b, 7));
+    assert_eq!(count_kind(o, "NiControllerSequence"), 0);
 }
 
 #[test]
@@ -789,6 +797,8 @@ fn split_then_undo_restores_source_bytes() {
     let r = apply(&b, &[split(&m, "A")]).unwrap();
     assert_ne!(r.bytes, b);
     assert_eq!(apply(&b, &[]).unwrap().bytes, b);
+    let (x, _, _) = clip_on_shared_alpha(true);
+    assert_eq!(apply(&x, &[]).unwrap().bytes, x);
     // splitting again is a no-op: A is the only user of its new alpha
     let again = apply(&r.bytes, &[split(&m, "A")]).unwrap();
     assert_eq!(again.outcomes, vec![Outcome::Applied]);
@@ -1221,6 +1231,7 @@ fn set_keys(at: &Anchor, keys: KeyData, base: KeyData) -> Op {
     Op::SetKeys {
         at: at.clone(),
         clip: None,
+        clip_name: None,
         keys,
         base,
     }
@@ -1400,6 +1411,7 @@ fn set_keys_refusals() {
     let clip = |at: &Anchor, c| Op::SetKeys {
         at: at.clone(),
         clip: Some(c),
+        clip_name: None,
         keys: lin(&[(0.0, 1.0)]),
         base: data_of(&b, 6),
     };
@@ -1423,6 +1435,7 @@ fn set_keys_refusals() {
     let op = Op::SetKeys {
         at: kat,
         clip: Some(8),
+        clip_name: None,
         keys: lin(&[(0.0, 1.0)]),
         base: data_of(&ks, 6),
     };
@@ -1470,6 +1483,7 @@ fn set_keys_refusals() {
     let clip_a = |keys| Op::SetKeys {
         at: mat.clone(),
         clip: Some(2),
+        clip_name: None,
         keys,
         base: empty_float(),
     };
@@ -1480,9 +1494,7 @@ fn set_keys_refusals() {
     let r = apply(&two, &[clip_a(lin(&[(0.0, 1.0)]))]).unwrap();
     assert_eq!(
         r.outcomes,
-        refused(
-            "This clip has several interpolators for this controller: editing them needs Phase C."
-        )
+        refused("This clip has several interpolators for this controller: they cannot be edited.")
     );
     assert_eq!(r.bytes, two);
     // Unpatched: both CBs name interpolator 10 (2 refs, 2 users: no copy); its data -1 gets a new NiFloatData.
@@ -2179,6 +2191,7 @@ fn clip_key_edit_changes_only_that_clips_data() {
     let op = Op::SetKeys {
         at: at.clone(),
         clip: Some(1),
+        clip_name: None,
         keys: keys.clone(),
         base: data_of(&b, 13),
     };
@@ -2207,6 +2220,7 @@ fn clip_key_edit_changes_only_that_clips_data() {
     let stale = Op::SetKeys {
         at: at.clone(),
         clip: Some(1),
+        clip_name: None,
         keys: keys.clone(),
         base: lin(&[(0.0, 9.0)]),
     };
@@ -2366,4 +2380,1463 @@ fn add_env_map_scale_is_refused_on_pbr() {
     );
     let r = apply(&b, &[add(at, LSCF, Some(8), keys, 1.0)]).unwrap();
     assert_eq!(r.outcomes, vec![Outcome::Applied]);
+}
+
+// ---- v2 C2: AddSequence, RemoveSequence, RenameSequence ----
+
+use nif::clips::{read_mttc, read_palette, read_sequence_out, read_text_keys};
+use nif::ctrl::read_manager;
+
+fn root_anchor(b: &[u8]) -> Anchor {
+    anchor_role(&read_model(b).unwrap(), None, Role::Root).unwrap()
+}
+
+/// A track on `animated`'s LSCF of variable `var` (shape "S", block 2).
+fn track(b: &[u8], var: u32, keys: KeyData) -> ClipTrack {
+    let at = anchor_role(&read_model(b).unwrap(), Some(2), lscf_role(var)).unwrap();
+    ClipTrack { at, keys }
+}
+
+fn add_seq(at: Anchor, name: &str, tracks: Vec<ClipTrack>) -> Op {
+    Op::AddSequence {
+        at,
+        name: name.into(),
+        cycle: 2,
+        freq: 1.0,
+        start: 0.0,
+        stop: 1.0,
+        tracks,
+    }
+}
+
+fn remove_seq(at: Anchor, name: &str, nth: u32) -> Op {
+    Op::RemoveSequence {
+        at,
+        name: name.into(),
+        nth,
+    }
+}
+
+fn rename_seq(at: Anchor, name: &str, nth: u32, new_name: &str) -> Op {
+    Op::RenameSequence {
+        at,
+        name: name.into(),
+        nth,
+        new_name: new_name.into(),
+    }
+}
+
+fn open_keys() -> KeyData {
+    lin(&[(0.0, 0.0), (1.0, 1.0)])
+}
+
+fn root_ctrl(b: &[u8]) -> usize {
+    read_model(b).unwrap().root_net.unwrap().controller as usize
+}
+
+fn count_kind(b: &[u8], kind: &str) -> usize {
+    let h = Header::parse(b).unwrap();
+    (0..h.sizes.len())
+        .filter(|&i| h.kind(i) == kind.as_bytes())
+        .count()
+}
+
+/// The names of the root manager's sequences, in list order.
+fn clip_names(b: &[u8]) -> Vec<String> {
+    let h = Header::parse(b).unwrap();
+    let man = read_manager(&h, b, root_ctrl(b)).unwrap();
+    man.sequences
+        .iter()
+        .map(|&s| {
+            let n = read_sequence_out(&h, b, s as usize).unwrap().name;
+            String::from_utf8_lossy(h.string(n).unwrap()).into_owned()
+        })
+        .collect()
+}
+
+/// `managed_clip()` with its BSTriShape (5) named "shape" (string 3), as the palette and CBs name it.
+fn named_managed_clip() -> Vec<u8> {
+    let mut b = scenes::managed_clip();
+    let at = Header::parse(&b).unwrap().offsets()[5];
+    b[at..at + 4].copy_from_slice(&3i32.to_le_bytes());
+    b
+}
+
+fn refused(b: &[u8], op: Op) -> String {
+    let r = apply(b, &[op]).unwrap();
+    assert_eq!(r.bytes, b, "{:?}", r.outcomes);
+    match &r.outcomes[0] {
+        Outcome::Refused(s) => s.clone(),
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
+fn add_first_sequence_creates_manager_palette_and_mttc() {
+    use nif::clips::{MANAGER_FLAGS, MTTC_FLAGS};
+    let b = scenes::animated(Some(1), 2);
+    let tracks = vec![track(&b, 11, open_keys()), track(&b, 20, open_keys())];
+    let r = apply(&b, &[add_seq(root_anchor(&b), "Open", tracks)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let mgr = root_ctrl(o);
+    assert_eq!(h.kind(mgr), b"NiControllerManager");
+    let man = read_manager(&h, o, mgr).unwrap();
+    assert_eq!(
+        (man.ctrl.flags, man.ctrl.target, man.cumulative),
+        (MANAGER_FLAGS, 0, 0)
+    );
+    let (mttc, targets) = read_mttc(&h, o, man.ctrl.next as usize).unwrap();
+    assert_eq!((mttc.next, mttc.flags, mttc.target), (-1, MTTC_FLAGS, 0));
+    // C-P29: vanilla managers and MTTCs (1051 of 1051) run freq 1, phase 0, start FLT_MAX, stop -FLT_MAX
+    for c in [&man.ctrl, &mttc] {
+        assert_eq!(
+            (c.frequency, c.phase, c.start, c.stop),
+            (1.0, 0.0, f32::MAX, f32::MIN)
+        );
+    }
+    assert_eq!(targets, [2], "the shape the clip binds (C-P26)");
+    assert_eq!(man.sequences.len(), 1);
+    let pal = read_palette(&h, o, man.palette as usize).unwrap();
+    assert_eq!(pal, (0, vec![(b"S".to_vec(), 2)]));
+    let seq = man.sequences[0] as usize;
+    let s = read_sequence_out(&h, o, seq).unwrap();
+    let st = |i: i32| h.string(i).map(<[u8]>::to_vec);
+    assert_eq!(st(s.name), Some(b"Open".to_vec()));
+    let root_name = read_model(&b).unwrap().root_net.unwrap().name;
+    assert_eq!(
+        (s.cycle, s.freq, s.start, s.stop, s.manager, s.accum_root),
+        (2, 1.0, 0.0, 1.0, mgr as i32, root_name)
+    );
+    assert_eq!((s.weight, s.array_grow_by, s.notes.len()), (1.0, 1, 0));
+    let (_, tk) = read_text_keys(&h, o, s.text_keys as usize).unwrap();
+    let tk: Vec<_> = tk.iter().map(|&(t, v)| (t, st(v).unwrap())).collect();
+    assert_eq!(tk, [(0.0, b"start".to_vec()), (1.0, b"end".to_vec())]);
+    let m = read_model(o).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(s.blocks.len(), 2);
+    for (cb, (ctrl, id)) in s.blocks.iter().zip([(4, "11"), (5, "20")]) {
+        assert_eq!(cb.controller, ctrl);
+        assert_eq!(st(cb.node), Some(b"S".to_vec()));
+        assert_eq!(st(cb.property), Some(b"BSLightingShaderProperty".to_vec()));
+        assert_eq!(st(cb.ctrl_type), Some(LSCF.as_bytes().to_vec()));
+        assert_eq!(st(cb.ctrl_id), Some(id.as_bytes().to_vec()));
+        assert_eq!((cb.interp_id, cb.priority), (-1, 0));
+        assert_eq!(h.kind(cb.interp as usize), b"NiFloatInterpolator");
+        assert!(cb.interp as usize >= 10, "a fresh interpolator");
+        let d = m.interps[&(cb.interp as u32)].data as usize;
+        assert!(d >= 10 && h.kind(d) == b"NiFloatData");
+        assert_eq!(data_of(o, d), open_keys());
+        let c = &m.ctrls[&(ctrl as u32)];
+        assert_eq!(c.flags, 0x48 | 0x20);
+        let bl = nif::ctrl::read_blend_interp(&h, o, c.interp.unwrap() as usize).unwrap();
+        assert_eq!(bl.class, "NiBlendFloatInterpolator");
+        assert_eq!((bl.flags, bl.array_size), (1, 2));
+        assert_eq!(bl.value[0].to_bits(), 0xFF7F_FFFF);
+    }
+    assert_eq!(bsx_of(o) & 1, 1);
+    same_blocks(&b, o, (1..10).filter(|k| ![4, 5].contains(k)));
+    assert_eq!(
+        changed_ranges(&block_bytes_of(&b, 0), &block_bytes_of(o, 0)).len(),
+        1,
+        "only the root's Controller ref"
+    );
+    assert!(m.managed(4) && m.managed(5));
+    assert_eq!(m.sequences.len(), 1);
+}
+
+#[test]
+fn add_second_sequence_reuses_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let first = add_seq(
+        root.clone(),
+        "Open",
+        vec![track(&b, 11, open_keys()), track(&b, 20, open_keys())],
+    );
+    let second = add_seq(root, "Close", vec![track(&b, 11, lin(&[(0.0, 1.0)]))]);
+    let one = apply(&b, std::slice::from_ref(&first)).unwrap().bytes;
+    let r = apply(&b, &[first, second]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    let o = &r.bytes;
+    assert_eq!(clip_names(o), ["Open", "Close"]);
+    assert_eq!(count_kind(o, "NiControllerManager"), 1);
+    assert_eq!(count_kind(o, "NiMultiTargetTransformController"), 1);
+    assert_eq!(count_kind(o, "NiDefaultAVObjectPalette"), 1);
+    let pal = |b: &[u8]| {
+        let h = Header::parse(b).unwrap();
+        let p = read_manager(&h, b, root_ctrl(b)).unwrap().palette;
+        read_palette(&h, b, p as usize).unwrap()
+    };
+    assert_eq!(pal(o), pal(&one));
+    let interp = |b: &[u8]| read_model(b).unwrap().ctrls[&4].interp;
+    assert_eq!(interp(o), interp(&one), "the blend interpolator is kept");
+}
+
+#[test]
+fn add_on_managed_clip_file_joins_its_manager() {
+    let b = named_managed_clip();
+    let m = read_model(&b).unwrap();
+    let t = ClipTrack {
+        at: anchor_role(&m, Some(5), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    assert_eq!(t.at.block, 7);
+    let r = apply(&b, &[add_seq(root_anchor(&b), "C", vec![t])]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let man = read_manager(&h, o, 1).unwrap();
+    assert_eq!(man.sequences[..2], [2, 3]);
+    assert_eq!(man.sequences.len(), 3);
+    assert_eq!(h.kind(man.sequences[2] as usize), b"NiControllerSequence");
+    assert_eq!(man.ctrl.next, 9);
+    assert_eq!(read_mttc(&h, o, 9).unwrap().0.next, -1);
+    assert_eq!(count_kind(o, "NiControllerManager"), 1);
+    assert_eq!(clip_names(o), ["A", "B", "C"]);
+    assert_eq!(read_model(o).unwrap().ctrls[&7].interp, Some(8));
+}
+
+#[test]
+fn add_refuses_bad_tracks() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let t11 = || track(&b, 11, open_keys());
+    refused(&b, add_seq(root.clone(), "X", vec![]));
+    refused(&b, add_seq(root.clone(), "X", vec![t11(), t11()]));
+    let pos = pos_keys(&[(0.0, [0.0; 3])]);
+    refused(&b, add_seq(root.clone(), "X", vec![track(&b, 11, pos)]));
+    refused(
+        &b,
+        add_seq(root.clone(), "X", vec![track(&b, 11, lin(&[]))]),
+    );
+    refused(&b, add_seq(root.clone(), "", vec![t11()]));
+    let mut nan = add_seq(root.clone(), "X", vec![t11()]);
+    if let Op::AddSequence { stop, .. } = &mut nan {
+        *stop = f32::NAN;
+    }
+    refused(&b, nan);
+
+    let mc = named_managed_clip();
+    let mm = read_model(&mc).unwrap();
+    let t7 = || ClipTrack {
+        at: anchor_role(&mm, Some(5), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    refused(&mc, add_seq(root_anchor(&mc), "A", vec![t7()]));
+    refused(&mc, add_seq(root_anchor(&mc), "a", vec![t7()]));
+    // the shape the track drives has no name
+    let un = scenes::managed_clip();
+    let t = ClipTrack {
+        at: anchor_role(&read_model(&un).unwrap(), Some(5), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    assert_eq!(
+        refused(&un, add_seq(root_anchor(&un), "C", vec![t])),
+        "This shape has no name: a clip cannot find it."
+    );
+
+    let sa = scenes::shared_alpha_with_testref_chain();
+    let role = Role::Ctrl {
+        owner: Owner::Alpha,
+        class: TESTREF.into(),
+        var: None,
+        nth: 0,
+    };
+    let t = ClipTrack {
+        at: anchor_role(&read_model(&sa).unwrap(), Some(1), role).unwrap(),
+        keys: open_keys(),
+    };
+    assert_eq!(
+        refused(&sa, add_seq(root_anchor(&sa), "X", vec![t])),
+        "This alpha is shared by 2 shapes: split it before editing."
+    );
+
+    let fc = scenes::free_chain();
+    let t = ClipTrack {
+        at: Anchor {
+            block: 1,
+            kind: LSCF.into(),
+            shape: None,
+            role: lscf_role(11),
+        },
+        keys: open_keys(),
+    };
+    assert_eq!(
+        refused(&fc, add_seq(root_anchor(&fc), "X", vec![t])),
+        "The root is not a node: a clip needs a node root."
+    );
+}
+
+#[test]
+fn testref_track_writes_a_null_controller_id() {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Alpha,
+        class: TESTREF.into(),
+        var: None,
+        nth: 0,
+    };
+    let t = ClipTrack {
+        at: anchor_role(&m, Some(1), role).unwrap(),
+        keys: open_keys(),
+    };
+    let split = Op::SplitAlpha {
+        at: anchor_shape(&m, 1),
+    };
+    let r = apply(&b, &[split, add_seq(root_anchor(&b), "Fade", vec![t])]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let man = read_manager(&h, o, root_ctrl(o)).unwrap();
+    let s = read_sequence_out(&h, o, man.sequences[0] as usize).unwrap();
+    let cb = &s.blocks[0];
+    assert_eq!(cb.ctrl_id, -1);
+    assert_eq!(h.string(cb.property), Some(&b"NiAlphaProperty"[..]));
+    assert_eq!(h.string(cb.node), Some(&b"A"[..]));
+    let m2 = read_model(o).unwrap();
+    let c = &m2.ctrls[&(cb.controller as u32)];
+    assert!(c.block != 5 && c.class == TESTREF, "the split copy");
+    assert_eq!(
+        h.kind(c.interp.unwrap() as usize),
+        b"NiBlendFloatInterpolator"
+    );
+    assert!(m2.problems.is_empty(), "{:?}", m2.problems);
+}
+
+#[test]
+fn remove_sequence_count_follows_list() {
+    let b = scenes::managed_clip();
+    let r = apply(&b, &[remove_seq(root_anchor(&b), "A", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    assert_eq!(read_manager(&h, o, 1).unwrap().sequences, [3]);
+    same_blocks(&b, o, (0..12).filter(|&k| k != 1));
+    let m = read_model(o).unwrap();
+    assert_eq!(m.sequences.iter().map(|s| s.block).collect::<Vec<_>>(), [3]);
+}
+
+#[test]
+fn remove_sequence_keeps_shared_blocks_of_other_clips() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let close_keys = lin(&[(0.0, 1.0), (1.0, 0.5)]);
+    let adds = [
+        add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())]),
+        add_seq(
+            root.clone(),
+            "Close",
+            vec![track(&b, 11, close_keys.clone())],
+        ),
+    ];
+    let two = apply(&b, &adds).unwrap().bytes;
+    let r = apply(
+        &b,
+        &[
+            adds[0].clone(),
+            adds[1].clone(),
+            remove_seq(root, "Open", 0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(r.outcomes[2], Outcome::Applied);
+    let o = &r.bytes;
+    assert_eq!(clip_names(o), ["Close"]);
+    let (m2, m) = (read_model(&two).unwrap(), read_model(o).unwrap());
+    assert_eq!(m.ctrls[&4].flags, 0x68);
+    assert_eq!(m.ctrls[&4].interp, m2.ctrls[&4].interp);
+    let close = m.sequences[0].block;
+    let ci = m.sequences[0].blocks[0].interp as usize;
+    let cd = m.interps[&(ci as u32)].data as usize;
+    same_blocks(&two, o, [ci, cd]);
+    let t = nif::anim::clip_tracks(&m, o, close, 3);
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].keys, Some(close_keys));
+}
+
+#[test]
+fn remove_last_clip_clears_0x20() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let add = add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())]);
+    let one = apply(&b, std::slice::from_ref(&add)).unwrap().bytes;
+    let open_interp = read_model(&one).unwrap().sequences[0].blocks[0].interp;
+    let r = apply(&b, &[add, remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    let o = &r.bytes;
+    let m = read_model(o).unwrap();
+    assert_eq!(
+        m.ctrls[&4].flags,
+        0x48 | 0x04,
+        "the clip's clamp cycle (C-P29)"
+    );
+    assert_eq!(m.ctrls[&4].interp, Some(open_interp));
+    let h = Header::parse(o).unwrap();
+    assert_eq!(h.kind(open_interp as usize), b"NiFloatInterpolator");
+    let d = m.interps[&(open_interp as u32)].data as usize;
+    assert_eq!(data_of(o, d), open_keys());
+    assert!(!m.managed(4));
+    assert!(m.sequences.is_empty());
+    let free = nif::anim::free_tracks(&m, o, 3);
+    assert!(free.iter().any(|t| t.ctrl == 4), "{free:?}");
+    assert_eq!(h.kind(root_ctrl(o)), b"NiControllerManager");
+    assert!(read_manager(&h, o, root_ctrl(o))
+        .unwrap()
+        .sequences
+        .is_empty());
+}
+
+#[test]
+fn remove_or_rename_a_missing_clip_is_a_conflict() {
+    let no = Outcome::Conflict("No clip named Nope.".into());
+    for b in [scenes::managed_clip(), scenes::animated(Some(1), 2)] {
+        let root = root_anchor(&b);
+        let r = apply(
+            &b,
+            &[
+                remove_seq(root.clone(), "Nope", 0),
+                rename_seq(root, "Nope", 0, "X"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(r.outcomes, vec![no.clone(), no.clone()]);
+        assert_eq!(r.bytes, b);
+    }
+    // "A" exists once: nth 1 is missing too
+    let b = scenes::managed_clip();
+    let r = apply(&b, &[remove_seq(root_anchor(&b), "A", 1)]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Conflict("No clip named A.".into())]
+    );
+}
+
+#[test]
+fn rename_refuses_duplicates() {
+    let b = scenes::managed_clip();
+    let root = root_anchor(&b);
+    refused(&b, rename_seq(root.clone(), "B", 0, "A"));
+    refused(&b, rename_seq(root.clone(), "B", 0, "a"));
+    refused(&b, rename_seq(root.clone(), "B", 0, ""));
+    let r = apply(&b, &[rename_seq(root, "B", 0, "Idle")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    for k in 0..12 {
+        let (x, y) = (block_bytes_of(&b, k), block_bytes_of(o, k));
+        if k == 3 {
+            assert_eq!(x[4..], y[4..], "only the 4-byte Name");
+            let idx = i32::from_le_bytes(y[..4].try_into().unwrap());
+            assert_eq!(Header::parse(o).unwrap().string(idx), Some(&b"Idle"[..]));
+        } else {
+            assert_eq!(x, y, "block {k}");
+        }
+    }
+    let (hb, ho) = (Header::parse(&b).unwrap(), Header::parse(o).unwrap());
+    assert_eq!(ho.strings.len(), hb.strings.len() + 1);
+    assert_eq!(clip_names(o), ["A", "Idle"]);
+}
+
+#[test]
+fn nth_picks_the_second_clip_of_the_same_name() {
+    let mut b = scenes::managed_clip();
+    let at = Header::parse(&b).unwrap().offsets()[3];
+    b[at..at + 4].copy_from_slice(&1i32.to_le_bytes()); // B's name -> "A" (string 1)
+    assert_eq!(clip_names(&b), ["A", "A"]);
+    let r = apply(&b, &[remove_seq(root_anchor(&b), "A", 1)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let h = Header::parse(&r.bytes).unwrap();
+    assert_eq!(read_manager(&h, &r.bytes, 1).unwrap().sequences, [2]);
+}
+
+// ---- v2 C2 fix round 1 (C-P29) ----
+
+/// The root manager re-emitted with `seqs` as its list (bypassing the editor).
+fn with_list(b: &[u8], seqs: Vec<i32>) -> Vec<u8> {
+    let h = Header::parse(b).unwrap();
+    let mgr = root_ctrl(b);
+    let mut man = read_manager(&h, b, mgr).unwrap();
+    man.sequences = seqs;
+    let mut doc = nif::write::NifDoc::open(b).unwrap();
+    doc.set_block(mgr as u32, nif::clips::encode_manager(&man).unwrap());
+    doc.bytes()
+}
+
+fn mttc_targets(b: &[u8]) -> Vec<i32> {
+    let h = Header::parse(b).unwrap();
+    let man = read_manager(&h, b, root_ctrl(b)).unwrap();
+    read_mttc(&h, b, man.ctrl.next as usize).unwrap().1
+}
+
+/// I1: a later clip that binds another shape adds it to the MTTC's targets; an existing target is not repeated.
+#[test]
+fn mttc_targets_union_across_clips() {
+    let b = scenes::two_animated();
+    let m = read_model(&b).unwrap();
+    let on = |shape: u32| ClipTrack {
+        at: anchor_role(&m, Some(shape), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    let root = root_anchor(&b);
+    let ops = [
+        add_seq(root.clone(), "A", vec![on(2)]),
+        add_seq(root.clone(), "B", vec![on(3)]),
+        add_seq(root, "C", vec![on(2), on(3)]),
+    ];
+    let r = apply(&b, &ops[..2]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 2]);
+    assert_eq!(mttc_targets(&r.bytes), [2, 3]);
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 3]);
+    assert_eq!(mttc_targets(&r.bytes), [2, 3]);
+    assert_eq!(count_kind(&r.bytes, "NiMultiTargetTransformController"), 1);
+}
+
+/// Value of a track at scene time `t`, as the preview plays it.
+fn play(tr: &nif::anim::Track, t: f32) -> f32 {
+    let ct = nif::anim::ctrl_time(t, tr.freq, tr.phase, tr.start, tr.stop, tr.flags);
+    match &tr.keys {
+        Some(KeyData::Float(g)) => nif::anim::sample_f32(g, ct).unwrap(),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// I2: a controller released by Remove takes the clip's timing with its keys, so they play as they did in the clip.
+#[test]
+fn released_controller_takes_the_clip_timing() {
+    let b = scenes::animated(Some(1), 1); // controller 4 runs 0-1, loop
+    let keys = lin(&[(10.0, 0.0), (20.0, 1.0)]);
+    let root = root_anchor(&b);
+    let add = Op::AddSequence {
+        at: root.clone(),
+        name: "Open".into(),
+        cycle: 2,
+        freq: 1.0,
+        start: 10.0,
+        stop: 20.0,
+        tracks: vec![track(&b, 11, keys)],
+    };
+    let one = apply(&b, std::slice::from_ref(&add)).unwrap().bytes;
+    let m1 = read_model(&one).unwrap();
+    let clip = &nif::anim::clip_tracks(&m1, &one, m1.sequences[0].block, 3)[0];
+    let r = apply(&b, &[add, remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 2]);
+    let m = read_model(&r.bytes).unwrap();
+    let c = &m.ctrls[&4];
+    assert_eq!(
+        (c.frequency, c.phase, c.start, c.stop),
+        (1.0, 0.0, 10.0, 20.0)
+    );
+    assert_eq!(c.flags, 0x48 | 0x04, "clamp from the clip's cycle type");
+    let free = nif::anim::free_tracks(&m, &r.bytes, 3);
+    let tr = free.iter().find(|t| t.ctrl == 4).unwrap();
+    for t in [10.0, 15.0, 20.0, 25.0] {
+        assert_eq!(play(tr, t), play(clip, t), "at {t}");
+    }
+    assert_eq!(play(tr, 15.0), 0.5);
+}
+
+/// I3: a sequence the manager lists that does not read refuses every clip op; it is not an absent name.
+#[test]
+fn unreadable_listed_sequence_refuses() {
+    let b = with_list(&named_managed_clip(), vec![2, 3, 99]);
+    let root = root_anchor(&b);
+    let m = read_model(&b).unwrap();
+    let t = ClipTrack {
+        at: anchor_role(&m, Some(5), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    refused(&b, remove_seq(root.clone(), "A", 0));
+    refused(&b, remove_seq(root.clone(), "Nope", 0));
+    refused(&b, rename_seq(root.clone(), "A", 0, "Z"));
+    refused(&b, add_seq(root, "C", vec![t]));
+}
+
+/// I4: a sequence another manager still lists keeps its controllers manager-controlled after a Remove.
+#[test]
+fn another_manager_keeps_the_clip_live() {
+    let b = scenes::animated(Some(1), 1);
+    let root = root_anchor(&b);
+    let one = apply(
+        &b,
+        &[add_seq(
+            root.clone(),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let h = Header::parse(&one).unwrap();
+    let man = read_manager(&h, &one, root_ctrl(&one)).unwrap();
+    let mut doc = nif::write::NifDoc::open(&one).unwrap();
+    let second = nif::ctrl::Manager {
+        palette: -1,
+        ..man.clone()
+    };
+    doc.append(
+        b"NiControllerManager",
+        nif::clips::encode_manager(&second).unwrap(),
+    );
+    let two = doc.bytes();
+    let before = read_model(&two).unwrap().ctrls[&4].clone();
+    let r = apply(&two, &[remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(
+        m.ctrls[&4], before,
+        "flags 0x20 and the blend interpolator stay"
+    );
+    assert_eq!(m.sequences.len(), 1, "the other manager lists it");
+    let h = Header::parse(&r.bytes).unwrap();
+    assert!(read_manager(&h, &r.bytes, root_ctrl(&r.bytes))
+        .unwrap()
+        .sequences
+        .is_empty());
+}
+
+/// Minor: an LSCC (Point3) track round trip: Point3 keyed and blend interpolators, all three values, and back.
+#[test]
+fn colour_track_round_trip() {
+    let b = scenes::animated(Some(1), 0);
+    let ctrl_keys = pos_keys(&[(0.0, [0.0; 3])]);
+    let shader = prop_anchor(&b, Role::Shader);
+    let a = apply(&b, &[add(shader, LSCC, Some(1), ctrl_keys, 1.0)])
+        .unwrap()
+        .bytes;
+    let m = read_model(&a).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Shader,
+        class: LSCC.into(),
+        var: Some(1),
+        nth: 0,
+    };
+    let at = anchor_role(&m, Some(2), role).unwrap();
+    let c = at.block;
+    let keys = pos_keys(&[(0.0, [0.1, 0.2, 0.3]), (1.0, [0.4, 0.5, 0.6])]);
+    let root = root_anchor(&a);
+    let addc = add_seq(
+        root.clone(),
+        "Glow",
+        vec![ClipTrack {
+            at,
+            keys: keys.clone(),
+        }],
+    );
+    let one = apply(&a, std::slice::from_ref(&addc)).unwrap();
+    assert_eq!(one.outcomes, vec![Outcome::Applied]);
+    let o = &one.bytes;
+    let (h, m) = (Header::parse(o).unwrap(), read_model(o).unwrap());
+    let s = read_sequence_out(&h, o, m.sequences[0].block as usize).unwrap();
+    let cb = &s.blocks[0];
+    assert_eq!(h.string(cb.ctrl_id), Some(&b"1"[..]));
+    assert_eq!(h.string(cb.ctrl_type), Some(LSCC.as_bytes()));
+    assert_eq!(h.kind(cb.interp as usize), b"NiPoint3Interpolator");
+    let ip = &m.interps[&(cb.interp as u32)];
+    assert_eq!(ip.value, [0.1, 0.2, 0.3]);
+    assert_eq!(h.kind(ip.data as usize), b"NiPosData");
+    assert_eq!(data_of(o, ip.data as usize), keys);
+    let bl = nif::ctrl::read_blend_interp(&h, o, m.ctrls[&c].interp.unwrap() as usize).unwrap();
+    assert_eq!(bl.class, "NiBlendPoint3Interpolator");
+    assert!(bl.value.iter().all(|v| v.to_bits() == 0xFF7F_FFFF) && bl.value.len() == 3);
+    assert_eq!(m.ctrls[&c].flags, 0x68);
+
+    let r = apply(&a, &[addc, remove_seq(root, "Glow", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 2]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&c].interp, Some(cb.interp));
+    assert_eq!(m.ctrls[&c].flags, 0x48 | 0x04);
+    let t = nif::anim::free_tracks(&m, &r.bytes, 3);
+    assert_eq!(t.iter().find(|t| t.ctrl == c).unwrap().keys, Some(keys));
+}
+
+// ---- v2 C3: ConvertChainToClips ----
+
+const TIMINGS: &str = "These controllers run on different timings: they cannot share one clip.";
+const NO_FREE: &str = "This property has no free controllers with keys.";
+
+/// `b` with `v` written at body offset `off` of block `k`.
+fn patched(b: &[u8], k: usize, off: usize, v: &[u8]) -> Vec<u8> {
+    let mut o = b.to_vec();
+    let at = Header::parse(b).unwrap().offsets()[k] + off;
+    o[at..at + v.len()].copy_from_slice(v);
+    o
+}
+
+/// `animated`'s shader anchor (shape "S" 2, BSLSP 3).
+fn conv_at(b: &[u8]) -> Anchor {
+    anchor_role(&read_model(b).unwrap(), Some(2), Role::Shader).unwrap()
+}
+
+fn conv(at: &Anchor, name: &str) -> Op {
+    Op::ConvertChainToClips {
+        at: at.clone(),
+        name: name.into(),
+    }
+}
+
+/// The root manager's only sequence block.
+fn only_seq(b: &[u8]) -> usize {
+    let h = Header::parse(b).unwrap();
+    let man = read_manager(&h, b, root_ctrl(b)).unwrap();
+    assert_eq!(man.sequences.len(), 1);
+    man.sequences[0] as usize
+}
+
+#[test]
+fn convert_moves_keys_into_one_clip_and_sets_0x20() {
+    let b = scenes::animated(Some(1), 2);
+    let m = read_model(&b).unwrap();
+    let r = apply(&b, &[conv(&conv_at(&b), CONVERT_NAME)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let m2 = read_model(o).unwrap();
+    assert!(m2.problems.is_empty(), "{:?}", m2.problems);
+    assert_eq!(m2.sequences.len(), 1);
+    let seq = only_seq(o);
+    let s = read_sequence_out(&h, o, seq).unwrap();
+    assert_eq!(h.string(s.name), Some(&b"SpecialIdle"[..]));
+    assert_eq!((s.cycle, s.freq, s.start, s.stop), (0, 1.0, 0.0, 1.0));
+    let ctrls: Vec<i32> = s.blocks.iter().map(|cb| cb.controller).collect();
+    assert_eq!(ctrls, [4, 5], "chain order");
+    for (cb, src) in s.blocks.iter().zip([8, 9]) {
+        assert!(cb.interp >= 10, "a fresh interpolator");
+        assert_eq!(h.kind(cb.interp as usize), b"NiFloatInterpolator");
+        let d = m2.interps[&(cb.interp as u32)].data as usize;
+        assert_eq!(data_of(o, d), data_of(&b, src));
+    }
+    for c in [4, 5] {
+        assert_eq!(m2.ctrls[&c].flags, 0x48 | 0x20);
+    }
+    let clip_t = nif::anim::clip_tracks(&m2, o, seq as u32, 3);
+    // C-P34 (a): the free preview plays the SpecialIdle clip itself (the game starts it by itself)
+    assert_eq!(nif::anim::free_tracks(&m2, o, 3), clip_t);
+    let clip: Vec<_> = clip_t.into_iter().map(|t| t.keys).collect();
+    let free: Vec<_> = nif::anim::free_tracks(&m, &b, 3)
+        .into_iter()
+        .map(|t| t.keys)
+        .collect();
+    assert_eq!(clip.len(), 2);
+    assert_eq!(clip, free);
+    same_blocks(&b, o, [6, 7, 8, 9]);
+}
+
+#[test]
+fn convert_equals_add_sequence() {
+    let b = scenes::animated(Some(1), 2);
+    let m = read_model(&b).unwrap();
+    let ctrl = |var| anchor_role(&m, Some(2), lscf_role(var)).unwrap();
+    let add = Op::AddSequence {
+        at: anchor_role(&m, None, Role::Root).unwrap(),
+        name: "X".into(),
+        cycle: 0,
+        freq: 1.0,
+        start: 0.0,
+        stop: 1.0,
+        tracks: vec![
+            ClipTrack {
+                at: ctrl(11),
+                keys: data_of(&b, 8),
+            },
+            ClipTrack {
+                at: ctrl(20),
+                keys: data_of(&b, 9),
+            },
+        ],
+    };
+    let a = apply(&b, &[add]).unwrap();
+    let c = apply(&b, &[conv(&conv_at(&b), "X")]).unwrap();
+    assert_eq!(a.outcomes, vec![Outcome::Applied]);
+    assert_eq!(c.outcomes, vec![Outcome::Applied]);
+    assert_eq!(c.bytes, a.bytes);
+}
+
+#[test]
+fn convert_range_is_the_union() {
+    let b = scenes::animated(Some(1), 2);
+    let b = patched(&b, 5, 14, &0.5f32.to_le_bytes());
+    let b = patched(&b, 5, 18, &3.0f32.to_le_bytes());
+    let r = apply(&b, &[conv(&conv_at(&b), "X")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let s = read_sequence_out(&h, o, only_seq(o)).unwrap();
+    assert_eq!((s.start, s.stop), (0.0, 3.0));
+    let m2 = read_model(o).unwrap();
+    for (cb, src) in s.blocks.iter().zip([8, 9]) {
+        let d = m2.interps[&(cb.interp as u32)].data as usize;
+        assert_eq!(data_of(o, d), data_of(&b, src), "keys are not rescaled");
+    }
+}
+
+/// `animated(Some(1), 2)` variants whose timings cannot share one clip.
+fn mixed_timings() -> Vec<Vec<u8>> {
+    let b = scenes::animated(Some(1), 2);
+    vec![
+        patched(&b, 5, 4, &(0x48u16 | 0x04).to_le_bytes()),
+        patched(&b, 5, 6, &2.0f32.to_le_bytes()),
+        patched(&b, 5, 10, &0.5f32.to_le_bytes()),
+        patched(&b, 5, 4, &(0x48u16 | 0x10).to_le_bytes()),
+        patched(&b, 4, 10, &f32::NAN.to_le_bytes()),
+    ]
+}
+
+#[test]
+fn convert_refuses_mixed_timings() {
+    for b in mixed_timings() {
+        refused_unchanged(&b, conv(&conv_at(&b), "X"), TIMINGS);
+    }
+    let b = patched(
+        &scenes::animated(Some(1), 2),
+        4,
+        10,
+        &(-0.0f32).to_le_bytes(),
+    );
+    let r = apply(&b, &[conv(&conv_at(&b), "X")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied], "-0.0 is phase 0");
+}
+
+#[test]
+fn convert_joins_an_existing_manager() {
+    let b = named_managed_clip();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, Some(5), Role::Shader).unwrap();
+    assert_eq!(at.block, 6);
+    let r = apply(
+        &b,
+        &[
+            add(at.clone(), LSCF, Some(20), open_keys(), 1.0),
+            conv(&at, "C"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let man = read_manager(&h, o, 1).unwrap();
+    assert_eq!(man.sequences.len(), 3);
+    assert_eq!(man.sequences[..2], [2, 3]);
+    assert_eq!(count_kind(o, "NiControllerManager"), 1);
+    assert_eq!(count_kind(o, "NiMultiTargetTransformController"), 1);
+    // C-P29: the MTTC (still block 9) gains the shape the new clip binds
+    assert_eq!(read_mttc(&h, o, 9).unwrap().1, [5]);
+    let s = read_sequence_out(&h, o, man.sequences[2] as usize).unwrap();
+    assert_eq!(s.blocks.len(), 1);
+    let m2 = read_model(o).unwrap();
+    let added = *m2.lighting[&6].prop.ctrls.last().unwrap();
+    assert_ne!(added, 7);
+    assert_eq!(
+        s.blocks[0].controller, added as i32,
+        "7 is managed: it stays out"
+    );
+}
+
+/// (file, shape, property, role) cases refused for want of free keyed controllers.
+fn without_free() -> Vec<(Vec<u8>, u32, u32, Role)> {
+    let a = scenes::animated(Some(1), 2);
+    let inactive = patched(&a, 4, 4, &0x40u16.to_le_bytes());
+    let both = patched(&inactive, 7, 4, &(-1i32).to_le_bytes());
+    vec![
+        (scenes::animated(Some(1), 0), 2, 3, Role::Shader),
+        (named_managed_clip(), 5, 6, Role::Shader),
+        (both, 2, 3, Role::Shader),
+    ]
+}
+
+#[test]
+fn convert_on_property_without_free_controllers_is_refused() {
+    for (b, shape, _, role) in without_free() {
+        let at = anchor_role(&read_model(&b).unwrap(), Some(shape), role).unwrap();
+        refused_unchanged(&b, conv(&at, "X"), NO_FREE);
+    }
+}
+
+#[test]
+fn convert_skips_keyless_and_inactive_controllers() {
+    let b = patched(&scenes::animated(Some(1), 2), 7, 4, &(-1i32).to_le_bytes());
+    let r = apply(&b, &[conv(&conv_at(&b), "X")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let s = read_sequence_out(&h, o, only_seq(o)).unwrap();
+    let ctrls: Vec<i32> = s.blocks.iter().map(|cb| cb.controller).collect();
+    assert_eq!(ctrls, [4]);
+    let m2 = read_model(o).unwrap();
+    assert_eq!(m2.ctrls[&5].flags, 0x48);
+    assert_eq!(m2.ctrls[&5].interp, Some(7));
+}
+
+const SHARED: &str = "This alpha is shared by 2 shapes: split it before editing.";
+
+#[test]
+fn convert_on_a_shared_alpha_is_a_conflict() {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let at = anchor_role(&m, Some(1), Role::Alpha).unwrap();
+    assert_eq!(at.block, 4);
+    let r = apply(&b, &[conv(&at, "X")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Conflict(SHARED.into())]);
+    assert_eq!(r.bytes, b);
+    assert_eq!(convert_check(&m, 4, Some("A")), Err(SHARED.into()));
+}
+
+#[test]
+fn convert_refuses_a_root_that_is_not_a_node() {
+    let b = scenes::free_chain();
+    let m = read_model(&b).unwrap();
+    let at = Anchor {
+        block: 0,
+        kind: "BSLightingShaderProperty".into(),
+        shape: None,
+        role: Role::Shader,
+    };
+    let r = apply(&b, &[conv(&at, "X")]).unwrap();
+    assert!(
+        matches!(r.outcomes[0], Outcome::Conflict(_) | Outcome::Refused(_)),
+        "{:?}",
+        r.outcomes
+    );
+    assert_eq!(r.bytes, b);
+    assert_eq!(
+        convert_check(&m, 0, Some("S")),
+        Err("The root is not a node: a clip needs a node root.".into())
+    );
+}
+
+#[test]
+fn convert_then_undo_is_identity() {
+    let b = scenes::animated(Some(1), 2);
+    assert_ne!(apply(&b, &[conv(&conv_at(&b), "X")]).unwrap().bytes, b);
+    assert_eq!(apply(&b, &[]).unwrap().bytes, b);
+}
+
+#[test]
+fn convert_check_matches_the_op() {
+    let mut cases = vec![(scenes::animated(Some(1), 2), 2, 3, Role::Shader)];
+    cases.extend(mixed_timings().into_iter().map(|b| (b, 2, 3, Role::Shader)));
+    cases.extend(without_free());
+    cases.push((scenes::shared_alpha_with_testref_chain(), 1, 4, Role::Alpha));
+    for (b, shape, prop, role) in cases {
+        let m = read_model(&b).unwrap();
+        let at = anchor_role(&m, Some(shape), role).unwrap();
+        assert_eq!(at.block, prop);
+        let check = convert_check(&m, prop, at.shape.as_deref());
+        let r = apply(&b, &[conv(&at, "X")]).unwrap();
+        match (&check, &r.outcomes[0]) {
+            (Ok(_), Outcome::Applied) => {}
+            (Err(e), Outcome::Refused(t) | Outcome::Conflict(t)) => assert_eq!(e, t),
+            (c, o) => panic!("check {c:?}, op {o:?}"),
+        }
+    }
+    let b = scenes::animated(Some(1), 2);
+    let m = read_model(&b).unwrap();
+    assert_eq!(convert_check(&m, 3, Some("S")), Ok(vec![4, 5]));
+}
+
+// ---- v2 C3 fix round 1 (C-P30) ----
+
+const BAD_TIMES: &str = "This animation has invalid times: it cannot be converted.";
+
+#[test]
+fn convert_refuses_invalid_controller_times() {
+    let a = scenes::animated(Some(1), 2);
+    // f32::min and f32::max would hide both: min(NaN, 0) = 0, max(-inf, 1) = 1
+    let nan_start = patched(&a, 4, 14, &f32::NAN.to_le_bytes());
+    let inf_stop = patched(&a, 5, 18, &f32::NEG_INFINITY.to_le_bytes());
+    for b in [nan_start, inf_stop] {
+        refused_unchanged(&b, conv(&conv_at(&b), "X"), BAD_TIMES);
+        let m = read_model(&b).unwrap();
+        assert_eq!(convert_check(&m, 3, Some("S")), Err(BAD_TIMES.into()));
+    }
+}
+
+// ---- v2 C4: SplitAlpha with clip-driven controllers ----
+
+use nif::clips::CtrlBlockOut;
+
+fn c4_open() -> KeyData {
+    lin(&[(0.0, 20.0), (1.0, 200.0)])
+}
+
+fn c4_close() -> KeyData {
+    lin(&[(0.0, 200.0), (1.0, 20.0)])
+}
+
+/// `shared_alpha_with_testref_chain()` (Root 0, "A" 1, "B" 2, BSLSP 3, alpha 4 -> free TestRef 5 -> interp 6 -> data 7)
+/// after SplitAlpha A (A's alpha 8, TestRef copy 9, interp 10, data 11) and two clips on 9: "Open" keys (0,20),(1,200)
+/// and "Close" keys (0,200),(1,20), both cycle 2, 0..1. Then B's alpha ref is patched to 8, so 8 is shared by A and B
+/// and 9 is driven by two clips whose CBs name "A". `by_ref: false` patches Open's CB controller ref to -1 (bound by
+/// strings only). Returns (bytes, open, close).
+fn clip_on_shared_alpha(by_ref: bool) -> (Vec<u8>, u32, u32) {
+    let b = scenes::shared_alpha_with_testref_chain();
+    let m = read_model(&b).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Alpha,
+        class: TESTREF.into(),
+        var: None,
+        nth: 0,
+    };
+    let t = |keys| ClipTrack {
+        at: anchor_role(&m, Some(1), role.clone()).unwrap(),
+        keys,
+    };
+    let ops = [
+        split(&m, "A"),
+        add_seq(root_anchor(&b), "Open", vec![t(c4_open())]),
+        add_seq(root_anchor(&b), "Close", vec![t(c4_close())]),
+    ];
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 3]);
+    let mut x = r.bytes;
+    let (open, close, open_at) = {
+        let h = Header::parse(&x).unwrap();
+        let man = read_manager(&h, &x, root_ctrl(&x)).unwrap();
+        let open = man.sequences[0] as u32;
+        (open, man.sequences[1] as u32, h.offsets()[open as usize])
+    };
+    let alpha_at = read_model(&x).unwrap().shape(2).unwrap().at.alpha;
+    x = with_i32(x, alpha_at, 8);
+    if !by_ref {
+        x = with_i32(x, open_at + 12 + 4, -1);
+    }
+    let mx = read_model(&x).unwrap();
+    assert!(mx.problems.is_empty(), "{:?}", mx.problems);
+    assert_eq!(mx.alphas[&8].prop.users, vec![1, 2]);
+    assert!(mx.managed(9));
+    assert_eq!(nif::anim::clip_tracks(&mx, &x, open, 8).len(), 1);
+    (x, open, close)
+}
+
+/// The keys of the one track sequence `seq` gives on `prop`.
+fn one_track(m: &nif::model::NifModel, b: &[u8], seq: u32, prop: u32) -> KeyData {
+    let t = nif::anim::clip_tracks(m, b, seq, prop);
+    assert_eq!(t.len(), 1, "seq {seq} prop {prop}");
+    t[0].keys.clone().unwrap()
+}
+
+fn palette_of(b: &[u8]) -> Vec<(Vec<u8>, i32)> {
+    let h = Header::parse(b).unwrap();
+    let man = read_manager(&h, b, root_ctrl(b)).unwrap();
+    read_palette(&h, b, man.palette as usize).unwrap().1
+}
+
+fn cbs(b: &[u8], seq: u32) -> Vec<CtrlBlockOut> {
+    read_sequence_out(&Header::parse(b).unwrap(), b, seq as usize)
+        .unwrap()
+        .blocks
+}
+
+#[test]
+fn managed_split_adds_cbs_to_every_sequence() {
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let r = apply(&x, &[split(&mx, "B")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    assert!(m3.problems.is_empty(), "{:?}", m3.problems);
+    assert_eq!(nblocks(out) as u32, n + 3);
+    assert_eq!(
+        m3.shape(2).unwrap().alpha,
+        Some(n),
+        "C4-D6: the alpha copy is first"
+    );
+    assert_eq!(m3.alphas[&n].prop.ctrls, vec![n + 1]);
+    let c = &m3.ctrls[&(n + 1)];
+    assert_eq!((c.flags, c.target), (0x48 | 0x20, n as i32));
+    assert_eq!(c.interp, Some(n as i32 + 2));
+    let blend = mx.ctrls[&9].interp.unwrap() as usize;
+    assert_eq!(kind_of(out, n as usize + 2), b"NiBlendFloatInterpolator");
+    assert_eq!(
+        block_bytes_of(out, n as usize + 2),
+        block_bytes_of(&x, blend)
+    );
+    let b_name = mx.shape(2).unwrap().net.name;
+    for (seq, keys) in [(open, c4_open()), (close, c4_close())] {
+        let before = cbs(&x, seq);
+        let after = cbs(out, seq);
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0], before[0]);
+        let want = CtrlBlockOut {
+            controller: n as i32 + 1,
+            node: b_name,
+            ..before[0].clone()
+        };
+        assert_eq!(after[1], want, "C4-D2: same interpolator and strings");
+        assert_eq!(one_track(&m3, out, seq, 8), keys);
+        assert_eq!(one_track(&m3, out, seq, n), keys);
+    }
+    assert!(palette_of(out).contains(&(b"B".to_vec(), 2)));
+    let h = Header::parse(out).unwrap();
+    let man = read_manager(&h, out, root_ctrl(out)).unwrap();
+    let (pal, mttc) = (man.palette as usize, man.ctrl.next as usize);
+    assert_eq!(mttc_targets(out), vec![1, 2], "C-P31: B joins the MTTC");
+    let changed = [2, open as usize, close as usize, pal, mttc];
+    same_blocks(&x, out, (0..n as usize).filter(|k| !changed.contains(k)));
+}
+
+/// C4 fix 1: a listed sequence that does not read refuses the split (the model drops it, so the plan cannot see it).
+#[test]
+fn managed_split_refuses_an_unreadable_listed_sequence() {
+    let (mut x, open, _) = clip_on_shared_alpha(true);
+    let end = {
+        let h = Header::parse(&x).unwrap();
+        h.offsets()[open as usize] + h.sizes[open as usize] as usize
+    };
+    // one anim note array, with no ref behind it
+    x[end - 2..end].copy_from_slice(&1u16.to_le_bytes());
+    let m = read_model(&x).unwrap();
+    assert!(m.sequences.iter().all(|s| s.block != open));
+    refused(&x, split(&m, "A"));
+}
+
+#[test]
+fn managed_split_repoints_the_named_shapes_cb() {
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let r = apply(&x, &[split(&mx, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    assert!(m3.problems.is_empty(), "{:?}", m3.problems);
+    assert_eq!(m3.shape(1).unwrap().alpha, Some(n));
+    let b_name = mx.shape(2).unwrap().net.name;
+    for (seq, keys) in [(open, c4_open()), (close, c4_close())] {
+        let before = cbs(&x, seq);
+        let after = cbs(out, seq);
+        assert_eq!(after.len(), 2);
+        let moved = CtrlBlockOut {
+            controller: n as i32 + 1,
+            ..before[0].clone()
+        };
+        assert_eq!(after[0], moved);
+        let kept = CtrlBlockOut {
+            controller: 9,
+            node: b_name,
+            ..before[0].clone()
+        };
+        assert_eq!(after[1], kept);
+        assert_eq!(one_track(&m3, out, seq, 8), keys);
+        assert_eq!(one_track(&m3, out, seq, n), keys);
+    }
+    assert!(palette_of(out).contains(&(b"B".to_vec(), 2)));
+}
+
+#[test]
+fn managed_split_repoints_a_string_bound_cb() {
+    let (x, open, _) = clip_on_shared_alpha(false);
+    assert_eq!(cbs(&x, open)[0].controller, -1);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let r = apply(&x, &[split(&mx, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    assert!(m3.problems.is_empty(), "{:?}", m3.problems);
+    let after = cbs(out, open);
+    assert_eq!(after[0].controller, n as i32 + 1, "now bound by ref");
+    assert_eq!(after[1].controller, 9);
+    assert_eq!(one_track(&m3, out, open, n), c4_open());
+    assert_eq!(one_track(&m3, out, open, 8), c4_open());
+}
+
+#[test]
+fn managed_split_leaves_other_shape_clips_unchanged() {
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let r = apply(&x, &[split(&mx, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let out = &r.bytes;
+    let m3 = read_model(out).unwrap();
+    let mut same = vec![9, mx.ctrls[&9].interp.unwrap() as usize];
+    for seq in [open, close] {
+        assert_eq!(
+            nif::anim::clip_tracks(&m3, out, seq, 8),
+            nif::anim::clip_tracks(&mx, &x, seq, 8)
+        );
+        for cb in cbs(&x, seq) {
+            same.push(cb.interp as usize);
+            same.push(mx.interps[&(cb.interp as u32)].data as usize);
+        }
+    }
+    let mgr = root_ctrl(&x);
+    let mttc = read_manager(&Header::parse(&x).unwrap(), &x, mgr)
+        .unwrap()
+        .ctrl
+        .next as usize;
+    assert_eq!(kind_of(&x, mttc), b"NiMultiTargetTransformController");
+    // C-P31: the existing targets stay and B, which the new CBs name, is appended
+    assert_eq!(mttc_targets(&x), vec![1]);
+    assert_eq!(mttc_targets(out), vec![1, 2]);
+    same.push(mgr);
+    same_blocks(&x, out, same);
+}
+
+#[test]
+fn managed_split_refuses_an_unnamed_target() {
+    let (x, _, _) = clip_on_shared_alpha(true);
+    let at = read_model(&x).unwrap().shape(2).unwrap().net.start;
+    let x = with_i32(x, at, -1);
+    let m = read_model(&x).unwrap();
+    assert_eq!(
+        refused(&x, split(&m, "A")),
+        "This shape has no name: a clip cannot find it."
+    );
+}
+
+#[test]
+fn managed_split_refuses_duplicate_target_names() {
+    let (x, _, _) = clip_on_shared_alpha(true);
+    let m = read_model(&x).unwrap();
+    let (at, a_name) = (m.shape(2).unwrap().net.start, m.shape(1).unwrap().net.name);
+    let x = with_i32(x, at, a_name);
+    let m = read_model(&x).unwrap();
+    let op = Op::SplitAlpha {
+        at: anchor_shape(&m, 1),
+    };
+    assert_eq!(
+        refused(&x, op),
+        "Two shapes are named A: a clip cannot tell them apart."
+    );
+}
+
+#[test]
+fn editing_one_split_clip_leaves_the_other() {
+    let (x, open, _) = clip_on_shared_alpha(true);
+    let mx = read_model(&x).unwrap();
+    let n = nblocks(&x) as u32;
+    let s = apply(&x, &[split(&mx, "A")]).unwrap().bytes;
+    let ms = read_model(&s).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Alpha,
+        class: TESTREF.into(),
+        var: None,
+        nth: 0,
+    };
+    let at = anchor_role(&ms, Some(1), role).unwrap();
+    assert_eq!(at.block, n + 1);
+    let keys = lin(&[(0.0, 50.0), (1.0, 60.0)]);
+    let op = Op::SetKeys {
+        at,
+        clip: Some(open),
+        clip_name: None,
+        keys: keys.clone(),
+        base: c4_open(),
+    };
+    let r = apply(&s, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m3 = read_model(&r.bytes).unwrap();
+    assert_eq!(one_track(&m3, &r.bytes, open, n), keys);
+    assert_eq!(
+        one_track(&m3, &r.bytes, open, 8),
+        c4_open(),
+        "E5 copied the shared interpolator"
+    );
+}
+
+/// C5-D2: `clip_key` gives the (name, nth) `find_clip` resolves back to the same block, in the manager's list order.
+#[test]
+fn clip_key_follows_the_manager_list() {
+    let mut b = scenes::managed_clip();
+    let h = Header::parse(&b).unwrap();
+    let (mgr, s2, s3) = (h.offsets()[1], h.offsets()[2], h.offsets()[3]);
+    let list: Vec<u8> = [2i32, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let at = mgr + b[mgr..s2].windows(12).position(|w| w == list).unwrap();
+    b[at..at + 8].copy_from_slice(&[3i32, 2].map(i32::to_le_bytes).concat());
+    let name_a: [u8; 4] = b[s2..s2 + 4].try_into().unwrap();
+    b[s3..s3 + 4].copy_from_slice(&name_a); // clip 3 is now "A" too
+    let m = read_model(&b).unwrap();
+    assert_eq!(clip_key(&b, &m, 3), Some(("A".into(), 0)));
+    assert_eq!(clip_key(&b, &m, 2), Some(("A".into(), 1)));
+    assert_eq!(
+        clip_key(&b, &m, 7),
+        None,
+        "a controller, not a listed sequence"
+    );
+    // the key finds the same block back: a rename of ("A", 1) renames block 2
+    let rename = Op::RenameSequence {
+        at: anchor_role(&m, None, Role::Root).unwrap(),
+        name: "A".into(),
+        nth: 1,
+        new_name: "Z".into(),
+    };
+    let r = apply(&b, &[rename]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    let name = |s: u32| {
+        m2.sequences
+            .iter()
+            .find(|q| q.block == s)
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert_eq!((name(2), name(3)), (Some("Z".into()), Some("A".into())));
+}
+
+/// C-P35 I1: a clip SetKeys names its sequence by block and name. Reverting the first AddSequence moves the second
+/// clip onto the first one's block; with equal keys the base check passes, so only the name tells them apart.
+#[test]
+fn clip_key_edit_after_a_revert_is_a_conflict_not_another_clip() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let (open, close) = (
+        add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())]),
+        add_seq(root, "Close", vec![track(&b, 11, open_keys())]),
+    );
+    let first = |ops: &[Op]| {
+        let o = apply(&b, ops).unwrap().bytes;
+        read_model(&o).unwrap().sequences[0].block
+    };
+    let seq = first(std::slice::from_ref(&open));
+    assert_eq!(
+        first(std::slice::from_ref(&close)),
+        seq,
+        "Close lands on Open's block"
+    );
+    let edit = Op::SetKeys {
+        at: track(&b, 11, open_keys()).at,
+        clip: Some(seq),
+        clip_name: Some("Open".into()),
+        keys: lin(&[(0.0, 0.5), (1.0, 1.0)]),
+        base: open_keys(),
+    };
+    let r = apply(&b, &[open, close.clone(), edit.clone()]).unwrap();
+    assert_eq!(r.outcomes[2], Outcome::Applied);
+    let r = apply(&b, &[close, edit]).unwrap();
+    assert!(
+        matches!(&r.outcomes[1], Outcome::Conflict(_)),
+        "{:?}",
+        r.outcomes
+    );
+}
+
+/// C-P35 M1: AddSequence refuses an unknown cycle type and an empty or reversed range.
+#[test]
+fn add_sequence_refuses_bad_cycle_and_range() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let with = |cycle: u32, start: f32, stop: f32| {
+        let Op::AddSequence {
+            at, name, tracks, ..
+        } = add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())])
+        else {
+            unreachable!()
+        };
+        Op::AddSequence {
+            at,
+            name,
+            cycle,
+            freq: 1.0,
+            start,
+            stop,
+            tracks,
+        }
+    };
+    assert_eq!(
+        refused(&b, with(3, 0.0, 1.0)),
+        "The cycle must be Loop, Reverse or Clamp."
+    );
+    for (start, stop) in [(0.0, 0.0), (1.0, 0.5)] {
+        assert_eq!(
+            refused(&b, with(2, start, stop)),
+            "Stop must be after start."
+        );
+    }
+}
+
+/// C-P35 M1: Convert of controllers whose ranges are all 0..0 refuses through AddSequence's check.
+#[test]
+fn convert_refuses_an_empty_range() {
+    let mut b = scenes::animated(Some(1), 2);
+    let offs = Header::parse(&b).unwrap().offsets().to_vec();
+    for c in [4, 5] {
+        b[offs[c] + 18..offs[c] + 22].copy_from_slice(&0f32.to_le_bytes()); // stop
+    }
+    assert_eq!(
+        refused(&b, conv(&conv_at(&b), CONVERT_NAME)),
+        "Stop must be after start."
+    );
+}
+
+/// C-P35 M2: a NiControllerManager on the root's chain that does not read refuses AddSequence; it never puts a
+/// second manager in front of it.
+#[test]
+fn add_sequence_refuses_an_unreadable_root_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let m = read_model(&b).unwrap();
+    let root = m.root.unwrap();
+    let mut doc = nif::write::NifDoc::open(&b).unwrap();
+    let at = m.root_net.as_ref().unwrap().controller_at() - doc.header().offsets()[root as usize];
+    let n = doc.append(b"NiControllerManager", vec![0; 8]); // shorter than NiTimeController
+    doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
+    let x = doc.bytes();
+    let add = add_seq(root_anchor(&x), "Open", vec![track(&x, 11, open_keys())]);
+    assert_eq!(
+        refused(&x, add),
+        "The root's controller chain cannot be read."
+    );
+    let remove = remove_seq(root_anchor(&x), "Open", 0);
+    assert_eq!(
+        refused(&x, remove),
+        "The root's controller chain cannot be read."
+    );
+    assert_eq!(clip_key(&x, &read_model(&x).unwrap(), n), None);
+}
+
+/// C-P35 M3: two managers that share one palette and one MTTC, each listing a clip that needs a different shape
+/// added: a split keeps both additions (the second no longer starts again from the source list).
+#[test]
+fn split_grows_a_shared_palette_and_mttc_once_for_both_managers() {
+    use nif::clips::{encode_manager, encode_mttc, encode_palette, encode_sequence};
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let h = Header::parse(&x).unwrap();
+    let mb = root_ctrl(&x) as u32;
+    let man = read_manager(&h, &x, mb as usize).unwrap();
+    let (scene, _) = read_palette(&h, &x, man.palette as usize).unwrap();
+    let (base, _) = read_mttc(&h, &x, man.ctrl.next as usize).unwrap();
+    let mx = read_model(&x).unwrap();
+    let b_name = mx.shape(shape_named(&mx, "B")).unwrap().net.name;
+    let mut doc = nif::write::NifDoc::open(&x).unwrap();
+    let m2 = doc.len();
+    // the palette and MTTC name no shape; Open stays on the root manager, Close moves to a second one and names B
+    doc.set_block(man.palette as u32, encode_palette(scene, &[]).unwrap());
+    doc.set_block(man.ctrl.next as u32, encode_mttc(&base, &[]).unwrap());
+    let mut c = read_sequence_out(&h, &x, close as usize).unwrap();
+    c.manager = m2 as i32;
+    c.blocks[0].node = b_name;
+    doc.set_block(close, encode_sequence(&c).unwrap());
+    let first = nif::ctrl::Manager {
+        sequences: vec![open as i32],
+        ..man.clone()
+    };
+    doc.set_block(mb, encode_manager(&first).unwrap());
+    let second = nif::ctrl::Manager {
+        sequences: vec![close as i32],
+        ..man.clone()
+    };
+    doc.append(b"NiControllerManager", encode_manager(&second).unwrap());
+    let y = doc.bytes();
+    let my = read_model(&y).unwrap();
+    let (a, bb) = (shape_named(&my, "A") as i32, shape_named(&my, "B") as i32);
+    let r = apply(&y, &[split(&my, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let mut pal: Vec<i32> = read_palette(&h, o, man.palette as usize)
+        .unwrap()
+        .1
+        .iter()
+        .map(|p| p.1)
+        .collect();
+    let (_, mut targets) = read_mttc(&h, o, man.ctrl.next as usize).unwrap();
+    pal.sort();
+    targets.sort();
+    assert_eq!(pal, [a, bb], "palette");
+    assert_eq!(targets, [a, bb], "MTTC");
 }

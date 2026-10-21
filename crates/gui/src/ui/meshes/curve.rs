@@ -9,6 +9,8 @@ pub(super) const PAD: f32 = 6.0;
 const HEIGHT: f32 = 120.0;
 const HANDLE: f32 = 4.0; // drawn radius; the hit box is 3×
 const TIME_STRIP: f32 = 10.0;
+/// Height of the colour strip under a colour curve's graph.
+const COLOUR_STRIP: f32 = 12.0;
 const RGB: [&str; 3] = ["R", "G", "B"];
 const RGB_COLORS: [egui::Color32; 3] = [
     egui::Color32::from_rgb(220, 80, 80),
@@ -143,6 +145,44 @@ pub(super) fn sample(d: &KeyData, t: f32) -> Option<[f32; 3]> {
         KeyData::Pos(g) => sample_vec3(g, t),
         KeyData::Bool(_) => None,
     }
+}
+
+/// How the key table's swatch shows an sRGB-stored NIF colour (C-P17'): its byte per channel, and whether any channel
+/// is outside 0-1 or NaN (drawn clamped, marked).
+pub(super) fn shown_colour(v: [f32; 3]) -> (egui::Color32, bool) {
+    // the key swatch's mapping (C-P17'): stored sRGB, shown as the picker paints it
+    // NaN first: both ecolor functions pass it through and the byte would read 255
+    let lin = v.map(|c| {
+        if c.is_nan() {
+            0.0
+        } else {
+            egui::ecolor::linear_from_gamma(c)
+        }
+    });
+    let hdr = v.iter().any(|c| !(0.0..=1.0).contains(c));
+    (
+        egui::Color32::from(egui::Rgba::from_rgb(lin[0], lin[1], lin[2])),
+        hdr,
+    )
+}
+
+/// The strip's colours: `n` samples of `keys` from `lo` to `hi` inclusive (`n == 1` samples `lo`), each as
+/// `shown_colour` of `sample(keys, t)`. Empty for Float or Bool keys, no keys, or `n == 0`.
+pub(super) fn strip_colours(
+    keys: &KeyData,
+    lo: f32,
+    hi: f32,
+    n: usize,
+) -> Vec<(egui::Color32, bool)> {
+    let KeyData::Pos(g) = keys else {
+        return vec![];
+    };
+    (0..n)
+        .map_while(|s| {
+            let t = lo + (hi - lo) * s as f32 / (n - 1).max(1) as f32;
+            sample_vec3(g, t).map(shown_colour)
+        })
+        .collect()
 }
 
 /// `g` with QUADRATIC tangents that keep its LINEAR shape (D8), or LINEAR without tangents.
@@ -507,9 +547,167 @@ pub(super) fn curve(
             }
         }
     }
+    // C5b: a colour curve's strip, its own allocation under the graph (the graph's rect and mapping stay as they are).
+    if nch == 3 && nk > 0 {
+        let (strip, sr) =
+            ui.allocate_exact_size(egui::vec2(w, COLOUR_STRIP), egui::Sense::click_and_drag());
+        if sr.clicked() || sr.dragged() {
+            if let Some(p) = sr.interact_pointer_pos() {
+                out.scrub = Some(t_of(p.x).clamp(lo, hi));
+            }
+        }
+        sr.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Other,
+                true,
+                format!("{name} colour strip"),
+            )
+        });
+        let area = egui::Rect::from_x_y_ranges(plot.x_range(), strip.y_range());
+        let painter = ui.painter_at(strip);
+        let hdr_stroke = egui::Stroke::new(2.0, visuals.strong_text_color());
+        let colours = strip_colours(keys, lo, hi, n);
+        let step = area.width() / colours.len() as f32;
+        for (i, (c, hdr)) in colours.into_iter().enumerate() {
+            let x0 = area.left() + i as f32 * step;
+            let cell = egui::Rect::from_x_y_ranges(x0..=x0 + step + 0.5, area.y_range());
+            painter.rect_filled(cell, 0.0, c);
+            // C5b-D3: a 3 px hatch band along the top edge (every other pair of samples) marks values outside 0-1
+            if hdr && (i / 2) % 2 == 0 {
+                let band =
+                    egui::Rect::from_x_y_ranges(cell.x_range(), area.top()..=area.top() + 3.0);
+                painter.rect_filled(band, 0.0, visuals.strong_text_color());
+            }
+        }
+        for k in 0..nk {
+            let t = time(keys, k);
+            if !t.is_finite() {
+                continue;
+            }
+            let v = std::array::from_fn(|c| get(keys, k, c, Part::Value));
+            let (c, hdr) = shown_colour(v);
+            let sw = egui::Rect::from_center_size(
+                egui::pos2(x(t), strip.center().y),
+                egui::vec2(8.0, 8.0),
+            );
+            painter.rect_filled(sw, 0.0, c);
+            let stroke = if hdr {
+                hdr_stroke
+            } else {
+                visuals.widgets.noninteractive.fg_stroke
+            };
+            painter.rect_stroke(sw, 0.0, stroke, egui::StrokeKind::Outside);
+        }
+        if let Some(c) = cursor.filter(|c| c.is_finite() && *c >= lo && *c <= hi) {
+            painter.line_segment(
+                [
+                    egui::pos2(x(c), strip.top()),
+                    egui::pos2(x(c), strip.bottom()),
+                ],
+                visuals.selection.stroke,
+            );
+        }
+        sr.on_hover_text(
+            "The colour at each time. Values outside 0-1 are shown clamped and marked.",
+        );
+    }
     // F19: compared as bytes, so a NaN key is "unchanged".
     if encode_data(&next) != encode_data(keys) {
         out.keys = Some(next);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nif::keys::{Key, KeyData, KeyGroup};
+
+    fn pos(keys: &[(f32, [f32; 3])]) -> KeyData {
+        KeyData::Pos(KeyGroup {
+            key_type: Some(1),
+            keys: keys
+                .iter()
+                .map(|&(time, value)| Key {
+                    time,
+                    value,
+                    forward: None,
+                    backward: None,
+                    tbc: None,
+                })
+                .collect(),
+        })
+    }
+
+    /// The key swatch's own path (C5b-D2).
+    fn picker(v: [f32; 3]) -> egui::Color32 {
+        let lin = egui::ecolor::linear_from_gamma;
+        egui::Color32::from(egui::Rgba::from_rgb(lin(v[0]), lin(v[1]), lin(v[2])))
+    }
+
+    #[test]
+    fn colour_strip_samples_the_curve() {
+        let ks = [
+            (0.0, [0.2, 0.4, 0.6]),
+            (1.0, [1.0, 0.5, 0.0]),
+            (2.0, [0.25, 0.75, 1.0]),
+        ];
+        let k = pos(&ks);
+        for (t, v) in ks {
+            assert_eq!(
+                strip_colours(&k, t, t, 1),
+                vec![(picker(v), false)],
+                "t={t}"
+            );
+        }
+        let KeyData::Pos(g) = &k else { unreachable!() };
+        let mid = sample_vec3(g, 0.5).unwrap();
+        assert_eq!(strip_colours(&k, 0.5, 0.5, 1), vec![(picker(mid), false)]);
+        assert_eq!(picker(mid), picker([0.6, 0.45, 0.3]));
+        let five = strip_colours(&k, 0.0, 2.0, 5);
+        assert_eq!(five.len(), 5);
+        assert_eq!(five[0], (picker(ks[0].1), false));
+        assert_eq!(five[2], (picker(ks[1].1), false));
+        assert_eq!(five[4], (picker(ks[2].1), false));
+    }
+
+    #[test]
+    fn colour_strip_marks_hdr_and_clamps() {
+        let k = pos(&[(0.0, [2.0, 0.5, -0.25]), (1.0, [0.5, 0.5, 0.5])]);
+        let half = picker([0.5; 3]);
+        assert_eq!(
+            strip_colours(&k, 0.0, 0.0, 1),
+            vec![(egui::Color32::from_rgb(255, half.g(), 0), true)]
+        );
+        assert_eq!(strip_colours(&k, 1.0, 1.0, 1), vec![(half, false)]);
+        let (c, hdr) = shown_colour([f32::NAN, 0.5, 0.5]);
+        assert_eq!((c.r(), hdr), (0, true));
+        assert!(!shown_colour([1.0, 0.0, 1.0]).1);
+        assert!(!shown_colour([0.0; 3]).1);
+    }
+
+    #[test]
+    fn shown_colour_matches_the_key_swatch() {
+        for v in [0.0, 0.003, 0.04045, 0.2, 0.5, 0.999, 1.0] {
+            assert_eq!(shown_colour([v; 3]).0, picker([v; 3]), "{v}");
+        }
+    }
+
+    #[test]
+    fn no_strip_for_float_or_empty_keys() {
+        let key = |time: f32| Key {
+            time,
+            value: time,
+            forward: None,
+            backward: None,
+            tbc: None,
+        };
+        let f = KeyData::Float(KeyGroup {
+            key_type: Some(1),
+            keys: vec![key(0.0), key(1.0)],
+        });
+        assert!(strip_colours(&f, 0.0, 1.0, 4).is_empty());
+        assert!(strip_colours(&pos(&[]), 0.0, 1.0, 4).is_empty());
+        assert!(strip_colours(&pos(&[(0.0, [0.5; 3])]), 0.0, 1.0, 0).is_empty());
+    }
 }
