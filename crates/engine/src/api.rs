@@ -331,6 +331,10 @@ pub struct Plan {
     pub shaders: BTreeMap<String, ShaderPick>,
     /// The NVTT probe, if any profile on `encoder.backend = "nvtt"` asked for it while planning (DECISIONS Note NV3).
     pub nvtt: Option<crate::nvtt::NvttProbe>,
+    /// Note CM23: members of derived or dropped sets whose own output a job of this plan writes (no TA12 fold: a
+    /// derived diffuse on its albedo's path, a kept landscape `_p`). That job's event ends them, so `run` emits no
+    /// `packed_source` for them.
+    pub derive_own: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -1559,6 +1563,7 @@ impl Engine {
         // Track A (DECISIONS Note CM): the derive step replaces each PBR set's jobs with derived jobs, after packing
         // (a packed member's job goes too) and before the shader assignment, so a derived set carries its vanilla
         // shader (TA29). Without `derive` nothing below runs (C6).
+        let mut derive_own = BTreeSet::new();
         let derived = req.derive.as_ref().map(|d| {
             crate::derive::plan::plan_derived(
                 &ctx,
@@ -1638,6 +1643,26 @@ impl Engine {
                 }
             }
             if let Some(d) = &req.derive {
+                // A derived candidate that failed here ends its own-key source with its `file_failed`.
+                let written: BTreeSet<String> = jobs
+                    .iter()
+                    .map(|j| key(&j.output))
+                    .chain(failed[failed_before..].iter().map(|f| key(&f.output)))
+                    .collect();
+                let members: BTreeSet<&Path> = d
+                    .sets
+                    .iter()
+                    .flat_map(|s| &s.members)
+                    .chain(&d.drop)
+                    .map(PathBuf::as_path)
+                    .collect();
+                derive_own = files
+                    .iter()
+                    .filter(|f| {
+                        members.contains(f.path.as_path()) && written.contains(&key(&f.output))
+                    })
+                    .map(|f| f.path.clone())
+                    .collect();
                 crate::derive::plan::report_unread(
                     d,
                     &dp.member_sets,
@@ -1646,6 +1671,7 @@ impl Engine {
                     &mut skipped,
                     &failed[..failed_before],
                     &cancelled,
+                    &derive_own,
                 );
             }
         }
@@ -1868,6 +1894,7 @@ impl Engine {
             cancelled,
             shaders: picks,
             nvtt: nvtt.into_probed(),
+            derive_own,
         })
     }
 
@@ -1977,7 +2004,8 @@ impl Engine {
             );
         }
         let mut ready = vec![];
-        let mut derive_read: BTreeSet<&Path> = BTreeSet::new();
+        let mut derive_read: BTreeSet<&Path> =
+            plan.derive_own.iter().map(PathBuf::as_path).collect();
         for job in &plan.jobs {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
             // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output. So

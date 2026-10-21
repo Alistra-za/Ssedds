@@ -85,10 +85,10 @@ fn reads(set: &DeriveSet) -> impl Iterator<Item = &Path> {
 fn derive_job(kind: DeriveKind, set: &DeriveSet, d: &DeriveRequest, anchor: &Path) -> DeriveJob {
     use DeriveKind::*;
     let diffuse = matches!(kind, VanillaDiffuse | CmDiffuse | GrassStack);
+    let landscape = set.shader == Shader::PbrLandscape;
     let mut job = DeriveJob {
         kind,
-        // Task 5 adds landscape sets.
-        landscape: false,
+        landscape,
         albedo: set.albedo.clone().filter(|_| diffuse),
         normal: set
             .normal
@@ -97,7 +97,11 @@ fn derive_job(kind: DeriveKind, set: &DeriveSet, d: &DeriveRequest, anchor: &Pat
         rough: set.rough.clone(),
         metal: set.metal.clone(),
         ao: set.ao.clone(),
-        height: set.height.clone().filter(|_| kind == CmM),
+        // The CM `_m` alpha, and the landscape diffuse alpha (TA5).
+        height: set
+            .height
+            .clone()
+            .filter(|_| kind == CmM || (landscape && kind == VanillaDiffuse)),
         curves: set.curves.clone().filter(|_| diffuse),
         cavity: set.cavity.clone().filter(|_| diffuse),
         gray: set.gray,
@@ -144,7 +148,6 @@ fn derive_job(kind: DeriveKind, set: &DeriveSet, d: &DeriveRequest, anchor: &Pat
 /// derived becomes a `SkippedFile` (`DERIVE-DDS-SOURCE`, `DERIVE-NO-ALBEDO`) or error jobs (`PACK-SIZE-MISMATCH`,
 /// `DERIVE-PATH-CONFLICT`), pushed here; the caller adds their target provenance. A set with a member that failed
 /// to load (in `failed`) is not derived: the failure is already reported.
-// shortcut: O6 (the landscape `_p` job stays) is Task 5's, with landscape and grass sets (preflight P7).
 pub fn plan_derived(
     ctx: &ResolveCtx,
     d: &DeriveRequest,
@@ -180,12 +183,37 @@ pub fn plan_derived(
         .chain(&d.drop)
         .map(PathBuf::as_path)
         .collect();
+    // O6 (TA5, preflight P7): the Vanilla folder keeps a derived landscape set's `_p` job (the `_p` member's own,
+    // or the `Parallax` recipe of a raw `_height`), folded by TA12. The CM folder never has it.
+    let keep: BTreeSet<&Path> = d
+        .sets
+        .iter()
+        .filter(|s| {
+            d.mode == DeriveMode::Vanilla
+                && s.shader == Shader::PbrLandscape
+                && s.dds.is_empty()
+                && (s.albedo.is_some() || s.normal.is_some())
+        })
+        .filter_map(|s| s.height.as_ref().and_then(source_path))
+        .collect();
+    let kept = |j: &ResolvedJob| match &j.pack {
+        None => keep.contains(j.input.as_path()),
+        Some(p) => {
+            p.kind == crate::pack::RecipeKind::Parallax
+                && p.sources.iter().any(|s| keep.contains(s.path.as_path()))
+        }
+    };
     jobs.retain(|j| {
-        !(gone.contains(j.input.as_path())
-            || j.pack
-                .as_ref()
-                .is_some_and(|p| p.sources.iter().any(|s| gone.contains(s.path.as_path()))))
+        kept(j)
+            || !(gone.contains(j.input.as_path())
+                || j.pack
+                    .as_ref()
+                    .is_some_and(|p| p.sources.iter().any(|s| gone.contains(s.path.as_path()))))
     });
+    for j in jobs.iter_mut().filter(|j| kept(j)) {
+        j.output = vanilla_rel(&j.output, &j.game_path);
+        j.game_path = vanilla_game_path(&j.game_path);
+    }
     skipped.retain(|s| !(s.code == Some(Code::PackConflict) && gone.contains(s.path.as_path())));
     let failed: BTreeSet<&Path> = failed.iter().map(|f| f.path.as_path()).collect();
 
@@ -256,9 +284,14 @@ pub fn plan_derived(
         }
 
         let metal_source = source_path(&set.metal).is_some();
+        let grass = set.shader == Shader::PbrGrass;
+        // Landscape and grass have no metal, env `_m` or NIF suggestion (TA5, O3; Note CM).
+        let object = !grass && set.shader != Shader::PbrLandscape;
         // TA8: otherwise the CM diffuse equals the vanilla one.
-        let cm_diffuse =
-            d.params.keep_metal_brightness && metal_source && d.params.keep_metal_strength > 0.0;
+        let cm_diffuse = object
+            && d.params.keep_metal_brightness
+            && metal_source
+            && d.params.keep_metal_strength > 0.0;
         let mut kinds = vec![];
         let mut notes = vec![];
         match d.mode {
@@ -266,10 +299,11 @@ pub fn plan_derived(
                 if albedo.is_some() {
                     kinds.push(VanillaDiffuse);
                 }
-                if normal.is_some() {
+                // O3: vanilla grass is the converted diffuse only.
+                if normal.is_some() && !grass {
                     kinds.push(LegacyN);
                 }
-                if metal_source {
+                if metal_source && object {
                     // TA13: the vote at the vanilla mesh key of the colour member.
                     let stem = anchor
                         .output
@@ -305,6 +339,12 @@ pub fn plan_derived(
                     }
                 }
             }
+            // shortcut: a grass set with no `_n` writes no stack; build one on a flat normal if such sets turn up.
+            DeriveMode::Cm if grass => {
+                if albedo.is_some() && normal.is_some() {
+                    kinds.push(GrassStack);
+                }
+            }
             DeriveMode::Cm => {
                 kinds.push(CmM);
                 if albedo.is_some() && cm_diffuse {
@@ -312,13 +352,15 @@ pub fn plan_derived(
                 }
             }
         }
-        let shader = match d.mode {
-            DeriveMode::Cm => Shader::ComplexMaterial,
-            DeriveMode::Vanilla if kinds.contains(&EnvM) => Shader::Envmap,
-            DeriveMode::Vanilla => Shader::Default,
+        let shader = match (d.mode, set.shader) {
+            (DeriveMode::Cm, Shader::PbrGrass) => Shader::ComplexGrass,
+            (DeriveMode::Cm, _) => Shader::ComplexMaterial,
+            (DeriveMode::Vanilla, Shader::PbrLandscape) => Shader::Landscape,
+            (DeriveMode::Vanilla, _) if kinds.contains(&EnvM) => Shader::Envmap,
+            (DeriveMode::Vanilla, _) => Shader::Default,
         };
-        // In CM mode only a CM diffuse would need the albedo (review M1).
-        if albedo.is_none() && (d.mode == DeriveMode::Vanilla || cm_diffuse) {
+        // In CM mode only a CM diffuse or the grass stack would need the albedo (review M1).
+        if albedo.is_none() && (d.mode == DeriveMode::Vanilla || cm_diffuse || grass) {
             notes.push(Warning::new(
                 Code::DeriveNoAlbedo,
                 format!("set {}: no albedo, so no diffuse is written", set.id),
@@ -406,7 +448,7 @@ pub fn plan_derived(
         {
             mine[i].notes = notes;
         }
-        if d.mode == DeriveMode::Vanilla {
+        if d.mode == DeriveMode::Vanilla && object {
             if let Some(i) = find(mine, &[LegacyN]).or(find(mine, &[VanillaDiffuse])) {
                 mine[i].nif = Some(metal_source);
             }
@@ -419,7 +461,9 @@ pub fn plan_derived(
 /// no derived job in `jobs` reads it (those get a `packed_source` event in `run`), and it has no skip, no earlier
 /// failure (`failed`, before the derive admission) and was not cancelled. So every discovered file gets one
 /// terminal event, keyed by its own output: `_g` and RNM layers, members left out (C2), the other members of a set
-/// skipped for DDS or no albedo, and the sources of an error or failed derived job.
+/// skipped for DDS or no albedo, and the sources of an error or failed derived job. A member in `own` (its own
+/// output is written by a job) is ended by that job.
+#[allow(clippy::too_many_arguments)]
 pub fn report_unread(
     d: &DeriveRequest,
     member_sets: &BTreeMap<PathBuf, String>,
@@ -428,6 +472,7 @@ pub fn report_unread(
     skipped: &mut Vec<SkippedFile>,
     failed: &[FailedFile],
     cancelled: &[PathBuf],
+    own: &BTreeSet<PathBuf>,
 ) {
     let mut ended: BTreeSet<&Path> = jobs
         .iter()
@@ -435,6 +480,7 @@ pub fn report_unread(
         .flat_map(|dj| dj.sources.iter().map(|s| s.path.as_path()))
         .chain(failed.iter().map(|f| f.path.as_path()))
         .chain(cancelled.iter().map(PathBuf::as_path))
+        .chain(own.iter().map(PathBuf::as_path))
         .collect();
     let had: BTreeSet<PathBuf> = skipped.iter().map(|s| s.path.clone()).collect();
     ended.extend(had.iter().map(PathBuf::as_path));

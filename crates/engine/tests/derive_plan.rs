@@ -895,6 +895,7 @@ impl Drop for HookVar {
 }
 
 fn plan_and_run(
+    mode: DeriveMode,
     inputs: &Path,
     out: &Path,
     tweak: impl Fn(&mut BatchRequest, Option<&mut DeriveRequest>),
@@ -903,7 +904,7 @@ fn plan_and_run(
     tweak(&mut r, None);
     let (cs, _) = plan(r);
     let mut d = DeriveRequest {
-        mode: DeriveMode::Vanilla,
+        mode,
         params: LegacyParams::default(),
         sets: derive_sets(&cs),
         drop: vec![],
@@ -922,9 +923,16 @@ fn plan_and_run(
 
 /// Review I1: every discovered file gets exactly one terminal event, whatever the derive step did with it: read by
 /// a derived job, not read (`_g`, an RNM layer), left out (`drop`), in a set with no albedo or a DDS source, or a
-/// source of a size-mismatch error job.
+/// source of a size-mismatch error job. Task 5: in both modes, with a landscape set whose `_p` is read by the diffuse
+/// and kept as its own job (O6), and a grass set whose `_n` the vanilla diffuse does not read.
 #[test]
 fn every_discovered_file_gets_one_terminal_event() {
+    for mode in [DeriveMode::Vanilla, DeriveMode::Cm] {
+        one_terminal_event_each(mode);
+    }
+}
+
+fn one_terminal_event_each(mode: DeriveMode) {
     let d = tempfile::tempdir().unwrap();
     let inputs = d.path().join("in");
     let dir = inputs.join("textures/pbr/arm");
@@ -958,8 +966,19 @@ fn every_discovered_file_gets_one_terminal_event() {
         16,
         [90, 90, 90, 255],
     );
-    let (_, ev) = plan_and_run(&inputs, d.path(), |_, d| {
+    dirt(&inputs, true);
+    // A landscape set with no albedo: its kept `_p` (O6) is read by nothing.
+    landscape(&inputs, "rock", true);
+    grass(&inputs, "textures/landscape/grass", 16);
+    let (_, ev) = plan_and_run(mode, &inputs, d.path(), |r, d| {
+        gras(r, None);
         if let Some(d) = d {
+            let rock = d
+                .sets
+                .iter_mut()
+                .find(|s| s.members.iter().any(|m| slash(m).ends_with("/rock_n.png")))
+                .unwrap();
+            rock.albedo = None;
             let is = |s: &DeriveSet, b: &str| {
                 s.members
                     .iter()
@@ -978,7 +997,7 @@ fn every_discovered_file_gets_one_terminal_event() {
         .filter(|e| matches!(e.kind, EventKind::FileDiscovered { .. }))
         .map(|e| (e.path.clone().unwrap(), e.job.clone().unwrap()))
         .collect();
-    assert!(discovered.len() >= 17, "{discovered:#?}");
+    assert!(discovered.len() >= 28, "{discovered:#?}");
     for (path, job) in &discovered {
         let n = ev
             .iter()
@@ -993,7 +1012,7 @@ fn every_discovered_file_gets_one_terminal_event() {
                 _ => false,
             })
             .count();
-        assert_eq!(n, 1, "{path} ({job}) has {n} terminal events");
+        assert_eq!(n, 1, "{mode:?}: {path} ({job}) has {n} terminal events");
     }
 }
 
@@ -1161,4 +1180,221 @@ fn derive_and_pack_candidates_fail_alone() {
     assert_eq!(p.failed[0].stage, Stage::Load);
     assert!(p.failed[0].error.contains("test hook"));
     assert!(p.jobs.iter().all(|j| j.pack.is_none()));
+}
+
+/// `<dir>/textures/landscape/<base>{,_n,_rmaos}.png` (16², opaque), plus `_p` (R 100) when `p`. `_rmaos`: rough
+/// 0.8, metal 1 (landscape ignores it), AO 128.
+fn landscape(dir: &Path, base: &str, p: bool) {
+    let d = dir.join("textures/landscape");
+    png(&d.join(format!("{base}.png")), 16, 16, [200, 200, 200, 255]);
+    png(
+        &d.join(format!("{base}_n.png")),
+        16,
+        16,
+        [128, 128, 255, 255],
+    );
+    png(
+        &d.join(format!("{base}_rmaos.png")),
+        16,
+        16,
+        [204, 255, 128, 255],
+    );
+    if p {
+        png(
+            &d.join(format!("{base}_p.png")),
+            16,
+            16,
+            [100, 100, 100, 255],
+        );
+    }
+}
+
+fn dirt(dir: &Path, p: bool) {
+    landscape(dir, "dirt", p);
+}
+
+/// `<dir>/<rel>/g{,_n,_rmaos}.png`, a `w`² opaque albedo.
+fn grass(dir: &Path, rel: &str, w: u32) {
+    let d = dir.join(rel);
+    png(&d.join("g.png"), w, w, [90, 140, 60, 255]);
+    png(&d.join("g_n.png"), w, w, [128, 128, 255, 255]);
+    png(&d.join("g_rmaos.png"), w, w, [128, 0, 255, 255]);
+}
+
+/// Picks `pbr_grass` for `textures/landscape/grass/g` by GRAS evidence (both requests).
+fn gras(r: &mut BatchRequest, _: Option<&mut DeriveRequest>) {
+    r.gras_all_diffuses
+        .insert("textures/landscape/grass/g".to_string());
+}
+
+fn kinds(p: &Plan) -> Vec<DeriveKind> {
+    p.jobs
+        .iter()
+        .filter_map(|j| j.derive.as_ref().map(|d| d.kind))
+        .collect()
+}
+
+/// TA5, O5, O6: the landscape diffuse alpha is the `_p` R, AO strength 0.3, the `_n` alpha x2.5 with metal ignored;
+/// CM writes only an `_m` (R = B = 0, A = `_p` R); the Vanilla folder keeps the `_p`, the CM folder does not.
+#[test]
+fn landscape_puts_p_in_the_diffuse_alpha_and_uses_ao_0_3() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    dirt(&inputs, true);
+    let (p, ev) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    let diffuse = out_job(&p, "textures/landscape/dirt.dds").expect("the landscape diffuse");
+    assert_eq!(diffuse.profile.subtype, Subtype::LandscapeDiffuse);
+    let dj = diffuse.derive.as_ref().unwrap();
+    assert_eq!(dj.kind, DeriveKind::VanillaDiffuse);
+    assert!(dj.landscape);
+    let a = engine::derive::assemble::assemble_derived(dj).unwrap();
+    let ao = 128.0 / 255.0;
+    let rgb = 200.0 / 255.0 * 0.9 * (1.0 - 0.3 * (1.0 - ao));
+    let px = a.image.px[0];
+    assert!((px[0] - rgb).abs() < 1e-4, "{px:?} vs {rgb}");
+    assert!((px[3] - 100.0 / 255.0).abs() < 1e-6, "alpha {}", px[3]);
+    assert!(a.info.has_alpha);
+    let n = out_job(&p, "textures/landscape/dirt_n.dds").expect("the landscape _n");
+    assert_eq!(n.profile.subtype, Subtype::LandscapeNormal);
+    let a = engine::derive::assemble::assemble_derived(n.derive.as_ref().unwrap()).unwrap();
+    let spec: f32 = (2.5 * 0.66 * (1.0 - 204.0 / 255.0) * ao).min(1.0);
+    assert!(
+        (a.image.px[0][3] - spec).abs() < 1e-4,
+        "{}",
+        a.image.px[0][3]
+    );
+    // O6: the set's own `_p` job stays in the Vanilla plan, under the derived landscape pick.
+    let kept = out_job(&p, "textures/landscape/dirt_p.dds").expect("the kept _p (O6)");
+    assert!(kept.derive.is_none());
+    assert!(slash(&kept.input).ends_with("dirt_p.png"));
+    assert!(matches!(kept.status, JobStatus::Ready), "{kept:#?}");
+    for j in &p.jobs {
+        let pick = j.shader.as_ref().unwrap();
+        assert_eq!(
+            (pick.shader, &pick.provenance),
+            (Shader::Landscape, &ShaderOrigin::Derived)
+        );
+    }
+    assert_eq!(p.jobs.len(), 3, "{:#?}", p.jobs);
+    assert!(out_job(&p, "textures/landscape/dirt_m.dds").is_none());
+    let codes = event_codes(&ev);
+    for c in [
+        Code::ShaderExtraMap,
+        Code::ShaderUnavailable,
+        Code::DeriveNoScan,
+        Code::DeriveNifSuggest,
+    ] {
+        assert!(!codes.contains(&c), "{codes:?}");
+    }
+
+    // CM: only the `_m`, even with Keep metal brightness (no metal on landscape, TA5).
+    let (p, _) = cs_then(DeriveMode::Cm, &inputs, &d.path().join("cm"), |_, d| {
+        if let Some(d) = d {
+            d.params.keep_metal_brightness = true;
+        }
+    });
+    assert_eq!(kinds(&p), [DeriveKind::CmM], "{:#?}", p.jobs);
+    assert_eq!(p.jobs.len(), 1, "no _p in the CM folder: {:#?}", p.jobs);
+    let m = out_job(&p, "textures/landscape/dirt_m.dds").unwrap();
+    assert_eq!(m.shader.as_ref().unwrap().shader, Shader::ComplexMaterial);
+    let a = engine::derive::assemble::assemble_derived(m.derive.as_ref().unwrap()).unwrap();
+    let px = a.image.px[0];
+    assert_eq!((px[0], px[2]), (0.0, 0.0));
+    assert!((px[3] - 100.0 / 255.0).abs() < 1e-6, "{px:?}");
+}
+
+/// TA5: no `_p`, an opaque diffuse with no alpha, and no `_p` job.
+#[test]
+fn landscape_without_p_has_an_opaque_diffuse() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    dirt(&inputs, false);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), no_tweak);
+    assert!(out_job(&p, "textures/landscape/dirt_p.dds").is_none());
+    let dj = out_job(&p, "textures/landscape/dirt.dds")
+        .unwrap()
+        .derive
+        .clone()
+        .unwrap();
+    let a = engine::derive::assemble::assemble_derived(&dj).unwrap();
+    assert!(!a.info.has_alpha);
+    assert_eq!(
+        analyse(&a.image, &a.info).alpha,
+        engine::presets::AlphaContent::None
+    );
+    let out = p.request.output_root.clone();
+    let s = Engine::new()
+        .unwrap()
+        .run(
+            p,
+            &Reporter::new(Arc::new(NullSink), "t"),
+            &CancelToken::default(),
+        )
+        .unwrap();
+    assert_eq!(s.converted, 2);
+    let f = read_dds(&std::fs::read(out.join("textures/landscape/dirt.dds")).unwrap()).unwrap();
+    let (w, h, r) = f.levels[0].clone();
+    let Decoded::Ldr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
+        panic!("LDR expected")
+    };
+    assert!(px.iter().all(|q| q[3] == 255));
+}
+
+/// 08e-1 (b): PBR grass under `textures/landscape/` reaches the derive step as a grass set, not a landscape one.
+#[test]
+fn grass_under_textures_landscape_is_still_grass() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    grass(&inputs, "textures/landscape/grass", 16);
+    let mut r = request(&inputs, &d.path().join("pbr"), Target::Cs);
+    gras(&mut r, None);
+    let (cs, _) = plan(r);
+    assert_eq!(derive_sets(&cs)[0].shader, Shader::PbrGrass);
+    for mode in [DeriveMode::Vanilla, DeriveMode::Cm] {
+        let (p, _) = cs_then(mode, &inputs, d.path(), gras);
+        let j = out_job(&p, "textures/landscape/grass/g.dds").expect("the grass job");
+        assert!(!j.derive.as_ref().unwrap().landscape);
+        assert_ne!(j.profile.subtype, Subtype::LandscapeDiffuse);
+    }
+}
+
+/// O3, CM14: Vanilla gets the plain converted diffuse only; CM gets the stack only (64x128), planned through
+/// `finish_derived`, so an opaque albedo does not `remove` the `_n` spec alpha.
+#[test]
+fn grass_is_a_plain_diffuse_under_vanilla_and_a_stack_under_cm() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    grass(&inputs, "textures/landscape/grass", 64);
+    let (p, ev) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), gras);
+    assert_eq!(kinds(&p), [DeriveKind::VanillaDiffuse], "{:#?}", p.jobs);
+    assert_eq!(p.jobs.len(), 1);
+    let j = out_job(&p, "textures/landscape/grass/g.dds").unwrap();
+    assert_eq!(j.profile.subtype, Subtype::Diffuse);
+    assert_eq!(j.shader.as_ref().unwrap().shader, Shader::Default);
+    let codes = event_codes(&ev);
+    assert!(!codes.contains(&Code::DeriveNifSuggest), "{codes:?}");
+    assert!(!codes.contains(&Code::DeriveNoScan), "{codes:?}");
+
+    let (p, _) = cs_then(DeriveMode::Cm, &inputs, &d.path().join("cm"), gras);
+    assert_eq!(kinds(&p), [DeriveKind::GrassStack], "{:#?}", p.jobs);
+    assert_eq!(p.jobs.len(), 1);
+    let j = out_job(&p, "textures/landscape/grass/g.dds").unwrap();
+    assert_eq!(j.profile.subtype, Subtype::ComplexGrass);
+    assert_eq!(j.shader.as_ref().unwrap().shader, Shader::ComplexGrass);
+    assert_ne!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert!(matches!(j.status, JobStatus::Ready), "{j:#?}");
+    let a = engine::derive::assemble::assemble_derived(j.derive.as_ref().unwrap()).unwrap();
+    assert_eq!((a.image.width, a.image.height), (64, 128));
+}
+
+/// A grass albedo that is not square power-of-two: the stack fails with `GRASS-SHAPE`, as complex grass does.
+#[test]
+fn a_grass_stack_of_the_wrong_shape_is_grass_shape() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    grass(&inputs, "textures/landscape/grass", 24);
+    let (p, _) = cs_then(DeriveMode::Cm, &inputs, d.path(), gras);
+    let j = out_job(&p, "textures/landscape/grass/g.dds").unwrap();
+    assert_eq!(j.derive.as_ref().unwrap().kind, DeriveKind::GrassStack);
+    assert!(has(j, Code::GrassShape), "{:?}", j.warnings);
 }
