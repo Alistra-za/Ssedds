@@ -697,6 +697,8 @@ fn add_row(
     let clicked = r.clicked();
     if no_root {
         r.on_disabled_hover_text("The root is not a node: the BSX Animated bit cannot be set.");
+    } else if at.is_none() {
+        r.on_disabled_hover_text("This property cannot be found again in the file.");
     }
     if let (true, Some(at)) = (clicked, at) {
         let (class, var, value) = match owner {
