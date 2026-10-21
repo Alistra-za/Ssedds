@@ -25,6 +25,9 @@ pub enum Selection {
     Shape(u32),
 }
 
+/// The panel line when a controller's times are not finite (B-P33): no clock, no Time slider.
+pub const ANIM_INVALID: &str = "This animation has invalid times: playback is off.";
+
 /// What the preview animates (v2 B3): the free controller chains, or one manager clip by its sequence block (B7
 /// adds the clip selector).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -603,24 +606,52 @@ impl NifEdit {
         self.anim_shown = None;
     }
 
-    /// The Time slider's span: the clip's start and stop, or the earliest start and latest stop of the free
-    /// tracks. None when nothing is animated.
+    /// The Time slider's span in scene time (B-P33): from 0 to the longest cycle, `span / |freq|`, where a Reverse
+    /// cycle counts both legs. `ctrl_time` still does each controller's own wrapping, phase included. A clip uses
+    /// its sequence's timing. None when nothing is animated or a controller's times are not finite.
     pub fn anim_range(&self) -> Option<(f32, f32)> {
-        let (lo, hi) = match self.playing {
+        self.anim_end().filter(|e| e.is_finite()).map(|e| (0.0, e))
+    }
+
+    /// A controller's times are not finite (+inf, NaN): playback is off and the panel says so.
+    pub fn anim_invalid(&self) -> bool {
+        self.anim_end().is_some_and(|e| !e.is_finite())
+    }
+
+    /// The longest cycle in scene time, NaN or inf when a contributing controller's times are not finite.
+    fn anim_end(&self) -> Option<f32> {
+        if self.anim.is_empty() {
+            return None;
+        }
+        // freq 0 or a span <= 0 contributes nothing; a NaN span or freq passes through to the result.
+        let cycle = |start: f32, stop: f32, freq: f32, reverse: bool| {
+            let span = (stop - start) * if reverse { 2.0 } else { 1.0 };
+            if freq == 0.0 || span <= 0.0 {
+                0.0
+            } else {
+                span / freq.abs()
+            }
+        };
+        let ends: Vec<f32> = match self.playing {
             Playing::Clip(seq) => {
                 let s = self.model.sequences.iter().find(|s| s.block == seq)?;
-                (s.start, s.stop)
+                vec![cycle(s.start, s.stop, s.frequency, s.cycle == 1)]
             }
             Playing::Free => self
                 .anim
                 .iter()
                 .flat_map(|(_, _, t)| t)
-                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), t| {
-                    (a.min(t.start), b.max(t.stop))
-                }),
+                .map(|t| cycle(t.start, t.stop, t.freq, (t.flags >> 1) & 3 == 1))
+                .collect(),
         };
-        // f32::max ignores NaN, so a NaN start or stop drops out; hi < lo gives a zero-length clock.
-        (!self.anim.is_empty() && lo.is_finite()).then(|| (lo, hi.max(lo)))
+        // f32::max would drop a NaN: keep it, so the range is rejected.
+        Some(ends.into_iter().fold(0.0, |a: f32, e| {
+            if a.is_nan() || e.is_nan() {
+                f32::NAN
+            } else {
+                a.max(e)
+            }
+        }))
     }
 
     /// Each animated shape's material at clock time `t`: `apply_anim` over the cached tracks, nothing parsed.

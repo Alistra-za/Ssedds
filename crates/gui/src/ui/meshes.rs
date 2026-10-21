@@ -1,7 +1,7 @@
 //! The Meshes view (plan A Task 12): mods, with the NIFs of the open mod under it (GUI tweaks G9) | shapes of the
 //! selected NIF. Draws `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::export::DocBadge;
-use crate::model::meshes::nif_edit::Selection;
+use crate::model::meshes::nif_edit::{Selection, ANIM_INVALID};
 use crate::model::meshes::{
     alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
     slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING,
@@ -668,11 +668,19 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     // v2 B3: the controls first (a click this frame is ticked this frame), then the tick, then the 3D view, whose
     // request_frame then carries the new time and materials: one Render per frame.
-    if m.v3.clock.is_some() && m.v3.nif_view {
+    // B-P33: non-finite controller times get no clock and no slider, only this line.
+    let invalid = m.edit.as_ref().is_some_and(|e| e.anim_invalid());
+    if m.v3.nif_view && (m.v3.clock.is_some() || invalid) {
         egui::Panel::bottom("meshes-3d-anim")
             .frame(egui::Frame::new())
             .resizable(false)
-            .show(ui, |ui| super::viewport3d::clock_controls(ui, &mut m.v3));
+            .show(ui, |ui| {
+                if invalid {
+                    ui.colored_label(AMBER, ANIM_INVALID);
+                } else {
+                    super::viewport3d::clock_controls(ui, &mut m.v3);
+                }
+            });
     } else {
         ui.skip_ahead_auto_ids(1);
     }

@@ -2766,6 +2766,11 @@ use sdc_gui::model::viewport3d::V3Reply;
 /// `bytes` with a free BSLightingShaderPropertyFloatController var 20 (U offset), Loop + Active (0x48), start 0,
 /// stop 1, LINEAR keys (0, 0) → (1, 1), put first in the first lit shape's controller chain.
 fn with_uv_ctrl(bytes: &[u8]) -> Vec<u8> {
+    with_uv_ctrl_timed(bytes, 0x48, [1.0, 0.0, 0.0, 1.0])
+}
+
+/// [`with_uv_ctrl`] with the controller's `flags` and (frequency, phase, start, stop).
+fn with_uv_ctrl_timed(bytes: &[u8], flags: u16, timing: [f32; 4]) -> Vec<u8> {
     let m = nif::model::read_model(bytes).unwrap();
     let lsp = m
         .shapes
@@ -2793,12 +2798,14 @@ fn with_uv_ctrl(bytes: &[u8]) -> Vec<u8> {
     );
     let ctrl = doc.append(
         b"BSLightingShaderPropertyFloatController",
-        scenes::ctrl_body(
-            net.controller,
-            0x48,
-            lsp as i32,
-            builder::W::default().i32(interp as i32).u32(20),
-        ),
+        builder::W::default()
+            .i32(net.controller)
+            .u16(flags)
+            .fs(&timing)
+            .i32(lsp as i32)
+            .i32(interp as i32)
+            .u32(20)
+            .0,
     );
     doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
     let out = doc.bytes();
@@ -2810,9 +2817,13 @@ fn with_uv_ctrl(bytes: &[u8]) -> Vec<u8> {
 
 /// A scanned session whose x.nif has `with_uv_ctrl`, the edit open, the first load sent and answered.
 fn playing_session() -> (tempfile::TempDir, MeshesModel, Receiver<V3Cmd>) {
+    session_on(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")))
+}
+
+/// [`playing_session`] on the given x.nif bytes.
+fn session_on(nif: &[u8]) -> (tempfile::TempDir, MeshesModel, Receiver<V3Cmd>) {
     let d = files(false);
-    let nif = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
-    put(d.path(), "mods/A/meshes/x.nif", Some(&nif));
+    put(d.path(), "mods/A/meshes/x.nif", Some(nif));
     let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
     m.procs = sdc_gui::model::meshes::no_procs;
     scan_and_select(&mut m, d.path());
@@ -2954,8 +2965,8 @@ fn play_and_pause_buttons_drive_the_clock() {
     h.get_by_role_and_label(AkRole::Slider, "Time");
 }
 
-/// Rule 3.1: at 1100, 1280 and 1600 px the clock rows (Play to the slider's "Time" text) stay inside the centre
-/// column.
+/// Rule 3.1: at 1100, 1280 and 1600 px the clock rows (Play, Loop, Speed, the Time slider and its text) stay
+/// inside the centre column.
 #[test]
 fn the_clock_row_fits_the_centre_column() {
     for w in [1100.0, 1280.0, 1600.0] {
@@ -2979,7 +2990,10 @@ fn the_clock_row_fits_the_centre_column() {
         let mut nodes = h.query_all_by_label("Time").collect::<Vec<_>>();
         nodes.push(h.get_by_label("Play"));
         nodes.push(h.get_by_label("Loop"));
-        assert!(nodes.len() >= 3);
+        let speed: Vec<_> = h.query_all_by_label("Speed").collect();
+        assert!(!speed.is_empty(), "the Speed label and its value");
+        nodes.extend(speed);
+        assert!(nodes.len() >= 4);
         for n in nodes {
             let r = n.rect();
             assert!(
@@ -2987,5 +3001,71 @@ fn the_clock_row_fits_the_centre_column() {
                 "{w} px: {r:?} outside {lo}..{hi}"
             );
         }
+    }
+}
+
+// ---- v2 B3 fix round 1 (B-P33): the clock range is in scene time ----
+
+/// The U offset sent for clock time `t` (scrubbed, then one tick).
+fn u_at(m: &mut MeshesModel, cmds: &Receiver<V3Cmd>, t: f32) -> f32 {
+    cmds.try_iter().for_each(drop);
+    m.v3.clock.as_mut().unwrap().scrub(t);
+    m.tick_anim(0.0);
+    cmds.try_iter()
+        .find_map(|c| match c {
+            V3Cmd::SetMaterial { material, .. } => Some(material.params.uv_offset[0]),
+            _ => None,
+        })
+        .expect("a SetMaterial")
+}
+
+/// A 0-1 controller at frequency 0.5 takes 2 s of scene time: the clock plays the whole curve.
+#[test]
+fn half_speed_plays_the_whole_curve() {
+    let nif = with_uv_ctrl_timed(
+        &fixture("TestNifFile_Skinned_SE.nif"),
+        0x48,
+        [0.5, 0.0, 0.0, 1.0],
+    );
+    let (_d, mut m, cmds) = session_on(&nif);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 2.0));
+    assert!((u_at(&mut m, &cmds, 1.9) - 0.95).abs() < 1e-5);
+}
+
+/// A frequency-1 Reverse (ping-pong) controller over 0-1 needs 2 s for both legs: the clock reaches the way back.
+#[test]
+fn ping_pong_reaches_its_reverse_leg() {
+    let nif = with_uv_ctrl_timed(
+        &fixture("TestNifFile_Skinned_SE.nif"),
+        0x48 | (1 << 1),
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    let (_d, mut m, cmds) = session_on(&nif);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 2.0));
+    assert!((u_at(&mut m, &cmds, 0.5) - 0.5).abs() < 1e-5);
+    assert!(
+        (u_at(&mut m, &cmds, 1.75) - 0.25).abs() < 1e-5,
+        "the reverse leg"
+    );
+}
+
+/// B-P33 Important 2: a controller whose stop is +inf or NaN gets no clock and no slider, and the panel says why.
+#[test]
+fn invalid_controller_times_turn_playback_off() {
+    for stop in [f32::INFINITY, f32::NAN] {
+        let nif = with_uv_ctrl_timed(
+            &fixture("TestNifFile_Skinned_SE.nif"),
+            0x48,
+            [1.0, 0.0, 0.0, stop],
+        );
+        let (_d, m, _cmds) = session_on(&nif);
+        assert_eq!(m.v3.clock, None, "stop {stop}");
+        assert!(m.edit.as_ref().unwrap().anim_invalid());
+        let mut h = view(m);
+        h.run_steps(2);
+        h.get_by_label(ANIM_INVALID);
+        assert!(h.query_by_label("Play").is_none(), "stop {stop}");
+        assert_eq!(h.query_all_by_label("Time").count(), 0, "stop {stop}");
+        assert_eq!(h.state().v3.clock, None);
     }
 }
