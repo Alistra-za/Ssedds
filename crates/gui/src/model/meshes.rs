@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 pub mod edit_doc;
 pub mod export;
 pub mod nif_edit;
+pub mod pg_entries;
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
@@ -1250,8 +1251,11 @@ impl MeshesModel {
     pub fn set_view_source(&mut self, source: bool) {
         if self.view_source != source {
             self.view_source = source;
-            // While editing, Source is the edit preview with every edit so far (ruling P13).
-            if !(source && self.show_edit_preview()) {
+            // While editing (v2 B8): Source is the edit preview, In game is pgpsim over it; each switch re-reads the JSON.
+            if let Some(e) = &mut self.edit {
+                e.pg = None;
+            }
+            if !self.show_edit_preview() {
                 self.v3.nif_view = false;
                 self.load_shapes();
             }

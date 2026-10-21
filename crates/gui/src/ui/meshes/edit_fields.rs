@@ -1,6 +1,7 @@
 //! The edit panel's Shader and Alpha tabs (spec §7, plan A17). Widgets only read the session; every change is
 //! collected in an [`Act`] that `edit_panel::panel` applies after drawing.
 use crate::model::meshes::nif_edit::{edit_slot_label, NifEdit, Selection};
+use crate::model::meshes::pg_entries::pg_ignore;
 use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::ui::status::{AMBER, RED};
@@ -9,7 +10,7 @@ use nif::edit::validate::{Level, Target};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::fields::{Field, Value};
 use nif::material::{SLSF1_NAMES, SLSF2_NAMES, SLSF2_TRUE_PBR};
-use nif::model::{NifModel, ShapeModel};
+use nif::model::ShapeModel;
 use nif::props::LightingTrailer;
 use render3d::material::{engine_blend, verified_blend};
 
@@ -279,13 +280,6 @@ fn trailer_fields(t: &LightingTrailer) -> Vec<(String, f32)> {
             ],
         ),
     }
-}
-
-/// A shape whose extra data has `NiBooleanExtraData` "PG_IGNORE": PGPatcher leaves it alone.
-fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
-    m.extras_of(&s.net)
-        .iter()
-        .any(|x| x.kind == "NiBooleanExtraData" && x.name.as_deref() == Some(b"PG_IGNORE"))
 }
 
 /// The selected shape, or a line saying why there is none.

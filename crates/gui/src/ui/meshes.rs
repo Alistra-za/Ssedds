@@ -2,6 +2,7 @@
 //! selected NIF. Draws `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::export::DocBadge;
 use crate::model::meshes::nif_edit::{Selection, ANIM_INVALID};
+use crate::model::meshes::pg_entries::{IN_GAME_SCOPE, NO_INSTANCE};
 use crate::model::meshes::{
     alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
     slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING,
@@ -644,16 +645,39 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         }
         plugin_overrides(ui, m);
     }
-    if m.pair.is_some() {
-        ui.horizontal(|ui| {
-            if ui.selectable_label(!m.view_source, "In game").clicked() {
+    // v2 B8: during an edit the toggle always shows; In game is pgpsim over the edited NIF.
+    let editing = m.edit.as_ref().is_some_and(|e| !e.le_mesh);
+    if m.pair.is_some() || editing {
+        let (game, source) = match editing {
+            true => ("In game (simulated)", "Edited source"),
+            false => ("In game", "Source"),
+        };
+        // Wrapped: the two edit-mode labels are wider than the centre column at 1100 px.
+        ui.horizontal_wrapped(|ui| {
+            if ui.selectable_label(!m.view_source, game).clicked() {
                 m.set_view_source(false);
             }
-            if ui.selectable_label(m.view_source, "Source").clicked() {
+            if ui.selectable_label(m.view_source, source).clicked() {
                 m.set_view_source(true);
             }
         });
-        // R11: "In game" still shows PGPatcher's copy, which was made from the unedited NIF.
+        if let Some(e) = m.edit.as_ref().filter(|_| editing && !m.view_source) {
+            let scope = match m.target {
+                Some(ScanTarget::Mo2 { .. }) => IN_GAME_SCOPE,
+                _ => NO_INSTANCE,
+            };
+            ui.add(egui::Label::new(scope).wrap());
+            if let (Selection::Shape(b), Some(rows)) = (e.selection, &e.in_game) {
+                for n in rows
+                    .iter()
+                    .filter(|(id, _, _)| id.0 == b)
+                    .flat_map(|(_, _, n)| n)
+                {
+                    ui.add(egui::Label::new(n.as_str()).wrap());
+                }
+            }
+        }
+        // R11 (kept by v2 B8, H9): the game still loads PGPatcher's copy, which was made from the unedited NIF.
         if m.edit
             .as_ref()
             .is_some_and(|e| e.doc.export.ops_hash.is_some())
@@ -671,7 +695,8 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
     // request_frame then carries the new time and materials: one Render per frame.
     // B-P33: non-finite controller times get no clock and no slider, only this line.
     let invalid = m.edit.as_ref().is_some_and(|e| e.anim_invalid());
-    if m.v3.nif_view && (m.v3.clock.is_some() || invalid) {
+    // No clock controls In game (simulated): the clock is paused there (F21).
+    if m.v3.nif_view && m.view_source && (m.v3.clock.is_some() || invalid) {
         egui::Panel::bottom("meshes-3d-anim")
             .frame(egui::Frame::new())
             .resizable(false)

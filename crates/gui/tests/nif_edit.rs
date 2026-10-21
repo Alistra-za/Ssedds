@@ -877,8 +877,7 @@ fn set_lit(m: &mut MeshesModel, field: Field, v: f32) {
     );
 }
 
-/// Final review I2, ruling P13: In game shows PGPatcher's copy; the session keeps updating, and Source shows the
-/// edit again with every edit made meanwhile.
+/// v2 B8 (supersedes P13's In game half): In game (simulated) keeps the session and shows every edit.
 #[test]
 fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     let (_d, mut m) = session(false);
@@ -887,13 +886,23 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     assert!(m.view_source, "the edit preview is the Source side");
     set_lit(&mut m, Field::Glossiness, 12.5);
     m.set_view_source(false);
-    assert!(m.v3.is_mesh(), "In game shows the PGPatcher copy");
-    assert!(!m.v3.nif_view);
+    assert!(!m.v3.is_mesh(), "In game is the simulated edit preview");
+    assert!(m.v3.nif_view);
+    assert!(m.edit.as_ref().unwrap().in_game.is_some());
     set_lit(&mut m, Field::SpecularStrength, 3.5);
     assert_eq!(m.edit.as_ref().unwrap().doc.ops.len(), 2);
+    let Some(Content::Parsed { nif, .. }) = m.v3.content() else {
+        panic!("In game shows the edit preview")
+    };
+    let p = &nif.shapes[0].material.params;
+    assert_eq!(
+        (p.glossiness, p.specular_strength),
+        (12.5, 3.5),
+        "no JSON: in game too"
+    );
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("Showing the PGPatcher copy: switch to Source to see your edit.");
+    h.get_by_label("In game (simulated)");
     let m = h.state_mut();
     m.set_view_source(true);
     assert!(m.v3.nif_view);
@@ -902,10 +911,6 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     };
     let p = &nif.shapes[0].material.params;
     assert_eq!((p.glossiness, p.specular_strength), (12.5, 3.5));
-    h.run_steps(4);
-    assert!(h
-        .query_by_label("Showing the PGPatcher copy: switch to Source to see your edit.")
-        .is_none());
 }
 
 // ---- v2 A17: the edit panel, selection, Shader and Alpha tabs ----
@@ -2959,7 +2964,9 @@ fn scrub_sets_time_and_pauses() {
 fn the_clock_pauses_in_game_and_goes_with_the_session() {
     let (_d, mut m, cmds) = playing_session();
     m.v3.clock.as_mut().unwrap().play();
-    m.v3.nif_view = false; // what set_view_source(false) does when the 3D view shows PGPatcher's copy
+    m.set_view_source(false);
+    assert!(m.v3.nif_view, "In game (simulated) is the edit preview too");
+    assert!(m.v3.clock.is_some());
     m.tick_anim(0.02);
     assert!(!m.v3.clock.unwrap().playing);
     assert!(!cmds
@@ -3011,6 +3018,9 @@ fn the_clock_row_fits_the_centre_column() {
         let mut nodes = h.query_all_by_label("Time").collect::<Vec<_>>();
         nodes.push(h.get_by_label("Play"));
         nodes.push(h.get_by_label("Loop"));
+        // v2 B8: the edit-mode toggle above them, too.
+        nodes.push(h.get_by_label("In game (simulated)"));
+        nodes.push(h.get_by_label("Edited source"));
         let speed: Vec<_> = h.query_all_by_label("Speed").collect();
         assert!(!speed.is_empty(), "the Speed label and its value");
         nodes.extend(speed);
@@ -3998,4 +4008,155 @@ fn picking_a_clip_sets_the_clock_range_to_its_timing() {
     m.edit_with(|e| e.set_playing(Playing::Free));
     m.tick_anim(0.0);
     assert_eq!(m.v3.clock.unwrap().range, (0.0, 1.0), "Free again");
+}
+
+// ---- v2 B8: In game (simulated) through pgpsim ----
+
+use sdc_gui::model::meshes::pg_entries::*;
+
+/// Mods (highest first) PGP, A, Low. A: x.nif, the PBR textures of `white`, PBRNIFPatcher\x.json (object form, BOM,
+/// roughness 0.5 from `default`) and bad.json (no `default`: PGPatcher skips the file). Low: a lower copy of the same
+/// path (hidden by A's) and a.json (sorts first, but Low is below A).
+fn pg_files() -> tempfile::TempDir {
+    let d = files_with(false, "+PGP\n+A\n+Low\n");
+    for t in ["white", "white_n", "white_rmaos"] {
+        put(
+            d.path(),
+            &format!("mods/A/textures/pbr/{t}.dds"),
+            Some(b"dds"),
+        );
+    }
+    let x = "\u{feff}{\"$schema\": \"x\", \"default\": {\"roughness_scale\": 0.5}, \"entries\": [{\"match_diffuse\": \"white\"}]}";
+    put(d.path(), "mods/A/PBRNIFPatcher/x.json", Some(x.as_bytes()));
+    put(
+        d.path(),
+        "mods/A/PBRNIFPatcher/bad.json",
+        Some(br#"{"entries": [{"match_diffuse": "white", "roughness_scale": 0.7}]}"#),
+    );
+    put(
+        d.path(),
+        "mods/Low/PBRNifPatcher/x.json",
+        Some(br#"[{"match_diffuse": "white", "roughness_scale": 0.1}]"#),
+    );
+    put(
+        d.path(),
+        "mods/Low/PBRNifPatcher/a.json",
+        Some(br#"[{"match_diffuse": "white", "roughness_scale": 0.9}]"#),
+    );
+    d
+}
+
+fn pg_session() -> (tempfile::TempDir, MeshesModel) {
+    let d = pg_files();
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    (d, m)
+}
+
+/// The Parsed content's material of shape block `b`.
+fn shown(m: &MeshesModel, b: u32) -> nif::material::MaterialState {
+    let Some(Content::Parsed { nif, .. }) = m.v3.content() else {
+        panic!("the edit preview shows")
+    };
+    nif.shapes
+        .iter()
+        .find(|s| s.id.0 == b)
+        .expect("the shape")
+        .material
+        .clone()
+}
+
+#[test]
+fn in_game_mode_applies_pgpatcher_json_from_mods() {
+    let d = pg_files();
+    let inst = modscan::mo2::Instance::load(d.path(), Some("Default")).unwrap();
+    let files: Vec<String> = pg_entries(&inst).into_iter().map(|f| f.file).collect();
+    assert_eq!(files, [r"PBRNIFPatcher\x.json", r"PBRNifPatcher\a.json"]);
+    drop(d);
+
+    let (_d, mut m) = pg_session();
+    assert!(m.view_source, "the edit opens on Edited source");
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\white.dds");
+    let cur = e.model.lighting[&shader].lighting.params.uv_offset[0];
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::UvOffset(0),
+            value: Value::F32(0.25f32.to_bits()),
+            base: Value::F32(cur.to_bits()),
+        }],
+        None,
+    );
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("In game (simulated)").click();
+    h.run_steps(4);
+    h.get_by_label(r"In game: PGPatcher applies PBRNIFPatcher\x.json.");
+    h.get_by_label(IN_GAME_SCOPE);
+    let m = h.state();
+    assert!(!m.view_source);
+    assert!(m.v3.nif_view);
+    assert!(m.edit.as_ref().unwrap().in_game.is_some());
+    let g = shown(m, shape);
+    assert_eq!(g.slots[0].raw, r"textures\pbr\white.dds");
+    assert_ne!(g.slsf2 & nif::material::SLSF2_TRUE_PBR, 0);
+    assert_eq!(
+        g.params.specular_strength, 0.5,
+        "A's x.json, through its default"
+    );
+    assert_eq!(g.params.uv_offset[0], 0.25, "the edit survives the sim");
+
+    h.get_by_label("Edited source").click();
+    h.run_steps(4);
+    let m = h.state();
+    assert!(m.view_source);
+    assert!(m.edit.as_ref().unwrap().in_game.is_none());
+    let s = shown(m, shape);
+    assert_eq!(s.slots[0].raw, r"textures\white.dds");
+    assert_eq!(s.params.uv_offset[0], 0.25);
+}
+
+/// PG_IGNORE (value true) on the shape: In game keeps the edited material and says why; value 0 does not count.
+#[test]
+fn pg_ignore_shape_is_not_simulated() {
+    for (v, ignored) in [(1u8, true), (0, false)] {
+        let (_d, mut m) = pg_session();
+        let e = m.edit.as_ref().unwrap();
+        let (shape, _) = lit_shape(e);
+        let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shape).unwrap();
+        m.edit_push(
+            vec![Op::AddExtra {
+                at,
+                kind: "NiBooleanExtraData".into(),
+                name: "PG_IGNORE".into(),
+                value: ExtraValue::Bool(v),
+            }],
+            None,
+        );
+        assert_eq!(m.error, None);
+        let edited = m.edit.as_ref().unwrap().materials();
+        m.set_view_source(false);
+        let s = shown(&m, shape);
+        if ignored {
+            let rows = m.edit.as_ref().unwrap().in_game.clone().unwrap();
+            let (_, mat, notes) = rows.iter().find(|(id, _, _)| id.0 == shape).unwrap();
+            let before = &edited.iter().find(|(id, _)| id.0 == shape).unwrap().1;
+            assert_eq!(mat, before);
+            assert_eq!(notes, &vec![PG_IGNORED.to_string()]);
+            assert_eq!(s.slots[0].raw, r"textures\white.dds");
+            assert_eq!(s.slsf2 & nif::material::SLSF2_TRUE_PBR, 0);
+        } else {
+            assert_eq!(
+                s.slots[0].raw, r"textures\pbr\white.dds",
+                "value 0 is simulated"
+            );
+        }
+    }
 }

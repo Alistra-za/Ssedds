@@ -2,6 +2,7 @@
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
+use super::pg_entries::{pg_ignore, simulate_shape, PgFile, PG_IGNORED};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
@@ -104,6 +105,12 @@ pub struct NifEdit {
     anim_shown: Option<f32>,
     /// The shapes the last `tick_anim` animated (D15: one that leaves gets its file material back).
     anim_last: Vec<ShapeId>,
+    /// v2 B8: the PGPatcher JSON In game reads, and the scan target it was read for. Cleared on each switch of the
+    /// toggle, so a switch re-reads the files.
+    pub pg: Option<(Option<ScanTarget>, Vec<PgFile>)>,
+    /// v2 B8: In game (simulated) is showing: each shape's simulated material and its lines. None on Edited source.
+    /// `preview_nif` draws these materials, so `materials()` and every `before` follow the shown side.
+    pub in_game: Option<Vec<(ShapeId, MaterialState, Vec<String>)>>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
     /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
@@ -286,6 +293,8 @@ impl NifEdit {
             anim: vec![],
             anim_shown: None,
             anim_last: vec![],
+            pg: None,
+            in_game: None,
             unsaved: false,
             drag: None,
         };
@@ -614,9 +623,17 @@ impl NifEdit {
         self.revert(i);
     }
 
-    /// The parsed patched NIF as the preview draws it: with Solo, every shape but the selected one is hidden.
+    /// The parsed patched NIF as the preview draws it: In game, each shape's simulated material (v2 B8); with Solo,
+    /// every shape but the selected one is hidden.
     fn preview_nif(&self) -> ParsedNif {
         let mut p = (*self.parsed).clone();
+        if let Some(rows) = &self.in_game {
+            for s in &mut p.shapes {
+                if let Some((_, m, _)) = rows.iter().find(|(id, _, _)| *id == s.id) {
+                    s.material = m.clone();
+                }
+            }
+        }
         if self.solo {
             for s in &mut p.shapes {
                 if self.selection != Selection::Shape(s.id.0) {
@@ -625,6 +642,36 @@ impl NifEdit {
             }
         }
         p
+    }
+
+    /// v2 B8 (closes R11): each shape's material as PGPatcher would leave the edited NIF (`pg_entries::simulate_shape`
+    /// over `pg`), with its lines. Shapes without a texture set keep their material and get no line; PG_IGNORE ones keep
+    /// it with `PG_IGNORED`. From the parsed edit (not `preview_nif`), so no shape is simulated twice.
+    pub fn in_game_materials(
+        &self,
+        exists: &dyn Fn(&str) -> bool,
+    ) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
+        let nif_path = self.data_path.replace('/', "\\");
+        let files = self.pg.as_ref().map_or(&[][..], |(_, f)| &f[..]);
+        self.parsed
+            .shapes
+            .iter()
+            .map(|s| {
+                let shape = self.model.shape(s.id.0);
+                let lit = shape
+                    .and_then(|sm| sm.shader)
+                    .and_then(|b| self.model.lighting.get(&b))
+                    .is_some_and(|l| l.texture_set.is_some());
+                let (m, notes) = match shape {
+                    _ if !lit => (s.material.clone(), vec![]),
+                    Some(sm) if pg_ignore(&self.model, sm) => {
+                        (s.material.clone(), vec![PG_IGNORED.to_string()])
+                    }
+                    _ => simulate_shape(files, &nif_path, &s.material, exists),
+                };
+                (s.id, m, notes)
+            })
+            .collect()
     }
 
     pub fn materials(&self) -> Vec<(ShapeId, MaterialState)> {
@@ -803,8 +850,8 @@ impl MeshesModel {
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((e, content)) => {
                 self.edit = Some(e);
-                // The toggle reads Source while the edit preview shows (P13); In game is PGPatcher's copy (R11).
-                self.view_source |= self.pair.is_some();
+                // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
+                self.view_source = true;
                 if let Some(c) = content {
                     self.v3.set_content(Some(c), false);
                     self.v3.nif_view = true;
@@ -857,9 +904,11 @@ impl MeshesModel {
         }))
     }
 
-    /// Shows the open session's edit preview, rebuilt from its current edits (ruling P13: back from In game).
+    /// Shows the open session's edit preview, rebuilt from its current edits, on the toggle's side (v2 B8: In game
+    /// overlays the simulated materials).
     /// False when there is none to show (no session, an LE NIF, or an error, which goes to `error`).
     pub(super) fn show_edit_preview(&mut self) -> bool {
+        self.refresh_in_game();
         let Some(e) = &self.edit else { return false };
         match self.edit_content(e) {
             Ok(Some(c)) => {
@@ -878,7 +927,7 @@ impl MeshesModel {
         }
     }
 
-    /// An edit is open but the 3D view shows a plain copy (In game, ruling P13): the edits are not on screen.
+    /// An edit is open but the 3D view shows a plain copy (`show_edit_preview` failed): the edits are not on screen.
     pub fn edit_preview_hidden(&self) -> bool {
         self.edit.as_ref().is_some_and(|e| !e.le_mesh) && !self.v3.nif_view
     }
@@ -925,6 +974,7 @@ impl MeshesModel {
             }
             e.anim_last = now;
         }
+        let in_game = self.edit.as_ref().is_some_and(|e| e.in_game.is_some());
         let Some(range) = self.edit.as_ref().and_then(NifEdit::anim_range) else {
             self.v3.clock = None;
             return;
@@ -934,8 +984,8 @@ impl MeshesModel {
             c.range = range;
             c.t = c.t.clamp(range.0, range.1);
         }
-        // In game shows PGPatcher's copy of the unedited NIF (F21): the clock pauses there.
-        if !self.v3.nif_view {
+        // In game (simulated) shows static PGPatcher materials (F21): the clock pauses there.
+        if !self.v3.nif_view || in_game {
             c.playing = false;
             return;
         }
@@ -1136,13 +1186,15 @@ impl MeshesModel {
             e.anim_shown = None;
         }
         self.edit_checks();
+        self.refresh_in_game();
         let (Some(e), Some(store)) = (&self.edit, &self.store) else {
             return;
         };
         if e.le_mesh {
             return;
         }
-        // In game shows PGPatcher's copy (P13): the session is current, and Source rebuilds the preview from it.
+        // A failed show_edit_preview left a plain copy on screen: the session is current, and the next switch
+        // rebuilds the preview from it.
         let Some(Content::Parsed { nif, textures, .. }) = self.v3.content() else {
             return;
         };
