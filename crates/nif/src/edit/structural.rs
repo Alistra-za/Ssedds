@@ -186,31 +186,18 @@ type Moves = Vec<(usize, u32)>;
 /// A shape a CB names: (block, raw name, name index).
 type Named = (u32, Vec<u8>, i32);
 
-/// The sequence and palette work of a split, planned before anything is appended.
+/// The sequence, palette and MTTC work of a split, planned before anything is appended.
 struct CbPlan {
     /// (sequence, its re-emit, the CBs that move to a copy)
     seqs: Vec<(u32, SequenceOut, Moves)>,
-    /// (palette, the shapes new CBs name)
-    palettes: Vec<(i32, Vec<Named>)>,
+    /// (a manager that lists a changed sequence, the shapes its new CBs name)
+    managers: Vec<(Manager, Vec<Named>)>,
 }
 
 /// The Node Name a new CB gives shape `s` (C4-D3, C4-D4): its raw Name index, which must name no other shape.
 fn cb_node(h: &Header, m: &NifModel, s: u32) -> Result<Named, String> {
     let sm = m.shape(s).ok_or("not a shape")?;
-    let raw = h
-        .string(sm.net.name)
-        .ok_or("This shape has no name: a clip cannot find it.")?;
-    if m.shapes
-        .iter()
-        .filter(|o| h.string(o.net.name) == Some(raw))
-        .count()
-        > 1
-    {
-        return Err(format!(
-            "Two shapes are named {}: a clip cannot tell them apart.",
-            crate::text::lossy(raw)
-        ));
-    }
+    let raw = shape_raw_name(h, m, sm, sm.name.as_deref())?;
     Ok((s, raw.to_vec(), sm.net.name))
 }
 
@@ -224,11 +211,19 @@ fn cb_plan(
     shape: &ShapeModel,
     prop: &PropModel,
 ) -> Result<CbPlan, String> {
+    // C4 fix 1: the model drops a listed sequence that does not read, so the plan could not see its CBs
+    if prop.ctrls.iter().any(|&c| m.managed(c)) {
+        for i in (0..h.sizes.len()).filter(|&i| h.kind(i) == b"NiControllerManager") {
+            if let Ok(man) = read_manager(h, cur, i) {
+                clip_names(h, cur, &man.sequences)?;
+            }
+        }
+    }
     let edited = h.string(shape.net.name);
     let rest = prop.users.iter().copied().find(|&u| u != shape.block);
     let mut plan = CbPlan {
         seqs: vec![],
-        palettes: vec![],
+        managers: vec![],
     };
     for s in &m.sequences {
         let mut out: Option<SequenceOut> = None;
@@ -259,23 +254,22 @@ fn cb_plan(
             }
         }
         let Some(o) = out else { continue };
-        // C4-D5: only the palette of a manager that lists this sequence
-        let pal = u32::try_from(o.manager)
+        // C4-D5, C-P31: only the palette and MTTC of a manager that lists this sequence
+        let man = u32::try_from(o.manager)
             .ok()
             .and_then(|g| read_manager(h, cur, g as usize).ok())
-            .filter(|man| man.sequences.contains(&(s.block as i32)) && man.palette >= 0)
-            .map(|man| man.palette);
-        if let Some(pal) = pal {
-            let k = match plan.palettes.iter().position(|p| p.0 == pal) {
+            .filter(|man| man.sequences.contains(&(s.block as i32)));
+        if let Some(man) = man {
+            let k = match plan.managers.iter().position(|p| p.0 == man) {
                 Some(k) => k,
                 None => {
-                    plan.palettes.push((pal, vec![]));
-                    plan.palettes.len() - 1
+                    plan.managers.push((man, vec![]));
+                    plan.managers.len() - 1
                 }
             };
             for n in named {
-                if !plan.palettes[k].1.iter().any(|x| x.0 == n.0) {
-                    plan.palettes[k].1.push(n);
+                if !plan.managers[k].1.iter().any(|x| x.0 == n.0) {
+                    plan.managers[k].1.push(n);
                 }
             }
         }
@@ -285,7 +279,7 @@ fn cb_plan(
 }
 
 /// After the chain copy: re-emits the planned sequences with each marked CB on its controller's copy (`pairs`:
-/// original, copy), then grows the palettes.
+/// original, copy), then grows the palettes and the MTTC targets.
 fn split_cbs(
     doc: &mut NifDoc,
     cur: &[u8],
@@ -302,8 +296,37 @@ fn split_cbs(
         }
         doc.set_block(seq, enc(encode_sequence(&out))?);
     }
-    for (pal, shapes) in plan.palettes {
-        ensure_palette(doc, cur, pal, -1, &shapes)?;
+    for (man, shapes) in plan.managers {
+        if man.palette >= 0 {
+            ensure_palette(doc, cur, man.palette, -1, &shapes)?;
+        }
+        ensure_mttc(doc, cur, man.ctrl.next, &shapes)?;
+    }
+    Ok(())
+}
+
+/// C-P26/C-P29: `targets` with each of `shapes` it lacks appended; existing targets stay in order.
+fn with_shapes(mut targets: Vec<i32>, shapes: &[Named]) -> Vec<i32> {
+    for (s, _, _) in shapes {
+        if !targets.contains(&(*s as i32)) {
+            targets.push(*s as i32);
+        }
+    }
+    targets
+}
+
+/// The manager's MTTC (its `next`, when that is a NiMultiTargetTransformController) gains each of `shapes` it lacks;
+/// it is re-emitted only when its target list grew (C-P29 I1, C-P31).
+fn ensure_mttc(doc: &mut NifDoc, cur: &[u8], next: i32, shapes: &[Named]) -> Result<(), String> {
+    let mttc = u32::try_from(next)
+        .ok()
+        .filter(|&n| doc.kind(n) == b"NiMultiTargetTransformController");
+    if let Some(n) = mttc {
+        let (base, old_t) = enc(read_mttc(doc.header(), cur, n as usize))?;
+        let targets = with_shapes(old_t.clone(), shapes);
+        if targets != old_t {
+            doc.set_block(n, enc(encode_mttc(&base, &targets))?);
+        }
     }
     Ok(())
 }
@@ -831,16 +854,33 @@ pub(crate) fn track_shape(
         [] => return Err(format!("No shape named {name} uses this controller.")),
         _ => return Err(two()),
     };
-    let raw = h.string(s.net.name).ok_or_else(unnamed)?;
+    shape_raw_name(h, m, s, Some(name))?;
+    Ok(s.block)
+}
+
+/// The raw Name bytes of shape `s`, which a clip binds by (C2-D6, F18): Err when it has none or another shape has the
+/// same bytes. `shown` names the shape in the message (the raw bytes decoded when None).
+fn shape_raw_name<'h>(
+    h: &'h Header,
+    m: &NifModel,
+    s: &ShapeModel,
+    shown: Option<&str>,
+) -> Result<&'h [u8], String> {
+    let raw = h
+        .string(s.net.name)
+        .ok_or("This shape has no name: a clip cannot find it.")?;
     if m.shapes
         .iter()
         .filter(|o| h.string(o.net.name) == Some(raw))
         .count()
         > 1
     {
-        return Err(two());
+        let name = shown.map_or_else(|| crate::text::lossy(raw), str::to_string);
+        return Err(format!(
+            "Two shapes are named {name}: a clip cannot tell them apart."
+        ));
     }
-    Ok(s.block)
+    Ok(raw)
 }
 
 /// AddSequence, RemoveSequence and RenameSequence, anchored on the root (v2 C2). A missing clip is a Conflict.
@@ -1142,26 +1182,9 @@ pub(crate) fn add_sequence(
         .collect::<Result<_, String>>()?;
 
     // C-P26/C-P29: the MTTC lists the nodes the clips bind; existing targets stay, missing ones are appended
-    let with_shapes = |mut targets: Vec<i32>| {
-        for (s, _, _) in &shapes {
-            if !targets.contains(&(*s as i32)) {
-                targets.push(*s as i32);
-            }
-        }
-        targets
-    };
     let (mgr, mut man) = match (found, old) {
         (Some(mb), Some(man)) => {
-            let mttc = u32::try_from(man.ctrl.next)
-                .ok()
-                .filter(|&n| doc.kind(n) == b"NiMultiTargetTransformController");
-            if let Some(n) = mttc {
-                let (base, old_t) = enc(read_mttc(doc.header(), cur, n as usize))?;
-                let targets = with_shapes(old_t.clone());
-                if targets != old_t {
-                    doc.set_block(n, enc(encode_mttc(&base, &targets))?);
-                }
-            }
+            ensure_mttc(doc, cur, man.ctrl.next, &shapes)?;
             (mb, man)
         }
         _ => {
@@ -1183,7 +1206,7 @@ pub(crate) fn add_sequence(
                 var: None,
                 known: false,
             };
-            let targets = with_shapes(vec![]);
+            let targets = with_shapes(vec![], &shapes);
             let mttc_body = enc(encode_mttc(&base(net.controller, MTTC_FLAGS), &targets))?;
             let mttc = doc.append(b"NiMultiTargetTransformController", mttc_body);
             let man = Manager {

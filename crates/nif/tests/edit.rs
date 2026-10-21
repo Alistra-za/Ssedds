@@ -3469,9 +3469,26 @@ fn managed_split_adds_cbs_to_every_sequence() {
     }
     assert!(palette_of(out).contains(&(b"B".to_vec(), 2)));
     let h = Header::parse(out).unwrap();
-    let pal = read_manager(&h, out, root_ctrl(out)).unwrap().palette as usize;
-    let changed = [2, open as usize, close as usize, pal];
+    let man = read_manager(&h, out, root_ctrl(out)).unwrap();
+    let (pal, mttc) = (man.palette as usize, man.ctrl.next as usize);
+    assert_eq!(mttc_targets(out), vec![1, 2], "C-P31: B joins the MTTC");
+    let changed = [2, open as usize, close as usize, pal, mttc];
     same_blocks(&x, out, (0..n as usize).filter(|k| !changed.contains(k)));
+}
+
+/// C4 fix 1: a listed sequence that does not read refuses the split (the model drops it, so the plan cannot see it).
+#[test]
+fn managed_split_refuses_an_unreadable_listed_sequence() {
+    let (mut x, open, _) = clip_on_shared_alpha(true);
+    let end = {
+        let h = Header::parse(&x).unwrap();
+        h.offsets()[open as usize] + h.sizes[open as usize] as usize
+    };
+    // one anim note array, with no ref behind it
+    x[end - 2..end].copy_from_slice(&1u16.to_le_bytes());
+    let m = read_model(&x).unwrap();
+    assert!(m.sequences.iter().all(|s| s.block != open));
+    refused(&x, split(&m, "A"));
 }
 
 #[test]
@@ -3550,7 +3567,10 @@ fn managed_split_leaves_other_shape_clips_unchanged() {
         .ctrl
         .next as usize;
     assert_eq!(kind_of(&x, mttc), b"NiMultiTargetTransformController");
-    same.extend([mgr, mttc]);
+    // C-P31: the existing targets stay and B, which the new CBs name, is appended
+    assert_eq!(mttc_targets(&x), vec![1]);
+    assert_eq!(mttc_targets(out), vec![1, 2]);
+    same.push(mgr);
     same_blocks(&x, out, same);
 }
 
