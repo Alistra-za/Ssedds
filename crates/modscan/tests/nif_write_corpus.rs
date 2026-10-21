@@ -17,6 +17,8 @@ struct Res {
     header_wrong: bool,
     decode: Vec<String>,
     encode: Vec<String>,
+    /// Classes of the key data and blend interpolator blocks checked (B1), one entry per block.
+    keyed: Vec<String>,
 }
 
 /// None when `nif::scan::scan` does not accept the file.
@@ -78,6 +80,23 @@ fn check(b: &[u8]) -> Option<Res> {
                 Ok(_) => {}
                 Err(e) => r.decode.push(what(&format!("texture set: {e}"))),
             }
+        } else if matches!(kind, b"NiFloatData" | b"NiPosData" | b"NiBoolData") {
+            r.keyed.push(String::from_utf8_lossy(kind).into());
+            match nif::keys::read_data(&h, b, i) {
+                Ok(d) if nif::keys::encode_data(&d) != blk => {
+                    r.encode.push(what("encode_data differs"))
+                }
+                Ok(_) => {}
+                Err(e) => r.decode.push(what(&format!("key data: {e}"))),
+            }
+        } else if matches!(
+            kind,
+            b"NiBlendFloatInterpolator" | b"NiBlendPoint3Interpolator"
+        ) {
+            r.keyed.push(String::from_utf8_lossy(kind).into());
+            if let Err(e) = nif::ctrl::read_blend_interp(&h, b, i) {
+                r.decode.push(what(&format!("blend interpolator: {e}")));
+            }
         } else if EDITABLE.iter().any(|k| k.as_bytes() == kind) {
             match read_extra(&h, b, i) {
                 Ok(x) => {
@@ -103,6 +122,7 @@ fn report(gate: &str, files: Vec<(String, Option<Res>)>) {
     let total = files.len();
     let (mut checked, mut hdr) = (0, vec![]);
     let (mut id, mut dec, mut enc) = (vec![], vec![], vec![]);
+    let mut keyed = std::collections::BTreeMap::<String, usize>::new();
     for (p, r) in files {
         let Some(r) = r else { continue };
         checked += 1;
@@ -112,7 +132,11 @@ fn report(gate: &str, files: Vec<(String, Option<Res>)>) {
         id.extend(r.identity.into_iter().map(|m| format!("{p}: {m}")));
         dec.extend(r.decode.into_iter().map(|m| format!("{p}: {m}")));
         enc.extend(r.encode.into_iter().map(|m| format!("{p}: {m}")));
+        for k in r.keyed {
+            *keyed.entry(k).or_default() += 1;
+        }
     }
+    println!("{gate}: key data / blend blocks checked: {keyed:?}");
     println!(
         "{gate}: {total} .nif seen, {checked} accepted by scan; {} identity failures, {} files with header fields already wrong, {} decode mismatches, {} encode mismatches",
         id.len(),

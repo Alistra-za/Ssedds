@@ -7,14 +7,14 @@ use crate::{header::Header, NifError};
 pub const BASE_LEN: usize = 26;
 const CB_LEN: usize = 29;
 
-fn geo(block: usize, msg: &str) -> NifError {
+pub(crate) fn geo(block: usize, msg: &str) -> NifError {
     NifError::Geometry {
         block: block as u32,
         msg: msg.into(),
     }
 }
 
-fn body<'a>(h: &Header, b: &'a [u8], block: usize) -> Result<&'a [u8], NifError> {
+pub(crate) fn body<'a>(h: &Header, b: &'a [u8], block: usize) -> Result<&'a [u8], NifError> {
     if block >= h.sizes.len() {
         return Err(geo(block, "no such block"));
     }
@@ -26,7 +26,7 @@ fn body<'a>(h: &Header, b: &'a [u8], block: usize) -> Result<&'a [u8], NifError>
     })
 }
 
-fn exact(h: &Header, block: usize, want: usize, got: usize) -> Result<(), NifError> {
+pub(crate) fn exact(h: &Header, block: usize, want: usize, got: usize) -> Result<(), NifError> {
     if want == got {
         return Ok(());
     }
@@ -169,6 +169,58 @@ pub(crate) fn interp_floats(kind: &[u8]) -> usize {
         b"NiPoint3Interpolator" => 3,
         _ => 0,
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlendInterp {
+    pub block: u32,
+    pub class: String,
+    pub flags: u8,
+    pub array_size: u8,
+    pub weight_threshold: f32,
+    /// Raw bytes from Interp Count through the last item (20 + 17 * array_size) when flags bit 0 is clear; None when set.
+    pub items: Option<Vec<u8>>,
+    /// 1 value (Float) or 3 (Point3), bit patterns as stored.
+    pub value: Vec<f32>,
+    /// Block-relative offset of Value.
+    pub value_at: usize,
+}
+
+/// NiBlendFloatInterpolator or NiBlendPoint3Interpolator; any other class is an Err. Exact size.
+/// Layout: flags u8, array size u8, threshold f32, then (bit 0 clear) 20 counter bytes and 17-byte items, then Value.
+pub fn read_blend_interp(h: &Header, b: &[u8], block: usize) -> Result<BlendInterp, NifError> {
+    let d = body(h, b, block)?;
+    let kind = h.kind(block);
+    let n = match kind {
+        b"NiBlendFloatInterpolator" => 1,
+        b"NiBlendPoint3Interpolator" => 3,
+        _ => return Err(geo(block, "not a blend interpolator")),
+    };
+    if d.len() < 6 {
+        return Err(geo(
+            block,
+            "blend interpolator shorter than its fixed fields",
+        ));
+    }
+    let (flags, array_size) = (d[0], d[1]);
+    let managed = flags & 1 != 0;
+    let value_at = if managed {
+        6
+    } else {
+        26 + 17 * array_size as usize
+    };
+    // also guards the slices below
+    exact(h, block, value_at + 4 * n, d.len())?;
+    Ok(BlendInterp {
+        block: block as u32,
+        class: String::from_utf8_lossy(kind).into(),
+        flags,
+        array_size,
+        weight_threshold: f32_at(d, 2),
+        items: (!managed).then(|| d[6..value_at].to_vec()),
+        value: (0..n).map(|i| f32_at(d, value_at + 4 * i)).collect(),
+        value_at,
+    })
 }
 
 /// String fields are raw string-table entries: None = index -1, Some(empty) = the empty string.
