@@ -10,9 +10,45 @@ pub const SUFFIXES: [&str; 20] = [
     "s", "f", "b", "d", "e", "i",
 ];
 
+/// The marker of a file Tessalith generated (v2 Generate from normal map, DECISIONS Note CO).
+pub const GENERATED: &str = "generated";
+/// The role tails that may carry the marker: the §6.1 suffix `p` and the vocabulary terms `height`, `ao` and
+/// `curves` (Note CO, preflight P10). Only names Tessalith writes carry it.
+pub const GENERATED_ROLES: &[&str] = &["p", "height", "ao", "curves"];
+
+/// `stem` without a trailing `_generated` (ASCII case-insensitive) and whether it had one, only when the
+/// remainder ends in `_<role>` for a role in [`GENERATED_ROLES`] and is longer than that tail. Otherwise
+/// `(stem, false)`, so `rock_generated` and `rock_n_generated` stay whole.
+pub fn split_generated(stem: &str) -> (&str, bool) {
+    let rest = stem
+        .len()
+        .checked_sub(GENERATED.len() + 1)
+        .filter(|&i| {
+            stem.as_bytes()[i] == b'_'
+                && stem.as_bytes()[i + 1..].eq_ignore_ascii_case(GENERATED.as_bytes())
+        })
+        // The tail is ASCII, so the cut falls on a char boundary even in non-ASCII stems.
+        .map(|i| &stem[..i]);
+    match rest.and_then(|r| r.rsplit_once('_').map(|(b, role)| (r, b, role))) {
+        Some((rest, base, role))
+            if !base.is_empty() && GENERATED_ROLES.iter().any(|g| role.eq_ignore_ascii_case(g)) =>
+        {
+            (rest, true)
+        }
+        _ => (stem, false),
+    }
+}
+
+/// Whether `stem` names a generated member (`rock_p_generated`): [`split_generated`] strips a marker.
+pub fn is_generated(stem: &str) -> bool {
+    split_generated(stem).1
+}
+
 /// Splits one recognised suffix off a stem (case-insensitive). The suffix is returned lower-case;
-/// a stem that is only a suffix (`_n`) is left whole.
+/// a stem that is only a suffix (`_n`) is left whole. A generated member splits as its role
+/// (`rock_p_generated` → `rock`, `p`).
 pub fn split_suffix(stem: &str) -> (String, Option<String>) {
+    let stem = split_generated(stem).0;
     let lower = stem.to_ascii_lowercase();
     for s in SUFFIXES {
         let tail = format!("_{s}");
@@ -120,6 +156,8 @@ pub static VOCABULARY: [Vocab; 37] = {
 /// The vocabulary term a stem ends in (case-insensitive) and the base before it. A stem that is only a term
 /// (`_normal`) is left alone, as with §6.1 suffixes.
 pub fn split_vocab(stem: &str) -> Option<(String, &'static Vocab)> {
+    // Note CO: the generated marker comes off before the layer terms too (08e-8).
+    let stem = split_generated(stem).0;
     // M6 Track F2: layer terms (longest first) before the exporter vocabulary, so `_detail_mask` is one term.
     if let Some(hit) = crate::rnm::split_layer(stem) {
         return Some(hit);
