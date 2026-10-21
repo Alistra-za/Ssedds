@@ -264,20 +264,26 @@ pub fn spawn_export_also(
         let done = match result {
             Err(e) => Err(e.to_string()),
             Ok(s) => {
-                let done = match &s.error {
-                    Some((engine::also::Phase::Pbr, msg, _)) => Err(msg.clone()),
-                    _ => {
-                        let mut b = s.combined();
-                        b.converted += s.copied;
-                        Ok(b)
-                    }
-                };
+                let done = also_done(&s);
                 let _ = tx.send(WorkerMsg::AlsoFinished(Box::new(s)));
                 done
             }
         };
         let _ = tx.send(WorkerMsg::ExportDone(done));
     });
+}
+
+/// An Also export's `ExportDone`: `Err` when its PBR phase failed (CM56), else every phase's counts with the copies
+/// (left out of `batch_done`) counted as written.
+pub(crate) fn also_done(s: &engine::also::AlsoSummary) -> Result<BatchSummary, String> {
+    match &s.error {
+        Some((engine::also::Phase::Pbr, msg, _)) => Err(msg.clone()),
+        _ => {
+            let mut b = s.combined();
+            b.converted += s.copied;
+            Ok(b)
+        }
+    }
 }
 
 /// A plan, with a panic turned into this plan's failure, so a superseded plan's panic is dropped by its

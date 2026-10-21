@@ -563,3 +563,42 @@ fn every_export_field_round_trips_through_sdc_toml() {
         "defaults are not written: {text}"
     );
 }
+
+/// Review M1: a tick left from the cs mode does not move the plan or the NIF edits (P16) into a PBR folder no export
+/// can fill while the project is vanilla; Review still names TA20.
+#[test]
+fn a_stale_tick_in_the_vanilla_mode_changes_no_root() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    assert_eq!(
+        m.nif_export_root(),
+        Some(m.also_folders()[0].clone()),
+        "P16"
+    );
+    m.set_target(engine::config::Target::Vanilla);
+    idle(&mut m);
+    assert!(m.also_on(), "the tick stays");
+    assert_eq!(m.output_root(), m.export_root());
+    assert_eq!(m.nif_export_root(), Some(m.export_root()));
+    let req = m.request().unwrap();
+    assert_eq!((req.output_root, req.skip_root), (m.export_root(), None));
+    m.export_clicked();
+    assert_eq!(
+        m.review_gate(),
+        Err(sdc_gui::model::also::NEEDS_CS.to_string())
+    );
+}
+
+/// Review M3: a custom folder name equal to another folder's default is refused at Review, naming its key.
+#[test]
+fn a_folder_name_collision_is_the_reviews_reason() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.set_also_settings(|c| c.names.vanilla = Some("Mod PBR".into()));
+    idle(&mut m);
+    m.export_clicked();
+    let why = m.review_gate().unwrap_err();
+    assert!(why.contains("export.names.vanilla"), "{why}");
+}

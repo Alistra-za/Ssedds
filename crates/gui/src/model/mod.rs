@@ -840,7 +840,7 @@ impl AppModel {
         let project = self.project.as_ref()?;
         let mut req = BatchRequest::new(vec![root], self.output_root(), Target::Cs);
         // TA10, P15: while a tick is on the plan is the PBR phase's (its folder, the whole location skipped).
-        if self.also_on() {
+        if self.also_root().is_some() {
             req.skip_root = Some(self.also_location());
         }
         req.target = None;

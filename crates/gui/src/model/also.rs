@@ -48,7 +48,8 @@ impl AppModel {
 
     /// One `[export]` edit, one undo step, planned again (the PBR folder is the plan's output root, TA10).
     fn edit_export(&mut self, label: &str, f: impl FnOnce(&mut ProjectDoc)) {
-        // A switch mid-export would move the JSON records under the finishers (re-check A4).
+        // So the plan on screen and the NIF root match the running export (the finishers use roots captured at its
+        // start). Undo and Redo are not guarded: harmless for the same reason (review M4).
         if self.export.running.is_some() {
             self.status_line = "Wait for the export to finish".into();
             return;
@@ -129,13 +130,21 @@ impl AppModel {
     }
 
     /// The PBR folder whenever a tick is on (not "while running": the finishers run after `running` is cleared).
+    /// Review M1: only in the cs mode, so a tick left from it never sends the plan or the NIF edits into a PBR folder
+    /// no export can fill (Review names TA20 instead).
     pub fn also_root(&self) -> Option<PathBuf> {
-        self.also_on().then(|| self.also_folders()[0].clone())
+        (self.also_on() && self.target == Target::Cs).then(|| self.also_folders()[0].clone())
     }
 
     /// The folder the plan and the PBR outputs are under: the PBR folder while a tick is on, else the export folder.
     pub fn output_root(&self) -> PathBuf {
         self.also_root().unwrap_or_else(|| self.export_root())
+    }
+
+    /// Note CI29 / P16: where NIF edits go, handed to the Meshes model every frame by `app.rs`: `output_root()` when
+    /// the Textures side has an export folder (a setting or an open project), else `None` (the CI3 fallback).
+    pub fn nif_export_root(&self) -> Option<PathBuf> {
+        (self.settings.export_folder.is_some() || self.root.is_some()).then(|| self.output_root())
     }
 
     /// What "Copy CLI command" passes as `-o` (P14): the location while a tick is on (the CLI reads `[export]`).
@@ -209,7 +218,10 @@ impl AppModel {
         }
         let root = self.root.clone().unwrap_or_default();
         engine::also::check_location(&[root], &self.also_location(), &self.also_folders())?;
-        self.also_config().check()
+        let cfg = self.also_config();
+        cfg.check()?;
+        // Review M3: a custom name equal to another folder's default, refused here rather than at run time.
+        engine::also::check_names(&cfg, &self.also_project())
     }
 
     /// "to {k} folders": 3 with CM (it needs Vanilla, TA30), else 2.
@@ -248,7 +260,10 @@ impl AppModel {
                 "Also export: the {} phase failed (exit {code}): {msg}",
                 phase_name(*phase)
             );
-            self.messages.notify(messages::Severity::Error, t.clone());
+            // Review M2: a PBR-phase error is the export's `Err`, logged and shown once by `export_ended`.
+            if *phase != Phase::Pbr {
+                self.messages.notify(messages::Severity::Error, t.clone());
+            }
             self.export.notes.push(t.clone());
             self.also_error = Some(t);
         }
@@ -265,6 +280,7 @@ impl AppModel {
 mod tests {
     use super::super::export::RowState;
     use super::super::tests::{bare_model, panicked};
+    use engine::also::{AlsoSummary, Phase};
     use engine::events::{EngineEvent, EventKind, EVENT_SCHEMA};
 
     fn discovered(m: &mut super::AppModel, job: &str) {
@@ -312,6 +328,60 @@ mod tests {
         assert_eq!(m.export.rows[0].state, RowState::Cancelled);
     }
 
+    /// A summary with 2 converted in the PBR phase, 3 copies, and an error in `phase`.
+    fn summary(phase: Option<Phase>) -> AlsoSummary {
+        AlsoSummary {
+            phases: vec![(
+                Phase::Pbr,
+                engine::api::BatchSummary {
+                    converted: 2,
+                    ..Default::default()
+                },
+            )],
+            copied: 3,
+            sets: vec![],
+            folders: Default::default(),
+            report: None,
+            zips: vec![],
+            notes: vec![],
+            cancelled_after: None,
+            error: phase.map(|p| (p, "plan broke".to_string(), 3)),
+            zip_failed: false,
+            report_failed: false,
+        }
+    }
+
+    /// CM56 in the worker: a PBR-phase error is the export's `Err` (nothing written after it); a later phase's is
+    /// `Ok` with the copies counted as written.
+    #[test]
+    fn the_worker_maps_a_pbr_phase_error_to_err() {
+        use crate::worker::also_done;
+        assert_eq!(
+            also_done(&summary(Some(Phase::Pbr))),
+            Err("plan broke".into())
+        );
+        for p in [None, Some(Phase::Vanilla), Some(Phase::Cm)] {
+            assert_eq!(also_done(&summary(p)).map(|b| b.converted), Ok(5), "{p:?}");
+        }
+    }
+
+    /// Review M2: a PBR-phase error is logged once ("Export failed", plus the dialog), as a plain export's.
+    #[test]
+    fn a_pbr_phase_error_is_logged_once() {
+        let mut m = bare_model();
+        m.also_pass = true;
+        m.export.running = Some(Default::default());
+        m.also_finished(summary(Some(Phase::Pbr)));
+        m.end_export_with(Err("plan broke".into()));
+        let n = m
+            .messages
+            .entries()
+            .filter(|e| e.text.contains("plan broke"))
+            .count();
+        assert_eq!(n, 1);
+        assert!(matches!(m.dialog, Some(super::super::Dialog::Error(_))));
+    }
+
     /// A plain export keeps today's behaviour: no sweep.
     #[test]
     fn a_plain_export_error_keeps_its_rows_as_today() {
@@ -331,19 +401,7 @@ mod tests {
         m.also_pass = true;
         m.export.running = Some(Default::default());
         discovered(&mut m, "textures Vanilla/a.dds");
-        m.also_finished(engine::also::AlsoSummary {
-            phases: vec![],
-            copied: 0,
-            sets: vec![],
-            folders: Default::default(),
-            report: None,
-            zips: vec![],
-            notes: vec![],
-            cancelled_after: None,
-            error: Some((engine::also::Phase::Vanilla, "plan broke".into(), 3)),
-            zip_failed: false,
-            report_failed: false,
-        });
+        m.also_finished(summary(Some(Phase::Vanilla)));
         m.end_export_with(Ok(Default::default()));
         let last = m.messages.entries().next_back().unwrap();
         assert_eq!(last.severity, Severity::Error, "{}", last.text);

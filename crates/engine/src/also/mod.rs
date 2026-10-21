@@ -203,7 +203,7 @@ fn project_name(inputs: &[PathBuf]) -> Result<String, EngineError> {
 
 /// The final folder names, compared pairwise ASCII/Unicode case-folded once the project name is known (closes the
 /// CM31 shortcut): a custom name equal to another folder's default is refused, naming the custom key.
-fn check_names(cfg: &ExportConfig, project: &str) -> Result<(), String> {
+pub fn check_names(cfg: &ExportConfig, project: &str) -> Result<(), String> {
     let names = cfg.folder_names(project);
     let custom = [
         cfg.names.pbr.is_some(),
