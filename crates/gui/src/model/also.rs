@@ -476,6 +476,25 @@ mod tests {
         assert!(matches!(&m.export.rows[0].state, RowState::Failed(e) if e.contains("plan broke")));
     }
 
+    /// Re-review N2: only a file whose bytes equal this export's text goes to the zip step; a different or missing
+    /// one does not.
+    #[test]
+    fn current_files_takes_only_files_that_hold_this_exports_text() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("sub")).unwrap();
+        std::fs::write(d.path().join("sub/same.json"), "{}").unwrap();
+        std::fs::write(d.path().join("other.json"), "{\"edited\":1}").unwrap();
+        let files = [
+            ("sub/same.json".to_string(), "{}".to_string()),
+            ("other.json".to_string(), "{}".to_string()),
+            ("missing.json".to_string(), "{}".to_string()),
+        ];
+        assert_eq!(
+            super::current_files(d.path(), &files),
+            [d.path().join("sub/same.json")]
+        );
+    }
+
     /// Final review I2: a panic while the zips run ends the export once; a late `AlsoZipped` is then dropped.
     #[test]
     fn a_panic_while_zipping_ends_the_export_and_a_late_zip_result_is_dropped() {
