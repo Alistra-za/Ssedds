@@ -1231,6 +1231,7 @@ fn set_keys(at: &Anchor, keys: KeyData, base: KeyData) -> Op {
     Op::SetKeys {
         at: at.clone(),
         clip: None,
+        clip_name: None,
         keys,
         base,
     }
@@ -1410,6 +1411,7 @@ fn set_keys_refusals() {
     let clip = |at: &Anchor, c| Op::SetKeys {
         at: at.clone(),
         clip: Some(c),
+        clip_name: None,
         keys: lin(&[(0.0, 1.0)]),
         base: data_of(&b, 6),
     };
@@ -1433,6 +1435,7 @@ fn set_keys_refusals() {
     let op = Op::SetKeys {
         at: kat,
         clip: Some(8),
+        clip_name: None,
         keys: lin(&[(0.0, 1.0)]),
         base: data_of(&ks, 6),
     };
@@ -1480,6 +1483,7 @@ fn set_keys_refusals() {
     let clip_a = |keys| Op::SetKeys {
         at: mat.clone(),
         clip: Some(2),
+        clip_name: None,
         keys,
         base: empty_float(),
     };
@@ -2187,6 +2191,7 @@ fn clip_key_edit_changes_only_that_clips_data() {
     let op = Op::SetKeys {
         at: at.clone(),
         clip: Some(1),
+        clip_name: None,
         keys: keys.clone(),
         base: data_of(&b, 13),
     };
@@ -2215,6 +2220,7 @@ fn clip_key_edit_changes_only_that_clips_data() {
     let stale = Op::SetKeys {
         at: at.clone(),
         clip: Some(1),
+        clip_name: None,
         keys: keys.clone(),
         base: lin(&[(0.0, 9.0)]),
     };
@@ -3618,6 +3624,7 @@ fn editing_one_split_clip_leaves_the_other() {
     let op = Op::SetKeys {
         at,
         clip: Some(open),
+        clip_name: None,
         keys: keys.clone(),
         base: c4_open(),
     };
@@ -3670,4 +3677,160 @@ fn clip_key_follows_the_manager_list() {
             .clone()
     };
     assert_eq!((name(2), name(3)), (Some("Z".into()), Some("A".into())));
+}
+
+/// C-P35 I1: a clip SetKeys names its sequence by block and name. Reverting the first AddSequence moves the second
+/// clip onto the first one's block; with equal keys the base check passes, so only the name tells them apart.
+#[test]
+fn clip_key_edit_after_a_revert_is_a_conflict_not_another_clip() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let (open, close) = (
+        add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())]),
+        add_seq(root, "Close", vec![track(&b, 11, open_keys())]),
+    );
+    let first = |ops: &[Op]| {
+        let o = apply(&b, ops).unwrap().bytes;
+        read_model(&o).unwrap().sequences[0].block
+    };
+    let seq = first(std::slice::from_ref(&open));
+    assert_eq!(
+        first(std::slice::from_ref(&close)),
+        seq,
+        "Close lands on Open's block"
+    );
+    let edit = Op::SetKeys {
+        at: track(&b, 11, open_keys()).at,
+        clip: Some(seq),
+        clip_name: Some("Open".into()),
+        keys: lin(&[(0.0, 0.5), (1.0, 1.0)]),
+        base: open_keys(),
+    };
+    let r = apply(&b, &[open, close.clone(), edit.clone()]).unwrap();
+    assert_eq!(r.outcomes[2], Outcome::Applied);
+    let r = apply(&b, &[close, edit]).unwrap();
+    assert!(
+        matches!(&r.outcomes[1], Outcome::Conflict(_)),
+        "{:?}",
+        r.outcomes
+    );
+}
+
+/// C-P35 M1: AddSequence refuses an unknown cycle type and an empty or reversed range.
+#[test]
+fn add_sequence_refuses_bad_cycle_and_range() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let with = |cycle: u32, start: f32, stop: f32| {
+        let Op::AddSequence {
+            at, name, tracks, ..
+        } = add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())])
+        else {
+            unreachable!()
+        };
+        Op::AddSequence {
+            at,
+            name,
+            cycle,
+            freq: 1.0,
+            start,
+            stop,
+            tracks,
+        }
+    };
+    assert_eq!(
+        refused(&b, with(3, 0.0, 1.0)),
+        "The cycle must be Loop, Reverse or Clamp."
+    );
+    for (start, stop) in [(0.0, 0.0), (1.0, 0.5)] {
+        assert_eq!(
+            refused(&b, with(2, start, stop)),
+            "Stop must be after start."
+        );
+    }
+}
+
+/// C-P35 M1: Convert of controllers whose ranges are all 0..0 refuses through AddSequence's check.
+#[test]
+fn convert_refuses_an_empty_range() {
+    let mut b = scenes::animated(Some(1), 2);
+    let offs = Header::parse(&b).unwrap().offsets().to_vec();
+    for c in [4, 5] {
+        b[offs[c] + 18..offs[c] + 22].copy_from_slice(&0f32.to_le_bytes()); // stop
+    }
+    assert_eq!(
+        refused(&b, conv(&conv_at(&b), CONVERT_NAME)),
+        "Stop must be after start."
+    );
+}
+
+/// C-P35 M2: a NiControllerManager on the root's chain that does not read refuses AddSequence; it never puts a
+/// second manager in front of it.
+#[test]
+fn add_sequence_refuses_an_unreadable_root_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let m = read_model(&b).unwrap();
+    let root = m.root.unwrap();
+    let mut doc = nif::write::NifDoc::open(&b).unwrap();
+    let at = m.root_net.as_ref().unwrap().controller_at() - doc.header().offsets()[root as usize];
+    let n = doc.append(b"NiControllerManager", vec![0; 8]); // shorter than NiTimeController
+    doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
+    let x = doc.bytes();
+    let add = add_seq(root_anchor(&x), "Open", vec![track(&x, 11, open_keys())]);
+    assert_eq!(
+        refused(&x, add),
+        "The root's controller chain cannot be read."
+    );
+}
+
+/// C-P35 M3: two managers that share one palette and one MTTC, each listing a clip that needs a different shape
+/// added: a split keeps both additions (the second no longer starts again from the source list).
+#[test]
+fn split_grows_a_shared_palette_and_mttc_once_for_both_managers() {
+    use nif::clips::{encode_manager, encode_mttc, encode_palette, encode_sequence};
+    let (x, open, close) = clip_on_shared_alpha(true);
+    let h = Header::parse(&x).unwrap();
+    let mb = root_ctrl(&x) as u32;
+    let man = read_manager(&h, &x, mb as usize).unwrap();
+    let (scene, _) = read_palette(&h, &x, man.palette as usize).unwrap();
+    let (base, _) = read_mttc(&h, &x, man.ctrl.next as usize).unwrap();
+    let mx = read_model(&x).unwrap();
+    let b_name = mx.shape(shape_named(&mx, "B")).unwrap().net.name;
+    let mut doc = nif::write::NifDoc::open(&x).unwrap();
+    let m2 = doc.len();
+    // the palette and MTTC name no shape; Open stays on the root manager, Close moves to a second one and names B
+    doc.set_block(man.palette as u32, encode_palette(scene, &[]).unwrap());
+    doc.set_block(man.ctrl.next as u32, encode_mttc(&base, &[]).unwrap());
+    let mut c = read_sequence_out(&h, &x, close as usize).unwrap();
+    c.manager = m2 as i32;
+    c.blocks[0].node = b_name;
+    doc.set_block(close, encode_sequence(&c).unwrap());
+    let first = nif::ctrl::Manager {
+        sequences: vec![open as i32],
+        ..man.clone()
+    };
+    doc.set_block(mb, encode_manager(&first).unwrap());
+    let second = nif::ctrl::Manager {
+        sequences: vec![close as i32],
+        ..man.clone()
+    };
+    doc.append(b"NiControllerManager", encode_manager(&second).unwrap());
+    let y = doc.bytes();
+    let my = read_model(&y).unwrap();
+    let (a, bb) = (shape_named(&my, "A") as i32, shape_named(&my, "B") as i32);
+    let r = apply(&y, &[split(&my, "A")]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = &r.bytes;
+    let h = Header::parse(o).unwrap();
+    let mut pal: Vec<i32> = read_palette(&h, o, man.palette as usize)
+        .unwrap()
+        .1
+        .iter()
+        .map(|p| p.1)
+        .collect();
+    let (_, mut targets) = read_mttc(&h, o, man.ctrl.next as usize).unwrap();
+    pal.sort();
+    targets.sort();
+    assert_eq!(pal, [a, bb], "palette");
+    assert_eq!(targets, [a, bb], "MTTC");
 }

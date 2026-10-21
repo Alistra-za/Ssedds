@@ -33,6 +33,8 @@ const PICK_CLIP: &str = "Pick a clip in Preview to rename or remove it.";
 const NO_NAME: &str = "Type a name for the clip.";
 const NO_TRACK: &str = "Tick at least one controller.";
 const BAD_RANGE: &str = "Stop must be after start.";
+/// C-P35 I2: TBC, XYZ and CONST keys are never authored, so New clip starts such a controller flat.
+const FLAT_ONLY: &str = "Its keys are not linear or quadratic: the clip starts flat.";
 const NOT_ROOT_CLIP: &str =
     "This clip is not on the root's manager: it cannot be renamed or removed here.";
 /// Remove and Rename find a clip by its name (C2-D1), so a null Name cannot be addressed.
@@ -385,6 +387,8 @@ struct NewClip {
     start: f32,
     stop: f32,
     picked: Vec<u32>,
+    /// (file, shape) the ticks belong to: another file or shape clears them (C-P35 M6).
+    scope: Option<(String, u32)>,
 }
 
 /// C5-D6: no name, Clamp (the census's most common cycle), 0 to 1 s, nothing ticked.
@@ -396,6 +400,7 @@ impl Default for NewClip {
             start: 0.0,
             stop: 1.0,
             picked: vec![],
+            scope: None,
         }
     }
 }
@@ -404,6 +409,11 @@ impl Default for NewClip {
 fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
     let id = egui::Id::new("meshes-edit-new-clip");
     let mut nc: NewClip = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let scope = Some((e.data_path.clone(), shape.block));
+    if nc.scope != scope {
+        nc.picked.clear();
+        nc.scope = scope;
+    }
     let root = anchor_role(&e.model, None, Role::Root).filter(|_| e.model.root_net.is_some());
     let no_root = root.is_none().then_some(NO_ROOT);
     let slsf2 = shape_slsf2(e, shape);
@@ -479,6 +489,8 @@ fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
                 continue;
             };
             let title = ctrl_title(c, slsf2);
+            let flat_only =
+                matches!(e.keys.get(&(c.block, None)), Some(Ok(k)) if has_keys(k) && !authored(k));
             ui.horizontal(|ui| {
                 let mut on = nc.picked.contains(&c.block);
                 let r = ui.add_enabled(shared.is_none(), egui::Checkbox::new(&mut on, &title));
@@ -500,6 +512,8 @@ fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
                 }
                 if let Some(why) = &shared {
                     r.on_disabled_hover_text(why);
+                } else if flat_only {
+                    r.on_hover_text(FLAT_ONLY);
                 }
                 ui.weak(short_class(&c.class));
             });
@@ -527,9 +541,10 @@ fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
         let tracks = tracks
             .into_iter()
             .map(|(prop, c, at)| {
-                // C5-D5: the controller's own keys; a managed or keyless one starts flat over the clip's range
+                // C5-D5: the controller's own keys; a managed, keyless or TBC/XYZ/CONST one (C-P35 I2) starts flat
+                // over the clip's range
                 let keys = match e.keys.get(&(c.block, None)) {
-                    Some(Ok(k)) if has_keys(k) => k.clone(),
+                    Some(Ok(k)) if has_keys(k) && authored(k) => k.clone(),
                     _ => flat_keys(e, prop, &c.class, c.var, [nc.start, nc.stop]),
                 };
                 ClipTrack { at, keys }
@@ -550,6 +565,11 @@ fn new_clip(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, shape: &ShapeModel) {
     }
     ui.data_mut(|d| d.insert_temp(id, nc));
     refused_line(ui, err, &inputs);
+}
+
+/// LINEAR or QUADRATIC: the key types New clip copies (D11).
+fn authored(k: &KeyData) -> bool {
+    matches!(curve::key_type(k), Some(1 | 2))
 }
 
 fn has_keys(k: &KeyData) -> bool {
@@ -1247,6 +1267,9 @@ fn push_keys(
     let op = Op::SetKeys {
         at: at.clone(),
         clip,
+        clip_name: clip
+            .and_then(|s| e.model.sequences.iter().find(|q| q.block == s))
+            .and_then(|s| s.name.clone()),
         keys,
         base: base.clone(),
     };

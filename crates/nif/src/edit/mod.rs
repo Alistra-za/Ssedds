@@ -99,10 +99,16 @@ pub enum Op {
         at: Anchor,
     },
     /// Replaces the keys of the anchored controller's own interpolator (`clip: None`), or of a sequence's
-    /// controlled-block interpolator bound to that controller (`clip: Some(sequence block)`, v2 B7).
+    /// controlled-block interpolator bound to that controller (`clip: Some(sequence block)`, v2 B7). `clip_name` is
+    /// that sequence's name when the edit was made: a different name at that block is a Conflict (C-P35 I1).
     SetKeys {
         at: Anchor, // Role::Ctrl
         clip: Option<u32>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        clip_name: Option<String>,
         keys: KeyData,
         base: KeyData,
     },

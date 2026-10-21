@@ -296,11 +296,30 @@ fn split_cbs(
         }
         doc.set_block(seq, enc(encode_sequence(&out))?);
     }
+    // C-P35 M3: `ensure_*` read the source block, so managers sharing a palette or an MTTC grow it once, together
+    let mut pals: Vec<(i32, Vec<Named>)> = vec![];
+    let mut mttcs: Vec<(i32, Vec<Named>)> = vec![];
     for (man, shapes) in plan.managers {
-        if man.palette >= 0 {
-            ensure_palette(doc, cur, man.palette, -1, &shapes)?;
+        for (list, block) in [(&mut pals, man.palette), (&mut mttcs, man.ctrl.next)] {
+            let k = match list.iter().position(|p| p.0 == block) {
+                Some(k) => k,
+                None => {
+                    list.push((block, vec![]));
+                    list.len() - 1
+                }
+            };
+            for n in &shapes {
+                if !list[k].1.iter().any(|x| x.0 == n.0) {
+                    list[k].1.push(n.clone());
+                }
+            }
         }
-        ensure_mttc(doc, cur, man.ctrl.next, &shapes)?;
+    }
+    for (pal, shapes) in pals.into_iter().filter(|p| p.0 >= 0) {
+        ensure_palette(doc, cur, pal, -1, &shapes)?;
+    }
+    for (next, shapes) in mttcs {
+        ensure_mttc(doc, cur, next, &shapes)?;
     }
     Ok(())
 }
@@ -525,11 +544,24 @@ pub(crate) fn set_keys(
     op: &Op,
 ) -> Result<Outcome, String> {
     let Op::SetKeys {
-        keys, base, clip, ..
+        keys,
+        base,
+        clip,
+        clip_name,
+        ..
     } = op
     else {
         return Err("not a key op".into());
     };
+    // C-P35 I1: a revert can shift another clip onto this block; its name tells them apart
+    if let (Some(seq), Some(want)) = (clip, clip_name) {
+        let s = m.sequences.iter().find(|s| s.block == *seq);
+        if s.is_some_and(|s| s.name.as_deref() != Some(want.as_str())) {
+            return Ok(Outcome::Conflict(format!(
+                "The clip {want} is no longer at its place in the file."
+            )));
+        }
+    }
     let t = key_target(doc.header(), cur, m, ctrl, *clip)?;
     let (i, floats, data, now) = (t.interp, t.floats, t.data, &t.keys);
     let kind: &[u8] = match (keys, now) {
@@ -738,18 +770,33 @@ fn enc<T>(r: Result<T, crate::NifError>) -> Result<T, String> {
 /// #INV_FLT#: the Value every vanilla blend interpolator holds (C1 census, 6722 of 6722).
 const INV_FLT: u32 = 0xFF7F_FFFF;
 
-/// The first NiControllerManager on the root's controller chain.
-fn root_manager(m: &NifModel) -> Option<u32> {
-    let mut c = m.root_net.as_ref()?.controller;
+/// The first NiControllerManager on the root's controller chain. Err when a NiControllerManager on the chain does
+/// not read, so AddSequence never puts a second manager in front of it (C-P35 M2).
+fn root_manager(h: &Header, m: &NifModel) -> Result<Option<u32>, String> {
+    let Some(net) = m.root_net.as_ref() else {
+        return Ok(None);
+    };
+    let mut c = net.controller;
     // bounded: a looping chain is cut by `ctrl::chain`, but stay safe on any `next`
     for _ in 0..=m.ctrls.len() {
-        let t = m.ctrls.get(&u32::try_from(c).ok()?)?;
+        let Ok(b) = u32::try_from(c) else {
+            return Ok(None);
+        };
+        let Some(t) = m.ctrls.get(&b) else {
+            // before h.kind, which does not check the range
+            let man = (b as usize) < h.sizes.len() && h.kind(b as usize) == b"NiControllerManager";
+            return if man {
+                Err("The root's controller chain cannot be read.".into())
+            } else {
+                Ok(None)
+            };
+        };
         if t.class == "NiControllerManager" {
-            return Some(t.block);
+            return Ok(Some(t.block));
         }
         c = t.next;
     }
-    None
+    Ok(None)
 }
 
 /// The raw Name of each listed sequence (None: no name). A listed sequence that does not read is an Err (C-P29).
@@ -775,7 +822,7 @@ fn find_clip(
     name: &str,
     nth: u32,
 ) -> Result<Option<(u32, Manager, usize)>, String> {
-    let Some(mb) = root_manager(m) else {
+    let Some(mb) = root_manager(h, m)? else {
         return Ok(None);
     };
     let man = enc(read_manager(h, cur, mb as usize))?;
@@ -796,7 +843,7 @@ fn clip_named(r: &[u8], name: &str) -> bool {
 /// list it, it has no name, or the manager or a listed sequence does not read. Parses the header: call it on a click.
 pub fn clip_key(b: &[u8], m: &NifModel, seq: u32) -> Option<(String, u32)> {
     let h = Header::parse(b).ok()?;
-    let man = read_manager(&h, b, root_manager(m)? as usize).ok()?;
+    let man = read_manager(&h, b, root_manager(&h, m).ok()?? as usize).ok()?;
     let names = clip_names(&h, b, &man.sequences).ok()?;
     let k = man.sequences.iter().position(|&s| s == seq as i32)?;
     let name = crate::text::lossy(names[k]?);
@@ -1173,7 +1220,7 @@ pub(crate) fn add_sequence(
         .root
         .zip(m.root_net.as_ref())
         .ok_or("The root is not a node: a clip needs a node root.")?;
-    let found = root_manager(m);
+    let found = root_manager(doc.header(), m)?;
     let old = match found {
         Some(mb) => Some(enc(read_manager(doc.header(), cur, mb as usize))?),
         None => None,
@@ -1181,6 +1228,12 @@ pub(crate) fn add_sequence(
     let name_b = clip_name_bytes(doc.header(), cur, old.as_ref(), name, None)?;
     if ![freq, start, stop].iter().all(|v| v.is_finite()) {
         return Err("Clip times must be finite numbers.".into());
+    }
+    if cycle > 2 {
+        return Err("The cycle must be Loop, Reverse or Clamp.".into());
+    }
+    if stop.partial_cmp(&start) != Some(std::cmp::Ordering::Greater) {
+        return Err("Stop must be after start.".into());
     }
     if tracks.is_empty() {
         return Err("A clip needs at least one track.".into());

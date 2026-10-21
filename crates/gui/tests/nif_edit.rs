@@ -92,6 +92,7 @@ fn key_bits_survive_the_document() {
     let op = Op::SetKeys {
         at: sample_op_anchor(),
         clip: None,
+        clip_name: None,
         keys: KeyData::Float(KeyGroup {
             key_type: Some(1),
             keys: vec![fkey(-0.0, f32::from_bits(0x7FC0_0001), None)],
@@ -422,6 +423,7 @@ fn every_op_variant_round_trips() {
         Op::SetKeys {
             at: ctrl.clone(),
             clip: Some(2),
+            clip_name: Some("Open".into()),
             keys: KeyData::Float(KeyGroup {
                 key_type: Some(1),
                 keys: vec![fkey(-0.0, 1e38, None), fkey(1.0, -0.0, None)],
@@ -440,6 +442,7 @@ fn every_op_variant_round_trips() {
         Op::SetKeys {
             at: ctrl.clone(),
             clip: None,
+            clip_name: None,
             keys: KeyData::Float(KeyGroup {
                 key_type: Some(3),
                 keys: vec![fkey(0.0, 2.0, Some([0.5, -0.25, 1.0]))],
@@ -1733,6 +1736,7 @@ fn authored_key_errors_block_export() {
         let op = Op::SetKeys {
             at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
             clip: None,
+            clip_name: None,
             keys: KeyData::Float(KeyGroup {
                 key_type: Some(key_type),
                 keys: times.iter().map(|&t| fkey(t, 1.0, tbc)).collect(),
@@ -3644,6 +3648,7 @@ fn set_float_keys(m: &mut MeshesModel, var: u32, keys: KeyData) {
         vec![Op::SetKeys {
             at,
             clip: None,
+            clip_name: None,
             keys,
             base,
         }],
@@ -4152,6 +4157,7 @@ fn key_table_colour_picker_is_disabled_for_tbc_xyz_and_const_keys() {
             vec![Op::SetKeys {
                 at,
                 clip: None,
+                clip_name: None,
                 keys: KeyData::Pos(keys),
                 base: KeyData::Pos(base),
             }],
@@ -4543,6 +4549,7 @@ fn add_key_on_a_string_bound_empty_clip_starts_at_its_interpolator_value() {
     let last = ops(h.state()).pop();
     let Some(Op::SetKeys {
         clip: Some(s),
+        clip_name,
         keys: KeyData::Float(g),
         ..
     }) = &last
@@ -4550,6 +4557,11 @@ fn add_key_on_a_string_bound_empty_clip_starts_at_its_interpolator_value() {
         panic!("{last:?}")
     };
     assert_eq!(*s, seq);
+    assert_eq!(
+        clip_name.as_deref(),
+        Some("Glow"),
+        "C-P35 I1: the edit names its clip"
+    );
     assert_eq!(g.keys.len(), 1);
     assert_eq!((g.keys[0].time, g.keys[0].value), (0.0, 5.0));
 }
@@ -5605,6 +5617,7 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
         Op::SetKeys {
             at: at.clone(),
             clip,
+            clip_name: None,
             keys: k,
             base: keys.clone(),
         }
@@ -5735,6 +5748,7 @@ fn add_key_never_duplicates_a_time() {
         let op = Op::SetKeys {
             at,
             clip: None,
+            clip_name: None,
             keys: KeyData::Float(g),
             base,
         };
@@ -5850,6 +5864,7 @@ fn a_drag_whose_stop_op_comes_and_goes_is_one_step() {
         Op::SetKeys {
             at: at.clone(),
             clip: None,
+            clip_name: None,
             keys: KeyData::Float(g),
             base: base.clone(),
         }
@@ -5904,6 +5919,7 @@ fn keyed_view_at(times: &[f32]) -> Harness<'static, MeshesModel> {
     let op = Op::SetKeys {
         at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
         clip: None,
+        clip_name: None,
         keys: KeyData::Float(KeyGroup {
             key_type: g.key_type,
             keys,
@@ -6212,6 +6228,107 @@ fn new_clip_drives_the_picked_controllers() {
     let e = h.state().edit.as_ref().unwrap();
     assert_eq!(e.outcomes.last(), Some(&nif::edit::Outcome::Applied));
     assert!(managed(h.state(), 5) && !managed(h.state(), 4));
+}
+
+/// C-P35 I2: New clip on a controller whose own keys are TBC starts flat, so the clip never blocks Export NIF.
+#[test]
+fn new_clip_on_tbc_keys_starts_flat_without_an_error() {
+    let b = scenes::animated(Some(1), 2);
+    let m = nif::model::read_model(&b).unwrap();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(20),
+        nth: 0,
+    };
+    let s = m
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some("S"))
+        .unwrap()
+        .block;
+    let at = nif::edit::anchor_role(&m, Some(s), role).unwrap();
+    let Ok(KeyData::Float(base)) = nif::edit::keys_of(&b, &m, 5, None) else {
+        panic!("float keys")
+    };
+    let mut tbc = base.clone();
+    tbc.key_type = Some(3);
+    for k in &mut tbc.keys {
+        k.tbc = Some([0.0; 3]);
+    }
+    let op = Op::SetKeys {
+        at,
+        clip: None,
+        clip_name: None,
+        keys: KeyData::Float(tbc),
+        base: KeyData::Float(base),
+    };
+    let r = nif::edit::apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![nif::edit::Outcome::Applied]);
+    let mut m = direct(r.bytes);
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    edit_number(&mut h, "New clip name", "Open");
+    let tick = "Add U offset to the new clip";
+    reveal(&mut h, tick);
+    let c = h.get_by_label(tick).rect().center();
+    h.hover_at(c);
+    h.run_steps(3);
+    h.get_by_label("Its keys are not linear or quadratic: the clip starts flat.");
+    click(&mut h, tick);
+    h.run_steps(3);
+    click(&mut h, "Add clip");
+    h.run_steps(3);
+    let got = ops(h.state());
+    let Some(Op::AddSequence { tracks, .. }) = got.last() else {
+        panic!("{got:?}")
+    };
+    assert!(
+        matches!(&tracks[0].keys, KeyData::Float(g) if g.key_type == Some(1)),
+        "{:?}",
+        tracks[0].keys
+    );
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(e.outcomes.last(), Some(&nif::edit::Outcome::Applied));
+    let errors: Vec<_> = e
+        .op_warnings
+        .iter()
+        .filter(|w| w.level == nif::edit::validate::Level::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+/// C-P35 M6: the New clip ticks belong to one file and shape; opening another file clears them.
+#[test]
+fn new_clip_ticks_clear_when_the_file_changes() {
+    let mut h = view(clip_scene());
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let tick = "Add U offset to the new clip";
+    click(&mut h, tick);
+    h.run_steps(3);
+    let on = |h: &Harness<'static, MeshesModel>| {
+        h.get_by_label(tick).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+    };
+    assert!(on(&h), "ticked");
+    let mut other = MeshesModel::empty();
+    other.edit = Some(
+        NifEdit::open(
+            scenes::animated(Some(1), 2),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+        )
+        .unwrap(),
+    );
+    select(&mut other, "S");
+    *h.state_mut() = other;
+    h.run_steps(3);
+    tab(&mut h, "Controllers");
+    reveal(&mut h, tick);
+    assert!(!on(&h), "another file starts with nothing ticked");
 }
 
 #[test]

@@ -530,6 +530,7 @@ fn key_errors_on(b: Vec<u8>, key_type: Option<u32>, keys: Vec<Key<f32>>) -> Vec<
     let ops = vec![Op::SetKeys {
         at: anchor_role(&m, Some(0), role).unwrap(),
         clip: None,
+        clip_name: None,
         keys: KeyData::Float(KeyGroup { key_type, keys }),
         base,
     }];
@@ -621,6 +622,7 @@ fn superseded_set_keys_are_not_checked() {
             role: Role::Shape,
         },
         clip,
+        clip_name: None,
         keys: KeyData::Float(KeyGroup {
             key_type: Some(1),
             keys: times.iter().map(|&t| k(t, None, false)).collect(),
