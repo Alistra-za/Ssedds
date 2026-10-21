@@ -173,6 +173,7 @@ excludes 0.
 | Adopt `max` as a new, off-by-default level | **Yes.** Done in this branch: `encoder.effort = "max"`, bc7e patch 0002, `Bc7Level::Max`. Default output is byte-identical (the level-identity test pins every shipped level; the goldens do not move). |
 | Adopt the endpoint search in the default (`veryslow`) | **Owner ruling needed.** It is the cheapest of the gains: +0.05 dB colour, +0.065° / +0.34 dB normals, +0.14 dB cutouts at 1.4× the time, 100 of 100 images. It changes every BC7 output, so the goldens, the version and an `if-changed` re-encode of every recorded output follow. Recorded here, not done. |
 | Partition breadth without refinement (the `slowest` level's approach) | Drop as a lever; keep `slowest` as it is for compatibility. |
+| Raise bc7e's alpha error weight for maps with data in alpha (`_n` specular, complex `_m` height) | **Measured 2026-10-21, see "Alpha weighting" below; owner decides.** Alpha PSNR rises about 3 dB per dB of RGB lost; a `_n` loses 0.17° of normal accuracy at weight 2; a height map's 0 and 255 regions are not reliably pinned. Recommended: drop for `_n`; for complex `_m` at most weight 2 on top of exact-opaque, as an opt-in, not a default. |
 | Per-channel weights for normals | Drop: lower angular error but worse Z, which Skyrim reads. |
 | More least-squares passes | Drop: converges in one. |
 
@@ -303,3 +304,130 @@ Per-image rows: `bc7e-tuning/skyrim-max.csv` (scores, fastest alternating time, 
 - On this sample `slowest` is worse than `veryslow` on diffuse (RGB −0.175 [±0.098], 7/60 wins) and slightly
   better on normals (+0.0072°). `max` beats `slowest` on every class: diffuse RGB +0.323 [±0.122] without
   images over 60 dB, normals +0.0266° [±0.0043], alpha PSNR +0.320 [±0.125] over the 30 alpha textures.
+
+## Alpha weighting (2026-10-21)
+
+Question: does raising bc7e's alpha error weight give cleaner alpha on BC7 maps that store data in alpha, and
+what does it cost in RGB? Measurement only: no engine, preset or encoder change, and no golden moves.
+Branch `research/bc7-alpha-weight`; rows in `bc7e-tuning/alpha-weighting.csv`.
+
+bc7e's error is `w_r·ΔR² + w_g·ΔG² + w_b·ΔB² + w_a·ΔA²` per texel with linear per-channel weights
+(`Bc7Tune.weights`, `perceptual = false`, Tessalith's setting); the weight travels with the channel through the
+mode 4/5 rotations and drives the partition and mode choices as well as the endpoint fit. Opaque blocks never
+see `w_a`. The baseline is `veryslow` with weights 1,1,1,1 and exact-opaque off.
+
+### Corpus
+
+Built by `bc7e-tuning/make_alpha_classes.py` from the same Poly Haven CC0 assets as the study corpus (every
+source PNG re-checked against `MANIFEST.tsv`; the new classes and their maps, URLs and hashes are in
+`MANIFEST-alpha.tsv`). This is a synthetic stand-in for Skyrim `_n` and `_m` files, not real game textures:
+
+| Class | n | Construction | Alpha statistics |
+|---|---|---|---|
+| `n_spec` | 35 | RGB = `nor_dx`, alpha = 255 − `Rough` (specular as 1 − roughness), 1k | smooth to mid-frequency greyscale, mean 99, 2% at 0 |
+| `n_spec_mip2` | 35 | the same at mip 2: two 2×2 box passes, RGB renormalised, 256 px | mean 100 |
+| `m_height` | 34 | R = `AO` (env-mask stand-in), G = 255 − `Rough` (gloss), B = `Metal` or 0, alpha = `Displacement` stretched so its 1st and 99th percentiles land on 0 and 255 and clipped | real 0 regions (1.0%) and 255 regions (1.1%) |
+| `cutout`, `smooth` | 15, 15 | the study's controls (Diffuse with a thresholded or raw Displacement/AO alpha) | |
+
+Poly Haven's displacement PNGs are 16-bit; the generator scales them to 8 bits itself (PIL's grey conversion
+clips them). One diffuse asset has a flat displacement map and was skipped.
+
+### Metrics
+
+Per image at mip 0, and at mip 2 for `n_spec`: RGB PSNR (for the normal classes the mean angular error of the
+stored vector instead), alpha PSNR, the largest absolute alpha error, the share of source alpha-0 and alpha-255
+texels that decode exactly, alpha SSIM (Gaussian window σ 1.5, radius 5, K1 0.01, K2 0.03, L 255, averaged over
+the region where the window fits), the share of texels whose alpha test at 128 flips (the cutout edge), and
+encode time (fastest of 2 runs, 4 cores, Linux objects built from the vendored source). Δ is the per-image
+difference against the baseline, mean with a 95% Student-t interval and the worst image; a change is called
+real when the interval excludes 0. Angles are shown as degrees of error, so a negative Δ is worse.
+
+### Results
+
+Baselines: `n_spec` angle 1.962°, RGB 38.28 dB, alpha 39.20 dB, alpha SSIM 0.916; `n_spec_mip2` 1.758°,
+40.10 dB, 40.59 dB, 0.927; `m_height` RGB 43.54 dB, alpha 41.75 dB, exact-0 share 86.4%, exact-255 share 70.9%,
+SSIM 0.984; `cutout` RGB 45.94 dB, alpha 55.66 dB, exact-0 91.9%, exact-255 75.9%, flips 0.009%; `smooth`
+premultiplied 46.84 dB, RGB 46.31 dB, alpha 51.46 dB.
+
+**`n_spec` (n = 35), Δ against the baseline, mean [±95% CI], worst image:**
+
+| Variant | angle (°) | RGB (dB) | alpha PSNR (dB) | alpha max err (codes) | alpha SSIM (×1000) | time |
+|---|---|---|---|---|---|---|
+| weight 2 | −0.171 [±0.047], worst −0.691 | −0.600 [±0.143], worst −1.93 | +1.82 [±0.25], worst +0.57 | −5.8 [±2.6] | +22.4 [±6.2] | 1.00× |
+| weight 4 | −0.394 [±0.106], worst −1.459 | −1.280 [±0.286], worst −3.89 | +3.69 [±0.44], worst +1.20 | −12.1 [±3.9] | +41.1 [±11.7] | 1.02× |
+| weight 8 | −0.658 [±0.175], worst −2.084 | −1.986 [±0.383], worst −4.86 | +5.49 [±0.56], worst +2.26 | −17.0 [±5.0] | +55.6 [±16.0] | 1.01× |
+| exact-opaque | 0 | 0 | 0 | 0 | 0 | 1.00× |
+
+At mip 2 the picture is the same: weight 2 costs 0.148° [±0.045] and 0.64 dB RGB for +1.81 dB alpha; weight 8
+costs 0.56° and 2.10 dB for +5.41 dB. Exact-opaque changes nothing here because no block has alpha 255
+throughout.
+
+**`m_height` (n = 34):**
+
+| Variant | RGB (dB) | alpha PSNR (dB) | alpha max err | exact-0 share (pt) | exact-255 share (pt) | alpha SSIM (×1000) | time |
+|---|---|---|---|---|---|---|---|
+| weight 2 | −0.906 [±0.081], worst −1.38 | +1.73 [±0.14], worst +0.75 | −4.6 [±1.3] | +3.2 [±1.1], worst −2.9 | +4.3 [±1.5], worst −5.8 | +5.3 [±1.6] | 1.00× |
+| weight 4 | −1.824 [±0.168], worst −2.77 | +3.37 [±0.31], worst +1.04 | −7.5 [±1.5] | +4.9 [±2.1], worst −6.5 | +7.8 [±2.5], worst −8.8 | +8.9 [±2.8] | 1.01× |
+| weight 8 | −2.684 [±0.248], worst −4.15 | +4.75 [±0.45], worst +1.14 | −9.2 [±1.5] | +5.4 [±2.9], worst −9.6 | +9.8 [±3.0], worst −11.9 | +11.1 [±3.5] | 1.01× |
+| exact-opaque | 0.000 | +0.002 | 0 | 0 | +9.0 [±5.0], worst 0 | 0 | 1.00× |
+| weight 2 + exact-opaque | −0.906 [±0.081] | +1.73 [±0.14] | −4.6 | +3.2 [±1.1], worst −2.9 | +13.4 [±5.5], worst −5.8 | +5.3 | 1.02× |
+| weight 4 + exact-opaque | −1.824 [±0.168] | +3.38 [±0.31] | −7.5 | +4.9 [±2.1], worst −6.5 | +16.8 [±5.9], worst −8.8 | +8.9 | 1.02× |
+
+**Controls:**
+
+| Class, variant | primary | RGB (dB) | alpha PSNR (dB) | exact-0 / exact-255 (pt) | alpha SSIM (×1000) | alpha-test flips at 128 (pt) |
+|---|---|---|---|---|---|---|
+| cutout, weight 2 | RGB −0.199 [±0.119], worst −0.71 | | +5.5 [±1.8] | +5.2 [±1.8] / +1.2 [±1.3] | +2.7 [±1.4] | −0.001 [±0.001] (no change) |
+| cutout, weight 4 | RGB −0.402 [±0.280], worst −1.44 | | +12.2 [±3.8] | +7.1 [±2.8] / +2.2 [±2.3] | +3.6 [±1.9] | −0.002 [±0.003] (no change) |
+| cutout, weight 8 | RGB −0.659 [±0.521], worst −2.50 | | +19.6 [±5.9] | +7.6 [±3.1] / +2.8 [±3.1] | +3.8 [±2.0] | −0.004 [±0.004] (no change) |
+| cutout, exact-opaque | RGB −0.004 [±0.005] | | +0.02 | 0 / +19.5 [±27.7] | +0.2 | 0 |
+| smooth, weight 2 | premul +0.015 [±0.030] | −0.178 [±0.148], worst −0.66 | +0.45 [±0.37] | | +1.9 [±1.7] | |
+| smooth, weight 4 | premul −0.064 [±0.069] | −0.431 [±0.361], worst −1.72 | +0.98 [±0.81] | | +3.4 [±3.0] | |
+| smooth, weight 8 | premul −0.249 [±0.211] | −0.745 [±0.626], worst −2.92 | +1.58 [±1.34] | | +4.7 [±4.1] | |
+| smooth, exact-opaque | premul +0.082 [±0.186] | −0.124 [±0.119], worst −0.83 | +29.2 [±11.9] | | +1.3 [±0.7] | |
+
+### What the numbers say
+
+- **The trade is about 3 dB of alpha for 1 dB of RGB, at every weight.** On `n_spec` weight 2 buys +1.8 dB
+  alpha for −0.60 dB RGB, weight 8 +5.5 dB for −2.0 dB; on `m_height` +1.7 dB for −0.9 dB and +4.7 dB for
+  −2.7 dB. Encode time does not change. Every variant trips the study's 0.1 dB RGB flag on every class.
+- **A `_n` pays in normal accuracy.** Weight 2 adds 0.17° of angular error (9% of the baseline, 2.6× the 0.065°
+  the endpoint search recovered in this study), weight 8 adds 0.66°; the worst image loses 0.7° to 2.1°. The
+  specular channel's SSIM rises from 0.916 to 0.938 (weight 2) and 0.971 (weight 8). The same holds at mip 2.
+- **A height map's 0 and 255 regions are not reliably pinned by weighting.** On average the exact-0 and
+  exact-255 shares rise by 3 to 10 points, but the worst images lose 3 to 12 points: the weight moves the fit,
+  it does not constrain it. The largest alpha error drops by 5 to 9 codes out of 24. Exact-opaque pins the
+  all-255 blocks (+9 points of exact-255 share) at no cost, which is what Tessalith already does for `_m`;
+  the weight adds to that (+13 points together at weight 2) and still leaves worst images below the baseline.
+- **The cutout edge does not get worse.** Alpha-test flips at 128 stay at 0.009% ± 0.001 for every weight.
+  Cutout alpha PSNR jumps (+5.5 to +19.6 dB) because its alpha is mostly 0 and 255 and the weight pushes those
+  texels onto exact codes; RGB falls 0.2 to 0.66 dB. Smooth alpha is near neutral on its premultiplied metric
+  at weight 2 and worse at weight 8.
+- **Exact-opaque on the controls** shows the known mode-6 behaviour: on `smooth`, whose Poly Haven alpha maps
+  saturate at 255 over large regions, pinning the all-255 blocks lifts alpha PSNR by 29 dB [±12] for −0.12 dB
+  RGB; on `cutout` it raises the exact-255 share by 19.5 points on average (the interval is wide: a few images
+  have no all-255 blocks).
+
+### Recommendation
+
+- **`_n` with specular in alpha: drop (keep weight 1).** The angular cost is large against anything else this
+  study has moved, and the specular gain is 1.8 dB on a channel that is already at 39 dB.
+- **Complex `_m` with height in alpha: not as a default.** If parallax quality is judged to matter more than
+  gloss, metal and the env mask together, weight 2 on top of exact-opaque is the only setting worth offering,
+  as an opt-in: −0.9 dB RGB for +1.7 dB alpha, +13 points of exactly decoded 255 texels, alpha SSIM 0.984 →
+  0.990, with the caveat that it still loses exact-extreme texels on some images. Weights 4 and 8 cost 1.8 and
+  2.7 dB of RGB and are not worth it.
+- The corpus is synthetic Poly Haven data: `n_spec`'s alpha is 1 − roughness, not a painted specular map, and
+  `m_height`'s RGB is AO / gloss / metal from a scan, not an artist's `_m`. The trade-off ratio is a property of
+  the encoder's error sum and should carry over; the absolute SSIM and exact-share numbers depend on the
+  content and should be re-measured on real Skyrim `_n` / `_m` files before a weight is adopted anywhere.
+
+### Not checked
+
+- No in-game or rendered comparison: PSNR, SSIM and exact shares only.
+- Mip 2 only for `n_spec`; `m_height` was measured at mip 0 only.
+- Weights between 1 and 2, and asymmetric RGB weights (for example lowering only the env-mask channel), were not
+  tried.
+- Only `veryslow`; the `max` level and NVTT were not measured with alpha weights.
+- Linux objects and timings; the Windows objects encode the same source with per-target differences (see the
+  Windows re-check), so the Δs should hold but were not re-run there.

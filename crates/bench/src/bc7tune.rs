@@ -315,6 +315,25 @@ pub const VARIANTS: &[Variant] = &[
         level: V,
         tune: T,
     },
+    // Tessalith's `_m` runs with exact-opaque on, so the weight is also measured on top of it.
+    Variant {
+        name: "alpha_w2_exact",
+        exact_opaque: true,
+        level: V,
+        tune: Bc7Tune {
+            weights: Some([1, 1, 1, 2]),
+            ..T
+        },
+    },
+    Variant {
+        name: "alpha_w4_exact",
+        exact_opaque: true,
+        level: V,
+        tune: Bc7Tune {
+            weights: Some([1, 1, 1, 4]),
+            ..T
+        },
+    },
 ];
 
 pub fn variant(name: &str) -> Option<Variant> {
