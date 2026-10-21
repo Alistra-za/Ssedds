@@ -106,6 +106,7 @@
         "ENC-NVTT-MISSING",
         "ENC-NVTT-VERSION",
         "ENC-NVTT-FAILED",
+        "ENC-WEIGHTS-IGNORED",
         "IN-DUPLICATE",
         "IN-DDS-SKIPPED",
         "IN-PACKING-INPUT",

@@ -74,6 +74,15 @@
       ],
       "type": "string"
     },
+    "Bc7Weights": {
+      "enum": [
+        "alpha2",
+        "alpha8",
+        "alpha16",
+        "rmaos"
+      ],
+      "type": "string"
+    },
     "BentMode": {
       "enum": [
         "ao_blend",
@@ -230,6 +239,17 @@
         },
         "bc45_search_radius": {
           "$ref": "#/$defs/SearchRadius"
+        },
+        "bc7_weights": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bc7Weights"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "BC7 linear error weights (bc7e only; ignored when `perceptual` is on). Not serialised when unset, so existing\nprofile hashes hold (DECISIONS Note CP)."
         },
         "effort": {
           "$ref": "#/$defs/Effort"
@@ -669,6 +689,17 @@
         },
         "bc45_search_radius": {
           "$ref": "#/$defs/SearchRadius"
+        },
+        "bc7_weights": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bc7Weights"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "BC7 linear error weights (bc7e only; ignored when `perceptual` is on). Not serialised when unset, so existing\nprofile hashes hold (DECISIONS Note CP)."
         },
         "effort": {
           "$ref": "#/$defs/Effort"
