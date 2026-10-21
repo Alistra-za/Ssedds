@@ -531,8 +531,6 @@ fn a_tick_is_refused_in_the_vanilla_mode() {
     assert_eq!(m.status_line, sdc_gui::model::also::NEEDS_CS);
 }
 
-/// Every `[export]` field set at once survives the write and the parse (prune, tables after values), as an unsaved
-/// edit; only the non-default fields are written.
 /// The entry names of a zip, from its central directory (as the engine's also_export test reads them).
 fn zip_names(path: &Path) -> Vec<String> {
     let z = std::fs::read(path).unwrap();
@@ -584,6 +582,8 @@ fn the_pbr_zip_holds_the_pgpatcher_json_from_the_first_run() {
     assert!(m.export.running.is_none());
 }
 
+/// Every `[export]` field set at once survives the write and the parse (prune, tables after values), as an unsaved
+/// edit; only the non-default fields are written.
 #[test]
 fn every_export_field_round_trips_through_sdc_toml() {
     let d = tempfile::tempdir().unwrap();
