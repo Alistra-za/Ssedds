@@ -1359,7 +1359,7 @@ fn drawing_a_colour_records_nothing_and_a_change_keeps_the_other_channels() {
     let mut m = direct(odd_colours());
     let a = select(&mut m, "A");
     let mut h = view(m);
-    h.run_steps(3);
+    h.run_steps(8);
     assert!(ops(h.state()).is_empty(), "{:?}", ops(h.state()));
     assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
     h.get_by_label("Specular colour B").focus();
