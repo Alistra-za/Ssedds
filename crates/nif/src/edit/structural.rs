@@ -1,7 +1,7 @@
 //! Structural ops: shader type re-emit and alpha add/remove/split (spec §5, plan A9). Removal is unlink: the
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
 use super::validate::{ENV_SCALE_PBR, LSCC, LSCF, LSCF_VARS, TESTREF};
-use super::{Anchor, Op, Outcome, Role};
+use super::{Anchor, ClipTrack, Op, Outcome, Owner, Role};
 use crate::clips::{
     encode_blend_interp, encode_manager, encode_mttc, encode_palette, encode_sequence,
     encode_text_keys, read_mttc, read_palette, read_sequence_out, CtrlBlockOut, SequenceOut,
@@ -740,6 +740,128 @@ pub(crate) fn clip_op(
         _ => return Err("not a clip op".into()),
     }
     Ok(Outcome::Applied)
+}
+
+/// The controllers ConvertChainToClips would take from property `prop` (chain order), or why it cannot run.
+/// Model only, no header parse: the Controllers tab calls it every frame. `shape` is the anchored shape's name.
+pub fn convert_check(m: &NifModel, prop: u32, shape: Option<&str>) -> Result<Vec<u32>, String> {
+    if m.root_net.is_none() {
+        return Err("The root is not a node: a clip needs a node root.".into());
+    }
+    let (p, alpha) = match (m.lighting.get(&prop), m.alphas.get(&prop)) {
+        (Some(l), _) => (&l.prop, false),
+        (_, Some(a)) => (&a.prop, true),
+        _ => return Err("not a readable property".into()),
+    };
+    if alpha && p.users.len() > 1 {
+        return Err(format!(
+            "This alpha is shared by {} shapes: split it before editing.",
+            p.users.len()
+        ));
+    }
+    let name = shape.ok_or("This shape has no name: a clip cannot find it.")?;
+    if m.shapes
+        .iter()
+        .filter(|s| s.name.as_deref() == Some(name))
+        .count()
+        > 1
+    {
+        return Err(format!(
+            "Two shapes are named {name}: a clip cannot tell them apart."
+        ));
+    }
+    // anim::free_tracks_in's filter (known, Active, not managed), plus a clip class and key data (C3-D1)
+    let free: Vec<&crate::ctrl::TimeCtrl> = p
+        .ctrls
+        .iter()
+        .filter_map(|c| m.ctrls.get(c))
+        .filter(|c| c.known && c.flags & 0x08 != 0 && !m.managed(c.block))
+        .filter(|c| [LSCF, LSCC, TESTREF].contains(&c.class.as_str()))
+        .filter(|c| {
+            c.interp
+                .and_then(|i| u32::try_from(i).ok())
+                .and_then(|i| m.interps.get(&i))
+                .is_some_and(|i| i.data >= 0)
+        })
+        .collect();
+    let Some(first) = free.first() else {
+        return Err("This property has no free controllers with keys.".into());
+    };
+    // a sequence has one cycle, frequency and range, and no phase or Play Backwards (F12)
+    let same = |c: &crate::ctrl::TimeCtrl| {
+        (c.flags >> 1) & 3 == (first.flags >> 1) & 3
+            && c.frequency.to_bits() == first.frequency.to_bits()
+            && c.phase == 0.0
+            && c.flags & 0x10 == 0
+    };
+    if !free.iter().all(|c| same(c)) {
+        return Err(
+            "These controllers run on different timings: they cannot share one clip.".into(),
+        );
+    }
+    Ok(free.iter().map(|c| c.block).collect())
+}
+
+/// ConvertChainToClips on property `prop` (resolved from `at`): gathers the tracks and runs C2's AddSequence path.
+pub(crate) fn convert_op(
+    doc: &mut NifDoc,
+    cur: &[u8],
+    m: &NifModel,
+    at: &Anchor,
+    prop: u32,
+    op: &Op,
+) -> Result<Outcome, String> {
+    let Op::ConvertChainToClips { name, .. } = op else {
+        return Err("not a convert op".into());
+    };
+    let ctrls = convert_check(m, prop, at.shape.as_deref())?;
+    let (owner, chain) = match m.lighting.get(&prop) {
+        Some(l) => (Owner::Shader, &l.prop.ctrls),
+        None => (Owner::Alpha, &m.alphas[&prop].prop.ctrls),
+    };
+    let mut tracks = Vec::with_capacity(ctrls.len());
+    for &c in &ctrls {
+        let (_, _, _, keys) = ctrl_keys(doc.header(), cur, m, c)?;
+        let t = &m.ctrls[&c];
+        // nth as the Controllers tab counts it: earlier controllers of the chain with this class and variable
+        let i = chain.iter().position(|&b| b == c).unwrap_or(0);
+        let nth = chain[..i]
+            .iter()
+            .filter_map(|b| m.ctrls.get(b))
+            .filter(|p| p.class == t.class && p.var == t.var)
+            .count() as u32;
+        let at = Anchor {
+            block: c,
+            kind: t.class.clone(),
+            shape: at.shape.clone(),
+            role: Role::Ctrl {
+                owner,
+                class: t.class.clone(),
+                var: t.var,
+                nth,
+            },
+        };
+        tracks.push(ClipTrack { at, keys });
+    }
+    let t = &m.ctrls[&ctrls[0]];
+    let (start, stop) = ctrls
+        .iter()
+        .map(|c| &m.ctrls[c])
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.start), b.max(c.stop))
+        });
+    let no_root = "The root is not a node: a clip needs a node root.";
+    let root_at = super::anchor_role(m, None, Role::Root).ok_or(no_root)?;
+    let add = Op::AddSequence {
+        at: root_at,
+        name: name.clone(),
+        cycle: ((t.flags >> 1) & 3) as u32,
+        freq: t.frequency,
+        start,
+        stop,
+        tracks,
+    };
+    clip_op(doc, cur, m, m.root.ok_or(no_root)?, &add)
 }
 
 /// G2: each known controller the removed clip `rs` drove and no sequence in `listed` drives (`rs` too, when another

@@ -246,6 +246,7 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::AddSequence { at, .. }
         | Op::RemoveSequence { at, .. }
         | Op::RenameSequence { at, .. }
+        | Op::ConvertChainToClips { at, .. }
         | Op::SetKeys { at, .. } => at,
     }
 }

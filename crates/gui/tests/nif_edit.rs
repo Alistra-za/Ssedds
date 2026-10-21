@@ -482,6 +482,10 @@ fn every_op_variant_round_trips() {
             stop: 2.0,
         },
         Op::RemoveController { at: ctrl.clone() },
+        Op::ConvertChainToClips {
+            at: shader.clone(),
+            name: "Caf\u{e9}".into(),
+        },
     ];
     for v in [
         E::Bsx(7),

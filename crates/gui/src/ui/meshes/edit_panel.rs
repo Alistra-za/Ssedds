@@ -245,6 +245,7 @@ fn op_label(op: &Op) -> String {
         Op::RenameSequence {
             at, name, new_name, ..
         } => (format!("Rename clip {name} to {new_name}"), at),
+        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
     };
     match &at.shape {
         Some(s) => format!("{s}: {what}"),
