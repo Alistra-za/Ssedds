@@ -1182,6 +1182,77 @@ fn the_spinner_needs_300_ms_of_continuous_work_and_resets_when_idle() {
     assert!(v.show_spinner(t1 + Duration::from_millis(300)));
 }
 
+/// v2 B3 perf gate (spec §6.3): a playback frame (new clock time + a cbuffer SetMaterial per shape + the Render) stays
+/// under 33.3 ms (30 fps) at 1600×900 and the Meshes default size, deferred (the default look) and forward.
+/// `cargo test -p sdc-gui --release --offline --test viewport3d -- --ignored --nocapture femalebody_playback`
+#[test]
+#[ignore = "needs the owner's MO2 instance, CS install and a D3D11 device"]
+fn femalebody_playback_holds_30_fps() {
+    let cache = tempfile::tempdir().unwrap();
+    let Some(mut v) = femalebody_viewport(cache.path()) else {
+        return;
+    };
+    let Some(v3::Content::Mesh(spec)) = v.content().cloned() else {
+        panic!("a mesh")
+    };
+    let nif = Arc::new(render3d::parse(&v3::read_file(&spec.nif).unwrap()));
+    assert!(!nif.shapes.is_empty());
+    v.set_content(
+        Some(v3::Content::Parsed {
+            key: 2,
+            nif: nif.clone(),
+            textures: Arc::new(spec.textures.clone()),
+        }),
+        false,
+    );
+    v.clock = Some(v3::Clock::new((0.0, 1.0)));
+    for deferred in [true, false] {
+        v.set_deferred(deferred);
+        for (w, h) in [(1600, 900), MESHES_DEFAULT] {
+            v.request_frame(w, h);
+            wait_idle(&mut v);
+            v.request_frame(w, h);
+            wait_idle(&mut v);
+            println!("adapter: {:?}", v.adapter);
+            let (mut wall, mut render, n) = (0.0, 0.0, 60);
+            for i in 0..n + 5 {
+                v.clock.as_mut().unwrap().scrub((i as f32 / 60.0).fract());
+                let t0 = Instant::now();
+                for s in &nif.shapes {
+                    let mut m = s.material.clone();
+                    m.params.uv_offset[0] = v.clock.unwrap().t;
+                    assert!(v.set_material(s.id, m));
+                }
+                v.request_frame(w, h);
+                wait_idle(&mut v);
+                let (f, tm) = fresh_sample(&v, (w, h))
+                    .unwrap_or_else(|e| panic!("frame {i} at {w}x{h}: {e}"));
+                let img = eframe::egui::ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize],
+                    &f.rgba,
+                );
+                std::hint::black_box(img);
+                if i >= 5 {
+                    wall += t0.elapsed().as_secs_f64() * 1000.0;
+                    render += tm.draw_ms + tm.gpu_ms + tm.readback_ms;
+                }
+            }
+            let (wall, render) = (wall / n as f64, render / n as f64);
+            println!(
+                "deferred {deferred}, {w}x{h}: playback {wall:.2} ms/frame wall, {render:.2} ms render (FrameTiming)"
+            );
+            assert_eq!(
+                v.last_edit.map(|e| e.0),
+                Some(render3d::EditKind::Cbuffer),
+                "cbuffer edits only"
+            );
+            assert!(
+                wall < 33.3,
+                "deferred {deferred}, {w}x{h}: {wall:.2} ms is under 30 fps"
+            );
+        }
+    }
+}
 // ---- M2: background and light controls ----
 
 /// A viewport with a loaded mesh and its first Render already sent and drained.
