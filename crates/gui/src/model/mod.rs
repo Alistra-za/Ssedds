@@ -11,6 +11,7 @@ pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;
 pub mod fields;
+pub mod from_normal;
 pub mod heatmap;
 pub mod history;
 pub mod input_name;
@@ -454,6 +455,8 @@ pub struct AppModel {
     /// File-exists answers asked while drawing (the scan DB, Show in Explorer), re-checked at most once a second
     /// (AG128).
     pub stats: std::cell::RefCell<shell::StatCache>,
+    /// Header sizes read for the Generate offers, by (path, size, mtime) (Note CO, spec-M5).
+    pub(crate) gen_dims: std::cell::RefCell<from_normal::GenDims>,
     /// A Save report write is on a worker (AG130); the app keeps frames coming until it lands.
     pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -667,6 +670,7 @@ impl AppModel {
             nav: Default::default(),
             shell: Vec::new(),
             stats: Default::default(),
+            gen_dims: Default::default(),
             report_saving: false,
             last_inputs: None,
             auto_replans: 0,

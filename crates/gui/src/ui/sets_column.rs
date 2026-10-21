@@ -1265,6 +1265,20 @@ fn menu(
         acts.push(Act::Select(v.key.clone()));
         ui.close();
     }
+    // Note CO (P19): the set's entry point, for a set whose shader shows no Height row.
+    let generate = model.gen_entry(&v.id, None);
+    let r = ui.add_enabled(
+        generate.disabled.is_none(),
+        egui::Button::new(&generate.label),
+    );
+    let r = match &generate.disabled {
+        Some(why) if editing.on => r.on_disabled_hover_text(why),
+        _ => tip(r),
+    };
+    if r.clicked() {
+        acts.push(Act::Bulk(generate.action));
+        ui.close();
+    }
     let remove = ui.menu_button("Remove member", |ui| {
         for mk in &v.members {
             let name = model.item(mk).map_or(mk.as_str(), |i| i.name.as_str());

@@ -5,6 +5,7 @@ use super::fields::{
     all_fields, field_view, filter_option_lock, hidden_reason, views_of, FieldView, EDGE_FIELD,
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
+use super::from_normal::{GenMap, GenOp};
 use super::sets::{
     engine_inputs, game_path_in, locked_items, member_game_path, slot_gives, slot_of, SlotCommand,
     SlotKind, SLOT_LOCKED,
@@ -921,6 +922,11 @@ pub enum MenuAction {
     ClearInputAlias,
     /// Task 5: select the source file of texture `key` in Explorer.
     ShowInExplorer(String),
+    /// Note CO: "Generate from normal map…" (open the dialog) or "Delete generated file…" on set `set` (an id).
+    Generated {
+        set: String,
+        op: GenOp,
+    },
 }
 
 /// The slot menu's PGPatcher lock entry, off and on (Note AN).
@@ -1295,6 +1301,10 @@ impl AppModel {
                 }),
             });
         }
+        // Note CO: after the PGPatcher lock, so the existing rows keep their places.
+        if kind == SlotKind::Height {
+            menu.push(self.gen_entry(&id, Some(GenMap::Height)));
+        }
         menu
     }
 
@@ -1325,6 +1335,8 @@ impl AppModel {
                 self.clear_input_alias(&keys);
             }
             MenuAction::ShowInExplorer(key) => return self.reveal_item(&key).err(),
+            // Task 6 opens the dialog here, Task 7 deletes.
+            MenuAction::Generated { .. } => {}
         }
         None
     }
