@@ -323,6 +323,18 @@ pub fn derive_sets(
             }),
             _ => None,
         };
+        // Final review I1: `_curves` and cavity are raw maps, planned as packing inputs (CM3).
+        let raw = |want: RawMap| {
+            plain.iter().find_map(|j| match j.status {
+                JobStatus::PackingInput { role } if role == want => Some(ChannelSource::Source {
+                    path: j.input.clone(),
+                    role,
+                    invert: false,
+                    channel: None,
+                }),
+                _ => None,
+            })
+        };
         out.push(DeriveSet {
             id,
             shader: pick.shader,
@@ -338,8 +350,8 @@ pub fn derive_sets(
             metal: channel(Slot::Metallic, 0.0),
             ao: channel(Slot::Ao, 1.0),
             height,
-            curves: None,
-            cavity: None,
+            curves: raw(RawMap::Curves),
+            cavity: raw(RawMap::Cavity),
             gray: GraySource::R,
         });
     }

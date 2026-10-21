@@ -1484,3 +1484,34 @@ fn a_failed_pbr_run_is_recorded_not_returned() {
     assert!(ev.iter().any(|e| matches!(&e.kind,
         EventKind::Warning(w) if w.code == engine::codes::Code::AlsoPhaseFailed && w.message.contains("Pbr"))));
 }
+
+/// Final review I1: a set's `_curves` member reaches the Vanilla diffuse (spec step 3, CM3), and is not reported as
+/// not converted.
+#[test]
+fn a_curves_member_changes_the_vanilla_diffuse() {
+    let diffuse = |curves: bool| {
+        let (_d, m, loc) = project(|m| {
+            steel(m);
+            if curves {
+                png(
+                    &m.join("textures/pbr/arm/steel_curves.png"),
+                    16,
+                    16,
+                    [240, 240, 240, 255],
+                );
+            }
+        });
+        let (s, ev) = also(request(&m, &loc), &spec(&loc, &[AlsoTarget::Vanilla]));
+        assert_eq!(s.unwrap().exit_code(), 0);
+        let not_converted = ev.iter().any(|e| match &e.kind {
+            EventKind::Warning(w) => w.code == engine::codes::Code::DeriveNotConverted,
+            EventKind::FileSkipped { code, .. } => {
+                *code == Some(engine::codes::Code::DeriveNotConverted)
+            }
+            _ => false,
+        });
+        assert!(!not_converted, "{curves}: {ev:#?}");
+        std::fs::read(loc.join("Mod Vanilla/textures/arm/steel.dds")).unwrap()
+    };
+    assert_ne!(diffuse(false), diffuse(true));
+}
