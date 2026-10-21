@@ -69,6 +69,8 @@ pub struct AlsoSummary {
     pub cancelled_after: Option<Phase>,
     /// The phase (Vanilla or CM) an engine error stopped, its message and its exit code (`EngineError::exit_code`).
     pub error: Option<(Phase, String, i32)>,
+    /// `zip` was on and a zip or the sums file was not written (`ALSO-ZIP-FAILED` or `ALSO-OWNED-UNREADABLE`).
+    pub zip_failed: bool,
 }
 
 /// `b`'s counts added to `a`, `cancelled` concatenated.
@@ -94,13 +96,13 @@ impl AlsoSummary {
 
     /// A later phase's engine error code (2 or 3) when there is one, as a plain export that errors exits with it;
     /// else `combined().exit_code()`, where an export a cancel stopped before its last phase is partial (1, which
-    /// beats 4 as in spec §8) even when the phases that ran were clean.
+    /// beats 4 as in spec §8) even when the phases that ran were clean. A zip not written is partial too.
     pub fn exit_code(&self) -> i32 {
         if let Some((_, _, code)) = &self.error {
             return *code;
         }
         match self.combined().exit_code() {
-            0 | 4 if self.cancelled_after.is_some() => 1,
+            0 | 4 if self.cancelled_after.is_some() || self.zip_failed => 1,
             c => c,
         }
     }
@@ -496,15 +498,16 @@ fn folder_files(folder: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 /// C8 (Note CM): each folder that ran becomes `<location>/<folder name>.zip` of this run's outputs (TA23), and
-/// `<location>/<project> SHA256SUMS.txt` gets a line per zip written, all through `OwnedFiles` (TA21).
+/// `<location>/<project> SHA256SUMS.txt` gets a line per zip written, all through `OwnedFiles` (TA21). Returns what
+/// was not written, one message each (review M1).
 fn write_zips(
     s: &mut AlsoSummary,
     owned: &mut OwnedFiles,
     keys: &[BTreeSet<String>; 3],
     location: &Path,
     project: &str,
-) {
-    let mut lines = String::new();
+) -> Vec<String> {
+    let (mut lines, mut failed) = (String::new(), vec![]);
     let ran: Vec<usize> = s.phases.iter().map(|(p, _)| *p as usize).collect();
     for i in ran {
         let folder = &s.folders[i];
@@ -517,7 +520,7 @@ fn write_zips(
         let files = match folder_files(folder) {
             Ok(f) => f,
             Err(e) => {
-                s.notes.push(format!("{} not written ({e})", zip.display()));
+                failed.push(format!("{} not written ({e})", zip.display()));
                 continue;
             }
         };
@@ -536,7 +539,7 @@ fn write_zips(
         let bytes = match crate::zip::write_zip(folder, &take) {
             Ok(b) => b,
             Err(e) => {
-                s.notes.push(format!("{} not written: {e}", zip.display()));
+                failed.push(format!("{} not written: {e}", zip.display()));
                 continue;
             }
         };
@@ -545,15 +548,21 @@ fn write_zips(
                 lines.push_str(&format!("{}  {name}.zip\n", sha256_hex(&bytes)));
                 s.zips.push(zip);
             }
-            Err(e) => s.notes.push(e.note(&zip)),
+            Err(e) => failed.push(e.note(&zip)),
         }
     }
+    let sums = location.join(format!("{project} SHA256SUMS.txt"));
     if !lines.is_empty() {
-        let sums = location.join(format!("{project} SHA256SUMS.txt"));
         if let Err(e) = owned.write(&sums, lines.as_bytes()) {
-            s.notes.push(e.note(&sums));
+            failed.push(e.note(&sums));
         }
+    } else if sums.exists() {
+        failed.push(format!(
+            "{} not written: no zip was written, so it still lists an earlier export's zips",
+            sums.display()
+        ));
     }
+    failed
 }
 
 /// Buffers a phase's planning events until the plan is filtered, then forwards the kept ones and everything after.
@@ -737,20 +746,61 @@ pub fn run_also(
     let keys: [Arc<Mutex<BTreeSet<String>>>; 3] = Default::default();
     let project = project_name(&base.inputs)?;
     let dry_run = base.dry_run;
-    let mut s = run_phases(engine, cache, base, spec, sink, cancel, &keys)?;
-    if spec.cfg.zip && !dry_run {
-        if cancel.is_cancelled() || s.error.is_some() {
-            s.notes.push(ZIP_SKIPPED.into());
-        } else if let Ok(mut owned) = OwnedFiles::load(&s.folders[0]) {
-            // An unreadable record already raised ALSO-OWNED-UNREADABLE: no zip, no sums file (CM43).
-            let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
-            write_zips(&mut s, &mut owned, &keys, &spec.location, &project);
-        }
+    let recorder = |i: usize, inner: Arc<dyn EventSink>| -> Arc<dyn EventSink> {
+        Arc::new(Recorder {
+            inner,
+            keys: keys[i].clone(),
+        })
+    };
+    // The PBR phase's reporter; the later phases' batch-level warnings and the zip step's go out under its batch.
+    let rep = Reporter::new(recorder(0, sink.clone()), new_batch_id());
+    let mut s = run_phases(engine, cache, base, spec, sink, cancel, &rep, &recorder)?;
+    if !spec.cfg.zip || dry_run {
+        return Ok(s);
     }
+    let warn = |code: Code, message: &str| {
+        rep.emit(
+            None,
+            None,
+            EventKind::Warning(Warning::new(code, message.to_string())),
+        )
+    };
+    if cancel.is_cancelled() || s.error.is_some() {
+        s.notes.push(ZIP_SKIPPED.into());
+        return Ok(s);
+    }
+    let failed = match OwnedFiles::load(&s.folders[0]) {
+        Ok(mut owned) => {
+            let keys = keys.map(|k| std::mem::take(&mut *crate::api::lock(&k)));
+            write_zips(&mut s, &mut owned, &keys, &spec.location, &project)
+        }
+        // CM43: a record found unreadable at the start was reported then; one that broke since is reported here.
+        Err(_) if s.notes.iter().any(|n| n.contains(OWNED_UNREADABLE)) => vec![],
+        Err(e) => {
+            let m = format!(
+                "{} cannot be read ({e}): {OWNED_UNREADABLE}",
+                s.folders[0].join("_sdc").join("also.json").display()
+            );
+            warn(Code::AlsoOwnedUnreadable, &m);
+            s.notes.push(m);
+            vec![]
+        }
+    };
+    for m in &failed {
+        warn(Code::AlsoZipFailed, m);
+    }
+    // Review M1: a zip or the sums file not written (or no zip at all) is a partial export.
+    s.zip_failed = !failed.is_empty() || s.zips.len() < s.phases.len();
+    s.notes.extend(failed);
     Ok(s)
 }
 
-/// `run_also` without the zips; `keys` collects each phase's zip list (P4).
+/// CM43: the tail of the note for an unreadable `also.json`.
+const OWNED_UNREADABLE: &str =
+    "it is left as it is, and no report, zip or sums file is written until it is fixed or removed";
+
+/// `run_also` without the zips; `rep` is the PBR phase's reporter, `recorder` wraps each later phase's sink (P4).
+#[allow(clippy::too_many_arguments)]
 fn run_phases(
     engine: &Engine,
     cache: &AnalysisCache,
@@ -758,14 +808,9 @@ fn run_phases(
     spec: &AlsoSpec,
     sink: Arc<dyn EventSink>,
     cancel: &CancelToken,
-    keys: &[Arc<Mutex<BTreeSet<String>>>; 3],
+    rep: &Reporter,
+    recorder: &dyn Fn(usize, Arc<dyn EventSink>) -> Arc<dyn EventSink>,
 ) -> Result<AlsoSummary, EngineError> {
-    let recorder = |i: usize, inner: Arc<dyn EventSink>| -> Arc<dyn EventSink> {
-        Arc::new(Recorder {
-            inner,
-            keys: keys[i].clone(),
-        })
-    };
     let cfg = &spec.cfg;
     let project = project_name(&base.inputs)?;
     let folders = folders(spec, &project);
@@ -813,11 +858,11 @@ fn run_phases(
         notes: vec![],
         cancelled_after: None,
         error: None,
+        zip_failed: false,
     };
 
     // PBR phase: today's export into folder 0, unprefixed, so the GUI's PGPatcher-JSON rows match.
-    let rep = Reporter::new(recorder(0, sink.clone()), new_batch_id());
-    let pbr_plan = engine.plan_cached(pbr_req.clone(), &rep, cancel, cache)?;
+    let pbr_plan = engine.plan_cached(pbr_req.clone(), rep, cancel, cache)?;
     if pbr_plan.target != Target::Cs {
         return Err(EngineError::Usage(
             "Also export needs the cs mode: the PBR folder is the cs export".into(),
@@ -832,7 +877,7 @@ fn run_phases(
         .as_ref()
         .and_then(|p| p.tool())
         .map(|t| t.version.clone());
-    let pbr_sum = engine.run(pbr_plan, &rep, cancel)?;
+    let pbr_sum = engine.run(pbr_plan, rep, cancel)?;
     s.phases.push((Phase::Pbr, pbr_sum));
     // Batch-level events of the later phases go out unprefixed, under the PBR phase's batch.
     let warn = |code: Code, message: String| {
@@ -848,8 +893,7 @@ fn run_phases(
         });
         if let Err(e) = made {
             let m = format!(
-                "{} cannot be read or written ({e}): it is left as it is, and no report, zip or sums file is written \
-                 until it is fixed or removed; the files it lists are not touched",
+                "{} cannot be read or written ({e}): {OWNED_UNREADABLE}; the files it lists are not touched",
                 rec.display()
             );
             warn(Code::AlsoOwnedUnreadable, m.clone());

@@ -160,7 +160,8 @@
         "DERIVE-NOT-CONVERTED",
         "DERIVE-NIF-SUGGEST",
         "ALSO-PHASE-FAILED",
-        "ALSO-OWNED-UNREADABLE"
+        "ALSO-OWNED-UNREADABLE",
+        "ALSO-ZIP-FAILED"
       ],
       "type": "string"
     },

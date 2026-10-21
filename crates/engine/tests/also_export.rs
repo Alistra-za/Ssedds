@@ -917,8 +917,13 @@ fn a_zip_tessalith_did_not_write_is_kept() {
         cup(m);
     });
     std::fs::write(loc.join("Mod PBR.zip"), b"mine").unwrap();
-    let s = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    let (s, ev) = also(request(&m, &loc), &zip_spec(&loc, BOTH));
+    let s = s.unwrap();
     assert_eq!(std::fs::read(loc.join("Mod PBR.zip")).unwrap(), b"mine");
+    // Review M1: a zip not written is a partial export, with a warning.
+    assert_eq!(s.exit_code(), 1, "{s:#?}");
+    assert!(ev.iter().any(|e| matches!(&e.kind,
+        EventKind::Warning(w) if w.code == engine::codes::Code::AlsoZipFailed && w.message.contains("Mod PBR.zip"))));
     assert!(
         s.notes.iter().any(|n| n.contains("Mod PBR.zip")),
         "{:?}",
@@ -1012,4 +1017,114 @@ fn a_corrupt_owned_record_writes_no_zip_or_sums() {
     assert!(s.zips.is_empty());
     assert!(!loc.join("Mod SHA256SUMS.txt").exists());
     assert_eq!(std::fs::read(&rec).unwrap(), b"{ not json");
+    assert_eq!(s.exit_code(), 1, "no zip was written");
+}
+
+/// Review M2: a dry run writes no zip and says nothing about zips.
+#[test]
+fn a_dry_run_writes_no_zip() {
+    let (_d, m, loc) = project(cup);
+    let mut req = request(&m, &loc);
+    req.dry_run = true;
+    let s = also(req, &zip_spec(&loc, &[AlsoTarget::Vanilla]))
+        .0
+        .unwrap();
+    assert!(!loc.exists() || zips_in(&loc).is_empty());
+    assert!(s.zips.is_empty());
+    assert!(!loc.join("Mod SHA256SUMS.txt").exists());
+    assert!(s.notes.iter().all(|n| !n.contains("zip")), "{:?}", s.notes);
+}
+
+/// Review M2: a phase that returned `Err` stops the zips.
+#[test]
+fn a_phase_error_writes_no_zip() {
+    let (_d, m, loc) = project(cup);
+    std::fs::write(loc.join("Mod Vanilla"), b"a file").unwrap();
+    let s = also(request(&m, &loc), &zip_spec(&loc, BOTH)).0.unwrap();
+    assert!(s.error.is_some());
+    assert!(zips_in(&loc).is_empty());
+    assert!(!loc.join("Mod SHA256SUMS.txt").exists());
+    assert!(
+        s.notes
+            .contains(&"zip skipped: the export did not finish".to_string()),
+        "{:?}",
+        s.notes
+    );
+}
+
+/// Breaks `also.json` when the Vanilla phase ends (the second `batch_done`), after the start check read it.
+struct BreakRecordOnVanillaDone(std::path::PathBuf, std::sync::atomic::AtomicU32);
+
+impl EventSink for BreakRecordOnVanillaDone {
+    fn emit(&self, ev: &EngineEvent) {
+        if matches!(ev.kind, EventKind::BatchDone { .. })
+            && self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        {
+            std::fs::write(&self.0, b"broken").unwrap();
+        }
+    }
+}
+
+/// Review M5: an owned record that cannot be read at the zip step, and was not reported yet, is warned about.
+#[test]
+fn an_owned_record_unreadable_at_the_zip_step_is_reported() {
+    let (_d, m, loc) = project(cup);
+    let rec = loc.join("Mod PBR/_sdc/also.json");
+    let sink = Arc::new(VecSink::default());
+    let tee: Arc<dyn EventSink> = Arc::new(Tee(
+        sink.clone(),
+        Arc::new(BreakRecordOnVanillaDone(rec.clone(), Default::default())),
+    ));
+    let s = also_with(
+        request(&m, &loc),
+        &zip_spec(&loc, &[AlsoTarget::Vanilla]),
+        tee,
+        &CancelToken::default(),
+    )
+    .unwrap();
+    assert!(zips_in(&loc).is_empty());
+    assert_eq!(std::fs::read(&rec).unwrap(), b"broken");
+    let warned = sink
+        .take()
+        .iter()
+        .filter(|e| {
+            matches!(&e.kind,
+            EventKind::Warning(w) if w.code == engine::codes::Code::AlsoOwnedUnreadable)
+        })
+        .count();
+    assert_eq!(warned, 1);
+    assert!(
+        s.notes.iter().any(|n| n.contains("also.json")),
+        "{:?}",
+        s.notes
+    );
+    assert_eq!(s.exit_code(), 1);
+}
+
+struct Tee(Arc<VecSink>, Arc<dyn EventSink>);
+
+impl EventSink for Tee {
+    fn emit(&self, ev: &EngineEvent) {
+        self.0.emit(ev);
+        self.1.emit(ev);
+    }
+}
+
+/// Review M5: a corrupt record found at the start is warned about once, not again at the zip step.
+#[test]
+fn a_corrupt_owned_record_is_warned_once_with_zip_on() {
+    let (_d, m, loc) = project(cup);
+    let rec = loc.join("Mod PBR/_sdc/also.json");
+    std::fs::create_dir_all(rec.parent().unwrap()).unwrap();
+    std::fs::write(&rec, b"{ not json").unwrap();
+    let (s, ev) = also(request(&m, &loc), &zip_spec(&loc, &[AlsoTarget::Vanilla]));
+    s.unwrap();
+    let warned = ev
+        .iter()
+        .filter(|e| {
+            matches!(&e.kind,
+            EventKind::Warning(w) if w.code == engine::codes::Code::AlsoOwnedUnreadable)
+        })
+        .count();
+    assert_eq!(warned, 1);
 }

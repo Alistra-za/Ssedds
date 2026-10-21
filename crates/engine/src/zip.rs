@@ -14,7 +14,7 @@ pub enum ZipError {
 /// The archive of exactly `files` (paths under `folder`, TA23), entries named `<folder name>/<rel>` with `/`.
 // shortcut: the whole zip is buffered in RAM, so TA17's 4 GiB ceiling is also a RAM ceiling; upgrade to a temp file
 // plus rename (same flush) if a real mod gets near it.
-// shortcut: no ZIP64 (TA17); an archive over 4 GiB - 1 or 65,535 entries is `TooLarge`. Upgrade if a real mod hits it.
+// shortcut: no ZIP64 (TA17): 65,535 entries, or 4 GiB - 1 bytes, or more is `TooLarge`; upgrade if a real mod hits it.
 pub fn write_zip(folder: &Path, files: &[PathBuf]) -> Result<Vec<u8>, ZipError> {
     let top = folder
         .file_name()
@@ -33,7 +33,8 @@ pub fn write_zip(folder: &Path, files: &[PathBuf]) -> Result<Vec<u8>, ZipError> 
         })
         .collect();
     named.sort();
-    if named.len() > 0xFFFF {
+    // 0xFFFF entries would be the ZIP64 sentinel in the EOCD (review M4).
+    if named.len() >= 0xFFFF {
         return Err(ZipError::TooLarge);
     }
     let fit = |n: usize| u32::try_from(n).ok().filter(|&n| n != u32::MAX);
@@ -124,6 +125,11 @@ mod tests {
         for _ in 0..n {
             assert_eq!(u32le(z, at), 0x0201_4b50);
             assert_eq!(u16le(z, at + 10), 8, "method");
+            // UTF-8 names; DOS time 00:00 and date 1980-01-01, in the central and the local header.
+            assert_eq!(
+                [u16le(z, at + 8), u16le(z, at + 12), u16le(z, at + 14)],
+                [0x0800, 0, 0x0021]
+            );
             let crc = u32le(z, at + 16);
             let (csize, usize_) = (u32le(z, at + 20) as usize, u32le(z, at + 24) as usize);
             let (nlen, xlen, clen) = (u16le(z, at + 28), u16le(z, at + 30), u16le(z, at + 32));
@@ -132,6 +138,14 @@ mod tests {
             at += 46 + nlen + xlen + clen;
 
             assert_eq!(u32le(z, local), 0x0403_4b50);
+            assert_eq!(
+                [
+                    u16le(z, local + 6),
+                    u16le(z, local + 10),
+                    u16le(z, local + 12)
+                ],
+                [0x0800, 0, 0x0021]
+            );
             assert_eq!(u32le(z, local + 14), crc);
             assert_eq!(u32le(z, local + 18) as usize, csize);
             assert_eq!(u32le(z, local + 22) as usize, usize_);
@@ -209,6 +223,35 @@ mod tests {
         let z = write_zip(&f, &[f.join("x.dds"), f.join("sub").join("y.dds")]).unwrap();
         let names: Vec<String> = read_back(&z).into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, ["Mod CM/sub/y.dds", "Mod CM/x.dds"]);
+    }
+
+    #[test]
+    fn a_non_ascii_name_is_written_as_utf8() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("Mod Ünï");
+        put(&f.join("textures/日本.dds"), b"x");
+        let z = write_zip(&f, &[f.join("textures/日本.dds")]).unwrap();
+        assert_eq!(read_back(&z)[0].0, "Mod Ünï/textures/日本.dds");
+    }
+
+    /// TA17 (review M4): 65,535 entries would put the ZIP64 sentinel 0xFFFF in the EOCD, so the limit is 65,534.
+    /// The count is checked before any file is read, so missing files show which side of the limit a list is on.
+    #[test]
+    fn the_entry_limit_is_65534() {
+        let d = tempfile::tempdir().unwrap();
+        let list = |n: usize| -> Vec<PathBuf> {
+            (0..n)
+                .map(|i| d.path().join(format!("missing{i}")))
+                .collect()
+        };
+        assert!(matches!(
+            write_zip(d.path(), &list(0xFFFF)),
+            Err(ZipError::TooLarge)
+        ));
+        assert!(matches!(
+            write_zip(d.path(), &list(0xFFFE)),
+            Err(ZipError::Io(_))
+        ));
     }
 
     #[test]
