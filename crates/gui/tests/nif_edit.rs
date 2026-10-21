@@ -5483,3 +5483,68 @@ fn a_drag_whose_stop_op_comes_and_goes_is_one_step() {
     assert!(e.doc.ops().is_empty());
     assert!(!e.history.can_undo());
 }
+
+/// keyed_view with ctrl 2's keys replaced by LINEAR keys at `times` (value 1), as one pushed SetKeys.
+fn keyed_view_at(times: &[f32]) -> Harness<'static, MeshesModel> {
+    let mut h = keyed_view();
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    let g = float_keys(m, 2);
+    let base = KeyData::Float(g.clone());
+    let keys = times
+        .iter()
+        .map(|&time| Key {
+            time,
+            value: 1.0,
+            forward: None,
+            backward: None,
+            tbc: None,
+        })
+        .collect();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let op = Op::SetKeys {
+        at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup {
+            key_type: g.key_type,
+            keys,
+        }),
+        base,
+    };
+    m.edit_push(vec![op], None);
+    h.run_steps(2);
+    h
+}
+
+/// B-P45: at 2^21 a 0.1 step rounds back to the last time; Add key takes the next f32 above it instead.
+#[test]
+fn add_key_past_a_large_time_still_increases() {
+    let mut h = keyed_view_at(&[2097152.0]);
+    click_add_key(&mut h);
+    click_add_key(&mut h);
+    let t: Vec<f32> = float_keys(h.state(), 2)
+        .keys
+        .iter()
+        .map(|k| k.time)
+        .collect();
+    assert_eq!(t.len(), 3, "{t:?}");
+    assert!(t.windows(2).all(|w| w[1] > w[0]), "{t:?}");
+    assert!(t.iter().all(|x| x.is_finite()), "{t:?}");
+}
+
+/// B-P45: no finite time is above f32::MAX: Add key is off and says why on hover.
+#[test]
+fn add_key_is_off_when_no_later_time_exists() {
+    let mut h = keyed_view_at(&[0.0, f32::MAX]);
+    let b = h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple");
+    assert!(b.accesskit_node().is_disabled());
+    b.hover();
+    h.run();
+    h.get_by_label("No later time is possible for a new key.");
+    assert_eq!(float_keys(h.state(), 2).keys.len(), 2);
+}

@@ -700,7 +700,8 @@ fn without_key(keys: &KeyData, k: usize) -> KeyData {
 }
 
 /// Add key (B-P43, replaces D10): after the last key, at its time plus the average key spacing (0.1 for one key or
-/// a spacing of 0), with the last key's value; QUADRATIC tangents 0. It never lands on a key's time. An empty group
+/// a spacing of 0), with the last key's value; QUADRATIC tangents 0. The time is finite and strictly later (B-P45:
+/// the next f32 up when the step rounds away; off when no finite time is later). An empty group
 /// starts LINEAR at `span`'s start with the value of the interpolator it edits (the controller's, or the clip's
 /// bound CB's). Past a controller's stop, `push_keys` moves the stop in the same step (B-P44).
 #[allow(clippy::too_many_arguments)]
@@ -716,7 +717,22 @@ fn add_key(
     editable: bool,
     span: (f32, f32),
 ) {
-    let r = ui.add_enabled(editable, egui::Button::new("Add key"));
+    let n = curve::len(keys);
+    let t = match n {
+        0 => Some(span.0),
+        _ => {
+            let last = curve::time(keys, n - 1);
+            let avg = (last - curve::time(keys, 0)) / (n - 1).max(1) as f32;
+            let step = if avg > 0.0 { avg } else { 0.1 };
+            // B-P45: finite and strictly later; a step lost to rounding gives the next f32 up.
+            let t = last + step;
+            match t.is_finite() && t > last {
+                true => Some(t),
+                false => (last.is_finite() && last < f32::MAX).then(|| last.next_up()),
+            }
+        }
+    };
+    let r = ui.add_enabled(editable && t.is_some(), egui::Button::new("Add key"));
     set_name(
         &r,
         egui::WidgetType::Button,
@@ -724,20 +740,19 @@ fn add_key(
         None,
         None,
     );
-    if !r.clicked() {
-        return;
+    let clicked = r.clicked();
+    if editable && t.is_none() {
+        r.on_disabled_hover_text("No later time is possible for a new key.");
     }
-    let n = curve::len(keys);
-    let (t, v) = if n > 0 {
-        let last = curve::time(keys, n - 1);
-        let avg = (last - curve::time(keys, 0)) / (n - 1).max(1) as f32;
-        let step = if avg > 0.0 { avg } else { 0.1 };
+    let Some(t) = t.filter(|_| clicked) else {
+        return;
+    };
+    let v = if n > 0 {
         let nch = curve::channels(keys);
-        let v = std::array::from_fn(|ch| match ch < nch {
+        std::array::from_fn(|ch| match ch < nch {
             true => curve::get(keys, n - 1, ch, Part::Value),
             false => 0.0,
-        });
-        (last + step, v)
+        })
     } else {
         // A clip's interpolator through the shared binding (by ref or by strings); parsed on the click only.
         let interp = match clip {
@@ -750,7 +765,7 @@ fn add_key(
             .map(|i| i.value.clone())
             .unwrap_or_default();
         let at = |k: usize| interp.get(k).copied().unwrap_or(0.0);
-        (span.0, [at(0), at(1), at(2)])
+        [at(0), at(1), at(2)]
     };
     fn append<T: Clone>(g: &KeyGroup<T>, t: f32, value: T, zero: T) -> KeyGroup<T> {
         let quad = g.key_type == Some(2);
