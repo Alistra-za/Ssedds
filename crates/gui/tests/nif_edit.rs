@@ -3086,6 +3086,11 @@ fn drag_up(h: &mut Harness<'static, MeshesModel>, label: &str, dy: f32) {
     h.get_by_label(label).scroll_to_me();
     h.run_steps(2);
     let c = h.get_by_label(label).rect().center();
+    drag_from(h, c, dy);
+}
+
+/// Press at `c`, move `dy` px up in three steps, release.
+fn drag_from(h: &mut Harness<'static, MeshesModel>, c: egui::Pos2, dy: f32) {
     h.hover_at(c);
     h.run_steps(1);
     h.drag_at(c);
@@ -3403,4 +3408,227 @@ fn a_removed_controller_restores_the_file_material() {
         sent.len()
     );
     assert_eq!(m.v3.clock, None, "nothing animated: no clock");
+}
+
+// ---- v2 B6 fix round 1 (B-P35) ----
+
+/// Replaces the keys of shape "S"'s float controller `var` (one undo step), before any drawing.
+fn set_float_keys(m: &mut MeshesModel, var: u32, keys: KeyData) {
+    let e = m.edit.as_ref().unwrap();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(var),
+        nth: 0,
+    };
+    let at = nif::edit::anchor_role(&e.model, Some(shape_named(e, "S")), role).unwrap();
+    let base = e.keys[&(at.block, None)].clone().unwrap();
+    m.edit_push(
+        vec![Op::SetKeys {
+            at,
+            clip: None,
+            keys,
+            base,
+        }],
+        None,
+    );
+}
+
+fn lin2(a: f32, b: f32) -> KeyData {
+    KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![fkey(0.0, a, None), fkey(1.0, b, None)],
+    })
+}
+
+/// B-P35 I1: the clip-shared guard is the alpha's (D9); a shared shader with a managed controller still adds.
+#[test]
+fn a_shared_shader_with_a_managed_controller_keeps_add_enabled() {
+    // A and B share BSLSP 3; the added U offset controller has bit 0x20 (managed).
+    let b = with_uv_ctrl_timed(
+        &scenes::shared_alpha_with_testref_chain(),
+        0x68,
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    let mut m = direct(b);
+    select(&mut m, "A");
+    let e = m.edit.as_ref().unwrap();
+    let lsp = e.model.lighting.values().next().unwrap();
+    assert!(lsp.prop.users.len() > 1 && lsp.prop.ctrls.iter().any(|&c| e.model.managed(c)));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let add = h.get_by_label("Add controller to shader property");
+    assert!(!add.accesskit_node().is_disabled());
+}
+
+/// B-P35 I2: a tangent handle that projects outside the graph cannot start a drag there.
+#[test]
+fn a_drag_where_a_tangent_handle_projects_outside_the_graph_changes_no_keys() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    let KeyData::Float(mut q) = m.edit.as_ref().unwrap().keys[&(3, None)].clone().unwrap() else {
+        panic!()
+    };
+    q.keys[0].backward = Some(100.0); // ctrl 3: QUADRATIC (0,0) -> (1,1)
+    set_float_keys(&mut m, 20, KeyData::Float(q));
+    let mut h = view(m);
+    // Tall enough that nothing scrolls: an animated scroll_to_me would move the content under the drag.
+    h.set_size(egui::vec2(1400.0, 1400.0));
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.run_steps(2);
+    let graph = h.get_by_label("U offset curve").rect();
+    let p = h
+        .get_by_label("U offset key 1 backward handle")
+        .rect()
+        .center();
+    assert!(
+        p.y < graph.top() && p.y > 150.0,
+        "the handle projects above the graph, on screen: {p:?} {graph:?}"
+    );
+    let before = (
+        ops(h.state()),
+        h.state().edit.as_ref().unwrap().keys.clone(),
+    );
+    drag_from(&mut h, p, 20.0);
+    let e = h.state().edit.as_ref().unwrap();
+    assert_eq!(ops(h.state()), before.0, "no op");
+    assert_eq!(e.keys, before.1, "no key changed");
+}
+
+/// B-P35 I3: a flat curve at 1e8 maps to finite handle positions inside the graph.
+#[test]
+fn a_flat_curve_at_1e8_has_finite_handles() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    set_float_keys(&mut m, 11, lin2(1e8, 1e8));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let graph = h.get_by_label("Emissive multiple curve").rect();
+    for k in ["Emissive multiple key 1", "Emissive multiple key 2"] {
+        let c = h.get_by_label(k).rect().center();
+        assert!(
+            c.x.is_finite() && c.y.is_finite() && graph.contains(c),
+            "{k}: {c:?} in {graph:?}"
+        );
+    }
+}
+
+/// B-P35 I3: keys the graph cannot map (an infinite value) show a line instead of the graph; the table stays.
+#[test]
+fn an_infinite_key_shows_the_out_of_range_line() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    set_float_keys(&mut m, 11, lin2(0.0, f32::INFINITY));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("These keys are out of range for the graph.");
+    assert!(h.query_by_label("Emissive multiple curve").is_none());
+    h.get_by_label("U offset curve");
+    h.get_by_label("Emissive multiple key 2 value");
+}
+
+/// B-P35 minor: a colour key's handle moves its own channel only.
+#[test]
+fn dragging_one_colour_channel_changes_only_it() {
+    let mut m = direct(scenes::emit_scene("BSX", 0x82, true));
+    let s = select(&mut m, "S");
+    let e = m.edit.as_ref().unwrap();
+    let at = nif::edit::anchor_role(&e.model, Some(s), Role::Shader).unwrap();
+    let key = |time: f32, value: [f32; 3]| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    m.edit_push(
+        vec![Op::AddController {
+            at,
+            class: "BSLightingShaderPropertyColorController".into(),
+            var: Some(1),
+            keys: KeyData::Pos(KeyGroup {
+                key_type: Some(1),
+                keys: vec![key(0.0, [0.2, 0.4, 0.6]), key(1.0, [0.8, 0.6, 0.4])],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 1.0,
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    let ctrl = e.model.lighting.values().next().unwrap().prop.ctrls[0];
+    let pos = |m: &MeshesModel| match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
+        Ok(KeyData::Pos(g)) => g.clone(),
+        k => panic!("{k:?}"),
+    };
+    let before = pos(&m);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    drag_up(&mut h, "Emissive colour key 2 G", 30.0);
+    assert_eq!(ops(h.state()).len(), 2, "{:?}", ops(h.state()));
+    let after = pos(h.state());
+    let bits = |k: &Key<[f32; 3]>| (k.time.to_bits(), k.value.map(f32::to_bits));
+    assert_eq!(
+        bits(&after.keys[0]),
+        bits(&before.keys[0]),
+        "key 1 untouched"
+    );
+    assert_eq!(after.keys[1].time.to_bits(), before.keys[1].time.to_bits());
+    assert_eq!(
+        after.keys[1].value[0].to_bits(),
+        before.keys[1].value[0].to_bits(),
+        "R"
+    );
+    assert_eq!(
+        after.keys[1].value[2].to_bits(),
+        before.keys[1].value[2].to_bits(),
+        "B"
+    );
+    assert!(
+        after.keys[1].value[1] > 0.6,
+        "G dragged up: {:?}",
+        after.keys[1]
+    );
+}
+
+/// B-P35 minor (D11): TBC, XYZ and CONST keys are drawn, but their handles, table cells and buttons are disabled
+/// and a drag records nothing.
+#[test]
+fn tbc_xyz_and_const_keys_are_drawn_not_edited() {
+    for t in [3, 4, 5] {
+        let mut m = direct(scenes::keyed_pair(scenes::Share::No, [t, 1]));
+        select(&mut m, "S");
+        let mut h = view(m);
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        h.get_by_label("Emissive multiple curve");
+        h.get_by_label("These keys are previewed, not edited.");
+        assert!(
+            h.query_by_label("Emissive multiple interpolation")
+                .is_none(),
+            "type {t}"
+        );
+        for l in [
+            "Emissive multiple key 1",
+            "Emissive multiple key 1 time",
+            "Emissive multiple key 1 value",
+            "Remove Emissive multiple key 1",
+            "Add key to Emissive multiple",
+        ] {
+            assert!(
+                h.get_by_label(l).accesskit_node().is_disabled(),
+                "type {t}: {l}"
+            );
+        }
+        drag_up(&mut h, "Emissive multiple key 2", 30.0);
+        assert!(ops(h.state()).is_empty(), "type {t}: {:?}", ops(h.state()));
+    }
 }

@@ -95,9 +95,11 @@ fn chain(
 ) {
     let users = prop.users.len();
     let mut locked = false;
-    let clip_shared = users > 1 && prop.ctrls.iter().any(|&c| e.model.managed(c));
+    let managed = users > 1 && prop.ctrls.iter().any(|&c| e.model.managed(c));
+    // D9: only a shared alpha must split before an add, and a clip controller on it blocks the split. A shared
+    // shader adds in place (its banner says the edit changes every shape).
+    let clip_shared = owner == Owner::Alpha && managed;
     if users > 1 {
-        let managed = clip_shared;
         if owner == Owner::Alpha {
             // An alpha edit on a shared alpha is a conflict: the split comes first (as on the Alpha tab).
             locked = true;
@@ -699,6 +701,8 @@ fn add_row(
         r.on_disabled_hover_text("The root is not a node: the BSX Animated bit cannot be set.");
     } else if at.is_none() {
         r.on_disabled_hover_text("This property cannot be found again in the file.");
+    } else if clip_shared {
+        r.on_disabled_hover_text(CLIP_SHARED);
     }
     if let (true, Some(at)) = (clicked, at) {
         let (class, var, value) = match owner {

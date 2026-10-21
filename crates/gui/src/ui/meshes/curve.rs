@@ -176,48 +176,91 @@ pub(super) fn convert(d: &KeyData, quad: bool) -> KeyData {
     }
 }
 
-/// The view: (time lo, time hi, value lo, value hi).
-fn view(keys: &KeyData, span: (f32, f32), samples: usize) -> [f32; 4] {
-    let n = len(keys);
-    let fin = |v: f32| v.is_finite().then_some(v);
-    let first = (n > 0).then(|| time(keys, 0)).and_then(fin);
-    let last = (n > 0).then(|| time(keys, n - 1)).and_then(fin);
-    let mut lo = first.map_or(span.0, |f| span.0.min(f));
-    let mut hi = last.map_or(span.1, |l| span.1.max(l));
-    if !lo.is_finite() {
-        lo = 0.0;
-    }
-    if hi.is_nan() || hi <= lo {
-        hi = lo + 1.0;
-    }
-    let (mut vlo, mut vhi) = (f32::INFINITY, f32::NEG_INFINITY);
-    let mut add = |v: f32| {
-        if v.is_finite() {
-            vlo = vlo.min(v);
-            vhi = vhi.max(v);
+/// The line drawn instead of a graph whose keys cannot be mapped (B-P35).
+pub(super) const OUT_OF_RANGE: &str = "These keys are out of range for the graph.";
+
+/// `[a, b]` as a mapping range whose span is finite and strictly positive: `pad` × the span on each side, or, for a
+/// flat range (within ~80 ulps), a span of max(|v| × 1e-3, 0.5) around its middle (so 1e8 ± 0.5 cannot round back
+/// to 1e8). None when f32 cannot hold it.
+fn range(a: f32, b: f32, pad: f32) -> Option<(f32, f32)> {
+    let mag = a.abs().max(b.abs());
+    let (lo, hi) = if b - a > mag * 1e-5 {
+        let p = (b - a) * pad;
+        (a - p, b + p)
+    } else {
+        let (mid, half) = (a + (b - a) / 2.0, (mag * 1e-3).max(0.5) / 2.0);
+        (mid - half, mid + half)
+    };
+    let d = hi - lo;
+    (lo.is_finite() && hi.is_finite() && d.is_finite() && d > 0.0).then_some((lo, hi))
+}
+
+/// The view: (time lo, time hi, value lo, value hi), every span finite and > 0 (B-P35). None when the keys cannot
+/// be mapped: a non-finite key time or value, a curve that samples to a non-finite value, or spans past f32.
+fn view(keys: &KeyData, span: (f32, f32), samples: usize) -> Option<[f32; 4]> {
+    let (n, nch) = (len(keys), channels(keys));
+    for i in 0..n {
+        if !time(keys, i).is_finite() || (0..nch).any(|c| !get(keys, i, c, Part::Value).is_finite())
+        {
+            return None;
         }
+    }
+    // A non-finite start or stop (B3's invalid times) is ignored: the keys still give the extent.
+    let ends = [span.0, span.1]
+        .into_iter()
+        .filter(|t| t.is_finite())
+        .chain(
+            (n > 0)
+                .then(|| [time(keys, 0), time(keys, n - 1)])
+                .into_iter()
+                .flatten(),
+        );
+    let (a, b) = ends.fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), t| {
+        (a.min(t), b.max(t))
+    });
+    let (lo, hi) = if a <= b {
+        range(a, b, 0.0)?
+    } else {
+        range(0.0, 0.0, 0.0)?
+    };
+    let (mut a, mut b) = (f32::INFINITY, f32::NEG_INFINITY);
+    let mut add = |v: f32| {
+        a = a.min(v);
+        b = b.max(v);
     };
     for i in 0..n {
-        for c in 0..channels(keys) {
-            add(get(keys, i, c, Part::Value));
-        }
+        (0..nch).for_each(|c| add(get(keys, i, c, Part::Value)));
     }
     for s in 0..samples {
         let t = lo + (hi - lo) * s as f32 / (samples - 1).max(1) as f32;
-        for v in sample(keys, t).into_iter().flatten().take(channels(keys)) {
+        for &v in sample(keys, t).iter().flatten().take(nch) {
+            if !v.is_finite() {
+                return None;
+            }
             add(v);
         }
     }
-    if vhi < vlo {
-        (vlo, vhi) = (0.0, 0.0);
+    if n == 0 {
+        (a, b) = (0.0, 0.0);
     }
-    if vhi - vlo <= f32::EPSILON * vhi.abs().max(1.0) {
-        (vlo, vhi) = (vlo - 0.5, vhi + 0.5);
-    } else {
-        let pad = (vhi - vlo) * 0.1;
-        (vlo, vhi) = (vlo - pad, vhi + pad);
+    // QUADRATIC handles widen the view, capped at half the curve's own span past it: a huge tangent leaves its
+    // handle outside the graph (where it cannot start a drag) instead of flattening the curve.
+    if key_type(keys) == Some(KeyType::Quadratic as u32) {
+        let cap = (b - a).max((a.abs().max(b.abs()) * 1e-3).max(0.5)) / 2.0;
+        let (a0, b0) = (a, b);
+        for (i, j) in (1..n).map(|j| (j - 1, j)) {
+            for c in 0..nch {
+                let out_h = get(keys, i, c, Part::Value) + get(keys, i, c, Part::Backward) / 3.0;
+                let in_h = get(keys, j, c, Part::Value) - get(keys, j, c, Part::Forward) / 3.0;
+                for h in [out_h, in_h].into_iter().filter(|h| h.is_finite()) {
+                    a = a.min(h.max(a0 - cap));
+                    b = b.max(h.min(b0 + cap));
+                }
+            }
+        }
     }
-    [lo, hi, vlo, vhi]
+    let (vlo, vhi) = range(a, b, 0.1)?;
+    Some([lo, hi, vlo, vhi])
 }
 
 /// `keys` over at least `span` (the controller's start and stop); `cursor` is the clock's time in key time;
@@ -245,11 +288,14 @@ pub(super) fn curve(
     let n = (((w - 2.0 * PAD) / 2.0) as usize).clamp(2, 400);
     // D6: while a handle is dragged the axes stay as they were at its start.
     let view_id = id.with("view");
-    let [lo, hi, vlo, vhi] = ui
+    let frozen = ui
         .data(|d| d.get_temp::<[f32; 4]>(view_id))
         // a drag that ended unseen (its handle went away) does not keep the axes frozen
-        .filter(|_| ui.input(|i| i.pointer.any_down()))
-        .unwrap_or_else(|| view(keys, span, n));
+        .filter(|_| ui.input(|i| i.pointer.any_down()));
+    let Some([lo, hi, vlo, vhi]) = frozen.or_else(|| view(keys, span, n)) else {
+        ui.weak(OUT_OF_RANGE);
+        return out;
+    };
     let (rect, bg) = ui.allocate_exact_size(egui::vec2(w, HEIGHT), egui::Sense::click_and_drag());
     // PAD on every side, plus a strip under the plot for the time extents (x keeps PAD: tests map times with it).
     let plot = egui::Rect::from_min_max(
@@ -343,10 +389,13 @@ pub(super) fn curve(
                       c: usize,
                       value: f32,
                       label: String| {
+        // B-P35: a handle projected outside the graph (a huge tangent) cannot start a drag there, over other
+        // controls; a drag already under way continues wherever the pointer goes.
+        let live = rect.contains(centre) || ui.ctx().is_being_dragged(hid);
         let r = ui.interact(
             egui::Rect::from_center_size(centre, egui::vec2(3.0 * HANDLE, 3.0 * HANDLE)),
             hid,
-            sense,
+            if live { sense } else { egui::Sense::hover() },
         );
         let fill = if r.dragged() {
             visuals.widgets.active.bg_fill
