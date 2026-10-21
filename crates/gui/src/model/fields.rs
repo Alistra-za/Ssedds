@@ -63,6 +63,41 @@ pub fn weighting_option_lock(target: Target, p: &Profile, v: &str) -> Option<&'s
         .flatten()
 }
 
+/// What picking `pick` on the BC7 weighting row writes into a texture's own entry, as (`encoder.perceptual`,
+/// `encoder.bc7_weights`); `None` clears that key. `p` is the texture's resolved profile, `own_*` its own values.
+/// Note CP10: an inherited perceptual or weighting is overridden explicitly (`perceptual = false`, `bc7_weights =
+/// "linear"`); with nothing inherited, Linear clears both. An own `false` / `"linear"` is such an override, so it
+/// stands for an inherited value. Perceptual sets `true` and clears the weights.
+pub fn weighting_writes(
+    pick: &str,
+    p: &Profile,
+    own_p: Option<&Value>,
+    own_w: Option<&Value>,
+) -> (Option<Value>, Option<Value>) {
+    let inherited_p = match own_p {
+        None => p.encoder.perceptual,
+        Some(v) => *v == Value::Bool(false),
+    };
+    let inherited_w = match own_w {
+        None => p
+            .encoder
+            .bc7_weights
+            .is_some_and(|w| w != engine::config::Bc7Weights::Linear),
+        Some(v) => v.as_str() == Some("linear"),
+    };
+    match pick {
+        "perceptual" => (Some(Value::Bool(true)), None),
+        "linear" if inherited_p || inherited_w => {
+            (Some(Value::Bool(false)), Some(Value::from("linear")))
+        }
+        "linear" => (None, None),
+        w => (
+            inherited_p.then_some(Value::Bool(false)),
+            Some(Value::from(w)),
+        ),
+    }
+}
+
 /// The BC7 weighting row's value for `p`: perceptual wins (bc7e then uses its own weights), else the weights, else
 /// `"linear"`.
 pub fn weighting_value(p: &Profile) -> Value {
@@ -253,6 +288,8 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
         "encoder.rgbcx_level" if p.encoder.backend != Backend::Rgbcx => {
             Some("used only by the rgbcx encoder (BC1, BC3, BC4, BC5)")
         }
+        // Note CP (fix round 1, I2): the Advanced drawer shows the row everywhere; lock it where it does nothing.
+        WEIGHTING => hidden_reason(p, WEIGHTING),
         "mips.edge" if p.mips.filter == MipFilter::Box => {
             Some("only tent, Mitchell and Kaiser read the edge")
         }

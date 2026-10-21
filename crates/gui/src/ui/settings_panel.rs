@@ -406,6 +406,13 @@ fn weighting_combo(
             }
         })
         .response;
+    // M4: named for a screen reader, with the shown option as its value.
+    r.widget_info(|| {
+        let mut i =
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, r.enabled(), "BC7 weighting");
+        i.current_text_value = Some(shown.to_string());
+        i
+    });
     (picked, r)
 }
 
