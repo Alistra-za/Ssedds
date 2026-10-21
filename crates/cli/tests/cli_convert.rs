@@ -1520,3 +1520,68 @@ fn also_exit_codes_follow_the_summary_not_err() {
     let o = fx.convert_to("in", &HI);
     assert_eq!(code(&o), 2, "{}", text(&o.stderr));
 }
+
+/// Task 10 M1: a Ctrl-C on the Also path (simulated by the engine's `SDC_TEST_CANCEL_ON` hook, which cancels the
+/// token `run_also` was given just before the named file loads, as `cli_edges` does for the plain path) is partial:
+/// exit 1, no later phase, and the report says where it stopped.
+#[test]
+fn a_cancel_on_the_also_path_exits_1_and_stops_the_later_phases() {
+    let fx = Fx::new();
+    fx.pbr_and_plain();
+    fx.project_config(ALSO_ALL);
+    let o = fx
+        .sdc()
+        .env("SDC_TEST_CANCEL_ON", "cup_n.png")
+        .args(["convert", "--json", "--recursive"])
+        .args(HI)
+        .arg("-o")
+        .arg(fx.p("out"))
+        .arg(fx.p("in"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr));
+    assert!(!fx.dds("in Vanilla").exists());
+    assert!(!fx.dds("in CM").exists());
+    let r = std::fs::read_to_string(fx.dds("in conversion-report.md")).unwrap();
+    assert!(r.to_lowercase().contains("cancel"), "{r}");
+}
+
+/// Task 10 M2 (pinned as measured, CM99): the Also path with the default acceptance (no `--accept-suggestions`).
+/// Every plain file stays undecided, so the PBR folder gets no texture and the plain set is neither copied nor
+/// encoded; the PBR set is still picked `pbr`, and its derived jobs are decided by their recipe, so Vanilla and CM
+/// get the derived files. The undecided files make it partial (exit 1).
+#[test]
+fn the_default_flow_with_undecided_sets() {
+    let fx = Fx::new();
+    fx.pbr_and_plain();
+    fx.project_config(ALSO_ALL);
+    let o = fx.convert(&[]);
+    let r = std::fs::read_to_string(fx.dds("in conversion-report.md")).unwrap();
+    assert_eq!(code(&o), 1, "{}\n{r}", text(&o.stderr));
+    assert!(r.contains("| in PBR | 0 | - | 0 | 5 | 0 |"), "{r}");
+    assert!(r.contains("| textures/pbr/arm/steel |"), "{r}");
+    assert!(!fx.dds("in PBR/textures/pbr/arm/steel.dds").exists());
+    assert!(fx.dds("in Vanilla/textures/arm/steel.dds").exists());
+    assert!(!fx.dds("in Vanilla/textures/clutter/cup.dds").exists());
+    assert!(fx.dds("in CM/textures/arm/steel_m.dds").exists());
+}
+
+/// Task 10 M3: `[export]` is read on every convert, but without `also` a valid table changes nothing, and a
+/// malformed one is a config error (exit 2) as any bad `sdc.toml` is.
+#[test]
+fn an_export_table_without_also_stays_plain_or_fails_as_config() {
+    let fx = Fx::new();
+    fx.pbr_and_plain();
+    fx.project_config("[export]\nzip = true\n");
+    let o = fx.convert(&HI);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(fx.dds("textures/clutter/cup.dds").exists());
+    assert!(!fx.dds("in PBR").exists());
+    assert!(!fx.p("out/in PBR.zip").exists());
+    let fx = Fx::new();
+    fx.pbr_and_plain();
+    fx.project_config("[export]\nzip = \"yes\"\n");
+    let o = fx.convert(&HI);
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(!fx.p("out").exists());
+}
