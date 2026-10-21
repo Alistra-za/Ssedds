@@ -486,6 +486,10 @@ fn shader_of(v: &SetView) -> Shader {
 
 /// The Generate button's hover while nothing is ticked (spec-M2).
 pub const NOTHING_TICKED: &str = "tick a map to generate";
+/// The Generate button's hover while a preview job runs.
+pub const PREVIEW_RUNNING: &str = "wait for the preview to finish";
+/// The Generate button's hover while Generate runs.
+pub const GENERATING: &str = "generating; wait for it to finish";
 /// The `_p` choice on a complex-material set (D5).
 pub const COMPLEX_USE_P: &str =
     "complex material reads height from the _m alpha; a _p would be unused";
@@ -517,12 +521,16 @@ pub struct GenDialog {
     next_id: u64,
     /// The opts of the last preview started.
     previewed: Option<Opts>,
+    /// The running Generate's project root and normal key, taken when it started (its record goes there or nowhere).
+    job: Option<(Option<PathBuf>, String)>,
 }
 
-/// What a job made: the maps, and for Generate the files it wrote with their sha256.
+/// What a job made: the maps, and for Generate the files it wrote with their sha256 and the sha256 of the normal it
+/// read (hashed on the worker before the decode).
 pub struct GenResult {
     pub maps: Generated,
     pub written: Vec<(GenMap, PathBuf, String)>,
+    pub from_sha256: String,
 }
 
 /// A written file's item key: the normal's key with its file name swapped (they share a folder).
@@ -553,9 +561,11 @@ fn cap_of(map: GenMap) -> u32 {
 }
 
 /// Steps 3-5 of Generate (spec-S9): stop if cancelled (the last point where Cancel writes nothing); check every
-/// target with the shared may-replace helper before writing any; write each with `write_atomic`, removing this
-/// call's earlier files if one fails. `targets` are (path, bytes, the recorded sha256 when the file is ours).
-/// Returns each target's sha256. Public as the test seam for the Cancel window.
+/// target with the shared may-replace helper before writing any; write each with `write_atomic`. If a write fails,
+/// undo this call's earlier writes: a file it created is removed, our own earlier file (Regenerate) gets its old
+/// bytes back, and a file that already held the new bytes was never written (M4). `targets` are (path, bytes, the
+/// recorded sha256 when the file is ours). Returns each target's sha256. Public as the test seam for the Cancel
+/// window.
 pub fn write_all(
     targets: &[(PathBuf, Vec<u8>, Option<String>)],
     cancel: &AtomicBool,
@@ -563,6 +573,7 @@ pub fn write_all(
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
+    let mut before = vec![];
     for (path, bytes, own) in targets {
         may_replace(path, bytes, |old| own.as_deref() == Some(sha256(old).as_str())).map_err(
             |k| match k {
@@ -574,15 +585,28 @@ pub fn write_all(
                 k => k.note(path),
             },
         )?;
+        // What was there (absent, or bytes the helper let us replace), for the rollback.
+        before.push(std::fs::read(path).ok());
     }
     // shortcut: a file created between the check above and the rename is replaced; upgrade with a hard-link
     // publish if that is ever seen.
     for (i, (path, bytes, _)) in targets.iter().enumerate() {
+        if before[i].as_ref() == Some(bytes) {
+            continue;
+        }
         if let Err(e) = write_atomic(path, bytes) {
-            for (p, _, _) in &targets[..i] {
-                let _ = std::fs::remove_file(p);
+            let mut msg = format!("{}: {e}", path.display());
+            for ((p, new, _), old) in targets[..i].iter().zip(&before) {
+                let undo = match old {
+                    Some(old) if old == new => continue,
+                    Some(old) => write_atomic(p, old),
+                    None => std::fs::remove_file(p),
+                };
+                if let Err(e) = undo {
+                    msg.push_str(&format!("; {} could not be undone: {e}", p.display()));
+                }
             }
-            return Err(format!("{}: {e}", path.display()));
+            return Err(msg);
         }
     }
     Ok(targets.iter().map(|t| sha256(&t.1)).collect())
@@ -596,12 +620,19 @@ fn run_job(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<GenResult, String> {
+    // Hashed before the decode: a normal saved again meanwhile leaves the record stale, never falsely fresh (I2).
+    let from_sha256 = match targets {
+        Some(_) => crate::model::history::sha256_of(normal)
+            .ok_or_else(|| format!("{} cannot be read", normal.display()))?,
+        None => String::new(),
+    };
     let (img, _) = engine::load::load_image(normal).map_err(|e| e.to_string())?;
     let maps = generate(&img, opts, progress, cancel).map_err(|e| e.to_string())?;
     let Some(targets) = targets else {
         return Ok(GenResult {
             maps,
             written: vec![],
+            from_sha256,
         });
     };
     let mut files = vec![];
@@ -623,7 +654,11 @@ fn run_job(
         .zip(shas)
         .map(|((map, path, _), sha)| (map, path, sha))
         .collect();
-    Ok(GenResult { maps, written })
+    Ok(GenResult {
+        maps,
+        written,
+        from_sha256,
+    })
 }
 
 impl AppModel {
@@ -715,6 +750,7 @@ impl AppModel {
             // Ids never repeat across dialogs, so a closed dialog's late preview is dropped (stale id).
             next_id: self.gen_ids,
             previewed: None,
+            job: None,
         });
         self.dialog = Some(crate::model::Dialog::GenerateFromNormal(set.to_string()));
     }
@@ -776,10 +812,20 @@ impl AppModel {
             .collect()
     }
 
-    /// The parallax cost warning while Height is ticked above `COST_WARN_ABOVE` (Q11, D2).
+    /// The disabled Generate button's hover: nothing ticked, or the job it waits for (M1).
+    pub fn gen_generate_hover(&self) -> &'static str {
+        match self.gen.as_ref().map(|g| (g.ticked.is_empty(), g.running)) {
+            Some((false, Some((_, true)))) => PREVIEW_RUNNING,
+            Some((false, Some((_, false)))) => GENERATING,
+            _ => NOTHING_TICKED,
+        }
+    }
+
+    /// The parallax cost warning while a `_p` height is ticked above `COST_WARN_ABOVE` (Q11, D2). Not for the `_m`
+    /// alpha, whose size follows the `_m` at no extra parallax cost (OWNER-Q1).
     pub fn gen_size_warning(&self) -> Option<&'static str> {
         let g = self.gen.as_ref()?;
-        (g.ticked.contains(&GenMap::Height) && g.opts.size > COST_WARN_ABOVE)
+        (g.ticked.contains(&GenMap::Height) && !g.m_alpha && g.opts.size > COST_WARN_ABOVE)
             .then_some(SIZE_WARNING)
     }
 
@@ -900,7 +946,7 @@ impl AppModel {
             g.error = Some(e);
             return;
         }
-        let (Some((_, path)), Some(targets)) = (normal, targets) else {
+        let (Some((key, path)), Some(targets)) = (normal, targets) else {
             g.error = Some(NO_NORMAL.into());
             return;
         };
@@ -908,6 +954,7 @@ impl AppModel {
         if !ticked.contains(&GenMap::Height) {
             opts.height = None;
         }
+        g.job = Some((self.root.clone(), key));
         g.error = None;
         g.cancel.store(false, Ordering::Relaxed);
         self.spawn_gen(tx, path, opts, Some(targets));
@@ -918,11 +965,7 @@ impl AppModel {
         if let Some(g) = self.gen.as_ref() {
             g.cancel.store(true, Ordering::Relaxed);
         }
-        if !self
-            .gen
-            .as_ref()
-            .is_some_and(|g| matches!(g.running, Some((_, false))))
-        {
+        if !self.gen_writing() {
             self.gen = None;
         }
         if matches!(
@@ -975,8 +1018,13 @@ impl AppModel {
                 g.error = Some(e);
                 return;
             }
-            Err(_) => {
+            Err(e) => {
                 self.gen = None;
+                // Cancelled with the dialog closed: a failure is still said, never dropped (M3).
+                if e != "cancelled" {
+                    self.gen_notice(format!("Generate from normal map failed: {e}"));
+                }
+                self.gen_after_job();
                 return;
             }
         };
@@ -984,19 +1032,66 @@ impl AppModel {
         if open {
             self.dialog = None;
         }
-        self.gen_record(&g, &r.written);
+        let (root, normal) = g.job.clone().unwrap_or_default();
+        if root != self.root {
+            // The project changed under the job: its record belongs to no open project (I1).
+            let names: Vec<String> = r
+                .written
+                .iter()
+                .map(|(_, p, _)| p.display().to_string())
+                .collect();
+            self.gen_notice(format!(
+                "Generate wrote {}; its project was closed, so they are unrecorded",
+                names.join(", ")
+            ));
+        } else {
+            self.gen_record(&g, &normal, &r);
+        }
+        self.gen_after_job();
+    }
+
+    /// A Generate that writes is running: Open and Close wait for it (I1), as they wait for an export.
+    pub(crate) fn gen_writing(&self) -> bool {
+        self.gen
+            .as_ref()
+            .is_some_and(|g| matches!(g.running, Some((_, false))))
+    }
+
+    /// Close or open the folder once the Generate in its way has landed (`request_close` / `request_open` deferred
+    /// them). An export or a held pass runs them itself when it ends.
+    fn gen_after_job(&mut self) {
+        if self.export.running.is_some() || self.half_size_waiting() {
+            return;
+        }
+        match self.after_export.take() {
+            Some(crate::model::AfterExport::Close) => self.close_ready = true,
+            Some(crate::model::AfterExport::Open(root)) => {
+                self.request_open(root);
+            }
+            None => {}
+        }
+    }
+
+    /// Drop "provenance recorded; written with the next Save" once it is no longer true (a Save, another folder).
+    pub(crate) fn drop_provenance_note(&mut self) {
+        if self.status_note.as_deref() == Some(PROVENANCE_DEFERRED) {
+            self.status_note = None;
+        }
+    }
+
+    /// A warning on the status line and in Messages.
+    fn gen_notice(&mut self, text: String) {
+        self.status_line = text.clone();
+        self.messages
+            .notify(crate::model::messages::Severity::Warning, text);
     }
 
     /// Record the written files' provenance outside the undo history (the JSON hash records' rule, P14), add them
-    /// to the set when its normal was moved in (the one undoable part), re-plan and select the first.
-    fn gen_record(&mut self, g: &GenDialog, written: &[(GenMap, PathBuf, String)]) {
-        let Some((normal, normal_path)) = self.set_normal(&g.set).and_then(|k| {
-            let p = self.item(&k)?.input.clone();
-            Some((k, p))
-        }) else {
-            return;
-        };
-        let from_sha256 = crate::model::history::sha256_of(&normal_path).unwrap_or_default();
+    /// to the set when its normal was moved in (the one undoable part), re-plan and select the first. The normal and
+    /// its hash are the ones the job read (I1, I2).
+    fn gen_record(&mut self, g: &GenDialog, normal: &str, r: &GenResult) {
+        let (normal, written) = (normal.to_string(), &r.written);
+        let from_sha256 = r.from_sha256.clone();
         let keys: Vec<String> = written
             .iter()
             .map(|(_, p, _)| {

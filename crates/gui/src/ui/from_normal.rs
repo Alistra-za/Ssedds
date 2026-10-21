@@ -1,6 +1,6 @@
 //! v2 Track B (Note CO): the "Generate from normal map" dialog. The state and jobs are in `model::from_normal`.
 use super::dialogs::{dialog_hover, short_name, Role, HALF_SIZE_LIST_SHARE};
-use crate::model::from_normal::{GenMap, GenResult, GenSize, COMPLEX_USE_P, NOTHING_TICKED};
+use crate::model::from_normal::{GenMap, GenResult, GenSize, COMPLEX_USE_P};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::from_normal::{Gray, Tiling};
@@ -44,6 +44,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     let warning = model.gen_size_warning();
     let paths = model.gen_paths();
     let buttons = gen_buttons(!ticked.is_empty(), running.is_some());
+    let hover = model.gen_generate_hover();
     let max_h = ctx.content_rect().height() * HALF_SIZE_LIST_SHARE;
     let mut dragging = false;
     let (k, clicked) = dialog_hover(
@@ -53,7 +54,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         640.0,
         "Generate from normal map",
         &buttons,
-        &[None, Some(NOTHING_TICKED)],
+        &[None, Some(hover)],
         |ui| {
             ui.scope(|ui| {
                 ui.style_mut().spacing.scroll = egui::style::ScrollStyle::thin();

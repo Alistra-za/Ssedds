@@ -755,6 +755,10 @@ impl AppModel {
         self.pending_cs = None;
         self.pending_cm = None;
         self.pending_json_answer = None;
+        // A Generate of the previous folder: cancelled; one that writes still lands, and records nothing here (I1).
+        self.gen_cancel();
+        self.gen_select = None;
+        self.drop_provenance_note();
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
         // were answered to get here).
         self.dialog = None;
@@ -1526,6 +1530,17 @@ impl AppModel {
 
     /// K12: a close or open asked while the box is open or its pass waits: done after that pass; an open box is
     /// answered as full size (owner answer 4).
+    /// I1: a close or open asked while a Generate writes: done when it has landed and recorded its files, so a file
+    /// Tessalith wrote is never left unrecorded or recorded into another project.
+    fn defer_until_generated(&mut self, action: AfterExport) {
+        self.status_line = match action {
+            AfterExport::Close => "Closing when Generate has finished",
+            AfterExport::Open(_) => "Opening the folder when Generate has finished",
+        }
+        .into();
+        self.after_export = Some(action);
+    }
+
     fn defer_until_half_size(&mut self, action: AfterExport) {
         let why = match action {
             AfterExport::Close => "before closing",
@@ -3202,6 +3217,8 @@ impl AppModel {
             crate::crash_log::discard_recovery(s.path());
             wrote = true;
         }
+        // The deferred provenance is written now (M2).
+        self.drop_provenance_note();
         if wrote {
             self.refresh_banner(); // the save removed the saved documents' recovery files
             self.messages.notify(messages::Severity::Info, "Saved");
@@ -3258,6 +3275,9 @@ impl AppModel {
             false
         } else if self.half_size_waiting() {
             self.defer_until_half_size(AfterExport::Open(root));
+            false
+        } else if self.gen_writing() {
+            self.defer_until_generated(AfterExport::Open(root));
             false
         } else if self.is_dirty() {
             self.dialog = Some(Dialog::OpenUnsaved(root));
@@ -3331,6 +3351,9 @@ impl AppModel {
             false
         } else if self.half_size_waiting() {
             self.defer_until_half_size(AfterExport::Close);
+            false
+        } else if self.gen_writing() {
+            self.defer_until_generated(AfterExport::Close);
             false
         } else if self.is_dirty() {
             self.dialog = Some(Dialog::CloseUnsaved);

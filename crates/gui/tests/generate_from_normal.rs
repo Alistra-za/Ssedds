@@ -937,6 +937,10 @@ fn use_as_m_alpha_writes_height_generated_on_a_vanilla_complex_set() {
             (64, 64)
         )]
     );
+    // M5: the `_m` alpha follows the `_m`'s size at no extra parallax cost: no cost warning at any size.
+    m.gen.as_mut().unwrap().opts.size = 1024;
+    assert_eq!(m.gen_size_warning(), None);
+    m.gen.as_mut().unwrap().opts.size = 64;
     m.gen_generate();
     idle(&mut m);
     assert!(land(d.path()).join("rock01_height_generated.png").exists());
@@ -1182,6 +1186,12 @@ fn the_footer_stays_on_screen_at_1280x800() {
         let mut h = gen_harness(m, w, 800.0);
         h.run_steps(3);
         assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+        // The tallest state: a refusal naming a long path below the body (CO61).
+        let long = land(d.path()).join(format!("{}rock01_p_generated.png", "deep/".repeat(30)));
+        h.state_mut().gen.as_mut().unwrap().error = Some(format!(
+            "{} already exists; nothing was written",
+            long.display()
+        ));
         h.run_steps(5);
         let win = eframe::egui::Rect::from_min_size(
             eframe::egui::Pos2::ZERO,
@@ -1205,4 +1215,264 @@ fn generate_jobs_are_polled_without_greying_advanced() {
     idle(&mut m);
     assert!(land(d.path()).join("rock01_p_generated.png").exists());
     assert!(!m.gen_pending());
+}
+
+// ---- Task 6 fix round 1 ----
+
+/// `opened` (a clean sdc-project.toml) with a 64² relief normal.
+fn relief_clean(d: &Path) -> AppModel {
+    let mut m = opened(d);
+    relief_normal(&land(d), "rock01_normal.png", 64);
+    reopen(&mut m, d);
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    m
+}
+
+fn project_text(root: &Path) -> String {
+    std::fs::read_to_string(root.join("sdc-project.toml")).unwrap_or_default()
+}
+
+/// Wait without polling until the job has written `p` (the worker passed its hash, its decode and the cancel check).
+fn until_written(p: &Path) {
+    let end = std::time::Instant::now() + Duration::from_secs(60);
+    while !p.exists() {
+        assert!(
+            std::time::Instant::now() < end,
+            "{} never written",
+            p.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_generate_never_records_into_another_project() {
+    // I1: the project changed under a running Generate (a direct open, as the plan-failure fallback does).
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut m = relief_clean(da.path());
+    let root_a = m.root.clone().unwrap();
+    let root_b = mod_folder(db.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    // Past the cancel check, so the open's cancel cannot stop it and it lands with a written file.
+    until_written(&land(da.path()).join("rock01_p_generated.png"));
+    m.open_folder(root_b.clone());
+    idle(&mut m);
+    assert_eq!(m.root.as_ref(), Some(&root_b));
+    assert!(
+        m.sets_doc.as_ref().unwrap().generated().is_empty(),
+        "not in B"
+    );
+    assert!(!project_text(&root_b).contains("[generated]"));
+    assert!(!project_text(&root_a).contains("[generated]"), "not in A");
+    // Said on the status line (the next plan's count replaces it) and kept in Messages.
+    assert!(
+        m.messages.entries().any(|e| e.text.contains("unrecorded")),
+        "said so"
+    );
+
+    // Open and close wait for a running Generate, as they wait for an export.
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut m = relief_clean(da.path());
+    let root_a = m.root.clone().unwrap();
+    let root_b = mod_folder(db.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    assert!(!m.request_open(root_b.clone()), "waits");
+    assert_eq!(m.root.as_ref(), Some(&root_a));
+    idle(&mut m);
+    assert!(project_text(&root_a).contains("[generated]"), "A recorded");
+    assert_eq!(m.root.as_ref(), Some(&root_b), "then B opened");
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    assert!(!m.request_close(), "waits");
+    assert!(!m.take_close_ready());
+    idle(&mut m);
+    assert!(project_text(&m.root.clone().unwrap()).contains("[generated]"));
+    assert!(m.take_close_ready(), "then closes");
+    // A drop opens through `request_open`, so it waits too.
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut m = relief_clean(da.path());
+    let root_b = mod_folder(db.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    assert!(!m.dropped(std::slice::from_ref(&root_b)));
+    idle(&mut m);
+    assert_eq!(m.root.as_ref(), Some(&root_b));
+}
+
+#[test]
+fn the_record_hashes_the_normal_the_job_read() {
+    // I2: a normal re-saved while the job runs leaves the record stale.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    let normal = land(d.path()).join("rock01_normal.png");
+    let read = sdc_gui::model::history::sha256_of(&normal).unwrap();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    until_written(&land(d.path()).join("rock01_p_generated.png"));
+    relief_normal(&land(d.path()), "rock01_normal.png", 32);
+    assert_ne!(sdc_gui::model::history::sha256_of(&normal).unwrap(), read);
+    idle(&mut m);
+    let rec = &m.sets_doc.as_ref().unwrap().generated()[P_KEY];
+    assert_eq!(rec["from_sha256"], read.as_str());
+}
+
+#[test]
+fn a_cancel_after_writing_started_still_records() {
+    // I3 (CO50).
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    let p = land(d.path()).join("rock01_p_generated.png");
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    until_written(&p);
+    m.gen_cancel();
+    assert!(m.dialog.is_none(), "closed");
+    assert!(m.gen_pending(), "the job still lands");
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(
+        m.status_line,
+        "Generate is still finishing; try again in a moment"
+    );
+    assert!(m.dialog.is_none(), "refused while it lands");
+    idle(&mut m);
+    assert!(m.gen.is_none());
+    assert!(m.sets_doc.as_ref().unwrap().generated().contains_key(P_KEY));
+    // Cancelled at once: either nothing was written, or what was written is recorded.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    let p = land(d.path()).join("rock01_p_generated.png");
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_generate();
+    m.gen_cancel();
+    idle(&mut m);
+    assert!(m.gen.is_none());
+    assert_eq!(
+        p.exists(),
+        m.sets_doc.as_ref().unwrap().generated().contains_key(P_KEY)
+    );
+}
+
+#[test]
+fn the_disabled_generate_says_why() {
+    // M1.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    m.open_gen(ROCK_SET, None);
+    assert_eq!(m.gen_generate_hover(), NOTHING_TICKED);
+    m.gen.as_mut().unwrap().ticked.insert(GenMap::Height);
+    m.gen_frame();
+    assert_eq!(m.gen_generate_hover(), PREVIEW_RUNNING);
+    idle(&mut m);
+    m.gen_generate();
+    assert_eq!(m.gen_generate_hover(), GENERATING);
+    idle(&mut m);
+}
+
+#[test]
+fn the_deferred_note_goes_with_save_and_open() {
+    // M2.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    assert_eq!(m.status_note.as_deref(), Some(PROVENANCE_DEFERRED));
+    m.save().unwrap();
+    assert_eq!(m.status_note, None);
+    assert!(project_text(&m.root.clone().unwrap()).contains("[generated]"));
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    m.save().unwrap();
+    m.status_note = Some(PROVENANCE_DEFERRED.into());
+    let other = tempfile::tempdir().unwrap();
+    m.open_folder(mod_folder(other.path()));
+    assert_eq!(m.status_note, None);
+}
+
+#[test]
+fn an_error_after_cancel_is_shown() {
+    // M3: a Generate that failed after its dialog was cancelled says so.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_clean(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen.as_mut().unwrap().running = Some((999, false));
+    m.gen_cancel();
+    assert!(m.gen.is_some(), "kept for its landing");
+    m.sender()
+        .send(sdc_gui::worker::WorkerMsg::Generated {
+            id: 999,
+            preview: false,
+            result: Err("x.png: disk full".into()),
+        })
+        .unwrap();
+    m.poll();
+    assert!(m.gen.is_none());
+    assert!(m.status_line.contains("disk full"), "{}", m.status_line);
+    assert!(m.messages.entries().any(|e| e.text.contains("disk full")));
+}
+
+#[test]
+fn a_rollback_never_removes_a_file_that_was_there() {
+    // M4.
+    let d = tempfile::tempdir().unwrap();
+    let go = std::sync::atomic::AtomicBool::new(false);
+    std::fs::write(d.path().join("afile"), b"x").unwrap();
+    let bad = d.path().join("afile").join("x.png");
+    // Equal bytes already there: nothing to write, nothing to roll back.
+    let same = d.path().join("same.png");
+    std::fs::write(&same, [7]).unwrap();
+    assert!(write_all(
+        &[(same.clone(), vec![7], None), (bad.clone(), vec![1], None)],
+        &go
+    )
+    .is_err());
+    assert_eq!(std::fs::read(&same).unwrap(), [7], "kept");
+    // Our own earlier file (Regenerate) is put back as it was.
+    let own = d.path().join("own.png");
+    std::fs::write(&own, [1, 1]).unwrap();
+    let sha = sdc_gui::model::history::sha256_of(&own);
+    assert!(write_all(&[(own.clone(), vec![2, 2], sha), (bad, vec![1], None)], &go).is_err());
+    assert_eq!(std::fs::read(&own).unwrap(), [1, 1], "restored");
+}
+
+#[test]
+fn a_preview_is_at_most_512_and_a_closed_dialogs_preview_is_dropped() {
+    // M7 (a), (b): CO35/CO57.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    relief_normal(&land(d.path()), "rock01_normal.png", 1024);
+    reopen(&mut m, d.path());
+    let width = |m: &AppModel| {
+        let g = m.gen.as_ref().unwrap();
+        g.preview
+            .as_ref()
+            .unwrap()
+            .maps
+            .height
+            .as_ref()
+            .unwrap()
+            .width
+    };
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_frame();
+    idle(&mut m);
+    assert_eq!(width(&m), 512);
+    m.gen.as_mut().unwrap().opts.size = 256;
+    m.gen_frame();
+    idle(&mut m);
+    assert_eq!(width(&m), 256);
+    // A preview of a closed dialog lands after the new dialog's job started: it is dropped.
+    m.gen_cancel();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_frame(); // 512
+    m.gen_cancel();
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen.as_mut().unwrap().opts.size = 256;
+    m.gen_frame(); // 256
+    idle(&mut m);
+    assert_eq!(width(&m), 256, "the new dialog's own preview");
+    assert_eq!(m.gen.as_ref().unwrap().started, 1);
 }
