@@ -250,6 +250,9 @@ fn op_label(op: &Op) -> String {
 fn apply(m: &mut MeshesModel, act: Act) {
     if let Some((ops, merge)) = act.push {
         m.edit_push(ops, merge);
+        if let Some(e) = &mut m.edit {
+            e.notice = act.notice;
+        }
     }
     if let (true, Some(e)) = (act.flush, &mut m.edit) {
         e.flush();

@@ -58,6 +58,57 @@ pub const ALPHA_TEST_OFF: &str = "This controller has no effect: alpha test is o
 /// B9 R00 / I9-P00: the cbuffer follows but nothing shows on screen.
 pub const REFRACTION_NO_EFFECT: &str = "Refraction strength has no visible effect in game.";
 
+/// Note CO (owner): SLSF1 bit 21 FaceGen_RGB_Tint off shader type 5 (Skin Tint) crashes the game.
+pub const SKIN_TINT_TYPE: &str =
+    "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
+/// Note CO (owner): SLSF1 bit 10 Facegen_Detail_Map off shader type 4 (Face Tint) renders black.
+pub const FACEGEN_DETAIL_TYPE: &str =
+    "FaceGen detail flag needs the Face Tint shader type: the mesh renders black otherwise.";
+/// Note CO (owner): type 4 without bit 10 is wrong too (every vanilla Face Tint shape has it).
+pub const FACE_TINT_FLAG: &str =
+    "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
+/// Errors that block export even when the source already has them: each one crashes or blacks out in game.
+const ALWAYS_BLOCK: [&str; 4] = [
+    ENV_SCALE_PBR,
+    SKIN_TINT_TYPE,
+    FACEGEN_DETAIL_TYPE,
+    FACE_TINT_FLAG,
+];
+
+/// The SLSF1 bits `shader_type` gets wrong (Note CO), as (mask, value it needs, error, notice for a type change).
+pub fn type_flag_errors(
+    shader_type: u32,
+    slsf1: u32,
+) -> Vec<(u32, u32, &'static str, &'static str)> {
+    let (skin, detail) = (1 << 21, 1 << 10);
+    let mut out = vec![];
+    if slsf1 & skin != 0 && shader_type != 5 {
+        let n = "Skin tint flag cleared: it needs the Skin Tint shader type.";
+        out.push((skin, 0, SKIN_TINT_TYPE, n));
+    }
+    match (slsf1 & detail != 0, shader_type == 4) {
+        (true, false) => {
+            let n = "FaceGen detail flag cleared: it needs the Face Tint shader type.";
+            out.push((detail, 0, FACEGEN_DETAIL_TYPE, n));
+        }
+        (false, true) => {
+            let n = "FaceGen detail flag set: the Face Tint shader type needs it.";
+            out.push((detail, detail, FACE_TINT_FLAG, n));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Why an SLSF1 checkbox is greyed on `shader_type` (Note CO): the bit cannot apply to it.
+pub fn type_flag_lock(shader_type: u32, bit: u32) -> Option<&'static str> {
+    match bit {
+        21 if shader_type != 5 => Some("Needs the Skin Tint shader type."),
+        10 if shader_type != 4 => Some("Needs the Face Tint shader type."),
+        _ => None,
+    }
+}
+
 /// A variable's label. Under CS TruePBR (SLSF2 bit 23) three read differently, as on the Shader tab (B9 design §1).
 pub fn var_label(class: &str, v: u32, slsf2: u32) -> String {
     let pbr = slsf2 & SLSF2_TRUE_PBR != 0;
@@ -197,6 +248,26 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
         if !pbr && lt.slsf2 & (1 << 12) != 0 {
             let t = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
             push(Level::Warn, slsf2, t, None);
+        }
+        let shader_at = l
+            .prop
+            .users
+            .first()
+            .and_then(|&s| anchor_role(m, Some(s), Role::Shader));
+        // S-P2: a shader no shape uses is never drawn, so its flags cannot crash or render black.
+        let errs = match l.prop.users.is_empty() {
+            true => vec![],
+            false => type_flag_errors(lt.shader_type, lt.slsf1),
+        };
+        for (mask, value, text, _) in errs {
+            let fix = shader_at.clone().map(|at| Op::SetBits {
+                at,
+                field: Field::Slsf1,
+                mask,
+                value,
+                base: lt.slsf1,
+            });
+            push(Level::Error, fld(block, Field::Slsf1), text, fix);
         }
         let ext = lt.slsf1 & SLSF1_EXTERNAL_EMITTANCE != 0;
         let have = bsx.as_ref().map_or(0, |b| b.1);
@@ -447,13 +518,13 @@ fn fixed_path(text: &str, norm: &str) -> Option<String> {
 }
 
 /// Errors in `edited` that `source` does not already have (R14): an untouched source error never blocks export,
-/// except [`ENV_SCALE_PBR`], which crashes the game (B-P39).
+/// except [`ALWAYS_BLOCK`], which crash or black out in game (B-P39, Note CO).
 pub fn new_errors(source: &[Warning], edited: &[Warning]) -> Vec<Warning> {
     edited
         .iter()
         .filter(|w| {
             w.level == Level::Error
-                && (w.text == ENV_SCALE_PBR
+                && (ALWAYS_BLOCK.contains(&w.text.as_str())
                     || !source
                         .iter()
                         .any(|s| s.target == w.target && s.text == w.text))
