@@ -4947,3 +4947,104 @@ fn notes_or_none(m: &MeshesModel, b: u32) -> Option<Vec<String>> {
     let rows = m.edit.as_ref().unwrap().in_game.clone()?;
     rows.into_iter().find(|(id, _, _)| id.0 == b).map(|r| r.2)
 }
+
+// ---- B-P41: key-drag cost on a many-controller owner NIF (final review minor 5) ----
+
+/// One key-drag tick (`push` with the drag's merge key: `reapply`) on the owner NIF with the most lighting controllers a
+/// scan of the loose meshes\effects, actors and magic folders found (2026-10-21): vanilla fxtg09nocturnalbirds.nif,
+/// 608 controllers and 2 sequences. The loose extract of it is disabled, so it is read from the vanilla mesh BSAs
+/// (the winning copy). Release build; not a gate.
+#[test]
+#[ignore]
+fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
+    let Ok(root) = std::env::var("SDC_ACHERUS") else {
+        println!("skipped: set SDC_ACHERUS");
+        return;
+    };
+    const PATH: &str = r"meshes\effects\fxtg09nocturnalbirds.nif";
+    let data = Path::new(&root).join("Stock Game").join("Data");
+    let bytes = ["Skyrim - Meshes0.bsa", "Skyrim - Meshes1.bsa"]
+        .iter()
+        .find_map(|n| {
+            let b = vfs::bsa::Bsa::open(&data.join(n)).ok()?;
+            let e = b
+                .entries
+                .iter()
+                .find(|e| e.norm.replace('/', "\\").eq_ignore_ascii_case(PATH))?;
+            b.read(e).ok()
+        })
+        .expect("the NIF in the vanilla mesh BSAs");
+    let mut e = NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap();
+    // The first controller (free or in a clip) with two float or colour keys or more, on a shape's shader or alpha.
+    let (at, clip, keys) = e
+        .keys
+        .iter()
+        .filter_map(|((c, clip), k)| match k {
+            Ok(k @ KeyData::Float(g)) if g.keys.len() >= 2 => Some((*c, *clip, k.clone())),
+            Ok(k @ KeyData::Pos(g)) if g.keys.len() >= 2 => Some((*c, *clip, k.clone())),
+            _ => None,
+        })
+        .find_map(|(c, clip, k)| {
+            let m = &e.model;
+            let (s, owner, prop) = m.shapes.iter().find_map(|s| {
+                let lit = s.shader.and_then(|b| m.lighting.get(&b)).map(|l| &l.prop);
+                let alpha = s.alpha.and_then(|b| m.alphas.get(&b)).map(|a| &a.prop);
+                [
+                    (nif::edit::Owner::Shader, lit),
+                    (nif::edit::Owner::Alpha, alpha),
+                ]
+                .into_iter()
+                .find_map(|(o, p)| p.filter(|p| p.ctrls.contains(&c)).map(|p| (s, o, p)))
+            })?;
+            let cm = &m.ctrls[&c];
+            let i = prop.ctrls.iter().position(|&b| b == c)?;
+            let nth = prop.ctrls[..i]
+                .iter()
+                .filter_map(|b| m.ctrls.get(b))
+                .filter(|p| p.class == cm.class && p.var == cm.var)
+                .count() as u32;
+            let at = Anchor {
+                block: c,
+                kind: cm.class.clone(),
+                shape: s.name.clone(),
+                role: Role::Ctrl {
+                    owner,
+                    class: cm.class.clone(),
+                    var: cm.var,
+                    nth,
+                },
+            };
+            Some((at, clip, k))
+        })
+        .expect("a keyed controller");
+    let tick = |v: f32| {
+        let mut k = keys.clone();
+        match &mut k {
+            KeyData::Float(g) => g.keys[1].value = v,
+            KeyData::Pos(g) => g.keys[1].value[0] = v,
+            KeyData::Bool(_) => unreachable!(),
+        }
+        Op::SetKeys {
+            at: at.clone(),
+            clip,
+            keys: k,
+            base: keys.clone(),
+        }
+    };
+    let merge = Some(nif::edit::merge_key(&tick(0.0)));
+    e.push(vec![tick(0.0)], merge.clone());
+    let n = 20;
+    let t = Instant::now();
+    for i in 1..=n {
+        e.push(vec![tick(i as f32 * 0.01)], merge.clone());
+    }
+    let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    assert_eq!(e.doc.ops.len(), 1, "one drag, one op");
+    assert_eq!(e.outcomes, [nif::edit::Outcome::Applied]);
+    println!(
+        "{} controllers, {} sequences, {} shapes, clip {clip:?}: {per:.2} ms per drag tick",
+        e.model.ctrls.len(),
+        e.model.sequences.len(),
+        e.model.shapes.len()
+    );
+}

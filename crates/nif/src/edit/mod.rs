@@ -304,7 +304,18 @@ pub fn merge_key(op: &Op) -> String {
 /// exactly as `apply` compares an op's `base`. Err gives why there is nothing to edit (shown in the tab).
 pub fn keys_of(b: &[u8], m: &NifModel, ctrl: u32, clip: Option<u32>) -> Result<KeyData, String> {
     let h = crate::header::Header::parse(b).map_err(|e| e.to_string())?;
-    structural::key_target(&h, b, m, ctrl, clip).map(|t| t.keys)
+    keys_of_in(&h, b, m, ctrl, clip)
+}
+
+/// [`keys_of`] with `b`'s header parsed once by the caller (B-P41: one parse per edit, not per controller).
+pub fn keys_of_in(
+    h: &crate::header::Header,
+    b: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+    clip: Option<u32>,
+) -> Result<KeyData, String> {
+    structural::key_target(h, b, m, ctrl, clip).map(|t| t.keys)
 }
 
 /// Err only when `src` itself does not open. A later op that cannot run is a `Conflict` or `Refused` outcome and

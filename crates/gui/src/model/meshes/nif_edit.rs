@@ -8,7 +8,7 @@ use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
-use nif::anim::{apply_anim, clip_tracks, free_tracks, Track};
+use nif::anim::{apply_anim, clip_tracks_in, free_tracks_in, Track};
 use nif::edit::validate::{new_errors, validate, validate_ops, Level, Target, Warning};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::keys::KeyData;
@@ -513,20 +513,28 @@ impl NifEdit {
         self.warnings = validate(&self.model, None);
         // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
         self.op_warnings = validate_ops(&self.doc.ops());
-        self.keys = self
-            .model
-            .ctrls
-            .keys()
-            .map(|&c| {
-                let k = nif::edit::keys_of(&self.patched, &self.model, c, None);
-                ((c, None), k)
-            })
-            .collect();
-        // v2 B7: the keys of each clip a managed controller is driven by (a header parse per call, once per change).
-        for &c in self.model.ctrls.keys().filter(|&&c| self.model.managed(c)) {
-            for seq in nif::anim::clips_of(&self.model, &self.patched, c) {
-                let k = nif::edit::keys_of(&self.patched, &self.model, c, Some(seq));
-                self.keys.insert((c, Some(seq)), k);
+        // B-P41: one header parse per change; one per controller cost 266 ms a drag tick on a 608-controller NIF.
+        let header = nif::header::Header::parse(&self.patched).map_err(|e| e.to_string());
+        self.keys =
+            self.model
+                .ctrls
+                .keys()
+                .map(|&c| {
+                    let k = header.as_ref().map_err(Clone::clone).and_then(|h| {
+                        nif::edit::keys_of_in(h, &self.patched, &self.model, c, None)
+                    });
+                    ((c, None), k)
+                })
+                .collect();
+        // v2 B7: the keys of each clip a managed controller is driven by (once per change).
+        // shortcut: clips_of_in walks every property per (sequence, controller): ~18 ms a drag tick on a 608-controller,
+        // 818-shape NIF (CM32); invert it per sequence if a file the owner edits passes 16 ms.
+        if let Ok(h) = &header {
+            for &c in self.model.ctrls.keys().filter(|&&c| self.model.managed(c)) {
+                for seq in nif::anim::clips_of_in(&self.model, h, c) {
+                    let k = nif::edit::keys_of_in(h, &self.patched, &self.model, c, Some(seq));
+                    self.keys.insert((c, Some(seq)), k);
+                }
             }
         }
         self.parsed = Arc::new(render3d::parse(&self.patched));
@@ -863,6 +871,10 @@ fn anim_tracks(
     p: &ParsedNif,
     playing: Playing,
 ) -> Vec<(ShapeId, MaterialState, Vec<Track>)> {
+    // B-P41: one header parse, not one per property.
+    let Ok(h) = nif::header::Header::parse(b) else {
+        return vec![];
+    };
     p.shapes
         .iter()
         .filter_map(|s| {
@@ -871,8 +883,8 @@ fn anim_tracks(
                 .into_iter()
                 .flatten()
                 .flat_map(|prop| match playing {
-                    Playing::Free => free_tracks(m, b, prop),
-                    Playing::Clip(seq) => clip_tracks(m, b, seq, prop),
+                    Playing::Free => free_tracks_in(m, &h, b, prop),
+                    Playing::Clip(seq) => clip_tracks_in(m, &h, b, seq, prop),
                 })
                 .collect();
             (!tracks.is_empty()).then(|| (s.id, s.material.clone(), tracks))

@@ -207,7 +207,12 @@ fn chain_of(m: &NifModel, prop: u32) -> Option<(&[u32], &[u32], &'static [u8])> 
 /// Tracks of the controllers that run in the free preview: known, Active, not managed (G2, F13). Parses the
 /// header and reads key data on each call; call once per edit, never per frame (F23).
 pub fn free_tracks(m: &NifModel, b: &[u8], prop: u32) -> Vec<Track> {
-    let (Ok(h), Some((chain, _, _))) = (Header::parse(b), chain_of(m, prop)) else {
+    Header::parse(b).map_or(vec![], |h| free_tracks_in(m, &h, b, prop))
+}
+
+/// [`free_tracks`] with `b`'s header parsed once by the caller (B-P41: one parse per edit, not per property).
+pub fn free_tracks_in(m: &NifModel, h: &Header, b: &[u8], prop: u32) -> Vec<Track> {
+    let Some((chain, _, _)) = chain_of(m, prop) else {
         return vec![];
     };
     chain
@@ -218,7 +223,7 @@ pub fn free_tracks(m: &NifModel, b: &[u8], prop: u32) -> Vec<Track> {
                 return None;
             }
             let target = target_of(c)?;
-            let (value, keys) = interp_track(m, &h, b, c.interp.unwrap_or(-1));
+            let (value, keys) = interp_track(m, h, b, c.interp.unwrap_or(-1));
             Some(Track {
                 ctrl: id,
                 target,
@@ -297,12 +302,14 @@ pub(crate) fn bound_cbs(m: &NifModel, h: &Header, s: &Sequence, ctrl: u32) -> Ve
 /// The sequence blocks with at least one CB driving `ctrl` (the Controllers tab's clip list). Parses the header:
 /// call once per change, never per frame.
 pub fn clips_of(m: &NifModel, b: &[u8], ctrl: u32) -> Vec<u32> {
-    let Ok(h) = Header::parse(b) else {
-        return vec![];
-    };
+    Header::parse(b).map_or(vec![], |h| clips_of_in(m, &h, ctrl))
+}
+
+/// [`clips_of`] with the header parsed once by the caller (B-P41).
+pub fn clips_of_in(m: &NifModel, h: &Header, ctrl: u32) -> Vec<u32> {
     m.sequences
         .iter()
-        .filter(|s| !bound_cbs(m, &h, s, ctrl).is_empty())
+        .filter(|s| !bound_cbs(m, h, s, ctrl).is_empty())
         .map(|s| s.block)
         .collect()
 }
@@ -321,8 +328,12 @@ pub fn clip_interp(m: &NifModel, b: &[u8], seq: u32, ctrl: u32) -> Option<i32> {
 /// by node, property type, controller type and controller ID strings (spec §5.5). Timing comes from the sequence;
 /// the value and keys from the CB's own interpolator.
 pub fn clip_tracks(m: &NifModel, b: &[u8], seq: u32, prop: u32) -> Vec<Track> {
-    let (Ok(h), Some(s), Some((chain, users, ptype))) = (
-        Header::parse(b),
+    Header::parse(b).map_or(vec![], |h| clip_tracks_in(m, &h, b, seq, prop))
+}
+
+/// [`clip_tracks`] with `b`'s header parsed once by the caller (B-P41).
+pub fn clip_tracks_in(m: &NifModel, h: &Header, b: &[u8], seq: u32, prop: u32) -> Vec<Track> {
+    let (Some(s), Some((chain, users, ptype))) = (
         m.sequences.iter().find(|s| s.block == seq),
         chain_of(m, prop),
     ) else {
@@ -339,7 +350,7 @@ pub fn clip_tracks(m: &NifModel, b: &[u8], seq: u32, prop: u32) -> Vec<Track> {
         .filter_map(|cb| {
             let c = bound(cb, &ctrls, &names, ptype)?;
             let target = target_of(c)?;
-            let (value, keys) = interp_track(m, &h, b, cb.interp);
+            let (value, keys) = interp_track(m, h, b, cb.interp);
             Some(Track {
                 ctrl: c.block,
                 target,
