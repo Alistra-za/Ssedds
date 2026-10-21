@@ -21,6 +21,7 @@ const BLUE: egui::Color32 = egui::Color32::from_rgb(90, 140, 220);
 const EDIT_MIN: f32 = 300.0;
 const EDIT_CENTRE_MIN: f32 = 240.0;
 
+mod curve;
 mod edit_ctrl;
 mod edit_extra;
 mod edit_fields;

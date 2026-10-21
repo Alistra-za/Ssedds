@@ -3069,3 +3069,338 @@ fn invalid_controller_times_turn_playback_off() {
         assert_eq!(h.state().v3.clock, None);
     }
 }
+
+// ---- v2 B6: the Controllers tab (curve, key table, scrub, add and remove) ----
+
+use nif::keys::encode_data;
+
+fn float_keys(m: &MeshesModel, ctrl: u32) -> KeyGroup<f32> {
+    match &m.edit.as_ref().unwrap().keys[&(ctrl, None)] {
+        Ok(KeyData::Float(g)) => g.clone(),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// Press on the node labelled `label`, move `dy` px up in three steps, release.
+fn drag_up(h: &mut Harness<'static, MeshesModel>, label: &str, dy: f32) {
+    h.get_by_label(label).scroll_to_me();
+    h.run_steps(2);
+    let c = h.get_by_label(label).rect().center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=3 {
+        h.hover_at(c - egui::vec2(0.0, dy * k as f32 / 3.0)); // the first step is past max_click_dist (6 px)
+        h.run_steps(1);
+    }
+    h.drop_at(c - egui::vec2(0.0, dy));
+    h.run_steps(3);
+}
+
+/// A handle drag is one SetKeys with the base it started from, one undo step; the release flushes, so the next
+/// drag is a second op.
+#[test]
+fn dragging_a_key_records_one_undo_step() {
+    let b = scenes::keyed_pair(scenes::Share::No, [1, 2]); // ctrl 2: var 11, LINEAR (0,0) (1,1), data 6
+    let orig = nif::keys::read_data(&nif::header::Header::parse(&b).unwrap(), &b, 6).unwrap();
+    let mut m = direct(b);
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    assert!(
+        ops(h.state()).is_empty(),
+        "drawing the curve records nothing"
+    );
+    drag_up(&mut h, "Emissive multiple key 2", 30.0);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    let Op::SetKeys {
+        clip, keys, base, ..
+    } = &got[0]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(*clip, None);
+    assert_eq!(
+        encode_data(base),
+        encode_data(&orig),
+        "the op keeps the keys the drag started from"
+    );
+    let g = float_keys(h.state(), 2);
+    assert_eq!(
+        &KeyData::Float(g.clone()),
+        keys,
+        "the patched file has the op's keys"
+    );
+    assert_eq!(
+        (g.keys[0].time, g.keys[0].value),
+        (0.0, 0.0),
+        "the other key is untouched"
+    );
+    assert_eq!(g.keys[1].time, 1.0, "a vertical drag keeps the time");
+    assert!(g.keys[1].value > 1.0, "dragged up: {}", g.keys[1].value);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().outcomes,
+        vec![nif::edit::Outcome::Applied]
+    );
+    // The release flushed: a second drag is a second op. (Before any undo: `restore` also ends a drag, so a drag
+    // after an undo/redo would be a new op even without the release's flush.)
+    drag_up(&mut h, "Emissive multiple key 2", 30.0);
+    assert_eq!(ops(h.state()).len(), 2, "{:?}", ops(h.state()));
+    // One undo step per drag, back to the source.
+    assert!(h.state_mut().undo_edit());
+    assert_eq!(ops(h.state()).len(), 1);
+    assert!(h.state_mut().undo_edit());
+    assert!(ops(h.state()).is_empty());
+    assert!(!h.state().edit.as_ref().unwrap().history.can_undo());
+}
+
+/// A typed key value is stored with its exact bits; a typed decreasing time is kept (never clamped) and its
+/// validate_ops error shows under the controller.
+#[test]
+fn key_table_edit_sets_exact_value() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    edit_number(&mut h, "Emissive multiple key 2 value", "0.3");
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    let g = float_keys(h.state(), 2);
+    assert_eq!(g.keys[1].value.to_bits(), 0.3f32.to_bits());
+    assert_eq!(g.keys[1].time, 1.0);
+    // The bytes on file: data block 6 (unshared, re-emitted in place, B4).
+    let e = h.state().edit.as_ref().unwrap();
+    let on_file = nif::keys::read_data(
+        &nif::header::Header::parse(&e.patched).unwrap(),
+        &e.patched,
+        6,
+    )
+    .unwrap();
+    assert_eq!(encode_data(&on_file), encode_data(&KeyData::Float(g)));
+    // A QUADRATIC tangent (ctrl 3, var 20).
+    edit_number(&mut h, "U offset key 1 backward", "-2.5");
+    let KeyData::Float(q) = h.state().edit.as_ref().unwrap().keys[&(3, None)]
+        .clone()
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        q.keys[0].backward.map(f32::to_bits),
+        Some((-2.5f32).to_bits())
+    );
+    // Decreasing time: kept as typed, Error shown, no clamp.
+    edit_number(&mut h, "Emissive multiple key 2 time", "-1");
+    assert_eq!(float_keys(h.state(), 2).keys[1].time, -1.0);
+    h.get_by_label("Key times must not decrease");
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(
+        e.op_warnings
+            .iter()
+            .any(|w| w.target == Target::Block { block: 2 }),
+        "{:?}",
+        e.op_warnings
+    );
+    assert_eq!(ops(h.state()).len(), 3, "each typed edit is its own step");
+}
+
+/// D9: Add controller appends a free controller and sets BSX bit 0; the Extra data tab then shows Animated ticked
+/// and locked. Remove unlinks it; the bit stays (add-only) and is no longer locked.
+#[test]
+fn add_controller_ticks_and_locks_bsx_animated() {
+    let mut m = direct(scenes::emit_scene("BSX", 0x82, true)); // S -> BSLSP 2, no controllers; root BSX 0x82
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(!h
+        .get_by_role_and_label(AkRole::CheckBox, "Animated")
+        .accesskit_node()
+        .is_disabled());
+    tab(&mut h, "Controllers");
+    h.get_by_label("No controllers.");
+    h.get_by_role_and_label(AkRole::ComboBox, "Add controller variable")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, "Emissive multiple (11)")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Add controller to shader property").click();
+    h.run_steps(4);
+    let got = ops(h.state());
+    let e = h.state().edit.as_ref().unwrap();
+    let v = e
+        .model
+        .lighting
+        .values()
+        .next()
+        .unwrap()
+        .lighting
+        .params
+        .emissive_multiple;
+    let Some(Op::AddController {
+        class,
+        var,
+        keys,
+        flags,
+        freq,
+        start,
+        stop,
+        ..
+    }) = got.first()
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(
+        (class.as_str(), *var),
+        ("BSLightingShaderPropertyFloatController", Some(11))
+    );
+    assert_eq!((*flags, *freq, *start, *stop), (0x48, 1.0, 0.0, 1.0));
+    let KeyData::Float(g) = keys else {
+        panic!("{keys:?}")
+    };
+    assert_eq!(g.key_type, Some(1));
+    assert_eq!(
+        g.keys.iter().map(|k| (k.time, k.value)).collect::<Vec<_>>(),
+        [(0.0, v), (1.0, v)]
+    );
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    assert_eq!(
+        e.model.lighting.values().next().unwrap().prop.ctrls.len(),
+        1
+    );
+    let bsx = e
+        .model
+        .extras
+        .values()
+        .find(|x| x.kind == "BSXFlags")
+        .and_then(|x| x.value.clone());
+    assert_eq!(bsx, Some(ExtraValue::Bsx(0x83)));
+    tab(&mut h, "Extra data");
+    let a = h.get_by_role_and_label(AkRole::CheckBox, "Animated");
+    assert!(
+        a.accesskit_node().is_disabled(),
+        "locked while a free controller exists"
+    );
+    assert_eq!(
+        a.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    tab(&mut h, "Controllers");
+    h.get_by_label("Remove Emissive multiple controller")
+        .click();
+    h.run_steps(4);
+    assert!(matches!(
+        ops(h.state()).last(),
+        Some(Op::RemoveController { .. })
+    ));
+    assert!(h
+        .state()
+        .edit
+        .as_ref()
+        .unwrap()
+        .model
+        .lighting
+        .values()
+        .next()
+        .unwrap()
+        .prop
+        .ctrls
+        .is_empty());
+    tab(&mut h, "Extra data");
+    let a = h.get_by_role_and_label(AkRole::CheckBox, "Animated");
+    assert!(
+        !a.accesskit_node().is_disabled(),
+        "no free controller: unlocked"
+    );
+    assert_eq!(
+        a.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "D9 is add-only"
+    );
+}
+
+/// A click on the curve moves the clock (B3) to that time and pauses it; the next frame sends the material at
+/// that time and renders with it.
+#[test]
+fn scrub_moves_the_preview_time() {
+    let (_d, mut m, cmds) = playing_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    m.v3.clock.as_mut().unwrap().play();
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_label("U offset curve").scroll_to_me();
+    h.run_steps(2);
+    let r = h.get_by_label("U offset curve").rect();
+    // curve.rs PAD = 6 px; the var-20 controller spans [0, 1] (start 0, stop 1, keys at 0 and 1).
+    let p = egui::pos2(r.left() + 6.0 + 0.25 * (r.width() - 12.0), r.top() + 10.0);
+    cmds.try_iter().for_each(drop);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let c = h.state().v3.clock.unwrap();
+    assert!(!c.playing, "a scrub pauses");
+    assert!((c.t - 0.25).abs() < 0.01, "{c:?}");
+    let sent: Vec<V3Cmd> = cmds.try_iter().collect();
+    assert!(
+        sent.iter().any(|x| matches!(x, V3Cmd::SetMaterial { material, .. } if material.params.uv_offset[0] == c.t)),
+        "the animated material at the scrubbed time"
+    );
+    assert!(sent
+        .iter()
+        .any(|x| matches!(x, V3Cmd::Render { time, .. } if *time == c.t)));
+}
+
+/// Removing a playing shape's only controller sends its file material once: the viewport must not keep the last
+/// animated frame.
+#[test]
+fn a_removed_controller_restores_the_file_material() {
+    let (_d, mut m, cmds) = playing_session();
+    let (shape, lsp) = lit_shape(m.edit.as_ref().unwrap());
+    let file_u = m.edit.as_ref().unwrap().model.lighting[&lsp]
+        .lighting
+        .params
+        .uv_offset[0];
+    m.v3.clock.as_mut().unwrap().scrub(0.5);
+    m.tick_anim(0.0);
+    assert!(cmds.try_iter().any(
+        |c| matches!(c, V3Cmd::SetMaterial { material, .. } if material.params.uv_offset[0] == 0.5)
+    ));
+    let e = m.edit.as_ref().unwrap();
+    let ctrl = e.model.lighting[&lsp].prop.ctrls[0];
+    let c = &e.model.ctrls[&ctrl];
+    let at = Anchor {
+        block: ctrl,
+        kind: c.class.clone(),
+        shape: e.model.shape(shape).and_then(|s| s.name.clone()),
+        role: Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: c.class.clone(),
+            var: c.var,
+            nth: 0,
+        },
+    };
+    m.edit_push(vec![Op::RemoveController { at }], None);
+    assert_eq!(
+        m.edit.as_ref().unwrap().outcomes.last(),
+        Some(&nif::edit::Outcome::Applied)
+    );
+    cmds.try_iter().for_each(drop);
+    m.tick_anim(0.0);
+    let sent: Vec<V3Cmd> = cmds.try_iter().collect();
+    assert!(
+        sent.iter().any(|c| matches!(c, V3Cmd::SetMaterial { id, material, .. } if id.0 == shape && material.params.uv_offset[0] == file_u)),
+        "no file material in {} commands (V3Cmd is not Debug)",
+        sent.len()
+    );
+    assert_eq!(m.v3.clock, None, "nothing animated: no clock");
+}

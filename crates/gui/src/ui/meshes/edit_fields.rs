@@ -33,6 +33,8 @@ pub(super) struct Act {
     pub guard_close: bool,
     /// Diff pressed in the guard dialog.
     pub guard_diff: bool,
+    /// A click or drag on a curve: the scene time the clock jumps to (it pauses, B3's `Clock::scrub`).
+    pub scrub: Option<f32>,
 }
 
 const LABEL_W: f32 = 132.0;
@@ -56,7 +58,8 @@ pub(super) fn row_label(ui: &mut egui::Ui, text: &str) {
 
 /// Warnings of `target` under their field: amber, red for errors, with "Fix" when the warning carries a fix.
 pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
-    for w in e.warnings.iter().filter(|w| w.target == *target) {
+    let all = e.warnings.iter().chain(&e.op_warnings);
+    for w in all.filter(|w| w.target == *target) {
         let color = if w.level == Level::Error { RED } else { AMBER };
         ui.horizontal(|ui| {
             ui.add_space(LABEL_W);

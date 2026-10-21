@@ -38,7 +38,7 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
             .show(ui, |ui| match tab {
                 0 => edit_fields::shader_tab(ui, m, e, &mut act),
                 1 => edit_fields::alpha_tab(ui, e, &mut act),
-                2 => edit_ctrl::controllers_tab(ui, e, &mut act),
+                2 => edit_ctrl::controllers_tab(ui, m, e, &mut act),
                 _ => edit_extra::extra_tab(ui, e, &mut act),
             });
     }
@@ -253,6 +253,10 @@ fn apply(m: &mut MeshesModel, act: Act) {
     }
     if let (true, Some(e)) = (act.flush, &mut m.edit) {
         e.flush();
+    }
+    // v2 B6: a curve click jumps the clock (B3) and pauses it; tick_anim later this frame sends the materials.
+    if let (Some(t), Some(c)) = (act.scrub, m.v3.clock.as_mut()) {
+        c.scrub(t);
     }
     if act.undo {
         m.undo_edit();

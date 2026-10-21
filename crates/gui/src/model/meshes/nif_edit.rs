@@ -10,10 +10,11 @@ use modscan::store::{PathCopy, ShapeView, KIND_BSA};
 use nif::anim::{apply_anim, clip_tracks, free_tracks, Track};
 use nif::edit::validate::{new_errors, validate, validate_ops, Warning};
 use nif::edit::{Anchor, Op, Outcome};
+use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel};
 use render3d::{ParsedNif, ShapeId};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -62,6 +63,11 @@ pub struct NifEdit {
     pub model: NifModel,
     pub outcomes: Vec<Outcome>,
     pub warnings: Vec<Warning>,
+    /// validate_ops over the document's ops (B4/B5 key errors), recomputed with the ops in `reapply`.
+    pub op_warnings: Vec<Warning>,
+    /// Every controller's editable keys by (controller, clip), `nif::edit::keys_of`; rebuilt in `reapply`, never
+    /// per frame (F23). B7 adds the clip entries.
+    pub keys: BTreeMap<(u32, Option<u32>), Result<KeyData, String>>,
     pub source_warnings: Vec<Warning>,
     pub selection: Selection,
     pub solo: bool,
@@ -96,6 +102,8 @@ pub struct NifEdit {
     anim: Vec<(ShapeId, MaterialState, Vec<Track>)>,
     /// The clock time whose materials the viewport shows; None after anything sent un-animated materials.
     anim_shown: Option<f32>,
+    /// The shapes the last `tick_anim` animated (D15: one that leaves gets its file material back).
+    anim_last: Vec<ShapeId>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
     /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
@@ -256,6 +264,8 @@ impl NifEdit {
             model,
             outcomes: vec![],
             warnings: vec![],
+            op_warnings: vec![],
+            keys: BTreeMap::new(),
             selection: Selection::Root,
             solo: false,
             check_exists: false,
@@ -275,6 +285,7 @@ impl NifEdit {
             playing: Playing::Free,
             anim: vec![],
             anim_shown: None,
+            anim_last: vec![],
             unsaved: false,
             drag: None,
         };
@@ -342,7 +353,7 @@ impl NifEdit {
         if let Some(w) = new_errors(&self.source_warnings, &self.warnings).first() {
             return Some(w.text.clone());
         }
-        if let Some(w) = validate_ops(&self.doc.ops()).first() {
+        if let Some(w) = self.op_warnings.first() {
             return Some(w.text.clone());
         }
         read_back(&self.patched).err()
@@ -457,6 +468,17 @@ impl NifEdit {
             Err(e) => self.error = Some(e.to_string()),
         }
         self.warnings = validate(&self.model, None);
+        // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
+        self.op_warnings = validate_ops(&self.doc.ops());
+        self.keys = self
+            .model
+            .ctrls
+            .keys()
+            .map(|&c| {
+                let k = nif::edit::keys_of(&self.patched, &self.model, c, None);
+                ((c, None), k)
+            })
+            .collect();
         self.parsed = Arc::new(render3d::parse(&self.patched));
         self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, self.playing);
         self.anim_shown = None;
@@ -872,6 +894,23 @@ impl MeshesModel {
     /// `ui::viewport3d::show`, so that frame's Render carries the new time. Keeps the clock in step with the
     /// session's tracks, advances it, and sends each animated shape's material (cbuffer only) when the time moved.
     pub fn tick_anim(&mut self, dt: f32) {
+        // A shape animated last frame that no longer is (a removed controller, B7's clip switch) shows its file
+        // material again: nothing else resends it, its static material did not change.
+        if let Some(e) = self.edit.as_mut() {
+            let now: Vec<ShapeId> = e.anim.iter().map(|(id, _, _)| *id).collect();
+            if e.anim_last.iter().any(|id| !now.contains(id)) {
+                let gone: Vec<_> = e
+                    .materials() // clones the parse (F22): only on the frame a shape leaves the set
+                    .into_iter()
+                    .filter(|(id, _)| e.anim_last.contains(id) && !now.contains(id))
+                    .collect();
+                for (id, m) in gone {
+                    // false: no load sent yet; the next load carries the file material
+                    self.v3.set_material(id, m);
+                }
+            }
+            e.anim_last = now;
+        }
         let Some(range) = self.edit.as_ref().and_then(NifEdit::anim_range) else {
             self.v3.clock = None;
             return;
