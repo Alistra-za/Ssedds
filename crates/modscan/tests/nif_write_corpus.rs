@@ -217,7 +217,7 @@ fn check(b: &[u8]) -> Option<Res> {
         ) {
             r.keyed.push(String::from_utf8_lossy(kind).into());
             match nif::ctrl::read_blend_interp(&h, b, i) {
-                Ok(x) if nif::clips::encode_blend(&x) != blk => {
+                Ok(x) if nif::clips::encode_blend(&x).ok().as_deref() != Some(blk) => {
                     r.encode.push(what("encode_blend differs"))
                 }
                 Ok(_) => {}
@@ -229,21 +229,29 @@ fn check(b: &[u8]) -> Option<Res> {
                 | b"NiControllerSequence"
                 | b"NiDefaultAVObjectPalette"
                 | b"NiTextKeyExtraData"
+                | b"NiMultiTargetTransformController"
         ) {
             use nif::clips::*;
             r.keyed.push(String::from_utf8_lossy(kind).into());
             let enc = match kind {
                 b"NiControllerManager" => {
-                    nif::ctrl::read_manager(&h, b, i).map(|m| encode_manager(&m))
+                    nif::ctrl::read_manager(&h, b, i).map(|m| encode_manager(&m).ok())
                 }
-                b"NiControllerSequence" => read_sequence_out(&h, b, i).map(|s| encode_sequence(&s)),
+                b"NiControllerSequence" => {
+                    read_sequence_out(&h, b, i).map(|s| encode_sequence(&s).ok())
+                }
                 b"NiDefaultAVObjectPalette" => {
-                    read_palette(&h, b, i).map(|(s, o)| encode_palette(s, &o))
+                    read_palette(&h, b, i).map(|(s, o)| encode_palette(s, &o).ok())
                 }
-                _ => read_text_keys(&h, b, i).map(|(n, k)| encode_text_keys(n, &k)),
+                b"NiTextKeyExtraData" => {
+                    read_text_keys(&h, b, i).map(|(n, k)| encode_text_keys(n, &k).ok())
+                }
+                _ => read_mttc(&h, b, i).map(|(c, t)| encode_mttc(&c, &t).ok()),
             };
             match enc {
-                Ok(e) if e != blk => r.encode.push(what("clip encoder differs")),
+                Ok(e) if e.as_deref() != Some(blk) => {
+                    r.encode.push(what("clip encoder differs or refused"))
+                }
                 Ok(_) => {}
                 Err(e) => r.decode.push(what(&format!("clip block: {e}"))),
             }

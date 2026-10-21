@@ -45,4 +45,7 @@ pub enum NifError {
     },
     #[error("block {block}: {msg}")]
     Geometry { block: u32, msg: String },
+    /// An encoder was given a value the format cannot hold (a count past its field width, mismatched arrays).
+    #[error("cannot encode: {0}")]
+    Encode(String),
 }
