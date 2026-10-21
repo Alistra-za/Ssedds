@@ -438,13 +438,16 @@ impl NifEdit {
         if let Some(why) = self.blocked.clone() {
             return ExportOutcome::Blocked(why);
         }
+        // Note CQ: the file drops the blocks our edits appended that nothing reaches; on any doubt it is the patch
+        let n = nif::header::Header::parse(&self.source).map_or(0, |h| h.sizes.len() as u32);
+        let out = nif::edit::compact(&self.patched, n).unwrap_or_else(|_| self.patched.to_vec());
         let path = self.export_path.clone();
         let cannot_read = |e: std::io::Error| {
             ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
         };
         let last = self.doc.export.sha256.clone();
         let ours = |b: &[u8]| last.as_deref() == Some(edit_doc::sha256_hex(b).as_str());
-        match engine::dds::may_replace(&path, &self.patched, ours) {
+        match engine::dds::may_replace(&path, &out, ours) {
             Ok(()) => {}
             Err(Kept::Unreadable(e)) => return cannot_read(e),
             Err(Kept::Foreign) => {
@@ -456,10 +459,9 @@ impl NifEdit {
                 match choice {
                     Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
                     _ => {
-                        let diff =
-                            nif::write::block_diff(&on_disk, &self.patched).unwrap_or_else(|e| {
-                                vec![format!("The file on disk does not read as a NIF: {e}")]
-                            });
+                        let diff = nif::write::block_diff(&on_disk, &out).unwrap_or_else(|e| {
+                            vec![format!("The file on disk does not read as a NIF: {e}")]
+                        });
                         self.guard = Some(GuardAsk {
                             diff: diff.clone(),
                             show_diff: false,
@@ -471,14 +473,14 @@ impl NifEdit {
                 }
             }
         }
-        if let Err(e) = engine::dds::write_atomic(&path, &self.patched) {
+        if let Err(e) = engine::dds::write_atomic(&path, &out) {
             return ExportOutcome::Blocked(format!("Cannot write {}: {e}", path.display()));
         }
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         self.doc.export = ExportRec {
-            sha256: Some(edit_doc::sha256_hex(&self.patched)),
+            sha256: Some(edit_doc::sha256_hex(&out)),
             at: Some(at),
             ops_hash: Some(self.doc.ops_hash()),
         };

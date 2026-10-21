@@ -8,7 +8,9 @@ use crate::model::{read_model, NifModel, ShapeModel};
 use crate::write::NifDoc;
 use crate::NifError;
 
+mod compact;
 mod structural;
+pub use compact::compact;
 pub use structural::{clip_key, convert_check, trailer_defaults};
 pub mod validate;
 
