@@ -3296,7 +3296,8 @@ fn key_table_edit_sets_exact_value() {
         "{:?}",
         e.op_warnings
     );
-    assert_eq!(ops(h.state()).len(), 3, "each typed edit is its own step");
+    // 3 typed edits; the time edit also moves the stop to the last key (B-P44) in the same step.
+    assert_eq!(ops(h.state()).len(), 4, "each typed edit is its own step");
 }
 
 /// D9: Add controller appends a free controller and sets BSX bit 0; the Extra data tab then shows Animated ticked
@@ -5230,4 +5231,320 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
         e.model.sequences.len(),
         e.model.shapes.len()
     );
+}
+
+// ---- Key fixes: stale key errors (Note CM33), Add key after the last key (B-P43), stop follows keys (B-P44) ----
+
+fn ctrl_times(m: &MeshesModel, ctrl: u32) -> (f32, f32) {
+    let c = &m.edit.as_ref().unwrap().model.ctrls[&ctrl];
+    (c.start, c.stop)
+}
+
+/// keyed_pair's ctrl 2 (Emissive multiple: LINEAR (0, 0) (1, 1), start 0, stop 1) in the Controllers tab.
+fn keyed_view() -> Harness<'static, MeshesModel> {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h
+}
+
+/// A scanned session (export folder, real shapes, the clock) on `with_uv_ctrl`, in the Controllers tab of the
+/// shape whose chain starts with the U offset controller (LINEAR (0, 0) (1, 1), start 0, stop 1).
+fn uv_view() -> (tempfile::TempDir, Harness<'static, MeshesModel>) {
+    let (d, mut m, _cmds) = session_on(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    (d, h)
+}
+
+fn click_add_key(h: &mut Harness<'static, MeshesModel>) {
+    h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple")
+        .click();
+    h.run_steps(3);
+}
+
+/// A SetKeys that a later SetKeys replaced is not validated: fixing the times clears the error everywhere.
+#[test]
+fn stale_key_order_error_clears_when_keys_are_fixed() {
+    const ERR: &str = "Key times must not decrease";
+    let (_d, mut h) = uv_view();
+    edit_number(&mut h, "U offset key 2 time", "-1");
+    assert!(h.query_all_by_label(ERR).count() > 0);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().export_block().as_deref(),
+        Some(ERR)
+    );
+    edit_number(&mut h, "U offset key 2 time", "2");
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label(ERR).count(), 0);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(e.op_warnings.is_empty(), "{:?}", e.op_warnings);
+    assert_ne!(e.export_block().as_deref(), Some(ERR));
+}
+
+/// B-P43: Add key appends at the last time plus the average spacing, with the last key's value.
+#[test]
+fn add_key_appends_after_the_last_key() {
+    let mut h = keyed_view();
+    for _ in 0..3 {
+        click_add_key(&mut h);
+    }
+    let g = float_keys(h.state(), 2);
+    let got: Vec<(f32, f32)> = g.keys.iter().map(|k| (k.time, k.value)).collect();
+    assert_eq!(
+        got,
+        [(0.0, 0.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (4.0, 1.0)]
+    );
+}
+
+/// B-P43/B-P44: past the stop, the same undo step moves the stop to the new key.
+#[test]
+fn add_key_past_stop_raises_stop_in_one_step() {
+    let mut h = keyed_view();
+    click_add_key(&mut h);
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 2.0));
+    let got = ops(h.state());
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(
+        matches!(&got[1], Op::SetField { field: Field::StopTime, value: Value::F32(v), .. } if f32::from_bits(*v) == 2.0),
+        "{got:?}"
+    );
+    assert!(h.state_mut().undo_edit());
+    assert!(ops(h.state()).is_empty());
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 1.0));
+    assert_eq!(float_keys(h.state(), 2).keys.len(), 2);
+}
+
+/// B-P43: the old rule (the cursor, or half-way between the last two keys) gave 1 on (0, 1, 1) and disabled Add
+/// key with "A key is already at this time."; now the key lands after the last one.
+#[test]
+fn add_key_never_duplicates_a_time() {
+    let mut h = keyed_view();
+    {
+        let m = h.state_mut();
+        let e = m.edit.as_ref().unwrap();
+        let mut g = float_keys(m, 2);
+        let base = KeyData::Float(g.clone());
+        g.keys.push(g.keys[1].clone());
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(11),
+            nth: 0,
+        };
+        let at = nif::edit::anchor_role(&e.model, Some(0), role).unwrap();
+        let op = Op::SetKeys {
+            at,
+            clip: None,
+            keys: KeyData::Float(g),
+            base,
+        };
+        m.edit_push(vec![op], None);
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("A key is already at this time.").is_none());
+    click_add_key(&mut h);
+    let t: Vec<f32> = float_keys(h.state(), 2)
+        .keys
+        .iter()
+        .map(|k| k.time)
+        .collect();
+    assert_eq!(t.len(), 4, "{t:?}");
+    assert!(t[3] > t[2], "{t:?}");
+    assert!(t[..3].iter().all(|&x| x != t[3]), "{t:?}");
+}
+
+/// B-P44: dragging the last key moves the stop with it; one undo reverts both.
+#[test]
+fn stop_follows_the_last_key_on_drag() {
+    let mut h = keyed_view();
+    // The key 2 handle (t 1, the right end) dragged left: a time drag of several ticks, one merged step.
+    let c = h.get_by_label("Emissive multiple key 2").rect().center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=3 {
+        h.hover_at(c - egui::vec2(40.0 * k as f32 / 3.0, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(c - egui::vec2(40.0, 0.0));
+    h.run_steps(3);
+    let last = float_keys(h.state(), 2).keys[1].time;
+    assert!(last < 1.0, "{last} {:?}", ops(h.state()));
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, last));
+    assert_eq!(ops(h.state()).len(), 2, "{:?}", ops(h.state()));
+    assert!(h.state_mut().undo_edit());
+    assert!(ops(h.state()).is_empty());
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 1.0));
+}
+
+/// B-P44: removing the last key brings the stop back to the new last key; a first key moved before the start
+/// pulls the start with it.
+#[test]
+fn remove_last_key_shrinks_stop() {
+    let mut h = keyed_view();
+    click_add_key(&mut h);
+    assert_eq!(ctrl_times(h.state(), 2).1, 2.0);
+    h.get_by_label("Remove Emissive multiple key 3").click();
+    h.run_steps(3);
+    assert_eq!(ctrl_times(h.state(), 2), (0.0, 1.0));
+    edit_number(&mut h, "Emissive multiple key 1 time", "-0.5");
+    assert_eq!(ctrl_times(h.state(), 2), (-0.5, 1.0));
+}
+
+/// B-P44: a clip's keys never move its sequence's start and stop.
+#[test]
+fn clip_stop_is_not_changed() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (nif, seq) = with_clip(&plain);
+    let mut m = direct(nif);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple in Glow")
+        .click();
+    h.run_steps(3);
+    let got = ops(h.state());
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(matches!(&got[0], Op::SetKeys { clip: Some(_), .. }));
+    let e = h.state().edit.as_ref().unwrap();
+    let s = e.model.sequences.iter().find(|s| s.block == seq).unwrap();
+    assert_eq!((s.start, s.stop), (0.0, 1.0));
+}
+
+/// The owner's "end time stayed at 1": a typed Stop is stored, and the clock's range follows it without a reopen.
+#[test]
+fn typed_stop_is_stored_and_moves_the_clock_range() {
+    let (_d, mut h) = uv_view();
+    edit_number(&mut h, "U offset stop", "3");
+    let e = h.state().edit.as_ref().unwrap();
+    let stops: Vec<f32> = e.model.ctrls.values().map(|c| c.stop).collect();
+    assert!(stops.contains(&3.0), "{stops:?}");
+    assert_eq!(e.anim_range(), Some((0.0, 3.0)));
+    h.state_mut().tick_anim(0.0);
+    assert_eq!(h.state().v3.clock.map(|c| c.range), Some((0.0, 3.0)));
+}
+
+/// B-P44: the stop op comes and goes during one drag (the last key passes the stop and comes back); the drag stays
+/// one undo step, the stop op keeps the stop from before the drag as its base and leaves when it is not needed.
+#[test]
+fn a_drag_whose_stop_op_comes_and_goes_is_one_step() {
+    let mut m = direct(scenes::keyed_pair(scenes::Share::No, [1, 2]));
+    let base = KeyData::Float(float_keys(&m, 2));
+    let e = m.edit.as_mut().unwrap();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let at = nif::edit::anchor_role(&e.model, Some(0), role).unwrap();
+    let keys = |t: f32| {
+        let KeyData::Float(mut g) = base.clone() else {
+            unreachable!()
+        };
+        g.keys[1].time = t;
+        Op::SetKeys {
+            at: at.clone(),
+            clip: None,
+            keys: KeyData::Float(g),
+            base: base.clone(),
+        }
+    };
+    let stop = |to: f32, from: f32| Op::SetField {
+        at: at.clone(),
+        field: Field::StopTime,
+        value: Value::F32(to.to_bits()),
+        base: Value::F32(from.to_bits()),
+    };
+    let merge = Some(nif::edit::merge_key(&keys(1.0)));
+    e.push(vec![keys(1.0)], merge.clone());
+    e.push(vec![keys(1.5), stop(1.5, 1.0)], merge.clone());
+    // The UI reads the base from the drag's op: here a later tick names the current stop, which push replaces.
+    e.push(vec![keys(2.0), stop(2.0, 1.5)], merge.clone());
+    let got: Vec<Op> = e.doc.ops().to_vec();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[1], stop(2.0, 1.0), "the base from before the drag");
+    assert_eq!(e.model.ctrls[&2].stop, 2.0);
+    e.push(vec![keys(1.0)], merge.clone());
+    assert_eq!(e.doc.ops().len(), 1, "{:?}", e.doc.ops());
+    assert_eq!(e.model.ctrls[&2].stop, 1.0);
+    e.flush();
+    assert!(e.undo());
+    assert!(e.doc.ops().is_empty());
+    assert!(!e.history.can_undo());
+}
+
+/// keyed_view with ctrl 2's keys replaced by LINEAR keys at `times` (value 1), as one pushed SetKeys.
+fn keyed_view_at(times: &[f32]) -> Harness<'static, MeshesModel> {
+    let mut h = keyed_view();
+    let m = h.state_mut();
+    let e = m.edit.as_ref().unwrap();
+    let g = float_keys(m, 2);
+    let base = KeyData::Float(g.clone());
+    let keys = times
+        .iter()
+        .map(|&time| Key {
+            time,
+            value: 1.0,
+            forward: None,
+            backward: None,
+            tbc: None,
+        })
+        .collect();
+    let role = Role::Ctrl {
+        owner: nif::edit::Owner::Shader,
+        class: "BSLightingShaderPropertyFloatController".into(),
+        var: Some(11),
+        nth: 0,
+    };
+    let op = Op::SetKeys {
+        at: nif::edit::anchor_role(&e.model, Some(0), role).unwrap(),
+        clip: None,
+        keys: KeyData::Float(KeyGroup {
+            key_type: g.key_type,
+            keys,
+        }),
+        base,
+    };
+    m.edit_push(vec![op], None);
+    h.run_steps(2);
+    h
+}
+
+/// B-P45: at 2^21 a 0.1 step rounds back to the last time; Add key takes the next f32 above it instead.
+#[test]
+fn add_key_past_a_large_time_still_increases() {
+    let mut h = keyed_view_at(&[2097152.0]);
+    click_add_key(&mut h);
+    click_add_key(&mut h);
+    let t: Vec<f32> = float_keys(h.state(), 2)
+        .keys
+        .iter()
+        .map(|k| k.time)
+        .collect();
+    assert_eq!(t.len(), 3, "{t:?}");
+    assert!(t.windows(2).all(|w| w[1] > w[0]), "{t:?}");
+    assert!(t.iter().all(|x| x.is_finite()), "{t:?}");
+}
+
+/// B-P45: no finite time is above f32::MAX: Add key is off and says why on hover.
+#[test]
+fn add_key_is_off_when_no_later_time_exists() {
+    let mut h = keyed_view_at(&[0.0, f32::MAX]);
+    let b = h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple");
+    assert!(b.accesskit_node().is_disabled());
+    b.hover();
+    h.run();
+    h.get_by_label("No later time is possible for a new key.");
+    assert_eq!(float_keys(h.state(), 2).keys.len(), 2);
 }
