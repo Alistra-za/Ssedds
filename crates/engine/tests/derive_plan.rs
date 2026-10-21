@@ -422,6 +422,7 @@ fn a_dds_only_pbr_set_is_skipped_with_derive_dds_source() {
         .find(|s| s.code == Some(Code::DeriveDdsSource))
         .expect("DERIVE-DDS-SOURCE");
     assert!(slash(&skip.path).contains("/pbr/arm/steel"), "{skip:?}");
+    assert_eq!(skip.kind(), SkipKind::DdsInput);
     assert!(p.jobs.iter().all(|j| j.derive.is_none()));
     assert!(out_job(&p, "textures/misc/cup.dds").is_some());
     assert!(!p

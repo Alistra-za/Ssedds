@@ -207,10 +207,11 @@ pub struct SkippedFile {
 }
 
 impl SkippedFile {
-    /// What the skip means for a consumer of events: `IN-DDS-SKIPPED`, `PACK-CONFLICT`, else `IN-DUPLICATE`.
+    /// What the skip means for a consumer of events: `IN-DDS-SKIPPED` (and `DERIVE-DDS-SOURCE`, a set whose DDS sources are
+    /// not re-read, Note CM16), `PACK-CONFLICT`, else `IN-DUPLICATE`.
     pub fn kind(&self) -> SkipKind {
         match self.code {
-            Some(Code::InDdsSkipped) => SkipKind::DdsInput,
+            Some(Code::InDdsSkipped | Code::DeriveDdsSource) => SkipKind::DdsInput,
             Some(Code::PackConflict) => SkipKind::PackConflict,
             _ => SkipKind::Duplicate,
         }
@@ -1902,8 +1903,11 @@ impl Engine {
                 &mut summary,
             );
             // IN-DUPLICATE is a conflict the user must resolve; IN-DDS-SKIPPED (Note I) and a pre-packed file
-            // replaced under `packing.prefer = raw` (Note M9) are deliberate.
-            if matches!(s.code, Some(Code::InDdsSkipped | Code::PackConflict)) {
+            // replaced under `packing.prefer = raw` (Note M9) are deliberate, as is a PBR set left in DDS (Note CM16).
+            if matches!(
+                s.code,
+                Some(Code::InDdsSkipped | Code::PackConflict | Code::DeriveDdsSource)
+            ) {
                 summary.skipped_intentional += 1;
             }
         }
