@@ -228,6 +228,7 @@ pub const FIELD_PATHS: &[&str] = &[
     "encoder.effort",
     "encoder.rgbcx_level",
     "encoder.perceptual",
+    "encoder.bc7_weights",
     "encoder.bc1_transparent_black",
     "encoder.bc45_search_radius",
     "validation.min_mip_psnr_db",

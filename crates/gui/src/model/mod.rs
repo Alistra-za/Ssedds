@@ -2702,6 +2702,10 @@ impl AppModel {
             if !engine::policy::backend_fits(engine::config::Backend::Nvtt, f) {
                 p.clear_file_value(&k, "encoder.backend");
             }
+            // Note CP: BC7 weights mean nothing on another format (the row hides there), so they go with it.
+            if f != engine::config::Format::Bc7 {
+                p.clear_file_value(&k, fields::WEIGHTING);
+            }
         });
     }
 
@@ -2729,6 +2733,40 @@ impl AppModel {
             if let Ok(st) = serde_json::from_value::<Subtype>(value.clone()) {
                 return self.edit_subtype("Change subtype", item_key, Some(st));
             }
+        }
+        // Note CP: the BC7 weighting row writes two fields (`fields::weighting_writes`, CP10).
+        if field == fields::WEIGHTING {
+            let w = value.as_str().unwrap_or("");
+            if w != "perceptual"
+                && serde_json::from_value::<engine::config::Bc7Weights>(value.clone()).is_err()
+            {
+                return;
+            }
+            let Some(profile) = self
+                .item(item_key)
+                .and_then(|i| i.job.as_ref())
+                .map(|j| j.profile.clone())
+            else {
+                return;
+            };
+            let k = item_key.to_string();
+            let w = w.to_string();
+            return self.edit("Change BC7 weighting", move |p| {
+                let (own_p, own_w) = (
+                    p.file_value(&k, "encoder.perceptual"),
+                    p.file_value(&k, fields::WEIGHTING),
+                );
+                let writes = fields::weighting_writes(&w, &profile, own_p.as_ref(), own_w.as_ref());
+                for (f, v) in [
+                    ("encoder.perceptual", writes.0),
+                    (fields::WEIGHTING, writes.1),
+                ] {
+                    match v {
+                        Some(v) => p.set_file_value(&k, f, &v),
+                        None => p.clear_file_value(&k, f),
+                    }
+                }
+            });
         }
         // Note CL (M9): an unticked half size removes the key; a written `false` would stay as a provenance entry.
         if field == "drop_top_mip" && value == json!(false) {
@@ -2772,6 +2810,10 @@ impl AppModel {
             // The Format row writes the tag with the format (`set_format`), so its reset clears both.
             if f == "format" {
                 p.clear_file_value(&k, "color.tag");
+            }
+            // The BC7 weighting row stands for both of its fields (Note CP).
+            if f == fields::WEIGHTING {
+                p.clear_file_value(&k, "encoder.perceptual");
             }
         });
     }

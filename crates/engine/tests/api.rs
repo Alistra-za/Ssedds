@@ -522,6 +522,75 @@ fn a_resolve_error_fails_the_file_at_resolve() {
     assert!(!d.path().join("out/armor/iron_n.dds").exists());
 }
 
+/// Note CP: `--set encoder.bc7_weights=…` reaches the profile; ENC-WEIGHTS-IGNORED when perceptual wins, on a
+/// non-BC7 format, or on another backend; never when the field is unset.
+#[test]
+fn bc7_weights_set_resolves_and_warns_where_it_has_no_effect() {
+    use engine::config::{Bc7Weights, Format};
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let try_plan = |sets: &[&str]| {
+        let mut req = request(d.path());
+        req.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+        Engine::new().unwrap().plan(
+            req,
+            &Reporter::new(Arc::new(NullSink), "t"),
+            &CancelToken::default(),
+        )
+    };
+    let plan = |sets: &[&str]| try_plan(sets).unwrap();
+    let iron = |p: &Plan| {
+        p.jobs
+            .iter()
+            .find(|j| j.input.ends_with("iron.png"))
+            .unwrap()
+            .clone()
+    };
+    let ignored = |j: &engine::policy::ResolvedJob| {
+        j.warnings.iter().any(|w| w.code == Code::EncWeightsIgnored)
+    };
+    let base = iron(&plan(&[]));
+    assert_eq!(base.profile.format, Format::Bc7);
+    assert_eq!(base.profile.encoder.bc7_weights, None);
+    assert!(!ignored(&base));
+    let set = iron(&plan(&["encoder.bc7_weights=alpha8"]));
+    assert_eq!(set.profile.encoder.bc7_weights, Some(Bc7Weights::Alpha8));
+    assert!(!ignored(&set), "{:?}", set.warnings);
+    for extra in [
+        "file:**/iron.png.encoder.perceptual=true",
+        "file:**/iron.png.format=bc1",
+        "file:**/iron.png.encoder.backend=nvtt",
+    ] {
+        let j = iron(&plan(&["encoder.bc7_weights=alpha16", extra]));
+        assert!(ignored(&j), "{extra}: {:?}", j.warnings);
+    }
+    // Fix round 1: `linear` overrides an inherited weighting and is never "ignored".
+    for extra in ["", "file:**/iron.png.format=bc1"] {
+        let sets: Vec<&str> = [
+            "encoder.bc7_weights=alpha8",
+            "file:**/iron.png.encoder.bc7_weights=linear",
+            extra,
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+        let j = iron(&plan(&sets));
+        assert_eq!(j.profile.encoder.bc7_weights, Some(Bc7Weights::Linear));
+        assert!(!ignored(&j), "{extra}: {:?}", j.warnings);
+    }
+    // M3: an unknown value is refused, naming the key and the valid values. `rmaos` was dropped (Note CP12).
+    for bad in ["alpha4", "rmaos"] {
+        let text = match try_plan(&[&format!("encoder.bc7_weights={bad}")]) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("{bad} planned"),
+        };
+        let valid = "expected one of `linear`, `alpha2`, `alpha8`, `alpha16`";
+        for want in [bad, "encoder.bc7_weights", valid] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+    }
+}
+
 /// `--on-existing skip` keeps an existing output untouched and reports it as skipped, with its set (M9).
 #[test]
 fn on_existing_skip_keeps_existing_outputs() {

@@ -103,3 +103,63 @@ fn exact_opaque_decodes_alpha_exactly_255_where_upstream_gives_254() {
         "flag on: {on:02x?}"
     );
 }
+
+/// Note CP: a tune that sets only the weights leaves every other level parameter alone: unit weights give the plain
+/// call's bytes at each level, and other weights reach bc7e.
+#[test]
+fn tuned_with_unit_weights_matches_the_plain_call() {
+    use encoders_sys::{bc7e_compress_blocks_tuned, Bc7Tune};
+    let mut s = 0x9e37_79b9_u32;
+    let px: Vec<[u8; 4]> = (0..64 * 16)
+        .map(|i| {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let b = s.to_le_bytes();
+            // Every fourth block opaque, so the exact-opaque tables are exercised too.
+            let a = if (i / 16) % 4 == 0 { 255 } else { b[3] };
+            [b[0], b[1], b[2], a]
+        })
+        .collect();
+    let tune = |weights| Bc7Tune {
+        weights: Some(weights),
+        ..Default::default()
+    };
+    let levels = [
+        Bc7Level::Ultrafast,
+        Bc7Level::Veryfast,
+        Bc7Level::Fast,
+        Bc7Level::Basic,
+        Bc7Level::Slow,
+        Bc7Level::Veryslow,
+        Bc7Level::Slowest,
+        Bc7Level::Max,
+    ];
+    let exacts: &[bool] = if encoders_sys::BC7E_EXACT_OPAQUE_NATIVE {
+        &[false, true]
+    } else {
+        &[false]
+    };
+    let mut checked = 0;
+    for level in levels {
+        if level == Bc7Level::Max && !encoders_sys::BC7E_MAX_NATIVE {
+            continue;
+        }
+        for &exact_opaque in exacts {
+            let p = Bc7Params {
+                level,
+                exact_opaque,
+                ..U5
+            };
+            let what = format!("{level:?} exact={exact_opaque}");
+            let mut plain = vec![0u8; 64 * 16];
+            bc7e_compress_blocks(&px, &mut plain, p);
+            let mut tuned = vec![0u8; 64 * 16];
+            bc7e_compress_blocks_tuned(&px, &mut tuned, p, tune([1, 1, 1, 1]));
+            assert_eq!(plain, tuned, "{what}");
+            bc7e_compress_blocks_tuned(&px, &mut tuned, p, tune([1, 1, 1, 8]));
+            assert_ne!(plain, tuned, "{what}: the weights reach bc7e");
+            checked += 1;
+        }
+    }
+    // The vendored objects carry both patches: every level, both exact-opaque settings.
+    assert_eq!(checked, 16);
+}

@@ -104,6 +104,28 @@ cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 // refused with `CFG-INVALID` without them (docs/research/bc7e-tuning.md).
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest, Max });
 cfg_enum!(SearchRadius, "lowercase" { Default, Max, Fast });
+// BC7 linear error weights for bc7e (DECISIONS Note CP): alpha priority. `linear` is bc7e's own 1,1,1,1 (the plain
+// call): it overrides an inherited weighting.
+cfg_enum!(Bc7Weights, "lowercase" { Linear, Alpha2, Alpha8, Alpha16 });
+impl Bc7Weights {
+    /// Every value, in order; `all_lists_every_variant` ties it to the enum.
+    pub const ALL: [Bc7Weights; 4] = [
+        Bc7Weights::Linear,
+        Bc7Weights::Alpha2,
+        Bc7Weights::Alpha8,
+        Bc7Weights::Alpha16,
+    ];
+
+    /// The R, G, B, A weights bc7e is given.
+    pub fn weights(self) -> [u32; 4] {
+        match self {
+            Bc7Weights::Linear => [1, 1, 1, 1],
+            Bc7Weights::Alpha2 => [1, 1, 1, 2],
+            Bc7Weights::Alpha8 => [1, 1, 1, 8],
+            Bc7Weights::Alpha16 => [1, 1, 1, 16],
+        }
+    }
+}
 cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
 cfg_enum!(
     /// One RNM normal layer (M6 Track F2 spec §2.1).
@@ -683,6 +705,10 @@ pub struct EncoderSpec {
     pub effort: Effort,
     pub rgbcx_level: u32,
     pub perceptual: bool,
+    /// BC7 linear error weights (bc7e only; ignored when `perceptual` is on). Not serialised when unset, so existing
+    /// profile hashes hold (DECISIONS Note CP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bc7_weights: Option<Bc7Weights>,
     pub bc1_transparent_black: bool,
     pub bc45_search_radius: SearchRadius,
 }
@@ -753,6 +779,17 @@ impl Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Note CP: `Bc7Weights::ALL` lists every variant once, in schema order (a new variant fails here until added).
+    #[test]
+    fn all_lists_every_variant() {
+        let schema = serde_json::to_value(schemars::schema_for!(Bc7Weights)).unwrap();
+        let names: Vec<_> = Bc7Weights::ALL
+            .iter()
+            .map(|w| serde_json::to_value(w).unwrap())
+            .collect();
+        assert_eq!(schema["enum"], serde_json::Value::Array(names));
+    }
 
     #[test]
     fn serde_names_match_the_spec() {

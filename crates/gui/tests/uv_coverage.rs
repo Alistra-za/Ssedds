@@ -766,8 +766,10 @@ fn check_all_polls_without_greying_advanced() {
     assert!(h.state().uv.all_stopping());
     assert!(h.get_by_label("Stopping…").accesskit_node().is_disabled());
     // The Advanced fields stay enabled while the run polls.
+    // The BC7 weighting combo (Note CP; it replaced the Perceptual box): a combo's accessible text is its value.
     let fields: Vec<bool> = h
-        .query_all_by_label("Perceptual")
+        .query_all_by_role(egui::accesskit::Role::ComboBox)
+        .filter(|n| n.accesskit_node().value().as_deref() == Some("Linear"))
         .map(|n| n.accesskit_node().is_disabled())
         .collect();
     assert!(

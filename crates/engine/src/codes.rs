@@ -17,6 +17,7 @@
 //! and ALPHA-PARALLAX-NO-ALPHA (`alpha.parallax` on for a complex `_m` whose source has no alpha, DECISIONS AH2).
 //! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
 //! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CL).
+//! and ENC-WEIGHTS-IGNORED (an `encoder.bc7_weights` that perceptual, the format or the backend overrides, DECISIONS Note CP).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +101,7 @@ codes! {
     EncNvttMissing = "ENC-NVTT-MISSING" => Blocking,
     EncNvttVersion = "ENC-NVTT-VERSION" => Blocking,
     EncNvttFailed = "ENC-NVTT-FAILED" => Error,
+    EncWeightsIgnored = "ENC-WEIGHTS-IGNORED" => Warning,
     InDuplicate = "IN-DUPLICATE" => Blocking,
     InDdsSkipped = "IN-DDS-SKIPPED" => Info,
     InPackingInput = "IN-PACKING-INPUT" => Warning,
@@ -240,8 +242,9 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 112);
+        assert_eq!(Code::ALL.len(), 113);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
+        assert_eq!(Code::EncWeightsIgnored.severity(), Severity::Warning);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
         assert_eq!(
