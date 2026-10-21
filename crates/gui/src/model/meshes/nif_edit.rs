@@ -587,33 +587,47 @@ impl NifEdit {
     }
 
     /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
-    /// drag) with as many ops replaces the drag's ops instead, each keeping its original `base`: a drag is one op
-    /// (or one op per colour channel).
+    /// drag) replaces the drag's ops instead, each keeping the `base` of the drag's op with its merge key: a drag
+    /// is one op (or one op per colour channel), plus the controller's start / stop while they follow the keys
+    /// (B-P44), which come and go during the drag.
     pub fn push(&mut self, ops: Vec<Op>, merge: Option<String>) {
         let merging = merge.is_some();
         let n = ops.len();
-        let same_drag = merging
-            && self.drag.as_ref().map(|(k, c)| (Some(k), *c)) == Some((merge.as_ref(), n))
-            && self.doc.ops.len() >= n;
+        let tail = self.drag_ops(merge.as_deref().unwrap_or_default()).len();
+        let same_drag = merging && tail > 0;
         self.drag = merge.clone().map(|k| (k, n));
         self.history.record(self.doc.to_text(), merge);
-        if same_drag {
-            let start = self.doc.ops.len() - n;
-            for (d, mut op) in self.doc.ops[start..].iter_mut().zip(ops) {
+        let old: Vec<DocOp> = match same_drag {
+            true => self.doc.ops.split_off(self.doc.ops.len() - tail),
+            false => vec![],
+        };
+        let key = |op: &Op| nif::edit::merge_key(op);
+        for (i, mut op) in ops.into_iter().enumerate() {
+            let same = old.get(i).filter(|d| key(&d.op) == key(&op));
+            if let Some(d) = same.or_else(|| old.iter().find(|d| key(&d.op) == key(&op))) {
                 keep_base(&mut op, &d.op);
-                d.op = op;
             }
-        } else {
-            self.doc.ops.extend(ops.into_iter().map(|op| DocOp {
+            self.doc.ops.push(DocOp {
                 op,
                 status: OpStatus::Applied,
-            }));
+            });
         }
         self.reapply();
         if merging {
             self.unsaved = true;
         } else {
             self.save();
+        }
+    }
+
+    /// The ops of the drag with merge key `merge` while it runs (empty otherwise): their bases are the values from
+    /// before the drag.
+    pub fn drag_ops(&self, merge: &str) -> &[DocOp] {
+        match &self.drag {
+            Some((k, n)) if k == merge && self.doc.ops.len() >= *n => {
+                &self.doc.ops[self.doc.ops.len() - n..]
+            }
+            _ => &[],
         }
     }
 

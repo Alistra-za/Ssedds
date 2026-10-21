@@ -494,7 +494,7 @@ fn keys_body(
                 Some(shown.into()),
             );
             if pick != quad {
-                push_keys(act, at, seq, curve::convert(keys, pick), keys, false);
+                push_keys(act, e, c, at, seq, curve::convert(keys, pick), keys, false);
             }
         });
     }
@@ -502,7 +502,7 @@ fn keys_body(
     let id = egui::Id::new(("meshes-edit-curve", c.block, seq));
     let out = curve::curve(ui, id, title, keys, span, cursor, editable);
     if let Some(k) = out.keys {
-        push_keys(act, at, seq, k, keys, true);
+        push_keys(act, e, c, at, seq, k, keys, true);
     }
     act.flush |= out.released;
     if let Some(kt) = out.scrub {
@@ -514,8 +514,8 @@ fn keys_body(
             kt
         });
     }
-    key_table(ui, act, c, at, seq, title, keys, editable);
-    add_key(ui, e, act, c, at, seq, title, keys, editable, cursor, span);
+    key_table(ui, e, act, c, at, seq, title, keys, editable);
+    add_key(ui, e, act, c, at, seq, title, keys, editable, span);
 }
 
 /// One exact float cell: f32's shortest round-trip text, so what is shown is the stored float. Returns the new value
@@ -576,6 +576,7 @@ fn swatch(ui: &mut egui::Ui, keys: &KeyData, k: usize, name: &str) -> (Option<Ke
 #[allow(clippy::too_many_arguments)]
 fn key_table(
     ui: &mut egui::Ui,
+    e: &NifEdit,
     act: &mut Act,
     c: &TimeCtrl,
     at: &Anchor,
@@ -677,7 +678,7 @@ fn key_table(
             });
     });
     if let Some((d, merge)) = next {
-        push_keys(act, at, clip, d, keys, merge);
+        push_keys(act, e, c, at, clip, d, keys, merge);
     }
 }
 
@@ -698,9 +699,10 @@ fn without_key(keys: &KeyData, k: usize) -> KeyData {
     }
 }
 
-/// Add key (D10): at the cursor time, else half-way between the last two keys (start / stop of `span` for 0 / 1
-/// keys), with the curve's value there; QUADRATIC tangents 0. An empty group starts LINEAR at the value of the
-/// interpolator it edits (the controller's, or the clip's bound CB's).
+/// Add key (B-P43, replaces D10): after the last key, at its time plus the average key spacing (0.1 for one key or
+/// a spacing of 0), with the last key's value; QUADRATIC tangents 0. It never lands on a key's time. An empty group
+/// starts LINEAR at `span`'s start with the value of the interpolator it edits (the controller's, or the clip's
+/// bound CB's). Past a controller's stop, `push_keys` moves the stop in the same step (B-P44).
 #[allow(clippy::too_many_arguments)]
 fn add_key(
     ui: &mut egui::Ui,
@@ -712,18 +714,9 @@ fn add_key(
     title: &str,
     keys: &KeyData,
     editable: bool,
-    cursor: Option<f32>,
     span: (f32, f32),
 ) {
-    let n = curve::len(keys);
-    let t = match (cursor, n) {
-        (Some(t), _) => t,
-        (None, 0) => span.0,
-        (None, 1) => span.1,
-        (None, _) => (curve::time(keys, n - 2) + curve::time(keys, n - 1)) / 2.0,
-    };
-    let taken = (0..n).any(|k| curve::time(keys, k) == t);
-    let r = ui.add_enabled(editable && !taken, egui::Button::new("Add key"));
+    let r = ui.add_enabled(editable, egui::Button::new("Add key"));
     set_name(
         &r,
         egui::WidgetType::Button,
@@ -731,72 +724,115 @@ fn add_key(
         None,
         None,
     );
-    let clicked = r.clicked();
-    if taken {
-        r.on_disabled_hover_text("A key is already at this time.");
-    }
-    if !clicked {
+    if !r.clicked() {
         return;
     }
-    // A clip's interpolator through the shared binding (by ref or by strings); parsed on the click only.
-    let interp = match clip {
-        Some(seq) => nif::anim::clip_interp(&e.model, &e.patched, seq, c.block),
-        None => c.interp,
-    };
-    let interp = interp
-        .and_then(|i| u32::try_from(i).ok())
-        .and_then(|i| e.model.interps.get(&i))
-        .map(|i| i.value.clone())
-        .unwrap_or_default();
-    let v = curve::sample(keys, t).unwrap_or_else(|| {
+    let n = curve::len(keys);
+    let (t, v) = if n > 0 {
+        let last = curve::time(keys, n - 1);
+        let avg = (last - curve::time(keys, 0)) / (n - 1).max(1) as f32;
+        let step = if avg > 0.0 { avg } else { 0.1 };
+        let nch = curve::channels(keys);
+        let v = std::array::from_fn(|ch| match ch < nch {
+            true => curve::get(keys, n - 1, ch, Part::Value),
+            false => 0.0,
+        });
+        (last + step, v)
+    } else {
+        // A clip's interpolator through the shared binding (by ref or by strings); parsed on the click only.
+        let interp = match clip {
+            Some(seq) => nif::anim::clip_interp(&e.model, &e.patched, seq, c.block),
+            None => c.interp,
+        };
+        let interp = interp
+            .and_then(|i| u32::try_from(i).ok())
+            .and_then(|i| e.model.interps.get(&i))
+            .map(|i| i.value.clone())
+            .unwrap_or_default();
         let at = |k: usize| interp.get(k).copied().unwrap_or(0.0);
-        [at(0), at(1), at(2)]
-    });
-    fn insert<T: Clone>(g: &KeyGroup<T>, t: f32, value: T, zero: T) -> KeyGroup<T> {
+        (span.0, [at(0), at(1), at(2)])
+    };
+    fn append<T: Clone>(g: &KeyGroup<T>, t: f32, value: T, zero: T) -> KeyGroup<T> {
         let quad = g.key_type == Some(2);
         let mut g = g.clone();
         g.key_type.get_or_insert(1);
-        let i = g
-            .keys
-            .iter()
-            .position(|k| k.time > t)
-            .unwrap_or(g.keys.len());
         let tangent = quad.then_some(zero);
-        let key = Key {
+        g.keys.push(Key {
             time: t,
             value,
             forward: tangent.clone(),
             backward: tangent,
             tbc: None,
-        };
-        g.keys.insert(i, key);
+        });
         g
     }
     let next = match keys {
-        KeyData::Float(g) => KeyData::Float(insert(g, t, v[0], 0.0)),
-        KeyData::Pos(g) => KeyData::Pos(insert(g, t, v, [0.0; 3])),
+        KeyData::Float(g) => KeyData::Float(append(g, t, v[0], 0.0)),
+        KeyData::Pos(g) => KeyData::Pos(append(g, t, v, [0.0; 3])),
         KeyData::Bool(_) => return,
     };
-    push_keys(act, at, clip, next, keys, false);
+    push_keys(act, e, c, at, clip, next, keys, false);
 }
 
-/// One SetKeys on the anchored controller's own keys (`clip: None`) or a clip's.
+/// One SetKeys on the anchored controller's own keys (`clip: None`) or a clip's. B-P44: on a controller's own keys
+/// the same step sets its stop to the last key's time, and its start to the first key's when that is earlier;
+/// each only when it changes from its value before this edit (or drag). A clip's sequence keeps its times.
+#[allow(clippy::too_many_arguments)]
 fn push_keys(
     act: &mut Act,
+    e: &NifEdit,
+    c: &TimeCtrl,
     at: &Anchor,
     clip: Option<u32>,
     keys: KeyData,
     base: &KeyData,
     merge: bool,
 ) {
+    let n = curve::len(&keys);
+    let ends = (n > 0).then(|| (curve::time(&keys, 0), curve::time(&keys, n - 1)));
     let op = Op::SetKeys {
         at: at.clone(),
         clip,
         keys,
         base: base.clone(),
     };
-    let key = merge.then(|| merge_key(&op));
-    act.push = Some((vec![op], key));
+    let key = merge_key(&op);
+    let mut ops = vec![op];
+    if let (None, Some((first, last))) = (clip, ends) {
+        let drag = if merge { e.drag_ops(&key) } else { &[] };
+        // A drag's start / stop op keeps the value from before the drag as its base.
+        let was = |field: Field, now: f32| {
+            drag.iter()
+                .find_map(|d| match &d.op {
+                    Op::SetField {
+                        field: f,
+                        base: Value::F32(b),
+                        ..
+                    } if *f == field => Some(f32::from_bits(*b)),
+                    _ => None,
+                })
+                .unwrap_or(now)
+        };
+        let (start, stop) = (was(Field::StartTime, c.start), was(Field::StopTime, c.stop));
+        for (field, from, to) in [
+            (
+                Field::StartTime,
+                start,
+                if first < start { first } else { start },
+            ),
+            (Field::StopTime, stop, last),
+        ] {
+            if to.is_finite() && to.to_bits() != from.to_bits() {
+                ops.push(Op::SetField {
+                    at: at.clone(),
+                    field,
+                    value: Value::F32(to.to_bits()),
+                    base: Value::F32(from.to_bits()),
+                });
+            }
+        }
+    }
+    act.push = Some((ops, merge.then_some(key)));
 }
 
 /// Adds a controller to `prop` (D9). Shader: a class (Float | Colour) and variable picker; alpha: TestRef only.
