@@ -1504,3 +1504,51 @@ fn set_keys_refusals() {
     );
     assert_eq!(merge_key(&clip(&at, 3)), "SetKeys|2|3");
 }
+
+/// Review B4 minor 1: a sequence's controlled block counts as a user of the interpolator and its data.
+#[test]
+fn sequence_users_make_key_edits_copy() {
+    let keys = lin(&[(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+
+    // controlled block 0 of sequence 8 shares ctrl 2's interpolator 4
+    let b = scenes::keyed_with_sequence(Some(4));
+    assert_eq!(read_model(&b).unwrap().sequences[0].blocks[0].interp, 4);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 11);
+    assert_eq!(kind_of(&r.bytes, 9), b"NiFloatInterpolator");
+    assert_eq!(
+        block_bytes_of(&r.bytes, 9),
+        with_i32(block_bytes_of(&b, 4), 4, 10)
+    );
+    assert_eq!(block_bytes_of(&r.bytes, 10), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 2),
+        with_i32(block_bytes_of(&b, 2), 26, 9)
+    );
+    same_blocks(&b, &r.bytes, (0..9).filter(|&k| k != 2));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&2].interp, Some(9));
+    assert_eq!(m.sequences[0].blocks[0].interp, 4);
+    assert_eq!(m.interps[&4].data, 6);
+
+    // sequence-only interpolator 9 shares ctrl 2's data 6
+    let b = scenes::keyed_with_sequence(None);
+    assert_eq!(read_model(&b).unwrap().interps[&9].data, 6);
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let r = apply(&b, &[set_keys(&at, keys.clone(), data_of(&b, 6))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    assert_eq!(nblocks(&r.bytes), 11);
+    assert_eq!(kind_of(&r.bytes, 10), b"NiFloatData");
+    assert_eq!(block_bytes_of(&r.bytes, 10), encode_data(&keys));
+    assert_eq!(
+        block_bytes_of(&r.bytes, 4),
+        with_i32(block_bytes_of(&b, 4), 4, 10)
+    );
+    same_blocks(&b, &r.bytes, (0..10).filter(|&k| k != 4));
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.sequences[0].blocks[0].interp, 9);
+    assert_eq!(m.interps[&9].data, 6);
+    assert_eq!(data_of(&r.bytes, 6), data_of(&b, 6));
+}

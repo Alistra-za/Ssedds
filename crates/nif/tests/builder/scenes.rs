@@ -283,6 +283,8 @@ pub fn all() -> Vec<Vec<u8>> {
         keyed_pair(Share::Data, [1, 1]),
         keyed_pair(Share::Interp, [1, 1]),
         keyed_pair(Share::No, [3, 1]),
+        keyed_with_sequence(Some(4)),
+        keyed_with_sequence(None),
     ]
 }
 
@@ -602,6 +604,24 @@ pub enum Share {
 /// interp 5; 4 with Share::Interp). NiFloatInterpolator 0.5 (4, data 6) and 0.25 (5, data 7; 6 with Share::Data).
 /// NiFloatData of `types[0]` (6) and `types[1]` (7). All 8 blocks always exist; unreferenced ones are orphans.
 pub fn keyed_pair(share: Share, types: [u32; 2]) -> Vec<u8> {
+    keyed_nif(share, types).bytes()
+}
+
+/// `keyed_pair(Share::No, [1, 2])` plus a NiControllerSequence (8) whose one controlled block names interpolator
+/// `seq_interp`. `seq_interp: None` adds a sequence-only NiFloatInterpolator 0.75 (9) over ctrl 2's data 6 and names
+/// that instead.
+pub fn keyed_with_sequence(seq_interp: Option<i32>) -> Vec<u8> {
+    let mut n = keyed_nif(Share::No, [1, 2]);
+    let mut seq = sequence_body();
+    seq[12..16].copy_from_slice(&seq_interp.unwrap_or(9).to_le_bytes()); // controlled block 0's interpolator
+    n.block("NiControllerSequence", seq);
+    if seq_interp.is_none() {
+        n.block("NiFloatInterpolator", W::default().f(0.75).i32(6).0);
+    }
+    n.bytes()
+}
+
+fn keyed_nif(share: Share, types: [u32; 2]) -> Nif {
     let mut n = Nif::new(100);
     let s = n.string("S");
     n.block("BSTriShape", bstri_named(s, 1, -1));
@@ -618,5 +638,5 @@ pub fn keyed_pair(share: Share, types: [u32; 2]) -> Vec<u8> {
     n.block("NiFloatInterpolator", W::default().f(0.25).i32(data).0);
     n.block("NiFloatData", float_data(types[0]));
     n.block("NiFloatData", float_data(types[1]));
-    n.bytes()
+    n
 }
