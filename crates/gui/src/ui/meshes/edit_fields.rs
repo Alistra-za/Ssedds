@@ -58,6 +58,13 @@ pub(super) fn row_label(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+/// A combo width that ends at the visible right edge (egui-ui-rules 3.5, 3.8): `want`, or what the row has left
+/// after its label. Pair it with `.truncate()` so a long value cannot widen the combo again.
+pub(super) fn fit_width(ui: &egui::Ui, want: f32) -> f32 {
+    let right = ui.max_rect().right().min(ui.clip_rect().right()) - ui.spacing().item_spacing.x;
+    want.min(right - ui.cursor().left()).max(40.0)
+}
+
 /// Warnings of `target` under their field: amber, red for errors, with "Fix" when the warning carries a fix.
 pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
     let all = e.warnings.iter().chain(&e.op_warnings);

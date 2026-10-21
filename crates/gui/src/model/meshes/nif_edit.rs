@@ -487,6 +487,13 @@ impl NifEdit {
             }
         }
         self.parsed = Arc::new(render3d::parse(&self.patched));
+        // A clip the edits or a source reload removed: back to the free chains (with the last sequence gone, the
+        // Preview selector is gone too).
+        if let Playing::Clip(seq) = self.playing {
+            if !self.model.sequences.iter().any(|s| s.block == seq) {
+                self.playing = Playing::Free;
+            }
+        }
         self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, self.playing);
         self.anim_shown = None;
         self.refresh_blocked();

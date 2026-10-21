@@ -2,7 +2,7 @@
 //! shape's shader and alpha chains, and (v2 B6) each controller's keys: a curve, a key table, Add and Remove key,
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
-use super::edit_fields::{float_named, row_label, selected, set_name, warnings, Act};
+use super::edit_fields::{fit_width, float_named, row_label, selected, set_name, warnings, Act};
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
 use crate::model::meshes::MeshesModel;
 use crate::model::viewport3d::Clock;
@@ -113,7 +113,7 @@ fn preview(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                 .map_or(format!("Clip {b}"), clip_name),
         };
         let r = egui::ComboBox::from_id_salt("meshes-edit-preview")
-            .width(200.0)
+            .width(fit_width(ui, 200.0))
             .truncate()
             .selected_text(&shown)
             .show_ui(ui, |ui| {
@@ -469,21 +469,12 @@ fn keys_body(
     clip: Option<&Sequence>,
     clock: Option<Clock>,
 ) {
-    let (span, freq, phase, flags, interp) = match clip {
+    let (span, freq, phase, flags) = match clip {
         Some(s) => {
-            // shortcut: the empty-group start value comes from a by-ref CB only; a string-bound clip with no keys
-            // starts at 0. Upgrade if such files show up.
-            let cb = s.blocks.iter().find(|b| b.controller == c.block as i32);
             let flags = 0x08 | ((s.cycle.min(3) as u16) << 1);
-            (
-                (s.start, s.stop),
-                s.frequency,
-                0.0,
-                flags,
-                cb.map(|b| b.interp),
-            )
+            ((s.start, s.stop), s.frequency, 0.0, flags)
         }
-        None => ((c.start, c.stop), c.frequency, c.phase, c.flags, c.interp),
+        None => ((c.start, c.stop), c.frequency, c.phase, c.flags),
     };
     let seq = clip.map(|s| s.block);
     let kt = curve::key_type(keys);
@@ -536,9 +527,7 @@ fn keys_body(
         });
     }
     key_table(ui, act, c, at, seq, title, keys, editable);
-    add_key(
-        ui, e, act, at, seq, title, keys, editable, cursor, span, interp,
-    );
+    add_key(ui, e, act, c, at, seq, title, keys, editable, cursor, span);
 }
 
 /// One exact float cell: f32's shortest round-trip text, so what is shown is the stored float. Returns the new value
@@ -671,13 +660,14 @@ fn without_key(keys: &KeyData, k: usize) -> KeyData {
 }
 
 /// Add key (D10): at the cursor time, else half-way between the last two keys (start / stop of `span` for 0 / 1
-/// keys), with the curve's value there; QUADRATIC tangents 0. An empty group starts LINEAR at interpolator
-/// `interp`'s value.
+/// keys), with the curve's value there; QUADRATIC tangents 0. An empty group starts LINEAR at the value of the
+/// interpolator it edits (the controller's, or the clip's bound CB's).
 #[allow(clippy::too_many_arguments)]
 fn add_key(
     ui: &mut egui::Ui,
     e: &NifEdit,
     act: &mut Act,
+    c: &TimeCtrl,
     at: &Anchor,
     clip: Option<u32>,
     title: &str,
@@ -685,7 +675,6 @@ fn add_key(
     editable: bool,
     cursor: Option<f32>,
     span: (f32, f32),
-    interp: Option<i32>,
 ) {
     let n = curve::len(keys);
     let t = match (cursor, n) {
@@ -710,6 +699,11 @@ fn add_key(
     if !clicked {
         return;
     }
+    // A clip's interpolator through the shared binding (by ref or by strings); parsed on the click only.
+    let interp = match clip {
+        Some(seq) => nif::anim::clip_interp(&e.model, &e.patched, seq, c.block),
+        None => c.interp,
+    };
     let interp = interp
         .and_then(|i| u32::try_from(i).ok())
         .and_then(|i| e.model.interps.get(&i))
@@ -813,7 +807,8 @@ fn add_row(
             };
             let shown = format!("{} ({var})", var_name(class, var));
             let r = egui::ComboBox::from_id_salt(id.with("var"))
-                .width(180.0)
+                .width(fit_width(ui, 180.0))
+                .truncate()
                 .selected_text(&shown)
                 .show_ui(ui, |ui| {
                     for &o in offered {
@@ -985,7 +980,8 @@ fn variable(
         let shown = var_name(&c.class, v);
         // Phase A ruling R8 lifted (v2 B7): a managed controller's clips follow the new variable.
         let r = egui::ComboBox::from_id_salt(("meshes-edit-ctrl-var", c.block))
-            .width(180.0)
+            .width(fit_width(ui, 180.0))
+            .truncate()
             .selected_text(&shown)
             .show_ui(ui, |ui| {
                 // A value outside the list stays selectable, so the current one is never lost.

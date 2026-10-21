@@ -3661,6 +3661,30 @@ fn tbc_xyz_and_const_keys_are_drawn_not_edited() {
 /// NiFloatInterpolator LINEAR (0, 0) -> (1, 4); Loop, frequency 1, start 0, stop 1; text keys "start" at 0, "end"
 /// at 1. Returns the bytes and the sequence block.
 fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: [(0.0, 0.0), (1.0, 4.0)]
+            .map(|(time, value)| Key {
+                time,
+                value,
+                forward: None,
+                backward: None,
+                tbc: None,
+            })
+            .into(),
+    });
+    with_clip_at(bytes, true, 0.0, Some(keys), [1.0, 0.0, 1.0])
+}
+
+/// [`with_clip`] with the CB bound by ref or (ref -1) by strings only, the CB interpolator's value, its keys (None:
+/// data -1, the empty group) and the sequence's (frequency, start, stop).
+fn with_clip_at(
+    bytes: &[u8],
+    by_ref: bool,
+    value: f32,
+    keys: Option<KeyData>,
+    timing: [f32; 3],
+) -> (Vec<u8>, u32) {
     let m = nif::model::read_model(bytes).unwrap();
     let (shape, lsp) = m
         .shapes
@@ -3688,21 +3712,12 @@ fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
         ),
     );
     doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
-    let key = |time: f32, value: f32| Key {
-        time,
-        value,
-        forward: None,
-        backward: None,
-        tbc: None,
-    };
-    let keys = KeyData::Float(KeyGroup {
-        key_type: Some(1),
-        keys: vec![key(0.0, 0.0), key(1.0, 4.0)],
+    let data = keys.map_or(-1, |k| {
+        doc.append(b"NiFloatData", nif::keys::encode_data(&k)) as i32
     });
-    let data = doc.append(b"NiFloatData", nif::keys::encode_data(&keys));
     let interp = doc.append(
         b"NiFloatInterpolator",
-        builder::W::default().f(0.0).i32(data as i32).0,
+        builder::W::default().f(value).i32(data).0,
     );
     let s = |doc: &mut nif::write::NifDoc, x: &[u8]| doc.string(x);
     let (start, end) = (s(&mut doc, b"start"), s(&mut doc, b"end"));
@@ -3728,7 +3743,7 @@ fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
         .u32(1)
         .u32(0)
         .i32(interp as i32)
-        .i32(ctrl as i32)
+        .i32(if by_ref { ctrl as i32 } else { -1 })
         .u8(0)
         .i32(shape.net.name)
         .i32(prop)
@@ -3738,7 +3753,7 @@ fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
         .f(1.0)
         .i32(tk as i32)
         .u32(0)
-        .fs(&[1.0, 0.0, 1.0])
+        .fs(&timing)
         .i32(-1)
         .i32(-1)
         .u16(0)
@@ -3751,6 +3766,11 @@ fn with_clip(bytes: &[u8]) -> (Vec<u8>, u32) {
     assert_eq!(back.lighting[&lsp].prop.ctrls[0], ctrl);
     assert_eq!(back.sequences.len(), 1);
     assert_eq!(back.sequences[0].text_keys.len(), 2);
+    assert_eq!(
+        nif::anim::clips_of(&back, &out, ctrl),
+        vec![seq],
+        "the CB binds"
+    );
     (out, seq)
 }
 
@@ -3838,4 +3858,144 @@ fn clip_preview_swaps_interpolators_only_while_selected() {
     h.run_steps(3);
     assert_eq!(h.state().edit.as_ref().unwrap().playing, Playing::Free);
     drop(cmds);
+}
+
+// ---- v2 B7 fix round 1 (B-P36) ----
+
+/// The managed controller with_clip puts first in the lit shape's chain.
+fn clip_ctrl(e: &NifEdit) -> u32 {
+    let (_, lsp) = lit_shape(e);
+    e.model.lighting[&lsp].prop.ctrls[0]
+}
+
+/// Review I2: a source reload that removes the selected clip's sequence returns the preview to the free chains, so
+/// they still play (the selector is gone with the last sequence).
+#[test]
+fn losing_the_selected_clip_returns_to_the_free_chains() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (nif, seq) = with_clip(&plain);
+    let (_d, mut m, _cmds) = session_on(&nif);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    m.edit_with(|e| e.reload_source(plain.clone()).unwrap());
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.model.sequences.is_empty());
+    assert_eq!(e.playing, Playing::Free);
+    assert_eq!(
+        e.anim_range(),
+        Some((0.0, 1.0)),
+        "the free U offset chain plays"
+    );
+    m.tick_anim(0.0);
+    assert!(m.v3.clock.is_some());
+}
+
+/// Review I3: Add key on a string-bound clip with an empty key group starts at its CB interpolator's value (5).
+#[test]
+fn add_key_on_a_string_bound_empty_clip_starts_at_its_interpolator_value() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (nif, seq) = with_clip_at(&plain, false, 5.0, None, [1.0, 0.0, 1.0]);
+    let mut m = direct(nif);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let e = m.edit.as_ref().unwrap();
+    let ctrl = clip_ctrl(e);
+    assert!(
+        matches!(&e.keys[&(ctrl, Some(seq))], Ok(KeyData::Float(g)) if g.keys.is_empty()),
+        "{:?}",
+        e.keys.get(&(ctrl, Some(seq)))
+    );
+    let (shape, _) = lit_shape(e);
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.get_by_role_and_label(AkRole::Button, "Add key to Emissive multiple in Glow")
+        .click();
+    h.run_steps(3);
+    let last = ops(h.state()).pop();
+    let Some(Op::SetKeys {
+        clip: Some(s),
+        keys: KeyData::Float(g),
+        ..
+    }) = &last
+    else {
+        panic!("{last:?}")
+    };
+    assert_eq!(*s, seq);
+    assert_eq!(g.keys.len(), 1);
+    assert_eq!((g.keys[0].time, g.keys[0].value), (0.0, 5.0));
+}
+
+/// Review I4: every combo of the Controllers tab (Preview, the Variable combos, Add controller) ends inside the edit
+/// panel at 1100 px.
+#[test]
+fn controllers_tab_combos_fit_the_edit_panel() {
+    let (nif, _) = with_clip(&with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif")));
+    let (_d, mut m, _cmds) = session_on(&nif);
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1100.0, 1600.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    h.run_steps(3);
+    let panel = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
+        .expect("the edit panel")
+        .outer_rect;
+    let combos: Vec<_> = h
+        .query_all(egui_kittest::kittest::by().role(AkRole::ComboBox))
+        .filter(|n| n.rect().min.x >= panel.min.x)
+        .collect();
+    let names: Vec<String> = combos
+        .iter()
+        .map(|n| n.accesskit_node().label().unwrap_or_default())
+        .collect();
+    for want in [
+        "Preview animation",
+        "Emissive multiple variable",
+        "U offset variable",
+        "Add controller variable",
+    ] {
+        assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
+    }
+    for n in &combos {
+        let r = n.rect();
+        assert!(
+            r.max.x <= panel.max.x + 0.5,
+            "{:?}: {r:?} past the edit panel's right edge {}",
+            n.accesskit_node().label(),
+            panel.max.x
+        );
+    }
+}
+
+/// Review minor: a clip whose timing differs from the free chain (0 to 3 s) sets the clock's range when picked;
+/// Free sets it back.
+#[test]
+fn picking_a_clip_sets_the_clock_range_to_its_timing() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let key = |time: f32, value: f32| Key {
+        time,
+        value,
+        forward: None,
+        backward: None,
+        tbc: None,
+    };
+    let keys = KeyData::Float(KeyGroup {
+        key_type: Some(1),
+        keys: vec![key(0.0, 0.0), key(3.0, 3.0)],
+    });
+    let (nif, seq) = with_clip_at(&plain, true, 0.0, Some(keys), [1.0, 0.0, 3.0]);
+    let (_d, mut m, _cmds) = session_on(&nif);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 1.0), "Free");
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    m.tick_anim(0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 3.0), "the clip");
+    m.edit_with(|e| e.set_playing(Playing::Free));
+    m.tick_anim(0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, 1.0), "Free again");
 }
