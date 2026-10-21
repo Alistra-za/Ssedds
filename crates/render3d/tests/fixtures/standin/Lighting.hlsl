@@ -37,6 +37,8 @@
 // - DYNAMIC_CUBEMAPS (with STANDIN_FLAT, plain forward main only): the colour adds the level-15 +Z sample of
 //   EnvReflectionsTexture at t30, CS's forward DC register, so the env cube binding shows in pixels (v2 D5). With
 //   STANDIN_ENV_T31 it samples EnvTexture at t31 instead (CS's other forward DC register).
+// - STANDIN_TIMER (with STANDIN_FLAT): the PS declares CS's Timer (b2) and the flat colour adds 0.5 x frac(Timer)
+//   to red, so the clock's time shows in pixels (v2 B3).
 
 struct VsOut
 {
@@ -109,6 +111,9 @@ cbuffer StandinLight : register(b2)
     float4 PointLightPosition[7];
     float4 PointLightColor[7];
     float2 NumLightNumShadowLight;
+#if defined(STANDIN_TIMER)
+    float Timer;
+#endif
 };
 
 cbuffer StandinMaterialPs : register(b1)
@@ -166,6 +171,9 @@ float4 shade(VsOut i)
 #endif
 #if defined(STANDIN_REPLAY)
     col += DirLightColor.rgb;
+#endif
+#if defined(STANDIN_TIMER)
+    col.r += 0.5 * frac(Timer);
 #endif
     return float4(col, base.a * 0.5);
 #else

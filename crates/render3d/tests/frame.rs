@@ -1,7 +1,7 @@
 //! 03 §7 per-frame cost: resolved fields write the same bytes and pixels as the by-name writer; an unchanged
 //! frame uploads nothing; `draw_ms` is recorded (not asserted).
 mod common;
-use common::{dds_rgba8, fixture, renderer, FLAT};
+use common::{dds_rgba8, fixture, plane_shape, renderer, FLAT, IDENT};
 use nif::material::MaterialState;
 use render3d::cbuffer::CbWriter;
 use render3d::compile::{CbLayout, CbVar, VarKind};
@@ -19,7 +19,6 @@ const STATIC_NAMES: &[&str] = &[
     "ColourOutputClamp",
     "AmbientSpecularTintAndFresnelPower",
     "SSRParams",
-    "Timer",
     "WaterSystemHeight",
     "WaterData",
     "FrameParams",
@@ -106,6 +105,7 @@ fn resolved_fields_write_same_bytes_as_by_name() {
     ns.reverse();
     let mut scene = Scene::neutral();
     scene.dir_light.direction = [0.3, -0.2, 0.93];
+    scene.time = 2.5;
     let view = View::new(
         &Camera::Orbit {
             target: [1.0, 2.0, 3.0],
@@ -349,4 +349,54 @@ fn a_retained_draw_returning_from_hidden_matches_the_by_name_writer() {
         a.last_uploads() >= 1,
         "retained draw drew with pre-hide constants"
     );
+}
+
+/// v2 B3 (F4): `Scene.time` reaches CS's `Timer` every frame, and a cbuffer edit (which rewrites the static block)
+/// does not reset it.
+#[test]
+fn timer_reaches_the_shader() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(
+        cache.path(),
+        &["STANDIN_OPAQUE_OK", "STANDIN_FLAT", "STANDIN_TIMER"],
+    );
+    let plane = plane_shape(1, IDENT, [0.0; 3], 0);
+    let base = plane.material.clone();
+    let rep = r.load_parsed(
+        &render3d::ParsedNif {
+            shapes: vec![plane],
+            ..Default::default()
+        },
+        &|_| None,
+    );
+    assert!(
+        rep.errors.is_empty() && rep.compile_errors.is_empty(),
+        "{rep:?}"
+    );
+    let id = ShapeId(1);
+    let mut s = Scene::neutral();
+    assert_eq!(
+        s.time, 1.0,
+        "the default is the constant the preview always wrote"
+    );
+    let a = r.render(&s, 64, 64).unwrap();
+    assert_eq!(r.draw_cb_floats(id, "Timer"), Some(vec![1.0]));
+    s.time = 0.25;
+    let b = r.render(&s, 64, 64).unwrap();
+    assert_eq!(r.draw_cb_floats(id, "Timer"), Some(vec![0.25]));
+    assert_ne!(a, b, "frac(1.0) = 0 adds nothing; frac(0.25) adds red");
+    // A cbuffer edit (glossiness is not drawn by STANDIN_FLAT): the static block is rewritten, Timer must survive.
+    let mut m = base;
+    m.params.glossiness += 1.0;
+    assert_eq!(
+        r.set_material(id, m, &|_| None).unwrap(),
+        render3d::EditKind::Cbuffer
+    );
+    let c = r.render(&s, 64, 64).unwrap();
+    assert_eq!(
+        r.draw_cb_floats(id, "Timer"),
+        Some(vec![0.25]),
+        "not reset to 1.0 by write_static"
+    );
+    assert_eq!(b, c, "same time, same pixels");
 }
