@@ -55,6 +55,9 @@ pub struct TextureItem {
     pub decisions: Vec<Decision>,
     pub warnings: Vec<Warning>,
     pub thumb: Option<std::sync::Arc<Thumbnail>>,
+    /// The cached analysis, check stats included (DECISIONS Note CL); `None` for skipped, failed and packed-source
+    /// items.
+    pub analysis: Option<std::sync::Arc<engine::analyse::Analysis>>,
     pub changed_on_disk: bool,
     /// The file's stamp when it was listed. Only DDS inputs carry one: the engine plans no job for them, so
     /// nothing else records what they looked like; an item with a job is checked against the job's stamps.
@@ -217,6 +220,7 @@ impl PlanView {
                 decisions: decisions_of(job),
                 warnings: job.warnings.clone(),
                 thumb: session.thumbnail(job),
+                analysis: session.cache().analysis(job).map(std::sync::Arc::new),
                 job: Some(job.clone()),
                 status,
                 changed_on_disk: false,
@@ -236,6 +240,7 @@ impl PlanView {
                         decisions: vec![],
                         warnings: vec![],
                         thumb: session.cache().thumbnail_of(&s.path),
+                        analysis: None,
                         changed_on_disk: false,
                         stamp: None,
                     });
@@ -256,6 +261,7 @@ impl PlanView {
                 decisions: vec![],
                 warnings: vec![],
                 thumb: None,
+                analysis: None,
                 changed_on_disk: false,
                 stamp: if dds { SourceStamp::of(&s.path) } else { None },
             });
@@ -273,6 +279,7 @@ impl PlanView {
                 decisions: vec![],
                 warnings: vec![],
                 thumb: None,
+                analysis: None,
                 changed_on_disk: false,
                 stamp: None,
             });

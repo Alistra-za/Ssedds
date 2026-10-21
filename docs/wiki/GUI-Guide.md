@@ -140,7 +140,7 @@ With two or more sets selected, a row of chips picks which of their maps to edit
 Right-clicking a selected tile or set keeps the selection; right-clicking another one selects it alone. The menu offers:
 
 - *Edit settings for N selected*.
-- *Copy settings from <texture> to N selected…*: a checklist of the active texture's own settings. Untick what you want to keep.
+- *Copy settings from <texture> to N selected…*: a checklist of the active texture's own settings. Untick what you want to keep. A saved half size is asked about on Apply instead.
 - *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept.
 - For sets, *Select members of kind*, which turns the selection into those textures.
 
@@ -172,7 +172,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - **Live encode** is off by default. Press **Encode now** to encode. With Live encode on, the preview re-encodes a moment after each edit. A result that no longer matches the settings is marked stale.
 - Each previewed mip is byte-identical to the same mip of the DDS that Export writes. The exception is a texture on NVTT: its preview uses the built-in encoder and says so.
 - Only mips whose larger side is at most the preview size limit are encoded. The limit is 4096 by default, settable to 1024, 2048, 4096 or 8192, and 16384 after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and says so.
-- Toolbar: three labelled clusters that wrap onto more rows when the preview is narrow. **Channels** (RGBA, R, G, B, A and α-mask); **View** (*Side by side* or *Split*, *Pin this result*, a *Heatmap* of the difference to the source, *Lens*, *Tile 3×3*, *Fit* and *1:1*); **Encode** (*Live encode* and **Encode now**, filled while it can encode). The sRGB / UNORM display and the mip slider follow, and **✕ Close** stays at the right. Scroll zooms, drag pans. HDR formats are tone-mapped for display.
+- Toolbar: three labelled clusters that wrap onto more rows when the preview is narrow. **Channels** (RGBA, R, G, B, A and α-mask); **View** (*Side by side* or *Split*, *Pin this result*, a *Heatmap* of the difference to the source, *Lens*, *Tile 3×3*, the *Range* and *UV coverage* overlays when they apply, *Fit* and *1:1*); **Encode** (*Live encode* and **Encode now**, filled while it can encode). The sRGB / UNORM display and the mip slider follow, and **✕ Close** stays at the right. Scroll zooms, drag pans. HDR formats are tone-mapped for display.
 - Readouts under the viewports show PSNR, alpha and normal-length checks for the mip on show.
 - **Pixel readout:** point at the picture to see the source and encoded value of the texel under the cursor (0 to 255 and floats), the difference per channel, and for a normal map both normals and the angle between them.
 - **Lens** (L) magnifies 8x under the cursor. **Tile 3x3** (T) repeats the picture to check seams. HDR formats get an **Exposure** slider. The heatmap has a colour legend and a full-scale slider.
@@ -302,11 +302,12 @@ Switch the set editor to **3D** to see the set on a mesh, rendered with Direct3D
 | **Mesh:** | *Auto* (the first scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. The scanned meshes are listed loose before BSA, with ground models (`gnd`, `_go`) and `1stperson` meshes last. |
 | **Shader folder…** | Point at your Community Shaders mod folder or its `Shaders` folder when it is not found automatically ("Community Shaders not found", **Choose folder…**). |
 | Community Shaders features | On by default. Off compiles the shaders without CS feature defines. |
+| **Accurate (deferred)** (in **View**) | On by default. Opaque shapes draw through Community Shaders' own deferred pass and composite, as in game; blended shapes still draw on top the forward way. Off uses the older forward path. If your Community Shaders build cannot run it, the view stays forward and a notice says why. The setting is remembered. |
 | Background | Solid or Studio HDRI (Poly Haven, CC0). For Solid, a colour swatch with a hex field and a *Grey* slider (0 to 100 %) set the grey level; a non-grey colour is turned into its grey. |
 | Sun brightness, Point light brightness and radius | Lighting. |
 | **Reset view** | Reset the camera. |
 
-Moving around: drag to orbit, scroll to zoom, middle-drag or Shift+drag to pan, Shift+right-drag to turn the sun, double-click or Home to recentre. **View** has a debug view (Lit or UV checker; V steps through them) and **Reset view**. Missing textures show in magenta, listed under the frame with **Open in Textures** when the file is in the folder. **Copy image** (Ctrl+Shift+C) copies the frame to the clipboard.
+Moving around: drag to orbit, scroll to zoom, middle-drag or Shift+drag to pan, Shift+right-drag to turn the sun, double-click or Home to recentre. **View** has a debug view (Lit or UV checker; V steps through them), **Accurate (deferred)** and **Reset view**. Missing textures show in magenta, listed under the frame with **Open in Textures** when the file is in the folder. **Copy image** (Ctrl+Shift+C) copies the frame to the clipboard.
 
 Notes:
 
@@ -314,7 +315,7 @@ Notes:
 - To preview on a real mesh, scan your mods first. "No scanned mesh uses this diffuse" means the scan found none. Meshes from Skyrim LE are not drawn; a built-in shape is shown instead. A built-in shape cannot match an entry's match keys, so it shows the plain textures.
 - The preview assumes your JSON wins over other mods' PGPatcher configs.
 - Large textures are previewed at a capped size ("Preview at N px, export writes full size").
-- These Community Shaders features are off in the preview: Light Limit Fix, Skylighting, Screen-Space Shadows, Subsurface Scattering, Dynamic Cubemaps, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, water, fog, Volumetric Shadows.
+- These Community Shaders features are off in the preview: Light Limit Fix, Skylighting, Screen-Space Shadows, Subsurface Scattering, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, water, fog, Volumetric Shadows.
 - A timing log is written while the preview runs. Set the environment variable `SDC_PREVIEW_LOG=0` to turn it off.
 
 ## RNM normal layers
@@ -338,8 +339,30 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | Project-wide fills (legacy) | One line, shown only while `sdc.toml` holds fills in `defaults.packing.fill.*`. **Clear** removes them; set fills on each packed output's card instead. |
 | Preview | Largest previewed side, Allow 16384 previews, Live encode. |
 | Mipmaps | Levels for the selected texture. |
-| Advanced texture fields | Perceptual, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize. |
+| Advanced texture fields | Perceptual, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size (drop mip 0). |
+| Checks | The switches for the artist checks, **Drop mip 0 when it adds nothing** and **Check all UV coverage**. See *Artist checks* below. |
 | Unmatched [files] entries | `[files]` entries that name no file under the current target, with **Remove**. |
+
+## Artist checks
+
+Six checks look at the numbers Tessalith measures while it plans and warn about maps that will probably look wrong in game. They only warn: no check blocks an export, asks a question or changes "ready" (no amber dot on a tile or set, and the header **Export** dot stays green). Each has a switch in **Advanced → Checks**, on by default; a switch hides its results at once.
+
+| Check | Flags |
+|---|---|
+| Value range | Albedo too dark or too bright, metal that is not black or white, extreme roughness, a dark AO channel, dark metal, a mostly bright emissive background. |
+| Plastic look | A vanilla `_n` with no alpha or an almost all-white alpha, so the specular is flat and full. Soft by design. |
+| Fake resolution | A top mip that adds almost nothing over mip 1. Measured during Export. |
+| Green direction | A normal that looks OpenGL when read as DirectX (an Info hint, never an auto-flip) or whose blue points the wrong way. |
+| Parallax | A height map, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), that uses little range, clips, is mostly white or is too steep; landscape sets whose displacement scales differ by more than 2x. |
+| UV coverage | UV islands closer than 8 texels for more than 2 % of used texels, so colour bleeds at a distance. Needs a Meshes scan. |
+
+- **Problems rows.** Each warning is a row in the bottom panel's Problems tab, after the ordinary warnings. **Checks N** narrows the list to them.
+- **ⓘ badge.** A set card shows **ⓘ n** beside **⚠ n**. Hover it for the list, click it to open Problems on the set. Info results (the green-direction hint) show only there and in the texture's own settings panel.
+- **End of export.** One Info line counts them, for example "Checks: 3 warnings on 1 texture and 1 set; see Problems".
+- **Range overlay.** The preview's **Range** toggle paints the texels that break the value-range rule magenta on the Source side. It appears only when the texture has a per-texel range warning, and is greyed out while a pin is compared.
+- **UV coverage overlay.** The **UV coverage** toggle darkens the texels no mesh uses. It reads the Meshes scan, so scan first: it is greyed out with the reason until a scan has finished (an empty scan counts as none). **Check all UV coverage** in Advanced → Checks reads every colour texture of the folder, with a progress bar and a **Stop** button.
+- **Half size.** With **Drop mip 0 when it adds nothing** on, Export holds back low-detail textures and then asks **Export at half size?**: **Export selected at half size** saves `drop_top_mip = true` for the ticked ones and writes them from mip 1, **Export all at full size** (or Esc) writes them as they are. There is no Enter default. An unticked texture is asked about again next time. **Advanced → Half size (drop mip 0)** sets the same field by hand, and *Copy settings* asks **Copy the half size too?**.
+- **Toksvig gloss bake (opt-in).** Setting a `_n`'s *Normal handling* to **Renormalise and bake**, in a set with a complex-material `_m`, also bakes the normal's variance into that `_m`'s gloss. Off by default.
 
 ## Presets
 

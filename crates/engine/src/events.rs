@@ -79,6 +79,8 @@ pub enum SkipKind {
     PackConflict,
     /// A raw map consumed by a recipe; the event's `job_key` names the packed output.
     PackedSource,
+    /// `CHK-LOW-DETAIL`: held by `BatchRequest::low_detail = hold`, not written (v2 artist checks, check 3).
+    LowDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -863,6 +863,10 @@
         "color": {
           "$ref": "#/$defs/PartialColorSpec"
         },
+        "drop_top_mip": {
+          "description": "Write the texture at half size, from its mip 1; every lower level is unchanged.",
+          "type": "boolean"
+        },
         "encoder": {
           "$ref": "#/$defs/PartialEncoderSpec"
         },
@@ -979,6 +983,10 @@
         },
         "color": {
           "$ref": "#/$defs/ColorSpec"
+        },
+        "drop_top_mip": {
+          "description": "Write the texture at half size, from its mip 1; every lower level is unchanged.",
+          "type": "boolean"
         },
         "encoder": {
           "$ref": "#/$defs/EncoderSpec"

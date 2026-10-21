@@ -5,7 +5,7 @@
 //! `run` applies `--on-existing`, then converts the ready files on a rayon pool of `jobs` threads, admitting them
 //! by estimated memory against `--mem-budget`. Files that are unresolved, blocked or in error are reported and
 //! never converted: the engine does not guess (spec §8, DECISIONS "never auto-decide").
-use crate::analyse::analyse;
+use crate::analyse::analyse_with;
 use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover_reporting, InputFile, InputKind};
@@ -19,7 +19,7 @@ use crate::manifest::{
 };
 use crate::overrides::{project_rel, to_patch, FileScopes, KeyForms, Scope, SetOverride};
 use crate::pack;
-use crate::pipeline::{process_file, FileError, FileTracker};
+use crate::pipeline::{process_file, FileError, FileTracker, Processed};
 use crate::policy::*;
 use crate::presets::*;
 use crate::session::{pack_cache_key, AnalysisCache, PackEntry};
@@ -124,6 +124,22 @@ pub struct BatchRequest {
     pub dry_run: bool,
     /// GUI (DECISIONS AG91): counters the planner updates while it loads and resolves; nothing is emitted or written.
     pub plan_progress: Option<PlanProgress>,
+    /// GUI (v2 artist checks, check 3, DECISIONS Note CL20): measure each eligible texture's detail ratio during the
+    /// run. `Off` for the CLI.
+    pub low_detail: LowDetailMode,
+}
+
+/// What a run does with a texture whose mip 0 adds little detail over mip 1 (`CHK-LOW-DETAIL`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LowDetailMode {
+    /// Nothing is measured.
+    #[default]
+    Off,
+    /// The warning is emitted and the file is written as usual.
+    Warn,
+    /// The warning is emitted and the file is not written (`SkipKind::LowDetail`, an intentional skip). An eligible
+    /// up-to-date output is loaded and measured again without encoding, so it is flagged again.
+    Hold,
 }
 
 /// How far a plan's per-file pass has got: `total` is the number of files it loads and resolves (duplicates and
@@ -170,6 +186,7 @@ impl BatchRequest {
             sidecar: false,
             dry_run: false,
             plan_progress: None,
+            low_detail: LowDetailMode::Off,
         }
     }
 }
@@ -256,8 +273,8 @@ pub struct BatchSummary {
     /// Every `file_skipped` except up-to-date files and raw packing inputs.
     pub skipped: u32,
     /// Of `skipped`, those skipped on purpose: `IN-DDS-SKIPPED` inputs, `PACK-CONFLICT` pre-packed files replaced
-    /// under `packing.prefer = raw` and outputs kept by an explicit `--on-existing skip`. They do not make the
-    /// batch partial (DECISIONS Notes I and M9).
+    /// under `packing.prefer = raw`, outputs kept by an explicit `--on-existing skip` and textures held as low detail
+    /// (`LowDetailMode::Hold`). They do not make the batch partial (DECISIONS Notes I, M9 and CL20).
     pub skipped_intentional: u32,
     pub failed: u32,
     /// Written outputs whose validation reported an error (`passed = false`); also counted in `converted`.
@@ -269,7 +286,8 @@ pub struct BatchSummary {
 impl BatchSummary {
     /// Spec §8 precedence for a batch that ran: 1 partial (unintentionally skipped, failed or cancelled
     /// files) > 4 validation failed > 0. Up-to-date files, raw packing inputs and intentional skips
-    /// (DECISIONS Note I) do not make a batch partial. (2 and 3 come from `EngineError`.)
+    /// (DECISIONS Note I; held low-detail textures, Note CL20) do not make a batch partial. (2 and 3 come from
+    /// `EngineError`.)
     pub fn exit_code(&self) -> i32 {
         let unintended = self.skipped.saturating_sub(self.skipped_intentional);
         if unintended + self.failed > 0 || !self.cancelled.is_empty() {
@@ -1087,6 +1105,7 @@ impl Engine {
                 panic_while_planning_for_test(&f.path, st);
             };
             enter(Stage::Load);
+            let split = split_for((set, f));
             // Taken before the read, so a change made while it is loaded is seen as a change too.
             let source = SourceStamp::of(&f.path);
             let (a, info) = match source.and_then(|s| cache.file(&f.path, s)) {
@@ -1098,7 +1117,8 @@ impl Engine {
                     let (img, info, meta) = load_image_meta(&f.path)?;
                     cache.count_loads(1);
                     enter(Stage::Analyse);
-                    let mut a = analyse(&img, &info);
+                    let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                    let mut a = analyse_with(&img, &info, hints);
                     a.icc_profile = meta.icc_profile;
                     a.dds_dxgi = meta.dds_dxgi;
                     if let Some(s) = source {
@@ -1110,7 +1130,6 @@ impl Engine {
                 }
             };
             enter(Stage::Resolve);
-            let split = split_for((set, f));
             let facts = FileFacts {
                 input: f,
                 suffix: split.suffix.as_deref(),
@@ -1375,7 +1394,14 @@ impl Engine {
                                     cache.count_loads(c.job.sources.len() as u64);
                                     stage.set(Stage::Analyse);
                                     let e = PackEntry {
-                                        analysis: analyse(&asm.image, &asm.info),
+                                        analysis: analyse_with(
+                                            &asm.image,
+                                            &asm.info,
+                                            crate::checks::hints_for(
+                                                Some(c.job.kind.suffix()),
+                                                cache.checks,
+                                            ),
+                                        ),
                                         info: asm.info,
                                         non_gray: asm.non_gray,
                                         thumb: cache.make_thumb(&asm.image, &asm.info),
@@ -1477,17 +1503,17 @@ impl Engine {
         // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped),
         // before the bakes, so a baking roughness member copies its `_n`'s blend (Note W18).
         crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
-        let baking = crate::bake::plan::plan_bakes(
-            &crate::bake::plan::BakeCtx {
-                target,
-                sets: &sets,
-                files: &files,
-                aliases: registry.alias_table(),
-                shared: &shared,
-                borrowed: &borrowed,
-            },
-            &mut jobs,
-        );
+        let bake_cx = crate::bake::plan::BakeCtx {
+            target,
+            sets: &sets,
+            files: &files,
+            aliases: registry.alias_table(),
+            shared: &shared,
+            borrowed: &borrowed,
+        };
+        let mut baking = crate::bake::plan::plan_bakes(&bake_cx, &mut jobs);
+        // Note CL40: the opt-in complex `_m` gloss bake, any target.
+        baking.extend(crate::bake::plan::plan_gloss_bakes(&bake_cx, &mut jobs));
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];
@@ -1609,7 +1635,7 @@ impl Engine {
                     registry.alias_table(),
                     target,
                 );
-                warnings.extend(crate::shader::check_maps(p, &maps));
+                warnings.extend(crate::shader::check_maps(p, target, &maps));
             }
             rep.emit(
                 Some(&set.key),
@@ -1912,8 +1938,10 @@ impl Engine {
         } else {
             vec![false; ready.len()]
         };
-        let mut todo: Vec<(&ResolvedJob, PresetRef)> = vec![];
+        // The bool is measure-only: an up-to-date output re-measured under `LowDetailMode::Hold`, never encoded.
+        let mut todo: Vec<(&ResolvedJob, PresetRef, bool)> = vec![];
         for (job, current) in ready.into_iter().zip(current) {
+            let mut measure_only = false;
             if cancel.is_cancelled() {
                 summary.cancelled.push(job.input.clone());
                 continue;
@@ -1960,6 +1988,16 @@ impl Engine {
                                 );
                                 continue;
                             }
+                            // Note CL20 (owner answer 2): "flagged again next time" — Hold re-measures an eligible
+                            // up-to-date output; the size half of eligibility is known only after Load.
+                            Some(e)
+                                if current
+                                    && (!req.sidecar || sidecar_present(&job.output, e))
+                                    && req.low_detail == LowDetailMode::Hold
+                                    && crate::checks::low_detail_profile_eligible(&job.profile) =>
+                            {
+                                measure_only = true;
+                            }
                             Some(e)
                                 if current && (!req.sidecar || sidecar_present(&job.output, e)) =>
                             {
@@ -1991,7 +2029,7 @@ impl Engine {
                 None => PresetRef::for_preset(&plan.registry, &plan.preset_id, None),
             };
             match preset {
-                Some(p) => todo.push((job, p)),
+                Some(p) => todo.push((job, p, measure_only)),
                 None => {
                     summary.failed += 1;
                     rep.emit_job(
@@ -2014,7 +2052,7 @@ impl Engine {
         // ever blocks on the budget. A pool thread blocked in `acquire` while its nested band-parallel encode stole
         // another file's task could otherwise hold budget forever (deadlock).
         pool.in_place_scope(|scope| {
-            for (job, preset) in &todo {
+            for &(job, ref preset, measure_only) in &todo {
                 if cancel.is_cancelled() {
                     lock(&state).cancelled.push(job.input.clone());
                     continue;
@@ -2034,7 +2072,17 @@ impl Engine {
                         lock(state).cancelled.push(job.input.clone());
                         return;
                     }
-                    run_one(job, req, preset, cancel, rep, manifest, state, nvtt);
+                    run_one(
+                        job,
+                        req,
+                        preset,
+                        measure_only,
+                        cancel,
+                        rep,
+                        manifest,
+                        state,
+                        nvtt,
+                    );
                 });
             }
         });
@@ -2053,6 +2101,7 @@ fn run_one(
     job: &ResolvedJob,
     req: &BatchRequest,
     preset: &PresetRef,
+    measure_only: bool,
     cancel: &CancelToken,
     rep: &Reporter,
     manifest: &Manifest,
@@ -2065,10 +2114,49 @@ fn run_one(
     emit(EventKind::FileStarted);
     let tracker = FileTracker::default();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        process_file(job, req, preset, cancel, rep, manifest, &tracker, nvtt)
+        process_file(
+            job,
+            req,
+            preset,
+            measure_only,
+            cancel,
+            rep,
+            manifest,
+            &tracker,
+            nvtt,
+        )
     }));
     let (stage, error) = match r {
-        Ok(Ok(out)) => {
+        Ok(Ok(Processed::Held(w))) => {
+            emit(EventKind::Warning(w));
+            {
+                let mut s = lock(state);
+                s.skipped += 1;
+                s.skipped_intentional += 1;
+            }
+            // Audit 08d-7: say when an earlier output stays on disk.
+            let kept = if job.output.exists() {
+                "; previous output kept"
+            } else {
+                ""
+            };
+            emit(EventKind::FileSkipped {
+                kind: SkipKind::LowDetail,
+                code: Some(Code::ChkLowDetail),
+                reason: format!("held (low detail){kept}"),
+            });
+            return;
+        }
+        Ok(Ok(Processed::UpToDate)) => {
+            lock(state).up_to_date += 1;
+            emit(EventKind::FileSkipped {
+                kind: SkipKind::UpToDate,
+                code: None,
+                reason: "up to date".into(),
+            });
+            return;
+        }
+        Ok(Ok(Processed::Written(out))) => {
             for w in &out.report.warnings {
                 emit(EventKind::Warning(w.clone()));
             }

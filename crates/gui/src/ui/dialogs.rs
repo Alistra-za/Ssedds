@@ -18,6 +18,106 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::CopySettings { from, to, fields } => copy_settings(ctx, model, &from, &to, fields),
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
         Dialog::Rename(d) => super::rename_dialog::draw(ctx, model, d),
+        Dialog::HalfSize(rows) => half_size(ctx, model, rows),
+        Dialog::CopyHalfSize { from, to, .. } => copy_half_size(ctx, model, &from, to.len()),
+    }
+}
+
+/// The half-size box's list is at most this share of the window height, so the footer stays on screen (CE19).
+pub const HALF_SIZE_LIST_SHARE: f32 = 0.6;
+
+/// The half-size box's footer. Both buttons write, so neither is the Enter default (ui-rules 5.2); "Export selected"
+/// needs a writable `sdc.toml` and a tick.
+pub fn half_size_buttons(writable: bool, any: bool) -> [(&'static str, Role, bool); 2] {
+    [
+        ("Export all at full size", Role::Plain, true),
+        ("Export selected at half size", Role::Plain, writable && any),
+    ]
+}
+
+/// Check 3, Hold mode (Note CL24): the held textures, ticked to write at half size. Esc is "Export all at full
+/// size" (the spec's "close = full size"); a click outside does nothing, since it would start an export.
+fn half_size(ctx: &egui::Context, model: &mut AppModel, mut rows: Vec<crate::model::HalfRow>) {
+    use crate::model::out_size::human;
+    let why = model.half_size_unwritable.clone();
+    let any = rows.iter().any(|r| r.tick);
+    let buttons = half_size_buttons(why.is_none(), any);
+    let max_h = ctx.content_rect().height() * HALF_SIZE_LIST_SHARE;
+    // M4: a disabled "Export selected" says why.
+    let off = why
+        .as_deref()
+        .unwrap_or("Tick at least one texture to write at half size.");
+    let (k, clicked) = dialog_hover(
+        ctx,
+        "half-size",
+        false,
+        640.0,
+        "Export at half size?",
+        &buttons,
+        &[None, Some(off)],
+        |ui| {
+            if let Some(why) = &why {
+                ui.colored_label(super::status::AMBER, why);
+            }
+            ui.label(
+                "Mip 0 of these textures adds little detail over mip 1. Ticked ones are written at half size, \
+                 and the choice is saved in sdc.toml; the rest are written at full size.",
+            );
+            ui.scope(|ui| {
+                ui.style_mut().spacing.scroll = egui::style::ScrollStyle::thin();
+                let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+                let n = rows.len();
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .auto_shrink([false, true])
+                    .show_rows(ui, row_h, n, |ui, range| {
+                        for r in &mut rows[range] {
+                            ui.horizontal(|ui| {
+                                // M4: the visible name is shortened; the accessible name and the hover (also when
+                                // disabled) carry the full path (ui-rules 3.4, 8.1).
+                                let on = why.is_none();
+                                let item = r.item.clone();
+                                let tick = ui
+                                    .add_enabled(
+                                        on,
+                                        egui::Checkbox::new(&mut r.tick, short_name(&r.item)),
+                                    )
+                                    .on_hover_text(&r.item)
+                                    .on_disabled_hover_text(&r.item);
+                                let ticked = r.tick;
+                                tick.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::Checkbox,
+                                        on,
+                                        ticked,
+                                        &item,
+                                    )
+                                });
+                                ui.weak(format!(
+                                    "{}×{} → {}×{}",
+                                    r.full.width, r.full.height, r.half.width, r.half.height
+                                ));
+                                ui.weak(format!(
+                                    "saves {}",
+                                    human(r.full.file_bytes().saturating_sub(r.half.file_bytes()))
+                                ));
+                            });
+                        }
+                    });
+            });
+        },
+    );
+    if clicked == Some(1) {
+        let ticked: Vec<String> = rows
+            .iter()
+            .filter(|r| r.tick)
+            .map(|r| r.item.clone())
+            .collect();
+        model.export_half_size(&ticked);
+    } else if clicked == Some(0) || k.cancel {
+        model.export_full_size();
+    } else if let Some(Dialog::HalfSize(kept)) = model.dialog.as_mut() {
+        *kept = rows;
     }
 }
 
@@ -103,6 +203,21 @@ pub fn dialog(
     buttons: &[(&str, Role, bool)],
     body: impl FnOnce(&mut egui::Ui),
 ) -> (Keys, Option<usize>) {
+    dialog_hover(ctx, id, outside, width, title, buttons, &[], body)
+}
+
+/// [`dialog`] with a hover reason for each button while it is disabled (`hovers[i]`, by the index into `buttons`).
+#[allow(clippy::too_many_arguments)]
+pub fn dialog_hover(
+    ctx: &egui::Context,
+    id: &str,
+    outside: bool,
+    width: f32,
+    title: &str,
+    buttons: &[(&str, Role, bool)],
+    hovers: &[Option<&str>],
+    body: impl FnOnce(&mut egui::Ui),
+) -> (Keys, Option<usize>) {
     debug_assert!(
         buttons.iter().filter(|b| b.1 == Role::Default).count() <= 1,
         "a dialog has at most one Enter default"
@@ -130,7 +245,11 @@ pub fn dialog(
                         Role::Destructive => b.stroke(egui::Stroke::new(1.5, super::status::RED)),
                         Role::Default => b.fill(ui.visuals().selection.bg_fill),
                     };
-                    if ui.add_enabled(enabled, b).clicked() {
+                    let mut r = ui.add_enabled(enabled, b);
+                    if let Some(Some(h)) = hovers.get(i) {
+                        r = r.on_disabled_hover_text(*h);
+                    }
+                    if r.clicked() {
                         clicked = Some(i);
                     }
                 }
@@ -200,11 +319,47 @@ fn copy_settings(
     let close = clicked == Some(0) || k.cancel;
     if clicked == Some(1) && any {
         let ticked: Vec<String> = fields.iter().filter(|f| f.1).map(|f| f.0.clone()).collect();
-        model.apply_copy_settings(from, to, &ticked);
+        model.copy_settings_chosen(from, to, &ticked);
     } else if close {
         model.dialog = None;
     } else if let Some(Dialog::CopySettings { fields: kept, .. }) = model.dialog.as_mut() {
         *kept = fields;
+    }
+}
+
+/// Owner ruling 2026-10-20 (Note CL26): the one place a saved half size is copied. Enter copies without it (the
+/// safe side: the targets' mip 0 was never measured); Esc or a click outside cancels the whole copy.
+fn copy_half_size(ctx: &egui::Context, model: &mut AppModel, from: &str, n: usize) {
+    let name = model
+        .item(from)
+        .map_or(from.to_string(), |i| i.name.clone());
+    let buttons = [
+        ("Cancel", Role::Plain, true),
+        ("Also copy half size", Role::Plain, true),
+        ("Copy without half size", Role::Default, true),
+    ];
+    let (k, clicked) = dialog(
+        ctx,
+        "copy-half-size",
+        true,
+        420.0,
+        "Copy the half size too?",
+        &buttons,
+        |ui| {
+            ui.label(format!(
+                "{name} is written at half size (drop mip 0). Copy that to the {n} other selected texture{} too? \
+                 Their mip 0 has not been measured.",
+                if n == 1 { "" } else { "s" }
+            ));
+        },
+    );
+    match clicked {
+        Some(1) => model.resolve_copy_half_size(true),
+        Some(2) => model.resolve_copy_half_size(false),
+        _ if k.enter => model.resolve_copy_half_size(false),
+        Some(0) => model.dialog = None,
+        _ if k.cancel => model.dialog = None,
+        _ => {}
     }
 }
 

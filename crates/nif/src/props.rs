@@ -128,18 +128,21 @@ fn finish(h: &Header, block: usize, c: &Cursor, start: usize, end: usize) -> Res
 }
 
 /// NiObjectNET: Name (string index), NumExtraData + refs, Controller.
-fn object_net(h: &Header, c: &mut Cursor) -> Result<Option<String>, NifError> {
-    let name = h.string(c.i32()?).map(lossy).filter(|s| !s.is_empty());
-    let n = c.u32()? as usize;
-    c.skip(4 * n)?;
-    c.i32()?;
-    Ok(name)
+fn object_net(
+    h: &Header,
+    b: &[u8],
+    block: usize,
+    c: &mut Cursor,
+) -> Result<Option<String>, NifError> {
+    let net = crate::net::read_net(h, b, block)?;
+    c.skip(net.end - c.pos())?;
+    Ok(h.string(net.name).map(lossy).filter(|s| !s.is_empty()))
 }
 
 pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
     let shader_type = c.u32()?; // before the name at BSVER 83..139 (plan 01 Q2)
-    let name = object_net(h, &mut c)?;
+    let name = object_net(h, b, block, &mut c)?;
     let slsf1 = c.u32()?;
     let slsf2 = c.u32()?;
     let uv_offset = c.f32s::<2>()?;
@@ -204,7 +207,7 @@ pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, N
 
 pub fn decode_effect(h: &Header, b: &[u8], block: usize) -> Result<Effect, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
-    let name = object_net(h, &mut c)?;
+    let name = object_net(h, b, block, &mut c)?;
     let slsf1 = c.u32()?;
     let slsf2 = c.u32()?;
     let uv_offset = c.f32s::<2>()?;
@@ -260,9 +263,50 @@ pub fn decode_texture_set(h: &Header, b: &[u8], block: usize) -> Result<TextureS
     Ok(TextureSet { slots })
 }
 
+/// A texture set exactly as stored: raw bytes, exact count, no normalisation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TexSetRaw {
+    pub block: u32,
+    pub slots: Vec<Vec<u8>>,
+}
+
+pub fn decode_texture_set_raw(h: &Header, b: &[u8], block: usize) -> Result<TexSetRaw, NifError> {
+    if block >= h.sizes.len() {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: "no such block".into(),
+        });
+    }
+    let (mut c, start, end) = block_cursor(h, b, block);
+    let n = c.u32()? as usize;
+    if n > MAX_TEXTURE_SLOTS {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: format!("{n} texture slots (at most {MAX_TEXTURE_SLOTS})"),
+        });
+    }
+    let slots = (0..n)
+        .map(|_| c.sized_bytes().map(<[u8]>::to_vec))
+        .collect::<Result<Vec<_>, _>>()?;
+    finish(h, block, &c, start, end)?;
+    Ok(TexSetRaw {
+        block: block as u32,
+        slots,
+    })
+}
+
+pub fn encode_texture_set(slots: &[Vec<u8>]) -> Vec<u8> {
+    let mut o = (slots.len() as u32).to_le_bytes().to_vec();
+    for s in slots {
+        o.extend((s.len() as u32).to_le_bytes());
+        o.extend(s);
+    }
+    o
+}
+
 pub fn decode_alpha(h: &Header, b: &[u8], block: usize) -> Result<Alpha, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
-    object_net(h, &mut c)?;
+    object_net(h, b, block, &mut c)?;
     let flags = c.u16()?;
     let threshold = c.u8()?;
     finish(h, block, &c, start, end)?;

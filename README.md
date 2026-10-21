@@ -6,7 +6,7 @@
 
 ---
 
-Tessalith converts a folder of source images for Skyrim SE/AE. It works out what each file is from its name, groups files into material sets, packs loose maps into Skyrim's layouts, builds the mips and picks the format and colour tag each shader needs. The GUI (`tessalith.exe`) and the CLI (`sdc`) share one engine and one per-project `sdc.toml`, so both write the same bytes. Targets: `cs` (Community Shaders with TruePBR; default) and `vanilla` (which also packs the complex-material `_m` for a set given the complex material shader). It is for making new textures, not for fixing an installed game folder. Windows x64. Version 0.8.0 (see the [CHANGELOG](CHANGELOG.md)). GPL-3.0-or-later.
+Tessalith converts a folder of source images for Skyrim SE/AE. It works out what each file is from its name, groups files into material sets, packs loose maps into Skyrim's layouts, builds the mips and picks the format and colour tag each shader needs. The GUI (`tessalith.exe`) and the CLI (`sdc`) share one engine and one per-project `sdc.toml`, so both write the same bytes. Targets: `cs` (Community Shaders with TruePBR; default) and `vanilla` (which also packs the complex-material `_m` for a set given the complex material shader). It is for making new textures, not for fixing an installed game folder. Windows x64. Version 0.9.0 (see the [CHANGELOG](CHANGELOG.md)). GPL-3.0-or-later.
 
 ## Features
 

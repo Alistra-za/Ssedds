@@ -143,7 +143,15 @@
         "GRASS-NORMALS",
         "GRASS-DETECT-SOURCE",
         "VAL-GRASS-DETECT",
-        "PBR-GRASS-DETECT"
+        "PBR-GRASS-DETECT",
+        "CHK-RANGE",
+        "CHK-PLASTIC",
+        "CHK-GREEN-GUESS",
+        "CHK-Z-SIGN",
+        "CHK-PARALLAX",
+        "CHK-PARALLAX-SCALE",
+        "CHK-LOW-DETAIL",
+        "CHK-UV-GUTTER"
       ],
       "type": "string"
     },

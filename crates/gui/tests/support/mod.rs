@@ -211,3 +211,27 @@ pub fn outside_sets<'a, S>(
     assert_eq!(n.len(), 1, "one {label:?} outside the Sets column");
     n.pop().unwrap()
 }
+
+/// Task 6: a PBR set under `textures/test` (`wall.png` at grey `albedo`, `wall_rmaos.png` filled with `rmaos`),
+/// opened as the app opens a folder, shader Pbr. Luma 20 gives the albedo a per-texel CHK-RANGE; luma 100 with a
+/// metal `_rmaos` (G 255) gives it only `dark_metal`.
+pub fn pbr_wall(dir: &Path, albedo: u8, rmaos: [u8; 3]) -> AppModel {
+    let r = dir.join("textures/test");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([albedo, albedo, albedo]))
+        .save(r.join("wall.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb(rmaos))
+        .save(r.join("wall_rmaos.png"))
+        .unwrap();
+    let mut m = opened_as_the_app(dir.join("textures"), dir.join("export"));
+    let id = sdc_gui::model::sets::views(&m)
+        .iter()
+        .find(|v| v.key.ends_with("wall"))
+        .expect("the set")
+        .id
+        .clone();
+    m.set_shader(&id, Some(engine::shader::Shader::Pbr));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m
+}

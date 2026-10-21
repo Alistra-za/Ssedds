@@ -44,13 +44,15 @@ export function layoutOf(plan) {
 // forced (owner 2026-10-18): Log Level <= 1 turns on CS developer mode, which compiles D3DCOMPILE_DEBUG shaders into the
 // owner's disk cache. W2 uses the DevBench shadercache tool; X6 decodes descriptors offline (cslog_defines.py).
 const CAPTURE_KEYS = { RenderDoc: { 'Enable RenderDoc Capture': true }, Advanced: { 'Frame Annotations': true } }
-// x_extract stage names -> scripts, in run order (GOLDEN-EXTRACTORS.md "Run order"). X4 (stage D) is not built.
+// x_extract stage names -> scripts, in run order (GOLDEN-EXTRACTORS.md "Run order"). D (X4 DebugPixel traces) is opt-in: named values need a
+// Developer Mode capture (profile DBG), so the default list leaves it out.
 export const EXTRACT_STAGES = [
   { stage: 'A', script: 'p04_stageA_enumerate.py', runner: 'qrenderdoc' },
   { stage: 'B', script: 'p04_stageB_state.py', runner: 'qrenderdoc' },
   { stage: 'dispatch', script: 'p04_dispatch.py', runner: 'qrenderdoc' },
   { stage: 'B', script: 'p04_stageB_extra.py', runner: 'qrenderdoc' },
   { stage: 'C', script: 'p04_stageC_dump.py', runner: 'qrenderdoc' },
+  { stage: 'D', script: 'p04_stageD_debug.py', runner: 'qrenderdoc' },
   { stage: 'shader_id', script: 'p04_shader_id.py', runner: 'qrenderdoc' },
   { stage: 'defines', script: 'cslog_defines.py', runner: 'python' },
   { stage: 'fixture', script: 'golden_fixture.py', runner: 'python' },
@@ -168,6 +170,7 @@ export function resolveProfile(plan, profileArg) {
   const profile = profileArg || base
   let overlay = plan.x_cs_settings || {}
   let groups = plan.groups || []
+  let extract = plan.x_extract
   if (profile !== base) {
     const other = (plan.x_profiles_other_runs || {})[profile]
     if (!other) throw new Error(`profile ${profile} is neither x_profile (${base}) nor a key of x_profiles_other_runs`)
@@ -188,8 +191,9 @@ export function resolveProfile(plan, profileArg) {
       }
     }
     if (other.x_cs_settings_add) overlay = deepMerge(overlay, other.x_cs_settings_add) // e.g. A_DC + Log Level
+    if (other.x_extract) extract = other.x_extract // e.g. DBG adds D
   }
-  return { profile, overlay: deepMerge(overlay, CAPTURE_KEYS), groups }
+  return { profile, overlay: deepMerge(overlay, CAPTURE_KEYS), groups, extract }
 }
 
 export function validatePlan(plan, groups) {
@@ -421,8 +425,9 @@ export function extractScripts(names) {
   const list = names || ['A', 'B', 'dispatch', 'C', 'shader_id', 'defines', 'fixture']
   const known = new Set(EXTRACT_STAGES.map(s => s.stage))
   const bad = list.filter(n => !known.has(n))
-  if (bad.length) throw new Error(`x_extract: unsupported stage(s) ${bad.join(', ')} (known: ${[...known].join(', ')}; D/X4 is not built)`)
+  if (bad.length) throw new Error(`x_extract: unsupported stage(s) ${bad.join(', ')} (known: ${[...known].join(', ')})`)
   if (list.some(n => ['B', 'C', 'shader_id'].includes(n)) && !list.includes('dispatch')) throw new Error('x_extract: B, C and shader_id need "dispatch" (X1 runs before X2/X3/X5)')
+  if (list.includes('D') && !list.includes('C')) throw new Error('x_extract: D needs "C" (X4 picks pixels from the X3 mask)')
   if (list.some(n => n !== 'A') && !list.includes('A')) throw new Error('x_extract: every stage needs "A" (drawmap.json)')
   return EXTRACT_STAGES.filter(s => list.includes(s.stage))
 }
@@ -442,10 +447,10 @@ async function preflight(o) {
   if (o['run-dir']) return { ok: false, reason: 'preflight takes --run-root and creates a fresh run dir itself; --run-dir is not accepted' }
   if (!o['run-root']) return { ok: false, reason: 'preflight needs --run-root' }
   const plan = readJson(o.plan)
-  const { profile, overlay, groups: rawGroups } = resolveProfile(plan, o.profile)
+  const { profile, overlay, groups: rawGroups, extract } = resolveProfile(plan, o.profile)
   const errs = validatePlan(plan, rawGroups)
   let scripts = []
-  try { scripts = extractScripts(plan.x_extract) } catch (e) { errs.push(e.message) }
+  try { scripts = extractScripts(extract) } catch (e) { errs.push(e.message) }
   if (errs.length) return { ok: false, reason: `plan: ${errs.join('; ')}` }
   if (!o.journal) return { ok: false, reason: 'preflight needs --journal' }
   if (!o.tools) return { ok: false, reason: 'preflight needs --tools (the folder with rdc-scripts and rdc-out)' }

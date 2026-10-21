@@ -72,6 +72,34 @@ pub enum WorkerMsg {
         id: u64,
         image: Option<Arc<crate::model::heatmap::HeatImage>>,
     },
+    /// The preview overlay of job `generation` (`AppModel::overlay_for`), ready to upload; `None` when the job
+    /// panicked.
+    Overlay {
+        generation: u64,
+        image: Option<Arc<eframe::egui::ColorImage>>,
+    },
+    /// The UV coverage of scan path `tex` at written size `size` (`AppModel::uv_coverage`, Check all); a failed read
+    /// is a `Coverage` with an error line (K18). The overlay image is built later, for the expanded item only (CL44).
+    /// A cancelled read sends nothing; a stale `generation` (a clear or a new folder since) is dropped.
+    UvCoverage {
+        generation: u64,
+        tex: String,
+        size: [u32; 2],
+        coverage: Arc<crate::model::uv_coverage::Coverage>,
+    },
+    /// "Check all UV coverage" run `run` has read `done` of `total` textures; `finished` once the run has ended
+    /// (cancelled runs end with `done < total`).
+    UvProgress {
+        run: u64,
+        done: usize,
+        total: usize,
+        finished: bool,
+    },
+    /// The scan-has-rows probe of the scan DB as it was at `stamp`.
+    ScanHasRows {
+        stamp: crate::model::cs_pbr::Stamp,
+        rows: bool,
+    },
     /// The RNM blended thumbnail of job `id` (`AppModel::rnm_preview_frame`); `None` when the blend failed.
     RnmPreview {
         id: u64,

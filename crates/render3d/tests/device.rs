@@ -36,3 +36,21 @@ fn display_readback_is_opaque() {
     );
     assert_eq!(t.readback_display(&gpu, true).unwrap()[3], 255);
 }
+
+/// Deferred target: RT0 (`color`, RTV|SRV|UAV) + RT1-7 in the capture's formats, and RT0 as a UAV (D3 step 1).
+#[test]
+fn new_deferred_makes_eight_targets_and_a_main_uav() {
+    use render3d::device::MRT_FORMATS;
+    let gpu = Gpu::new_warp().unwrap();
+    let t = Target::new_deferred(&gpu, 4, 2).unwrap();
+    assert!(t.deferred());
+    assert_eq!(t.mrt.len(), 8);
+    assert!(t.main_uav.is_some());
+    assert_eq!(t.rtvs().len(), 8);
+    for (i, (tex, _, _)) in t.mrt.iter().enumerate() {
+        let mut d = windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC::default();
+        unsafe { tex.GetDesc(&mut d) };
+        assert_eq!(d.Format, MRT_FORMATS[i].0, "RT{i}");
+    }
+    assert!(!Target::new(&gpu, 4, 2).unwrap().deferred());
+}

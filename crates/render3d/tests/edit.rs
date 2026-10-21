@@ -1,7 +1,9 @@
 //! Live material edits on WARP with the stand-in shader. `STANDIN_FLAT` makes pixels = 0.25·diffuse +
 //! EmitColor (+ 0.5 green when PBRFlags ≠ 0), so cbuffer and texture edits show without lighting saturation.
 mod common;
-use common::{cache_files, channel, covered, dds_rgba8, fixture, renderer, FLAT};
+use common::{
+    cache_files, channel, covered, dds_rgba8, fixture, plane_shape, planes, renderer, FLAT, IDENT,
+};
 use nif::material::MaterialState;
 use nif::props::Alpha;
 use render3d::scene::Scene;
@@ -258,4 +260,96 @@ fn pbr_flags_reach_the_shader() {
         channel(&subsurface, 1)
     );
     assert_eq!(channel(&subsurface, 2), channel(&plain, 2));
+}
+
+// ---- A14: per-shape blend, cull and depth state ----
+
+#[test]
+fn blend_pair_edit_changes_pixels_without_a_compile() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut s = plane_shape(0, IDENT, [1.0, 0.0, 0.0], 1);
+    s.material.alpha = Some(Alpha {
+        flags: 0x00ED,
+        threshold: 0,
+    });
+    // A blue opaque plane in the same place sits behind (depth LessEqual lets the blended one through): on a
+    // black background the destination factor would show nothing.
+    let mut r = planes(
+        cache.path(),
+        vec![s, plane_shape(1, IDENT, [0.0, 0.0, 1.0], 1)],
+    );
+    let id = ShapeId(0);
+    assert_eq!(r.pipe_of(id).unwrap().blend, Some((6, 7)));
+    let before = r.render(&Scene::neutral(), 64, 64).unwrap();
+    let files = cache_files(cache.path());
+    let mut m = material(&r, id);
+    m.alpha = Some(Alpha {
+        flags: 0x0001,
+        threshold: 0,
+    }); // ONE / ONE
+    assert_eq!(r.set_material(id, m, &|_| None), Ok(EditKind::Cbuffer));
+    let after = r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert_eq!(cache_files(cache.path()), files, "nothing was compiled");
+    assert_ne!(before, after);
+    assert_eq!(r.pipe_of(id).unwrap().blend, Some((6, 0)));
+}
+
+#[test]
+fn double_sided_shows_back_faces() {
+    let cache = tempfile::tempdir().unwrap();
+    let flip = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+    ]; // 180 degrees about X
+    let mut r = planes(cache.path(), vec![plane_shape(0, flip, [1.0, 0.0, 0.0], 1)]);
+    let id = ShapeId(0);
+    assert_eq!(covered(&r.render(&Scene::neutral(), 64, 64).unwrap()), 0);
+    let mut m = material(&r, id);
+    m.slsf2 |= 1 << 4; // Double_Sided
+    assert_eq!(r.set_material(id, m, &|_| None), Ok(EditKind::Cbuffer));
+    assert!(covered(&r.render(&Scene::neutral(), 64, 64).unwrap()) > 0);
+}
+
+#[test]
+fn zwrite_off_lets_a_later_shape_draw_through() {
+    let cache = tempfile::tempdir().unwrap();
+    let near = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 4.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ];
+    let mut r = planes(
+        cache.path(),
+        vec![
+            plane_shape(0, near, [1.0, 0.0, 0.0], 1),
+            plane_shape(1, IDENT, [0.0, 0.0, 1.0], 1),
+        ],
+    );
+    let on = r.render(&Scene::neutral(), 64, 64).unwrap();
+    let mut m = material(&r, ShapeId(0));
+    m.slsf2 &= !1; // Z_Buffer_Write off
+    assert_eq!(
+        r.set_material(ShapeId(0), m, &|_| None),
+        Ok(EditKind::Cbuffer)
+    );
+    let off = r.render(&Scene::neutral(), 64, 64).unwrap();
+    assert!(
+        channel(&off, 2) > channel(&on, 2) + 1000,
+        "blue {} -> {}",
+        channel(&on, 2),
+        channel(&off, 2)
+    );
+}
+
+#[test]
+fn builtin_load_keeps_the_fixed_pipeline() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.load_builtin(
+        render3d::Builtin::Plane,
+        MaterialState::builtin_default(),
+        &|_| None,
+    );
+    assert_eq!(r.pipe_of(ShapeId(0)), Some(render3d::material::Pipe::FIXED));
 }

@@ -12,6 +12,18 @@ pub struct Header {
     pub data_start: usize,
     /// Absolute offset of each block.
     pub offsets: Vec<usize>,
+    /// Offset of Num Block Types.
+    pub prefix_end: usize,
+    /// Offset of the Num Blocks u32.
+    pub nblocks_at: usize,
+    /// Block type indices as stored (top bit kept).
+    pub type_index_raw: Vec<u16>,
+    /// Max String Length as stored.
+    pub max_string_len: u32,
+    /// Offset of Num Groups.
+    pub groups_at: usize,
+    /// data_start + sum of sizes: offset of the footer.
+    pub footer_at: usize,
 }
 
 const MAX_BLOCKS: u32 = 1 << 20; // nifly NIF_BLOCK_INDEX_LIMIT
@@ -40,6 +52,7 @@ impl Header {
             return Err(NifError::BadEndian);
         }
         let user = c.u32()?;
+        let nblocks_at = c.pos();
         let nblocks = c.u32()?;
         let bsver = c.u32()?;
         if user != 12 || !(bsver == 83 || bsver == 100) || nblocks > MAX_BLOCKS {
@@ -52,13 +65,15 @@ impl Header {
         c.export_bytes()?; // author
         c.export_bytes()?; // process script (BSVER < 131)
         c.export_bytes()?; // export script; no Max Filepath below BSVER 103
+        let prefix_end = c.pos();
         let ntypes = c.u16()? as usize;
         let block_types = (0..ntypes)
             .map(|_| c.sized_bytes().map(<[u8]>::to_vec))
             .collect::<Result<Vec<_>, _>>()?;
-        let type_index = (0..nblocks)
-            .map(|_| c.u16().map(|t| t & 0x7FFF))
+        let type_index_raw = (0..nblocks)
+            .map(|_| c.u16())
             .collect::<Result<Vec<_>, _>>()?;
+        let type_index: Vec<u16> = type_index_raw.iter().map(|t| t & 0x7FFF).collect();
         if type_index.iter().any(|&t| t as usize >= ntypes) {
             return Err(NifError::Truncated {
                 at: c.pos(),
@@ -69,13 +84,14 @@ impl Header {
             .map(|_| c.u32())
             .collect::<Result<Vec<_>, _>>()?;
         let nstrings = c.u32()?;
-        c.u32()?; // max string length
+        let max_string_len = c.u32()?;
         if nstrings > MAX_BLOCKS {
             return Err(NifError::TooManyStrings(nstrings));
         }
         let strings = (0..nstrings)
             .map(|_| c.sized_bytes().map(<[u8]>::to_vec))
             .collect::<Result<Vec<_>, _>>()?;
+        let groups_at = c.pos();
         let ngroups = c.u32()? as usize;
         c.skip(4 * ngroups)?;
         let mut p = c.pos();
@@ -95,6 +111,12 @@ impl Header {
             strings,
             data_start: c.pos(),
             offsets,
+            prefix_end,
+            nblocks_at,
+            type_index_raw,
+            max_string_len,
+            groups_at,
+            footer_at: p,
         })
     }
 
@@ -111,6 +133,14 @@ impl Header {
             .ok()
             .and_then(|i| self.strings.get(i))
             .map(Vec::as_slice)
+    }
+
+    /// Footer root refs.
+    pub fn roots(&self, b: &[u8]) -> Result<Vec<i32>, NifError> {
+        self.check_file_length(b)?;
+        let mut c = Cursor::new(b, self.footer_at);
+        let n = c.u32()?;
+        (0..n).map(|_| c.i32()).collect()
     }
 
     /// data_start + Σ sizes + 4 + 4·roots == file length (plan 01 Q1 scanner rule a).

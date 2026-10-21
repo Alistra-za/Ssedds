@@ -207,10 +207,11 @@ pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> 
     true
 }
 
-/// A12: the green dot on Export: a folder is open, something would be written and no problem is listed.
+/// A12: the green dot on Export: a folder is open, something would be written and no problem that takes "ready"
+/// away is listed (artist checks never do, owner answer 1).
 pub fn export_dot(model: &AppModel) -> bool {
     model.root.is_some()
-        && crate::model::bottom::problems(model).is_empty()
+        && crate::model::bottom::flagged(model).ready_rows == 0
         && model.export_files() > 0
 }
 
@@ -255,7 +256,7 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
         // A12: the hover counts the files and the problems; a green dot says there are none.
-        let n = crate::model::bottom::problems(model).len();
+        let n = crate::model::bottom::flagged(model).ready_rows;
         let hover = |ui: &mut egui::Ui| {
             ui.label(format!("{} files, {n} problems", model.export_files()));
         };
@@ -454,15 +455,18 @@ fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
 
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
 fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
+    // A20: the NIF history while a NIF edit is open in the Meshes view.
+    let nif = super::meshes::undo_target(ui.ctx());
     for (undo, name) in [(true, "Undo"), (false, "Redo")] {
-        let label = if undo {
-            model.undo_label()
-        } else {
-            model.redo_label()
+        let label = match nif {
+            Some((u, r)) => (if undo { u } else { r }).then_some("the last NIF edit"),
+            None if undo => model.undo_label(),
+            None => model.redo_label(),
         };
+        let sep = if nif.is_some() { " " } else { ": " };
         let hover = match label {
             Some(l) => format!(
-                "{name}: {l}  ({})",
+                "{name}{sep}{l}  ({})",
                 super::actions::keys_text(if undo { "undo" } else { "redo" })
             ),
             None => format!("Nothing to {}", name.to_lowercase()),
@@ -471,6 +475,7 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
         if r.on_hover_text(hover.clone())
             .on_disabled_hover_text(hover)
             .clicked()
+            && !super::meshes::request_undo(ui.ctx(), undo)
         {
             if undo {
                 model.undo();

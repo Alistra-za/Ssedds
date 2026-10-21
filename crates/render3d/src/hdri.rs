@@ -243,6 +243,100 @@ pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
     integrate(&cells(img), 0.0)
 }
 
+/// Side of the environment cube (v2 D5): the captured Dynamic Cubemaps cube is 256², 9 mips.
+pub const ENV_SIZE: u32 = 256;
+
+/// CS's GetSamplingVector (DynamicCubemaps/CaptureCommon.hlsli:48): texel centre of face 0..6 (+X −X +Y −Y +Z −Z) →
+/// unit world direction. This is D3D's cube addressing (tests/hdri.rs checks it on the GPU).
+pub fn cube_dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
+    let s = (x as f32 + 0.5) / size as f32;
+    let t = (y as f32 + 0.5) / size as f32;
+    let (u, v) = (2.0 * s - 1.0, 2.0 * (1.0 - t) - 1.0);
+    let d = match face {
+        0 => [1.0, v, -u],
+        1 => [-1.0, v, u],
+        2 => [u, 1.0, -v],
+        3 => [u, -1.0, v],
+        4 => [u, v, 1.0],
+        _ => [-u, v, -1.0],
+    };
+    let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    d.map(|c| c / n)
+}
+
+/// Per texel of a `size` cube (face-major): the yaw-free part of [`dir_to_uv`] of its [`cube_dir`], the azimuth term
+/// `atan2(y, x) + YAW` and `v`.
+fn cube_angles(size: u32) -> Vec<(f32, f32)> {
+    (0..6)
+        .flat_map(|f| {
+            (0..size * size).map(move |i| {
+                let d = cube_dir(f, i % size, i / size, size);
+                (d[1].atan2(d[0]) + YAW, d[2].clamp(-1.0, 1.0).acos() / PI)
+            })
+        })
+        .collect()
+}
+
+/// Mip 0 of the env cube turned by `yaw` (as the backdrop and [`integrate`]): per texel, the equirect pixel holding
+/// `dir_to_uv(Rz(-yaw)·cube_dir)`, alpha 1. Face-major, rows top first. A turn about +Z only shifts the azimuth, so
+/// `u = (azimuth − yaw)` from a per-size angle table (built once for [`ENV_SIZE`]): a yaw drag costs no atan2/acos.
+pub fn cube_faces(img: &Hdr, size: u32, yaw: f32) -> [Vec<[f32; 4]>; 6] {
+    static ENV: OnceLock<Vec<(f32, f32)>> = OnceLock::new();
+    let owned;
+    let table: &[(f32, f32)] = if size == ENV_SIZE {
+        ENV.get_or_init(|| cube_angles(ENV_SIZE))
+    } else {
+        owned = cube_angles(size);
+        &owned
+    };
+    let (w, h) = (img.width, img.height);
+    let n = (size * size) as usize;
+    std::array::from_fn(|f| {
+        table[f * n..(f + 1) * n]
+            .iter()
+            .map(|&(a, v)| {
+                let u = ((a - yaw) / TAU + 0.5).rem_euclid(1.0);
+                let px = ((u * w as f32) as usize).min(w - 1);
+                let py = ((v * h as f32) as usize).min(h - 1);
+                let i = (py * w + px) * 3;
+                [img.rgb[i], img.rgb[i + 1], img.rgb[i + 2], 1.0]
+            })
+            .collect()
+    })
+}
+
+/// 2×2 box mips down to 1×1, mip 0 included. Err unless `size` is a power of two and `face` is `size²` texels.
+/// shortcut: a box chain, not CS's GGX-prefiltered specular irradiance; prefilter if the owner's visual check asks (R4).
+pub fn mip_chain(face: &[[f32; 4]], size: u32) -> Result<Vec<Vec<[f32; 4]>>, String> {
+    let n = size as usize;
+    if !size.is_power_of_two() || n.checked_mul(n) != Some(face.len()) {
+        return Err(format!(
+            "mip chain: {} texels for a {size}² face (the size must be a power of two)",
+            face.len()
+        ));
+    }
+    let mut out = vec![face.to_vec()];
+    let mut n = n;
+    while n > 1 {
+        let (prev, h) = (out.last().expect("mip 0"), n / 2);
+        let next = (0..h * h)
+            .map(|i| {
+                let (x, y) = (i % h * 2, i / h * 2);
+                let (a, b, c, d) = (
+                    prev[y * n + x],
+                    prev[y * n + x + 1],
+                    prev[(y + 1) * n + x],
+                    prev[(y + 1) * n + x + 1],
+                );
+                std::array::from_fn(|k| (a[k] + b[k] + c[k] + d[k]) * 0.25)
+            })
+            .collect();
+        out.push(next);
+        n = h;
+    }
+    Ok(out)
+}
+
 /// The bundled studio HDRI with its ambient, decoded on first use.
 pub struct Studio {
     pub image: Hdr,

@@ -328,6 +328,10 @@ impl eframe::App for SdcApp {
         // Upload before drawing: the paint callbacks run after this frame's UI and read what is on the GPU.
         self.model.heatmap_frame();
         self.sync_renderer();
+        self.meshes.set_nif_export_root(
+            (self.model.settings.export_folder.is_some() || self.model.root.is_some())
+                .then(|| self.model.export_root()),
+        );
         let scanning = self.meshes.scanning();
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).
@@ -408,7 +412,8 @@ impl eframe::App for SdcApp {
             || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()
-            || self.state.set3d.busy();
+            || self.state.set3d.busy()
+            || self.model.v2_jobs_pending();
         let background =
             self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;
         if let Some(d) = worker_poll(visible, background) {

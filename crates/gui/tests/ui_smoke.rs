@@ -642,7 +642,7 @@ fn toolbar_node(h: &Harness<'static, AppModel>, label: &str, contains: bool) -> 
 }
 
 /// K9/K10: the toolbar's controls in reading order (row, then x).
-const TOOLBAR_ORDER: [(&str, bool); 22] = [
+const TOOLBAR_ORDER: [(&str, bool); 23] = [
     ("Channels", false),
     ("RGBA", false),
     ("R", false),
@@ -657,6 +657,8 @@ const TOOLBAR_ORDER: [(&str, bool); 22] = [
     ("Heatmap", false),
     ("Lens", false),
     ("Tile 3×3", false),
+    // K7: drawn for every texture, enabled or not (Task 8).
+    ("UV coverage overlay", false),
     ("Fit", false),
     ("1:1", false),
     ("Encode", false),
@@ -683,12 +685,20 @@ fn expanded_at_1280(advanced: bool) -> (Harness<'static, AppModel>, tempfile::Te
     (h, d)
 }
 
-fn assert_toolbar_layout(h: &Harness<'static, AppModel>) {
+/// `extra`: conditional controls drawn after "Tile 3×3" and before "UV coverage overlay" (K7: the Range overlay
+/// toggle), by AccessKit name.
+fn assert_toolbar_layout(h: &Harness<'static, AppModel>, extra: &[&str]) {
     let bar = toolbar_rect(h);
-    let rects: Vec<_> = TOOLBAR_ORDER
+    let tile = TOOLBAR_ORDER
         .iter()
-        .map(|(l, c)| (*l, toolbar_node(h, l, *c)))
-        .collect();
+        .position(|(l, _)| *l == "Tile 3×3")
+        .unwrap();
+    let order = TOOLBAR_ORDER[..=tile]
+        .iter()
+        .copied()
+        .chain(extra.iter().map(|l| (*l, false)))
+        .chain(TOOLBAR_ORDER[tile + 1..].iter().copied());
+    let rects: Vec<_> = order.map(|(l, c)| (l, toolbar_node(h, l, c))).collect();
     for w in rects.windows(2) {
         assert!(
             reads_before(w[0].1, w[1].1),
@@ -739,7 +749,73 @@ fn assert_toolbar_layout(h: &Harness<'static, AppModel>) {
 #[test]
 fn the_toolbar_groups_channels_view_and_encode() {
     let (h, _d) = expanded_at_1280(false);
-    assert_toolbar_layout(&h);
+    assert_toolbar_layout(&h, &[]);
+}
+
+/// Task 6 (K7, CE12, CE20): with a dark albedo expanded, the "Range overlay" toggle sits after "Tile 3×3", inside the
+/// toolbar, and nothing runs under ✕ Close, at 1100, 1280 and 1600 px.
+#[test]
+fn the_toolbar_pin_holds_with_the_range_toggle() {
+    for width in [1100.0, 1280.0, 1600.0] {
+        let d = tempfile::tempdir().unwrap();
+        let mut model = pbr_wall(d.path(), 20, [128, 10, 200]);
+        model.expand("test/wall.png");
+        assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+        assert!(model.range_overlay_offered("test/wall.png"));
+        let mut h = Harness::builder()
+            .with_size(eframe::egui::vec2(width, 800.0))
+            .build_ui_state(
+                |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+                model,
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run();
+        assert_toolbar_layout(&h, &["Range overlay"]);
+    }
+}
+
+/// Task 8 (K7, CE20): the "UV coverage overlay" toggle, enabled (a scan with rows, here after the Range toggle) and
+/// disabled (no scan, as in the other toolbar tests), sits after "Tile 3×3", inside the toolbar and never under
+/// ✕ Close, at 1100, 1280 and 1600 px.
+#[test]
+fn the_toolbar_pin_holds_with_the_uv_toggle() {
+    use egui_kittest::kittest::NodeT;
+    for width in [1100.0, 1280.0, 1600.0] {
+        for scan in [true, false] {
+            let d = tempfile::tempdir().unwrap();
+            let mut model = pbr_wall(d.path(), 20, [128, 10, 200]);
+            if scan {
+                let db = d.path().join("scan.db");
+                let s = modscan::store::Store::open(&db).unwrap();
+                s.conn()
+                    .execute(
+                        "INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (1, 1, 'm', 'm', 1, 1)",
+                        [],
+                    )
+                    .unwrap();
+                drop(s);
+                model.scan_db = Some(db);
+            }
+            model.expand("test/wall.png");
+            assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+            assert_eq!(model.uv_offered("test/wall.png").is_ok(), scan);
+            let mut h = Harness::builder()
+                .with_size(eframe::egui::vec2(width, 800.0))
+                .build_ui_state(
+                    |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+                    model,
+                );
+            sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+            h.run();
+            assert_eq!(
+                h.get_by_label("UV coverage overlay")
+                    .accesskit_node()
+                    .is_disabled(),
+                !scan
+            );
+            assert_toolbar_layout(&h, &["Range overlay"]);
+        }
+    }
 }
 
 /// K8, K10 (shots 15/16/17): with Advanced open at 1280×800 the viewport keeps PREVIEW_MIN and the settings collapse.
@@ -761,7 +837,7 @@ fn at_1280x800_with_advanced_open_the_preview_keeps_its_width_and_the_toolbar_fi
         sdc_gui::ui::preview::PREVIEW_MIN
     );
     h.get_by_label("Settings");
-    assert_toolbar_layout(&h);
+    assert_toolbar_layout(&h, &[]);
 }
 
 /// A6, A7, A10: the strip opens the settings, and they stay open for this preview.
@@ -817,7 +893,7 @@ fn the_preview_settings_panel_is_never_drawn_under_the_toolbar() {
             "{key}: the settings {panel:?} run off the window"
         );
         // The toolbar beside the open settings is narrower, and nothing in it runs under ✕ Close.
-        assert_toolbar_layout(&h);
+        assert_toolbar_layout(&h, &[]);
         // The panel is the rightmost thing with these labels; its stored rect is where egui moved it.
         for g in ["Alpha", "Mipmaps", "Compression"] {
             let r = h
@@ -873,7 +949,7 @@ fn at_1100_wide_the_advanced_drawer_leaves_the_preview_its_width() {
         "viewport {}",
         bar.width()
     );
-    assert_toolbar_layout(&h);
+    assert_toolbar_layout(&h, &[]);
     // A pinned result adds Compare: Source / Pinned and Unpin to the View cluster; they stay in the toolbar too.
     h.state_mut().encode_now();
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
@@ -889,7 +965,7 @@ fn at_1100_wide_the_advanced_drawer_leaves_the_preview_its_width() {
             "{label} {r:?} outside the toolbar {bar:?}"
         );
     }
-    assert_toolbar_layout(&h);
+    assert_toolbar_layout(&h, &[]);
     h.state_mut().collapse();
     h.run();
     assert_eq!(width(&h), before);
