@@ -466,7 +466,7 @@ pub(crate) fn key_target(
     };
     if ks.iter().any(|&k| s.blocks[k].interp != first) {
         return Err(
-            "This clip has several interpolators for this controller: editing them needs Phase C."
+            "This clip has several interpolators for this controller: they cannot be edited."
                 .into(),
         );
     }

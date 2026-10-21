@@ -1490,9 +1490,7 @@ fn set_keys_refusals() {
     let r = apply(&two, &[clip_a(lin(&[(0.0, 1.0)]))]).unwrap();
     assert_eq!(
         r.outcomes,
-        refused(
-            "This clip has several interpolators for this controller: editing them needs Phase C."
-        )
+        refused("This clip has several interpolators for this controller: they cannot be edited.")
     );
     assert_eq!(r.bytes, two);
     // Unpatched: both CBs name interpolator 10 (2 refs, 2 users: no copy); its data -1 gets a new NiFloatData.
