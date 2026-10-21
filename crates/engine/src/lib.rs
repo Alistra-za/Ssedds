@@ -10,6 +10,7 @@ pub mod coverage;
 pub mod dds;
 pub mod dds_patch;
 pub mod decode;
+pub mod derive;
 pub mod dilate;
 pub mod discover;
 pub mod encode;
