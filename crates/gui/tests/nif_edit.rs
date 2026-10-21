@@ -5554,7 +5554,7 @@ fn add_key_is_off_when_no_later_time_exists() {
 const SKIN_TINT: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
 const FACEGEN_DETAIL: &str =
-    "FaceGen detail flag needs the Face Tint shader type: the mesh renders black otherwise.";
+    "FaceGen detail flag needs the Face Tint or Skin Tint shader type: the mesh renders black otherwise.";
 
 /// Shape "S" (0) on a BSLSP (1) of `shader_type` with SLSF1 = Zbuffer_Test | `bits`.
 fn typed(shader_type: u32, bits: u32) -> Vec<u8> {
@@ -5652,6 +5652,11 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
     h.run_steps(2);
     assert!(!h
         .get_by_label("FaceGen_RGB_Tint")
+        .accesskit_node()
+        .is_disabled());
+    // CO3: Skin Tint may carry the detail flag too.
+    assert!(!h
+        .get_by_label("Facegen_Detail_Map")
         .accesskit_node()
         .is_disabled());
 }

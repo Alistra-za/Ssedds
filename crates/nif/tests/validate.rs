@@ -833,7 +833,7 @@ fn emissive_multiple_up_to_100_is_quiet() {
 const SKIN_TINT: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
 const FACEGEN_DETAIL: &str =
-    "FaceGen detail flag needs the Face Tint shader type: the mesh renders black otherwise.";
+    "FaceGen detail flag needs the Face Tint or Skin Tint shader type: the mesh renders black otherwise.";
 const FACE_TINT: &str =
     "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
 
@@ -855,7 +855,7 @@ fn type_bound_flags_are_errors_with_a_one_click_fix_that_always_blocks() {
         (0, 1 << 21, SKIN_TINT, 0),
         (4, (1 << 21) | (1 << 10), SKIN_TINT, 0),
         (0, 1 << 10, FACEGEN_DETAIL, 0),
-        (5, (1 << 10) | (1 << 21), FACEGEN_DETAIL, 0),
+        (2, 1 << 10, FACEGEN_DETAIL, 0),
         (4, 0, FACE_TINT, 1 << 10),
     ] {
         let b = typed(ty, slsf1 | bits);
@@ -892,7 +892,15 @@ fn type_bound_flags_are_errors_with_a_one_click_fix_that_always_blocks() {
         );
     }
     // The matching pairs are clean.
-    for (ty, bits) in [(5, 1 << 21), (4, 1 << 10), (5, 0), (0, 0)] {
+    // CO3: Skin Tint may carry the detail flag (9 mod shapes, fine in game).
+    for (ty, bits) in [
+        (5, 1 << 21),
+        (4, 1 << 10),
+        (5, 0),
+        (0, 0),
+        (5, 1 << 10),
+        (5, (1 << 10) | (1 << 21)),
+    ] {
         let w = warnings(&typed(ty, slsf1 | bits));
         for t in [SKIN_TINT, FACEGEN_DETAIL, FACE_TINT] {
             none(&w, t);
@@ -911,7 +919,8 @@ fn a_type_change_fixes_the_flags_it_needs() {
     };
     assert_eq!(f(0, 1 << 21), vec![(1 << 21, 0)]);
     assert_eq!(f(4, 1 << 21), vec![(1 << 21, 0), (1 << 10, 1 << 10)]);
-    assert_eq!(f(5, 1 << 10), vec![(1 << 10, 0)]);
+    assert_eq!(f(5, 1 << 10), vec![]);
+    assert_eq!(f(1, 1 << 10), vec![(1 << 10, 0)]);
     assert_eq!(f(5, 1 << 21), vec![]);
     let notice: Vec<_> = type_flag_errors(0, 1 << 21)
         .into_iter()
