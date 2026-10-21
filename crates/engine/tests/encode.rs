@@ -542,7 +542,7 @@ fn bc7_weighting_options_change_the_bytes_and_unset_is_the_plain_call() {
         assert_ne!(encode(&input, w, h, &weighted(Some(o))), linear, "{o:?}");
         n += 1;
     }
-    assert!(n >= 4);
+    assert_eq!(n, Bc7Weights::ALL.len() - 1);
     let mut q = weighted(Some(Bc7Weights::Alpha8));
     q.encoder.perceptual = true;
     let mut r = weighted(None);

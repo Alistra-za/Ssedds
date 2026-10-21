@@ -27,7 +27,7 @@ pub const FIELDS: [(&str, &str); 15] = [
 pub const WEIGHTING: &str = "encoder.bc7_weights";
 
 /// The BC7 weighting row's options: the row's value, its label, its hover text.
-pub const WEIGHTING_OPTIONS: [(&str, &str, &str); 6] = [
+pub const WEIGHTING_OPTIONS: [(&str, &str, &str); 5] = [
     ("linear", "Linear", "Linear: every channel counts the same (the default)."),
     (
         "perceptual",
@@ -48,11 +48,6 @@ pub const WEIGHTING_OPTIONS: [(&str, &str, &str); 6] = [
         "alpha16",
         "Alpha ×16",
         "Alpha ×16: the strongest alpha priority; best for a _n with specular in alpha.",
-    ),
-    (
-        "rmaos",
-        "RMAOS (R4 G1 B2 A1)",
-        "RMAOS: roughness (R) first, then AO (B), for PBR RMAOS maps. Still being measured.",
     ),
 ];
 

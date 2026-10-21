@@ -561,7 +561,7 @@ fn bc7_weights_set_resolves_and_warns_where_it_has_no_effect() {
         "file:**/iron.png.format=bc1",
         "file:**/iron.png.encoder.backend=nvtt",
     ] {
-        let j = iron(&plan(&["encoder.bc7_weights=rmaos", extra]));
+        let j = iron(&plan(&["encoder.bc7_weights=alpha16", extra]));
         assert!(ignored(&j), "{extra}: {:?}", j.warnings);
     }
     // Fix round 1: `linear` overrides an inherited weighting and is never "ignored".
@@ -578,13 +578,16 @@ fn bc7_weights_set_resolves_and_warns_where_it_has_no_effect() {
         assert_eq!(j.profile.encoder.bc7_weights, Some(Bc7Weights::Linear));
         assert!(!ignored(&j), "{extra}: {:?}", j.warnings);
     }
-    // M3: an unknown value is refused, naming the key and the valid values.
-    let text = match try_plan(&["encoder.bc7_weights=alpha4"]) {
-        Err(e) => e.to_string(),
-        Ok(_) => panic!("alpha4 planned"),
-    };
-    for want in ["alpha4", "encoder.bc7_weights", "linear", "alpha8", "rmaos"] {
-        assert!(text.contains(want), "{want}: {text}");
+    // M3: an unknown value is refused, naming the key and the valid values. `rmaos` was dropped (Note CP12).
+    for bad in ["alpha4", "rmaos"] {
+        let text = match try_plan(&[&format!("encoder.bc7_weights={bad}")]) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("{bad} planned"),
+        };
+        let valid = "expected one of `linear`, `alpha2`, `alpha8`, `alpha16`";
+        for want in [bad, "encoder.bc7_weights", valid] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
     }
 }
 

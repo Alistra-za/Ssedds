@@ -79,8 +79,7 @@
         "linear",
         "alpha2",
         "alpha8",
-        "alpha16",
-        "rmaos"
+        "alpha16"
       ],
       "type": "string"
     },

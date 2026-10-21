@@ -104,17 +104,16 @@ cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 // refused with `CFG-INVALID` without them (docs/research/bc7e-tuning.md).
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest, Max });
 cfg_enum!(SearchRadius, "lowercase" { Default, Max, Fast });
-// BC7 linear error weights for bc7e (DECISIONS Note CP): alpha priority, or roughness then AO for an RMAOS map.
-// `linear` is bc7e's own 1,1,1,1 (the plain call): it overrides an inherited weighting.
-cfg_enum!(Bc7Weights, "lowercase" { Linear, Alpha2, Alpha8, Alpha16, Rmaos });
+// BC7 linear error weights for bc7e (DECISIONS Note CP): alpha priority. `linear` is bc7e's own 1,1,1,1 (the plain
+// call): it overrides an inherited weighting.
+cfg_enum!(Bc7Weights, "lowercase" { Linear, Alpha2, Alpha8, Alpha16 });
 impl Bc7Weights {
     /// Every value, in order; `all_lists_every_variant` ties it to the enum.
-    pub const ALL: [Bc7Weights; 5] = [
+    pub const ALL: [Bc7Weights; 4] = [
         Bc7Weights::Linear,
         Bc7Weights::Alpha2,
         Bc7Weights::Alpha8,
         Bc7Weights::Alpha16,
-        Bc7Weights::Rmaos,
     ];
 
     /// The R, G, B, A weights bc7e is given.
@@ -124,7 +123,6 @@ impl Bc7Weights {
             Bc7Weights::Alpha2 => [1, 1, 1, 2],
             Bc7Weights::Alpha8 => [1, 1, 1, 8],
             Bc7Weights::Alpha16 => [1, 1, 1, 16],
-            Bc7Weights::Rmaos => [4, 1, 2, 1],
         }
     }
 }

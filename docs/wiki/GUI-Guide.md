@@ -51,7 +51,7 @@ The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, C
 | Coverage, Exact opaque alpha | Auto / On / Off; on or off. |
 | Normal handling, Normal base level | Renormalise or Renormalise and bake; Renormalise to unit length or Keep as authored. |
 | Mipmaps: Levels, Filter, Edge | Full chain or None (base level only); Box, Tent, Mitchell, Kaiser; Wrap or Clamp. |
-| Format, Effort, Encoder, BC7 weighting | The block formats plus RGBA8, R8, RG8 and (under `cs`) RGBA16F; bc7e effort; Built-in or NVTT Production; Linear, Perceptual, Alpha ×2, ×8, ×16 or RMAOS (BC7 with the built-in encoder only). |
+| Format, Effort, Encoder, BC7 weighting | The block formats plus RGBA8, R8, RG8 and (under `cs`) RGBA16F; bc7e effort; Built-in or NVTT Production; Linear, Perceptual, Alpha ×2, ×8 or ×16 (BC7 with the built-in encoder only). |
 
 Options a texture cannot use are greyed out, with the reason on hover. For example, Tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting; HDR textures may use Box or Tent; Edge is locked while the filter is Box; Effort is locked for uncompressed formats; BC7 weighting shows only for BC7 with the built-in encoder, and its Perceptual option only for colour without data alpha; the Encoder row is locked for BC1 to BC5 and hidden for uncompressed formats.
 
