@@ -2475,6 +2475,13 @@ fn add_first_sequence_creates_manager_palette_and_mttc() {
     );
     let (mttc, targets) = read_mttc(&h, o, man.ctrl.next as usize).unwrap();
     assert_eq!((mttc.next, mttc.flags, mttc.target), (-1, MTTC_FLAGS, 0));
+    // C-P29: vanilla managers and MTTCs (1051 of 1051) run freq 1, phase 0, start FLT_MAX, stop -FLT_MAX
+    for c in [&man.ctrl, &mttc] {
+        assert_eq!(
+            (c.frequency, c.phase, c.start, c.stop),
+            (1.0, 0.0, f32::MAX, f32::MIN)
+        );
+    }
     assert_eq!(targets, [2], "the shape the clip binds (C-P26)");
     assert_eq!(man.sequences.len(), 1);
     let pal = read_palette(&h, o, man.palette as usize).unwrap();
@@ -2747,7 +2754,11 @@ fn remove_last_clip_clears_0x20() {
     assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
     let o = &r.bytes;
     let m = read_model(o).unwrap();
-    assert_eq!(m.ctrls[&4].flags, 0x48);
+    assert_eq!(
+        m.ctrls[&4].flags,
+        0x48 | 0x04,
+        "the clip's clamp cycle (C-P29)"
+    );
     assert_eq!(m.ctrls[&4].interp, Some(open_interp));
     let h = Header::parse(o).unwrap();
     assert_eq!(h.kind(open_interp as usize), b"NiFloatInterpolator");
@@ -2824,4 +2835,205 @@ fn nth_picks_the_second_clip_of_the_same_name() {
     assert_eq!(r.outcomes, vec![Outcome::Applied]);
     let h = Header::parse(&r.bytes).unwrap();
     assert_eq!(read_manager(&h, &r.bytes, 1).unwrap().sequences, [2]);
+}
+
+// ---- v2 C2 fix round 1 (C-P29) ----
+
+/// The root manager re-emitted with `seqs` as its list (bypassing the editor).
+fn with_list(b: &[u8], seqs: Vec<i32>) -> Vec<u8> {
+    let h = Header::parse(b).unwrap();
+    let mgr = root_ctrl(b);
+    let mut man = read_manager(&h, b, mgr).unwrap();
+    man.sequences = seqs;
+    let mut doc = nif::write::NifDoc::open(b).unwrap();
+    doc.set_block(mgr as u32, nif::clips::encode_manager(&man).unwrap());
+    doc.bytes()
+}
+
+fn mttc_targets(b: &[u8]) -> Vec<i32> {
+    let h = Header::parse(b).unwrap();
+    let man = read_manager(&h, b, root_ctrl(b)).unwrap();
+    read_mttc(&h, b, man.ctrl.next as usize).unwrap().1
+}
+
+/// I1: a later clip that binds another shape adds it to the MTTC's targets; an existing target is not repeated.
+#[test]
+fn mttc_targets_union_across_clips() {
+    let b = scenes::two_animated();
+    let m = read_model(&b).unwrap();
+    let on = |shape: u32| ClipTrack {
+        at: anchor_role(&m, Some(shape), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    let root = root_anchor(&b);
+    let ops = [
+        add_seq(root.clone(), "A", vec![on(2)]),
+        add_seq(root.clone(), "B", vec![on(3)]),
+        add_seq(root, "C", vec![on(2), on(3)]),
+    ];
+    let r = apply(&b, &ops[..2]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 2]);
+    assert_eq!(mttc_targets(&r.bytes), [2, 3]);
+    let r = apply(&b, &ops).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 3]);
+    assert_eq!(mttc_targets(&r.bytes), [2, 3]);
+    assert_eq!(count_kind(&r.bytes, "NiMultiTargetTransformController"), 1);
+}
+
+/// Value of a track at scene time `t`, as the preview plays it.
+fn play(tr: &nif::anim::Track, t: f32) -> f32 {
+    let ct = nif::anim::ctrl_time(t, tr.freq, tr.phase, tr.start, tr.stop, tr.flags);
+    match &tr.keys {
+        Some(KeyData::Float(g)) => nif::anim::sample_f32(g, ct).unwrap(),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// I2: a controller released by Remove takes the clip's timing with its keys, so they play as they did in the clip.
+#[test]
+fn released_controller_takes_the_clip_timing() {
+    let b = scenes::animated(Some(1), 1); // controller 4 runs 0-1, loop
+    let keys = lin(&[(10.0, 0.0), (20.0, 1.0)]);
+    let root = root_anchor(&b);
+    let add = Op::AddSequence {
+        at: root.clone(),
+        name: "Open".into(),
+        cycle: 2,
+        freq: 1.0,
+        start: 10.0,
+        stop: 20.0,
+        tracks: vec![track(&b, 11, keys)],
+    };
+    let one = apply(&b, std::slice::from_ref(&add)).unwrap().bytes;
+    let m1 = read_model(&one).unwrap();
+    let clip = &nif::anim::clip_tracks(&m1, &one, m1.sequences[0].block, 3)[0];
+    let r = apply(&b, &[add, remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 2]);
+    let m = read_model(&r.bytes).unwrap();
+    let c = &m.ctrls[&4];
+    assert_eq!(
+        (c.frequency, c.phase, c.start, c.stop),
+        (1.0, 0.0, 10.0, 20.0)
+    );
+    assert_eq!(c.flags, 0x48 | 0x04, "clamp from the clip's cycle type");
+    let free = nif::anim::free_tracks(&m, &r.bytes, 3);
+    let tr = free.iter().find(|t| t.ctrl == 4).unwrap();
+    for t in [10.0, 15.0, 20.0, 25.0] {
+        assert_eq!(play(tr, t), play(clip, t), "at {t}");
+    }
+    assert_eq!(play(tr, 15.0), 0.5);
+}
+
+/// I3: a sequence the manager lists that does not read refuses every clip op; it is not an absent name.
+#[test]
+fn unreadable_listed_sequence_refuses() {
+    let b = with_list(&named_managed_clip(), vec![2, 3, 99]);
+    let root = root_anchor(&b);
+    let m = read_model(&b).unwrap();
+    let t = ClipTrack {
+        at: anchor_role(&m, Some(5), lscf_role(11)).unwrap(),
+        keys: open_keys(),
+    };
+    refused(&b, remove_seq(root.clone(), "A", 0));
+    refused(&b, remove_seq(root.clone(), "Nope", 0));
+    refused(&b, rename_seq(root.clone(), "A", 0, "Z"));
+    refused(&b, add_seq(root, "C", vec![t]));
+}
+
+/// I4: a sequence another manager still lists keeps its controllers manager-controlled after a Remove.
+#[test]
+fn another_manager_keeps_the_clip_live() {
+    let b = scenes::animated(Some(1), 1);
+    let root = root_anchor(&b);
+    let one = apply(
+        &b,
+        &[add_seq(
+            root.clone(),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let h = Header::parse(&one).unwrap();
+    let man = read_manager(&h, &one, root_ctrl(&one)).unwrap();
+    let mut doc = nif::write::NifDoc::open(&one).unwrap();
+    let second = nif::ctrl::Manager {
+        palette: -1,
+        ..man.clone()
+    };
+    doc.append(
+        b"NiControllerManager",
+        nif::clips::encode_manager(&second).unwrap(),
+    );
+    let two = doc.bytes();
+    let before = read_model(&two).unwrap().ctrls[&4].clone();
+    let r = apply(&two, &[remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(
+        m.ctrls[&4], before,
+        "flags 0x20 and the blend interpolator stay"
+    );
+    assert_eq!(m.sequences.len(), 1, "the other manager lists it");
+    let h = Header::parse(&r.bytes).unwrap();
+    assert!(read_manager(&h, &r.bytes, root_ctrl(&r.bytes))
+        .unwrap()
+        .sequences
+        .is_empty());
+}
+
+/// Minor: an LSCC (Point3) track round trip: Point3 keyed and blend interpolators, all three values, and back.
+#[test]
+fn colour_track_round_trip() {
+    let b = scenes::animated(Some(1), 0);
+    let ctrl_keys = pos_keys(&[(0.0, [0.0; 3])]);
+    let shader = prop_anchor(&b, Role::Shader);
+    let a = apply(&b, &[add(shader, LSCC, Some(1), ctrl_keys, 1.0)])
+        .unwrap()
+        .bytes;
+    let m = read_model(&a).unwrap();
+    let role = Role::Ctrl {
+        owner: Owner::Shader,
+        class: LSCC.into(),
+        var: Some(1),
+        nth: 0,
+    };
+    let at = anchor_role(&m, Some(2), role).unwrap();
+    let c = at.block;
+    let keys = pos_keys(&[(0.0, [0.1, 0.2, 0.3]), (1.0, [0.4, 0.5, 0.6])]);
+    let root = root_anchor(&a);
+    let addc = add_seq(
+        root.clone(),
+        "Glow",
+        vec![ClipTrack {
+            at,
+            keys: keys.clone(),
+        }],
+    );
+    let one = apply(&a, std::slice::from_ref(&addc)).unwrap();
+    assert_eq!(one.outcomes, vec![Outcome::Applied]);
+    let o = &one.bytes;
+    let (h, m) = (Header::parse(o).unwrap(), read_model(o).unwrap());
+    let s = read_sequence_out(&h, o, m.sequences[0].block as usize).unwrap();
+    let cb = &s.blocks[0];
+    assert_eq!(h.string(cb.ctrl_id), Some(&b"1"[..]));
+    assert_eq!(h.string(cb.ctrl_type), Some(LSCC.as_bytes()));
+    assert_eq!(h.kind(cb.interp as usize), b"NiPoint3Interpolator");
+    let ip = &m.interps[&(cb.interp as u32)];
+    assert_eq!(ip.value, [0.1, 0.2, 0.3]);
+    assert_eq!(h.kind(ip.data as usize), b"NiPosData");
+    assert_eq!(data_of(o, ip.data as usize), keys);
+    let bl = nif::ctrl::read_blend_interp(&h, o, m.ctrls[&c].interp.unwrap() as usize).unwrap();
+    assert_eq!(bl.class, "NiBlendPoint3Interpolator");
+    assert!(bl.value.iter().all(|v| v.to_bits() == 0xFF7F_FFFF) && bl.value.len() == 3);
+    assert_eq!(m.ctrls[&c].flags, 0x68);
+
+    let r = apply(&a, &[addc, remove_seq(root, "Glow", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied; 2]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&c].interp, Some(cb.interp));
+    assert_eq!(m.ctrls[&c].flags, 0x48 | 0x04);
+    let t = nif::anim::free_tracks(&m, &r.bytes, 3);
+    assert_eq!(t.iter().find(|t| t.ctrl == c).unwrap().keys, Some(keys));
 }

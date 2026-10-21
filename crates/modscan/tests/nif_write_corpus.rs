@@ -23,6 +23,16 @@ struct Res {
     census: Vec<String>,
 }
 
+/// A census bucket for a time value: the FLT_MAX sentinels, zero, or other.
+fn bucket(v: f32) -> &'static str {
+    match v {
+        f32::MAX => "FLT_MAX",
+        f32::MIN => "-FLT_MAX",
+        0.0 => "0",
+        _ => "other",
+    }
+}
+
 /// Census lines for one clip-related block (C1-D6). `listed` = sequences some manager lists; `root` = footer root.
 fn census(
     h: &Header,
@@ -56,6 +66,37 @@ fn census(
                     c.flags, m.cumulative, c.frequency, c.phase
                 ));
                 out.push(format!("mgr next={}", kind_of(c.next)));
+                // C2 fix round 1: are start/stop the FLT_MAX pair or the range of the listed sequences?
+                let seqs: Vec<_> = m
+                    .sequences
+                    .iter()
+                    .filter_map(|&q| read_sequence_out(h, b, usize::try_from(q).ok()?).ok())
+                    .collect();
+                let lo = seqs.iter().map(|q| q.start).fold(f32::INFINITY, f32::min);
+                let hi = seqs
+                    .iter()
+                    .map(|q| q.stop)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                out.push(format!(
+                    "mgr start={} stop={} seq_range={}",
+                    bucket(c.start),
+                    bucket(c.stop),
+                    c.start == lo && c.stop == hi
+                ));
+                if let Some((t, _)) = usize::try_from(c.next)
+                    .ok()
+                    .and_then(|n| read_mttc(h, b, n).ok())
+                {
+                    out.push(format!(
+                        "mttc freq={} phase={} start={} stop={} seq_range={} same_as_mgr={}",
+                        t.frequency,
+                        t.phase,
+                        bucket(t.start),
+                        bucket(t.stop),
+                        t.start == lo && t.stop == hi,
+                        (t.start, t.stop) == (c.start, c.stop)
+                    ));
+                }
             }
         }
         b"NiMultiTargetTransformController" => {

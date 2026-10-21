@@ -4,8 +4,8 @@ use super::validate::{ENV_SCALE_PBR, LSCC, LSCF, LSCF_VARS, TESTREF};
 use super::{Anchor, Op, Outcome, Role};
 use crate::clips::{
     encode_blend_interp, encode_manager, encode_mttc, encode_palette, encode_sequence,
-    encode_text_keys, read_palette, read_sequence_out, CtrlBlockOut, SequenceOut, MANAGER_FLAGS,
-    MTTC_FLAGS,
+    encode_text_keys, read_mttc, read_palette, read_sequence_out, CtrlBlockOut, SequenceOut,
+    MANAGER_FLAGS, MTTC_FLAGS,
 };
 use crate::ctrl::{read_manager, Manager, TimeCtrl, BASE_LEN, CB_LEN};
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
@@ -557,10 +557,19 @@ fn root_manager(m: &NifModel) -> Option<u32> {
     None
 }
 
-/// The raw Name of sequence `s`; None when it does not read or has no name.
-fn clip_name<'h>(h: &'h Header, cur: &[u8], s: i32) -> Option<&'h [u8]> {
-    let s = usize::try_from(s).ok()?;
-    h.string(read_sequence_out(h, cur, s).ok()?.name)
+/// The raw Name of each listed sequence (None: no name). A listed sequence that does not read is an Err (C-P29).
+fn clip_names<'h>(
+    h: &'h Header,
+    cur: &[u8],
+    seqs: &[i32],
+) -> Result<Vec<Option<&'h [u8]>>, String> {
+    seqs.iter()
+        .map(|&s| {
+            let i = usize::try_from(s)
+                .map_err(|_| format!("The manager lists a null sequence ({s})."))?;
+            Ok(h.string(enc(read_sequence_out(h, cur, i))?.name))
+        })
+        .collect()
 }
 
 /// (manager, the manager as read, list position) of the `nth` clip named `name` on the root's manager.
@@ -577,8 +586,9 @@ fn find_clip(
     let man = enc(read_manager(h, cur, mb as usize))?;
     // the Windows-1252 name the editor shows, or the model's UTF-8 view of it
     let named = |r: &[u8]| crate::text::lossy(r) == name || String::from_utf8_lossy(r) == name;
-    let k = (0..man.sequences.len())
-        .filter(|&k| clip_name(h, cur, man.sequences[k]).is_some_and(named))
+    let names = clip_names(h, cur, &man.sequences)?;
+    let k = (0..names.len())
+        .filter(|&k| names[k].is_some_and(named))
         .nth(nth as usize);
     Ok(k.map(|k| (mb, man, k)))
 }
@@ -595,10 +605,10 @@ fn clip_name_bytes(
     if b.is_empty() {
         return Err("A clip needs a name.".into());
     }
-    let seqs = man.map_or(&[][..], |m| &m.sequences);
-    let taken = (0..seqs.len())
+    let names = clip_names(h, cur, man.map_or(&[][..], |m| &m.sequences))?;
+    let taken = (0..names.len())
         .filter(|&k| Some(k) != skip)
-        .any(|k| clip_name(h, cur, seqs[k]).is_some_and(|r| r.eq_ignore_ascii_case(&b)));
+        .any(|k| names[k].is_some_and(|r| r.eq_ignore_ascii_case(&b)));
     if taken {
         return Err(format!("Another clip is already named {name}."));
     }
@@ -700,13 +710,18 @@ pub(crate) fn clip_op(
             };
             let removed = man.sequences.remove(k);
             doc.set_block(mgr, enc(encode_manager(&man))?);
-            let gone = m
-                .sequences
-                .iter()
-                .find(|s| s.block as i32 == removed)
-                .filter(|_| !man.sequences.contains(&removed));
-            if let Some(rs) = gone {
-                release(doc, m, rs)?;
+            // C-P29: the union over every readable manager after the remove, as read_model counts live sequences
+            let h = doc.header();
+            let mut listed: Vec<i32> = man.sequences.clone();
+            for i in (0..h.sizes.len()).filter(|&i| i != mgr as usize) {
+                if h.kind(i) == b"NiControllerManager" {
+                    if let Ok(o) = read_manager(h, cur, i) {
+                        listed.extend(o.sequences);
+                    }
+                }
+            }
+            if let Some(rs) = m.sequences.iter().find(|s| s.block as i32 == removed) {
+                release(doc, m, rs, &listed)?;
             }
         }
         Op::RenameSequence {
@@ -727,9 +742,16 @@ pub(crate) fn clip_op(
     Ok(Outcome::Applied)
 }
 
-/// G2: each known controller the removed clip `rs` drove and no other live clip drives gets 0x20 cleared and
-/// `rs`'s keyed interpolator back (when it is a plain one of the controller's kind).
-fn release(doc: &mut NifDoc, m: &NifModel, rs: &crate::ctrl::Sequence) -> Result<(), String> {
+/// G2: each known controller the removed clip `rs` drove and no sequence in `listed` drives (`rs` too, when another
+/// manager still lists it) gets 0x20 cleared, `rs`'s keyed interpolator back (when it is a plain one of the
+/// controller's kind), and `rs`'s timing, so its keys play as they did in the clip (C-P29): frequency, start and
+/// stop from the sequence, phase 0, cycle bits from its cycle type, Play Backwards cleared (a clip never sets it).
+fn release(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    rs: &crate::ctrl::Sequence,
+    listed: &[i32],
+) -> Result<(), String> {
     let mut fix = vec![];
     {
         let h = doc.header();
@@ -737,7 +759,10 @@ fn release(doc: &mut NifDoc, m: &NifModel, rs: &crate::ctrl::Sequence) -> Result
             let Some(&k) = crate::anim::bound_cbs(m, h, rs, c).first() else {
                 continue;
             };
-            let others = m.sequences.iter().filter(|s| s.block != rs.block);
+            let others = m
+                .sequences
+                .iter()
+                .filter(|s| listed.contains(&(s.block as i32)));
             if others
                 .into_iter()
                 .any(|s| !crate::anim::bound_cbs(m, h, s, c).is_empty())
@@ -751,12 +776,17 @@ fn release(doc: &mut NifDoc, m: &NifModel, rs: &crate::ctrl::Sequence) -> Result
                 b"NiFloatInterpolator"
             };
             let plain = u32::try_from(ip).is_ok_and(|i| doc.kind(i) == want);
-            fix.push((c, ctrl.flags & !0x20, plain.then_some(ip)));
+            let flags = (ctrl.flags & !(0x20 | 0x10 | 0x06)) | ((rs.cycle.min(3) as u16) << 1);
+            fix.push((c, flags, plain.then_some(ip)));
         }
     }
     for (c, flags, ip) in fix {
-        doc.patch(c, 4, &flags.to_le_bytes())
-            .map_err(|e| e.to_string())?;
+        // flags, frequency, phase, start, stop: bytes 4..22 of the NiTimeController base
+        let mut t = flags.to_le_bytes().to_vec();
+        for f in [rs.frequency, 0.0, rs.start, rs.stop] {
+            t.extend(f.to_le_bytes());
+        }
+        doc.patch(c, 4, &t).map_err(|e| e.to_string())?;
         if let Some(ip) = ip {
             patch(doc, c, BASE_LEN, ip)?;
         }
@@ -816,8 +846,29 @@ pub(crate) fn add_sequence(
         _ => (root as i32, vec![]),
     };
 
+    // C-P26/C-P29: the MTTC lists the nodes the clips bind; existing targets stay, missing ones are appended
+    let with_shapes = |mut targets: Vec<i32>| {
+        for (s, _, _) in &shapes {
+            if !targets.contains(&(*s as i32)) {
+                targets.push(*s as i32);
+            }
+        }
+        targets
+    };
     let (mgr, mut man) = match (found, old) {
-        (Some(mb), Some(man)) => (mb, man),
+        (Some(mb), Some(man)) => {
+            let mttc = u32::try_from(man.ctrl.next)
+                .ok()
+                .filter(|&n| doc.kind(n) == b"NiMultiTargetTransformController");
+            if let Some(n) = mttc {
+                let (base, old_t) = enc(read_mttc(doc.header(), cur, n as usize))?;
+                let targets = with_shapes(old_t.clone());
+                if targets != old_t {
+                    doc.set_block(n, enc(encode_mttc(&base, &targets))?);
+                }
+            }
+            (mb, man)
+        }
         _ => {
             // F21: a placeholder manager, filled by set_block at the end
             let mgr = doc.append(b"NiControllerManager", vec![]);
@@ -826,22 +877,18 @@ pub(crate) fn add_sequence(
                 class: String::new(),
                 next,
                 flags,
+                // C-P29 census: all 1051 vanilla managers and their MTTCs run freq 1, phase 0 over the
+                // FLT_MAX / -FLT_MAX range, not the clips' range
                 frequency: 1.0,
                 phase: 0.0,
-                start: 0.0,
-                stop,
+                start: f32::MAX,
+                stop: f32::MIN,
                 target: root as i32,
                 interp: None,
                 var: None,
                 known: false,
             };
-            // C-P26: the MTTC lists the nodes the clip's blocks bind
-            let mut targets: Vec<i32> = vec![];
-            for (s, _, _) in &shapes {
-                if !targets.contains(&(*s as i32)) {
-                    targets.push(*s as i32);
-                }
-            }
+            let targets = with_shapes(vec![]);
             let mttc_body = enc(encode_mttc(&base(net.controller, MTTC_FLAGS), &targets))?;
             let mttc = doc.append(b"NiMultiTargetTransformController", mttc_body);
             let man = Manager {
