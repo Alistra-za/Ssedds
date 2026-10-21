@@ -2,7 +2,7 @@
 //! block stays as an orphan. New blocks are appended; refs inside opaque blocks are never rewritten.
 use super::validate::LSCF_VARS;
 use super::{Anchor, Op, Outcome, Role};
-use crate::ctrl::BASE_LEN;
+use crate::ctrl::{BASE_LEN, CB_LEN};
 use crate::extra::{encode_extra, ExtraValue, EDITABLE};
 use crate::header::Header;
 use crate::keys::{encode_data, read_data, KeyData, KeyGroup};
@@ -172,6 +172,18 @@ pub(crate) fn ctrl_keys(
         Some(i) if i >= 0 => i as usize,
         _ => return Err("The controller has no interpolator.".into()),
     };
+    let (floats, data, keys) = interp_keys(h, b, m, i)?;
+    Ok((i as u32, floats, data, keys))
+}
+
+/// Interpolator `i`'s keys: (pose float count, data block, current keys). A data ref of -1 reads as the empty group
+/// of the interpolator's kind.
+pub(crate) fn interp_keys(
+    h: &Header,
+    b: &[u8],
+    m: &NifModel,
+    i: usize,
+) -> Result<(usize, Option<u32>, KeyData), String> {
     if i >= h.sizes.len() {
         return Err("The interpolator ref is outside the file.".into()); // before h.kind, which does not check
     }
@@ -199,7 +211,7 @@ pub(crate) fn ctrl_keys(
             }),
             _ => return Err(mismatch()),
         };
-        return Ok((i as u32, floats, None, empty));
+        return Ok((floats, None, empty));
     }
     if ip.data < -1 || ip.data as usize >= h.sizes.len() {
         return Err("The interpolator's data ref is outside the file.".into());
@@ -207,14 +219,103 @@ pub(crate) fn ctrl_keys(
     let d = ip.data as usize;
     let keys = read_data(h, b, d).map_err(|e| e.to_string())?;
     match (&keys, floats) {
-        (KeyData::Float(_), 1) | (KeyData::Pos(_), 3) => {
-            Ok((i as u32, floats, Some(d as u32), keys))
-        }
+        (KeyData::Float(_), 1) | (KeyData::Pos(_), 3) => Ok((floats, Some(d as u32), keys)),
         _ => Err(mismatch()),
     }
 }
 
-/// SetKeys with clip None on the controller `ctrl`. Ok(Conflict) for a stale base.
+/// What one SetKeys edits: the interpolator, the refs that name it for this op, its float count, data and keys.
+pub(crate) struct KeyTarget {
+    pub interp: u32,
+    /// (block, block-relative offset) of every ref this op re-points when it copies the interpolator.
+    pub refs: Vec<(u32, usize)>,
+    pub floats: usize,
+    pub data: Option<u32>,
+    pub keys: KeyData,
+}
+
+/// The interpolator SetKeys edits on controller `ctrl`: its own (`clip: None`), or the CB interpolator of sequence
+/// `seq` bound to it (v2 B7, E1, E4).
+pub(crate) fn key_target(
+    h: &Header,
+    b: &[u8],
+    m: &NifModel,
+    ctrl: u32,
+    clip: Option<u32>,
+) -> Result<KeyTarget, String> {
+    let Some(seq) = clip else {
+        let (interp, floats, data, keys) = ctrl_keys(h, b, m, ctrl)?;
+        return Ok(KeyTarget {
+            interp,
+            refs: vec![(ctrl, BASE_LEN)],
+            floats,
+            data,
+            keys,
+        });
+    };
+    let s = m
+        .sequences
+        .iter()
+        .find(|s| s.block == seq)
+        .ok_or("This clip is not in this file.")?;
+    let ks = crate::anim::bound_cbs(m, h, s, ctrl);
+    let first = match ks.first() {
+        None => return Err("This clip does not animate this controller.".into()),
+        Some(&k) => s.blocks[k].interp,
+    };
+    if ks.iter().any(|&k| s.blocks[k].interp != first) {
+        return Err(
+            "This clip has several interpolators for this controller: editing them needs Phase C."
+                .into(),
+        );
+    }
+    let i =
+        usize::try_from(first).map_err(|_| "This clip has no interpolator for this controller.")?;
+    let (floats, data, keys) = interp_keys(h, b, m, i)?;
+    Ok(KeyTarget {
+        interp: i as u32,
+        refs: ks.iter().map(|&k| (seq, 12 + k * CB_LEN)).collect(),
+        floats,
+        data,
+        keys,
+    })
+}
+
+/// Variable `old` -> `new` on managed controller `ctrl` (spec §5.5, E2, E3): every CB bound to it whose Controller
+/// ID is `old` in decimal gets `new` in decimal; null, empty and other IDs stay. Patches each CB's 4-byte index only.
+pub(crate) fn rewrite_cb_ids(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    ctrl: u32,
+    old: u32,
+    new: u32,
+) -> Result<(), String> {
+    let old_id = old.to_string().into_bytes();
+    // `Header` is not Clone: collect under the shared borrow, mutate after it ends.
+    let targets: Vec<(u32, usize)> = {
+        let h = doc.header();
+        m.sequences
+            .iter()
+            .flat_map(|s| {
+                crate::anim::bound_cbs(m, h, s, ctrl)
+                    .into_iter()
+                    .filter(|&k| s.blocks[k].ctrl_id.as_deref() == Some(&old_id[..]))
+                    .map(|k| (s.block, 12 + k * CB_LEN + 21))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    if targets.is_empty() {
+        return Ok(()); // 0x20 with no clip, or only null/empty IDs: nothing names the variable
+    }
+    let idx = doc.string(new.to_string().as_bytes());
+    for (seq, at) in targets {
+        patch(doc, seq, at, idx)?;
+    }
+    Ok(())
+}
+
+/// SetKeys on the controller `ctrl`, its own keys or (clip Some) a clip's. Ok(Conflict) for a stale base.
 pub(crate) fn set_keys(
     doc: &mut NifDoc,
     cur: &[u8],
@@ -222,17 +323,21 @@ pub(crate) fn set_keys(
     ctrl: u32,
     op: &Op,
 ) -> Result<Outcome, String> {
-    let Op::SetKeys { keys, base, .. } = op else {
+    let Op::SetKeys {
+        keys, base, clip, ..
+    } = op
+    else {
         return Err("not a key op".into());
     };
-    let (i, floats, data, now) = ctrl_keys(doc.header(), cur, m, ctrl)?;
-    let kind: &[u8] = match (keys, &now) {
+    let t = key_target(doc.header(), cur, m, ctrl, *clip)?;
+    let (i, floats, data, now) = (t.interp, t.floats, t.data, &t.keys);
+    let kind: &[u8] = match (keys, now) {
         (KeyData::Float(_), KeyData::Float(_)) => b"NiFloatData",
         (KeyData::Pos(_), KeyData::Pos(_)) => b"NiPosData",
         _ => return Err("The keys do not match the interpolator's type.".into()),
     };
     // bytes, not KeyData ==: NaN != NaN (F19)
-    if encode_data(base) != encode_data(&now) {
+    if encode_data(base) != encode_data(now) {
         return Ok(Outcome::Conflict(
             "changed in the source: the keys differ from the edit's base".into(),
         ));
@@ -252,9 +357,12 @@ pub(crate) fn set_keys(
     let data_users = data.map_or(0, |d| {
         m.interps.values().filter(|x| x.data == d as i32).count()
     });
-    if interp_users > 1 {
+    // E5: copy when something other than the refs this op re-points also names the interpolator.
+    if interp_users > t.refs.len() {
         let ni = copy(doc, i);
-        patch(doc, ctrl, BASE_LEN, ni as i32)?;
+        for &(blk, at) in &t.refs {
+            patch(doc, blk, at, ni as i32)?;
+        }
         let nd = doc.append(kind, encode_data(keys));
         patch(doc, ni, 4 * floats, nd as i32)?;
     } else if let Some(d) = data.filter(|_| data_users <= 1) {

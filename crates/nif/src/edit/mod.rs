@@ -99,7 +99,7 @@ pub enum Op {
         at: Anchor,
     },
     /// Replaces the keys of the anchored controller's own interpolator (`clip: None`), or of a sequence's
-    /// controlled-block interpolator (`clip: Some(sequence block)`, B7; Refused until then).
+    /// controlled-block interpolator bound to that controller (`clip: Some(sequence block)`, v2 B7).
     SetKeys {
         at: Anchor, // Role::Ctrl
         clip: Option<u32>,
@@ -301,11 +301,7 @@ pub fn merge_key(op: &Op) -> String {
 /// exactly as `apply` compares an op's `base`. Err gives why there is nothing to edit (shown in the tab).
 pub fn keys_of(b: &[u8], m: &NifModel, ctrl: u32, clip: Option<u32>) -> Result<KeyData, String> {
     let h = crate::header::Header::parse(b).map_err(|e| e.to_string())?;
-    match clip {
-        None => structural::ctrl_keys(&h, b, m, ctrl).map(|r| r.3),
-        // B7 implements clips; the text matches step()'s refusal.
-        Some(_) => Err("Editing a clip's keys is not supported yet.".into()),
-    }
+    structural::key_target(&h, b, m, ctrl, clip).map(|t| t.keys)
 }
 
 /// Err only when `src` itself does not open. A later op that cannot run is a `Conflict` or `Refused` outcome and
@@ -412,11 +408,9 @@ pub fn keep_mine(new_src: &[u8], ops: &[Op], i: usize) -> Result<Vec<Op>, NifErr
                 *base = v;
             }
         }
-        Op::SetKeys {
-            base, clip: None, ..
-        } => {
-            if let Ok((.., now)) = structural::ctrl_keys(doc.header(), &cur, &m, block) {
-                *base = now;
+        Op::SetKeys { base, clip, .. } => {
+            if let Ok(t) = structural::key_target(doc.header(), &cur, &m, block, *clip) {
+                *base = t.keys;
             }
         }
         _ => {}
@@ -444,10 +438,6 @@ fn field_block(m: &NifModel, block: u32, field: Field) -> u32 {
 fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     let refused = |s: String| (None, Outcome::Refused(s));
     let at = anchor_of(op);
-    // before resolve: a clip edit is always Refused, never a Conflict (B7 removes this)
-    if let Op::SetKeys { clip: Some(_), .. } = op {
-        return refused("Editing a clip's keys is not supported yet.".into());
-    }
     let m = match read_model(cur) {
         Ok(m) => m,
         Err(e) => return refused(e.to_string()),
@@ -541,9 +531,6 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     if field == Field::ShaderType && matches!(op, Op::SetBits { .. }) {
         return refused("the shader type is not a bit field".into());
     }
-    if field == Field::Variable && m.managed(block) {
-        return refused("the variable of a manager-controlled controller cannot change".into());
-    }
     let ctrl = block;
     let block = field_block(&m, block, field);
     // Ruling P9: an interpolator that several controllers reference would change all of them.
@@ -613,6 +600,22 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     };
     if let Err(e) = doc.patch(block, rel, &new) {
         return refused(e.to_string());
+    }
+    // Phase A ruling R8 lifted (v2 B7): a managed controller's clips follow its new variable.
+    if let (
+        Field::Variable,
+        Op::SetField {
+            value: Value::U32(v),
+            base: Value::U32(o),
+            ..
+        },
+    ) = (field, op)
+    {
+        if m.managed(ctrl) && v != o {
+            if let Err(e) = structural::rewrite_cb_ids(&mut doc, &m, ctrl, *o, *v) {
+                return refused(e);
+            }
+        }
     }
     (Some(doc.bytes()), outcome)
 }

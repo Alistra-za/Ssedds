@@ -150,38 +150,6 @@ fn stale_base_is_a_conflict_and_later_ops_still_apply() {
 }
 
 #[test]
-fn variable_change_on_managed_controller_is_refused() {
-    let b = scenes::managed_clip();
-    let m = read_model(&b).unwrap();
-    let shape = m.shapes[0].block;
-    let at = anchor_role(
-        &m,
-        Some(shape),
-        Role::Ctrl {
-            owner: Owner::Shader,
-            class: "BSLightingShaderPropertyFloatController".into(),
-            var: Some(11),
-            nth: 0,
-        },
-    )
-    .unwrap();
-    assert!(m.managed(at.block));
-    let op = Op::SetField {
-        at,
-        field: Field::Variable,
-        value: Value::U32(20),
-        base: Value::U32(11),
-    };
-    let r = apply(&b, &[op]).unwrap();
-    assert!(
-        matches!(r.outcomes[0], Outcome::Refused(_)),
-        "{:?}",
-        r.outcomes
-    );
-    assert_eq!(r.bytes, b);
-}
-
-#[test]
 fn reordered_blocks_reanchor_by_role() {
     let (b1, b2) = (scenes::reordered(false, "S"), scenes::reordered(true, "S"));
     let at = shader_anchor(&b1);
@@ -1438,14 +1406,32 @@ fn set_keys_refusals() {
     let mut lost = at.clone();
     lost.block = 99;
     lost.shape = Some("nope".into());
-    for a in [&at, &lost] {
-        let r = apply(&b, &[clip(a, 0)]).unwrap();
-        assert_eq!(
-            r.outcomes,
-            refused("Editing a clip's keys is not supported yet.")
-        );
-        assert_eq!(r.bytes, b);
-    }
+    // v2 B7 (E9): clip edits are implemented; a missing sequence is Refused, a lost anchor a Conflict.
+    let r = apply(&b, &[clip(&at, 0)]).unwrap();
+    assert_eq!(r.outcomes, refused("This clip is not in this file."));
+    assert_eq!(r.bytes, b);
+    let r = apply(&b, &[clip(&lost, 0)]).unwrap();
+    assert!(
+        matches!(r.outcomes[0], Outcome::Conflict(_)),
+        "{:?}",
+        r.outcomes
+    );
+    assert_eq!(r.bytes, b);
+    // A CB with controller -1 and null strings binds nothing.
+    let ks = scenes::keyed_with_sequence(Some(4));
+    let kat = ctrl_anchor(&ks, Owner::Shader, LSCF, Some(11), "S");
+    let op = Op::SetKeys {
+        at: kat,
+        clip: Some(8),
+        keys: lin(&[(0.0, 1.0)]),
+        base: data_of(&ks, 6),
+    };
+    let r = apply(&ks, &[op]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused("This clip does not animate this controller.")
+    );
+    assert_eq!(r.bytes, ks);
 
     let pos = KeyData::Pos(KeyGroup {
         key_type: Some(1),
@@ -1480,6 +1466,42 @@ fn set_keys_refusals() {
         refused("A NiBlendFloatInterpolator has no keys to edit.")
     );
     assert_eq!(r.bytes, mc);
+    // v2 B7 (E4): A's two CBs naming different interpolators for one controller are Refused.
+    let clip_a = |keys| Op::SetKeys {
+        at: mat.clone(),
+        clip: Some(2),
+        keys,
+        base: empty_float(),
+    };
+    let mut two = mc.clone();
+    let seq_a = Header::parse(&mc).unwrap().offsets()[2];
+    let cb1 = seq_a + 12 + 29;
+    two[cb1..cb1 + 4].copy_from_slice(&11i32.to_le_bytes());
+    let r = apply(&two, &[clip_a(lin(&[(0.0, 1.0)]))]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        refused(
+            "This clip has several interpolators for this controller: editing them needs Phase C."
+        )
+    );
+    assert_eq!(r.bytes, two);
+    // Unpatched: both CBs name interpolator 10 (2 refs, 2 users: no copy); its data -1 gets a new NiFloatData.
+    let r = apply(&mc, &[clip_a(lin(&[(0.0, 1.0)]))]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m2 = read_model(&r.bytes).unwrap();
+    assert_eq!(
+        (
+            m2.sequences[0].blocks[0].interp,
+            m2.sequences[0].blocks[1].interp
+        ),
+        (10, 10)
+    );
+    assert_eq!(nblocks(&r.bytes), 13);
+    assert_eq!(m2.interps[&10].data, 12);
+    assert_eq!(
+        encode_data(&data_of(&r.bytes, 12)),
+        encode_data(&lin(&[(0.0, 1.0)]))
+    );
 
     let sa = scenes::shared_alpha_with_testref_chain();
     let ta = ctrl_anchor(
@@ -1506,7 +1528,7 @@ fn set_keys_refusals() {
 }
 
 /// v2 B6: keys_of is the base SetKeys checks: the data block's keys, the empty group for no data, an error for a
-/// blend interpolator and for a clip (until B7).
+/// blend interpolator; v2 B7: a clip's CB interpolator keys, and an error for a missing clip.
 #[test]
 fn keys_of_is_the_set_keys_base() {
     let b = scenes::keyed_pair(Share::No, [1, 2]);
@@ -1524,9 +1546,16 @@ fn keys_of_is_the_set_keys_base() {
         nif::edit::keys_of(&mc, &mm, 7, None),
         Err("A NiBlendFloatInterpolator has no keys to edit.".into())
     );
+    // v2 B7 (E9): clips are implemented.
     assert_eq!(
         nif::edit::keys_of(&b, &m, 2, Some(0)),
-        Err("Editing a clip's keys is not supported yet.".into())
+        Err("This clip is not in this file.".into())
+    );
+    let mp = scenes::managed_pair();
+    let mpm = read_model(&mp).unwrap();
+    assert_eq!(
+        nif::edit::keys_of(&mp, &mpm, 5, Some(1)),
+        Ok(data_of(&mp, 13))
     );
 }
 
@@ -2135,4 +2164,178 @@ fn broken_chains_refuse_remove_and_add() {
     let b = with_next(&scenes::animated(Some(1), 1), 4, 99);
     let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
     refused_unchanged(&b, Op::RemoveController { at }, BROKEN);
+}
+
+// ---- v2 B7: clip key edits and the Controller ID rewrite (R8 lifted) ----
+
+/// SetKeys on clip A edits only A's CB interpolator data for that controller; B, the other controller, the blend
+/// interpolators and every other block keep their bytes. A shared CB interpolator is copied for A.
+#[test]
+fn clip_key_edit_changes_only_that_clips_data() {
+    let b = scenes::managed_pair();
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S"); // ctrl 5
+    assert_eq!(at.block, 5);
+    let keys = lin(&[(0.0, 0.0), (1.0, 5.0)]);
+    let op = Op::SetKeys {
+        at: at.clone(),
+        clip: Some(1),
+        keys: keys.clone(),
+        base: data_of(&b, 13),
+    };
+    let r = apply(&b, std::slice::from_ref(&op)).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let h = Header::parse(&b).unwrap();
+    same_blocks(&b, &r.bytes, (0..h.sizes.len()).filter(|&i| i != 13));
+    assert_eq!(
+        encode_data(&data_of(&r.bytes, 13)),
+        encode_data(&keys),
+        "A's var-11 data, re-emitted in place"
+    );
+    let m = read_model(&r.bytes).unwrap();
+    let a = nif::anim::clip_tracks(&m, &r.bytes, 1, 4);
+    let b_ = nif::anim::clip_tracks(&m, &r.bytes, 2, 4);
+    assert_eq!(
+        a.iter().find(|t| t.ctrl == 5).unwrap().keys,
+        Some(keys.clone())
+    );
+    assert_eq!(
+        b_.iter().find(|t| t.ctrl == 5).unwrap().keys,
+        Some(data_of(&b, 15)),
+        "clip B unchanged"
+    );
+    // Stale base: Conflict; Keep mine takes the current keys; then it applies.
+    let stale = Op::SetKeys {
+        at: at.clone(),
+        clip: Some(1),
+        keys: keys.clone(),
+        base: lin(&[(0.0, 9.0)]),
+    };
+    assert!(matches!(
+        apply(&b, std::slice::from_ref(&stale)).unwrap().outcomes[0],
+        Outcome::Conflict(_)
+    ));
+    let fixed = nif::edit::keep_mine(&b, &[stale], 0).unwrap();
+    assert_eq!(apply(&b, &fixed).unwrap().outcomes, vec![Outcome::Applied]);
+    // B's var-11 CB shares A's interpolator 9: A's edit copies it (E5).
+    let mut s = b.clone();
+    let seq_b = h.offsets()[2];
+    s[seq_b + 12..seq_b + 16].copy_from_slice(&9i32.to_le_bytes());
+    let r = apply(&s, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    let (sa, sb) = (&m.sequences[0], &m.sequences[1]);
+    assert_eq!(sa.blocks[0].interp, 18, "A's CB names the copy");
+    assert_eq!(sb.blocks[0].interp, 9, "B still names the original");
+    assert_eq!(m.interps[&18].data, 19);
+    assert_eq!(encode_data(&data_of(&r.bytes, 19)), encode_data(&keys));
+    assert_eq!(
+        data_of(&r.bytes, 13),
+        data_of(&b, 13),
+        "the original data is untouched"
+    );
+}
+
+/// R8 lifted: Variable 11 -> 12 on managed ctrl 5 rewrites the ID of A's by-ref CB and of B's string-bound CB to
+/// one appended "12"; ctrl 6's CBs and B's CB on node "T" keep theirs. Only 4 bytes per CB and the controller's
+/// variable change, plus the header's string table.
+#[test]
+fn variable_change_rewrites_cb_ids_by_ref_and_by_string() {
+    let mut b = scenes::managed_pair();
+    let h = Header::parse(&b).unwrap();
+    let seq_b = h.offsets()[2];
+    b[seq_b + 16..seq_b + 20].copy_from_slice(&(-1i32).to_le_bytes()); // B's CB 0: bound by strings only
+    let strings = h.strings.len();
+    let at = ctrl_anchor(&b, Owner::Shader, LSCF, Some(11), "S");
+    let op = Op::SetField {
+        at,
+        field: Field::Variable,
+        value: Value::U32(12),
+        base: Value::U32(11),
+    };
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&5].var, Some(12));
+    let id = |s: usize, k: usize| m.sequences[s].blocks[k].ctrl_id.clone();
+    assert_eq!(id(0, 0), Some(b"12".to_vec()), "A, by ref");
+    assert_eq!(id(1, 0), Some(b"12".to_vec()), "B, by strings");
+    assert_eq!(
+        (id(0, 1), id(1, 1)),
+        (Some(b"20".to_vec()), Some(b"20".to_vec())),
+        "ctrl 6's CBs"
+    );
+    assert_eq!(id(1, 2), Some(b"11".to_vec()), "node T binds nothing");
+    let h2 = Header::parse(&r.bytes).unwrap();
+    assert_eq!(
+        h2.strings.len(),
+        strings + 1,
+        "one string appended, shared by both CBs"
+    );
+    // Locality: the controller's variable and each rewritten CB's Controller ID index.
+    let n = h.sizes.len();
+    same_blocks(&b, &r.bytes, (0..n).filter(|i| ![1, 2, 5].contains(i)));
+    let id_at = 12 + 21;
+    for (blk, allowed) in [(1, id_at..id_at + 4), (2, id_at..id_at + 4), (5, 30..34)] {
+        for c in changed_ranges(&block_bytes_of(&b, blk), &block_bytes_of(&r.bytes, blk)) {
+            assert!(
+                allowed.start <= c.start && c.end <= allowed.end,
+                "block {blk}: {c:?}"
+            );
+        }
+    }
+    // The preview still binds both CBs to ctrl 5 with the new ID.
+    assert!(nif::anim::clip_tracks(&m, &r.bytes, 2, 4)
+        .iter()
+        .any(|t| t.ctrl == 5));
+}
+
+/// E2/E3 on managed_clip (all three CBs name ctrl 7 by ref; IDs "11", null, ""): 11 -> 20 rewrites only "11";
+/// null stays -1 and "" keeps its own index. 20 -> 11 then reuses the existing "11" entry.
+#[test]
+fn null_and_empty_cb_ids_stay_distinct() {
+    let b = scenes::managed_clip();
+    let h = Header::parse(&b).unwrap();
+    let raw_id = |bytes: &[u8], seq: usize, k: usize| {
+        let o = Header::parse(bytes).unwrap().offsets()[seq] + 12 + k * 29 + 21;
+        i32::from_le_bytes(bytes[o..o + 4].try_into().unwrap())
+    };
+    let empty_idx = raw_id(&b, 3, 0);
+    // managed_clip's BSTriShape is unnamed: anchor as set_keys_refusals does.
+    let anchor = |bytes: &[u8], var: u32| {
+        let m = read_model(bytes).unwrap();
+        let role = Role::Ctrl {
+            owner: Owner::Shader,
+            class: LSCF.into(),
+            var: Some(var),
+            nth: 0,
+        };
+        anchor_role(&m, Some(m.shapes[0].block), role).unwrap()
+    };
+    let at = anchor(&b, 11);
+    let set = |at: &Anchor, v, o| Op::SetField {
+        at: at.clone(),
+        field: Field::Variable,
+        value: Value::U32(v),
+        base: Value::U32(o),
+    };
+    let r = apply(&b, &[set(&at, 20, 11)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.sequences[0].blocks[0].ctrl_id, Some(b"20".to_vec()));
+    assert_eq!(m.sequences[0].blocks[1].ctrl_id, None, "null stays null");
+    assert_eq!(raw_id(&r.bytes, 2, 1), -1);
+    assert_eq!(
+        m.sequences[1].blocks[0].ctrl_id,
+        Some(vec![]),
+        "empty stays empty"
+    );
+    assert_eq!(raw_id(&r.bytes, 3, 0), empty_idx, "with its own index");
+    let n = Header::parse(&r.bytes).unwrap().strings.len();
+    assert_eq!(n, h.strings.len() + 1);
+    // Back: "11" exists, so no new entry; A's CB 0 names the original "11" index again.
+    let at2 = anchor(&r.bytes, 20);
+    let back = apply(&r.bytes, &[set(&at2, 11, 20)]).unwrap();
+    assert_eq!(back.outcomes, vec![Outcome::Applied]);
+    assert_eq!(Header::parse(&back.bytes).unwrap().strings.len(), n);
+    assert_eq!(raw_id(&back.bytes, 2, 0), raw_id(&b, 2, 0));
 }

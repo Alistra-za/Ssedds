@@ -232,6 +232,104 @@ pub fn managed_clip() -> Vec<u8> {
     n.bytes()
 }
 
+/// Two clips over two manager-controlled controllers, everything bound by ref, each CB with its own keyed
+/// interpolator. NiNode "Root" (0); NiControllerSequence "A" (1) and "B" (2); BSTriShape "S" (3) -> BSLSP (4,
+/// controller 5) -> LSCF var 11 (5, flags 0x68, next 6, NiBlendFloatInterpolator 7) -> LSCF var 20 (6, 0x68, next -1,
+/// blend 8). CB interpolators 9 (A, ctrl 5, ID "11"), 10 (A, ctrl 6, ID "20"), 11 (B, ctrl 5, ID "11"),
+/// 12 (B, ctrl 6, ID "20"), NiFloatInterpolator 0.0 over NiFloatData LINEAR (0,0)(1,1) 13..16. Sequence B has a
+/// third CB: controller -1, node "T" (no such shape), ID "11", interpolator 11: it binds nothing.
+/// NiTextKeyExtraData (17) "start" at 0 and "end" at 1, named by A. No manager: the model reads every sequence.
+pub fn managed_pair() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = |n: &mut Nif, x: &str| n.string(x);
+    let (root, a, bb, sh, t) = (
+        s(&mut n, "Root"),
+        s(&mut n, "A"),
+        s(&mut n, "B"),
+        s(&mut n, "S"),
+        s(&mut n, "T"),
+    );
+    let prop = s(&mut n, "BSLightingShaderProperty");
+    let ct = s(&mut n, "BSLightingShaderPropertyFloatController");
+    let (id11, id20) = (s(&mut n, "11"), s(&mut n, "20"));
+    let (start, end) = (s(&mut n, "start"), s(&mut n, "end"));
+    n.block(
+        "NiNode",
+        avobj(W::default().i32(root).u32(0).i32(-1))
+            .u32(1)
+            .i32(3)
+            .u32(0)
+            .0,
+    );
+    // (interpolator, controller, node, controller ID)
+    let seq = |name: i32, text_keys: i32, cbs: &[(i32, i32, i32, i32)]| {
+        let mut w = W::default().i32(name).u32(cbs.len() as u32).u32(0);
+        for &(interp, ctrl, node, cid) in cbs {
+            w = w
+                .i32(interp)
+                .i32(ctrl)
+                .u8(0)
+                .i32(node)
+                .i32(prop)
+                .i32(ct)
+                .i32(cid)
+                .i32(-1);
+        }
+        w.f(1.0) // weight
+            .i32(text_keys)
+            .u32(0) // cycle
+            .fs(&[1.0, 0.0, 1.0]) // freq, start, stop
+            .i32(-1) // manager
+            .i32(-1) // accum root name
+            .u16(0)
+            .0
+    };
+    n.block(
+        "NiControllerSequence",
+        seq(a, 17, &[(9, 5, sh, id11), (10, 6, sh, id20)]),
+    );
+    n.block(
+        "NiControllerSequence",
+        seq(
+            bb,
+            -1,
+            &[(11, 5, sh, id11), (12, 6, sh, id20), (11, -1, t, id11)],
+        ),
+    );
+    n.block("BSTriShape", bstri_named(sh, 4, -1));
+    n.block("BSLightingShaderProperty", lsp_body(0, &[], 5, &[]));
+    for (next, var, blend) in [(6, 11, 7), (-1, 20, 8)] {
+        n.block(
+            "BSLightingShaderPropertyFloatController",
+            ctrl_body(next, 0x68, 4, W::default().i32(blend).u32(var)),
+        );
+    }
+    for _ in 0..2 {
+        n.block(
+            "NiBlendFloatInterpolator",
+            W::default().u8(1).u8(0).f(0.0).f(0.0).0,
+        );
+    }
+    for d in 13..17 {
+        n.block("NiFloatInterpolator", W::default().f(0.0).i32(d).0);
+    }
+    for _ in 0..4 {
+        n.block("NiFloatData", float_data(1));
+    }
+    n.block(
+        "NiTextKeyExtraData",
+        W::default()
+            .i32(-1)
+            .u32(2)
+            .f(0.0)
+            .i32(start)
+            .f(1.0)
+            .i32(end)
+            .0,
+    );
+    n.bytes()
+}
+
 /// NiControllerSequence body with one controlled block and every string null.
 pub fn sequence_body() -> Vec<u8> {
     W::default()
@@ -289,6 +387,7 @@ pub fn all() -> Vec<Vec<u8>> {
         animated(None, 1),
         animated(Some(0x80), 0),
         two_props_one_ctrl(),
+        managed_pair(),
     ]
 }
 

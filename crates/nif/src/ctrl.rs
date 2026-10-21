@@ -5,7 +5,7 @@ use crate::{header::Header, NifError};
 
 /// next i32, flags u16, frequency, phase, start, stop f32, target i32.
 pub const BASE_LEN: usize = 26;
-const CB_LEN: usize = 29;
+pub(crate) const CB_LEN: usize = 29;
 
 pub(crate) fn geo(block: usize, msg: &str) -> NifError {
     NifError::Geometry {
@@ -245,6 +245,35 @@ pub struct Sequence {
     pub frequency: f32,
     pub start: f32,
     pub stop: f32,
+    /// The NiTextKeyExtraData the sequence names: (time, raw string or None for -1); empty when there is none or it
+    /// does not read.
+    pub text_keys: Vec<(f32, Option<Vec<u8>>)>,
+}
+
+/// NiTextKeyExtraData `r` (name i32, count u32, then time f32 + value string index i32 per key, nif.xml 5180).
+fn text_keys(h: &Header, b: &[u8], r: i32) -> Vec<(f32, Option<Vec<u8>>)> {
+    // shortcut: a malformed text-key block reads as none; the sequence itself still reads.
+    let Ok(r) = usize::try_from(r) else {
+        return vec![];
+    };
+    if r >= h.sizes.len() || h.kind(r) != b"NiTextKeyExtraData" {
+        return vec![];
+    }
+    let Ok(t) = body(h, b, r) else { return vec![] };
+    if t.len() < 8 {
+        return vec![];
+    }
+    let n = u32_at(t, 4) as usize;
+    // the length check bounds n by the block before anything is allocated
+    if n.checked_mul(8).and_then(|x| x.checked_add(8)) != Some(t.len()) {
+        return vec![];
+    }
+    (0..n)
+        .map(|k| {
+            let s = h.string(u32_at(t, 12 + 8 * k) as i32);
+            (f32_at(t, 8 + 8 * k), s.map(<[u8]>::to_vec))
+        })
+        .collect()
 }
 
 /// Copies one string-table entry. `budget` is the bytes still allowed to be copied for this sequence.
@@ -320,6 +349,7 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         frequency: f32_at(d, tail + 12),
         start: f32_at(d, tail + 16),
         stop: f32_at(d, tail + 20),
+        text_keys: text_keys(h, b, u32_at(d, tail + 4) as i32),
     })
 }
 

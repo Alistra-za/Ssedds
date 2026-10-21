@@ -286,3 +286,23 @@ fn sequence_strings_past_file_length_are_an_error() {
         Err(NifError::Geometry { .. })
     ));
 }
+
+/// v2 B7: a sequence's text keys come from the NiTextKeyExtraData it names; a -1 ref gives none.
+#[test]
+fn sequence_text_keys_are_read() {
+    // managed_clip's sequences name no text keys.
+    let m = nif::model::read_model(&scenes::managed_clip()).unwrap();
+    assert!(m.sequences.iter().all(|s| s.text_keys.is_empty()));
+    let b = scenes::managed_pair(); // sequence A (1) names text keys 17: "start" at 0, "end" at 1
+    let m = nif::model::read_model(&b).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.lighting[&4].prop.ctrls, vec![5, 6]);
+    assert!(m.managed(5) && m.managed(6));
+    let a = m.sequences.iter().find(|s| s.block == 1).unwrap();
+    assert_eq!(
+        a.text_keys,
+        vec![(0.0, Some(b"start".to_vec())), (1.0, Some(b"end".to_vec()))]
+    );
+    let b_ = m.sequences.iter().find(|s| s.block == 2).unwrap();
+    assert!(b_.text_keys.is_empty());
+}

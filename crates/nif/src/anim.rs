@@ -1,6 +1,6 @@
 //! Controller evaluation for the preview (spec §6.1-§6.2): NifSkope's ctrlTime, key sampling and the
 //! controller-target → MaterialState mapping. Pure.
-use crate::ctrl::TimeCtrl;
+use crate::ctrl::{CtrlBlock, Sequence, TimeCtrl};
 use crate::header::Header;
 use crate::keys::{read_data, Key, KeyData, KeyGroup, KeyType};
 use crate::material::MaterialState;
@@ -234,6 +234,79 @@ pub fn free_tracks(m: &NifModel, b: &[u8], prop: u32) -> Vec<Track> {
         .collect()
 }
 
+/// B2's binding (spec §5.5): the controller of `ctrls` (one property's chain) that CB `cb` drives, by its controller
+/// ref, else (ref -1 only) by raw node, property type, controller type and Controller ID bytes, first match.
+fn bound<'a>(
+    cb: &CtrlBlock,
+    ctrls: &[&'a TimeCtrl],
+    names: &[&[u8]],
+    ptype: &[u8],
+) -> Option<&'a TimeCtrl> {
+    if cb.controller >= 0 {
+        ctrls
+            .iter()
+            .find(|c| c.block as i32 == cb.controller)
+            .copied()
+    } else if cb.controller == -1 {
+        ctrls
+            .iter()
+            .find(|c| {
+                let id = match target_of(c) {
+                    Some(Target::Lscf(v) | Target::Lscc(v)) => Some(v.to_string().into_bytes()),
+                    _ => None,
+                };
+                cb.ctrl_type.as_deref() == Some(c.class.as_bytes())
+                    && cb.property.as_deref() == Some(ptype)
+                    && cb.node.as_deref().is_some_and(|n| names.contains(&n))
+                    && cb.ctrl_id == id
+            })
+            .copied()
+    } else {
+        None
+    }
+}
+
+/// The CB indices of `s` that drive controller `ctrl`, over every property whose chain lists it (B7). A by-ref CB
+/// naming `ctrl` counts even when no property lists it, so a hostile file cannot hide it from the ID rewrite.
+pub(crate) fn bound_cbs(m: &NifModel, h: &Header, s: &Sequence, ctrl: u32) -> Vec<usize> {
+    let props = m
+        .lighting
+        .keys()
+        .chain(m.alphas.keys())
+        .filter_map(|&p| chain_of(m, p))
+        .filter(|(chain, _, _)| chain.contains(&ctrl));
+    let mut out: Vec<usize> = (0..s.blocks.len())
+        .filter(|&k| s.blocks[k].controller == ctrl as i32)
+        .collect();
+    for (chain, users, ptype) in props {
+        let ctrls: Vec<&TimeCtrl> = chain.iter().filter_map(|id| m.ctrls.get(id)).collect();
+        let names: Vec<&[u8]> = users
+            .iter()
+            .filter_map(|&u| h.string(m.shape(u)?.net.name))
+            .collect();
+        out.extend((0..s.blocks.len()).filter(|&k| {
+            bound(&s.blocks[k], &ctrls, &names, ptype).is_some_and(|c| c.block == ctrl)
+        }));
+    }
+    // a controller on two properties' chains finds a CB twice
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The sequence blocks with at least one CB driving `ctrl` (the Controllers tab's clip list). Parses the header:
+/// call once per change, never per frame.
+pub fn clips_of(m: &NifModel, b: &[u8], ctrl: u32) -> Vec<u32> {
+    let Ok(h) = Header::parse(b) else {
+        return vec![];
+    };
+    m.sequences
+        .iter()
+        .filter(|s| !bound_cbs(m, &h, s, ctrl).is_empty())
+        .map(|s| s.block)
+        .collect()
+}
+
 /// Tracks for sequence block `seq` on `prop`: each controlled block binds by controller ref, else (ref -1 only)
 /// by node, property type, controller type and controller ID strings (spec §5.5). Timing comes from the sequence;
 /// the value and keys from the CB's own interpolator.
@@ -254,22 +327,7 @@ pub fn clip_tracks(m: &NifModel, b: &[u8], seq: u32, prop: u32) -> Vec<Track> {
     s.blocks
         .iter()
         .filter_map(|cb| {
-            let c = if cb.controller >= 0 {
-                ctrls.iter().find(|c| c.block as i32 == cb.controller)?
-            } else if cb.controller == -1 {
-                ctrls.iter().find(|c| {
-                    let id = match target_of(c) {
-                        Some(Target::Lscf(v) | Target::Lscc(v)) => Some(v.to_string().into_bytes()),
-                        _ => None,
-                    };
-                    cb.ctrl_type.as_deref() == Some(c.class.as_bytes())
-                        && cb.property.as_deref() == Some(ptype)
-                        && cb.node.as_deref().is_some_and(|n| names.contains(&n))
-                        && cb.ctrl_id == id
-                })?
-            } else {
-                return None;
-            };
+            let c = bound(cb, &ctrls, &names, ptype)?;
             let target = target_of(c)?;
             let (value, keys) = interp_track(m, &h, b, cb.interp);
             Some(Track {
