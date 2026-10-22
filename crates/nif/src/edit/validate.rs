@@ -1,13 +1,14 @@
 //! Validation (spec §3.3): warns, never clamps or normalises. Reads the model only.
 use super::{anchor_role, Anchor, Op, Role};
 use crate::ctrl::TimeCtrl;
-use crate::extra::ExtraValue;
+use crate::extra::{Extra, ExtraValue};
 use crate::fields::Field;
 use crate::keys::{KeyData, KeyGroup};
 use crate::material::{SLSF1_SPECULAR, SLSF2_TRUE_PBR};
 use crate::model::NifModel;
 use crate::path::canon_texture;
 use crate::props::LightingTrailer;
+use std::collections::BTreeSet;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,10 @@ pub const FACE_TINT_FLAG: &str =
 /// Note CU8 (C6E): Skyrim crashes in Load3D on a NiControllerManager that lists no sequences.
 pub const EMPTY_MANAGER: &str =
     "This file has a NiControllerManager with no clips: the game crashes on it.";
+/// Heel data (HH_OFFSET or SDTA) on the root or a property: RaceMenu reads it only on a shape (HH-results).
+pub const HEEL_NOT_ON_SHAPE: &str = "The game ignores heel height here. Put it on a shape.";
+/// Heel data on a shape after the first shape that has some: the first shape wins (HH-results).
+pub const HEEL_EARLIER_WINS: &str = "An earlier shape's heel height wins.";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
 const ALWAYS_BLOCK: [&str; 4] = [
     ENV_SCALE_PBR,
@@ -391,6 +396,54 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
                 "BSXFlags must be named BSX",
                 None,
             );
+        }
+    }
+
+    // Meshes UI T5b (HH-results, 2026-10-22): RaceMenu reads heel data only on a shape, and the first shape wins.
+    let heel = |x: &&Extra| {
+        x.name.as_deref().is_some_and(|n| {
+            n.eq_ignore_ascii_case(b"HH_OFFSET") || n.eq_ignore_ascii_case(b"SDTA")
+        })
+    };
+    let on_shape: BTreeSet<u32> = m
+        .shapes
+        .iter()
+        .flat_map(|s| s.net.extra.iter().filter_map(|&r| u32::try_from(r).ok()))
+        .collect();
+    // T5b review Minor 7: any block but a shape (root, other nodes, any shader or property, nothing at all).
+    for x in m
+        .extras
+        .values()
+        .filter(heel)
+        .filter(|x| !on_shape.contains(&x.block))
+    {
+        push(
+            Level::Warn,
+            Target::Extra { block: x.block },
+            HEEL_NOT_ON_SHAPE,
+            None,
+        );
+    }
+    // Controller ruling (T5b fix round 1): only shapes the root reaches count, in block order.
+    // shortcut: block order is unverified against scene-graph order (HH-results cannot tell them apart); settle it
+    // in game with two heeled shapes whose block order and child order disagree (swap them under the root).
+    let mut first = true;
+    for s in m.shapes.iter().filter(|s| m.index3d.contains_key(&s.block)) {
+        let mine: Vec<u32> = m
+            .extras_of(&s.net)
+            .into_iter()
+            .filter(heel)
+            .map(|x| x.block)
+            .collect();
+        if !mine.is_empty() && !std::mem::take(&mut first) {
+            for b in mine {
+                push(
+                    Level::Warn,
+                    Target::Extra { block: b },
+                    HEEL_EARLIER_WINS,
+                    None,
+                );
+            }
         }
     }
 

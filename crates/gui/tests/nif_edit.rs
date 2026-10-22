@@ -1122,7 +1122,7 @@ fn edit_toggle_opens_the_panel_with_four_tabs() {
     let (_d, m) = session(false);
     let mut h = view(m);
     h.run_steps(4);
-    assert!(h.query_by_label("Controllers").is_none());
+    assert!(h.query_by_label("Controllers tab").is_none());
     h.get_by_label("Edit").click();
     h.run_steps(4);
     assert!(h.state().edit.is_some(), "Edit opens a session");
@@ -1131,13 +1131,13 @@ fn edit_toggle_opens_the_panel_with_four_tabs() {
         "Edit shows the shape cards to pick from"
     );
     for l in ["Shader", "Alpha", "Controllers", "Extra data"] {
-        h.get_by_label(l);
+        h.get_by_label(&format!("{l} tab"));
     }
     h.get_by_label("Source: A");
     h.get_by_label("Edit").click();
     h.run_steps(4);
     assert!(h.state().edit.is_none(), "Edit again closes it");
-    assert!(h.query_by_label("Controllers").is_none());
+    assert!(h.query_by_label("Controllers tab").is_none());
 }
 
 #[test]
@@ -1147,11 +1147,10 @@ fn clicking_a_card_selects_the_shape_and_root_card_is_first() {
     m.shapes_col = true;
     let s = m.shapes[0].clone();
     let card = format!(
-        "{} {} — {}",
+        "Select shape {} {}",
         s.index3d
             .map_or("#– (not in scene tree)".into(), |i| format!("#{i}")),
         s.name.as_deref().unwrap_or("(unnamed)"),
-        s.kind
     );
     let mut h = view(m);
     h.run_steps(4);
@@ -1167,6 +1166,155 @@ fn clicking_a_card_selects_the_shape_and_root_card_is_first() {
     h.get_by_label("Root").click();
     h.run_steps(4);
     assert_eq!(h.state().edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+/// Meshes UI T2: a card picked outside edit mode is where Edit opens; the Shapes button is locked on while editing.
+#[test]
+fn edit_opens_on_the_card_picked_before_and_locks_the_shapes_column() {
+    let (_d, mut m) = session(false);
+    m.shapes_col = true;
+    let s = m.shapes.last().unwrap().clone();
+    let label = format!(
+        "Select shape {} {}",
+        s.index3d
+            .map_or("#– (not in scene tree)".into(), |i| format!("#{i}")),
+        s.name.as_deref().unwrap_or("(unnamed)"),
+    );
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_role_and_label(AkRole::Button, &label).click();
+    h.run_steps(4);
+    assert!(
+        h.state().edit.is_none(),
+        "a pick outside edit mode opens nothing"
+    );
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().selection,
+        Selection::Shape(s.block)
+    );
+    let shapes = h.get_by_role_and_label(AkRole::Button, "Shapes");
+    assert!(
+        shapes.accesskit_node().is_disabled(),
+        "locked while editing"
+    );
+    shapes.click();
+    h.run_steps(4);
+    assert!(h.state().shapes_col);
+}
+
+/// T2 review Minor 2: a card picked inside Edit is the card outlined after Edit closes and where the next Edit opens.
+#[test]
+fn a_pick_inside_edit_carries_to_the_next_edit() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let last = e.model.shapes.last().unwrap();
+    let (block, name) = (last.block, last.name.clone());
+    let mut h = view(m);
+    h.run_steps(4);
+    let tail = format!(" {}", name.as_deref().unwrap());
+    h.query_all_by_role(AkRole::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Select shape") && l.ends_with(&tail))
+        })
+        .expect("the last shape's header")
+        .click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().selection,
+        Selection::Shape(block)
+    );
+    assert_eq!(h.state().card_sel, Some((block, name.clone())));
+    let m = h.state_mut();
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(m.edit.as_ref().unwrap().selection, Selection::Shape(block));
+}
+
+/// T2 review Minor 1: Root stays selected across an export-folder switch (the reopen would pick a shape).
+#[test]
+fn root_stays_selected_across_an_export_folder_switch() {
+    let (d, mut m) = export_session();
+    m.card_sel = Some((m.shapes[0].block, m.shapes[0].name.clone()));
+    m.open_edit();
+    assert!(matches!(
+        m.edit.as_ref().unwrap().selection,
+        Selection::Shape(_)
+    ));
+    m.select_edit(Selection::Root);
+    m.set_nif_export_root(Some(d.path().join(r"mods\MyOut")));
+    assert!(m.edit.is_some());
+    assert_eq!(m.edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+/// T2 review Minor 6: a clip-driven controller reads "(clip)", a shape without controllers "none", and a shape whose
+/// shader is not a lighting shader keeps its alpha controllers (Minor 3).
+#[test]
+fn controllers_lines_mark_clips_say_none_and_keep_alpha_on_other_shaders() {
+    let mut h = view(direct(scenes::managed_clip()));
+    h.run_steps(2);
+    h.get_by_label_contains("(clip)");
+    let mut h = view(direct(two_named(false)));
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("none").count(), 2);
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", scenes::bstri_named(s, 1, 2));
+    n.block(
+        "BSWaterShaderProperty",
+        W::default().raw(&nif::net::encode_net(-1, &[], -1)).0,
+    );
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], 3))
+            .u16(0x00ED)
+            .u8(128)
+            .0,
+    );
+    n.block(
+        "BSNiAlphaPropertyTestRefController",
+        scenes::ctrl_body(-1, 0x48, 2, W::default().i32(4)),
+    );
+    n.block("NiFloatInterpolator", W::default().f(1.0).i32(5).0);
+    n.block(
+        "NiFloatData",
+        W::default().u32(2).u32(1).fs(&[0.0, 0.0, 1.0, 1.0]).0,
+    );
+    let mut h = view(direct(n.bytes()));
+    h.run_steps(2);
+    h.get_by_label("1: Alpha test threshold");
+}
+
+/// Meshes UI T2: a NIF with one shape opens Edit on that shape, not on Root.
+#[test]
+fn a_one_shape_nif_opens_edit_on_its_shape() {
+    let mut n = builder::Nif::new(100);
+    let a = n.string("Only");
+    n.block("BSTriShape", one_tri(a, 1));
+    n.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    let bytes = n.bytes();
+    let d = files_pair(&bytes, &bytes);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.selection, Selection::Shape(shape_named(e, "Only")));
+}
+
+/// Meshes UI T2: in edit mode a card lists its controllers from the edited model.
+#[test]
+fn edit_cards_list_their_controllers() {
+    let m = direct(ctrl_scene(0x82));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("2: Emissive multiple, U offset");
 }
 
 /// A BSTriShape with one triangle (positions only), so the preview draws it.
@@ -1230,14 +1378,23 @@ fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
     assert_eq!(m.error, None);
     m.shapes_col = true;
     let a = shape_named(m.edit.as_ref().unwrap(), "A");
+    let shown_a = m
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some("A"))
+        .unwrap()
+        .block;
+    assert_ne!(a, shown_a, "the copies number A differently");
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label_contains(") A — ").click();
+    h.get_by_label_contains("tree) A").click();
     h.run_steps(4);
     assert_eq!(
         h.state().edit.as_ref().unwrap().selection,
         Selection::Shape(a)
     );
+    // T4 review Minor 5: the pick is kept in the shown copy's numbering, so the outline finds A after Edit closes.
+    assert_eq!(h.state().card_sel, Some((shown_a, Some("A".into()))));
     h.get_by_label("Show only this shape").click();
     h.run_steps(4);
     let mats = h.state().edit.as_ref().unwrap().materials();
@@ -1245,6 +1402,137 @@ fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
     for (id, mat) in mats {
         assert_eq!(mat.hidden, id.0 != a, "shape block {}", id.0);
     }
+}
+
+/// Meshes UI T1: the edit-mode cards are built from the edited bytes; untouched, they equal the scan's cards.
+#[test]
+fn edit_cards_equal_the_scan_before_any_edit() {
+    let (d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let scanned = modscan::store::Store::open_read_only(&d.path().join("scan.db"))
+        .unwrap()
+        .shapes_of(e.source_copy.copy_id)
+        .unwrap();
+    assert!(!scanned.is_empty());
+    assert_eq!(e.cards, scanned);
+}
+
+/// Review Minor 6 (bug 1, rename half): when the source on disk renames its shapes, the cards follow the new names
+/// with their full content, not a title only.
+#[test]
+fn edit_cards_follow_a_source_that_renamed_its_shapes() {
+    let mut m = direct(two_named(false));
+    let e = m.edit.as_mut().unwrap();
+    assert_eq!(e.cards[0].name.as_deref(), Some("A"));
+    e.reload_source(two_named(true)).unwrap();
+    let names: Vec<_> = e.cards.iter().map(|c| c.name.as_deref()).collect();
+    assert_eq!(names, [Some("B"), Some("A")]);
+    assert!(
+        e.cards.iter().all(|c| c.shader_kind == 1),
+        "full cards: {:?}",
+        e.cards
+    );
+}
+
+/// Meshes UI T1 (bug 1): a card shows the edited shader type, flags, alpha and texture path, not the scanned ones.
+#[test]
+fn edit_cards_show_the_edited_values() {
+    use sdc_gui::model::meshes::{alpha_line, shader_type_name};
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    m.shapes_col = true;
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let l = &e.model.lighting[&shader].lighting;
+    let ty = l.shader_type;
+    let new_ty = if ty == 1 { 0 } else { 1 };
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    let set_block = e.model.lighting[&shader].texture_set.unwrap();
+    let alpha = e.model.shape(shape).unwrap().alpha;
+    let slot0 = String::from_utf8_lossy(&e.model.texsets[&set_block].raw.slots[0]).into_owned();
+    let push = |m: &mut MeshesModel, op: Op| m.edit_push(vec![op], None);
+    push(
+        &mut m,
+        Op::SetField {
+            at: at.clone(),
+            field: Field::ShaderType,
+            value: Value::U32(new_ty),
+            base: Value::U32(ty),
+        },
+    );
+    // After the type change: it may have changed the flags too (Note CS).
+    let f1 = m.edit.as_ref().unwrap().model.lighting[&shader]
+        .lighting
+        .slsf1;
+    push(
+        &mut m,
+        Op::SetBits {
+            at: at.clone(),
+            field: Field::Slsf1,
+            mask: 1 << 12,
+            value: !f1 & (1 << 12),
+            base: f1 & (1 << 12),
+        },
+    );
+    let on_shape = nif::edit::anchor_shape(&m.edit.as_ref().unwrap().model, shape);
+    push(
+        &mut m,
+        Op::SetTexturePath {
+            at: on_shape,
+            slot: 0,
+            path: r"Textures\Edited\Card.dds".into(),
+            base: slot0,
+        },
+    );
+    let want_alpha = match alpha {
+        Some(a) => {
+            let e = m.edit.as_ref().unwrap();
+            let p = &e.model.alphas[&a].alpha;
+            let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Alpha).unwrap();
+            let (flags, thr) = (p.flags, p.threshold);
+            push(
+                &mut m,
+                Op::SetBits {
+                    at,
+                    field: Field::AlphaFlags,
+                    mask: 1,
+                    value: !flags as u32 & 1,
+                    base: flags as u32 & 1,
+                },
+            );
+            alpha_line(flags ^ 1, thr)
+        }
+        None => {
+            let e = m.edit.as_ref().unwrap();
+            let at = nif::edit::anchor_shape(&e.model, shape);
+            push(
+                &mut m,
+                Op::AddAlpha {
+                    at,
+                    flags: 0x00ED,
+                    threshold: 128,
+                },
+            );
+            alpha_line(0x00ED, 128)
+        }
+    };
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.doc.ops.iter().all(|d| d.status == OpStatus::Applied),
+        "{:?}",
+        e.outcomes
+    );
+    let f1_now = e.model.lighting[&shader].lighting.slsf1;
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(&shader_type_name(new_ty));
+    h.get_by_label(&format!("Details of NIF block {shape}"))
+        .click();
+    h.run_steps(2);
+    h.get_by_label(&format!("SLSF1 0x{f1_now:08X}"));
+    h.get_by_label("textures/edited/card.dds");
+    h.get_by_label(&want_alpha);
 }
 
 #[test]
@@ -1285,7 +1573,7 @@ fn shared_alpha_banner_and_split_on_edit() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
-    h.get_by_label("Alpha").click();
+    h.get_by_label("Alpha tab").click();
     h.run_steps(2);
     h.get_by_label("Shared by 2 shapes: editing will split.");
     h.get_by_label("Blend").click();
@@ -1372,6 +1660,7 @@ fn skinned_and_pbr_bits_are_greyed() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     assert!(h.get_by_label("Skinned").accesskit_node().is_disabled());
     assert!(h
         .get_by_label("Unused01 (TruePBR)")
@@ -1452,7 +1741,7 @@ fn a_shared_alpha_with_a_clip_controller_splits_on_edit() {
     };
     let mut h = view(m);
     h.run_steps(2);
-    h.get_by_label("Alpha").click();
+    h.get_by_label("Alpha tab").click();
     h.run_steps(2);
     assert!(h
         .query_by_label("Shared alpha with a clip controller: splitting needs Phase C.")
@@ -1585,7 +1874,7 @@ fn edit_controls_have_names_and_roles() {
     h.get_by_role_and_label(AkRole::ComboBox, "Shader type");
     h.get_by_role_and_label(AkRole::ColorWell, "Specular colour");
     h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)");
-    h.get_by_label("Alpha").click();
+    h.get_by_label("Alpha tab").click();
     h.run_steps(2);
     for l in ["Source", "Destination", "Function"] {
         h.get_by_role_and_label(AkRole::ComboBox, l);
@@ -1697,10 +1986,10 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         "3D toolbar pushed under the panel"
     );
     for l in [
-        "Shader",
-        "Alpha",
-        "Controllers",
-        "Extra data",
+        "Shader tab",
+        "Alpha tab",
+        "Controllers tab",
+        "Extra data tab",
         "Undo NIF edit",
         "Redo NIF edit",
     ] {
@@ -1710,6 +1999,25 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
             "{l} {r:?} outside the panel {edit:?}"
         );
     }
+    // Meshes UI T3: Export NIF sits in a footer under the tabs, inside the panel, with its blocked reason.
+    let footer = panel("meshes-edit-export");
+    let export = h.get(export_nif()).rect();
+    let tabs = h.get_by_label("Extra data tab").rect();
+    assert!(
+        edit.contains(footer.min) && edit.contains(footer.max - egui::vec2(0.5, 0.5)),
+        "footer {footer:?} outside {edit:?}"
+    );
+    assert!(
+        footer.contains(export.center()),
+        "{export:?} not in {footer:?}"
+    );
+    assert!(
+        export.min.y > tabs.max.y,
+        "Export NIF {export:?} above the tabs {tabs:?}"
+    );
+    // Minor 5: an untouched session is idle, not blocked: weak text, no red.
+    h.get_by_label("No edits to export.");
+    assert!(h.query_by_label("Blocked: No edits to export.").is_none());
 }
 
 // ---- v2 A18: Controllers (scalars) and Extra data tabs ----
@@ -1809,11 +2117,29 @@ fn ctrl_scene_vars(bsx: u32, vars: [u32; 2]) -> Vec<u8> {
 }
 
 fn tab(h: &mut Harness<'static, MeshesModel>, name: &str) {
-    h.get_by_label(name).click();
+    h.get_by_label(&format!("{name} tab")).click();
+    h.run_steps(3);
+}
+
+/// Meshes UI T4: opens the Controllers tab's "Clips (…)" section (closed by default) unless it is open.
+fn open_clips(h: &mut Harness<'static, MeshesModel>) {
+    if h.query_by_label("New clip name").is_some() {
+        return;
+    }
+    if h.query_by_label_contains("Clips (").is_none() {
+        return;
+    }
+    // The section ends the tab, often below the fold: scroll it into view before the click.
+    h.get_by_label_contains("Clips (").scroll_to_me();
+    h.run_steps(12);
+    h.get_by_label_contains("Clips (").click();
     h.run_steps(3);
 }
 
 fn edit_number(h: &mut Harness<'static, MeshesModel>, label: &str, text: &str) {
+    if h.query_by_label(label).is_none() {
+        open_clips(h); // Meshes UI T4: the New clip fields sit in the closed Clips section
+    }
     h.get_by_label(label).focus();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -1870,6 +2196,117 @@ fn controller_rows_show_variable_cycle_and_edit_frequency() {
     edit_number(&mut h, "U offset value", "0.75");
     let e = h.state().edit.as_ref().unwrap();
     assert_eq!(e.model.interps[&5].value, vec![0.75], "{:?}", e.outcomes);
+}
+
+/// The managed-clip scene in a direct session with its shape selected, on the Controllers tab (Clips closed).
+fn clip_view() -> Harness<'static, MeshesModel> {
+    let mut m = direct(scenes::managed_clip());
+    let b = m.edit.as_ref().unwrap().model.shapes[0].block;
+    m.select_edit(Selection::Shape(b));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Controllers tab").click();
+    h.run_steps(3);
+    h
+}
+
+/// Meshes UI T4: Preview stays at the top; one closed "Clips (N · showing X)" section at the end holds Rename,
+/// Remove, Convert to clips and New clip; a managed controller names its clip in one weak line.
+#[test]
+fn clip_controls_sit_in_one_closed_section_under_the_chains() {
+    let mut h = clip_view();
+    let preview = h
+        .get_by_role_and_label(AkRole::ComboBox, "Preview animation")
+        .rect();
+    let shader = h.get_by_label("Shader property").rect();
+    assert!(preview.max.y <= shader.min.y, "Preview on top");
+    let header = h.get_by_label("Clips (2 · showing free chains)").rect();
+    assert!(
+        header.min.y > shader.max.y,
+        "the section is after the chains"
+    );
+    for l in [
+        "Clip name",
+        "New clip name",
+        "Convert shader controllers to clips",
+    ] {
+        assert!(
+            h.query_by_label(l).is_none(),
+            "{l} is inside the closed section"
+        );
+    }
+    h.get_by_label_contains("In clip A · ");
+    h.get_by_label("Clips (2 · showing free chains)").click();
+    h.run_steps(3);
+    // T4 review Minor 6: the order inside the section, and the Convert row's label.
+    let y = |h: &Harness<'static, MeshesModel>, l: &str| h.get_by_label(l).rect().min.y;
+    let (rename, convert, new) = (
+        y(&h, "Clip name"),
+        y(&h, "Convert to clips: shader property"),
+        y(&h, "New clip name"),
+    );
+    assert!(
+        rename < convert && convert < new,
+        "{rename} {convert} {new}"
+    );
+    h.get_by_label("Convert shader controllers to clips");
+}
+
+/// T4 review Minor 1: a refusal left from an earlier file state does not open the section.
+#[test]
+fn a_stale_clip_refusal_does_not_open_the_clips_section() {
+    let mut h = clip_view();
+    let id = egui::Id::new("meshes-edit-clip").with("refused");
+    // Revision 0 is never a state's (`next_key` starts at 1).
+    h.ctx
+        .data_mut(|d| d.insert_temp(id, ("0|None".to_string(), "old".to_string())));
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("Clip name").is_none(),
+        "opened on a stale refusal"
+    );
+}
+
+/// T4 review Minor 2: on a shape with no shader and no alpha the Clips section (Rename, Remove) is still there.
+#[test]
+fn the_clips_section_shows_on_a_shape_without_properties() {
+    let mut m = direct(scenes::managed_clip_and_bare_shape());
+    m.select_edit(Selection::Shape(12));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Controllers tab").click();
+    h.run_steps(3);
+    h.get_by_label("This shape has no shader or alpha property.");
+    h.get_by_label("Clips (2 · showing free chains)").click();
+    h.run_steps(3);
+    h.get_by_label("Clip name");
+}
+
+/// Meshes UI T4: a clip refusal stored while the section is closed opens it, so the red line is seen. The refusal is
+/// stored as the Rename row stores it (its id, and inputs = state revision | picked clip).
+#[test]
+fn a_clip_refusal_opens_the_clips_section() {
+    let mut h = clip_view();
+    let (rev, a) = {
+        let e = h.state().edit.as_ref().unwrap();
+        (e.rev, e.model.sequences[0].block)
+    };
+    h.state_mut().edit_with(|e| e.set_playing(Playing::Clip(a)));
+    h.run_steps(3);
+    let rev = h.state().edit.as_ref().unwrap().rev.max(rev);
+    assert!(h.query_by_label("Clip name").is_none(), "closed");
+    let id = egui::Id::new("meshes-edit-clip").with("refused");
+    let inputs = format!("{rev}|{:?}", Some(a));
+    h.ctx
+        .data_mut(|d| d.insert_temp(id, (inputs, "Type a name for the clip.".to_string())));
+    h.run_steps(3);
+    h.get_by_label("Clip name");
+    h.get_by_label("Type a name for the clip.");
+    // Closed by hand, it stays closed while that refusal stands.
+    // T4 review Minor 6: the title names the clip the Preview shows.
+    h.get_by_label("Clips (2 · showing A)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Clip name").is_none());
 }
 
 /// R8 lifted (v2 B7, E9: replaces `managed_variable_combo_is_disabled`): the Variable combo of a managed controller
@@ -2014,6 +2451,224 @@ fn add_and_remove_string_extra_on_a_shape() {
         e.model.extras_of(e.model.root_net.as_ref().unwrap()).len(),
         6
     );
+}
+
+/// Opens the Known picker of the shape (`root` false) or root list and clicks `entry`.
+fn pick_known(h: &mut Harness<'static, MeshesModel>, root: bool, entry: &str) {
+    let combo = if root {
+        "Known extra data"
+    } else {
+        "Known extra data (shape)"
+    };
+    h.get_by_role_and_label(AkRole::ComboBox, combo)
+        .scroll_to_me();
+    h.run_steps(12);
+    h.get_by_role_and_label(AkRole::ComboBox, combo).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, entry).click();
+    h.run_steps(3);
+}
+
+fn known_entry_disabled(h: &mut Harness<'static, MeshesModel>, root: bool, entry: &str) -> bool {
+    let combo = if root {
+        "Known extra data"
+    } else {
+        "Known extra data (shape)"
+    };
+    h.get_by_role_and_label(AkRole::ComboBox, combo)
+        .scroll_to_me();
+    h.run_steps(12);
+    h.get_by_role_and_label(AkRole::ComboBox, combo).click();
+    h.run_steps(3);
+    let off = h
+        .get_by_role_and_label(AkRole::Button, entry)
+        .accesskit_node()
+        .is_disabled();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    off
+}
+
+/// Meshes UI T5: the shape's Known picker adds AnisotropicAlphaMaterial as NiIntegerExtraData 3; root-only entries
+/// are off there ("Goes on the root").
+#[test]
+fn known_picker_adds_anisotropic_alpha_on_a_shape() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(
+        known_entry_disabled(&mut h, false, "BSX"),
+        "BSX goes on the root"
+    );
+    // Owner, 2026-10-22: BODYTRI is not offered (BodySlide / Outfit Studio writes it).
+    h.get_by_role_and_label(AkRole::ComboBox, "Known extra data (shape)")
+        .click();
+    h.run_steps(3);
+    assert!(h
+        .query_by_role_and_label(AkRole::Button, "BODYTRI")
+        .is_none());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    pick_known(&mut h, false, "AnisotropicAlphaMaterial");
+    h.get_by_label("Add to shape").click();
+    h.run_steps(4);
+    let e = h.state().edit.as_ref().unwrap();
+    let added = e.model.extras_of(&e.model.shape(s).unwrap().net);
+    assert_eq!(added.len(), 1, "{:?}", e.outcomes);
+    assert!(
+        matches!(
+            &ops(h.state())[0],
+            Op::AddExtra { kind, name, value: ExtraValue::Int(3), .. }
+                if kind == "NiIntegerExtraData" && name == "AnisotropicAlphaMaterial"
+        ),
+        "{:?}",
+        ops(h.state())
+    );
+}
+
+/// Meshes UI T5: on the root, BSX and INV are off when present ("Already on this root"); HDT SMP's Add waits for a
+/// path; Prn is offered marked unconfirmed (owner decision 1).
+#[test]
+fn known_picker_on_the_root_offers_hdt_with_a_path_and_marks_prn() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(
+        known_entry_disabled(&mut h, true, "BSX"),
+        "BSX is already there"
+    );
+    assert!(
+        known_entry_disabled(&mut h, true, "AnisotropicAlphaMaterial"),
+        "goes on a shape"
+    );
+    assert!(!known_entry_disabled(&mut h, true, "Prn (unconfirmed)"));
+    pick_known(&mut h, true, "HDT Skinned Mesh Physics Object");
+    assert!(
+        h.get_by_label("Add to root").accesskit_node().is_disabled(),
+        "needs a path"
+    );
+    h.get_by_role_and_label(AkRole::TextInput, "Value").focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Value")
+        .type_text(r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml");
+    h.run_steps(2);
+    h.get_by_label("Add to root").click();
+    h.run_steps(4);
+    let got = ops(h.state());
+    assert!(
+        matches!(
+            &got[..],
+            [Op::AddExtra { kind, name, value: ExtraValue::Str(p), .. }]
+                if kind == "NiStringExtraData"
+                    && name == "HDT Skinned Mesh Physics Object"
+                    && p == r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml"
+        ),
+        "{got:?}"
+    );
+}
+
+/// Meshes UI T5 (bug 3): an extra-data row shows its own warnings, here "BSXFlags must be named BSX".
+#[test]
+fn an_extra_row_shows_its_warnings() {
+    let mut m = direct(ctrl_scene(0x82));
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, None, Role::Root).unwrap();
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "BSXFlags".into(),
+            name: "BSX2".into(),
+            value: ExtraValue::Bsx(0),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    // T5 review Minor 6: under its own row (after BSX2, before the root's Add row), once.
+    let w = h.get_by_label("BSXFlags must be named BSX").rect();
+    let row = h.get_by_label("BSX2").rect();
+    let add = h
+        .get_by_role_and_label(AkRole::ComboBox, "Known extra data")
+        .rect();
+    assert!(
+        row.max.y <= w.min.y && w.max.y <= add.min.y,
+        "{row:?} {w:?} {add:?}"
+    );
+}
+
+/// T5 review Minors 2-4: Prn needs a value, a typed value is trimmed, and a duplicate is found ignoring ASCII case
+/// (the SMP reader compares the HDT name that way).
+#[test]
+fn known_values_are_required_trimmed_and_duplicates_ignore_case() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, None, Role::Root).unwrap();
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "NiStringExtraData".into(),
+            name: "hdt skinned mesh physics object".into(),
+            value: ExtraValue::Str("x.xml".into()),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(
+        known_entry_disabled(&mut h, true, "HDT Skinned Mesh Physics Object"),
+        "the same name in lower case is already there"
+    );
+    pick_known(&mut h, true, "Prn (unconfirmed)");
+    assert!(
+        h.get_by_label("Add to root").accesskit_node().is_disabled(),
+        "Prn needs a node name"
+    );
+    h.get_by_role_and_label(AkRole::TextInput, "Value").focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Value")
+        .type_text("  WeaponBack  ");
+    h.run_steps(2);
+    h.get_by_label("Add to root").click();
+    h.run_steps(4);
+    let got = ops(h.state());
+    assert!(
+        matches!(got.last(), Some(Op::AddExtra { name, value: ExtraValue::Str(v), .. }) if name == "Prn" && v == "WeaponBack"),
+        "{got:?}"
+    );
+}
+
+/// T5 review Minor 6: after a Known Add the picker is back on Custom… and the entry is off ("Already on this
+/// shape"); an existing row of a Known entry shows its tooltip on the name.
+#[test]
+fn a_known_add_falls_back_to_custom_and_rows_show_the_tip() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "AnisotropicAlphaMaterial");
+    h.get_by_label("Add to shape").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.get_by_role_and_label(AkRole::ComboBox, "Known extra data (shape)")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("Custom…")
+    );
+    assert!(known_entry_disabled(
+        &mut h,
+        false,
+        "AnisotropicAlphaMaterial"
+    ));
+    h.get_by_label("AnisotropicAlphaMaterial").hover();
+    h.run_steps(30);
+    h.get_by_label_contains("Community Shaders see-through look");
 }
 
 /// Drawing both tabs records nothing, whatever the values' bits (negative zero, CRLF).
@@ -2504,6 +3159,8 @@ fn pending_list_and_chips() {
     };
     assert_eq!(chips("x.nif"), Some(DocBadge::Exported));
     assert_eq!(chips("y.nif"), Some(DocBadge::Pending));
+    // Meshes UI T2: the column is locked on the shapes while Edit is open; the chips are in the NIF list.
+    m.close_edit();
     let mut h = view(m);
     h.run_steps(4);
     h.get_by_label("Edited");
@@ -2543,18 +3200,23 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
     let revert = format!("Revert 1: {}: Glossiness", at.shape.as_deref().unwrap());
     let mut h = view(m);
     h.run_steps(3);
-    h.get_by_label(&format!("To: {}", exported(&d).display()));
+    h.get_by_label(&writes_line(&d));
     h.get_by_label("Placement OK.");
+    // Meshes UI T3: the pending list is closed while no row is red.
+    assert!(h.query_by_label(&revert).is_none());
+    h.get_by_label("Pending edits (1)").click();
+    h.run_steps(3);
     h.get_by_role_and_label(AkRole::Button, &revert);
-    h.get_by_role_and_label(AkRole::Button, "Export NIF")
-        .click();
+    h.get_by_label("Ready");
+    h.get_by_label("Export NIF · 1 edit");
+    h.get(export_nif()).click();
     h.run_steps(3);
     let p = exported(&d);
     assert!(p.is_file(), "the click exported");
     h.get_by_label("Re-run PGPatcher so its output includes this edit.");
+    h.get_by_label("Export NIF again");
     std::fs::write(&p, b"junk").unwrap();
-    h.get_by_role_and_label(AkRole::Button, "Export NIF")
-        .click();
+    h.get(export_nif()).click();
     h.run_steps(3);
     h.get_by_label("This file changed since sdc exported it.");
     h.get_by_role_and_label(AkRole::Button, "Diff").click();
@@ -2567,6 +3229,123 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
         .is_none());
     assert_eq!(std::fs::read(&p).unwrap(), b"junk", "Enter keeps theirs");
     assert!(h.state().edit.as_ref().unwrap().guard.is_none());
+}
+
+/// Meshes UI T3: the Export NIF button; its name is its text ("Export NIF · 1 edit", "Export NIF again").
+fn export_nif() -> egui_kittest::kittest::By<'static> {
+    egui_kittest::kittest::By::new()
+        .role(AkRole::Button)
+        .label_contains("Export NIF")
+}
+
+/// Meshes UI T3: the export block's destination line ("Writes … to …"), whole in its accessible name.
+fn writes_line(d: &tempfile::TempDir) -> String {
+    format!("Writes meshes\\x.nif to {}", exported(d).display())
+}
+
+/// Meshes UI T3 (bug 2): Enter or Space on a focused Export NIF or Overwrite writes nothing; a click still does.
+#[test]
+fn enter_or_space_on_focused_export_or_overwrite_writes_nothing() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let mut h = view(m);
+    h.run_steps(3);
+    let p = exported(&d);
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        h.get(export_nif()).focus();
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        assert!(!p.exists(), "{key:?} on a focused Export NIF exported");
+    }
+    h.get(export_nif()).click();
+    h.run_steps(3);
+    assert!(p.is_file(), "the click exported");
+    std::fs::write(&p, b"junk").unwrap();
+    h.get(export_nif()).click();
+    h.run_steps(3);
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        h.get_by_role_and_label(AkRole::Button, "Overwrite").focus();
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(std::fs::read(&p).unwrap(), b"junk", "{key:?} overwrote");
+        assert!(
+            h.state().edit.as_ref().unwrap().guard.is_some(),
+            "{key:?} closed the guard"
+        );
+    }
+    h.get_by_role_and_label(AkRole::Button, "Overwrite").click();
+    h.run_steps(3);
+    assert_ne!(std::fs::read(&p).unwrap(), b"junk", "the click overwrote");
+}
+
+/// A pending-list row (a label; its Revert button carries the same words).
+fn row(text: &str) -> egui_kittest::kittest::By<'_> {
+    egui_kittest::kittest::By::new()
+        .role(AkRole::Label)
+        .label_contains(text)
+}
+
+/// Meshes UI T3: a red row opens "Pending edits (N)" by itself, the block says why it is blocked, and the row is
+/// named in words, not as a Rust field (`Slsf1`).
+#[test]
+fn a_red_row_opens_the_pending_list_and_rows_read_as_words() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let f1 = e.model.lighting[&shader].lighting.slsf1;
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[0]).into_owned();
+    let on_shape = nif::edit::anchor_shape(&e.model, shape);
+    m.edit_push(
+        vec![Op::SetBits {
+            at,
+            field: Field::Slsf1,
+            mask: 1 << 12,
+            value: !f1 & (1 << 12),
+            base: f1 & (1 << 12),
+        }],
+        None,
+    );
+    // A path outside Windows-1252 is refused: a red row.
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at: on_shape,
+            slot: 0,
+            path: "textures\\\u{4e2d}.dds".into(),
+            base,
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label("Pending edits (2)");
+    h.get_by_label("Blocked: 1 edit cannot be applied.");
+    h.get(row(": SLSF1 flags"));
+    assert!(h.query_by_label_contains("Slsf1").is_none());
+    h.get_by_label_contains(": Texture slot 0: ");
+    // Closed by hand, Show opens it again.
+    h.get_by_label("Pending edits (2)").click();
+    h.run_steps(3);
+    assert!(h.query(row(": SLSF1 flags")).is_none());
+    h.get_by_role_and_label(AkRole::Button, "Show pending edits")
+        .click();
+    h.run_steps(3);
+    h.get(row(": SLSF1 flags"));
+}
+
+/// Meshes UI T3: without an export folder the block stays and says why it cannot export.
+#[test]
+fn a_read_only_session_shows_the_no_export_folder_reason() {
+    let m = direct(scenes::shared_alpha_and_set());
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label(&format!("Blocked: {NO_EXPORT_FOLDER}"));
+    assert!(h.get(export_nif()).accesskit_node().is_disabled());
 }
 
 // ---- v2 A19 review ----
@@ -2638,8 +3417,7 @@ fn a_path_typed_without_enter_is_exported_by_the_export_click() {
     h.get_by_role_and_label(AkRole::TextInput, field)
         .type_text("textures\\typed.dds");
     h.run_steps(1);
-    h.get_by_role_and_label(AkRole::Button, "Export NIF")
-        .click();
+    h.get(export_nif()).click();
     h.run_steps(4);
     let bytes = std::fs::read(exported(&d)).expect("exported");
     let needle = b"textures\\typed.dds";
@@ -2871,6 +3649,10 @@ fn the_textures_view_undoes_textures_with_a_nif_edit_open() {
 fn ctrl_z_does_nothing_in_a_text_field_a_popup_or_a_dialog() {
     use egui::{Key, Modifiers};
     let (_t, _d, mut h) = both_histories(1);
+    // Meshes UI T2: with Edit open the mod filter is hidden (Shapes locked): a texture path field instead.
+    let (shape, _) = lit_shape(h.state().meshes.edit.as_ref().unwrap());
+    h.state_mut().meshes.select_edit(Selection::Shape(shape));
+    h.run_steps(2);
     let tex = textures(&h);
     // A focused text field.
     h.query_all_by_role(AkRole::TextInput)
@@ -2933,6 +3715,7 @@ fn pbr_shape_labels_slsf2_bits_and_non_pbr_does_not() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     assert!(h.query_all_by_label_contains("PBR:").next().is_none());
     set_slsf2(&mut h, a, (1 << 23) | (1 << 24) | (1 << 25));
     h.get_by_label("PBR: Two-layer coat");
@@ -2950,6 +3733,7 @@ fn slsf2_warning_shows_under_the_flags() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     set_slsf2(&mut h, a, 1 << 12);
     h.get_by_label("Fit_Slope (SLSF2 12) does nothing without the PBR flag.");
 }
@@ -3076,11 +3860,13 @@ fn the_destination_line_shows_the_real_path() {
     let (d, mut m) = export_session();
     m.open_edit();
     gloss(&mut m, 12.5);
-    let full = format!("To: {}", exported(&d).display());
+    let full = writes_line(&d);
     let mut h = view(m);
     h.run_steps(3);
     h.get_by_label(&full);
-    h.get_by_label("Change it with Export to ▾ in the header.");
+    h.get_by_label(
+        "The source file is never changed. Change the folder with Export to ▾ in the header.",
+    );
 }
 
 #[test]
@@ -4533,8 +5319,8 @@ fn clip_preview_swaps_interpolators_only_while_selected() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
-    h.get_by_label("Glow");
-    h.get_by_label("Loop · 0 to 1 s");
+    // Meshes UI T4: the clip is one weak line under its controller.
+    h.get_by_label("In clip Glow · Loop · 0 to 1 s");
     h.get_by_label("Text keys: start at 0 s, end at 1 s");
     h.get_by_label("Pick this clip in Preview to see and edit its keys.");
     h.get_by_role_and_label(AkRole::ComboBox, "Preview animation")
@@ -6198,6 +6984,9 @@ fn click(h: &mut Harness<'static, MeshesModel>, label: &str) {
 
 /// `scroll_to_me` animates: step until the node has not moved for three frames (at most 60).
 fn reveal(h: &mut Harness<'static, MeshesModel>, label: &str) {
+    if h.query_by_label(label).is_none() {
+        open_clips(h); // Meshes UI T4: clip controls sit in the closed Clips section
+    }
     h.get_by_label(label).scroll_to_me();
     let (mut last, mut still) = (h.get_by_label(label).rect(), 0);
     for _ in 0..60 {
@@ -6229,6 +7018,7 @@ fn convert_button_makes_one_undo_step_and_lists_the_clip() {
     let mut h = view(clip_scene());
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     assert!(enabled(&h, CONVERT_SHADER));
     click(&mut h, CONVERT_SHADER);
     h.run_steps(3);
@@ -6262,6 +7052,7 @@ fn rename_clip_updates_the_selector() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     edit_number(&mut h, "Clip name", "Open");
     let got = ops(h.state());
     assert!(
@@ -6286,6 +7077,7 @@ fn remove_clip_returns_to_free_chains_when_none_left() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     click(&mut h, "Remove clip SpecialIdle");
     h.run_steps(3);
     let got = ops(h.state());
@@ -6316,6 +7108,7 @@ fn clip_actions_are_disabled_on_free_chains() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     assert!(h.get_by_label("Clip name").accesskit_node().is_disabled());
     disabled_with(
         &mut h,
@@ -6355,6 +7148,7 @@ fn convert_is_disabled_with_a_reason() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(
         &mut h,
         CONVERT_SHADER,
@@ -6366,6 +7160,7 @@ fn convert_is_disabled_with_a_reason() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(
         &mut h,
         CONVERT_SHADER,
@@ -6377,6 +7172,7 @@ fn convert_is_disabled_with_a_reason() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(
         &mut h,
         "Convert alpha controllers to clips",
@@ -6389,6 +7185,7 @@ fn new_clip_drives_the_picked_controllers() {
     let mut h = view(clip_scene());
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(&mut h, "Add clip", "Type a name for the clip.");
     edit_number(&mut h, "New clip name", "Open");
     disabled_with(&mut h, "Add clip", "Tick at least one controller.");
@@ -6461,6 +7258,7 @@ fn new_clip_on_tbc_keys_starts_flat_without_an_error() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     edit_number(&mut h, "New clip name", "Open");
     let tick = "Add U offset to the new clip";
     reveal(&mut h, tick);
@@ -6497,6 +7295,7 @@ fn new_clip_ticks_clear_when_the_file_changes() {
     let mut h = view(clip_scene());
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     let tick = "Add U offset to the new clip";
     click(&mut h, tick);
     h.run_steps(3);
@@ -6519,6 +7318,7 @@ fn new_clip_ticks_clear_when_the_file_changes() {
     *h.state_mut() = other;
     h.run_steps(3);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     reveal(&mut h, tick);
     assert!(!on(&h), "another file starts with nothing ticked");
 }
@@ -6530,6 +7330,7 @@ fn a_refused_clip_name_records_nothing_and_says_why() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     edit_number(&mut h, "New clip name", "specialidle");
     click(&mut h, "Add Emissive multiple to the new clip");
     click(&mut h, "Add clip");
@@ -6552,6 +7353,7 @@ fn clips_ui_fits_the_panel_at_1100() {
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     let panel = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
         .expect("the edit panel")
         .outer_rect;
@@ -6578,6 +7380,7 @@ fn playing_clip_view() -> Harness<'static, MeshesModel> {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     h
 }
 
@@ -6954,10 +7757,21 @@ fn a_type_bound_flag_shows_its_error_and_clears_in_one_undo_step() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
+    // Meshes UI T6: a flag list with a warning starts open (its Fix in sight).
     h.get_by_label(SKIN_TINT);
-    h.get_by_label("Clear the flag").scroll_to_me();
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Clear the flag: "),
+    )
+    .scroll_to_me();
     h.run();
-    h.get_by_label("Clear the flag").click();
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Clear the flag: "),
+    )
+    .click();
     h.run_steps(2);
     assert!(h.query_by_label(SKIN_TINT).is_none());
     let m = h.state_mut();
@@ -6970,9 +7784,19 @@ fn a_type_bound_flag_shows_its_error_and_clears_in_one_undo_step() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
-    h.get_by_label("Set the flag").scroll_to_me();
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Set the flag: "),
+    )
+    .scroll_to_me();
     h.run();
-    h.get_by_label("Set the flag").click();
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Set the flag: "),
+    )
+    .click();
     h.run_steps(2);
     assert_eq!(slsf1(h.state()), (1 << 31) | (1 << 10));
 }
@@ -7011,6 +7835,7 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     let skin = h.get_by_label("FaceGen_RGB_Tint");
     assert!(skin.accesskit_node().is_disabled());
     assert!(h
@@ -7027,6 +7852,7 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h);
     assert!(!h
         .get_by_label("FaceGen_RGB_Tint")
         .accesskit_node()
@@ -7052,4 +7878,786 @@ fn a_type_bound_flag_blocks_export_even_in_an_untouched_source() {
         None,
     );
     assert_eq!(e.export_block().as_deref(), Some(FACEGEN_DETAIL));
+}
+
+// ---- Meshes UI T5b: heel height (Note CZ19) ----
+
+/// The heel scene on the Extra data tab with shape `name` selected and the heel entry picked.
+fn heel_view(name: &str, sibling: Option<&str>) -> Harness<'static, MeshesModel> {
+    let mut m = direct(scenes::heel_scene());
+    select(&mut m, name);
+    m.edit.as_mut().unwrap().weight_sibling = sibling.map(String::from);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    h
+}
+
+/// The extra-data ops of the last push, as (kind or "edit", name, value).
+fn heel_ops(h: &Harness<'static, MeshesModel>) -> Vec<Op> {
+    ops(h.state())
+}
+
+/// A shape with an SDTA and no HH_OFFSET: Set adds HH_OFFSET and moves the SDTA's NPC Z with it (one undo step); an
+/// earlier shape (A) already has heel data, so the row says it wins.
+#[test]
+fn heel_height_adds_hh_offset_and_moves_the_sdta() {
+    let mut h = heel_view("B", None);
+    h.get_by_label("An earlier shape's heel height wins.");
+    let v = h.get_by_role_and_label(AkRole::SpinButton, "Heel height (shape)");
+    assert_eq!(
+        v.accesskit_node().numeric_value(),
+        Some(5.0),
+        "starts at the SDTA's Z"
+    );
+    edit_number(&mut h, "Heel height (shape)", "8.5");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(
+        matches!(&got[0], Op::AddExtra { kind, name, value: ExtraValue::Float(b), .. }
+            if kind == "NiFloatExtraData" && name == "HH_OFFSET" && f32::from_bits(*b) == 8.5),
+        "{got:?}"
+    );
+    let Op::EditExtra {
+        value: ExtraValue::Str(s),
+        ..
+    } = &got[1]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(sdta_npc_z(s), Some(8.5));
+    // Final review Minor 3: both ops apply, and the patched bytes carry HH_OFFSET = 8.5 and the SDTA's 8.5 on B.
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(
+        e.doc.ops.iter().all(|d| d.status == OpStatus::Applied),
+        "{:?}",
+        e.outcomes
+    );
+    let pm = nif::model::read_model(&e.patched).unwrap();
+    let b = pm
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some("B"))
+        .unwrap();
+    let extras = pm.extras_of(&b.net);
+    let hh = extras
+        .iter()
+        .find(|x| x.name.as_deref() == Some(&b"HH_OFFSET"[..]))
+        .unwrap();
+    assert_eq!(hh.value, Some(ExtraValue::Float(8.5f32.to_bits())));
+    let sdta = extras
+        .iter()
+        .find(|x| x.name.as_deref() == Some(&b"SDTA"[..]))
+        .unwrap();
+    let Some(ExtraValue::Str(written)) = &sdta.value else {
+        panic!("{sdta:?}")
+    };
+    assert_eq!(sdta_npc_z(written), Some(8.5));
+    let m = h.state_mut();
+    assert!(m.undo_edit());
+    assert!(ops(m).is_empty(), "one undo step");
+}
+
+/// A shape with HH_OFFSET: Set edits it in place (a second one is ignored by the game) and adds no SDTA.
+#[test]
+fn heel_height_edits_an_existing_hh_offset() {
+    let mut h = heel_view("A", None);
+    assert!(h
+        .query_by_label("An earlier shape's heel height wins.")
+        .is_none());
+    edit_number(&mut h, "Heel height (shape)", "9");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert!(
+        matches!(&got[..], [Op::EditExtra { value: ExtraValue::Float(b), base: ExtraValue::Float(was), .. }]
+            if f32::from_bits(*b) == 9.0 && f32::from_bits(*was) == 7.0),
+        "{got:?}"
+    );
+}
+
+/// A shape with no heel data: HH_OFFSET only, or HH_OFFSET and a new SDTA when the box is ticked; the weight-file
+/// sibling is named.
+#[test]
+fn heel_height_on_a_bare_shape_adds_hh_and_an_optional_sdta() {
+    let mut h = heel_view("C", Some("meshes/x_1.nif"));
+    h.get_by_label("An earlier shape's heel height wins.");
+    h.get_by_label("Apply the same value to the other weight file (meshes\\x_1.nif).");
+    h.get_by_label("Also write SDTA (OStim and others read it)")
+        .click();
+    h.run_steps(2);
+    edit_number(&mut h, "Heel height (shape)", "6");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert_eq!(got.len(), 2, "{got:?}");
+    let Op::AddExtra {
+        kind,
+        name,
+        value: ExtraValue::Str(s),
+        ..
+    } = &got[1]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(
+        (kind.as_str(), name.as_str()),
+        ("NiStringExtraData", "SDTA")
+    );
+    assert_eq!(sdta_npc_z(s), Some(6.0));
+}
+
+/// On the root the entry is off, and the root's own SDTA row says the game ignores it there.
+#[test]
+fn heel_height_is_off_on_the_root_and_root_heel_data_warns() {
+    let mut m = direct(scenes::heel_scene());
+    select(&mut m, "C");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(known_entry_disabled(&mut h, true, "Heel height (RaceMenu)"));
+    h.get_by_label("The game ignores heel height here. Put it on a shape.");
+}
+
+/// Calculate fills the field from the lowest bind-pose vertex (`heel_z_of`); on a shape with no geometry it says so.
+#[test]
+fn heel_height_calculate_fills_the_field() {
+    let bytes = fixture("TestNifFile_Skinned_SE.nif");
+    let mut m = direct(bytes.clone());
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let want = heel_z_of(&bytes, shape).expect("a measurable shape");
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    h.get_by_role_and_label(AkRole::Button, "Calculate").click();
+    h.run_steps(3);
+    let v = h.get_by_role_and_label(AkRole::SpinButton, "Heel height (shape)");
+    assert_eq!(v.accesskit_node().numeric_value(), Some(want as f64));
+    let mut h = heel_view("C", None);
+    h.get_by_role_and_label(AkRole::Button, "Calculate").click();
+    h.run_steps(3);
+    h.get_by_label("This shape has no geometry to measure: type the height.");
+}
+
+/// The weight-file sibling of a data path: `_0` ↔ `_1` before `.nif`, any case; None for other names.
+#[test]
+fn weight_sibling_names_the_other_weight_file() {
+    assert_eq!(
+        weight_sibling_of("meshes/armor/boots_0.nif").as_deref(),
+        Some("meshes/armor/boots_1.nif")
+    );
+    assert_eq!(
+        weight_sibling_of("meshes/armor/Boots_1.NIF").as_deref(),
+        Some("meshes/armor/Boots_0.NIF")
+    );
+    assert_eq!(weight_sibling_of("meshes/armor/boots.nif"), None);
+    assert_eq!(weight_sibling_of("meshes/armor/boots_10.nif"), None);
+}
+
+// ---- T5b review fix round 1 ----
+
+fn heel_field(h: &Harness<'static, MeshesModel>) -> Option<f64> {
+    h.get_by_role_and_label(AkRole::SpinButton, "Heel height (shape)")
+        .accesskit_node()
+        .numeric_value()
+}
+
+/// Important 1: after Set and an undo the field shows the restored value, and a typed value or a heel pick never
+/// carries to the same block of another session.
+#[test]
+fn heel_field_follows_undo_and_stays_in_its_session() {
+    let mut h = heel_view("A", None);
+    edit_number(&mut h, "Heel height (shape)", "9");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    assert_eq!(heel_field(&h), Some(9.0));
+    assert!(h.state_mut().undo_edit());
+    h.run_steps(4);
+    assert_eq!(heel_field(&h), Some(7.0), "the restored HH_OFFSET");
+    edit_number(&mut h, "Heel height (shape)", "4");
+    // Another session on a file with the same block numbers: no heel pick, no typed 4.
+    let m = h.state_mut();
+    m.edit = Some(
+        NifEdit::open(
+            scenes::heel_scene(),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+        )
+        .unwrap(),
+    );
+    let a = shape_named(m.edit.as_ref().unwrap(), "A");
+    m.select_edit(Selection::Shape(a));
+    h.run_steps(4);
+    assert_eq!(
+        h.get_by_role_and_label(AkRole::ComboBox, "Known extra data (shape)")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("Custom…")
+    );
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    assert_eq!(heel_field(&h), Some(7.0));
+}
+
+/// Important 2: HH_OFFSET and the SDTA's NPC Z get the same number (2.25, not 2.25 and 2.3).
+#[test]
+fn heel_hh_and_sdta_get_the_same_value() {
+    let mut h = heel_view("B", None);
+    edit_number(&mut h, "Heel height (shape)", "2.25");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    let (
+        Op::AddExtra {
+            value: ExtraValue::Float(b),
+            ..
+        },
+        Op::EditExtra {
+            value: ExtraValue::Str(s),
+            ..
+        },
+    ) = (&got[0], &got[1])
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(f32::from_bits(*b), 2.25);
+    assert_eq!(sdta_npc_z(s), Some(2.25));
+}
+
+/// Minor 5: an SDTA whose NPC Z already equals the height is left alone (no reformatting edit).
+#[test]
+fn heel_leaves_an_sdta_that_already_has_the_height() {
+    let mut h = heel_view("B", None);
+    assert_eq!(heel_field(&h), Some(5.0));
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert!(matches!(&got[..], [Op::AddExtra { .. }]), "{got:?}");
+}
+
+/// Minors 1 and 6: the "no geometry" note stays in its session; a negative height says it lowers the actor.
+#[test]
+fn heel_notes_for_no_geometry_and_a_negative_height() {
+    let mut h = heel_view("C", None);
+    h.get_by_role_and_label(AkRole::Button, "Calculate").click();
+    h.run_steps(3);
+    h.get_by_label("This shape has no geometry to measure: type the height.");
+    edit_number(&mut h, "Heel height (shape)", "-1");
+    h.get_by_label("A negative height lowers the actor.");
+    let m = h.state_mut();
+    m.edit = Some(
+        NifEdit::open(
+            scenes::heel_scene(),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+        )
+        .unwrap(),
+    );
+    let c = shape_named(m.edit.as_ref().unwrap(), "C");
+    m.select_edit(Selection::Shape(c));
+    h.run_steps(4);
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    assert!(h
+        .query_by_label("This shape has no geometry to measure: type the height.")
+        .is_none());
+}
+
+/// Minor 3: an HH_OFFSET the editor cannot set (another type) blocks Set with a note instead of adding a second one.
+#[test]
+fn heel_refuses_an_hh_offset_of_another_type() {
+    let mut m = direct(scenes::heel_scene());
+    let c = select(&mut m, "C");
+    let at = nif::edit::anchor_shape(&m.edit.as_ref().unwrap().model, c);
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "NiStringExtraData".into(),
+            name: "HH_OFFSET".into(),
+            value: ExtraValue::Str("7".into()),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    h.get_by_label(HEEL_HH_UNSET_TEXT);
+    assert!(h
+        .get_by_role_and_label(AkRole::Button, "Set heel height")
+        .accesskit_node()
+        .is_disabled());
+}
+
+/// The note for an HH_OFFSET that is not a readable float.
+const HEEL_HH_UNSET_TEXT: &str =
+    "This shape's HH_OFFSET is not a number the editor can set: remove that row first.";
+
+/// T5b re-review gap: the heel row's "earlier shape" note counts only shapes the root reaches. Worn's own HH_OFFSET
+/// is removed first; the only earlier heel data is then on the unlinked "Orphan" shape, so no note.
+#[test]
+fn heel_row_ignores_an_earlier_orphan_shape() {
+    let mut m = direct(scenes::heel_orphan_scene());
+    let worn = select(&mut m, "Worn");
+    let at = Anchor {
+        block: 4,
+        kind: "NiFloatExtraData".into(),
+        shape: Some("Worn".into()),
+        role: Role::Extra {
+            on_root: false,
+            name: "HH_OFFSET".into(),
+            kind: "NiFloatExtraData".into(),
+            nth: 0,
+        },
+    };
+    m.edit_push(vec![Op::RemoveExtra { at }], None);
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.model
+            .extras_of(&e.model.shape(worn).unwrap().net)
+            .is_empty(),
+        "{:?}",
+        e.outcomes
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    assert!(h
+        .query_by_label("An earlier shape's heel height wins.")
+        .is_none());
+}
+
+// ---- Meshes UI T6: panel orientation (Note CZ21) ----
+
+/// The panel names what the tabs act on, under the tab strip: the selected shape and its type, or the root.
+#[test]
+fn the_panel_says_which_shape_it_edits() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    let line = h.get_by_label("Editing: S (BSTriShape)").rect();
+    let tabs = h.get_by_label("Extra data tab").rect();
+    assert!(
+        line.min.y >= tabs.max.y,
+        "under the tab strip: {line:?} {tabs:?}"
+    );
+    h.state_mut().select_edit(Selection::Root);
+    h.run_steps(2);
+    h.get_by_label("Editing: Root (NiNode)");
+}
+
+/// The Shader tab puts the texture slots first, and the SLSF1 / SLSF2 flag lists start closed.
+#[test]
+fn shader_tab_shows_slots_first_and_flags_closed() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    let slot = h
+        .get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)")
+        .rect();
+    let ty = h
+        .get_by_role_and_label(AkRole::ComboBox, "Shader type")
+        .rect();
+    assert!(slot.max.y <= ty.min.y, "slots first: {slot:?} {ty:?}");
+    assert!(
+        h.query_by_label("Specular").is_none(),
+        "SLSF1 starts closed"
+    );
+    h.get_by_label_contains("SLSF1 0x").click();
+    h.run_steps(3);
+    h.get_by_label("Specular");
+}
+
+/// Meshes UI T6: opens the Shader tab's SLSF1 and SLSF2 flag lists (closed by default). T6 review Minor 4: a list
+/// already open (its first flag is drawn) is left open.
+fn open_flags(h: &mut Harness<'static, MeshesModel>) {
+    use nif::material::{SLSF1_NAMES, SLSF2_NAMES};
+    for (flags, first) in [("SLSF1 0x", SLSF1_NAMES[0]), ("SLSF2 0x", SLSF2_NAMES[0])] {
+        if h.query_by_role_and_label(AkRole::CheckBox, first).is_some() {
+            continue;
+        }
+        h.get_by_label_contains(flags).scroll_to_me();
+        h.run_steps(12);
+        h.get_by_label_contains(flags).click();
+        h.run_steps(3);
+    }
+}
+
+// ---- Meshes UI T7: rule fixes (Note CZ22) ----
+
+/// The app in the Meshes view at `w` × `hgt` with x.nif's edit open on its first lit shape; `gpu` renders with wgpu.
+fn app_edit(w: f32, hgt: f32, gpu: bool) -> (tempfile::TempDir, AppH) {
+    use sdc_gui::app::SdcApp;
+    app_data();
+    let d = files(false);
+    let model = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings::default(),
+        None,
+        support::session(),
+    );
+    let mut app = SdcApp::new(model);
+    app.meshes.procs = sdc_gui::model::meshes::no_procs;
+    app.meshes.store_path = Some(d.path().join("scan.db"));
+    scan_and_select(&mut app.meshes, d.path());
+    app.meshes.open_edit();
+    let (shape, _) = lit_shape(app.meshes.edit.as_ref().unwrap());
+    app.meshes.select_edit(Selection::Shape(shape));
+    let mut frame = eframe::Frame::_new_kittest();
+    let b = Harness::builder().with_size(egui::vec2(w, hgt));
+    let b = if gpu { b.wgpu() } else { b };
+    let mut h = b.build_ui_state(
+        move |ui, app: &mut SdcApp| eframe::App::ui(app, ui, &mut frame),
+        app,
+    );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(6);
+    (d, h)
+}
+
+fn panel_rect(h: &AppH, id: &str) -> egui::Rect {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new(id))
+        .unwrap()
+        .outer_rect
+}
+
+/// T7: at 1100 px with an edit open the left column gives way, so the 3D view keeps its 240 px minimum.
+#[test]
+fn the_3d_view_keeps_its_minimum_at_1100_with_an_edit_open() {
+    let (_d, h) = app_edit(1100.0, 800.0, false);
+    let (tree, edit) = (panel_rect(&h, "meshes-tree"), panel_rect(&h, "meshes-edit"));
+    let frame3d = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(
+        frame3d.min.x >= tree.max.x && frame3d.max.x <= edit.min.x,
+        "{tree:?} {frame3d:?} {edit:?}"
+    );
+    assert!(
+        frame3d.width() >= 240.0 - 1.0,
+        "3D view {frame3d:?} at 1100 px"
+    );
+    // T7 review Minor 1 (controller ruling): the column defaults to ~420 px and is capped near 40% of the width, so
+    // the 3D view sits above its minimum at 1100 and gets the slack at 1280.
+    assert!(frame3d.width() > 260.0, "3D view {frame3d:?} at 1100 px");
+    assert!(tree.width() <= 0.4 * 1100.0 + 1.0, "tree {tree:?}");
+    let (_d, h) = app_edit(1280.0, 800.0, false);
+    let frame3d = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(frame3d.width() > 380.0, "3D view {frame3d:?} at 1280 px");
+}
+
+/// T5 open item, checked in T7: the Known combo with the longest entry picked stays inside the edit panel at 1100 px.
+#[test]
+fn the_known_combo_fits_the_edit_panel_at_1100() {
+    let (_d, mut h) = app_edit(1100.0, 800.0, false);
+    h.get_by_label("Extra data tab").click();
+    h.run_steps(4);
+    h.get_by_role_and_label(AkRole::ComboBox, "Known extra data")
+        .scroll_to_me();
+    h.run_steps(12);
+    h.get_by_role_and_label(AkRole::ComboBox, "Known extra data")
+        .click();
+    h.run_steps(4);
+    h.get_by_role_and_label(AkRole::Button, "HDT Skinned Mesh Physics Object")
+        .click();
+    h.run_steps(4);
+    let edit = panel_rect(&h, "meshes-edit");
+    let combo = h
+        .get_by_role_and_label(AkRole::ComboBox, "Known extra data")
+        .rect();
+    assert!(
+        combo.max.x <= edit.max.x + 0.5,
+        "combo {combo:?} past the panel {edit:?}"
+    );
+}
+
+/// T7: the edit tabs are named as tabs, distinct from the fields and headings with the same words.
+#[test]
+fn the_edit_tabs_are_named_as_tabs() {
+    let mut h = view(direct(ctrl_scene(0x82)));
+    h.run_steps(2);
+    for t in [
+        "Shader tab",
+        "Alpha tab",
+        "Controllers tab",
+        "Extra data tab",
+    ] {
+        h.get_by_label(t);
+    }
+}
+
+/// T7: a repeated fix button is named after its warning; Take source / Keep mine after their edit.
+#[test]
+fn repeated_fix_and_conflict_buttons_have_unique_names() {
+    let mut m = direct(typed(0, 1 << 21));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(
+        AkRole::Button,
+        &format!("Clear the flag: {SKIN_TINT} (SLSF1 flags)"),
+    );
+    // T7 review Minor 5: two fix buttons on one tab have two different names.
+    let mut m = direct(typed(0, (1 << 21) | (1 << 10)));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    let names: Vec<String> = h
+        .query_all_by_role(AkRole::Button)
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Clear the flag: "))
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert_ne!(names[0], names[1]);
+    // A slot path outside Data: its "Not relative to Data" warning carries a fix.
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let e = m.edit.as_ref().unwrap();
+    let set = e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[0]).into_owned();
+    let at = nif::edit::anchor_shape(&e.model, a);
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at,
+            slot: 0,
+            path: r"C:\Game\Data\textures\a.dds".into(),
+            base,
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::Button, "Fix slot 0: Not relative to Data");
+    // A conflict: the source's own glossiness changes on disk under the edit.
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let cur = nif::model::read_model(&e.source).unwrap().lighting[&shader]
+        .lighting
+        .params
+        .glossiness;
+    let theirs = nif::edit::apply(
+        &e.source,
+        &[Op::SetField {
+            at: nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap(),
+            field: Field::Glossiness,
+            value: Value::F32(7.0f32.to_bits()),
+            base: Value::F32(cur.to_bits()),
+        }],
+    )
+    .unwrap()
+    .bytes;
+    std::fs::write(d.path().join("mods/A/meshes/x.nif"), &theirs).unwrap();
+    let _ = m.export_edit(None);
+    assert!(m.edit.as_ref().unwrap().doc.has_conflicts());
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Take source 1: "),
+    );
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Keep mine 1: "),
+    );
+}
+
+/// T6 review Minor 3: the Editing line for an unnamed shape and for a selection that is not in the file.
+#[test]
+fn the_editing_line_names_unnamed_and_missing_shapes() {
+    let mut m = direct(scenes::managed_clip_and_bare_shape());
+    m.select_edit(Selection::Shape(12));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Editing: (unnamed) (BSTriShape)");
+    h.state_mut().select_edit(Selection::Shape(999));
+    h.run_steps(2);
+    h.get_by_label("Editing: block 999 (not in this NIF)");
+}
+
+/// T7 screenshots (GPU, run with the render_ gate): the Meshes page with an edit open at 1100, 1280 and 1600 px, saved
+/// to %TEMP% (never the repo) for the report.
+#[test]
+fn render_meshes_page_with_an_edit_at_three_widths() {
+    for w in [1100.0f32, 1280.0, 1600.0] {
+        let (_d, mut h) = app_edit(w, 900.0, true);
+        h.run_steps(6);
+        let img = h.render().expect("render");
+        let out = std::env::temp_dir().join(format!("tessalith-meshes-edit-{w}.png"));
+        img.save(&out).expect("save png");
+        println!("screenshot: {}", out.display());
+    }
+}
+
+// ---- Meshes UI T8: the Controllers line outside Edit (Note CZ25) ----
+
+/// Steps the view until `label` shows (the controller summary is read off the UI thread), at most ~5 s.
+fn wait_for_label(h: &mut Harness<'static, MeshesModel>, label: &str) -> bool {
+    for _ in 0..100 {
+        h.run_steps(1);
+        if h.query_by_label(label).is_some() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// T8: a selected NIF's cards show their Controllers line without Edit, read from the file once.
+#[test]
+fn cards_show_controllers_without_edit() {
+    let bytes = ctrl_scene(0x82);
+    let d = files_pair(&bytes, &bytes);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.shapes_col = true;
+    let mut h = view(m);
+    assert!(
+        wait_for_label(&mut h, "2: Emissive multiple, U offset"),
+        "no Controllers line outside Edit"
+    );
+    assert!(h.state().edit.is_none());
+}
+
+/// T8: a NIF whose file cannot be read any more (gone since the scan) still shows its cards, with no Controllers line
+/// and no error.
+#[test]
+fn cards_stay_when_the_controller_read_fails() {
+    let bytes = ctrl_scene(0x82);
+    let d = files_pair(&bytes, &bytes);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    // The scan reads the good bytes; both copies then turn into junk before the NIF is selected (and read again).
+    m.activate_with(None);
+    m.use_instance(d.path().to_path_buf(), "Default".into());
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    let t = Instant::now();
+    m.poll();
+    while m.scanning() || m.v3.locating() {
+        assert!(t.elapsed() < Duration::from_secs(60), "scan did not end");
+        std::thread::sleep(Duration::from_millis(10));
+        m.poll();
+    }
+    for rel in ["mods/A/meshes/x.nif", "mods/PGP/meshes/x.nif"] {
+        std::fs::write(d.path().join(rel), b"not a nif").unwrap();
+    }
+    let a = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+    m.select_mod(a);
+    let c = m.nifs[0].copy_id;
+    m.select_nif(c);
+    assert!(!m.shapes.is_empty(), "the cards come from the scan");
+    m.shapes_col = true;
+    let mut h = view(m);
+    for _ in 0..20 {
+        h.run_steps(1);
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    h.get_by_label_contains("Select shape");
+    assert!(h.query_by_label("Controllers:").is_none());
+    assert_eq!(h.state().error, None);
+}
+
+// ---- Meshes UI final-review fixes (Note CZ24) ----
+
+/// Final review Minor 1: the flag lists' open state belongs to one session, so a second NIF whose shader has the
+/// same block number still opens a list with a warning.
+#[test]
+fn a_flag_warning_opens_its_list_in_the_next_session() {
+    let mut m = direct(typed(0, 0));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    assert!(h.query_by_label("Specular").is_none(), "closed, no warning");
+    let m = h.state_mut();
+    m.edit =
+        Some(NifEdit::open(typed(0, 1 << 21), copy("A", 1, false), "meshes/y.nif", None).unwrap());
+    let s = shape_named(m.edit.as_ref().unwrap(), "S");
+    m.select_edit(Selection::Shape(s));
+    h.run_steps(3);
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Clear the flag: "),
+    );
+}
+
+/// Final review Minor 2: a Root pick inside Edit is where the next Edit opens.
+#[test]
+fn a_root_pick_inside_edit_carries_to_the_next_edit() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let shape = lit_shape(m.edit.as_ref().unwrap()).0;
+    m.select_edit(Selection::Shape(shape));
+    m.shapes_col = true;
+    let mut h = view(m);
+    h.run_steps(4);
+    let name = h
+        .state()
+        .edit
+        .as_ref()
+        .unwrap()
+        .model
+        .shape(shape)
+        .unwrap()
+        .name
+        .clone();
+    let tail = format!(" {}", name.unwrap());
+    h.query_all_by_role(AkRole::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Select shape") && l.ends_with(&tail))
+        })
+        .unwrap()
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Root").click();
+    h.run_steps(3);
+    let m = h.state_mut();
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(m.edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+/// Final review Minor 8: closing Edit puts the column back where it was (Mods and meshes).
+#[test]
+fn closing_edit_restores_the_mods_and_meshes_column() {
+    let (_d, mut m) = session(false);
+    m.shapes_col = false;
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(h.state().shapes_col, "Shapes while editing");
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(h.state().edit.is_none());
+    assert!(!h.state().shapes_col, "back on Mods and meshes");
 }

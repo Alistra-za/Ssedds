@@ -89,8 +89,12 @@ pub struct NifEdit {
     pub error: Option<String>,
     /// Every enabled copy of the NIF (the store's order), for the placement check and the PGPatcher re-run note.
     pub copies: Vec<PathCopy>,
-    /// The scan's shape cards of `source_copy` (texture and flag details for the edit-mode cards; final review I1).
+    /// The shape cards of the edited bytes (`shape_cards`), rebuilt by every `reapply` (Note CZ1; was the scan's
+    /// cards of `source_copy`, final review I1).
     pub cards: Vec<ShapeView>,
+    /// Meshes UI T2: each shape's controllers line ("2: Emissive multiple, Alpha (clip)"), by shape block; rebuilt with
+    /// `cards`.
+    pub card_ctrls: HashMap<u32, String>,
     /// The placement check (spec §8.2); None without an MO2 instance.
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
@@ -103,6 +107,14 @@ pub struct NifEdit {
     pub export_note: Option<(String, bool)>,
     /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
     pub cleanup_note: Option<String>,
+    /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
+    /// the ops per frame.
+    pub up_to_date: bool,
+    /// Meshes UI T5b: the other weight file (`x_0.nif` ↔ `x_1.nif`) when the scan has it, set when the session opens.
+    /// The game uses `_1` only at weight 100, so a heel height belongs in both; the editor edits one file at a time.
+    pub weight_sibling: Option<String>,
+    /// A process-unique id of this session (T5b review Important 1): UI state that belongs to one session keys on it.
+    pub session: u64,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -161,6 +173,8 @@ pub struct GuardAsk {
     pub never_exported: bool,
 }
 
+/// The idle reason Export NIF is off: drawn neutral, not as a block (review Minor 5).
+pub const NO_EDITS: &str = "No edits to export.";
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
 /// No Textures export folder and no MO2 instance: the session is read-only (Note CI29).
 pub const NO_EXPORT_FOLDER: &str =
@@ -331,12 +345,16 @@ impl NifEdit {
             error: None,
             copies: vec![],
             cards: vec![],
+            card_ctrls: HashMap::new(),
             placement: None,
             blocked: None,
             notice: None,
             guard: None,
             export_note: None,
             cleanup_note: None,
+            up_to_date: false,
+            weight_sibling: None,
+            session: next_key(),
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -393,7 +411,7 @@ impl NifEdit {
             return Some(e.clone());
         }
         if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
-            return Some("No edits to export.".into());
+            return Some(NO_EDITS.into());
         }
         let refused = self
             .outcomes
@@ -499,6 +517,7 @@ impl NifEdit {
             at: Some(at),
             ops_hash: Some(self.doc.ops_hash()),
         };
+        self.up_to_date = true;
         self.save();
         self.cleanup_note = skipped.map(|why| format!("Exported without cleanup: {why}."));
         ExportOutcome::Written {
@@ -516,6 +535,7 @@ impl NifEdit {
             Err(e) => {
                 self.error = Some(e.to_string());
                 self.apply_err = Some(e.to_string());
+                self.up_to_date = false; // review Minor 3: the stale bytes are not what the last export wrote
                 self.refresh_blocked();
                 return;
             }
@@ -534,10 +554,13 @@ impl NifEdit {
         }
         self.patched = Arc::new(a.bytes);
         self.outcomes = a.outcomes;
+        self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
         match read_model(&self.patched) {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.cards = shape_cards(&self.patched); // once per change, never per frame (rule 9.1)
+        self.card_ctrls = card_ctrls(&self.model);
         self.warnings = validate(&self.model, None);
         demote_source(&self.source_warnings, &mut self.warnings);
         // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
@@ -971,6 +994,235 @@ fn anim_tracks(
         .collect()
 }
 
+/// The shape cards of `bytes`, as the scan store would give them for these bytes (`modscan` `write_shapes` and
+/// `shapes_of`): the edit-mode cards then show the edited values (Note CZ1). Empty when the bytes do not scan.
+pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
+    use modscan::store::{RawSlot, MAX_SLOTS};
+    use nif::path::TexPath;
+    use nif::scan::Shader;
+    let Ok(scan) = nif::scan::scan(bytes) else {
+        // Silent on purpose (review Minor 4): the cards fall back to titles, and the same failure blocks Export NIF
+        // with its reason, since `read_back` scans the patched bytes too.
+        return vec![];
+    };
+    // modscan's `keep_raw`: the raw string says more than the canonical path.
+    let keep_raw = |p: &TexPath| {
+        let f = &p.flags;
+        f.rebased
+            || f.prefixed
+            || f.non_dds
+            || p.raw.replace('\\', "/").to_ascii_lowercase() != p.norm
+    };
+    let json = |v: serde_json::Result<String>| v.ok();
+    scan.shapes
+        .iter()
+        .map(|s| {
+            let (shader_kind, shader_type, slsf1, slsf2, slots, params): (
+                _,
+                _,
+                _,
+                _,
+                Vec<&TexPath>,
+                _,
+            ) = match &s.shader {
+                Shader::None => (0, None, None, None, vec![], None),
+                Shader::Lighting(l, ts) => (
+                    1,
+                    Some(l.shader_type),
+                    Some(l.slsf1),
+                    Some(l.slsf2),
+                    ts.iter().take(MAX_SLOTS).collect(),
+                    json(serde_json::to_string(&l.params)),
+                ),
+                Shader::Effect(e) => (
+                    2,
+                    None,
+                    Some(e.slsf1),
+                    Some(e.slsf2),
+                    vec![&e.source, &e.greyscale],
+                    json(serde_json::to_string(&e.params)),
+                ),
+                Shader::Other { kind } => (
+                    3,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    Some(serde_json::json!({ "shader": kind }).to_string()),
+                ),
+            };
+            let h = &s.head;
+            ShapeView {
+                block: s.block,
+                name: h.name.clone(),
+                kind: format!("{:?}", h.kind),
+                shader_kind,
+                shader_type,
+                slsf1,
+                slsf2,
+                textures: slots
+                    .iter()
+                    .map(|p| (!(p.flags.empty || p.norm.is_empty())).then(|| p.norm.clone()))
+                    .collect(),
+                raw: slots
+                    .iter()
+                    .map(|p| {
+                        keep_raw(p).then(|| RawSlot {
+                            raw: p.raw.clone(),
+                            flags: p.flags.clone(),
+                        })
+                    })
+                    .collect(),
+                alpha_flags: s.alpha.map(|a| a.flags),
+                alpha_threshold: s.alpha.map(|a| a.threshold),
+                params,
+                skinned: h.skinned,
+                vertex_desc: h.vertex_desc,
+                num_vertices: h.num_vertices,
+                num_triangles: h.num_triangles,
+                index3d: scan.index3d.get(&s.block).copied(),
+            }
+        })
+        .collect()
+}
+
+/// Meshes UI T5b (Note CZ19): the heel height shape `shape` needs, Z = −(lowest bind-pose vertex Z) in root space,
+/// rounded to 0.1. A skinned shape's vertices go through the inverse of its NiSkinData skin transform; an unskinned
+/// one through its node chain. None when the shape has no drawable geometry (a non-lighting shape, an LE file).
+pub fn heel_z_of(bytes: &[u8], shape: u32) -> Option<f32> {
+    let parsed = render3d::parse(bytes);
+    let s = parsed.shapes.iter().find(|s| s.id.0 == shape)?;
+    let h = nif::header::Header::parse(bytes).ok()?;
+    let m = nif::geom::skin_to_root(&h, bytes, shape as usize)
+        .ok()?
+        .unwrap_or(s.world);
+    let low = s
+        .mesh
+        .positions
+        .iter()
+        .map(|p| m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2] + m[2][3])
+        .fold(f32::INFINITY, f32::min);
+    let z = (-low * 10.0).round() / 10.0;
+    z.is_finite().then_some(z + 0.0) // + 0.0: never "-0"
+}
+
+/// The other weight file of `data_path`: `…_0.nif` ↔ `…_1.nif` (any case, the case kept). None for other names.
+pub fn weight_sibling_of(data_path: &str) -> Option<String> {
+    let dot = data_path.len().checked_sub(4)?;
+    if !data_path.get(dot..)?.eq_ignore_ascii_case(".nif") {
+        return None;
+    }
+    let (stem, ext) = data_path.split_at(dot);
+    let other = match stem.get(stem.len().checked_sub(2)?..)? {
+        "_0" => "_1",
+        "_1" => "_0",
+        _ => return None,
+    };
+    Some(format!("{}{other}{ext}", &stem[..stem.len() - 2]))
+}
+
+/// The Z of the last "NPC" entry of an SDTA string (`[{"name":"NPC","pos":[x,y,Z]}, …]`): the entry RaceMenu uses.
+pub fn sdta_npc_z(sdta: &str) -> Option<f32> {
+    let v: serde_json::Value = serde_json::from_str(sdta).ok()?;
+    let npc = v
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("NPC"))?;
+    npc.get("pos")?.get(2)?.as_f64().map(|z| z as f32)
+}
+
+/// `sdta` with its last "NPC" entry's Z set to `z`, other entries kept; an "NPC" entry is appended when there is
+/// none. None when the string is not a JSON array.
+pub fn sdta_with_npc_z(sdta: &str, z: f32) -> Option<String> {
+    let mut v: serde_json::Value = serde_json::from_str(sdta).ok()?;
+    let list = v.as_array_mut()?;
+    // T5b review Important 2: `z` as given, in its shortest f32 form ("2.25", "7.3"), so it reads back as the same
+    // f32 that HH_OFFSET holds.
+    let zv: serde_json::Value = serde_json::from_str(&z.to_string()).ok()?;
+    let npc = list
+        .iter_mut()
+        .rev()
+        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("NPC"));
+    match npc {
+        Some(e) => {
+            let pos = e
+                .as_object_mut()?
+                .entry("pos")
+                .or_insert(serde_json::json!([0, 0, 0]));
+            match pos.as_array_mut() {
+                Some(p) if p.len() >= 3 => p[2] = zv,
+                _ => *pos = serde_json::json!([0, 0, zv]),
+            }
+        }
+        None => list.push(serde_json::json!({"name": "NPC", "pos": [0, 0, zv]})),
+    }
+    serde_json::to_string(&v).ok()
+}
+
+/// Meshes UI T2: per shape, "N: title, title (clip)" over its shader's and its alpha's controllers; "none" without.
+/// A shader that is not a BSLightingShaderProperty has controllers the editor does not read: its shape lists only its
+/// alpha controllers, and gets no line (rather than a wrong "none") when it has none.
+pub(crate) fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
+    m.shapes
+        .iter()
+        .filter_map(|s| {
+            let other = s.shader.is_some_and(|b| !m.lighting.contains_key(&b));
+            let lit = s.shader.and_then(|b| m.lighting.get(&b));
+            let slsf2 = lit.map_or(0, |l| l.lighting.slsf2);
+            let props = [
+                lit.map(|l| &l.prop),
+                s.alpha.and_then(|b| m.alphas.get(&b)).map(|a| &a.prop),
+            ];
+            let titles: Vec<String> = props
+                .into_iter()
+                .flatten()
+                .flat_map(|p| &p.ctrls)
+                .filter_map(|c| m.ctrls.get(c).map(|t| (c, t)))
+                .map(|(c, t)| {
+                    let title = nif::edit::validate::ctrl_title(t, slsf2);
+                    match m.managed(*c) {
+                        true => format!("{title} (clip)"),
+                        false => title,
+                    }
+                })
+                .collect();
+            let line = match titles.len() {
+                0 if other => return None,
+                0 => "none".to_string(),
+                n => format!("{n}: {}", titles.join(", ")),
+            };
+            Some((s.block, line))
+        })
+        .collect()
+}
+
+/// Meshes UI T2: where Edit opens. The card picked outside edit mode (same block and name, else the only shape with
+/// that name, since the shown copy may be PGPatcher's and numbered differently), else the only shape, else Root.
+pub fn first_selection(m: &NifModel, picked: Option<&(u32, Option<String>)>) -> Selection {
+    if let Some((block, name)) = picked {
+        let same = m
+            .shapes
+            .iter()
+            .find(|s| s.block == *block && s.name == *name);
+        let mut named = m
+            .shapes
+            .iter()
+            .filter(|s| name.is_some() && s.name == *name);
+        let by_name = match (named.next(), named.next()) {
+            (Some(s), None) => Some(s),
+            _ => None,
+        };
+        if let Some(s) = same.or(by_name) {
+            return Selection::Shape(s.block);
+        }
+    }
+    match m.shapes.as_slice() {
+        [only] => Selection::Shape(only.block),
+        _ => Selection::Root,
+    }
+}
+
 fn read_source(source: &[u8]) -> Result<(nif::scan::NifScan, NifModel), String> {
     let cannot = |e: nif::NifError| format!("This NIF cannot be edited: {e}");
     let scan = nif::scan::scan(source).map_err(cannot)?;
@@ -1035,6 +1287,8 @@ impl MeshesModel {
     /// opens with no preview).
     pub fn open_edit(&mut self) {
         self.drop_edit();
+        // Final review Minor 8: the column before Edit (Edit locks it on Shapes); `drop_edit` puts it back.
+        let column = self.shapes_col;
         let Some(row) = self.selected_row().cloned() else {
             return;
         };
@@ -1043,8 +1297,10 @@ impl MeshesModel {
             self.error = Some(NO_EXPORT_FOLDER.into());
         }
         match self.start_edit(&row.path, edit_mod.as_deref()) {
-            Ok((e, content)) => {
+            Ok((mut e, content)) => {
+                e.selection = first_selection(&e.model, self.card_sel.as_ref());
                 self.edit = Some(e);
+                self.shapes_col_before = Some(column);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
                 self.view_source = true;
                 if let Some(c) = content {
@@ -1078,7 +1334,8 @@ impl MeshesModel {
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
         let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
         e.copies = copies;
-        e.cards = store.shapes_of(e.source_copy.copy_id).unwrap_or_default();
+        e.weight_sibling = weight_sibling_of(path)
+            .filter(|s| store.copies_of_path(s).is_ok_and(|c| !c.is_empty()));
         let c = self.edit_content(&e)?;
         Ok((e, c))
     }
@@ -1138,6 +1395,9 @@ impl MeshesModel {
 
     /// Ends the session without touching the view's content.
     pub(super) fn drop_edit(&mut self) {
+        if let Some(column) = self.shapes_col_before.take() {
+            self.shapes_col = column;
+        }
         if let Some(mut e) = self.edit.take() {
             e.flush();
             if let Some(err) = e.error {
@@ -1380,12 +1640,17 @@ impl MeshesModel {
         let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
             return;
         };
-        self.drop_edit(); // flushes to the old folder
-        self.open_edit(); // the selected NIF is the edited one: selecting another ends the session
-        if let (Selection::Shape(id), Some(e)) = (selection, &self.edit) {
-            if e.parsed.shapes.iter().any(|s| s.id.0 == id) {
-                self.select_edit(selection);
-            }
+        // Flushes to the old folder.
+        self.drop_edit();
+        // The selected NIF is the edited one: selecting another ends the session.
+        self.open_edit();
+        // Root too (T2 review Minor 1): the reopen starts on `first_selection`, which may be a shape.
+        let keep = self.edit.as_ref().is_some_and(|e| match selection {
+            Selection::Root => true,
+            Selection::Shape(id) => e.parsed.shapes.iter().any(|s| s.id.0 == id),
+        });
+        if keep {
+            self.select_edit(selection);
         }
     }
 

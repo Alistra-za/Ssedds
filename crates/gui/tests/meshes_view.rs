@@ -1,4 +1,5 @@
 //! The Meshes view (plan A Task 12): per-mod NIF list with PGPatcher-aware badges and texture slots.
+use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use modscan::plugin_store::{MeshUse, MissingRef, ShapeSwap};
@@ -237,6 +238,10 @@ fn shapes_show_shader_type_flags_and_slot_resolution() {
     h.get_by_label("LE mesh: optimise it for SSE, e.g. with Cathedral Assets Optimizer.");
     h.get_by_label_contains("Body");
     h.get_by_label_contains("Environment Map (1)");
+    // Meshes UI T2: flags, counts, origins and raw paths sit in Details, closed by default.
+    assert!(h.query_by_label_contains("SLSF1 0x80000101").is_none());
+    h.get_by_label("Details of NIF block 4").click();
+    h.run();
     h.get_by_label_contains("SLSF1 0x80000101");
     h.get_by_label_contains("SLSF2 0x00000021");
     h.get_by_label_contains("120 vertices");
@@ -244,7 +249,7 @@ fn shapes_show_shader_type_flags_and_slot_resolution() {
     h.get_by_label_contains("→ A (2 copies)");
     h.get_by_label_contains("→ missing");
     h.get_by_label_contains("C:\\Game\\Data\\Textures\\b_n.dds");
-    h.get_by_label_contains("(empty)");
+    h.get_by_label("(1 empty slot)");
     // Clicking a texture asks who else uses it (no store here: an empty answer).
     h.get_by_label("textures/a.dds").click();
     h.run();
@@ -1615,7 +1620,7 @@ fn shape_cards_show_the_pgpatcher_3d_index_and_the_block_in_the_hover() {
     );
     h.get_by_label_contains("#1 First").hover();
     h.run();
-    h.get_by_label_contains("NIF block 12");
+    h.get_by_label_contains("NIF block 12\nPGPatcher");
     h.get_by_label_contains("PGPatcher 3D index");
 }
 
@@ -1634,11 +1639,60 @@ fn shader_line_is_the_bare_type_name_and_slots_are_indented() {
 fn slsf_expander_lists_set_bits_by_name() {
     let mut h = harness(shapes_model(vec![shape(vec![None])]));
     h.run();
+    h.get_by_label("Details of NIF block 4").click();
+    h.run();
     assert!(h.query_by_label("Specular (0)").is_none());
     h.get_by_label_contains("SLSF1 0x80000101").click();
     h.run();
     h.get_by_label("Specular (0)");
     h.get_by_label("Receive_Shadows (8)");
+}
+
+/// Meshes UI T2: a card is framed with a full-width header button ("Select shape #N name"); Shader, Textures and
+/// Alpha show, a shape without alpha says so, and a header click outside edit mode selects the card.
+#[test]
+fn shape_cards_are_selectable_with_four_facts_and_closed_details() {
+    let a = ShapeView {
+        block: 12,
+        name: Some("First".into()),
+        index3d: Some(1),
+        ..shape(vec![Some("textures/a.dds"), None, None])
+    };
+    let b = ShapeView {
+        block: 20,
+        name: Some("Second".into()),
+        index3d: Some(0),
+        alpha_flags: Some(0x12ED),
+        alpha_threshold: Some(5),
+        ..shape(vec![None])
+    };
+    let mut h = harness(shapes_model(vec![a, b]));
+    h.run();
+    let first = h.get_by_role_and_label(Role::Button, "Select shape #1 First");
+    let second = h
+        .get_by_role_and_label(Role::Button, "Select shape #0 Second")
+        .rect();
+    let first_rect = first.rect();
+    assert!(first_rect.width() > 300.0, "full width: {first_rect:?}");
+    assert!(first_rect.max.y < second.min.y);
+    h.get_by_label("No NiAlphaProperty");
+    h.get_by_label("Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5");
+    h.get_by_label("(2 empty slots)");
+    assert!(
+        h.query_by_label_contains("120 vertices").is_none(),
+        "Details closed"
+    );
+    // The scan has no controller data: no Controllers line outside edit mode (T2 review Minor 6).
+    assert!(h.query_by_label("Controllers:").is_none());
+    assert_eq!(
+        h.query_all_by_label_contains("Details of NIF block")
+            .count(),
+        2
+    );
+    h.get_by_role_and_label(Role::Button, "Select shape #1 First")
+        .click();
+    h.run();
+    assert_eq!(h.state().card_sel, Some((12, Some("First".into()))));
 }
 
 #[test]
