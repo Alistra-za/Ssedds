@@ -229,6 +229,10 @@ impl SetsDoc {
     pub fn is_dirty(&self) -> bool {
         self.f.dirty
     }
+    /// Put the flag back after a write that left the text as it was.
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.f.dirty = dirty;
+    }
     pub fn read_only(&self) -> bool {
         self.f.read_only()
     }

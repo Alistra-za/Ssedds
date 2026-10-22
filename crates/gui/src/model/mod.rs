@@ -1757,11 +1757,24 @@ impl AppModel {
     /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
     fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
         let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        let dirty = (
+            self.project.as_ref().is_some_and(ProjectDoc::is_dirty),
+            self.sets_doc
+                .as_ref()
+                .is_some_and(crate::sets_doc::SetsDoc::is_dirty),
+        );
         self.batch = true;
         f(self);
         self.batch = false;
         let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
         if after == before {
+            // Trace #28: writes that changed nothing leave the documents as clean as they were.
+            if let Some(p) = self.project.as_mut() {
+                p.set_dirty(dirty.0);
+            }
+            if let Some(s) = self.sets_doc.as_mut() {
+                s.set_dirty(dirty.1);
+            }
             return false;
         }
         self.drop_undo_note();
@@ -2596,9 +2609,12 @@ impl AppModel {
             return f(p, s);
         }
         let before = Self::snapshot_of(Some(p), Some(s));
+        let dirty = (p.is_dirty(), s.is_dirty());
         f(p, s);
         let after = Self::snapshot_of(Some(p), Some(s));
         if after == before {
+            // An equal write is no edit: `touch` marked the document dirty, so undo that (trace #28).
+            (p.set_dirty(dirty.0), s.set_dirty(dirty.1));
             return;
         }
         self.drop_undo_note();

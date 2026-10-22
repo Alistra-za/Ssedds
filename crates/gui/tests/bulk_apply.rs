@@ -490,3 +490,20 @@ fn copy_with_format_ticked_keeps_a_tag_only_source_tag() {
     idle(&mut m);
     assert_eq!(file(&m, ODD, "color.tag"), Some(json!(t)));
 }
+
+/// Trace #28: a write of the value already stored is no edit: no undo step, and the document stays clean.
+#[test]
+fn writing_an_equal_value_leaves_sdc_toml_clean() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(LEAF, "format", json!("bc1"));
+    idle(&mut m);
+    m.save().unwrap();
+    assert!(!m.is_dirty());
+    let steps = m.history.undo.len();
+    m.set_field(LEAF, "format", json!("bc1"));
+    assert_eq!(m.history.undo.len(), steps, "no undo step");
+    assert!(!m.is_dirty(), "an equal write does not dirty the document");
+    m.set_field(LEAF, "format", json!("bc3"));
+    assert!(m.is_dirty(), "a change still dirties");
+}
