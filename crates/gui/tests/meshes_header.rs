@@ -39,4 +39,8 @@ fn the_meshes_view_keeps_the_header() {
     }
     // K3: the bottom panel's strip is drawn too, under the header.
     h.get_by_label("Files");
+    // Meshes UI T3 (owner decision 4): in the Meshes view the textures Export's hover says where NIF edits export.
+    h.get_by_label("Export").hover();
+    h.run();
+    h.get_by_label_contains("NIF edits export with Export NIF in the edit panel.");
 }
