@@ -283,3 +283,22 @@ fn an_explicit_default_valued_export_pin_survives_an_also_edit() {
         "a default the GUI would add is pruned: {t}"
     );
 }
+
+/// Trace #29: the engine matches a `[files]` key written without the extension, so the GUI finds it too.
+#[test]
+fn an_extension_less_hand_written_key_is_found_and_reused() {
+    let (d, mut doc) = doc_with("[files.\"Landscape/Rock01_N\"]\nformat = \"bc7\"\n");
+    assert_eq!(
+        doc.file_value("landscape/rock01_n.png", "format"),
+        Some(json!("bc7"))
+    );
+    doc.set_file_value("landscape/rock01_n.png", "subtype", &json!("normal"));
+    assert_eq!(doc.file_keys(), vec!["Landscape/Rock01_N".to_string()]);
+    doc.clear_file_value("landscape/rock01_n.png", "format");
+    assert_eq!(doc.file_value("landscape/rock01_n.png", "format"), None);
+    doc.save(false).unwrap();
+    let files = ProjectDoc::open(d.path()).config().unwrap().files;
+    assert_eq!(files.len(), 1, "no twin table");
+    doc.remove_file_entry("landscape/rock01_n.png");
+    assert!(doc.file_keys().is_empty());
+}

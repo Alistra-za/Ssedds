@@ -226,17 +226,22 @@ pub(crate) fn set_value(t: &mut dyn TableLike, key: &str, mut v: Value) {
     }
 }
 
-/// The spelling `key` has in `t`: an exact match, else a case-insensitive one (the engine matches `[files]` keys
-/// case-insensitively, so a GUI write must reuse a hand-written `Landscape/Rock01_N.png` rather than add a twin).
+/// The spelling `key` has in `t`: an exact match, else a case-insensitive one, else one without the extension (the
+/// engine matches `[files]` keys that way, so a GUI write must reuse a hand-written `Landscape/Rock01_N.png` or
+/// `Landscape/Rock01_N` rather than add a twin).
 pub(crate) fn find_key(t: &dyn TableLike, key: &str) -> Option<String> {
     if t.contains_key(key) {
         return Some(key.to_owned());
     }
     let lower = key.to_lowercase();
-    t.iter()
-        .map(|(k, _)| k)
-        .find(|k| k.to_lowercase() == lower)
-        .map(str::to_owned)
+    let by = |want: &str| {
+        t.iter()
+            .map(|(k, _)| k)
+            .find(|k| k.to_lowercase() == want)
+            .map(str::to_owned)
+    };
+    // The engine also matches a key written without the file's extension (`path_key_matches`; trace #29).
+    by(&lower).or_else(|| by(&without_ext(&lower)?.to_owned()))
 }
 
 impl ProjectDoc {
@@ -550,7 +555,7 @@ impl ProjectDoc {
     /// The spelling of file `key`'s entry in `[inputs]`: `key` in any case, or without its extension.
     fn read_as_key(&self, key: &str) -> Option<String> {
         let t = self.f.doc.get("inputs")?.as_table_like()?;
-        find_key(t, key).or_else(|| find_key(t, without_ext(key)?))
+        find_key(t, key)
     }
 
     /// F3b: the path file `key` is read as (its `[inputs]` alias), if it has one.
