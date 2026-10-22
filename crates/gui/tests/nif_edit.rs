@@ -1233,6 +1233,117 @@ fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
     }
 }
 
+/// Meshes UI T1: the edit-mode cards are built from the edited bytes; untouched, they equal the scan's cards.
+#[test]
+fn edit_cards_equal_the_scan_before_any_edit() {
+    let (d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let scanned = modscan::store::Store::open_read_only(&d.path().join("scan.db"))
+        .unwrap()
+        .shapes_of(e.source_copy.copy_id)
+        .unwrap();
+    assert!(!scanned.is_empty());
+    assert_eq!(e.cards, scanned);
+}
+
+/// Meshes UI T1 (bug 1): a card shows the edited shader type, flags, alpha and texture path, not the scanned ones.
+#[test]
+fn edit_cards_show_the_edited_values() {
+    use sdc_gui::model::meshes::{alpha_line, shader_type_name};
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    m.shapes_col = true;
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let l = &e.model.lighting[&shader].lighting;
+    let ty = l.shader_type;
+    let new_ty = if ty == 1 { 0 } else { 1 };
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    let set_block = e.model.lighting[&shader].texture_set.unwrap();
+    let alpha = e.model.shape(shape).unwrap().alpha;
+    let slot0 = String::from_utf8_lossy(&e.model.texsets[&set_block].raw.slots[0]).into_owned();
+    let push = |m: &mut MeshesModel, op: Op| m.edit_push(vec![op], None);
+    push(
+        &mut m,
+        Op::SetField {
+            at: at.clone(),
+            field: Field::ShaderType,
+            value: Value::U32(new_ty),
+            base: Value::U32(ty),
+        },
+    );
+    // After the type change: it may have changed the flags too (Note CS).
+    let f1 = m.edit.as_ref().unwrap().model.lighting[&shader]
+        .lighting
+        .slsf1;
+    push(
+        &mut m,
+        Op::SetBits {
+            at: at.clone(),
+            field: Field::Slsf1,
+            mask: 1 << 12,
+            value: !f1 & (1 << 12),
+            base: f1 & (1 << 12),
+        },
+    );
+    let on_shape = nif::edit::anchor_shape(&m.edit.as_ref().unwrap().model, shape);
+    push(
+        &mut m,
+        Op::SetTexturePath {
+            at: on_shape,
+            slot: 0,
+            path: r"Textures\Edited\Card.dds".into(),
+            base: slot0,
+        },
+    );
+    let want_alpha = match alpha {
+        Some(a) => {
+            let e = m.edit.as_ref().unwrap();
+            let p = &e.model.alphas[&a].alpha;
+            let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Alpha).unwrap();
+            let (flags, thr) = (p.flags, p.threshold);
+            push(
+                &mut m,
+                Op::SetBits {
+                    at,
+                    field: Field::AlphaFlags,
+                    mask: 1,
+                    value: !flags as u32 & 1,
+                    base: flags as u32 & 1,
+                },
+            );
+            alpha_line(flags ^ 1, thr)
+        }
+        None => {
+            let e = m.edit.as_ref().unwrap();
+            let at = nif::edit::anchor_shape(&e.model, shape);
+            push(
+                &mut m,
+                Op::AddAlpha {
+                    at,
+                    flags: 0x00ED,
+                    threshold: 128,
+                },
+            );
+            alpha_line(0x00ED, 128)
+        }
+    };
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.doc.ops.iter().all(|d| d.status == OpStatus::Applied),
+        "{:?}",
+        e.outcomes
+    );
+    let f1_now = e.model.lighting[&shader].lighting.slsf1;
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(&shader_type_name(new_ty));
+    h.get_by_label(&format!("SLSF1 0x{f1_now:08X}"));
+    h.get_by_label("textures/edited/card.dds");
+    h.get_by_label(&want_alpha);
+}
+
 #[test]
 fn typing_glossiness_records_one_op_and_one_undo_step() {
     let (_d, mut m) = session(false);

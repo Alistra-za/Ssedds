@@ -89,7 +89,8 @@ pub struct NifEdit {
     pub error: Option<String>,
     /// Every enabled copy of the NIF (the store's order), for the placement check and the PGPatcher re-run note.
     pub copies: Vec<PathCopy>,
-    /// The scan's shape cards of `source_copy` (texture and flag details for the edit-mode cards; final review I1).
+    /// The shape cards of the edited bytes (`shape_cards`), rebuilt by every `reapply` (Note CV1; was the scan's
+    /// cards of `source_copy`, final review I1).
     pub cards: Vec<ShapeView>,
     /// The placement check (spec §8.2); None without an MO2 instance.
     pub placement: Option<Placement>,
@@ -538,6 +539,7 @@ impl NifEdit {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.cards = shape_cards(&self.patched); // once per change, never per frame (rule 9.1)
         self.warnings = validate(&self.model, None);
         demote_source(&self.source_warnings, &mut self.warnings);
         // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
@@ -971,6 +973,96 @@ fn anim_tracks(
         .collect()
 }
 
+/// The shape cards of `bytes`, as the scan store would give them for these bytes (`modscan` `write_shapes` and
+/// `shapes_of`): the edit-mode cards then show the edited values (Note CV1). Empty when the bytes do not scan.
+pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
+    use modscan::store::{RawSlot, MAX_SLOTS};
+    use nif::path::TexPath;
+    use nif::scan::Shader;
+    let Ok(scan) = nif::scan::scan(bytes) else {
+        return vec![];
+    };
+    // modscan's `keep_raw`: the raw string says more than the canonical path.
+    let keep_raw = |p: &TexPath| {
+        let f = &p.flags;
+        f.rebased
+            || f.prefixed
+            || f.non_dds
+            || p.raw.replace('\\', "/").to_ascii_lowercase() != p.norm
+    };
+    let json = |v: serde_json::Result<String>| v.ok();
+    scan.shapes
+        .iter()
+        .map(|s| {
+            let (shader_kind, shader_type, slsf1, slsf2, slots, params): (
+                _,
+                _,
+                _,
+                _,
+                Vec<&TexPath>,
+                _,
+            ) = match &s.shader {
+                Shader::None => (0, None, None, None, vec![], None),
+                Shader::Lighting(l, ts) => (
+                    1,
+                    Some(l.shader_type),
+                    Some(l.slsf1),
+                    Some(l.slsf2),
+                    ts.iter().take(MAX_SLOTS).collect(),
+                    json(serde_json::to_string(&l.params)),
+                ),
+                Shader::Effect(e) => (
+                    2,
+                    None,
+                    Some(e.slsf1),
+                    Some(e.slsf2),
+                    vec![&e.source, &e.greyscale],
+                    json(serde_json::to_string(&e.params)),
+                ),
+                Shader::Other { kind } => (
+                    3,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    Some(serde_json::json!({ "shader": kind }).to_string()),
+                ),
+            };
+            let h = &s.head;
+            ShapeView {
+                block: s.block,
+                name: h.name.clone(),
+                kind: format!("{:?}", h.kind),
+                shader_kind,
+                shader_type,
+                slsf1,
+                slsf2,
+                textures: slots
+                    .iter()
+                    .map(|p| (!(p.flags.empty || p.norm.is_empty())).then(|| p.norm.clone()))
+                    .collect(),
+                raw: slots
+                    .iter()
+                    .map(|p| {
+                        keep_raw(p).then(|| RawSlot {
+                            raw: p.raw.clone(),
+                            flags: p.flags.clone(),
+                        })
+                    })
+                    .collect(),
+                alpha_flags: s.alpha.map(|a| a.flags),
+                alpha_threshold: s.alpha.map(|a| a.threshold),
+                params,
+                skinned: h.skinned,
+                vertex_desc: h.vertex_desc,
+                num_vertices: h.num_vertices,
+                num_triangles: h.num_triangles,
+                index3d: scan.index3d.get(&s.block).copied(),
+            }
+        })
+        .collect()
+}
+
 fn read_source(source: &[u8]) -> Result<(nif::scan::NifScan, NifModel), String> {
     let cannot = |e: nif::NifError| format!("This NIF cannot be edited: {e}");
     let scan = nif::scan::scan(source).map_err(cannot)?;
@@ -1078,7 +1170,6 @@ impl MeshesModel {
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
         let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
         e.copies = copies;
-        e.cards = store.shapes_of(e.source_copy.copy_id).unwrap_or_default();
         let c = self.edit_content(&e)?;
         Ok((e, c))
     }

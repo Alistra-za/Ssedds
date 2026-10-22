@@ -789,7 +789,7 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 ui.separator();
             }
             // While editing, the edited copy's shapes (the shown copy may be PGPatcher's, numbered differently); each
-            // with its scanned card when the scan of that copy agrees on block and name, else a title only.
+            // with its card from the edited bytes (Note CV1), else a title only.
             let cards: Vec<(u32, Option<&ShapeView>, String)> = match &m.edit {
                 Some(e) => e
                     .model
