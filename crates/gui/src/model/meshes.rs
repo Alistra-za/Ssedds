@@ -503,6 +503,8 @@ pub struct MeshesModel {
     /// The latest scan to end returned a result (`report`). False after a pause, cancel, failure or panic: the
     /// store's origins may be outside the readable run, so the app does not re-read its mesh evidence.
     pub scan_completed: bool,
+    /// The latest scan failed before `begin_scan` because PGPatcher is running: the store is as it was. Not for Busy: another scan is mid-flight.
+    pub store_untouched: bool,
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
     /// The running scan phase's rate (Task 5's `Pace`); a new phase starts a new one.
@@ -609,6 +611,7 @@ impl MeshesModel {
             dialog: None,
             report: None,
             scan_completed: false,
+            store_untouched: false,
             progress: None,
             scan_pace: None,
             status: String::new(),
@@ -894,6 +897,7 @@ impl MeshesModel {
                 WorkerMsg::Scanned(r) => self.finished(r),
                 WorkerMsg::Panicked { message, .. } => {
                     self.scan_completed = false;
+                    self.store_untouched = false;
                     self.cancel = None;
                     self.progress = None;
                     self.status.clear();
@@ -909,6 +913,7 @@ impl MeshesModel {
         self.cancel = None;
         self.progress = None;
         self.scan_completed = r.is_ok();
+        self.store_untouched = false;
         match r {
             Ok(report) => {
                 self.scan_rev += 1;
@@ -942,6 +947,7 @@ impl MeshesModel {
                 };
             }
             Err(ScanError::PgpRunning) => {
+                self.store_untouched = true;
                 self.status = "Scan paused: PGPatcher is running.".into();
                 self.banner = Some(Banner::PgpRunning);
             }

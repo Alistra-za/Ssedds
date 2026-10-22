@@ -1711,6 +1711,62 @@ fn cancelled_or_failed_scan_does_not_mark_a_completed_scan() {
     assert!(!m.scan_completed);
 }
 
+/// Trace-debug 2026-10-22 #5 (Note CW2): a scan that stops before `begin_scan` (PGPatcher running) leaves the store as
+/// it was, so the Used-by lists and UV coverage come back; a cancelled scan (store disabled) still keeps them off.
+#[test]
+fn a_scan_that_stops_before_begin_scan_keeps_the_store_settled() {
+    let session = std::sync::Arc::new(
+        engine::session::Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"),
+    );
+    let mut app =
+        sdc_gui::model::AppModel::new(sdc_gui::settings::GuiSettings::default(), None, session);
+    let (_d, mut m) = scanned();
+    let run_scan = |app: &mut sdc_gui::model::AppModel, m: &mut MeshesModel| {
+        m.request_scan(false);
+        let req = m.take_request().unwrap();
+        m.start(req);
+        app.scan_started();
+        wait(m);
+        app.scan_finished(m.scan_completed, m.store_untouched);
+    };
+    m.procs = || vec!["pgpatcher.exe".to_string()];
+    run_scan(&mut app, &mut m);
+    assert_eq!(m.banner, Some(Banner::PgpRunning));
+    assert!(!app.scan_store_unsettled, "the store is as it was");
+    // Unsettled before the scan (an earlier cancel): it stays so.
+    app.scan_store_unsettled = true;
+    run_scan(&mut app, &mut m);
+    assert!(app.scan_store_unsettled);
+
+    // Another scan holds scan.lock (a Windows sharing lock): Busy means that scan is mid-flight with every origin
+    // disabled, so the flag stays set whatever it was (not like PgpRunning).
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        m.procs = sdc_gui::model::meshes::no_procs;
+        let lock = _d.path().join("scan.lock");
+        let _held = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .open(lock)
+            .unwrap();
+        app.scan_store_unsettled = false;
+        run_scan(&mut app, &mut m);
+        assert!(
+            m.error
+                .as_deref()
+                .is_some_and(|e| e.contains("already running")),
+            "{:?}",
+            m.error
+        );
+        assert!(
+            !m.store_untouched && app.scan_store_unsettled,
+            "Busy is not an untouched store"
+        );
+    }
+}
 #[test]
 fn the_path_filter_folds_ascii_only_like_stored_paths() {
     let mut m = model_with(None);

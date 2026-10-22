@@ -337,11 +337,8 @@ impl eframe::App for SdcApp {
         if scanning && !self.meshes.scanning() {
             self.scan_ended();
             // Wave 2 #6: a cancelled or failed scan leaves every origin disabled, so plans keep the evidence too.
-            self.model.scan_store_unsettled = !self.meshes.scan_completed;
-            if self.meshes.scan_completed {
-                self.model.refresh_mesh_votes(false);
-                self.model.refresh_known_paths();
-            }
+            self.model
+                .scan_finished(self.meshes.scan_completed, self.meshes.store_untouched);
         }
         self.state.set3d.poll(&self.model);
         // Both views offer the scan (the Textures view has its row under the header).
@@ -349,7 +346,9 @@ impl eframe::App for SdcApp {
         if let Some(req) = self.meshes.take_request() {
             self.meshes.start(req);
             // `begin_scan` disables every origin until the scan ends.
-            self.model.scan_store_unsettled |= self.meshes.scanning();
+            if self.meshes.scanning() {
+                self.model.scan_started();
+            }
         }
         self.route_3d(&ctx);
         if crate::ui::header::meshes_view_active(&ctx) {

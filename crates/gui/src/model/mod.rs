@@ -307,6 +307,8 @@ pub struct AppModel {
     /// Trace-debug wave 2 #6: a Meshes scan is running, or the last one was cancelled or failed, so the store has every
     /// origin disabled and reads empty; the mesh evidence and "Used by meshes" keep what they have. Set by the app.
     pub scan_store_unsettled: bool,
+    /// What `scan_store_unsettled` was when the running scan started (Note CW2: an error raised before `begin_scan` restores it).
+    unsettled_before_scan: bool,
     /// `scan_db`'s stamp, taken once per frame in `poll` (REPORT #9: `view_key` does not stat it per call).
     scan_stamp: cs_pbr::Stamp,
     /// The last scan-database read error logged (audit GM-5: each distinct error once).
@@ -581,6 +583,7 @@ impl AppModel {
             skipped_user_presets: vec![],
             scan_db: None,
             scan_store_unsettled: false,
+            unsettled_before_scan: false,
             scan_stamp: None,
             scan_db_error: None,
             mesh_votes: Default::default(),
@@ -961,6 +964,31 @@ impl AppModel {
                 .unwrap_or_else(|p| Err(format!("panic: {}", crate::worker::panic_text(&*p))));
             let _ = tx.send(WorkerMsg::MeshVotes { generation, result });
         });
+    }
+
+    /// A Meshes scan started: `begin_scan` disables every origin, so the store reads empty until it ends.
+    pub fn scan_started(&mut self) {
+        self.unsettled_before_scan = self.scan_store_unsettled;
+        self.scan_store_unsettled = true;
+        // A read in flight may see the disabled origins: the same read again lands the kept evidence at once and
+        // makes the worker's answer stale (it keeps its `after_plan` tail).
+        if let Some((_, after_plan)) = self.votes_pending {
+            self.refresh_mesh_votes(after_plan);
+        }
+    }
+
+    /// The scan ended. `completed`: it finished; `store_untouched`: it failed before `begin_scan` (PGPatcher running,
+    /// another scan holds the lock), so the store still holds what it held before.
+    pub fn scan_finished(&mut self, completed: bool, store_untouched: bool) {
+        self.scan_store_unsettled = if store_untouched {
+            self.unsettled_before_scan
+        } else {
+            !completed
+        };
+        if completed {
+            self.refresh_mesh_votes(false);
+            self.refresh_known_paths();
+        }
     }
 
     /// The mesh keys `refresh_mesh_votes` reads: each colour member's (by `shader::colour_mesh_key`); while a tick
@@ -3564,6 +3592,33 @@ mod tests {
             "{:?}",
             m.dialog
         );
+    }
+
+    /// Trace-debug 2026-10-22 #4 (Note CW1): a scan that starts while a mesh-evidence read is in flight must not let
+    /// that read land the emptied store's votes, alpha and GRAS.
+    #[test]
+    fn a_scan_start_drops_the_evidence_read_in_flight() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("scan.db");
+        std::fs::write(&db, "not a database").unwrap();
+        let mut m = bare_model();
+        m.scan_db = Some(db);
+        m.gras_diffuses = ["keep".to_string()].into();
+        m.refresh_mesh_votes(false);
+        let read = m.votes_gen;
+        assert!(m.votes_pending.is_some(), "a read is in flight");
+        m.scan_started();
+        // The read ends after `begin_scan`: the store reads empty.
+        m.handle(WorkerMsg::MeshVotes {
+            generation: read,
+            result: Ok(Default::default()),
+        });
+        assert_eq!(
+            m.gras_diffuses,
+            ["keep".to_string()].into(),
+            "the in-flight read landed empty evidence"
+        );
+        assert!(m.votes_pending.is_none(), "the pending read still settles");
     }
 
     /// A TruePBR rock set exported once, its PGPatcher JSON edited by hand, a setting changed and a second export
