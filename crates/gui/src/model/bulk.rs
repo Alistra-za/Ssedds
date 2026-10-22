@@ -1,10 +1,10 @@
 //! M6 Track F3a (design `2026-10-13-sdc-m6-f3a-design.md`): the multi-selection, the bulk edit plan and its
 //! commands. No egui types.
-use super::fields::encoding_options;
 use super::fields::{
     all_fields, field_view, filter_option_lock, hidden_reason, views_of, weighting_option_lock,
     FieldView, EDGE_FIELD, FIELDS, FILTER_FIELD, LEVELS_FIELD, WEIGHTING,
 };
+use super::fields::{backend_lock, encoding_options};
 use super::from_normal::{GenMap, GenOp};
 use super::sets::{
     engine_inputs, game_path_in, locked_items, member_game_path, slot_gives, slot_of, SlotCommand,
@@ -338,6 +338,7 @@ fn skip_of(
     op: Option<&BulkOp>,
     slot_locked: Option<&str>,
     target: Target,
+    nvtt_found: bool,
 ) -> Option<String> {
     if let Some(why) = slot_locked {
         return Some(why.into());
@@ -368,6 +369,12 @@ fn skip_of(
                     .any(|o| v.as_str() == Some(o.0)));
         if bad {
             return Some(INVALID.into());
+        }
+        // The single Encoder row's lock (Note NV): no NVTT to pick unless the texture is already on it.
+        if field == "encoder.backend" && *v == serde_json::json!(engine::config::Backend::Nvtt) {
+            if let Some(lock) = backend_lock(&job.profile, nvtt_found) {
+                return Some(lock.into());
+            }
         }
         let barred = serde_json::from_value::<MipFilter>(v.clone())
             .ok()
@@ -464,6 +471,7 @@ pub fn plan_bulk_edit(
                 Some(op),
                 locked.get(k).map(String::as_str),
                 m.target,
+                m.nvtt_found(),
             )
             .map_or(Change::Write, Change::Skip);
             (k.clone(), change)
@@ -541,6 +549,7 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
                 None,
                 locked.get(k).map(String::as_str),
                 m.target,
+                m.nvtt_found(),
             ) {
                 Some(r) => match row.skipped.iter_mut().find(|e| e.0 == r) {
                     Some(e) => e.1 += 1,

@@ -39,6 +39,26 @@ fn with_fake(dir: &std::path::Path) -> AppModel {
     m
 }
 
+/// Trace 13: the bulk Encoder row honours the same NVTT-not-found lock as the single row.
+#[test]
+fn the_bulk_encoder_row_skips_nvtt_when_it_is_not_found() {
+    use sdc_gui::model::bulk::{plan_bulk_edit, BulkOp, Change};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.nvtt = Some(NvttProbe::Missing("not on PATH".into()));
+    let keys = [ROCK.to_string()];
+    let plan = |m: &AppModel, b: Backend| {
+        plan_bulk_edit(m, &keys, "encoder.backend", &BulkOp::Set(json!(b)))[0]
+            .1
+            .clone()
+    };
+    assert_eq!(plan(&m, Backend::Nvtt), Change::Skip(NVTT_NOT_FOUND.into()));
+    assert_eq!(plan(&m, Backend::Bc7e), Change::Write);
+    m.apply_bulk_edit(&keys, "encoder.backend", BulkOp::Set(json!(Backend::Nvtt)));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(file_value(&m, "encoder.backend"), None);
+}
+
 fn file_value(m: &AppModel, field: &str) -> Option<serde_json::Value> {
     m.project.as_ref().unwrap().file_value(ROCK, field)
 }
