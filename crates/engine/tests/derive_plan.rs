@@ -1484,7 +1484,7 @@ fn a_p_follows_its_set_when_the_set_does_not_derive() {
 }
 
 /// Trace-debug #17: a `_d` colour member keeps its `_d` in the vanilla file (`steel_d.dds`), so the env-map gate
-/// looks the vote up at `textures/arm/steel_d`, the key the GUI asks the scan for (Notes CN17 and CN68, CU).
+/// looks the vote up at `textures/arm/steel_d`, the key the GUI asks the scan for (Notes CN17 and CN68, CV).
 #[test]
 fn env_m_vote_is_read_at_the_colour_members_own_key_for_a_d_set() {
     let d = tempfile::tempdir().unwrap();

@@ -133,7 +133,7 @@ pub fn discover_reporting(
             // Note BC (audit #3): only an output root strictly inside this folder is skipped; in place skips nothing.
             let in_abs = std::path::absolute(input)?;
             let skip_out = is_under(&out_abs, &in_abs) && !is_under(&in_abs, &out_abs);
-            // A followed link into the output folder must be skipped too: compare resolved paths (Note CU6).
+            // A followed link into the output folder must be skipped too: compare resolved paths (Note CV6).
             // shortcut: only folder links are resolved; a file link into the output folder is still read.
             let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
             let (in_real, out_real) = (real(&in_abs), real(&out_abs));
@@ -141,7 +141,7 @@ pub fn discover_reporting(
             let max_depth = if recursive { usize::MAX } else { 1 };
             let walker = walkdir::WalkDir::new(input)
                 .min_depth(1)
-                .follow_links(true) // as vfs loose.rs does; a loop or dead link is an Err below (Note CU)
+                .follow_links(true) // as vfs loose.rs does; a loop or dead link is an Err below (Note CV)
                 .max_depth(max_depth);
             // With links followed, walkdir's open-folder errors carry no path: remember the folder kept at each depth
             // so the unreadable child can be named (see unreadable_child).

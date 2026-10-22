@@ -380,7 +380,7 @@ fn make_dir_link(link: &Path, target: &Path) -> bool {
     }
 }
 
-/// Trace-debug #27 (Note CU): recursive discovery follows directory links, and a link loop is reported, not dropped.
+/// Trace-debug #27 (Note CV): recursive discovery follows directory links, and a link loop is reported, not dropped.
 #[test]
 fn recursive_discovery_follows_links_and_reports_a_loop() {
     let d = tempfile::tempdir().unwrap();
