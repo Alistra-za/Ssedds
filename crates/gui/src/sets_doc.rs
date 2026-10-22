@@ -952,15 +952,21 @@ impl SetsDoc {
             return;
         }
         let t = self.table_mut(id);
-        match shader {
+        let same = match shader {
             Some(s) => {
+                let same = has_table && t.get("shader").and_then(Item::as_str) == Some(s.id());
                 t.insert("shader", toml_edit::value(s.id()));
+                same
             }
             None => {
                 t.remove("shader");
+                false
             }
+        };
+        // An equal write is no edit (trace #28 review M3).
+        if !same {
+            self.f.touch();
         }
-        self.f.touch();
     }
 
     /// F3b D2: set (or with `None` remove) the base name of set `id`'s outputs.

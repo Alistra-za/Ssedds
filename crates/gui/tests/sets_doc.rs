@@ -475,3 +475,16 @@ fn the_split_remove_is_sorted_image_only_and_has_no_duplicates() {
     let e = &s.entries()[0];
     assert_eq!(e.remove, ["a/f.bmp", "a/f.tga"], "{e:?}");
 }
+
+/// Fix D2 M3: an equal `set_shader` write on a sets document is no edit.
+#[test]
+fn an_equal_shader_write_leaves_the_sets_document_clean() {
+    let (_d, mut s) = doc(None);
+    s.set_shader("a/one", Some(engine::shader::Shader::Default));
+    assert!(s.is_dirty());
+    s.save(false).unwrap();
+    s.set_shader("a/one", Some(engine::shader::Shader::Default));
+    assert!(!s.is_dirty(), "an equal write");
+    s.set_shader("a/one", None);
+    assert!(s.is_dirty(), "a change still dirties");
+}

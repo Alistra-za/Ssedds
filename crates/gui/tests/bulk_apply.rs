@@ -507,3 +507,20 @@ fn writing_an_equal_value_leaves_sdc_toml_clean() {
     m.set_field(LEAF, "format", json!("bc3"));
     assert!(m.is_dirty(), "a change still dirties");
 }
+
+/// Fix D2 M3: a bulk-panel write of the value already stored (the `batch_edit` path) leaves the document clean.
+#[test]
+fn a_bulk_write_of_an_equal_value_leaves_the_documents_clean() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(LEAF, "format", json!("bc1"));
+    idle(&mut m);
+    m.save().unwrap();
+    assert!(!m.is_dirty());
+    let steps = m.history.undo.len();
+    m.apply_bulk_edit(&strings(&[LEAF]), "format", BulkOp::Set(json!("bc1")));
+    assert_eq!(m.history.undo.len(), steps, "no undo step");
+    assert!(!m.is_dirty(), "an equal bulk write does not dirty anything");
+    m.apply_bulk_edit(&strings(&[LEAF]), "format", BulkOp::Set(json!("bc3")));
+    assert!(m.is_dirty(), "a change still dirties");
+}
