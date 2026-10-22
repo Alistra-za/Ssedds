@@ -2782,11 +2782,8 @@ fn remove_last_clip_clears_0x20() {
     assert!(m.sequences.is_empty());
     let free = nif::anim::free_tracks(&m, o, 3);
     assert!(free.iter().any(|t| t.ctrl == 4), "{free:?}");
-    assert_eq!(h.kind(root_ctrl(o)), b"NiControllerManager");
-    assert!(read_manager(&h, o, root_ctrl(o))
-        .unwrap()
-        .sequences
-        .is_empty());
+    // C-P36 (Note CU8): the emptied manager and its MTTC left the root's chain
+    assert_eq!(m.root_net.as_ref().unwrap().controller, -1);
 }
 
 #[test]
@@ -2990,11 +2987,8 @@ fn another_manager_keeps_the_clip_live() {
         "flags 0x20 and the blend interpolator stay"
     );
     assert_eq!(m.sequences.len(), 1, "the other manager lists it");
-    let h = Header::parse(&r.bytes).unwrap();
-    assert!(read_manager(&h, &r.bytes, root_ctrl(&r.bytes))
-        .unwrap()
-        .sequences
-        .is_empty());
+    // C-P36 (Note CU8): only the emptied root manager leaves the chain
+    assert_eq!(m.root_net.as_ref().unwrap().controller, -1);
 }
 
 /// Minor: an LSCC (Point3) track round trip: Point3 keyed and blend interpolators, all three values, and back.
@@ -3789,6 +3783,113 @@ fn add_sequence_refuses_an_unreadable_root_manager() {
     assert_eq!(clip_key(&x, &read_model(&x).unwrap(), n), None);
 }
 
+/// Note CU4: an unreadable controller of any kind in front of the root's manager refuses AddSequence; the manager
+/// behind it is never shadowed by a second one.
+#[test]
+fn add_sequence_refuses_an_unreadable_controller_in_front_of_the_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let r = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = r.bytes;
+    let m = read_model(&o).unwrap();
+    let root = m.root.unwrap();
+    let mgr = root_ctrl(&o) as i32;
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    let at = m.root_net.as_ref().unwrap().controller_at() - doc.header().offsets()[root as usize];
+    // next -> the manager, then too short for NiTimeController
+    let mut body = mgr.to_le_bytes().to_vec();
+    body.extend([0; 4]);
+    let n = doc.append(b"NiTransformController", body);
+    doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
+    let x = doc.bytes();
+    let add = add_seq(root_anchor(&x), "Close", vec![track(&x, 20, open_keys())]);
+    assert_eq!(
+        refused(&x, add),
+        "The root's controller chain cannot be read."
+    );
+}
+
+/// Fix round 1 (review I1): the whole root chain must read, also past the first manager: a truncated controller after
+/// the MTTC, an unreadable second manager or a loop refuses every clip op and leaves the bytes unchanged.
+#[test]
+fn clip_ops_refuse_a_broken_root_chain_after_the_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let o = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let h = Header::parse(&o).unwrap();
+    let mgr = root_ctrl(&o);
+    let mttc = read_manager(&h, &o, mgr).unwrap().ctrl.next as u32;
+    assert_eq!(h.kind(mttc as usize), b"NiMultiTargetTransformController");
+    // the MTTC's next -> `kind` with `body`
+    let after = |kind: &[u8], body: Vec<u8>| {
+        let mut doc = nif::write::NifDoc::open(&o).unwrap();
+        let n = doc.append(kind, body);
+        doc.patch(mttc, 0, &(n as i32).to_le_bytes()).unwrap();
+        doc.bytes()
+    };
+    let truncated = after(b"NiTransformController", vec![0xFF; 8]);
+    // a whole NiTimeController base (next -1), then cumulative 0 and a sequence count past the block
+    let mut man = (-1i32).to_le_bytes().to_vec();
+    man.extend([0; 22]);
+    man.push(0);
+    man.extend(1000u32.to_le_bytes());
+    let bad_manager = after(b"NiControllerManager", man);
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    doc.patch(mttc, 0, &(mgr as i32).to_le_bytes()).unwrap();
+    let looped = doc.bytes();
+    for x in [truncated, bad_manager, looped] {
+        let root = root_anchor(&x);
+        let chain = "The root's controller chain cannot be read.";
+        assert_eq!(
+            refused(
+                &x,
+                add_seq(root.clone(), "Close", vec![track(&x, 20, open_keys())])
+            ),
+            chain
+        );
+        assert_eq!(refused(&x, remove_seq(root.clone(), "Open", 0)), chain);
+        assert_eq!(refused(&x, rename_seq(root, "Open", 0, "Z")), chain);
+    }
+}
+
+/// Note CU3: `convert_check` predicts AddSequence's cycle and range refusals, with the same text.
+#[test]
+fn convert_check_predicts_the_cycle_and_range_refusals() {
+    let a = scenes::animated(Some(1), 2);
+    let mut cycle3 = a.clone();
+    for c in [4, 5] {
+        cycle3 = patched(&cycle3, c, 4, &0x4Eu16.to_le_bytes()); // 0x48 | cycle bits 3
+    }
+    let mut empty = a.clone();
+    for c in [4, 5] {
+        empty = patched(&empty, c, 18, &0f32.to_le_bytes()); // stop = start = 0
+    }
+    for (b, want) in [
+        (cycle3, "The cycle must be Loop, Reverse or Clamp."),
+        (empty, "Stop must be after start."),
+    ] {
+        refused_unchanged(&b, conv(&conv_at(&b), "X"), want);
+        let m = read_model(&b).unwrap();
+        assert_eq!(convert_check(&m, 3, Some("S")), Err(want.into()));
+    }
+}
+
 /// C-P35 M3: two managers that share one palette and one MTTC, each listing a clip that needs a different shape
 /// added: a split keeps both additions (the second no longer starts again from the source list).
 #[test]
@@ -3839,4 +3940,103 @@ fn split_grows_a_shared_palette_and_mttc_once_for_both_managers() {
     targets.sort();
     assert_eq!(pal, [a, bb], "palette");
     assert_eq!(targets, [a, bb], "MTTC");
+}
+
+// ---- Note CU8 (C-P36, C6E-results): the game crashes on a NiControllerManager with no clips ----
+
+/// Removing the last clip unlinks the manager and its MTTC from the root's chain, so export cleanup drops them.
+#[test]
+fn removing_the_last_clip_unlinks_the_manager_and_its_mttc() {
+    use nif::edit::validate::{validate, EMPTY_MANAGER};
+    let b = scenes::animated(Some(1), 2);
+    let n = Header::parse(&b).unwrap().sizes.len() as u32;
+    let convert = conv(&conv_at(&b), CONVERT_NAME);
+    let o = apply(&b, std::slice::from_ref(&convert)).unwrap().bytes;
+    let remove = remove_seq(root_anchor(&o), CONVERT_NAME, 0);
+    let r = apply(&b, &[convert, remove]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.root_net.as_ref().unwrap().controller, -1, "no manager");
+    assert!(m.sequences.is_empty());
+    for c in [4, 5] {
+        let t = &m.ctrls[&c];
+        assert_eq!(t.flags & 0x20, 0, "{c} is free");
+        assert!(
+            m.interps[&(t.interp.unwrap() as u32)].data >= 0,
+            "{c} is keyed"
+        );
+    }
+    assert!(validate(&m, None).iter().all(|w| w.text != EMPTY_MANAGER));
+    let x = compact(&r.bytes, n).unwrap();
+    for k in [
+        "NiControllerManager",
+        "NiMultiTargetTransformController",
+        "NiDefaultAVObjectPalette",
+        "NiControllerSequence",
+    ] {
+        assert_eq!(count_kind(&x, k), 0, "{k}");
+    }
+    read_model(&x).unwrap();
+}
+
+/// Removing one of two clips keeps the manager.
+#[test]
+fn removing_one_of_two_clips_keeps_the_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let ops = [
+        add_seq(root.clone(), "Open", vec![track(&b, 11, open_keys())]),
+        add_seq(root.clone(), "Close", vec![track(&b, 20, open_keys())]),
+        remove_seq(root, "Open", 0),
+    ];
+    let r = apply(&b, &ops).unwrap();
+    assert!(r.outcomes.iter().all(|o| *o == Outcome::Applied));
+    let h = Header::parse(&r.bytes).unwrap();
+    assert_eq!(h.kind(root_ctrl(&r.bytes)), b"NiControllerManager");
+    assert_eq!(clip_names(&r.bytes), vec!["Close".to_string()]);
+}
+
+/// An empty manager on the root's chain is an Error; one the source already has is shown as a Warning only.
+#[test]
+fn an_empty_manager_on_the_root_chain_is_an_error_unless_the_source_has_it() {
+    use nif::clips::encode_manager;
+    use nif::edit::validate::{demote_source, new_errors, validate, Level, Target, EMPTY_MANAGER};
+    let b = scenes::animated(Some(1), 2);
+    let o = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let mgr = root_ctrl(&o);
+    let mut man = read_manager(&Header::parse(&o).unwrap(), &o, mgr).unwrap();
+    man.sequences.clear();
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    doc.set_block(mgr as u32, encode_manager(&man).unwrap());
+    let x = doc.bytes();
+    let w = validate(&read_model(&x).unwrap(), None);
+    let hit: Vec<_> = w.iter().filter(|w| w.text == EMPTY_MANAGER).collect();
+    assert_eq!(hit.len(), 1, "{w:?}");
+    assert_eq!(
+        (hit[0].level, &hit[0].target),
+        (Level::Error, &Target::Block { block: mgr as u32 })
+    );
+    // the same manager in the source: shown as a Warning, never blocking
+    let mut edited = w.clone();
+    demote_source(&w, &mut edited);
+    assert!(edited
+        .iter()
+        .filter(|e| e.text == EMPTY_MANAGER)
+        .all(|e| e.level == Level::Warn));
+    assert!(new_errors(&w, &w).iter().all(|e| e.text != EMPTY_MANAGER));
+    // made by the edits: an Error
+    let mut fresh = w.clone();
+    demote_source(&validate(&read_model(&o).unwrap(), None), &mut fresh);
+    assert!(fresh
+        .iter()
+        .any(|e| e.text == EMPTY_MANAGER && e.level == Level::Error));
 }

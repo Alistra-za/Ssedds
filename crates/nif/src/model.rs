@@ -69,6 +69,8 @@ pub struct NifModel {
     pub interps: BTreeMap<u32, Interp>,
     pub extras: BTreeMap<u32, Extra>,
     pub sequences: Vec<Sequence>,
+    /// Every readable NiControllerManager: how many sequences it lists (Note CU8).
+    pub managers: BTreeMap<u32, usize>,
     pub problems: Vec<String>,
 }
 
@@ -131,6 +133,7 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
         interps: BTreeMap::new(),
         extras: BTreeMap::new(),
         sequences: vec![],
+        managers: BTreeMap::new(),
         problems: vec![],
     };
     m.root_kind = m
@@ -228,7 +231,10 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
     let mut listed: Option<BTreeSet<i32>> = None;
     for i in (0..n).filter(|&i| h.kind(i) == b"NiControllerManager") {
         match ctrl::read_manager(&h, b, i) {
-            Ok(mgr) => listed.get_or_insert_default().extend(mgr.sequences),
+            Ok(mgr) => {
+                m.managers.insert(i as u32, mgr.sequences.len());
+                listed.get_or_insert_default().extend(mgr.sequences)
+            }
             Err(e) => p.push(format!("block {i}: {e}")),
         }
     }

@@ -347,7 +347,8 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         });
     }
     let name = string(h, block, u32_at(d, 0) as i32, "name", &mut budget)?
-        .map(|s| String::from_utf8_lossy(&s).into());
+        // fix round 1 (Note CU): Windows-1252, as the editor shows and writes it; one byte, one char, so it is an identity
+        .map(|s| crate::text::lossy(&s));
     Ok(Sequence {
         block: block as u32,
         name,

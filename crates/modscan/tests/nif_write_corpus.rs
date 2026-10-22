@@ -1079,3 +1079,74 @@ fn sharing_census() {
     println!("{out}");
     let _ = std::fs::write(std::env::temp_dir().join("sharing-census.txt"), &out);
 }
+
+/// Note CU8 census: NIFs with a NiControllerManager that lists no sequences (the game crashes on one the root's chain
+/// reaches, C6E). Every `*Meshes*.bsa` beside SDC_BSA, plus SDC_NIF_CORPUS loose. Asserts only that files were read.
+#[test]
+#[ignore]
+fn empty_manager_census() {
+    use nif::edit::validate::{validate, EMPTY_MANAGER};
+    // (files read, files with an empty manager, of those on the root's chain)
+    fn census(b: &[u8]) -> Option<(bool, bool)> {
+        let m = read_model(b).ok()?;
+        let any = m.managers.values().any(|&n| n == 0);
+        let root = validate(&m, None).iter().any(|w| w.text == EMPTY_MANAGER);
+        Some((any, root))
+    }
+    let mut out = String::new();
+    let mut add = |what: &str, hits: Vec<(String, (bool, bool))>| {
+        let any: Vec<_> = hits.iter().filter(|h| h.1 .0).collect();
+        let root = any.iter().filter(|h| h.1 .1).count();
+        out += &format!(
+            "{what}: {} NIFs read, {} with an empty manager, {root} on the root's chain\n",
+            hits.len(),
+            any.len()
+        );
+        for (p, (_, r)) in any {
+            out += &format!("  {p}{}\n", if *r { " (root chain)" } else { "" });
+        }
+        hits.len()
+    };
+    let mut read = 0;
+    if let Some(bsa_path) = env_path("SDC_BSA") {
+        let dir = bsa_path.parent().unwrap().to_path_buf();
+        let mut archives: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                let n = p
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_ascii_lowercase();
+                n.contains("meshes") && n.ends_with(".bsa")
+            })
+            .collect();
+        archives.sort();
+        for a in archives {
+            let Ok(bsa) = vfs::bsa::Bsa::open(&a) else {
+                continue;
+            };
+            let hits = bsa
+                .entries
+                .par_iter()
+                .filter(|e| e.norm.ends_with(".nif"))
+                .filter_map(|e| Some((e.norm.clone(), census(&bsa.read(e).ok()?)?)))
+                .collect();
+            read += add(&a.display().to_string(), hits);
+        }
+    }
+    if let Some(root) = env_path("SDC_NIF_CORPUS") {
+        let mut v = vec![];
+        nifs_under(&root, &mut v);
+        let hits = v
+            .par_iter()
+            .filter_map(|p| Some((p.display().to_string(), census(&std::fs::read(p).ok()?)?)))
+            .collect();
+        read += add("loose corpus", hits);
+    }
+    println!("{out}");
+    let _ = std::fs::write(std::env::temp_dir().join("empty-manager-census.txt"), &out);
+    assert!(read > 0 || std::env::var_os("SDC_BSA").is_none());
+}

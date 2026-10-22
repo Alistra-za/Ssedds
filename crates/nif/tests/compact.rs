@@ -195,9 +195,13 @@ fn summary(b: &[u8]) -> Vec<String> {
 fn owner_scenario_keeps_only_live_appended_blocks() {
     let (src, out) = owner_scenario();
     assert_eq!(nblocks(&src), 4);
-    assert_eq!(nblocks(&out), 27, "the uncompacted export");
+    assert_eq!(
+        nblocks(&out),
+        30,
+        "the uncompacted export (C-P36: the emptied manager, MTTC and palette stay until cleanup)"
+    );
     let c = compact(&out, 4).unwrap();
-    // source 4 + BSXFlags, manager, MTTC, palette, controller, data, keyed interp, blend, text keys, sequence
+    // source 4 + BSXFlags, controller, manager, MTTC, palette (C-P36: the second add made them anew), data, keyed interp, blend, text keys, sequence
     assert_eq!(nblocks(&c), 14);
     let h = Header::parse(&c).unwrap();
     let kinds: Vec<String> = (4..14)
@@ -207,10 +211,10 @@ fn owner_scenario_keeps_only_live_appended_blocks() {
         kinds,
         [
             "BSXFlags",
+            LSCF,
             "NiControllerManager",
             "NiMultiTargetTransformController",
             "NiDefaultAVObjectPalette",
-            LSCF,
             "NiFloatData",
             "NiFloatInterpolator",
             "NiBlendFloatInterpolator",
@@ -286,7 +290,8 @@ fn hostile_input_never_panics_and_refuses() {
         assert!(compact(&out[..n], 4).is_err(), "truncated at {n}");
     }
     // a garbled controlled-block count in the live sequence
-    let seq = h.offsets[26];
+    assert_eq!(h.kind(29), b"NiControllerSequence");
+    let seq = h.offsets[29];
     let mut g = out.clone();
     g[seq + 4..seq + 8].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(compact(&g, 4).is_err());
@@ -294,16 +299,16 @@ fn hostile_input_never_panics_and_refuses() {
     let mut g = out.clone();
     g[seq + 12..seq + 16].copy_from_slice(&1000i32.to_le_bytes());
     assert!(compact(&g, 4).is_err());
-    // a live ref-free block that does not read: the live clip's NiFloatData (22) and NiTextKeyExtraData (25)
-    for (block, kind) in [(22, &b"NiFloatData"[..]), (25, b"NiTextKeyExtraData")] {
+    // a live ref-free block that does not read: the live clip's NiFloatData (25) and NiTextKeyExtraData (28)
+    for (block, kind) in [(25, &b"NiFloatData"[..]), (28, b"NiTextKeyExtraData")] {
         assert_eq!(h.kind(block), kind);
-        let at = h.offsets[block] + if block == 25 { 4 } else { 0 };
+        let at = h.offsets[block] + if block == 28 { 4 } else { 0 };
         let mut g = out.clone();
         g[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(compact(&g, 4).is_err(), "garbled block {block}");
     }
     // a source count past the file
-    assert!(compact(&out, 28).is_err());
+    assert!(compact(&out, 31).is_err());
     // a footer root is a ref: an appended block it names stays, renumbered
     let mut g = out.clone();
     let at = h.footer_at + 4;
