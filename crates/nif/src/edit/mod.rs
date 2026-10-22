@@ -234,20 +234,8 @@ fn role_cands(m: &NifModel, sel: &[&ShapeModel], role: &Role) -> Vec<Cand> {
             nth,
         } => {
             for s in sel {
-                let chain = match owner {
-                    Owner::Shader => shader_block(s).map(|b| &m.lighting[&b].prop.ctrls),
-                    Owner::Alpha => s
-                        .alpha
-                        .and_then(|b| m.alphas.get(&b))
-                        .map(|a| &a.prop.ctrls),
-                };
-                let hit = chain
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|c| m.ctrls.get(c))
-                    .filter(|c| c.class == *class && c.var == *var)
-                    .nth(*nth as usize);
-                v.extend(hit.map(|c| (c.block, c.class.clone())));
+                let hit = twins(m, s, owner, class, *var).nth(*nth as usize);
+                v.extend(hit.map(|c| (c, class.clone())));
             }
         }
         Role::Extra {
@@ -279,6 +267,32 @@ fn role_cands(m: &NifModel, sel: &[&ShapeModel], role: &Role) -> Vec<Cand> {
     v
 }
 
+/// The controllers of `class` and `var` on `s`'s `owner` chain, in chain order.
+fn twins<'a>(
+    m: &'a NifModel,
+    s: &ShapeModel,
+    owner: &Owner,
+    class: &'a str,
+    var: Option<u32>,
+) -> impl Iterator<Item = u32> + 'a {
+    let chain = match owner {
+        Owner::Shader => s
+            .shader
+            .and_then(|b| m.lighting.get(&b))
+            .map(|l| &l.prop.ctrls),
+        Owner::Alpha => s
+            .alpha
+            .and_then(|b| m.alphas.get(&b))
+            .map(|a| &a.prop.ctrls),
+    };
+    chain
+        .into_iter()
+        .flatten()
+        .filter_map(|c| m.ctrls.get(c))
+        .filter(move |c| c.class == class && c.var == var)
+        .map(|c| c.block)
+}
+
 /// Finds the block an anchor means in `m`: the recorded index if it still satisfies the role, else the single
 /// block that does. Returns `(block, re-anchored)`.
 pub fn resolve(m: &NifModel, a: &Anchor) -> Result<(u32, bool), String> {
@@ -297,6 +311,22 @@ pub fn resolve(m: &NifModel, a: &Anchor) -> Result<(u32, bool), String> {
     }
     if own && a.shape.is_none() {
         return Err("missing".into()); // unnamed shape: the index is all there is
+    }
+    // Note CY1 (CR15 I1 for controllers): the recorded block is still a same-class twin on the chain, just not the
+    // nth one any more, so taking the nth would edit the twin the user did not touch.
+    if let Role::Ctrl {
+        owner, class, var, ..
+    } = &a.role
+    {
+        if a.kind == *class
+            && sel
+                .iter()
+                .any(|s| twins(m, s, owner, class, *var).any(|c| c == a.block))
+        {
+            return Err(
+                "ambiguous: this controller is no longer at its place on the chain.".into(),
+            );
+        }
     }
     match c.as_slice() {
         [] => Err("missing".into()),

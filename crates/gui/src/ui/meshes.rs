@@ -15,14 +15,22 @@ use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use eframe::egui;
 use modscan::plugin_store::{record_label, MeshUse};
 use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA};
+use std::collections::HashMap;
 
-const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
-const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
-const GREEN: egui::Color32 = egui::Color32::from_rgb(90, 170, 90);
+// Meshes UI T7: status colours come from `ui::status` (rule 4.1); blue is the "derived" chip, not a status.
+use super::status::{AMBER, GREEN, RED};
 const BLUE: egui::Color32 = egui::Color32::from_rgb(90, 140, 220);
+/// The left column's narrowest width.
+const TREE_MIN: f32 = 200.0;
 /// The NIF edit panel's narrowest width, and the 3D view's narrowest beside it.
 const EDIT_MIN: f32 = 300.0;
 const EDIT_CENTRE_MIN: f32 = 240.0;
+/// A side panel's frame adds its inner margin (`Frame::side_top_panel`, 8 + 8) to the width its range sets.
+const PANEL_MARGIN_X: f32 = 16.0;
+/// The edit panel's starting width.
+const EDIT_DEFAULT: f32 = 380.0;
+/// The left column's widest share of the window (T7 review Minor 1).
+const TREE_MAX_SHARE: f32 = 0.4;
 
 mod curve;
 mod edit_ctrl;
@@ -84,14 +92,31 @@ fn draw(ui: &mut egui::Ui, m: &mut MeshesModel) {
     if bar_has_content(m) {
         egui::Panel::top("meshes-bar").show(ui, |ui| bar(ui, m));
     }
+    // Meshes UI T7 (rule 2.3): the column leaves the 3D view its minimum, and the edit panel its own while editing;
+    // on a window too small for all three the minimum wins.
+    // The edit panel's width as drawn last frame (its frame margins included), else its default (T7 review Minor 2:
+    // the frame an edit opens has no width yet).
+    // shortcut: after the user drags the edit panel wider, this cap is one frame stale; use the panel's response if
+    // the 3D view's dip below its minimum for that frame shows.
+    let edit_w = egui::containers::panel::PanelState::load(ui.ctx(), egui::Id::new("meshes-edit"))
+        .map_or(EDIT_DEFAULT + PANEL_MARGIN_X, |p| {
+            p.outer_rect.width().max(EDIT_MIN)
+        });
+    let others = EDIT_CENTRE_MIN + if m.edit.is_some() { edit_w } else { 0.0 };
+    // T7 review Minor 1 (controller ruling): also at most ~40% of the width, so the 3D view gets the slack.
+    let avail = ui.available_width();
+    let max = (avail - others - PANEL_MARGIN_X)
+        .min(TREE_MAX_SHARE * avail)
+        .max(TREE_MIN);
     egui::Panel::left("meshes-tree")
-        .default_size(620.0)
+        .default_size(420.0)
+        .size_range(TREE_MIN..=max)
         .show(ui, |ui| tree(ui, m));
     if m.edit.is_some() {
         // The 3D view keeps at least EDIT_CENTRE_MIN; when the window is too small the panel's minimum wins.
-        let max = (ui.available_width() - EDIT_CENTRE_MIN).max(EDIT_MIN);
+        let max = (ui.available_width() - EDIT_CENTRE_MIN - PANEL_MARGIN_X).max(EDIT_MIN);
         egui::Panel::right("meshes-edit")
-            .default_size(380.0)
+            .default_size(EDIT_DEFAULT)
             .size_range(EDIT_MIN..=max)
             .show(ui, |ui| edit_panel::panel(ui, m));
     } else {
@@ -349,19 +374,26 @@ enum TreeRow {
 /// GUI tweaks G9: mods and their meshes in one column. A mod opens (its arrow, or a click on its name) to list its
 /// NIFs under it; the chips and the path filter narrow those. With All meshes the column lists the search instead.
 fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    let can = m.selected_row().is_some();
-    if !can {
+    // Meshes UI T7 (rule 3.2): thin bars that stay visible without hover, for every list in this column.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+    // Meshes UI T2 (owner decision 2): while Edit is open the column stays on the shapes, the only way to pick one.
+    let locked = m.edit.is_some();
+    let can = m.selected_row().is_some() && !locked;
+    if locked {
+        m.shapes_col = true;
+    } else if !can {
         m.shapes_col = false;
     }
     ui.horizontal(|ui| {
         ui.heading("Mods and meshes");
         let on = m.shapes_col;
         let r = ui.add_enabled(can, egui::Button::selectable(on, "Shapes"));
-        let r = r.on_hover_text(if can {
-            "Show the shape list instead of the mods and meshes"
+        let r = r.on_disabled_hover_text(if locked {
+            "Close Edit to see the mods and meshes"
         } else {
             "Select a mesh first"
         });
+        let r = r.on_hover_text("Show the shape list instead of the mods and meshes");
         if r.clicked() {
             m.shapes_col = !on;
         }
@@ -566,10 +598,15 @@ fn badges(ui: &mut egui::Ui, n: &NifRow, edit: Option<DocBadge>) {
         egui::Color32::GRAY
     };
     let r = chip(ui, color, n.status_label());
+    // Built only while hovered (rule 9.3).
     if let Some(by) = &n.overridden_by {
-        r.on_hover_text(format!("Overridden by {by} · {} copies", n.n_copies));
+        r.on_hover_ui(|ui| {
+            ui.label(format!("Overridden by {by} · {} copies", n.n_copies));
+        });
     } else if n.n_copies > 1 {
-        r.on_hover_text(format!("{} copies", n.n_copies));
+        r.on_hover_ui(|ui| {
+            ui.label(format!("{} copies", n.n_copies));
+        });
     }
     if n.derived {
         chip(ui, BLUE, "PGPatcher");
@@ -745,7 +782,13 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
 /// The shape cards of the selected NIF, in the left column (owner, 2026-10-14). A click on a texture asks who else
 /// uses it.
 fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    let (mut clicked, mut open, mut pick) = (None, None, None);
+    // Meshes UI T8: the Controllers lines outside Edit come from a worker; look for its answer while one runs.
+    if m.poll_card_ctrls() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    let scan_ctrls = m.shown_copy().and_then(|c| m.scan_ctrls.get(&c).cloned());
+    let (mut clicked, mut open, mut pick, mut pick_root) = (None, None, None, None);
     egui::ScrollArea::vertical()
         .id_salt("meshes-shapes-scroll")
         .auto_shrink([false, false])
@@ -775,7 +818,7 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
             let editing = m.edit.as_ref().map(|e| e.selection);
             if let Some(sel) = editing {
                 let on = sel == Selection::Root;
-                card(ui, Some(on), |ui| {
+                card(ui, on, |ui| {
                     let r = ui
                         .add(egui::Button::selectable(
                             on,
@@ -783,92 +826,145 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                         ))
                         .on_hover_text("The root node: its extra data");
                     if r.clicked() {
-                        pick = Some(Selection::Root);
+                        pick_root = Some(Selection::Root);
                     }
                 });
-                ui.separator();
+                ui.add_space(CARD_GAP);
             }
             // While editing, the edited copy's shapes (the shown copy may be PGPatcher's, numbered differently); each
-            // with its scanned card when the scan of that copy agrees on block and name, else a title only.
-            let cards: Vec<(u32, Option<&ShapeView>, String)> = match &m.edit {
-                Some(e) => e
-                    .model
-                    .shapes
-                    .iter()
-                    .map(|s| {
-                        let scanned = e
-                            .cards
-                            .iter()
-                            .find(|c| c.block == s.block && c.name == s.name);
-                        let name = s.name.as_deref().unwrap_or("(unnamed)");
-                        (s.block, scanned, format!("{name} — {:?}", s.kind))
-                    })
-                    .collect(),
+            // with its card from the edited bytes (Note CZ1), else a title only. The lookup is built once a frame.
+            let cards: Vec<(u32, Option<&ShapeView>, Option<&str>, String)> = match &m.edit {
+                Some(e) => {
+                    let by: HashMap<(u32, Option<&str>), &ShapeView> = e
+                        .cards
+                        .iter()
+                        .map(|c| ((c.block, c.name.as_deref()), c))
+                        .collect();
+                    e.model
+                        .shapes
+                        .iter()
+                        .map(|s| {
+                            let card = by.get(&(s.block, s.name.as_deref())).copied();
+                            (s.block, card, s.name.as_deref(), format!("{:?}", s.kind))
+                        })
+                        .collect()
+                }
                 None => m
                     .shapes
                     .iter()
-                    .map(|s| (s.block, Some(s), String::new()))
+                    .map(|s| (s.block, Some(s), s.name.as_deref(), String::new()))
                     .collect(),
             };
             if cards.is_empty() {
                 ui.label("No shapes.");
             }
-            for (block, view, fallback) in cards {
-                let on = editing.map(|sel| sel == Selection::Shape(block));
+            for (block, view, name, fallback) in cards {
+                let on = match (editing, &m.card_sel) {
+                    (Some(sel), _) => sel == Selection::Shape(block),
+                    (None, Some((b, n))) => *b == block && n.as_deref() == name,
+                    (None, None) => false,
+                };
+                // Inside Edit the edited model's lines (unsaved edits included); outside, the file's (T8).
+                let ctrls = match &m.edit {
+                    Some(e) => e.card_ctrls.get(&block),
+                    None => scan_ctrls.as_ref().and_then(|c| c.get(&block)),
+                }
+                .map(String::as_str);
                 card(ui, on, |ui| {
                     let title = match view {
                         Some(s) => {
-                            let (p, title) = shape(ui, m, s, &mut open, on);
+                            let (p, title) = shape(ui, m, s, &mut open, on, ctrls);
                             if p.is_some() {
                                 clicked = p;
                             }
                             title
                         }
-                        None => ui
-                            .add(egui::Button::selectable(
-                                on == Some(true),
-                                egui::RichText::new(fallback).strong(),
-                            ))
-                            .on_hover_text(format!("NIF block {block}"))
-                            .clicked(),
+                        None => {
+                            // No scanned card, so no 3D index: "#–" gives every header the same form (T2 review
+                            // Minor 5).
+                            let title = format!("#– {}", name.unwrap_or("(unnamed)"));
+                            let label = format!("Select shape {title}");
+                            header(ui, on, &title, &fallback, &label, block)
+                        }
                     };
                     if title {
-                        pick = Some(Selection::Shape(block));
+                        pick = Some((block, name.map(String::from)));
                     }
                 });
-                ui.separator();
+                ui.add_space(CARD_GAP);
             }
         });
     if let Some(p) = clicked {
         m.show_users(&p);
     }
-    if let Some(s) = pick {
+    match (pick, m.edit.is_some()) {
+        (Some((block, name)), true) => {
+            m.select_edit(Selection::Shape(block));
+            // T2 review Minor 2: the outline and the next Edit follow this pick. T4 review Minor 5: kept in the shown
+            // copy's numbering (it may be PGPatcher's): the same block and name, else the only card with that name.
+            let same = m.shapes.iter().any(|s| s.block == block && s.name == name);
+            let mut named = m.shapes.iter().filter(|s| name.is_some() && s.name == name);
+            let shown = match (same, named.next(), named.next()) {
+                (false, Some(s), None) => s.block,
+                _ => block,
+            };
+            m.card_sel = Some((shown, name));
+        }
+        (Some(p), false) => m.card_sel = Some(p),
+        (None, _) => {}
+    }
+    if let Some(s) = pick_root {
         m.select_edit(s);
+        // Final review Minor 2: the next Edit opens on Root too (no card picked).
+        m.card_sel = None;
     }
     if open.is_some() {
         m.open_in_textures = open;
     }
 }
 
-/// A shape card's frame in edit mode (`selected` Some): the selected card is outlined and tinted with the selection
-/// colour. Outside edit mode the card is drawn as before, without a frame.
-fn card(ui: &mut egui::Ui, selected: Option<bool>, add: impl FnOnce(&mut egui::Ui)) {
+/// The gap between two shape cards.
+const CARD_GAP: f32 = 8.0;
+
+/// A shape card's frame (Meshes UI T2: every card, in both modes): the selected card is outlined and tinted with the
+/// selection colour, the others get the plain group stroke.
+fn card(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut egui::Ui)) {
+    let frame = egui::Frame::new().inner_margin(6.0).corner_radius(4.0);
     let frame = match selected {
-        None => return add(ui),
-        Some(true) => {
+        true => {
             let s = ui.visuals().selection;
-            egui::Frame::new()
-                .stroke(s.stroke)
-                .fill(s.bg_fill.gamma_multiply(0.15))
-                .inner_margin(4.0)
-                .corner_radius(4.0)
+            frame.stroke(s.stroke).fill(s.bg_fill.gamma_multiply(0.15))
         }
-        Some(false) => egui::Frame::new().inner_margin(4.0),
+        false => frame.stroke(ui.visuals().widgets.noninteractive.bg_stroke),
     };
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         add(ui)
     });
+}
+
+/// A card's full-width header button: `title` and `kind` shown, `name` for AccessKit ("Select shape #3 Body"), the NIF block on
+/// hover (built only while hovered). True when clicked.
+fn header(ui: &mut egui::Ui, on: bool, title: &str, kind: &str, name: &str, block: u32) -> bool {
+    // The title on the left, the block type on the right (a grow atom between them): weak on an unselected card,
+    // plain on the selection fill, where weak grey is hard to read (final review Minor 4).
+    let kind = match on {
+        true => egui::RichText::new(kind),
+        false => egui::RichText::new(kind).weak(),
+    };
+    let b = egui::Button::selectable(on, egui::RichText::new(title).strong())
+        .right_text(kind)
+        .truncate()
+        .min_size(egui::vec2(ui.available_width(), 0.0));
+    let r = ui.add(b);
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name));
+    let clicked = r.clicked();
+    r.on_hover_ui(|ui| {
+        ui.label(format!(
+            "NIF block {block}\nPGPatcher 3D index: the number plugins use for this shape's alternate textures"
+        ));
+    });
+    clicked
 }
 
 /// Item 9: "Open in Textures" after a texture path that is an item of the open folder.
@@ -1050,34 +1146,30 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         });
 }
 
-/// One shape card, numbered by PGPatcher's 3D index. Returns the texture path that was clicked, and whether the
-/// title was clicked. `edit`: in edit mode, whether this card is selected (its title is then a selectable button).
+/// One shape card, numbered by PGPatcher's 3D index (Meshes UI T2): the header button, then Shader, Textures, Alpha
+/// and (in edit mode, `ctrls`) Controllers; the rest in a closed Details section. Returns the texture path that was
+/// clicked, and whether the header was clicked.
 fn shape(
     ui: &mut egui::Ui,
     m: &MeshesModel,
     s: &ShapeView,
     open: &mut Option<String>,
-    edit: Option<bool>,
+    on: bool,
+    ctrls: Option<&str>,
 ) -> (Option<String>, bool) {
     let mut clicked = None;
     let number = s
         .index3d
         .map_or_else(|| "#– (not in scene tree)".to_string(), |i| format!("#{i}"));
-    let title = egui::RichText::new(format!(
-        "{number} {} — {}",
-        s.name.as_deref().unwrap_or("(unnamed)"),
-        s.kind
-    ))
-    .strong();
-    let title = match edit {
-        Some(on) => ui.add(egui::Button::selectable(on, title)),
-        None => ui.label(title),
-    };
-    let picked = edit.is_some() && title.clicked();
-    title.on_hover_text(format!(
-        "NIF block {}\nPGPatcher 3D index: the number plugins use for this shape's alternate textures",
-        s.block
-    ));
+    let name = s.name.as_deref().unwrap_or("(unnamed)");
+    let picked = header(
+        ui,
+        on,
+        &format!("{number} {name}"),
+        &s.kind,
+        &format!("Select shape {number} {name}"),
+        s.block,
+    );
     let bold = |t: String| egui::RichText::new(t).strong();
     ui.label(match s.shader_kind {
         1 => bold(
@@ -1091,6 +1183,80 @@ fn shape(
         )),
         _ => egui::RichText::new("No shader"),
     });
+    let empty = s.textures.iter().filter(|t| t.is_none()).count();
+    ui.indent(("slots", s.block), |ui| {
+        for (i, t) in s.textures.iter().enumerate() {
+            let Some(p) = t else { continue };
+            ui.horizontal_wrapped(|ui| {
+                let name = slot_name(s.shader_kind, i);
+                ui.label(if name.is_empty() {
+                    format!("slot {i}:")
+                } else {
+                    format!("slot {i} ({name}):")
+                });
+                if ui.link(p).clicked() {
+                    clicked = Some(p.clone());
+                }
+                open_button(ui, m, p, open);
+                // A missing texture stays in sight; which mod wins is a detail.
+                if let Some(TexResolution::Missing) = m.resolved.get(p) {
+                    ui.colored_label(RED, "→ missing");
+                }
+            });
+        }
+        match empty {
+            0 => {}
+            1 => {
+                ui.weak("(1 empty slot)");
+            }
+            n => {
+                ui.weak(format!("({n} empty slots)"));
+            }
+        }
+    });
+    match s.alpha_flags {
+        Some(a) => {
+            ui.label(alpha_line(a, s.alpha_threshold.unwrap_or(0)))
+                .on_hover_ui(|ui| {
+                    ui.label(format!("flags 0x{a:04X} ({a})"));
+                });
+        }
+        None => {
+            ui.label("No NiAlphaProperty");
+        }
+    }
+    if let Some(c) = ctrls {
+        ui.horizontal(|ui| {
+            ui.label("Controllers:");
+            ui.label(c);
+        });
+    }
+    let details = egui::CollapsingHeader::new("Details")
+        // Final review Minor 1: per edit session (0 outside Edit), so another NIF's card never inherits it.
+        .id_salt((
+            "shape-details",
+            m.edit.as_ref().map_or(0, |e| e.session),
+            s.block,
+        ))
+        .show(ui, |ui| shape_details(ui, m, s));
+    // One "Details" per card: each is named after its shape (rule 8.4).
+    let label = format!("Details of NIF block {}", s.block);
+    details.header_response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &label)
+    });
+    (clicked, picked)
+}
+
+/// The closed part of a shape card: block and 3D index, SLSF1/SLSF2, geometry, which mod wins each texture, raw slot
+/// strings.
+fn shape_details(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView) {
+    let index = s
+        .index3d
+        .map_or_else(|| "not in the scene tree".to_string(), |i| i.to_string());
+    ui.label(format!(
+        "NIF block {} · PGPatcher 3D index {index}",
+        s.block
+    ));
     for (label, v, names) in [
         ("SLSF1", s.slsf1, &SLSF1_NAMES),
         ("SLSF2", s.slsf2, &SLSF2_NAMES),
@@ -1118,64 +1284,43 @@ fn shape(
     if !geo.is_empty() {
         ui.label(geo.join(" · "));
     }
-    if let Some(a) = s.alpha_flags {
-        ui.label(alpha_line(a, s.alpha_threshold.unwrap_or(0)))
-            .on_hover_text(format!("flags 0x{a:04X} ({a})"));
-    }
-    ui.indent(("slots", s.block), |ui| {
-        for (i, t) in s.textures.iter().enumerate() {
-            ui.horizontal_wrapped(|ui| {
-                let name = slot_name(s.shader_kind, i);
-                ui.label(if name.is_empty() {
-                    format!("slot {i}:")
-                } else {
-                    format!("slot {i} ({name}):")
-                });
-                match t {
-                    None => {
-                        ui.weak("(empty)");
-                    }
-                    Some(p) => {
-                        if ui.link(p).clicked() {
-                            clicked = Some(p.clone());
-                        }
-                        open_button(ui, m, p, open);
-                        match m.resolved.get(p) {
-                            Some(TexResolution::Found { origin, n_copies }) if *n_copies > 1 => {
-                                ui.label(format!("→ {origin} ({n_copies} copies)"));
-                            }
-                            Some(TexResolution::Found { origin, .. }) => {
-                                ui.label(format!("→ {origin}"));
-                            }
-                            Some(TexResolution::Missing) => {
-                                ui.colored_label(RED, "→ missing");
-                            }
-                            None => {}
-                        }
-                    }
-                }
-                if let Some(Some(raw)) = s.raw.get(i) {
-                    let f = &raw.flags;
-                    let names: Vec<&str> = [
-                        (f.empty, "empty"),
-                        (f.rebased, "rebased"),
-                        (f.prefixed, "prefixed"),
-                        (f.non_dds, "not .dds"),
-                    ]
-                    .into_iter()
-                    .filter_map(|(on, n)| on.then_some(n))
-                    .collect();
-                    let tail = if names.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" [{}]", names.join(", "))
-                    };
-                    ui.weak(format!("raw: {}{tail}", raw.raw));
-                }
-            });
+    for (i, t) in s.textures.iter().enumerate() {
+        let origin = match t.as_ref().and_then(|p| m.resolved.get(p)) {
+            Some(TexResolution::Found { origin, n_copies }) if *n_copies > 1 => {
+                Some(format!("→ {origin} ({n_copies} copies)"))
+            }
+            Some(TexResolution::Found { origin, .. }) => Some(format!("→ {origin}")),
+            _ => None,
+        };
+        let raw = s.raw.get(i).and_then(|r| r.as_ref()).map(|raw| {
+            let f = &raw.flags;
+            let names: Vec<&str> = [
+                (f.empty, "empty"),
+                (f.rebased, "rebased"),
+                (f.prefixed, "prefixed"),
+                (f.non_dds, "not .dds"),
+            ]
+            .into_iter()
+            .filter_map(|(on, n)| on.then_some(n))
+            .collect();
+            match names.is_empty() {
+                true => format!("raw: {}", raw.raw),
+                false => format!("raw: {} [{}]", raw.raw, names.join(", ")),
+            }
+        });
+        if origin.is_none() && raw.is_none() {
+            continue;
         }
-    });
-    (clicked, picked)
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("slot {i}"));
+            if let Some(o) = origin {
+                ui.label(o);
+            }
+            if let Some(r) = raw {
+                ui.weak(r);
+            }
+        });
+    }
 }
 
 fn dialogs(ctx: &egui::Context, m: &mut MeshesModel) {

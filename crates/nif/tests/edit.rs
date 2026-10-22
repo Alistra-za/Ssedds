@@ -2153,6 +2153,67 @@ fn remove_refuses_a_controller_on_two_properties() {
     }
 }
 
+/// Note CY4: S's chain ends in a controller T's chain also lists, so a link after it would join T's chain too.
+#[test]
+fn add_refuses_a_chain_shared_by_two_properties() {
+    let b = scenes::two_animated();
+    let at = Header::parse(&b).unwrap().offsets()[5] + LSP_CTRL_AT;
+    let b = with_i32(b, at, 6); // T's shader (5) now lists S's controller 6
+    let m = read_model(&b).unwrap();
+    assert_eq!(m.lighting[&4].prop.ctrls, vec![6]);
+    assert_eq!(m.lighting[&5].prop.ctrls, vec![6]);
+    let at = anchor_role(&m, Some(shape_named(&m, "S")), Role::Shader).unwrap();
+    refused_unchanged(
+        &b,
+        add(at, LSCF, Some(20), lin(&[(0.0, 1.0)]), 1.0),
+        "This controller chain is shared by several properties: a controller cannot be added.",
+    );
+}
+
+/// Note CY1: an edit recorded on twin s1 (nth 0 after s0's removal) never lands on s0 once that removal is reverted.
+#[test]
+fn a_ctrl_edit_never_lands_on_its_twin_after_a_revert() {
+    let b0 = scenes::animated(Some(1), 0);
+    let k = lin(&[(0.0, 1.0)]);
+    let at_s = prop_anchor(&b0, Role::Shader);
+    let twins = [
+        add(at_s.clone(), LSCF, Some(20), k.clone(), 1.0),
+        add(at_s, LSCF, Some(20), k, 1.0),
+    ];
+    let b = apply(&b0, &twins).unwrap().bytes;
+    let chain = read_model(&b).unwrap().lighting[&3].prop.ctrls.clone();
+    let [s0, s1] = chain[..] else {
+        panic!("{chain:?}")
+    };
+    let anchor = |block| Anchor {
+        block,
+        kind: LSCF.into(),
+        shape: Some("S".into()),
+        role: lscf_role(20),
+    };
+    let freq = |b: &[u8], k| current(b, k, Field::Frequency);
+    let one = Value::F32(1.0f32.to_bits());
+    let set = Op::SetField {
+        at: anchor(s1),
+        field: Field::Frequency,
+        value: Value::F32(2.0f32.to_bits()),
+        base: one,
+    };
+    let rm = Op::RemoveController { at: anchor(s0) };
+    let r = apply(&b, &[rm, set.clone()]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(freq(&r.bytes, s1), Value::F32(2.0f32.to_bits()));
+    // the revert of op 1
+    let r = apply(&b, &[set]).unwrap();
+    assert!(
+        matches!(&r.outcomes[0], Outcome::Conflict(s) if s.starts_with("ambiguous")),
+        "{:?}",
+        r.outcomes
+    );
+    assert_eq!(freq(&r.bytes, s0), one);
+    assert_eq!(r.bytes, b);
+}
+
 #[test]
 fn broken_chains_refuse_remove_and_add() {
     let one = lin(&[(0.0, 1.0)]);
@@ -2757,6 +2818,35 @@ fn remove_sequence_keeps_shared_blocks_of_other_clips() {
     assert_eq!(t[0].keys, Some(close_keys));
 }
 
+/// Note CY5 pin: `release` frees only the controllers no other listed clip drives, with the removed clip's timing.
+#[test]
+fn remove_releases_only_controllers_no_other_clip_drives() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let adds = [
+        add_seq(
+            root.clone(),
+            "Open",
+            vec![track(&b, 11, open_keys()), track(&b, 20, open_keys())],
+        ),
+        add_seq(root.clone(), "Close", vec![track(&b, 11, open_keys())]),
+    ];
+    let two = apply(&b, &adds).unwrap().bytes;
+    let m2 = read_model(&two).unwrap();
+    assert_eq!((m2.ctrls[&4].flags, m2.ctrls[&5].flags), (0x68, 0x68));
+    let r = apply(&two, &[remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&4], m2.ctrls[&4], "Close still drives 4");
+    assert_eq!(m.ctrls[&5].flags, 0x48 | 0x04, "5 is free, clamp cycle");
+    assert_eq!(
+        (m.ctrls[&5].frequency, m.ctrls[&5].start, m.ctrls[&5].stop),
+        (1.0, 0.0, 1.0)
+    );
+    let open = &m2.sequences[0];
+    assert_eq!(m.ctrls[&5].interp, Some(open.blocks[1].interp));
+}
+
 #[test]
 fn remove_last_clip_clears_0x20() {
     let b = scenes::animated(Some(1), 2);
@@ -2976,7 +3066,8 @@ fn another_manager_keeps_the_clip_live() {
     doc.append(
         b"NiControllerManager",
         nif::clips::encode_manager(&second).unwrap(),
-    );
+    )
+    .unwrap();
     let two = doc.bytes();
     let before = read_model(&two).unwrap().ctrls[&4].clone();
     let r = apply(&two, &[remove_seq(root, "Open", 0)]).unwrap();
@@ -3767,7 +3858,7 @@ fn add_sequence_refuses_an_unreadable_root_manager() {
     let root = m.root.unwrap();
     let mut doc = nif::write::NifDoc::open(&b).unwrap();
     let at = m.root_net.as_ref().unwrap().controller_at() - doc.header().offsets()[root as usize];
-    let n = doc.append(b"NiControllerManager", vec![0; 8]); // shorter than NiTimeController
+    let n = doc.append(b"NiControllerManager", vec![0; 8]).unwrap(); // shorter than NiTimeController
     doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
     let x = doc.bytes();
     let add = add_seq(root_anchor(&x), "Open", vec![track(&x, 11, open_keys())]);
@@ -3807,7 +3898,7 @@ fn add_sequence_refuses_an_unreadable_controller_in_front_of_the_manager() {
     // next -> the manager, then too short for NiTimeController
     let mut body = mgr.to_le_bytes().to_vec();
     body.extend([0; 4]);
-    let n = doc.append(b"NiTransformController", body);
+    let n = doc.append(b"NiTransformController", body).unwrap();
     doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
     let x = doc.bytes();
     let add = add_seq(root_anchor(&x), "Close", vec![track(&x, 20, open_keys())]);
@@ -3839,7 +3930,7 @@ fn clip_ops_refuse_a_broken_root_chain_after_the_manager() {
     // the MTTC's next -> `kind` with `body`
     let after = |kind: &[u8], body: Vec<u8>| {
         let mut doc = nif::write::NifDoc::open(&o).unwrap();
-        let n = doc.append(kind, body);
+        let n = doc.append(kind, body).unwrap();
         doc.patch(mttc, 0, &(n as i32).to_le_bytes()).unwrap();
         doc.bytes()
     };
@@ -3921,7 +4012,8 @@ fn split_grows_a_shared_palette_and_mttc_once_for_both_managers() {
         sequences: vec![close as i32],
         ..man.clone()
     };
-    doc.append(b"NiControllerManager", encode_manager(&second).unwrap());
+    doc.append(b"NiControllerManager", encode_manager(&second).unwrap())
+        .unwrap();
     let y = doc.bytes();
     let my = read_model(&y).unwrap();
     let (a, bb) = (shape_named(&my, "A") as i32, shape_named(&my, "B") as i32);
@@ -4039,4 +4131,38 @@ fn an_empty_manager_on_the_root_chain_is_an_error_unless_the_source_has_it() {
     assert!(fresh
         .iter()
         .any(|e| e.text == EMPTY_MANAGER && e.level == Level::Error));
+}
+
+/// Note CY3: root -> X -> manager, while the shader's last controller (5, a lower block than X) also links to the
+/// manager. Removing the only clip unlinks the manager from X, the root chain's own link, and leaves 5 alone.
+#[test]
+fn removing_the_last_clip_unlinks_the_manager_from_the_root_chain() {
+    use nif::edit::validate::{validate, EMPTY_MANAGER};
+    let b = scenes::animated(Some(1), 2);
+    let o = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let mgr = root_ctrl(&o) as i32;
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    let x_body = with_i32(block_bytes_of(&o, 5), 0, mgr);
+    let x = doc.append(LSCF.as_bytes(), x_body).unwrap() as i32;
+    let o = doc.bytes();
+    let root_at = read_model(&o).unwrap().root_net.unwrap().controller_at();
+    let o = with_next(&with_i32(o, root_at, x), 5, mgr);
+    let m = read_model(&o).unwrap();
+    assert_eq!(m.ctrls[&(x as u32)].next, mgr);
+    assert_eq!(m.ctrls[&5].next, mgr);
+    let r = apply(&o, &[remove_seq(root_anchor(&o), "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_ne!(m.ctrls[&(x as u32)].next, mgr);
+    assert_eq!(m.ctrls[&5].next, mgr);
+    assert!(validate(&m, None).iter().all(|w| w.text != EMPTY_MANAGER));
 }

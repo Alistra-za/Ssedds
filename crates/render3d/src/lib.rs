@@ -1024,7 +1024,9 @@ impl Renderer {
                     path.norm
                 )),
                 None => {
-                    if entry.is_some_and(|e| e.missing) {
+                    // Another shape's edit may have evicted the entry; `evicted_missing` keeps it (as in plain_srv).
+                    let gone = entry.is_none() && self.evicted_missing.contains(&path.norm);
+                    if gone || entry.is_some_and(|e| e.missing) {
                         missing.insert(reg);
                     }
                 }
@@ -1754,7 +1756,7 @@ impl Renderer {
         let fresh = if dds.is_empty() {
             None
         } else {
-            Some(textures::load_dds(&self.gpu, dds).map_err(|e| format!("{path}: {e}"))?)
+            Some(textures::load_dds(&self.gpu, dds).map_err(|e| with_context(path, e))?)
         };
         let mut entry = self
             .tex_cache
@@ -1808,7 +1810,7 @@ impl Renderer {
         match dds {
             Some(b) => {
                 let t = textures::load_dds(&self.gpu, b)
-                    .map_err(|e| format!("slot {slot} override: {e}"))?;
+                    .map_err(|e| with_context(&format!("slot {slot} override"), e))?;
                 self.overrides.insert(slot, (Arc::from(b), t));
             }
             None => {
@@ -2686,6 +2688,27 @@ fn blend_state<'a>(
         v.insert(b.ok_or("no blend state")?);
     }
     Ok(&cache[&pair])
+}
+
+/// `what: e` for an error a swap or override returns. An error from a lost device keeps [`device::DEVICE_REMOVED`]
+/// in front, since the GUI tests that prefix to replay the swap after the rebuild (Note BS1, trace 2026-10-22 #2).
+fn with_context(what: &str, e: String) -> String {
+    match e.strip_prefix(device::DEVICE_REMOVED) {
+        Some(rest) => format!("{}{rest} [{what}]", device::DEVICE_REMOVED),
+        None => format!("{what}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn a_device_removed_error_keeps_its_prefix() {
+        let lost = format!("{}: hung (CreateTexture2D: x)", device::DEVICE_REMOVED);
+        assert!(with_context("a.dds", lost).starts_with(device::DEVICE_REMOVED));
+        assert_eq!(with_context("a.dds", "bad dds".into()), "a.dds: bad dds");
+    }
 }
 
 #[cfg(test)]

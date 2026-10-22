@@ -543,7 +543,7 @@ fn the_later_special_idle_track_wins() {
     let mut body = both[s..s + n].to_vec();
     body[31..39].copy_from_slice(&[3i32.to_le_bytes(), 2i32.to_le_bytes()].concat());
     let mut d = NifDoc::open(&both).unwrap();
-    d.append(b"NiControllerManager", body);
+    d.append(b"NiControllerManager", body).unwrap();
     let two = d.bytes();
     assert!(
         tracks(&two) > tracks(&both),

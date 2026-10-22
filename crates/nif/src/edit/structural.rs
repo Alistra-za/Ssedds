@@ -95,7 +95,7 @@ pub(crate) fn alpha_op(
             let mut body = crate::net::encode_net(-1, &[], -1);
             body.extend(flags.to_le_bytes());
             body.push(*threshold);
-            let new = doc.append(b"NiAlphaProperty", body);
+            let new = enc(doc.append(b"NiAlphaProperty", body))?;
             patch(doc, shape.block, ref_at, new as i32)
         }
         Op::RemoveAlpha { .. } => {
@@ -115,9 +115,9 @@ pub(crate) fn alpha_op(
     }
 }
 
-fn copy(doc: &mut NifDoc, block: u32) -> u32 {
+fn copy(doc: &mut NifDoc, block: u32) -> Result<u32, String> {
     let (kind, body) = (doc.kind(block).to_vec(), doc.block(block).to_vec());
-    doc.append(&kind, body)
+    enc(doc.append(&kind, body))
 }
 
 /// Appends a private copy of the shape's alpha with deep copies of its controller chain, managed ones included;
@@ -141,18 +141,18 @@ fn split(
     // refs are bounded by the source, not the growing doc
     let source_blocks = doc.len();
     // C4-D6: the alpha copy stays the first appended block: the edit after a split anchors there (edit_fields.rs)
-    let new = copy(doc, a.prop.block);
+    let new = copy(doc, a.prop.block)?;
     // (controller copy, Some((interpolator copy, data copy, pose floats))) in chain order
     let mut copies = vec![];
     for c in &a.prop.ctrls {
-        let nc = copy(doc, *c);
+        let nc = copy(doc, *c)?;
         let mut ni = None;
         if let Some(i) = m.ctrls[c].interp.and_then(|i| m.interps.get(&(i as u32))) {
-            let n = copy(doc, i.block);
+            let n = copy(doc, i.block)?;
             let data = u32::try_from(i.data)
                 .ok()
                 .filter(|&d| i.known && d < source_blocks);
-            ni = Some((n, data.map(|d| copy(doc, d)), i.value.len()));
+            ni = Some((n, data.map(|d| copy(doc, d)).transpose()?, i.value.len()));
         }
         copies.push((nc, ni));
     }
@@ -371,7 +371,7 @@ fn ensure_palette(
     }
     let body = enc(encode_palette(scene, &objs))?;
     if pal < 0 {
-        return Ok(doc.append(b"NiDefaultAVObjectPalette", body) as i32);
+        return Ok(enc(doc.append(b"NiDefaultAVObjectPalette", body))? as i32);
     }
     if objs.len() > before {
         doc.set_block(pal as u32, body);
@@ -528,7 +528,7 @@ pub(crate) fn rewrite_cb_ids(
     if targets.is_empty() {
         return Ok(()); // 0x20 with no clip, or only null/empty IDs: nothing names the variable
     }
-    let idx = doc.string(new.to_string().as_bytes());
+    let idx = enc(doc.string(new.to_string().as_bytes()))?;
     for (seq, at) in targets {
         patch(doc, seq, at, idx)?;
     }
@@ -592,16 +592,16 @@ pub(crate) fn set_keys(
     });
     // E5: copy when something other than the refs this op re-points also names the interpolator.
     if interp_users > t.refs.len() {
-        let ni = copy(doc, i);
+        let ni = copy(doc, i)?;
         for &(blk, at) in &t.refs {
             patch(doc, blk, at, ni as i32)?;
         }
-        let nd = doc.append(kind, encode_data(keys));
+        let nd = enc(doc.append(kind, encode_data(keys)))?;
         patch(doc, ni, 4 * floats, nd as i32)?;
     } else if let Some(d) = data.filter(|_| data_users <= 1) {
         doc.set_block(d, encode_data(keys));
     } else {
-        let nd = doc.append(kind, encode_data(keys));
+        let nd = enc(doc.append(kind, encode_data(keys)))?;
         patch(doc, i, 4 * floats, nd as i32)?;
     }
     Ok(Outcome::Applied)
@@ -624,6 +624,16 @@ fn whole_chain(m: &NifModel, p: &PropModel) -> Result<(), String> {
     } else {
         Err("This controller chain is broken: it cannot be edited.".into())
     }
+}
+
+/// The lighting and alpha properties whose chains list controller `block`.
+fn owners(m: &NifModel, block: u32) -> Vec<&PropModel> {
+    m.lighting
+        .values()
+        .map(|l| &l.prop)
+        .chain(m.alphas.values().map(|a| &a.prop))
+        .filter(|p| p.ctrls.contains(&block))
+        .collect()
 }
 
 /// AddController (anchored on a property) and RemoveController (anchored on a controller).
@@ -675,6 +685,10 @@ pub(crate) fn ctrl_op(
             .ok_or("not a readable property")?;
             whole_chain(m, prop)?;
             let last = prop.ctrls.last();
+            // chains that share a tail stay merged to the end, so the last link tells (Note CY4)
+            if last.is_some_and(|&l| owners(m, l).len() > 1) {
+                return Err("This controller chain is shared by several properties: a controller cannot be added.".into());
+            }
             if m.root_net.is_none() {
                 return Err("The root is not a node: the BSX Animated bit cannot be set.".into());
             }
@@ -687,7 +701,7 @@ pub(crate) fn ctrl_op(
             cb.extend((block as i32).to_le_bytes());
             cb.extend((i as i32).to_le_bytes());
             cb.extend(var.map(u32::to_le_bytes).into_iter().flatten());
-            let c = doc.append(class.as_bytes(), cb);
+            let c = enc(doc.append(class.as_bytes(), cb))?;
             match last {
                 None => patch(doc, block, ctrl_ref_at(doc, prop), c as i32)?,
                 Some(&l) => patch(doc, l, 0, c as i32)?,
@@ -698,15 +712,8 @@ pub(crate) fn ctrl_op(
             if m.managed(block) {
                 return Err("A manager-controlled controller cannot be removed.".into());
             }
-            let owners: Vec<&PropModel> = m
-                .lighting
-                .values()
-                .map(|l| &l.prop)
-                .chain(m.alphas.values().map(|a| &a.prop))
-                .filter(|p| p.ctrls.contains(&block))
-                .collect();
             let prop =
-                match owners.as_slice() {
+                match owners(m, block).as_slice() {
                     [] => return Err("No property lists this controller.".into()),
                     [p] => *p,
                     _ => return Err(
@@ -757,13 +764,13 @@ fn append_keyed(doc: &mut NifDoc, keys: &KeyData) -> Result<u32, String> {
         ),
         KeyData::Bool(_) => return Err("The keys do not match the controller's type.".into()),
     };
-    let d = doc.append(data_kind, encode_data(keys));
+    let d = enc(doc.append(data_kind, encode_data(keys)))?;
     let mut ib = first;
     ib.extend((d as i32).to_le_bytes());
-    Ok(doc.append(interp_kind, ib))
+    enc(doc.append(interp_kind, ib))
 }
 
-fn enc<T>(r: Result<T, crate::NifError>) -> Result<T, String> {
+fn enc<T, E: std::fmt::Display>(r: Result<T, E>) -> Result<T, String> {
     r.map_err(|e| e.to_string())
 }
 
@@ -1015,7 +1022,7 @@ pub(crate) fn clip_op(
                 return missing(name);
             };
             let b = clip_name_bytes(doc.header(), cur, Some(&man), new_name, Some(k))?;
-            let s = doc.string(&b);
+            let s = enc(doc.string(&b))?;
             patch(doc, man.sequences[k] as u32, 0, s)?;
         }
         _ => return Err("not a clip op".into()),
@@ -1047,13 +1054,19 @@ fn unlink_manager(
         let at = net.controller_at() - doc.header().offsets()[root as usize];
         return patch(doc, root, at, after);
     }
-    // root_manager walked this chain, so the manager is on it
-    let prev = m
-        .ctrls
-        .values()
-        .find(|c| c.next == mgr as i32)
-        .ok_or("The root's controller chain cannot be read.")?;
-    patch(doc, prev.block, 0, after)
+    // root_manager walked this chain (whole, no loop), so the manager is on it; another chain may also link to the
+    // manager, so the predecessor is found on the root's own chain (Note CY3)
+    let mut c = net.controller;
+    loop {
+        let t = u32::try_from(c)
+            .ok()
+            .and_then(|b| m.ctrls.get(&b))
+            .ok_or("The root's controller chain cannot be read.")?;
+        if t.next == mgr as i32 {
+            return patch(doc, t.block, 0, after);
+        }
+        c = t.next;
+    }
 }
 
 /// AddSequence's cycle and range refusals; `convert_check` predicts both with the same text (Note CU3).
@@ -1214,20 +1227,21 @@ fn release(
     let mut fix = vec![];
     {
         let h = doc.header();
-        for (&c, ctrl) in m.ctrls.iter().filter(|(_, c)| c.known) {
-            let Some(&k) = crate::anim::bound_cbs(m, h, rs, c).first() else {
+        // bindings once per sequence, not per controller x property (Note CY5)
+        let driven: std::collections::BTreeSet<u32> = m
+            .sequences
+            .iter()
+            .filter(|s| listed.contains(&(s.block as i32)))
+            .flat_map(|s| crate::anim::bound_map(m, h, s).into_keys())
+            .collect();
+        for (c, ks) in crate::anim::bound_map(m, h, rs) {
+            let Some(ctrl) = m.ctrls.get(&c).filter(|c| c.known) else {
                 continue;
             };
-            let others = m
-                .sequences
-                .iter()
-                .filter(|s| listed.contains(&(s.block as i32)));
-            if others
-                .into_iter()
-                .any(|s| !crate::anim::bound_cbs(m, h, s, c).is_empty())
-            {
+            if driven.contains(&c) {
                 continue;
             }
+            let k = ks[0];
             let ip = rs.blocks[k].interp;
             let want: &[u8] = if ctrl.class == LSCC {
                 b"NiPoint3Interpolator"
@@ -1313,7 +1327,7 @@ pub(crate) fn add_sequence(
         }
         _ => {
             // F21: a placeholder manager, filled by set_block at the end
-            let mgr = doc.append(b"NiControllerManager", vec![]);
+            let mgr = enc(doc.append(b"NiControllerManager", vec![]))?;
             let base = |next: i32, flags: u16| TimeCtrl {
                 block: 0,
                 class: String::new(),
@@ -1332,7 +1346,7 @@ pub(crate) fn add_sequence(
             };
             let targets = with_shapes(vec![], &shapes);
             let mttc_body = enc(encode_mttc(&base(net.controller, MTTC_FLAGS), &targets))?;
-            let mttc = doc.append(b"NiMultiTargetTransformController", mttc_body);
+            let mttc = enc(doc.append(b"NiMultiTargetTransformController", mttc_body))?;
             let man = Manager {
                 ctrl: base(mttc as i32, MANAGER_FLAGS),
                 cumulative: 0,
@@ -1362,7 +1376,7 @@ pub(crate) fn add_sequence(
         if !has_blend {
             let inv = f32::from_bits(INV_FLT);
             let v = if point3 { vec![inv; 3] } else { vec![inv] };
-            let bl = doc.append(blend.as_bytes(), enc(encode_blend_interp(blend, &v))?);
+            let bl = enc(doc.append(blend.as_bytes(), enc(encode_blend_interp(blend, &v))?))?;
             patch(doc, *c, BASE_LEN, bl as i32)?;
         }
         doc.patch(*c, 4, &(ctrl.flags | 0x20).to_le_bytes())
@@ -1373,11 +1387,11 @@ pub(crate) fn add_sequence(
         } else {
             b"BSLightingShaderProperty"
         };
-        let property = doc.string(ptype);
-        let ctrl_type = doc.string(ctrl.class.as_bytes());
+        let property = enc(doc.string(ptype))?;
+        let ctrl_type = enc(doc.string(ctrl.class.as_bytes()))?;
         // F0: TestRef CBs carry a null Controller ID, as vanilla does
         let ctrl_id = match ctrl.var {
-            Some(v) if !testref => doc.string(v.to_string().as_bytes()),
+            Some(v) if !testref => enc(doc.string(v.to_string().as_bytes()))?,
             _ => -1,
         };
         blocks.push(CtrlBlockOut {
@@ -1391,10 +1405,10 @@ pub(crate) fn add_sequence(
             interp_id: -1,
         });
     }
-    let s_name = doc.string(&name_b);
-    let (s_start, s_end) = (doc.string(b"start"), doc.string(b"end"));
+    let s_name = enc(doc.string(&name_b))?;
+    let (s_start, s_end) = (enc(doc.string(b"start"))?, enc(doc.string(b"end"))?);
     let tk_body = enc(encode_text_keys(-1, &[(start, s_start), (stop, s_end)]))?;
-    let tk = doc.append(b"NiTextKeyExtraData", tk_body);
+    let tk = enc(doc.append(b"NiTextKeyExtraData", tk_body))?;
     let seq = SequenceOut {
         name: s_name,
         blocks,
@@ -1409,7 +1423,7 @@ pub(crate) fn add_sequence(
         accum_root: net.name,
         notes: vec![],
     };
-    let seq = doc.append(b"NiControllerSequence", enc(encode_sequence(&seq))?);
+    let seq = enc(doc.append(b"NiControllerSequence", enc(encode_sequence(&seq))?))?;
     man.sequences.push(seq as i32);
     doc.set_block(mgr, enc(encode_manager(&man))?);
     set_bsx_animated(doc, m)?;
@@ -1443,9 +1457,9 @@ fn set_bsx_animated(doc: &mut NifDoc, m: &NifModel) -> Result<(), String> {
             .patch(x, 4, &(v | 1).to_le_bytes())
             .map_err(|e| e.to_string()),
         None => {
-            let nm = doc.string(b"BSX");
+            let nm = enc(doc.string(b"BSX"))?;
             let (_, body) = encode_extra(nm, &ExtraValue::Bsx(1), -1);
-            let x = doc.append(b"BSXFlags", body);
+            let x = enc(doc.append(b"BSXFlags", body))?;
             set_extra_list(
                 doc,
                 root,
@@ -1505,16 +1519,16 @@ pub(crate) fn extra_op(
             if !EDITABLE.contains(&kind.as_str()) {
                 return Err(format!("{kind} extra data is read-only"));
             }
-            let nm = doc.string(&win1252(name)?);
+            let nm = enc(doc.string(&win1252(name)?))?;
             let si = match value {
-                ExtraValue::Str(s) => doc.string(&win1252(s)?),
+                ExtraValue::Str(s) => enc(doc.string(&win1252(s)?))?,
                 _ => -1,
             };
             let (k, body) = encode_extra(nm, value, si);
             if k != kind {
                 return Err(format!("a {k} value cannot make a {kind}"));
             }
-            let new = doc.append(k.as_bytes(), body);
+            let new = enc(doc.append(k.as_bytes(), body))?;
             let mut extra = net.extra.clone();
             extra.push(new as i32);
             set_extra_list(doc, block, net, &extra)?;
@@ -1528,7 +1542,7 @@ pub(crate) fn extra_op(
                 )));
             }
             let si = match value {
-                ExtraValue::Str(s) => doc.string(&win1252(s)?),
+                ExtraValue::Str(s) => enc(doc.string(&win1252(s)?))?,
                 _ => -1,
             };
             let (k, body) = encode_extra(-1, value, si);
@@ -1604,7 +1618,7 @@ pub(crate) fn texture_path_op(
     slots[*slot as usize] = win1252(path)?;
     let mut target = set.raw.block;
     if set.users.len() > 1 {
-        target = copy(doc, target);
+        target = copy(doc, target)?;
         // texture-set ref sits 24 bytes after the NiObjectNET (01-format §1.2)
         let at = lsp.prop.net.end - doc.header().offsets()[lsp.prop.block as usize] + 24;
         patch(doc, lsp.prop.block, at, target as i32)?;

@@ -115,7 +115,7 @@ pub(crate) fn file_mtime(p: &std::path::Path) -> i64 {
 /// `_separator` lines from modlist.txt (`+` or `-`; MO2 writes them as `-`), each with the priority of the
 /// first enabled mod below it (-1 if none).
 fn separators(inst: &Instance, loose: &[LooseOrigin]) -> Result<Vec<(String, i32)>, ScanError> {
-    let text = std::fs::read_to_string(inst.profiles.join(&inst.profile).join("modlist.txt"))?;
+    let text = crate::read_text(&inst.profiles.join(&inst.profile).join("modlist.txt"))?;
     let prio: HashMap<&str, i32> = loose
         .iter()
         .filter(|o| o.kind == OriginKind::Mod)

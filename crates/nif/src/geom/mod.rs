@@ -6,7 +6,7 @@ pub mod skin_partition;
 mod vertex_desc;
 
 pub use av::{read_av_head, AvHead};
-pub use bstrishape::read_shape;
+pub use bstrishape::{read_shape, skin_to_root};
 pub use vertex_desc::{Attr, VertexDesc};
 
 /// One shape's vertex streams. Every non-empty stream has one entry per position. `bitangents` and

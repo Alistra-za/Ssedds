@@ -391,7 +391,7 @@ pub struct FileRefs {
 pub const MISSING_NOTE: &str = "Paths that winning plugin records name and that no enabled mod, the game Data folder or an active BSA provides. Information only.";
 /// Shown under Unused when the last scan did not read plugins (Folder scan, cancelled or PGPatcher-tainted run).
 pub const PLUGINS_NOT_READ_NOTE: &str = "Plugins were not read in the last scan; Unused may count plugin-only textures or use earlier plugin data.";
-pub const UNUSED_NOTE: &str = "Textures that no NIF and no plugin record names. textures\\pbr\\ is left out (PGPatcher output); LOD, interface and engine textures are listed too. Information only.";
+pub const UNUSED_NOTE: &str = "Textures that no NIF and no plugin record names. textures\\pbr\\ (PGPatcher output) and LOD textures are left out. Interface and engine textures are listed too. Information only.";
 
 /// The scan details line of the plugin pass (esp spec §4.3).
 pub fn plugins_line(p: &PluginStats) -> String {
@@ -512,6 +512,15 @@ pub struct MeshesModel {
     pub status: String,
     /// The left column lists the selected NIF's shapes instead of the mods and meshes (owner, 2026-10-14).
     pub shapes_col: bool,
+    /// Meshes UI T2: the shape card picked outside edit mode (block, name in the shown copy); Edit opens on it.
+    pub card_sel: Option<(u32, Option<String>)>,
+    /// Final review Minor 8: `shapes_col` before Edit locked it on Shapes; restored when the edit ends.
+    pub shapes_col_before: Option<bool>,
+    /// Meshes UI T8 (Note CZ25): each read NIF copy's per-shape Controllers lines (`nif_edit::card_ctrls` of its
+    /// bytes), by copy id; empty when the file did not read or parse. Cleared by `reload` (after a scan).
+    pub scan_ctrls: HashMap<i64, Arc<HashMap<u32, String>>>,
+    /// The copy whose lines a worker thread is reading, and where it answers.
+    ctrls_rx: Option<(i64, Receiver<HashMap<u32, String>>)>,
     /// Item 9: the texture paths listed here that are items of the open folder (path → item key); `SdcApp::route_3d`
     /// fills it each frame.
     pub folder_items: HashMap<String, String>,
@@ -616,6 +625,10 @@ impl MeshesModel {
             scan_pace: None,
             status: String::new(),
             shapes_col: false,
+            card_sel: None,
+            shapes_col_before: None,
+            scan_ctrls: HashMap::new(),
+            ctrls_rx: None,
             folder_items: HashMap::new(),
             open_in_textures: None,
             folder_items_for: (vec![], u64::MAX),
@@ -980,6 +993,7 @@ impl MeshesModel {
         self.refresh_placement();
         // The winners may have changed: ask again.
         self.all_nifs.clear();
+        self.scan_ctrls.clear(); // the files may have changed too (T8)
         self.all_query = None;
         self.all_pending = None;
         let keep = self
@@ -1008,6 +1022,7 @@ impl MeshesModel {
     fn clear_nif(&mut self) {
         self.selected_nif = None;
         self.selected_info = None;
+        self.card_sel = None;
         self.shapes.clear();
         self.resolved.clear();
         self.pair = None;
@@ -1280,6 +1295,45 @@ impl MeshesModel {
         }
     }
 
+    /// Meshes UI T8: reads copy `copy`'s Controllers lines on a worker thread, once per copy (cached); the cards
+    /// show them when `poll_card_ctrls` takes the answer. A failure leaves an empty entry: no line, no error.
+    fn read_card_ctrls(&mut self, copy: i64, src: FileSource) {
+        if self.scan_ctrls.contains_key(&copy)
+            || self.ctrls_rx.as_ref().is_some_and(|(c, _)| *c == copy)
+        {
+            return;
+        }
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let lines = crate::model::viewport3d::read_file(&src)
+                .ok()
+                .and_then(|b| nif::model::read_model(&b).ok())
+                .map(|m| nif_edit::card_ctrls(&m))
+                .unwrap_or_default();
+            let _ = tx.send(lines); // the page may have moved on: nobody listens
+        });
+        self.ctrls_rx = Some((copy, rx));
+    }
+
+    /// Takes a finished Controllers read (T8). True while one is still running, so the caller repaints.
+    pub fn poll_card_ctrls(&mut self) -> bool {
+        let Some((copy, rx)) = &self.ctrls_rx else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(lines) => {
+                self.scan_ctrls.insert(*copy, Arc::new(lines));
+                self.ctrls_rx = None;
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.ctrls_rx = None;
+                false
+            }
+        }
+    }
+
     fn load_shapes(&mut self) {
         let (Some(store), Some(copy)) = (&self.store, self.shown_copy()) else {
             return;
@@ -1313,8 +1367,12 @@ impl MeshesModel {
                     }
                 };
                 let spec = mesh_spec(store, copy, &s);
+                let location = store.copy_location(copy).ok().flatten();
                 self.shapes = s;
                 self.resolved = resolved;
+                if let Some((path, kind, root, _)) = location {
+                    self.read_card_ctrls(copy, FileSource::from_store(kind, &root, &path));
+                }
                 match spec {
                     Ok(spec) => self.v3.set_mesh(spec),
                     Err(e) => {

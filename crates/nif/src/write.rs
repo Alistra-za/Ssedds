@@ -1,6 +1,6 @@
 //! Byte-exact NIF writer. Untouched blocks, the footer and everything in the header the editor does not own are
 //! copied from the source; a file with no structural change is written header-verbatim (plan A6).
-use crate::header::Header;
+use crate::header::{Header, MAX_BLOCKS};
 use crate::NifError;
 use std::borrow::Cow;
 
@@ -96,27 +96,41 @@ impl<'a> NifDoc<'a> {
         }
     }
 
-    pub fn append(&mut self, kind: &[u8], body: Vec<u8>) -> u32 {
-        let t = match self.types.iter().position(|k| k == kind) {
-            Some(t) => t,
-            None => {
-                self.types.push(kind.to_vec());
-                self.types.len() - 1
-            }
-        };
+    /// Refuses a block or type past what `Header::parse` reads back (Note CY2): the parser masks bit 15 of a type
+    /// index and caps blocks at `MAX_BLOCKS`.
+    pub fn append(&mut self, kind: &[u8], body: Vec<u8>) -> Result<u32, WriteError> {
+        let t = self
+            .types
+            .iter()
+            .position(|k| k == kind)
+            .unwrap_or(self.types.len());
+        if t > 0x7FFF || self.blocks.len() >= MAX_BLOCKS as usize {
+            return Err(WriteError::Refused(
+                "This NIF already lists too many block types or blocks.".into(),
+            ));
+        }
+        if t == self.types.len() {
+            self.types.push(kind.to_vec());
+        }
         self.type_raw.push(t as u16);
         self.blocks.push(Cow::Owned(body));
         self.structural = true;
-        self.blocks.len() as u32 - 1
+        Ok(self.blocks.len() as u32 - 1)
     }
 
-    pub fn string(&mut self, s: &[u8]) -> i32 {
+    /// Refuses a string past `MAX_BLOCKS` strings, the parser's cap (Note CY2).
+    pub fn string(&mut self, s: &[u8]) -> Result<i32, WriteError> {
         if let Some(i) = self.strings.iter().position(|e| e == s) {
-            return i as i32;
+            return Ok(i as i32);
+        }
+        if self.strings.len() >= MAX_BLOCKS as usize {
+            return Err(WriteError::Refused(
+                "This NIF already lists too many strings.".into(),
+            ));
         }
         self.strings.push(s.to_vec());
         self.structural = true;
-        self.strings.len() as i32 - 1
+        Ok(self.strings.len() as i32 - 1)
     }
 
     pub fn rebuild_header(&mut self) {

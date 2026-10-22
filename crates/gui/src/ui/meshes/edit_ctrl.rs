@@ -68,9 +68,10 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
     let Some(shape) = selected(ui, e, "controllers") else {
         return;
     };
+    // Owner decision 3 (Note CZ15): Preview stays at the top; it decides what the 3D view plays.
     if !e.model.sequences.is_empty() {
         preview(ui, e, act);
-        clip_actions(ui, e, act);
+        ui.separator();
     }
     let clock = m.v3.clock;
     let shader = shape
@@ -83,16 +84,77 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
         .map(|a| (Owner::Alpha, "Alpha property", &a.prop));
     let chains: Vec<_> = [shader, alpha].into_iter().flatten().collect();
     if chains.is_empty() {
+        // No early return: the Clips section (Rename, Remove the picked clip) still follows (T4 review Minor 2).
         ui.label("This shape has no shader or alpha property.");
-        return;
     }
-    for (owner, title, prop) in chains {
-        ui.strong(title);
-        chain(ui, e, act, shape, owner, prop, clock);
+    for (owner, title, prop) in &chains {
+        ui.strong(*title);
+        chain(ui, e, act, shape, *owner, prop, clock);
         ui.separator();
     }
-    ui.strong("New clip");
-    new_clip(ui, e, act, shape);
+    clips_section(ui, e, act, shape, &chains);
+}
+
+/// Meshes UI T4 (Note CZ15): every clip control but Preview in one section at the end of the tab, closed by default:
+/// Rename and Remove of the picked clip, Convert to clips per property, New clip. It opens itself on the frame a
+/// clip refusal appears, so the red line is seen.
+fn clips_section(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    shape: &ShapeModel,
+    chains: &[(Owner, &str, &PropModel)],
+) {
+    let n = e.model.sequences.len();
+    let title = match (n, e.playing) {
+        (0, _) => "Clips (0)".to_string(),
+        (n, Playing::Free) => format!("Clips ({n} · showing free chains)"),
+        (n, Playing::Clip(b)) => {
+            let shown = e
+                .model
+                .sequences
+                .iter()
+                .find(|s| s.block == b)
+                .map_or(format!("Clip {b}"), clip_name);
+            format!("Clips ({n} · showing {shown})")
+        }
+    };
+    let refusals = [
+        egui::Id::new("meshes-edit-clip").with("refused"),
+        egui::Id::new("meshes-edit-new-clip").with("refused"),
+    ]
+    .into_iter()
+    .chain(
+        chains
+            .iter()
+            .map(|(_, _, p)| egui::Id::new(("meshes-edit-convert", p.block)).with("refused")),
+    );
+    // Only a refusal of this file state counts (T4 review Minor 1): every row's inputs start with `bytes_tag`, and a
+    // stale entry is cleared only by its row's `refused_line`, so it could otherwise open the section on nothing.
+    let now = format!("{}|", bytes_tag(e));
+    let refused = refusals.into_iter().any(|id| {
+        ui.data(|d| d.get_temp::<(String, String)>(id))
+            .is_some_and(|(inputs, _)| inputs.starts_with(&now))
+    });
+    // Final review Minor 1: per session, so the last session's state never decides this one's first frame.
+    let seen = egui::Id::new(("meshes-edit-clips-refused", e.session));
+    let before = ui.data(|d| d.get_temp::<bool>(seen)).unwrap_or(false);
+    ui.data_mut(|d| d.insert_temp(seen, refused));
+    egui::CollapsingHeader::new(title)
+        .id_salt(("meshes-edit-clips", e.session))
+        .default_open(false)
+        .open((refused && !before).then_some(true))
+        .show(ui, |ui| {
+            if n > 0 {
+                clip_actions(ui, e, act);
+            }
+            for (owner, title, prop) in chains.iter().filter(|(_, _, p)| !p.ctrls.is_empty()) {
+                ui.weak(format!("Convert to clips: {}", title.to_lowercase()));
+                convert_row(ui, e, act, shape, *owner, prop);
+            }
+            ui.strong("New clip");
+            new_clip(ui, e, act, shape);
+        });
 }
 
 /// A clip's name, or "Clip {block}" for a null name.
@@ -621,10 +683,7 @@ fn chain(
             }
         }
     });
-    // Outside the lock: a shared alpha shows convert_check's reason; it adds through Split + Add.
-    if !prop.ctrls.is_empty() {
-        convert_row(ui, e, act, shape, owner, prop);
-    }
+    // Convert to clips moved to the Clips section (Note CZ15).
     add_row(ui, e, act, shape, owner, prop);
 }
 
@@ -673,7 +732,8 @@ fn row(
             ui.strong(&title);
             ui.weak(short_class(&c.class));
             if managed {
-                ui.colored_label(AMBER, "Managed by a clip");
+                // Meshes UI T7: a fact, not a warning (rule 4.1).
+                ui.weak("Managed by a clip");
             }
             if !c.known {
                 ui.weak("unknown (read-only)");
@@ -865,9 +925,9 @@ fn clips(
         };
         any = true;
         let name = clip_name(s);
-        ui.strong(&name);
+        // Note CZ15: one weak line, so a clip no longer reads like a section heading.
         ui.weak(format!(
-            "{} · {} to {} s",
+            "In clip {name} · {} · {} to {} s",
             cycle_name(s.cycle),
             s.start,
             s.stop
