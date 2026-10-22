@@ -35,7 +35,6 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 - TruePBR: PGPatcher JSON written per set, validated, with every option exposed, including recent ones. PGPatcher `_m` sidecar `.json`.
 - PBR Landscape: PBRTextureSets and PBRMaterialObjects JSONs built from the actual EDIDs in your load order.
 - [Also export as Vanilla and Complex material](docs/wiki/GUI-Guide.md#also-export-as-vanilla-and-cm): converts PBR sets to those two formats.
-- NiAlphaProperty (alpha blend/test) set in a familiar format.
 - Doesn't need to be launched from MO2, but can be. From MO2 it fills in your MO2 location the first time, It skips MO2's virtual file system either way.
 
 **GUI**
