@@ -480,7 +480,7 @@ pub fn generate(
         }
         None => (None, 0.0),
     };
-    step(870)?;
+    step(ao::AO_PROGRESS.0)?;
     let (ao, ao_mean, ao_dark_share) = match &opts.ao {
         Some(o) => {
             let g = generate_ao(
@@ -489,6 +489,7 @@ pub fn generate(
                 wrap,
                 dims((w, h), opts.size.min(AO_MAX)),
                 o,
+                progress,
                 cancel,
             )?;
             let n = g.px.len().max(1) as f64;
@@ -530,6 +531,7 @@ fn generate_ao(
     wrap: bool,
     size: (u32, u32),
     o: &AoOpts,
+    progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Gray, GenerateError> {
     let depth = f64::from(o.depth);
@@ -559,7 +561,8 @@ fn generate_ao(
         };
         (h, s)
     };
-    let px = ao::march(&h, &s, wrap, o, cancel).ok_or(GenerateError::Cancelled)?;
+    let px = ao::march_with_progress(&h, &s, wrap, o, progress, cancel)
+        .ok_or(GenerateError::Cancelled)?;
     Ok(Gray {
         width: size.0,
         height: size.1,

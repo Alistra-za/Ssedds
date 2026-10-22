@@ -2,7 +2,7 @@
 use super::{AoOpts, Slopes};
 use rayon::prelude::*;
 use std::f64::consts::{FRAC_PI_2, PI};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// tan(4°): horizons this little above the tangent plane are noise on flats and are ignored.
 const BIAS: f64 = 0.0699;
@@ -100,6 +100,7 @@ fn texel(
 }
 
 /// AO in [0, 1] (1 = open) of height `h` (texel units) with its de-tilted slopes `s`; `None` when cancelled.
+#[cfg(test)] // `generate` calls [`march_with_progress`]
 pub(crate) fn march(
     h: &[f64],
     s: &Slopes,
@@ -107,15 +108,43 @@ pub(crate) fn march(
     o: &AoOpts,
     cancel: &AtomicBool,
 ) -> Option<Vec<f32>> {
-    march_with_bias(h, s, wrap, o, cancel, BIAS)
+    run(h, s, wrap, o, None, cancel, BIAS)
+}
+
+/// `generate`'s per-mille progress span the march fills, per finished row: from `.0` to `.0 + .1`.
+pub(crate) const AO_PROGRESS: (u32, u32) = (870, 130);
+
+/// [`march`], storing [`AO_PROGRESS`] into `progress` as rows finish.
+pub(crate) fn march_with_progress(
+    h: &[f64],
+    s: &Slopes,
+    wrap: bool,
+    o: &AoOpts,
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+) -> Option<Vec<f32>> {
+    run(h, s, wrap, o, Some(progress), cancel, BIAS)
 }
 
 /// [`march`] with its angle bias as a parameter (the test seam).
+#[cfg(test)]
 pub(crate) fn march_with_bias(
     h: &[f64],
     s: &Slopes,
     wrap: bool,
     o: &AoOpts,
+    cancel: &AtomicBool,
+    bias: f64,
+) -> Option<Vec<f32>> {
+    run(h, s, wrap, o, None, cancel, bias)
+}
+
+fn run(
+    h: &[f64],
+    s: &Slopes,
+    wrap: bool,
+    o: &AoOpts,
+    progress: Option<&AtomicU32>,
     cancel: &AtomicBool,
     bias: f64,
 ) -> Option<Vec<f32>> {
@@ -134,17 +163,22 @@ pub(crate) fn march_with_bias(
     let dirs = directions(o.slices.max(1) as usize);
     let f = Field { h, w, hgt, wrap };
     let power = f64::from(o.intensity);
+    let done = AtomicU32::new(0);
     let rows: Option<Vec<Vec<f32>>> = (0..hgt)
         .into_par_iter()
         .map(|y| {
             if cancel.load(Ordering::Relaxed) {
                 return None;
             }
-            Some(
-                (0..w)
-                    .map(|x| texel(&f, s, x, y, &dirs, &radii, bias).powf(power) as f32)
-                    .collect(),
-            )
+            let row = (0..w)
+                .map(|x| texel(&f, s, x, y, &dirs, &radii, bias).powf(power) as f32)
+                .collect();
+            if let Some(p) = progress {
+                let d = u64::from(done.fetch_add(1, Ordering::Relaxed) + 1);
+                let pm = u64::from(AO_PROGRESS.1) * d / hgt as u64;
+                p.fetch_max(AO_PROGRESS.0 + pm as u32, Ordering::Relaxed);
+            }
+            Some(row)
         })
         .collect();
     Some(rows?.concat())
@@ -173,8 +207,18 @@ mod tests {
     }
 
     fn gen_ao(n: &Rgba32F, tiling: Tiling, green: GreenConvention, ao: AoOpts) -> Gray {
+        gen_ao_at(n, n.width.max(n.height), tiling, green, ao)
+    }
+
+    fn gen_ao_at(
+        n: &Rgba32F,
+        size: u32,
+        tiling: Tiling,
+        green: GreenConvention,
+        ao: AoOpts,
+    ) -> Gray {
         let o = Opts {
-            size: n.width.max(n.height),
+            size,
             tiling,
             relief: 0.3,
             green: Some(green),
@@ -186,7 +230,27 @@ mod tests {
         let ao = g.ao.expect("an AO");
         let mean = ao.px.iter().map(|&v| f64::from(v)).sum::<f64>() / ao.px.len() as f64;
         assert!((f64::from(g.report.ao_mean.unwrap()) - mean).abs() < 1e-4);
+        let dark = ao.px.iter().filter(|&&v| v < 0.5).count() as f32 / ao.px.len() as f32;
+        assert_eq!(g.report.ao_dark_share, Some(dark));
         ao
+    }
+
+    #[test]
+    fn the_dark_share_counts_texels_below_one_half() {
+        // A deep narrow pit: its floor is below 0.5, so the share is not 0 and a wrong comparison shows.
+        let n = 128;
+        let hf: Vec<f64> = (0..n * n)
+            .map(|i| -9.0 * gauss((i % n) as f64, (i / n) as f64, 64.0, 64.0, 3.0))
+            .collect();
+        let g = gen_ao(
+            &bump(&hf, n, n, 0.5, true),
+            Tiling::Wrap,
+            Directx,
+            AoOpts::default(),
+        );
+        let dark = g.px.iter().filter(|&&v| v < 0.5).count();
+        let quarter = g.px.iter().filter(|&&v| v < 0.25).count();
+        assert!(dark > quarter, "below 0.5 {dark}, below 0.25 {quarter}");
     }
 
     /// Analytic height plus its central-difference slopes (`k = 0.5`: the slope, not twice it).
@@ -395,6 +459,41 @@ mod tests {
             .map(|i| (gr.px[i] - g.px[((i / w + h / 2) % h) * w + (i % w + w / 2) % w]).abs())
             .fold(0.0f32, f32::max);
         assert!(d < 1e-4, "rolled AO differs by {d}");
+        // The same surface at 1024 (same UV radius, heights in its own texels): the upsampled height must be scaled
+        // by ao_size / solve_size and the slopes must not, or the 2048 AO is lighter or darker (review I1).
+        // 45° triangle ridges along y (period 256) with a gentle y swell: smooth at the 16-row solve, unlike the torus,
+        // whose y content reaches Nyquist there; its valleys make AO sensitive to the height scale.
+        let hf: Vec<f64> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64, (i / w) as f64);
+                let tau = 2.0 * std::f64::consts::PI;
+                let m = x % 256.0;
+                m.min(256.0 - m) + 2.0 * (tau * y / 32.0).cos()
+            })
+            .collect();
+        let n = bump(&hf, w, h, 0.5, true);
+        let big = gen_ao(&n, Tiling::Wrap, Directx, AoOpts::default());
+        let small = gen_ao_at(&n, 1024, Tiling::Wrap, Directx, AoOpts::default());
+        assert_eq!((small.width, small.height), (1024, 16));
+        let mean = |g: &Gray| g.px.iter().map(|&v| f64::from(v)).sum::<f64>() / g.px.len() as f64;
+        let (m2, m1) = (mean(&big), mean(&small));
+        let mad = (0..1024 * 16)
+            .map(|i| {
+                let (x, y) = (i % 1024, i / 1024);
+                let b = |xx: usize, yy: usize| f64::from(big.px[yy * 2048 + xx]);
+                let avg = (b(2 * x, 2 * y)
+                    + b(2 * x + 1, 2 * y)
+                    + b(2 * x, 2 * y + 1)
+                    + b(2 * x + 1, 2 * y + 1))
+                    / 4.0;
+                (avg - f64::from(small.px[i])).abs()
+            })
+            .sum::<f64>()
+            / (1024.0 * 16.0);
+        assert!((m2 - m1).abs() < 0.01, "2048 mean {m2} vs 1024 mean {m1}");
+        // Per texel too: a dropped ratio darkens the downhill sides and opens the uphill ones, so the mean barely
+        // moves (0.006) while each texel does (mean |Δ| 0.036 against 0.001).
+        assert!(mad < 0.01, "mean |2048 (2×2 average) − 1024| {mad}");
     }
 
     #[test]
@@ -476,6 +575,81 @@ mod tests {
             };
             assert!(refused(o), "intensity {intensity}");
         }
+    }
+
+    #[test]
+    fn the_bias_ignores_tan_4_degree_horizons_only() {
+        // Ridges along y, period 64, R = 16: amplitude 1 peaks about tan 2.4° above the tangent, amplitude 4 about
+        // tan 7° (review M2). BIAS = 0 darkens the first; BIAS = 0.2 opens the second.
+        let n = 256;
+        let min_ao = |a: f64, bias: Option<f64>| {
+            let hf: Vec<f64> = (0..n * n)
+                .map(|i| a * (2.0 * std::f64::consts::PI * (i % n) as f64 / 64.0).sin())
+                .collect();
+            let s = analytic(&hf, n, n, true);
+            let o = AoOpts::default();
+            match bias {
+                Some(b) => march_with_bias(&hf, &s, true, &o, &no(), b),
+                None => march(&hf, &s, true, &o, &no()),
+            }
+            .unwrap()
+            .into_iter()
+            .fold(1.0f32, f32::min)
+        };
+        assert_eq!(min_ao(1.0, None), 1.0, "a gentle ridge is fully open");
+        assert!(
+            min_ao(1.0, Some(0.0)) < 1.0 - 1e-4,
+            "bias 0 sees its horizons"
+        );
+        assert!(min_ao(4.0, None) < 0.999, "a 7° horizon is not ignored");
+    }
+
+    #[test]
+    fn mirror_samples_clamp_to_the_edge() {
+        // A tall bump 4 texels from the right edge: wrapped it shadows column 0; clamped it is out of reach (review M1).
+        let n = 128;
+        let hf: Vec<f64> = (0..n * n)
+            .map(|i| 30.0 * gauss((i % n) as f64, (i / n) as f64, 124.0, 64.0, 3.0))
+            .collect();
+        let s = analytic(&hf, n, n, false);
+        let o = AoOpts::default();
+        let col0 = |wrap: bool| {
+            let ao = march(&hf, &s, wrap, &o, &no()).unwrap();
+            (0..n).map(|y| ao[y * n]).fold(1.0f32, f32::min)
+        };
+        assert!(col0(false) >= 0.999, "mirror: column 0 {}", col0(false));
+        assert!(col0(true) < 0.99, "wrap: column 0 {}", col0(true));
+    }
+
+    #[test]
+    fn generate_marches_the_solve_times_depth_with_unscaled_slopes() {
+        // Review M4: at the solve size, generate's AO is march(solve · depth, slopes); the slopes are not scaled.
+        let (w, h) = (128, 128);
+        let n = bump(&torus(w, h), w, h, 4.0, true);
+        let o = AoOpts {
+            depth: 2.0,
+            ..AoOpts::default()
+        };
+        let g = gen_ao(&n, Tiling::Wrap, Directx, o.clone());
+        let s = slopes(&n, Directx);
+        let hs: Vec<f64> = solve(&s, true, 0.3).iter().map(|v| v * 2.0).collect();
+        let want = march(&hs, &s, true, &o, &no()).unwrap();
+        let d =
+            g.px.iter()
+                .zip(&want)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+        assert!(d < 1e-6, "max |Δ| {d}");
+    }
+
+    #[test]
+    fn the_march_reports_progress_per_row() {
+        // Review M3: progress moves from AO_PROGRESS.0 to AO_PROGRESS.0 + AO_PROGRESS.1 as rows finish.
+        let t = torus(64, 64);
+        let s = analytic(&t, 64, 64, true);
+        let p = AtomicU32::new(0);
+        march_with_progress(&t, &s, true, &AoOpts::default(), &p, &no()).unwrap();
+        assert_eq!(p.into_inner(), AO_PROGRESS.0 + AO_PROGRESS.1);
     }
 
     #[test]
