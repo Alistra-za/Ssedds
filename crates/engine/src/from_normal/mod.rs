@@ -1,4 +1,4 @@
-//! Generate a height (and later AO and curvature) from a normal map (v2 Tracks B + D, DECISIONS Note CO).
+//! Generate a height, an AO and a curvature from a normal map (v2 Tracks B + D, DECISIONS Note CO).
 mod ao;
 mod fft;
 mod solve;
@@ -353,7 +353,7 @@ fn resample_gray(g: Gray, size: (u32, u32), wrap: bool) -> Gray {
     }
 }
 
-/// A height (and later AO and curvature) from a stored normal map. `progress` is per mille; `cancel` is read between
+/// A height, an AO and a curvature (each when asked) from a stored normal map. `progress` is per mille; `cancel` is read between
 /// stages and between rows.
 pub fn generate(
     stored: &Rgba32F,
@@ -480,6 +480,16 @@ pub fn generate(
         }
         None => (None, 0.0),
     };
+    step(860)?;
+    // Curvature at its own size (the set's albedo, P6) from the same solve-size slopes, tiling and relief.
+    let curvature = opts.curvature.then(|| {
+        let g = Gray {
+            width: s.width,
+            height: s.height,
+            px: solve::curvature(&s, wrap, f64::from(opts.relief)),
+        };
+        resample_gray(g, dims((w, h), opts.size.min(AO_MAX)), wrap)
+    });
     step(ao::AO_PROGRESS.0)?;
     let (ao, ao_mean, ao_dark_share) = match &opts.ao {
         Some(o) => {
@@ -503,7 +513,7 @@ pub fn generate(
     Ok(Generated {
         height,
         ao,
-        curvature: None,
+        curvature,
         report: Report {
             wrap,
             seam_ratio,
@@ -639,6 +649,24 @@ mod tests {
 
     fn invalid(n: &Rgba32F, o: &Opts) -> bool {
         matches!(run(n, o), Err(GenerateError::InvalidOpts(_)))
+    }
+
+    #[test]
+    fn generate_fills_curvature_only_when_asked() {
+        let n = torus_n(256, 256);
+        let mut o = opts(128, Neutral::Half);
+        o.tiling = Tiling::Wrap;
+        o.green = Some(Directx);
+        assert!(run(&n, &o).unwrap().curvature.is_none());
+        o.curvature = true;
+        o.height = None;
+        let g = run(&n, &o).unwrap();
+        assert!(g.height.is_none());
+        let c = g.curvature.expect("a curvature");
+        assert_eq!((c.width, c.height), (128, 128));
+        // The solve-size de-tilted slopes, the detected wrap and the opts' relief, as the height uses.
+        let s = resize(&slopes(&n, Directx), (128, 128));
+        assert_eq!(c.px, solve::curvature(&s, true, f64::from(o.relief)));
     }
 
     #[test]

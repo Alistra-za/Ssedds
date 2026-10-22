@@ -288,6 +288,14 @@ The same dialog makes an ambient-occlusion map from the normal (a horizon march 
 - **The file:** `<base>_ao_generated.png` next to the normal, 16-bit grey. On the next plan it is the `_rmaos` B channel, with the Info note `GEN-AO` in place of `PACK-DEFAULTED`. It fills no row of its own: the `_rmaos` row's File hover says "AO generated from {normal}" (no **generated** marker: the packed `_rmaos` itself is not generated), its AO fill line says "Generated from {normal}", a stale AO turns that row's dot amber, and that row's menu offers **Delete generated file…**.
 - **Bent normals:** when the set's normal has an RNM bent layer and AO can be generated for it, the dialog says at the top that a generated AO also changes the normal map, which is weighted by AO.
 
+### Curvature
+
+The dialog's **Curvature** checkbox writes `<base>_curves_generated.png`: the Laplacian of the same height solve, smoothed over about 2 texels, 0.5-centred, with peaks bright and hollows dark. Its hover says "used by Also export as: Vanilla / Complex material": it is read only by Also export's soft-light step, so a plain export reports it as `PACK-UNUSED-INPUT`, which is expected.
+
+- **Where:** the set card's menu (the dialog's **Curvature** checkbox) and Regenerate. It has no slot row. It is greyed out when the set has no normal, the normal is not a power of two, the set already has a real `_curves` or `_curvature` map, or a `_curves_generated` file Tessalith did not write is there.
+- **Size:** the set's albedo size, shown read-only, because Also's diffuse reads the albedo and the curvature together. A normal smaller than the albedo disables Curvature with the reason. With no albedo, any size the normal offers (up to 2048).
+- **Provenance:** with no row, its stale reason, Regenerate and **Delete generated file** are on the set card's menu.
+
 ## The preview
 
 Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. In the preview, **[** and **]** step to the previous and next texture in the order the Textures column shows, **1** to **6** pick the channel buttons from left to right, **PageUp** and **PageDown** step through the mips, **L** turns the lens on or off and **T** the 3×3 tiling.

@@ -419,6 +419,42 @@ fn a_real_p_replaces_the_generated_p_with_an_info_skip() {
 }
 
 #[test]
+fn a_real_curves_replaces_the_generated_one() {
+    for real in ["rock_curves.png", "rock_curvature.png"] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+        put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+        put(d.path(), "rock_curves_generated.png", 16, |x, y| {
+            (x * 8 + y) as u8
+        });
+        put(d.path(), real, 16, |x, _| 100 + x as u8);
+        let (p, ev) = plan(d.path(), Target::Vanilla, &[]);
+        assert!(
+            !all_codes(&p).contains(&Code::InDuplicate),
+            "{:?}",
+            p.skipped
+        );
+        assert!(!warning_codes(&ev).contains(&Code::InDuplicate));
+        let s = replaced(&p, "rock_curves_generated.png").expect("GEN-REPLACED skip");
+        assert_eq!(
+            s.reason,
+            format!("generated rock_curves_generated.png replaced by {real}")
+        );
+        assert_eq!(s.set.as_deref(), Some(job(&p, "rock.png").set_key.as_str()));
+    }
+    // `_cavity` is another role: no rival.
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put(d.path(), "rock_curves_generated.png", 16, |x, y| {
+        (x * 8 + y) as u8
+    });
+    put(d.path(), "rock_cavity.png", 16, |x, _| 100 + x as u8);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[]);
+    assert!(replaced(&p, "rock_curves_generated.png").is_none());
+}
+
+#[test]
 fn a_real_raw_height_beats_a_generated_p_without_pack_conflict() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);

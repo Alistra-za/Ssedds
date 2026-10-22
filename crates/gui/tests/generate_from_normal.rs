@@ -1181,12 +1181,13 @@ fn the_footer_stays_on_screen_at_1280x800() {
     use egui_kittest::kittest::Queryable;
     for w in [1280.0, 1100.0] {
         let d = tempfile::tempdir().unwrap();
-        // P17: Height and AO ticked, so the AO group and two preview tiles grow the body.
+        // P17: Height, AO and Curvature ticked, so the AO group and three preview tiles grow the body.
         let mut m = relief_rock(d.path());
         std::fs::remove_file(land(d.path()).join("rock01_ao.png")).unwrap();
         reopen(&mut m, d.path());
         m.open_gen(ROCK_SET, Some(GenMap::Height));
         m.gen_tick(GenMap::Ao, true);
+        m.gen_tick(GenMap::Curvature, true);
         let mut h = gen_harness(m, w, 800.0);
         h.run_steps(3);
         assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
@@ -1201,6 +1202,7 @@ fn the_footer_stays_on_screen_at_1280x800() {
             h.query_by_label("AO preview").is_some(),
             "the AO group and tile"
         );
+        assert!(h.query_by_label("Curvature preview").is_some());
         let win = eframe::egui::Rect::from_min_size(
             eframe::egui::Pos2::ZERO,
             eframe::egui::vec2(w, 800.0),
@@ -3132,4 +3134,243 @@ fn only_ao_ticked_hides_strength_and_the_height_preview() {
     h.run_steps(3);
     assert!(h.query_by_label("Strength").is_some());
     assert!(h.query_by_label("Height preview").is_some());
+}
+
+// ---- Task 12: curvature ----
+
+const CURVES_KEY: &str = "landscape/rock01_curves_generated.png";
+
+fn curves(m: &AppModel) -> Result<(), String> {
+    m.gen_offer(ROCK_SET, GenMap::Curvature)
+}
+
+/// Replace the fixture's 64² albedo with a `size`² one.
+fn albedo(d: &Path, size: u32) {
+    ImageBuffer::from_fn(size, size, |x, y| Rgb([x as u8, y as u8, 90u8]))
+        .save(land(d).join("rock01.png"))
+        .unwrap();
+}
+
+#[test]
+fn the_curvature_box_writes_curves_generated() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    // P10: Track A's role exists, so the box is always there, with Also's use on hover.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    assert_eq!(curves(&m), Ok(()));
+    m.open_gen(ROCK_SET, None);
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(4);
+    let b = h.get_by_label("Curvature");
+    assert!(!b.accesskit_node().is_disabled());
+    let r = b.rect();
+    h.hover_at(r.center());
+    h.run_steps(30);
+    assert!(
+        h.query_by_label(CURVATURE_HOVER).is_some(),
+        "Also's use on hover"
+    );
+    assert_eq!(
+        CURVATURE_HOVER,
+        "used by Also export as: Vanilla / Complex material"
+    );
+    h.get_by_label("Curvature").click();
+    // The open's preview lands, then the tick's preview starts and lands.
+    for _ in 0..2 {
+        h.run_steps(3);
+        assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    }
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("Curvature preview").is_some(),
+        "the curvature preview tile"
+    );
+    let mut m = h.into_state();
+    let g = m.gen.as_ref().unwrap();
+    assert_eq!(g.ticked, [GenMap::Curvature].into_iter().collect());
+    assert!(g.opts.curvature);
+    m.gen_generate();
+    idle(&mut m);
+    let p = land(d.path()).join("rock01_curves_generated.png");
+    let img = image::open(&p).expect("the generated file");
+    assert_eq!(img.color(), image::ColorType::L16, "16-bit grey");
+    assert_eq!((img.width(), img.height()), (64, 64), "the albedo's size");
+    assert_eq!(
+        generated_pngs(&land(d.path())),
+        vec!["rock01_curves_generated.png".to_string()],
+        "only the ticked map"
+    );
+    let rec = &m.sets_doc.as_ref().unwrap().generated()[CURVES_KEY];
+    assert_eq!(rec["kind"], "curvature");
+    assert_eq!(rec["opts"]["curvature"], true);
+    assert_eq!(
+        rec["sha256"],
+        sdc_gui::model::history::sha256_of(&p).unwrap().as_str()
+    );
+    // The re-plan reads it as Track A's Curves input: unused in a plain run (expected).
+    let item = m.item(CURVES_KEY).expect("the generated item");
+    assert!(
+        item.warnings
+            .iter()
+            .any(|w| w.code == engine::codes::Code::PackUnusedInput
+                && w.message
+                    .contains("read only by Also export as (Vanilla / Complex material)")),
+        "{:?}",
+        item.warnings
+    );
+}
+
+#[test]
+fn curvature_matches_the_albedo_size() {
+    // P6: Also's diffuse reads the albedo and the curvature together, so the curvature takes the albedo's size.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    relief_normal(&land(d.path()), NORMAL, 128);
+    reopen(&mut m, d.path());
+    assert_eq!(
+        m.gen_size(ROCK_SET, GenMap::Curvature),
+        Ok(GenSize::Locked(64))
+    );
+    m.open_gen(ROCK_SET, None);
+    m.gen_tick(GenMap::Curvature, true);
+    let f = m.gen_facts();
+    assert_eq!(f.locked, vec![(GenMap::Curvature, 64)]);
+    assert_eq!(f.paths.len(), 1);
+    assert_eq!(f.paths[0].2, (64, 64));
+    m.gen_generate();
+    idle(&mut m);
+    assert_eq!(
+        image::image_dimensions(land(d.path()).join("rock01_curves_generated.png")).unwrap(),
+        (64, 64)
+    );
+
+    // A normal smaller than the albedo is never upsampled.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    flat_normal(&land(d.path()).join(NORMAL), 32);
+    reopen(&mut m, d.path());
+    let locked =
+        "this set's maps are 64×64; a generated curvature map must match them (the normal is 32×32)";
+    assert_eq!(curves(&m), Err(locked.into()));
+    assert_eq!(m.gen_size(ROCK_SET, GenMap::Curvature), Err(locked.into()));
+}
+
+#[test]
+fn curvature_reasons() {
+    // A real `_curves` (or `_curvature`) map.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    ImageBuffer::from_fn(64, 64, |x, _| Luma([x as u8]))
+        .save(land(d.path()).join("rock01_curvature.png"))
+        .unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(
+        curves(&m),
+        Err("this set already has a curvature map (rock01_curvature.png)".into())
+    );
+    // A `_curves_generated` Tessalith has no record of.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    ImageBuffer::from_fn(64, 64, |x, _| Luma([x as u8]))
+        .save(land(d.path()).join("rock01_curves_generated.png"))
+        .unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(
+        curves(&m),
+        Err(
+            "rock01_curves_generated.png exists but was not generated here; delete it to generate again"
+                .into()
+        )
+    );
+    // An NPOT normal; then no normal.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    flat_normal(&land(d.path()).join(NORMAL), 48);
+    reopen(&mut m, d.path());
+    assert_eq!(
+        curves(&m),
+        Err("the normal map is 48×48; only power-of-two sizes can be generated".into())
+    );
+    std::fs::remove_file(land(d.path()).join(NORMAL)).unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(curves(&m), Err(NO_NORMAL.into()));
+}
+
+#[test]
+fn a_generated_curvature_shows_on_the_set_card() {
+    // P20: curvature fills no slot row; the set card carries its Regenerate, Delete and stale reason.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, None);
+    m.gen_tick(GenMap::Curvature, true);
+    m.gen_generate();
+    idle(&mut m);
+    assert_eq!(
+        m.generated_info(CURVES_KEY).map(|g| (g.from, g.stale)),
+        Some((NORMAL.to_string(), None))
+    );
+    assert_eq!(m.gen_entry(ROCK_SET, None).label, "Regenerate…");
+    assert!(m.delete_generated_entries(ROCK_SET).iter().any(|e| e.label
+        == "rock01_curves_generated.png"
+        && e.action
+            == MenuAction::Generated {
+                set: ROCK_SET.into(),
+                op: GenOp::Delete(CURVES_KEY.into())
+            }));
+    rewrite_normal(&mut m, d.path());
+    assert_eq!(
+        m.generated_info(CURVES_KEY).unwrap().stale.as_deref(),
+        Some(EARLIER)
+    );
+    // Regenerate from the set card replaces its own file (the recorded hash) and is fresh again.
+    m.open_gen(ROCK_SET, None);
+    m.gen_tick(GenMap::Curvature, true);
+    m.gen_generate();
+    idle(&mut m);
+    assert!(
+        m.gen.is_none(),
+        "{:?}",
+        m.gen.as_ref().and_then(|g| g.error.clone())
+    );
+    assert_eq!(m.generated_info(CURVES_KEY).unwrap().stale, None);
+}
+
+#[test]
+fn progress_runs_once_across_three_generate_calls() {
+    // Height 256 (the normal's own), AO 64 (the roughness), curvature 128 (the albedo): three calls, one job.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    relief_normal(&land(d.path()), NORMAL, 256);
+    albedo(d.path(), 128);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_tick(GenMap::Ao, true);
+    m.gen_tick(GenMap::Curvature, true);
+    let dims: Vec<(GenMap, (u32, u32))> =
+        m.gen_paths().into_iter().map(|(g, _, d)| (g, d)).collect();
+    assert_eq!(
+        dims,
+        vec![
+            (GenMap::Height, (256, 256)),
+            (GenMap::Ao, (64, 64)),
+            (GenMap::Curvature, (128, 128))
+        ]
+    );
+    m.gen_generate();
+    let part = m.gen.as_ref().unwrap().part.clone();
+    idle(&mut m);
+    assert_eq!(
+        part.load(std::sync::atomic::Ordering::Relaxed),
+        (2 << 8) | 3,
+        "ended on part 3 of 3"
+    );
+    assert_eq!(overall_progress(0, 1, 3), 333);
+    assert_eq!(overall_progress(1000, 2, 3), 1000);
+    let dim = |n: &str| image::image_dimensions(land(d.path()).join(n)).unwrap();
+    assert_eq!(dim("rock01_p_generated.png"), (256, 256));
+    assert_eq!(dim("rock01_ao_generated.png"), (64, 64));
+    assert_eq!(dim("rock01_curves_generated.png"), (128, 128));
+    let gen = m.sets_doc.as_ref().unwrap().generated();
+    assert_eq!(gen[CURVES_KEY]["opts"]["size"], 128);
+    assert_eq!(gen[AO_KEY]["opts"]["size"], 64);
 }

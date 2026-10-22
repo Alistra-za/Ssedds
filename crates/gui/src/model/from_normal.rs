@@ -76,10 +76,10 @@ pub const VANILLA_LANDSCAPE: &str =
     "vanilla landscape keeps its height in the diffuse alpha; there is no _p slot";
 pub const COMPLEX_CS: &str =
     "complex material reads height from the _m alpha, which is packed only on the vanilla target";
-/// Curvature is offered from Task 12.
-pub const NOT_OFFERED: &str = "not offered yet";
-/// The maps the entries offer; Task 12 adds curvature.
-const OFFERED: [GenMap; 2] = [GenMap::Height, GenMap::Ao];
+/// The maps the entries offer. Curvature is always offered: Track A's `curves` role exists (P10).
+const OFFERED: [GenMap; 3] = [GenMap::Height, GenMap::Ao, GenMap::Curvature];
+/// The Curvature box's hover: Track A's soft-light step is its only reader (a plain run reports PACK-UNUSED-INPUT).
+pub const CURVATURE_HOVER: &str = "used by Also export as: Vanilla / Complex material";
 /// AO only for cs PBR sets: a loose `_ao` is PBR evidence (`suggest::is_pbr_set`), so it never reaches another set.
 pub const NOT_PBR: &str =
     "AO is generated only for PBR sets under Community Shaders (a loose _ao would start an _rmaos)";
@@ -409,12 +409,13 @@ impl AppModel {
         if let Some(e) = self.sets_doc.as_ref().and_then(|d| d.error()) {
             return Err(format!("sdc-project.toml is read-only: {e}"));
         }
+        // Curvature fills no slot (P20), so no slot lock holds it.
         let slot = match map {
-            GenMap::Height => SlotKind::Height,
-            GenMap::Ao => SlotKind::Rmaos,
-            GenMap::Curvature => return Err(NOT_OFFERED.into()),
+            GenMap::Height => Some(SlotKind::Height),
+            GenMap::Ao => Some(SlotKind::Rmaos),
+            GenMap::Curvature => None,
         };
-        if v.locks.contains(&slot.slot_number()) {
+        if slot.is_some_and(|s| v.locks.contains(&s.slot_number())) {
             return Err(SLOT_LOCKED.into());
         }
         let normal = self.normal_of(v, aliases).ok_or(NO_NORMAL)?;
@@ -428,7 +429,9 @@ impl AppModel {
                 self.ao_shader_and_rmaos(v, shader, aliases)?;
                 ("ao", "an AO source")
             }
-            _ => {
+            // No shader rule: Also export reads it for any set (Q19).
+            GenMap::Curvature => ("curves", "a curvature map"),
+            GenMap::Height => {
                 self.height_shader(v, shader, aliases)?;
                 let own = if shader == Shader::ComplexMaterial {
                     "height"
@@ -649,7 +652,13 @@ impl AppModel {
                     Some(s) => locked_to(s, (nw, nh), AO_MAX, "AO"),
                 };
             }
-            GenMap::Curvature => return Err(NOT_OFFERED.into()),
+            // P6: Also's diffuse reads the albedo and the curvature together, so it takes the albedo's size.
+            GenMap::Curvature => {
+                return match self.albedo_size(v) {
+                    None => Ok(free(AO_MAX, None)),
+                    Some(s) => locked_to(s, (nw, nh), AO_MAX, "curvature map"),
+                };
+            }
             GenMap::Height => {}
         }
         match shader_of(v) {
@@ -660,14 +669,19 @@ impl AppModel {
             },
             // OWNER-Q1: a cs PBR `_p` may follow the albedo up to 2048 (Also's CM `_m` and landscape diffuse read it).
             Shader::Pbr | Shader::PbrLandscape => {
-                let albedo = match v.slots.get(&SlotKind::Diffuse) {
-                    Some(SlotFill::Own { item }) => self.normal_size(item).map(|(w, h)| w.max(h)),
-                    _ => None,
-                };
+                let albedo = self.albedo_size(v).map(|(w, h)| w.max(h));
                 let cap = albedo.map_or(HEIGHT_MAX, |a| a.clamp(HEIGHT_MAX, HEIGHT_MAX_RECIPE));
                 Ok(free(cap, albedo))
             }
             _ => Ok(free(HEIGHT_MAX, None)),
+        }
+    }
+
+    /// The size of the set's own albedo (its Diffuse slot's file).
+    fn albedo_size(&self, v: &SetView) -> Option<(u32, u32)> {
+        match v.slots.get(&SlotKind::Diffuse) {
+            Some(SlotFill::Own { item }) => self.normal_size(item),
+            _ => None,
         }
     }
 
@@ -905,6 +919,7 @@ fn run_job(
             size,
             height: opts.height.clone().filter(|_| has(GenMap::Height)),
             ao: opts.ao.clone().filter(|_| has(GenMap::Ao)),
+            curvature: opts.curvature && has(GenMap::Curvature),
             ..opts.clone()
         };
         let maps = run(&o)?;
@@ -1022,6 +1037,8 @@ impl AppModel {
             Some(GenMap::Ao) => Some(opts.ao.unwrap_or_default()),
             _ => None,
         };
+        // Kept with the tick, like AO's settings.
+        opts.curvature = pre == Some(GenMap::Curvature);
         self.gen = Some(GenDialog {
             set: set.to_string(),
             ticked: pre.into_iter().collect(),
@@ -1249,13 +1266,17 @@ impl AppModel {
     /// Tick or untick a map. AO's settings start at their defaults (Q17) when AO is ticked, and go when it is not, so
     /// a tick changes the preview's opts and starts a preview.
     pub fn gen_tick(&mut self, map: GenMap, on: bool) {
-        // AO's default size (its locked size, else the largest it offers), for "only AO ticked" (CO95, review M2).
-        let ao_size = self.gen_ctx().and_then(|c| {
+        // A map's default size (its locked size, else the largest it offers), for "only AO (or Curvature) ticked"
+        // (CO95, review M2).
+        let c = self.gen_ctx();
+        let size_of = |m: GenMap| {
+            let c = c.as_ref()?;
             let d = c.normal.as_ref()?.2?;
-            match self.gen_size_of(&c.v, GenMap::Ao, d, &c.aliases).ok()? {
+            match self.gen_size_of(&c.v, m, d, &c.aliases).ok()? {
                 GenSize::Locked(s) | GenSize::Free { default: s, .. } => Some(s),
             }
-        });
+        };
+        let solo = [GenMap::Ao, GenMap::Curvature].map(|m| (m, size_of(m)));
         let Some(g) = self.gen.as_mut() else {
             return;
         };
@@ -1264,11 +1285,13 @@ impl AppModel {
         } else {
             g.ticked.remove(&map);
         }
-        if map == GenMap::Ao {
-            g.opts.ao = on.then(|| g.opts.ao.take().unwrap_or_default());
+        match map {
+            GenMap::Ao => g.opts.ao = on.then(|| g.opts.ao.take().unwrap_or_default()),
+            GenMap::Curvature => g.opts.curvature = on,
+            GenMap::Height => {}
         }
-        if g.ticked.len() == 1 && g.ticked.contains(&GenMap::Ao) {
-            if let Some(s) = ao_size {
+        for (m, s) in solo {
+            if let (true, Some(s)) = (g.ticked.len() == 1 && g.ticked.contains(&m), s) {
                 g.opts.size = s;
             }
         }
@@ -1431,6 +1454,7 @@ impl AppModel {
         if !ticked.contains(&GenMap::Ao) {
             opts.ao = None;
         }
+        opts.curvature = ticked.contains(&GenMap::Curvature);
         g.job = Some((self.root.clone(), key));
         g.error = None;
         g.cancel.store(false, Ordering::Relaxed);

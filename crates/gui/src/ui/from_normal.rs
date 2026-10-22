@@ -1,6 +1,8 @@
 //! v2 Track B (Note CO): the "Generate from normal map" dialog. The state and jobs are in `model::from_normal`.
 use super::dialogs::{dialog_hover, short_name, Role, HALF_SIZE_LIST_SHARE};
-use crate::model::from_normal::{map_label, GenMap, GenResult, GenSize, BENT_NOTE, COMPLEX_USE_P};
+use crate::model::from_normal::{
+    map_label, GenMap, GenResult, GenSize, BENT_NOTE, COMPLEX_USE_P, CURVATURE_HOVER,
+};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::from_normal::{AoOpts, Gray, Tiling};
@@ -15,8 +17,8 @@ pub fn gen_buttons(ticked: bool, running: bool) -> [(&'static str, Role, bool); 
     ]
 }
 
-/// The maps the dialog lists; Task 12 adds curvature.
-const MAPS: [GenMap; 2] = [GenMap::Height, GenMap::Ao];
+/// The maps the dialog lists.
+const MAPS: [GenMap; 3] = [GenMap::Height, GenMap::Ao, GenMap::Curvature];
 
 /// The AO group's controls, inside the engine's `AoOpts` guards (CO84). Radius is shown as a % of the width.
 pub const AO_RADIUS_PCT: std::ops::RangeInclusive<f32> = 1.5625..=25.0;
@@ -96,8 +98,13 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                             );
                             if let Err(why) = offer {
                                 r.on_disabled_hover_text(why);
-                            } else if on != was {
-                                toggled.push((*map, on));
+                            } else {
+                                if *map == GenMap::Curvature {
+                                    r.on_hover_text(CURVATURE_HOVER);
+                                }
+                                if on != was {
+                                    toggled.push((*map, on));
+                                }
                             }
                         }
                         egui::Grid::new("gen-opts").num_columns(2).show(ui, |ui| {
@@ -291,6 +298,7 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
         for (g, label) in [
             (&p.maps.height, "Height preview"),
             (&p.maps.ao, "AO preview"),
+            (&p.maps.curvature, "Curvature preview"),
         ] {
             let Some(g) = g else { continue };
             let tex = texture(ui.ctx(), label, p, g);

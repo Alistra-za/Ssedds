@@ -53,6 +53,66 @@ fn symbol(k: usize, n: usize) -> f64 {
 /// solves its half-sample-symmetric 2W × 2H extension and crops. `relief` ∈ [0, 1] damps content coarser than
 /// `8·relief` cycles across the width.
 pub(crate) fn solve(s: &Slopes, wrap: bool, relief: f64) -> Vec<f64> {
+    let (hh, n, m) = spectrum(s, wrap, relief);
+    let mut out = crop(hh, n, m, s);
+    let mean = out.iter().sum::<f64>() / out.len().max(1) as f64;
+    out.iter_mut().for_each(|v| *v -= mean);
+    out
+}
+
+/// The inverse FFT of an `n × m` spectrum, cropped to `s`'s size (real parts).
+fn crop(mut hh: Vec<C>, n: usize, m: usize, s: &Slopes) -> Vec<f64> {
+    let (w, h) = (s.width as usize, s.height as usize);
+    fft2(&mut hh, n, m, true);
+    (0..h)
+        .flat_map(|y| hh[y * n..y * n + w].iter().map(|c| c.re))
+        .collect()
+}
+
+/// Gaussian band limit of the curvature, in texels at the solve size: fixed, the spec's dialog has no radius control.
+pub(crate) const CURVATURE_SIGMA: f64 = 2.0;
+
+/// The 0.5-centred curvature at `s`'s size (Q19): `K̂ = −den·Ĥ` from `solve`'s spectrum (same symbol and relief),
+/// band-limited by `exp(−σ²(ωx² + ωy²)/2)`, `ω = 2π·k̃/N` on the FFT grid (the mirror's 2W × 2H included); stored as
+/// `0.5 − 0.5·clamp(κ/Rκ, −1, 1)` with `Rκ = p99.5(|κ|)`, so peaks (convex) are bright and flat is 0.5 (`Rκ < 1e-12`:
+/// all 0.5).
+pub(crate) fn curvature(s: &Slopes, wrap: bool, relief: f64) -> Vec<f32> {
+    let (mut hh, n, m) = spectrum(s, wrap, relief);
+    let axis = |len: usize| -> Vec<(f64, f64)> {
+        (0..len)
+            .map(|k| {
+                let kt = if 2 * k <= len {
+                    k as f64
+                } else {
+                    k as f64 - len as f64
+                };
+                (symbol(k, len), 2.0 * PI * kt / len as f64)
+            })
+            .collect()
+    };
+    let (ax, ay) = (axis(n), axis(m));
+    let sig2 = CURVATURE_SIGMA * CURVATURE_SIGMA;
+    for (l, &(dy, wy)) in ay.iter().enumerate() {
+        for (k, &(dx, wx)) in ax.iter().enumerate() {
+            let gain = -(dx * dx + dy * dy) * (-sig2 * (wx * wx + wy * wy) / 2.0).exp();
+            hh[l * n + k] = hh[l * n + k].scale(gain);
+        }
+    }
+    let kappa = crop(hh, n, m, s);
+    let r = super::percentile(kappa.iter().map(|v| v.abs()).collect(), 0.995);
+    // A NaN (a non-finite slope reaching the solve) reads as flat too.
+    if r.is_nan() || r < 1e-12 {
+        return vec![0.5; kappa.len()];
+    }
+    kappa
+        .iter()
+        .map(|&k| (0.5 - 0.5 * (k / r).clamp(-1.0, 1.0)) as f32)
+        .collect()
+}
+
+/// The relief-damped height spectrum `Ĥ·den/(den + λ)` of `s`'s slopes on the FFT grid `n × m`: the tile when
+/// wrapped, its half-sample-symmetric 2W × 2H extension otherwise.
+fn spectrum(s: &Slopes, wrap: bool, relief: f64) -> (Vec<C>, usize, usize) {
     let (w, h) = (s.width as usize, s.height as usize);
     let (n, m) = if wrap { (w, h) } else { (2 * w, 2 * h) };
     let fold = |i: usize, len: usize| {
@@ -96,13 +156,7 @@ pub(crate) fn solve(s: &Slopes, wrap: bool, relief: f64) -> Vec<f64> {
             hh[l * n + k] = num.scale(1.0 / (den + lambda));
         }
     }
-    fft2(&mut hh, n, m, true);
-    let mut out: Vec<f64> = (0..h)
-        .flat_map(|y| hh[y * n..y * n + w].iter().map(|c| c.re))
-        .collect();
-    let mean = out.iter().sum::<f64>() / out.len().max(1) as f64;
-    out.iter_mut().for_each(|v| *v -= mean);
-    out
+    (hh, n, m)
 }
 
 fn unit(v: [f64; 3]) -> [f64; 3] {
@@ -555,5 +609,109 @@ pub(super) mod tests {
                 );
             }
         }
+    }
+
+    /// Slopes of a height varying along x only (q = 0): `p = dh(x)`, `w`×`h`.
+    fn x_slopes(w: usize, h: usize, dh: impl Fn(f64) -> f64) -> Slopes {
+        let p: Vec<f64> = (0..w * h).map(|i| dh((i % w) as f64)).collect();
+        Slopes {
+            width: w as u32,
+            height: h as u32,
+            q: vec![0.0; w * h],
+            p,
+            tilt: (0.0, 0.0),
+        }
+    }
+
+    #[test]
+    fn curvature_of_a_sine_is_bright_on_peaks_and_half_where_flat() {
+        // h = sin(2πx/64) on 256²: peaks at x = 16 + 64k, zero crossings at 32k, troughs at 48 + 64k.
+        let om = 2.0 * PI / 64.0;
+        let s = x_slopes(256, 256, |x| om * (om * x).cos());
+        let c = curvature(&s, true, 0.0);
+        assert_eq!(c.len(), 256 * 256);
+        for k in 0..4 {
+            let at = |x: usize| c[100 * 256 + x + 64 * k];
+            assert!(at(16) > 0.9, "peak {}", at(16));
+            assert!((at(0) - 0.5).abs() < 0.02, "zero {}", at(0));
+            assert!((at(32) - 0.5).abs() < 0.02, "zero {}", at(32));
+            assert!(at(48) < 0.1, "trough {}", at(48));
+        }
+        // Mirror mode, the same sign: h = cos(2π(x + ½)/64) is even about both edges; peaks at x + ½ = 64k.
+        let s = x_slopes(256, 256, |x| -om * (om * (x + 0.5)).sin());
+        let c = curvature(&s, false, 0.0);
+        let row = &c[100 * 256..101 * 256];
+        assert!(row[63] > 0.9 && row[127] > 0.9, "{} {}", row[63], row[127]);
+        assert!(row[95] < 0.1 && row[159] < 0.1, "{} {}", row[95], row[159]);
+    }
+
+    #[test]
+    fn curvature_is_band_limited_by_a_sigma_2_gaussian() {
+        // Periods 64 and 8, amplitudes chosen so their curvatures are equal before the Gaussian (κ amplitude
+        // 2·A·ω·sin(ω/2) = 2 each). The output's period-8 share is then exp(−σ²ω8²/2) / exp(−σ²ω64²/2) ≈ 0.297 at
+        // σ = 2 (0.74 at σ = 1, 0.07 at σ = 3).
+        let (w, h) = (256, 8);
+        let oms = [2.0 * PI / 64.0, 2.0 * PI / 8.0];
+        let amp = |om: f64| 1.0 / (om * (om / 2.0).sin());
+        let s = x_slopes(w, h, |x| {
+            oms.iter().map(|&om| amp(om) * om * (om * x).cos()).sum()
+        });
+        let c = curvature(&s, true, 0.0);
+        let proj = |om: f64| -> f64 {
+            c.iter()
+                .enumerate()
+                .map(|(i, v)| (f64::from(*v) - 0.5) * (om * (i % w) as f64).sin())
+                .sum()
+        };
+        let (lo, hi) = (proj(oms[0]), proj(oms[1]));
+        assert!(
+            lo > 0.0,
+            "peaks bright: the sine's own component is positive ({lo})"
+        );
+        let want = (-4.0 * oms[1].powi(2) / 2.0).exp() / (-4.0 * oms[0].powi(2) / 2.0).exp();
+        assert!((hi / lo - want).abs() < 0.03, "{} vs {want}", hi / lo);
+    }
+
+    #[test]
+    fn flat_normal_gives_half_curvature() {
+        for px in [[0.5, 0.5, 1.0, 1.0], [0.6, 0.45, 1.0, 1.0]] {
+            let s = slopes(&constant(64, 64, px), Directx);
+            for wrap in [true, false] {
+                let c = curvature(&s, wrap, 0.3);
+                assert!(c.iter().all(|&v| v == 0.5), "{px:?} wrap {wrap}");
+            }
+        }
+    }
+
+    #[test]
+    fn curvature_follows_the_solves_relief() {
+        // Relief damps the same coarse content as in the height: at relief 1 a one-cycle sine fades beside a
+        // period-16 one (equal curvatures before the damping).
+        let w = 256;
+        let s = x_slopes(w, 8, |x| {
+            [256.0f64, 16.0]
+                .iter()
+                .map(|&p| {
+                    let om = 2.0 * PI / p;
+                    (om * x).cos() / (om / 2.0).sin()
+                })
+                .sum()
+        });
+        let share = |relief: f64| {
+            let c = curvature(&s, true, relief);
+            let proj = |p: f64| -> f64 {
+                c.iter()
+                    .enumerate()
+                    .map(|(i, v)| (f64::from(*v) - 0.5) * (2.0 * PI * (i % w) as f64 / p).sin())
+                    .sum()
+            };
+            (proj(256.0) / proj(16.0)).abs()
+        };
+        assert!(
+            share(1.0) < 0.5 * share(0.0),
+            "{} vs {}",
+            share(1.0),
+            share(0.0)
+        );
     }
 }
