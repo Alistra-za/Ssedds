@@ -5657,6 +5657,44 @@ fn env_map_scale_warns_when_pgpatcher_makes_the_shape_pbr() {
     assert!(h.query_by_label(PG_ENV).is_none());
 }
 
+/// Note CU7 (Phase B parked): a var-8 controller added after the In game simulation was cached still gets the In
+/// game red line and the Edited source Warning, from the cache.
+#[test]
+fn env_map_scale_added_after_the_simulation_is_cached_still_warns() {
+    let (_d, mut m) = pg_session();
+    in_game(&mut m);
+    m.set_view_source(true);
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.sim_runs > 0, "the simulation is cached");
+    let (shape, _) = lit_shape(e);
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::AddController {
+            at,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(8),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(0.0, 1.0, None), fkey(1.0, 0.5, None)],
+            }),
+            flags: 0x48,
+            freq: 1.0,
+            start: 0.0,
+            stop: 1.0,
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.pg_warnings.iter().any(|w| w.text == PG_ENV),
+        "{:?}",
+        e.pg_warnings
+    );
+    in_game(&mut m);
+    let n = notes(&m, shape);
+    assert!(n.iter().any(|l| l == PG_ENV), "{n:?}");
+}
+
 fn notes_or_none(m: &MeshesModel, b: u32) -> Option<Vec<String>> {
     let rows = m.edit.as_ref().unwrap().in_game.clone()?;
     rows.into_iter().find(|(id, _, _)| id.0 == b).map(|r| r.2)
@@ -6569,6 +6607,201 @@ fn a_nameless_clip_says_it_has_no_name() {
     click(&mut h, &format!("Remove clip Clip {seq}"));
     assert!(ops(h.state()).is_empty());
     h.get_by_label("This clip has no name: it cannot be renamed or removed here.");
+}
+
+// ---- Note CU: parked NIF editor fixes ----
+
+/// `clip_scene` with two added clips, "Open" on U offset (5) then "Close" on Emissive multiple (4); returns the
+/// sequence blocks (Open, Close).
+fn two_clips() -> (MeshesModel, u32, u32) {
+    let mut m = clip_scene();
+    let e = m.edit.as_ref().unwrap();
+    let s = shape_named(e, "S");
+    let root = nif::edit::anchor_role(&e.model, None, Role::Root).unwrap();
+    let track = |var: u32| {
+        let role = Role::Ctrl {
+            owner: nif::edit::Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(var),
+            nth: 0,
+        };
+        nif::edit::ClipTrack {
+            at: nif::edit::anchor_role(&e.model, Some(s), role).unwrap(),
+            keys: KeyData::Float(KeyGroup {
+                key_type: Some(1),
+                keys: vec![fkey(0.0, 0.0, None), fkey(1.0, 1.0, None)],
+            }),
+        }
+    };
+    let add = |name: &str, var: u32| Op::AddSequence {
+        at: root.clone(),
+        name: name.into(),
+        cycle: 2,
+        freq: 1.0,
+        start: 0.0,
+        stop: 1.0,
+        tracks: vec![track(var)],
+    };
+    let ops = vec![add("Open", 20), add("Close", 11)];
+    for op in ops {
+        m.edit_push(vec![op], None);
+    }
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+    let block = |n: &str| {
+        e.model
+            .sequences
+            .iter()
+            .find(|q| q.name.as_deref() == Some(n))
+            .unwrap()
+            .block
+    };
+    let (open, close) = (block("Open"), block("Close"));
+    (m, open, close)
+}
+
+/// The name of the clip the Preview shows, None on Free chains.
+fn shown_clip(m: &MeshesModel) -> Option<Option<String>> {
+    let e = m.edit.as_ref().unwrap();
+    match e.playing {
+        Playing::Free => None,
+        Playing::Clip(b) => Some(
+            e.model
+                .sequences
+                .iter()
+                .find(|s| s.block == b)
+                .and_then(|s| s.name.clone()),
+        ),
+    }
+}
+
+/// Note CU1: a revert that moves another clip onto the picked clip's block never shows that other clip.
+#[test]
+fn preview_never_switches_clips_after_a_revert() {
+    // Open picked, its AddSequence reverted: Close now sits on Open's block
+    let (mut m, open, _) = two_clips();
+    m.edit_with(|e| e.set_playing(Playing::Clip(open)));
+    m.edit_with(|e| e.revert(0));
+    assert_eq!(
+        m.edit.as_ref().unwrap().model.sequences[0].name.as_deref(),
+        Some("Close")
+    );
+    assert_eq!(shown_clip(&m), None, "Free chains, not Close");
+    // Close picked, Open's AddSequence reverted: Free, or Close itself
+    let (mut m, _, close) = two_clips();
+    m.edit_with(|e| e.set_playing(Playing::Clip(close)));
+    m.edit_with(|e| e.revert(0));
+    let got = shown_clip(&m);
+    assert!(
+        got.is_none() || got == Some(Some("Close".into())),
+        "{got:?}"
+    );
+    // undo brings Open back on its block: the Preview does not jump to it
+    m.undo_edit();
+    let got = shown_clip(&m);
+    assert!(
+        got.is_none() || got == Some(Some("Close".into())),
+        "{got:?}"
+    );
+}
+
+/// Note CU2: every change of the edited bytes gives a new revision, so a refusal line never comes back on a later
+/// state (the `Arc` address could be reused).
+#[test]
+fn every_apply_gives_a_new_revision() {
+    let mut m = clip_scene();
+    let mut seen = vec![m.edit.as_ref().unwrap().rev];
+    let mut note = |m: &MeshesModel| {
+        let r = m.edit.as_ref().unwrap().rev;
+        assert!(!seen.contains(&r), "{r} seen before: {seen:?}");
+        seen.push(r);
+    };
+    convert(&mut m);
+    note(&m);
+    m.undo_edit();
+    note(&m);
+    m.redo_edit();
+    note(&m);
+    m.edit_with(|e| e.revert(0));
+    note(&m);
+    m.undo_edit();
+    note(&m);
+}
+
+/// Note CU2: a refused New clip line goes on undo and stays gone on redo.
+#[test]
+fn a_refusal_line_goes_on_undo_and_stays_gone() {
+    let mut m = clip_scene();
+    convert(&mut m);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    edit_number(&mut h, "New clip name", "specialidle");
+    click(&mut h, "Add Emissive multiple to the new clip");
+    click(&mut h, "Add clip");
+    h.run_steps(3);
+    let line = "Another clip is already named specialidle.";
+    h.get_by_label(line);
+    h.state_mut().undo_edit();
+    h.run_steps(3);
+    assert!(h.query_by_label(line).is_none(), "gone after undo");
+    h.state_mut().redo_edit();
+    h.run_steps(3);
+    assert!(h.query_by_label(line).is_none(), "still gone after redo");
+}
+
+/// Note CU3: Convert to clips is off, with AddSequence's reason, for cycle bits 3 and an empty range.
+#[test]
+fn convert_is_disabled_for_cycle_3_and_an_empty_range() {
+    let patch = |b: &mut Vec<u8>, off: usize, v: &[u8]| {
+        let offs = nif::header::Header::parse(b).unwrap().offsets().to_vec();
+        for c in [4, 5] {
+            b[offs[c] + off..offs[c] + off + v.len()].copy_from_slice(v);
+        }
+    };
+    let mut cycle3 = scenes::animated(Some(1), 2);
+    patch(&mut cycle3, 4, &0x4Eu16.to_le_bytes());
+    let mut empty = scenes::animated(Some(1), 2);
+    patch(&mut empty, 18, &0f32.to_le_bytes());
+    for (b, why) in [
+        (cycle3, "The cycle must be Loop, Reverse or Clamp."),
+        (empty, "Stop must be after start."),
+    ] {
+        let mut m = direct(b);
+        select(&mut m, "S");
+        let mut h = view(m);
+        h.run_steps(2);
+        tab(&mut h, "Controllers");
+        disabled_with(&mut h, CONVERT_SHADER, why);
+    }
+}
+
+/// Note CU6 (C-P35 M6, shape half): the New clip ticks clear when another shape is selected.
+#[test]
+fn new_clip_ticks_clear_when_the_shape_changes() {
+    let mut m = direct(scenes::two_animated());
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Controllers");
+    let tick = "Add Emissive multiple to the new clip";
+    let on = |h: &Harness<'static, MeshesModel>| {
+        h.get_by_label(tick).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+    };
+    click(&mut h, tick);
+    assert!(on(&h), "ticked on S");
+    let t = shape_named(h.state().edit.as_ref().unwrap(), "T");
+    h.state_mut().select_edit(Selection::Shape(t));
+    h.run_steps(3);
+    tab(&mut h, "Controllers");
+    reveal(&mut h, tick);
+    assert!(!on(&h), "T starts with nothing ticked");
+    let s = shape_named(h.state().edit.as_ref().unwrap(), "S");
+    h.state_mut().select_edit(Selection::Shape(s));
+    h.run_steps(3);
+    tab(&mut h, "Controllers");
+    reveal(&mut h, tick);
+    assert!(!on(&h), "back on S, the old tick is gone");
 }
 
 /// C5 screenshots (egui-ui-rules step 5): the Controllers tab with a clip picked at 1100, 1280 and 1600 px, saved
