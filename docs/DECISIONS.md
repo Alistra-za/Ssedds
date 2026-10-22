@@ -2624,3 +2624,6 @@ The letters CQ are provisional: take the next free letter on `main` at merge and
 - **CT2 Why.** The per-source SHA-256s and roles in slot order already identify the job, so the paths were redundant. Hashing them made every derived output re-encode once after a project moved.
 - **CT3 Cost.** Each existing derived output re-encodes once, the first time `if-changed` runs after this change, because its recorded identity no longer matches. Encoded bytes are unchanged, so goldens are unchanged.
 - **CT4 Test.** `derive_identity_ignores_paths_but_not_roles_or_settings` (engine, `derive::assemble` tests) fails on the old code: a moved job hashed differently.
+
+## Note CU — Trace-debug fixes 2026-10-21 (main session, 2026-10-21)
+- **CU1 NIF edit source ignores path spelling (trace 2; points at Note CI29).** `pick_source` skips the edit mod's own copy by comparing the copy root with the edit mod folder. It compared raw text, but MO2 store roots use `/` after the instance folder while the export folder picker gives `\`. After a rescan the edit mod's own export was then picked as the source, ops turned into conflicts and the link to the original was lost. It now uses the same comparison as `same_dir` (separators, trailing separator and ASCII case ignored). It only widens a match; roots in modscan are not changed.
