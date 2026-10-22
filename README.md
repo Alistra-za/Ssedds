@@ -61,7 +61,7 @@ BC7E for BC7, rgbcx for BC1–BC5, Intel ISPC for BC6H. The charts show the meas
 
 ### BC7
 
-![Bar chart of BC7 encoders sorted by quality against bc7e u6, with speed as text. Tessalith's opt-in bc7e max is best at plus 0.32 dB RGB and alpha, about 0.6 s per megapixel. The default bc7e u5 is level with u6 at 0.22 s. NVTT Production, Compressonator and texconv CPU take 14 to 33 s and do not beat it. GPU encoders take 0.03 to 0.09 s and lose 1.4 to 2.8 dB.](docs/img/encoder-bc7.svg)
+![Back-to-back bar chart of BC7 encoders. Left bars show speed in seconds per megapixel on a log scale, where shorter is faster. Right bars show quality in dB against bc7e u6. Tessalith's opt-in bc7e max is best at plus 0.32 dB RGB and alpha, about 0.6 s per megapixel. The default bc7e u5 is level with u6 at 0.22 s. NVTT Production, Compressonator and texconv CPU take 14 to 33 s and do not beat it. GPU encoders take 0.03 to 0.09 s and lose 1.4 to 2.8 dB.](docs/img/encoder-bc7.svg)
 
 ‡ `max` is opt-in (`encoder.effort = "max"`). It was measured later, on a 150-texture Skyrim sample, not on the set above. It took 2.7× the time of u5 (`veryslow`) with the two run alternately per image, and 2.9× in separate runs, so about 0.6 s/Mpix on this scale. That matches the expected ~3×. Δ is against u6 on that sample: RGB on diffuse (images over 60 dB left out; +0.94 with all 60) and alpha PSNR on the 30 textures with alpha. Against u5 it gains +0.18 dB on diffuse, +0.037° on normal maps and +0.24 dB on alpha. A build ran during part of the alternating run (CPU about 14% busy before it, up to 6 rustc processes); the separate runs had the machine nearly idle. Details: [bc7e tuning](docs/research/bc7e-tuning.md).
 
@@ -69,7 +69,7 @@ For BC7 data maps with alpha, see the [BC7 weighting](docs/wiki/GUI-Guide.md#bc7
 
 ### Other formats
 
-![Bar chart of PSNR in dB grouped by compressor, one striped bar per format (BC1, BC3, BC4, BC6H). rgbcx is best on BC1 and BC4 and within 0.09 dB of NVTT 3 on BC3. Intel ISPC is best on BC6H. Missing values are marked not measured.](docs/img/encoder-formats.svg)
+![Bar chart of PSNR in dB grouped by format (BC1, BC3, BC4, BC5, BC6H), one striped bar per encoder. rgbcx is best on BC1, BC4 and BC5 and within 0.09 dB of NVTT 3 on BC3. Intel ISPC is best on BC6H. Missing values are marked not measured.](docs/img/encoder-formats.svg)
 
 † Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.
 

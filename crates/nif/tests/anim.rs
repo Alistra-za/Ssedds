@@ -512,6 +512,50 @@ fn special_idle_wins_over_an_earlier_listed_clip() {
     assert_eq!((tr[0].freq, tr[0].start, tr[0].stop), (1.0, 0.0, 1.0));
 }
 
+/// Note CU5 (CR14 parked): two SpecialIdle clips, or two managers, binding one controller both play under Free chains;
+/// the track listed last wins (managers in block order, each in its list order).
+#[test]
+fn the_later_special_idle_track_wins() {
+    use nif::edit::{anchor_role, apply, Op, Role};
+    let b = patch(&managed_clip(), 10, 0, &0.25f32.to_le_bytes());
+    let b = patch(&b, 11, 0, &0.75f32.to_le_bytes());
+    let at = anchor_role(&read_model(&b).unwrap(), None, Role::Root).unwrap();
+    let r = apply(
+        &b,
+        &[Op::RenameSequence {
+            at,
+            name: "B".into(),
+            nth: 0,
+            new_name: "SpecialIdle".into(),
+        }],
+    )
+    .unwrap();
+    // A gets B's Name index too: Rename refuses a duplicate name
+    let h = Header::parse(&r.bytes).unwrap();
+    let name_b = r.bytes[h.offsets()[3]..h.offsets()[3] + 4].to_vec();
+    let both = patch(&r.bytes, 2, 0, &name_b);
+    let tracks = |b: &[u8]| free_tracks(&read_model(b).unwrap(), b, 6).len();
+    assert!(tracks(&both) > tracks(&r.bytes), "A plays too");
+    assert_eq!(idle_emissive(&both, 6, 0.5), 0.75, "B is listed last");
+    // a second manager listing [B, A] after the first one's [A, B]: A is last
+    let h = Header::parse(&both).unwrap();
+    let (s, n) = (h.offsets()[1], h.sizes[1] as usize);
+    let mut body = both[s..s + n].to_vec();
+    body[31..39].copy_from_slice(&[3i32.to_le_bytes(), 2i32.to_le_bytes()].concat());
+    let mut d = NifDoc::open(&both).unwrap();
+    d.append(b"NiControllerManager", body);
+    let two = d.bytes();
+    assert!(
+        tracks(&two) > tracks(&both),
+        "the second manager plays its clips too"
+    );
+    assert_eq!(
+        idle_emissive(&two, 6, 0.5),
+        0.25,
+        "the second manager's last clip"
+    );
+}
+
 /// C-P32: the first sequence in the manager's list that binds the controller gives the held value (an interpolator
 /// without keys holds its Value); without a manager (G2) the property value stays.
 #[test]

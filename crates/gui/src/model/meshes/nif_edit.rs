@@ -9,7 +9,9 @@ use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
 use nif::anim::{apply_anim, clip_tracks_in, free_tracks_in, Track};
-use nif::edit::validate::{new_errors, validate, validate_ops, Level, Target, Warning};
+use nif::edit::validate::{
+    demote_source, new_errors, validate, validate_ops, Level, Target, Warning,
+};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
@@ -61,6 +63,9 @@ pub struct NifEdit {
     pub source_copy: PathCopy,
     pub data_path: String,
     pub patched: Arc<Vec<u8>>,
+    /// A process-unique id of the current edit state, new on every apply, undo, redo, revert and reload (Note CU2):
+    /// the refusal lines key on it, not on the `Arc` address, which an allocation can reuse.
+    pub rev: u64,
     pub model: NifModel,
     pub outcomes: Vec<Outcome>,
     pub warnings: Vec<Warning>,
@@ -104,6 +109,8 @@ pub struct NifEdit {
     parsed: Arc<ParsedNif>,
     /// What the preview animates.
     pub playing: Playing,
+    /// The picked clip's name (Note CU1): a revert can move another clip onto its block.
+    playing_name: Option<String>,
     /// Per animated shape: its parsed material and its tracks for `playing`. Rebuilt by `reapply` and
     /// `set_playing`, never per frame (F22, F23).
     anim: Vec<(ShapeId, MaterialState, Vec<Track>)>,
@@ -306,6 +313,7 @@ impl NifEdit {
             source: Arc::new(source),
             data_path: data_path.into(),
             patched: Arc::new(vec![]),
+            rev: 0,
             source_warnings: validate(&model, None),
             model,
             outcomes: vec![],
@@ -332,6 +340,7 @@ impl NifEdit {
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
+            playing_name: None,
             anim: vec![],
             anim_shown: None,
             anim_last: vec![],
@@ -500,6 +509,7 @@ impl NifEdit {
     /// Applies the ops to the source: patched bytes, outcomes (each `ReAnchored` block written back into its op),
     /// statuses (a conflict or a refusal blocks export), the model, the warnings and the parsed preview.
     fn reapply(&mut self) {
+        self.rev = next_key();
         self.notice = None;
         let a = match nif::edit::apply(&self.source, &self.doc.ops()) {
             Ok(a) => a,
@@ -529,6 +539,7 @@ impl NifEdit {
             Err(e) => self.error = Some(e.to_string()),
         }
         self.warnings = validate(&self.model, None);
+        demote_source(&self.source_warnings, &mut self.warnings);
         // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
         self.op_warnings = validate_ops(&self.doc.ops());
         // B-P41: one header parse per change; one per controller cost 266 ms a drag tick on a 608-controller NIF.
@@ -557,9 +568,15 @@ impl NifEdit {
         }
         self.parsed = Arc::new(render3d::parse(&self.patched));
         // A clip the edits or a source reload removed: back to the free chains (with the last sequence gone, the
-        // Preview selector is gone too).
+        // Preview selector is gone too). Another name at its block is another clip a revert moved there (Note CU1).
         if let Playing::Clip(seq) = self.playing {
-            if !self.model.sequences.iter().any(|s| s.block == seq) {
+            let name = &self.playing_name;
+            if !self
+                .model
+                .sequences
+                .iter()
+                .any(|s| s.block == seq && s.name == *name)
+            {
                 self.playing = Playing::Free;
             }
         }
@@ -615,6 +632,24 @@ impl NifEdit {
         let same_drag = merging && tail > 0;
         self.drag = merge.clone().map(|k| (k, n));
         self.history.record(self.doc.to_text(), merge);
+        // Note CU1: a rename of the picked clip keeps it picked (the block stays; its name follows)
+        if let Playing::Clip(seq) = self.playing {
+            for op in &ops {
+                if let Op::RenameSequence {
+                    name,
+                    nth,
+                    new_name,
+                    ..
+                } = op
+                {
+                    if nif::edit::clip_key(&self.patched, &self.model, seq)
+                        == Some((name.clone(), *nth))
+                    {
+                        self.playing_name = Some(new_name.clone());
+                    }
+                }
+            }
+        }
         let old: Vec<DocOp> = match same_drag {
             true => self.doc.ops.split_off(self.doc.ops.len() - tail),
             false => vec![],
@@ -829,6 +864,15 @@ impl NifEdit {
     /// Switches what the preview animates (B7's clip selector) and rebuilds the track cache.
     pub fn set_playing(&mut self, p: Playing) {
         self.playing = p;
+        self.playing_name = match p {
+            Playing::Clip(b) => self
+                .model
+                .sequences
+                .iter()
+                .find(|s| s.block == b)
+                .and_then(|s| s.name.clone()),
+            Playing::Free => None,
+        };
         self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, p);
         self.anim_shown = None;
     }
@@ -1218,6 +1262,7 @@ impl MeshesModel {
         let Some(e) = &mut self.edit else { return };
         e.check_exists = on;
         e.warnings = validate(&e.model, None);
+        demote_source(&e.source_warnings, &mut e.warnings);
         self.edit_checks();
     }
 
@@ -1238,6 +1283,7 @@ impl MeshesModel {
         if let (true, Some(store)) = (e.check_exists, &self.store) {
             let exists = |n: &str| matches!(store.texture_location(n), Ok(Some(_)));
             e.warnings = validate(&e.model, Some(&exists));
+            demote_source(&e.source_warnings, &mut e.warnings);
         }
         e.refresh_blocked();
         if !e.edit_mod.as_os_str().is_empty() {
