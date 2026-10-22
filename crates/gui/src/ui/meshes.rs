@@ -27,6 +27,10 @@ const EDIT_MIN: f32 = 300.0;
 const EDIT_CENTRE_MIN: f32 = 240.0;
 /// A side panel's frame adds its inner margin (`Frame::side_top_panel`, 8 + 8) to the width its range sets.
 const PANEL_MARGIN_X: f32 = 16.0;
+/// The edit panel's starting width.
+const EDIT_DEFAULT: f32 = 380.0;
+/// The left column's widest share of the window (T7 review Minor 1).
+const TREE_MAX_SHARE: f32 = 0.4;
 
 mod curve;
 mod edit_ctrl;
@@ -90,20 +94,29 @@ fn draw(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     // Meshes UI T7 (rule 2.3): the column leaves the 3D view its minimum, and the edit panel its own while editing;
     // on a window too small for all three the minimum wins.
-    // The edit panel's width as drawn last frame (its frame margins included), else its minimum.
+    // The edit panel's width as drawn last frame (its frame margins included), else its default (T7 review Minor 2:
+    // the frame an edit opens has no width yet).
+    // shortcut: after the user drags the edit panel wider, this cap is one frame stale; use the panel's response if
+    // the 3D view's dip below its minimum for that frame shows.
     let edit_w = egui::containers::panel::PanelState::load(ui.ctx(), egui::Id::new("meshes-edit"))
-        .map_or(EDIT_MIN, |p| p.outer_rect.width().max(EDIT_MIN));
+        .map_or(EDIT_DEFAULT + PANEL_MARGIN_X, |p| {
+            p.outer_rect.width().max(EDIT_MIN)
+        });
     let others = EDIT_CENTRE_MIN + if m.edit.is_some() { edit_w } else { 0.0 };
-    let max = (ui.available_width() - others - PANEL_MARGIN_X).max(TREE_MIN);
+    // T7 review Minor 1 (controller ruling): also at most ~40% of the width, so the 3D view gets the slack.
+    let avail = ui.available_width();
+    let max = (avail - others - PANEL_MARGIN_X)
+        .min(TREE_MAX_SHARE * avail)
+        .max(TREE_MIN);
     egui::Panel::left("meshes-tree")
-        .default_size(620.0)
+        .default_size(420.0)
         .size_range(TREE_MIN..=max)
         .show(ui, |ui| tree(ui, m));
     if m.edit.is_some() {
         // The 3D view keeps at least EDIT_CENTRE_MIN; when the window is too small the panel's minimum wins.
         let max = (ui.available_width() - EDIT_CENTRE_MIN - PANEL_MARGIN_X).max(EDIT_MIN);
         egui::Panel::right("meshes-edit")
-            .default_size(380.0)
+            .default_size(EDIT_DEFAULT)
             .size_range(EDIT_MIN..=max)
             .show(ui, |ui| edit_panel::panel(ui, m));
     } else {

@@ -8297,6 +8297,15 @@ fn the_3d_view_keeps_its_minimum_at_1100_with_an_edit_open() {
         frame3d.width() >= 240.0 - 1.0,
         "3D view {frame3d:?} at 1100 px"
     );
+    // T7 review Minor 1 (controller ruling): the column defaults to ~420 px and is capped near 40% of the width, so
+    // the 3D view sits above its minimum at 1100 and gets the slack at 1280.
+    assert!(frame3d.width() > 260.0, "3D view {frame3d:?} at 1100 px");
+    assert!(tree.width() <= 0.4 * 1100.0 + 1.0, "tree {tree:?}");
+    let (_d, h) = app_edit(1280.0, 800.0, false);
+    let frame3d = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(frame3d.width() > 380.0, "3D view {frame3d:?} at 1280 px");
 }
 
 /// T5 open item, checked in T7: the Known combo with the longest entry picked stays inside the edit panel at 1100 px.
@@ -8346,7 +8355,22 @@ fn repeated_fix_and_conflict_buttons_have_unique_names() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
-    h.get_by_role_and_label(AkRole::Button, &format!("Clear the flag: {SKIN_TINT}"));
+    h.get_by_role_and_label(
+        AkRole::Button,
+        &format!("Clear the flag: {SKIN_TINT} (SLSF1 flags)"),
+    );
+    // T7 review Minor 5: two fix buttons on one tab have two different names.
+    let mut m = direct(typed(0, (1 << 21) | (1 << 10)));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    let names: Vec<String> = h
+        .query_all_by_role(AkRole::Button)
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Clear the flag: "))
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert_ne!(names[0], names[1]);
     // A slot path outside Data: its "Not relative to Data" warning carries a fix.
     let mut m = direct(scenes::shared_alpha_and_set());
     let a = select(&mut m, "A");

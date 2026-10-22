@@ -392,7 +392,7 @@ fn op_label(op: &Op) -> String {
 }
 
 /// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
-fn field_label(f: Field) -> String {
+pub(super) fn field_label(f: Field) -> String {
     let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
     let rgb = |n: u8| ["R", "G", "B"].get(n as usize).copied().unwrap_or("?");
     match f {

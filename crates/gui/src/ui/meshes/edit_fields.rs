@@ -84,7 +84,8 @@ pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mu
                 };
                 let r = ui.small_button(label);
                 // Meshes UI T7 (rule 8.4): several rows can carry the same button; each is named after its warning.
-                let name = format!("{label}: {}", w.text);
+                // T7 review Minor 3: with what it applies to, so the same text on two targets still differs.
+                let name = format!("{label}: {} ({})", w.text, target_name(target));
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
                 if r.clicked() {
                     act.push = Some((vec![fix.clone()], None));
@@ -601,6 +602,16 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                     }
                 }
             });
+    }
+}
+
+/// What a warning applies to, in words, for a fix button's accessible name.
+fn target_name(t: &Target) -> String {
+    match t {
+        Target::Field { field, .. } => super::edit_panel::field_label(*field),
+        Target::Slot { slot, .. } => format!("slot {slot}"),
+        Target::Extra { block } => format!("extra data block {block}"),
+        Target::Block { block } => format!("block {block}"),
     }
 }
 
