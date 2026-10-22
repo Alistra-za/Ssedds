@@ -16,6 +16,7 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .lt{opacity:.5}
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
+.nf{fill:var(--mute)}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
 <rect class="bg" width="780" height="908"/>
 <text x="10.0" y="20.0" class="t" text-anchor="start">BC3 against BC7 alpha weights: mean PSNR in dB</text>

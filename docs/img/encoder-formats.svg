@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 546" width="780" height="546" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 584" width="780" height="584" role="img" aria-labelledby="t d">
 <title id="t">Encoders compared by format, PSNR</title>
-<desc id="d">Bar chart of PSNR in dB, grouped by compressor, one bar per format (BC1 RGB, BC3 premultiplied, BC4, BC6H multi-exposure), with the format shown by a stripe pattern. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 on BC3 (49.20 against 49.29). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator BC6H values were not measured. texconv CPU is last or near last.</desc>
+<desc id="d">Bar chart of PSNR in dB, grouped by format (BC1 RGB, BC3 premultiplied, BC4, BC6H multi-exposure), one bar per encoder, with the encoder shown by a stripe pattern. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 on BC3 (49.20 against 49.29). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator BC6H values were not measured. texconv CPU is last or near last.</desc>
 <style>
 svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
 --ink:#1f2328;--mute:#59636e;--grid:#d1d9e0;--bg:#ffffff;--c0:#2a78d6;--c1:#eb6834;--c2:#1baf7a;--c3:#6250d6;--c4:#e87ba4;}
@@ -16,86 +16,91 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .lt{opacity:.5}
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
+.nf{fill:var(--mute)}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
-<rect class="bg" width="780" height="546"/>
-<defs><pattern id="pd" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2.5" height="6" class="pl"/></pattern><pattern id="ph" width="6" height="5" patternUnits="userSpaceOnUse"><rect width="6" height="2" class="pl"/></pattern><pattern id="px" width="6" height="6" patternUnits="userSpaceOnUse"><rect width="6" height="1.6" class="pl"/><rect width="1.6" height="6" class="pl"/></pattern></defs>
-<text x="10.0" y="20.0" class="t" text-anchor="start">Best encoder per format: PSNR in dB, grouped by compressor</text>
-<text x="10.0" y="38.0" class="s" text-anchor="start">Higher is better. Bars start at 35 dB, not zero. The stripe shows the format.</text>
-<rect x="10" y="48" width="14" height="12" class="mu"/>
-<text x="30.0" y="58.0" class="s" text-anchor="start">BC1 RGB</text>
-<rect x="97" y="48" width="14" height="12" class="mu"/>
-<rect x="97" y="48" width="14" height="12" fill="url(#pd)"/>
-<text x="117.0" y="58.0" class="s" text-anchor="start">BC3 premultiplied</text>
-<rect x="254" y="48" width="14" height="12" class="mu"/>
-<rect x="254" y="48" width="14" height="12" fill="url(#ph)"/>
-<text x="274.0" y="58.0" class="s" text-anchor="start">BC4</text>
-<rect x="313" y="48" width="14" height="12" class="mu"/>
-<rect x="313" y="48" width="14" height="12" fill="url(#px)"/>
-<text x="333.0" y="58.0" class="s" text-anchor="start">BC6H multi-exposure</text>
-<path class="g" d="M30.0 78V484"/>
-<text x="30.0" y="496.0" class="m" text-anchor="middle">35</text>
-<path class="g" d="M226.9 78V484"/>
-<text x="226.9" y="496.0" class="m" text-anchor="middle">40</text>
-<path class="g" d="M423.8 78V484"/>
-<text x="423.8" y="496.0" class="m" text-anchor="middle">45</text>
-<path class="g" d="M620.6 78V484"/>
-<text x="620.6" y="496.0" class="m" text-anchor="middle">50</text>
-<text x="10.0" y="88.0" class="b" text-anchor="start">rgbcx</text>
-<rect x="30.0" y="94" width="191.0" height="12" class="f0"/>
-<text x="226.0" y="104.0" class="s" text-anchor="start">39.85</text>
-<rect x="30.0" y="109" width="559.1" height="12" class="f0"/>
-<rect x="30.0" y="109" width="559.1" height="12" fill="url(#pd)"/>
-<text x="594.1" y="119.0" class="s" text-anchor="start">49.20</text>
-<rect x="30.0" y="124" width="417.0" height="12" class="f0"/>
-<rect x="30.0" y="124" width="417.0" height="12" fill="url(#ph)"/>
-<text x="452.0" y="134.0" class="s" text-anchor="start">45.59</text>
-<text x="36.0" y="149.0" class="s" text-anchor="start">not measured</text>
-<text x="10.0" y="170.0" class="b" text-anchor="start">NVTT 3</text>
-<rect x="30.0" y="176" width="186.6" height="12" class="f2"/>
-<text x="221.6" y="186.0" class="s" text-anchor="start">39.74</text>
-<rect x="30.0" y="191" width="562.7" height="12" class="f2"/>
-<rect x="30.0" y="191" width="562.7" height="12" fill="url(#pd)"/>
-<text x="597.7" y="201.0" class="s" text-anchor="start">49.29</text>
-<rect x="30.0" y="206" width="395.7" height="12" class="f2"/>
-<rect x="30.0" y="206" width="395.7" height="12" fill="url(#ph)"/>
-<text x="430.7" y="216.0" class="s" text-anchor="start">45.05</text>
-<rect x="30.0" y="221" width="511.9" height="12" class="f2"/>
-<rect x="30.0" y="221" width="511.9" height="12" fill="url(#px)"/>
-<text x="546.9" y="231.0" class="s" text-anchor="start">48.00</text>
-<text x="10.0" y="252.0" class="b" text-anchor="start">Compressonator</text>
-<rect x="30.0" y="258" width="159.5" height="12" class="f3"/>
-<text x="194.5" y="268.0" class="s" text-anchor="start">39.05</text>
-<rect x="30.0" y="273" width="541.4" height="12" class="f3"/>
-<rect x="30.0" y="273" width="541.4" height="12" fill="url(#pd)"/>
-<text x="576.4" y="283.0" class="s" text-anchor="start">48.75</text>
-<rect x="30.0" y="288" width="401.2" height="12" class="f3"/>
-<rect x="30.0" y="288" width="401.2" height="12" fill="url(#ph)"/>
-<text x="436.2" y="298.0" class="s" text-anchor="start">45.19</text>
-<text x="36.0" y="313.0" class="s" text-anchor="start">not measured†</text>
-<text x="10.0" y="334.0" class="b" text-anchor="start">Intel ISPC</text>
-<rect x="30.0" y="340" width="122.5" height="12" class="f1"/>
-<text x="157.5" y="350.0" class="s" text-anchor="start">38.11</text>
-<rect x="30.0" y="355" width="512.7" height="12" class="f1"/>
-<rect x="30.0" y="355" width="512.7" height="12" fill="url(#pd)"/>
-<text x="547.7" y="365.0" class="s" text-anchor="start">48.02</text>
-<rect x="30.0" y="370" width="342.6" height="12" class="f1"/>
-<rect x="30.0" y="370" width="342.6" height="12" fill="url(#ph)"/>
-<text x="377.6" y="380.0" class="s" text-anchor="start">43.70</text>
-<rect x="30.0" y="385" width="605.6" height="12" class="f1"/>
-<rect x="30.0" y="385" width="605.6" height="12" fill="url(#px)"/>
-<text x="640.6" y="395.0" class="s" text-anchor="start">50.38</text>
-<text x="10.0" y="416.0" class="b" text-anchor="start">texconv (CPU)</text>
-<rect x="30.0" y="422" width="94.9" height="12" class="f4"/>
-<text x="129.9" y="432.0" class="s" text-anchor="start">37.41</text>
-<rect x="30.0" y="437" width="514.6" height="12" class="f4"/>
-<rect x="30.0" y="437" width="514.6" height="12" fill="url(#pd)"/>
-<text x="549.6" y="447.0" class="s" text-anchor="start">48.07</text>
-<rect x="30.0" y="452" width="352.0" height="12" class="f4"/>
-<rect x="30.0" y="452" width="352.0" height="12" fill="url(#ph)"/>
-<text x="387.0" y="462.0" class="s" text-anchor="start">43.94</text>
-<rect x="30.0" y="467" width="575.7" height="12" class="f4"/>
-<rect x="30.0" y="467" width="575.7" height="12" fill="url(#px)"/>
-<text x="610.7" y="477.0" class="s" text-anchor="start">49.62</text>
-<text x="10.0" y="512.0" class="s" text-anchor="start">† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.</text>
-<text x="10.0" y="536.0" class="s" text-anchor="start">BC5 normals and BC6H highlight share are not dB; the full table is in the wiki (Research).</text>
+<rect class="bg" width="780" height="584"/>
+<defs><pattern id="pd" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3.5" height="8" class="pl"/></pattern><pattern id="ph" width="8" height="7" patternUnits="userSpaceOnUse"><rect width="8" height="3" class="pl"/></pattern><pattern id="px" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="2.4" class="pl"/><rect width="2.4" height="8" class="pl"/></pattern><pattern id="pv" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="3.5" height="8" class="pl"/></pattern></defs>
+<text x="10.0" y="20.0" class="t" text-anchor="start">Best encoder per format: PSNR in dB, grouped by format</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">Higher is better. Bars start at 35 dB, not zero. The stripe shows the encoder.</text>
+<rect x="10" y="48" width="14" height="12" class="nf"/>
+<text x="30.0" y="58.0" class="s" text-anchor="start">rgbcx</text>
+<rect x="83" y="48" width="14" height="12" class="nf"/>
+<rect x="83" y="48" width="14" height="12" fill="url(#pd)"/>
+<text x="103.0" y="58.0" class="s" text-anchor="start">NVTT 3</text>
+<rect x="163" y="48" width="14" height="12" class="nf"/>
+<rect x="163" y="48" width="14" height="12" fill="url(#ph)"/>
+<text x="183.0" y="58.0" class="s" text-anchor="start">Compressonator</text>
+<rect x="299" y="48" width="14" height="12" class="nf"/>
+<rect x="299" y="48" width="14" height="12" fill="url(#px)"/>
+<text x="319.0" y="58.0" class="s" text-anchor="start">Intel ISPC</text>
+<rect x="407" y="48" width="14" height="12" class="nf"/>
+<rect x="407" y="48" width="14" height="12" fill="url(#pv)"/>
+<text x="427.0" y="58.0" class="s" text-anchor="start">texconv (CPU)</text>
+<path class="g" d="M30.0 78V522"/>
+<text x="30.0" y="534.0" class="m" text-anchor="middle">35</text>
+<path class="g" d="M226.9 78V522"/>
+<text x="226.9" y="534.0" class="m" text-anchor="middle">40</text>
+<path class="g" d="M423.8 78V522"/>
+<text x="423.8" y="534.0" class="m" text-anchor="middle">45</text>
+<path class="g" d="M620.6 78V522"/>
+<text x="620.6" y="534.0" class="m" text-anchor="middle">50</text>
+<text x="10.0" y="88.0" class="b" text-anchor="start">BC1 colour (RGB PSNR)</text>
+<rect x="30.0" y="94" width="191.0" height="14" class="nf"/>
+<text x="226.0" y="106.0" class="s" text-anchor="start">39.85</text>
+<rect x="30.0" y="112" width="186.6" height="14" class="nf"/>
+<rect x="30.0" y="112" width="186.6" height="14" fill="url(#pd)"/>
+<text x="221.6" y="124.0" class="s" text-anchor="start">39.74</text>
+<rect x="30.0" y="130" width="159.5" height="14" class="nf"/>
+<rect x="30.0" y="130" width="159.5" height="14" fill="url(#ph)"/>
+<text x="194.5" y="142.0" class="s" text-anchor="start">39.05</text>
+<rect x="30.0" y="148" width="122.5" height="14" class="nf"/>
+<rect x="30.0" y="148" width="122.5" height="14" fill="url(#px)"/>
+<text x="157.5" y="160.0" class="s" text-anchor="start">38.11</text>
+<rect x="30.0" y="166" width="94.9" height="14" class="nf"/>
+<rect x="30.0" y="166" width="94.9" height="14" fill="url(#pv)"/>
+<text x="129.9" y="178.0" class="s" text-anchor="start">37.41</text>
+<text x="10.0" y="200.0" class="b" text-anchor="start">BC3 colour + alpha (premultiplied PSNR)</text>
+<rect x="30.0" y="206" width="559.1" height="14" class="nf"/>
+<text x="594.1" y="218.0" class="s" text-anchor="start">49.20</text>
+<rect x="30.0" y="224" width="562.7" height="14" class="nf"/>
+<rect x="30.0" y="224" width="562.7" height="14" fill="url(#pd)"/>
+<text x="597.7" y="236.0" class="s" text-anchor="start">49.29</text>
+<rect x="30.0" y="242" width="541.4" height="14" class="nf"/>
+<rect x="30.0" y="242" width="541.4" height="14" fill="url(#ph)"/>
+<text x="576.4" y="254.0" class="s" text-anchor="start">48.75</text>
+<rect x="30.0" y="260" width="512.7" height="14" class="nf"/>
+<rect x="30.0" y="260" width="512.7" height="14" fill="url(#px)"/>
+<text x="547.7" y="272.0" class="s" text-anchor="start">48.02</text>
+<rect x="30.0" y="278" width="514.6" height="14" class="nf"/>
+<rect x="30.0" y="278" width="514.6" height="14" fill="url(#pv)"/>
+<text x="549.6" y="290.0" class="s" text-anchor="start">48.07</text>
+<text x="10.0" y="312.0" class="b" text-anchor="start">BC4 masks (PSNR)</text>
+<rect x="30.0" y="318" width="417.0" height="14" class="nf"/>
+<text x="452.0" y="330.0" class="s" text-anchor="start">45.59</text>
+<rect x="30.0" y="336" width="395.7" height="14" class="nf"/>
+<rect x="30.0" y="336" width="395.7" height="14" fill="url(#pd)"/>
+<text x="430.7" y="348.0" class="s" text-anchor="start">45.05</text>
+<rect x="30.0" y="354" width="401.2" height="14" class="nf"/>
+<rect x="30.0" y="354" width="401.2" height="14" fill="url(#ph)"/>
+<text x="436.2" y="366.0" class="s" text-anchor="start">45.19</text>
+<rect x="30.0" y="372" width="342.6" height="14" class="nf"/>
+<rect x="30.0" y="372" width="342.6" height="14" fill="url(#px)"/>
+<text x="377.6" y="384.0" class="s" text-anchor="start">43.70</text>
+<rect x="30.0" y="390" width="352.0" height="14" class="nf"/>
+<rect x="30.0" y="390" width="352.0" height="14" fill="url(#pv)"/>
+<text x="387.0" y="402.0" class="s" text-anchor="start">43.94</text>
+<text x="10.0" y="424.0" class="b" text-anchor="start">BC6H HDR (multi-exposure PSNR)</text>
+<text x="36.0" y="442.0" class="s" text-anchor="start">not measured</text>
+<rect x="30.0" y="448" width="511.9" height="14" class="nf"/>
+<rect x="30.0" y="448" width="511.9" height="14" fill="url(#pd)"/>
+<text x="546.9" y="460.0" class="s" text-anchor="start">48.00</text>
+<text x="36.0" y="478.0" class="s" text-anchor="start">not measured†</text>
+<rect x="30.0" y="484" width="605.6" height="14" class="nf"/>
+<rect x="30.0" y="484" width="605.6" height="14" fill="url(#px)"/>
+<text x="640.6" y="496.0" class="s" text-anchor="start">50.38</text>
+<rect x="30.0" y="502" width="575.7" height="14" class="nf"/>
+<rect x="30.0" y="502" width="575.7" height="14" fill="url(#pv)"/>
+<text x="610.7" y="514.0" class="s" text-anchor="start">49.62</text>
+<text x="10.0" y="558.0" class="s" text-anchor="start">† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.</text>
+<text x="10.0" y="574.0" class="s" text-anchor="start">BC5 normals and BC6H highlight share are not dB; the full table is in the wiki (Research).</text>
 </svg>
