@@ -445,3 +445,18 @@ fn moving_a_file_back_splits_a_shared_extensionless_remove() {
     assert_eq!(e.remove, ["a/f.tga"], "{e:?}");
     assert!(e.add.is_empty(), "{e:?}");
 }
+
+/// Fix D2 I1: a folder `a/f/` beside `a/f.png` is no same-stem sibling, so the shared key still goes.
+#[test]
+fn a_folder_with_the_same_stem_is_no_sibling_when_moving_back() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a/f")).unwrap();
+    for f in ["a/f.png", "a/f.tga"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.tga"], "{e:?}");
+}

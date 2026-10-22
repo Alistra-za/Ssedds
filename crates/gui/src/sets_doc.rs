@@ -883,9 +883,10 @@ impl SetsDoc {
             .flatten()
             .flatten()
             .filter(|e| {
-                e.path()
-                    .file_stem()
-                    .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
+                e.file_type().is_ok_and(|t| t.is_file())
+                    && e.path()
+                        .file_stem()
+                        .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
                     && e.file_name().to_string_lossy().to_lowercase() != name
             })
             .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
