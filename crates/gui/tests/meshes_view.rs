@@ -1673,6 +1673,8 @@ fn shape_cards_are_selectable_with_four_facts_and_closed_details() {
         h.query_by_label_contains("120 vertices").is_none(),
         "Details closed"
     );
+    // The scan has no controller data: no Controllers line outside edit mode (T2 review Minor 6).
+    assert!(h.query_by_label("Controllers:").is_none());
     assert_eq!(
         h.query_all_by_label_contains("Details of NIF block")
             .count(),

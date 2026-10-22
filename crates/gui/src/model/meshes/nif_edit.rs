@@ -1080,12 +1080,13 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
 }
 
 /// Meshes UI T2: per shape, "N: title, title (clip)" over its shader's and its alpha's controllers; "none" without.
-/// No line for a shape whose shader is not a BSLightingShaderProperty: the editor does not read those controllers.
+/// A shader that is not a BSLightingShaderProperty has controllers the editor does not read: its shape lists only its
+/// alpha controllers, and gets no line (rather than a wrong "none") when it has none.
 fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
     m.shapes
         .iter()
-        .filter(|s| s.shader.is_none_or(|b| m.lighting.contains_key(&b)))
-        .map(|s| {
+        .filter_map(|s| {
+            let other = s.shader.is_some_and(|b| !m.lighting.contains_key(&b));
             let lit = s.shader.and_then(|b| m.lighting.get(&b));
             let slsf2 = lit.map_or(0, |l| l.lighting.slsf2);
             let props = [
@@ -1106,10 +1107,11 @@ fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
                 })
                 .collect();
             let line = match titles.len() {
+                0 if other => return None,
                 0 => "none".to_string(),
                 n => format!("{n}: {}", titles.join(", ")),
             };
-            (s.block, line)
+            Some((s.block, line))
         })
         .collect()
 }
@@ -1551,10 +1553,13 @@ impl MeshesModel {
         };
         self.drop_edit(); // flushes to the old folder
         self.open_edit(); // the selected NIF is the edited one: selecting another ends the session
-        if let (Selection::Shape(id), Some(e)) = (selection, &self.edit) {
-            if e.parsed.shapes.iter().any(|s| s.id.0 == id) {
-                self.select_edit(selection);
-            }
+                          // Root too (T2 review Minor 1): the reopen starts on `first_selection`, which may be a shape.
+        let keep = self.edit.as_ref().is_some_and(|e| match selection {
+            Selection::Root => true,
+            Selection::Shape(id) => e.parsed.shapes.iter().any(|s| s.id.0 == id),
+        });
+        if keep {
+            self.select_edit(selection);
         }
     }
 

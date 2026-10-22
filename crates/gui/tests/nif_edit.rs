@@ -1190,6 +1190,92 @@ fn edit_opens_on_the_card_picked_before_and_locks_the_shapes_column() {
     assert!(h.state().shapes_col);
 }
 
+/// T2 review Minor 2: a card picked inside Edit is the card outlined after Edit closes and where the next Edit opens.
+#[test]
+fn a_pick_inside_edit_carries_to_the_next_edit() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let last = e.model.shapes.last().unwrap();
+    let (block, name) = (last.block, last.name.clone());
+    let mut h = view(m);
+    h.run_steps(4);
+    let tail = format!(" {}", name.as_deref().unwrap());
+    h.query_all_by_role(AkRole::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Select shape") && l.ends_with(&tail))
+        })
+        .expect("the last shape's header")
+        .click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().selection,
+        Selection::Shape(block)
+    );
+    assert_eq!(h.state().card_sel, Some((block, name.clone())));
+    let m = h.state_mut();
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(m.edit.as_ref().unwrap().selection, Selection::Shape(block));
+}
+
+/// T2 review Minor 1: Root stays selected across an export-folder switch (the reopen would pick a shape).
+#[test]
+fn root_stays_selected_across_an_export_folder_switch() {
+    let (d, mut m) = export_session();
+    m.card_sel = Some((m.shapes[0].block, m.shapes[0].name.clone()));
+    m.open_edit();
+    assert!(matches!(
+        m.edit.as_ref().unwrap().selection,
+        Selection::Shape(_)
+    ));
+    m.select_edit(Selection::Root);
+    m.set_nif_export_root(Some(d.path().join(r"mods\MyOut")));
+    assert!(m.edit.is_some());
+    assert_eq!(m.edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+/// T2 review Minor 6: a clip-driven controller reads "(clip)", a shape without controllers "none", and a shape whose
+/// shader is not a lighting shader keeps its alpha controllers (Minor 3).
+#[test]
+fn controllers_lines_mark_clips_say_none_and_keep_alpha_on_other_shaders() {
+    let mut h = view(direct(scenes::managed_clip()));
+    h.run_steps(2);
+    h.get_by_label_contains("(clip)");
+    let mut h = view(direct(two_named(false)));
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("none").count(), 2);
+    let mut n = Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", scenes::bstri_named(s, 1, 2));
+    n.block(
+        "BSWaterShaderProperty",
+        W::default().raw(&nif::net::encode_net(-1, &[], -1)).0,
+    );
+    n.block(
+        "NiAlphaProperty",
+        W::default()
+            .raw(&nif::net::encode_net(-1, &[], 3))
+            .u16(0x00ED)
+            .u8(128)
+            .0,
+    );
+    n.block(
+        "BSNiAlphaPropertyTestRefController",
+        scenes::ctrl_body(-1, 0x48, 2, W::default().i32(4)),
+    );
+    n.block("NiFloatInterpolator", W::default().f(1.0).i32(5).0);
+    n.block(
+        "NiFloatData",
+        W::default().u32(2).u32(1).fs(&[0.0, 0.0, 1.0, 1.0]).0,
+    );
+    let mut h = view(direct(n.bytes()));
+    h.run_steps(2);
+    h.get_by_label("1: Alpha test threshold");
+}
+
 /// Meshes UI T2: a NIF with one shape opens Edit on that shape, not on Root.
 #[test]
 fn a_one_shape_nif_opens_edit_on_its_shape() {

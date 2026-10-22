@@ -842,9 +842,11 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                             title
                         }
                         None => {
-                            let title = name.unwrap_or("(unnamed)");
+                            // No scanned card, so no 3D index: "#–" gives every header the same form (T2 review
+                            // Minor 5).
+                            let title = format!("#– {}", name.unwrap_or("(unnamed)"));
                             let label = format!("Select shape {title}");
-                            header(ui, on, title, &fallback, &label, block)
+                            header(ui, on, &title, &fallback, &label, block)
                         }
                     };
                     if title {
@@ -858,7 +860,10 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
         m.show_users(&p);
     }
     match (pick, m.edit.is_some()) {
-        (Some((b, _)), true) => m.select_edit(Selection::Shape(b)),
+        (Some(p), true) => {
+            m.select_edit(Selection::Shape(p.0));
+            m.card_sel = Some(p); // T2 review Minor 2: the outline and the next Edit follow this pick
+        }
         (Some(p), false) => m.card_sel = Some(p),
         (None, _) => {}
     }

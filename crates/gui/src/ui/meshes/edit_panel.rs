@@ -188,6 +188,7 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                 ui.colored_label(GREEN, "Ready");
             }
             // Review Minor 5: nothing edited yet is an idle state, not a block: a weak dot and weak text.
+            // shortcut: a hand-drawn copy of `status::dot`; add a `Status::Idle` there (main-team file) if another view needs it.
             Some(why) if why == NO_EDITS => {
                 let (rect, r) =
                     ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
