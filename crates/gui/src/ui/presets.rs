@@ -341,7 +341,8 @@ fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
             acts.push(Act::ResetAll);
         }
         if pm.deletable() {
-            let id = ui.make_persistent_id("presets-delete-ask");
+            // Trace #22: per preset, so picking another one never shows the question already asked.
+            let id = ui.make_persistent_id(("presets-delete-ask", pm.id()));
             let asking = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
             if asking {
                 let file = pm.source_file().unwrap_or_else(|| pm.id());
