@@ -67,6 +67,9 @@ pub const FACEGEN_DETAIL_TYPE: &str =
 /// Note CS (owner): type 4 without bit 10 is wrong too (every vanilla Face Tint shape has it).
 pub const FACE_TINT_FLAG: &str =
     "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
+/// Note CU8 (C6E): Skyrim crashes in Load3D on a NiControllerManager that lists no sequences.
+pub const EMPTY_MANAGER: &str =
+    "This file has a NiControllerManager with no clips: the game crashes on it.";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
 const ALWAYS_BLOCK: [&str; 4] = [
     ENV_SCALE_PBR,
@@ -367,6 +370,19 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
         }
     }
 
+    // Note CU8: a manager the root's chain reaches that lists nothing (an unlinked one is never loaded)
+    let mut at = m.root_net.as_ref().map_or(-1, |n| n.controller);
+    for _ in 0..=m.ctrls.len() {
+        let Some(c) = u32::try_from(at).ok().and_then(|b| m.ctrls.get(&b)) else {
+            break;
+        };
+        if m.managers.get(&c.block) == Some(&0) {
+            let tgt = Target::Block { block: c.block };
+            push(Level::Error, tgt, EMPTY_MANAGER, None);
+        }
+        at = c.next;
+    }
+
     for (&block, e) in &m.extras {
         if e.kind == "BSXFlags" && e.name.as_deref() != Some(b"BSX") {
             push(
@@ -522,6 +538,18 @@ fn fixed_path(text: &str, norm: &str) -> Option<String> {
         .map(|(i, _)| i)
         .find(|&i| i == 0 || norm.as_bytes()[i - 1] == b'\\')?;
     Some(text[cut..].to_string())
+}
+
+/// Note CU8: an [`EMPTY_MANAGER`] Error the source already has is shown as a Warning (the edits did not make it).
+pub fn demote_source(source: &[Warning], edited: &mut [Warning]) {
+    for w in edited.iter_mut().filter(|w| w.text == EMPTY_MANAGER) {
+        if source
+            .iter()
+            .any(|s| s.target == w.target && s.text == w.text)
+        {
+            w.level = Level::Warn;
+        }
+    }
 }
 
 /// Errors in `edited` that `source` does not already have (R14): an untouched source error never blocks export,

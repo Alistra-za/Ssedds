@@ -193,9 +193,9 @@ fn refused_line(ui: &mut egui::Ui, id: egui::Id, inputs: &str) {
     }
 }
 
-/// The current bytes' identity: a refusal shown for one file state is cleared by any edit, undo or reload.
+/// The current state's identity: a refusal shown for one file state is cleared by any edit, undo or reload.
 fn bytes_tag(e: &NifEdit) -> String {
-    format!("{:p}", std::sync::Arc::as_ptr(&e.patched))
+    e.rev.to_string() // Note CU2: never the `Arc` address, which a later state can reuse
 }
 
 /// Rename and Remove for the clip the Preview shows, with its cycle and range (C5-D1, F14).

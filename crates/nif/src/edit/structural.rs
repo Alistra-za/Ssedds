@@ -770,33 +770,32 @@ fn enc<T>(r: Result<T, crate::NifError>) -> Result<T, String> {
 /// #INV_FLT#: the Value every vanilla blend interpolator holds (C1 census, 6722 of 6722).
 const INV_FLT: u32 = 0xFF7F_FFFF;
 
-/// The first NiControllerManager on the root's controller chain. Err when a NiControllerManager on the chain does
-/// not read, so AddSequence never puts a second manager in front of it (C-P35 M2).
-fn root_manager(h: &Header, m: &NifModel) -> Result<Option<u32>, String> {
+/// The first NiControllerManager on the root's controller chain. The whole chain is checked to its end (C-P35 M2,
+/// Note CU4, fix round 1): every entry reads, every manager's payload reads, no loop and no link outside -1 and the
+/// file; otherwise Err, so no clip op runs on a chain it cannot see whole.
+fn root_manager(h: &Header, cur: &[u8], m: &NifModel) -> Result<Option<u32>, String> {
     let Some(net) = m.root_net.as_ref() else {
         return Ok(None);
     };
-    let mut c = net.controller;
-    // bounded: a looping chain is cut by `ctrl::chain`, but stay safe on any `next`
-    for _ in 0..=m.ctrls.len() {
-        let Ok(b) = u32::try_from(c) else {
-            return Ok(None);
+    let broken = || Err("The root's controller chain cannot be read.".into());
+    let (mut c, mut seen, mut first) = (net.controller, vec![], None);
+    while c != -1 {
+        let Some(t) = u32::try_from(c).ok().and_then(|b| m.ctrls.get(&b)) else {
+            return broken();
         };
-        let Some(t) = m.ctrls.get(&b) else {
-            // before h.kind, which does not check the range
-            let man = (b as usize) < h.sizes.len() && h.kind(b as usize) == b"NiControllerManager";
-            return if man {
-                Err("The root's controller chain cannot be read.".into())
-            } else {
-                Ok(None)
-            };
-        };
+        if seen.contains(&t.block) {
+            return broken(); // a loop
+        }
+        seen.push(t.block);
         if t.class == "NiControllerManager" {
-            return Ok(Some(t.block));
+            if read_manager(h, cur, t.block as usize).is_err() {
+                return broken();
+            }
+            first = first.or(Some(t.block));
         }
         c = t.next;
     }
-    Ok(None)
+    Ok(first)
 }
 
 /// The raw Name of each listed sequence (None: no name). A listed sequence that does not read is an Err (C-P29).
@@ -822,7 +821,7 @@ fn find_clip(
     name: &str,
     nth: u32,
 ) -> Result<Option<(u32, Manager, usize)>, String> {
-    let Some(mb) = root_manager(h, m)? else {
+    let Some(mb) = root_manager(h, cur, m)? else {
         return Ok(None);
     };
     let man = enc(read_manager(h, cur, mb as usize))?;
@@ -843,7 +842,7 @@ fn clip_named(r: &[u8], name: &str) -> bool {
 /// list it, it has no name, or the manager or a listed sequence does not read. Parses the header: call it on a click.
 pub fn clip_key(b: &[u8], m: &NifModel, seq: u32) -> Option<(String, u32)> {
     let h = Header::parse(b).ok()?;
-    let man = read_manager(&h, b, root_manager(&h, m).ok()?? as usize).ok()?;
+    let man = read_manager(&h, b, root_manager(&h, b, m).ok()?? as usize).ok()?;
     let names = clip_names(&h, b, &man.sequences).ok()?;
     let k = man.sequences.iter().position(|&s| s == seq as i32)?;
     let name = crate::text::lossy(names[k]?);
@@ -988,6 +987,9 @@ pub(crate) fn clip_op(
                 return missing(name);
             };
             let removed = man.sequences.remove(k);
+            if man.sequences.is_empty() {
+                unlink_manager(doc, m, root, mgr, &man)?;
+            }
             doc.set_block(mgr, enc(encode_manager(&man))?);
             // C-P29: the union over every readable manager after the remove, as read_model counts live sequences
             let h = doc.header();
@@ -1020,6 +1022,43 @@ pub(crate) fn clip_op(
     }
     Ok(Outcome::Applied)
 }
+
+/// C-P36 (Note CU8, C6E): the game crashes on a manager with no sequences, so the emptied manager and the MTTC after
+/// it leave the root's chain (its link goes to what followed them); export cleanup (Note CQ) then drops them with the
+/// palette. Call before any block is re-emitted: the offsets are the ones `m` was read with.
+fn unlink_manager(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    root: u32,
+    mgr: u32,
+    man: &Manager,
+) -> Result<(), String> {
+    let net = m
+        .root_net
+        .as_ref()
+        .ok_or("The root is not a node: a clip needs a node root.")?;
+    let mut after = man.ctrl.next;
+    if let Some(t) = u32::try_from(after).ok().and_then(|b| m.ctrls.get(&b)) {
+        if t.class == "NiMultiTargetTransformController" {
+            after = t.next;
+        }
+    }
+    if net.controller == mgr as i32 {
+        let at = net.controller_at() - doc.header().offsets()[root as usize];
+        return patch(doc, root, at, after);
+    }
+    // root_manager walked this chain, so the manager is on it
+    let prev = m
+        .ctrls
+        .values()
+        .find(|c| c.next == mgr as i32)
+        .ok_or("The root's controller chain cannot be read.")?;
+    patch(doc, prev.block, 0, after)
+}
+
+/// AddSequence's cycle and range refusals; `convert_check` predicts both with the same text (Note CU3).
+const BAD_CYCLE: &str = "The cycle must be Loop, Reverse or Clamp.";
+const BAD_RANGE: &str = "Stop must be after start.";
 
 /// The controllers ConvertChainToClips would take from property `prop` (chain order), or why it cannot run.
 /// Model only, no header parse: the Controllers tab calls it every frame. `shape` is the anchored shape's name.
@@ -1084,6 +1123,18 @@ pub fn convert_check(m: &NifModel, prop: u32, shape: Option<&str>) -> Result<Vec
         .all(|c| c.start.is_finite() && c.stop.is_finite())
     {
         return Err("This animation has invalid times: it cannot be converted.".into());
+    }
+    // Note CU3: the checks AddSequence makes on the clip convert_op builds (cycle bits, the union range)
+    if (first.flags >> 1) & 3 == 3 {
+        return Err(BAD_CYCLE.into());
+    }
+    let (start, stop) = free
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.start), b.max(c.stop))
+        });
+    if stop <= start {
+        return Err(BAD_RANGE.into());
     }
     Ok(free.iter().map(|c| c.block).collect())
 }
@@ -1220,7 +1271,7 @@ pub(crate) fn add_sequence(
         .root
         .zip(m.root_net.as_ref())
         .ok_or("The root is not a node: a clip needs a node root.")?;
-    let found = root_manager(doc.header(), m)?;
+    let found = root_manager(doc.header(), cur, m)?;
     let old = match found {
         Some(mb) => Some(enc(read_manager(doc.header(), cur, mb as usize))?),
         None => None,
@@ -1230,10 +1281,10 @@ pub(crate) fn add_sequence(
         return Err("Clip times must be finite numbers.".into());
     }
     if cycle > 2 {
-        return Err("The cycle must be Loop, Reverse or Clamp.".into());
+        return Err(BAD_CYCLE.into());
     }
     if stop.partial_cmp(&start) != Some(std::cmp::Ordering::Greater) {
-        return Err("Stop must be after start.".into());
+        return Err(BAD_RANGE.into());
     }
     if tracks.is_empty() {
         return Err("A clip needs at least one track.".into());
