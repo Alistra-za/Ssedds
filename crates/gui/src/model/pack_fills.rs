@@ -232,8 +232,12 @@ impl AppModel {
 /// What the card shows for one channel of a packed output.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FillRow {
-    /// The channel has a source file: read-only text.
-    FromFile { role: RawMap, file: String },
+    /// The channel has a source file: read-only text. `key` is the file's item key.
+    FromFile {
+        role: RawMap,
+        file: String,
+        key: String,
+    },
     /// No source: a 0..=255 value (the fill, or the neutral default that stands in), with a reset when the
     /// output's own entry holds the key.
     Value {
@@ -264,6 +268,11 @@ pub fn fill_rows(model: &AppModel, key: &str) -> Vec<FillRow> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
+                    key: model
+                        .root
+                        .as_deref()
+                        .map(|r| super::items::key_of(r, path))
+                        .unwrap_or_default(),
                 },
                 ChannelSource::Fill { role: r, code } => FillRow::Value {
                     role,

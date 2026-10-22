@@ -495,7 +495,10 @@
         "ALSO-PHASE-FAILED",
         "ALSO-OWNED-UNREADABLE",
         "ALSO-ZIP-FAILED",
-        "ALSO-REPORT-FAILED"
+        "ALSO-REPORT-FAILED",
+        "GEN-REPLACED",
+        "GEN-STALE",
+        "GEN-AO"
       ],
       "type": "string"
     },
@@ -1886,6 +1889,11 @@
         {
           "const": "low_detail",
           "description": "`CHK-LOW-DETAIL`: held by `BatchRequest::low_detail = hold`, not written (v2 artist checks, check 3).",
+          "type": "string"
+        },
+        {
+          "const": "generated_replaced",
+          "description": "A generated member that a real source for its slot replaced (`GEN-REPLACED`, Note CO).",
           "type": "string"
         }
       ]

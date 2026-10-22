@@ -658,6 +658,11 @@ impl PresetRegistry {
                     "suffix alias '{alias}' is a canonical suffix (spec §6.1)"
                 )));
             }
+            if alias == crate::group::GENERATED {
+                return Err(bad(
+                    "suffix alias 'generated' is the generated-file marker".into()
+                ));
+            }
             if alias == "orm" {
                 return Err(bad(
                     "suffix alias 'orm' is an exporter vocabulary term: orm is a built-in packing input since Note AL (AO, roughness, metallic); remove the alias".into(),

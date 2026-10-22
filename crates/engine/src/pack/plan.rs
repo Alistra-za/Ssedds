@@ -147,6 +147,9 @@ pub struct PackPlan {
     pub candidates: Vec<Candidate>,
     /// Recipe reports per set key, for `set_resolved`.
     pub reports: BTreeMap<String, Vec<RecipeReport>>,
+    /// Generated AO maps skipped `GEN-REPLACED` because a pre-packed image's B holds AO (Note CO103); the caller
+    /// drops them from their sets, as step 3b does its losers.
+    pub gen_replaced: Vec<PathBuf>,
 }
 
 /// Marks the report of `c` `Failed` with `reason`: pass 2 could not plan it (a load or assembly failure, a panic, or
@@ -216,6 +219,95 @@ fn prepacked_member<'a>(
                 == Some(kind.suffix())
             && jobs.iter().any(|j| j.input == f.path)
     })
+}
+
+/// Note CO103: a generated AO beside a pre-packed `_rmaos`/`_rfaos` image of the set (cs). When the image's B holds
+/// AO (or was not analysed), the generated AO is skipped `GEN-REPLACED` and leaves `raw`. When it is empty and the
+/// AO is the set's only `_rmaos`/`_rfaos` source, the image joins `raw` as `RawMap::Rmaos` and `recipes_for_with`
+/// builds R, G and A from it, B from the AO. With other loose sources the M9 conflict of today stands.
+#[allow(clippy::too_many_arguments)]
+fn prepacked_b<'a>(
+    ctx: &ResolveCtx,
+    set: &TextureSet,
+    files: &'a [InputFile],
+    flat_b: &BTreeSet<PathBuf>,
+    raw: &mut Vec<RawInput>,
+    members: &mut BTreeMap<PathBuf, &'a InputFile>,
+    jobs: &mut Vec<ResolvedJob>,
+    skipped: &mut Vec<SkippedFile>,
+    out: &mut PackPlan,
+) {
+    let stem = |p: &Path| {
+        p.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let Some(ai) = raw
+        .iter()
+        .position(|r| r.role == RawMap::Ao && crate::group::is_generated(&stem(&r.path)))
+    else {
+        return;
+    };
+    let Some(img) = set.members.iter().map(|&i| &files[i]).find(|f| {
+        f.kind == InputKind::Image
+            && raw_role(f).is_none()
+            && matches!(
+                split_suffix_with(&stem(&f.rel), ctx.registry.alias_table())
+                    .suffix
+                    .as_deref(),
+                Some("rmaos" | "rfaos")
+            )
+    }) else {
+        return;
+    };
+    // CO107: the recipe kind and `virtual_stem` read the built-in suffix only, so an aliased image is never joined.
+    // shortcut: an aliased `_rmaos`/`_rfaos` image always keeps its own job; pass the alias table to the recipe and
+    // `virtual_stem` if users ask for AO on aliased pre-packed images.
+    let aliased = crate::group::split_suffix(&stem(&img.rel)).1.as_deref()
+        != split_suffix_with(&stem(&img.rel), ctx.registry.alias_table())
+            .suffix
+            .as_deref();
+    if aliased || !flat_b.contains(&img.path) {
+        let ao = raw.remove(ai).path;
+        let f = members.remove(&ao).expect("a raw member");
+        jobs.retain(|j| j.input != ao);
+        skipped.push(SkippedFile {
+            path: ao.clone(),
+            output: f.output.clone(),
+            set: Some(set.key.clone()),
+            code: Some(Code::GenReplaced),
+            reason: format!(
+                "generated {} replaced by {}{}",
+                name(&ao),
+                name(&img.path),
+                if aliased { "" } else { " (B)" }
+            ),
+        });
+        out.gen_replaced.push(ao);
+        return;
+    }
+    let ao = &raw[ai].path;
+    let lone = !raw.iter().any(|r| {
+        &r.path != ao
+            && matches!(
+                r.role,
+                RawMap::Roughness
+                    | RawMap::Glossiness
+                    | RawMap::Metallic
+                    | RawMap::Specular
+                    | RawMap::Fuzz
+                    | RawMap::Orm
+                    | RawMap::Ao
+            )
+    });
+    if lone {
+        raw.push(RawInput {
+            path: img.path.clone(),
+            role: RawMap::Rmaos,
+        });
+        members.insert(img.path.clone(), img);
+    }
 }
 
 /// PACK-SIZE-MISMATCH for `output`, whose sources differ in size (spec §6.4 "Dimensions"; derive TA22).
@@ -308,7 +400,8 @@ fn chosen_recipe(
     pa: &Analysis,
     pinfo: &SourceInfo,
 ) -> (PackRecipe, Option<(Code, String)>) {
-    if ctx.target != Target::Cs {
+    // CO109: a pre-packed image keeps its own layout (`_rmaos` or `_rfaos`), whatever `packing.recipe` says.
+    if ctx.target != Target::Cs || raw.iter().any(|r| r.role == RawMap::Rmaos) {
         return (PackRecipe::Auto, None);
     }
     let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto, false);
@@ -425,6 +518,7 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
 /// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b. `derive_heights`
 /// holds the raw heights of the landscape sets a Vanilla derive converts (Note CN26, O6): each gets the cs
 /// `Parallax` recipe, which the vanilla target otherwise never plans. It is empty without `derive` (C6).
+/// `flat_b` holds the pass-1 images whose B is empty (`!pack::b_has_content`, Note CO103).
 #[allow(clippy::too_many_arguments)]
 pub fn plan_packing(
     ctx: &ResolveCtx,
@@ -436,11 +530,13 @@ pub fn plan_packing(
     skipped: &mut Vec<SkippedFile>,
     packed_outputs: &BTreeMap<(String, String), PathBuf>,
     derive_heights: &BTreeSet<PathBuf>,
+    flat_b: &BTreeSet<PathBuf>,
 ) -> PackPlan {
     let (pa, pinfo) = placeholder();
     let mut out = PackPlan {
         candidates: vec![],
         reports: BTreeMap::new(),
+        gen_replaced: vec![],
     };
     let mut consumed: BTreeSet<PathBuf> = BTreeSet::new();
     let mut heads = vec![];
@@ -467,6 +563,19 @@ pub fn plan_packing(
                 });
                 members.insert(f.path.clone(), f);
             }
+        }
+        if ctx.target == Target::Cs {
+            prepacked_b(
+                ctx,
+                set,
+                files,
+                flat_b,
+                &mut raw,
+                &mut members,
+                jobs,
+                skipped,
+                &mut out,
+            );
         }
         if raw.is_empty() {
             continue;
@@ -565,7 +674,9 @@ pub fn plan_packing(
             // step 5's duplicate check ran on the files, so it is checked against every other output now. Two
             // jobs on one path would both write it (the last rename wins) and append two manifest records.
             if explicit {
-                let taken = other_output(&vin.output, jobs, &outputs, me);
+                // A pre-packed image this recipe reads (Note CO104) is a source, not another writer.
+                let taken =
+                    other_output(&vin.output, jobs, &outputs, me).filter(|o| !sources.contains(o));
                 if let Some(other) = taken {
                     report.status = RecipeStatus::Failed;
                     report.reason = Some(format!(
@@ -630,7 +741,16 @@ pub fn plan_packing(
                 _ => None,
             };
             let mut kept = None;
-            if let Some(pre) = prepacked_member(ctx, set, files, jobs, recipe.kind) {
+            let pre = prepacked_member(ctx, set, files, jobs, recipe.kind);
+            // Note CO104: a pre-packed image that is a channel source of this recipe is consumed like a raw map
+            // (`PackedSource`), never a conflict; on a size mismatch its own job stays, as M9 keeps one.
+            if let Some(own) = pre.filter(|f| sources.contains(&f.path)) {
+                if mismatch.is_some() {
+                    kept = Some(name(&own.path));
+                } else {
+                    jobs.retain(|j| j.input != own.path);
+                }
+            } else if let Some(pre) = pre {
                 let pre_output = pre.output.clone();
                 let pre = pre.path.clone();
                 report.status = RecipeStatus::Conflict;
@@ -804,6 +924,29 @@ pub fn finish_recipe(
                     "channel": CHANNELS[i],
                     "slot": slot,
                     "value": value,
+                })),
+            );
+        }
+    }
+    if let ChannelSource::Source {
+        path,
+        role: RawMap::Ao,
+        ..
+    } = &c.job.channels[2]
+    {
+        if crate::group::is_generated(&path.file_stem().unwrap_or_default().to_string_lossy()) {
+            let file = name(path);
+            job.warnings.push(
+                Warning::new(
+                    Code::GenAo,
+                    format!(
+                        "{out} B: AO generated from the normal map ({file}); a baked AO is better"
+                    ),
+                )
+                .with_data(json!({
+                    "output": slash(&c.virtual_input.output),
+                    "channel": "B",
+                    "source": file,
                 })),
             );
         }

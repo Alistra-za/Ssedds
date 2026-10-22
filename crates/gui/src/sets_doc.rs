@@ -17,6 +17,23 @@ use std::sync::Arc;
 use toml_edit::{Array, ArrayOfTables, Item, Table, TableLike, Value};
 
 pub const FILE_NAME: &str = "sdc-project.toml";
+const GENERATED: &str = "generated";
+
+/// `json_to_toml` that also writes objects, as nested inline tables; `null` members are dropped.
+fn json_to_toml_deep(v: &Json) -> Option<Value> {
+    match v {
+        Json::Object(o) => {
+            let mut t = toml_edit::InlineTable::new();
+            for (k, x) in o {
+                if let Some(x) = json_to_toml_deep(x) {
+                    t.insert(k, x);
+                }
+            }
+            Some(Value::InlineTable(t))
+        }
+        _ => json_to_toml(v),
+    }
+}
 /// GUI tweaks G4: the array of extra PGPatcher entries (delete sections).
 const SECTIONS: &str = "pgp_sections";
 /// Design §5: `[project] cs_pbr_sha256`, path under the export root → hash of the CS JSON sdc last wrote there.
@@ -244,6 +261,8 @@ impl SetsDoc {
         let pgp = self.pgp_json_shas();
         let copies = self.copy_shas();
         let folder = self.export_folder();
+        let generated = self.f.doc.get(GENERATED).cloned();
+        let was_generated = self.generated();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
@@ -266,6 +285,14 @@ impl SetsDoc {
         if self.export_folder() != folder {
             let v = folder.map(|p| Value::from(p.to_string_lossy().as_ref()));
             self.set_project("export_folder", v);
+        }
+        // Note CO (P15): `[generated]` records generated files on disk, which undo does not change either.
+        if self.generated() != was_generated {
+            match generated {
+                Some(t) => self.f.doc.insert(GENERATED, t),
+                None => self.f.doc.remove(GENERATED),
+            };
+            self.f.touch();
         }
         if self.text() == old {
             self.f.doc = doc;
@@ -325,6 +352,51 @@ impl SetsDoc {
             "export_folder",
             Some(Value::from(path.to_string_lossy().as_ref())),
         );
+    }
+
+    /// Note CO: the top-level `[generated]` table, item key → provenance record (`model::from_normal::Provenance`).
+    pub fn generated(&self) -> BTreeMap<String, Json> {
+        self.f
+            .doc
+            .get(GENERATED)
+            .and_then(Item::as_table_like)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, i)| Some((k.to_string(), item_json(i)?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Record (`Some`) or remove (`None`) the provenance of item `key`, matched by Unicode lowercase (Note BF). Not
+    /// through `set_project`: `[generated]` is a table of its own (P15).
+    pub fn set_generated(&mut self, key: &str, v: Option<&Json>) {
+        let fold = key.to_lowercase();
+        let now = self.generated();
+        let same: Vec<&String> = now.keys().filter(|k| k.to_lowercase() == fold).collect();
+        let unchanged = match v {
+            None => same.is_empty(),
+            Some(v) => same.len() == 1 && same[0] == key && now.get(key) == Some(v),
+        };
+        if self.read_only() || unchanged {
+            return;
+        }
+        let value = v.and_then(json_to_toml_deep);
+        let Some(t) = sub_table(self.f.doc.as_table_mut(), GENERATED, || {
+            Item::Table(Table::new())
+        }) else {
+            return;
+        };
+        for k in same {
+            t.remove(k);
+        }
+        if let Some(value) = value {
+            t.insert(key, Item::Value(value));
+        }
+        if t.is_empty() {
+            self.f.doc.remove(GENERATED);
+        }
+        self.f.touch();
     }
 
     /// TA10: `[project] also_location`, where this project's Also export writes its three folders.

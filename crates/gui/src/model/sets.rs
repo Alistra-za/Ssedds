@@ -455,7 +455,7 @@ fn dir_of(key: &str) -> &str {
 }
 
 /// A source stem without its exporter or Skyrim suffix (`rock01_roughness` → `rock01`, `rock01_n` → `rock01`).
-fn base_of(stem: &str) -> String {
+pub(crate) fn base_of(stem: &str) -> String {
     split_vocab(stem).map_or_else(|| split_suffix(stem).0, |(b, _)| b)
 }
 
@@ -1083,8 +1083,8 @@ fn clear_slot(s: &mut SetsDoc, id: &str, slot: Option<SlotKind>, existing: &Opti
 }
 
 impl AppModel {
-    fn view_of(&self, id: &str) -> Option<SetView> {
-        set_views(self).into_iter().find(|v| same_id(&v.id, id))
+    pub(super) fn view_of(&self, id: &str) -> Option<SetView> {
+        views(self).iter().find(|v| same_id(&v.id, id)).cloned()
     }
 
     fn set_of_item(&self, item: &str) -> Option<SetView> {

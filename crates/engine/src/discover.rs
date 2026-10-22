@@ -351,6 +351,8 @@ pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, 
                 VocabRole::Colour => Some(format!("{}.dds", split.base)),
                 VocabRole::Normal(_) | VocabRole::Emissive | VocabRole::CoatColour => suffixed(),
             },
+            // Note CO: a generated §6.1 member writes its role's output (`rock_p_generated` → `rock_p.dds`).
+            (None, None) if crate::group::is_generated(&stem) => suffixed(),
             (None, None) => None,
         };
         if let Some(n) = name {

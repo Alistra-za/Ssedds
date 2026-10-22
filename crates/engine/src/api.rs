@@ -212,12 +212,13 @@ pub struct SkippedFile {
 
 impl SkippedFile {
     /// What the skip means for a consumer of events: `IN-DDS-SKIPPED` (and `DERIVE-DDS-SOURCE`, a set whose DDS sources are
-    /// not re-read, Note CN16), `PACK-CONFLICT`, else `IN-DUPLICATE`.
+    /// not re-read, Note CN16), `PACK-CONFLICT`, `GEN-REPLACED` (Note CO), else `IN-DUPLICATE`.
     pub fn kind(&self) -> SkipKind {
         match self.code {
             Some(Code::InDdsSkipped | Code::DeriveDdsSource) => SkipKind::DdsInput,
             Some(Code::PackConflict) => SkipKind::PackConflict,
             Some(Code::DeriveNotConverted) => SkipKind::PackingInput,
+            Some(Code::GenReplaced) => SkipKind::GeneratedReplaced,
             _ => SkipKind::Duplicate,
         }
     }
@@ -1125,7 +1126,62 @@ impl Engine {
             &req.output_root,
             &req.output_paths,
         );
+        // Read by 3b too (CO102): a DDS at a packed output's explicit path is that output's earlier export.
         let packed_outputs = crate::sets::packed_outputs(&req.output_root, &req.output_paths);
+        // 3b, Note CO (the M9 fold): a generated member loses to a real map for its slot before duplicates and
+        // pack planning see it, since a generated `_p` and a real `_p` share one output.
+        let mut gen_replaced: Vec<SkippedFile> = vec![];
+        let mut losers: BTreeSet<PathBuf> = BTreeSet::new();
+        for (g, r) in crate::group::generated_losers(
+            &sets,
+            &files,
+            registry.alias_table(),
+            target,
+            &packed_outputs,
+        ) {
+            let set = sets
+                .iter_mut()
+                .find(|s| s.members.contains(&g))
+                .expect("a loser is a set member");
+            set.members.retain(|&i| i != g);
+            let suffix_of = |i: usize| {
+                let stem = files[i]
+                    .rel
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                crate::group::split_suffix_with(&stem, registry.alias_table()).suffix
+            };
+            if let Some(sfx) = suffix_of(g) {
+                if !set
+                    .members
+                    .iter()
+                    .any(|&i| suffix_of(i).as_ref() == Some(&sfx))
+                {
+                    set.suffixes.remove(&sfx);
+                }
+            }
+            let name = |i: usize| {
+                files[i]
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            };
+            let dds = if files[r].kind == InputKind::Dds {
+                " (a DDS: not written to the output unless DDS inputs are re-encoded)"
+            } else {
+                ""
+            };
+            losers.insert(files[g].path.clone());
+            gen_replaced.push(SkippedFile {
+                path: files[g].path.clone(),
+                output: files[g].output.clone(),
+                set: Some(set.key.clone()),
+                code: Some(Code::GenReplaced),
+                reason: format!("generated {} replaced by {}{dds}", name(g), name(r)),
+            });
+        }
         for f in &files {
             rep.emit_job(
                 Some(&key(&f.output)),
@@ -1139,7 +1195,7 @@ impl Engine {
         let reencode =
             |f: &InputFile| f.kind == InputKind::Dds && crate::policy::reencode_requested(&ctx, f);
         let dups = crate::group::duplicate_outputs_with(&files, |f| {
-            f.kind != InputKind::Dds || reencode(f)
+            !losers.contains(&f.path) && (f.kind != InputKind::Dds || reencode(f))
         });
 
         // Spec §6.4 "Set membership", DECISIONS Note M7: a recipe's output joins its set before anything resolves.
@@ -1173,6 +1229,7 @@ impl Engine {
                 reason: "two inputs map to one output; exclude one".into(),
             })
             .collect();
+        skipped.extend(gen_replaced);
         let mut self_overwrite: Vec<FailedFile> = vec![];
         let mut work: Vec<(&TextureSet, &InputFile)> = vec![];
         for set in &sets {
@@ -1407,6 +1464,12 @@ impl Engine {
             shaders: &picks,
             ..base_ctx
         };
+        // Note CO103: images whose B is empty, for a generated AO beside a pre-packed `_rmaos` (pack planning).
+        let flat_b: BTreeSet<PathBuf> = pass1
+            .iter()
+            .filter(|(_, a, _)| !pack::b_has_content(&a.channels[2]))
+            .map(|(wi, _, _)| work[*wi].1.path.clone())
+            .collect();
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
@@ -1491,7 +1554,13 @@ impl Engine {
             &mut skipped,
             &packed_outputs,
             &derive_heights,
+            &flat_b,
         );
+        // As step 3b drops its losers, so later steps (the RNM bent AO) never read a replaced generated AO.
+        for s in &mut sets {
+            s.members
+                .retain(|&i| !packed.gen_replaced.contains(&files[i].path));
+        }
         // Pass 1 may add a recipe job it fails at once (sources of different sizes); like every job it records the
         // target's origin (`BatchRequest::target`, ruling W1).
         for j in &mut jobs {
@@ -2014,6 +2083,7 @@ impl Engine {
                         | Code::PackConflict
                         | Code::DeriveDdsSource
                         | Code::DeriveNotConverted
+                        | Code::GenReplaced
                 )
             ) {
                 summary.skipped_intentional += 1;

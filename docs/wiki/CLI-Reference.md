@@ -154,8 +154,8 @@ The `done` counters:
 |---|---|
 | converted | Files encoded and written in this run. |
 | up to date | Outputs left alone by `if-changed`. |
-| skipped | Files not converted for any other reason: unresolved, blocked, duplicate output, DDS input, existing output with no record, `--on-existing skip`, a pre-packed file replaced under `packing.prefer = "raw"` (`PACK-CONFLICT`). |
-| on purpose | The part of skipped that you asked for: DDS inputs not opted in (`IN-DDS-SKIPPED`), `--on-existing skip`, a pre-packed file replaced under `packing.prefer = "raw"` (`PACK-CONFLICT`). |
+| skipped | Files not converted for any other reason: unresolved, blocked, duplicate output, DDS input, existing output with no record, `--on-existing skip`, a pre-packed file replaced under `packing.prefer = "raw"` (`PACK-CONFLICT`), a generated file replaced by a real map (`GEN-REPLACED`). |
+| on purpose | The part of skipped that you asked for: DDS inputs not opted in (`IN-DDS-SKIPPED`), `--on-existing skip`, a pre-packed file replaced under `packing.prefer = "raw"` (`PACK-CONFLICT`), a generated file replaced by a real map (`GEN-REPLACED`). |
 | failed | Files that failed to load, resolve, encode or write. |
 | failed validation | Files written whose validation reported an error. |
 | cancelled | Files not started because you pressed Ctrl-C. |

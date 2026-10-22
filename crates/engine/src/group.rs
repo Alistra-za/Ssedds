@@ -10,9 +10,45 @@ pub const SUFFIXES: [&str; 20] = [
     "s", "f", "b", "d", "e", "i",
 ];
 
+/// The marker of a file Tessalith generated (v2 Generate from normal map, DECISIONS Note CO).
+pub const GENERATED: &str = "generated";
+/// The role tails that may carry the marker: the §6.1 suffix `p` and the vocabulary terms `height`, `ao` and
+/// `curves` (Note CO, preflight P10). Only names Tessalith writes carry it.
+pub const GENERATED_ROLES: &[&str] = &["p", "height", "ao", "curves"];
+
+/// `stem` without a trailing `_generated` (ASCII case-insensitive) and whether it had one, only when the
+/// remainder ends in `_<role>` for a role in [`GENERATED_ROLES`] and is longer than that tail. Otherwise
+/// `(stem, false)`, so `rock_generated` and `rock_n_generated` stay whole.
+pub fn split_generated(stem: &str) -> (&str, bool) {
+    let rest = stem
+        .len()
+        .checked_sub(GENERATED.len() + 1)
+        .filter(|&i| {
+            stem.as_bytes()[i] == b'_'
+                && stem.as_bytes()[i + 1..].eq_ignore_ascii_case(GENERATED.as_bytes())
+        })
+        // The tail is ASCII, so the cut falls on a char boundary even in non-ASCII stems.
+        .map(|i| &stem[..i]);
+    match rest.and_then(|r| r.rsplit_once('_').map(|(b, role)| (r, b, role))) {
+        Some((rest, base, role))
+            if !base.is_empty() && GENERATED_ROLES.iter().any(|g| role.eq_ignore_ascii_case(g)) =>
+        {
+            (rest, true)
+        }
+        _ => (stem, false),
+    }
+}
+
+/// Whether `stem` names a generated member (`rock_p_generated`): [`split_generated`] strips a marker.
+pub fn is_generated(stem: &str) -> bool {
+    split_generated(stem).1
+}
+
 /// Splits one recognised suffix off a stem (case-insensitive). The suffix is returned lower-case;
-/// a stem that is only a suffix (`_n`) is left whole.
+/// a stem that is only a suffix (`_n`) is left whole. A generated member splits as its role
+/// (`rock_p_generated` → `rock`, `p`).
 pub fn split_suffix(stem: &str) -> (String, Option<String>) {
+    let stem = split_generated(stem).0;
     let lower = stem.to_ascii_lowercase();
     for s in SUFFIXES {
         let tail = format!("_{s}");
@@ -120,6 +156,8 @@ pub static VOCABULARY: [Vocab; 37] = {
 /// The vocabulary term a stem ends in (case-insensitive) and the base before it. A stem that is only a term
 /// (`_normal`) is left alone, as with §6.1 suffixes.
 pub fn split_vocab(stem: &str) -> Option<(String, &'static Vocab)> {
+    // Note CO: the generated marker comes off before the layer terms too (08e-8).
+    let stem = split_generated(stem).0;
     // M6 Track F2: layer terms (longest first) before the exporter vocabulary, so `_detail_mask` is one term.
     if let Some(hit) = crate::rnm::split_layer(stem) {
         return Some(hit);
@@ -346,6 +384,89 @@ pub fn duplicate_outputs_with(
 /// `duplicate_outputs_with` over every image input (DDS inputs are skipped, not written).
 pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
     duplicate_outputs_with(files, |f| f.kind != InputKind::Dds)
+}
+
+/// Whether a real member `real_stem` of kind `real_kind` replaces the generated member `generated_stem` of the same
+/// set (Note CO, the M9 fold). Slot files (`_p`, `_m`, `_rmaos`, `_rfaos`) count as an image or a DDS; raw maps only
+/// as an image, as `pack::plan::raw_role` reads them. A raw height is no rival of a generated `_p` on `vanilla`,
+/// where nothing is built from it. An `_rmaos`/`_rfaos` image is no rival of a generated `_ao` on `cs`: pack planning
+/// decides on its B (Note CO103). A generated stem is never a rival. Callers pass `real_stem` canonical
+/// (`<base>_<suffix>` after `split_suffix_with` with the preset aliases), as [`generated_losers`] does: an aliased
+/// stem passed raw is not recognised.
+pub fn real_rival(
+    generated_stem: &str,
+    real_stem: &str,
+    real_kind: InputKind,
+    target: crate::config::Target,
+) -> bool {
+    let (rest, generated) = split_generated(generated_stem);
+    if !generated || is_generated(real_stem) {
+        return false;
+    }
+    let role = rest
+        .rsplit_once('_')
+        .map_or("", |(_, r)| r)
+        .to_ascii_lowercase();
+    let real = split_suffix_with(real_stem, &BTreeMap::new()).suffix;
+    let image = real_kind == InputKind::Image;
+    match (role.as_str(), real.as_deref()) {
+        ("p", Some("p")) | ("height", Some("p" | "m")) => true,
+        // Note CO103: on cs, pack planning reads a pre-packed image's B by content instead.
+        ("ao", Some("rmaos" | "rfaos")) => !image || target != crate::config::Target::Cs,
+        ("p", Some("height")) => image && target == crate::config::Target::Cs,
+        ("height", Some("height")) | ("ao", Some("ao" | "orm")) | ("curves", Some("curves")) => {
+            image
+        }
+        _ => false,
+    }
+}
+
+/// (generated member, its first real rival) pairs within each set, by [`real_rival`]. A DDS that is an earlier export
+/// in place of the generated member's own output or of a packed output it feeds (`rock_p`, `rock_m`, `rock_rmaos`
+/// next to its output, or the set's packed output where `packed` (the explicit `output_paths`, by set key and suffix)
+/// moved it; `dds::same_file`) is not a rival (Note CO8, CO10, CO102).
+pub fn generated_losers(
+    sets: &[TextureSet],
+    files: &[InputFile],
+    aliases: &BTreeMap<String, String>,
+    target: crate::config::Target,
+    packed: &BTreeMap<(String, String), std::path::PathBuf>,
+) -> Vec<(usize, usize)> {
+    let stem = |i: usize| {
+        files[i]
+            .rel
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+    };
+    // Canonical stems, so an aliased real map counts under its canonical suffix.
+    let canonical = |i: usize| {
+        let s = split_suffix_with(&stem(i), aliases);
+        s.suffix
+            .map_or(stem(i).into_owned(), |x| format!("{}_{x}", s.base))
+    };
+    let mut out = vec![];
+    for set in sets {
+        for &g in set.members.iter().filter(|&&g| is_generated(&stem(g))) {
+            let rival = set.members.iter().copied().find(|&r| {
+                r != g
+                    && !is_generated(&stem(r))
+                    && real_rival(&stem(g), &canonical(r), files[r].kind, target)
+                    && !(files[r].kind == InputKind::Dds
+                        && (crate::dds::same_file(
+                            &files[r].path,
+                            &files[g]
+                                .output
+                                .with_file_name(files[r].path.file_name().unwrap_or_default()),
+                        ) || packed
+                            .iter()
+                            .filter(|((set_key, _), _)| *set_key == set.key)
+                            .any(|(_, out)| crate::dds::same_file(&files[r].path, out))))
+            });
+            out.extend(rival.map(|r| (g, r)));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

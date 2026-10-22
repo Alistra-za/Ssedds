@@ -341,6 +341,18 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 - The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail. Supply normal AO (white = open); Tessalith inverts it.
 - Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
 
+## Generate from normal map
+
+Right-click the Height row (or open the set card's menu) and pick **Generate from normal map…** to make a height map from the set's normal. The dialog has Size, Tiling, Relief balance and Strength, with a preview; **Generate** writes `<base>_p_generated.png` (or `<base>_height_generated.png` for a complex material's `_m` alpha) as a 16-bit grey PNG next to the normal. See [Texture types](Texture-Types.md#generated-height-maps) for names and ranges.
+
+- The Height row's File hover says "Generated from {normal}", and the Flags cell shows a weak **generated** marker.
+- When the file is stale (the normal changed, the set wants the other neutral, or the shader reads no height), that row's status dot turns amber and its hover gives the reason. No Problems row is added.
+- **Regenerate…** reuses the stored settings, with the set's current neutral and a size the normal still offers. A file you edited is never overwritten.
+- **Delete generated file…** (row menu, or the set card's submenu) asks first; Cancel is the default. The box says when the file was edited or has no record; your confirm deletes it. It cannot be undone.
+- A new `_p` makes a default set Parallax (PGPatcher then patches its meshes), and turns on `parallax` on a TruePBR set.
+
+**AO.** On a PBR set under Community Shaders, right-click the `_rmaos` row (or tick **AO** in the dialog) to generate `<base>_ao_generated.png`. A baked AO is better; this is for sets with none. The AO group has Radius, Quality, Depth and Intensity (0.7–1.0 is a good range: CS applies AO to indirect light itself). When the set has a roughness or other `_rmaos` source, the AO takes its size. The file becomes the `_rmaos` blue channel (`GEN-AO`); the `_rmaos` row's File hover says "AO generated from {normal}", its dot turns amber when the AO is stale, and it offers **Delete generated file…**. A set with an RNM bent layer (where AO can be generated) gets a note at the top of the dialog: the AO also changes its normal map.
+
 ## Advanced drawer
 
 The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the **Advanced** tab of the set panel instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.
@@ -399,7 +411,7 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 | File | Contents |
 |---|---|
 | `<folder>\sdc.toml` | Target and per-file decisions. Shared with the CLI. |
-| `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections, the export folder, and the hashes of the JSON files and borrowed-slot copies Tessalith wrote. GUI only. |
+| `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections, the export folder, and the hashes of the JSON files and borrowed-slot copies Tessalith wrote, and the records of generated files (`[generated]`). GUI only. |
 | `%APPDATA%\sdc\gui.toml` | Window and app settings: the default export folder (a project's own is in its `sdc-project.toml`), recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
 | `%APPDATA%\sdc\config.toml` | The user config, also read by the CLI. |
 | `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |

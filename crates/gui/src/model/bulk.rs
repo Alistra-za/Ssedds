@@ -5,6 +5,7 @@ use super::fields::{
     all_fields, field_view, filter_option_lock, hidden_reason, views_of, weighting_option_lock,
     FieldView, EDGE_FIELD, FIELDS, FILTER_FIELD, LEVELS_FIELD, WEIGHTING,
 };
+use super::from_normal::{GenMap, GenOp};
 use super::sets::{
     engine_inputs, game_path_in, locked_items, member_game_path, slot_gives, slot_of, SlotCommand,
     SlotKind, SLOT_LOCKED,
@@ -942,6 +943,11 @@ pub enum MenuAction {
     ClearInputAlias,
     /// Task 5: select the source file of texture `key` in Explorer.
     ShowInExplorer(String),
+    /// Note CO: "Generate from normal map…" (open the dialog) or "Delete generated file…" on set `set` (an id).
+    Generated {
+        set: String,
+        op: GenOp,
+    },
 }
 
 /// The slot menu's PGPatcher lock entry, off and on (Note AN).
@@ -1316,6 +1322,14 @@ impl AppModel {
                 }),
             });
         }
+        // Note CO: after the PGPatcher lock, so the existing rows keep their places.
+        match kind {
+            SlotKind::Height => menu.push(self.gen_entry(&id, Some(GenMap::Height))),
+            SlotKind::Rmaos => menu.push(self.gen_entry(&id, Some(GenMap::Ao))),
+            _ => {}
+        }
+        // Task 7: after Generate (P12: tests find it by action).
+        menu.extend(self.delete_slot_entry(v, kind));
         menu
     }
 
@@ -1346,6 +1360,14 @@ impl AppModel {
                 self.clear_input_alias(&keys);
             }
             MenuAction::ShowInExplorer(key) => return self.reveal_item(&key).err(),
+            MenuAction::Generated {
+                set,
+                op: GenOp::Open(pre),
+            } => self.open_gen(&set, pre),
+            MenuAction::Generated {
+                op: GenOp::Delete(key),
+                ..
+            } => self.ask_delete_generated(&key),
         }
         None
     }

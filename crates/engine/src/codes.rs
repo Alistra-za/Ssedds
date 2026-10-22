@@ -18,6 +18,7 @@
 //! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
 //! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CL).
 //! and ENC-WEIGHTS-IGNORED (an `encoder.bc7_weights` that perceptual, the format or the backend overrides, DECISIONS Note CP).
+//! and the three `GEN-*` codes of generated maps: GEN-REPLACED, GEN-STALE (GUI only) and GEN-AO (v2 Generate from normal map, DECISIONS Note CO).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -176,6 +177,13 @@ codes! {
     AlsoZipFailed = "ALSO-ZIP-FAILED" => Warning,
     // The Also export report was not written (kept as edited outside Tessalith, I/O): the export is partial (1).
     AlsoReportFailed = "ALSO-REPORT-FAILED" => Warning,
+    // v2 Generate from normal map (Note CO): a generated member skipped because a real map fills its slot.
+    GenReplaced = "GEN-REPLACED" => Info,
+    // v2 Generate from normal map (Note CO): a generated file whose normal, height neutral or shader changed since it
+    // was generated. GUI only: the slot row's dot hover and the texture's message list, never a Problems row.
+    GenStale = "GEN-STALE" => Info,
+    // v2 Generate from normal map (Note CO): a packed _rmaos whose B channel is an AO generated from the normal map.
+    GenAo = "GEN-AO" => Info,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -242,7 +250,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 113);
+        assert_eq!(Code::ALL.len(), 116);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::EncWeightsIgnored.severity(), Severity::Warning);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
@@ -251,7 +259,7 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::AlsoReportFailed));
+        assert_eq!(Code::ALL.last(), Some(&Code::GenAo));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));

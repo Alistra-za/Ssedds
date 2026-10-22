@@ -17,6 +17,7 @@ pub mod discover;
 pub mod encode;
 pub mod events;
 pub mod filter;
+pub mod from_normal;
 pub mod grass;
 pub mod group;
 pub mod image;

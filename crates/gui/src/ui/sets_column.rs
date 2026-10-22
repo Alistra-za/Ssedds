@@ -1265,6 +1265,59 @@ fn menu(
         acts.push(Act::Select(v.key.clone()));
         ui.close();
     }
+    // Note CO (P19): the set's entry point, for a set whose shader shows no Height row.
+    let generate = model.gen_entry(&v.id, None);
+    let r = ui.add_enabled(
+        generate.disabled.is_none(),
+        egui::Button::new(&generate.label),
+    );
+    let r = match &generate.disabled {
+        Some(why) if editing.on => r.on_disabled_hover_text(why),
+        _ => tip(r),
+    };
+    if r.clicked() {
+        acts.push(Act::Bulk(generate.action));
+        ui.close();
+    }
+    // Note CO (P20): every generated file of the set, with its stale reason on hover.
+    let gens = model.delete_generated_entries(&v.id);
+    if !gens.is_empty() {
+        let del = ui.menu_button("Delete generated file", |ui| {
+            for e in gens {
+                let key = match &e.action {
+                    MenuAction::Generated {
+                        op: crate::model::from_normal::GenOp::Delete(k),
+                        ..
+                    } => k.as_str(),
+                    _ => "",
+                };
+                // A replaced file fills no slot row (review M2), so its rival is named here.
+                let info = model.generated_info(key);
+                let hover: Vec<String> = info
+                    .iter()
+                    .flat_map(|g| {
+                        [
+                            g.replaced_by.as_ref().map(|r| format!("replaced by {r}")),
+                            g.stale.as_ref().map(|s| format!("stale: {s}")),
+                        ]
+                    })
+                    .flatten()
+                    .collect();
+                let mut r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(&e.label));
+                if !hover.is_empty() {
+                    r = r.on_hover_text(hover.join("\n"));
+                }
+                if let Some(why) = &e.disabled {
+                    r = r.on_disabled_hover_text(why);
+                }
+                if r.clicked() {
+                    acts.push(Act::Bulk(e.action));
+                    ui.close();
+                }
+            }
+        });
+        tip(del.response);
+    }
     let remove = ui.menu_button("Remove member", |ui| {
         for mk in &v.members {
             let name = model.item(mk).map_or(mk.as_str(), |i| i.name.as_str());

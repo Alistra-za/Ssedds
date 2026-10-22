@@ -1168,3 +1168,46 @@ fn a_set_row_click_selects_the_set() {
     assert_eq!(sel.len(), 1, "{sel:?}");
     assert!(sel[0].ends_with("/a") || sel[0].ends_with("/b"));
 }
+
+/// Note CO (Task 7, X-S6): range and parallax findings on a generated map say "generated: ".
+#[test]
+fn check_findings_on_generated_maps_say_generated() {
+    let white = || {
+        rgb(64, 64, |_, y| {
+            let v = 180 + y as u8 + (y / 9) as u8;
+            [v, v, v]
+        })
+    };
+    for (name, prefixed) in [("wall_p_generated.png", true), ("wall_p.png", false)] {
+        let d = tempfile::tempdir().unwrap();
+        let (j, a) = planned(d.path(), name, white());
+        let j = as_subtype(j, Subtype::Height);
+        let ms = parallax(&texture_checks(
+            &j,
+            &a,
+            HeightNeutral::Half,
+            None,
+            &all_on(),
+        ));
+        assert!(!ms.is_empty(), "{name}");
+        assert!(
+            ms.iter().all(|m| m.starts_with("generated: ") == prefixed),
+            "{name}: {ms:?}"
+        );
+    }
+    // CHK-RANGE: a dark albedo, read as if it were generated.
+    let d = tempfile::tempdir().unwrap();
+    let (j, a) = planned(
+        d.path(),
+        "wall_p_generated.png",
+        rgb(64, 64, |_, _| [20, 20, 20]),
+    );
+    let j = as_subtype(j, Subtype::PbrAlbedo);
+    let ws = texture_checks(&j, &a, HeightNeutral::Half, None, &all_on());
+    let r = with(Code::ChkRange, &ws);
+    assert!(!r.is_empty());
+    assert!(
+        r.iter().all(|w| w.message.starts_with("generated: ")),
+        "{r:?}"
+    );
+}
