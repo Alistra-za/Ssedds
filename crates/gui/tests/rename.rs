@@ -162,6 +162,36 @@ fn an_invalid_pattern_disables_apply() {
 }
 
 #[test]
+fn two_inputs_renamed_to_one_output_block_apply() {
+    let d = tempfile::tempdir().unwrap();
+    let r = mod_folder(d.path()).join("landscape");
+    ImageBuffer::from_fn(8, 8, |x, y| Rgb([x as u8, y as u8, 9u8]))
+        .save(r.join("a.png"))
+        .unwrap();
+    ImageBuffer::from_fn(8, 8, |x, y| Rgb([y as u8, x as u8, 9u8]))
+        .save(r.join("b.tga"))
+        .unwrap();
+    let mut m = opened(d.path());
+    let (a, b) = ("landscape/a.png", "landscape/b.tga");
+    m.click_item(a, false, false);
+    m.click_item(b, true, false);
+    m.open_rename(RenameMode::Inputs);
+    let d2 = dialog(&mut m);
+    d2.typed.insert(a.into(), "landscape/x.png".into());
+    d2.typed.insert(b.into(), "landscape/x.tga".into());
+    let p = plan(&m);
+    // Different names, one x.dds: the second row is refused.
+    let bad: Vec<_> = p.rows.iter().filter(|r| r.problem.is_some()).collect();
+    assert_eq!(bad.len(), 1, "{:?}", p.rows);
+    assert!(
+        bad[0].problem.as_deref().unwrap().contains("x.dds"),
+        "{:?}",
+        bad[0].problem
+    );
+    assert!(!m.apply_rename());
+}
+
+#[test]
 fn input_names_that_collide_or_windows_refuses_block_apply() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());

@@ -361,6 +361,7 @@ fn input_collisions(m: &AppModel, rows: &mut [RenameRow]) {
         .map(|i| (lower(&i.job_key.replace('\\', "/")), i.key.clone()))
         .collect();
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    let mut seen_out: BTreeMap<String, String> = BTreeMap::new();
     for r in rows.iter_mut().filter(|r| r.writes()) {
         let l = lower(&r.new);
         if let Some(other) = taken.get(&l).filter(|o| **o != r.key) {
@@ -369,8 +370,12 @@ fn input_collisions(m: &AppModel, rows: &mut [RenameRow]) {
             r.problem = Some(format!("{other} already writes {}", r.output));
         } else if let Some(other) = seen.get(&l) {
             r.problem = Some(format!("{other} is renamed to this name too"));
+        } else if let Some(other) = seen_out.get(&lower(&r.output)) {
+            // Different names (a.png, b.tga), one output (x.dds).
+            r.problem = Some(format!("{other} is renamed to write {} too", r.output));
         } else {
             seen.insert(l, r.key.clone());
+            seen_out.insert(lower(&r.output), r.key.clone());
         }
     }
 }
