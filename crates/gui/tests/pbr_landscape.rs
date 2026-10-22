@@ -384,7 +384,12 @@ fn render_the_card() {
         .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run_steps(6);
-    let top = h.get_by_label(CARD).rect();
+    // The set card's kind pill (layout v2 A5) reads the same; the editor's card is the right-most node.
+    let top = h
+        .query_all_by_label(CARD)
+        .map(|n| n.rect())
+        .max_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("the PBR Landscape card");
     let bottom = h
         .query_all_by_label("Add EDID")
         .map(|n| n.rect().bottom())
