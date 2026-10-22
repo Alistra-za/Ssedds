@@ -232,6 +232,15 @@ fn a_drive_root_input_makes_the_also_gate_show_the_engines_problem() {
 }
 
 #[test]
+fn the_also_gate_with_no_project_says_to_open_a_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.root = None;
+    assert_eq!(m.also_gate(), Err("Open a folder first".to_string()));
+}
+
+#[test]
 fn a_bad_location_is_the_reviews_reason() {
     let d = tempfile::tempdir().unwrap();
     let mut m = project(d.path());

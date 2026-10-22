@@ -135,7 +135,7 @@ impl AppModel {
 
     /// The project name the engine names the folders by: the opened folder's name (`also::project_name`).
     fn also_project(&self) -> Result<String, String> {
-        let root = self.root.clone().unwrap_or_default();
+        let root = self.root.clone().ok_or("Open a folder first")?;
         engine::also::project_name(&[root]).map_err(|e| e.to_string())
     }
 
