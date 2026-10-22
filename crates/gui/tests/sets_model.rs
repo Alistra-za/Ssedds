@@ -234,6 +234,8 @@ fn duplicating_a_raw_source_copies_it_and_undo_deletes_it_only_when_unchanged() 
 fn coat_and_fuzz_cannot_share_a_set() {
     assert!(slot_conflict(&[SlotKind::Fuzz], SlotKind::Coat).is_some());
     assert!(slot_conflict(&[SlotKind::Coat], SlotKind::Fuzz).is_some());
+    assert!(slot_conflict(&[SlotKind::Emissive], SlotKind::SkinSk).is_some());
+    assert!(slot_conflict(&[SlotKind::SkinSk], SlotKind::Emissive).is_some());
     assert!(slot_conflict(&[SlotKind::Diffuse, SlotKind::Normal], SlotKind::Coat).is_none());
 }
 
