@@ -510,6 +510,8 @@ pub struct MeshesModel {
     pub status: String,
     /// The left column lists the selected NIF's shapes instead of the mods and meshes (owner, 2026-10-14).
     pub shapes_col: bool,
+    /// Meshes UI T2: the shape card picked outside edit mode (block, name in the shown copy); Edit opens on it.
+    pub card_sel: Option<(u32, Option<String>)>,
     /// Item 9: the texture paths listed here that are items of the open folder (path → item key); `SdcApp::route_3d`
     /// fills it each frame.
     pub folder_items: HashMap<String, String>,
@@ -613,6 +615,7 @@ impl MeshesModel {
             scan_pace: None,
             status: String::new(),
             shapes_col: false,
+            card_sel: None,
             folder_items: HashMap::new(),
             open_in_textures: None,
             folder_items_for: (vec![], u64::MAX),
@@ -1002,6 +1005,7 @@ impl MeshesModel {
     fn clear_nif(&mut self) {
         self.selected_nif = None;
         self.selected_info = None;
+        self.card_sel = None;
         self.shapes.clear();
         self.resolved.clear();
         self.pair = None;

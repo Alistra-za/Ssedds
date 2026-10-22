@@ -92,6 +92,9 @@ pub struct NifEdit {
     /// The shape cards of the edited bytes (`shape_cards`), rebuilt by every `reapply` (Note CV1; was the scan's
     /// cards of `source_copy`, final review I1).
     pub cards: Vec<ShapeView>,
+    /// Meshes UI T2: each shape's controllers line ("2: Emissive multiple, Alpha (clip)"), by shape block; rebuilt with
+    /// `cards`.
+    pub card_ctrls: HashMap<u32, String>,
     /// The placement check (spec §8.2); None without an MO2 instance.
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
@@ -337,6 +340,7 @@ impl NifEdit {
             error: None,
             copies: vec![],
             cards: vec![],
+            card_ctrls: HashMap::new(),
             placement: None,
             blocked: None,
             notice: None,
@@ -549,6 +553,7 @@ impl NifEdit {
             Err(e) => self.error = Some(e.to_string()),
         }
         self.cards = shape_cards(&self.patched); // once per change, never per frame (rule 9.1)
+        self.card_ctrls = card_ctrls(&self.model);
         self.warnings = validate(&self.model, None);
         demote_source(&self.source_warnings, &mut self.warnings);
         // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
@@ -1074,6 +1079,65 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
         .collect()
 }
 
+/// Meshes UI T2: per shape, "N: title, title (clip)" over its shader's and its alpha's controllers; "none" without.
+fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
+    m.shapes
+        .iter()
+        .map(|s| {
+            let lit = s.shader.and_then(|b| m.lighting.get(&b));
+            let slsf2 = lit.map_or(0, |l| l.lighting.slsf2);
+            let props = [
+                lit.map(|l| &l.prop),
+                s.alpha.and_then(|b| m.alphas.get(&b)).map(|a| &a.prop),
+            ];
+            let titles: Vec<String> = props
+                .into_iter()
+                .flatten()
+                .flat_map(|p| &p.ctrls)
+                .filter_map(|c| m.ctrls.get(c).map(|t| (c, t)))
+                .map(|(c, t)| {
+                    let title = nif::edit::validate::ctrl_title(t, slsf2);
+                    match m.managed(*c) {
+                        true => format!("{title} (clip)"),
+                        false => title,
+                    }
+                })
+                .collect();
+            let line = match titles.len() {
+                0 => "none".to_string(),
+                n => format!("{n}: {}", titles.join(", ")),
+            };
+            (s.block, line)
+        })
+        .collect()
+}
+
+/// Meshes UI T2: where Edit opens. The card picked outside edit mode (same block and name, else the only shape with
+/// that name, since the shown copy may be PGPatcher's and numbered differently), else the only shape, else Root.
+pub fn first_selection(m: &NifModel, picked: Option<&(u32, Option<String>)>) -> Selection {
+    if let Some((block, name)) = picked {
+        let same = m
+            .shapes
+            .iter()
+            .find(|s| s.block == *block && s.name == *name);
+        let mut named = m
+            .shapes
+            .iter()
+            .filter(|s| name.is_some() && s.name == *name);
+        let by_name = match (named.next(), named.next()) {
+            (Some(s), None) => Some(s),
+            _ => None,
+        };
+        if let Some(s) = same.or(by_name) {
+            return Selection::Shape(s.block);
+        }
+    }
+    match m.shapes.as_slice() {
+        [only] => Selection::Shape(only.block),
+        _ => Selection::Root,
+    }
+}
+
 fn read_source(source: &[u8]) -> Result<(nif::scan::NifScan, NifModel), String> {
     let cannot = |e: nif::NifError| format!("This NIF cannot be edited: {e}");
     let scan = nif::scan::scan(source).map_err(cannot)?;
@@ -1146,7 +1210,8 @@ impl MeshesModel {
             self.error = Some(NO_EXPORT_FOLDER.into());
         }
         match self.start_edit(&row.path, edit_mod.as_deref()) {
-            Ok((e, content)) => {
+            Ok((mut e, content)) => {
+                e.selection = first_selection(&e.model, self.card_sel.as_ref());
                 self.edit = Some(e);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
                 self.view_source = true;

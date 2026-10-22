@@ -1133,11 +1133,10 @@ fn clicking_a_card_selects_the_shape_and_root_card_is_first() {
     m.shapes_col = true;
     let s = m.shapes[0].clone();
     let card = format!(
-        "{} {} — {}",
+        "Select shape {} {}",
         s.index3d
             .map_or("#– (not in scene tree)".into(), |i| format!("#{i}")),
         s.name.as_deref().unwrap_or("(unnamed)"),
-        s.kind
     );
     let mut h = view(m);
     h.run_steps(4);
@@ -1153,6 +1152,69 @@ fn clicking_a_card_selects_the_shape_and_root_card_is_first() {
     h.get_by_label("Root").click();
     h.run_steps(4);
     assert_eq!(h.state().edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+/// Meshes UI T2: a card picked outside edit mode is where Edit opens; the Shapes button is locked on while editing.
+#[test]
+fn edit_opens_on_the_card_picked_before_and_locks_the_shapes_column() {
+    let (_d, mut m) = session(false);
+    m.shapes_col = true;
+    let s = m.shapes.last().unwrap().clone();
+    let label = format!(
+        "Select shape {} {}",
+        s.index3d
+            .map_or("#– (not in scene tree)".into(), |i| format!("#{i}")),
+        s.name.as_deref().unwrap_or("(unnamed)"),
+    );
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_role_and_label(AkRole::Button, &label).click();
+    h.run_steps(4);
+    assert!(
+        h.state().edit.is_none(),
+        "a pick outside edit mode opens nothing"
+    );
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().edit.as_ref().unwrap().selection,
+        Selection::Shape(s.block)
+    );
+    let shapes = h.get_by_role_and_label(AkRole::Button, "Shapes");
+    assert!(
+        shapes.accesskit_node().is_disabled(),
+        "locked while editing"
+    );
+    shapes.click();
+    h.run_steps(4);
+    assert!(h.state().shapes_col);
+}
+
+/// Meshes UI T2: a NIF with one shape opens Edit on that shape, not on Root.
+#[test]
+fn a_one_shape_nif_opens_edit_on_its_shape() {
+    let mut n = builder::Nif::new(100);
+    let a = n.string("Only");
+    n.block("BSTriShape", one_tri(a, 1));
+    n.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    let bytes = n.bytes();
+    let d = files_pair(&bytes, &bytes);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.selection, Selection::Shape(shape_named(e, "Only")));
+}
+
+/// Meshes UI T2: in edit mode a card lists its controllers from the edited model.
+#[test]
+fn edit_cards_list_their_controllers() {
+    let m = direct(ctrl_scene(0x82));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("2: Emissive multiple, U offset");
 }
 
 /// A BSTriShape with one triangle (positions only), so the preview draws it.
@@ -1218,7 +1280,7 @@ fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
     let a = shape_named(m.edit.as_ref().unwrap(), "A");
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label_contains(") A — ").click();
+    h.get_by_label_contains("tree) A").click();
     h.run_steps(4);
     assert_eq!(
         h.state().edit.as_ref().unwrap().selection,
@@ -1356,6 +1418,9 @@ fn edit_cards_show_the_edited_values() {
     let mut h = view(m);
     h.run_steps(4);
     h.get_by_label(&shader_type_name(new_ty));
+    h.get_by_label(&format!("Details of NIF block {shape}"))
+        .click();
+    h.run_steps(2);
     h.get_by_label(&format!("SLSF1 0x{f1_now:08X}"));
     h.get_by_label("textures/edited/card.dds");
     h.get_by_label(&want_alpha);
@@ -2637,6 +2702,8 @@ fn pending_list_and_chips() {
     };
     assert_eq!(chips("x.nif"), Some(DocBadge::Exported));
     assert_eq!(chips("y.nif"), Some(DocBadge::Pending));
+    // Meshes UI T2: the column is locked on the shapes while Edit is open; the chips are in the NIF list.
+    m.close_edit();
     let mut h = view(m);
     h.run_steps(4);
     h.get_by_label("Edited");
@@ -3125,6 +3192,10 @@ fn the_textures_view_undoes_textures_with_a_nif_edit_open() {
 fn ctrl_z_does_nothing_in_a_text_field_a_popup_or_a_dialog() {
     use egui::{Key, Modifiers};
     let (_t, _d, mut h) = both_histories(1);
+    // Meshes UI T2: with Edit open the mod filter is hidden (Shapes locked): a texture path field instead.
+    let (shape, _) = lit_shape(h.state().meshes.edit.as_ref().unwrap());
+    h.state_mut().meshes.select_edit(Selection::Shape(shape));
+    h.run_steps(2);
     let tex = textures(&h);
     // A focused text field.
     h.query_all_by_role(AkRole::TextInput)
