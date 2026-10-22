@@ -110,11 +110,16 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                                             .selected_text(format!("{} px", facts.shown_size))
                                             .show_ui(ui, |ui| {
                                                 for s in sizes {
-                                                    ui.selectable_value(
-                                                        &mut opts.size,
-                                                        *s,
-                                                        format!("{s} px"),
-                                                    );
+                                                    // Highlighted by the size it writes at.
+                                                    if ui
+                                                        .selectable_label(
+                                                            facts.shown_size == *s,
+                                                            format!("{s} px"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        opts.size = *s;
+                                                    }
                                                 }
                                             });
                                     }

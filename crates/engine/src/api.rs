@@ -1126,12 +1126,19 @@ impl Engine {
             &req.output_root,
             &req.output_paths,
         );
+        // Read by 3b too (CO102): a DDS at a packed output's explicit path is that output's earlier export.
+        let packed_outputs = crate::sets::packed_outputs(&req.output_root, &req.output_paths);
         // 3b, Note CO (the M9 fold): a generated member loses to a real map for its slot before duplicates and
         // pack planning see it, since a generated `_p` and a real `_p` share one output.
         let mut gen_replaced: Vec<SkippedFile> = vec![];
         let mut losers: BTreeSet<PathBuf> = BTreeSet::new();
-        for (g, r) in crate::group::generated_losers(&sets, &files, registry.alias_table(), target)
-        {
+        for (g, r) in crate::group::generated_losers(
+            &sets,
+            &files,
+            registry.alias_table(),
+            target,
+            &packed_outputs,
+        ) {
             let set = sets
                 .iter_mut()
                 .find(|s| s.members.contains(&g))
@@ -1175,7 +1182,6 @@ impl Engine {
                 reason: format!("generated {} replaced by {}{dds}", name(g), name(r)),
             });
         }
-        let packed_outputs = crate::sets::packed_outputs(&req.output_root, &req.output_paths);
         for f in &files {
             rep.emit_job(
                 Some(&key(&f.output)),

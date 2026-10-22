@@ -2899,15 +2899,7 @@ fn pbr_dir_rock(d: &Path) -> (AppModel, PathBuf) {
 const PBR_SET: &str = "pbr/landscape/rock01";
 
 /// Review I1: the set's own earlier `_rmaos` export, written in place, is neither a DDS `_rmaos` nor a real AO source.
-/// `full`: also generate and expect Regenerate (the engine must keep the generated AO too).
-fn in_place_rmaos_keeps_ao(
-    m: &mut AppModel,
-    set: &str,
-    dir: &Path,
-    d: &Path,
-    export: &Path,
-    full: bool,
-) {
+fn in_place_rmaos_keeps_ao(m: &mut AppModel, set: &str, dir: &Path, d: &Path, export: &Path) {
     m.sets_doc.as_mut().unwrap().set_export_folder(export);
     reopen(m, d);
     let out = m
@@ -2933,9 +2925,6 @@ fn in_place_rmaos_keeps_ao(
     // Before any AO is generated (the `real_rival` scan and DDS_RMAOS).
     let e = row(m);
     assert_eq!((e.label.as_str(), e.disabled), (GENERATE, None));
-    if !full {
-        return;
-    }
     m.open_gen(set, Some(GenMap::Ao));
     m.gen_generate();
     idle(m);
@@ -2945,21 +2934,12 @@ fn in_place_rmaos_keeps_ao(
 }
 
 #[test]
-fn an_in_place_rmaos_export_under_textures_pbr_keeps_ao_offered() {
-    let d = tempfile::tempdir().unwrap();
-    let (mut m, dir) = pbr_dir_rock(d.path());
-    // PBR outputs go to `textures\pbr\…` under the export root: the mod folder above the opened `textures`.
-    // Only the offer: the engine's `group::generated_losers` does not predict a packed output moved by
-    // `output_paths` (its `shortcut:`), so it still skips the generated AO GEN-REPLACED here; see the ignored test.
-    in_place_rmaos_keeps_ao(&mut m, PBR_SET, &dir, d.path(), d.path(), false);
-}
-
-#[test]
-#[ignore = "engine: group::generated_losers does not predict redirected packed outputs (owed, not owner data)"]
 fn an_in_place_rmaos_export_under_textures_pbr_keeps_regenerate() {
     let d = tempfile::tempdir().unwrap();
     let (mut m, dir) = pbr_dir_rock(d.path());
-    in_place_rmaos_keeps_ao(&mut m, PBR_SET, &dir, d.path(), d.path(), true);
+    // PBR outputs go to `textures\pbr\…` under the export root: the mod folder above the opened `textures`. The
+    // engine reads the moved packed output too (CO102), so the generated AO is kept and Regenerate offered.
+    in_place_rmaos_keeps_ao(&mut m, PBR_SET, &dir, d.path(), d.path());
 }
 
 #[test]
@@ -2970,7 +2950,7 @@ fn an_in_place_rmaos_export_of_a_set_with_no_prefix_keeps_ao_offered() {
     m.set_json_value(ROCK_SET, "rename", Some(json!("a/b")));
     idle(&mut m);
     let root = m.root.clone().unwrap();
-    in_place_rmaos_keeps_ao(&mut m, ROCK_SET, &land(d.path()), d.path(), &root, true);
+    in_place_rmaos_keeps_ao(&mut m, ROCK_SET, &land(d.path()), d.path(), &root);
 }
 
 #[test]

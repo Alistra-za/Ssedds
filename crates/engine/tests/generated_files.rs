@@ -591,6 +591,52 @@ fn an_earlier_packed_export_of_a_generated_height_does_not_replace_it() {
 }
 
 #[test]
+fn a_packed_output_moved_by_output_paths_onto_an_earlier_export_is_no_rival() {
+    // Task 10 fix round 2: the GUI's PBR path (`textures/pbr/…` under the mod folder) moves the packed `_rmaos` onto
+    // the set's own folder; the DDS there is that output's earlier export, not a real AO source.
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put(d.path(), "rock_roughness.png", 16, |x, _| x as u8 * 4);
+    put(d.path(), "rock_ao_generated.png", 16, |x, y| {
+        60 + (x + y) as u8 * 4
+    });
+    put_dds(d.path(), "rock_rmaos.dds");
+    let moved = d.path().join("in/textures/a/rock_rmaos.dds");
+    let mut req = request(d.path(), Target::Cs, &[]);
+    // The default outputs land under `<root>/textures/a`, not beside the inputs in `<root>/in/textures/a`.
+    req.output_root = d.path().to_path_buf();
+    req.accept = AcceptSuggestions::High;
+    req.output_paths = BTreeMap::from([(
+        engine::sets::OutputKey::Packed {
+            set: "textures/a/rock".into(),
+            suffix: "rmaos".into(),
+        },
+        std::path::PathBuf::from("in/textures/a/rock_rmaos.dds"),
+    )]);
+    let (p, _) = plan_req(req);
+    assert!(
+        replaced(&p, "rock_ao_generated.png").is_none(),
+        "{:?}",
+        p.skipped
+    );
+    let rm = p
+        .jobs
+        .iter()
+        .find(|j| j.output == moved)
+        .unwrap_or_else(|| {
+            panic!(
+                "the moved _rmaos: {:?}",
+                p.jobs.iter().map(|j| &j.output).collect::<Vec<_>>()
+            )
+        });
+    assert!(rm
+        .provenance
+        .values()
+        .any(|v| *v == Provenance::Source("rock_ao_generated.png:R".into())));
+}
+
+#[test]
 fn a_generated_ao_loses_to_any_real_ao_source() {
     for real in ["rock_ao.png", "rock_orm.png", "rock_rmaos.png"] {
         let d = tempfile::tempdir().unwrap();

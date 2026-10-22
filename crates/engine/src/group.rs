@@ -420,12 +420,14 @@ pub fn real_rival(
 
 /// (generated member, its first real rival) pairs within each set, by [`real_rival`]. A DDS that is an earlier export
 /// in place of the generated member's own output or of a packed output it feeds (`rock_p`, `rock_m`, `rock_rmaos`
-/// next to its output, `dds::same_file`) is not a rival (Note CO8, CO10).
+/// next to its output, or the set's packed output where `packed` (the explicit `output_paths`, by set key and suffix)
+/// moved it; `dds::same_file`) is not a rival (Note CO8, CO10, CO102).
 pub fn generated_losers(
     sets: &[TextureSet],
     files: &[InputFile],
     aliases: &BTreeMap<String, String>,
     target: crate::config::Target,
+    packed: &BTreeMap<(String, String), std::path::PathBuf>,
 ) -> Vec<(usize, usize)> {
     let stem = |i: usize| {
         files[i]
@@ -448,14 +450,15 @@ pub fn generated_losers(
                     && !is_generated(&stem(r))
                     && real_rival(&stem(g), &canonical(r), files[r].kind, target)
                     && !(files[r].kind == InputKind::Dds
-                        // shortcut: a packed output moved by `output_paths` is not predicted; read the set's
-                        // packed output paths here if an in-place export with redirected PBR paths needs it.
-                        && crate::dds::same_file(
+                        && (crate::dds::same_file(
                             &files[r].path,
                             &files[g]
                                 .output
                                 .with_file_name(files[r].path.file_name().unwrap_or_default()),
-                        ))
+                        ) || packed
+                            .iter()
+                            .filter(|((set_key, _), _)| *set_key == set.key)
+                            .any(|(_, out)| crate::dds::same_file(&files[r].path, out))))
             });
             out.extend(rival.map(|r| (g, r)));
         }
