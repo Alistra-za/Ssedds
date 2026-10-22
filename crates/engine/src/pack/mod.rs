@@ -102,6 +102,13 @@ pub fn rmaos_channel(slot: Slot) -> Option<u8> {
     }
 }
 
+/// Whether the B (AO) of a pre-packed `_rmaos`/`_rfaos` image holds AO (Note CO103): it varies by 2/255 or more, or
+/// it is not near white. A flat white B is empty, and a generated AO may fill it.
+pub fn b_has_content(b: &crate::analyse::ChannelStats) -> bool {
+    // A hair under the stated thresholds, so 8-bit codes 2 apart or a mean of exactly 250 count.
+    f64::from(b.max - b.min) * 255.0 >= 2.0 - 1e-3 || b.mean * 255.0 <= 250.0 + 1e-3
+}
+
 /// A raw map of one set waiting for a recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawInput {
@@ -305,7 +312,32 @@ pub fn recipes_for_with(
             } else {
                 &[Roughness, Glossiness, Ao, Metallic, Orm]
             };
-            if triggers.iter().copied().any(has) {
+            // Note CO104 (Track A R1): `plan_packing` passes a pre-packed `_rmaos`/`_rfaos` image only beside a lone
+            // generated AO, when the image's B is empty. R, G (metallic, or fuzz on `_rfaos`) and A come from the
+            // image, B from the AO.
+            if let Some(img) = by_role.get(&Rmaos) {
+                let ch = |slot: Slot| ChannelNeed::Source {
+                    path: img.path.clone(),
+                    role: Rmaos,
+                    invert: false,
+                    channel: rmaos_channel(slot),
+                };
+                let stem = img.path.file_stem().unwrap_or_default().to_string_lossy();
+                let kind = match crate::group::split_suffix(&stem).1.as_deref() {
+                    Some("rfaos") => RecipeKind::Rfaos,
+                    _ => RecipeKind::Rmaos,
+                };
+                recipes.push(Recipe {
+                    kind,
+                    channels: [
+                        ch(Slot::Roughness),
+                        ch(Slot::Metallic),
+                        src(Ao, false).unwrap_or(Missing(Slot::Ao)),
+                        ch(Slot::Specular),
+                    ],
+                    notes: vec![],
+                });
+            } else if triggers.iter().copied().any(has) {
                 let mut notes = vec![];
                 let rough = prefer(
                     src(Roughness, false).or_else(|| src(Glossiness, true)),

@@ -389,7 +389,8 @@ pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
 /// Whether a real member `real_stem` of kind `real_kind` replaces the generated member `generated_stem` of the same
 /// set (Note CO, the M9 fold). Slot files (`_p`, `_m`, `_rmaos`, `_rfaos`) count as an image or a DDS; raw maps only
 /// as an image, as `pack::plan::raw_role` reads them. A raw height is no rival of a generated `_p` on `vanilla`,
-/// where nothing is built from it. A generated stem is never a rival. Callers pass `real_stem` canonical
+/// where nothing is built from it. An `_rmaos`/`_rfaos` image is no rival of a generated `_ao` on `cs`: pack planning
+/// decides on its B (Note CO103). A generated stem is never a rival. Callers pass `real_stem` canonical
 /// (`<base>_<suffix>` after `split_suffix_with` with the preset aliases), as [`generated_losers`] does: an aliased
 /// stem passed raw is not recognised.
 pub fn real_rival(
@@ -409,7 +410,9 @@ pub fn real_rival(
     let real = split_suffix_with(real_stem, &BTreeMap::new()).suffix;
     let image = real_kind == InputKind::Image;
     match (role.as_str(), real.as_deref()) {
-        ("p", Some("p")) | ("height", Some("p" | "m")) | ("ao", Some("rmaos" | "rfaos")) => true,
+        ("p", Some("p")) | ("height", Some("p" | "m")) => true,
+        // Note CO103: on cs, pack planning reads a pre-packed image's B by content instead.
+        ("ao", Some("rmaos" | "rfaos")) => !image || target != crate::config::Target::Cs,
         ("p", Some("height")) => image && target == crate::config::Target::Cs,
         ("height", Some("height")) | ("ao", Some("ao" | "orm")) | ("curves", Some("curves")) => {
             image

@@ -470,6 +470,16 @@ impl AppModel {
             if let Some((i, _)) = rival {
                 return Err(has_real(&i.name));
             }
+            // Note CO103: a pre-packed image whose B holds AO, read from the plan's analysis as the engine reads it
+            // (none, e.g. a skipped image: the real map wins).
+            if let Some((i, _)) = self.prepacked_rmaos(v, aliases).filter(|(i, _)| {
+                map == GenMap::Ao
+                    && i.analysis
+                        .as_ref()
+                        .is_none_or(|a| engine::pack::b_has_content(&a.channels[2]))
+            }) {
+                return Err(has_real(&format!("{} (B)", i.name)));
+            }
         }
         if let Some((i, _)) = gens.iter().find(|(i, _)| self.provenance(&i.key).is_none()) {
             return Err(format!(
@@ -544,6 +554,17 @@ impl AppModel {
         }
     }
 
+    /// The set's pre-packed `_rmaos`/`_rfaos` image, if any.
+    fn prepacked_rmaos<'a>(
+        &'a self,
+        v: &'a SetView,
+        aliases: &'a BTreeMap<String, String>,
+    ) -> Option<(&'a TextureItem, Option<String>)> {
+        self.real_members(v, aliases).find(|(i, s)| {
+            i.kind == ItemKind::Image && matches!(s.as_deref(), Some("rmaos" | "rfaos"))
+        })
+    }
+
     /// A DDS that is the set's own packed output exported in place (a PBR set under `textures/pbr/`, or one with no
     /// prefix, exported into its own folder): an earlier export, not a pre-packed `_rmaos` or a rival (Review
     /// Focus 1; the engine's `same_file` rule, CO8/CO10).
@@ -590,10 +611,17 @@ impl AppModel {
         match map {
             // P6: AO packs into `_rmaos` B, so it takes the size of the recipe's other sources.
             GenMap::Ao => {
-                return match self.recipe_size(v, aliases, "rmaos", RawMap::Ao) {
+                // A pre-packed image is the recipe's R/G/A source before any AO exists (Note CO103).
+                let size = self
+                    .recipe_size(v, aliases, "rmaos", RawMap::Ao)
+                    .or_else(|| {
+                        self.prepacked_rmaos(v, aliases)
+                            .and_then(|(i, _)| self.header_dims(&i.input))
+                    });
+                return match size {
                     None => Ok(free(AO_MAX, None)),
                     Some(s) => locked_to(s, (nw, nh), AO_MAX, "AO"),
-                }
+                };
             }
             GenMap::Curvature => return Err(NOT_OFFERED.into()),
             GenMap::Height => {}

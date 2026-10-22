@@ -329,7 +329,13 @@ fn the_rival_table() {
         assert!(!real_rival("rock_ao_generated", r, Dds, cs), "{r}.dds");
     }
     for r in ["rock_rmaos", "rock_rfaos"] {
-        assert!(real_rival("rock_ao_generated", r, Image, cs), "{r}");
+        // Task 11: on cs an image's B is read by content in pack planning; a DDS stays a rival.
+        assert!(!real_rival("rock_ao_generated", r, Image, cs), "{r}");
+        assert!(
+            real_rival("rock_ao_generated", r, Image, va),
+            "{r} on vanilla"
+        );
+        assert!(real_rival("rock_ao_generated", r, Dds, cs), "{r}.dds");
         assert!(real_rival("rock_ao_generated", r, Dds, va), "{r}.dds");
     }
     assert!(!real_rival(
@@ -795,4 +801,181 @@ fn a_bent_layer_set_weights_by_the_generated_ao() {
     };
     assert_eq!(ao_file(false), "rock_ao_generated.png");
     assert_eq!(ao_file(true), "rock_ao.png");
+}
+
+// ---- Task 11: a generated AO on a pre-packed `_rmaos` image ----
+
+fn put_rgba(dir: &Path, name: &str, w: u32, f: impl Fn(u32, u32) -> [u8; 4]) {
+    let p = dir.join("in/textures/a").join(name);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    ImageBuffer::from_fn(w, w, |x, y| image::Rgba(f(x, y)))
+        .save(p)
+        .unwrap();
+}
+
+/// rock.png, rock_rmaos.png (R 120, G 0, A 0; B `b`) and, with `generated`, rock_ao_generated.png.
+fn prepacked_rock(dir: &Path, b: impl Fn(u32, u32) -> u8, generated: bool) {
+    put(dir, "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgba(dir, "rock_rmaos.png", 16, |x, y| [120, 0, b(x, y), 0]);
+    if generated {
+        put(dir, "rock_ao_generated.png", 16, |x, y| {
+            (x * 8 + y * 4) as u8
+        });
+    }
+}
+
+fn rmaos_jobs(p: &Plan) -> Vec<&ResolvedJob> {
+    p.jobs
+        .iter()
+        .filter(|j| {
+            j.output
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().contains("_rmaos"))
+        })
+        .collect()
+}
+
+#[test]
+fn a_generated_ao_fills_the_flat_b_of_a_prepacked_rmaos() {
+    let d = tempfile::tempdir().unwrap();
+    prepacked_rock(d.path(), |_, _| 255, true);
+    let (p, ev) = plan(d.path(), Target::Cs, &[]);
+    let jobs = rmaos_jobs(&p);
+    assert_eq!(jobs.len(), 1, "one _rmaos job: {:?}", p.jobs);
+    let j = jobs[0];
+    let pk = j.pack.as_ref().expect("a packed _rmaos");
+    // R, G and A from the image, byte for byte; B from the generated file.
+    let asm = engine::pack::assemble::assemble(pk, pk.gray).unwrap();
+    for (i, px) in asm.image.px.iter().enumerate() {
+        let (x, y) = (i as u32 % 16, i as u32 / 16);
+        let q = px.map(|v| (v * 255.0).round() as u8);
+        assert_eq!(q, [120, 0, (x * 8 + y * 4) as u8, 0], "texel ({x}, {y})");
+    }
+    for (ch, want) in [("r", "rock_rmaos.png:R"), ("a", "rock_rmaos.png:A")] {
+        assert_eq!(
+            j.provenance[&format!("pack.{ch}")],
+            Provenance::Source(want.into())
+        );
+    }
+    assert_eq!(
+        j.provenance["pack.b"],
+        Provenance::Source("rock_ao_generated.png:R".into())
+    );
+    let gen_ao = j
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::GenAo)
+        .expect("GEN-AO");
+    assert!(
+        gen_ao.message.contains("rock_ao_generated.png"),
+        "{}",
+        gen_ao.message
+    );
+    assert!(
+        !all_codes(&p).contains(&Code::PackConflict),
+        "{:?}",
+        all_codes(&p)
+    );
+    assert!(!warning_codes(&ev).contains(&Code::PackConflict));
+    assert!(replaced(&p, "rock_ao_generated.png").is_none());
+    // The image is a channel source, not a job of its own.
+    assert!(!p
+        .jobs
+        .iter()
+        .any(|j| j.input.ends_with("rock_rmaos.png") && j.pack.is_none()));
+}
+
+#[test]
+fn the_packed_output_replaces_the_prepacked_rmaos_name() {
+    let d = tempfile::tempdir().unwrap();
+    prepacked_rock(d.path(), |_, _| 255, true);
+    let (p, _) = plan(d.path(), Target::Cs, &[]);
+    let jobs = rmaos_jobs(&p);
+    assert!(jobs.iter().all(|j| j.pack.is_some()), "the packed job only");
+    let outs: Vec<_> = jobs.iter().map(|j| j.output.clone()).collect();
+    assert_eq!(outs.len(), 1, "{outs:?}");
+    assert!(outs[0].ends_with("textures/a/rock_rmaos.dds"), "{outs:?}");
+}
+
+/// Converts the folder on cs; every output DDS (path under `out`, bytes).
+fn convert_all(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut req = request(dir, Target::Cs, &[]);
+    req.on_existing = OnExisting::Overwrite;
+    req.accept = AcceptSuggestions::High;
+    let (p, _) = plan_req(req);
+    assert!(
+        p.jobs
+            .iter()
+            .any(|j| j.output.ends_with("rock_rmaos.dds") && matches!(j.status, JobStatus::Ready)),
+        "{:?}",
+        p.jobs
+    );
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink, "generated-files");
+    Engine::new()
+        .unwrap()
+        .run(p, &rep, &CancelToken::default())
+        .unwrap();
+    let out = dir.join("out");
+    let mut files = BTreeMap::new();
+    let mut stack = vec![out.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "dds") {
+                let rel = p.strip_prefix(&out).unwrap().to_string_lossy();
+                files.insert(rel.replace('\\', "/"), std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn a_prepacked_rmaos_with_baked_ao_keeps_its_b() {
+    let baked = |x: u32, y: u32| 100 + ((x + y) * 5) as u8; // 100..250
+    let with = tempfile::tempdir().unwrap();
+    prepacked_rock(with.path(), baked, true);
+    let (p, ev) = plan(with.path(), Target::Cs, &[]);
+    let s = replaced(&p, "rock_ao_generated.png").expect("GEN-REPLACED");
+    assert!(
+        s.reason.ends_with("replaced by rock_rmaos.png (B)"),
+        "{}",
+        s.reason
+    );
+    assert!(!all_codes(&p).contains(&Code::PackConflict));
+    assert!(!warning_codes(&ev).contains(&Code::PackConflict));
+    assert!(!p.jobs.iter().any(|j| j.pack.is_some()), "no recipe");
+    let without = tempfile::tempdir().unwrap();
+    prepacked_rock(without.path(), baked, false);
+    let (a, b) = (convert_all(with.path()), convert_all(without.path()));
+    assert!(
+        a.keys().any(|k| k.ends_with("rock_rmaos.dds")),
+        "{:?}",
+        a.keys()
+    );
+    assert_eq!(a, b, "the output equals the run without the generated file");
+    // A bent layer weights by the image's B, not by the replaced generated file.
+    let d = tempfile::tempdir().unwrap();
+    prepacked_rock(d.path(), baked, true);
+    put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+    put_rgb(d.path(), "rock_bent.png", 16, |x, y| {
+        [(x * 8) as u8, (y * 8) as u8, 255]
+    });
+    let (p, _) = plan(d.path(), Target::Cs, &[]);
+    let ao = job(&p, "rock_n.png")
+        .rnm
+        .as_ref()
+        .unwrap()
+        .ao
+        .clone()
+        .unwrap();
+    assert!(
+        ao.file.path.ends_with("rock_rmaos.png"),
+        "{}",
+        ao.file.path.display()
+    );
+    assert_eq!(ao.channel, 2);
 }

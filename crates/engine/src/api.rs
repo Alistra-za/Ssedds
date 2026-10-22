@@ -1464,6 +1464,12 @@ impl Engine {
             shaders: &picks,
             ..base_ctx
         };
+        // Note CO103: images whose B is empty, for a generated AO beside a pre-packed `_rmaos` (pack planning).
+        let flat_b: BTreeSet<PathBuf> = pass1
+            .iter()
+            .filter(|(_, a, _)| !pack::b_has_content(&a.channels[2]))
+            .map(|(wi, _, _)| work[*wi].1.path.clone())
+            .collect();
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
@@ -1548,7 +1554,13 @@ impl Engine {
             &mut skipped,
             &packed_outputs,
             &derive_heights,
+            &flat_b,
         );
+        // As step 3b drops its losers, so later steps (the RNM bent AO) never read a replaced generated AO.
+        for s in &mut sets {
+            s.members
+                .retain(|&i| !packed.gen_replaced.contains(&files[i].path));
+        }
         // Pass 1 may add a recipe job it fails at once (sources of different sizes); like every job it records the
         // target's origin (`BatchRequest::target`, ruling W1).
         for j in &mut jobs {

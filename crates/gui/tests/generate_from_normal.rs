@@ -4,7 +4,7 @@ mod support;
 use engine::config::{GreenConvention, Target};
 use engine::from_normal::{HeightOpts, Neutral, Opts, Tiling};
 use engine::shader::Shader;
-use image::{ImageBuffer, Luma, Rgb};
+use image::{ImageBuffer, Luma, Rgb, Rgba};
 use sdc_gui::model::bulk::{MenuAction, MenuEntry};
 use sdc_gui::model::checks;
 use sdc_gui::model::from_normal::*;
@@ -2419,6 +2419,87 @@ fn a_pbr_set_without_ao_offers_ao_on_the_rmaos_row() {
 }
 
 #[test]
+fn a_generated_ao_fills_a_flat_prepacked_rmaos_and_offers_regenerate() {
+    use engine::codes::Code;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01_roughness.png")).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, _| Rgba([100u8 + x as u8, 0, 255, 77]))
+        .save(land(d.path()).join("rock01_rmaos.png"))
+        .unwrap();
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Ao));
+    m.gen_generate();
+    idle(&mut m);
+    assert_eq!(
+        generated_pngs(&land(d.path())),
+        vec!["rock01_ao_generated.png"]
+    );
+    let codes = rmaos_codes(&m);
+    assert!(codes.iter().any(|(c, _)| *c == Code::GenAo), "{codes:?}");
+    assert!(
+        !codes
+            .iter()
+            .any(|(c, _)| matches!(c, Code::PackDefaulted | Code::PackConflict)),
+        "{codes:?}"
+    );
+    let pk = rmaos(&m).job.as_ref().unwrap().pack.as_ref().unwrap();
+    assert!(
+        pk.sources
+            .iter()
+            .any(|s| s.path.ends_with("rock01_rmaos.png")),
+        "R/G/A from the image"
+    );
+    let e = ao_open(&m.slot_menu(ROCK_SET, SlotKind::Rmaos))
+        .cloned()
+        .unwrap();
+    assert_eq!((e.label.as_str(), e.disabled), ("Regenerate…", None));
+}
+
+#[test]
+fn the_rmaos_row_offers_ao_on_a_flat_prepacked_rmaos() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    // The pre-packed image is the set's only R/G/A source.
+    std::fs::remove_file(land(d.path()).join("rock01_roughness.png")).unwrap();
+    let rm = land(d.path()).join("rock01_rmaos.png");
+    let row = |m: &AppModel| {
+        m.slot_menu(ROCK_SET, SlotKind::Rmaos)
+            .last()
+            .cloned()
+            .unwrap()
+    };
+    ImageBuffer::from_fn(32, 32, |_, _| Rgb([100u8, 0, 255]))
+        .save(&rm)
+        .unwrap();
+    reopen(&mut m, d.path());
+    let e = row(&m);
+    assert_eq!(ao_open(std::slice::from_ref(&e)), Some(&e), "the AO entry");
+    assert_eq!((e.label.as_str(), e.disabled), (GENERATE, None));
+    // The AO takes the image's size, so the recipe's sources match.
+    assert_eq!(m.gen_size(ROCK_SET, GenMap::Ao), Ok(GenSize::Locked(32)));
+    // B varies 100..255: it already holds AO.
+    ImageBuffer::from_fn(64, 64, |x, y| {
+        Rgb([100u8, 0, 100 + ((x + y) * 155 / 126) as u8])
+    })
+    .save(&rm)
+    .unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(
+        row(&m).disabled.as_deref(),
+        Some("this set already has an AO source (rock01_rmaos.png (B))")
+    );
+    // A DDS `_rmaos` instead: DDS_RMAOS.
+    std::fs::remove_file(&rm).unwrap();
+    bc1_dds(&land(d.path()).join("rock01_rmaos.dds"), 64, 64);
+    reopen(&mut m, d.path());
+    assert_eq!(
+        row(&m).disabled.as_deref(),
+        Some("this set's _rmaos is a DDS (rock01_rmaos.dds), which is never re-encoded")
+    );
+}
+
+#[test]
 fn ao_reasons_cover_vanilla_non_pbr_real_ao_and_prepacked_rmaos() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened_plain(d.path());
@@ -2459,13 +2540,13 @@ fn ao_reasons_cover_vanilla_non_pbr_real_ao_and_prepacked_rmaos() {
     shader(&mut m, Shader::PbrGrass);
     assert_eq!(ao(&m), Ok(()));
     shader(&mut m, Shader::Pbr);
-    // P11: a pre-packed `_rmaos` image is a real AO source until Task 11.
+    // Task 11: a pre-packed `_rmaos` image whose B holds AO is a real AO source.
     let rm = land(d.path()).join("rock01_rmaos.png");
     ImageBuffer::from_fn(64, 64, |x, _| Rgb([100u8, 0, 100 + x as u8]))
         .save(&rm)
         .unwrap();
     reopen(&mut m, d.path());
-    assert_eq!(ao(&m), real("rock01_rmaos.png"));
+    assert_eq!(ao(&m), real("rock01_rmaos.png (B)"));
     std::fs::remove_file(&rm).unwrap();
     // A DDS `_rmaos` is never re-encoded.
     bc1_dds(&land(d.path()).join("rock01_rmaos.dds"), 64, 64);
