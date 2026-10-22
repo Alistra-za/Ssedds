@@ -488,3 +488,34 @@ fn an_equal_shader_write_leaves_the_sets_document_clean() {
     s.set_shader("a/one", None);
     assert!(s.is_dirty(), "a change still dirties");
 }
+
+/// Final review I1: a `.dds` beside `a/f.png` is a same-stem sibling too (discovery admits DDS inputs).
+#[test]
+fn a_dds_beside_the_moved_file_stays_removed() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/f.png", "a/f.dds"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.dds"], "{e:?}");
+}
+
+/// The same pair through `names_only`: removing the png from another set keeps the shared `add` key for the dds.
+#[test]
+fn a_shared_add_key_is_kept_when_a_dds_sibling_exists() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nadd = [\"a/foo\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/foo.png", "a/foo.dds"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.remove_member("a/new", "a/foo.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.add, ["a/foo"], "{e:?}");
+    assert_eq!(e.remove, ["a/foo.png"], "{e:?}");
+}

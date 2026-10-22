@@ -886,10 +886,10 @@ impl SetsDoc {
                     && p.file_stem()
                         .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
                     && e.file_name().to_string_lossy().to_lowercase() != name
-                    // Only what the engine reads as an input: a `.txt` beside it is no sibling.
+                    // Only what the engine reads as an input (images and DDS): a `.txt` beside it is no sibling.
                     && p.extension().is_some_and(|x| {
                         let x = x.to_string_lossy().to_lowercase();
-                        engine::discover::IMAGE_EXTS.contains(&x.as_str())
+                        x == "dds" || engine::discover::IMAGE_EXTS.contains(&x.as_str())
                     })
             })
             .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
