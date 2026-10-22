@@ -73,7 +73,7 @@ For BC7 data maps with alpha, see the [BC7 weighting](docs/wiki/GUI-Guide.md#bc7
 
 † Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.
 
-rgbcx beats NVTT on BC1 on 96 of 100 images, and BC3 is a tie. The texconv GPU path is slower than ISPC on BC6H and loses 1.8 dB.
+rgbcx beats NVTT on BC1 on 96 of 100 images, and BC3 is a tie. On BC6H the texconv GPU path is slower than ISPC (0.41 against 0.19 s/Mpix) and 2.2 dB lower in mPSNR (4 HDR images).
 
 ## Quick start
 
