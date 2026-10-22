@@ -1024,7 +1024,9 @@ impl Renderer {
                     path.norm
                 )),
                 None => {
-                    if entry.is_some_and(|e| e.missing) {
+                    // Another shape's edit may have evicted the entry; `evicted_missing` keeps it (as in plain_srv).
+                    let gone = entry.is_none() && self.evicted_missing.contains(&path.norm);
+                    if gone || entry.is_some_and(|e| e.missing) {
                         missing.insert(reg);
                     }
                 }
