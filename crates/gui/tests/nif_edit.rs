@@ -2097,7 +2097,25 @@ fn tab(h: &mut Harness<'static, MeshesModel>, name: &str) {
     h.run_steps(3);
 }
 
+/// Meshes UI T4: opens the Controllers tab's "Clips (…)" section (closed by default) unless it is open.
+fn open_clips(h: &mut Harness<'static, MeshesModel>) {
+    if h.query_by_label("New clip name").is_some() {
+        return;
+    }
+    if h.query_by_label_contains("Clips (").is_none() {
+        return;
+    }
+    // The section ends the tab, often below the fold: scroll it into view before the click.
+    h.get_by_label_contains("Clips (").scroll_to_me();
+    h.run_steps(12);
+    h.get_by_label_contains("Clips (").click();
+    h.run_steps(3);
+}
+
 fn edit_number(h: &mut Harness<'static, MeshesModel>, label: &str, text: &str) {
+    if h.query_by_label(label).is_none() {
+        open_clips(h); // Meshes UI T4: the New clip fields sit in the closed Clips section
+    }
     h.get_by_label(label).focus();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -2154,6 +2172,77 @@ fn controller_rows_show_variable_cycle_and_edit_frequency() {
     edit_number(&mut h, "U offset value", "0.75");
     let e = h.state().edit.as_ref().unwrap();
     assert_eq!(e.model.interps[&5].value, vec![0.75], "{:?}", e.outcomes);
+}
+
+/// The managed-clip scene in a direct session with its shape selected, on the Controllers tab (Clips closed).
+fn clip_view() -> Harness<'static, MeshesModel> {
+    let mut m = direct(scenes::managed_clip());
+    let b = m.edit.as_ref().unwrap().model.shapes[0].block;
+    m.select_edit(Selection::Shape(b));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Controllers").click();
+    h.run_steps(3);
+    h
+}
+
+/// Meshes UI T4: Preview stays at the top; one closed "Clips (N · showing X)" section at the end holds Rename,
+/// Remove, Convert to clips and New clip; a managed controller names its clip in one weak line.
+#[test]
+fn clip_controls_sit_in_one_closed_section_under_the_chains() {
+    let mut h = clip_view();
+    let preview = h
+        .get_by_role_and_label(AkRole::ComboBox, "Preview animation")
+        .rect();
+    let shader = h.get_by_label("Shader property").rect();
+    assert!(preview.max.y <= shader.min.y, "Preview on top");
+    let header = h.get_by_label("Clips (2 · showing free chains)").rect();
+    assert!(
+        header.min.y > shader.max.y,
+        "the section is after the chains"
+    );
+    for l in [
+        "Clip name",
+        "New clip name",
+        "Convert shader controllers to clips",
+    ] {
+        assert!(
+            h.query_by_label(l).is_none(),
+            "{l} is inside the closed section"
+        );
+    }
+    h.get_by_label_contains("In clip A · ");
+    h.get_by_label("Clips (2 · showing free chains)").click();
+    h.run_steps(3);
+    h.get_by_label("Clip name");
+    h.get_by_label("New clip name");
+    h.get_by_label("Convert shader controllers to clips");
+}
+
+/// Meshes UI T4: a clip refusal stored while the section is closed opens it, so the red line is seen. The refusal is
+/// stored as the Rename row stores it (its id, and inputs = state revision | picked clip).
+#[test]
+fn a_clip_refusal_opens_the_clips_section() {
+    let mut h = clip_view();
+    let (rev, a) = {
+        let e = h.state().edit.as_ref().unwrap();
+        (e.rev, e.model.sequences[0].block)
+    };
+    h.state_mut().edit_with(|e| e.set_playing(Playing::Clip(a)));
+    h.run_steps(3);
+    let rev = h.state().edit.as_ref().unwrap().rev.max(rev);
+    assert!(h.query_by_label("Clip name").is_none(), "closed");
+    let id = egui::Id::new("meshes-edit-clip").with("refused");
+    let inputs = format!("{rev}|{:?}", Some(a));
+    h.ctx
+        .data_mut(|d| d.insert_temp(id, (inputs, "Type a name for the clip.".to_string())));
+    h.run_steps(3);
+    h.get_by_label("Clip name");
+    h.get_by_label("Type a name for the clip.");
+    // Closed by hand, it stays closed while that refusal stands.
+    h.get_by_label_contains("Clips (2 · showing").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Clip name").is_none());
 }
 
 /// R8 lifted (v2 B7, E9: replaces `managed_variable_combo_is_disabled`): the Variable combo of a managed controller
@@ -4931,8 +5020,8 @@ fn clip_preview_swaps_interpolators_only_while_selected() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
-    h.get_by_label("Glow");
-    h.get_by_label("Loop · 0 to 1 s");
+    // Meshes UI T4: the clip is one weak line under its controller.
+    h.get_by_label("In clip Glow · Loop · 0 to 1 s");
     h.get_by_label("Text keys: start at 0 s, end at 1 s");
     h.get_by_label("Pick this clip in Preview to see and edit its keys.");
     h.get_by_role_and_label(AkRole::ComboBox, "Preview animation")
@@ -6596,6 +6685,9 @@ fn click(h: &mut Harness<'static, MeshesModel>, label: &str) {
 
 /// `scroll_to_me` animates: step until the node has not moved for three frames (at most 60).
 fn reveal(h: &mut Harness<'static, MeshesModel>, label: &str) {
+    if h.query_by_label(label).is_none() {
+        open_clips(h); // Meshes UI T4: clip controls sit in the closed Clips section
+    }
     h.get_by_label(label).scroll_to_me();
     let (mut last, mut still) = (h.get_by_label(label).rect(), 0);
     for _ in 0..60 {
@@ -6627,6 +6719,7 @@ fn convert_button_makes_one_undo_step_and_lists_the_clip() {
     let mut h = view(clip_scene());
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     assert!(enabled(&h, CONVERT_SHADER));
     click(&mut h, CONVERT_SHADER);
     h.run_steps(3);
@@ -6660,6 +6753,7 @@ fn rename_clip_updates_the_selector() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     edit_number(&mut h, "Clip name", "Open");
     let got = ops(h.state());
     assert!(
@@ -6684,6 +6778,7 @@ fn remove_clip_returns_to_free_chains_when_none_left() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     click(&mut h, "Remove clip SpecialIdle");
     h.run_steps(3);
     let got = ops(h.state());
@@ -6714,6 +6809,7 @@ fn clip_actions_are_disabled_on_free_chains() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     assert!(h.get_by_label("Clip name").accesskit_node().is_disabled());
     disabled_with(
         &mut h,
@@ -6753,6 +6849,7 @@ fn convert_is_disabled_with_a_reason() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(
         &mut h,
         CONVERT_SHADER,
@@ -6764,6 +6861,7 @@ fn convert_is_disabled_with_a_reason() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(
         &mut h,
         CONVERT_SHADER,
@@ -6775,6 +6873,7 @@ fn convert_is_disabled_with_a_reason() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(
         &mut h,
         "Convert alpha controllers to clips",
@@ -6787,6 +6886,7 @@ fn new_clip_drives_the_picked_controllers() {
     let mut h = view(clip_scene());
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     disabled_with(&mut h, "Add clip", "Type a name for the clip.");
     edit_number(&mut h, "New clip name", "Open");
     disabled_with(&mut h, "Add clip", "Tick at least one controller.");
@@ -6859,6 +6959,7 @@ fn new_clip_on_tbc_keys_starts_flat_without_an_error() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     edit_number(&mut h, "New clip name", "Open");
     let tick = "Add U offset to the new clip";
     reveal(&mut h, tick);
@@ -6895,6 +6996,7 @@ fn new_clip_ticks_clear_when_the_file_changes() {
     let mut h = view(clip_scene());
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     let tick = "Add U offset to the new clip";
     click(&mut h, tick);
     h.run_steps(3);
@@ -6917,6 +7019,7 @@ fn new_clip_ticks_clear_when_the_file_changes() {
     *h.state_mut() = other;
     h.run_steps(3);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     reveal(&mut h, tick);
     assert!(!on(&h), "another file starts with nothing ticked");
 }
@@ -6928,6 +7031,7 @@ fn a_refused_clip_name_records_nothing_and_says_why() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     edit_number(&mut h, "New clip name", "specialidle");
     click(&mut h, "Add Emissive multiple to the new clip");
     click(&mut h, "Add clip");
@@ -6950,6 +7054,7 @@ fn clips_ui_fits_the_panel_at_1100() {
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     let panel = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
         .expect("the edit panel")
         .outer_rect;
@@ -6976,6 +7081,7 @@ fn playing_clip_view() -> Harness<'static, MeshesModel> {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Controllers");
+    open_clips(&mut h);
     h
 }
 
