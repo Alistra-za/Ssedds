@@ -503,7 +503,7 @@ pub struct MeshesModel {
     /// The latest scan to end returned a result (`report`). False after a pause, cancel, failure or panic: the
     /// store's origins may be outside the readable run, so the app does not re-read its mesh evidence.
     pub scan_completed: bool,
-    /// The latest scan failed before `begin_scan` (PGPatcher running, another scan holds the lock): the store is as it was.
+    /// The latest scan failed before `begin_scan` because PGPatcher is running: the store is as it was. Not for Busy: another scan is mid-flight.
     pub store_untouched: bool,
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
@@ -958,8 +958,6 @@ impl MeshesModel {
                     "Scan cancelled. The lists are from before; scan again to refresh them.".into();
             }
             Err(e) => {
-                // The scan lock is taken before anything is read or written.
-                self.store_untouched = matches!(e, ScanError::Busy);
                 self.status.clear();
                 self.error = Some(format!("Scan failed: {e}"));
             }

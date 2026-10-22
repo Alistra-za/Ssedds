@@ -1738,7 +1738,8 @@ fn a_scan_that_stops_before_begin_scan_keeps_the_store_settled() {
     run_scan(&mut app, &mut m);
     assert!(app.scan_store_unsettled);
 
-    // Another scan holds scan.lock (the lock is a Windows sharing lock): Busy stops before begin_scan too.
+    // Another scan holds scan.lock (a Windows sharing lock): Busy means that scan is mid-flight with every origin
+    // disabled, so the flag stays set whatever it was (not like PgpRunning).
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -1751,6 +1752,7 @@ fn a_scan_that_stops_before_begin_scan_keeps_the_store_settled() {
             .share_mode(0)
             .open(lock)
             .unwrap();
+        app.scan_store_unsettled = false;
         run_scan(&mut app, &mut m);
         assert!(
             m.error
@@ -1760,14 +1762,8 @@ fn a_scan_that_stops_before_begin_scan_keeps_the_store_settled() {
             m.error
         );
         assert!(
-            m.store_untouched && app.scan_store_unsettled,
-            "an earlier cancel stays"
-        );
-        app.scan_store_unsettled = false;
-        run_scan(&mut app, &mut m);
-        assert!(
-            !app.scan_store_unsettled,
-            "Busy leaves a settled store settled"
+            !m.store_untouched && app.scan_store_unsettled,
+            "Busy is not an untouched store"
         );
     }
 }

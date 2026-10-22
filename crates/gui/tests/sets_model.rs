@@ -1583,6 +1583,25 @@ fn a_queued_export_fires_once_the_post_plan_read_lands() {
     assert!(export_started_or_asked(&m), "the tail of the plan ran");
 }
 
+/// Trace-debug 2026-10-22 #4 (Note CW1): a scan that starts while a plan's post-plan read is pending keeps the evidence
+/// held and still finishes the plan (a queued export starts).
+#[test]
+fn a_scan_start_during_the_post_plan_read_keeps_the_evidence_and_finishes_the_plan() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.gras_diffuses = ["keep".to_string()].into();
+    m.export_clicked();
+    assert!(!export_started_or_asked(&m), "waits for the read");
+    m.scan_started();
+    assert!(!m.votes_pending(), "the read was re-issued and landed");
+    idle(&mut m);
+    assert!(m.gras_diffuses.contains("keep"), "the evidence was emptied");
+    assert!(
+        m.mesh_votes.is_empty(),
+        "the real read must not land after the scan start"
+    );
+    assert!(export_started_or_asked(&m), "the tail of the plan ran");
+}
 #[test]
 fn a_scan_finished_refresh_keeps_the_pending_plan_continuation() {
     let d = tempfile::tempdir().unwrap();
