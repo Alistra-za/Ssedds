@@ -295,6 +295,34 @@ mod tests {
         }
     }
 
+    /// CN12: a moved project keeps its derive identity; a changed role or setting does not.
+    #[test]
+    fn derive_identity_ignores_paths_but_not_roles_or_settings() {
+        let d = tempfile::tempdir().unwrap();
+        let mut job = diffuse_job(d.path());
+        job.rough = ChannelSource::Source {
+            path: "a/x_r.png".into(),
+            role: crate::config::RawMap::Roughness,
+            invert: false,
+            channel: None,
+        };
+        let mut moved = job.clone();
+        moved.albedo = Some("b/x.png".into());
+        moved.sources[0].path = "b/x.png".into();
+        if let ChannelSource::Source { path, .. } = &mut moved.rough {
+            *path = "b/x_r.png".into();
+        }
+        let mut role = job.clone();
+        role.sources[0].role = "normal".into();
+        let mut inverted = job.clone();
+        if let ChannelSource::Source { invert, .. } = &mut inverted.rough {
+            *invert = true;
+        }
+        assert_eq!(job.identity_sha256(), moved.identity_sha256());
+        assert_ne!(job.identity_sha256(), role.identity_sha256());
+        assert_ne!(job.identity_sha256(), inverted.identity_sha256());
+    }
+
     /// TA5: a landscape diffuse's alpha is the `_p` R, opaque (and alpha-free) without a `_p`; an object keeps the
     /// albedo's alpha.
     #[test]

@@ -182,13 +182,25 @@ pub struct DeriveJob {
 }
 
 impl DeriveJob {
-    /// SHA-256 of the job without its sources' stamps: every setting, slot and path (Note CN12). Recorded on each
-    /// source (`SourceRef::derive`), so `if-changed` re-encodes when any changes.
-    // shortcut: absolute paths are hashed, so a moved project re-encodes once; clear them before release (CN12).
+    /// SHA-256 of the job without its sources' stamps or paths: every setting, slot and role (Note CN12). Recorded on
+    /// each source (`SourceRef::derive`), so `if-changed` re-encodes when any changes; a moved project does not.
     pub fn identity_sha256(&self) -> String {
         let mut j = self.clone();
         for s in &mut j.sources {
             s.stamp = None;
+            s.path.clear();
+        }
+        j.albedo = j.albedo.map(|_| PathBuf::new());
+        j.normal = j.normal.map(|_| PathBuf::new());
+        let chans = [&mut j.rough, &mut j.metal, &mut j.ao].into_iter();
+        for c in chans.chain(
+            [&mut j.height, &mut j.curves, &mut j.cavity]
+                .into_iter()
+                .flatten(),
+        ) {
+            if let ChannelSource::Source { path, .. } = c {
+                path.clear();
+            }
         }
         crate::manifest::sha256_json(&j).expect("a DeriveJob serialises")
     }
