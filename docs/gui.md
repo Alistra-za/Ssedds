@@ -341,16 +341,16 @@ The Meshes view's 3D panel and a set's 3D view work the same way.
 
 **Scan source and progress.** The scan source is behind the **MO2…** header button (both views): a popup with the instance and **Choose…**, the instance's profiles, **Scan a folder…** and **Scan** / **Cancel**, which stays open while you click in it. While a scan runs, the scan row (in the Meshes view and in the Textures view) shows a bar with the phase and its count, for example `reading 120/4000 · ETA 0:42`. The ETA appears once the phase has finished 3 items or run for 2 seconds. The ETA is the average over the last 10 seconds, as in the Files tab, and starts over with each phase.
 
-Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Select a mesh first", until a mesh is selected). Switched on, it replaces the mods and meshes list with the shape cards of the selected mesh; switched off, or when the selection clears, the list is back. The right-hand pane always shows the 3D view.
+Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Select a mesh first", until a mesh is selected). Switched on, it replaces the mods and meshes list with the shape cards of the selected mesh; switched off, or when the selection clears, the list is back. While **Edit** is open the column stays on the shapes and the button is greyed ("Close Edit to see the mods and meshes"): the cards are where you pick the shape to edit. The right-hand pane always shows the 3D view.
 
-A shape card shows, from the top:
+Each shape is a framed card. It shows, from the top:
 
-- **#N name — type.** N is the shape's PGPatcher 3D index, the number plugins use for its alternate textures (a shape outside the scene tree reads `#–`). Hover for the NIF block index ("NIF block 12").
+- **#N name · type**, a button as wide as the card. N is the shape's PGPatcher 3D index, the number plugins use for its alternate textures (a shape outside the scene tree reads `#–`). Click it to select the card: it gets the accent outline, and **Edit** then opens on that shape instead of Root. A NIF with one shape opens on it. Hover for the NIF block index ("NIF block 12").
 - **The shader**, in bold: the lighting shader type, for example **Hair Tint (6)**, or "Effect shader".
-- **SLSF1 0x… and SLSF2 0x…** as collapsed headers. Open one to list its set flags by name, one per line, for example "Specular (0)". A bit with no known name reads "bit N".
-- The geometry line (skinned, vertices, triangles).
-- **Alpha**, in words: "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5". Blending or testing is left out when it is off, and "Alpha: none" shows when both are. Hover for the raw flags, for example "flags 0x12ED (4845)".
-- The texture-set slots, indented under the shape.
+- **The textures**: each set slot with its path, indented, and one weak line for the empty ones ("(4 empty slots)"). A missing texture says "→ missing" in red.
+- **Alpha**, in words: "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5". Blending or testing is left out when it is off, and "Alpha: none" shows when both are. A shape with no alpha property says "No NiAlphaProperty". Hover for the raw flags, for example "flags 0x12ED (4845)".
+- **Controllers** (edit mode only): how many, and their names, with "(clip)" for one a clip drives, for example "2: Emissive multiple, Alpha (clip)", or "none".
+- **Details**, closed: the NIF block and 3D index, **SLSF1 0x…** and **SLSF2 0x…** (open one to list its set flags by name, for example "Specular (0)"; a bit with no known name reads "bit N"), the geometry line (skinned, vertices, triangles), which mod each texture comes from ("→ A (2 copies)") and the raw slot strings.
 
 A texture path that is a texture of the open folder has an **Open in Textures** button, on the shape card and on the "Users of" list's title. It switches to the Textures view, selects that texture and scrolls it into view.
 
@@ -358,7 +358,7 @@ A texture path that is a texture of the open folder has an **Open in Textures** 
 
 **Edit** (next to the NIF's name in the Meshes view) opens the edit panel for the selected NIF; click it again to close the panel. The panel shows the file's data path and `Source: <where it came from>`. Edits never change the source file. They are kept in a small edit document in `.sdc\nif-edits` under the export folder, and **Export NIF** writes a copy there. The export folder is the Textures one (**Export to ▾** in the header, else `<project>\sdc-out`); with no project and no Export to folder it is `mods\sdc NIF Edits` in the MO2 instance.
 
-**Cards.** In edit mode the shape cards get a **Root** card first, then one card per shape. Click a card's title to select it; the tabs below edit the selected card. **Show only this shape** hides the other shapes in the 3D view. While you edit, the cards show the edited file: a change to the shader type, a flag, the alpha or a texture path shows on its card at once.
+**Cards.** In edit mode the shape cards get a **Root** card first, then one card per shape. Click a card's header to select it; the tabs below edit the selected card. **Show only this shape** hides the other shapes in the 3D view. While you edit, the cards show the edited file: a change to the shader type, a flag, the alpha or a texture path shows on its card at once.
 
 **Tabs.**
 - **Shader** edits the BSLightingShaderProperty of the selected shape: shader type, SLSF1 and SLSF2 flags, glossiness, specular, emissive, UV scale and offset, the per-type fields, and the texture slots (type a path, **Browse**, or pick from the scanned textures; **Check that files exist** and **Filter textures** help). A texture path change shows in the 3D view at once.
