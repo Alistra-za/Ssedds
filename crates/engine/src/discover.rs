@@ -119,7 +119,7 @@ pub fn discover_reporting(
     let out_abs = std::path::absolute(skip.unwrap_or(output_root))?;
     let mut files = vec![];
     let mut skipped = vec![];
-    // Trace-debug #13 (Note BQ): a file reached through two inputs is kept once, through the first.
+    // Note BQ1: a file reached through two inputs is kept once, through the first.
     let mut seen = std::collections::HashSet::new();
     let mut first_sight = |p: &Path| {
         seen.insert(
@@ -133,6 +133,11 @@ pub fn discover_reporting(
             // Note BC (audit #3): only an output root strictly inside this folder is skipped; in place skips nothing.
             let in_abs = std::path::absolute(input)?;
             let skip_out = is_under(&out_abs, &in_abs) && !is_under(&in_abs, &out_abs);
+            // A followed link into the output folder must be skipped too: compare resolved paths (Note CU6).
+            // shortcut: only folder links are resolved; a file link into the output folder is still read.
+            let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            let (in_real, out_real) = (real(&in_abs), real(&out_abs));
+            let skip_real = !is_under(&in_real, &out_real);
             let max_depth = if recursive { usize::MAX } else { 1 };
             let walker = walkdir::WalkDir::new(input)
                 .min_depth(1)
@@ -151,6 +156,7 @@ pub fn discover_reporting(
                 e.file_name() != SDC_DIR
                     && !(skip_out
                         && std::path::absolute(e.path()).is_ok_and(|a| is_under(&a, &out_abs)))
+                    && !(skip_real && is_under(&real(e.path()), &out_real))
             };
             for e in walker.into_iter().filter_entry(keep) {
                 let e = match e {
