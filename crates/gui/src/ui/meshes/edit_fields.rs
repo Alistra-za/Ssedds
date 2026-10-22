@@ -6,7 +6,7 @@ use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::ui::status::{AMBER, RED};
 use eframe::egui;
-use nif::edit::validate::{Level, Target};
+use nif::edit::validate::{type_flag_errors, type_flag_lock, Level, Target};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::fields::{Field, Value};
 use nif::material::{SLSF1_NAMES, SLSF2_NAMES, SLSF2_TRUE_PBR};
@@ -38,6 +38,8 @@ pub(super) struct Act {
     pub scrub: Option<f32>,
     /// The Preview selector picked free chains or a clip (v2 B7).
     pub playing: Option<crate::model::meshes::nif_edit::Playing>,
+    /// Note CS: the line shown after `push` (a shader type change that also fixed a flag).
+    pub notice: Option<String>,
 }
 
 const LABEL_W: f32 = 132.0;
@@ -79,7 +81,13 @@ pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mu
             ui.add_space(LABEL_W);
             ui.add(egui::Label::new(egui::RichText::new(&w.text).color(color)).wrap());
             if let Some(fix) = &w.fix {
-                if ui.small_button("Fix").clicked() {
+                // Note CS: a flag fix names what it does.
+                let label = match fix {
+                    Op::SetBits { value: 0, .. } => "Clear the flag",
+                    Op::SetBits { .. } => "Set the flag",
+                    _ => "Fix",
+                };
+                if ui.small_button(label).clicked() {
                     act.push = Some((vec![fix.clone()], None));
                 }
             }
@@ -160,6 +168,20 @@ pub(super) fn set_name(
     });
 }
 
+/// The hover text of a colour picker disabled because a channel is outside 0-1 (C-P25).
+pub(super) const OUT_OF_RANGE: &str = "Values outside 0-1: edit R, G and B directly.";
+
+/// C-P17': NIF colours are sRGB but egui's `color_edit_button_rgb` takes linear, so the pickers get
+/// `v.map(linear_from_gamma)` (= `lin`). This maps the picked linear colour back to sRGB; a channel whose shown byte
+/// the picker kept was not touched and keeps its exact bits (the HSV round trip and popup bytes move it a little).
+pub(super) fn from_picker(v: [f32; 3], lin: [f32; 3], picked: [f32; 3]) -> [f32; 3] {
+    let byte = egui::ecolor::gamma_u8_from_linear_f32;
+    std::array::from_fn(|ch| match byte(picked[ch]) == byte(lin[ch]) {
+        true => v[ch],
+        false => egui::ecolor::gamma_from_linear(picked[ch]),
+    })
+}
+
 /// An RGB colour: a picker and the three exact floats. A real change pushes all three channels (an untouched
 /// channel with its own bits, so −0.0 survives) as one merged step.
 fn color(
@@ -176,11 +198,17 @@ fn color(
     ui.horizontal(|ui| {
         row_label(ui, name);
         // egui writes the picker's colour back through HSV every frame (not bit-exact): use it only on a change.
-        let mut picked = v;
-        let r = ui.color_edit_button_rgb(&mut picked);
+        let lin = v.map(egui::ecolor::linear_from_gamma);
+        let mut picked = lin;
+        // C-P25: disabled outside 0-1 (NaN included): the picker would clamp.
+        let hdr = v.iter().any(|x| !(0.0..=1.0).contains(x));
+        let r = ui
+            .add_enabled_ui(!hdr, |ui| ui.color_edit_button_rgb(&mut picked))
+            .inner;
         set_name(&r, egui::WidgetType::ColorButton, name, None, None);
+        let r = r.on_disabled_hover_text(OUT_OF_RANGE);
         if r.changed() {
-            x = picked;
+            x = from_picker(v, lin, picked);
             changed = true;
         }
         for (i, c) in ["R", "G", "B"].into_iter().enumerate() {
@@ -350,17 +378,36 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
         set_name(&r, typ, "Shader type", None, Some(shown));
         r.on_hover_text(TYPE_HOVER);
         if t != lt.shader_type {
-            act.push = Some((
-                vec![Op::SetField {
+            let mut ops = vec![Op::SetField {
+                at: at.clone(),
+                field: Field::ShaderType,
+                value: Value::U32(t),
+                base: Value::U32(lt.shader_type),
+            }];
+            // Note CS: the flags the new type needs change in the same undo step.
+            let fixes = type_flag_errors(t, lt.slsf1);
+            if !fixes.is_empty() {
+                let mask = fixes.iter().fold(0, |a, f| a | f.0);
+                let value = fixes.iter().fold(0, |a, f| a | f.1);
+                ops.push(Op::SetBits {
                     at: at.clone(),
-                    field: Field::ShaderType,
-                    value: Value::U32(t),
-                    base: Value::U32(lt.shader_type),
-                }],
-                None,
-            ));
+                    field: Field::Slsf1,
+                    mask,
+                    value,
+                    base: lt.slsf1,
+                });
+                let notice: Vec<_> = fixes.iter().map(|f| f.3).collect();
+                act.notice = Some(notice.join(" "));
+            }
+            act.push = Some((ops, None));
         }
     });
+    if let Some(n) = &e.notice {
+        ui.horizontal(|ui| {
+            ui.add_space(LABEL_W);
+            ui.add(egui::Label::new(n).wrap());
+        });
+    }
     warnings(
         ui,
         e,
@@ -500,6 +547,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                     let locked = match field {
                         Field::Slsf1 if bit == 1 => Some(SKINNED_HOVER),
                         Field::Slsf2 if bit == 23 => Some(PBR_HOVER),
+                        Field::Slsf1 => type_flag_lock(lt.shader_type, bit as u32),
                         _ => None,
                     };
                     let pbr_meaning = if field == Field::Slsf2 {
@@ -775,19 +823,6 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             .wrap(),
         );
     }
-    // `nif::edit` refuses that split, and the edit after it would re-anchor on the shared block (every user).
-    let blocked = shared && a.prop.ctrls.iter().any(|&c| e.model.managed(c));
-    if blocked {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(
-                    "Shared alpha with a clip controller: splitting needs Phase C.",
-                )
-                .color(RED),
-            )
-            .wrap(),
-        );
-    }
     // Built only when an edit is pushed. After a split this shape's alpha is the block the split appends: the end
     // of the file.
     let at = || {
@@ -860,51 +895,49 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
         });
     };
 
-    ui.add_enabled_ui(!blocked, |ui| {
-        check(ui, act, "Blend", 0);
-        combo(ui, act, "Source", 1, 4, fl.src, 16, &blend_name);
-        combo(ui, act, "Destination", 5, 4, fl.dst, 16, &blend_name);
-        if fl.blend {
-            let ((_, _), mapped) = engine_blend(fl.src, fl.dst);
-            if mapped {
-                ui.weak("Shown as the engine draws it");
-            }
-            if !verified_blend(fl.src, fl.dst) {
-                ui.weak("Not verified in game");
-            }
+    check(ui, act, "Blend", 0);
+    combo(ui, act, "Source", 1, 4, fl.src, 16, &blend_name);
+    combo(ui, act, "Destination", 5, 4, fl.dst, 16, &blend_name);
+    if fl.blend {
+        let ((_, _), mapped) = engine_blend(fl.src, fl.dst);
+        if mapped {
+            ui.weak("Shown as the engine draws it");
         }
-        check(ui, act, "Test", 9);
-        combo(ui, act, "Function", 10, 3, fl.func, 8, &|c| {
-            TEST_FUNCS[c as usize].to_string()
-        });
-        ui.weak("Shown as CS evaluates it (alpha ≥ threshold)");
-        ui.horizontal(|ui| {
-            row_label(ui, "Threshold");
-            let mut t = a.alpha.threshold;
-            let r = ui.add(egui::Slider::new(&mut t, 0..=255));
-            set_name(
-                &r,
-                egui::WidgetType::Slider,
-                "Threshold",
-                Some(t as f64),
-                None,
-            );
-            if t != a.alpha.threshold {
-                let op = Op::SetField {
-                    at: at(),
-                    field: Field::AlphaThreshold,
-                    value: Value::U8(t),
-                    base: Value::U8(a.alpha.threshold),
-                };
-                let key = merge_key(&op);
-                edit(act, op, Some(key));
-            }
-            act.flush |= r.drag_stopped() || r.lost_focus();
-        });
-        check(ui, act, "No sorter", 13);
-        check(ui, act, "Clone unique", 14);
-        check(ui, act, "Editor threshold", 15);
+        if !verified_blend(fl.src, fl.dst) {
+            ui.weak("Not verified in game");
+        }
+    }
+    check(ui, act, "Test", 9);
+    combo(ui, act, "Function", 10, 3, fl.func, 8, &|c| {
+        TEST_FUNCS[c as usize].to_string()
     });
+    ui.weak("Shown as CS evaluates it (alpha ≥ threshold)");
+    ui.horizontal(|ui| {
+        row_label(ui, "Threshold");
+        let mut t = a.alpha.threshold;
+        let r = ui.add(egui::Slider::new(&mut t, 0..=255));
+        set_name(
+            &r,
+            egui::WidgetType::Slider,
+            "Threshold",
+            Some(t as f64),
+            None,
+        );
+        if t != a.alpha.threshold {
+            let op = Op::SetField {
+                at: at(),
+                field: Field::AlphaThreshold,
+                value: Value::U8(t),
+                base: Value::U8(a.alpha.threshold),
+            };
+            let key = merge_key(&op);
+            edit(act, op, Some(key));
+        }
+        act.flush |= r.drag_stopped() || r.lost_focus();
+    });
+    check(ui, act, "No sorter", 13);
+    check(ui, act, "Clone unique", 14);
+    check(ui, act, "Editor threshold", 15);
     ui.label(format!("Flags 0x{flags:04X} ({flags})"));
     let w = Target::Field {
         block: a.prop.block,

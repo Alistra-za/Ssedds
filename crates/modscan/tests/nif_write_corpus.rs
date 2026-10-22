@@ -19,6 +19,158 @@ struct Res {
     encode: Vec<String>,
     /// Classes of the key data and blend interpolator blocks checked (B1), one entry per block.
     keyed: Vec<String>,
+    /// Field values of clip blocks (C1 F6, information for C2's defaults); never asserted.
+    census: Vec<String>,
+}
+
+/// A census bucket for a time value: the FLT_MAX sentinels, zero, or other.
+fn bucket(v: f32) -> &'static str {
+    match v {
+        f32::MAX => "FLT_MAX",
+        f32::MIN => "-FLT_MAX",
+        0.0 => "0",
+        _ => "other",
+    }
+}
+
+/// Census lines for one clip-related block (C1-D6). `listed` = sequences some manager lists; `root` = footer root.
+fn census(
+    h: &Header,
+    b: &[u8],
+    i: usize,
+    blk: &[u8],
+    listed: &[i32],
+    root: i32,
+    out: &mut Vec<String>,
+) {
+    use nif::clips::*;
+    let kind = h.kind(i);
+    let kind_of = |r: i32| match usize::try_from(r) {
+        Ok(r) if r < h.sizes.len() => String::from_utf8_lossy(h.kind(r)).into_owned(),
+        _ => "null".into(),
+    };
+    let s = |x: i32| {
+        h.string(x).map(|v| {
+            String::from_utf8_lossy(v)
+                .chars()
+                .take(16)
+                .collect::<String>()
+        })
+    };
+    match kind {
+        b"NiControllerManager" => {
+            if let Ok(m) = nif::ctrl::read_manager(h, b, i) {
+                let c = &m.ctrl;
+                out.push(format!(
+                    "mgr flags={:#x} cum={} freq={} phase={}",
+                    c.flags, m.cumulative, c.frequency, c.phase
+                ));
+                out.push(format!("mgr next={}", kind_of(c.next)));
+                // C2 fix round 1: are start/stop the FLT_MAX pair or the range of the listed sequences?
+                let seqs: Vec<_> = m
+                    .sequences
+                    .iter()
+                    .filter_map(|&q| read_sequence_out(h, b, usize::try_from(q).ok()?).ok())
+                    .collect();
+                let lo = seqs.iter().map(|q| q.start).fold(f32::INFINITY, f32::min);
+                let hi = seqs
+                    .iter()
+                    .map(|q| q.stop)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                out.push(format!(
+                    "mgr start={} stop={} seq_range={}",
+                    bucket(c.start),
+                    bucket(c.stop),
+                    c.start == lo && c.stop == hi
+                ));
+                if let Some((t, _)) = usize::try_from(c.next)
+                    .ok()
+                    .and_then(|n| read_mttc(h, b, n).ok())
+                {
+                    out.push(format!(
+                        "mttc freq={} phase={} start={} stop={} seq_range={} same_as_mgr={}",
+                        t.frequency,
+                        t.phase,
+                        bucket(t.start),
+                        bucket(t.stop),
+                        t.start == lo && t.stop == hi,
+                        (t.start, t.stop) == (c.start, c.stop)
+                    ));
+                }
+            }
+        }
+        b"NiMultiTargetTransformController" => {
+            if let (Ok(c), Some(k)) = (nif::ctrl::read_ctrl(h, b, i), blk.get(26..28)) {
+                let k = u16::from_le_bytes([k[0], k[1]]);
+                out.push(format!(
+                    "mttc flags={:#x} targets={} target_is_root={}",
+                    c.flags,
+                    if k == 0 { "0" } else { ">0" },
+                    c.target == root
+                ));
+            }
+        }
+        b"NiControllerSequence" => {
+            if let Ok(q) = read_sequence_out(h, b, i) {
+                out.push(format!(
+                    "seq weight={} growby={} notes={} cycle={}",
+                    q.weight,
+                    q.array_grow_by,
+                    q.notes.len(),
+                    q.cycle
+                ));
+                let root_name = usize::try_from(root)
+                    .ok()
+                    .and_then(|r| read_net(h, b, r).ok())
+                    .and_then(|n| h.string(n.name));
+                let accum = h.string(q.accum_root);
+                out.push(format!(
+                    "seq accum_is_root_name={}",
+                    accum.is_some() && accum == root_name
+                ));
+                out.push(format!("seq listed={}", listed.contains(&(i as i32))));
+                out.push(format!(
+                    "seq text_keys={}",
+                    if q.text_keys == -1 { "null" } else { "set" }
+                ));
+                for c in &q.blocks {
+                    let id = match h.string(c.interp_id) {
+                        None => "null",
+                        Some([]) => "empty",
+                        Some(_) => "other",
+                    };
+                    out.push(format!("cb priority={} interp_id={id}", c.priority));
+                }
+            }
+        }
+        b"NiBlendFloatInterpolator" | b"NiBlendPoint3Interpolator" => {
+            if let Ok(x) = nif::ctrl::read_blend_interp(h, b, i) {
+                out.push(format!(
+                    "blend flags={} size={} threshold_bits={:#x} value_inv={}",
+                    x.flags,
+                    x.array_size,
+                    x.weight_threshold.to_bits(),
+                    x.value[0].to_bits() == 0xFF7F_FFFF
+                ));
+            }
+        }
+        b"NiDefaultAVObjectPalette" => {
+            if let Ok((scene, _)) = read_palette(h, b, i) {
+                out.push(format!("palette scene_is_root={}", scene == root));
+            }
+        }
+        b"NiTextKeyExtraData" => {
+            if let Ok((_, k)) = read_text_keys(h, b, i) {
+                let v = |x: Option<&(f32, i32)>| x.and_then(|x| s(x.1)).unwrap_or("null".into());
+                out.push(format!(
+                    "textkeys first={} last={}",
+                    v(k.first()),
+                    v(k.last())
+                ));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// None when `nif::scan::scan` does not accept the file.
@@ -46,6 +198,16 @@ fn check(b: &[u8]) -> Option<Res> {
     let Ok(h) = Header::parse(b) else {
         return Some(r);
     };
+    let listed: Vec<i32> = (0..h.sizes.len())
+        .filter(|&i| h.kind(i) == b"NiControllerManager")
+        .filter_map(|i| nif::ctrl::read_manager(&h, b, i).ok())
+        .flat_map(|m| m.sequences)
+        .collect();
+    let root = h
+        .roots(b)
+        .ok()
+        .and_then(|r| r.first().copied())
+        .unwrap_or(-1);
     for i in 0..h.sizes.len() {
         let kind = h.kind(i);
         let (bs, size) = (h.offsets()[i], h.sizes[i] as usize);
@@ -53,6 +215,7 @@ fn check(b: &[u8]) -> Option<Res> {
             continue;
         };
         let what = |m: &str| format!("block {i} {}: {m}", String::from_utf8_lossy(kind));
+        census(&h, b, i, blk, &listed, root, &mut r.census);
         let net_kind = ShapeKind::from_name(kind).is_some()
             || kind == b"BSLightingShaderProperty"
             || kind == b"NiAlphaProperty"
@@ -94,8 +257,44 @@ fn check(b: &[u8]) -> Option<Res> {
             b"NiBlendFloatInterpolator" | b"NiBlendPoint3Interpolator"
         ) {
             r.keyed.push(String::from_utf8_lossy(kind).into());
-            if let Err(e) = nif::ctrl::read_blend_interp(&h, b, i) {
-                r.decode.push(what(&format!("blend interpolator: {e}")));
+            match nif::ctrl::read_blend_interp(&h, b, i) {
+                Ok(x) if nif::clips::encode_blend(&x).ok().as_deref() != Some(blk) => {
+                    r.encode.push(what("encode_blend differs"))
+                }
+                Ok(_) => {}
+                Err(e) => r.decode.push(what(&format!("blend interpolator: {e}"))),
+            }
+        } else if matches!(
+            kind,
+            b"NiControllerManager"
+                | b"NiControllerSequence"
+                | b"NiDefaultAVObjectPalette"
+                | b"NiTextKeyExtraData"
+                | b"NiMultiTargetTransformController"
+        ) {
+            use nif::clips::*;
+            r.keyed.push(String::from_utf8_lossy(kind).into());
+            let enc = match kind {
+                b"NiControllerManager" => {
+                    nif::ctrl::read_manager(&h, b, i).map(|m| encode_manager(&m).ok())
+                }
+                b"NiControllerSequence" => {
+                    read_sequence_out(&h, b, i).map(|s| encode_sequence(&s).ok())
+                }
+                b"NiDefaultAVObjectPalette" => {
+                    read_palette(&h, b, i).map(|(s, o)| encode_palette(s, &o).ok())
+                }
+                b"NiTextKeyExtraData" => {
+                    read_text_keys(&h, b, i).map(|(n, k)| encode_text_keys(n, &k).ok())
+                }
+                _ => read_mttc(&h, b, i).map(|(c, t)| encode_mttc(&c, &t).ok()),
+            };
+            match enc {
+                Ok(e) if e.as_deref() != Some(blk) => {
+                    r.encode.push(what("clip encoder differs or refused"))
+                }
+                Ok(_) => {}
+                Err(e) => r.decode.push(what(&format!("clip block: {e}"))),
             }
         } else if EDITABLE.iter().any(|k| k.as_bytes() == kind) {
             match read_extra(&h, b, i) {
@@ -123,6 +322,7 @@ fn report(gate: &str, files: Vec<(String, Option<Res>)>) {
     let (mut checked, mut hdr) = (0, vec![]);
     let (mut id, mut dec, mut enc) = (vec![], vec![], vec![]);
     let mut keyed = std::collections::BTreeMap::<String, usize>::new();
+    let mut cen = std::collections::BTreeMap::<String, usize>::new();
     for (p, r) in files {
         let Some(r) = r else { continue };
         checked += 1;
@@ -135,8 +335,17 @@ fn report(gate: &str, files: Vec<(String, Option<Res>)>) {
         for k in r.keyed {
             *keyed.entry(k).or_default() += 1;
         }
+        for k in r.census {
+            *cen.entry(k).or_default() += 1;
+        }
     }
     println!("{gate}: key data / blend blocks checked: {keyed:?}");
+    for (k, n) in cen.iter().take(60) {
+        println!("{gate}: census {k}: {n}");
+    }
+    if cen.len() > 60 {
+        println!("{gate}: census: {} more keys not shown", cen.len() - 60);
+    }
     println!(
         "{gate}: {total} .nif seen, {checked} accepted by scan; {} identity failures, {} files with header fields already wrong, {} decode mismatches, {} encode mismatches",
         id.len(),

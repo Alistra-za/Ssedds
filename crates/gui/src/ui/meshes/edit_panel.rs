@@ -174,6 +174,9 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
         let t = egui::RichText::new(note);
         ui.add(egui::Label::new(if *err { t.color(RED) } else { t }).wrap());
     }
+    if let Some(note) = &e.cleanup_note {
+        ui.add(egui::Label::new(note).wrap());
+    }
     if let Some(p) = &e.placement {
         let color = if *p == Placement::Ok { GREEN } else { AMBER };
         let mod_name = e.edit_mod.file_name().unwrap_or_default().to_string_lossy();
@@ -240,6 +243,12 @@ fn op_label(op: &Op) -> String {
         Op::SetKeys { at, .. } => ("Edit keys".into(), at),
         Op::AddController { at, .. } => ("Add controller".into(), at),
         Op::RemoveController { at } => ("Remove controller".into(), at),
+        Op::AddSequence { at, name, .. } => (format!("Add clip {name}"), at),
+        Op::RemoveSequence { at, name, .. } => (format!("Remove clip {name}"), at),
+        Op::RenameSequence {
+            at, name, new_name, ..
+        } => (format!("Rename clip {name} to {new_name}"), at),
+        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
     };
     match &at.shape {
         Some(s) => format!("{s}: {what}"),
@@ -250,6 +259,9 @@ fn op_label(op: &Op) -> String {
 fn apply(m: &mut MeshesModel, act: Act) {
     if let Some((ops, merge)) = act.push {
         m.edit_push(ops, merge);
+        if let Some(e) = &mut m.edit {
+            e.notice = act.notice;
+        }
     }
     if let (true, Some(e)) = (act.flush, &mut m.edit) {
         e.flush();

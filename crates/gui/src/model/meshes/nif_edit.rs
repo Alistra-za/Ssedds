@@ -90,10 +90,14 @@ pub struct NifEdit {
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
     pub blocked: Option<String>,
+    /// Note CS: what a shader type change also did to the flags, until the next change.
+    pub notice: Option<String>,
     /// The guard dialog's question, while it is open.
     pub guard: Option<GuardAsk>,
     /// The last export's result line, and whether it is an error.
     pub export_note: Option<(String, bool)>,
+    /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
+    pub cleanup_note: Option<String>,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -243,6 +247,10 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::RemoveExtra { at }
         | Op::AddController { at, .. }
         | Op::RemoveController { at }
+        | Op::AddSequence { at, .. }
+        | Op::RemoveSequence { at, .. }
+        | Op::RenameSequence { at, .. }
+        | Op::ConvertChainToClips { at, .. }
         | Op::SetKeys { at, .. } => at,
     }
 }
@@ -317,8 +325,10 @@ impl NifEdit {
             cards: vec![],
             placement: None,
             blocked: None,
+            notice: None,
             guard: None,
             export_note: None,
+            cleanup_note: None,
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -431,13 +441,19 @@ impl NifEdit {
         if let Some(why) = self.blocked.clone() {
             return ExportOutcome::Blocked(why);
         }
+        // Note CQ: the file drops the blocks our edits appended that nothing reaches; on any doubt it is the patch
+        let n = nif::header::Header::parse(&self.source).map_or(0, |h| h.sizes.len() as u32);
+        let (out, skipped) = match nif::edit::compact(&self.patched, n) {
+            Ok(out) => (out, None),
+            Err(why) => (self.patched.to_vec(), Some(why)),
+        };
         let path = self.export_path.clone();
         let cannot_read = |e: std::io::Error| {
             ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
         };
         let last = self.doc.export.sha256.clone();
         let ours = |b: &[u8]| last.as_deref() == Some(edit_doc::sha256_hex(b).as_str());
-        match engine::dds::may_replace(&path, &self.patched, ours) {
+        match engine::dds::may_replace(&path, &out, ours) {
             Ok(()) => {}
             Err(Kept::Unreadable(e)) => return cannot_read(e),
             Err(Kept::Foreign) => {
@@ -449,10 +465,9 @@ impl NifEdit {
                 match choice {
                     Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
                     _ => {
-                        let diff =
-                            nif::write::block_diff(&on_disk, &self.patched).unwrap_or_else(|e| {
-                                vec![format!("The file on disk does not read as a NIF: {e}")]
-                            });
+                        let diff = nif::write::block_diff(&on_disk, &out).unwrap_or_else(|e| {
+                            vec![format!("The file on disk does not read as a NIF: {e}")]
+                        });
                         self.guard = Some(GuardAsk {
                             diff: diff.clone(),
                             show_diff: false,
@@ -464,18 +479,19 @@ impl NifEdit {
                 }
             }
         }
-        if let Err(e) = engine::dds::write_atomic(&path, &self.patched) {
+        if let Err(e) = engine::dds::write_atomic(&path, &out) {
             return ExportOutcome::Blocked(format!("Cannot write {}: {e}", path.display()));
         }
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         self.doc.export = ExportRec {
-            sha256: Some(edit_doc::sha256_hex(&self.patched)),
+            sha256: Some(edit_doc::sha256_hex(&out)),
             at: Some(at),
             ops_hash: Some(self.doc.ops_hash()),
         };
         self.save();
+        self.cleanup_note = skipped.map(|why| format!("Exported without cleanup: {why}."));
         ExportOutcome::Written {
             rerun_pgpatcher: self.copies.iter().any(|c| c.derived),
         }
@@ -484,6 +500,7 @@ impl NifEdit {
     /// Applies the ops to the source: patched bytes, outcomes (each `ReAnchored` block written back into its op),
     /// statuses (a conflict or a refusal blocks export), the model, the warnings and the parsed preview.
     fn reapply(&mut self) {
+        self.notice = None;
         let a = match nif::edit::apply(&self.source, &self.doc.ops()) {
             Ok(a) => a,
             Err(e) => {
@@ -495,6 +512,7 @@ impl NifEdit {
         };
         self.apply_err = None;
         self.export_note = None; // the last export's line no longer describes these edits
+        self.cleanup_note = None;
         for (d, o) in self.doc.ops.iter_mut().zip(&a.outcomes) {
             if let Outcome::ReAnchored { block } = o {
                 anchor_mut(&mut d.op).block = *block;
@@ -817,9 +835,12 @@ impl NifEdit {
 
     /// The Time slider's span in scene time (B-P33): from 0 to the longest cycle, `span / |freq|`, where a Reverse
     /// cycle counts both legs. `ctrl_time` still does each controller's own wrapping, phase included. A clip uses
-    /// its sequence's timing. None when nothing is animated or a controller's times are not finite.
+    /// its sequence's timing. None when nothing is animated, a controller's times are not finite, or the span is zero
+    /// (C-P34 (b): only held values, no clock; `tick_anim` still shows them).
     pub fn anim_range(&self) -> Option<(f32, f32)> {
-        self.anim_end().filter(|e| e.is_finite()).map(|e| (0.0, e))
+        self.anim_end()
+            .filter(|e| e.is_finite() && *e > 0.0)
+            .map(|e| (0.0, e))
     }
 
     /// A controller's times are not finite (+inf, NaN): playback is off and the panel says so.
@@ -1107,6 +1128,14 @@ impl MeshesModel {
         let in_game = self.edit.as_ref().is_some_and(|e| e.in_game.is_some());
         let Some(range) = self.edit.as_ref().and_then(NifEdit::anim_range) else {
             self.v3.clock = None;
+            // C-P34 (b): a zero-length range (held values only) has no clock, but its values still show.
+            let held = self
+                .edit
+                .as_ref()
+                .is_some_and(|e| !e.anim.is_empty() && !e.anim_invalid());
+            if held && self.v3.nif_view && !in_game {
+                self.show_anim_frame(0.0);
+            }
             return;
         };
         let c = self.v3.clock.get_or_insert(Clock::new(range));
@@ -1120,19 +1149,26 @@ impl MeshesModel {
             return;
         }
         self.v3.tick(dt);
-        let (Some(e), Some(c)) = (self.edit.as_mut(), self.v3.clock) else {
+        if let Some(c) = self.v3.clock {
+            self.show_anim_frame(c.t);
+        }
+    }
+
+    /// Sends each animated shape's material at time `t`, once per new `t`.
+    fn show_anim_frame(&mut self, t: f32) {
+        let Some(e) = self.edit.as_mut() else {
             return;
         };
-        if e.anim_shown == Some(c.t) {
+        if e.anim_shown == Some(t) {
             return;
         }
-        for (id, m) in e.frame_materials(c.t) {
+        for (id, m) in e.frame_materials(t) {
             // false: no load of this content sent yet (a reload); the next frame tries again.
             if !self.v3.set_material(id, m) {
                 return;
             }
         }
-        e.anim_shown = Some(c.t);
+        e.anim_shown = Some(t);
     }
 
     pub fn edit_push(&mut self, ops: Vec<Op>, merge: Option<String>) {
