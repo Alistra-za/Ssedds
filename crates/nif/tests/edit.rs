@@ -4086,3 +4086,37 @@ fn an_empty_manager_on_the_root_chain_is_an_error_unless_the_source_has_it() {
         .iter()
         .any(|e| e.text == EMPTY_MANAGER && e.level == Level::Error));
 }
+
+/// Note CY3: root -> X -> manager, while the shader's last controller (5, a lower block than X) also links to the
+/// manager. Removing the only clip unlinks the manager from X, the root chain's own link, and leaves 5 alone.
+#[test]
+fn removing_the_last_clip_unlinks_the_manager_from_the_root_chain() {
+    use nif::edit::validate::{validate, EMPTY_MANAGER};
+    let b = scenes::animated(Some(1), 2);
+    let o = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let mgr = root_ctrl(&o) as i32;
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    let x_body = with_i32(block_bytes_of(&o, 5), 0, mgr);
+    let x = doc.append(LSCF.as_bytes(), x_body).unwrap() as i32;
+    let o = doc.bytes();
+    let root_at = read_model(&o).unwrap().root_net.unwrap().controller_at();
+    let o = with_next(&with_i32(o, root_at, x), 5, mgr);
+    let m = read_model(&o).unwrap();
+    assert_eq!(m.ctrls[&(x as u32)].next, mgr);
+    assert_eq!(m.ctrls[&5].next, mgr);
+    let r = apply(&o, &[remove_seq(root_anchor(&o), "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_ne!(m.ctrls[&(x as u32)].next, mgr);
+    assert_eq!(m.ctrls[&5].next, mgr);
+    assert!(validate(&m, None).iter().all(|w| w.text != EMPTY_MANAGER));
+}

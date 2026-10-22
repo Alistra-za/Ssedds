@@ -1047,13 +1047,19 @@ fn unlink_manager(
         let at = net.controller_at() - doc.header().offsets()[root as usize];
         return patch(doc, root, at, after);
     }
-    // root_manager walked this chain, so the manager is on it
-    let prev = m
-        .ctrls
-        .values()
-        .find(|c| c.next == mgr as i32)
-        .ok_or("The root's controller chain cannot be read.")?;
-    patch(doc, prev.block, 0, after)
+    // root_manager walked this chain (whole, no loop), so the manager is on it; another chain may also link to the
+    // manager, so the predecessor is found on the root's own chain (Note CY3)
+    let mut c = net.controller;
+    loop {
+        let t = u32::try_from(c)
+            .ok()
+            .and_then(|b| m.ctrls.get(&b))
+            .ok_or("The root's controller chain cannot be read.")?;
+        if t.next == mgr as i32 {
+            return patch(doc, t.block, 0, after);
+        }
+        c = t.next;
+    }
 }
 
 /// AddSequence's cycle and range refusals; `convert_check` predicts both with the same text (Note CU3).
