@@ -879,7 +879,7 @@ fn add_sequence_track_keys_are_checked() {
     );
 }
 
-// ---- Note CO: SLSF1 bits that need a shader type (owner) ----
+// ---- Note CS: SLSF1 bits that need a shader type (owner) ----
 
 const SKIN_TINT: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
@@ -943,7 +943,7 @@ fn type_bound_flags_are_errors_with_a_one_click_fix_that_always_blocks() {
         );
     }
     // The matching pairs are clean.
-    // CO3: Skin Tint may carry the detail flag (9 mod shapes, fine in game).
+    // CS3: Skin Tint may carry the detail flag (9 mod shapes, fine in game).
     for (ty, bits) in [
         (5, 1 << 21),
         (4, 1 << 10),

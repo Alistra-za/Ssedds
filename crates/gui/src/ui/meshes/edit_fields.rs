@@ -38,7 +38,7 @@ pub(super) struct Act {
     pub scrub: Option<f32>,
     /// The Preview selector picked free chains or a clip (v2 B7).
     pub playing: Option<crate::model::meshes::nif_edit::Playing>,
-    /// Note CO: the line shown after `push` (a shader type change that also fixed a flag).
+    /// Note CS: the line shown after `push` (a shader type change that also fixed a flag).
     pub notice: Option<String>,
 }
 
@@ -81,7 +81,7 @@ pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mu
             ui.add_space(LABEL_W);
             ui.add(egui::Label::new(egui::RichText::new(&w.text).color(color)).wrap());
             if let Some(fix) = &w.fix {
-                // Note CO: a flag fix names what it does.
+                // Note CS: a flag fix names what it does.
                 let label = match fix {
                     Op::SetBits { value: 0, .. } => "Clear the flag",
                     Op::SetBits { .. } => "Set the flag",
@@ -384,7 +384,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                 value: Value::U32(t),
                 base: Value::U32(lt.shader_type),
             }];
-            // Note CO: the flags the new type needs change in the same undo step.
+            // Note CS: the flags the new type needs change in the same undo step.
             let fixes = type_flag_errors(t, lt.slsf1);
             if !fixes.is_empty() {
                 let mask = fixes.iter().fold(0, |a, f| a | f.0);

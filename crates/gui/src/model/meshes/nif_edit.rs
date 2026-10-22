@@ -90,7 +90,7 @@ pub struct NifEdit {
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
     pub blocked: Option<String>,
-    /// Note CO: what a shader type change also did to the flags, until the next change.
+    /// Note CS: what a shader type change also did to the flags, until the next change.
     pub notice: Option<String>,
     /// The guard dialog's question, while it is open.
     pub guard: Option<GuardAsk>,

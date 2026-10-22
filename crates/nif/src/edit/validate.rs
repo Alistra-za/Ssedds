@@ -58,13 +58,13 @@ pub const ALPHA_TEST_OFF: &str = "This controller has no effect: alpha test is o
 /// B9 R00 / I9-P00: the cbuffer follows but nothing shows on screen.
 pub const REFRACTION_NO_EFFECT: &str = "Refraction strength has no visible effect in game.";
 
-/// Note CO (owner): SLSF1 bit 21 FaceGen_RGB_Tint off shader type 5 (Skin Tint) crashes the game.
+/// Note CS (owner): SLSF1 bit 21 FaceGen_RGB_Tint off shader type 5 (Skin Tint) crashes the game.
 pub const SKIN_TINT_TYPE: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
-/// Note CO (owner): SLSF1 bit 10 Facegen_Detail_Map off shader types 4 (Face Tint) and 5 (Skin Tint, CO3) renders black.
+/// Note CS (owner): SLSF1 bit 10 Facegen_Detail_Map off shader types 4 (Face Tint) and 5 (Skin Tint, CS3) renders black.
 pub const FACEGEN_DETAIL_TYPE: &str =
     "FaceGen detail flag needs the Face Tint or Skin Tint shader type: the mesh renders black otherwise.";
-/// Note CO (owner): type 4 without bit 10 is wrong too (every vanilla Face Tint shape has it).
+/// Note CS (owner): type 4 without bit 10 is wrong too (every vanilla Face Tint shape has it).
 pub const FACE_TINT_FLAG: &str =
     "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
@@ -75,7 +75,7 @@ const ALWAYS_BLOCK: [&str; 4] = [
     FACE_TINT_FLAG,
 ];
 
-/// The SLSF1 bits `shader_type` gets wrong (Note CO), as (mask, value it needs, error, notice for a type change).
+/// The SLSF1 bits `shader_type` gets wrong (Note CS), as (mask, value it needs, error, notice for a type change).
 pub fn type_flag_errors(
     shader_type: u32,
     slsf1: u32,
@@ -100,7 +100,7 @@ pub fn type_flag_errors(
     out
 }
 
-/// Why an SLSF1 checkbox is greyed on `shader_type` (Note CO): the bit cannot apply to it.
+/// Why an SLSF1 checkbox is greyed on `shader_type` (Note CS): the bit cannot apply to it.
 pub fn type_flag_lock(shader_type: u32, bit: u32) -> Option<&'static str> {
     match bit {
         21 if shader_type != 5 => Some("Needs the Skin Tint shader type."),
@@ -525,7 +525,7 @@ fn fixed_path(text: &str, norm: &str) -> Option<String> {
 }
 
 /// Errors in `edited` that `source` does not already have (R14): an untouched source error never blocks export,
-/// except [`ALWAYS_BLOCK`], which crash or black out in game (B-P39, Note CO).
+/// except [`ALWAYS_BLOCK`], which crash or black out in game (B-P39, Note CS).
 pub fn new_errors(source: &[Warning], edited: &[Warning]) -> Vec<Warning> {
     edited
         .iter()

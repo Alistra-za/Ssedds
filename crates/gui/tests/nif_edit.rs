@@ -6603,7 +6603,7 @@ fn render_the_clips_tab() {
     }
 }
 
-// ---- Note CO: SLSF1 bits that need a shader type (owner) ----
+// ---- Note CS: SLSF1 bits that need a shader type (owner) ----
 
 const SKIN_TINT: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
@@ -6708,7 +6708,7 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
         .get_by_label("FaceGen_RGB_Tint")
         .accesskit_node()
         .is_disabled());
-    // CO3: Skin Tint may carry the detail flag too.
+    // CS3: Skin Tint may carry the detail flag too.
     assert!(!h
         .get_by_label("Facegen_Detail_Map")
         .accesskit_node()
