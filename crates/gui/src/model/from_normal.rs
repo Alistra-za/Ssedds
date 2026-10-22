@@ -222,6 +222,12 @@ fn map_size(rule: &GenSize, size: u32) -> u32 {
     }
 }
 
+/// A job's per mille when call `part` (0-based) of `parts` reports `pm`: each call fills its share, so the line never
+/// restarts (review M3).
+pub fn overall_progress(pm: u32, part: u32, parts: u32) -> u32 {
+    (part * 1000 + pm.min(1000)) / parts.max(1)
+}
+
 /// The dialog's name for a map.
 pub fn map_label(map: GenMap) -> &'static str {
     match map {
@@ -459,6 +465,7 @@ impl AppModel {
                     _ => InputKind::Image,
                 };
                 real_rival(&gen_stem, &canonical, kind, self.target)
+                    && !self.own_packed_export(v, i)
             });
             if let Some((i, _)) = rival {
                 return Err(has_real(&i.name));
@@ -527,12 +534,27 @@ impl AppModel {
             return Err(NOT_PBR.into());
         }
         let dds = self.real_members(v, aliases).find(|(i, s)| {
-            matches!(s.as_deref(), Some("rmaos" | "rfaos")) && i.kind == ItemKind::Dds
+            matches!(s.as_deref(), Some("rmaos" | "rfaos"))
+                && i.kind == ItemKind::Dds
+                && !self.own_packed_export(v, i)
         });
         match dds {
             Some((i, _)) => Err(dds_rmaos(&i.name)),
             None => Ok(()),
         }
+    }
+
+    /// A DDS that is the set's own packed output exported in place (a PBR set under `textures/pbr/`, or one with no
+    /// prefix, exported into its own folder): an earlier export, not a pre-packed `_rmaos` or a rival (Review
+    /// Focus 1; the engine's `same_file` rule, CO8/CO10).
+    fn own_packed_export(&self, v: &SetView, i: &TextureItem) -> bool {
+        i.kind == ItemKind::Dds
+            && v.members
+                .iter()
+                .filter_map(|k| self.item(k))
+                .filter(|p| p.kind == ItemKind::Packed)
+                .filter_map(|p| p.job.as_ref())
+                .any(|j| engine::dds::same_file(&i.input, &j.output))
     }
 
     fn normal_dims(&self, normal: &str) -> Result<(u32, u32), String> {
@@ -687,6 +709,8 @@ pub struct GenDialog {
     pub preview: Option<Arc<GenResult>>,
     /// Per mille, written by the running job.
     pub progress: Arc<AtomicU32>,
+    /// The running call of a Generate job that makes its maps in several `generate` calls: `part << 8 | parts`.
+    pub part: Arc<AtomicU32>,
     pub cancel: Arc<AtomicBool>,
     /// The job in flight: its id and whether it is a preview.
     pub running: Option<(u64, bool)>,
@@ -796,6 +820,7 @@ fn run_job(
     opts: &Opts,
     targets: Option<Vec<JobTarget>>,
     progress: &AtomicU32,
+    part: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<GenResult, String> {
     // Hashed before the decode: a normal saved again meanwhile leaves the record stale, never falsely fresh (I2).
@@ -816,9 +841,11 @@ fn run_job(
     let sizes: BTreeSet<u32> = targets.iter().map(|t| t.3).collect();
     let mut first = None;
     let mut made = vec![];
-    // shortcut: two sizes (a height at its 1024 cap beside a 2048 AO) solve twice and the progress line restarts;
-    // pass per-map sizes into `generate` if that cost shows.
-    for size in sizes {
+    // shortcut: two sizes (a height at its 1024 cap beside a 2048 AO) solve twice; pass per-map sizes into
+    // `generate` if that cost shows. Each call reports its part, so the progress line runs once (`overall_progress`).
+    let parts = sizes.len() as u32;
+    for (i, size) in sizes.into_iter().enumerate() {
+        part.store(((i as u32) << 8) | parts, Ordering::Relaxed);
         let has = |m: GenMap| targets.iter().any(|t| t.3 == size && t.0 == m);
         let o = Opts {
             size,
@@ -948,6 +975,7 @@ impl AppModel {
             m_alpha,
             preview: None,
             progress: Arc::default(),
+            part: Arc::new(AtomicU32::new(1)),
             cancel: Arc::default(),
             running: None,
             error: None,
@@ -1167,6 +1195,13 @@ impl AppModel {
     /// Tick or untick a map. AO's settings start at their defaults (Q17) when AO is ticked, and go when it is not, so
     /// a tick changes the preview's opts and starts a preview.
     pub fn gen_tick(&mut self, map: GenMap, on: bool) {
+        // AO's default size (its locked size, else the largest it offers), for "only AO ticked" (CO95, review M2).
+        let ao_size = self.gen_ctx().and_then(|c| {
+            let d = c.normal.as_ref()?.2?;
+            match self.gen_size_of(&c.v, GenMap::Ao, d, &c.aliases).ok()? {
+                GenSize::Locked(s) | GenSize::Free { default: s, .. } => Some(s),
+            }
+        });
         let Some(g) = self.gen.as_mut() else {
             return;
         };
@@ -1177,6 +1212,11 @@ impl AppModel {
         }
         if map == GenMap::Ao {
             g.opts.ao = on.then(|| g.opts.ao.take().unwrap_or_default());
+        }
+        if g.ticked.len() == 1 && g.ticked.contains(&GenMap::Ao) {
+            if let Some(s) = ao_size {
+                g.opts.size = s;
+            }
         }
     }
 
@@ -1203,6 +1243,14 @@ impl AppModel {
             r.ao_mean?,
             r.ao_dark_share? * 100.0
         ))
+    }
+
+    /// The running job's per mille over all its `generate` calls.
+    pub fn gen_progress(&self) -> u32 {
+        self.gen.as_ref().map_or(0, |g| {
+            let p = g.part.load(Ordering::Relaxed);
+            overall_progress(g.progress.load(Ordering::Relaxed), p >> 8, p & 0xff)
+        })
     }
 
     /// The opts of the last preview started (tests: the preview AO quality).
@@ -1235,6 +1283,10 @@ impl AppModel {
         if !g.ticked.contains(&GenMap::Ao) {
             opts.ao = None;
         }
+        // Review M4: no height preview while Height is unticked (the solve and its fit line stay).
+        if !g.ticked.contains(&GenMap::Height) {
+            opts.height = None;
+        }
         if let Some(a) = opts.ao.as_mut() {
             (a.slices, a.steps) = (8, 8);
         }
@@ -1266,11 +1318,12 @@ impl AppModel {
         let (id, preview) = (g.next_id, targets.is_none());
         g.running = Some((id, preview));
         g.progress.store(0, Ordering::Relaxed);
-        let (progress, cancel) = (g.progress.clone(), g.cancel.clone());
+        g.part.store(1, Ordering::Relaxed);
+        let (progress, part, cancel) = (g.progress.clone(), g.part.clone(), g.cancel.clone());
         spawn_guarded(tx, "generate-from-normal", move |tx| {
             let result = or_send(
                 tx,
-                || run_job(&normal, &opts, targets, &progress, &cancel).map(Arc::new),
+                || run_job(&normal, &opts, targets, &progress, &part, &cancel).map(Arc::new),
                 |e| WorkerMsg::Generated {
                     id,
                     preview,

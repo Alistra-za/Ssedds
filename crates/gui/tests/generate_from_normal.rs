@@ -2683,22 +2683,31 @@ fn bent_fixture(dir: &Path, bent: bool) -> AppModel {
 #[test]
 fn the_bent_layer_note_shows_only_for_bent_layer_sets() {
     use egui_kittest::kittest::Queryable;
-    for bent in [true, false] {
+    // (bent layer, cs PBR so AO is offered): the note shows only where both hold (review M5: not where AO is refused).
+    for (bent, pbr) in [(true, true), (false, true), (true, false)] {
         let d = tempfile::tempdir().unwrap();
         let mut m = bent_fixture(d.path(), bent);
+        if pbr {
+            m.set_shader("m/iron", Some(Shader::Pbr));
+            idle(&mut m);
+        }
         assert_eq!(m.has_bent_layer("m/iron"), bent);
+        assert_eq!(m.gen_offer("m/iron", GenMap::Ao).is_ok(), pbr);
         m.open_gen("m/iron", None);
         assert!(m.gen.as_ref().unwrap().ticked.is_empty());
         let mut h = gen_harness(m, 1500.0, 900.0);
         h.run_steps(3);
+        let want = bent && pbr;
         assert_eq!(
             h.query_by_label(BENT_NOTE).is_some(),
-            bent,
-            "nothing ticked"
+            want,
+            "nothing ticked ({bent}, {pbr})"
         );
-        h.state_mut().gen_tick(GenMap::Ao, true);
-        h.run_steps(3);
-        assert_eq!(h.query_by_label(BENT_NOTE).is_some(), bent, "AO ticked");
+        if pbr {
+            h.state_mut().gen_tick(GenMap::Ao, true);
+            h.run_steps(3);
+            assert_eq!(h.query_by_label(BENT_NOTE).is_some(), want, "AO ticked");
+        }
         assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
     }
 }
@@ -2782,9 +2791,33 @@ fn a_generated_ao_shows_on_the_rmaos_row() {
         m.generated_info(AO_KEY).unwrap().stale.as_deref(),
         Some(EARLIER)
     );
+    let rm_name = rmaos(&m).name.clone();
     select_rock(&mut m);
     let mut h = harness(m);
     h.run();
+    // Review M1: no "generated" marker on the packed row; its File hover says "AO generated from …".
+    assert!(
+        h.query_all_by_label("Generated from rock01_normal.png")
+            .all(|n| in_sets_column(&h, n.rect())),
+        "no Flags marker on the _rmaos row"
+    );
+    let row = h
+        .query_all_by_label("RMAOS")
+        .map(|n| n.rect())
+        .filter(|r| !in_sets_column(&h, *r))
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the _rmaos row");
+    let file = h
+        .query_all_by_label(&rm_name)
+        .map(|n| n.rect())
+        .filter(|r| !in_sets_column(&h, *r) && r.min.x > row.max.x)
+        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the _rmaos File cell");
+    h.hover_at(file.center());
+    h.run();
+    assert!(h
+        .query_by_label_contains("AO generated from rock01_normal.png")
+        .is_some());
     let (dot, r) = row_dot(&h, "RMAOS");
     assert_eq!(dot, "warning");
     // The AO fill line already says it; the dot's hover adds one more.
@@ -2822,4 +2855,195 @@ fn the_dialog_looks_up_its_set_once_per_frame() {
         "one set lookup per frame"
     );
     assert_eq!(aliases2, aliases, "no alias rebuild without a new plan");
+}
+
+// ---- Task 10 fix round 1 ----
+
+/// The support fixture's rock01 (no `_ao`) under `textures/pbr/landscape/`, as a cs PBR set `pbr/landscape/rock01`.
+fn pbr_dir_rock(d: &Path) -> (AppModel, PathBuf) {
+    let r = d.join("textures/pbr/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, (y * 4) as u8, 90u8]))
+        .save(r.join("rock01.png"))
+        .unwrap();
+    relief_normal(&r, "rock01_normal.png", 64);
+    ImageBuffer::from_fn(64, 64, |x, _| Luma([120u8.wrapping_add(x as u8)]))
+        .save(r.join("rock01_roughness.png"))
+        .unwrap();
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: Some(d.join("export")),
+        ..Default::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.open_folder(d.join("textures"));
+    idle(&mut m);
+    m.decide(
+        "pbr/landscape/rock01.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::PbrAlbedo),
+    );
+    m.decide(
+        "pbr/landscape/rock01_normal.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::PbrNormal),
+    );
+    m.decide(
+        "pbr/landscape/rock01_normal.png",
+        sdc_gui::model::Answer::Green(GreenConvention::Directx),
+    );
+    idle(&mut m);
+    m.set_shader(PBR_SET, Some(Shader::Pbr));
+    idle(&mut m);
+    (m, r)
+}
+
+const PBR_SET: &str = "pbr/landscape/rock01";
+
+/// Review I1: the set's own earlier `_rmaos` export, written in place, is neither a DDS `_rmaos` nor a real AO source.
+/// `full`: also generate and expect Regenerate (the engine must keep the generated AO too).
+fn in_place_rmaos_keeps_ao(
+    m: &mut AppModel,
+    set: &str,
+    dir: &Path,
+    d: &Path,
+    export: &Path,
+    full: bool,
+) {
+    m.sets_doc.as_mut().unwrap().set_export_folder(export);
+    reopen(m, d);
+    let out = m
+        .items
+        .iter()
+        .find(|i| {
+            i.key.ends_with("rock01_rmaos") && i.job.as_ref().is_some_and(|j| j.pack.is_some())
+        })
+        .expect("the packed _rmaos")
+        .job
+        .as_ref()
+        .unwrap()
+        .output
+        .clone();
+    assert_eq!(out, dir.join("rock01_rmaos.dds"), "in place");
+    bc1_dds(&out, 64, 64);
+    reopen(m, d);
+    let row = |m: &AppModel| {
+        ao_open(&m.slot_menu(set, SlotKind::Rmaos))
+            .cloned()
+            .expect("the _rmaos row's entry")
+    };
+    // Before any AO is generated (the `real_rival` scan and DDS_RMAOS).
+    let e = row(m);
+    assert_eq!((e.label.as_str(), e.disabled), (GENERATE, None));
+    if !full {
+        return;
+    }
+    m.open_gen(set, Some(GenMap::Ao));
+    m.gen_generate();
+    idle(m);
+    assert!(dir.join("rock01_ao_generated.png").exists());
+    let e = row(m);
+    assert_eq!((e.label.as_str(), e.disabled), ("Regenerate…", None));
+}
+
+#[test]
+fn an_in_place_rmaos_export_under_textures_pbr_keeps_ao_offered() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, dir) = pbr_dir_rock(d.path());
+    // PBR outputs go to `textures\pbr\…` under the export root: the mod folder above the opened `textures`.
+    // Only the offer: the engine's `group::generated_losers` does not predict a packed output moved by
+    // `output_paths` (its `shortcut:`), so it still skips the generated AO GEN-REPLACED here; see the ignored test.
+    in_place_rmaos_keeps_ao(&mut m, PBR_SET, &dir, d.path(), d.path(), false);
+}
+
+#[test]
+#[ignore = "engine: group::generated_losers does not predict redirected packed outputs (owed, not owner data)"]
+fn an_in_place_rmaos_export_under_textures_pbr_keeps_regenerate() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, dir) = pbr_dir_rock(d.path());
+    in_place_rmaos_keeps_ao(&mut m, PBR_SET, &dir, d.path(), d.path(), true);
+}
+
+#[test]
+fn an_in_place_rmaos_export_of_a_set_with_no_prefix_keeps_ao_offered() {
+    // A rename with a folder is a prefix error: the set has no PBR prefix and its outputs mirror the input keys.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    m.set_json_value(ROCK_SET, "rename", Some(json!("a/b")));
+    idle(&mut m);
+    let root = m.root.clone().unwrap();
+    in_place_rmaos_keeps_ao(&mut m, ROCK_SET, &land(d.path()), d.path(), &root, true);
+}
+
+#[test]
+fn only_ao_ticked_from_the_set_menu_takes_aos_size() {
+    // Review M2: opened from the set menu (Height's Size), ticking only AO switches to AO's default.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01_roughness.png")).unwrap();
+    flat_normal(&land(d.path()).join("rock01_normal.png"), 2048);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, None);
+    assert_eq!(m.gen.as_ref().unwrap().opts.size, 1024, "Height's default");
+    m.gen_tick(GenMap::Ao, true);
+    assert_eq!(m.gen.as_ref().unwrap().opts.size, 2048);
+    assert_eq!(m.gen_paths()[0].2, (2048, 2048));
+    // With Height ticked too, the user's Size stays.
+    m.gen.as_mut().unwrap().opts.size = 512;
+    m.gen_tick(GenMap::Height, true);
+    assert_eq!(m.gen.as_ref().unwrap().opts.size, 512);
+}
+
+#[test]
+fn progress_runs_once_across_two_generate_calls() {
+    // Review M3: part `i` of `n` maps its 0–1000 into its share, so the line never restarts.
+    assert_eq!(overall_progress(0, 0, 1), 0);
+    assert_eq!(overall_progress(1000, 0, 1), 1000);
+    assert_eq!(overall_progress(1000, 0, 2), 500);
+    assert_eq!(overall_progress(0, 1, 2), 500);
+    assert_eq!(overall_progress(400, 1, 2), 700);
+    assert_eq!(overall_progress(1000, 1, 2), 1000);
+    // The two-size job sets its parts: a 128 height beside a 64 AO.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    relief_normal(&land(d.path()), "rock01_normal.png", 128);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_tick(GenMap::Ao, true);
+    m.gen_generate();
+    let part = m.gen.as_ref().unwrap().part.clone();
+    idle(&mut m);
+    assert_eq!(
+        part.load(std::sync::atomic::Ordering::Relaxed),
+        (1 << 8) | 2,
+        "ended on part 2 of 2"
+    );
+}
+
+#[test]
+fn only_ao_ticked_hides_strength_and_the_height_preview() {
+    // Review M4.
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Ao));
+    m.gen_frame();
+    idle(&mut m);
+    assert_eq!(m.gen_preview_opts().unwrap().height, None);
+    let g = m.gen.as_ref().unwrap();
+    assert!(g.preview.as_ref().unwrap().maps.height.is_none());
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(3);
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(3);
+    assert!(h.query_by_label("Strength").is_none());
+    assert!(h.query_by_label("Height preview").is_none());
+    assert!(
+        h.query_by_label_contains("Fit: mean").is_some(),
+        "the solve's fit stays"
+    );
+    h.state_mut().gen_tick(GenMap::Height, true);
+    h.run_steps(3);
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(3);
+    assert!(h.query_by_label("Strength").is_some());
+    assert!(h.query_by_label("Height preview").is_some());
 }

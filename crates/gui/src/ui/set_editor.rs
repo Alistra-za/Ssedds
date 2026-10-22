@@ -624,9 +624,13 @@ fn row(
     let item = item_key.as_deref().and_then(|k| model.item(k));
     // Note CO (owner answers 2 and 7): a generated file says where it came from; stale turns only this row's dot amber.
     // P20: a packed output (the `_rmaos` row) shows the generated source it reads (a generated AO).
-    let gen = item_key
-        .as_deref()
-        .and_then(|k| model.generated_info(k).or_else(|| model.generated_feed(k)));
+    let gen = item_key.as_deref().and_then(|k| model.generated_info(k));
+    // P20: a packed output (the `_rmaos` row) names the generated AO it reads on its hover and dot, with no marker
+    // (review M1: the packed output itself is not generated).
+    let fed = match &gen {
+        None => item_key.as_deref().and_then(|k| model.generated_feed(k)),
+        Some(_) => None,
+    };
 
     // Slot: the title, dim when empty.
     let text = if locked {
@@ -738,6 +742,9 @@ fn row(
                 };
                 if let Some(g) = &gen {
                     hover.push_str(&format!("\nGenerated from {}", g.from));
+                }
+                if let Some(g) = &fed {
+                    hover.push_str(&format!("\nAO generated from {}", g.from));
                 }
                 ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate())
                     .on_hover_text(hover);
@@ -883,7 +890,7 @@ fn row(
             } else if !rnm_layers.is_empty() {
                 lines.push(format!("RNM, {} layers", rnm_layers.len()));
             }
-            let stale = gen.as_ref().and_then(|g| g.stale.as_ref());
+            let stale = gen.as_ref().or(fed.as_ref()).and_then(|g| g.stale.as_ref());
             if let Some(r) = stale {
                 lines.push(format!("stale: {r}"));
             }

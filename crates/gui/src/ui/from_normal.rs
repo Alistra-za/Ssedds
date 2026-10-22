@@ -4,7 +4,6 @@ use crate::model::from_normal::{map_label, GenMap, GenResult, GenSize, BENT_NOTE
 use crate::model::AppModel;
 use eframe::egui;
 use engine::from_normal::{AoOpts, Gray, Tiling};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// The footer: Cancel, then Generate (enabled with a tick and no job running). Neither is the Enter default:
@@ -40,6 +39,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     let facts = model.gen_facts();
     model.gen_frame_at(facts.normal.clone());
     let ao_summary = model.gen_ao_summary();
+    let progress = model.gen_progress();
     let Some(g) = model.gen.as_ref() else {
         model.dialog = None;
         return;
@@ -49,7 +49,6 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     let mut opts = g.opts.clone();
     let m_alpha = g.m_alpha;
     let (preview, error, running) = (g.preview.clone(), g.error.clone(), g.running);
-    let progress = g.progress.load(Ordering::Relaxed);
     let complex = m_alpha;
     let ao_width = facts
         .paths
@@ -76,7 +75,12 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         // 0. The bent-layer note, on the first screen (Q20, spec-M8).
-                        if facts.bent {
+                        // Review M5: only where AO can be generated.
+                        let ao_ok = facts
+                            .offers
+                            .iter()
+                            .any(|(m, r)| *m == GenMap::Ao && r.is_ok());
+                        if facts.bent && ao_ok {
                             ui.colored_label(super::status::AMBER, BENT_NOTE);
                         }
                         // 1. The maps, each off with its reason.
@@ -128,7 +132,10 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                             });
                             ui.end_row();
                             // 3. Strength.
-                            if let Some(h) = opts.height.as_mut() {
+                            // Review M4: Strength only while Height is ticked.
+                            if let (Some(h), true) =
+                                (opts.height.as_mut(), ticked.contains(&GenMap::Height))
+                            {
                                 ui.label("Strength");
                                 dragging |= ui
                                     .add(egui::Slider::new(&mut h.strength, 0.1..=1.0))
