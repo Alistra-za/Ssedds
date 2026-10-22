@@ -80,12 +80,22 @@ pub const COMPLEX_CS: &str =
 const OFFERED: [GenMap; 3] = [GenMap::Height, GenMap::Ao, GenMap::Curvature];
 /// The Curvature box's hover: Track A's soft-light step is its only reader (a plain run reports PACK-UNUSED-INPUT).
 pub const CURVATURE_HOVER: &str = "used by Also export as: Vanilla / Complex material";
+/// Also export derives only cs PBR, PBR landscape and PBR grass sets (`also::derive_sets`), the curvature's one reader.
+pub const NOT_PBR_CURVES: &str =
+    "curvature is read only by Also export, which reads PBR sets under Community Shaders";
+/// Also writes no diffuse for a set with no albedo, and the curvature only shades that diffuse.
+pub const NO_ALBEDO: &str =
+    "this set has no albedo; curvature only shades the diffuse Also export writes from it";
 /// AO only for cs PBR sets: a loose `_ao` is PBR evidence (`suggest::is_pbr_set`), so it never reaches another set.
 pub const NOT_PBR: &str =
     "AO is generated only for PBR sets under Community Shaders (a loose _ao would start an _rmaos)";
 /// Shown at the top of the dialog for a set whose normal has an RNM bent layer, ticked or not (Q20, spec-M8).
 pub const BENT_NOTE: &str =
     "This set has an RNM bent layer: a generated AO also changes its normal map, which is weighted by AO.";
+
+fn dds_set(name: &str) -> String {
+    format!("Also export skips a set with a DDS member ({name}), so nothing would read a curvature")
+}
 
 fn dds_rmaos(name: &str) -> String {
     format!("this set's _rmaos is a DDS ({name}), which is never re-encoded")
@@ -196,6 +206,9 @@ fn locked_to(
             what,
             format!("the normal is {nw}×{nh}"),
         ))
+    } else if !w.is_power_of_two() || !h.is_power_of_two() {
+        // The solve's FFT needs power-of-two sides (review M1).
+        Err(size_locked((w, h), what, "not a power of two".into()))
     } else if w.max(h) > cap {
         Err(size_locked(
             (w, h),
@@ -429,8 +442,10 @@ impl AppModel {
                 self.ao_shader_and_rmaos(v, shader, aliases)?;
                 ("ao", "an AO source")
             }
-            // No shader rule: Also export reads it for any set (Q19).
-            GenMap::Curvature => ("curves", "a curvature map"),
+            GenMap::Curvature => {
+                self.curves_reader(v, shader, aliases)?;
+                ("curves", "a curvature map")
+            }
             GenMap::Height => {
                 self.height_shader(v, shader, aliases)?;
                 let own = if shader == Shader::ComplexMaterial {
@@ -565,6 +580,31 @@ impl AppModel {
         }
     }
 
+    /// Curvature's reader is Also export alone, so it is offered only where `also::derive_sets` derives the set: the
+    /// cs target, a PBR, PBR landscape or PBR grass shader, and no DDS member (derive skips such a set whole,
+    /// DERIVE-DDS-SOURCE). The albedo rule is the size rule's (`NO_ALBEDO`).
+    fn curves_reader(
+        &self,
+        v: &SetView,
+        shader: Shader,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let pbr = matches!(
+            shader,
+            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
+        );
+        if self.target != engine::config::Target::Cs || !pbr {
+            return Err(NOT_PBR_CURVES.into());
+        }
+        match self
+            .real_members(v, aliases)
+            .find(|(i, _)| i.kind == ItemKind::Dds)
+        {
+            Some((i, _)) => Err(dds_set(&i.name)),
+            None => Ok(()),
+        }
+    }
+
     /// The set's pre-packed `_rmaos`/`_rfaos` image, if any.
     fn prepacked_rmaos<'a>(
         &'a self,
@@ -654,8 +694,9 @@ impl AppModel {
             }
             // P6: Also's diffuse reads the albedo and the curvature together, so it takes the albedo's size.
             GenMap::Curvature => {
+                // No albedo: Also writes no diffuse, so nothing would read it (CO116).
                 return match self.albedo_size(v) {
-                    None => Ok(free(AO_MAX, None)),
+                    None => Err(NO_ALBEDO.into()),
                     Some(s) => locked_to(s, (nw, nh), AO_MAX, "curvature map"),
                 };
             }
@@ -677,7 +718,8 @@ impl AppModel {
         }
     }
 
-    /// The size of the set's own albedo (its Diffuse slot's file).
+    /// The size of the set's own albedo (its Diffuse slot's file). A borrowed diffuse does not count: Also reads only
+    /// the set's own jobs (`also::derive_sets`), so for it the set has no albedo (CO116).
     fn albedo_size(&self, v: &SetView) -> Option<(u32, u32)> {
         match v.slots.get(&SlotKind::Diffuse) {
             Some(SlotFill::Own { item }) => self.normal_size(item),
@@ -967,6 +1009,15 @@ impl AppModel {
             self.status_line = "Generate is still finishing; try again in a moment".into();
             return;
         }
+        // The set card's "Regenerate…" (no map preselected) reopens the first recorded map it may make again, with its
+        // record (review I1, spec Goal 7).
+        let pre = pre.or_else(|| {
+            self.generated_items(set)
+                .into_iter()
+                .filter(|(_, p)| p.is_some())
+                .filter_map(|(k, _)| gen_role(&stem(&k)).and_then(|r| map_of(&r)))
+                .find(|&m| self.gen_offer(set, m).is_ok())
+        });
         let Some(v) = self.gen_view(set) else {
             return;
         };

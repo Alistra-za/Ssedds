@@ -3322,9 +3322,13 @@ fn a_generated_curvature_shows_on_the_set_card() {
         m.generated_info(CURVES_KEY).unwrap().stale.as_deref(),
         Some(EARLIER)
     );
-    // Regenerate from the set card replaces its own file (the recorded hash) and is fresh again.
+    // Regenerate from the set card ticks the recorded map (I1), replaces its own file (the recorded hash) and is
+    // fresh again.
     m.open_gen(ROCK_SET, None);
-    m.gen_tick(GenMap::Curvature, true);
+    assert_eq!(
+        m.gen.as_ref().unwrap().ticked,
+        [GenMap::Curvature].into_iter().collect()
+    );
     m.gen_generate();
     idle(&mut m);
     assert!(
@@ -3373,4 +3377,130 @@ fn progress_runs_once_across_three_generate_calls() {
     let gen = m.sets_doc.as_ref().unwrap().generated();
     assert_eq!(gen[CURVES_KEY]["opts"]["size"], 128);
     assert_eq!(gen[AO_KEY]["opts"]["size"], 64);
+}
+
+// ---- Task 12 fix round 1 ----
+
+#[test]
+fn regenerate_from_the_set_card_loads_the_record() {
+    // I1 (spec Goal 7): a curvature made with Mirror, OpenGL green and relief 0.8.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    m.open_gen(ROCK_SET, None);
+    m.gen_tick(GenMap::Curvature, true);
+    {
+        let o = &mut m.gen.as_mut().unwrap().opts;
+        o.tiling = Tiling::Mirror;
+        o.green = Some(GreenConvention::Opengl);
+        o.relief = 0.8;
+    }
+    m.gen_generate();
+    idle(&mut m);
+    assert!(m.gen.is_none());
+    m.open_gen(ROCK_SET, None);
+    let g = m.gen.as_ref().unwrap();
+    assert_eq!(g.ticked, [GenMap::Curvature].into_iter().collect());
+    assert_eq!(g.opts.tiling, Tiling::Mirror);
+    assert_eq!(g.opts.green, Some(GreenConvention::Opengl));
+    assert_eq!(g.opts.relief, 0.8);
+    assert!(g.opts.curvature);
+
+    // An `_m`-alpha height (its only entry is the set card) keeps its strength.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    relief_normal(&land(d.path()), NORMAL, 64);
+    reopen(&mut m, d.path());
+    complex_material(&mut m, "rock01");
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    {
+        let g = m.gen.as_mut().unwrap();
+        g.opts.size = 64;
+        g.opts.height.as_mut().unwrap().strength = 0.5;
+    }
+    m.gen_generate();
+    idle(&mut m);
+    m.open_gen(ROCK_SET, None);
+    let g = m.gen.as_ref().unwrap();
+    assert_eq!(g.ticked, [GenMap::Height].into_iter().collect());
+    assert!(g.m_alpha);
+    assert_eq!(g.opts.height.as_ref().unwrap().strength, 0.5);
+}
+
+#[test]
+fn curvature_is_refused_where_also_export_reads_none() {
+    // I2: Also derives only cs PBR, PBR landscape and PBR grass sets.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    shader(&mut m, Shader::Parallax);
+    assert_eq!(curves(&m), Err(NOT_PBR_CURVES.into()));
+    shader(&mut m, Shader::PbrLandscape);
+    assert_eq!(curves(&m), Ok(()));
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    shader(&mut m, Shader::Pbr);
+    assert_eq!(curves(&m), Err(NOT_PBR_CURVES.into()));
+
+    // A PBR set with no albedo writes no Vanilla diffuse, so nothing would read the curvature.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01.png")).unwrap();
+    reopen(&mut m, d.path());
+    shader(&mut m, Shader::Pbr);
+    assert_eq!(curves(&m), Err(NO_ALBEDO.into()));
+    assert_eq!(
+        m.gen_size(ROCK_SET, GenMap::Curvature),
+        Err(NO_ALBEDO.into())
+    );
+}
+
+#[test]
+fn a_locked_size_that_is_not_a_power_of_two_is_refused() {
+    // M1: a 1000² albedo beside a 1024² normal; never an "internal error" from the FFT.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    flat_normal(&land(d.path()).join(NORMAL), 1024);
+    albedo(d.path(), 1000);
+    reopen(&mut m, d.path());
+    let locked = "this set's maps are 1000×1000; a generated curvature map must match them (not a power of two)";
+    assert_eq!(curves(&m), Err(locked.into()));
+    assert_eq!(m.gen_size(ROCK_SET, GenMap::Curvature), Err(locked.into()));
+}
+
+#[test]
+fn curvature_takes_a_rectangular_or_dds_albedos_size() {
+    // M2(c): a 64×32 albedo beside a 128×64 normal.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    ImageBuffer::from_fn(128, 64, |_, _| Rgb([128u8, 128, 255]))
+        .save(land(d.path()).join(NORMAL))
+        .unwrap();
+    ImageBuffer::from_fn(64, 32, |x, y| Rgb([x as u8, y as u8, 90u8]))
+        .save(land(d.path()).join("rock01.png"))
+        .unwrap();
+    reopen(&mut m, d.path());
+    assert_eq!(
+        m.gen_size(ROCK_SET, GenMap::Curvature),
+        Ok(GenSize::Locked(64))
+    );
+    m.open_gen(ROCK_SET, None);
+    m.gen_tick(GenMap::Curvature, true);
+    assert_eq!(m.gen_facts().paths[0].2, (64, 32));
+
+    // A DDS albedo: Also derives no set with a DDS member (DERIVE-DDS-SOURCE), so the curvature is refused.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    flat_normal(&land(d.path()).join(NORMAL), 128);
+    std::fs::remove_file(land(d.path()).join("rock01.png")).unwrap();
+    bc1_dds(&land(d.path()).join("rock01.dds"), 64, 64);
+    reopen(&mut m, d.path());
+    shader(&mut m, Shader::Pbr);
+    assert_eq!(
+        curves(&m),
+        Err(
+            "Also export skips a set with a DDS member (rock01.dds), so nothing would read a curvature"
+                .into()
+        )
+    );
 }

@@ -290,11 +290,11 @@ The same dialog makes an ambient-occlusion map from the normal (a horizon march 
 
 ### Curvature
 
-The dialog's **Curvature** checkbox writes `<base>_curves_generated.png`: the Laplacian of the same height solve, smoothed over about 2 texels, 0.5-centred, with peaks bright and hollows dark. Its hover says "used by Also export as: Vanilla / Complex material": it is read only by Also export's soft-light step, so a plain export reports it as `PACK-UNUSED-INPUT`, which is expected.
+The dialog's **Curvature** checkbox writes `<base>_curves_generated.png`: the Laplacian of the same height solve, smoothed over about 2 texels at the solve size (up to 1024 px; a 2048 curvature is upsampled, so about 4 of its texels), 0.5-centred, with peaks bright and hollows dark. Its hover says "used by Also export as: Vanilla / Complex material": it is read only by Also export's soft-light step, so a plain export reports it as `PACK-UNUSED-INPUT`, which is expected.
 
-- **Where:** the set card's menu (the dialog's **Curvature** checkbox) and Regenerate. It has no slot row. It is greyed out when the set has no normal, the normal is not a power of two, the set already has a real `_curves` or `_curvature` map, or a `_curves_generated` file Tessalith did not write is there.
-- **Size:** the set's albedo size, shown read-only, because Also's diffuse reads the albedo and the curvature together. A normal smaller than the albedo disables Curvature with the reason. With no albedo, any size the normal offers (up to 2048).
-- **Provenance:** with no row, its stale reason, Regenerate and **Delete generated file** are on the set card's menu.
+- **Where:** the set card's menu (the dialog's **Curvature** checkbox) and Regenerate. It has no slot row. It is offered only where Also export reads it: PBR, PBR landscape and PBR grass sets on the `cs` target with no DDS member (Also skips such a set). Elsewhere it says "curvature is read only by Also export, which reads PBR sets under Community Shaders", or names the DDS. It is also greyed out when the set has no normal, the normal is not a power of two, the set already has a real `_curves` or `_curvature` map, or a `_curves_generated` file Tessalith did not write is there.
+- **Size:** the set's albedo size, shown read-only, because Also's diffuse reads the albedo and the curvature together. A normal smaller than the albedo, or an albedo whose sides are not powers of two, disables Curvature with the reason. A set with no albedo of its own (a borrowed diffuse does not count) gets no Vanilla diffuse from Also, so Curvature is greyed out there too.
+- **Provenance:** with no row, its stale reason, Regenerate and **Delete generated file** are on the set card's menu. The set card's **Regenerate…** opens with the set's first recorded map ticked and the settings it was made with (Tiling, green, Relief balance, Strength, AO settings).
 
 ## The preview
 

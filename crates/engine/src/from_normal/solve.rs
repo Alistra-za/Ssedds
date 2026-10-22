@@ -646,6 +646,31 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_rectangular_curvature_keeps_its_axes() {
+        // Review M2(a): 256 wide, 128 high, a sine along x (wrap) and an edge-even cosine along y (mirror).
+        let om = 2.0 * PI / 64.0;
+        let s = x_slopes(256, 128, |x| om * (om * x).cos());
+        let c = curvature(&s, true, 0.0);
+        assert_eq!(c.len(), 256 * 128);
+        let row = &c[100 * 256..101 * 256];
+        assert!(row[16] > 0.9 && row[48] < 0.1, "{} {}", row[16], row[48]);
+        let (w, h) = (128usize, 256usize);
+        let s = Slopes {
+            width: w as u32,
+            height: h as u32,
+            p: vec![0.0; w * h],
+            q: (0..w * h)
+                .map(|i| -om * (om * ((i / w) as f64 + 0.5)).sin())
+                .collect(),
+            tilt: (0.0, 0.0),
+        };
+        let c = curvature(&s, false, 0.0);
+        let col = |y: usize| c[y * w + 40];
+        assert!(col(63) > 0.9 && col(127) > 0.9, "{} {}", col(63), col(127));
+        assert!(col(95) < 0.1 && col(159) < 0.1, "{} {}", col(95), col(159));
+    }
+
+    #[test]
     fn curvature_is_band_limited_by_a_sigma_2_gaussian() {
         // Periods 64 and 8, amplitudes chosen so their curvatures are equal before the Gaussian (κ amplitude
         // 2·A·ω·sin(ω/2) = 2 each). The output's period-8 share is then exp(−σ²ω8²/2) / exp(−σ²ω64²/2) ≈ 0.297 at

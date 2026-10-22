@@ -368,6 +368,10 @@ pub fn generate(
     if opts.size == 0 {
         return Err(InvalidOpts("the size must be above 0"));
     }
+    // With a power-of-two normal this keeps every solve side a power of two, as the FFT needs (review M1).
+    if !opts.size.is_power_of_two() {
+        return Err(InvalidOpts("the size must be a power of two"));
+    }
     if opts
         .height
         .as_ref()
@@ -667,6 +671,31 @@ mod tests {
         // The solve-size de-tilted slopes, the detected wrap and the opts' relief, as the height uses.
         let s = resize(&slopes(&n, Directx), (128, 128));
         assert_eq!(c.px, solve::curvature(&s, true, f64::from(o.relief)));
+    }
+
+    #[test]
+    fn a_size_that_is_not_a_power_of_two_is_refused() {
+        // Review M1: refused with InvalidOpts, never the FFT's assert.
+        let n = constant(1024, 1024, [0.5, 0.5, 1.0, 1.0]);
+        let mut o = opts(1000, Neutral::Half);
+        o.curvature = true;
+        assert!(invalid(&n, &o));
+    }
+
+    #[test]
+    fn a_curvature_above_the_solve_size_upsamples_wrapped() {
+        // Review M2(b): 2048 from a 1024 solve, through the wrap-aware upsample (no clamped edge at the tile seam).
+        let n = torus_n(2048, 2048);
+        let mut o = opts(2048, Neutral::Half);
+        (o.tiling, o.green, o.height, o.curvature) = (Tiling::Wrap, Some(Directx), None, true);
+        let c = run(&n, &o).unwrap().curvature.expect("a curvature");
+        let s = resize(&slopes(&n, Directx), (1024, 1024));
+        let solved = Gray {
+            width: 1024,
+            height: 1024,
+            px: solve::curvature(&s, true, f64::from(o.relief)),
+        };
+        assert_eq!(c.px, resample_gray(solved, (2048, 2048), true).px);
     }
 
     #[test]
