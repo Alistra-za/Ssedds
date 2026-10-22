@@ -314,6 +314,16 @@ pub(crate) fn load(path: &Path, max_dim: u32) -> Result<(Rgba32F, SourceInfo, bo
         c => return bad(format!("unknown image data compression {c}")),
     };
 
+    // Trace #26: the pixel data must exist before the float buffer (up to ~4 GiB) is filled. Raw needs every row;
+    // RLE needs every counted byte.
+    let need = if compression == 0 {
+        (row as u64) * (ht as u64) * u64::from(used)
+    } else {
+        counts.iter().sum()
+    };
+    if need > r.0.get_ref().metadata()?.len().saturating_sub(r.pos()?) {
+        return bad("truncated PSD");
+    }
     let mut px = vec![[0.0, 0.0, 0.0, 1.0]; w * ht];
     let mut line = vec![0u8; row];
     let mut packed = Vec::new();
