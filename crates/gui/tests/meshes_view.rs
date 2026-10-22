@@ -1209,6 +1209,15 @@ fn unused_says_plugins_were_not_read_after_a_folder_scan() {
     assert!(!run(Some(stats(1, 1, 1, 1, &[]))));
 }
 
+/// Trace 2026-10-22 #6: `unused_textures` leaves LOD textures out (modscan lod_skip.rs); the note must not say they
+/// are listed.
+#[test]
+fn unused_note_says_lod_textures_are_left_out() {
+    let note = sdc_gui::model::meshes::UNUSED_NOTE;
+    assert!(note.contains("LOD textures are left out"), "{note}");
+    assert!(!note.contains("LOD, interface"), "{note}");
+}
+
 /// Review M5: the list is cut at 200; the rest is counted.
 #[test]
 fn plugin_overrides_say_how_many_more_are_cut() {
