@@ -3020,7 +3020,8 @@ fn another_manager_keeps_the_clip_live() {
     doc.append(
         b"NiControllerManager",
         nif::clips::encode_manager(&second).unwrap(),
-    );
+    )
+    .unwrap();
     let two = doc.bytes();
     let before = read_model(&two).unwrap().ctrls[&4].clone();
     let r = apply(&two, &[remove_seq(root, "Open", 0)]).unwrap();
@@ -3811,7 +3812,7 @@ fn add_sequence_refuses_an_unreadable_root_manager() {
     let root = m.root.unwrap();
     let mut doc = nif::write::NifDoc::open(&b).unwrap();
     let at = m.root_net.as_ref().unwrap().controller_at() - doc.header().offsets()[root as usize];
-    let n = doc.append(b"NiControllerManager", vec![0; 8]); // shorter than NiTimeController
+    let n = doc.append(b"NiControllerManager", vec![0; 8]).unwrap(); // shorter than NiTimeController
     doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
     let x = doc.bytes();
     let add = add_seq(root_anchor(&x), "Open", vec![track(&x, 11, open_keys())]);
@@ -3851,7 +3852,7 @@ fn add_sequence_refuses_an_unreadable_controller_in_front_of_the_manager() {
     // next -> the manager, then too short for NiTimeController
     let mut body = mgr.to_le_bytes().to_vec();
     body.extend([0; 4]);
-    let n = doc.append(b"NiTransformController", body);
+    let n = doc.append(b"NiTransformController", body).unwrap();
     doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
     let x = doc.bytes();
     let add = add_seq(root_anchor(&x), "Close", vec![track(&x, 20, open_keys())]);
@@ -3883,7 +3884,7 @@ fn clip_ops_refuse_a_broken_root_chain_after_the_manager() {
     // the MTTC's next -> `kind` with `body`
     let after = |kind: &[u8], body: Vec<u8>| {
         let mut doc = nif::write::NifDoc::open(&o).unwrap();
-        let n = doc.append(kind, body);
+        let n = doc.append(kind, body).unwrap();
         doc.patch(mttc, 0, &(n as i32).to_le_bytes()).unwrap();
         doc.bytes()
     };
@@ -3965,7 +3966,8 @@ fn split_grows_a_shared_palette_and_mttc_once_for_both_managers() {
         sequences: vec![close as i32],
         ..man.clone()
     };
-    doc.append(b"NiControllerManager", encode_manager(&second).unwrap());
+    doc.append(b"NiControllerManager", encode_manager(&second).unwrap())
+        .unwrap();
     let y = doc.bytes();
     let my = read_model(&y).unwrap();
     let (a, bb) = (shape_named(&my, "A") as i32, shape_named(&my, "B") as i32);
