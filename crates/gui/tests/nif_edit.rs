@@ -6614,6 +6614,11 @@ fn a_nameless_clip_says_it_has_no_name() {
 /// `clip_scene` with two added clips, "Open" on U offset (5) then "Close" on Emissive multiple (4); returns the
 /// sequence blocks (Open, Close).
 fn two_clips() -> (MeshesModel, u32, u32) {
+    two_clips_named("Open", "Close")
+}
+
+/// `two_clips` with the clips named `first` (on U offset) and `second` (on Emissive multiple).
+fn two_clips_named(first: &str, second: &str) -> (MeshesModel, u32, u32) {
     let mut m = clip_scene();
     let e = m.edit.as_ref().unwrap();
     let s = shape_named(e, "S");
@@ -6642,22 +6647,43 @@ fn two_clips() -> (MeshesModel, u32, u32) {
         stop: 1.0,
         tracks: vec![track(var)],
     };
-    let ops = vec![add("Open", 20), add("Close", 11)];
+    let ops = vec![add(first, 20), add(second, 11)];
     for op in ops {
         m.edit_push(vec![op], None);
     }
     let e = m.edit.as_ref().unwrap();
     assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
-    let block = |n: &str| {
-        e.model
-            .sequences
-            .iter()
-            .find(|q| q.name.as_deref() == Some(n))
-            .unwrap()
-            .block
-    };
-    let (open, close) = (block("Open"), block("Close"));
-    (m, open, close)
+    // appended in order: the first clip has the lower block
+    let mut blocks: Vec<u32> = e.model.sequences.iter().map(|q| q.block).collect();
+    blocks.sort();
+    (m, blocks[0], blocks[1])
+}
+
+/// Fix round 1 (review I2): clip identity is the Windows-1252 name, so "é" and "ö" never pass for each other, and a
+/// rename to "Café" keeps the Preview on that clip.
+#[test]
+fn preview_tells_non_ascii_clip_names_apart() {
+    let (mut m, first, _) = two_clips_named("é", "ö");
+    m.edit_with(|e| e.set_playing(Playing::Clip(first)));
+    assert_eq!(shown_clip(&m), Some(Some("é".into())));
+    m.edit_with(|e| e.revert(0));
+    assert_eq!(shown_clip(&m), None, "Free chains, not ö");
+    // rename the picked clip to Café
+    let (mut m, first, _) = two_clips_named("Open", "Close");
+    m.edit_with(|e| e.set_playing(Playing::Clip(first)));
+    let e = m.edit.as_ref().unwrap();
+    let (name, nth) = nif::edit::clip_key(&e.patched, &e.model, first).unwrap();
+    let at = nif::edit::anchor_role(&e.model, None, Role::Root).unwrap();
+    m.edit_push(
+        vec![Op::RenameSequence {
+            at,
+            name,
+            nth,
+            new_name: "Café".into(),
+        }],
+        None,
+    );
+    assert_eq!(shown_clip(&m), Some(Some("Café".into())));
 }
 
 /// The name of the clip the Preview shows, None on Free chains.

@@ -770,27 +770,32 @@ fn enc<T>(r: Result<T, crate::NifError>) -> Result<T, String> {
 /// #INV_FLT#: the Value every vanilla blend interpolator holds (C1 census, 6722 of 6722).
 const INV_FLT: u32 = 0xFF7F_FFFF;
 
-/// The first NiControllerManager on the root's controller chain. Err when any entry before the chain's end does not
-/// read: a manager there, or one behind it, would get a second manager in front of it (C-P35 M2, Note CU4).
-fn root_manager(m: &NifModel) -> Result<Option<u32>, String> {
+/// The first NiControllerManager on the root's controller chain. The whole chain is checked to its end (C-P35 M2,
+/// Note CU4, fix round 1): every entry reads, every manager's payload reads, no loop and no link outside -1 and the
+/// file; otherwise Err, so no clip op runs on a chain it cannot see whole.
+fn root_manager(h: &Header, cur: &[u8], m: &NifModel) -> Result<Option<u32>, String> {
     let Some(net) = m.root_net.as_ref() else {
         return Ok(None);
     };
-    let mut c = net.controller;
-    // bounded: a looping chain is cut by `ctrl::chain`, but stay safe on any `next`
-    for _ in 0..=m.ctrls.len() {
-        let Ok(b) = u32::try_from(c) else {
-            return Ok(None);
+    let broken = || Err("The root's controller chain cannot be read.".into());
+    let (mut c, mut seen, mut first) = (net.controller, vec![], None);
+    while c != -1 {
+        let Some(t) = u32::try_from(c).ok().and_then(|b| m.ctrls.get(&b)) else {
+            return broken();
         };
-        let Some(t) = m.ctrls.get(&b) else {
-            return Err("The root's controller chain cannot be read.".into());
-        };
+        if seen.contains(&t.block) {
+            return broken(); // a loop
+        }
+        seen.push(t.block);
         if t.class == "NiControllerManager" {
-            return Ok(Some(t.block));
+            if read_manager(h, cur, t.block as usize).is_err() {
+                return broken();
+            }
+            first = first.or(Some(t.block));
         }
         c = t.next;
     }
-    Ok(None)
+    Ok(first)
 }
 
 /// The raw Name of each listed sequence (None: no name). A listed sequence that does not read is an Err (C-P29).
@@ -816,7 +821,7 @@ fn find_clip(
     name: &str,
     nth: u32,
 ) -> Result<Option<(u32, Manager, usize)>, String> {
-    let Some(mb) = root_manager(m)? else {
+    let Some(mb) = root_manager(h, cur, m)? else {
         return Ok(None);
     };
     let man = enc(read_manager(h, cur, mb as usize))?;
@@ -837,7 +842,7 @@ fn clip_named(r: &[u8], name: &str) -> bool {
 /// list it, it has no name, or the manager or a listed sequence does not read. Parses the header: call it on a click.
 pub fn clip_key(b: &[u8], m: &NifModel, seq: u32) -> Option<(String, u32)> {
     let h = Header::parse(b).ok()?;
-    let man = read_manager(&h, b, root_manager(m).ok()?? as usize).ok()?;
+    let man = read_manager(&h, b, root_manager(&h, b, m).ok()?? as usize).ok()?;
     let names = clip_names(&h, b, &man.sequences).ok()?;
     let k = man.sequences.iter().position(|&s| s == seq as i32)?;
     let name = crate::text::lossy(names[k]?);
@@ -1266,7 +1271,7 @@ pub(crate) fn add_sequence(
         .root
         .zip(m.root_net.as_ref())
         .ok_or("The root is not a node: a clip needs a node root.")?;
-    let found = root_manager(m)?;
+    let found = root_manager(doc.header(), cur, m)?;
     let old = match found {
         Some(mb) => Some(enc(read_manager(doc.header(), cur, mb as usize))?),
         None => None,

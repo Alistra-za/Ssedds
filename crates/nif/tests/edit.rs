@@ -3817,6 +3817,57 @@ fn add_sequence_refuses_an_unreadable_controller_in_front_of_the_manager() {
     );
 }
 
+/// Fix round 1 (review I1): the whole root chain must read, also past the first manager: a truncated controller after
+/// the MTTC, an unreadable second manager or a loop refuses every clip op and leaves the bytes unchanged.
+#[test]
+fn clip_ops_refuse_a_broken_root_chain_after_the_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let o = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap()
+    .bytes;
+    let h = Header::parse(&o).unwrap();
+    let mgr = root_ctrl(&o);
+    let mttc = read_manager(&h, &o, mgr).unwrap().ctrl.next as u32;
+    assert_eq!(h.kind(mttc as usize), b"NiMultiTargetTransformController");
+    // the MTTC's next -> `kind` with `body`
+    let after = |kind: &[u8], body: Vec<u8>| {
+        let mut doc = nif::write::NifDoc::open(&o).unwrap();
+        let n = doc.append(kind, body);
+        doc.patch(mttc, 0, &(n as i32).to_le_bytes()).unwrap();
+        doc.bytes()
+    };
+    let truncated = after(b"NiTransformController", vec![0xFF; 8]);
+    // a whole NiTimeController base (next -1), then cumulative 0 and a sequence count past the block
+    let mut man = (-1i32).to_le_bytes().to_vec();
+    man.extend([0; 22]);
+    man.push(0);
+    man.extend(1000u32.to_le_bytes());
+    let bad_manager = after(b"NiControllerManager", man);
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    doc.patch(mttc, 0, &(mgr as i32).to_le_bytes()).unwrap();
+    let looped = doc.bytes();
+    for x in [truncated, bad_manager, looped] {
+        let root = root_anchor(&x);
+        let chain = "The root's controller chain cannot be read.";
+        assert_eq!(
+            refused(
+                &x,
+                add_seq(root.clone(), "Close", vec![track(&x, 20, open_keys())])
+            ),
+            chain
+        );
+        assert_eq!(refused(&x, remove_seq(root.clone(), "Open", 0)), chain);
+        assert_eq!(refused(&x, rename_seq(root, "Open", 0, "Z")), chain);
+    }
+}
+
 /// Note CU3: `convert_check` predicts AddSequence's cycle and range refusals, with the same text.
 #[test]
 fn convert_check_predicts_the_cycle_and_range_refusals() {
