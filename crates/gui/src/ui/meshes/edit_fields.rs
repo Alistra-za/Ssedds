@@ -360,6 +360,9 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
     }
     let (lt, p) = (&l.lighting, &l.lighting.params);
     let pbr = lt.slsf2 & SLSF2_TRUE_PBR != 0;
+    // Meshes UI T6 (Note CV21): the texture slots first, as the shape's identity.
+    texture_slots(ui, m, e, shape, l, act);
+    ui.separator();
 
     ui.horizontal(|ui| {
         row_label(ui, "Shader type");
@@ -522,15 +525,16 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
         f(ui, act, &name, Field::Trailer(n as u8), v);
     }
 
-    texture_slots(ui, m, e, shape, l, act);
     ui.separator();
     for (label, field, v, names) in [
         ("SLSF1", Field::Slsf1, lt.slsf1, &SLSF1_NAMES),
         ("SLSF2", Field::Slsf2, lt.slsf2, &SLSF2_NAMES),
     ] {
         egui::CollapsingHeader::new(format!("{label} 0x{v:08X}"))
-            .id_salt(("meshes-edit-flags", label))
-            .default_open(true)
+            .id_salt(("meshes-edit-flags", label, at.block))
+            // Meshes UI T6 (Note CV21): closed by default, so the slots and the values come first; open when a flag
+            // has a warning, so its Fix is in sight.
+            .default_open(has_warning(e, at.block, field))
             .show(ui, |ui| {
                 warnings(
                     ui,
@@ -596,6 +600,16 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                 }
             });
     }
+}
+
+/// True when `field` of `block` has a warning (`warnings` would draw a line for it).
+fn has_warning(e: &NifEdit, block: u32, field: Field) -> bool {
+    let t = Target::Field { block, field };
+    e.warnings
+        .iter()
+        .chain(&e.op_warnings)
+        .chain(&e.pg_warnings)
+        .any(|w| w.target == t)
 }
 
 fn texture_slots(

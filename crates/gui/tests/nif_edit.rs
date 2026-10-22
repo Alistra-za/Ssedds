@@ -1646,6 +1646,7 @@ fn skinned_and_pbr_bits_are_greyed() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     assert!(h.get_by_label("Skinned").accesskit_node().is_disabled());
     assert!(h
         .get_by_label("Unused01 (TruePBR)")
@@ -3700,6 +3701,7 @@ fn pbr_shape_labels_slsf2_bits_and_non_pbr_does_not() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     assert!(h.query_all_by_label_contains("PBR:").next().is_none());
     set_slsf2(&mut h, a, (1 << 23) | (1 << 24) | (1 << 25));
     h.get_by_label("PBR: Two-layer coat");
@@ -3717,6 +3719,7 @@ fn slsf2_warning_shows_under_the_flags() {
     let a = select(&mut m, "A");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     set_slsf2(&mut h, a, 1 << 12);
     h.get_by_label("Fit_Slope (SLSF2 12) does nothing without the PBR flag.");
 }
@@ -7725,6 +7728,7 @@ fn a_type_bound_flag_shows_its_error_and_clears_in_one_undo_step() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
+    // Meshes UI T6: a flag list with a warning starts open (its Fix in sight).
     h.get_by_label(SKIN_TINT);
     h.get_by_label("Clear the flag").scroll_to_me();
     h.run();
@@ -7782,6 +7786,7 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     let skin = h.get_by_label("FaceGen_RGB_Tint");
     assert!(skin.accesskit_node().is_disabled());
     assert!(h
@@ -7798,6 +7803,7 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
     select(&mut m, "S");
     let mut h = view(m);
     h.run_steps(2);
+    open_flags(&mut h);
     assert!(!h
         .get_by_label("FaceGen_RGB_Tint")
         .accesskit_node()
@@ -8123,3 +8129,91 @@ fn heel_refuses_an_hh_offset_of_another_type() {
 /// The note for an HH_OFFSET that is not a readable float.
 const HEEL_HH_UNSET_TEXT: &str =
     "This shape's HH_OFFSET is not a number the editor can set: remove that row first.";
+
+/// T5b re-review gap: the heel row's "earlier shape" note counts only shapes the root reaches. Worn's own HH_OFFSET
+/// is removed first; the only earlier heel data is then on the unlinked "Orphan" shape, so no note.
+#[test]
+fn heel_row_ignores_an_earlier_orphan_shape() {
+    let mut m = direct(scenes::heel_orphan_scene());
+    let worn = select(&mut m, "Worn");
+    let at = Anchor {
+        block: 4,
+        kind: "NiFloatExtraData".into(),
+        shape: Some("Worn".into()),
+        role: Role::Extra {
+            on_root: false,
+            name: "HH_OFFSET".into(),
+            kind: "NiFloatExtraData".into(),
+            nth: 0,
+        },
+    };
+    m.edit_push(vec![Op::RemoveExtra { at }], None);
+    let e = m.edit.as_ref().unwrap();
+    assert!(
+        e.model
+            .extras_of(&e.model.shape(worn).unwrap().net)
+            .is_empty(),
+        "{:?}",
+        e.outcomes
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    assert!(h
+        .query_by_label("An earlier shape's heel height wins.")
+        .is_none());
+}
+
+// ---- Meshes UI T6: panel orientation (Note CV21) ----
+
+/// The panel names what the tabs act on, under the tab strip: the selected shape and its type, or the root.
+#[test]
+fn the_panel_says_which_shape_it_edits() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    let line = h.get_by_label("Editing: S (BSTriShape)").rect();
+    let tabs = h.get_by_label("Extra data").rect();
+    assert!(
+        line.min.y >= tabs.max.y,
+        "under the tab strip: {line:?} {tabs:?}"
+    );
+    h.state_mut().select_edit(Selection::Root);
+    h.run_steps(2);
+    h.get_by_label("Editing: Root (NiNode)");
+}
+
+/// The Shader tab puts the texture slots first, and the SLSF1 / SLSF2 flag lists start closed.
+#[test]
+fn shader_tab_shows_slots_first_and_flags_closed() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    let slot = h
+        .get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)")
+        .rect();
+    let ty = h
+        .get_by_role_and_label(AkRole::ComboBox, "Shader type")
+        .rect();
+    assert!(slot.max.y <= ty.min.y, "slots first: {slot:?} {ty:?}");
+    assert!(
+        h.query_by_label("Specular").is_none(),
+        "SLSF1 starts closed"
+    );
+    h.get_by_label_contains("SLSF1 0x").click();
+    h.run_steps(3);
+    h.get_by_label("Specular");
+}
+
+/// Meshes UI T6: opens the Shader tab's SLSF1 and SLSF2 flag lists, closed by default (call it once).
+fn open_flags(h: &mut Harness<'static, MeshesModel>) {
+    for flags in ["SLSF1 0x", "SLSF2 0x"] {
+        h.get_by_label_contains(flags).scroll_to_me();
+        h.run_steps(12);
+        h.get_by_label_contains(flags).click();
+        h.run_steps(3);
+    }
+}

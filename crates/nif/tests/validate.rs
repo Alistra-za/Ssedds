@@ -310,6 +310,26 @@ fn heel_data_on_an_orphan_shape_or_a_node() {
     );
 }
 
+/// T5b re-review gap: heel data on a shader property warns too (BSTriShape 0 → BSLSP 1 with extra HH_OFFSET 2).
+#[test]
+fn heel_data_on_a_shader_warns() {
+    use builder::{Nif, W};
+    use nif::edit::validate::HEEL_NOT_ON_SHAPE;
+    let mut n = Nif::new(100);
+    let hh = n.string("HH_OFFSET");
+    n.block("BSTriShape", scenes::bstri(1, -1));
+    n.block(
+        "BSLightingShaderProperty",
+        scenes::lsp_body(0, &[2], -1, &[]),
+    );
+    n.block("NiFloatExtraData", W::default().i32(hh).f(6.0).0);
+    let w = warnings(&n.bytes());
+    assert_eq!(
+        only(&w, HEEL_NOT_ON_SHAPE, Level::Warn).target,
+        Target::Extra { block: 2 }
+    );
+}
+
 #[test]
 fn bsxflags_must_be_named_bsx() {
     let w = warnings(&scenes::emit_scene("Other", 0x83, true));

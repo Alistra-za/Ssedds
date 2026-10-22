@@ -4,7 +4,7 @@ use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
 use crate::model::meshes::export::{GuardChoice, Placement};
-use crate::model::meshes::nif_edit::{NifEdit, NO_EDITS};
+use crate::model::meshes::nif_edit::{NifEdit, Selection, NO_EDITS};
 use crate::model::meshes::MeshesModel;
 use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
@@ -34,6 +34,8 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         });
         ui.data_mut(|d| d.insert_temp(tab_id, tab));
+        // Meshes UI T6 (Note CV21): what the tabs act on, always in sight.
+        ui.add(egui::Label::new(editing_line(e)).truncate());
         ui.separator();
         // Both ways: a wide row scrolls instead of widening the panel; thin bars stay visible without hover.
         ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
@@ -48,6 +50,22 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
             });
     }
     apply(m, act);
+}
+
+/// "Editing: BodyMesh (BSTriShape)", or "Editing: Root (NiNode)" while the root is selected.
+fn editing_line(e: &NifEdit) -> String {
+    match e.selection {
+        Selection::Root if e.model.root_kind.is_empty() => "Editing: Root".into(),
+        Selection::Root => format!("Editing: Root ({})", e.model.root_kind),
+        Selection::Shape(b) => match e.model.shape(b) {
+            Some(s) => format!(
+                "Editing: {} ({:?})",
+                s.name.as_deref().unwrap_or("(unnamed)"),
+                s.kind
+            ),
+            None => format!("Editing: block {b} (not in this NIF)"),
+        },
+    }
 }
 
 fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
