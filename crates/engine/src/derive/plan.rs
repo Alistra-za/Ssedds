@@ -312,7 +312,13 @@ pub fn plan_derived(
                         .file_stem()
                         .unwrap_or_default()
                         .to_string_lossy();
-                    let stem = crate::group::split_suffix(&stem).0;
+                    // Trace #17: an albedo anchor keeps its own stem (steel_d, the name the vanilla file gets and the GUI asks
+                    // the scan for, CN68); only a normal-only anchor drops its _n.
+                    let stem = if albedo.is_some() {
+                        stem.into_owned()
+                    } else {
+                        crate::group::split_suffix(&stem).0
+                    };
                     let mesh = vanilla_game_path(&mesh_key(&anchor.game_path, &stem));
                     if !d.scanned {
                         notes.push(Warning::new(

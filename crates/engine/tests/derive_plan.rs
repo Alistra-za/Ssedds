@@ -1482,3 +1482,30 @@ fn a_p_follows_its_set_when_the_set_does_not_derive() {
         .iter()
         .any(|s| s.path.ends_with("rock_p.png") && s.code == Some(Code::DeriveNotConverted)));
 }
+
+/// Trace-debug #17: a `_d` colour member keeps its `_d` in the vanilla file (`steel_d.dds`), so the env-map gate
+/// looks the vote up at `textures/arm/steel_d`, the key the GUI asks the scan for (Notes CN17 and CN68, CU).
+#[test]
+fn env_m_vote_is_read_at_the_colour_members_own_key_for_a_d_set() {
+    let d = tempfile::tempdir().unwrap();
+    let inputs = d.path().join("in");
+    let a = inputs.join("textures/pbr/arm");
+    png(&a.join("steel_d.png"), 16, 16, [200, 200, 200, 255]);
+    png(&a.join("steel_n.png"), 16, 16, [128, 128, 255, 255]);
+    png(&a.join("steel_rmaos.png"), 16, 16, [128, 255, 255, 255]);
+    let (p, _) = cs_then(DeriveMode::Vanilla, &inputs, d.path(), |r, d| {
+        r.mesh_shaders =
+            BTreeMap::from([("textures/arm/steel_d".to_string(), vec![Shader::Envmap])]);
+        if let Some(d) = d {
+            d.scanned = true;
+        }
+    });
+    let outs: Vec<_> = p.jobs.iter().map(|j| j.output.clone()).collect();
+    assert!(
+        p.jobs.iter().any(|j| j
+            .derive
+            .as_ref()
+            .is_some_and(|d| d.kind == DeriveKind::EnvM)),
+        "{outs:?}"
+    );
+}
