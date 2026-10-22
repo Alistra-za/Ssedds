@@ -6675,6 +6675,41 @@ fn shown_clip(m: &MeshesModel) -> Option<Option<String>> {
     }
 }
 
+/// Note CU8 (C-P36): removing the last clip takes the manager off the root's chain; undo puts it back.
+#[test]
+fn removing_the_last_clip_unlinks_the_manager_and_undo_restores_it() {
+    let mut m = clip_scene();
+    convert(&mut m);
+    let root_ctrl = |m: &MeshesModel| {
+        let e = m.edit.as_ref().unwrap();
+        let c = e.model.root_net.as_ref().unwrap().controller;
+        let h = nif::header::Header::parse(&e.patched).unwrap();
+        (c >= 0).then(|| String::from_utf8_lossy(h.kind(c as usize)).into_owned())
+    };
+    assert_eq!(root_ctrl(&m).as_deref(), Some("NiControllerManager"));
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, None, Role::Root).unwrap();
+    m.edit_push(
+        vec![Op::RemoveSequence {
+            at,
+            name: nif::edit::CONVERT_NAME.into(),
+            nth: 0,
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+    assert_eq!(root_ctrl(&m), None, "no manager on the root");
+    assert!(m
+        .edit
+        .as_ref()
+        .unwrap()
+        .warnings
+        .iter()
+        .all(|w| w.text != nif::edit::validate::EMPTY_MANAGER));
+    m.undo_edit();
+    assert_eq!(root_ctrl(&m).as_deref(), Some("NiControllerManager"));
+}
+
 /// Note CU1: a revert that moves another clip onto the picked clip's block never shows that other clip.
 #[test]
 fn preview_never_switches_clips_after_a_revert() {

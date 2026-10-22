@@ -982,6 +982,9 @@ pub(crate) fn clip_op(
                 return missing(name);
             };
             let removed = man.sequences.remove(k);
+            if man.sequences.is_empty() {
+                unlink_manager(doc, m, root, mgr, &man)?;
+            }
             doc.set_block(mgr, enc(encode_manager(&man))?);
             // C-P29: the union over every readable manager after the remove, as read_model counts live sequences
             let h = doc.header();
@@ -1013,6 +1016,39 @@ pub(crate) fn clip_op(
         _ => return Err("not a clip op".into()),
     }
     Ok(Outcome::Applied)
+}
+
+/// C-P36 (Note CU8, C6E): the game crashes on a manager with no sequences, so the emptied manager and the MTTC after
+/// it leave the root's chain (its link goes to what followed them); export cleanup (Note CQ) then drops them with the
+/// palette. Call before any block is re-emitted: the offsets are the ones `m` was read with.
+fn unlink_manager(
+    doc: &mut NifDoc,
+    m: &NifModel,
+    root: u32,
+    mgr: u32,
+    man: &Manager,
+) -> Result<(), String> {
+    let net = m
+        .root_net
+        .as_ref()
+        .ok_or("The root is not a node: a clip needs a node root.")?;
+    let mut after = man.ctrl.next;
+    if let Some(t) = u32::try_from(after).ok().and_then(|b| m.ctrls.get(&b)) {
+        if t.class == "NiMultiTargetTransformController" {
+            after = t.next;
+        }
+    }
+    if net.controller == mgr as i32 {
+        let at = net.controller_at() - doc.header().offsets()[root as usize];
+        return patch(doc, root, at, after);
+    }
+    // root_manager walked this chain, so the manager is on it
+    let prev = m
+        .ctrls
+        .values()
+        .find(|c| c.next == mgr as i32)
+        .ok_or("The root's controller chain cannot be read.")?;
+    patch(doc, prev.block, 0, after)
 }
 
 /// AddSequence's cycle and range refusals; `convert_check` predicts both with the same text (Note CU3).

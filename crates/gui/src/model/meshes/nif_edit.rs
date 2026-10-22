@@ -9,7 +9,9 @@ use engine::dds::Kept;
 use modscan::mo2::Instance;
 use modscan::store::{PathCopy, ShapeView, KIND_BSA};
 use nif::anim::{apply_anim, clip_tracks_in, free_tracks_in, Track};
-use nif::edit::validate::{new_errors, validate, validate_ops, Level, Target, Warning};
+use nif::edit::validate::{
+    demote_source, new_errors, validate, validate_ops, Level, Target, Warning,
+};
 use nif::edit::{Anchor, Op, Outcome};
 use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
@@ -537,6 +539,7 @@ impl NifEdit {
             Err(e) => self.error = Some(e.to_string()),
         }
         self.warnings = validate(&self.model, None);
+        demote_source(&self.source_warnings, &mut self.warnings);
         // After the ReAnchored write-back: each op's `at.block` is the block its warning targets.
         self.op_warnings = validate_ops(&self.doc.ops());
         // B-P41: one header parse per change; one per controller cost 266 ms a drag tick on a 608-controller NIF.
@@ -1259,6 +1262,7 @@ impl MeshesModel {
         let Some(e) = &mut self.edit else { return };
         e.check_exists = on;
         e.warnings = validate(&e.model, None);
+        demote_source(&e.source_warnings, &mut e.warnings);
         self.edit_checks();
     }
 
@@ -1279,6 +1283,7 @@ impl MeshesModel {
         if let (true, Some(store)) = (e.check_exists, &self.store) {
             let exists = |n: &str| matches!(store.texture_location(n), Ok(Some(_)));
             e.warnings = validate(&e.model, Some(&exists));
+            demote_source(&e.source_warnings, &mut e.warnings);
         }
         e.refresh_blocked();
         if !e.edit_mod.as_os_str().is_empty() {
