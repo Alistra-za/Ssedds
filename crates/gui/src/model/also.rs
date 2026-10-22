@@ -134,19 +134,16 @@ impl AppModel {
     }
 
     /// The project name the engine names the folders by: the opened folder's name (`also::project_name`).
-    fn also_project(&self) -> String {
-        self.root
-            .as_ref()
-            .map(|r| std::path::absolute(r).unwrap_or_else(|_| r.clone()))
-            .and_then(|r| r.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_default()
+    fn also_project(&self) -> Result<String, String> {
+        let root = self.root.clone().unwrap_or_default();
+        engine::also::project_name(&[root]).map_err(|e| e.to_string())
     }
 
     /// The PBR, Vanilla and CM folders: the location joined with `[export.names]` (default `<project> PBR`, …).
     pub fn also_folders(&self) -> [PathBuf; 3] {
         let loc = self.also_location();
         self.also_config()
-            .folder_names(&self.also_project())
+            .folder_names(&self.also_project().unwrap_or_default())
             .map(|n| loc.join(n))
     }
 
@@ -248,12 +245,14 @@ impl AppModel {
         if self.target != Target::Cs {
             return Err(NEEDS_CS.into());
         }
+        // The engine refuses an input with no folder name (a drive root) when it names the folders.
+        let project = self.also_project()?;
         let root = self.root.clone().unwrap_or_default();
         engine::also::check_location(&[root], &self.also_location(), &self.also_folders())?;
         let cfg = self.also_config();
         cfg.check()?;
         // Review M3: a custom name equal to another folder's default, refused here rather than at run time.
-        engine::also::check_names(&cfg, &self.also_project())
+        engine::also::check_names(&cfg, &project)
     }
 
     /// "to {k} folders": 3 with CM (it needs Vanilla, TA30), else 2.

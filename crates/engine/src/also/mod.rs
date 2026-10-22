@@ -199,7 +199,7 @@ pub fn folders(spec: &AlsoSpec, project: &str) -> [PathBuf; 3] {
 }
 
 /// The project name: the first input folder's name (a file input: its folder's).
-fn project_name(inputs: &[PathBuf]) -> Result<String, EngineError> {
+pub fn project_name(inputs: &[PathBuf]) -> Result<String, EngineError> {
     let first = inputs
         .first()
         .ok_or_else(|| EngineError::Usage("Also export needs an input folder".into()))?;
