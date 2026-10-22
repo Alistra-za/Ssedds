@@ -821,13 +821,11 @@ impl SetsDoc {
                 if !names_file(&it, file) {
                     out.push(it);
                 } else if !same_id(&it, file) {
-                    for s in &siblings {
-                        if !out.contains(s) {
-                            out.push(s.clone());
-                        }
-                    }
+                    out.extend(siblings.iter().cloned());
                 }
             }
+            let mut seen = std::collections::HashSet::new();
+            out.retain(|k| seen.insert(fold_id(k)));
             self.set_list(id, "remove", &out);
         } else {
             self.list_edit(id, "add", file, true);
@@ -878,19 +876,26 @@ impl SetsDoc {
             name.to_string_lossy().to_lowercase(),
             stem.to_string_lossy().to_lowercase(),
         );
-        std::fs::read_dir(dir)
+        let mut found: Vec<String> = std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
             .filter(|e| {
+                let p = e.path();
                 e.file_type().is_ok_and(|t| t.is_file())
-                    && e.path()
-                        .file_stem()
+                    && p.file_stem()
                         .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
                     && e.file_name().to_string_lossy().to_lowercase() != name
+                    // Only what the engine reads as an input: a `.txt` beside it is no sibling.
+                    && p.extension().is_some_and(|x| {
+                        let x = x.to_string_lossy().to_lowercase();
+                        engine::discover::IMAGE_EXTS.contains(&x.as_str())
+                    })
             })
             .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
-            .collect()
+            .collect();
+        found.sort(); // read_dir order differs between filesystems
+        found
     }
 
     pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {

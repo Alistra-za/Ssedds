@@ -460,3 +460,18 @@ fn a_folder_with_the_same_stem_is_no_sibling_when_moving_back() {
     let e = &s.entries()[0];
     assert_eq!(e.remove, ["a/f.tga"], "{e:?}");
 }
+
+/// Fix D2 M1: the expanded `remove` holds image siblings only, sorted, each once.
+#[test]
+fn the_split_remove_is_sorted_image_only_and_has_no_duplicates() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\", \"a/f.tga\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/f.png", "a/f.tga", "a/f.bmp", "a/f.txt", "a/f.json"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.bmp", "a/f.tga"], "{e:?}");
+}
