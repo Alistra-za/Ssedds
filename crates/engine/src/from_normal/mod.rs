@@ -1,4 +1,5 @@
 //! Generate a height (and later AO and curvature) from a normal map (v2 Tracks B + D, DECISIONS Note CO).
+mod ao;
 mod fft;
 mod solve;
 
@@ -374,6 +375,23 @@ pub fn generate(
     {
         return Err(InvalidOpts("the height strength must be between 0.1 and 1"));
     }
+    if let Some(a) = &opts.ao {
+        if !(0.0..=0.25).contains(&a.radius) {
+            return Err(InvalidOpts("the AO radius must be between 0 and 0.25"));
+        }
+        if !(1..=64).contains(&a.slices) {
+            return Err(InvalidOpts("the AO slices must be between 1 and 64"));
+        }
+        if !(1..=64).contains(&a.steps) {
+            return Err(InvalidOpts("the AO steps must be between 1 and 64"));
+        }
+        if !(0.25..=4.0).contains(&a.depth) {
+            return Err(InvalidOpts("the AO depth must be between 0.25 and 4"));
+        }
+        if !(0.5..=3.0).contains(&a.intensity) {
+            return Err(InvalidOpts("the AO intensity must be between 0.5 and 3"));
+        }
+    }
     let (w, h) = (stored.width, stored.height);
     if w == 0 || h == 0 {
         return Err(InvalidOpts("the normal map is empty"));
@@ -462,10 +480,28 @@ pub fn generate(
         }
         None => (None, 0.0),
     };
+    step(870)?;
+    let (ao, ao_mean, ao_dark_share) = match &opts.ao {
+        Some(o) => {
+            let g = generate_ao(
+                &hs,
+                &s,
+                wrap,
+                dims((w, h), opts.size.min(AO_MAX)),
+                o,
+                cancel,
+            )?;
+            let n = g.px.len().max(1) as f64;
+            let mean = g.px.iter().map(|&v| f64::from(v)).sum::<f64>() / n;
+            let dark = g.px.iter().filter(|&&v| v < 0.5).count() as f64 / n;
+            (Some(g), Some(mean as f32), Some(dark as f32))
+        }
+        None => (None, None, None),
+    };
     progress.store(1000, Ordering::Relaxed);
     Ok(Generated {
         height,
-        ao: None,
+        ao,
         curvature: None,
         report: Report {
             wrap,
@@ -479,9 +515,55 @@ pub fn generate(
             fit_mean_deg,
             fit_p95_deg,
             clamped_share,
-            ao_mean: None,
-            ao_dark_share: None,
+            ao_mean,
+            ao_dark_share,
         },
+    })
+}
+
+/// AO at `size` from the unnormalised solve `hs` (relief applied) and its de-tilted slopes `s`, both at the solve
+/// size. A larger AO upsamples them first (wrap-aware when wrapped, CO34); the height is in texel units, so it is
+/// scaled by the size ratio, the slopes are not. Then `h *= depth`.
+fn generate_ao(
+    hs: &[f64],
+    s: &Slopes,
+    wrap: bool,
+    size: (u32, u32),
+    o: &AoOpts,
+    cancel: &AtomicBool,
+) -> Result<Gray, GenerateError> {
+    let depth = f64::from(o.depth);
+    let up = |v: &[f64]| {
+        let g = Gray {
+            width: s.width,
+            height: s.height,
+            px: v.iter().map(|&x| x as f32).collect(),
+        };
+        resample_gray(g, size, wrap)
+            .px
+            .into_iter()
+            .map(f64::from)
+            .collect::<Vec<f64>>()
+    };
+    let (h, s) = if (s.width, s.height) == size {
+        (hs.iter().map(|v| v * depth).collect(), s.clone())
+    } else {
+        let k = depth * f64::from(size.0) / f64::from(s.width);
+        let h: Vec<f64> = up(hs).into_iter().map(|v| v * k).collect();
+        let s = Slopes {
+            width: size.0,
+            height: size.1,
+            p: up(&s.p),
+            q: up(&s.q),
+            tilt: s.tilt,
+        };
+        (h, s)
+    };
+    let px = ao::march(&h, &s, wrap, o, cancel).ok_or(GenerateError::Cancelled)?;
+    Ok(Gray {
+        width: size.0,
+        height: size.1,
+        px,
     })
 }
 
