@@ -109,6 +109,44 @@ fn only_the_ticked_rows_apply_as_one_step() {
     assert!(m.fill_from_names(SET, &["a/wall_p.png".into()]).is_err());
 }
 
+/// a/wall (diffuse only) with a `_cnr` and an `_f` beside it, neither yet a member (`_g` and `_sk` share slot 3 the
+/// same way, but `_sk` needs a skin set, so this pins the slot 7 pair).
+fn clash_fixture(dir: &std::path::Path) -> AppModel {
+    let a = dir.join("textures/a");
+    std::fs::create_dir_all(&a).unwrap();
+    ImageBuffer::from_fn(16, 16, |x, y| Rgb([(x * 16) as u8, (y * 16) as u8, 90u8]))
+        .save(a.join("wall.png"))
+        .unwrap();
+    for n in ["wall_cnr.png", "wall_f.png"] {
+        ImageBuffer::from_fn(16, 16, |_, _| Rgb([128u8, 128, 255]))
+            .save(a.join(n))
+            .unwrap();
+    }
+    let mut m = opened_as_the_app(dir.join("textures"), dir.join("export"));
+    for n in ["wall_cnr", "wall_f"] {
+        let k = format!("a/{n}.png");
+        if members(&m).contains(&k) {
+            m.remove_member(SET, &k).unwrap();
+            idle(&mut m);
+        }
+    }
+    m
+}
+
+#[test]
+fn a_batch_never_adds_both_cnr_and_f() {
+    let d = tempfile::tempdir().unwrap();
+    let m = clash_fixture(d.path());
+    let p = fill_proposals(&m, SET);
+    let blocked = |n: &str| {
+        p.iter()
+            .find(|r| r.name == n)
+            .and_then(|r| r.blocked.clone())
+    };
+    let free = |a: &str, b: &str| blocked(a).is_none() as u8 + blocked(b).is_none() as u8;
+    assert_eq!(free("wall_cnr.png", "wall_f.png"), 1, "{p:?}");
+}
+
 fn harness(m: AppModel) -> Harness<'static, (AppModel, State)> {
     let h = Harness::builder()
         .with_size(eframe::egui::vec2(1400.0, 900.0))

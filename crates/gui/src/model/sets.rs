@@ -1915,7 +1915,8 @@ pub fn fill_proposals(m: &AppModel, set: &str) -> Vec<FillProposal> {
         .collect();
     cands.sort_by(|a, b| a.key.cmp(&b.key));
     let name_of = |k: &str| m.item(k).map_or(k.to_string(), |i| i.name.clone());
-    let existing: Vec<SlotKind> = v.slots.keys().copied().collect();
+    // Grows with each accepted row, so a batch cannot add both halves of a slot 3/7 clash (AG99).
+    let mut existing: Vec<SlotKind> = v.slots.keys().copied().collect();
     let mut taken = BTreeSet::new();
     cands
         .into_iter()
@@ -1939,6 +1940,9 @@ pub fn fill_proposals(m: &AppModel, set: &str) -> Vec<FillProposal> {
                         .err()
                 })
             };
+            if blocked.is_none() {
+                existing.push(slot);
+            }
             Some(FillProposal {
                 item: i.key.clone(),
                 name: i.name.clone(),
