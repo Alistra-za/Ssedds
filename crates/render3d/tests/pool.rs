@@ -61,3 +61,41 @@ fn a_failing_job_is_delivered_as_an_error() {
         done.result
     );
 }
+
+/// Trace-debug #16: the pool worker drops a job whose load was replaced; only the current job answers.
+#[test]
+fn the_pool_skips_a_stale_job() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.set_async_compile(true);
+    let nif = parse(&fixture("TestNifFile_Furniture_Col_SE.nif"));
+    r.load_parsed(&nif, &|_| None);
+    let stale = r.take_jobs();
+    r.load_parsed(&nif, &|_| None);
+    let current = r.take_jobs();
+    assert!(!stale.is_empty() && stale.len() == current.len());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let pool = CompilePool::new(render3d::pool::WORKERS, move |d| {
+        let _ = tx.send(d);
+    });
+    for j in stale
+        .into_iter()
+        .chain(current.iter().map(|j| render3d::CompileJob {
+            key: j.key.clone(),
+            src: j.src.clone(),
+            vs: j.vs.clone(),
+            ps: j.ps.clone(),
+            cache_dir: j.cache_dir.clone(),
+            live: j.live.clone(),
+        }))
+    {
+        pool.submit(j);
+    }
+    for _ in 0..current.len() {
+        rx.recv_timeout(Duration::from_secs(60)).expect("a result");
+    }
+    assert!(
+        rx.recv_timeout(Duration::from_millis(1500)).is_err(),
+        "a stale job answered"
+    );
+}

@@ -452,6 +452,7 @@ fn a_replaced_loads_jobs_are_dropped_not_queued_behind_the_new_load() {
     let nif = parse(&fixture("TestNifFile_Furniture_Col_SE.nif"));
     r.load_parsed(&nif, &none);
     let sent = r.take_jobs(); // handed to the pool
+    assert!(!sent.is_empty());
     r.load_parsed(&nif, &none);
     let unsent = r.take_jobs();
     // the unsent queue holds only the new load's jobs, and the same program is queued again
