@@ -977,8 +977,8 @@ impl AppModel {
         }
     }
 
-    /// The scan ended. `completed`: it finished; `store_untouched`: it failed before `begin_scan` (PGPatcher running,
-    /// another scan holds the lock), so the store still holds what it held before.
+    /// The scan ended. `completed`: it finished; `store_untouched`: it stopped before `begin_scan` because PGPatcher
+    /// is running, so the store still holds what it held before (not Busy: another scan is mid-flight; Note CW2).
     pub fn scan_finished(&mut self, completed: bool, store_untouched: bool) {
         self.scan_store_unsettled = if store_untouched {
             self.unsettled_before_scan
