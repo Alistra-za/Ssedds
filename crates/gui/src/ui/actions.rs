@@ -654,22 +654,33 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
         }
     }
     let meshes = super::header::meshes_view_active(ctx);
-    let mut pairs: Vec<(&'static Action, Shortcut)> = actions()
+    // Trace #7: a disabled action keeps its keys in the match when an enabled action shares the key (egui ignores
+    // an extra Shift, so Ctrl+Shift+Z with nothing to redo would otherwise be Undo). It eats the key, runs nothing.
+    let mut pairs: Vec<(&'static Action, Shortcut, bool)> = actions()
         .iter()
-        .filter(|a| {
-            a.run.is_some()
-                && live(a.area, model, meshes)
-                && enabled(a, model, ctx)
-                && (!text || a.id == PALETTE)
+        .filter(|a| a.run.is_some() && live(a.area, model, meshes) && (!text || a.id == PALETTE))
+        .flat_map(|a| {
+            let on = enabled(a, model, ctx);
+            a.keys.iter().map(move |s| (a, *s, on))
         })
-        .flat_map(|a| a.keys.iter().map(move |s| (a, *s)))
         .collect();
-    pairs.sort_by_key(|(_, s)| std::cmp::Reverse(s.weight()));
-    let (a, _) = pairs
+    keep_disabled_shadows(&mut pairs);
+    pairs.sort_by_key(|(_, s, _)| std::cmp::Reverse(s.weight()));
+    let (a, _, on) = pairs
         .into_iter()
-        .find(|(_, s)| ctx.input_mut(|i| i.consume_key(s.mods, s.key)))?;
+        .find(|(_, s, _)| ctx.input_mut(|i| i.consume_key(s.mods, s.key)))?;
+    if !on {
+        return None;
+    }
     (a.run?)(model, ctx);
     Some(a.id)
+}
+
+/// Keeps every enabled pair, and a disabled pair only when an enabled one shares its key (it eats the key, trace #7)
+/// but not its exact (key, modifiers): an enabled twin of the same shortcut must win.
+fn keep_disabled_shadows<T>(pairs: &mut Vec<(T, Shortcut, bool)>) {
+    let live: Vec<Shortcut> = pairs.iter().filter(|p| p.2).map(|p| p.1).collect();
+    pairs.retain(|p| p.2 || (live.iter().any(|s| s.key == p.1.key) && !live.contains(&p.1)));
 }
 
 /// The sheet and the palette, while open. Drawn with the dialogs, so both views have them.
@@ -848,4 +859,33 @@ pub fn markdown_table() -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sc(mods: Modifiers) -> Shortcut {
+        Shortcut { mods, key: Key::Z }
+    }
+
+    #[test]
+    fn a_disabled_pair_yields_to_an_enabled_twin_but_shadows_a_different_modifier() {
+        let mut pairs = vec![
+            (1, sc(Modifiers::COMMAND), true),
+            (2, sc(Modifiers::COMMAND), false), // same (key, mods) as an enabled pair: dropped
+            (3, sc(Modifiers::COMMAND | Modifiers::SHIFT), false), // same key only: kept (trace #7)
+            (
+                4,
+                Shortcut {
+                    mods: Modifiers::NONE,
+                    key: Key::Enter,
+                },
+                false,
+            ), // key nothing enabled uses: dropped
+        ];
+        keep_disabled_shadows(&mut pairs);
+        let ids: Vec<i32> = pairs.iter().map(|p| p.0).collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
 }

@@ -602,6 +602,20 @@ fn the_edit_mod_is_matched_ignoring_case() {
     assert_eq!(placement(&copies, &mods, EDIT_MOD), Placement::Ok);
 }
 
+/// Trace 2: MO2 roots use `/` after the instance folder, the export folder picker uses `\`.
+#[test]
+fn the_edit_mod_is_matched_across_separator_spelling() {
+    let m = Path::new(r"X:\Instance\mods\sdc NIF Edits");
+    let mut edit = copy("sdc NIF Edits", 8, false);
+    edit.root = r"X:\Instance/mods\sdc NIF Edits".into();
+    let mut a = copy("A", 3, false);
+    a.root = r"X:\Instance/mods\A".into();
+    let c = [edit.clone(), a];
+    assert_eq!(pick_source(&c, m).map(|c| c.origin.as_str()), Some("A"));
+    edit.root = r"X:\Instance/mods\sdc NIF Edits\".into();
+    assert!(pick_source(&[edit], m).is_none());
+}
+
 #[test]
 fn generated_winner_warns() {
     assert_eq!(

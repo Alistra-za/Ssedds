@@ -360,3 +360,72 @@ fn game_path_of_a_textures_root_holding_mods_starts_at_the_mods_textures() {
         "textures/landscape/rock.png"
     );
 }
+
+/// A directory link `link` -> `target`: a symlink, else (Windows, no privilege) a junction. `false` when neither can
+/// be made here.
+fn make_dir_link(link: &Path, target: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+            || std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .is_ok_and(|o| o.status.success())
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+}
+
+/// Trace-debug #27 (Note CV): recursive discovery follows directory links, and a link loop is reported, not dropped.
+#[test]
+fn recursive_discovery_follows_links_and_reports_a_loop() {
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    let input = d.path().join("in");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(real.join("a.png"), b"x").unwrap();
+    if !make_dir_link(&input.join("link"), &real) {
+        eprintln!("SKIPPED: cannot create a directory link here (no privilege)");
+        return;
+    }
+    let (files, skipped) = discover_reporting(
+        std::slice::from_ref(&input),
+        &d.path().join("out"),
+        true,
+        None,
+    )
+    .unwrap();
+    let rels: Vec<_> = files.iter().map(|f| f.rel.clone()).collect();
+    assert_eq!(rels, vec![Path::new("link").join("a.png")], "{skipped:?}");
+    assert!(skipped.is_empty(), "{skipped:?}");
+
+    // A link back up to its own ancestor is a loop: one warning line, and the walk ends.
+    assert!(make_dir_link(&real.join("up"), &input));
+    let (_, skipped) = discover_reporting(&[input], &d.path().join("out"), true, None).unwrap();
+    assert!(!skipped.is_empty(), "a link loop was dropped silently");
+}
+
+/// Trace-debug #27 follow-up: a link inside the input that points at the output folder must not feed the outputs
+/// back in as inputs.
+#[test]
+fn a_link_to_the_output_folder_is_not_read_back() {
+    let d = tempfile::tempdir().unwrap();
+    let input = d.path().join("in");
+    let out = d.path().join("out");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(input.join("a.png"), b"x").unwrap();
+    std::fs::write(out.join("made.png"), b"x").unwrap();
+    if !make_dir_link(&input.join("back"), &out) {
+        eprintln!("SKIPPED: cannot create a directory link here (no privilege)");
+        return;
+    }
+    let (files, _) = discover_reporting(std::slice::from_ref(&input), &out, true, None).unwrap();
+    let rels: Vec<_> = files.iter().map(|f| f.rel.clone()).collect();
+    assert_eq!(rels, vec![Path::new("a.png")]);
+}

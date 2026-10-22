@@ -333,7 +333,7 @@ Fixes DDS header faults that need no change to the pixel data: mip count, flags,
 | `--format <format>` | The block format the files must be; a file in another format is refused. |
 | `--dry-run` | Report what would change, write nothing. |
 
-Per file, it prints one of:
+Per file, it prints one of (with `--dry-run` a file that would change prints `<file>: would patch: <fixes>` instead of the `DDS-HEADER-PATCHED` line, and no code):
 
 ```text
 <file>: header already valid; nothing to patch

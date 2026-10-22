@@ -321,11 +321,16 @@ impl ConfigFile {
                 if !crate::overrides::FIELD_PATHS.contains(&field.as_str()) {
                     return Err(bad(format!("unknown field '{field}'")));
                 }
+                // No such path means the key itself held a dot (`"alpha.policy" = ...`): refuse, never read null.
                 let value = field
                     .split('.')
                     .try_fold(&entry, |v, part| v.get(part))
                     .cloned()
-                    .unwrap_or(Value::Null);
+                    .ok_or_else(|| {
+                        bad(format!(
+                            "'{field}' is written as one quoted key; use a nested table or an unquoted dotted key"
+                        ))
+                    })?;
                 if field == crate::overrides::REENCODE_FIELD && !value.is_boolean() {
                     return Err(bad("reencode takes true or false".into()));
                 }

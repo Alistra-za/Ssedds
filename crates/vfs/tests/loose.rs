@@ -113,3 +113,19 @@ fn walk_reports_a_broken_top_level_link() {
     assert!(files.is_empty());
     assert_eq!(errs.len(), 1, "{errs:?}");
 }
+
+#[test]
+fn walk_keeps_a_facegendata_folder_outside_the_actor_path() {
+    let d = tempfile::tempdir().unwrap();
+    let mk = |p: &str| {
+        let f = d.path().join(p);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, b"x").unwrap();
+    };
+    mk("Meshes/Armor/FaceGenData/helmet.nif");
+    mk("meshes/actors/character/facegendata/facegeom/0001.nif");
+    let (files, errs) = vfs::loose::walk(d.path(), &["meshes"], &["nif"]);
+    assert!(errs.is_empty(), "{errs:?}");
+    let got: Vec<_> = files.into_iter().map(|f| f.norm).collect();
+    assert_eq!(got, ["meshes/armor/facegendata/helmet.nif"]);
+}

@@ -194,6 +194,16 @@ fn tab_accepts_the_ghost_and_with_no_ghost_moves_focus() {
     assert_eq!(free(&h), "rocks/big");
 }
 
+/// Trace #8 (AO2): Shift+Tab leaves the box; it never takes the ghost.
+#[test]
+fn shift_tab_does_not_accept_the_ghost() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    clear_and_type(&mut h, "rocks");
+    key(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert_ne!(free(&h), "rocks/", "Shift+Tab took the ghost");
+}
+
 #[test]
 fn enter_commits_one_step_esc_reverts_and_invalid_text_does_not_commit() {
     let (_d, mut h) = harness();

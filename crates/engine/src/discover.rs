@@ -119,7 +119,7 @@ pub fn discover_reporting(
     let out_abs = std::path::absolute(skip.unwrap_or(output_root))?;
     let mut files = vec![];
     let mut skipped = vec![];
-    // Trace-debug #13 (Note BQ): a file reached through two inputs is kept once, through the first.
+    // Note BQ1: a file reached through two inputs is kept once, through the first.
     let mut seen = std::collections::HashSet::new();
     let mut first_sight = |p: &Path| {
         seen.insert(
@@ -133,17 +133,30 @@ pub fn discover_reporting(
             // Note BC (audit #3): only an output root strictly inside this folder is skipped; in place skips nothing.
             let in_abs = std::path::absolute(input)?;
             let skip_out = is_under(&out_abs, &in_abs) && !is_under(&in_abs, &out_abs);
+            // A followed link into the output folder must be skipped too: compare resolved paths (Note CV6).
+            // shortcut: only folder links are resolved; a file link into the output folder is still read.
+            let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            let (in_real, out_real) = (real(&in_abs), real(&out_abs));
+            let skip_real = !is_under(&in_real, &out_real);
             let max_depth = if recursive { usize::MAX } else { 1 };
             let walker = walkdir::WalkDir::new(input)
                 .min_depth(1)
+                .follow_links(true) // as vfs loose.rs does; a loop or dead link is an Err below (Note CV)
                 .max_depth(max_depth);
+            // With links followed, walkdir's open-folder errors carry no path: remember the folder kept at each depth
+            // so the unreadable child can be named (see unreadable_child).
+            let dirs = std::cell::RefCell::new(vec![input.clone()]);
             let keep = |e: &walkdir::DirEntry| {
                 if !e.file_type().is_dir() {
                     return true;
                 }
+                let mut v = dirs.borrow_mut();
+                v.truncate(e.depth());
+                v.push(e.path().to_path_buf());
                 e.file_name() != SDC_DIR
                     && !(skip_out
                         && std::path::absolute(e.path()).is_ok_and(|a| is_under(&a, &out_abs)))
+                    && !(skip_real && is_under(&real(e.path()), &out_real))
             };
             for e in walker.into_iter().filter_entry(keep) {
                 let e = match e {
@@ -154,7 +167,15 @@ pub fn discover_reporting(
                         if err.depth() == 0 {
                             return Err(std::io::Error::other(err));
                         }
-                        skipped.push(err.to_string());
+                        skipped.push(if err.path().is_none() && err.loop_ancestor().is_none() {
+                            {
+                                let v = dirs.borrow();
+                                let parent = &v[err.depth().saturating_sub(1).min(v.len() - 1)];
+                                format!("{}: {err}", unreadable_child(parent))
+                            }
+                        } else {
+                            err.to_string()
+                        });
                         continue;
                     }
                 };
@@ -187,6 +208,23 @@ pub fn discover_reporting(
     Ok((files, skipped))
 }
 
+/// The sub-folders of `parent` that cannot be opened, joined; `parent` itself when none is found (walkdir does not
+/// say which one failed once it follows links).
+fn unreadable_child(parent: &Path) -> String {
+    let bad: Vec<String> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && std::fs::read_dir(p).is_err())
+        .map(|p| p.display().to_string())
+        .collect();
+    if bad.is_empty() {
+        parent.display().to_string()
+    } else {
+        bad.join(", ")
+    }
+}
 /// M6 Track F3b: apply the project's `[inputs]` aliases. A file whose project-relative path matches a key (as a
 /// `[files]` key does) takes the alias as its `rel`, `game_path` and output, and keeps its real `rel` in
 /// `real_rel`; its `path` (what is decoded) is unchanged. Call it right after discovery, before

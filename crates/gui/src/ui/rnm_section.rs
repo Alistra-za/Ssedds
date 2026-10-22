@@ -76,7 +76,7 @@ fn row(
         thumb(ui, model, &r.path, None);
         ui.label(r.label);
         let sid = egui::Id::new(("rnm-strength", key, id));
-        if let Some(v) = drag_slider(ui, sid, r.strength, 0.0..=2.0, "") {
+        if let Some(v) = drag_slider(ui, model.busy(), sid, r.strength, 0.0..=2.0, "") {
             let v = json!(v);
             edits.push((key.into(), format!("rnm.{id}.strength"), Some(v)));
         }
@@ -135,7 +135,14 @@ fn bent(ui: &mut egui::Ui, model: &AppModel, key: &str, job: &ResolvedJob, edits
             edits.push((key.into(), "rnm.bent.mode".into(), Some(json!(mode))));
         }
         let pid = egui::Id::new(("rnm-ao-power", key));
-        if let Some(p) = drag_slider(ui, pid, job.profile.rnm.ao_power(), 0.1..=8.0, "AO power") {
+        if let Some(p) = drag_slider(
+            ui,
+            model.busy(),
+            pid,
+            job.profile.rnm.ao_power(),
+            0.1..=8.0,
+            "AO power",
+        ) {
             let p = json!(p);
             edits.push((key.into(), "rnm.bent.ao_power".into(), Some(p)));
         }
@@ -217,26 +224,40 @@ pub fn rnm_section(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
 }
 
 /// A slider that returns its value once per gesture (drag release, click or key press), not every frame; the
-/// value in flight lives in `ui.data` under `id`.
+/// value in flight lives in `ui.data` under `id`. As settings_panel::commit_slider does, a value already sent
+/// (`committed`) stays on show while the re-plan runs (`busy`), so the slider does not snap back after release.
 fn drag_slider(
     ui: &mut egui::Ui,
+    busy: bool,
     id: egui::Id,
     current: f64,
     range: std::ops::RangeInclusive<f64>,
     text: &str,
 ) -> Option<f64> {
-    let pending: Option<f64> = ui.data(|d| d.get_temp(id));
-    let mut v = pending.unwrap_or(current);
+    let mut pending: Option<(f64, bool)> = ui.data(|d| d.get_temp(id));
+    if pending.is_some_and(|(v, sent)| v == current || (sent && !busy)) {
+        pending = None;
+    }
+    let mut v = pending.map_or(current, |p| p.0);
     let r = ui.add(egui::Slider::new(&mut v, range.clone()).text(text));
     if r.changed() {
-        ui.data_mut(|d| d.insert_temp(id, v));
+        pending = Some((v, false));
     }
+    let mut out = None;
     if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        ui.data_mut(|d| d.remove_temp::<f64>(id));
         let v = v.clamp(*range.start(), *range.end());
-        return (v != current).then_some(v);
+        if v != current {
+            out = Some(v);
+            pending = Some((v, true));
+        }
     }
-    None
+    ui.data_mut(|d| match pending {
+        Some(p) => {
+            d.insert_temp(id, p);
+        }
+        None => d.remove::<(f64, bool)>(id),
+    });
+    out
 }
 
 /// The blended preview's texture: one slot, holding the `Arc` it was made from (so its pointer cannot be reused by

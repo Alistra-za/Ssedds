@@ -354,7 +354,7 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
                 "rename: a file name only, no folders ({r:?})"
             )));
         }
-        check_rel_path(r, "rename")?;
+        crate::model::sets::check_named(r, "rename").map_err(PrefixError)?;
     }
     let base = matched_prefix(s, derived)?;
     Ok(match rename {

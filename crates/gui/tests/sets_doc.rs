@@ -428,3 +428,94 @@ fn removing_one_of_two_same_stem_files_keeps_the_shared_add_key() {
     assert_eq!(e.add, ["a/foo"], "{e:?}");
     assert_eq!(e.remove, ["a/foo.tga"], "{e:?}");
 }
+
+/// Trace #30 (AG100 gap): a hand-written extension-less `remove` key that also names a sibling cannot be lifted
+/// outright. It becomes an exact `remove` for the sibling, so the moved file is back and the sibling stays out.
+#[test]
+fn moving_a_file_back_splits_a_shared_extensionless_remove() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/f.png", "a/f.tga"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.tga"], "{e:?}");
+    assert!(e.add.is_empty(), "{e:?}");
+}
+
+/// Fix D2 I1: a folder `a/f/` beside `a/f.png` is no same-stem sibling, so the shared key still goes.
+#[test]
+fn a_folder_with_the_same_stem_is_no_sibling_when_moving_back() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a/f")).unwrap();
+    for f in ["a/f.png", "a/f.tga"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.tga"], "{e:?}");
+}
+
+/// Fix D2 M1: the expanded `remove` holds image siblings only, sorted, each once.
+#[test]
+fn the_split_remove_is_sorted_image_only_and_has_no_duplicates() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\", \"a/f.tga\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/f.png", "a/f.tga", "a/f.bmp", "a/f.txt", "a/f.json"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.bmp", "a/f.tga"], "{e:?}");
+}
+
+/// Fix D2 M3: an equal `set_shader` write on a sets document is no edit.
+#[test]
+fn an_equal_shader_write_leaves_the_sets_document_clean() {
+    let (_d, mut s) = doc(None);
+    s.set_shader("a/one", Some(engine::shader::Shader::Default));
+    assert!(s.is_dirty());
+    s.save(false).unwrap();
+    s.set_shader("a/one", Some(engine::shader::Shader::Default));
+    assert!(!s.is_dirty(), "an equal write");
+    s.set_shader("a/one", None);
+    assert!(s.is_dirty(), "a change still dirties");
+}
+
+/// Final review I1: a `.dds` beside `a/f.png` is a same-stem sibling too (discovery admits DDS inputs).
+#[test]
+fn a_dds_beside_the_moved_file_stays_removed() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nremove = [\"a/f\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/f.png", "a/f.dds"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.add_member("a/new", "a/f.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.remove, ["a/f.dds"], "{e:?}");
+}
+
+/// The same pair through `names_only`: removing the png from another set keeps the shared `add` key for the dds.
+#[test]
+fn a_shared_add_key_is_kept_when_a_dds_sibling_exists() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nadd = [\"a/foo\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/foo.png", "a/foo.dds"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.remove_member("a/new", "a/foo.png");
+    let e = &s.entries()[0];
+    assert_eq!(e.add, ["a/foo"], "{e:?}");
+    assert_eq!(e.remove, ["a/foo.png"], "{e:?}");
+}

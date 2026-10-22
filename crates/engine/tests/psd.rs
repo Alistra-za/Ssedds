@@ -361,3 +361,29 @@ fn rejects_over_16384_from_the_header() {
         Err(LoadError::TooLarge { dim: 16385, .. })
     ));
 }
+
+/// Trace-debug #26: a header-only 16384 x 16384 PSD (raw, or RLE with a full count table) is refused as truncated
+/// before the ~4 GiB float buffer is filled, so it fails in milliseconds.
+#[test]
+fn a_header_only_psd_is_refused_before_the_float_buffer_is_filled() {
+    let d = tempfile::tempdir().unwrap();
+    let empty = || vec![vec![], vec![], vec![]];
+    let raw = Psd::rgb(16384, 16384, 8, empty()).write(d.path(), "raw.psd");
+    let mut rle = Psd::rgb(16384, 16384, 8, empty());
+    rle.compression = 1;
+    let mut b = rle.bytes();
+    for _ in 0..3 * 16384 {
+        b.extend_from_slice(&16384u16.to_be_bytes()); // every row claims a full literal run
+    }
+    let rle = d.path().join("rle.psd");
+    std::fs::write(&rle, b).unwrap();
+    for p in [raw, rle] {
+        let t = std::time::Instant::now();
+        assert!(decode_msg(&p).contains("truncated"));
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(500),
+            "{:?}",
+            t.elapsed()
+        );
+    }
+}

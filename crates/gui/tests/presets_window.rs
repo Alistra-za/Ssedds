@@ -168,6 +168,36 @@ fn delete_names_the_file_and_broken_files_are_listed_with_open_folder() {
     h.get_by_label_contains("other-name.toml?");
 }
 
+/// Trace #22: the Delete confirmation belongs to the preset it was asked on, not to the next one picked.
+#[test]
+fn the_delete_question_is_per_preset() {
+    let d = tempfile::tempdir().unwrap();
+    for id in ["aa", "bb"] {
+        std::fs::write(
+            d.path().join(format!("{id}.toml")),
+            format!(
+                "schema_version = 1\nid = \"{id}\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    let mut m = with_folder(d.path());
+    m.presets_model().select("aa");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Delete…").click();
+    h.run();
+    h.get_by_label_contains("aa.toml?");
+    h.state_mut().presets_model().select("bb");
+    h.run();
+    h.run();
+    assert!(
+        h.query_by_label_contains("bb.toml?").is_none(),
+        "armed for bb"
+    );
+    h.get_by_label("Delete…");
+}
+
 #[test]
 fn the_orm_example_is_a_read_only_branch_under_rmaos() {
     let mut m = AppModel::placeholder(GuiSettings::default());

@@ -1002,3 +1002,16 @@ fn config_with_rfaos_and_skin_rfaos_is_refused() {
     r.add_toml(&format!("{head}[subtypes.rfaos]\nformat = \"bc3\"\n"))
         .unwrap();
 }
+
+/// Trace-debug #15: a quoted dotted key under `[files."x"]` used to pass the field check and then read as null (the
+/// value silently dropped). It is refused with the way to write it; the unquoted form still works.
+#[test]
+fn a_quoted_dotted_files_key_is_refused_not_ignored() {
+    let quoted =
+        ConfigFile::parse("[files.\"a.dds\"]\n\"alpha.policy\" = \"cutout\"\n", "t").unwrap();
+    let e = quoted.file_entries().unwrap_err().to_string();
+    assert!(e.contains("alpha.policy") && e.contains("nested"), "{e}");
+    let ok = ConfigFile::parse("[files.\"a.dds\"]\nalpha.policy = \"cutout\"\n", "t").unwrap();
+    let (o, _) = ok.file_entries().unwrap();
+    assert_eq!(o[0].value, json!("cutout"));
+}

@@ -497,7 +497,15 @@ pub fn views(m: &AppModel) -> Arc<Vec<SetView>> {
     v
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test probe: how many deep clones `set_views` made on this thread.
+    pub static SET_VIEWS_CLONES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub fn set_views(m: &AppModel) -> Vec<SetView> {
+    #[cfg(test)]
+    SET_VIEWS_CLONES.with(|c| c.set(c.get() + 1));
     // shortcut: a clone per call for the ~20 callers that take ownership; switch them to `views` if it shows in a profile.
     (*views(m)).clone()
 }
@@ -807,11 +815,16 @@ pub fn renamed_output(job_key: &str, name: &str) -> Option<PathBuf> {
 /// F3b: whether `name` can be an output base name. A name ending in a map suffix (`wall_n`) is refused: the
 /// suffix belongs to each output, and the name would be read back as a base plus that suffix.
 pub fn check_output_name(name: &str) -> Result<(), String> {
-    check_file_name(name, "output name").map_err(|e| e.0)?;
+    check_named(name, "output name")
+}
+
+/// `check_output_name` for a named field (the PGPatcher `rename` box shares it).
+pub fn check_named(name: &str, field: &str) -> Result<(), String> {
+    check_file_name(name, field).map_err(|e| e.0)?;
     let base = base_of(name);
     if base.len() < name.len() {
         return Err(format!(
-            "output name: ends in {}, a map suffix; each output keeps its own ({name:?})",
+            "{field}: ends in {}, a map suffix; each output keeps its own ({name:?})",
             &name[base.len()..]
         ));
     }
@@ -1802,6 +1815,11 @@ impl AppModel {
         }
         let outcome = if self.set_of_item(&key).is_some_and(|f| same_id(&f.id, set)) {
             DropOutcome::Joined
+        } else if let Some(why) = self.view_of(set).and_then(|t| {
+            // The slot 3/7 clash guard `drop_on_set` applies (AG99).
+            slot_conflict(&t.slots.keys().copied().collect::<Vec<_>>(), slot_of(it)?)
+        }) {
+            DropOutcome::Refused(why)
         } else {
             self.drop_choice(&key, set, DropChoice::Move)
         };
@@ -1897,7 +1915,8 @@ pub fn fill_proposals(m: &AppModel, set: &str) -> Vec<FillProposal> {
         .collect();
     cands.sort_by(|a, b| a.key.cmp(&b.key));
     let name_of = |k: &str| m.item(k).map_or(k.to_string(), |i| i.name.clone());
-    let existing: Vec<SlotKind> = v.slots.keys().copied().collect();
+    // Grows with each accepted row, so a batch cannot add both halves of a slot 3/7 clash (AG99).
+    let mut existing: Vec<SlotKind> = v.slots.keys().copied().collect();
     let mut taken = BTreeSet::new();
     cands
         .into_iter()
@@ -1921,6 +1940,9 @@ pub fn fill_proposals(m: &AppModel, set: &str) -> Vec<FillProposal> {
                         .err()
                 })
             };
+            if blocked.is_none() {
+                existing.push(slot);
+            }
             Some(FillProposal {
                 item: i.key.clone(),
                 name: i.name.clone(),

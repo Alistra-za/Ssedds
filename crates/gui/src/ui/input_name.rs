@@ -201,15 +201,18 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                 .cursor
                 .char_range()
                 .is_none_or(|r| r.primary.index.0 >= free.chars().count());
-            let took = if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+            // Trace #8: egui matches Tab with an extra Shift, so Shift+Tab is taken before plain Tab.
+            let back = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
+            if back {
+                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
+            }
+            let took = if back {
+                None
+            } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
                 tab_part(&paths, &text)
             } else if at_end && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowRight)) {
                 ghost.clone()
             } else {
-                // Tab is held in the box while a ghost shows; Shift+Tab still leaves it.
-                if ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab)) {
-                    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
-                }
                 None
             };
             if let Some(t) = took {

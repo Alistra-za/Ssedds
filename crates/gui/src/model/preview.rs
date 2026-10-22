@@ -76,6 +76,8 @@ pub struct PreviewModel {
     pending_since: Option<Instant>,
     source_pending: bool,
     encode_pending: bool,
+    /// An Encode now pressed during an export: it runs once the export is done, Live encode or not.
+    encode_after_export: bool,
     inflight_source: Option<(u64, CancelToken)>,
     inflight_encode: Option<(u64, CancelToken)>,
     next_token: u64,
@@ -107,6 +109,7 @@ impl PreviewModel {
             pending_since: None,
             source_pending: false,
             encode_pending: false,
+            encode_after_export: false,
             inflight_source: None,
             inflight_encode: None,
             next_token: 0,
@@ -135,7 +138,7 @@ impl PreviewModel {
 
     /// True while a debounced request waits for its time (the UI keeps frames coming).
     pub fn scheduled(&self) -> bool {
-        self.source_pending || self.encode_pending
+        self.source_pending || self.encode_pending || self.encode_after_export
     }
 
     /// True while a worker is reading or encoding for the preview.
@@ -505,8 +508,12 @@ impl AppModel {
             self.start_source();
         }
         let p = &mut self.preview;
-        if p.encode_pending && p.live && self.export.running.is_none() {
+        if (p.encode_pending && p.live || p.encode_after_export) && self.export.running.is_none() {
             p.encode_pending = false;
+            p.encode_after_export = false;
+            if self.preview.base_notice.as_deref() == Some(WAITS_FOR_EXPORT) {
+                self.set_base_notice(None);
+            }
             self.start_encode();
         }
         if !self.preview.scheduled() {
@@ -527,10 +534,13 @@ impl AppModel {
             return;
         }
         if self.export.running.is_some() {
+            // The notice says it waits, so it does: `tick` encodes once the export is done (trace #32).
+            self.preview.encode_after_export = true;
             self.set_base_notice(Some(WAITS_FOR_EXPORT.to_string()));
             return;
         }
         self.preview.encode_pending = false;
+        self.preview.encode_after_export = false;
         self.start_encode();
     }
 

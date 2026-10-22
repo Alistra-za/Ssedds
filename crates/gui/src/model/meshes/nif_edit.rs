@@ -170,7 +170,7 @@ pub const NO_EXPORT_FOLDER: &str =
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
     copies
         .iter()
-        .find(|c| !c.derived && !c.root.eq_ignore_ascii_case(&edit_mod.to_string_lossy()))
+        .find(|c| !c.derived && !same_dir(Path::new(&c.root), edit_mod))
 }
 
 pub fn generated_warning(origin: &str) -> Option<String> {

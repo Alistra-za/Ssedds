@@ -50,7 +50,12 @@ pub fn walk(root: &Path, top: &[&str], ext: &[&str]) -> (Vec<LooseFile>, Vec<(St
             .follow_links(true)
             .into_iter()
             .filter_entry(|e| {
-                !(e.file_type().is_dir() && e.file_name().eq_ignore_ascii_case("facegendata"))
+                // prune only the actor facegen folder (is_facegen), not any folder with that name
+                !(e.file_type().is_dir()
+                    && e.file_name().eq_ignore_ascii_case("facegendata")
+                    && e.path().strip_prefix(root).is_ok_and(|r| {
+                        is_facegen(&format!("{}/", canon_mesh(&r.to_string_lossy())))
+                    }))
             });
         for e in it {
             let e = match e {

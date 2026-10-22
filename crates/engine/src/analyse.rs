@@ -177,7 +177,8 @@ pub fn analyse_with(img: &Rgba32F, info: &SourceInfo, hints: AnalyseHints) -> An
         s.steep = hints.steps.map(|c| crate::checks::steep_share(img, c));
     }
     let ln = len_n.max(1) as f64;
-    let all_255 = hist.eq255 as usize == count;
+    // A NaN texel has code 0 but no value: it must not turn all-255 into near-opaque (trace #6).
+    let all_255 = hist.eq255 > 0 && (hist.eq255 + nonfinite[3]) as usize == count;
     let near_opaque = info.has_alpha && ch[3].min >= NEAR_OPAQUE_ALPHA - NEAR_OPAQUE_EPS;
     let alpha = if !info.has_alpha {
         AlphaContent::None
@@ -509,5 +510,20 @@ mod tests {
         let a = analyse(&img, &src);
         assert_eq!(a.alpha, AlphaContent::Constant255);
         assert!(a.alpha_near_opaque);
+    }
+
+    /// Trace-debug #6: one NaN alpha texel on an otherwise opaque float source is not "near-opaque" (its code is 0,
+    /// which broke the all-255 test while the finite minimum stayed 1.0).
+    #[test]
+    fn a_nan_alpha_texel_on_an_opaque_source_is_not_near_opaque() {
+        let src = SourceInfo {
+            is_float: true,
+            ..RGBA8
+        };
+        let mut img = Rgba32F::new(2, 1, [0.5, 0.5, 0.5, 1.0]);
+        img.px[0][3] = f32::NAN;
+        let a = analyse(&img, &src);
+        assert_eq!(a.alpha, AlphaContent::Constant255);
+        assert!(!a.alpha_near_opaque);
     }
 }

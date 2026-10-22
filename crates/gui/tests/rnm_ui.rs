@@ -99,6 +99,33 @@ fn moving_a_layer_writes_the_order_and_a_redraw_writes_nothing() {
     assert_eq!(v[1], json!("bump"));
 }
 
+/// Trace #23: after a strength slider settles, it keeps the new value until the re-plan lands (no snap back).
+#[test]
+fn the_rnm_strength_slider_does_not_snap_back_while_the_plan_runs() {
+    use eframe::egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT as _;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel(fixture(d.path(), &FULL));
+    h.run();
+    let strength = |h: &Harness<'static, AppModel>| -> Vec<f64> {
+        h.query_all_by_role(Role::Slider)
+            .filter(|n| n.accesskit_node().max_numeric_value() == Some(2.0))
+            .filter_map(|n| n.accesskit_node().numeric_value())
+            .collect()
+    };
+    let before = strength(&h);
+    assert!(!before.is_empty(), "no RNM strength slider");
+    h.query_all_by_role(Role::Slider)
+        .find(|n| n.accesskit_node().max_numeric_value() == Some(2.0))
+        .unwrap()
+        .focus();
+    h.key_press(eframe::egui::Key::ArrowRight);
+    h.run_steps(1);
+    h.run_steps(1);
+    assert!(h.state().busy(), "the re-plan should still be running");
+    assert_ne!(strength(&h), before, "the slider snapped back");
+}
+
 #[test]
 fn ao_note_shows_for_bent() {
     let d = tempfile::tempdir().unwrap();
