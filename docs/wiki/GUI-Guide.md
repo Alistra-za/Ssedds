@@ -67,7 +67,7 @@ A DDS file in the folder shows its header check, a *Tag on patch* choice and **P
 
 ![Grouped bar chart of mean RGB and alpha PSNR for BC3 and the BC7 weightings on three texture classes. On colour with smooth alpha, Alpha ×8 gives 51.40 dB alpha against 47.24 for BC3 and keeps 46.60 dB RGB against 41.00. On a normal map or packed rmaos with specular in alpha, BC3 keeps the highest alpha, and BC7 alpha rises with the weight.](../img/bc7-alpha-weights.svg)
 
-Takeaway: for colour with smooth alpha, Alpha ×8 beats BC3 on alpha and keeps 5.6 dB more RGB. For specular in the alpha of a normal map or an `_rmaos`, BC3 still has the highest alpha. BC7 closes the gap as the weight rises, and it keeps the better RGB or normals. The "w4" row was measured in the study but is not a dropdown option. Source: local study, 2026-10-21, and [DECISIONS Note CP](../DECISIONS.md).
+Takeaway: for colour with smooth alpha, Alpha ×8 beats BC3 on alpha and keeps 5.6 dB more RGB. For specular in the alpha of a normal map or an `_rmaos`, BC3 still has the highest alpha. BC7 closes the gap as the weight rises, and it keeps the better RGB or normals. The "w4" row was measured in the study but is not a dropdown option. Source: local study, 2026-10-21, and [DECISIONS Note CP](../DECISIONS.md). The full results (SSIM, max error, exact 0 and 255, per texture class) are in [Research](Research.md#bc3-against-bc7-alpha-weights-study-results).
 
 ### Sets (between Textures and the centre)
 

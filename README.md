@@ -69,7 +69,7 @@ For BC7 data maps with alpha, see the [BC7 weighting](docs/wiki/GUI-Guide.md#bc7
 
 ### Other formats
 
-![Grouped bar chart of PSNR in dB for BC1, BC3, BC4 and BC6H, one bar per encoder. rgbcx is best on BC1 and BC4 and within 0.09 dB of NVTT 3 on BC3. Intel ISPC is best on BC6H. Missing values are marked not measured.](docs/img/encoder-formats.svg)
+![Bar chart of PSNR in dB grouped by compressor, one striped bar per format (BC1, BC3, BC4, BC6H). rgbcx is best on BC1 and BC4 and within 0.09 dB of NVTT 3 on BC3. Intel ISPC is best on BC6H. Missing values are marked not measured.](docs/img/encoder-formats.svg)
 
 † Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.
 

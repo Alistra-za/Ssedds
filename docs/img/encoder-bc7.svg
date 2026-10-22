@@ -15,6 +15,7 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .z{stroke:var(--mute);stroke-width:1;fill:none}
 .lt{opacity:.5}
 .mu{fill:var(--mute)}
+.pl{fill:var(--bg)}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
 <rect class="bg" width="780" height="536"/>
 <text x="10.0" y="20.0" class="t" text-anchor="start">BC7 encoders: quality against bc7e u6, with speed</text>

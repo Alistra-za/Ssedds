@@ -30,6 +30,7 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .z{stroke:var(--mute);stroke-width:1;fill:none}
 .lt{opacity:.5}
 .mu{fill:var(--mute)}
+.pl{fill:var(--bg)}
 """ % (
     "".join("--c%d:%s;" % (i, s[0]) for i, s in enumerate(SLOTS)),
     "".join("--c%d:%s;" % (i, s[1]) for i, s in enumerate(SLOTS)),
@@ -144,44 +145,76 @@ def chart_bc7():
 
 # ------------------------------------------------- chart 2: other formats, dB
 def chart_formats():
-    E = [("rgbcx", BLUE), ("NVTT 3", AQUA), ("Compressonator", VIOLET),
-         ("Intel ISPC", ORANGE), ("texconv (CPU)", MAGENTA)]
-    NM, NMD = "not measured", "not measured†"
-    G = [  # title, values in encoder order, labels (copied from the table)
-        ("BC1 colour (RGB PSNR)", [39.85, 39.74, 39.05, 38.11, 37.41]),
-        ("BC3 colour + alpha (premultiplied PSNR)", [49.20, 49.29, 48.75, 48.02, 48.07]),
-        ("BC4 masks (PSNR)", [45.59, 45.05, 45.19, 43.70, 43.94]),
-        ("BC6H HDR (multi-exposure PSNR)", [None, 48.00, None, 50.38, 49.62]),
+    """One chart: a group per compressor, one bar per format. Pattern = format."""
+    FORMATS = ["BC1 RGB", "BC3 premultiplied", "BC4", "BC6H multi-exposure"]
+    # one fill per format; pattern lines are drawn in the page colour over the bar colour
+    PAT = [None, "pd", "ph", "px"]
+    G = [  # compressor, colour, values in FORMATS order (copied from the table)
+        ("rgbcx", BLUE, [39.85, 49.20, 45.59, None]),
+        ("NVTT 3", AQUA, [39.74, 49.29, 45.05, 48.00]),
+        ("Compressonator", VIOLET, [39.05, 48.75, 45.19, None]),
+        ("Intel ISPC", ORANGE, [38.11, 48.02, 43.70, 50.38]),
+        ("texconv (CPU)", MAGENTA, [37.41, 48.07, 43.94, 49.62]),
     ]
-    b = text(10, 20, "Best encoder per format, PSNR in dB", "t")
-    b += text(10, 38, "Higher is better. Bars start at 35 dB, not zero.", "s")
-    y = 56
-    x0, x1, vmin, vmax = 150, 560, 35, 51
-    sections = ""
-    start = y
-    for title, vals in G:
-        sections += text(10, y + 10, title, "b")
-        rows = []
-        for (n, c), v in zip(E, vals):
-            lab = NMD if (v is None and n == "Compressonator") else NM if v is None else "%.2f" % v
-            rows.append(dict(name=n, vals=[v], labels=[lab], colors=[c]))
-        body, bot = hbars(y + 18, rows, 1, x0, x1, vmin, vmax, vmin, [35, 40, 45, 50],
-                          bh=14, gap=6, tick_labels=False)
-        sections += body
-        y = bot + 18
-    # gridlines come from each group; one tick row under the last group
+    x0, x1, vmin, vmax = 30, 660, 35, 51
+    bh, step = 12, 15
+
+    def sx(v):
+        return x0 + (v - vmin) / (vmax - vmin) * (x1 - x0)
+
+    defs = (
+        '<defs>'
+        '<pattern id="pd" width="6" height="6" patternUnits="userSpaceOnUse" '
+        'patternTransform="rotate(45)"><rect width="2.5" height="6" class="pl"/></pattern>'
+        '<pattern id="ph" width="6" height="5" patternUnits="userSpaceOnUse">'
+        '<rect width="6" height="2" class="pl"/></pattern>'
+        '<pattern id="px" width="6" height="6" patternUnits="userSpaceOnUse">'
+        '<rect width="6" height="1.6" class="pl"/><rect width="1.6" height="6" class="pl"/>'
+        '</pattern></defs>\n'
+    )
+    b = text(10, 20, "Best encoder per format: PSNR in dB, grouped by compressor", "t")
+    b += text(10, 38, "Higher is better. Bars start at 35 dB, not zero. The stripe shows the format.",
+              "s")
+    lx = 10
+    for i, name in enumerate(FORMATS):
+        b += '<rect x="%d" y="48" width="14" height="12" class="mu"/>\n' % lx
+        if PAT[i]:
+            b += '<rect x="%d" y="48" width="14" height="12" fill="url(#%s)"/>\n' % (lx, PAT[i])
+        b += text(lx + 20, 58, name, "s")
+        lx += 20 + 7 * len(name) + 18
+    y = 78
+    top = y
+    gh = 4 * step + 22
+    bot = top + gh * len(G)
     for t in (35, 40, 45, 50):
-        sections += text(x0 + (t - vmin) / (vmax - vmin) * (x1 - x0), y - 4, str(t), "m", "middle")
-    b += sections
-    b += text(10, y + 20, "† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB "
+        b += '<path class="g" d="M%.1f %dV%d"/>\n' % (sx(t), top, bot - 4)
+        b += text(sx(t), bot + 8, str(t), "m", "middle")
+    for gi, (name, c, vals) in enumerate(G):
+        gy = top + gi * gh
+        b += text(10, gy + 10, name, "b")
+        for k, v in enumerate(vals):
+            by = gy + 16 + k * step
+            if v is None:
+                lab = "not measured†" if (name == "Compressonator" and k == 3) else "not measured"
+                b += text(sx(vmin) + 6, by + bh - 2, lab, "s")
+                continue
+            w = sx(v) - sx(vmin)
+            b += '<rect x="%.1f" y="%d" width="%.1f" height="%d" class="f%d"/>\n' % (
+                sx(vmin), by, w, bh, c)
+            if PAT[k]:
+                b += '<rect x="%.1f" y="%d" width="%.1f" height="%d" fill="url(#%s)"/>\n' % (
+                    sx(vmin), by, w, bh, PAT[k])
+            b += text(sx(v) + 5, by + bh - 2, "%.2f" % v, "s")
+    b += text(10, bot + 24, "† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB "
               "below ISPC.", "s")
-    b += text(10, y + 36, "BC5 normals and BC6H highlight share are not dB; the full table "
+    b += text(10, bot + 48, "BC5 normals and BC6H highlight share are not dB; the full table "
               "is in the wiki (Research).", "s")
-    desc = ("Grouped horizontal bars of PSNR in dB for BC1, BC3, BC4 and BC6H, one bar per "
-            "encoder. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 "
+    desc = ("Bar chart of PSNR in dB, grouped by compressor, one bar per format (BC1 RGB, BC3 "
+            "premultiplied, BC4, BC6H multi-exposure), with the format shown by a stripe "
+            "pattern. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 "
             "on BC3 (49.20 against 49.29). Intel ISPC is best on BC6H (50.38). rgbcx and "
             "Compressonator BC6H values were not measured. texconv CPU is last or near last.")
-    return svg(780, y + 46, "Encoders compared by format, PSNR", desc, b)
+    return svg(780, bot + 58, "Encoders compared by format, PSNR", desc, defs + b)
 
 
 # ------------------------------------- chart 3: BC3 against BC7 alpha weights
@@ -225,10 +258,47 @@ def chart_alpha_weights():
     return svg(780, y + 6, "BC3 against BC7 alpha weights", desc, b)
 
 
+# ------------------------------------- chart 4: SSIM and VIF, BC7 opaque colour
+def chart_ssim_vif():
+    # name, colour, dSSIMx1000 label, dVIFx100 label: copied from the study's section 4.1
+    T = [
+        ("bc7e u6 perceptual", BLUE, 1.63, 3.10, "+1.63", "+3.10"),
+        ("bc7e u5", BLUE, -0.058, -0.10, M + "0.058", M + "0.10"),
+        ("Compressonator q1.0 (n = 7)", VIOLET, -0.12, -0.16, M + "0.12", M + "0.16"),
+        ("NVTT Production", AQUA, -0.180, -0.46, M + "0.180", M + "0.46"),
+        ("ISPC slow", ORANGE, -0.28, -0.49, M + "0.28", M + "0.49"),
+        ("bc7e u4", BLUE, -0.27, -0.54, M + "0.27", M + "0.54"),
+        ("ISPC basic", ORANGE, -0.32, -0.62, M + "0.32", M + "0.62"),
+        ("NVTT Normal (GPU)", AQUA, -0.80, -1.74, M + "0.80", M + "1.74"),
+        ("texconv -bc x", MAGENTA, -0.98, -2.05, M + "0.98", M + "2.05"),
+        ("texconv GPU", MAGENTA, -1.23, -2.40, M + "1.23", M + "2.40"),
+    ]
+    assert [r[3] for r in T] == sorted((r[3] for r in T), reverse=True)  # sorted by VIF
+    b = text(10, 20, "BC7 opaque colour: SSIM and VIF against bc7e u6", "t")
+    b += text(10, 38, "Mean difference over 99 images, on luma. Higher is better; 0 is bc7e u6.", "s")
+    b += text(180, 66, "ΔSSIM × 10³", "b")
+    b += text(520, 66, "ΔVIF × 10²", "b")
+    r1 = [dict(name=n, vals=[s], labels=[sl], colors=[c]) for n, c, s, v, sl, vl in T]
+    r2 = [dict(name="", vals=[v], labels=[vl], colors=[c]) for n, c, s, v, sl, vl in T]
+    kw = dict(bh=14, gap=8)
+    p1, bot = hbars(76, r1, 1, 180, 430, -1.9, 2.0, 0, [-1, 0, 1, 2], **kw)
+    p2, _ = hbars(76, r2, 1, 520, 770, -3.0, 4.2, 0, [-2, 0, 2, 4], **kw)
+    b += p1 + p2
+    b += text(10, bot + 40, "Bars below zero are worse than bc7e u6 (Compressonator, n = 7, is a tie). "
+              "The full tables are in the wiki (Research).", "s")
+    desc = ("Two bar charts of the mean SSIM and VIF difference against bc7e u6 on 99 real colour "
+            "textures. bc7e perceptual is the only encoder above zero, at plus 1.63 SSIM and plus "
+            "3.10 VIF. bc7e u5, Compressonator, NVTT Production, ISPC and bc7e u4 are slightly "
+            "below u6, and the GPU encoders and texconv are furthest below, down to minus 2.40 "
+            "VIF for texconv GPU.")
+    return svg(780, bot + 50, "SSIM and VIF of BC7 encoders against bc7e u6", desc, b)
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     for name, fn in [("encoder-bc7", chart_bc7), ("encoder-formats", chart_formats),
-                     ("bc7-alpha-weights", chart_alpha_weights)]:
+                     ("bc7-alpha-weights", chart_alpha_weights),
+                     ("encoder-ssim-vif", chart_ssim_vif)]:
         path = os.path.join(OUT, name + ".svg")
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(fn())
