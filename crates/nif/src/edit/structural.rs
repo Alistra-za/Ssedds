@@ -1227,20 +1227,21 @@ fn release(
     let mut fix = vec![];
     {
         let h = doc.header();
-        for (&c, ctrl) in m.ctrls.iter().filter(|(_, c)| c.known) {
-            let Some(&k) = crate::anim::bound_cbs(m, h, rs, c).first() else {
+        // bindings once per sequence, not per controller x property (Note CY5)
+        let driven: std::collections::BTreeSet<u32> = m
+            .sequences
+            .iter()
+            .filter(|s| listed.contains(&(s.block as i32)))
+            .flat_map(|s| crate::anim::bound_map(m, h, s).into_keys())
+            .collect();
+        for (c, ks) in crate::anim::bound_map(m, h, rs) {
+            let Some(ctrl) = m.ctrls.get(&c).filter(|c| c.known) else {
                 continue;
             };
-            let others = m
-                .sequences
-                .iter()
-                .filter(|s| listed.contains(&(s.block as i32)));
-            if others
-                .into_iter()
-                .any(|s| !crate::anim::bound_cbs(m, h, s, c).is_empty())
-            {
+            if driven.contains(&c) {
                 continue;
             }
+            let k = ks[0];
             let ip = rs.blocks[k].interp;
             let want: &[u8] = if ctrl.class == LSCC {
                 b"NiPoint3Interpolator"

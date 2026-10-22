@@ -2818,6 +2818,35 @@ fn remove_sequence_keeps_shared_blocks_of_other_clips() {
     assert_eq!(t[0].keys, Some(close_keys));
 }
 
+/// Note CY5 pin: `release` frees only the controllers no other listed clip drives, with the removed clip's timing.
+#[test]
+fn remove_releases_only_controllers_no_other_clip_drives() {
+    let b = scenes::animated(Some(1), 2);
+    let root = root_anchor(&b);
+    let adds = [
+        add_seq(
+            root.clone(),
+            "Open",
+            vec![track(&b, 11, open_keys()), track(&b, 20, open_keys())],
+        ),
+        add_seq(root.clone(), "Close", vec![track(&b, 11, open_keys())]),
+    ];
+    let two = apply(&b, &adds).unwrap().bytes;
+    let m2 = read_model(&two).unwrap();
+    assert_eq!((m2.ctrls[&4].flags, m2.ctrls[&5].flags), (0x68, 0x68));
+    let r = apply(&two, &[remove_seq(root, "Open", 0)]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let m = read_model(&r.bytes).unwrap();
+    assert_eq!(m.ctrls[&4], m2.ctrls[&4], "Close still drives 4");
+    assert_eq!(m.ctrls[&5].flags, 0x48 | 0x04, "5 is free, clamp cycle");
+    assert_eq!(
+        (m.ctrls[&5].frequency, m.ctrls[&5].start, m.ctrls[&5].stop),
+        (1.0, 0.0, 1.0)
+    );
+    let open = &m2.sequences[0];
+    assert_eq!(m.ctrls[&5].interp, Some(open.blocks[1].interp));
+}
+
 #[test]
 fn remove_last_clip_clears_0x20() {
     let b = scenes::animated(Some(1), 2);

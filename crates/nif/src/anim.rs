@@ -6,6 +6,7 @@ use crate::keys::{read_data, Key, KeyData, KeyGroup, KeyType};
 use crate::material::MaterialState;
 use crate::model::NifModel;
 use crate::props::LightingTrailer;
+use std::collections::BTreeMap;
 
 /// NifSkope `Controller::ctrlTime` (glcontroller.cpp:246-290), then Play Backwards (bit 4) as
 /// `start + stop - ct`. shortcut: bit 4 is this project's reading of G8 (direction checked, phase not); upgrade
@@ -360,6 +361,35 @@ pub(crate) fn bound_cbs(m: &NifModel, h: &Header, s: &Sequence, ctrl: u32) -> Ve
     // a controller on two properties' chains finds a CB twice
     out.sort_unstable();
     out.dedup();
+    out
+}
+
+/// [`bound_cbs`] for every controller at once, from one pass over the properties (Note CY5): controller -> CB
+/// indices of `s`, sorted. A controller no CB drives is absent.
+pub(crate) fn bound_map(m: &NifModel, h: &Header, s: &Sequence) -> BTreeMap<u32, Vec<usize>> {
+    let mut out: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (k, cb) in s.blocks.iter().enumerate() {
+        if let Ok(c) = u32::try_from(cb.controller) {
+            out.entry(c).or_default().push(k);
+        }
+    }
+    let props = m.lighting.keys().chain(m.alphas.keys());
+    for (chain, users, ptype) in props.filter_map(|&p| chain_of(m, p)) {
+        let ctrls: Vec<&TimeCtrl> = chain.iter().filter_map(|id| m.ctrls.get(id)).collect();
+        let names: Vec<&[u8]> = users
+            .iter()
+            .filter_map(|&u| h.string(m.shape(u)?.net.name))
+            .collect();
+        for (k, cb) in s.blocks.iter().enumerate() {
+            if let Some(c) = bound(cb, &ctrls, &names, ptype) {
+                out.entry(c.block).or_default().push(k);
+            }
+        }
+    }
+    for v in out.values_mut() {
+        v.sort_unstable();
+        v.dedup();
+    }
     out
 }
 
