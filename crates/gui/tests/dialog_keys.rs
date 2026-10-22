@@ -172,6 +172,25 @@ fn the_undo_note_asks_for_a_frame_when_it_runs_out() {
     assert_eq!(m.undo_note_left(at_end), None);
 }
 
+/// Trace #7: Ctrl+Shift+Z with nothing to redo is Redo (disabled), never Undo.
+#[test]
+fn ctrl_shift_z_with_nothing_to_redo_does_not_undo() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(400.0, 300.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| {
+                sdc_gui::ui::actions::keys(ui.ctx(), m, false);
+            },
+            with_a_step(d.path()),
+        );
+    h.run();
+    assert!(h.state().can_undo() && !h.state().can_redo());
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Z);
+    h.run();
+    assert!(h.state().can_undo(), "Ctrl+Shift+Z undid");
+}
+
 #[test]
 fn ctrl_z_waits_while_a_sets_column_box_is_open() {
     let d = tempfile::tempdir().unwrap();
