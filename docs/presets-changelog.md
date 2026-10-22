@@ -3,6 +3,10 @@
 One entry per built-in preset version. A version changes when anything the preset resolves to changes; the workspace
 version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
 
+## 2026-10-22 — sdc 1.0.0
+
+- Version bump only; no preset or output change. Every output re-encodes once under `if-changed` (engine version 1.0.0).
+
 ## 2026-10-19 — sdc 0.9.0
 
 - Version bump only; no preset or output change. Every output re-encodes once under `if-changed` (engine version 0.9.0).

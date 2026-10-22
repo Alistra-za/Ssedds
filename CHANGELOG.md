@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.0.0
+
+First official release. It covers everything since 0.8.0-alpha.2 (0.9.0 was never released).
+
+- **Upgrading: one re-encode.** The version change makes every `--on-existing if-changed` run re-encode each recorded output once after you upgrade. The bump itself changes no pixels and no presets.
+- Derived outputs (Generate from normal map, Also export) no longer re-encode when you move a project folder. The first `if-changed` run after upgrading re-encodes them once.
+- Meshes page: edit NIF files in the GUI. Change shader and material fields, edit extra data, add and remove alpha properties, and see the result in the 3D preview. **Export NIF** writes the edited mesh as a loose file into your Textures export folder (or an `sdc NIF Edits` mod in MO2). See docs/gui.md.
+- Meshes page redesign: shape cards update as you edit, and **Export NIF** is a footer that stays in view. The button names its work ("Export NIF · 3 edits", "Export NIF again"), and Enter or Space on it never exports or overwrites. Also new: a Clips section, heel height, a known-extra-data list and controllers on the cards.
+- Animation: a clock with play, pause and scrub. A key editor with colour pickers, plus controller editing (add, remove, retarget). The In game preview animates UV scroll, emissive, glossiness, specular, alpha and alpha threshold the way the game does.
+- Named clips: add, rename and remove animation clips, and **Convert to clips** turns a plain controller chain into one. Removing the last clip removes the empty manager.
+- Export NIF drops the orphan blocks that your edits left behind. A mesh with no orphans exports byte-identical to before.
+- Shader-flag checks: Skin Tint and FaceGen detail need their shader type. A mesh that would crash the game or render black is flagged as an error and blocks export.
+- Edit history: undo, redo, revert and Keep mine / Take source behave the same everywhere. A refusal message goes away once it no longer applies.
+- 3D preview matches Community Shaders' deferred path more closely: **Accurate (deferred)** in the 3D view's *View* menu, on by default. Missing textures show a fill instead of white.
+- **Generate from normal map**: make height, AO and curvature maps from a normal map. The files are named `_generated` and are used as packing inputs. See docs/gui.md.
+- **Also export as Vanilla / Complex Material**: from a PBR set, write a vanilla or Complex Material version beside the PBR one. `_curves`, `_curvature` and `_cavity` files now join their set as packing inputs instead of making their own set. They write nothing by themselves.
+- **Artist checks**: advice for banding, very dark or bright areas, normal-map curl and stepped height or metalness maps, listed in the bottom panel (**Checks**). They never block an export.
+- **BC7 weighting** dropdown replaces the Perceptual check box: Linear (default), Perceptual, Alpha ×2, ×8 or ×16. It applies to the built-in BC7 encoder only. Other formats and encoders show a warning that it is ignored. Output with the default setting is unchanged.
+- The `encoder.bc7_weights` setting is also available from `--set`, `[files]` and rules.
+- Fixes:
+  - Mod scan: MO2 files (`modlist.txt`, `ModOrganizer.ini`, `plugins.txt`, `Skyrim.ccc`, `Skyrim.ini`) are read one line at a time. A byte-order mark or a non-UTF-8 mod name no longer breaks the scan.
+  - The loose-file walk skips only the actor facegen folder, so other folders are no longer missed.
+  - Scan state: a scan that is stopped, or one started while a mesh read is in flight, no longer leaves "Used by meshes" and UV coverage empty.
+  - Followed links: recursive discovery follows folder links. A link loop or a dead link is reported instead of hanging or being read back as input.
+  - Rename Inputs refuses two rows that would write the same output. The JSON rename box refuses device and map-suffix names.
+  - Fill from names checks slot clashes inside the batch. A file dropped from Explorer onto a slot card gets the same slot 3 and 7 check as a drag inside the app.
+  - Moving a file back to its set, or a set that shares an extension-less key, now splits and restores correctly.
+  - The Also gate with no project open says to open a folder.
+  - The JSON editor: pending match pills stay visible, follow a mode change and shift when you remove a row. Shift+F8 goes to the previous error.
+  - Keyboard: Ctrl+Shift+Z with nothing to redo no longer undoes. Shift+Tab in the input-name box no longer takes the ghost suggestion. A disabled shortcut yields to an enabled one on the same keys.
+  - Presets: the Delete confirmation is per preset. The RNM strength and AO-power sliders keep the value you set until the plan updates.
+  - Encode now pressed during an export runs when the export ends.
+  - A non-Unicode path is left out of `gui.toml` instead of failing the settings save.
+  - An edit that changes no text leaves the project clean. A `[files]` lookup also finds a key without an extension.
+  - The bulk Encoder row keeps its lock when NVTT is not found.
+  - CLI: `patch-header --dry-run` prints "would patch: ..." and no longer prints the real patched code. A quoted dotted `[files]` key is now a config error that names the field. Before, the value was silently dropped.
+  - NVTT: a level timeout or Cancel stops the whole encoder process tree, not only the launcher. The temp folder is cleaned up.
+  - Images: a NaN alpha pixel no longer turns an opaque float image almost opaque. A corrupt PSD with no pixel data is refused instead of crashing. The derive env-map gate finds the colour map by its own key (`_d` kept).
+  - Meshes: the Unused note says LOD textures are left out of the list.
+  - Meshes: the Meshes path filter folds ASCII case only, as stored paths do. The NIF edit source ignores path-separator spelling (`/` or `\`). A new 3D load no longer waits behind a replaced load's queued compiles.
+
 ## 0.8.0-alpha.2
 
 - GUI layout v2. The header is rebuilt, and dialogs share one frame with a fixed button order. The export Review tab is split out, the Sets column has a filter, and the Presets window and the 3D settings window have moved. See docs/gui.md.

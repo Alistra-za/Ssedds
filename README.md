@@ -10,7 +10,7 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 
 - **Targets:** `cs` (Community Shaders with TruePBR; default) and `vanilla` (which also packs the complex-material `_m` for a set given the complex material shader).
 - **Scope:** it makes new textures. It does not fix an installed game folder.
-- **Platform and version:** Windows x64, version 0.9.0 (see the [CHANGELOG](CHANGELOG.md)). GPL-3.0-or-later.
+- **Platform and version:** Windows x64, version 1.0.0 (see the [CHANGELOG](CHANGELOG.md)). GPL-3.0-or-later.
 
 ## Features
 
