@@ -297,6 +297,19 @@ fn heel_data_off_a_shape_or_on_a_later_shape_warns() {
     );
 }
 
+/// T5b review Minors 4 and 7 (controller ruling): a shape the root does not reach does not count as "earlier", and
+/// heel data on any block that is not a shape (here an unlinked NiNode) warns.
+#[test]
+fn heel_data_on_an_orphan_shape_or_a_node() {
+    use nif::edit::validate::{HEEL_EARLIER_WINS, HEEL_NOT_ON_SHAPE};
+    let w = warnings(&scenes::heel_orphan_scene());
+    none(&w, HEEL_EARLIER_WINS);
+    assert_eq!(
+        only(&w, HEEL_NOT_ON_SHAPE, Level::Warn).target,
+        Target::Extra { block: 6 }
+    );
+}
+
 #[test]
 fn bsxflags_must_be_named_bsx() {
     let w = warnings(&scenes::emit_scene("Other", 0x83, true));

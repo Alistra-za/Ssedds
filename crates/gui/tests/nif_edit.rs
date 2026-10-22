@@ -7980,3 +7980,146 @@ fn weight_sibling_names_the_other_weight_file() {
     assert_eq!(weight_sibling_of("meshes/armor/boots.nif"), None);
     assert_eq!(weight_sibling_of("meshes/armor/boots_10.nif"), None);
 }
+
+// ---- T5b review fix round 1 ----
+
+fn heel_field(h: &Harness<'static, MeshesModel>) -> Option<f64> {
+    h.get_by_role_and_label(AkRole::SpinButton, "Heel height (shape)")
+        .accesskit_node()
+        .numeric_value()
+}
+
+/// Important 1: after Set and an undo the field shows the restored value, and a typed value or a heel pick never
+/// carries to the same block of another session.
+#[test]
+fn heel_field_follows_undo_and_stays_in_its_session() {
+    let mut h = heel_view("A", None);
+    edit_number(&mut h, "Heel height (shape)", "9");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    assert_eq!(heel_field(&h), Some(9.0));
+    assert!(h.state_mut().undo_edit());
+    h.run_steps(4);
+    assert_eq!(heel_field(&h), Some(7.0), "the restored HH_OFFSET");
+    edit_number(&mut h, "Heel height (shape)", "4");
+    // Another session on a file with the same block numbers: no heel pick, no typed 4.
+    let m = h.state_mut();
+    m.edit = Some(
+        NifEdit::open(
+            scenes::heel_scene(),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+        )
+        .unwrap(),
+    );
+    let a = shape_named(m.edit.as_ref().unwrap(), "A");
+    m.select_edit(Selection::Shape(a));
+    h.run_steps(4);
+    assert_eq!(
+        h.get_by_role_and_label(AkRole::ComboBox, "Known extra data (shape)")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("Custom…")
+    );
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    assert_eq!(heel_field(&h), Some(7.0));
+}
+
+/// Important 2: HH_OFFSET and the SDTA's NPC Z get the same number (2.25, not 2.25 and 2.3).
+#[test]
+fn heel_hh_and_sdta_get_the_same_value() {
+    let mut h = heel_view("B", None);
+    edit_number(&mut h, "Heel height (shape)", "2.25");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    let (
+        Op::AddExtra {
+            value: ExtraValue::Float(b),
+            ..
+        },
+        Op::EditExtra {
+            value: ExtraValue::Str(s),
+            ..
+        },
+    ) = (&got[0], &got[1])
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(f32::from_bits(*b), 2.25);
+    assert_eq!(sdta_npc_z(s), Some(2.25));
+}
+
+/// Minor 5: an SDTA whose NPC Z already equals the height is left alone (no reformatting edit).
+#[test]
+fn heel_leaves_an_sdta_that_already_has_the_height() {
+    let mut h = heel_view("B", None);
+    assert_eq!(heel_field(&h), Some(5.0));
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert!(matches!(&got[..], [Op::AddExtra { .. }]), "{got:?}");
+}
+
+/// Minors 1 and 6: the "no geometry" note stays in its session; a negative height says it lowers the actor.
+#[test]
+fn heel_notes_for_no_geometry_and_a_negative_height() {
+    let mut h = heel_view("C", None);
+    h.get_by_role_and_label(AkRole::Button, "Calculate").click();
+    h.run_steps(3);
+    h.get_by_label("This shape has no geometry to measure: type the height.");
+    edit_number(&mut h, "Heel height (shape)", "-1");
+    h.get_by_label("A negative height lowers the actor.");
+    let m = h.state_mut();
+    m.edit = Some(
+        NifEdit::open(
+            scenes::heel_scene(),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+        )
+        .unwrap(),
+    );
+    let c = shape_named(m.edit.as_ref().unwrap(), "C");
+    m.select_edit(Selection::Shape(c));
+    h.run_steps(4);
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    assert!(h
+        .query_by_label("This shape has no geometry to measure: type the height.")
+        .is_none());
+}
+
+/// Minor 3: an HH_OFFSET the editor cannot set (another type) blocks Set with a note instead of adding a second one.
+#[test]
+fn heel_refuses_an_hh_offset_of_another_type() {
+    let mut m = direct(scenes::heel_scene());
+    let c = select(&mut m, "C");
+    let at = nif::edit::anchor_shape(&m.edit.as_ref().unwrap().model, c);
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "NiStringExtraData".into(),
+            name: "HH_OFFSET".into(),
+            value: ExtraValue::Str("7".into()),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    h.get_by_label(HEEL_HH_UNSET_TEXT);
+    assert!(h
+        .get_by_role_and_label(AkRole::Button, "Set heel height")
+        .accesskit_node()
+        .is_disabled());
+}
+
+/// The note for an HH_OFFSET that is not a readable float.
+const HEEL_HH_UNSET_TEXT: &str =
+    "This shape's HH_OFFSET is not a number the editor can set: remove that row first.";

@@ -33,6 +33,43 @@ fn heel_z_of_a_fixture_is_finite_and_a_bad_block_is_none() {
     assert_eq!(heel_z_of(&b, 9999), None);
 }
 
+#[path = "../../nif/tests/builder/mod.rs"]
+mod builder;
+
+/// T5b review Minor 2: the sign, the rounding to 0.1 and the node chain of `heel_z_of`.
+#[test]
+fn heel_z_of_is_minus_the_lowest_root_space_z_rounded() {
+    use builder::scenes::heel_tri;
+    let z = |zs, node| heel_z_of(&heel_tri(zs, node), 1);
+    assert_eq!(
+        z([-3.04, 2.0, 5.0], 0.0),
+        Some(3.0),
+        "the lowest vertex, negated and rounded"
+    );
+    assert_eq!(
+        z([-3.04, 2.0, 5.0], 1.0),
+        Some(2.0),
+        "the parent node's translation applies"
+    );
+    assert_eq!(z([0.0, 2.0, 5.0], 0.0), Some(0.0), "never -0");
+    assert_eq!(
+        z([1.26, 2.0, 5.0], 0.0),
+        Some(-1.3),
+        "above the root: a negative height"
+    );
+}
+
+/// T5b review Important 2: the SDTA's Z is written as given, so it equals HH_OFFSET's f32 (2.25 stays 2.25, 7.3 is
+/// written as 7.3).
+#[test]
+fn sdta_writes_the_value_as_given() {
+    let s = sdta_with_npc_z("[]", 2.25).unwrap();
+    assert_eq!(sdta_npc_z(&s), Some(2.25));
+    let s = sdta_with_npc_z("[]", 7.3).unwrap();
+    assert!(s.contains("7.3]"), "{s}");
+    assert_eq!(sdta_npc_z(&s), Some(7.3));
+}
+
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }

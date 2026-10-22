@@ -214,6 +214,87 @@ pub fn heel_scene() -> Vec<u8> {
     n.bytes()
 }
 
+/// Heel data off the scene (T5b review Minors 4 and 7): BSTriShape "Orphan" (0, no parent, extra HH_OFFSET 1 = 3.0);
+/// NiNode "Root" (2, the root, child 3); BSTriShape "Worn" (3, extra HH_OFFSET 4 = 5.0); NiNode "Bone" (5, not
+/// linked, extra SDTA 6). No shaders.
+pub fn heel_orphan_scene() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = |n: &mut Nif, x: &str| n.string(x);
+    let (orphan, root, worn, bone) = (
+        s(&mut n, "Orphan"),
+        s(&mut n, "Root"),
+        s(&mut n, "Worn"),
+        s(&mut n, "Bone"),
+    );
+    let (hh, sdta) = (s(&mut n, "HH_OFFSET"), s(&mut n, "SDTA"));
+    let npc = s(&mut n, r#"[{"name":"NPC","pos":[0,0,2]}]"#);
+    let one = |name: i32, e: i32| W::default().i32(name).u32(1).i32(e).i32(-1);
+    let shape = |name: i32, e: i32| {
+        avobj(one(name, e))
+            .fs(&[0.0; 4])
+            .i32(-1)
+            .i32(-1)
+            .i32(-1)
+            .u64(0)
+            .u16(0)
+            .u16(0)
+            .u32(0)
+            .0
+    };
+    n.block("BSTriShape", shape(orphan, 1));
+    n.block("NiFloatExtraData", W::default().i32(hh).f(3.0).0);
+    n.block("NiNode", avobj(net(root)).u32(1).i32(3).u32(0).0);
+    n.block("BSTriShape", shape(worn, 4));
+    n.block("NiFloatExtraData", W::default().i32(hh).f(5.0).0);
+    n.block("NiNode", avobj(one(bone, 6)).u32(0).u32(0).0);
+    n.block("NiStringExtraData", W::default().i32(sdta).i32(npc).0);
+    n.roots = vec![2];
+    n.bytes()
+}
+
+/// A lit BSTriShape (1) with one triangle whose vertex Z are `zs`, under NiNode "Root" (0) translated by `node_z`
+/// (T5b review Minor 2: `heel_z_of`'s sign, rounding and node chain).
+pub fn heel_tri(zs: [f32; 3], node_z: f32) -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let (root, shoe) = (n.string("Root"), n.string("Shoe"));
+    n.block(
+        "NiNode",
+        net(root)
+            .u32(14)
+            .fs(&[0.0, 0.0, node_z])
+            .fs(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+            .f(1.0)
+            .i32(-1)
+            .u32(1)
+            .i32(1)
+            .u32(0)
+            .0,
+    );
+    n.block(
+        "BSTriShape",
+        avobj(net(shoe))
+            .fs(&[0.0; 4])
+            .i32(-1)
+            .i32(2)
+            .i32(-1)
+            .u64((1 << 44) | 4) // Vertex, 16-byte records
+            .u16(1)
+            .u16(3)
+            .u32(3 * 16 + 6)
+            .fs(&[
+                0.0, 0.0, zs[0], 0.0, 1.0, 0.0, zs[1], 0.0, 0.0, 1.0, zs[2], 0.0,
+            ])
+            .u16(0)
+            .u16(1)
+            .u16(2)
+            .u32(0) // particle data
+            .0,
+    );
+    n.block("BSLightingShaderProperty", lsp(0, -1));
+    n.roots = vec![0];
+    n.bytes()
+}
+
 pub fn managed_clip() -> Vec<u8> {
     managed_clip_with(false)
 }

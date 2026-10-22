@@ -113,6 +113,8 @@ pub struct NifEdit {
     /// Meshes UI T5b: the other weight file (`x_0.nif` ↔ `x_1.nif`) when the scan has it, set when the session opens.
     /// The game uses `_1` only at weight 100, so a heel height belongs in both; the editor edits one file at a time.
     pub weight_sibling: Option<String>,
+    /// A process-unique id of this session (T5b review Important 1): UI state that belongs to one session keys on it.
+    pub session: u64,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -352,6 +354,7 @@ impl NifEdit {
             cleanup_note: None,
             up_to_date: false,
             weight_sibling: None,
+            session: next_key(),
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -1134,7 +1137,9 @@ pub fn sdta_npc_z(sdta: &str) -> Option<f32> {
 pub fn sdta_with_npc_z(sdta: &str, z: f32) -> Option<String> {
     let mut v: serde_json::Value = serde_json::from_str(sdta).ok()?;
     let list = v.as_array_mut()?;
-    let zv = serde_json::json!((z as f64 * 10.0).round() / 10.0);
+    // T5b review Important 2: `z` as given, in its shortest f32 form ("2.25", "7.3"), so it reads back as the same
+    // f32 that HH_OFFSET holds.
+    let zv: serde_json::Value = serde_json::from_str(&z.to_string()).ok()?;
     let npc = list
         .iter_mut()
         .rev()

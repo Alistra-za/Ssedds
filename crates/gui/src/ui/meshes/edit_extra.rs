@@ -477,12 +477,16 @@ struct AddState {
     /// The heel row's Z while it differs from the shape's stored one, and its "Also write SDTA" tick.
     z: Option<f32>,
     sdta: bool,
+    /// The last Calculate found no geometry to measure.
+    calc_none: bool,
 }
 
 /// The Known picker above the type picker, a name and Add. A Known entry fills type, name and value; Custom… keeps
 /// free typing.
 fn add_row(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, root: bool, at: Anchor, have: &[&Extra]) {
-    let id = egui::Id::new(("meshes-edit-extra-add", root, at.block));
+    // T5b review Important 1: keyed by the session too, so a pick or a typed value never reaches the same block of
+    // another NIF or session.
+    let id = egui::Id::new(("meshes-edit-extra-add", e.session, root, at.block));
     let mut st: AddState = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| AddState {
         name: prefill(EDITABLE[0]).to_string(),
         ..Default::default()
@@ -507,6 +511,7 @@ fn add_row(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, root: bool, at: Anchor
                         st.known = Some(i);
                         st.text.clear();
                         st.z = None;
+                        st.calc_none = false;
                     }
                     match off {
                         Some(why) => r.on_disabled_hover_text(why),
@@ -608,6 +613,7 @@ fn add_row(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, root: bool, at: Anchor
                 text: st.text,
                 z: None,
                 sdta: st.sdta,
+                calc_none: false,
             },
         )
     });
@@ -652,7 +658,8 @@ fn known_row(
                     ExtraValue::Str(std::mem::take(&mut st.text).trim().to_string())
                 }
                 KnownValue::Fixed(f) => f(),
-                KnownValue::Heel => unreachable!("the heel entry has its own row"),
+                // The heel entry has its own row (`heel_row`); nothing to add here (T5b review Minor 8).
+                KnownValue::Heel => return,
             };
             act.push = Some((
                 vec![Op::AddExtra {
@@ -699,14 +706,26 @@ fn heel_row(
     st: &mut AddState,
 ) {
     let shape = at.block;
-    let hh = first_named(have, "NiFloatExtraData", b"HH_OFFSET");
+    // T5b review Minor 3: an HH_OFFSET the editor cannot set (another type, or a value that did not read) blocks Set:
+    // adding a second one would be ignored in game.
+    let hh_any = have.iter().position(|x| {
+        x.name
+            .as_deref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(b"HH_OFFSET"))
+    });
+    let hh = hh_any.map(|i| (i, have[i])).filter(|(_, x)| {
+        x.kind == "NiFloatExtraData" && matches!(x.value, Some(ExtraValue::Float(_)))
+    });
+    let blocked = hh_any.is_some() && hh.is_none();
     let sdta = first_named(have, "NiStringExtraData", b"SDTA");
     let stored = match (hh.map(|h| &h.1.value), sdta.map(|s| &s.1.value)) {
         (Some(Some(ExtraValue::Float(b))), _) => Some(f32::from_bits(*b)),
         (_, Some(Some(ExtraValue::Str(s)))) => sdta_npc_z(s),
         _ => None,
     };
-    let mut z = st.z.or(stored).unwrap_or(0.0);
+    // T5b review Important 1: `st.z` holds only a value the user typed or Calculate gave; otherwise the field follows
+    // the stored value (an undo, a row edit, a Revert).
+    let mut z = st.z.unwrap_or(stored.unwrap_or(0.0));
     ui.horizontal(|ui| {
         ui.label("Heel height").on_hover_text(HEEL_TIP);
         let r = ui.add(egui::DragValue::new(&mut z).speed(0.1).max_decimals(2));
@@ -717,32 +736,43 @@ fn heel_row(
             Some(z as f64),
             None,
         );
+        if r.changed() {
+            st.z = Some(z);
+        }
         let calc = ui.button("Calculate").on_hover_text(HEEL_TIP);
         if calc.clicked() {
             match heel_z_of(&e.patched, shape) {
-                Some(c) => z = c,
-                None => {
-                    let id = egui::Id::new(("meshes-edit-heel-calc", shape));
-                    ui.data_mut(|d| d.insert_temp(id, true));
+                Some(c) => {
+                    z = c;
+                    st.z = Some(c);
+                    st.calc_none = false;
                 }
+                None => st.calc_none = true,
             }
         }
     });
-    st.z = Some(z);
-    if ui
-        .data(|d| d.get_temp::<bool>(egui::Id::new(("meshes-edit-heel-calc", shape))))
-        .is_some()
-    {
+    if st.z.is_some() && st.z == stored {
+        st.z = None;
+    }
+    if st.calc_none {
         ui.weak("This shape has no geometry to measure: type the height.");
+    }
+    if z < 0.0 {
+        ui.weak("A negative height lowers the actor.");
+    }
+    if blocked {
+        ui.colored_label(AMBER, HEEL_HH_UNSET);
     }
     if sdta.is_none() {
         ui.checkbox(&mut st.sdta, "Also write SDTA (OStim and others read it)");
     }
+    // Only shapes the root reaches count, in block order (the controller ruling; see `validate`).
     let earlier = e
         .model
         .shapes
         .iter()
         .take_while(|s| s.block != shape)
+        .filter(|s| e.model.index3d.contains_key(&s.block))
         .any(|s| e.model.extras_of(&s.net).into_iter().any(is_heel));
     // A shape with heel data of its own already shows this under that row (validate).
     if earlier && !have.iter().any(|x| is_heel(x)) {
@@ -760,12 +790,14 @@ fn heel_row(
             .wrap(),
         );
     }
-    let r = ui.button("Set heel height");
+    let r = ui.add_enabled(!blocked, egui::Button::new("Set heel height"));
     set_name(&r, egui::WidgetType::Button, "Set heel height", None, None);
     if !r.clicked() {
+        r.on_disabled_hover_text(HEEL_HH_UNSET);
         return;
     }
     let mut ops = vec![];
+    // T5b review Important 2: the same number goes to HH_OFFSET and to the SDTA (`sdta_with_npc_z` writes `z` as is).
     let value = ExtraValue::Float(z.to_bits());
     match hh {
         Some((i, x)) => {
@@ -786,9 +818,12 @@ fn heel_row(
     }
     match sdta {
         Some((i, x)) => {
-            if let Some(ExtraValue::Str(cur)) = &x.value {
+            // T5b review Minor 5: an SDTA that already has this height is left as it is (a rewrite would reformat it).
+            if let Some(ExtraValue::Str(cur)) =
+                x.value.as_ref().filter(|_| sdta_npc_z_of(x) != Some(z))
+            {
                 // shortcut: an SDTA that is not a JSON list is left as it is (HH_OFFSET wins in game anyway).
-                if let Some(new) = sdta_with_npc_z(cur, z).filter(|n| n != cur) {
+                if let Some(new) = sdta_with_npc_z(cur, z) {
                     ops.push(Op::EditExtra {
                         at: extra_anchor(have, i, at.shape.clone(), false),
                         value: ExtraValue::Str(new),
@@ -814,3 +849,15 @@ fn heel_row(
     }
     st.z = None;
 }
+
+/// The last "NPC" Z of an SDTA extra, when its value is a string.
+fn sdta_npc_z_of(x: &Extra) -> Option<f32> {
+    match &x.value {
+        Some(ExtraValue::Str(s)) => sdta_npc_z(s),
+        _ => None,
+    }
+}
+
+/// T5b review Minor 3: the note and the disabled hover of Set when the shape's HH_OFFSET cannot be set.
+const HEEL_HH_UNSET: &str =
+    "This shape's HH_OFFSET is not a number the editor can set: remove that row first.";

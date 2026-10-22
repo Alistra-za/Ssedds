@@ -72,6 +72,8 @@ pub struct NifModel {
     /// Every readable NiControllerManager: how many sequences it lists (Note CU8).
     pub managers: BTreeMap<u32, usize>,
     pub problems: Vec<String>,
+    /// Every shape the root reaches, with its PGPatcher 3D index (`graph::index3d`); an orphan shape is absent.
+    pub index3d: BTreeMap<u32, u32>,
 }
 
 impl NifModel {
@@ -135,6 +137,7 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
         sequences: vec![],
         managers: BTreeMap::new(),
         problems: vec![],
+        index3d: crate::graph::index3d(&h, b),
     };
     m.root_kind = m
         .root
