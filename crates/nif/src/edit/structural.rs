@@ -626,6 +626,16 @@ fn whole_chain(m: &NifModel, p: &PropModel) -> Result<(), String> {
     }
 }
 
+/// The lighting and alpha properties whose chains list controller `block`.
+fn owners(m: &NifModel, block: u32) -> Vec<&PropModel> {
+    m.lighting
+        .values()
+        .map(|l| &l.prop)
+        .chain(m.alphas.values().map(|a| &a.prop))
+        .filter(|p| p.ctrls.contains(&block))
+        .collect()
+}
+
 /// AddController (anchored on a property) and RemoveController (anchored on a controller).
 pub(crate) fn ctrl_op(
     doc: &mut NifDoc,
@@ -675,6 +685,10 @@ pub(crate) fn ctrl_op(
             .ok_or("not a readable property")?;
             whole_chain(m, prop)?;
             let last = prop.ctrls.last();
+            // chains that share a tail stay merged to the end, so the last link tells (Note CY4)
+            if last.is_some_and(|&l| owners(m, l).len() > 1) {
+                return Err("This controller chain is shared by several properties: a controller cannot be added.".into());
+            }
             if m.root_net.is_none() {
                 return Err("The root is not a node: the BSX Animated bit cannot be set.".into());
             }
@@ -698,15 +712,8 @@ pub(crate) fn ctrl_op(
             if m.managed(block) {
                 return Err("A manager-controlled controller cannot be removed.".into());
             }
-            let owners: Vec<&PropModel> = m
-                .lighting
-                .values()
-                .map(|l| &l.prop)
-                .chain(m.alphas.values().map(|a| &a.prop))
-                .filter(|p| p.ctrls.contains(&block))
-                .collect();
             let prop =
-                match owners.as_slice() {
+                match owners(m, block).as_slice() {
                     [] => return Err("No property lists this controller.".into()),
                     [p] => *p,
                     _ => return Err(

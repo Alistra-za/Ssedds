@@ -2153,6 +2153,23 @@ fn remove_refuses_a_controller_on_two_properties() {
     }
 }
 
+/// Note CY4: S's chain ends in a controller T's chain also lists, so a link after it would join T's chain too.
+#[test]
+fn add_refuses_a_chain_shared_by_two_properties() {
+    let b = scenes::two_animated();
+    let at = Header::parse(&b).unwrap().offsets()[5] + LSP_CTRL_AT;
+    let b = with_i32(b, at, 6); // T's shader (5) now lists S's controller 6
+    let m = read_model(&b).unwrap();
+    assert_eq!(m.lighting[&4].prop.ctrls, vec![6]);
+    assert_eq!(m.lighting[&5].prop.ctrls, vec![6]);
+    let at = anchor_role(&m, Some(shape_named(&m, "S")), Role::Shader).unwrap();
+    refused_unchanged(
+        &b,
+        add(at, LSCF, Some(20), lin(&[(0.0, 1.0)]), 1.0),
+        "This controller chain is shared by several properties: a controller cannot be added.",
+    );
+}
+
 /// Note CY1: an edit recorded on twin s1 (nth 0 after s0's removal) never lands on s0 once that removal is reverted.
 #[test]
 fn a_ctrl_edit_never_lands_on_its_twin_after_a_revert() {
