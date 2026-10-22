@@ -1815,6 +1815,11 @@ impl AppModel {
         }
         let outcome = if self.set_of_item(&key).is_some_and(|f| same_id(&f.id, set)) {
             DropOutcome::Joined
+        } else if let Some(why) = self.view_of(set).and_then(|t| {
+            // The slot 3/7 clash guard `drop_on_set` applies (AG99).
+            slot_conflict(&t.slots.keys().copied().collect::<Vec<_>>(), slot_of(it)?)
+        }) {
+            DropOutcome::Refused(why)
         } else {
             self.drop_choice(&key, set, DropChoice::Move)
         };
