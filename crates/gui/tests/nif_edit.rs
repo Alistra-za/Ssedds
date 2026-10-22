@@ -2438,6 +2438,144 @@ fn add_and_remove_string_extra_on_a_shape() {
     );
 }
 
+/// Opens the Known picker of the shape (`root` false) or root list and clicks `entry`.
+fn pick_known(h: &mut Harness<'static, MeshesModel>, root: bool, entry: &str) {
+    let combo = if root {
+        "Known extra data"
+    } else {
+        "Known extra data (shape)"
+    };
+    h.get_by_role_and_label(AkRole::ComboBox, combo)
+        .scroll_to_me();
+    h.run_steps(12);
+    h.get_by_role_and_label(AkRole::ComboBox, combo).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(AkRole::Button, entry).click();
+    h.run_steps(3);
+}
+
+fn known_entry_disabled(h: &mut Harness<'static, MeshesModel>, root: bool, entry: &str) -> bool {
+    let combo = if root {
+        "Known extra data"
+    } else {
+        "Known extra data (shape)"
+    };
+    h.get_by_role_and_label(AkRole::ComboBox, combo)
+        .scroll_to_me();
+    h.run_steps(12);
+    h.get_by_role_and_label(AkRole::ComboBox, combo).click();
+    h.run_steps(3);
+    let off = h
+        .get_by_role_and_label(AkRole::Button, entry)
+        .accesskit_node()
+        .is_disabled();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    off
+}
+
+/// Meshes UI T5: the shape's Known picker adds AnisotropicAlphaMaterial as NiIntegerExtraData 3; root-only entries
+/// are off there ("Goes on the root").
+#[test]
+fn known_picker_adds_anisotropic_alpha_on_a_shape() {
+    let mut m = direct(ctrl_scene(0x82));
+    let s = select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(
+        known_entry_disabled(&mut h, false, "BSX"),
+        "BSX goes on the root"
+    );
+    // Owner, 2026-10-22: BODYTRI is not offered (BodySlide / Outfit Studio writes it).
+    h.get_by_role_and_label(AkRole::ComboBox, "Known extra data (shape)")
+        .click();
+    h.run_steps(3);
+    assert!(h
+        .query_by_role_and_label(AkRole::Button, "BODYTRI")
+        .is_none());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    pick_known(&mut h, false, "AnisotropicAlphaMaterial");
+    h.get_by_label("Add to shape").click();
+    h.run_steps(4);
+    let e = h.state().edit.as_ref().unwrap();
+    let added = e.model.extras_of(&e.model.shape(s).unwrap().net);
+    assert_eq!(added.len(), 1, "{:?}", e.outcomes);
+    assert!(
+        matches!(
+            &ops(h.state())[0],
+            Op::AddExtra { kind, name, value: ExtraValue::Int(3), .. }
+                if kind == "NiIntegerExtraData" && name == "AnisotropicAlphaMaterial"
+        ),
+        "{:?}",
+        ops(h.state())
+    );
+}
+
+/// Meshes UI T5: on the root, BSX and INV are off when present ("Already on this root"); HDT SMP's Add waits for a
+/// path; Prn is offered marked unconfirmed (owner decision 1).
+#[test]
+fn known_picker_on_the_root_offers_hdt_with_a_path_and_marks_prn() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(
+        known_entry_disabled(&mut h, true, "BSX"),
+        "BSX is already there"
+    );
+    assert!(
+        known_entry_disabled(&mut h, true, "AnisotropicAlphaMaterial"),
+        "goes on a shape"
+    );
+    assert!(!known_entry_disabled(&mut h, true, "Prn (unconfirmed)"));
+    pick_known(&mut h, true, "HDT Skinned Mesh Physics Object");
+    assert!(
+        h.get_by_label("Add to root").accesskit_node().is_disabled(),
+        "needs a path"
+    );
+    h.get_by_role_and_label(AkRole::TextInput, "Value").focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Value")
+        .type_text(r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml");
+    h.run_steps(2);
+    h.get_by_label("Add to root").click();
+    h.run_steps(4);
+    let got = ops(h.state());
+    assert!(
+        matches!(
+            &got[..],
+            [Op::AddExtra { kind, name, value: ExtraValue::Str(p), .. }]
+                if kind == "NiStringExtraData"
+                    && name == "HDT Skinned Mesh Physics Object"
+                    && p == r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml"
+        ),
+        "{got:?}"
+    );
+}
+
+/// Meshes UI T5 (bug 3): an extra-data row shows its own warnings, here "BSXFlags must be named BSX".
+#[test]
+fn an_extra_row_shows_its_warnings() {
+    let mut m = direct(ctrl_scene(0x82));
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, None, Role::Root).unwrap();
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "BSXFlags".into(),
+            name: "BSX2".into(),
+            value: ExtraValue::Bsx(0),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    h.get_by_label("BSXFlags must be named BSX");
+}
+
 /// Drawing both tabs records nothing, whatever the values' bits (negative zero, CRLF).
 #[test]
 fn drawing_the_controller_and_extra_tabs_records_nothing() {

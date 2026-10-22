@@ -1,8 +1,9 @@
 //! The edit panel's Extra data tab (spec §7, plan A18): the selected shape's extra data and the root's. Editable
 //! types are changed in place, added and removed; every other type is a read-only row.
-use super::edit_fields::{row_label, set_name, Act};
+use super::edit_fields::{row_label, set_name, warnings, Act};
 use crate::model::meshes::nif_edit::{NifEdit, Selection};
 use eframe::egui;
+use nif::edit::validate::Target;
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::extra::{Extra, ExtraValue, BSX_NAMES, EDITABLE, INV_DEFAULT};
 use nif::model::NifModel;
@@ -28,7 +29,7 @@ pub(super) fn extra_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             Some(s) => {
                 let net = e.model.extras_of(&s.net);
                 let at = anchor_shape(&e.model, b);
-                list(ui, act, false, (net, Some(at)), s.name.clone(), animated);
+                list(ui, e, act, false, (net, Some(at)), s.name.clone(), animated);
             }
             None => {
                 ui.label("The selected shape is not in this NIF.");
@@ -43,7 +44,15 @@ pub(super) fn extra_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     match &e.model.root_net {
         Some(net) => {
             let at = anchor_role(&e.model, None, Role::Root);
-            list(ui, act, true, (e.model.extras_of(net), at), None, animated);
+            list(
+                ui,
+                e,
+                act,
+                true,
+                (e.model.extras_of(net), at),
+                None,
+                animated,
+            );
         }
         None => {
             ui.label("The root is not a node: it has no extra data.");
@@ -54,6 +63,7 @@ pub(super) fn extra_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
 /// One list. `add_at` is the anchor an added block hangs on; `shape` the owning shape name (None for the root).
 fn list(
     ui: &mut egui::Ui,
+    e: &NifEdit,
     act: &mut Act,
     root: bool,
     (extras, add_at): (Vec<&Extra>, Option<Anchor>),
@@ -81,11 +91,13 @@ fn list(
             },
         };
         ui.push_id((x.block, root), |ui| {
-            row(ui, act, x, &name, &at, root, animated)
+            row(ui, act, x, &name, &at, root, animated);
+            // Meshes UI T5 (bug 3): the row's own warnings, such as "BSXFlags must be named BSX".
+            warnings(ui, e, &Target::Extra { block: x.block }, act);
         });
     }
     if let Some(at) = add_at {
-        add_row(ui, act, root, at);
+        add_row(ui, act, root, at, &extras);
     }
 }
 
@@ -110,7 +122,10 @@ fn row(
     egui::Sides::new().shrink_left().truncate().show(
         ui,
         |ui| {
-            ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+            let r = ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+            if let Some(tip) = known_tip(x) {
+                r.on_hover_text(tip);
+            }
             ui.weak(&x.kind);
         },
         |ui| {
@@ -313,12 +328,180 @@ fn prefill(kind: &str) -> &'static str {
     PREFILL.iter().find(|p| p.0 == kind).map_or("", |p| p.1)
 }
 
-/// The type picker, a name and Add. The pick and the name live in egui memory until Add.
-fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor) {
+/// One entry of the Known picker (Meshes UI T5, Note CV17). `root`: it goes on the root, else on a shape. `text`:
+/// the value is a string typed in the Value field; `needs_text`: Add waits for it.
+struct Known {
+    name: &'static str,
+    kind: &'static str,
+    root: bool,
+    value: fn() -> ExtraValue,
+    text: bool,
+    needs_text: bool,
+    unconfirmed: bool,
+    tip: &'static str,
+}
+
+/// The confirmed (and owner-approved unconfirmed) entries; sources in Note CV17. Everything else is Custom…. BODYTRI is
+/// left out on purpose: BodySlide / Outfit Studio writes it (owner, 2026-10-22).
+const KNOWN: [Known; 5] = [
+    Known {
+        name: "AnisotropicAlphaMaterial",
+        kind: "NiIntegerExtraData",
+        root: false,
+        value: || ExtraValue::Int(3),
+        text: false,
+        needs_text: false,
+        unconfirmed: false,
+        tip: "Community Shaders see-through look for this shape. 0 off, 1 rim edge, 2 fabric, 3 woven fabric. \
+              Only on alpha-blended lit shapes.",
+    },
+    Known {
+        name: "BSX",
+        kind: "BSXFlags",
+        root: true,
+        value: || ExtraValue::Bsx(0),
+        text: false,
+        needs_text: false,
+        unconfirmed: false,
+        tip: "Engine flags for the whole model: animation, collision, ragdoll, external emit. Must be named BSX.",
+    },
+    Known {
+        name: "INV",
+        kind: "BSInvMarker",
+        root: true,
+        value: || ExtraValue::Inv {
+            rot: INV_DEFAULT.0,
+            zoom: INV_DEFAULT.1.to_bits(),
+        },
+        text: false,
+        needs_text: false,
+        unconfirmed: false,
+        tip: "How the item turns and zooms in the inventory view. Leave the default if unsure.",
+    },
+    Known {
+        name: "HDT Skinned Mesh Physics Object",
+        kind: "NiStringExtraData",
+        root: true,
+        value: || ExtraValue::Str(String::new()),
+        text: true,
+        needs_text: true,
+        unconfirmed: false,
+        tip: "Gives this model SMP physics. The value is the path to the physics xml. Needs HDT-SMP installed. \
+              The name must be exact.",
+    },
+    Known {
+        name: "Prn",
+        kind: "NiStringExtraData",
+        root: true,
+        value: || ExtraValue::Str(String::new()),
+        text: true,
+        needs_text: false,
+        unconfirmed: true,
+        tip: "Unconfirmed: no source checked yet. Names the skeleton node this item attaches to, for example \
+              WeaponBack or SHIELD.",
+    },
+];
+
+fn known_label(k: &Known) -> String {
+    match k.unconfirmed {
+        true => format!("{} (unconfirmed)", k.name),
+        false => k.name.to_string(),
+    }
+}
+
+/// Why `k` cannot be added here, if it cannot: the other owner's entry, or one this owner already has.
+fn known_off(k: &Known, root: bool, have: &[&Extra]) -> Option<&'static str> {
+    if k.root != root {
+        return Some(if k.root {
+            "Goes on the root"
+        } else {
+            "Goes on a shape"
+        });
+    }
+    let present = have
+        .iter()
+        .any(|x| x.kind == k.kind && x.name.as_deref() == Some(k.name.as_bytes()));
+    present.then_some(if root {
+        "Already on this root"
+    } else {
+        "Already on this shape"
+    })
+}
+
+/// The tooltip of an existing row whose kind and name are a Known entry's.
+fn known_tip(x: &Extra) -> Option<&'static str> {
+    KNOWN
+        .iter()
+        .find(|k| x.kind == k.kind && x.name.as_deref() == Some(k.name.as_bytes()))
+        .map(|k| k.tip)
+}
+
+/// What the Add row holds between frames (egui memory, until Add): the Known pick (None = Custom…), the Custom
+/// type and name, and a Known entry's typed value.
+#[derive(Clone, Default)]
+struct AddState {
+    known: Option<usize>,
+    kind: usize,
+    name: String,
+    text: String,
+}
+
+/// The Known picker above the type picker, a name and Add. A Known entry fills type, name and value; Custom… keeps
+/// free typing.
+fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor, have: &[&Extra]) {
     let id = egui::Id::new(("meshes-edit-extra-add", root, at.block));
-    let (mut kind, mut name): (usize, String) = ui
-        .data(|d| d.get_temp(id))
-        .unwrap_or_else(|| (0, prefill(EDITABLE[0]).to_string()));
+    let mut st: AddState = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| AddState {
+        name: prefill(EDITABLE[0]).to_string(),
+        ..Default::default()
+    });
+    ui.horizontal(|ui| {
+        row_label(ui, "Known");
+        let shown = st
+            .known
+            .map_or("Custom…".to_string(), |i| known_label(&KNOWN[i]));
+        let r = egui::ComboBox::from_id_salt(id.with("known"))
+            .width(200.0)
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut st.known, None, "Custom…");
+                for (i, k) in KNOWN.iter().enumerate() {
+                    let off = known_off(k, root, have);
+                    let r = ui.add_enabled(
+                        off.is_none(),
+                        egui::Button::selectable(st.known == Some(i), known_label(k)),
+                    );
+                    if r.clicked() {
+                        st.known = Some(i);
+                        st.text.clear();
+                    }
+                    match off {
+                        Some(why) => r.on_disabled_hover_text(why),
+                        None => r.on_hover_text(k.tip),
+                    };
+                }
+            })
+            .response;
+        set_name(
+            &r,
+            egui::WidgetType::ComboBox,
+            &scoped(root, "Known extra data"),
+            None,
+            Some(shown),
+        );
+    });
+    // A pick made while it was free can become taken (an Add, an undo): back to Custom….
+    if st
+        .known
+        .is_some_and(|i| known_off(&KNOWN[i], root, have).is_some())
+    {
+        st.known = None;
+    }
+    if let Some(i) = st.known {
+        known_row(ui, act, root, at, &KNOWN[i], &mut st);
+        ui.data_mut(|d| d.insert_temp(id, st));
+        return;
+    }
+    let (mut kind, mut name) = (st.kind, std::mem::take(&mut st.name));
     ui.horizontal(|ui| {
         ui.label("Add");
         let before = kind;
@@ -374,5 +557,68 @@ fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor) {
             name = prefill(k).to_string();
         }
     });
-    ui.data_mut(|d| d.insert_temp(id, (kind, name)));
+    ui.data_mut(|d| {
+        d.insert_temp(
+            id,
+            AddState {
+                known: None,
+                kind,
+                name,
+                text: st.text,
+            },
+        )
+    });
+}
+
+/// A Known entry's row: its type and name as set, a Value field for a string entry, and Add.
+fn known_row(
+    ui: &mut egui::Ui,
+    act: &mut Act,
+    root: bool,
+    at: Anchor,
+    k: &Known,
+    st: &mut AddState,
+) {
+    ui.horizontal(|ui| {
+        ui.weak(k.kind);
+        ui.label(k.name).on_hover_text(k.tip);
+    });
+    ui.horizontal(|ui| {
+        if k.text {
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut st.text)
+                    .hint_text("Value")
+                    .desired_width(ui.available_width().min(240.0)),
+            );
+            set_name(
+                &r,
+                egui::WidgetType::TextEdit,
+                &scoped(root, "Value"),
+                None,
+                Some(st.text.clone()),
+            );
+            r.on_hover_text(k.tip);
+        }
+        let ready = !k.needs_text || !st.text.trim().is_empty();
+        let r = ui.add_enabled(ready, egui::Button::new("Add"));
+        let label = if root { "Add to root" } else { "Add to shape" };
+        set_name(&r, egui::WidgetType::Button, label, None, None);
+        if r.clicked() {
+            let value = match k.text {
+                true => ExtraValue::Str(std::mem::take(&mut st.text)),
+                false => (k.value)(),
+            };
+            act.push = Some((
+                vec![Op::AddExtra {
+                    at,
+                    kind: k.kind.into(),
+                    name: k.name.into(),
+                    value,
+                }],
+                None,
+            ));
+        } else if !ready {
+            r.on_disabled_hover_text("Type the path first.");
+        }
+    });
 }
