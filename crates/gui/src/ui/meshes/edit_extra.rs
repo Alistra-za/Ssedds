@@ -335,7 +335,7 @@ fn prefill(kind: &str) -> &'static str {
     PREFILL.iter().find(|p| p.0 == kind).map_or("", |p| p.1)
 }
 
-/// One entry of the Known picker (Meshes UI T5, Note CV17). `root`: it goes on the root, else on a shape.
+/// One entry of the Known picker (Meshes UI T5, Note CZ17). `root`: it goes on the root, else on a shape.
 struct Known {
     name: &'static str,
     kind: &'static str,
@@ -355,7 +355,7 @@ enum KnownValue {
     Heel,
 }
 
-/// The confirmed (and owner-approved unconfirmed) entries; sources in Note CV17. Everything else is Custom…. BODYTRI is
+/// The confirmed (and owner-approved unconfirmed) entries; sources in Note CZ17. Everything else is Custom…. BODYTRI is
 /// left out on purpose: BodySlide / Outfit Studio writes it (owner, 2026-10-22).
 const KNOWN: [Known; 6] = [
     Known {
@@ -694,7 +694,7 @@ fn first_named<'a>(have: &[&'a Extra], kind: &str, name: &[u8]) -> Option<(usize
     })
 }
 
-/// Meshes UI T5b (Note CV19): heel height on a shape. Set writes HH_OFFSET (edited in place when the shape has one),
+/// Meshes UI T5b (Note CZ19): heel height on a shape. Set writes HH_OFFSET (edited in place when the shape has one),
 /// moves the first SDTA's last "NPC" entry to the same Z when the shape has an SDTA, or adds an SDTA only when
 /// ticked. Calculate fills Z from the shape's lowest bind-pose vertex; the value stays editable.
 fn heel_row(

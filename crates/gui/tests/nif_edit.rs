@@ -7880,7 +7880,7 @@ fn a_type_bound_flag_blocks_export_even_in_an_untouched_source() {
     assert_eq!(e.export_block().as_deref(), Some(FACEGEN_DETAIL));
 }
 
-// ---- Meshes UI T5b: heel height (Note CV19) ----
+// ---- Meshes UI T5b: heel height (Note CZ19) ----
 
 /// The heel scene on the Extra data tab with shape `name` selected and the heel entry picked.
 fn heel_view(name: &str, sibling: Option<&str>) -> Harness<'static, MeshesModel> {
@@ -8214,7 +8214,7 @@ fn heel_row_ignores_an_earlier_orphan_shape() {
         .is_none());
 }
 
-// ---- Meshes UI T6: panel orientation (Note CV21) ----
+// ---- Meshes UI T6: panel orientation (Note CZ21) ----
 
 /// The panel names what the tabs act on, under the tab strip: the selected shape and its type, or the root.
 #[test]
@@ -8272,7 +8272,7 @@ fn open_flags(h: &mut Harness<'static, MeshesModel>) {
     }
 }
 
-// ---- Meshes UI T7: rule fixes (Note CV22) ----
+// ---- Meshes UI T7: rule fixes (Note CZ22) ----
 
 /// The app in the Meshes view at `w` × `hgt` with x.nif's edit open on its first lit shape; `gpu` renders with wgpu.
 fn app_edit(w: f32, hgt: f32, gpu: bool) -> (tempfile::TempDir, AppH) {

@@ -40,7 +40,7 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         });
         ui.data_mut(|d| d.insert_temp(tab_id, tab));
-        // Meshes UI T6 (Note CV21): what the tabs act on, always in sight.
+        // Meshes UI T6 (Note CZ21): what the tabs act on, always in sight.
         ui.add(egui::Label::new(editing_line(e)).truncate());
         ui.separator();
         // Both ways: a wide row scrolls instead of widening the panel; thin bars stay visible without hover.

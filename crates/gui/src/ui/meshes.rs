@@ -826,7 +826,7 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 ui.add_space(CARD_GAP);
             }
             // While editing, the edited copy's shapes (the shown copy may be PGPatcher's, numbered differently); each
-            // with its card from the edited bytes (Note CV1), else a title only. The lookup is built once a frame.
+            // with its card from the edited bytes (Note CZ1), else a title only. The lookup is built once a frame.
             let cards: Vec<(u32, Option<&ShapeView>, Option<&str>, String)> = match &m.edit {
                 Some(e) => {
                     let by: HashMap<(u32, Option<&str>), &ShapeView> = e

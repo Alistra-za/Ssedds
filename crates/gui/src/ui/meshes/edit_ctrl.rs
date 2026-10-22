@@ -68,7 +68,7 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
     let Some(shape) = selected(ui, e, "controllers") else {
         return;
     };
-    // Owner decision 3 (Note CV15): Preview stays at the top; it decides what the 3D view plays.
+    // Owner decision 3 (Note CZ15): Preview stays at the top; it decides what the 3D view plays.
     if !e.model.sequences.is_empty() {
         preview(ui, e, act);
         ui.separator();
@@ -95,7 +95,7 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
     clips_section(ui, e, act, shape, &chains);
 }
 
-/// Meshes UI T4 (Note CV15): every clip control but Preview in one section at the end of the tab, closed by default:
+/// Meshes UI T4 (Note CZ15): every clip control but Preview in one section at the end of the tab, closed by default:
 /// Rename and Remove of the picked clip, Convert to clips per property, New clip. It opens itself on the frame a
 /// clip refusal appears, so the red line is seen.
 fn clips_section(
@@ -682,7 +682,7 @@ fn chain(
             }
         }
     });
-    // Convert to clips moved to the Clips section (Note CV15).
+    // Convert to clips moved to the Clips section (Note CZ15).
     add_row(ui, e, act, shape, owner, prop);
 }
 
@@ -924,7 +924,7 @@ fn clips(
         };
         any = true;
         let name = clip_name(s);
-        // Note CV15: one weak line, so a clip no longer reads like a section heading.
+        // Note CZ15: one weak line, so a clip no longer reads like a section heading.
         ui.weak(format!(
             "In clip {name} · {} · {} to {} s",
             cycle_name(s.cycle),

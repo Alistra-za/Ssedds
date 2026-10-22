@@ -1,4 +1,4 @@
-//! Meshes UI T5b (Note CV19): the heel height helpers, and the owner-data check of Calculate against the corpus.
+//! Meshes UI T5b (Note CZ19): the heel height helpers, and the owner-data check of Calculate against the corpus.
 use nif::extra::ExtraValue;
 use sdc_gui::model::meshes::nif_edit::{heel_z_of, sdta_npc_z, sdta_with_npc_z};
 use std::io::Read;

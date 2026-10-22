@@ -89,7 +89,7 @@ pub struct NifEdit {
     pub error: Option<String>,
     /// Every enabled copy of the NIF (the store's order), for the placement check and the PGPatcher re-run note.
     pub copies: Vec<PathCopy>,
-    /// The shape cards of the edited bytes (`shape_cards`), rebuilt by every `reapply` (Note CV1; was the scan's
+    /// The shape cards of the edited bytes (`shape_cards`), rebuilt by every `reapply` (Note CZ1; was the scan's
     /// cards of `source_copy`, final review I1).
     pub cards: Vec<ShapeView>,
     /// Meshes UI T2: each shape's controllers line ("2: Emissive multiple, Alpha (clip)"), by shape block; rebuilt with
@@ -995,7 +995,7 @@ fn anim_tracks(
 }
 
 /// The shape cards of `bytes`, as the scan store would give them for these bytes (`modscan` `write_shapes` and
-/// `shapes_of`): the edit-mode cards then show the edited values (Note CV1). Empty when the bytes do not scan.
+/// `shapes_of`): the edit-mode cards then show the edited values (Note CZ1). Empty when the bytes do not scan.
 pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
     use modscan::store::{RawSlot, MAX_SLOTS};
     use nif::path::TexPath;
@@ -1086,7 +1086,7 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
         .collect()
 }
 
-/// Meshes UI T5b (Note CV19): the heel height shape `shape` needs, Z = −(lowest bind-pose vertex Z) in root space,
+/// Meshes UI T5b (Note CZ19): the heel height shape `shape` needs, Z = −(lowest bind-pose vertex Z) in root space,
 /// rounded to 0.1. A skinned shape's vertices go through the inverse of its NiSkinData skin transform; an unskinned
 /// one through its node chain. None when the shape has no drawable geometry (a non-lighting shape, an LE file).
 pub fn heel_z_of(bytes: &[u8], shape: u32) -> Option<f32> {

@@ -360,7 +360,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
     }
     let (lt, p) = (&l.lighting, &l.lighting.params);
     let pbr = lt.slsf2 & SLSF2_TRUE_PBR != 0;
-    // Meshes UI T6 (Note CV21): the texture slots first, as the shape's identity.
+    // Meshes UI T6 (Note CZ21): the texture slots first, as the shape's identity.
     texture_slots(ui, m, e, shape, l, act);
     ui.separator();
 
@@ -532,7 +532,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
     ] {
         egui::CollapsingHeader::new(format!("{label} 0x{v:08X}"))
             .id_salt(("meshes-edit-flags", label, at.block))
-            // Meshes UI T6 (Note CV21): closed by default, so the slots and the values come first; open when a flag
+            // Meshes UI T6 (Note CZ21): closed by default, so the slots and the values come first; open when a flag
             // has a warning, so its Fix is in sight. shortcut: `default_open` acts on the first draw only, so a warning
             // that appears later on a closed list stays inside it (the Export footer still names a blocking one); open
             // it with `CollapsingState` on a new warning if users miss one.
