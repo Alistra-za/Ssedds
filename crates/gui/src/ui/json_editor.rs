@@ -214,8 +214,9 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     ));
     let spots = error_spots(entries, issues);
     let (prev, next) = toolbar(ui, &mut nav, issues, entries, &spots);
-    let key_next = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F8));
+    // Trace #19: egui matches plain F8 with an extra Shift, so Shift+F8 is consumed first.
     let key_prev = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F8));
+    let key_next = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F8));
     let dir = if prev || key_prev {
         Some(false)
     } else if next || key_next {
