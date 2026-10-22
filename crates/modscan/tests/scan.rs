@@ -253,6 +253,28 @@ fn dups_are_dup_of_and_overwrite_only_derives_listed_paths() {
     assert_eq!(ay.overridden_by.as_deref(), Some("overwrite"));
 }
 
+/// Trace 2026-10-22 #3: a PGPatcher-listed mesh in overwrite is a derived copy for `copies_of_path` too (the copy
+/// flag, not the origin's, which overwrite never has).
+#[test]
+fn copies_of_path_marks_pgpatcher_output_in_overwrite_derived() {
+    let d = instance_fixture("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "overwrite/meshes/x.nif", None);
+    put(d.path(), "overwrite/PGPatcher.esp", Some(b"e"));
+    put(
+        d.path(),
+        "overwrite/ParallaxGen_Diff.json",
+        Some(br#"{"meshes\\x.nif":{"crc32original":1,"crc32patched":2}}"#),
+    );
+    let (store, _) = go(&d, vec![]);
+    let ow = mod_id(&store, "overwrite");
+    let row = &store.nifs_of(ow).unwrap()[0];
+    assert!(row.derived, "the scan marks the copy derived");
+    let c = store.copies_of_path("meshes/x.nif").unwrap();
+    let names: Vec<(&str, bool)> = c.iter().map(|c| (c.origin.as_str(), c.derived)).collect();
+    assert_eq!(names, [("overwrite", true), ("A", false)]);
+}
+
 #[test]
 fn separators_are_listed_above_their_group() {
     let d = instance_fixture("+B\n-Sep_separator\n+A\n");

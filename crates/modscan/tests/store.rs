@@ -1239,6 +1239,14 @@ fn copies_of_path_orders_loose_by_priority_then_bsas() {
         .map(|&o| put(&mut s, p, o, 0, lit(&[]), false))
         .collect();
     put(&mut s, "meshes/x/other.nif", a, 0, lit(&[]), false);
+    // As the scan writes it: every copy in a PGPatcher mod is a derived copy.
+    s.set_derived(&[DeriveRow {
+        copy_id: ids[2],
+        is_derived: true,
+        source_copy_id: None,
+        derive_check: None,
+    }])
+    .unwrap();
     let c = s.copies_of_path(p).unwrap();
     let names: Vec<&str> = c.iter().map(|c| c.origin.as_str()).collect();
     assert_eq!(names, ["PG", "B", "A", "hi.bsa", "lo.bsa"]);
