@@ -380,11 +380,33 @@ impl AppModel {
     }
 
     /// The recorded provenance of item `key` (keys match by Unicode lowercase).
+    /// Parsed once per (sets document, items) revision, as `generated_info` (final review M4).
     pub fn provenance(&self, key: &str) -> Option<Provenance> {
-        let fold = key.to_lowercase();
-        let all = self.sets_doc.as_ref()?.generated();
-        let (_, v) = all.iter().find(|(k, _)| k.to_lowercase() == fold)?;
-        serde_json::from_value(v.clone()).ok()
+        let d = self.sets_doc.as_ref()?;
+        let rev = (d.rev(), self.items_rev());
+        let mut c = self.gen_info.borrow_mut();
+        let all = match &c.provs {
+            Some((r, all)) if *r == rev => all.clone(),
+            _ => {
+                let all: Provs = Arc::new(
+                    d.generated()
+                        .into_iter()
+                        .filter_map(|(k, v)| {
+                            Some((k.to_lowercase(), serde_json::from_value(v).ok()?))
+                        })
+                        .collect(),
+                );
+                c.provs = Some((rev, all.clone()));
+                c.prov_builds += 1;
+                all
+            }
+        };
+        all.get(&key.to_lowercase()).cloned()
+    }
+
+    /// `[generated]` parses for `provenance` (tests).
+    pub fn gen_prov_builds(&self) -> u32 {
+        self.gen_info.borrow().prov_builds
     }
 
     /// Generated items of the set, by set key (P5: a GEN-REPLACED loser is no member but keeps its set).
@@ -644,7 +666,23 @@ impl AppModel {
                 .filter_map(|k| self.item(k))
                 .filter(|p| p.kind == ItemKind::Packed)
                 .filter_map(|p| p.job.as_ref())
-                .any(|j| engine::dds::same_file(&i.input, &j.output))
+                .any(|j| self.same_file_cached(&i.input, &j.output))
+    }
+
+    /// `dds::same_file` (a canonicalize per path), kept `STAT_TTL` per pair so an open dialog does not stat every
+    /// frame (final review M4), as `header_dims` does.
+    fn same_file_cached(&self, a: &Path, b: &Path) -> bool {
+        let now = Instant::now();
+        let key = (a.to_path_buf(), b.to_path_buf());
+        let mut c = self.gen_info.borrow_mut();
+        if let Some((at, same)) = c.same.get(&key) {
+            if now.saturating_duration_since(*at) < STAT_TTL {
+                return *same;
+            }
+        }
+        let same = engine::dds::same_file(a, b);
+        c.same.insert(key, (now, same));
+        same
     }
 
     fn normal_dims(&self, normal: &str) -> Result<(u32, u32), String> {
@@ -951,8 +989,8 @@ fn run_job(
     let sizes: BTreeSet<u32> = targets.iter().map(|t| t.3).collect();
     let mut first = None;
     let mut made = vec![];
-    // shortcut: two sizes (a height at its 1024 cap beside a 2048 AO) solve twice; pass per-map sizes into
-    // `generate` if that cost shows. Each call reports its part, so the progress line runs once (`overall_progress`).
+    // shortcut: up to three sizes (height, AO and curvature each at their own, CO113) solve up to three times; pass per-map
+    // sizes into `generate` if that cost shows. Each call reports its part, so the progress line runs once (`overall_progress`).
     let parts = sizes.len() as u32;
     for (i, size) in sizes.into_iter().enumerate() {
         part.store(((i as u32) << 8) | parts, Ordering::Relaxed);
@@ -1328,6 +1366,17 @@ impl AppModel {
             }
         };
         let solo = [GenMap::Ao, GenMap::Curvature].map(|m| (m, size_of(m)));
+        // The map's record, when the set has one: its own settings load with the tick (final review M2, Goal 7).
+        let rec = self
+            .gen
+            .as_ref()
+            .filter(|_| on)
+            .and_then(|g| {
+                self.generated_items(&g.set).into_iter().find_map(|(k, p)| {
+                    (gen_role(&stem(&k)).and_then(|r| map_of(&r)) == Some(map)).then_some(p)?
+                })
+            })
+            .map(|p| p.opts);
         let Some(g) = self.gen.as_mut() else {
             return;
         };
@@ -1337,9 +1386,23 @@ impl AppModel {
             g.ticked.remove(&map);
         }
         match map {
-            GenMap::Ao => g.opts.ao = on.then(|| g.opts.ao.take().unwrap_or_default()),
+            GenMap::Ao => {
+                g.opts.ao = on.then(|| {
+                    rec.and_then(|r| r.ao)
+                        .or(g.opts.ao.take())
+                        .unwrap_or_default()
+                })
+            }
             GenMap::Curvature => g.opts.curvature = on,
-            GenMap::Height => {}
+            // Only the strength: the neutral is the set's current one (spec-S3).
+            GenMap::Height => {
+                if let (Some(h), Some(s)) = (
+                    g.opts.height.as_mut(),
+                    rec.and_then(|r| r.height).map(|h| h.strength),
+                ) {
+                    h.strength = s;
+                }
+            }
         }
         for (m, s) in solo {
             if let (true, Some(s)) = (g.ticked.len() == 1 && g.ticked.contains(&m), s) {
@@ -1732,11 +1795,20 @@ pub const DELETE_ENTRY: &str = "Delete generated file…";
 
 /// `AppModel::gen_info`: each normal's sha256 by path with the stamp it was read at, the hashes taken (tests), and
 /// each item's `GenInfo` with the (sets document, items) revisions it was built at.
+/// `[generated]` parsed, by lowercase item key.
+type Provs = Arc<std::collections::HashMap<String, Provenance>>;
+
 #[derive(Default)]
 pub struct GenInfoCache {
     hashes: std::collections::HashMap<PathBuf, (Option<SourceStamp>, String)>,
     hashed: u32,
     infos: std::collections::HashMap<String, ((u64, u64), Option<GenInfo>)>,
+    /// `[generated]` parsed once per (sets document, items) revision, by lowercase key (final review M4), and the
+    /// rebuilds (tests).
+    provs: Option<((u64, u64), Provs)>,
+    prov_builds: u32,
+    /// `own_packed_export`'s `same_file` answers by (DDS, packed output), re-checked after `STAT_TTL`.
+    same: std::collections::HashMap<(PathBuf, PathBuf), (Instant, bool)>,
 }
 
 /// One file in the "Delete generated file" box: its texts and hash are read when it opens; on Delete the file must
@@ -1969,54 +2041,49 @@ impl AppModel {
             .collect()
     }
 
-    /// Open the "Delete generated file" box for `keys` (CE3: user-confirmed). Each file's hash is read here, once.
-    pub fn ask_delete_generated(&mut self, keys: &[String]) {
-        let rows: Vec<DeleteGenerated> = keys
-            .iter()
-            .filter_map(|k| {
-                let i = self.item(k)?;
-                let p = self.provenance(k);
-                let now = crate::model::history::sha256_of(&i.input);
-                let (body, refused) = match &p {
-                    None => (
-                        format!(
-                            "Delete {}? Tessalith has no record of generating it.",
-                            i.name
-                        ),
-                        now.is_none().then(|| format!("{} cannot be read", i.name)),
-                    ),
-                    Some(p) => {
-                        let from = self
-                            .item(&p.from)
-                            .map_or(p.from.as_str(), |n| n.name.as_str());
-                        let body = format!("Delete {}? It was generated from {from}.", i.name);
-                        match &now {
-                            Some(s) if *s == p.sha256 => (body, None),
-                            Some(_) => (format!("{body} It was edited since."), None),
-                            None => (body, Some(format!("{} cannot be read", i.name))),
-                        }
-                    }
-                };
-                Some(DeleteGenerated {
-                    key: k.clone(),
-                    name: i.name.clone(),
-                    path: i.input.clone(),
-                    body,
-                    refused,
-                    seen: now,
-                })
-            })
-            .collect();
-        if !rows.is_empty() {
-            self.dialog = Some(crate::model::Dialog::ConfirmDeleteGenerated(rows));
-        }
+    /// Open the "Delete generated file" box for item `key` (CE3: user-confirmed). Its hash is read here, once.
+    pub fn ask_delete_generated(&mut self, key: &str) {
+        let Some(i) = self.item(key) else {
+            return;
+        };
+        let p = self.provenance(key);
+        let now = crate::model::history::sha256_of(&i.input);
+        let (body, refused) = match &p {
+            None => (
+                format!(
+                    "Delete {}? Tessalith has no record of generating it.",
+                    i.name
+                ),
+                now.is_none().then(|| format!("{} cannot be read", i.name)),
+            ),
+            Some(p) => {
+                let from = self
+                    .item(&p.from)
+                    .map_or(p.from.as_str(), |n| n.name.as_str());
+                let body = format!("Delete {}? It was generated from {from}.", i.name);
+                match &now {
+                    Some(s) if *s == p.sha256 => (body, None),
+                    Some(_) => (format!("{body} It was edited since."), None),
+                    None => (body, Some(format!("{} cannot be read", i.name))),
+                }
+            }
+        };
+        let row = DeleteGenerated {
+            key: key.to_string(),
+            name: i.name.clone(),
+            path: i.input.clone(),
+            body,
+            refused,
+            seen: now,
+        };
+        self.dialog = Some(crate::model::Dialog::ConfirmDeleteGenerated(Box::new(row)));
     }
 
     /// "Delete …" in the box: delete each file that is still the one Tessalith wrote (its hash is checked again
     /// now), then drop its record outside the undo history (P14's save-if-clean rule) and re-plan. Not undoable: the
     /// confirm box is the safeguard.
     pub fn confirm_delete_generated(&mut self) {
-        let Some(crate::model::Dialog::ConfirmDeleteGenerated(rows)) = self.dialog.take() else {
+        let Some(crate::model::Dialog::ConfirmDeleteGenerated(r)) = self.dialog.take() else {
             return;
         };
         // Review M5: the record could not be dropped, so nothing is deleted.
@@ -2024,40 +2091,33 @@ impl AppModel {
             self.gen_notice(why);
             return;
         }
-        let mut notes = vec![];
-        let mut gone = vec![];
-        for r in rows.iter().filter(|r| r.refused.is_none()) {
-            if crate::model::history::sha256_of(&r.path) != r.seen {
-                notes.push(format!("{} changed since; it was not deleted", r.name));
-                continue;
+        if r.refused.is_some() {
+            return;
+        }
+        if crate::model::history::sha256_of(&r.path) != r.seen {
+            self.gen_notice(format!("{} changed since; it was not deleted", r.name));
+            return;
+        }
+        if let Err(e) = std::fs::remove_file(&r.path) {
+            self.gen_notice(format!("{}: {e}", r.path.display()));
+            return;
+        }
+        let k = &r.key;
+        if let Some(d) = self.sets_doc.as_mut() {
+            let was_dirty = d.is_dirty();
+            d.set_generated(k, None);
+            // Review M4: a file moved in with its normal leaves the set's `add` too (no SET-EDIT-STALE).
+            for e in d
+                .entries()
+                .iter()
+                .filter(|e| e.add.iter().any(|f| engine::sets::same_id(f, k)))
+            {
+                d.remove_member(&e.id, k);
             }
-            match std::fs::remove_file(&r.path) {
-                Ok(()) => gone.push(r.key.clone()),
-                Err(e) => notes.push(format!("{}: {e}", r.path.display())),
+            if self.save_record(was_dirty) {
+                self.status_note = Some(PROVENANCE_DEFERRED.into());
             }
         }
-        if !gone.is_empty() {
-            if let Some(d) = self.sets_doc.as_mut() {
-                let was_dirty = d.is_dirty();
-                let entries = d.entries();
-                for k in &gone {
-                    d.set_generated(k, None);
-                    // Review M4: a file moved in with its normal leaves the set's `add` too (no SET-EDIT-STALE).
-                    for e in entries
-                        .iter()
-                        .filter(|e| e.add.iter().any(|f| engine::sets::same_id(f, k)))
-                    {
-                        d.remove_member(&e.id, k);
-                    }
-                }
-                if self.save_record(was_dirty) {
-                    self.status_note = Some(PROVENANCE_DEFERRED.into());
-                }
-            }
-            self.replan();
-        }
-        if let Some(n) = notes.into_iter().reduce(|a, b| format!("{a}; {b}")) {
-            self.gen_notice(n);
-        }
+        self.replan();
     }
 }

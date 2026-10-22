@@ -2019,7 +2019,7 @@ fn an_in_place_export_still_offers_regenerate() {
 
 fn delete_rows(m: &AppModel) -> Vec<DeleteGenerated> {
     match &m.dialog {
-        Some(Dialog::ConfirmDeleteGenerated(d)) => d.clone(),
+        Some(Dialog::ConfirmDeleteGenerated(d)) => vec![(**d).clone()],
         d => panic!("{d:?}"),
     }
 }
@@ -2090,7 +2090,7 @@ fn a_real_height_added_later_replaces_the_generated_one_and_delete_is_offered() 
     let mut m = relief_rock(d.path());
     generate_height(&mut m);
     let p = land(d.path()).join("rock01_p_generated.png");
-    m.ask_delete_generated(&[P_KEY.to_string()]);
+    m.ask_delete_generated(P_KEY);
     let mut b = std::fs::read(&p).unwrap();
     b.push(0);
     std::fs::write(&p, &b).unwrap();
@@ -2127,7 +2127,7 @@ fn delete_takes_a_moved_in_generated_file_out_of_the_set() {
     };
     assert!(added(&m), "moved in with its normal");
     let steps = m.history.undo.len();
-    m.ask_delete_generated(&[key.to_string()]);
+    m.ask_delete_generated(key);
     m.confirm_delete_generated();
     idle(&mut m);
     assert!(!land(d.path()).join("stone_p_generated.png").exists());
@@ -2161,7 +2161,7 @@ fn a_read_only_project_deletes_nothing() {
         "{:?}",
         e.disabled
     );
-    m.ask_delete_generated(&[P_KEY.to_string()]);
+    m.ask_delete_generated(P_KEY);
     m.confirm_delete_generated();
     assert!(p.exists(), "kept");
     assert!(m.status_line.starts_with("sdc-project.toml is read-only: "));
@@ -3503,4 +3503,74 @@ fn curvature_takes_a_rectangular_or_dds_albedos_size() {
                 .into()
         )
     );
+}
+
+// ---- Final fix wave ----
+
+#[test]
+fn a_map_ticked_after_opening_loads_its_record() {
+    // Final review M2: a height (Strength 0.6, 128) and an AO (Radius 0.1, Depth 2, 64) recorded in two calls.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    relief_normal(&land(d.path()), NORMAL, 128);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen
+        .as_mut()
+        .unwrap()
+        .opts
+        .height
+        .as_mut()
+        .unwrap()
+        .strength = 0.6;
+    m.gen_tick(GenMap::Ao, true);
+    {
+        let a = m.gen.as_mut().unwrap().opts.ao.as_mut().unwrap();
+        (a.radius, a.depth) = (0.1, 2.0);
+    }
+    let ao_rec = m.gen.as_ref().unwrap().opts.ao.clone();
+    m.gen_generate();
+    idle(&mut m);
+    assert!(m.gen.is_none());
+    // Regenerate from the Height row, then tick AO: AO's recorded settings, not the defaults.
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    assert_eq!(m.gen.as_ref().unwrap().opts.ao, None);
+    m.gen_tick(GenMap::Ao, true);
+    assert_eq!(m.gen.as_ref().unwrap().opts.ao, ao_rec);
+    // The other way round: opened for AO, then Height ticked keeps the recorded Strength.
+    m.gen_cancel();
+    m.open_gen(ROCK_SET, Some(GenMap::Ao));
+    m.gen_tick(GenMap::Height, true);
+    assert_eq!(
+        m.gen
+            .as_ref()
+            .unwrap()
+            .opts
+            .height
+            .as_ref()
+            .unwrap()
+            .strength,
+        0.6
+    );
+}
+
+#[test]
+fn provenance_is_parsed_once_per_revision() {
+    // Final review M4: the open dialog's offers read the generated table from a cache, not per frame.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    m.open_gen(ROCK_SET, None);
+    let _ = m.gen_facts();
+    let before = m.gen_prov_builds();
+    for _ in 0..5 {
+        let _ = m.gen_facts();
+        assert!(m.provenance(P_KEY).is_some());
+    }
+    assert_eq!(m.gen_prov_builds(), before, "no rebuild without an edit");
+    m.gen_cancel();
+    m.ask_delete_generated(P_KEY);
+    m.confirm_delete_generated();
+    idle(&mut m);
+    assert!(m.provenance(P_KEY).is_none(), "a forgotten record is gone");
 }

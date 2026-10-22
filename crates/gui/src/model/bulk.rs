@@ -1346,7 +1346,7 @@ impl AppModel {
             MenuAction::Generated {
                 op: GenOp::Delete(key),
                 ..
-            } => self.ask_delete_generated(&[key]),
+            } => self.ask_delete_generated(&key),
         }
         None
     }

@@ -167,7 +167,7 @@ pub enum Dialog {
     /// v2 Track B: "Generate from normal map…" for this set id; its state is `AppModel::gen` (floats are not `Eq`).
     GenerateFromNormal(String),
     /// Note CO: "Delete generated file…", asked once per file; texts and refusals read when it opened.
-    ConfirmDeleteGenerated(Vec<from_normal::DeleteGenerated>),
+    ConfirmDeleteGenerated(Box<from_normal::DeleteGenerated>),
     Error(String),
 }
 

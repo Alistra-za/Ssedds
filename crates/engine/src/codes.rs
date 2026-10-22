@@ -17,6 +17,7 @@
 //! and ALPHA-PARALLAX-NO-ALPHA (`alpha.parallax` on for a complex `_m` whose source has no alpha, DECISIONS AH2).
 //! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
 //! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CL).
+//! and the three `GEN-*` codes of generated maps: GEN-REPLACED, GEN-STALE (GUI only) and GEN-AO (v2 Generate from normal map, DECISIONS Note CO).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

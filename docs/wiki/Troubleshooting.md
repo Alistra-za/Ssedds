@@ -305,6 +305,16 @@ These come from the GUI's artist checks, plus `CHK-LOW-DETAIL`, which convert me
 | `CHK-LOW-DETAIL` | warning | Mip 0 adds little detail over mip 1. | Export at half size, or ignore. |
 | `CHK-UV-GUTTER` | warning | UV islands closer than 8 texels for more than 2 % of used texels. | Space the islands out. |
 
+### Generated maps
+
+These concern the `*_generated.png` files the GUI's **Generate from normal map…** writes.
+
+| Code | Severity | Meaning | Fix |
+|---|---|---|---|
+| `GEN-REPLACED` | info | A generated file was skipped because a real map for the same slot is in the set. It counts as skipped on purpose. | Nothing; the real map wins. Delete the generated file if you no longer want it. |
+| `GEN-STALE` | info | GUI only: the generated file's normal, height neutral or shader changed since it was made. | **Regenerate…**, or ignore. |
+| `GEN-AO` | info | A packed `_rmaos` takes its blue channel from a generated AO (in place of `PACK-DEFAULTED`). | Nothing; a baked AO is better if you have one. |
+
 ## In-game checklist
 
 Tessalith's validation checks the files, not the game. After installing converted textures, check them in game. These checks follow the in-game tests behind Tessalith's defaults, and each notes the tested result where one set a current default.

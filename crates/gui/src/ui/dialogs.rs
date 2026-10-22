@@ -19,7 +19,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
         Dialog::Rename(d) => super::rename_dialog::draw(ctx, model, d),
         Dialog::GenerateFromNormal(_) => super::from_normal::draw(ctx, model),
-        Dialog::ConfirmDeleteGenerated(rows) => confirm_delete_generated(ctx, model, &rows),
+        Dialog::ConfirmDeleteGenerated(r) => confirm_delete_generated(ctx, model, &r),
         Dialog::HalfSize(rows) => half_size(ctx, model, rows),
         Dialog::CopyHalfSize { from, to, .. } => copy_half_size(ctx, model, &from, to.len()),
     }
@@ -406,13 +406,9 @@ pub fn delete_generated_buttons(name: &str) -> [(String, Role, bool); 2] {
 fn confirm_delete_generated(
     ctx: &egui::Context,
     model: &mut AppModel,
-    rows: &[crate::model::from_normal::DeleteGenerated],
+    r: &crate::model::from_normal::DeleteGenerated,
 ) {
-    let name = match rows {
-        [r] => short_name(&r.name),
-        _ => format!("{} files", rows.len()),
-    };
-    let owned = delete_generated_buttons(&name);
+    let owned = delete_generated_buttons(&short_name(&r.name));
     let buttons: Vec<(&str, Role, bool)> =
         owned.iter().map(|(l, r, e)| (l.as_str(), *r, *e)).collect();
     let (k, clicked) = dialog(
@@ -423,11 +419,9 @@ fn confirm_delete_generated(
         "Delete generated file",
         &buttons,
         |ui| {
-            for r in rows {
-                ui.label(&r.body);
-                if let Some(why) = &r.refused {
-                    ui.weak(format!("Not deleted: {why}."));
-                }
+            ui.label(&r.body);
+            if let Some(why) = &r.refused {
+                ui.weak(format!("Not deleted: {why}."));
             }
             ui.weak("This cannot be undone.");
         },

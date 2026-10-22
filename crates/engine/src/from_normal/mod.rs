@@ -417,7 +417,7 @@ pub fn generate(
     };
     step(0)?;
     let longer = w.max(h);
-    // shortcut: cancel is read between stages and rows, not inside one FFT solve (up to ~0.3 s at 1024); pass `cancel`
+    // shortcut: cancel is read between stages and rows, not inside one FFT solve (about 0.2 s at 1024, CO36); pass `cancel`
     // into `solve` if a longer solve ever makes that wait noticeable.
     let full = slopes(stored, GreenConvention::Directx);
     step(100)?;
