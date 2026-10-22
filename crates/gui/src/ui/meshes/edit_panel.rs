@@ -237,6 +237,8 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     let n = e.doc.ops.len();
     let text = match (e.up_to_date, n) {
         (true, _) => "Export NIF again".to_string(),
+        // Every edit undone after an export: writing the source back needs no count.
+        (false, 0) => "Export NIF".to_string(),
         (false, 1) => "Export NIF · 1 edit".to_string(),
         (false, n) => format!("Export NIF · {n} edits"),
     };
