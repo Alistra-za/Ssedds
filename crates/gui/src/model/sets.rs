@@ -815,11 +815,16 @@ pub fn renamed_output(job_key: &str, name: &str) -> Option<PathBuf> {
 /// F3b: whether `name` can be an output base name. A name ending in a map suffix (`wall_n`) is refused: the
 /// suffix belongs to each output, and the name would be read back as a base plus that suffix.
 pub fn check_output_name(name: &str) -> Result<(), String> {
-    check_file_name(name, "output name").map_err(|e| e.0)?;
+    check_named(name, "output name")
+}
+
+/// `check_output_name` for a named field (the PGPatcher `rename` box shares it).
+pub fn check_named(name: &str, field: &str) -> Result<(), String> {
+    check_file_name(name, field).map_err(|e| e.0)?;
     let base = base_of(name);
     if base.len() < name.len() {
         return Err(format!(
-            "output name: ends in {}, a map suffix; each output keeps its own ({name:?})",
+            "{field}: ends in {}, a map suffix; each output keeps its own ({name:?})",
             &name[base.len()..]
         ));
     }
