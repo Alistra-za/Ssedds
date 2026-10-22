@@ -70,6 +70,10 @@ pub const FACE_TINT_FLAG: &str =
 /// Note CU8 (C6E): Skyrim crashes in Load3D on a NiControllerManager that lists no sequences.
 pub const EMPTY_MANAGER: &str =
     "This file has a NiControllerManager with no clips: the game crashes on it.";
+/// Heel data (HH_OFFSET or SDTA) on the root or a property: RaceMenu reads it only on a shape (HH-results).
+pub const HEEL_NOT_ON_SHAPE: &str = "The game ignores heel height here. Put it on a shape.";
+/// Heel data on a shape after the first shape that has some: the first shape wins (HH-results).
+pub const HEEL_EARLIER_WINS: &str = "An earlier shape's heel height wins.";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
 const ALWAYS_BLOCK: [&str; 4] = [
     ENV_SCALE_PBR,
@@ -391,6 +395,55 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
                 "BSXFlags must be named BSX",
                 None,
             );
+        }
+    }
+
+    // Meshes UI T5b (HH-results, 2026-10-22): RaceMenu reads heel data only on a shape, and the first shape wins.
+    let heel = |b: &u32| {
+        m.extras.get(b).is_some_and(|x| {
+            x.name.as_deref().is_some_and(|n| {
+                n.eq_ignore_ascii_case(b"HH_OFFSET") || n.eq_ignore_ascii_case(b"SDTA")
+            })
+        })
+    };
+    let props = m
+        .lighting
+        .values()
+        .map(|l| &l.prop.net)
+        .chain(m.alphas.values().map(|a| &a.prop.net));
+    for net in m.root_net.iter().chain(props) {
+        for b in net
+            .extra
+            .iter()
+            .filter_map(|&r| u32::try_from(r).ok())
+            .filter(heel)
+        {
+            push(
+                Level::Warn,
+                Target::Extra { block: b },
+                HEEL_NOT_ON_SHAPE,
+                None,
+            );
+        }
+    }
+    let mut first = true;
+    for s in &m.shapes {
+        let mine: Vec<u32> = s
+            .net
+            .extra
+            .iter()
+            .filter_map(|&r| u32::try_from(r).ok())
+            .filter(heel)
+            .collect();
+        if !mine.is_empty() && !std::mem::take(&mut first) {
+            for b in mine {
+                push(
+                    Level::Warn,
+                    Target::Extra { block: b },
+                    HEEL_EARLIER_WINS,
+                    None,
+                );
+            }
         }
     }
 

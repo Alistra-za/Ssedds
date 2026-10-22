@@ -110,6 +110,9 @@ pub struct NifEdit {
     /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
     /// the ops per frame.
     pub up_to_date: bool,
+    /// Meshes UI T5b: the other weight file (`x_0.nif` ↔ `x_1.nif`) when the scan has it, set when the session opens.
+    /// The game uses `_1` only at weight 100, so a heel height belongs in both; the editor edits one file at a time.
+    pub weight_sibling: Option<String>,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -348,6 +351,7 @@ impl NifEdit {
             export_note: None,
             cleanup_note: None,
             up_to_date: false,
+            weight_sibling: None,
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -1079,6 +1083,78 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
         .collect()
 }
 
+/// Meshes UI T5b (Note CV19): the heel height shape `shape` needs, Z = −(lowest bind-pose vertex Z) in root space,
+/// rounded to 0.1. A skinned shape's vertices go through the inverse of its NiSkinData skin transform; an unskinned
+/// one through its node chain. None when the shape has no drawable geometry (a non-lighting shape, an LE file).
+pub fn heel_z_of(bytes: &[u8], shape: u32) -> Option<f32> {
+    let parsed = render3d::parse(bytes);
+    let s = parsed.shapes.iter().find(|s| s.id.0 == shape)?;
+    let h = nif::header::Header::parse(bytes).ok()?;
+    let m = nif::geom::skin_to_root(&h, bytes, shape as usize)
+        .ok()?
+        .unwrap_or(s.world);
+    let low = s
+        .mesh
+        .positions
+        .iter()
+        .map(|p| m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2] + m[2][3])
+        .fold(f32::INFINITY, f32::min);
+    let z = (-low * 10.0).round() / 10.0;
+    z.is_finite().then_some(z + 0.0) // + 0.0: never "-0"
+}
+
+/// The other weight file of `data_path`: `…_0.nif` ↔ `…_1.nif` (any case, the case kept). None for other names.
+pub fn weight_sibling_of(data_path: &str) -> Option<String> {
+    let dot = data_path.len().checked_sub(4)?;
+    if !data_path.get(dot..)?.eq_ignore_ascii_case(".nif") {
+        return None;
+    }
+    let (stem, ext) = data_path.split_at(dot);
+    let other = match stem.get(stem.len().checked_sub(2)?..)? {
+        "_0" => "_1",
+        "_1" => "_0",
+        _ => return None,
+    };
+    Some(format!("{}{other}{ext}", &stem[..stem.len() - 2]))
+}
+
+/// The Z of the last "NPC" entry of an SDTA string (`[{"name":"NPC","pos":[x,y,Z]}, …]`): the entry RaceMenu uses.
+pub fn sdta_npc_z(sdta: &str) -> Option<f32> {
+    let v: serde_json::Value = serde_json::from_str(sdta).ok()?;
+    let npc = v
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("NPC"))?;
+    npc.get("pos")?.get(2)?.as_f64().map(|z| z as f32)
+}
+
+/// `sdta` with its last "NPC" entry's Z set to `z`, other entries kept; an "NPC" entry is appended when there is
+/// none. None when the string is not a JSON array.
+pub fn sdta_with_npc_z(sdta: &str, z: f32) -> Option<String> {
+    let mut v: serde_json::Value = serde_json::from_str(sdta).ok()?;
+    let list = v.as_array_mut()?;
+    let zv = serde_json::json!((z as f64 * 10.0).round() / 10.0);
+    let npc = list
+        .iter_mut()
+        .rev()
+        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("NPC"));
+    match npc {
+        Some(e) => {
+            let pos = e
+                .as_object_mut()?
+                .entry("pos")
+                .or_insert(serde_json::json!([0, 0, 0]));
+            match pos.as_array_mut() {
+                Some(p) if p.len() >= 3 => p[2] = zv,
+                _ => *pos = serde_json::json!([0, 0, zv]),
+            }
+        }
+        None => list.push(serde_json::json!({"name": "NPC", "pos": [0, 0, zv]})),
+    }
+    serde_json::to_string(&v).ok()
+}
+
 /// Meshes UI T2: per shape, "N: title, title (clip)" over its shader's and its alpha's controllers; "none" without.
 /// A shader that is not a BSLightingShaderProperty has controllers the editor does not read: its shape lists only its
 /// alpha controllers, and gets no line (rather than a wrong "none") when it has none.
@@ -1250,6 +1326,8 @@ impl MeshesModel {
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
         let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
         e.copies = copies;
+        e.weight_sibling = weight_sibling_of(path)
+            .filter(|s| store.copies_of_path(s).is_ok_and(|c| !c.is_empty()));
         let c = self.edit_content(&e)?;
         Ok((e, c))
     }

@@ -1,7 +1,59 @@
 // real files written by nifly (GPL-3.0 fixtures)
+mod builder;
 use nif::geom::read_shape;
 use nif::header::Header;
 use nif::scan::scan;
+
+/// Meshes UI T5b: `skin_to_root` inverts NiSkinData's skin transform; a shape without a skin has none.
+#[test]
+fn skin_to_root_inverts_the_skin_transform() {
+    use builder::{scenes, Nif, W};
+    let mut n = Nif::new(100);
+    let shape = |skin: i32| {
+        scenes::avobj(scenes::net(-1))
+            .fs(&[0.0; 4])
+            .i32(skin)
+            .i32(-1)
+            .i32(-1)
+            .u64(0)
+            .u16(0)
+            .u16(0)
+            .u32(0)
+            .0
+    };
+    n.block("BSTriShape", shape(2));
+    n.block("BSTriShape", shape(-1));
+    n.block(
+        "NiSkinInstance",
+        W::default().i32(3).i32(-1).i32(-1).u32(0).0,
+    );
+    // Rotation 90 degrees about Z (rows), translation (1, 2, 5), scale 2.
+    n.block(
+        "NiSkinData",
+        W::default()
+            .fs(&[0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+            .fs(&[1.0, 2.0, 5.0])
+            .f(2.0)
+            .u32(0)
+            .u8(0)
+            .0,
+    );
+    let b = n.bytes();
+    let h = Header::parse(&b).unwrap();
+    assert_eq!(nif::geom::skin_to_root(&h, &b, 1).unwrap(), None);
+    let m = nif::geom::skin_to_root(&h, &b, 0).unwrap().unwrap();
+    // A point p maps to skin space as 2·R·p + t; the inverse brings it back.
+    let p = [0.3f32, -0.7, 1.1];
+    let r = [[0.0f32, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+    let t = [1.0f32, 2.0, 5.0];
+    let skin: Vec<f32> = (0..3)
+        .map(|i| 2.0 * (r[i][0] * p[0] + r[i][1] * p[1] + r[i][2] * p[2]) + t[i])
+        .collect();
+    for i in 0..3 {
+        let back = m[i][0] * skin[0] + m[i][1] * skin[1] + m[i][2] * skin[2] + m[i][3];
+        assert!((back - p[i]).abs() < 1e-5, "axis {i}: {back} vs {}", p[i]);
+    }
+}
 
 fn read(f: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap()

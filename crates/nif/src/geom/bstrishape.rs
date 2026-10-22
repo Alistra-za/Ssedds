@@ -103,6 +103,55 @@ pub fn read_shape(h: &Header, b: &[u8], block: usize) -> Result<Mesh, NifError> 
     Ok(m)
 }
 
+/// The skin-to-root transform of a skinned tri-shape (Meshes UI T5b): the inverse of its NiSkinData "Skin
+/// Transform" (global to skin space, nif.xml NiTransform: rotation, translation, scale), as a 3×4 row-major matrix
+/// in the `Mesh.transform` convention. `Ok(None)` for a shape without a skin.
+pub fn skin_to_root(h: &Header, b: &[u8], block: usize) -> Result<Option<[[f32; 4]; 3]>, NifError> {
+    let bad = |msg: String| NifError::Geometry {
+        block: block as u32,
+        msg,
+    };
+    let mut c = block_cursor(h, b, block)?;
+    read_av_head(h, &mut c)?;
+    c.skip(16)?; // bounding sphere
+    let skin = c.i32()?;
+    if skin == -1 {
+        return Ok(None);
+    }
+    let in_range = |r: i32| usize::try_from(r).ok().filter(|&i| i < h.sizes.len());
+    let si = in_range(skin).ok_or_else(|| bad(format!("skin ref {skin} out of range")))?;
+    match h.kind(si) {
+        b"NiSkinInstance" | b"BSDismemberSkinInstance" => {}
+        other => return Err(bad(format!("skin ref points at {}", lossy(other)))),
+    }
+    let data = block_cursor(h, b, si)?.i32()?;
+    let di = in_range(data).ok_or_else(|| bad(format!("skin data ref {data} out of range")))?;
+    if h.kind(di) != b"NiSkinData" {
+        return Err(bad(format!(
+            "skin data ref points at {}",
+            lossy(h.kind(di))
+        )));
+    }
+    let mut d = block_cursor(h, b, di)?;
+    let r = d.f32s::<9>()?;
+    let t = d.f32s::<3>()?;
+    let s = d.f32()?;
+    if !(s.is_finite() && s.abs() > f32::EPSILON) {
+        return Err(bad(format!("skin transform scale {s}")));
+    }
+    // p_skin = s·R·p + t, so p = Rᵀ·(p_skin − t) / s (R is a rotation: its inverse is its transpose).
+    let rt = |i: usize, j: usize| r[3 * j + i] / s;
+    Ok(Some([0, 1, 2].map(|i| {
+        let row = [rt(i, 0), rt(i, 1), rt(i, 2)];
+        [
+            row[0],
+            row[1],
+            row[2],
+            -(row[0] * t[0] + row[1] * t[1] + row[2] * t[2]),
+        ]
+    })))
+}
+
 fn skin_partition_of(
     h: &Header,
     b: &[u8],

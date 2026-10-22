@@ -161,6 +161,59 @@ pub fn alpha_testref() -> Vec<u8> {
 /// and palette (4); BSTriShape (5) -> BSLSP (6) -> Float ctrl var 11, flags 0x68 (Manager Controlled, 7) with a
 /// NiBlendFloatInterpolator (8); NiMultiTargetTransformController (9); keyed NiFloatInterpolators (10, 11).
 /// A has CBs with Controller ID "11" and null; B has one with the empty string.
+/// Heel data (Meshes UI T5b). NiNode "Root" (0, extra SDTA 6, children 1-3); BSTriShapes "A" (1, extra HH_OFFSET 4
+/// = 7.0), "B" (2, extra SDTA 5, NPC Z 5) and "C" (3, none), each with its own BSLSP (7, 8, 9).
+pub fn heel_scene() -> Vec<u8> {
+    let mut n = Nif::new(100);
+    let s = |n: &mut Nif, x: &str| n.string(x);
+    let (root, a, b, c) = (
+        s(&mut n, "Root"),
+        s(&mut n, "A"),
+        s(&mut n, "B"),
+        s(&mut n, "C"),
+    );
+    let (hh, sdta) = (s(&mut n, "HH_OFFSET"), s(&mut n, "SDTA"));
+    let npc5 = s(&mut n, r#"[{"name":"NPC","pos":[0,0,5]}]"#);
+    let npc3 = s(&mut n, r#"[{"name":"NPC","pos":[0,0,3]}]"#);
+    let with_extra = |name: i32, extra: Option<i32>| match extra {
+        Some(e) => W::default().i32(name).u32(1).i32(e).i32(-1),
+        None => net(name),
+    };
+    let shape = |name: i32, extra: Option<i32>, shader: i32| {
+        avobj(with_extra(name, extra))
+            .fs(&[0.0; 4])
+            .i32(-1)
+            .i32(shader)
+            .i32(-1)
+            .u64(0)
+            .u16(0)
+            .u16(0)
+            .u32(0)
+            .0
+    };
+    n.block(
+        "NiNode",
+        avobj(with_extra(root, Some(6)))
+            .u32(3)
+            .i32(1)
+            .i32(2)
+            .i32(3)
+            .u32(0)
+            .0,
+    );
+    n.block("BSTriShape", shape(a, Some(4), 7));
+    n.block("BSTriShape", shape(b, Some(5), 8));
+    n.block("BSTriShape", shape(c, None, 9));
+    n.block("NiFloatExtraData", W::default().i32(hh).f(7.0).0);
+    n.block("NiStringExtraData", W::default().i32(sdta).i32(npc5).0);
+    n.block("NiStringExtraData", W::default().i32(sdta).i32(npc3).0);
+    for _ in 0..3 {
+        n.block("BSLightingShaderProperty", lsp(0, -1));
+    }
+    n.roots = vec![0];
+    n.bytes()
+}
+
 pub fn managed_clip() -> Vec<u8> {
     managed_clip_with(false)
 }

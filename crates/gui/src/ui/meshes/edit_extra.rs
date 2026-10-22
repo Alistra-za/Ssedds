@@ -1,9 +1,10 @@
 //! The edit panel's Extra data tab (spec §7, plan A18): the selected shape's extra data and the root's. Editable
 //! types are changed in place, added and removed; every other type is a read-only row.
 use super::edit_fields::{row_label, set_name, warnings, Act};
-use crate::model::meshes::nif_edit::{NifEdit, Selection};
+use crate::model::meshes::nif_edit::{heel_z_of, sdta_npc_z, sdta_with_npc_z, NifEdit, Selection};
+use crate::ui::status::AMBER;
 use eframe::egui;
-use nif::edit::validate::Target;
+use nif::edit::validate::{Target, HEEL_EARLIER_WINS, HEEL_NOT_ON_SHAPE};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::extra::{Extra, ExtraValue, BSX_NAMES, EDITABLE, INV_DEFAULT};
 use nif::model::NifModel;
@@ -75,21 +76,7 @@ fn list(
     }
     for (i, x) in extras.iter().enumerate() {
         let name = nif::text::lossy(x.name.as_deref().unwrap_or(&[]));
-        let nth = extras[..i]
-            .iter()
-            .filter(|p| p.kind == x.kind && p.name == x.name)
-            .count() as u32;
-        let at = Anchor {
-            block: x.block,
-            kind: x.kind.clone(),
-            shape: shape.clone(),
-            role: Role::Extra {
-                on_root: root,
-                name: name.clone(),
-                kind: x.kind.clone(),
-                nth,
-            },
-        };
+        let at = extra_anchor(&extras, i, shape.clone(), root);
         ui.push_id((x.block, root), |ui| {
             row(ui, act, x, &name, &at, root, animated);
             // Meshes UI T5 (bug 3): the row's own warnings, such as "BSXFlags must be named BSX".
@@ -97,7 +84,27 @@ fn list(
         });
     }
     if let Some(at) = add_at {
-        add_row(ui, act, root, at, &extras);
+        add_row(ui, e, act, root, at, &extras);
+    }
+}
+
+/// The anchor of `extras[i]`: its block, kind and name, and how many earlier entries share both (`nth`).
+fn extra_anchor(extras: &[&Extra], i: usize, shape: Option<String>, root: bool) -> Anchor {
+    let x = extras[i];
+    let nth = extras[..i]
+        .iter()
+        .filter(|p| p.kind == x.kind && p.name == x.name)
+        .count() as u32;
+    Anchor {
+        block: x.block,
+        kind: x.kind.clone(),
+        shape,
+        role: Role::Extra {
+            on_root: root,
+            name: nif::text::lossy(x.name.as_deref().unwrap_or(&[])),
+            kind: x.kind.clone(),
+            nth,
+        },
     }
 }
 
@@ -344,11 +351,13 @@ struct Known {
 enum KnownValue {
     Fixed(fn() -> ExtraValue),
     Text(Option<&'static str>),
+    /// Meshes UI T5b: heel height, set through its own row (`heel_row`).
+    Heel,
 }
 
 /// The confirmed (and owner-approved unconfirmed) entries; sources in Note CV17. Everything else is Custom…. BODYTRI is
 /// left out on purpose: BodySlide / Outfit Studio writes it (owner, 2026-10-22).
-const KNOWN: [Known; 5] = [
+const KNOWN: [Known; 6] = [
     Known {
         name: "AnisotropicAlphaMaterial",
         kind: "NiIntegerExtraData",
@@ -395,17 +404,35 @@ const KNOWN: [Known; 5] = [
         tip: "Unconfirmed: no source checked yet. Names the skeleton node this item attaches to, for example \
               WeaponBack or SHIELD.",
     },
+    Known {
+        name: "HH_OFFSET",
+        kind: "NiFloatExtraData",
+        root: false,
+        value: KnownValue::Heel,
+        unconfirmed: false,
+        tip: HEEL_TIP,
+    },
 ];
 
+/// T5b-heel-height.md "Tooltip".
+const HEEL_TIP: &str =
+    "Raises the actor so heels stand on the ground. RaceMenu reads it. Calculate measures how far \
+                        the heel goes below the foot.";
+
 fn known_label(k: &Known) -> String {
-    match k.unconfirmed {
-        true => format!("{} (unconfirmed)", k.name),
-        false => k.name.to_string(),
+    match (k.value, k.unconfirmed) {
+        (KnownValue::Heel, _) => "Heel height (RaceMenu)".to_string(),
+        (_, true) => format!("{} (unconfirmed)", k.name),
+        (_, false) => k.name.to_string(),
     }
 }
 
 /// Why `k` cannot be added here, if it cannot: the other owner's entry, or one this owner already has.
 fn known_off(k: &Known, root: bool, have: &[&Extra]) -> Option<&'static str> {
+    if let KnownValue::Heel = k.value {
+        // RaceMenu reads heel data only on a shape; a shape's own is edited in place, never added twice.
+        return root.then_some(HEEL_NOT_ON_SHAPE);
+    }
     if k.root != root {
         return Some(if k.root {
             "Goes on the root"
@@ -447,11 +474,14 @@ struct AddState {
     kind: usize,
     name: String,
     text: String,
+    /// The heel row's Z while it differs from the shape's stored one, and its "Also write SDTA" tick.
+    z: Option<f32>,
+    sdta: bool,
 }
 
 /// The Known picker above the type picker, a name and Add. A Known entry fills type, name and value; Custom… keeps
 /// free typing.
-fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor, have: &[&Extra]) {
+fn add_row(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, root: bool, at: Anchor, have: &[&Extra]) {
     let id = egui::Id::new(("meshes-edit-extra-add", root, at.block));
     let mut st: AddState = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| AddState {
         name: prefill(EDITABLE[0]).to_string(),
@@ -476,6 +506,7 @@ fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor, have: &[&Ex
                     if r.clicked() {
                         st.known = Some(i);
                         st.text.clear();
+                        st.z = None;
                     }
                     match off {
                         Some(why) => r.on_disabled_hover_text(why),
@@ -498,6 +529,13 @@ fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor, have: &[&Ex
         .is_some_and(|i| known_off(&KNOWN[i], root, have).is_some())
     {
         st.known = None;
+    }
+    if let (Some(i), false) = (st.known, root) {
+        if let KnownValue::Heel = KNOWN[i].value {
+            heel_row(ui, e, act, at, have, &mut st);
+            ui.data_mut(|d| d.insert_temp(id, st));
+            return;
+        }
     }
     if let Some(i) = st.known {
         known_row(ui, act, root, at, &KNOWN[i], &mut st);
@@ -568,6 +606,8 @@ fn add_row(ui: &mut egui::Ui, act: &mut Act, root: bool, at: Anchor, have: &[&Ex
                 kind,
                 name,
                 text: st.text,
+                z: None,
+                sdta: st.sdta,
             },
         )
     });
@@ -612,6 +652,7 @@ fn known_row(
                     ExtraValue::Str(std::mem::take(&mut st.text).trim().to_string())
                 }
                 KnownValue::Fixed(f) => f(),
+                KnownValue::Heel => unreachable!("the heel entry has its own row"),
             };
             act.push = Some((
                 vec![Op::AddExtra {
@@ -626,4 +667,150 @@ fn known_row(
             r.on_disabled_hover_text(why);
         }
     });
+}
+
+/// True for heel data: an extra named HH_OFFSET or SDTA (any case).
+fn is_heel(x: &Extra) -> bool {
+    x.name
+        .as_deref()
+        .is_some_and(|n| n.eq_ignore_ascii_case(b"HH_OFFSET") || n.eq_ignore_ascii_case(b"SDTA"))
+}
+
+/// The first extra of `kind` named `name` (any case) and its index in `have`.
+fn first_named<'a>(have: &[&'a Extra], kind: &str, name: &[u8]) -> Option<(usize, &'a Extra)> {
+    have.iter().enumerate().find_map(|(i, x)| {
+        (x.kind == kind
+            && x.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        .then_some((i, *x))
+    })
+}
+
+/// Meshes UI T5b (Note CV19): heel height on a shape. Set writes HH_OFFSET (edited in place when the shape has one),
+/// moves the first SDTA's last "NPC" entry to the same Z when the shape has an SDTA, or adds an SDTA only when
+/// ticked. Calculate fills Z from the shape's lowest bind-pose vertex; the value stays editable.
+fn heel_row(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    act: &mut Act,
+    at: Anchor,
+    have: &[&Extra],
+    st: &mut AddState,
+) {
+    let shape = at.block;
+    let hh = first_named(have, "NiFloatExtraData", b"HH_OFFSET");
+    let sdta = first_named(have, "NiStringExtraData", b"SDTA");
+    let stored = match (hh.map(|h| &h.1.value), sdta.map(|s| &s.1.value)) {
+        (Some(Some(ExtraValue::Float(b))), _) => Some(f32::from_bits(*b)),
+        (_, Some(Some(ExtraValue::Str(s)))) => sdta_npc_z(s),
+        _ => None,
+    };
+    let mut z = st.z.or(stored).unwrap_or(0.0);
+    ui.horizontal(|ui| {
+        ui.label("Heel height").on_hover_text(HEEL_TIP);
+        let r = ui.add(egui::DragValue::new(&mut z).speed(0.1).max_decimals(2));
+        set_name(
+            &r,
+            egui::WidgetType::DragValue,
+            &scoped(false, "Heel height"),
+            Some(z as f64),
+            None,
+        );
+        let calc = ui.button("Calculate").on_hover_text(HEEL_TIP);
+        if calc.clicked() {
+            match heel_z_of(&e.patched, shape) {
+                Some(c) => z = c,
+                None => {
+                    let id = egui::Id::new(("meshes-edit-heel-calc", shape));
+                    ui.data_mut(|d| d.insert_temp(id, true));
+                }
+            }
+        }
+    });
+    st.z = Some(z);
+    if ui
+        .data(|d| d.get_temp::<bool>(egui::Id::new(("meshes-edit-heel-calc", shape))))
+        .is_some()
+    {
+        ui.weak("This shape has no geometry to measure: type the height.");
+    }
+    if sdta.is_none() {
+        ui.checkbox(&mut st.sdta, "Also write SDTA (OStim and others read it)");
+    }
+    let earlier = e
+        .model
+        .shapes
+        .iter()
+        .take_while(|s| s.block != shape)
+        .any(|s| e.model.extras_of(&s.net).into_iter().any(is_heel));
+    // A shape with heel data of its own already shows this under that row (validate).
+    if earlier && !have.iter().any(|x| is_heel(x)) {
+        ui.colored_label(AMBER, HEEL_EARLIER_WINS);
+    }
+    if let Some(sib) = &e.weight_sibling {
+        let sib = sib.replace('/', "\\");
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!(
+                    "Apply the same value to the other weight file ({sib})."
+                ))
+                .weak(),
+            )
+            .wrap(),
+        );
+    }
+    let r = ui.button("Set heel height");
+    set_name(&r, egui::WidgetType::Button, "Set heel height", None, None);
+    if !r.clicked() {
+        return;
+    }
+    let mut ops = vec![];
+    let value = ExtraValue::Float(z.to_bits());
+    match hh {
+        Some((i, x)) => {
+            if let Some(base) = x.value.clone().filter(|b| *b != value) {
+                ops.push(Op::EditExtra {
+                    at: extra_anchor(have, i, at.shape.clone(), false),
+                    value,
+                    base,
+                });
+            }
+        }
+        None => ops.push(Op::AddExtra {
+            at: at.clone(),
+            kind: "NiFloatExtraData".into(),
+            name: "HH_OFFSET".into(),
+            value,
+        }),
+    }
+    match sdta {
+        Some((i, x)) => {
+            if let Some(ExtraValue::Str(cur)) = &x.value {
+                // shortcut: an SDTA that is not a JSON list is left as it is (HH_OFFSET wins in game anyway).
+                if let Some(new) = sdta_with_npc_z(cur, z).filter(|n| n != cur) {
+                    ops.push(Op::EditExtra {
+                        at: extra_anchor(have, i, at.shape.clone(), false),
+                        value: ExtraValue::Str(new),
+                        base: ExtraValue::Str(cur.clone()),
+                    });
+                }
+            }
+        }
+        None if st.sdta => {
+            if let Some(new) = sdta_with_npc_z("[]", z) {
+                ops.push(Op::AddExtra {
+                    at,
+                    kind: "NiStringExtraData".into(),
+                    name: "SDTA".into(),
+                    value: ExtraValue::Str(new),
+                });
+            }
+        }
+        None => {}
+    }
+    if !ops.is_empty() {
+        act.push = Some((ops, None));
+    }
+    st.z = None;
 }

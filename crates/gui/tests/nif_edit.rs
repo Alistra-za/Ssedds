@@ -7824,3 +7824,159 @@ fn a_type_bound_flag_blocks_export_even_in_an_untouched_source() {
     );
     assert_eq!(e.export_block().as_deref(), Some(FACEGEN_DETAIL));
 }
+
+// ---- Meshes UI T5b: heel height (Note CV19) ----
+
+/// The heel scene on the Extra data tab with shape `name` selected and the heel entry picked.
+fn heel_view(name: &str, sibling: Option<&str>) -> Harness<'static, MeshesModel> {
+    let mut m = direct(scenes::heel_scene());
+    select(&mut m, name);
+    m.edit.as_mut().unwrap().weight_sibling = sibling.map(String::from);
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    h
+}
+
+/// The extra-data ops of the last push, as (kind or "edit", name, value).
+fn heel_ops(h: &Harness<'static, MeshesModel>) -> Vec<Op> {
+    ops(h.state())
+}
+
+/// A shape with an SDTA and no HH_OFFSET: Set adds HH_OFFSET and moves the SDTA's NPC Z with it (one undo step); an
+/// earlier shape (A) already has heel data, so the row says it wins.
+#[test]
+fn heel_height_adds_hh_offset_and_moves_the_sdta() {
+    let mut h = heel_view("B", None);
+    h.get_by_label("An earlier shape's heel height wins.");
+    let v = h.get_by_role_and_label(AkRole::SpinButton, "Heel height (shape)");
+    assert_eq!(
+        v.accesskit_node().numeric_value(),
+        Some(5.0),
+        "starts at the SDTA's Z"
+    );
+    edit_number(&mut h, "Heel height (shape)", "8.5");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(
+        matches!(&got[0], Op::AddExtra { kind, name, value: ExtraValue::Float(b), .. }
+            if kind == "NiFloatExtraData" && name == "HH_OFFSET" && f32::from_bits(*b) == 8.5),
+        "{got:?}"
+    );
+    let Op::EditExtra {
+        value: ExtraValue::Str(s),
+        ..
+    } = &got[1]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(sdta_npc_z(s), Some(8.5));
+    let m = h.state_mut();
+    assert!(m.undo_edit());
+    assert!(ops(m).is_empty(), "one undo step");
+}
+
+/// A shape with HH_OFFSET: Set edits it in place (a second one is ignored by the game) and adds no SDTA.
+#[test]
+fn heel_height_edits_an_existing_hh_offset() {
+    let mut h = heel_view("A", None);
+    assert!(h
+        .query_by_label("An earlier shape's heel height wins.")
+        .is_none());
+    edit_number(&mut h, "Heel height (shape)", "9");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert!(
+        matches!(&got[..], [Op::EditExtra { value: ExtraValue::Float(b), base: ExtraValue::Float(was), .. }]
+            if f32::from_bits(*b) == 9.0 && f32::from_bits(*was) == 7.0),
+        "{got:?}"
+    );
+}
+
+/// A shape with no heel data: HH_OFFSET only, or HH_OFFSET and a new SDTA when the box is ticked; the weight-file
+/// sibling is named.
+#[test]
+fn heel_height_on_a_bare_shape_adds_hh_and_an_optional_sdta() {
+    let mut h = heel_view("C", Some("meshes/x_1.nif"));
+    h.get_by_label("An earlier shape's heel height wins.");
+    h.get_by_label("Apply the same value to the other weight file (meshes\\x_1.nif).");
+    h.get_by_label("Also write SDTA (OStim and others read it)")
+        .click();
+    h.run_steps(2);
+    edit_number(&mut h, "Heel height (shape)", "6");
+    h.get_by_role_and_label(AkRole::Button, "Set heel height")
+        .click();
+    h.run_steps(4);
+    let got = heel_ops(&h);
+    assert_eq!(got.len(), 2, "{got:?}");
+    let Op::AddExtra {
+        kind,
+        name,
+        value: ExtraValue::Str(s),
+        ..
+    } = &got[1]
+    else {
+        panic!("{got:?}")
+    };
+    assert_eq!(
+        (kind.as_str(), name.as_str()),
+        ("NiStringExtraData", "SDTA")
+    );
+    assert_eq!(sdta_npc_z(s), Some(6.0));
+}
+
+/// On the root the entry is off, and the root's own SDTA row says the game ignores it there.
+#[test]
+fn heel_height_is_off_on_the_root_and_root_heel_data_warns() {
+    let mut m = direct(scenes::heel_scene());
+    select(&mut m, "C");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(known_entry_disabled(&mut h, true, "Heel height (RaceMenu)"));
+    h.get_by_label("The game ignores heel height here. Put it on a shape.");
+}
+
+/// Calculate fills the field from the lowest bind-pose vertex (`heel_z_of`); on a shape with no geometry it says so.
+#[test]
+fn heel_height_calculate_fills_the_field() {
+    let bytes = fixture("TestNifFile_Skinned_SE.nif");
+    let mut m = direct(bytes.clone());
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let want = heel_z_of(&bytes, shape).expect("a measurable shape");
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "Heel height (RaceMenu)");
+    h.get_by_role_and_label(AkRole::Button, "Calculate").click();
+    h.run_steps(3);
+    let v = h.get_by_role_and_label(AkRole::SpinButton, "Heel height (shape)");
+    assert_eq!(v.accesskit_node().numeric_value(), Some(want as f64));
+    let mut h = heel_view("C", None);
+    h.get_by_role_and_label(AkRole::Button, "Calculate").click();
+    h.run_steps(3);
+    h.get_by_label("This shape has no geometry to measure: type the height.");
+}
+
+/// The weight-file sibling of a data path: `_0` ↔ `_1` before `.nif`, any case; None for other names.
+#[test]
+fn weight_sibling_names_the_other_weight_file() {
+    assert_eq!(
+        weight_sibling_of("meshes/armor/boots_0.nif").as_deref(),
+        Some("meshes/armor/boots_1.nif")
+    );
+    assert_eq!(
+        weight_sibling_of("meshes/armor/Boots_1.NIF").as_deref(),
+        Some("meshes/armor/Boots_0.NIF")
+    );
+    assert_eq!(weight_sibling_of("meshes/armor/boots.nif"), None);
+    assert_eq!(weight_sibling_of("meshes/armor/boots_10.nif"), None);
+}

@@ -281,6 +281,22 @@ fn external_emittance_match_or_no_bsx() {
     assert!(x.fix.is_none());
 }
 
+/// Meshes UI T5b: heel data on the root warns (the game ignores it there); on a later shape it warns that the first
+/// shape wins; the first shape's own heel data is fine.
+#[test]
+fn heel_data_off_a_shape_or_on_a_later_shape_warns() {
+    use nif::edit::validate::{HEEL_EARLIER_WINS, HEEL_NOT_ON_SHAPE};
+    let w = warnings(&scenes::heel_scene());
+    assert_eq!(
+        only(&w, HEEL_NOT_ON_SHAPE, Level::Warn).target,
+        Target::Extra { block: 6 }
+    );
+    assert_eq!(
+        only(&w, HEEL_EARLIER_WINS, Level::Warn).target,
+        Target::Extra { block: 5 }
+    );
+}
+
 #[test]
 fn bsxflags_must_be_named_bsx() {
     let w = warnings(&scenes::emit_scene("Other", 0x83, true));
