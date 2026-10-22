@@ -2614,7 +2614,8 @@ impl AppModel {
         let after = Self::snapshot_of(Some(p), Some(s));
         if after == before {
             // An equal write is no edit: `touch` marked the document dirty, so undo that (trace #28).
-            (p.set_dirty(dirty.0), s.set_dirty(dirty.1));
+            p.set_dirty(dirty.0);
+            s.set_dirty(dirty.1);
             return;
         }
         self.drop_undo_note();
