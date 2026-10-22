@@ -808,6 +808,29 @@ pub fn finish_recipe(
             );
         }
     }
+    if let ChannelSource::Source {
+        path,
+        role: RawMap::Ao,
+        ..
+    } = &c.job.channels[2]
+    {
+        if crate::group::is_generated(&path.file_stem().unwrap_or_default().to_string_lossy()) {
+            let file = name(path);
+            job.warnings.push(
+                Warning::new(
+                    Code::GenAo,
+                    format!(
+                        "{out} B: AO generated from the normal map ({file}); a baked AO is better"
+                    ),
+                )
+                .with_data(json!({
+                    "output": slash(&c.virtual_input.output),
+                    "channel": "B",
+                    "source": file,
+                })),
+            );
+        }
+    }
     for (code, note) in &c.notes {
         job.warnings
             .push(Warning::new(*code, format!("{out}: {note}")));

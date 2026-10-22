@@ -164,7 +164,8 @@
         "ALSO-ZIP-FAILED",
         "ALSO-REPORT-FAILED",
         "GEN-REPLACED",
-        "GEN-STALE"
+        "GEN-STALE",
+        "GEN-AO"
       ],
       "type": "string"
     },

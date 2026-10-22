@@ -179,6 +179,8 @@ codes! {
     // v2 Generate from normal map (Note CO): a generated file whose normal, height neutral or shader changed since it
     // was generated. GUI only: the slot row's dot hover and the texture's message list, never a Problems row.
     GenStale = "GEN-STALE" => Info,
+    // v2 Generate from normal map (Note CO): a packed _rmaos whose B channel is an AO generated from the normal map.
+    GenAo = "GEN-AO" => Info,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -245,7 +247,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 114);
+        assert_eq!(Code::ALL.len(), 115);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -253,7 +255,7 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::GenStale));
+        assert_eq!(Code::ALL.last(), Some(&Code::GenAo));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));

@@ -673,3 +673,80 @@ fn a_skip_summary_counts_gen_replaced_as_intentional() {
     assert_eq!(with.skipped, without.skipped + 1);
     assert_eq!(with.exit_code(), without.exit_code());
 }
+
+#[test]
+fn a_generated_ao_fills_b_with_an_info_note_instead_of_defaulted() {
+    let packed = |ao: bool| {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+        put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+        put(d.path(), "rock_roughness.png", 16, |x, _| x as u8 * 4);
+        if ao {
+            put(d.path(), "rock_ao_generated.png", 16, |_, y| {
+                100 + y as u8 * 8
+            });
+        }
+        let (p, _) = plan(d.path(), Target::Cs, &[]);
+        let j = p
+            .jobs
+            .iter()
+            .find(|j| j.output.ends_with("rock_rmaos.dds"))
+            .expect("rock_rmaos job");
+        j.warnings.clone()
+    };
+    let with = packed(true);
+    let note = with.iter().find(|w| w.code == Code::GenAo).expect("GEN-AO");
+    assert!(
+        note.message.contains("rock_ao_generated.png"),
+        "{}",
+        note.message
+    );
+    assert_eq!(note.data["channel"], "B");
+    assert_eq!(note.data["source"], "rock_ao_generated.png");
+    assert!(note.data["output"]
+        .as_str()
+        .unwrap()
+        .ends_with("rock_rmaos.dds"));
+    assert!(!with
+        .iter()
+        .any(|w| w.code == Code::PackDefaulted && w.data["channel"] == "B"));
+    let without = packed(false);
+    assert!(!without.iter().any(|w| w.code == Code::GenAo));
+    assert!(without
+        .iter()
+        .any(|w| w.code == Code::PackDefaulted && w.data["channel"] == "B"));
+}
+
+#[test]
+fn a_bent_layer_set_weights_by_the_generated_ao() {
+    let ao_file = |real: bool| {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+        put_rgb(d.path(), "rock_n.png", 16, |_, _| [128, 128, 255]);
+        put_rgb(d.path(), "rock_bent.png", 16, |x, y| {
+            [(x * 8) as u8, (y * 8) as u8, 255]
+        });
+        put(d.path(), "rock_ao_generated.png", 16, |_, y| {
+            100 + y as u8 * 8
+        });
+        if real {
+            put(d.path(), "rock_ao.png", 16, |x, _| 120 + x as u8);
+        }
+        let (p, _) = plan(d.path(), Target::Cs, &[]);
+        let ao = job(&p, "rock_n.png")
+            .rnm
+            .as_ref()
+            .unwrap()
+            .ao
+            .clone()
+            .unwrap();
+        ao.file
+            .path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(ao_file(false), "rock_ao_generated.png");
+    assert_eq!(ao_file(true), "rock_ao.png");
+}
