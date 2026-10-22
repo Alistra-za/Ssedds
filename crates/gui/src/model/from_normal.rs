@@ -114,6 +114,8 @@ pub struct GenFacts {
     pub bent: bool,
     /// The normal's path and longer side, for the preview.
     pub normal: Option<(PathBuf, Option<u32>)>,
+    /// The Size the free choice writes at (the dialog's Size within its offered sizes), for the combo's text.
+    pub shown_size: u32,
 }
 
 /// The height's neutral for a set, from Track C's one rule (P8). `resolved` is the set's settings through
@@ -1145,7 +1147,12 @@ impl AppModel {
                 None => Err(NO_NORMAL.into()),
             });
         let normal = c.as_ref().and_then(|c| c.normal.as_ref());
+        let want = self.gen.as_ref().map_or(0, |g| g.opts.size);
         GenFacts {
+            shown_size: match &size {
+                Ok(r @ GenSize::Free { .. }) => map_size(r, want),
+                _ => want,
+            },
             offers,
             size,
             locked,

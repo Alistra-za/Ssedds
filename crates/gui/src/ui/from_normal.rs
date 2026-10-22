@@ -103,7 +103,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                                 match &facts.size {
                                     Ok(GenSize::Free { sizes, .. }) => {
                                         egui::ComboBox::from_id_salt("gen-size")
-                                            .selected_text(format!("{} px", opts.size))
+                                            .selected_text(format!("{} px", facts.shown_size))
                                             .show_ui(ui, |ui| {
                                                 for s in sizes {
                                                     ui.selectable_value(

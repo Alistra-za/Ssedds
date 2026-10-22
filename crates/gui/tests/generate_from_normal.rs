@@ -2539,6 +2539,19 @@ fn a_generated_ao_matches_the_rmaos_sources_size() {
     );
     assert!(codes.iter().any(|(c, _)| *c == Code::GenAo), "{codes:?}");
 
+    // Opened for AO (Size 64, its locked size), then Height ticked: the Size row shows what the height writes at.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    relief_normal(&land(d.path()), "rock01_normal.png", 128);
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Ao));
+    assert_eq!(m.gen.as_ref().unwrap().opts.size, 64);
+    m.gen_tick(GenMap::Height, true);
+    let f = m.gen_facts();
+    assert_eq!(f.shown_size, 128);
+    assert_eq!(f.locked, vec![(GenMap::Ao, 64)]);
+    assert_eq!(f.paths[0].2, (128, 128));
+
     // A 32² normal cannot make a 64² AO.
     let d = tempfile::tempdir().unwrap();
     let mut m = ao_rock(d.path());
