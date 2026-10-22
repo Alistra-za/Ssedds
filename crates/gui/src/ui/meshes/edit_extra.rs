@@ -328,17 +328,22 @@ fn prefill(kind: &str) -> &'static str {
     PREFILL.iter().find(|p| p.0 == kind).map_or("", |p| p.1)
 }
 
-/// One entry of the Known picker (Meshes UI T5, Note CV17). `root`: it goes on the root, else on a shape. `text`:
-/// the value is a string typed in the Value field; `needs_text`: Add waits for it.
+/// One entry of the Known picker (Meshes UI T5, Note CV17). `root`: it goes on the root, else on a shape.
 struct Known {
     name: &'static str,
     kind: &'static str,
     root: bool,
-    value: fn() -> ExtraValue,
-    text: bool,
-    needs_text: bool,
+    value: KnownValue,
     unconfirmed: bool,
     tip: &'static str,
+}
+
+/// A Known entry's value: a fixed default, or a string typed in the Value field (trimmed on Add). `Text(Some(why))`:
+/// Add waits for a value and says `why` while it is off.
+#[derive(Clone, Copy)]
+enum KnownValue {
+    Fixed(fn() -> ExtraValue),
+    Text(Option<&'static str>),
 }
 
 /// The confirmed (and owner-approved unconfirmed) entries; sources in Note CV17. Everything else is Custom…. BODYTRI is
@@ -348,9 +353,7 @@ const KNOWN: [Known; 5] = [
         name: "AnisotropicAlphaMaterial",
         kind: "NiIntegerExtraData",
         root: false,
-        value: || ExtraValue::Int(3),
-        text: false,
-        needs_text: false,
+        value: KnownValue::Fixed(|| ExtraValue::Int(3)),
         unconfirmed: false,
         tip: "Community Shaders see-through look for this shape. 0 off, 1 rim edge, 2 fabric, 3 woven fabric. \
               Only on alpha-blended lit shapes.",
@@ -359,9 +362,7 @@ const KNOWN: [Known; 5] = [
         name: "BSX",
         kind: "BSXFlags",
         root: true,
-        value: || ExtraValue::Bsx(0),
-        text: false,
-        needs_text: false,
+        value: KnownValue::Fixed(|| ExtraValue::Bsx(0)),
         unconfirmed: false,
         tip: "Engine flags for the whole model: animation, collision, ragdoll, external emit. Must be named BSX.",
     },
@@ -369,12 +370,10 @@ const KNOWN: [Known; 5] = [
         name: "INV",
         kind: "BSInvMarker",
         root: true,
-        value: || ExtraValue::Inv {
+        value: KnownValue::Fixed(|| ExtraValue::Inv {
             rot: INV_DEFAULT.0,
             zoom: INV_DEFAULT.1.to_bits(),
-        },
-        text: false,
-        needs_text: false,
+        }),
         unconfirmed: false,
         tip: "How the item turns and zooms in the inventory view. Leave the default if unsure.",
     },
@@ -382,9 +381,7 @@ const KNOWN: [Known; 5] = [
         name: "HDT Skinned Mesh Physics Object",
         kind: "NiStringExtraData",
         root: true,
-        value: || ExtraValue::Str(String::new()),
-        text: true,
-        needs_text: true,
+        value: KnownValue::Text(Some("Type the path first.")),
         unconfirmed: false,
         tip: "Gives this model SMP physics. The value is the path to the physics xml. Needs HDT-SMP installed. \
               The name must be exact.",
@@ -393,9 +390,7 @@ const KNOWN: [Known; 5] = [
         name: "Prn",
         kind: "NiStringExtraData",
         root: true,
-        value: || ExtraValue::Str(String::new()),
-        text: true,
-        needs_text: false,
+        value: KnownValue::Text(Some("Type the node name first.")),
         unconfirmed: true,
         tip: "Unconfirmed: no source checked yet. Names the skeleton node this item attaches to, for example \
               WeaponBack or SHIELD.",
@@ -418,9 +413,12 @@ fn known_off(k: &Known, root: bool, have: &[&Extra]) -> Option<&'static str> {
             "Goes on a shape"
         });
     }
-    let present = have
-        .iter()
-        .any(|x| x.kind == k.kind && x.name.as_deref() == Some(k.name.as_bytes()));
+    let present = have.iter().any(|x| {
+        x.kind == k.kind
+            && x.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(k.name.as_bytes()))
+    });
     present.then_some(if root {
         "Already on this root"
     } else {
@@ -432,7 +430,12 @@ fn known_off(k: &Known, root: bool, have: &[&Extra]) -> Option<&'static str> {
 fn known_tip(x: &Extra) -> Option<&'static str> {
     KNOWN
         .iter()
-        .find(|k| x.kind == k.kind && x.name.as_deref() == Some(k.name.as_bytes()))
+        .find(|k| {
+            x.kind == k.kind
+                && x.name
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(k.name.as_bytes()))
+        })
         .map(|k| k.tip)
 }
 
@@ -584,7 +587,7 @@ fn known_row(
         ui.label(k.name).on_hover_text(k.tip);
     });
     ui.horizontal(|ui| {
-        if k.text {
+        if let KnownValue::Text(_) = k.value {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut st.text)
                     .hint_text("Value")
@@ -599,14 +602,16 @@ fn known_row(
             );
             r.on_hover_text(k.tip);
         }
-        let ready = !k.needs_text || !st.text.trim().is_empty();
+        let ready = !matches!(k.value, KnownValue::Text(Some(_))) || !st.text.trim().is_empty();
         let r = ui.add_enabled(ready, egui::Button::new("Add"));
         let label = if root { "Add to root" } else { "Add to shape" };
         set_name(&r, egui::WidgetType::Button, label, None, None);
         if r.clicked() {
-            let value = match k.text {
-                true => ExtraValue::Str(std::mem::take(&mut st.text)),
-                false => (k.value)(),
+            let value = match k.value {
+                KnownValue::Text(_) => {
+                    ExtraValue::Str(std::mem::take(&mut st.text).trim().to_string())
+                }
+                KnownValue::Fixed(f) => f(),
             };
             act.push = Some((
                 vec![Op::AddExtra {
@@ -617,8 +622,8 @@ fn known_row(
                 }],
                 None,
             ));
-        } else if !ready {
-            r.on_disabled_hover_text("Type the path first.");
+        } else if let (false, KnownValue::Text(Some(why))) = (ready, k.value) {
+            r.on_disabled_hover_text(why);
         }
     });
 }

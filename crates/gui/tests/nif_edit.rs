@@ -2573,7 +2573,87 @@ fn an_extra_row_shows_its_warnings() {
     let mut h = view(m);
     h.run_steps(2);
     tab(&mut h, "Extra data");
-    h.get_by_label("BSXFlags must be named BSX");
+    // T5 review Minor 6: under its own row (after BSX2, before the root's Add row), once.
+    let w = h.get_by_label("BSXFlags must be named BSX").rect();
+    let row = h.get_by_label("BSX2").rect();
+    let add = h
+        .get_by_role_and_label(AkRole::ComboBox, "Known extra data")
+        .rect();
+    assert!(
+        row.max.y <= w.min.y && w.max.y <= add.min.y,
+        "{row:?} {w:?} {add:?}"
+    );
+}
+
+/// T5 review Minors 2-4: Prn needs a value, a typed value is trimmed, and a duplicate is found ignoring ASCII case
+/// (the SMP reader compares the HDT name that way).
+#[test]
+fn known_values_are_required_trimmed_and_duplicates_ignore_case() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let at = nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, None, Role::Root).unwrap();
+    m.edit_push(
+        vec![Op::AddExtra {
+            at,
+            kind: "NiStringExtraData".into(),
+            name: "hdt skinned mesh physics object".into(),
+            value: ExtraValue::Str("x.xml".into()),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    assert!(
+        known_entry_disabled(&mut h, true, "HDT Skinned Mesh Physics Object"),
+        "the same name in lower case is already there"
+    );
+    pick_known(&mut h, true, "Prn (unconfirmed)");
+    assert!(
+        h.get_by_label("Add to root").accesskit_node().is_disabled(),
+        "Prn needs a node name"
+    );
+    h.get_by_role_and_label(AkRole::TextInput, "Value").focus();
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Value")
+        .type_text("  WeaponBack  ");
+    h.run_steps(2);
+    h.get_by_label("Add to root").click();
+    h.run_steps(4);
+    let got = ops(h.state());
+    assert!(
+        matches!(got.last(), Some(Op::AddExtra { name, value: ExtraValue::Str(v), .. }) if name == "Prn" && v == "WeaponBack"),
+        "{got:?}"
+    );
+}
+
+/// T5 review Minor 6: after a Known Add the picker is back on Custom… and the entry is off ("Already on this
+/// shape"); an existing row of a Known entry shows its tooltip on the name.
+#[test]
+fn a_known_add_falls_back_to_custom_and_rows_show_the_tip() {
+    let mut m = direct(ctrl_scene(0x82));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    tab(&mut h, "Extra data");
+    pick_known(&mut h, false, "AnisotropicAlphaMaterial");
+    h.get_by_label("Add to shape").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.get_by_role_and_label(AkRole::ComboBox, "Known extra data (shape)")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("Custom…")
+    );
+    assert!(known_entry_disabled(
+        &mut h,
+        false,
+        "AnisotropicAlphaMaterial"
+    ));
+    h.get_by_label("AnisotropicAlphaMaterial").hover();
+    h.run_steps(30);
+    h.get_by_label_contains("Community Shaders see-through look");
 }
 
 /// Drawing both tabs records nothing, whatever the values' bits (negative zero, CRLF).

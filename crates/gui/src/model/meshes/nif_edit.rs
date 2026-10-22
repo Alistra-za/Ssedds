@@ -1551,8 +1551,9 @@ impl MeshesModel {
         let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
             return;
         };
-        self.drop_edit(); // flushes to the old folder
-                          // The selected NIF is the edited one: selecting another ends the session.
+        // Flushes to the old folder.
+        self.drop_edit();
+        // The selected NIF is the edited one: selecting another ends the session.
         self.open_edit();
         // Root too (T2 review Minor 1): the reopen starts on `first_selection`, which may be a shape.
         let keep = self.edit.as_ref().is_some_and(|e| match selection {
