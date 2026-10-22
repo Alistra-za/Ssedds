@@ -19,25 +19,24 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 - BC7 weighting dropdown (Linear, Perceptual, Alpha ×2, ×8, ×16).
 - Optional exact-opaque alpha 255 (forces BC7 mode 6's p-bit to 1; off by default).
 - Every encode is decoded and checked against Skyrim's rules. DDS files made by other tools can be validated too.
-- [Artist checks](docs/wiki/GUI-Guide.md#artist-checks): warnings for problems such as a weak or clipped height map. They never block an export.
+- [Artist checks](docs/wiki/GUI-Guide.md#artist-checks): warnings for problems such as a weak, missing uv coverage, or clipped height map. They never block an export.
 
 **Maps and packing**
 - Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster.
 - SRGB / UNORM (Linear) tag chosen per map type and target shader.
 - Cutout alpha: coverage-preserving mips, on by default. Normal mips are renormalised, and their variance is baked into TruePBR roughness.
 - Loose maps are picked up and packed into `_rmaos` / `_rfaos` / complex `_m`. Suffix-based channel remapping; ORM to RMAOS is instant. The complex-material `_m` gate is checked.
-- Multiple layers and duplicate types (`_bump2`) just work.
 - RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent`, with optional masks `_bumpmask`, `_detailnormmask`, `_bentmask`). See [RNM normal layers](docs/wiki/Texture-Types.md#rnm-normal-layers).
 - [Generate from normal map](docs/wiki/GUI-Guide.md#generate-from-normal-map): makes height, AO and curvature maps from a set's normal.
 - Complex grass (1:2 image, halves mipped apart).
 
 **Skyrim and mod aware**
 - Mod scan: meshes decide alpha meaning and set shader. Fast: 100,000 NIFs in 14 seconds, 1,500 plugins in under 3. See [Mod scanning](docs/wiki/Mod-Scanning.md).
-- TruePBR: PGPatcher JSON written per set, validated, with every option exposed, including the recent ones. PGPatcher `_m` sidecar `.json`.
+- TruePBR: PGPatcher JSON written per set, validated, with every option exposed, including recent ones. PGPatcher `_m` sidecar `.json`.
 - PBR Landscape: PBRTextureSets and PBRMaterialObjects JSONs built from the actual EDIDs in your load order.
 - [Also export as Vanilla and Complex material](docs/wiki/GUI-Guide.md#also-export-as-vanilla-and-cm): converts PBR sets to those two formats.
 - NiAlphaProperty (alpha blend/test) set in a familiar format.
-- Doesn't need to be launched from MO2, but can be. From MO2 it fills in your MO2 location the first time, and skips MO2's virtual file system.
+- Doesn't need to be launched from MO2, but can be. From MO2 it fills in your MO2 location the first time, It skips MO2's virtual file system either way.
 
 **GUI**
 - Encoded-mip preview, pixel readout, pin and compare.
@@ -48,7 +47,6 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 **NIF editing (in the 3D view)**
 - Edit NIF fields and shader flags.
 - Animation clock, key editor, controllers and named clips, with an in-game preview.
-- Export removes blocks that your edits left unused.
 
 **Command line**
 - Batch conversion, inspect and validate with `sdc`. See the [CLI reference](docs/wiki/CLI-Reference.md).
