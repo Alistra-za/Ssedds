@@ -773,15 +773,19 @@ impl SetsDoc {
         }
         let mut items = strings(self.table_mut(id).get(key));
         items.retain(|f| !self.names_only(f, file));
-        let t = self.table_mut(id);
         if add {
             items.push(file.to_string());
         }
+        self.set_list(id, key, &items);
+    }
+
+    fn set_list(&mut self, id: &str, key: &str, items: &[String]) {
+        let t = self.table_mut(id);
         if items.is_empty() {
             t.remove(key);
         } else {
             let mut arr = Array::new();
-            for f in &items {
+            for f in items {
                 arr.push(f.as_str());
             }
             t.insert(key, toml_edit::value(arr));
@@ -803,12 +807,28 @@ impl SetsDoc {
         }
         // A file this set removed belongs to it by its name: lifting the remove brings it back (an `add` beside the
         // `remove` would leave it out, AG100).
+        // A hand-written extension-less key that names a same-stem sibling too cannot just go: it is replaced by an
+        // exact `remove` for each sibling, so only this file comes back (trace #30).
         let removed_here = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| self.names_only(f, file)));
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| names_file(f, file)));
         if removed_here {
-            self.list_edit(id, "remove", file, false);
+            let mut items = strings(self.table_mut(id).get("remove"));
+            let siblings = self.siblings(file);
+            let mut out: Vec<String> = Vec::new();
+            for it in items.drain(..) {
+                if !names_file(&it, file) {
+                    out.push(it);
+                } else if !same_id(&it, file) {
+                    for s in &siblings {
+                        if !out.contains(s) {
+                            out.push(s.clone());
+                        }
+                    }
+                }
+            }
+            self.set_list(id, "remove", &out);
         } else {
             self.list_edit(id, "add", file, true);
         }
@@ -839,27 +859,37 @@ impl SetsDoc {
         if !names_file(key, file) {
             return false;
         }
+        self.siblings(file).is_empty()
+    }
+
+    /// The other files on disk with `file`'s folder and stem (another extension), as project-relative paths.
+    fn siblings(&self, file: &str) -> Vec<String> {
         let rel = Path::new(file);
         let (Some(root), Some(name), Some(stem)) =
             (self.f.path.parent(), rel.file_name(), rel.file_stem())
         else {
-            return true;
+            return Vec::new();
         };
         let dir = root.join(rel.parent().unwrap_or(Path::new("")));
+        let prefix = file
+            .rsplit_once('/')
+            .map_or(String::new(), |(d, _)| format!("{d}/"));
         let (name, stem) = (
             name.to_string_lossy().to_lowercase(),
             stem.to_string_lossy().to_lowercase(),
         );
-        !std::fs::read_dir(dir)
+        std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
-            .any(|e| {
-                let p = e.path();
-                p.file_stem()
+            .filter(|e| {
+                e.path()
+                    .file_stem()
                     .is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
                     && e.file_name().to_string_lossy().to_lowercase() != name
             })
+            .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
+            .collect()
     }
 
     pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {
