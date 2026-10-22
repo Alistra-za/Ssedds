@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 536" width="780" height="536" role="img" aria-labelledby="t d">
+<title id="t">BC7 encoders compared with bc7e u6</title>
+<desc id="d">Horizontal bars of BC7 encoder quality against bc7e u6, in dB, sorted by RGB. Tessalith's opt-in bc7e max is best at +0.32 dB RGB and +0.32 dB alpha, about 0.6 s per megapixel. bc7e u5, the default, is level with u6 at 0.22 s. Slow encoders (NVTT Production about 14 s, Compressonator about 33 s, texconv CPU 16 to 20 s) do not beat it. GPU encoders are fastest, 0.03 to 0.09 s, but lose 1.4 to 2.8 dB.</desc>
+<style>
+svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+--ink:#1f2328;--mute:#59636e;--grid:#d1d9e0;--bg:#ffffff;--c0:#2a78d6;--c1:#eb6834;--c2:#1baf7a;--c3:#6250d6;--c4:#e87ba4;}
+@media (prefers-color-scheme: dark){svg{--ink:#e6edf3;--mute:#9198a1;--grid:#30363d;--bg:#0d1117;--c0:#3987e5;--c1:#d95926;--c2:#199e70;--c3:#9085e9;--c4:#d55181;}}
+.bg{fill:var(--bg)}
+text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
+.m{fill:var(--mute)}
+.b{font-weight:600}
+.t{font-size:14px;font-weight:600}
+.s{font-size:11px;fill:var(--mute)}
+.g{stroke:var(--grid);stroke-width:1;fill:none}
+.z{stroke:var(--mute);stroke-width:1;fill:none}
+.lt{opacity:.5}
+.mu{fill:var(--mute)}
+.f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
+<rect class="bg" width="780" height="536"/>
+<text x="10.0" y="20.0" class="t" text-anchor="start">BC7 encoders: quality against bc7e u6, with speed</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">Δ in dB against bc7e u6 (higher is better), sorted by RGB. Speed is in seconds per megapixel.</text>
+<rect x="10" y="50" width="14" height="10" class="mu"/>
+<text x="30.0" y="59.0" class="s" text-anchor="start">RGB, real colour textures</text>
+<rect x="196" y="50" width="14" height="10" class="mu lt"/>
+<text x="216.0" y="59.0" class="s" text-anchor="start">Alpha, real alpha textures</text>
+<text x="650.0" y="82.0" class="s" text-anchor="start">Speed (s/Mpix)</text>
+<path class="g" d="M270.0 96.0V470.0"/>
+<text x="270.0" y="485.0" class="m" text-anchor="middle">−3</text>
+<path class="g" d="M357.5 96.0V470.0"/>
+<text x="357.5" y="485.0" class="m" text-anchor="middle">−2</text>
+<path class="g" d="M445.0 96.0V470.0"/>
+<text x="445.0" y="485.0" class="m" text-anchor="middle">−1</text>
+<path class="g" d="M532.5 96.0V470.0"/>
+<text x="532.5" y="485.0" class="m" text-anchor="middle">0</text>
+<path class="z" d="M532.5 96.0V470.0"/>
+<text x="10.0" y="116.0" class="b" text-anchor="start">bc7e max‡ (Tessalith opt-in)</text>
+<rect x="532.5" y="102.0" width="28.0" height="10" class="f0"/>
+<text x="565.5" y="111.0" class="s" text-anchor="start">+0.32</text>
+<rect x="532.5" y="114.0" width="28.0" height="10" class="f0 lt"/>
+<text x="565.5" y="123.0" class="s" text-anchor="start">+0.32</text>
+<text x="650.0" y="116.0" class="" text-anchor="start">~0.6</text>
+<text x="10.0" y="150.0" class="" text-anchor="start">bc7e u5 (Tessalith default)</text>
+<rect x="532.5" y="136.0" width="0.9" height="10" class="f0"/>
+<text x="538.4" y="145.0" class="s" text-anchor="start">+0.01</text>
+<rect x="529.9" y="148.0" width="2.6" height="10" class="f0 lt"/>
+<text x="524.9" y="157.0" class="s" text-anchor="end">−0.03</text>
+<text x="650.0" y="150.0" class="" text-anchor="start">0.22</text>
+<text x="10.0" y="184.0" class="" text-anchor="start">bc7e u6 (reference)</text>
+<text x="537.5" y="179.0" class="s" text-anchor="start">0</text>
+<text x="537.5" y="191.0" class="s" text-anchor="start">0</text>
+<text x="650.0" y="184.0" class="" text-anchor="start">0.28</text>
+<text x="10.0" y="218.0" class="" text-anchor="start">Compressonator q1.0</text>
+<rect x="518.5" y="204.0" width="14.0" height="10" class="f3"/>
+<text x="513.5" y="213.0" class="s" text-anchor="end">−0.16</text>
+<rect x="401.2" y="216.0" width="131.2" height="10" class="f3 lt"/>
+<text x="396.2" y="225.0" class="s" text-anchor="end">−1.50</text>
+<text x="650.0" y="218.0" class="" text-anchor="start">~33</text>
+<text x="10.0" y="252.0" class="" text-anchor="start">NVTT Production/Highest</text>
+<rect x="504.5" y="238.0" width="28.0" height="10" class="f2"/>
+<text x="499.5" y="247.0" class="s" text-anchor="end">−0.32</text>
+<rect x="500.1" y="250.0" width="32.4" height="10" class="f2 lt"/>
+<text x="495.1" y="259.0" class="s" text-anchor="end">−0.37</text>
+<text x="650.0" y="252.0" class="" text-anchor="start">~14</text>
+<text x="10.0" y="286.0" class="" text-anchor="start">bc7e u4</text>
+<rect x="498.4" y="272.0" width="34.1" height="10" class="f0"/>
+<text x="493.4" y="281.0" class="s" text-anchor="end">−0.39</text>
+<rect x="501.0" y="284.0" width="31.5" height="10" class="f0 lt"/>
+<text x="496.0" y="293.0" class="s" text-anchor="end">−0.36</text>
+<text x="650.0" y="286.0" class="" text-anchor="start">0.12</text>
+<text x="10.0" y="320.0" class="" text-anchor="start">ISPC slow</text>
+<rect x="480.9" y="306.0" width="51.6" height="10" class="f1"/>
+<text x="475.9" y="315.0" class="s" text-anchor="end">−0.59</text>
+<rect x="473.9" y="318.0" width="58.6" height="10" class="f1 lt"/>
+<text x="468.9" y="327.0" class="s" text-anchor="end">−0.67</text>
+<text x="650.0" y="320.0" class="" text-anchor="start">0.30</text>
+<text x="10.0" y="354.0" class="" text-anchor="start">ISPC basic</text>
+<rect x="466.9" y="340.0" width="65.6" height="10" class="f1"/>
+<text x="461.9" y="349.0" class="s" text-anchor="end">−0.75</text>
+<rect x="472.1" y="352.0" width="60.4" height="10" class="f1 lt"/>
+<text x="467.1" y="361.0" class="s" text-anchor="end">−0.69</text>
+<text x="650.0" y="354.0" class="" text-anchor="start">0.11</text>
+<text x="10.0" y="388.0" class="" text-anchor="start">NVTT Normal (GPU)</text>
+<rect x="410.0" y="374.0" width="122.5" height="10" class="f2"/>
+<text x="405.0" y="383.0" class="s" text-anchor="end">−1.4</text>
+<rect x="466.9" y="386.0" width="65.6" height="10" class="f2 lt"/>
+<text x="461.9" y="395.0" class="s" text-anchor="end">−0.75</text>
+<text x="650.0" y="388.0" class="" text-anchor="start">0.03–0.09</text>
+<text x="10.0" y="422.0" class="" text-anchor="start">texconv CPU (-bc x)</text>
+<rect x="392.5" y="408.0" width="140.0" height="10" class="f4"/>
+<text x="387.5" y="417.0" class="s" text-anchor="end">−1.6</text>
+<rect x="322.5" y="420.0" width="210.0" height="10" class="f4 lt"/>
+<text x="317.5" y="429.0" class="s" text-anchor="end">−2.4</text>
+<text x="650.0" y="422.0" class="" text-anchor="start">~16–20</text>
+<text x="10.0" y="456.0" class="" text-anchor="start">texconv GPU</text>
+<rect x="375.0" y="442.0" width="157.5" height="10" class="f4"/>
+<text x="370.0" y="451.0" class="s" text-anchor="end">−1.8</text>
+<rect x="287.5" y="454.0" width="245.0" height="10" class="f4 lt"/>
+<text x="282.5" y="463.0" class="s" text-anchor="end">−2.8</text>
+<text x="650.0" y="456.0" class="" text-anchor="start">0.03–0.09</text>
+<text x="10.0" y="510.0" class="s" text-anchor="start">‡ bc7e max is Tessalith's opt-in effort (encoder.effort = "max"). Measured later, on a 150-texture Skyrim sample; its Δ is against u6 on that sample.</text>
+<text x="10.0" y="526.0" class="s" text-anchor="start">~ means approximate. The 0.03–0.09 s range is shared by NVTT Normal (GPU) and texconv GPU.</text>
+</svg>

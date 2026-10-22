@@ -1,22 +1,20 @@
-"""Writes the README charts to docs/img/*.svg. Stdlib only.
+"""Writes the README and wiki bar charts to docs/img/*.svg. Stdlib only.
 
 Run from the repo root:  python -I tools/readme-charts.py
-Data below is copied from the old README tables. None = "not measured".
+Data below is copied from the README encoder tables and from the local study
+"BC7 alpha weighting vs BC3" (2026-10-21, DECISIONS Note CP). None = not measured.
 """
-import math
 import os
 from xml.sax.saxutils import escape
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "img")
+M = "−"  # minus sign, as in the tables
 
-# Colour follows the encoder, in every chart. Light / dark hex per slot.
+# Colour follows the encoder in every chart. Light / dark hex per slot.
+# Order passes the dataviz validator on adjacent pairs, light and dark.
 SLOTS = [("#2a78d6", "#3987e5"), ("#eb6834", "#d95926"), ("#1baf7a", "#199e70"),
          ("#6250d6", "#9085e9"), ("#e87ba4", "#d55181")]
 BLUE, ORANGE, AQUA, VIOLET, MAGENTA = range(5)
-ENC_COLOR = {
-    "bc7e": BLUE, "rgbcx": BLUE, "ISPC": ORANGE, "NVTT": AQUA,
-    "texconv": MAGENTA, "Compressonator": VIOLET,
-}
 
 STYLE = """
 svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
@@ -25,16 +23,17 @@ svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans
 .bg{fill:var(--bg)}
 text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
 .m{fill:var(--mute)}
+.b{font-weight:600}
 .t{font-size:14px;font-weight:600}
 .s{font-size:11px;fill:var(--mute)}
 .g{stroke:var(--grid);stroke-width:1;fill:none}
 .z{stroke:var(--mute);stroke-width:1;fill:none}
-.ring{stroke:var(--bg);stroke-width:2}
+.lt{opacity:.5}
+.mu{fill:var(--mute)}
 """ % (
     "".join("--c%d:%s;" % (i, s[0]) for i, s in enumerate(SLOTS)),
     "".join("--c%d:%s;" % (i, s[1]) for i, s in enumerate(SLOTS)),
-) + "".join(".f%d{fill:var(--c%d)}.k%d{stroke:var(--c%d);fill:none}" % (i, i, i, i)
-            for i in range(len(SLOTS)))
+) + "".join(".f%d{fill:var(--c%d)}" % (i, i) for i in range(len(SLOTS)))
 
 
 def svg(w, h, title, desc, body):
@@ -51,270 +50,185 @@ def text(x, y, s, cls="", anchor="start"):
         x, y, cls, anchor, escape(s))
 
 
-def nice_ticks(lo, hi, n=4):
-    raw = (hi - lo) / n
-    mag = 10 ** math.floor(math.log10(raw))
-    step = min((m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw), default=raw)
-    t = math.ceil(lo / step - 1e-9) * step
-    out = []
-    while t <= hi + 1e-9:
-        out.append(round(t, 10))
-        t += step
-    return out, step
+def num(v, signed=False, dec=2):
+    s = "%.*f" % (dec, abs(v))
+    if v < 0:
+        return M + s
+    return ("+" + s) if signed and v > 0 else s
 
 
-def fmt_tick(v, step):
-    d = 0 if step >= 1 else (1 if step >= 0.1 else 2)
-    s = "%.*f" % (d, v)
-    return s.replace("-", "−") if v < 0 else s
+def hbars(y0, rows, nbars, x0, x1, vmin, vmax, base, ticks, label_x=10,
+          bh=10, gap=12, tick_labels=True, fmt=None, axis_title=None):
+    """Horizontal bars from `base`. rows: dict(name, bold, vals[], labels[], colors[],
+    light[] (pale bar), right (text in the right column), right_x).
+    Returns (svg, y after the last row + axis)."""
+    def sx(v):
+        return x0 + (v - vmin) / (vmax - vmin) * (x1 - x0)
 
-
-# ---------------------------------------------------------------- chart 1
-def scatter_panel(y0, title, sub, pts, ymin, ymax, h=290):
-    X0, W = 70, 670
-    LO, HI = math.log10(0.02), math.log10(50)
-    top, bot = y0 + 40, y0 + 40 + h
-
-    def px(v):
-        return X0 + (math.log10(v) - LO) / (HI - LO) * W
-
-    def py(v):
-        return top + (ymax - v) / (ymax - ymin) * h
-
-    b = text(X0 - 60, y0 + 14, title, "t") + text(X0 - 60, y0 + 30, sub, "s")
-    for v in range(math.ceil(ymin), math.floor(ymax) + 1):
-        cls = "z" if v == 0 else "g"
-        b += '<path class="%s" d="M%d %.1fH%d"/>\n' % (cls, X0, py(v), X0 + W)
-        lab = ("+%d" % v if v > 0 else "%d" % v).replace("-", "−")
-        b += text(X0 - 8, py(v) + 4, lab, "m", "end")
-    for v, lab in [(0.03, "0.03"), (0.1, "0.1"), (0.3, "0.3"), (1, "1"), (3, "3"),
-                   (10, "10"), (30, "30")]:
-        b += '<path class="g" d="M%.1f %.1fV%.1f"/>\n' % (px(v), top, top + h)
-        b += text(px(v), top + h + 16, lab, "m", "middle")
-    for name, lo, hi, y, label, dx, dy, anchor, col in pts:
-        c = ENC_COLOR[col]
-        if hi is None:
-            b += '<circle cx="%.1f" cy="%.1f" r="5" class="f%d ring"/>\n' % (px(lo), py(y), c)
-            lx = px(lo)
-        else:
-            b += ('<path d="M%.1f %.1fH%.1f" class="k%d" stroke-width="10" '
-                  'stroke-linecap="round"/>\n' % (px(lo), py(y), px(hi), c))
-            lx = px(hi)
-        if anchor == "start_lo":
-            lx, anchor = px(lo), "start"
-        elif anchor == "end" and hi is not None:
-            lx = px(lo)
-        b += text(lx + dx, py(y) + dy, label, "", anchor)
-    return b
-
-
-def chart1():
-    rgb = [
-        ("gpu1", 0.03, 0.09, -1.4, "NVTT Normal (GPU) −1.4", 14, 4, "start", "NVTT"),
-        ("gpu2", 0.03, 0.09, -1.8, "texconv GPU −1.8", 14, 4, "start", "texconv"),
-        ("ispcb", 0.11, None, -0.75, "ISPC basic −0.75", -9, 4, "end", "ISPC"),
-        ("u4", 0.12, None, -0.39, "bc7e u4 −0.39", -9, 4, "end", "bc7e"),
-        ("u5", 0.22, None, 0.01, "bc7e u5 +0.01", -9, 4, "end", "bc7e"),
-        ("u6", 0.28, None, 0.0, "bc7e u6 0 (reference)", 10, 16, "start", "bc7e"),
-        ("max", 0.6, None, 0.32, "bc7e max‡ +0.32", 10, 4, "start", "bc7e"),
-        ("ispcs", 0.30, None, -0.59, "ISPC slow −0.59", 10, 4, "start", "ISPC"),
-        ("nvtt", 14, None, -0.32, "NVTT Production/Highest −0.32", 0, 20, "middle", "NVTT"),
-        ("tcpu", 16, 20, -1.6, "texconv CPU (-bc x) −1.6", 0, -14, "middle", "texconv"),
-        ("comp", 33, None, -0.16, "Compressonator q1.0 −0.16", 6, -12, "end", "Compressonator"),
-    ]
-    alpha = [
-        ("gpu1", 0.03, 0.09, -0.75, "NVTT Normal (GPU) −0.75", -5, 22, "start_lo", "NVTT"),
-        ("gpu2", 0.03, 0.09, -2.8, "texconv GPU −2.8", 14, 4, "start", "texconv"),
-        ("ispcb", 0.11, None, -0.69, "ISPC basic −0.69", -2, -13, "end", "ISPC"),
-        ("u4", 0.12, None, -0.36, "bc7e u4 −0.36", -9, 4, "end", "bc7e"),
-        ("u5", 0.22, None, -0.03, "bc7e u5 −0.03", -9, 4, "end", "bc7e"),
-        ("u6", 0.28, None, 0.0, "bc7e u6 0 (reference)", 10, 16, "start", "bc7e"),
-        ("max", 0.6, None, 0.32, "bc7e max‡ +0.32", 10, 4, "start", "bc7e"),
-        ("ispcs", 0.30, None, -0.67, "ISPC slow −0.67", 10, 4, "start", "ISPC"),
-        ("nvtt", 14, None, -0.37, "NVTT Production/Highest −0.37", 0, 20, "middle", "NVTT"),
-        ("tcpu", 16, 20, -2.4, "texconv CPU (-bc x) −2.4", 0, -14, "middle", "texconv"),
-        ("comp", 33, None, -1.50, "Compressonator q1.0 −1.50", 6, 20, "end", "Compressonator"),
-    ]
-    sub = "Δ vs bc7e u6 in dB (higher is better). Further right = slower."
-    b = scatter_panel(0, "BC7: colour (RGB, real textures)", sub, rgb, -3, 0.5)
-    b += scatter_panel(350, "BC7: real alpha", sub, alpha, -3, 0.5)
-    b += text(405, 716, "Time per megapixel in seconds (log scale)", "m", "middle")
-    b += text(10, 742,"‡ bc7e max is opt-in (encoder.effort = \"max\"), measured later on a "
-              "150-texture sample, about 0.6 s/Mpix; its Δ is against u6 on that sample.", "s")
-    b += text(10, 758,"“~” times are approximate. Ranges are drawn as bars. "
-              "NVTT Normal and texconv GPU share the 0.03–0.09 range.", "s")
-    desc = ("Scatter of BC7 encoders, speed against quality. The bc7e encoder is on the "
-            "fast, high-quality side: bc7e u5 and u6 take about 0.2 to 0.3 s per megapixel "
-            "and set the reference. Slow encoders (NVTT Production about 14, texconv CPU "
-            "16 to 20, Compressonator about 33) are no better than bc7e u6 on real colour "
-            "or alpha. GPU encoders are fastest but lose 1.4 to 2.8 dB.")
-    return svg(780, 772, "BC7 encoders: speed against quality", desc, b)
-
-
-# ------------------------------------------------------------ dot panels
-def dot_panels(w, panels, cols, caption_lines, title, desc, extra_cell=None):
-    PW, PH, ROWH = w // cols, 0, 24
+    rh = nbars * bh + (nbars - 1) * 2 + gap
+    top, bot = y0, y0 + rh * len(rows)
     b = ""
-    y = 8
-    row_h = []
-    for i in range(0, len(panels), cols):
-        row_h.append(max(len(p["rows"]) for p in panels[i:i + cols]) * ROWH + 74)
-    for i, p in enumerate(panels):
-        r, c = divmod(i, cols)
-        oy = 8 + sum(row_h[:r])
-        ox = c * PW
-        b += dot_panel(ox + 10, oy, PW - 20, p)
-    total = 8 + sum(row_h)
-    for k, ln in enumerate(caption_lines):
-        b += text(10, total + 14 + k * 16, ln, "s")
-    return svg(w, total + 14 + len(caption_lines) * 16, title, desc, b)
-
-
-def dot_panel(x, y, w, p):
-    """p: title, sub, rows [(name, value|None, label, enc)], log, zero (draw 0 line, stems)."""
-    LAB, ROWH = 128, 24
-    n = len(p["rows"])
-    px0, pw = x + LAB, w - LAB - 62
-    vals = [r[1] for r in p["rows"] if r[1] is not None]
-    log = p.get("log")
-    if log:
-        lo, hi = math.log10(0.1), math.log10(100)
-        ticks, step = [0.1, 1, 10, 100], None
-
-        def sx(v):
-            return px0 + (math.log10(v) - lo) / (hi - lo) * pw
-    else:
-        lo, hi = min(vals), max(vals)
-        if p.get("zero"):
-            lo, hi = min(lo, 0), max(hi, 0)
-        if p.get("base0"):
-            lo = 0
-        pad = (hi - lo) * (0.3 if p.get("zero") else 0.12) or 1
-        lo = lo if p.get("base0") else lo - pad
-        hi = hi + pad
-        ticks, step = nice_ticks(lo, hi, 3)
-
-        def sx(v):
-            return px0 + (v - lo) / (hi - lo) * pw
-    b = text(x, y + 14, p["title"], "t") + text(x, y + 30, p["sub"], "s")
-    top = y + 42
-    bot = top + n * ROWH
     for t in ticks:
-        lab = ("%g" % t) if log else fmt_tick(t, step)
         b += '<path class="g" d="M%.1f %.1fV%.1f"/>\n' % (sx(t), top, bot)
-        b += text(sx(t), bot + 14, lab, "m", "middle")
-    if p.get("zero"):
-        b += '<path class="z" d="M%.1f %.1fV%.1f"/>\n' % (sx(0), top, bot)
-    for i, (name, v, label, enc) in enumerate(p["rows"]):
-        cy = top + i * ROWH + ROWH / 2
-        b += text(x, cy + 4, name, "", "start")
-        c = ENC_COLOR[enc]
-        if v is None:
-            b += text(px0 + 6, cy + 4, label, "m", "start")
-            continue
-        if p.get("zero"):
-            b += '<path d="M%.1f %.1fH%.1f" class="k%d" stroke-width="2"/>\n' % (
-                sx(0), cy, sx(v), c)
-        b += '<circle cx="%.1f" cy="%.1f" r="5" class="f%d ring"/>\n' % (sx(v), cy, c)
-        if p.get("zero") and v < 0:
-            b += text(sx(v) - 10, cy + 4, label, "", "end")
-        else:
-            b += text(sx(v) + 10, cy + 4, label, "", "start")
-    return b
+        if tick_labels:
+            lab = (M + str(abs(t))) if t < 0 else str(t)
+            b += text(sx(t), bot + 15, lab, "m", "middle")
+    if vmin < base < vmax or base == 0:
+        b += '<path class="z" d="M%.1f %.1fV%.1f"/>\n' % (sx(base), top, bot)
+    for i, r in enumerate(rows):
+        ry = top + i * rh + gap / 2
+        b += text(label_x, ry + (nbars * bh) / 2 + 4, r["name"], "b" if r.get("bold") else "")
+        for k in range(nbars):
+            v, lab = r["vals"][k], r["labels"][k]
+            y = ry + k * (bh + 2)
+            if v is None:
+                b += text(sx(base) + 6, y + bh - 1, lab, "m")
+                continue
+            cls = "f%d%s" % (r["colors"][k], " lt" if r.get("light", [0] * nbars)[k] else "")
+            xa, xb = sorted((sx(base), sx(v)))
+            if xb - xa > 0.5:
+                b += '<rect x="%.1f" y="%.1f" width="%.1f" height="%d" class="%s"/>\n' % (
+                    xa, y, xb - xa, bh, cls)
+            if v < base:
+                b += text(xa - 5, y + bh - 1, lab, "s" if nbars > 1 else "", "end")
+            else:
+                b += text(xb + 5, y + bh - 1, lab, "s" if nbars > 1 else "", "start")
+        if r.get("right"):
+            b += text(r["right_x"], ry + (nbars * bh) / 2 + 4, r["right"], "")
+    return b, bot
 
 
-M = "−"  # minus sign, as in the old tables
-
-
-def chart2():
-    E = [("bc7e -u5", "bc7e"), ("NVTT 3 Production", "NVTT"),
-         ("Compressonator q1.0", "Compressonator"), ("Intel ISPC slow", "ISPC"),
-         ("texconv -bc x", "texconv")]
-
-    def rows(vals, labels):
-        return [(E[i][0], vals[i], labels[i], E[i][1]) for i in range(5)]
-
-    NM = "not measured†"
-    d = "Δ vs bc7e u6, dB. Higher is better."
-    panels = [
-        dict(title="Real colour textures", sub=d, zero=True, rows=rows(
-            [0.03, -0.27, -0.16, -0.44, -1.47],
-            ["+0.03", M + "0.27", M + "0.16†", M + "0.44", M + "1.47"])),
-        dict(title="Smooth gradients (synthetic)", sub=d, zero=True, rows=rows(
-            [0.00, 3.86, 3.21, 0.73, -6.89],
-            ["0.00", "+3.86", "+3.21", "+0.73", M + "6.89"])),
-        dict(title="Real decals, smooth alpha", sub=d, zero=True, rows=rows(
-            [-0.02, -0.06, -1.50, -0.58, -2.04],
-            [M + "0.02", M + "0.06", M + "1.50†", M + "0.58", M + "2.04"])),
-        dict(title="Packed data maps", sub="RGB PSNR, dB. Higher is better.", rows=rows(
-            [41.22, 41.58, None, 41.20, 40.38],
-            ["41.22", "41.58", NM, "41.20", "40.38"])),
-        dict(title="Normal maps", sub="Mean angle error, degrees. Lower is better.", rows=rows(
-            [1.77, 1.71, None, 1.79, 2.19],
-            ["1.77°", "1.71°", NM, "1.79°", "2.19°"])),
-        dict(title="Opaque input decoded with alpha 254",
-             sub="Share of texels. Lower is better.", base0=True, rows=rows(
-                 [28, 0, 1.1, 15, 2.4],
-                 ["28%*", "0%", "1.1%", "15%", "2.4%"])),
-        dict(title="Time per megapixel", sub="Seconds, log scale. Lower is faster.", log=True,
-             rows=rows([0.22, 14, 33, 0.30, 20],
-                       ["0.22 s", "~14 s", "~33 s", "0.30 s", "~20 s"])),
+# ------------------------------------------------------- chart 1: BC7 encoders
+def chart_bc7():
+    # name, speed (s/Mpix), dRGB (real), dAlpha (real), encoder colour; copied from the table
+    T = [
+        ("bc7e max‡ (Tessalith opt-in)", "~0.6", 0.32, 0.32, BLUE, "+0.32", "+0.32"),
+        ("bc7e u5 (Tessalith default)", "0.22", 0.01, -0.03, BLUE, "+0.01", M + "0.03"),
+        ("bc7e u6 (reference)", "0.28", 0.0, 0.0, BLUE, "0", "0"),
+        ("Compressonator q1.0", "~33", -0.16, -1.50, VIOLET, M + "0.16", M + "1.50"),
+        ("NVTT Production/Highest", "~14", -0.32, -0.37, AQUA, M + "0.32", M + "0.37"),
+        ("bc7e u4", "0.12", -0.39, -0.36, BLUE, M + "0.39", M + "0.36"),
+        ("ISPC slow", "0.30", -0.59, -0.67, ORANGE, M + "0.59", M + "0.67"),
+        ("ISPC basic", "0.11", -0.75, -0.69, ORANGE, M + "0.75", M + "0.69"),
+        ("NVTT Normal (GPU)", "0.03–0.09", -1.4, -0.75, AQUA, M + "1.4", M + "0.75"),
+        ("texconv CPU (-bc x)", "~16–20", -1.6, -2.4, MAGENTA, M + "1.6", M + "2.4"),
+        ("texconv GPU", "0.03–0.09", -1.8, -2.8, MAGENTA, M + "1.8", M + "2.8"),
     ]
-    cap = [
-        "† Compressonator q1.0 was not re-measured on the wider set: its values come from the "
-        "original 4–7 images.",
-        "  There it was 0.15 dB behind NVTT on packed data and 0.27° behind on normals. "
-        "The alpha-254 and time rows are also from the original run.",
-        "* The opt-in mode 6 p-bit override (exact opaque alpha) is for when this is not acceptable.",
+    assert [r[2] for r in T] == sorted((r[2] for r in T), reverse=True)  # sorted by RGB
+    rows = [dict(name=n, bold=n.startswith("bc7e max"), vals=[d, a], labels=[dl, al],
+                 colors=[c, c], light=[0, 1], right=sp, right_x=650)
+            for n, sp, d, a, c, dl, al in T]
+    head = 96
+    b = text(10, 20, "BC7 encoders: quality against bc7e u6, with speed", "t")
+    b += text(10, 38, "Δ in dB against bc7e u6 (higher is better), sorted by RGB. "
+              "Speed is in seconds per megapixel.", "s")
+    b += '<rect x="10" y="50" width="14" height="10" class="mu"/>\n'
+    b += text(30, 59, "RGB, real colour textures", "s")
+    b += '<rect x="196" y="50" width="14" height="10" class="mu lt"/>\n'
+    b += text(216, 59, "Alpha, real alpha textures", "s")
+    b += text(650, 82, "Speed (s/Mpix)", "s")
+    body, bot = hbars(head, rows, 2, 235, 585, -3.4, 0.6, 0, [-3, -2, -1, 0], tick_labels=True)
+    b += body
+    b += text(10, bot + 40, "‡ bc7e max is Tessalith's opt-in effort (encoder.effort = \"max\"). "
+              "Measured later, on a 150-texture Skyrim sample; its Δ is against u6 on that sample.",
+              "s")
+    b += text(10, bot + 56, "~ means approximate. The 0.03–0.09 s range is shared by "
+              "NVTT Normal (GPU) and texconv GPU.", "s")
+    desc = ("Horizontal bars of BC7 encoder quality against bc7e u6, in dB, sorted by RGB. "
+            "Tessalith's opt-in bc7e max is best at +0.32 dB RGB and +0.32 dB alpha, about 0.6 s "
+            "per megapixel. bc7e u5, the default, is level with u6 at 0.22 s. Slow encoders "
+            "(NVTT Production about 14 s, Compressonator about 33 s, texconv CPU 16 to 20 s) "
+            "do not beat it. GPU encoders are fastest, 0.03 to 0.09 s, but lose 1.4 to 2.8 dB.")
+    return svg(780, bot + 66, "BC7 encoders compared with bc7e u6", desc, b)
+
+
+# ------------------------------------------------- chart 2: other formats, dB
+def chart_formats():
+    E = [("rgbcx", BLUE), ("NVTT 3", AQUA), ("Compressonator", VIOLET),
+         ("Intel ISPC", ORANGE), ("texconv (CPU)", MAGENTA)]
+    NM, NMD = "not measured", "not measured†"
+    G = [  # title, values in encoder order, labels (copied from the table)
+        ("BC1 colour (RGB PSNR)", [39.85, 39.74, 39.05, 38.11, 37.41]),
+        ("BC3 colour + alpha (premultiplied PSNR)", [49.20, 49.29, 48.75, 48.02, 48.07]),
+        ("BC4 masks (PSNR)", [45.59, 45.05, 45.19, 43.70, 43.94]),
+        ("BC6H HDR (multi-exposure PSNR)", [None, 48.00, None, 50.38, 49.62]),
     ]
-    desc = ("BC7 encoders at maximum settings, one panel per measure. bc7e u5 matches the best "
-            "quality on real colour and decals and takes 0.22 s per megapixel. NVTT 3 Production "
-            "and Compressonator score higher on synthetic smooth gradients, but take about 14 "
-            "and 33 s per megapixel. texconv CPU is last on every quality measure. bc7e u5 "
-            "turns 28 percent of opaque input into alpha 254, against 0 percent for NVTT. "
-            "Compressonator packed-data and normal-map values were not measured.")
-    return dot_panels(780, panels, 2, cap, "BC7 encoders compared by measure", desc)
+    b = text(10, 20, "Best encoder per format, PSNR in dB", "t")
+    b += text(10, 38, "Higher is better. Bars start at 35 dB, not zero.", "s")
+    y = 56
+    x0, x1, vmin, vmax = 150, 560, 35, 51
+    sections = ""
+    start = y
+    for title, vals in G:
+        sections += text(10, y + 10, title, "b")
+        rows = []
+        for (n, c), v in zip(E, vals):
+            lab = NMD if (v is None and n == "Compressonator") else NM if v is None else "%.2f" % v
+            rows.append(dict(name=n, vals=[v], labels=[lab], colors=[c]))
+        body, bot = hbars(y + 18, rows, 1, x0, x1, vmin, vmax, vmin, [35, 40, 45, 50],
+                          bh=14, gap=6, tick_labels=False)
+        sections += body
+        y = bot + 18
+    # gridlines come from each group; one tick row under the last group
+    for t in (35, 40, 45, 50):
+        sections += text(x0 + (t - vmin) / (vmax - vmin) * (x1 - x0), y - 4, str(t), "m", "middle")
+    b += sections
+    b += text(10, y + 20, "† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB "
+              "below ISPC.", "s")
+    b += text(10, y + 36, "BC5 normals and BC6H highlight share are not dB; the full table "
+              "is in the wiki (Research).", "s")
+    desc = ("Grouped horizontal bars of PSNR in dB for BC1, BC3, BC4 and BC6H, one bar per "
+            "encoder. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 "
+            "on BC3 (49.20 against 49.29). Intel ISPC is best on BC6H (50.38). rgbcx and "
+            "Compressonator BC6H values were not measured. texconv CPU is last or near last.")
+    return svg(780, y + 46, "Encoders compared by format, PSNR", desc, b)
 
 
-def chart3():
-    E = [("rgbcx", "rgbcx"), ("NVTT 3", "NVTT"), ("Compressonator", "Compressonator"),
-         ("Intel ISPC", "ISPC"), ("texconv (CPU)", "texconv")]
-
-    def rows(vals, labels):
-        return [(E[i][0], vals[i], labels[i], E[i][1]) for i in range(5)]
-
-    NM = "not measured"
-    NMD = "not measured†"
-    panels = [
-        dict(title="BC1 colour", sub="RGB PSNR, dB. Higher is better.", rows=rows(
-            [39.85, 39.74, 39.05, 38.11, 37.41], ["39.85", "39.74", "39.05", "38.11", "37.41"])),
-        dict(title="BC3 colour + alpha", sub="Premultiplied PSNR, dB. Higher is better.",
-             rows=rows([49.20, 49.29, 48.75, 48.02, 48.07],
-                       ["49.20", "49.29", "48.75", "48.02", "48.07"])),
-        dict(title="BC4 masks", sub="PSNR, dB. Higher is better.", rows=rows(
-            [45.59, 45.05, 45.19, 43.70, 43.94], ["45.59", "45.05", "45.19", "43.70", "43.94"])),
-        dict(title="BC5 normals", sub="Mean angle error, degrees. Lower is better.", rows=rows(
-            [0.41, 0.47, 0.45, 0.55, 0.56],
-            ["0.41°", "0.47°", "0.45°", "0.55°", "0.56°"])),
-        dict(title="BC6H HDR", sub="Multi-exposure PSNR, dB. Higher is better.", rows=rows(
-            [None, 48.00, None, 50.38, 49.62], [NM, "48.00", NMD, "50.38", "49.62"])),
-        dict(title="BC6H brightest highlight kept",
-             sub="Worst image, share kept. Higher is better.", base0=True, rows=rows(
-                 [None, 94, 29, 22, 29], [NM, "94%", "29%†", "22%", "29%"])),
+# ------------------------------------- chart 3: BC3 against BC7 alpha weights
+def chart_alpha_weights():
+    # Names use the GUI dropdown labels where the setting is offered (Note CP1).
+    NAMES = ["BC3 (rgbcx L18 -r)", "Linear (w1, default)", "Alpha ×2 (w2)",
+             "w4 (study only)", "Alpha ×8 (w8)", "Alpha ×16 (w16)", "Perceptual"]
+    # (RGB PSNR, alpha PSNR) means, copied from the study's Results tables
+    CLASSES = [
+        ("Colour with smooth alpha", "alpha_real, 96 textures",
+         [(41.00, 47.24), (48.40, 47.93), (47.74, 49.39), (47.13, 50.56),
+          (46.60, 51.40), (46.17, 51.93), (46.54, 51.17)]),
+        ("Normal map with specular in alpha", "n_spec, 30 textures. RGB is the stored normal.",
+         [(33.47, 46.06), (37.54, 37.24), (36.79, 39.28), (36.00, 41.39),
+          (35.22, 43.36), (34.53, 44.96)]),
+        ("Packed rmaos with specular in alpha", "rmaos_spec, 24 textures",
+         [(38.64, 58.98), (45.27, 49.92), (44.95, 51.79), (44.62, 53.36),
+          (44.25, 54.74), (43.82, 56.07)]),
     ]
-    cap = ["† Original 4 HDRIs only; Compressonator mPSNR there was 1.2 dB below ISPC."]
-    desc = ("Best-effort encoders per format, one panel per measure. rgbcx is best on BC1, BC4 "
-            "and BC5 and within 0.09 dB of NVTT 3 on BC3. Intel ISPC is best on BC6H "
-            "multi-exposure PSNR, 50.38 dB, but NVTT 3 keeps the brightest highlight best, 94 "
-            "percent against 22 percent for ISPC. texconv CPU is last or near last on BC1, "
-            "BC3 and BC4. rgbcx does not do BC6H.")
-    return dot_panels(780, panels, 2, cap, "Encoders compared by format", desc)
+    b = text(10, 20, "BC3 against BC7 alpha weights: mean PSNR in dB", "t")
+    b += text(10, 38, "Higher is better. Bars start at 30 dB, not zero. "
+              "Perceptual was measured on the first class only.", "s")
+    b += '<rect x="10" y="48" width="14" height="10" class="f0"/>\n' + text(30, 57, "RGB", "s")
+    b += '<rect x="76" y="48" width="14" height="10" class="f1"/>\n' + text(96, 57, "Alpha", "s")
+    y = 76
+    x0, x1, vmin, vmax = 235, 655, 30, 60
+    for title, sub, data in CLASSES:
+        b += text(10, y + 10, title, "t") + text(10 + 8 + len(title) * 7.3, y + 10, sub, "s")
+        rows = [dict(name=NAMES[i], bold=(i == 0), vals=[r, a], labels=["%.2f" % r, "%.2f" % a],
+                     colors=[BLUE, ORANGE]) for i, (r, a) in enumerate(data)]
+        body, bot = hbars(y + 20, rows, 2, x0, x1, vmin, vmax, vmin, [30, 40, 50, 60])
+        b += body
+        y = bot + 40
+    b += text(10, y - 8, "Local study, 2026-10-21 (DECISIONS Note CP). Alpha ×8 is the "
+              "BC3 replacement the study found for smooth alpha.", "s")
+    desc = ("Grouped bars of mean RGB and alpha PSNR for BC3 and BC7 with alpha weights, in three "
+            "texture classes. On colour with smooth alpha, Alpha x8 gives 51.40 dB alpha against "
+            "47.24 for BC3 and keeps 46.60 dB RGB against 41.00. On a normal map or packed rmaos "
+            "with specular in alpha, BC3 keeps the highest alpha, 46.06 and 58.98 dB, and BC7 "
+            "alpha rises with the weight.")
+    return svg(780, y + 6, "BC3 against BC7 alpha weights", desc, b)
 
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    for name, fn in [("encoder-speed-quality", chart1), ("encoder-bc7-measures", chart2),
-                     ("encoder-formats", chart3)]:
+    for name, fn in [("encoder-bc7", chart_bc7), ("encoder-formats", chart_formats),
+                     ("bc7-alpha-weights", chart_alpha_weights)]:
         path = os.path.join(OUT, name + ".svg")
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(fn())

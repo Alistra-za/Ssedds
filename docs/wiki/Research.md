@@ -51,3 +51,59 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 - NVTT's licence forbids use that would put it under an open-source licence. Drove: Tessalith never links or ships it and runs your installed `nvcompress.exe` as a separate process.
 - Spike S7: feeding each pre-built level to its own `nvcompress -nomips` process matched a direct encode exactly at mip 0. BC7 Production runs on the CPU even with CUDA available, and `-nocuda` gave byte-identical output while saving about 0.13 s of CUDA start-up per process. Drove: Tessalith builds the mip chain itself and always passes `-nocuda`.
 - Spike S7b: nvcompress read an uncompressed DDS with a DX10 header as garbage (5.05 dB) but read the same pixels with a legacy header exactly, and BC6H encoded every level down to 1×1. Drove: levels are fed as legacy-header DDS (BGRA8 for BC7, RGBA16F for BC6H) and no fallback encoder is needed. NVTT 3.2.5 is the tested version; others need confirmation.
+
+## Encoder measurements
+
+The full data behind the charts in the README. "—" means not measured. The charts are drawn by `tools/readme-charts.py`.
+
+BC7E for BC7, rgbcx for BC1–BC5, Intel ISPC for BC6H.
+
+### BC7: GPU and CPU encoders, speed and quality
+
+Δ is against bc7e u6, in dB. "Real" means real textures.
+
+| Encoder | Speed (s/Mpix) | Δ RGB (real) | Δ (real alpha) |
+|---|--:|--:|--:|
+| NVTT Normal (GPU) / texconv GPU | 0.03–0.09 | −1.4 / −1.8 | −0.75 / −2.8 |
+| ISPC basic | 0.11 | −0.75 | −0.69 |
+| bc7e u4 | 0.12 | −0.39 | −0.36 |
+| bc7e u5 | 0.22 | +0.01 | −0.03 |
+| bc7e u6 | 0.28 | 0 | 0 |
+| bc7e max‡ | ~0.6 | +0.32 | +0.32 |
+| ISPC slow | 0.30 | −0.59 | −0.67 |
+| NVTT Production/Highest | ~14 | −0.32 | −0.37 |
+| texconv CPU (-bc x) | ~16–20 | −1.6 | −2.4 |
+| Compressonator q1.0 | ~33 | −0.16 | −1.50 |
+
+‡ `max` is opt-in (`encoder.effort = "max"`). It was measured later, on a 150-texture Skyrim sample, not on the set above. It took 2.7× the time of u5 (`veryslow`) with the two run alternately per image, and 2.9× in separate runs, so about 0.6 s/Mpix on this table's scale. That matches the expected ~3×. Δ is against u6 on that sample: RGB on diffuse (images over 60 dB left out; +0.94 with all 60) and alpha PSNR on the 30 textures with alpha. Against u5 it gains +0.18 dB on diffuse, +0.037° on normal maps and +0.24 dB on alpha. A build ran during part of the alternating run (CPU about 14% busy before it, up to 6 rustc processes); the separate runs had the machine nearly idle. Details: [bc7e tuning](../research/bc7e-tuning.md).
+
+### BC7: bc7e u5 against the other CPU encoders at maximum settings
+
+| Measure | bc7e -u5 | NVTT 3 Production | Compressonator q1.0 | Intel ISPC slow | texconv -bc x |
+|---|--:|--:|--:|--:|--:|
+| Real colour textures (Δ dB) | +0.03 | −0.27 | −0.16† | −0.44 | −1.47 |
+| Smooth gradients, synthetic (Δ dB) | 0.00 | +3.86 | +3.21 | +0.73 | −6.89 |
+| Real decals, smooth alpha (Δ dB) | −0.02 | −0.06 | −1.50† | −0.58 | −2.04 |
+| Packed data maps (RGB PSNR, dB) | 41.22 | 41.58 | —† | 41.20 | 40.38 |
+| Normal maps (mean angle error) | 1.77° | 1.71° | —† | 1.79° | 2.19° |
+| Opaque input decoded with alpha 254 | 28%* | 0% | 1.1% | 15% | 2.4% |
+| Time per megapixel | 0.22 s | ~14 s | ~33 s | 0.30 s | ~20 s |
+
+\* An optional patch (mode 6 p-bit override, exact opaque) is for when alpha 254 is not acceptable.
+
+† Compressonator q1.0 was not re-measured on the wider set; its values come from the original 4–7 images. On those images it was 0.15 dB behind NVTT on packed data and 0.27° behind on normals. The alpha-254 and timing rows are also from the original run.
+
+### Other formats: best encoders per format
+
+| Format and measure | rgbcx | NVTT 3 | Compressonator | Intel ISPC | texconv (CPU) |
+|---|--:|--:|--:|--:|--:|
+| BC1 colour (RGB PSNR, dB) | 39.85 | 39.74 | 39.05 | 38.11 | 37.41 |
+| BC3 colour + alpha (premultiplied PSNR, dB) | 49.20 | 49.29 | 48.75 | 48.02 | 48.07 |
+| BC4 masks (PSNR, dB) | 45.59 | 45.05 | 45.19 | 43.70 | 43.94 |
+| BC5 normals (mean angle error) | 0.41° | 0.47° | 0.45° | 0.55° | 0.56° |
+| BC6H HDR (multi-exposure PSNR, dB) | — | 48.00 | —† | 50.38 | 49.62 |
+| BC6H brightest highlight kept (worst image) | — | 94% | 29%† | 22% | 29% |
+
+rgbcx beats NVTT on BC1 on 96 of 100 images, and BC3 is a tie. The texconv GPU path is slower than ISPC on BC6H and loses 1.8 dB.
+
+† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.
