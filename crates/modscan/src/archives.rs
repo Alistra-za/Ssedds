@@ -35,14 +35,14 @@ pub struct ActivePlugin {
 /// plugins.txt `*` entries; each name once, at its first place.
 pub fn active_plugins(inst: &Instance) -> Vec<ActivePlugin> {
     let game = game_dir(inst);
-    let plugins = std::fs::read_to_string(inst.profiles.join(&inst.profile).join("plugins.txt"))
-        .unwrap_or_default();
+    let plugins =
+        read_text(&inst.profiles.join(&inst.profile).join("plugins.txt")).unwrap_or_default();
     let listed: std::collections::HashSet<String> = plugins
         .lines()
         .map(|l| l.trim().trim_start_matches('*').trim().to_ascii_lowercase())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
-    let ccc: Vec<String> = std::fs::read_to_string(game.join("Skyrim.ccc"))
+    let ccc: Vec<String> = read_text(&game.join("Skyrim.ccc"))
         .unwrap_or_default()
         .lines()
         .map(|l| l.trim().to_ascii_lowercase())
@@ -122,7 +122,12 @@ impl BsaIndex {
 }
 
 fn read_ini(p: &Path) -> Option<Ini> {
-    std::fs::read_to_string(p).ok().map(|t| Ini::parse(&t))
+    read_text(p).map(|t| Ini::parse(&t))
+}
+
+/// `None` when the file cannot be read; decoding is `crate::read_text`.
+fn read_text(p: &Path) -> Option<String> {
+    crate::read_text(p).ok()
 }
 
 /// Archive-list entries of `Skyrim.ini` + `SkyrimCustom.ini` in `dir` (later file wins per key); `None` when no
@@ -262,4 +267,21 @@ pub fn active_bsas_with(
         push(&format!("{stem} - textures.bsa"), &mut out);
     }
     (out, notes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trace-debug #24: a BOM must not hide the first section of Skyrim.ini.
+    #[test]
+    fn ini_lists_read_past_a_bom_and_an_ansi_byte() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("Skyrim.ini"),
+            b"\xEF\xBB\xBF[Archive]\nsResourceArchiveList=A.bsa, B.bsa\n[Other]\nsName=Caf\xE9\n",
+        )
+        .unwrap();
+        assert_eq!(ini_lists_in(d.path()).unwrap(), ["A.bsa", "B.bsa"]);
+    }
 }

@@ -217,3 +217,46 @@ fn a_hung_nvcompress_is_killed_and_fails_the_level() {
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     assert!(!tmp.path().join("l0.out.dds").exists());
 }
+
+/// Trace-debug #5: a wrapper `--nvtt` (here a .bat) must not leave its child running after a timeout.
+#[cfg(windows)]
+#[test]
+fn a_timed_out_wrapper_loses_its_whole_process_tree() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let bat = tmp.path().join("wrap.bat");
+    // 4711 pings is a marker no other process on the machine has; the ping is the wrapper's grandchild.
+    std::fs::write(
+        &bat,
+        "@echo off\r\n%SystemRoot%\\System32\\PING.EXE -n 4711 127.0.0.1 >nul\r\n",
+    )
+    .unwrap();
+    let tool = NvttTool {
+        path: bat,
+        version: NVTT_TESTED.into(),
+    };
+    let p = profile(Subtype::Diffuse, Format::Bc7, AlphaPolicy::Remove);
+    std::env::set_var("SDC_NVTT_LEVEL_TIMEOUT_MS", "1500");
+    let r = encode_level_nvtt(&tool, &ldr(8, 8), 8, 8, &p, &tmp, 0, &never);
+    std::env::remove_var("SDC_NVTT_LEVEL_TIMEOUT_MS");
+    assert!(
+        matches!(&r, Err(NvttError::Failed(m)) if m.contains("did not finish")),
+        "{r:?}"
+    );
+    let q = "(Get-CimInstance Win32_Process -Filter \"Name='PING.EXE'\" | Where-Object { $_.CommandLine -like '*4711*' } | Measure-Object).Count";
+    let alive = || {
+        let o = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", q])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let n = alive();
+    if n != "0" {
+        // Do not leave the marker process running when the assert fails.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "PING.EXE"])
+            .output();
+    }
+    assert_eq!(n, "0", "the wrapper's child survived the timeout");
+}

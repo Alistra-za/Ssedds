@@ -602,6 +602,20 @@ fn the_edit_mod_is_matched_ignoring_case() {
     assert_eq!(placement(&copies, &mods, EDIT_MOD), Placement::Ok);
 }
 
+/// Trace 2: MO2 roots use `/` after the instance folder, the export folder picker uses `\`.
+#[test]
+fn the_edit_mod_is_matched_across_separator_spelling() {
+    let m = Path::new(r"X:\Instance\mods\sdc NIF Edits");
+    let mut edit = copy("sdc NIF Edits", 8, false);
+    edit.root = r"X:\Instance/mods\sdc NIF Edits".into();
+    let mut a = copy("A", 3, false);
+    a.root = r"X:\Instance/mods\A".into();
+    let c = [edit.clone(), a];
+    assert_eq!(pick_source(&c, m).map(|c| c.origin.as_str()), Some("A"));
+    edit.root = r"X:\Instance/mods\sdc NIF Edits\".into();
+    assert!(pick_source(&[edit], m).is_none());
+}
+
 #[test]
 fn generated_winner_warns() {
     assert_eq!(
@@ -3916,22 +3930,28 @@ fn with_uv_ctrl_timed(bytes: &[u8], flags: u16, timing: [f32; 4]) -> Vec<u8> {
         key_type: Some(1),
         keys: vec![key(0.0, 0.0), key(1.0, 1.0)],
     });
-    let data = doc.append(b"NiFloatData", nif::keys::encode_data(&keys));
-    let interp = doc.append(
-        b"NiFloatInterpolator",
-        builder::W::default().f(0.0).i32(data as i32).0,
-    );
-    let ctrl = doc.append(
-        b"BSLightingShaderPropertyFloatController",
-        builder::W::default()
-            .i32(net.controller)
-            .u16(flags)
-            .fs(&timing)
-            .i32(lsp as i32)
-            .i32(interp as i32)
-            .u32(20)
-            .0,
-    );
+    let data = doc
+        .append(b"NiFloatData", nif::keys::encode_data(&keys))
+        .unwrap();
+    let interp = doc
+        .append(
+            b"NiFloatInterpolator",
+            builder::W::default().f(0.0).i32(data as i32).0,
+        )
+        .unwrap();
+    let ctrl = doc
+        .append(
+            b"BSLightingShaderPropertyFloatController",
+            builder::W::default()
+                .i32(net.controller)
+                .u16(flags)
+                .fs(&timing)
+                .i32(lsp as i32)
+                .i32(interp as i32)
+                .u32(20)
+                .0,
+        )
+        .unwrap();
     doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
     let out = doc.bytes();
     let back = nif::model::read_model(&out).unwrap();
@@ -5164,40 +5184,49 @@ fn with_clip_at(
     let net = m.lighting[&lsp].prop.net.clone();
     let mut doc = nif::write::NifDoc::open(bytes).unwrap();
     let at = net.controller_at() - doc.header().offsets()[lsp as usize];
-    let blend = doc.append(
-        b"NiBlendFloatInterpolator",
-        builder::W::default().u8(1).u8(0).f(0.0).f(0.0).0,
-    );
-    let ctrl = doc.append(
-        b"BSLightingShaderPropertyFloatController",
-        scenes::ctrl_body(
-            net.controller,
-            0x68,
-            lsp as i32,
-            builder::W::default().i32(blend as i32).u32(11),
-        ),
-    );
+    let blend = doc
+        .append(
+            b"NiBlendFloatInterpolator",
+            builder::W::default().u8(1).u8(0).f(0.0).f(0.0).0,
+        )
+        .unwrap();
+    let ctrl = doc
+        .append(
+            b"BSLightingShaderPropertyFloatController",
+            scenes::ctrl_body(
+                net.controller,
+                0x68,
+                lsp as i32,
+                builder::W::default().i32(blend as i32).u32(11),
+            ),
+        )
+        .unwrap();
     doc.patch(lsp, at, &(ctrl as i32).to_le_bytes()).unwrap();
     let data = keys.map_or(-1, |k| {
-        doc.append(b"NiFloatData", nif::keys::encode_data(&k)) as i32
+        doc.append(b"NiFloatData", nif::keys::encode_data(&k))
+            .unwrap() as i32
     });
-    let interp = doc.append(
-        b"NiFloatInterpolator",
-        builder::W::default().f(value).i32(data).0,
-    );
-    let s = |doc: &mut nif::write::NifDoc, x: &[u8]| doc.string(x);
+    let interp = doc
+        .append(
+            b"NiFloatInterpolator",
+            builder::W::default().f(value).i32(data).0,
+        )
+        .unwrap();
+    let s = |doc: &mut nif::write::NifDoc, x: &[u8]| doc.string(x).unwrap();
     let (start, end) = (s(&mut doc, b"start"), s(&mut doc, b"end"));
-    let tk = doc.append(
-        b"NiTextKeyExtraData",
-        builder::W::default()
-            .i32(-1)
-            .u32(2)
-            .f(0.0)
-            .i32(start)
-            .f(1.0)
-            .i32(end)
-            .0,
-    );
+    let tk = doc
+        .append(
+            b"NiTextKeyExtraData",
+            builder::W::default()
+                .i32(-1)
+                .u32(2)
+                .f(0.0)
+                .i32(start)
+                .f(1.0)
+                .i32(end)
+                .0,
+        )
+        .unwrap();
     let (name, prop, ctype, cid) = (
         s(&mut doc, b"Glow"),
         s(&mut doc, b"BSLightingShaderProperty"),
@@ -5224,7 +5253,7 @@ fn with_clip_at(
         .i32(-1)
         .u16(0)
         .0;
-    let seq = doc.append(b"NiControllerSequence", seq);
+    let seq = doc.append(b"NiControllerSequence", seq).unwrap();
     let out = doc.bytes();
     let back = nif::model::read_model(&out).unwrap();
     assert!(back.problems.is_empty(), "{:?}", back.problems);

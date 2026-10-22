@@ -295,8 +295,9 @@ fn dry_run_with_out_dir_writes_nothing() {
         .output()
         .unwrap();
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    // Trace 4: a dry run must not print the real "patched" code.
     assert!(
-        text(&o.stdout).contains("DDS-HEADER-PATCHED"),
+        !text(&o.stdout).contains("DDS-HEADER-PATCHED") && text(&o.stdout).contains("would patch"),
         "{}",
         text(&o.stdout)
     );

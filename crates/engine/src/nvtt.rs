@@ -428,19 +428,16 @@ pub fn encode_level_nvtt(
             Ok(Some(st)) => break st,
             Ok(None) => {}
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 return Err(failed(format!("waiting for nvcompress: {e}")));
             }
         }
         if cancel() {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Err(NvttError::Cancelled);
         }
         if started.elapsed() > limit {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Err(failed(format!(
                 "nvcompress did not finish a {w}x{h} level within {} s and was stopped",
                 limit.as_secs_f32()

@@ -391,7 +391,7 @@ pub struct FileRefs {
 pub const MISSING_NOTE: &str = "Paths that winning plugin records name and that no enabled mod, the game Data folder or an active BSA provides. Information only.";
 /// Shown under Unused when the last scan did not read plugins (Folder scan, cancelled or PGPatcher-tainted run).
 pub const PLUGINS_NOT_READ_NOTE: &str = "Plugins were not read in the last scan; Unused may count plugin-only textures or use earlier plugin data.";
-pub const UNUSED_NOTE: &str = "Textures that no NIF and no plugin record names. textures\\pbr\\ is left out (PGPatcher output); LOD, interface and engine textures are listed too. Information only.";
+pub const UNUSED_NOTE: &str = "Textures that no NIF and no plugin record names. textures\\pbr\\ (PGPatcher output) and LOD textures are left out. Interface and engine textures are listed too. Information only.";
 
 /// The scan details line of the plugin pass (esp spec §4.3).
 pub fn plugins_line(p: &PluginStats) -> String {
@@ -1106,7 +1106,11 @@ impl MeshesModel {
 
     /// The path filter as compared with stored paths: `/` slashes, lower case, no `meshes/` prefix.
     fn path_needle(&self) -> String {
-        let t = self.path_filter.trim().replace('\\', "/").to_lowercase();
+        let t = self
+            .path_filter
+            .trim()
+            .replace('\\', "/")
+            .to_ascii_lowercase();
         display_path(&t).to_string()
     }
 

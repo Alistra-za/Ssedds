@@ -254,7 +254,18 @@ subtype = \"normal\"
     );
     m.decide(DIFFUSE, Answer::Subtype(Subtype::PbrAlbedo));
     idle(&mut m);
-    assert_eq!(subtype(&m, N), None, "no own entry was written over it");
+    // The GUI finds the extension-less entry too (trace #29): it is still the one deciding, and still `normal`.
+    assert_eq!(
+        subtype(&m, N),
+        Some(json!("normal")),
+        "the entry is untouched"
+    );
+    let keys = m.project.as_ref().unwrap().file_keys();
+    assert!(keys.contains(&"m/rock01_n".to_string()), "{keys:?}");
+    assert!(
+        !keys.iter().any(|k| k.starts_with("m/rock01_n.")),
+        "no full-name table was added over it: {keys:?}"
+    );
     assert_eq!(
         m.item(N).unwrap().job.as_ref().unwrap().profile.subtype,
         Subtype::Normal

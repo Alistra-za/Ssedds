@@ -298,3 +298,27 @@ fn uncompressed_dds_inputs_preview_from_the_cpu_decode() {
         }
     }
 }
+
+/// Trace #32: Encode now during an export says it waits, so it encodes once the export is done (Live encode off).
+#[test]
+fn encode_now_during_an_export_runs_when_the_export_ends() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.expand("landscape/rock01_rmaos");
+    settle(&mut m);
+    m.export.running = Some(Default::default());
+    m.encode_now();
+    let t0 = Instant::now();
+    m.tick(t0 + DEBOUNCE * 2);
+    assert!(
+        matches!(m.preview.encoded, EncodedState::NotEncoded),
+        "waits while the export runs"
+    );
+    assert!(m.preview.notice.is_some(), "the notice says it waits");
+    m.export.running = None;
+    m.tick(t0 + DEBOUNCE * 3);
+    m.tick(t0 + DEBOUNCE * 5);
+    settle(&mut m);
+    assert!(matches!(m.preview.encoded, EncodedState::Done(_)));
+    assert!(m.preview.notice.is_none(), "and goes once it has run");
+}

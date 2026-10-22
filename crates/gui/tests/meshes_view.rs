@@ -1214,6 +1214,15 @@ fn unused_says_plugins_were_not_read_after_a_folder_scan() {
     assert!(!run(Some(stats(1, 1, 1, 1, &[]))));
 }
 
+/// Trace 2026-10-22 #6: `unused_textures` leaves LOD textures out (modscan lod_skip.rs); the note must not say they
+/// are listed.
+#[test]
+fn unused_note_says_lod_textures_are_left_out() {
+    let note = sdc_gui::model::meshes::UNUSED_NOTE;
+    assert!(note.contains("LOD textures are left out"), "{note}");
+    assert!(!note.contains("LOD, interface"), "{note}");
+}
+
 /// Review M5: the list is cut at 200; the rest is counted.
 #[test]
 fn plugin_overrides_say_how_many_more_are_cut() {
@@ -1763,4 +1772,14 @@ fn cancelled_or_failed_scan_does_not_mark_a_completed_scan() {
     wait(&mut m);
     assert_eq!(m.banner, Some(Banner::PgpRunning));
     assert!(!m.scan_completed);
+}
+
+#[test]
+fn the_path_filter_folds_ascii_only_like_stored_paths() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/Éclair/a.nif"), nif(2, "meshes/eclair/b.nif")];
+    m.path_filter = "Éclair".into();
+    assert_eq!(m.visible_nifs(), [0]);
+    m.path_filter = "éclair".into();
+    assert!(m.visible_nifs().is_empty(), "É and é are different paths");
 }

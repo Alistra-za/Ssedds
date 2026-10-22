@@ -62,6 +62,18 @@ fn a_bad_rename_blocks_and_names_the_field() {
 }
 
 #[test]
+fn a_device_or_map_suffix_rename_blocks_like_other_name_entries() {
+    for bad in ["CON", "nul", "wall_n"] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = pbr_ready(d.path());
+        m.set_json_value("landscape/rock01", "rename", Some(json!(bad)));
+        idle(&mut m);
+        let b = export_blocks(&m);
+        assert!(b.iter().any(|i| i.text.contains("rename")), "{bad}: {b:?}");
+    }
+}
+
+#[test]
 fn a_bad_slot_path_blocks() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_ready(d.path());

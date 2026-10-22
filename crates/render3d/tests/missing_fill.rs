@@ -141,6 +141,41 @@ fn a_dropped_swap_of_a_missing_path_falls_back_to_the_fill() {
     assert_eq!(r.draw_bound(CYL1), Some(vec![]));
 }
 
+/// Trace 2026-10-22 #1: an edit on another shape evicts the missing entry while this shape still compiles (async);
+/// the program that lands later must still bind the fill.
+#[test]
+fn an_edit_on_another_shape_keeps_the_fill_of_a_shape_still_compiling() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.set_async_compile(true);
+    r.set_missing_texture(Some(MAGENTA));
+    let mut p = render3d::parse(&fixture("TestNifFile_Furniture_Col_SE.nif"));
+    let cyl2 = ShapeId(12);
+    for s in p.shapes.iter_mut().filter(|s| s.id == cyl2) {
+        s.material
+            .set_slot_raw(0, r"textures\standin\missing_d.dds");
+    }
+    r.load_parsed(&p, &|_| None);
+    let mut m = r
+        .shapes()
+        .into_iter()
+        .find(|s| s.id == CYL1)
+        .unwrap()
+        .material;
+    m.params.uv_scale = [2.0, 2.0];
+    assert!(r.set_material(CYL1, m, &|_| None).is_ok());
+    loop {
+        let jobs = r.take_jobs();
+        if jobs.is_empty() {
+            break;
+        }
+        for j in jobs {
+            r.apply_compiled(render3d::run_job(j));
+        }
+    }
+    assert_eq!(r.draw_default_at(cyl2, 0), Some((SrvKind::Tex2D, MAGENTA)));
+}
+
 #[test]
 fn the_fill_survives_a_device_rebuild() {
     let cache = tempfile::tempdir().unwrap();

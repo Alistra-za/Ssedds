@@ -3,7 +3,7 @@
 use super::columns::AMBER;
 use crate::model::auto_flags::{auto_flags_for, hint, resolved_for};
 use crate::model::sets::{
-    is_pbr_grass, set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch,
+    is_pbr_grass, slot_matches, views, SetView, SlotFill, SlotKind, SlotMatch,
 };
 use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
@@ -128,7 +128,8 @@ pub(crate) struct Ctx {
 }
 
 pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
-    let v = set_views(model).into_iter().find(|v| same_id(&v.id, set));
+    let all = views(model);
+    let v = all.iter().find(|v| same_id(&v.id, set));
     let filled =
         |v: &SetView, s: SlotKind| !matches!(v.slots.get(&s), None | Some(SlotFill::Empty));
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
@@ -143,7 +144,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         .as_ref()
         .map(|v| resolved_for(v.pbr, &v.slots, &own, &ss))
         .unwrap_or_else(|| own.clone());
-    let (matches, addable) = v.as_ref().map(slot_matches).unwrap_or_default();
+    let (matches, addable) = v.map(slot_matches).unwrap_or_default();
     Ctx {
         locks: v.as_ref().map(|v| v.locks.clone()).unwrap_or_default(),
         no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
@@ -151,7 +152,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         derived: derived.clone().unwrap_or_default(),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
-        grass: v.as_ref().is_some_and(is_pbr_grass),
+        grass: v.is_some_and(is_pbr_grass),
         sub_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Subsurface)),
         tree_anim: ss.tree_anim,
         own,
@@ -998,4 +999,25 @@ fn alpha_combo(ui: &mut egui::Ui, id: (&str, &String), v: &mut u8, list: &[&str]
                 ui.selectable_value(v, i as u8, *name);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::sets::SET_VIEWS_CLONES;
+    use std::sync::Arc;
+
+    #[test]
+    fn context_does_not_clone_the_whole_view_list() {
+        let session = Arc::new(
+            engine::session::Session::new(encoders_sys::Bc1Model::Ideal).expect("a session"),
+        );
+        let m = AppModel::new(crate::settings::GuiSettings::default(), None, session);
+        SET_VIEWS_CLONES.with(|c| c.set(0));
+        for _ in 0..5 {
+            let c = context(&m, "some/set");
+            assert_eq!(c.set, "some/set");
+        }
+        assert_eq!(SET_VIEWS_CLONES.with(|c| c.get()), 0);
+    }
 }

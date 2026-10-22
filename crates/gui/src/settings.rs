@@ -215,7 +215,20 @@ impl GuiSettings {
             // Review M3: `rename` replaces an earlier `.bad` only once the move succeeds; a locked file keeps it.
             std::fs::rename(path, &kept)?;
         }
-        let text = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
+        // TOML holds Unicode only: a path that is not (a lone surrogate in a folder name) is left out of the file
+        // rather than failing every save (trace #31).
+        let mut s = self.clone();
+        let ok = |p: &PathBuf| p.to_str().is_some();
+        s.recent.retain(ok);
+        for p in [
+            &mut s.export_folder,
+            &mut s.nvtt_path,
+            &mut s.meshes.instance,
+            &mut s.meshes.folder,
+        ] {
+            *p = p.take().filter(ok);
+        }
+        let text = toml::to_string_pretty(&s).map_err(std::io::Error::other)?;
         engine::dds::write_atomic(path, text.as_bytes())?;
         Ok(unreadable.then_some(kept))
     }

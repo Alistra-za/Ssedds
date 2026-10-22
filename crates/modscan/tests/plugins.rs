@@ -764,3 +764,17 @@ fn a_master_past_the_limit_is_not_reported_missing() {
     );
     assert!(!m.iter().any(|t| t.contains("missing master")), "{m:?}");
 }
+
+/// Trace-debug #24: an ANSI byte or a UTF-8 BOM in plugins.txt must not empty the load order.
+#[test]
+fn active_plugins_survive_an_ansi_byte_and_a_bom_in_plugins_txt() {
+    let d = instance_fixture("+A\n");
+    let r = d.path();
+    put(
+        r,
+        "profiles/Default/plugins.txt",
+        b"\xEF\xBB\xBF# Caf\xE9 list\n*A.esp\n",
+    );
+    let inst = Instance::load(r, None).unwrap();
+    assert!(active_plugins(&inst).contains(&ap("a.esp", false)));
+}

@@ -219,6 +219,28 @@ fn a_read_only_sdc_toml_disables_reviews_export_with_the_reason() {
 }
 
 #[test]
+fn a_drive_root_input_makes_the_also_gate_show_the_engines_problem() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.set_also_location(&d.path().join("mods"));
+    idle(&mut m);
+    assert_eq!(m.also_gate(), Ok(()));
+    m.root = Some(PathBuf::from(r"C:\"));
+    let why = m.also_gate().unwrap_err();
+    assert!(why.contains("no folder name"), "{why}");
+}
+
+#[test]
+fn the_also_gate_with_no_project_says_to_open_a_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.root = None;
+    assert_eq!(m.also_gate(), Err("Open a folder first".to_string()));
+}
+
+#[test]
 fn a_bad_location_is_the_reviews_reason() {
     let d = tempfile::tempdir().unwrap();
     let mut m = project(d.path());

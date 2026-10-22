@@ -81,6 +81,33 @@ fn a_filled_slot_asks_first_and_a_locked_slot_refuses() {
 }
 
 #[test]
+fn a_file_drop_keeps_the_slot_7_clash_guard() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&dir).unwrap();
+    for n in ["rock01_cnr.png", "zed_f.png"] {
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb([128u8, 128, 255]))
+            .save(dir.join(n))
+            .unwrap();
+    }
+    let mut m = pbr_opened(d.path());
+    m.drop_choice(
+        "landscape/rock01_cnr.png",
+        ROCK,
+        sdc_gui::model::sets::DropChoice::Move,
+    );
+    idle(&mut m);
+    assert!(members(&m, ROCK).contains(&"landscape/rock01_cnr.png".to_string()));
+    let undo = m.history.undo.len();
+    let r = m.drop_file_on_slot(ROCK, SlotKind::Fuzz, &[file(&m, "landscape/zed_f.png")]);
+    assert!(
+        matches!(&r.outcome, DropOutcome::Refused(why) if why.contains("slot 7")),
+        "{r:?}"
+    );
+    assert_eq!(m.history.undo.len(), undo);
+}
+
+#[test]
 fn a_file_outside_the_folder_is_refused_and_never_copied() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());

@@ -161,6 +161,24 @@ fn f8_and_shift_f8_walk_the_errors() {
     assert_eq!(open_entries(&h), 2, "Shift+F8 wrapped back to the last");
 }
 
+/// Trace #19: with three spots (General, rock, leaf) Shift+F8 from rock must go back to General, not on to leaf.
+#[test]
+fn shift_f8_goes_backwards_with_three_spots() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = broken(d.path());
+    m.sets_doc.as_mut().unwrap().set_json_name(Some("a/b"));
+    let mut h = harness(m);
+    collapse_all(&mut h);
+    h.key_press(Key::F8); // General
+    h.run();
+    h.key_press(Key::F8); // rock
+    h.run();
+    assert_eq!(open_entries(&h), 1);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::F8);
+    h.run();
+    assert_eq!(open_entries(&h), 1, "Shift+F8 went forward to the leaf");
+}
+
 #[test]
 fn search_filters_by_name_and_by_path_and_says_how_many() {
     let d = tempfile::tempdir().unwrap();

@@ -1154,7 +1154,11 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
         match plan_patch(&bytes, &req) {
             Ok(None) => out!("{shown}: header already valid; nothing to patch"),
             Ok(Some(p)) => {
-                if !a.dry_run {
+                if a.dry_run {
+                    // The code is for a real patch; scripts count it.
+                    out!("{shown}: would patch: {}", p.fixes.join("; "));
+                    continue;
+                } else {
                     let out = match &a.out_dir {
                         Some(dir) => dir.join(path.file_name().unwrap_or_default()),
                         None => path.clone(),

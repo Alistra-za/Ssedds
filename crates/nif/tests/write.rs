@@ -21,9 +21,9 @@ fn block_bytes<'a>(h: &Header, b: &'a [u8], k: usize) -> &'a [u8] {
 
 fn appended(b: &[u8]) -> (Vec<u8>, u32) {
     let mut d = NifDoc::open(b).unwrap();
-    let s = d.string(b"NewName");
+    let s = d.string(b"NewName").unwrap();
     let body = [nif::net::encode_net(s, &[], -1), vec![0xEC, 0x12, 128]].concat();
-    let i = d.append(b"NiAlphaProperty", body);
+    let i = d.append(b"NiAlphaProperty", body).unwrap();
     (d.bytes(), i)
 }
 
@@ -137,7 +137,7 @@ fn quirk_fixture_round_trips_and_survives_an_unrelated_edit() {
     let b = scenes::quirks();
     assert_eq!(NifDoc::open(&b).unwrap().bytes(), b);
     let mut d = NifDoc::open(&b).unwrap();
-    d.string(b"Extra"); // forces a header re-emit
+    d.string(b"Extra").unwrap(); // forces a header re-emit
     let out = d.bytes();
     let (h0, h) = (Header::parse(&b).unwrap(), Header::parse(&out).unwrap());
     assert_eq!(h.roots(&out).unwrap(), vec![2, 0]);
@@ -149,4 +149,41 @@ fn quirk_fixture_round_trips_and_survives_an_unrelated_edit() {
     for k in 0..h0.sizes.len() {
         assert_eq!(block_bytes(&h, &out, k), block_bytes(&h0, &b, k));
     }
+}
+
+/// Note CY2: a NIF listing `n` block types, with one block (0, NiNode) of type 0.
+fn many_types(n: usize) -> Vec<u8> {
+    let mut b = builder::Nif::new(100);
+    b.block("NiNode", vec![]);
+    for k in 1..n {
+        b.add_type(&format!("T{k}"));
+    }
+    b.bytes()
+}
+
+#[test]
+fn append_never_writes_a_type_index_the_parser_masks() {
+    let b = many_types(0x8000);
+    let mut d = NifDoc::open(&b).unwrap();
+    let r = d.append(b"NiAlphaProperty", vec![0; 15]);
+    assert!(matches!(r, Err(WriteError::Refused(_))), "{r:?}");
+    assert_eq!(d.bytes(), b);
+    // a type already listed below 0x8000 still appends, and reads back as itself
+    let i = d.append(b"NiNode", vec![]).unwrap();
+    assert_eq!(
+        Header::parse(&d.bytes()).unwrap().kind(i as usize),
+        b"NiNode"
+    );
+}
+
+#[test]
+fn string_never_writes_past_the_parsers_string_cap() {
+    let mut n = builder::Nif::new(100);
+    n.block("NiNode", vec![]);
+    n.strings = (0..1u32 << 20).map(|k| k.to_string()).collect();
+    let b = n.bytes();
+    let mut d = NifDoc::open(&b).unwrap();
+    assert_eq!(d.string(b"7"), Ok(7));
+    assert!(matches!(d.string(b"new"), Err(WriteError::Refused(_))));
+    assert_eq!(d.bytes(), b);
 }

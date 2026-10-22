@@ -26,7 +26,7 @@ pub struct Header {
     pub footer_at: usize,
 }
 
-const MAX_BLOCKS: u32 = 1 << 20; // nifly NIF_BLOCK_INDEX_LIMIT
+pub(crate) const MAX_BLOCKS: u32 = 1 << 20; // nifly NIF_BLOCK_INDEX_LIMIT
 
 impl Header {
     pub fn parse(b: &[u8]) -> Result<Header, NifError> {

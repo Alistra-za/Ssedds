@@ -41,7 +41,7 @@ fn resolve(base: &Path, v: Option<String>, default: &str) -> PathBuf {
 
 impl Instance {
     pub fn load(root: &Path, profile: Option<&str>) -> Result<Instance, ScanError> {
-        let text = std::fs::read_to_string(root.join("ModOrganizer.ini"))
+        let text = crate::read_text(&root.join("ModOrganizer.ini"))
             .map_err(|e| ScanError::NoInstance(format!("{}: {e}", root.display())))?;
         let ini = Ini::parse(&text);
         // A relative base_directory is relative to the instance root, never to the working directory.
@@ -81,7 +81,7 @@ impl Instance {
 
 /// Origins lowest → highest priority. modlist.txt is stored highest-first (plan 02 §2.1).
 pub fn loose_origins(inst: &Instance) -> Result<(Vec<LooseOrigin>, Vec<String>), ScanError> {
-    let text = std::fs::read_to_string(inst.profiles.join(&inst.profile).join("modlist.txt"))
+    let text = crate::read_text(&inst.profiles.join(&inst.profile).join("modlist.txt"))
         .map_err(ScanError::Io)?;
     let mut enabled = vec![];
     let mut missing = vec![];
