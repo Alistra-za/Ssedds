@@ -360,3 +360,49 @@ fn game_path_of_a_textures_root_holding_mods_starts_at_the_mods_textures() {
         "textures/landscape/rock.png"
     );
 }
+
+/// A directory link `link` -> `target`: a symlink, else (Windows, no privilege) a junction. `false` when neither can
+/// be made here.
+fn make_dir_link(link: &Path, target: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return true;
+        }
+        return std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|o| o.status.success());
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+}
+
+/// Trace-debug #27 (Note CU): recursive discovery follows directory links, and a link loop is reported, not dropped.
+#[test]
+fn recursive_discovery_follows_links_and_reports_a_loop() {
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    let input = d.path().join("in");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(real.join("a.png"), b"x").unwrap();
+    if !make_dir_link(&input.join("link"), &real) {
+        eprintln!("SKIPPED: cannot create a directory link here (no privilege)");
+        return;
+    }
+    let (files, skipped) =
+        discover_reporting(&[input.clone()], &d.path().join("out"), true, None).unwrap();
+    let rels: Vec<_> = files.iter().map(|f| f.rel.clone()).collect();
+    assert_eq!(rels, vec![Path::new("link").join("a.png")], "{skipped:?}");
+    assert!(skipped.is_empty(), "{skipped:?}");
+
+    // A link back up to its own ancestor is a loop: one warning line, and the walk ends.
+    assert!(make_dir_link(&real.join("up"), &input));
+    let (_, skipped) = discover_reporting(&[input], &d.path().join("out"), true, None).unwrap();
+    assert!(!skipped.is_empty(), "a link loop was dropped silently");
+}
