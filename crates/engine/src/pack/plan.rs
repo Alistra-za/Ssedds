@@ -261,7 +261,14 @@ fn prepacked_b<'a>(
     }) else {
         return;
     };
-    if !flat_b.contains(&img.path) {
+    // CO107: the recipe kind and `virtual_stem` read the built-in suffix only, so an aliased image is never joined.
+    // shortcut: an aliased `_rmaos`/`_rfaos` image always keeps its own job; pass the alias table to the recipe and
+    // `virtual_stem` if users ask for AO on aliased pre-packed images.
+    let aliased = crate::group::split_suffix(&stem(&img.rel)).1.as_deref()
+        != split_suffix_with(&stem(&img.rel), ctx.registry.alias_table())
+            .suffix
+            .as_deref();
+    if aliased || !flat_b.contains(&img.path) {
         let ao = raw.remove(ai).path;
         let f = members.remove(&ao).expect("a raw member");
         jobs.retain(|j| j.input != ao);
@@ -271,9 +278,10 @@ fn prepacked_b<'a>(
             set: Some(set.key.clone()),
             code: Some(Code::GenReplaced),
             reason: format!(
-                "generated {} replaced by {} (B)",
+                "generated {} replaced by {}{}",
                 name(&ao),
-                name(&img.path)
+                name(&img.path),
+                if aliased { "" } else { " (B)" }
             ),
         });
         out.gen_replaced.push(ao);
@@ -392,7 +400,8 @@ fn chosen_recipe(
     pa: &Analysis,
     pinfo: &SourceInfo,
 ) -> (PackRecipe, Option<(Code, String)>) {
-    if ctx.target != Target::Cs {
+    // CO109: a pre-packed image keeps its own layout (`_rmaos` or `_rfaos`), whatever `packing.recipe` says.
+    if ctx.target != Target::Cs || raw.iter().any(|r| r.role == RawMap::Rmaos) {
         return (PackRecipe::Auto, None);
     }
     let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto, false);

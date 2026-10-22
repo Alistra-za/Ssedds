@@ -2457,6 +2457,31 @@ fn a_generated_ao_fills_a_flat_prepacked_rmaos_and_offers_regenerate() {
 }
 
 #[test]
+fn a_loose_roughness_beside_a_flat_prepacked_rmaos_keeps_the_plain_reason() {
+    // CO108: the engine joins the image only beside a lone generated AO; with a loose roughness it does not.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ao_rock(d.path());
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([100u8, 0, 255]))
+        .save(land(d.path()).join("rock01_rmaos.png"))
+        .unwrap();
+    let real = Err("this set already has an AO source (rock01_rmaos.png)".to_string());
+    // packing.prefer = raw (the default): the raw recipe replaces the image.
+    reopen(&mut m, d.path());
+    assert_eq!(ao(&m), real, "prefer = raw");
+    // packing.prefer = prepacked: the image is kept, and a generated AO would go unused.
+    let toml = m.root.clone().unwrap().join("sdc.toml");
+    std::fs::write(&toml, "[defaults.packing]\nprefer = \"prepacked\"\n").unwrap();
+    reopen(&mut m, d.path());
+    assert!(
+        m.items
+            .iter()
+            .any(|i| i.key.ends_with("rock01_rmaos.png") && i.analysis.is_some()),
+        "the image keeps its own job under prefer = prepacked"
+    );
+    assert_eq!(ao(&m), real, "prefer = prepacked");
+}
+
+#[test]
 fn the_rmaos_row_offers_ao_on_a_flat_prepacked_rmaos() {
     let d = tempfile::tempdir().unwrap();
     let mut m = ao_rock(d.path());
@@ -2540,13 +2565,13 @@ fn ao_reasons_cover_vanilla_non_pbr_real_ao_and_prepacked_rmaos() {
     shader(&mut m, Shader::PbrGrass);
     assert_eq!(ao(&m), Ok(()));
     shader(&mut m, Shader::Pbr);
-    // Task 11: a pre-packed `_rmaos` image whose B holds AO is a real AO source.
+    // Task 11: a pre-packed `_rmaos` image beside the fixture's loose roughness is a real AO source (CO108).
     let rm = land(d.path()).join("rock01_rmaos.png");
     ImageBuffer::from_fn(64, 64, |x, _| Rgb([100u8, 0, 100 + x as u8]))
         .save(&rm)
         .unwrap();
     reopen(&mut m, d.path());
-    assert_eq!(ao(&m), real("rock01_rmaos.png (B)"));
+    assert_eq!(ao(&m), real("rock01_rmaos.png"));
     std::fs::remove_file(&rm).unwrap();
     // A DDS `_rmaos` is never re-encoded.
     bc1_dds(&land(d.path()).join("rock01_rmaos.dds"), 64, 64);

@@ -471,14 +471,22 @@ impl AppModel {
                 return Err(has_real(&i.name));
             }
             // Note CO103: a pre-packed image whose B holds AO, read from the plan's analysis as the engine reads it
-            // (none, e.g. a skipped image: the real map wins).
-            if let Some((i, _)) = self.prepacked_rmaos(v, aliases).filter(|(i, _)| {
-                map == GenMap::Ao
-                    && i.analysis
-                        .as_ref()
-                        .is_none_or(|a| engine::pack::b_has_content(&a.channels[2]))
-            }) {
-                return Err(has_real(&format!("{} (B)", i.name)));
+            // (none, e.g. a skipped image: the real map wins). CO107/CO108: as `pack::plan::prepacked_b`, an aliased
+            // image or one beside a loose R/G/A source is never filled, so it blocks with its plain name.
+            if let Some((i, s)) = self
+                .prepacked_rmaos(v, aliases)
+                .filter(|_| map == GenMap::Ao)
+            {
+                let aliased = engine::group::split_suffix(&stem(&i.key)).1 != s;
+                if aliased || self.loose_rmaos_source(v, aliases) {
+                    return Err(has_real(&i.name));
+                }
+                if i.analysis
+                    .as_ref()
+                    .is_none_or(|a| engine::pack::b_has_content(&a.channels[2]))
+                {
+                    return Err(has_real(&format!("{} (B)", i.name)));
+                }
             }
         }
         if let Some((i, _)) = gens.iter().find(|(i, _)| self.provenance(&i.key).is_none()) {
@@ -562,6 +570,24 @@ impl AppModel {
     ) -> Option<(&'a TextureItem, Option<String>)> {
         self.real_members(v, aliases).find(|(i, s)| {
             i.kind == ItemKind::Image && matches!(s.as_deref(), Some("rmaos" | "rfaos"))
+        })
+    }
+
+    /// A loose roughness, glossiness, metallic, specular, fuzz or `_orm` image in the set (the engine's `lone` rule).
+    fn loose_rmaos_source(&self, v: &SetView, aliases: &BTreeMap<String, String>) -> bool {
+        self.real_members(v, aliases).any(|(i, _)| {
+            i.kind == ItemKind::Image
+                && matches!(
+                    vocab_of(&stem(&i.key)).map(|v| v.role),
+                    Some(VocabRole::PackingInput(
+                        RawMap::Roughness
+                            | RawMap::Glossiness
+                            | RawMap::Metallic
+                            | RawMap::Specular
+                            | RawMap::Fuzz
+                            | RawMap::Orm
+                    ))
+                )
         })
     }
 

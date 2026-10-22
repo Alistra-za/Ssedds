@@ -979,3 +979,112 @@ fn a_prepacked_rmaos_with_baked_ao_keeps_its_b() {
     );
     assert_eq!(ao.channel, 2);
 }
+
+// ---- Task 11 review fixes (CO106-CO109) ----
+
+#[test]
+fn b_has_content_follows_the_stated_thresholds() {
+    use engine::analyse::ChannelStats;
+    let b = |min: u8, max: u8, mean: f64| ChannelStats {
+        min: f32::from(min) / 255.0,
+        max: f32::from(max) / 255.0,
+        mean: mean / 255.0,
+    };
+    let has = |s: ChannelStats| engine::pack::b_has_content(&s);
+    assert!(has(b(253, 255, 254.0)), "a range of exactly 2/255");
+    assert!(!has(b(254, 255, 254.5)), "a range of 1/255, mean above 250");
+    assert!(has(b(250, 250, 250.0)), "a flat mean of exactly 250/255");
+    assert!(!has(b(251, 251, 251.0)), "a flat 251/255");
+    assert!(has(b(0, 0, 0.0)), "an all-zero B");
+}
+
+#[test]
+fn a_generated_ao_fills_the_flat_b_of_a_prepacked_rfaos() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgba(d.path(), "rock_rfaos.png", 16, |x, _| {
+        [120, x as u8 * 10, 255, 0]
+    });
+    put(d.path(), "rock_ao_generated.png", 16, |x, y| {
+        (x * 8 + y * 4) as u8
+    });
+    let (p, _) = plan(d.path(), Target::Cs, &[]);
+    let packed: Vec<_> = p.jobs.iter().filter(|j| j.pack.is_some()).collect();
+    assert_eq!(packed.len(), 1, "{:?}", p.jobs);
+    let j = packed[0];
+    let pk = j.pack.as_ref().unwrap();
+    assert_eq!(pk.kind, engine::pack::RecipeKind::Rfaos);
+    assert!(
+        j.output.ends_with("textures/a/rock_rfaos.dds"),
+        "{:?}",
+        j.output
+    );
+    assert!(
+        matches!(&pk.channels[1], engine::pack::ChannelSource::Source { path, channel: Some(1), .. }
+            if path.ends_with("rock_rfaos.png")),
+        "{:?}",
+        pk.channels[1]
+    );
+    assert!(j.warnings.iter().any(|w| w.code == Code::GenAo));
+    assert!(!p
+        .jobs
+        .iter()
+        .any(|j| j.input.ends_with("rock_rfaos.png") && j.pack.is_none()));
+}
+
+#[test]
+fn an_aliased_prepacked_image_is_not_packed_under_its_alias() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", 16, |x, _| x as u8 * 8);
+    put_rgba(d.path(), "rock_skinfaos.png", 16, |x, _| {
+        [120, x as u8 * 10, 255, 0]
+    });
+    put(d.path(), "rock_ao_generated.png", 16, |x, y| {
+        (x * 8 + y * 4) as u8
+    });
+    let alias = d.path().join("skin.toml");
+    std::fs::write(
+        &alias,
+        "schema_version = 1\nid = \"skin\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n\
+         [suffix_aliases]\nskinfaos = \"rfaos\"\n",
+    )
+    .unwrap();
+    let mut req = request(d.path(), Target::Cs, &[]);
+    req.preset_files = vec![alias];
+    let (p, _) = plan_req(req);
+    let outs: Vec<String> = p
+        .jobs
+        .iter()
+        .map(|j| j.output.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(!outs.iter().any(|o| o.contains("skinfaos_")), "{outs:?}");
+    assert_eq!(
+        outs.iter().filter(|o| o.contains("faos")).count(),
+        1,
+        "{outs:?}"
+    );
+    let s = replaced(&p, "rock_ao_generated.png").expect("GEN-REPLACED");
+    assert!(
+        s.reason.ends_with("replaced by rock_skinfaos.png"),
+        "{}",
+        s.reason
+    );
+}
+
+#[test]
+fn a_forced_recipe_on_a_prepacked_image_set_raises_no_unbuildable_notice() {
+    let d = tempfile::tempdir().unwrap();
+    prepacked_rock(d.path(), |_, _| 255, true);
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[defaults.packing]\nrecipe = \"rfaos\"\n",
+    )
+    .unwrap();
+    let (p, _) = plan(d.path(), Target::Cs, &[]);
+    let jobs = rmaos_jobs(&p);
+    assert_eq!(jobs.len(), 1, "{:?}", p.jobs);
+    assert!(jobs[0].pack.is_some());
+    let codes = all_codes(&p);
+    assert!(!codes.contains(&Code::PackRecipeUnbuildable), "{codes:?}");
+    assert!(!codes.contains(&Code::PackRecipeConflict), "{codes:?}");
+}
