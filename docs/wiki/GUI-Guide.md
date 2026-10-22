@@ -53,7 +53,7 @@ While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" wi
 
 ## The three columns
 
-From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab of the set editor's own right-hand panel. Under all of them runs the [bottom panel](#the-bottom-panel).
+From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab of the set editor's own right-hand panel. Under all of them runs the bottom panel ([Main window](#main-window), item 13).
 
 ### Textures (left)
 
@@ -216,7 +216,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 **Export** converts the folder into the export folder. It cannot write into the folder it reads.
 
 1. Export saves `sdc.toml` and `sdc-project.toml`.
-2. If something is blocked, undecided or worth a second look, **Review** opens in the bottom panel instead of exporting (see [The bottom panel](#the-bottom-panel)). Decide the textures there (or **Accept all suggestions**), fix the blockers, tick the warnings, then press Review's **Export**, which exports the decided textures and skips the rest. It never decides for you and never exports by itself.
+2. If something is blocked, undecided or worth a second look, **Review** opens in the bottom panel instead of exporting (see the bottom panel, [Main window](#main-window) item 13). Decide the textures there (or **Accept all suggestions**), fix the blockers, tick the warnings, then press Review's **Export**, which exports the decided textures and skips the rest. It never decides for you and never exports by itself.
 3. If a source changed on disk since it was planned, Export plans again first. The Textures column also offers **Reload** for changed files.
 4. The bottom panel opens on its *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled). Click a row to select that texture; hover it for the file's warnings, which *Problems* also lists.
 5. After a complete export, the TruePBR JSON is written (see below).

@@ -282,8 +282,12 @@ def chart_alpha_weights():
          ["At w64 BC7 passes BC3 on mean specular, but its normals are now worse than BC3's "
           "(2.85° against 2.81° mean error)."]),
         ("Packed rmaos with specular in alpha", "rmaos_spec, 24 textures",
-         [(38.64, 58.98), (45.27, 49.92), (44.95, 51.79), (44.62, 53.36),
-          (44.25, 54.74), (43.82, 56.07), (43.32, 57.31), (42.77, 58.51)],
+         # extra rows: (name, RGB, alpha, right-column text) from Follow-up 4 (exact-opaque)
+         [(38.64, 58.98, "91.2%"), (45.27, 49.92, "64.8%"), (44.95, 51.79, "67.7%"),
+          (44.62, 53.36, "70.4%"), (44.25, 54.74, "72.2%"), (43.82, 56.07, "73.1%"),
+          (43.32, 57.31, "73.4%"), (42.77, 58.51, "74.1%"),
+          ("Alpha ×8 + exact opaque", 44.25, 55.01, "91.6%"),
+          ("w64 + exact opaque", 42.77, 59.10, "93.6%")],
          ["Why BC3 leads on specular here: BC3 gives alpha its own half of the block (two 8-bit "
           "ends, 8 levels per block).",
           "BC7 shares one block across RGBA: its alpha either shares the colour indices (mode 6) "
@@ -291,7 +295,10 @@ def chart_alpha_weights():
           "These RGB channels are three unrelated maps (roughness, metal, AO), so colour needs "
           "most of BC7's bits, while the specular",
           "is smooth and near 255. BC3 keeps 91% of specular-255 texels exact against BC7's 65 "
-          "to 74%, and pays 4 to 7 dB of RGB for it."]),
+          "to 74%, and pays 4 to 7 dB of RGB for it.",
+          "Exact opaque pins blocks that are 255 everywhere (9% of blocks here): Alpha ×8 + exact "
+          "opaque matches BC3's exact-255 and keeps +5.6 dB RGB.",
+          "Right column: share of specular-255 texels that decode exactly."]),
     ]
     b = text(10, 20, "BC3 against BC7 alpha weights: mean PSNR in dB", "t")
     b += text(10, 38, "Higher is better. Bars start at 30 dB, not zero. "
@@ -302,10 +309,20 @@ def chart_alpha_weights():
     x0, x1, vmin, vmax = 235, 655, 30, 60
     for title, sub, data, notes in CLASSES:
         b += text(10, y + 10, title, "t") + text(10 + 8 + len(title) * 7.3, y + 10, sub, "s")
-        rows = [dict(name=NAMES[i], bold=(i == 1), vals=[r, a], labels=["%.2f" % r, "%.2f" % a],
-                     colors=[BLUE, ORANGE]) for i, (r, a) in enumerate(data)]
+        rows = []
+        for i, d in enumerate(data):
+            if isinstance(d[0], str):  # an extra row with its own name
+                name, d = d[0], d[1:]
+            else:
+                name = NAMES[i]
+            r, a = d[0], d[1]
+            right = d[2] if len(d) > 2 else None
+            rows.append(dict(name=name, bold=(i == 1), vals=[r, a], labels=["%.2f" % r, "%.2f" % a],
+                             colors=[BLUE, ORANGE], right=right, right_x=x1 + 52))
         body, bot = hbars(y + 20, rows, 2, x0, x1, vmin, vmax, vmin, [30, 40, 50, 60])
         b += body
+        if any(row["right"] for row in rows):
+            b += text(x1 + 52, y + 10, "exact-255", "s")
         for k, line in enumerate(notes):
             b += text(10, bot + 34 + k * 15, line, "s")
         y = bot + 40 + len(notes) * 15 + (8 if notes else 0)
@@ -319,7 +336,8 @@ def chart_alpha_weights():
             "against 47.24 for BC3 and keeps 46.60 dB RGB against 41.00. On a normal map with "
             "specular, w64 passes BC3 on alpha (46.64 against 46.06) but its normals fall behind. "
             "On packed rmaos with specular, BC3 keeps the highest alpha, 58.98 dB against 58.51 "
-            "at w64, because BC3 gives alpha its own half of the block.")
+            "at w64, because BC3 gives alpha its own half of the block. With exact opaque, Alpha x8 "
+            "keeps 91.6% of specular-255 texels exact against BC3's 91.2%, and w64 reaches 59.10 dB.")
     return svg(780, y + 6, "BC3 against BC7 alpha weights", desc, b)
 
 

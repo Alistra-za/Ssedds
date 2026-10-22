@@ -339,6 +339,9 @@ Means:
 | BC7 w16 | 42.58 | 50.50 | 43.42 | 43.82 | 56.07 | 0.9981 | 15.33 | 78.66 | 73.05 |
 | BC7 w32 (study only) | 42.05 | 50.09 | 43.01 | 43.32 | 57.31 | 0.9987 | 13.79 | 78.52 | 73.43 |
 | BC7 w64 (study only) | 41.47 | 49.70 | 42.57 | 42.77 | 58.51 | 0.9991 | 13.12 | 78.14 | 74.13 |
+| BC7 w8 + exact opaque | | | | 44.25 | 55.01 | 0.9973 | 17.67 | 95.14 | 91.64 |
+| BC7 w16 + exact opaque | | | | 43.82 | 56.43 | 0.9982 | 15.33 | 78.66 | 92.53 |
+| BC7 w64 + exact opaque (study only) | | | | 42.77 | 59.10 | 0.9992 | 13.12 | 78.14 | 93.60 |
 
 Where BC7 beats BC3:
 
@@ -360,6 +363,14 @@ Why BC3 keeps the lead on this class, even at w64:
 - **The specular is smooth and sits near 255.** BC4-style alpha fits that well: BC3's mean is 58.98 dB, and it keeps 91% of 255 texels exact against BC7's 65 to 74% at every weight.
 
 BC3 pays 4 to 7 dB of RGB for it, mostly in roughness and AO. The mode explanation follows from the formats; the study did not count which modes bc7e chose.
+
+**With Exact opaque alpha** (follow-up, 2026-10-22): the flag pins blocks whose alpha is 255 everywhere, which is 9% of blocks in this class.
+- **Alpha ×8 + exact opaque** keeps 91.6% of specular-255 texels exact against BC3's 91.2%, and keeps +5.6 dB of RGB.
+- At w64 the flag lifts mean alpha to 59.10 dB against BC3's 58.98, winning 12/24 images.
+- BC3 still wins alpha SSIM on 22/24.
+- The flag leaves RGB unchanged here (R/G/B columns left blank: same as the row without it).
+
+Over all classes: no weight with the flag beats BC3 on every image. Exact-255 reaches BC3's level on `m_height` from w32 (99.6%). On `n_spec` the flag does nothing, because there are almost no all-255 blocks. On opaque `_rmaos` it costs 0.20 dB RGB.
 
 ### Complex `_m` with height in alpha (`m_height`, 30 textures, proxy)
 
