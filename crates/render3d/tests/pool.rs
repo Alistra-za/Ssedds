@@ -51,6 +51,7 @@ fn a_failing_job_is_delivered_as_an_error() {
         vs: render3d::permutation::Defines::default(),
         ps: render3d::permutation::Defines::default(),
         cache_dir: cache.path().to_path_buf(),
+        live: None,
     };
     let done = render3d::run_job(job);
     assert_eq!(done.key.0, "k");

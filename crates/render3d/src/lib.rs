@@ -45,6 +45,7 @@ use scene::{LightValues, PointValues, Scene, View, ViewValues};
 use source::{ExpandedSource, SourceSet};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
@@ -157,8 +158,9 @@ struct Wanted {
 }
 
 impl Wanted {
-    fn job(&self, cache_dir: &Path) -> CompileJob {
+    fn job(&self, cache_dir: &Path, load: &Arc<AtomicU64>) -> CompileJob {
         CompileJob {
+            live: Some((load.clone(), load.load(Ordering::Relaxed))),
             key: self.key.clone(),
             src: self.src.clone(),
             vs: self.vs.clone(),
@@ -327,6 +329,8 @@ pub struct Renderer {
     inflight: HashSet<ProgramKey>,
     /// Queued, not yet taken by the host (`take_jobs`).
     jobs: Vec<CompileJob>,
+    /// Bumped by every load; a job queued by an earlier load is dropped by the pool (trace #16).
+    load_epoch: Arc<AtomicU64>,
     /// Hosts that drive a pool turn this on; the default settles every load and edit before returning.
     async_compile: bool,
     /// The loaded NIF is a head part (Note BA; [`ParsedNif::head_part`]), set by every load.
@@ -510,6 +514,7 @@ impl Renderer {
             compiled: HashMap::new(),
             inflight: HashSet::new(),
             jobs: vec![],
+            load_epoch: Arc::new(AtomicU64::new(0)),
             async_compile: false,
             head_part: false,
             defaults: HashMap::new(),
@@ -1301,7 +1306,8 @@ impl Renderer {
                     }),
                 );
                 if self.inflight.insert(wanted.key.clone()) {
-                    self.jobs.push(wanted.job(&self.cache_dir));
+                    self.jobs
+                        .push(wanted.job(&self.cache_dir, &self.load_epoch));
                 }
                 if let Some(s) = self.shapes.get_mut(&id) {
                     s.status = ShapeStatus::Pending {
@@ -1376,7 +1382,7 @@ impl Renderer {
                     .values()
                     .filter_map(|s| s.wanted.as_ref())
                     .filter(|w| seen.insert(w.key.clone()))
-                    .map(|w| w.job(&self.cache_dir))
+                    .map(|w| w.job(&self.cache_dir, &self.load_epoch))
                     .collect();
             }
             if jobs.is_empty() {
@@ -1463,6 +1469,11 @@ impl Renderer {
         sync: bool,
         fixed: bool,
     ) -> LoadReport {
+        // Jobs of the replaced load: the unsent ones go, the pool drops the sent ones (a running one only warms
+        // the memo). Clearing `inflight` lets this load queue what it needs again.
+        self.load_epoch.fetch_add(1, Ordering::Relaxed);
+        self.jobs.clear();
+        self.inflight.clear();
         self.shapes.clear();
         self.draw_order.clear();
         self.tex_cache.clear();
@@ -1678,7 +1689,7 @@ impl Renderer {
                 Lookup::Failed(e) => return Err(e),
                 // Sync mode (no pool) compiles inline, as the old `program()` did, e.g. after `set_shaders`.
                 Lookup::Waiting if !self.async_compile => {
-                    let d = run_job(w.job(&self.cache_dir));
+                    let d = run_job(w.job(&self.cache_dir, &self.load_epoch));
                     self.compiled.insert(d.key, d.result);
                     match self.lookup(&w) {
                         Lookup::Ready(p) => p,

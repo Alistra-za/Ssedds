@@ -6,6 +6,7 @@ use crate::permutation::Defines;
 use crate::source::ExpandedSource;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
@@ -23,6 +24,18 @@ pub struct CompileJob {
     pub vs: Defines,
     pub ps: Defines,
     pub cache_dir: PathBuf,
+    /// The renderer's load counter and its value when the job was queued; a pool worker drops a job whose
+    /// load was replaced since (trace #16). `None`: always runs.
+    pub live: Option<(Arc<AtomicU64>, u64)>,
+}
+
+impl CompileJob {
+    /// False once a newer load replaced the one that queued this job.
+    pub fn is_current(&self) -> bool {
+        self.live
+            .as_ref()
+            .is_none_or(|(a, e)| a.load(Ordering::Relaxed) == *e)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +123,10 @@ impl CompilePool {
                         // The lock is held while waiting: the other workers queue behind it, which is fine.
                         let job = rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
                         let Ok(job) = job else { break };
+                        // Dropped, no result: `load_inner` already cleared `inflight`, so nothing waits for it.
+                        if !job.is_current() {
+                            continue;
+                        }
                         sink(run_job(job));
                     }
                 });

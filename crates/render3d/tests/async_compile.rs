@@ -442,3 +442,24 @@ fn sync_load_compiles_key_already_taken_by_pool() {
         assert!(!r.apply_compiled(run_job(j)));
     }
 }
+
+/// Trace-debug #16: a replaced load's queued jobs must not hold up the new load in the pool's FIFO.
+#[test]
+fn a_replaced_loads_jobs_are_dropped_not_queued_behind_the_new_load() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.set_async_compile(true);
+    let nif = parse(&fixture("TestNifFile_Furniture_Col_SE.nif"));
+    r.load_parsed(&nif, &none);
+    let sent = r.take_jobs(); // handed to the pool
+    r.load_parsed(&nif, &none);
+    let unsent = r.take_jobs();
+    // the unsent queue holds only the new load's jobs, and the same program is queued again
+    assert_eq!(unsent.len(), sent.len());
+    assert!(sent.iter().all(|j| !j.is_current()), "old jobs are stale");
+    assert!(unsent.iter().all(|j| j.is_current()));
+    // an edit after the load is current too
+    r.load_parsed(&nif, &none);
+    r.load_parsed(&nif, &none);
+    assert_eq!(r.take_jobs().len(), sent.len(), "no pile-up of unsent jobs");
+}
