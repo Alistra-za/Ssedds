@@ -366,15 +366,13 @@ fn game_path_of_a_textures_root_holding_mods_starts_at_the_mods_textures() {
 fn make_dir_link(link: &Path, target: &Path) -> bool {
     #[cfg(windows)]
     {
-        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
-            return true;
-        }
-        return std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
-            .output()
-            .is_ok_and(|o| o.status.success());
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+            || std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .is_ok_and(|o| o.status.success())
     }
     #[cfg(unix)]
     {
@@ -395,8 +393,13 @@ fn recursive_discovery_follows_links_and_reports_a_loop() {
         eprintln!("SKIPPED: cannot create a directory link here (no privilege)");
         return;
     }
-    let (files, skipped) =
-        discover_reporting(&[input.clone()], &d.path().join("out"), true, None).unwrap();
+    let (files, skipped) = discover_reporting(
+        std::slice::from_ref(&input),
+        &d.path().join("out"),
+        true,
+        None,
+    )
+    .unwrap();
     let rels: Vec<_> = files.iter().map(|f| f.rel.clone()).collect();
     assert_eq!(rels, vec![Path::new("link").join("a.png")], "{skipped:?}");
     assert!(skipped.is_empty(), "{skipped:?}");
