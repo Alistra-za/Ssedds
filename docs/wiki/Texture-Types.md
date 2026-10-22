@@ -230,6 +230,23 @@ Any of these can be prefixed `n_` or `cnr_` (for example `iron_cnr_bump.png`) to
 
 The default blend order is bent, bump, bump2, detail, detail2. The `bent` layer by default weights itself by occlusion read from a raw `_ao` map, the R channel of an `_orm`, or the B channel of `_rmaos`/`_rfaos`; supply normal AO (white = open), Tessalith inverts it.
 
+How the layers are blended (code: `crates/engine/src/rnm/`):
+
+- **Method:** RNM for `_bump`, `_bump2`, `_detailnorm` and `_detailnorm2`. Bump layers are height maps: slopes taken from the mean of RGB become normals first.
+- **Bent:** `_bent` defaults to an AO blend: a renormalised linear mix weighted by strength × (1 − AO)^1.5 × mask. AO comes from `_ao` (R) or `_rmaos`/`_rfaos` (B). With no AO map the weight is uniform and `RNM-AO-MISSING` is reported. `rnm.bent.mode = "detail"` blends it with RNM instead.
+- **Strength:** it scales the layer's slope (0 is flat, 1 is as authored). A mask's R channel scales it per texel. `rnm.order` moves the layers it lists to the front.
+- **Where:** into the set's `_n` or `_cnr`, after decode and green flip, before mips. Layers are resampled to the base size. Alpha is untouched, so `_cnr` coat roughness passes through. The TruePBR roughness bake reads the blended normal.
+- **Bent default assumption:** the defaults assume `_bent` is a high-to-low mesh bake from the same normal source. It then holds all the detail the normal has, and the mask only reduces the AO strength. When that is not true, mix it differently (see `rnm.bent.mode`).
+
+Ways to put a detail normal on a base normal, and why RNM is used:
+
+| Method | How it combines | Preserves | Artifacts | Cost | Use for |
+|---|---|---|---|---|---|
+| Linear / overlay | Per-channel add or overlay, renormalise | Neither map exactly | Flattened detail; overlay treats vectors as colour | Lowest | Faint detail, previews |
+| Partial derivative (PD) / UDN | PD adds slopes (xy/z); UDN adds xy, keeps base z | Slopes at small angles | UDN flattens detail; both lose accuracy as the base tilts | Low | Real-time multi-layer shaders |
+| Whiteout | Adds xy, multiplies z, renormalise | More detail than UDN | Still approximate on steep bases | Low | Cheap shader blends |
+| RNM (Barré-Brisebois and Hill) | Rotates the detail into the base normal's frame | Detail as seen on the tilted surface; flat inputs leave the other unchanged | None in normal use; needs unit vectors | A little more | Highest quality: baking or high-end shaders |
+
 Settings are in [Project config](Project-Config.md#rnm-normal-layers). `sdc inspect` prints one `rnm` line per layer. Codes: `RNM-NO-BASE`, `RNM-IGNORED-EYE` (eye normals are model-space), `RNM-MASK-ORPHAN`, `RNM-LAYER-SHADOWED`, `RNM-AO-MISSING`.
 
 ## Set shaders
