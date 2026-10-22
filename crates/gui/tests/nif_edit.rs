@@ -8513,6 +8513,77 @@ fn render_meshes_page_with_an_edit_at_three_widths() {
     }
 }
 
+// ---- Meshes UI T8: the Controllers line outside Edit (Note CZ25) ----
+
+/// Steps the view until `label` shows (the controller summary is read off the UI thread), at most ~5 s.
+fn wait_for_label(h: &mut Harness<'static, MeshesModel>, label: &str) -> bool {
+    for _ in 0..100 {
+        h.run_steps(1);
+        if h.query_by_label(label).is_some() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// T8: a selected NIF's cards show their Controllers line without Edit, read from the file once.
+#[test]
+fn cards_show_controllers_without_edit() {
+    let bytes = ctrl_scene(0x82);
+    let d = files_pair(&bytes, &bytes);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.shapes_col = true;
+    let mut h = view(m);
+    assert!(
+        wait_for_label(&mut h, "2: Emissive multiple, U offset"),
+        "no Controllers line outside Edit"
+    );
+    assert!(h.state().edit.is_none());
+}
+
+/// T8: a NIF whose file cannot be read any more (gone since the scan) still shows its cards, with no Controllers line
+/// and no error.
+#[test]
+fn cards_stay_when_the_controller_read_fails() {
+    let bytes = ctrl_scene(0x82);
+    let d = files_pair(&bytes, &bytes);
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    // The scan reads the good bytes; both copies then turn into junk before the NIF is selected (and read again).
+    m.activate_with(None);
+    m.use_instance(d.path().to_path_buf(), "Default".into());
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    let t = Instant::now();
+    m.poll();
+    while m.scanning() || m.v3.locating() {
+        assert!(t.elapsed() < Duration::from_secs(60), "scan did not end");
+        std::thread::sleep(Duration::from_millis(10));
+        m.poll();
+    }
+    for rel in ["mods/A/meshes/x.nif", "mods/PGP/meshes/x.nif"] {
+        std::fs::write(d.path().join(rel), b"not a nif").unwrap();
+    }
+    let a = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+    m.select_mod(a);
+    let c = m.nifs[0].copy_id;
+    m.select_nif(c);
+    assert!(!m.shapes.is_empty(), "the cards come from the scan");
+    m.shapes_col = true;
+    let mut h = view(m);
+    for _ in 0..20 {
+        h.run_steps(1);
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    h.get_by_label_contains("Select shape");
+    assert!(h.query_by_label("Controllers:").is_none());
+    assert_eq!(h.state().error, None);
+}
+
 // ---- Meshes UI final-review fixes (Note CZ24) ----
 
 /// Final review Minor 1: the flag lists' open state belongs to one session, so a second NIF whose shader has the

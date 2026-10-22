@@ -782,6 +782,12 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
 /// The shape cards of the selected NIF, in the left column (owner, 2026-10-14). A click on a texture asks who else
 /// uses it.
 fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    // Meshes UI T8: the Controllers lines outside Edit come from a worker; look for its answer while one runs.
+    if m.poll_card_ctrls() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    let scan_ctrls = m.shown_copy().and_then(|c| m.scan_ctrls.get(&c).cloned());
     let (mut clicked, mut open, mut pick, mut pick_root) = (None, None, None, None);
     egui::ScrollArea::vertical()
         .id_salt("meshes-shapes-scroll")
@@ -858,11 +864,12 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     (None, Some((b, n))) => *b == block && n.as_deref() == name,
                     (None, None) => false,
                 };
-                let ctrls = m
-                    .edit
-                    .as_ref()
-                    .and_then(|e| e.card_ctrls.get(&block))
-                    .map(String::as_str);
+                // Inside Edit the edited model's lines (unsaved edits included); outside, the file's (T8).
+                let ctrls = match &m.edit {
+                    Some(e) => e.card_ctrls.get(&block),
+                    None => scan_ctrls.as_ref().and_then(|c| c.get(&block)),
+                }
+                .map(String::as_str);
                 card(ui, on, |ui| {
                     let title = match view {
                         Some(s) => {

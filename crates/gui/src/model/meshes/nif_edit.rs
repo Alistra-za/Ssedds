@@ -1163,7 +1163,7 @@ pub fn sdta_with_npc_z(sdta: &str, z: f32) -> Option<String> {
 /// Meshes UI T2: per shape, "N: title, title (clip)" over its shader's and its alpha's controllers; "none" without.
 /// A shader that is not a BSLightingShaderProperty has controllers the editor does not read: its shape lists only its
 /// alpha controllers, and gets no line (rather than a wrong "none") when it has none.
-fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
+pub(crate) fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
     m.shapes
         .iter()
         .filter_map(|s| {
