@@ -497,7 +497,15 @@ pub fn views(m: &AppModel) -> Arc<Vec<SetView>> {
     v
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test probe: how many deep clones `set_views` made on this thread.
+    pub static SET_VIEWS_CLONES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub fn set_views(m: &AppModel) -> Vec<SetView> {
+    #[cfg(test)]
+    SET_VIEWS_CLONES.with(|c| c.set(c.get() + 1));
     // shortcut: a clone per call for the ~20 callers that take ownership; switch them to `views` if it shows in a profile.
     (*views(m)).clone()
 }
