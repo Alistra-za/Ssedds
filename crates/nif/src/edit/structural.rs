@@ -770,9 +770,9 @@ fn enc<T>(r: Result<T, crate::NifError>) -> Result<T, String> {
 /// #INV_FLT#: the Value every vanilla blend interpolator holds (C1 census, 6722 of 6722).
 const INV_FLT: u32 = 0xFF7F_FFFF;
 
-/// The first NiControllerManager on the root's controller chain. Err when a NiControllerManager on the chain does
-/// not read, so AddSequence never puts a second manager in front of it (C-P35 M2).
-fn root_manager(h: &Header, m: &NifModel) -> Result<Option<u32>, String> {
+/// The first NiControllerManager on the root's controller chain. Err when any entry before the chain's end does not
+/// read: a manager there, or one behind it, would get a second manager in front of it (C-P35 M2, Note CU4).
+fn root_manager(m: &NifModel) -> Result<Option<u32>, String> {
     let Some(net) = m.root_net.as_ref() else {
         return Ok(None);
     };
@@ -783,13 +783,7 @@ fn root_manager(h: &Header, m: &NifModel) -> Result<Option<u32>, String> {
             return Ok(None);
         };
         let Some(t) = m.ctrls.get(&b) else {
-            // before h.kind, which does not check the range
-            let man = (b as usize) < h.sizes.len() && h.kind(b as usize) == b"NiControllerManager";
-            return if man {
-                Err("The root's controller chain cannot be read.".into())
-            } else {
-                Ok(None)
-            };
+            return Err("The root's controller chain cannot be read.".into());
         };
         if t.class == "NiControllerManager" {
             return Ok(Some(t.block));
@@ -822,7 +816,7 @@ fn find_clip(
     name: &str,
     nth: u32,
 ) -> Result<Option<(u32, Manager, usize)>, String> {
-    let Some(mb) = root_manager(h, m)? else {
+    let Some(mb) = root_manager(m)? else {
         return Ok(None);
     };
     let man = enc(read_manager(h, cur, mb as usize))?;
@@ -843,7 +837,7 @@ fn clip_named(r: &[u8], name: &str) -> bool {
 /// list it, it has no name, or the manager or a listed sequence does not read. Parses the header: call it on a click.
 pub fn clip_key(b: &[u8], m: &NifModel, seq: u32) -> Option<(String, u32)> {
     let h = Header::parse(b).ok()?;
-    let man = read_manager(&h, b, root_manager(&h, m).ok()?? as usize).ok()?;
+    let man = read_manager(&h, b, root_manager(m).ok()?? as usize).ok()?;
     let names = clip_names(&h, b, &man.sequences).ok()?;
     let k = man.sequences.iter().position(|&s| s == seq as i32)?;
     let name = crate::text::lossy(names[k]?);
@@ -1021,6 +1015,10 @@ pub(crate) fn clip_op(
     Ok(Outcome::Applied)
 }
 
+/// AddSequence's cycle and range refusals; `convert_check` predicts both with the same text (Note CU3).
+const BAD_CYCLE: &str = "The cycle must be Loop, Reverse or Clamp.";
+const BAD_RANGE: &str = "Stop must be after start.";
+
 /// The controllers ConvertChainToClips would take from property `prop` (chain order), or why it cannot run.
 /// Model only, no header parse: the Controllers tab calls it every frame. `shape` is the anchored shape's name.
 pub fn convert_check(m: &NifModel, prop: u32, shape: Option<&str>) -> Result<Vec<u32>, String> {
@@ -1084,6 +1082,18 @@ pub fn convert_check(m: &NifModel, prop: u32, shape: Option<&str>) -> Result<Vec
         .all(|c| c.start.is_finite() && c.stop.is_finite())
     {
         return Err("This animation has invalid times: it cannot be converted.".into());
+    }
+    // Note CU3: the checks AddSequence makes on the clip convert_op builds (cycle bits, the union range)
+    if (first.flags >> 1) & 3 == 3 {
+        return Err(BAD_CYCLE.into());
+    }
+    let (start, stop) = free
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.start), b.max(c.stop))
+        });
+    if stop <= start {
+        return Err(BAD_RANGE.into());
     }
     Ok(free.iter().map(|c| c.block).collect())
 }
@@ -1220,7 +1230,7 @@ pub(crate) fn add_sequence(
         .root
         .zip(m.root_net.as_ref())
         .ok_or("The root is not a node: a clip needs a node root.")?;
-    let found = root_manager(doc.header(), m)?;
+    let found = root_manager(m)?;
     let old = match found {
         Some(mb) => Some(enc(read_manager(doc.header(), cur, mb as usize))?),
         None => None,
@@ -1230,10 +1240,10 @@ pub(crate) fn add_sequence(
         return Err("Clip times must be finite numbers.".into());
     }
     if cycle > 2 {
-        return Err("The cycle must be Loop, Reverse or Clamp.".into());
+        return Err(BAD_CYCLE.into());
     }
     if stop.partial_cmp(&start) != Some(std::cmp::Ordering::Greater) {
-        return Err("Stop must be after start.".into());
+        return Err(BAD_RANGE.into());
     }
     if tracks.is_empty() {
         return Err("A clip needs at least one track.".into());

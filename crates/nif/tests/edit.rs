@@ -3789,6 +3789,62 @@ fn add_sequence_refuses_an_unreadable_root_manager() {
     assert_eq!(clip_key(&x, &read_model(&x).unwrap(), n), None);
 }
 
+/// Note CU4: an unreadable controller of any kind in front of the root's manager refuses AddSequence; the manager
+/// behind it is never shadowed by a second one.
+#[test]
+fn add_sequence_refuses_an_unreadable_controller_in_front_of_the_manager() {
+    let b = scenes::animated(Some(1), 2);
+    let r = apply(
+        &b,
+        &[add_seq(
+            root_anchor(&b),
+            "Open",
+            vec![track(&b, 11, open_keys())],
+        )],
+    )
+    .unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied]);
+    let o = r.bytes;
+    let m = read_model(&o).unwrap();
+    let root = m.root.unwrap();
+    let mgr = root_ctrl(&o) as i32;
+    let mut doc = nif::write::NifDoc::open(&o).unwrap();
+    let at = m.root_net.as_ref().unwrap().controller_at() - doc.header().offsets()[root as usize];
+    // next -> the manager, then too short for NiTimeController
+    let mut body = mgr.to_le_bytes().to_vec();
+    body.extend([0; 4]);
+    let n = doc.append(b"NiTransformController", body);
+    doc.patch(root, at, &(n as i32).to_le_bytes()).unwrap();
+    let x = doc.bytes();
+    let add = add_seq(root_anchor(&x), "Close", vec![track(&x, 20, open_keys())]);
+    assert_eq!(
+        refused(&x, add),
+        "The root's controller chain cannot be read."
+    );
+}
+
+/// Note CU3: `convert_check` predicts AddSequence's cycle and range refusals, with the same text.
+#[test]
+fn convert_check_predicts_the_cycle_and_range_refusals() {
+    let a = scenes::animated(Some(1), 2);
+    let mut cycle3 = a.clone();
+    for c in [4, 5] {
+        cycle3 = patched(&cycle3, c, 4, &0x4Eu16.to_le_bytes()); // 0x48 | cycle bits 3
+    }
+    let mut empty = a.clone();
+    for c in [4, 5] {
+        empty = patched(&empty, c, 18, &0f32.to_le_bytes()); // stop = start = 0
+    }
+    for (b, want) in [
+        (cycle3, "The cycle must be Loop, Reverse or Clamp."),
+        (empty, "Stop must be after start."),
+    ] {
+        refused_unchanged(&b, conv(&conv_at(&b), "X"), want);
+        let m = read_model(&b).unwrap();
+        assert_eq!(convert_check(&m, 3, Some("S")), Err(want.into()));
+    }
+}
+
 /// C-P35 M3: two managers that share one palette and one MTTC, each listing a clip that needs a different shape
 /// added: a split keeps both additions (the second no longer starts again from the source list).
 #[test]
