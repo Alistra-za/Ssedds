@@ -338,7 +338,7 @@ impl eframe::App for SdcApp {
             self.scan_ended();
             // Wave 2 #6: a cancelled or failed scan leaves every origin disabled, so plans keep the evidence too.
             self.model
-                .scan_finished(self.meshes.scan_completed, false);
+                .scan_finished(self.meshes.scan_completed, self.meshes.store_untouched);
         }
         self.state.set3d.poll(&self.model);
         // Both views offer the scan (the Textures view has its row under the header).
