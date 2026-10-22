@@ -88,6 +88,8 @@ enum Act {
     Select(String),
     /// A key added from the + menu was removed before it had a value.
     Unpend(Owner, String),
+    /// A key (or a match mode switched on a pill with no path) waits for its value.
+    Pend(Owner, String),
 }
 
 /// The window, while `AppModel::json_editor_open`: a native window of its own where the platform has them, an
@@ -263,7 +265,19 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
             Act::Edits(Owner::Set(id), e) => model.set_json_values(&id, e),
             Act::Edits(Owner::Section(i), e) => model.set_section_values(i, e),
             Act::AddSection => model.add_section(""),
-            Act::RemoveSection(i) => model.remove_section(i),
+            Act::RemoveSection(i) => {
+                // Trace #21: pending keys are held per section index, so the later sections' move up with them.
+                let n = sections.len();
+                for j in i..n {
+                    let next = if j + 1 < n {
+                        pending(ui, &Owner::Section(j + 1))
+                    } else {
+                        Vec::new()
+                    };
+                    set_pending(ui, &Owner::Section(j), next);
+                }
+                model.remove_section(i);
+            }
             Act::Select(key) => model.select_set(&key),
             Act::Fold(id) => {
                 if !nav.closed.remove(&id) {
@@ -276,6 +290,10 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
                     .filter(|k| *k != key)
                     .collect();
                 set_pending(ui, &owner, left);
+            }
+            Act::Pend(owner, key) => {
+                let w = pending(ui, &owner);
+                add_pending(ui, &owner, &w, &key);
             }
         }
     }
@@ -426,7 +444,13 @@ fn match_pill(
             })
             .response
             .on_hover_text("Exact: a mesh's texture in this slot is exactly this path. Path contains: the diffuse path contains this text.");
-        if picked_mode != mode {
+        if picked_mode != mode && path.is_empty() {
+            // Trace #20: a pill with no path yet is pending; the new mode takes its place (a store of "" is a no-op).
+            acts.push(Act::Unpend(owner.clone(), mode.key()));
+            acts.push(Act::Pend(owner.clone(), picked_mode.key()));
+            let (k, v) = unstore(owner, mode);
+            acts.push(Act::Edit(owner.clone(), k, v));
+        } else if picked_mode != mode {
             let edits = vec![
                 unstore(owner, mode),
                 store(owner, picked_mode, path, derived),
@@ -700,6 +724,21 @@ fn set_entry(
                     ui.colored_label(AMBER, NOT_WRITTEN);
                 }
             }
+            // Trace #18: an exact slot with no known path is a pending pill, not an invisible `matchN = ""`.
+            for n in (2..=8u8).filter(|n| {
+                waiting.contains(&format!("match{n}")) && !taken.contains(&Mode::Exact(*n))
+            }) {
+                match_pill(
+                    ui,
+                    model,
+                    &owner,
+                    Mode::Exact(n),
+                    "",
+                    &derived,
+                    &blocked,
+                    acts,
+                );
+            }
             if contains.is_some() || waiting.iter().any(|k| k == "path_contains") {
                 let p = contains.clone().unwrap_or_default();
                 match_pill(
@@ -795,8 +834,12 @@ fn add_set_key_menu(
                             .map(|a| a.path.clone())
                             .unwrap_or_default()
                     };
-                    let (k, val) = match_toggle(n, true, &path);
-                    acts.push(Act::Edit(owner.clone(), k, val));
+                    if n != 1 && path.is_empty() {
+                        add_pending(ui, owner, waiting, &format!("match{n}"));
+                    } else {
+                        let (k, val) = match_toggle(n, true, &path);
+                        acts.push(Act::Edit(owner.clone(), k, val));
+                    }
                     ui.close();
                 }
             }
