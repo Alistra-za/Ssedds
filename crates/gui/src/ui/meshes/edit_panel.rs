@@ -8,9 +8,10 @@ use crate::model::meshes::nif_edit::NifEdit;
 use crate::model::meshes::MeshesModel;
 use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
-use crate::ui::status::{AMBER, GREEN, RED};
+use crate::ui::status::{self, Status, AMBER, GREEN, RED};
 use eframe::egui;
 use nif::edit::{Op, Outcome};
+use nif::fields::Field;
 
 const TABS: [&str; 4] = ["Shader", "Alpha", "Controllers", "Extra data"];
 
@@ -19,6 +20,10 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
     let mut act = Act::default();
     if let Some(e) = &m.edit {
         top(ui, e, &mut act);
+        // Meshes UI T3: a footer drawn before the tabs (rule 2.1), so a long tab never pushes Export NIF away.
+        egui::Panel::bottom("meshes-edit-export")
+            .resizable(false)
+            .show(ui, |ui| export_block(ui, e, &mut act));
         let tab_id = egui::Id::new("meshes-edit-tab");
         let mut tab: usize = ui.data(|d| d.get_temp(tab_id)).unwrap_or(0);
         ui.horizontal(|ui| {
@@ -84,23 +89,52 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     // One scope: the rows and lines that come and go here must not shift the tabs' auto ids (a focused field would
     // lose its focus, and a typed value its commit, when the first edit adds a row).
     ui.push_id("meshes-edit-pending", |ui| {
-        // The pending list (spec §7): every op, the ones that did not apply in red with their way out.
-        egui::ScrollArea::vertical()
-            .id_salt("meshes-edit-ops")
-            .max_height(OPS_MAX_H)
+        // The pending list (spec §7): every op, the ones that did not apply in red with their way out. Meshes UI T3:
+        // collapsible, closed until a row turns red or the footer's Show asks for it.
+        let red = e
+            .doc
+            .ops
+            .iter()
+            .filter(|d| d.status == OpStatus::Conflict)
+            .count();
+        let seen = egui::Id::new("meshes-edit-pending-red");
+        let before: usize = ui.data(|d| d.get_temp(seen)).unwrap_or(0);
+        ui.data_mut(|d| d.insert_temp(seen, red));
+        let show = ui.data_mut(|d| d.remove_temp::<bool>(show_pending_id()));
+        if e.doc.ops.is_empty() {
+            return;
+        }
+        egui::CollapsingHeader::new(format!("Pending edits ({})", e.doc.ops.len()))
+            .id_salt("meshes-edit-pending-list")
+            .open((show.is_some() || red > before).then_some(true))
             .show(ui, |ui| {
-                for (i, d) in e.doc.ops.iter().enumerate() {
-                    let failed = d.status == OpStatus::Conflict;
-                    op_row(ui, e, i, &op_label(&d.op), failed, act);
-                }
+                egui::ScrollArea::vertical()
+                    .id_salt("meshes-edit-ops")
+                    .max_height(OPS_MAX_H)
+                    .show(ui, |ui| {
+                        for (i, d) in e.doc.ops.iter().enumerate() {
+                            let failed = d.status == OpStatus::Conflict;
+                            op_row(ui, e, i, &op_label(&d.op), failed, act);
+                        }
+                    });
             });
-        export_block(ui, e, act);
     });
     guard_dialog(ui.ctx(), e, act);
     ui.separator();
 }
 
 const OPS_MAX_H: f32 = 120.0;
+
+/// The footer's Show asks the pending list to open (it is drawn before the footer, so on the next frame).
+fn show_pending_id() -> egui::Id {
+    egui::Id::new("meshes-edit-show-pending")
+}
+
+/// Bug 2: egui turns Enter or Space on a focused button into a click. A write takes a pointer or AccessKit click.
+fn key_click(ui: &egui::Ui, r: &egui::Response) -> bool {
+    r.has_focus()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
+}
 
 fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, act: &mut Act) {
     let (text, conflict) = match (failed, e.outcomes.get(i)) {
@@ -141,30 +175,85 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
     );
 }
 
-/// "Export NIF" with its destination, its blocked reason or last result, and the placement line (spec §8).
+/// The Export NIF footer (spec §8, Meshes UI T3): a status line (Ready, or Blocked and why), what is written where,
+/// the button, then the last result and the placement line. A read-only session shows its reason here too.
 fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
-    if e.edit_mod.as_os_str().is_empty() {
-        return; // read-only: no export folder and no MO2 instance, nothing to export to
+    ui.add_space(4.0);
+    let red = e.doc.has_conflicts();
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| match &e.blocked {
+            None => {
+                status::dot(ui, Status::Ready);
+                ui.colored_label(GREEN, "Ready");
+            }
+            Some(why) => {
+                status::dot(ui, Status::Blocks);
+                ui.add(
+                    egui::Label::new(egui::RichText::new(format!("Blocked: {why}")).color(RED))
+                        .truncate(),
+                );
+            }
+        },
+        |ui| {
+            if red {
+                let r = ui.small_button("Show");
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Show pending edits")
+                });
+                if r.clicked() {
+                    ui.data_mut(|d| d.insert_temp(show_pending_id(), true));
+                    ui.ctx().request_repaint();
+                }
+            }
+        },
+    );
+    if !e.edit_mod.as_os_str().is_empty() {
+        // The real destination (Note CI29), cut in the middle like the header's Export to; the full path on hover and
+        // in the accessible name. MO2 joins `mods` with `/`: shown with `\` throughout.
+        let full = e.export_path.display().to_string().replace('/', "\\");
+        let data = e.data_path.replace('/', "\\");
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let glyph = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
+        let chars = ((ui.available_width() / glyph.max(1.0)) as usize)
+            .saturating_sub(data.chars().count() + 14);
+        let line = format!("Writes {data} to {full}");
+        let r = ui.add(
+            egui::Label::new(format!("Writes {data} to {}", elide_middle(&full, chars))).truncate(),
+        );
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &line));
+        r.on_hover_text(&line);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "The source file is never changed. Change the folder with Export to ▾ in the header.",
+                )
+                .weak(),
+            )
+            .wrap(),
+        );
     }
-    // The real destination (Note CI29), cut in the middle like the header's Export to; the full path on hover and in
-    // the accessible name.
-    // MO2 joins `mods` with `/`: shown with `\` throughout.
-    let full = e.export_path.display().to_string().replace('/', "\\");
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let glyph = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
-    let chars = ((ui.available_width() / glyph.max(1.0)) as usize).saturating_sub(4);
-    let to = format!("To: {full}");
-    let r = ui.add(egui::Label::new(format!("To: {}", elide_middle(&full, chars))).truncate());
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &to));
-    r.on_hover_text(&to);
-    ui.weak("Change it with Export to ▾ in the header.");
-    let r = ui.add_enabled(e.blocked.is_none(), egui::Button::new("Export NIF"));
-    if r.clicked() {
+    let ready = e.blocked.is_none();
+    let n = e.doc.ops.len();
+    let text = match (e.up_to_date, n) {
+        (true, _) => "Export NIF again".to_string(),
+        (false, 1) => "Export NIF · 1 edit".to_string(),
+        (false, n) => format!("Export NIF · {n} edits"),
+    };
+    // The page's primary action: strong, two rows tall, the accent fill when it can run (as the header's Export).
+    let mut b = egui::Button::new(egui::RichText::new(text).strong()).min_size(egui::vec2(
+        ui.available_width(),
+        2.0 * ui.spacing().interact_size.y,
+    ));
+    if ready {
+        b = b.fill(ui.visuals().selection.bg_fill);
+    }
+    let r = ui.add_enabled(ready, b);
+    if r.clicked() && !key_click(ui, &r) {
         act.export = Some(None);
     }
     if let Some(why) = &e.blocked {
         r.on_disabled_hover_text(why);
-        ui.add(egui::Label::new(egui::RichText::new(why).color(RED)).wrap());
     }
     if let Some((note, err)) = e
         .export_note
@@ -217,7 +306,11 @@ fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
             }
         },
     );
+    // Bug 2: Enter or Space on a focused Overwrite is egui's click; only a pointer or AccessKit click overwrites.
+    // NIF-side: the shared `dialogs.rs` (main team) still clicks on keys for its other Destructive buttons.
+    let key = ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
     match clicked {
+        Some(0) if key => {}
         Some(0) => act.export = Some(Some(GuardChoice::Overwrite)),
         Some(1) => act.guard_diff = true,
         Some(_) => act.export = Some(Some(GuardChoice::KeepTheirs)),
@@ -230,9 +323,7 @@ fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
 /// A short name of what an op changes, for the rows of ops that did not apply.
 fn op_label(op: &Op) -> String {
     let (what, at) = match op {
-        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => {
-            (format!("{field:?}"), at)
-        }
+        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => (field_label(*field), at),
         Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
         Op::SplitAlpha { at } => ("Split alpha".into(), at),
         Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
@@ -253,6 +344,41 @@ fn op_label(op: &Op) -> String {
     match &at.shape {
         Some(s) => format!("{s}: {what}"),
         None => what,
+    }
+}
+
+/// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
+fn field_label(f: Field) -> String {
+    let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
+    let rgb = |n: u8| ["R", "G", "B"].get(n as usize).copied().unwrap_or("?");
+    match f {
+        Field::ShaderType => "Shader type".into(),
+        Field::Slsf1 => "SLSF1 flags".into(),
+        Field::Slsf2 => "SLSF2 flags".into(),
+        Field::UvOffset(n) => format!("UV offset {}", axis(n)),
+        Field::UvScale(n) => format!("UV scale {}", axis(n)),
+        Field::EmissiveColor(n) => format!("Emissive colour {}", rgb(n)),
+        Field::EmissiveMultiple => "Emissive multiple".into(),
+        Field::ClampMode => "Clamp mode".into(),
+        Field::Alpha => "Shader alpha".into(),
+        Field::Refraction => "Refraction strength".into(),
+        Field::Glossiness => "Glossiness".into(),
+        Field::SpecularColor(n) => format!("Specular colour {}", rgb(n)),
+        Field::SpecularStrength => "Specular strength".into(),
+        Field::LightingEffect1 => "Lighting effect 1".into(),
+        Field::LightingEffect2 => "Lighting effect 2".into(),
+        // shortcut: the trailer's names depend on the shader type, which an op does not carry; name them from the
+        // model if users ask.
+        Field::Trailer(n) => format!("Shader type value {}", n + 1),
+        Field::AlphaFlags => "Alpha flags".into(),
+        Field::AlphaThreshold => "Alpha threshold".into(),
+        Field::CtrlFlags => "Controller flags".into(),
+        Field::Frequency => "Frequency".into(),
+        Field::Phase => "Phase".into(),
+        Field::StartTime => "Start".into(),
+        Field::StopTime => "Stop".into(),
+        Field::Variable => "Controlled variable".into(),
+        Field::InterpValue(n) => format!("Interpolator value {}", n + 1),
     }
 }
 

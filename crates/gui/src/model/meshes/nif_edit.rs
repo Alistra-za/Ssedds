@@ -104,6 +104,9 @@ pub struct NifEdit {
     pub export_note: Option<(String, bool)>,
     /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
     pub cleanup_note: Option<String>,
+    /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
+    /// the ops per frame.
+    pub up_to_date: bool,
     /// `nif::edit::apply` failed: the patched bytes are stale.
     apply_err: Option<String>,
     /// `render3d::parse(&patched)`, once per change.
@@ -338,6 +341,7 @@ impl NifEdit {
             guard: None,
             export_note: None,
             cleanup_note: None,
+            up_to_date: false,
             apply_err: None,
             parsed: Arc::default(),
             playing: Playing::Free,
@@ -500,6 +504,7 @@ impl NifEdit {
             at: Some(at),
             ops_hash: Some(self.doc.ops_hash()),
         };
+        self.up_to_date = true;
         self.save();
         self.cleanup_note = skipped.map(|why| format!("Exported without cleanup: {why}."));
         ExportOutcome::Written {
@@ -535,6 +540,7 @@ impl NifEdit {
         }
         self.patched = Arc::new(a.bytes);
         self.outcomes = a.outcomes;
+        self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
         match read_model(&self.patched) {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),

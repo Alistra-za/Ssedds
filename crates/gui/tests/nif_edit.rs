@@ -1807,6 +1807,23 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
             "{l} {r:?} outside the panel {edit:?}"
         );
     }
+    // Meshes UI T3: Export NIF sits in a footer under the tabs, inside the panel, with its blocked reason.
+    let footer = panel("meshes-edit-export");
+    let export = h.get(export_nif()).rect();
+    let tabs = h.get_by_label("Extra data").rect();
+    assert!(
+        edit.contains(footer.min) && edit.contains(footer.max - egui::vec2(0.5, 0.5)),
+        "footer {footer:?} outside {edit:?}"
+    );
+    assert!(
+        footer.contains(export.center()),
+        "{export:?} not in {footer:?}"
+    );
+    assert!(
+        export.min.y > tabs.max.y,
+        "Export NIF {export:?} above the tabs {tabs:?}"
+    );
+    h.get_by_label("Blocked: No edits to export.");
 }
 
 // ---- v2 A18: Controllers (scalars) and Extra data tabs ----
@@ -2640,18 +2657,23 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
     let revert = format!("Revert 1: {}: Glossiness", at.shape.as_deref().unwrap());
     let mut h = view(m);
     h.run_steps(3);
-    h.get_by_label(&format!("To: {}", exported(&d).display()));
+    h.get_by_label(&writes_line(&d));
     h.get_by_label("Placement OK.");
+    // Meshes UI T3: the pending list is closed while no row is red.
+    assert!(h.query_by_label(&revert).is_none());
+    h.get_by_label("Pending edits (1)").click();
+    h.run_steps(3);
     h.get_by_role_and_label(AkRole::Button, &revert);
-    h.get_by_role_and_label(AkRole::Button, "Export NIF")
-        .click();
+    h.get_by_label("Ready");
+    h.get_by_label("Export NIF · 1 edit");
+    h.get(export_nif()).click();
     h.run_steps(3);
     let p = exported(&d);
     assert!(p.is_file(), "the click exported");
     h.get_by_label("Re-run PGPatcher so its output includes this edit.");
+    h.get_by_label("Export NIF again");
     std::fs::write(&p, b"junk").unwrap();
-    h.get_by_role_and_label(AkRole::Button, "Export NIF")
-        .click();
+    h.get(export_nif()).click();
     h.run_steps(3);
     h.get_by_label("This file changed since sdc exported it.");
     h.get_by_role_and_label(AkRole::Button, "Diff").click();
@@ -2664,6 +2686,123 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
         .is_none());
     assert_eq!(std::fs::read(&p).unwrap(), b"junk", "Enter keeps theirs");
     assert!(h.state().edit.as_ref().unwrap().guard.is_none());
+}
+
+/// Meshes UI T3: the Export NIF button; its name is its text ("Export NIF · 1 edit", "Export NIF again").
+fn export_nif() -> egui_kittest::kittest::By<'static> {
+    egui_kittest::kittest::By::new()
+        .role(AkRole::Button)
+        .label_contains("Export NIF")
+}
+
+/// Meshes UI T3: the export block's destination line ("Writes … to …"), whole in its accessible name.
+fn writes_line(d: &tempfile::TempDir) -> String {
+    format!("Writes meshes\\x.nif to {}", exported(d).display())
+}
+
+/// Meshes UI T3 (bug 2): Enter or Space on a focused Export NIF or Overwrite writes nothing; a click still does.
+#[test]
+fn enter_or_space_on_focused_export_or_overwrite_writes_nothing() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let mut h = view(m);
+    h.run_steps(3);
+    let p = exported(&d);
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        h.get(export_nif()).focus();
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        assert!(!p.exists(), "{key:?} on a focused Export NIF exported");
+    }
+    h.get(export_nif()).click();
+    h.run_steps(3);
+    assert!(p.is_file(), "the click exported");
+    std::fs::write(&p, b"junk").unwrap();
+    h.get(export_nif()).click();
+    h.run_steps(3);
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        h.get_by_role_and_label(AkRole::Button, "Overwrite").focus();
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(std::fs::read(&p).unwrap(), b"junk", "{key:?} overwrote");
+        assert!(
+            h.state().edit.as_ref().unwrap().guard.is_some(),
+            "{key:?} closed the guard"
+        );
+    }
+    h.get_by_role_and_label(AkRole::Button, "Overwrite").click();
+    h.run_steps(3);
+    assert_ne!(std::fs::read(&p).unwrap(), b"junk", "the click overwrote");
+}
+
+/// A pending-list row (a label; its Revert button carries the same words).
+fn row(text: &str) -> egui_kittest::kittest::By<'_> {
+    egui_kittest::kittest::By::new()
+        .role(AkRole::Label)
+        .label_contains(text)
+}
+
+/// Meshes UI T3: a red row opens "Pending edits (N)" by itself, the block says why it is blocked, and the row is
+/// named in words, not as a Rust field (`Slsf1`).
+#[test]
+fn a_red_row_opens_the_pending_list_and_rows_read_as_words() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let f1 = e.model.lighting[&shader].lighting.slsf1;
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[0]).into_owned();
+    let on_shape = nif::edit::anchor_shape(&e.model, shape);
+    m.edit_push(
+        vec![Op::SetBits {
+            at,
+            field: Field::Slsf1,
+            mask: 1 << 12,
+            value: !f1 & (1 << 12),
+            base: f1 & (1 << 12),
+        }],
+        None,
+    );
+    // A path outside Windows-1252 is refused: a red row.
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at: on_shape,
+            slot: 0,
+            path: "textures\\\u{4e2d}.dds".into(),
+            base,
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label("Pending edits (2)");
+    h.get_by_label("Blocked: 1 edit cannot be applied.");
+    h.get(row(": SLSF1 flags"));
+    assert!(h.query_by_label_contains("Slsf1").is_none());
+    h.get_by_label_contains(": Texture slot 0: ");
+    // Closed by hand, Show opens it again.
+    h.get_by_label("Pending edits (2)").click();
+    h.run_steps(3);
+    assert!(h.query(row(": SLSF1 flags")).is_none());
+    h.get_by_role_and_label(AkRole::Button, "Show pending edits")
+        .click();
+    h.run_steps(3);
+    h.get(row(": SLSF1 flags"));
+}
+
+/// Meshes UI T3: without an export folder the block stays and says why it cannot export.
+#[test]
+fn a_read_only_session_shows_the_no_export_folder_reason() {
+    let m = direct(scenes::shared_alpha_and_set());
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label(&format!("Blocked: {NO_EXPORT_FOLDER}"));
+    assert!(h.get(export_nif()).accesskit_node().is_disabled());
 }
 
 // ---- v2 A19 review ----
@@ -2735,8 +2874,7 @@ fn a_path_typed_without_enter_is_exported_by_the_export_click() {
     h.get_by_role_and_label(AkRole::TextInput, field)
         .type_text("textures\\typed.dds");
     h.run_steps(1);
-    h.get_by_role_and_label(AkRole::Button, "Export NIF")
-        .click();
+    h.get(export_nif()).click();
     h.run_steps(4);
     let bytes = std::fs::read(exported(&d)).expect("exported");
     let needle = b"textures\\typed.dds";
@@ -3173,11 +3311,13 @@ fn the_destination_line_shows_the_real_path() {
     let (d, mut m) = export_session();
     m.open_edit();
     gloss(&mut m, 12.5);
-    let full = format!("To: {}", exported(&d).display());
+    let full = writes_line(&d);
     let mut h = view(m);
     h.run_steps(3);
     h.get_by_label(&full);
-    h.get_by_label("Change it with Export to ▾ in the header.");
+    h.get_by_label(
+        "The source file is never changed. Change the folder with Export to ▾ in the header.",
+    );
 }
 
 #[test]
