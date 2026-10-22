@@ -130,3 +130,27 @@ fn remove_clears_a_sections_pending_pill_and_shifts_the_next() {
         "the pending pill was lost with its section's index"
     );
 }
+
+#[test]
+fn a_pending_pill_switched_to_slot_1_stays_visible() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    // Slot 1 turned off (`match1 = ""`) with another match kept, so the set still has an entry and the
+    // drop-down offers slot 1.
+    m.set_json_value("landscape/rock01", "match1", Some(serde_json::json!("")));
+    m.set_json_value(
+        "landscape/rock01",
+        "match3",
+        Some(serde_json::json!("a\\b")),
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.json_editor_open = true;
+    let mut h = editor(m);
+    add_key(&mut h, 0, true, "exact · slot 2 normal");
+    pick_mode(&mut h, "exact · slot 2 normal", "exact · slot 1 diffuse");
+    let now = modes(&h);
+    assert!(
+        now.iter().any(|v| v.starts_with("exact · slot 1")),
+        "the pill vanished: {now:?}"
+    );
+}

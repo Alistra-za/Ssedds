@@ -725,7 +725,8 @@ fn set_entry(
                 }
             }
             // Trace #18: an exact slot with no known path is a pending pill, not an invisible `matchN = ""`.
-            for n in (2..=8u8).filter(|n| {
+            // Slot 1 too: a pill switched to slot 1 (turned off, `match1 = ""`) would otherwise vanish.
+            for n in (1..=8u8).filter(|n| {
                 waiting.contains(&format!("match{n}")) && !taken.contains(&Mode::Exact(*n))
             }) {
                 match_pill(
@@ -794,7 +795,12 @@ fn set_entry(
     // A pending key that now has a value is no longer pending (read again: the + menu may have added one).
     let left: Vec<String> = pending(ui, &owner)
         .into_iter()
-        .filter(|k| !c.own.contains_key(edit_key(k)))
+        .filter(|k| {
+            // A stored empty match (slot 1 turned off, `match1 = ""`) has no pill, so it keeps waiting.
+            !c.own.contains_key(edit_key(k))
+                || (is_match_key(k)
+                    && matches!(c.own.get(edit_key(k)), Some(Value::String(s)) if s.is_empty()))
+        })
         .collect();
     set_pending(ui, &owner, left);
 }
