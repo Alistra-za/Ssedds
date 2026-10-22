@@ -664,8 +664,7 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
             a.keys.iter().map(move |s| (a, *s, on))
         })
         .collect();
-    let live_keys: Vec<Key> = pairs.iter().filter(|p| p.2).map(|p| p.1.key).collect();
-    pairs.retain(|p| p.2 || live_keys.contains(&p.1.key));
+    keep_disabled_shadows(&mut pairs);
     pairs.sort_by_key(|(_, s, _)| std::cmp::Reverse(s.weight()));
     let (a, _, on) = pairs
         .into_iter()
@@ -675,6 +674,13 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
     }
     (a.run?)(model, ctx);
     Some(a.id)
+}
+
+/// Keeps every enabled pair, and a disabled pair only when an enabled one shares its key (it eats the key, trace #7)
+/// but not its exact (key, modifiers): an enabled twin of the same shortcut must win.
+fn keep_disabled_shadows<T>(pairs: &mut Vec<(T, Shortcut, bool)>) {
+    let live: Vec<Shortcut> = pairs.iter().filter(|p| p.2).map(|p| p.1).collect();
+    pairs.retain(|p| p.2 || (live.iter().any(|s| s.key == p.1.key) && !live.contains(&p.1)));
 }
 
 /// The sheet and the palette, while open. Drawn with the dialogs, so both views have them.
@@ -853,4 +859,33 @@ pub fn markdown_table() -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sc(mods: Modifiers) -> Shortcut {
+        Shortcut { mods, key: Key::Z }
+    }
+
+    #[test]
+    fn a_disabled_pair_yields_to_an_enabled_twin_but_shadows_a_different_modifier() {
+        let mut pairs = vec![
+            (1, sc(Modifiers::COMMAND), true),
+            (2, sc(Modifiers::COMMAND), false), // same (key, mods) as an enabled pair: dropped
+            (3, sc(Modifiers::COMMAND | Modifiers::SHIFT), false), // same key only: kept (trace #7)
+            (
+                4,
+                Shortcut {
+                    mods: Modifiers::NONE,
+                    key: Key::Enter,
+                },
+                false,
+            ), // key nothing enabled uses: dropped
+        ];
+        keep_disabled_shadows(&mut pairs);
+        let ids: Vec<i32> = pairs.iter().map(|p| p.0).collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
 }
