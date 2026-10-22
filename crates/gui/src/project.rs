@@ -241,7 +241,7 @@ pub(crate) fn find_key(t: &dyn TableLike, key: &str) -> Option<String> {
             .map(str::to_owned)
     };
     // The engine also matches a key written without the file's extension (`path_key_matches`; trace #29).
-    by(&lower).or_else(|| by(&without_ext(&lower)?.to_owned()))
+    by(&lower).or_else(|| by(without_ext(&lower)?))
 }
 
 impl ProjectDoc {
