@@ -136,11 +136,12 @@ fn clips_section(
         ui.data(|d| d.get_temp::<(String, String)>(id))
             .is_some_and(|(inputs, _)| inputs.starts_with(&now))
     });
-    let seen = egui::Id::new("meshes-edit-clips-refused");
+    // Final review Minor 1: per session, so the last session's state never decides this one's first frame.
+    let seen = egui::Id::new(("meshes-edit-clips-refused", e.session));
     let before = ui.data(|d| d.get_temp::<bool>(seen)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(seen, refused));
     egui::CollapsingHeader::new(title)
-        .id_salt("meshes-edit-clips")
+        .id_salt(("meshes-edit-clips", e.session))
         .default_open(false)
         .open((refused && !before).then_some(true))
         .show(ui, |ui| {

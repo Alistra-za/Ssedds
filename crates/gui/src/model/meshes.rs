@@ -512,6 +512,8 @@ pub struct MeshesModel {
     pub shapes_col: bool,
     /// Meshes UI T2: the shape card picked outside edit mode (block, name in the shown copy); Edit opens on it.
     pub card_sel: Option<(u32, Option<String>)>,
+    /// Final review Minor 8: `shapes_col` before Edit locked it on Shapes; restored when the edit ends.
+    pub shapes_col_before: Option<bool>,
     /// Item 9: the texture paths listed here that are items of the open folder (path → item key); `SdcApp::route_3d`
     /// fills it each frame.
     pub folder_items: HashMap<String, String>,
@@ -616,6 +618,7 @@ impl MeshesModel {
             status: String::new(),
             shapes_col: false,
             card_sel: None,
+            shapes_col_before: None,
             folder_items: HashMap::new(),
             open_in_textures: None,
             folder_items_for: (vec![], u64::MAX),

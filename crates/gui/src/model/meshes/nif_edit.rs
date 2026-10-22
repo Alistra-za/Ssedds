@@ -1287,6 +1287,8 @@ impl MeshesModel {
     /// opens with no preview).
     pub fn open_edit(&mut self) {
         self.drop_edit();
+        // Final review Minor 8: the column before Edit (Edit locks it on Shapes); `drop_edit` puts it back.
+        let column = self.shapes_col;
         let Some(row) = self.selected_row().cloned() else {
             return;
         };
@@ -1298,6 +1300,7 @@ impl MeshesModel {
             Ok((mut e, content)) => {
                 e.selection = first_selection(&e.model, self.card_sel.as_ref());
                 self.edit = Some(e);
+                self.shapes_col_before = Some(column);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
                 self.view_source = true;
                 if let Some(c) = content {
@@ -1392,6 +1395,9 @@ impl MeshesModel {
 
     /// Ends the session without touching the view's content.
     pub(super) fn drop_edit(&mut self) {
+        if let Some(column) = self.shapes_col_before.take() {
+            self.shapes_col = column;
+        }
         if let Some(mut e) = self.edit.take() {
             e.flush();
             if let Some(err) = e.error {

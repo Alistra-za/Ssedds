@@ -531,7 +531,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
         ("SLSF2", Field::Slsf2, lt.slsf2, &SLSF2_NAMES),
     ] {
         egui::CollapsingHeader::new(format!("{label} 0x{v:08X}"))
-            .id_salt(("meshes-edit-flags", label, at.block))
+            .id_salt(("meshes-edit-flags", e.session, label, at.block)) // final review Minor 1: per session
             // Meshes UI T6 (Note CZ21): closed by default, so the slots and the values come first; open when a flag
             // has a warning, so its Fix is in sight. shortcut: `default_open` acts on the first draw only, so a warning
             // that appears later on a closed list stays inside it (the Export footer still names a blocking one); open

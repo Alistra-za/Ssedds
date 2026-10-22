@@ -7930,6 +7930,33 @@ fn heel_height_adds_hh_offset_and_moves_the_sdta() {
         panic!("{got:?}")
     };
     assert_eq!(sdta_npc_z(s), Some(8.5));
+    // Final review Minor 3: both ops apply, and the patched bytes carry HH_OFFSET = 8.5 and the SDTA's 8.5 on B.
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(
+        e.doc.ops.iter().all(|d| d.status == OpStatus::Applied),
+        "{:?}",
+        e.outcomes
+    );
+    let pm = nif::model::read_model(&e.patched).unwrap();
+    let b = pm
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some("B"))
+        .unwrap();
+    let extras = pm.extras_of(&b.net);
+    let hh = extras
+        .iter()
+        .find(|x| x.name.as_deref() == Some(&b"HH_OFFSET"[..]))
+        .unwrap();
+    assert_eq!(hh.value, Some(ExtraValue::Float(8.5f32.to_bits())));
+    let sdta = extras
+        .iter()
+        .find(|x| x.name.as_deref() == Some(&b"SDTA"[..]))
+        .unwrap();
+    let Some(ExtraValue::Str(written)) = &sdta.value else {
+        panic!("{sdta:?}")
+    };
+    assert_eq!(sdta_npc_z(written), Some(8.5));
     let m = h.state_mut();
     assert!(m.undo_edit());
     assert!(ops(m).is_empty(), "one undo step");
@@ -8484,4 +8511,82 @@ fn render_meshes_page_with_an_edit_at_three_widths() {
         img.save(&out).expect("save png");
         println!("screenshot: {}", out.display());
     }
+}
+
+// ---- Meshes UI final-review fixes (Note CZ24) ----
+
+/// Final review Minor 1: the flag lists' open state belongs to one session, so a second NIF whose shader has the
+/// same block number still opens a list with a warning.
+#[test]
+fn a_flag_warning_opens_its_list_in_the_next_session() {
+    let mut m = direct(typed(0, 0));
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    assert!(h.query_by_label("Specular").is_none(), "closed, no warning");
+    let m = h.state_mut();
+    m.edit =
+        Some(NifEdit::open(typed(0, 1 << 21), copy("A", 1, false), "meshes/y.nif", None).unwrap());
+    let s = shape_named(m.edit.as_ref().unwrap(), "S");
+    m.select_edit(Selection::Shape(s));
+    h.run_steps(3);
+    h.get(
+        egui_kittest::kittest::By::new()
+            .role(AkRole::Button)
+            .label_contains("Clear the flag: "),
+    );
+}
+
+/// Final review Minor 2: a Root pick inside Edit is where the next Edit opens.
+#[test]
+fn a_root_pick_inside_edit_carries_to_the_next_edit() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let shape = lit_shape(m.edit.as_ref().unwrap()).0;
+    m.select_edit(Selection::Shape(shape));
+    m.shapes_col = true;
+    let mut h = view(m);
+    h.run_steps(4);
+    let name = h
+        .state()
+        .edit
+        .as_ref()
+        .unwrap()
+        .model
+        .shape(shape)
+        .unwrap()
+        .name
+        .clone();
+    let tail = format!(" {}", name.unwrap());
+    h.query_all_by_role(AkRole::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Select shape") && l.ends_with(&tail))
+        })
+        .unwrap()
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Root").click();
+    h.run_steps(3);
+    let m = h.state_mut();
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(m.edit.as_ref().unwrap().selection, Selection::Root);
+}
+
+/// Final review Minor 8: closing Edit puts the column back where it was (Mods and meshes).
+#[test]
+fn closing_edit_restores_the_mods_and_meshes_column() {
+    let (_d, mut m) = session(false);
+    m.shapes_col = false;
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(h.state().shapes_col, "Shapes while editing");
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(h.state().edit.is_none());
+    assert!(!h.state().shapes_col, "back on Mods and meshes");
 }

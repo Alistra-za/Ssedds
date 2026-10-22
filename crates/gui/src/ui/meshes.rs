@@ -908,6 +908,8 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     if let Some(s) = pick_root {
         m.select_edit(s);
+        // Final review Minor 2: the next Edit opens on Root too (no card picked).
+        m.card_sel = None;
     }
     if open.is_some() {
         m.open_in_textures = open;
@@ -937,9 +939,14 @@ fn card(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut egui::Ui)) {
 /// A card's full-width header button: `title` and `kind` shown, `name` for AccessKit ("Select shape #3 Body"), the NIF block on
 /// hover (built only while hovered). True when clicked.
 fn header(ui: &mut egui::Ui, on: bool, title: &str, kind: &str, name: &str, block: u32) -> bool {
-    // The title on the left, the block type weak on the right (a grow atom between them).
+    // The title on the left, the block type on the right (a grow atom between them): weak on an unselected card,
+    // plain on the selection fill, where weak grey is hard to read (final review Minor 4).
+    let kind = match on {
+        true => egui::RichText::new(kind),
+        false => egui::RichText::new(kind).weak(),
+    };
     let b = egui::Button::selectable(on, egui::RichText::new(title).strong())
-        .shortcut_text(kind)
+        .right_text(kind)
         .truncate()
         .min_size(egui::vec2(ui.available_width(), 0.0));
     let r = ui.add(b);
@@ -1218,7 +1225,12 @@ fn shape(
         });
     }
     let details = egui::CollapsingHeader::new("Details")
-        .id_salt(("shape-details", s.block))
+        // Final review Minor 1: per edit session (0 outside Edit), so another NIF's card never inherits it.
+        .id_salt((
+            "shape-details",
+            m.edit.as_ref().map_or(0, |e| e.session),
+            s.block,
+        ))
         .show(ui, |ui| shape_details(ui, m, s));
     // One "Details" per card: each is named after its shape (rule 8.4).
     let label = format!("Details of NIF block {}", s.block);
