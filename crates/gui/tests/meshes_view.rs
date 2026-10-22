@@ -1710,3 +1710,13 @@ fn cancelled_or_failed_scan_does_not_mark_a_completed_scan() {
     assert_eq!(m.banner, Some(Banner::PgpRunning));
     assert!(!m.scan_completed);
 }
+
+#[test]
+fn the_path_filter_folds_ascii_only_like_stored_paths() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/Éclair/a.nif"), nif(2, "meshes/eclair/b.nif")];
+    m.path_filter = "Éclair".into();
+    assert_eq!(m.visible_nifs(), [0]);
+    m.path_filter = "éclair".into();
+    assert!(m.visible_nifs().is_empty(), "É and é are different paths");
+}

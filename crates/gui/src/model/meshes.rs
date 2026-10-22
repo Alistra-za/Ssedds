@@ -1102,7 +1102,11 @@ impl MeshesModel {
 
     /// The path filter as compared with stored paths: `/` slashes, lower case, no `meshes/` prefix.
     fn path_needle(&self) -> String {
-        let t = self.path_filter.trim().replace('\\', "/").to_lowercase();
+        let t = self
+            .path_filter
+            .trim()
+            .replace('\\', "/")
+            .to_ascii_lowercase();
         display_path(&t).to_string()
     }
 
