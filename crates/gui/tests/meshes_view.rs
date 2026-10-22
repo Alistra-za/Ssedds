@@ -1737,8 +1737,40 @@ fn a_scan_that_stops_before_begin_scan_keeps_the_store_settled() {
     app.scan_store_unsettled = true;
     run_scan(&mut app, &mut m);
     assert!(app.scan_store_unsettled);
-}
 
+    // Another scan holds scan.lock (the lock is a Windows sharing lock): Busy stops before begin_scan too.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        m.procs = sdc_gui::model::meshes::no_procs;
+        let lock = _d.path().join("scan.lock");
+        let _held = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .open(lock)
+            .unwrap();
+        run_scan(&mut app, &mut m);
+        assert!(
+            m.error
+                .as_deref()
+                .is_some_and(|e| e.contains("already running")),
+            "{:?}",
+            m.error
+        );
+        assert!(
+            m.store_untouched && app.scan_store_unsettled,
+            "an earlier cancel stays"
+        );
+        app.scan_store_unsettled = false;
+        run_scan(&mut app, &mut m);
+        assert!(
+            !app.scan_store_unsettled,
+            "Busy leaves a settled store settled"
+        );
+    }
+}
 #[test]
 fn the_path_filter_folds_ascii_only_like_stored_paths() {
     let mut m = model_with(None);
