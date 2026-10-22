@@ -6,7 +6,7 @@ use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::ui::status::{AMBER, RED};
 use eframe::egui;
-use nif::edit::validate::{type_flag_errors, type_flag_lock, Level, Target};
+use nif::edit::validate::{type_flag_errors, type_flag_lock, Level, Target, Warning};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::fields::{Field, Value};
 use nif::material::{SLSF1_NAMES, SLSF2_NAMES, SLSF2_TRUE_PBR};
@@ -70,12 +70,7 @@ pub(super) fn fit_width(ui: &egui::Ui, want: f32) -> f32 {
 
 /// Warnings of `target` under their field: amber, red for errors, with "Fix" when the warning carries a fix.
 pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mut Act) {
-    let all = e
-        .warnings
-        .iter()
-        .chain(&e.op_warnings)
-        .chain(&e.pg_warnings);
-    for w in all.filter(|w| w.target == *target) {
+    for w in warnings_of(e, target) {
         let color = if w.level == Level::Error { RED } else { AMBER };
         ui.horizontal(|ui| {
             ui.add_space(LABEL_W);
@@ -87,7 +82,11 @@ pub(super) fn warnings(ui: &mut egui::Ui, e: &NifEdit, target: &Target, act: &mu
                     Op::SetBits { .. } => "Set the flag",
                     _ => "Fix",
                 };
-                if ui.small_button(label).clicked() {
+                let r = ui.small_button(label);
+                // Meshes UI T7 (rule 8.4): several rows can carry the same button; each is named after its warning.
+                let name = format!("{label}: {}", w.text);
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+                if r.clicked() {
                     act.push = Some((vec![fix.clone()], None));
                 }
             }
@@ -533,7 +532,9 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
         egui::CollapsingHeader::new(format!("{label} 0x{v:08X}"))
             .id_salt(("meshes-edit-flags", label, at.block))
             // Meshes UI T6 (Note CV21): closed by default, so the slots and the values come first; open when a flag
-            // has a warning, so its Fix is in sight.
+            // has a warning, so its Fix is in sight. shortcut: `default_open` acts on the first draw only, so a warning
+            // that appears later on a closed list stays inside it (the Export footer still names a blocking one); open
+            // it with `CollapsingState` on a new warning if users miss one.
             .default_open(has_warning(e, at.block, field))
             .show(ui, |ui| {
                 warnings(
@@ -580,8 +581,9 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                                 full.clone(),
                             )
                         });
-                        r = r
-                            .on_hover_text(format!("With the PBR flag CS reads this bit as: {m}."));
+                        r = r.on_hover_ui(|ui| {
+                            ui.label(format!("With the PBR flag CS reads this bit as: {m}."));
+                        });
                     }
                     if let Some(h) = locked {
                         r.on_disabled_hover_text(h);
@@ -602,14 +604,20 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
     }
 }
 
-/// True when `field` of `block` has a warning (`warnings` would draw a line for it).
-fn has_warning(e: &NifEdit, block: u32, field: Field) -> bool {
-    let t = Target::Field { block, field };
+/// The warnings `warnings` draws for `target` (T6 review Minor 1: one source for drawing and for `has_warning`).
+fn warnings_of<'a>(e: &'a NifEdit, target: &'a Target) -> impl Iterator<Item = &'a Warning> + 'a {
     e.warnings
         .iter()
         .chain(&e.op_warnings)
         .chain(&e.pg_warnings)
-        .any(|w| w.target == t)
+        .filter(move |w| w.target == *target)
+}
+
+/// True when `field` of `block` has a warning (`warnings` draws a line for it).
+fn has_warning(e: &NifEdit, block: u32, field: Field) -> bool {
+    warnings_of(e, &Target::Field { block, field })
+        .next()
+        .is_some()
 }
 
 fn texture_slots(
@@ -675,7 +683,12 @@ fn texture_slots(
                 ui.label(egui::RichText::new(&w.text).small().color(color))
                     .on_hover_text(&w.text);
                 if let Some(fix) = &w.fix {
-                    if ui.small_button("Fix").clicked() {
+                    let r = ui.small_button("Fix");
+                    let name = format!("Fix slot {i}: {}", w.text);
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
+                    });
+                    if r.clicked() {
                         act.push = Some((vec![fix.clone()], None));
                     }
                 }

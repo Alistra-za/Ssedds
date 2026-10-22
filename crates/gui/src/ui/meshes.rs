@@ -17,13 +17,16 @@ use modscan::plugin_store::{record_label, MeshUse};
 use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA};
 use std::collections::HashMap;
 
-const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
-const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
-const GREEN: egui::Color32 = egui::Color32::from_rgb(90, 170, 90);
+// Meshes UI T7: status colours come from `ui::status` (rule 4.1); blue is the "derived" chip, not a status.
+use super::status::{AMBER, GREEN, RED};
 const BLUE: egui::Color32 = egui::Color32::from_rgb(90, 140, 220);
+/// The left column's narrowest width.
+const TREE_MIN: f32 = 200.0;
 /// The NIF edit panel's narrowest width, and the 3D view's narrowest beside it.
 const EDIT_MIN: f32 = 300.0;
 const EDIT_CENTRE_MIN: f32 = 240.0;
+/// A side panel's frame adds its inner margin (`Frame::side_top_panel`, 8 + 8) to the width its range sets.
+const PANEL_MARGIN_X: f32 = 16.0;
 
 mod curve;
 mod edit_ctrl;
@@ -85,12 +88,20 @@ fn draw(ui: &mut egui::Ui, m: &mut MeshesModel) {
     if bar_has_content(m) {
         egui::Panel::top("meshes-bar").show(ui, |ui| bar(ui, m));
     }
+    // Meshes UI T7 (rule 2.3): the column leaves the 3D view its minimum, and the edit panel its own while editing;
+    // on a window too small for all three the minimum wins.
+    // The edit panel's width as drawn last frame (its frame margins included), else its minimum.
+    let edit_w = egui::containers::panel::PanelState::load(ui.ctx(), egui::Id::new("meshes-edit"))
+        .map_or(EDIT_MIN, |p| p.outer_rect.width().max(EDIT_MIN));
+    let others = EDIT_CENTRE_MIN + if m.edit.is_some() { edit_w } else { 0.0 };
+    let max = (ui.available_width() - others - PANEL_MARGIN_X).max(TREE_MIN);
     egui::Panel::left("meshes-tree")
         .default_size(620.0)
+        .size_range(TREE_MIN..=max)
         .show(ui, |ui| tree(ui, m));
     if m.edit.is_some() {
         // The 3D view keeps at least EDIT_CENTRE_MIN; when the window is too small the panel's minimum wins.
-        let max = (ui.available_width() - EDIT_CENTRE_MIN).max(EDIT_MIN);
+        let max = (ui.available_width() - EDIT_CENTRE_MIN - PANEL_MARGIN_X).max(EDIT_MIN);
         egui::Panel::right("meshes-edit")
             .default_size(380.0)
             .size_range(EDIT_MIN..=max)
@@ -350,6 +361,8 @@ enum TreeRow {
 /// GUI tweaks G9: mods and their meshes in one column. A mod opens (its arrow, or a click on its name) to list its
 /// NIFs under it; the chips and the path filter narrow those. With All meshes the column lists the search instead.
 fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    // Meshes UI T7 (rule 3.2): thin bars that stay visible without hover, for every list in this column.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
     // Meshes UI T2 (owner decision 2): while Edit is open the column stays on the shapes, the only way to pick one.
     let locked = m.edit.is_some();
     let can = m.selected_row().is_some() && !locked;
@@ -572,10 +585,15 @@ fn badges(ui: &mut egui::Ui, n: &NifRow, edit: Option<DocBadge>) {
         egui::Color32::GRAY
     };
     let r = chip(ui, color, n.status_label());
+    // Built only while hovered (rule 9.3).
     if let Some(by) = &n.overridden_by {
-        r.on_hover_text(format!("Overridden by {by} · {} copies", n.n_copies));
+        r.on_hover_ui(|ui| {
+            ui.label(format!("Overridden by {by} · {} copies", n.n_copies));
+        });
     } else if n.n_copies > 1 {
-        r.on_hover_text(format!("{} copies", n.n_copies));
+        r.on_hover_ui(|ui| {
+            ui.label(format!("{} copies", n.n_copies));
+        });
     }
     if n.derived {
         chip(ui, BLUE, "PGPatcher");

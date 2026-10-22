@@ -28,7 +28,13 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
         let mut tab: usize = ui.data(|d| d.get_temp(tab_id)).unwrap_or(0);
         ui.horizontal(|ui| {
             for (i, t) in TABS.iter().enumerate() {
-                if ui.selectable_label(tab == i, *t).clicked() {
+                let r = ui.selectable_label(tab == i, *t);
+                // Meshes UI T7 (rule 8.1): "Alpha tab", not the same name as the fields and headings it opens.
+                let (on, name) = (tab == i, format!("{t} tab"));
+                r.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, &name)
+                });
+                if r.clicked() {
                     tab = i;
                 }
             }
@@ -169,11 +175,19 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
         },
         |ui| {
             if conflict {
-                if ui.small_button("Take source").clicked() {
-                    act.take_source = Some(i);
-                }
-                if ui.small_button("Keep mine").clicked() {
-                    act.keep_mine = Some(i);
+                // Meshes UI T7 (rule 8.4): each row's buttons are named after its edit, as Revert is.
+                for (text, take) in [("Take source", true), ("Keep mine", false)] {
+                    let r = ui.small_button(text);
+                    let name = format!("{text} {}: {label}", i + 1);
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
+                    });
+                    if r.clicked() {
+                        match take {
+                            true => act.take_source = Some(i),
+                            false => act.keep_mine = Some(i),
+                        }
+                    }
                 }
             } else {
                 let r = ui.small_button("Revert");

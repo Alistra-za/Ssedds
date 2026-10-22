@@ -731,7 +731,8 @@ fn row(
             ui.strong(&title);
             ui.weak(short_class(&c.class));
             if managed {
-                ui.colored_label(AMBER, "Managed by a clip");
+                // Meshes UI T7: a fact, not a warning (rule 4.1).
+                ui.weak("Managed by a clip");
             }
             if !c.known {
                 ui.weak("unknown (read-only)");
