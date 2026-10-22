@@ -4,6 +4,28 @@ Tessalith (`tessalith.exe`) runs the same engine as `sdc convert`. A folder you 
 
 The window has two views, picked in the header: the Textures view (converter and set editor) and the Meshes view (mod scanning, covered in [Mod scanning](Mod-Scanning.md)).
 
+## Main window
+
+![Tessalith's main window with a folder open: the header on top, the Textures and Sets columns, the settings of the selected texture, the Advanced strip at the right and the bottom panel with its Problems tab. Numbered red markers point at the areas listed below.](../img/gui-main.png)
+
+The picture shows the Textures view after a folder is open, with a small made-up mod loaded. The numbers match the list. The 2D preview is not shown: it replaces the centre when you double-click a tile (see [The 2D preview](#the-2d-preview)).
+
+1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](#header).
+2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project.
+3. **Textures / Meshes tabs and the column eyes** (header, middle). Switch between the converter and the [mod scanning](Mod-Scanning.md) view, and show or hide the Textures and Sets columns.
+4. **Export to ▾** (header, right). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export](#export).
+5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same.
+6. **Export** (header, right edge). Converts the folder. If something is blocked or undecided, Review opens in the bottom panel first. See [Export](#export).
+7. **Texture filters** (top of the Textures column). Pills with counts (*Needs decision*, *Warnings*, *Failed*, *Not in a set*), the **Filter ▾** popup, the tile size buttons and the search box. See [Textures (left)](#textures-left).
+8. **Texture tiles** (Textures column). One tile per source file with its thumbnail, name and badges. An amber border means it still needs an answer; click a tile to select it, double-click for the preview. See [Deciding](#deciding).
+9. **Sets filters** (top of the Sets column). Pills for *Needs attention*, *Ready* and *No JSON*, a **Filter ▾** and a search box for sets.
+10. **A set card** (Sets column). A set groups the textures of one material: its shader, a status dot, a warning count and a chip for each slot (D, N, P, RMAOS and so on). Drag a texture onto a card to move it there. See [Sets and the set editor](#sets-and-the-set-editor).
+11. **Settings of the selected texture** (centre). Output summary, then the groups Type, Colour, Alpha, Mipmaps and Compression, each value showing where it came from. A texture that needs an answer shows a *Needs a decision* box above them. Selecting a set shows its recipes instead. See [Centre](#centre).
+12. **Advanced** (right edge). The drawer with tool paths, encoder and interface settings. Click the strip to open it. See [Advanced drawer](#advanced-drawer).
+13. **Bottom panel tabs** (full width, bottom). **Problems** lists every warning with its fix, **Messages** holds the notes of this session, **Files** shows an export's progress, and **Review** joins them while an export is being reviewed. Click a tab to open or collapse the panel.
+
+The line under the header is the status line: the file and set counts, a VRAM estimate for the selection and for the folder, and the progress of anything running.
+
 ## Header
 
 | Control | What it does |
@@ -31,7 +53,7 @@ While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" wi
 
 ## The three columns
 
-From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab of the set editor's own right-hand panel. Under all of them runs the [bottom panel](#the-bottom-panel).
+From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab of the set editor's own right-hand panel. Under all of them runs the bottom panel ([Main window](#main-window), item 13).
 
 ### Textures (left)
 
@@ -194,7 +216,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 **Export** converts the folder into the export folder. It cannot write into the folder it reads.
 
 1. Export saves `sdc.toml` and `sdc-project.toml`.
-2. If something is blocked, undecided or worth a second look, **Review** opens in the bottom panel instead of exporting (see [The bottom panel](#the-bottom-panel)). Decide the textures there (or **Accept all suggestions**), fix the blockers, tick the warnings, then press Review's **Export**, which exports the decided textures and skips the rest. It never decides for you and never exports by itself.
+2. If something is blocked, undecided or worth a second look, **Review** opens in the bottom panel instead of exporting (see the bottom panel, [Main window](#main-window) item 13). Decide the textures there (or **Accept all suggestions**), fix the blockers, tick the warnings, then press Review's **Export**, which exports the decided textures and skips the rest. It never decides for you and never exports by itself.
 3. If a source changed on disk since it was planned, Export plans again first. The Textures column also offers **Reload** for changed files.
 4. The bottom panel opens on its *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled). Click a row to select that texture; hover it for the file's warnings, which *Problems* also lists.
 5. After a complete export, the TruePBR JSON is written (see below).
