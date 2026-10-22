@@ -808,13 +808,7 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                         .iter()
                         .map(|s| {
                             let card = by.get(&(s.block, s.name.as_deref())).copied();
-                            let name = s.name.as_deref().unwrap_or("(unnamed)");
-                            (
-                                s.block,
-                                card,
-                                s.name.as_deref(),
-                                format!("{name} · {:?}", s.kind),
-                            )
+                            (s.block, card, s.name.as_deref(), format!("{:?}", s.kind))
                         })
                         .collect()
                 }
@@ -847,13 +841,11 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                             }
                             title
                         }
-                        None => header(
-                            ui,
-                            on,
-                            &fallback,
-                            &format!("Select shape {fallback}"),
-                            block,
-                        ),
+                        None => {
+                            let title = name.unwrap_or("(unnamed)");
+                            let label = format!("Select shape {title}");
+                            header(ui, on, title, &fallback, &label, block)
+                        }
                     };
                     if title {
                         pick = Some((block, name.map(String::from)));
@@ -898,10 +890,12 @@ fn card(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-/// A card's full-width header button: `text` shown, `name` for AccessKit ("Select shape #3 Body"), the NIF block on
+/// A card's full-width header button: `title` and `kind` shown, `name` for AccessKit ("Select shape #3 Body"), the NIF block on
 /// hover (built only while hovered). True when clicked.
-fn header(ui: &mut egui::Ui, on: bool, text: &str, name: &str, block: u32) -> bool {
-    let b = egui::Button::selectable(on, egui::RichText::new(text).strong())
+fn header(ui: &mut egui::Ui, on: bool, title: &str, kind: &str, name: &str, block: u32) -> bool {
+    // The title on the left, the block type weak on the right (a grow atom between them).
+    let b = egui::Button::selectable(on, egui::RichText::new(title).strong())
+        .shortcut_text(kind)
         .truncate()
         .min_size(egui::vec2(ui.available_width(), 0.0));
     let r = ui.add(b);
@@ -1113,7 +1107,8 @@ fn shape(
     let picked = header(
         ui,
         on,
-        &format!("{number} {name} · {}", s.kind),
+        &format!("{number} {name}"),
+        &s.kind,
         &format!("Select shape {number} {name}"),
         s.block,
     );

@@ -345,11 +345,11 @@ Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Selec
 
 Each shape is a framed card. It shows, from the top:
 
-- **#N name · type**, a button as wide as the card. N is the shape's PGPatcher 3D index, the number plugins use for its alternate textures (a shape outside the scene tree reads `#–`). Click it to select the card: it gets the accent outline, and **Edit** then opens on that shape instead of Root. A NIF with one shape opens on it. Hover for the NIF block index ("NIF block 12").
+- **#N name**, with the block type on the right, a button as wide as the card. N is the shape's PGPatcher 3D index, the number plugins use for its alternate textures (a shape outside the scene tree reads `#–`). Click it to select the card: it gets the accent outline, and **Edit** then opens on that shape instead of Root. A NIF with one shape opens on it. Hover for the NIF block index ("NIF block 12").
 - **The shader**, in bold: the lighting shader type, for example **Hair Tint (6)**, or "Effect shader".
 - **The textures**: each set slot with its path, indented, and one weak line for the empty ones ("(4 empty slots)"). A missing texture says "→ missing" in red.
 - **Alpha**, in words: "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5". Blending or testing is left out when it is off, and "Alpha: none" shows when both are. A shape with no alpha property says "No NiAlphaProperty". Hover for the raw flags, for example "flags 0x12ED (4845)".
-- **Controllers** (edit mode only): how many, and their names, with "(clip)" for one a clip drives, for example "2: Emissive multiple, Alpha (clip)", or "none".
+- **Controllers** (edit mode only): how many, and their names, with "(clip)" for one a clip drives, for example "2: Emissive multiple, Alpha (clip)", or "none". Not shown for an effect shader.
 - **Details**, closed: the NIF block and 3D index, **SLSF1 0x…** and **SLSF2 0x…** (open one to list its set flags by name, for example "Specular (0)"; a bit with no known name reads "bit N"), the geometry line (skinned, vertices, triangles), which mod each texture comes from ("→ A (2 copies)") and the raw slot strings.
 
 A texture path that is a texture of the open folder has an **Open in Textures** button, on the shape card and on the "Users of" list's title. It switches to the Textures view, selects that texture and scrolls it into view.

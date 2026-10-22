@@ -1080,9 +1080,11 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
 }
 
 /// Meshes UI T2: per shape, "N: title, title (clip)" over its shader's and its alpha's controllers; "none" without.
+/// No line for a shape whose shader is not a BSLightingShaderProperty: the editor does not read those controllers.
 fn card_ctrls(m: &NifModel) -> HashMap<u32, String> {
     m.shapes
         .iter()
+        .filter(|s| s.shader.is_none_or(|b| m.lighting.contains_key(&b)))
         .map(|s| {
             let lit = s.shader.and_then(|b| m.lighting.get(&b));
             let slsf2 = lit.map_or(0, |l| l.lighting.slsf2);
