@@ -162,6 +162,15 @@ pub fn alpha_testref() -> Vec<u8> {
 /// NiBlendFloatInterpolator (8); NiMultiTargetTransformController (9); keyed NiFloatInterpolators (10, 11).
 /// A has CBs with Controller ID "11" and null; B has one with the empty string.
 pub fn managed_clip() -> Vec<u8> {
+    managed_clip_with(false)
+}
+
+/// `managed_clip` plus an unnamed BSTriShape (12) with no shader and no alpha.
+pub fn managed_clip_and_bare_shape() -> Vec<u8> {
+    managed_clip_with(true)
+}
+
+fn managed_clip_with(bare: bool) -> Vec<u8> {
     let mut n = Nif::new(100);
     let s = |n: &mut Nif, x: &str| n.string(x);
     let (root, a, bb, shape) = (
@@ -229,6 +238,9 @@ pub fn managed_clip() -> Vec<u8> {
     );
     n.block("NiFloatInterpolator", W::default().f(0.0).i32(-1).0);
     n.block("NiFloatInterpolator", W::default().f(0.0).i32(-1).0);
+    if bare {
+        n.block("BSTriShape", bstri(-1, -1));
+    }
     n.bytes()
 }
 

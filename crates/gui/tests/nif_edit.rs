@@ -1364,6 +1364,13 @@ fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
     assert_eq!(m.error, None);
     m.shapes_col = true;
     let a = shape_named(m.edit.as_ref().unwrap(), "A");
+    let shown_a = m
+        .shapes
+        .iter()
+        .find(|s| s.name.as_deref() == Some("A"))
+        .unwrap()
+        .block;
+    assert_ne!(a, shown_a, "the copies number A differently");
     let mut h = view(m);
     h.run_steps(4);
     h.get_by_label_contains("tree) A").click();
@@ -1372,6 +1379,8 @@ fn edit_cards_follow_the_session_not_the_shown_pgpatcher_copy() {
         h.state().edit.as_ref().unwrap().selection,
         Selection::Shape(a)
     );
+    // T4 review Minor 5: the pick is kept in the shown copy's numbering, so the outline finds A after Edit closes.
+    assert_eq!(h.state().card_sel, Some((shown_a, Some("A".into()))));
     h.get_by_label("Show only this shape").click();
     h.run_steps(4);
     let mats = h.state().edit.as_ref().unwrap().materials();
@@ -2214,9 +2223,48 @@ fn clip_controls_sit_in_one_closed_section_under_the_chains() {
     h.get_by_label_contains("In clip A · ");
     h.get_by_label("Clips (2 · showing free chains)").click();
     h.run_steps(3);
-    h.get_by_label("Clip name");
-    h.get_by_label("New clip name");
+    // T4 review Minor 6: the order inside the section, and the Convert row's label.
+    let y = |h: &Harness<'static, MeshesModel>, l: &str| h.get_by_label(l).rect().min.y;
+    let (rename, convert, new) = (
+        y(&h, "Clip name"),
+        y(&h, "Convert to clips: shader property"),
+        y(&h, "New clip name"),
+    );
+    assert!(
+        rename < convert && convert < new,
+        "{rename} {convert} {new}"
+    );
     h.get_by_label("Convert shader controllers to clips");
+}
+
+/// T4 review Minor 1: a refusal left from an earlier file state does not open the section.
+#[test]
+fn a_stale_clip_refusal_does_not_open_the_clips_section() {
+    let mut h = clip_view();
+    let id = egui::Id::new("meshes-edit-clip").with("refused");
+    // Revision 0 is never a state's (`next_key` starts at 1).
+    h.ctx
+        .data_mut(|d| d.insert_temp(id, ("0|None".to_string(), "old".to_string())));
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("Clip name").is_none(),
+        "opened on a stale refusal"
+    );
+}
+
+/// T4 review Minor 2: on a shape with no shader and no alpha the Clips section (Rename, Remove) is still there.
+#[test]
+fn the_clips_section_shows_on_a_shape_without_properties() {
+    let mut m = direct(scenes::managed_clip_and_bare_shape());
+    m.select_edit(Selection::Shape(12));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Controllers").click();
+    h.run_steps(3);
+    h.get_by_label("This shape has no shader or alpha property.");
+    h.get_by_label("Clips (2 · showing free chains)").click();
+    h.run_steps(3);
+    h.get_by_label("Clip name");
 }
 
 /// Meshes UI T4: a clip refusal stored while the section is closed opens it, so the red line is seen. The refusal is
@@ -2240,7 +2288,8 @@ fn a_clip_refusal_opens_the_clips_section() {
     h.get_by_label("Clip name");
     h.get_by_label("Type a name for the clip.");
     // Closed by hand, it stays closed while that refusal stands.
-    h.get_by_label_contains("Clips (2 · showing").click();
+    // T4 review Minor 6: the title names the clip the Preview shows.
+    h.get_by_label("Clips (2 · showing A)").click();
     h.run_steps(3);
     assert!(h.query_by_label("Clip name").is_none());
 }

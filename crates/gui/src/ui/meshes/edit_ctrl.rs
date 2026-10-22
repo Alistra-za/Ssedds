@@ -84,8 +84,8 @@ pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, a
         .map(|a| (Owner::Alpha, "Alpha property", &a.prop));
     let chains: Vec<_> = [shader, alpha].into_iter().flatten().collect();
     if chains.is_empty() {
+        // No early return: the Clips section (Rename, Remove the picked clip) still follows (T4 review Minor 2).
         ui.label("This shape has no shader or alpha property.");
-        return;
     }
     for (owner, title, prop) in &chains {
         ui.strong(*title);
@@ -129,9 +129,13 @@ fn clips_section(
             .iter()
             .map(|(_, _, p)| egui::Id::new(("meshes-edit-convert", p.block)).with("refused")),
     );
-    let refused = refusals
-        .into_iter()
-        .any(|id| ui.data(|d| d.get_temp::<(String, String)>(id)).is_some());
+    // Only a refusal of this file state counts (T4 review Minor 1): every row's inputs start with `bytes_tag`, and a
+    // stale entry is cleared only by its row's `refused_line`, so it could otherwise open the section on nothing.
+    let now = format!("{}|", bytes_tag(e));
+    let refused = refusals.into_iter().any(|id| {
+        ui.data(|d| d.get_temp::<(String, String)>(id))
+            .is_some_and(|(inputs, _)| inputs.starts_with(&now))
+    });
     let seen = egui::Id::new("meshes-edit-clips-refused");
     let before = ui.data(|d| d.get_temp::<bool>(seen)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(seen, refused));

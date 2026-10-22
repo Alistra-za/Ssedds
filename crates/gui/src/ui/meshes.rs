@@ -860,9 +860,17 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
         m.show_users(&p);
     }
     match (pick, m.edit.is_some()) {
-        (Some(p), true) => {
-            m.select_edit(Selection::Shape(p.0));
-            m.card_sel = Some(p); // T2 review Minor 2: the outline and the next Edit follow this pick
+        (Some((block, name)), true) => {
+            m.select_edit(Selection::Shape(block));
+            // T2 review Minor 2: the outline and the next Edit follow this pick. T4 review Minor 5: kept in the shown
+            // copy's numbering (it may be PGPatcher's): the same block and name, else the only card with that name.
+            let same = m.shapes.iter().any(|s| s.block == block && s.name == name);
+            let mut named = m.shapes.iter().filter(|s| name.is_some() && s.name == name);
+            let shown = match (same, named.next(), named.next()) {
+                (false, Some(s), None) => s.block,
+                _ => block,
+            };
+            m.card_sel = Some((shown, name));
         }
         (Some(p), false) => m.card_sel = Some(p),
         (None, _) => {}

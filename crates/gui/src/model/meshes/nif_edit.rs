@@ -1552,8 +1552,9 @@ impl MeshesModel {
             return;
         };
         self.drop_edit(); // flushes to the old folder
-        self.open_edit(); // the selected NIF is the edited one: selecting another ends the session
-                          // Root too (T2 review Minor 1): the reopen starts on `first_selection`, which may be a shape.
+                          // The selected NIF is the edited one: selecting another ends the session.
+        self.open_edit();
+        // Root too (T2 review Minor 1): the reopen starts on `first_selection`, which may be a shape.
         let keep = self.edit.as_ref().is_some_and(|e| match selection {
             Selection::Root => true,
             Selection::Shape(id) => e.parsed.shapes.iter().any(|s| s.id.0 == id),
