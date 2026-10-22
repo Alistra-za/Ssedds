@@ -2153,6 +2153,50 @@ fn remove_refuses_a_controller_on_two_properties() {
     }
 }
 
+/// Note CY1: an edit recorded on twin s1 (nth 0 after s0's removal) never lands on s0 once that removal is reverted.
+#[test]
+fn a_ctrl_edit_never_lands_on_its_twin_after_a_revert() {
+    let b0 = scenes::animated(Some(1), 0);
+    let k = lin(&[(0.0, 1.0)]);
+    let at_s = prop_anchor(&b0, Role::Shader);
+    let twins = [
+        add(at_s.clone(), LSCF, Some(20), k.clone(), 1.0),
+        add(at_s, LSCF, Some(20), k, 1.0),
+    ];
+    let b = apply(&b0, &twins).unwrap().bytes;
+    let chain = read_model(&b).unwrap().lighting[&3].prop.ctrls.clone();
+    let [s0, s1] = chain[..] else {
+        panic!("{chain:?}")
+    };
+    let anchor = |block| Anchor {
+        block,
+        kind: LSCF.into(),
+        shape: Some("S".into()),
+        role: lscf_role(20),
+    };
+    let freq = |b: &[u8], k| current(b, k, Field::Frequency);
+    let one = Value::F32(1.0f32.to_bits());
+    let set = Op::SetField {
+        at: anchor(s1),
+        field: Field::Frequency,
+        value: Value::F32(2.0f32.to_bits()),
+        base: one,
+    };
+    let rm = Op::RemoveController { at: anchor(s0) };
+    let r = apply(&b, &[rm, set.clone()]).unwrap();
+    assert_eq!(r.outcomes, vec![Outcome::Applied, Outcome::Applied]);
+    assert_eq!(freq(&r.bytes, s1), Value::F32(2.0f32.to_bits()));
+    // the revert of op 1
+    let r = apply(&b, &[set]).unwrap();
+    assert!(
+        matches!(&r.outcomes[0], Outcome::Conflict(s) if s.starts_with("ambiguous")),
+        "{:?}",
+        r.outcomes
+    );
+    assert_eq!(freq(&r.bytes, s0), one);
+    assert_eq!(r.bytes, b);
+}
+
 #[test]
 fn broken_chains_refuse_remove_and_add() {
     let one = lin(&[(0.0, 1.0)]);
