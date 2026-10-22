@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 620" width="780" height="620" role="img" aria-labelledby="t d">
+<title id="t">Encoders compared by format</title>
+<desc id="d">Best-effort encoders per format, one panel per measure. rgbcx is best on BC1, BC4 and BC5 and within 0.09 dB of NVTT 3 on BC3. Intel ISPC is best on BC6H multi-exposure PSNR, 50.38 dB, but NVTT 3 keeps the brightest highlight best, 94 percent against 22 percent for ISPC. texconv CPU is last or near last on BC1, BC3 and BC4. rgbcx does not do BC6H.</desc>
+<style>
+svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+--ink:#1f2328;--mute:#59636e;--grid:#d1d9e0;--bg:#ffffff;--c0:#2a78d6;--c1:#eb6834;--c2:#1baf7a;--c3:#6250d6;--c4:#e87ba4;}
+@media (prefers-color-scheme: dark){svg{--ink:#e6edf3;--mute:#9198a1;--grid:#30363d;--bg:#0d1117;--c0:#3987e5;--c1:#d95926;--c2:#199e70;--c3:#9085e9;--c4:#d55181;}}
+.bg{fill:var(--bg)}
+text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
+.m{fill:var(--mute)}
+.t{font-size:14px;font-weight:600}
+.s{font-size:11px;fill:var(--mute)}
+.g{stroke:var(--grid);stroke-width:1;fill:none}
+.z{stroke:var(--mute);stroke-width:1;fill:none}
+.ring{stroke:var(--bg);stroke-width:2}
+.f0{fill:var(--c0)}.k0{stroke:var(--c0);fill:none}.f1{fill:var(--c1)}.k1{stroke:var(--c1);fill:none}.f2{fill:var(--c2)}.k2{stroke:var(--c2);fill:none}.f3{fill:var(--c3)}.k3{stroke:var(--c3);fill:none}.f4{fill:var(--c4)}.k4{stroke:var(--c4);fill:none}</style>
+<rect class="bg" width="780" height="620"/>
+<text x="10.0" y="22.0" class="t" text-anchor="start">BC1 colour</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">RGB PSNR, dB. Higher is better.</text>
+<path class="g" d="M190.5 50.0V170.0"/>
+<text x="190.5" y="184.0" class="m" text-anchor="middle">38</text>
+<path class="g" d="M309.5 50.0V170.0"/>
+<text x="309.5" y="184.0" class="m" text-anchor="middle">40</text>
+<text x="10.0" y="66.0" class="" text-anchor="start">rgbcx</text>
+<circle cx="300.6" cy="62.0" r="5" class="f0 ring"/>
+<text x="310.6" y="66.0" class="" text-anchor="start">39.85</text>
+<text x="10.0" y="90.0" class="" text-anchor="start">NVTT 3</text>
+<circle cx="294.0" cy="86.0" r="5" class="f2 ring"/>
+<text x="304.0" y="90.0" class="" text-anchor="start">39.74</text>
+<text x="10.0" y="114.0" class="" text-anchor="start">Compressonator</text>
+<circle cx="253.0" cy="110.0" r="5" class="f3 ring"/>
+<text x="263.0" y="114.0" class="" text-anchor="start">39.05</text>
+<text x="10.0" y="138.0" class="" text-anchor="start">Intel ISPC</text>
+<circle cx="197.1" cy="134.0" r="5" class="f1 ring"/>
+<text x="207.1" y="138.0" class="" text-anchor="start">38.11</text>
+<text x="10.0" y="162.0" class="" text-anchor="start">texconv (CPU)</text>
+<circle cx="155.4" cy="158.0" r="5" class="f4 ring"/>
+<text x="165.4" y="162.0" class="" text-anchor="start">37.41</text>
+<text x="400.0" y="22.0" class="t" text-anchor="start">BC3 colour + alpha</text>
+<text x="400.0" y="38.0" class="s" text-anchor="start">Premultiplied PSNR, dB. Higher is better.</text>
+<path class="g" d="M543.1 50.0V170.0"/>
+<text x="543.1" y="184.0" class="m" text-anchor="middle">48</text>
+<path class="g" d="M657.4 50.0V170.0"/>
+<text x="657.4" y="184.0" class="m" text-anchor="middle">49</text>
+<text x="400.0" y="66.0" class="" text-anchor="start">rgbcx</text>
+<circle cx="680.3" cy="62.0" r="5" class="f0 ring"/>
+<text x="690.3" y="66.0" class="" text-anchor="start">49.20</text>
+<text x="400.0" y="90.0" class="" text-anchor="start">NVTT 3</text>
+<circle cx="690.6" cy="86.0" r="5" class="f2 ring"/>
+<text x="700.6" y="90.0" class="" text-anchor="start">49.29</text>
+<text x="400.0" y="114.0" class="" text-anchor="start">Compressonator</text>
+<circle cx="628.9" cy="110.0" r="5" class="f3 ring"/>
+<text x="638.9" y="114.0" class="" text-anchor="start">48.75</text>
+<text x="400.0" y="138.0" class="" text-anchor="start">Intel ISPC</text>
+<circle cx="545.4" cy="134.0" r="5" class="f1 ring"/>
+<text x="555.4" y="138.0" class="" text-anchor="start">48.02</text>
+<text x="400.0" y="162.0" class="" text-anchor="start">texconv (CPU)</text>
+<circle cx="551.1" cy="158.0" r="5" class="f4 ring"/>
+<text x="561.1" y="162.0" class="" text-anchor="start">48.07</text>
+<text x="10.0" y="216.0" class="t" text-anchor="start">BC4 masks</text>
+<text x="10.0" y="232.0" class="s" text-anchor="start">PSNR, dB. Higher is better.</text>
+<path class="g" d="M178.5 244.0V364.0"/>
+<text x="178.5" y="378.0" class="m" text-anchor="middle">44</text>
+<path class="g" d="M255.3 244.0V364.0"/>
+<text x="255.3" y="378.0" class="m" text-anchor="middle">45</text>
+<text x="10.0" y="260.0" class="" text-anchor="start">rgbcx</text>
+<circle cx="300.6" cy="256.0" r="5" class="f0 ring"/>
+<text x="310.6" y="260.0" class="" text-anchor="start">45.59</text>
+<text x="10.0" y="284.0" class="" text-anchor="start">NVTT 3</text>
+<circle cx="259.1" cy="280.0" r="5" class="f2 ring"/>
+<text x="269.1" y="284.0" class="" text-anchor="start">45.05</text>
+<text x="10.0" y="308.0" class="" text-anchor="start">Compressonator</text>
+<circle cx="269.9" cy="304.0" r="5" class="f3 ring"/>
+<text x="279.9" y="308.0" class="" text-anchor="start">45.19</text>
+<text x="10.0" y="332.0" class="" text-anchor="start">Intel ISPC</text>
+<circle cx="155.4" cy="328.0" r="5" class="f1 ring"/>
+<text x="165.4" y="332.0" class="" text-anchor="start">43.70</text>
+<text x="10.0" y="356.0" class="" text-anchor="start">texconv (CPU)</text>
+<circle cx="173.9" cy="352.0" r="5" class="f4 ring"/>
+<text x="183.9" y="356.0" class="" text-anchor="start">43.94</text>
+<text x="400.0" y="216.0" class="t" text-anchor="start">BC5 normals</text>
+<text x="400.0" y="232.0" class="s" text-anchor="start">Mean angle error, degrees. Lower is better.</text>
+<path class="g" d="M535.7 244.0V364.0"/>
+<text x="535.7" y="378.0" class="m" text-anchor="middle">0.4</text>
+<path class="g" d="M632.5 244.0V364.0"/>
+<text x="632.5" y="378.0" class="m" text-anchor="middle">0.5</text>
+<text x="400.0" y="260.0" class="" text-anchor="start">rgbcx</text>
+<circle cx="545.4" cy="256.0" r="5" class="f0 ring"/>
+<text x="555.4" y="260.0" class="" text-anchor="start">0.41°</text>
+<text x="400.0" y="284.0" class="" text-anchor="start">NVTT 3</text>
+<circle cx="603.5" cy="280.0" r="5" class="f2 ring"/>
+<text x="613.5" y="284.0" class="" text-anchor="start">0.47°</text>
+<text x="400.0" y="308.0" class="" text-anchor="start">Compressonator</text>
+<circle cx="584.1" cy="304.0" r="5" class="f3 ring"/>
+<text x="594.1" y="308.0" class="" text-anchor="start">0.45°</text>
+<text x="400.0" y="332.0" class="" text-anchor="start">Intel ISPC</text>
+<circle cx="680.9" cy="328.0" r="5" class="f1 ring"/>
+<text x="690.9" y="332.0" class="" text-anchor="start">0.55°</text>
+<text x="400.0" y="356.0" class="" text-anchor="start">texconv (CPU)</text>
+<circle cx="690.6" cy="352.0" r="5" class="f4 ring"/>
+<text x="700.6" y="356.0" class="" text-anchor="start">0.56°</text>
+<text x="10.0" y="410.0" class="t" text-anchor="start">BC6H HDR</text>
+<text x="10.0" y="426.0" class="s" text-anchor="start">Multi-exposure PSNR, dB. Higher is better.</text>
+<path class="g" d="M155.4 438.0V558.0"/>
+<text x="155.4" y="572.0" class="m" text-anchor="middle">48</text>
+<path class="g" d="M216.4 438.0V558.0"/>
+<text x="216.4" y="572.0" class="m" text-anchor="middle">49</text>
+<path class="g" d="M277.4 438.0V558.0"/>
+<text x="277.4" y="572.0" class="m" text-anchor="middle">50</text>
+<text x="10.0" y="454.0" class="" text-anchor="start">rgbcx</text>
+<text x="144.0" y="454.0" class="m" text-anchor="start">not measured</text>
+<text x="10.0" y="478.0" class="" text-anchor="start">NVTT 3</text>
+<circle cx="155.4" cy="474.0" r="5" class="f2 ring"/>
+<text x="165.4" y="478.0" class="" text-anchor="start">48.00</text>
+<text x="10.0" y="502.0" class="" text-anchor="start">Compressonator</text>
+<text x="144.0" y="502.0" class="m" text-anchor="start">not measured†</text>
+<text x="10.0" y="526.0" class="" text-anchor="start">Intel ISPC</text>
+<circle cx="300.6" cy="522.0" r="5" class="f1 ring"/>
+<text x="310.6" y="526.0" class="" text-anchor="start">50.38</text>
+<text x="10.0" y="550.0" class="" text-anchor="start">texconv (CPU)</text>
+<circle cx="254.2" cy="546.0" r="5" class="f4 ring"/>
+<text x="264.2" y="550.0" class="" text-anchor="start">49.62</text>
+<text x="400.0" y="410.0" class="t" text-anchor="start">BC6H brightest highlight kept</text>
+<text x="400.0" y="426.0" class="s" text-anchor="start">Worst image, share kept. Higher is better.</text>
+<path class="g" d="M528.0 438.0V558.0"/>
+<text x="528.0" y="572.0" class="m" text-anchor="middle">0</text>
+<path class="g" d="M613.5 438.0V558.0"/>
+<text x="613.5" y="572.0" class="m" text-anchor="middle">50</text>
+<path class="g" d="M699.0 438.0V558.0"/>
+<text x="699.0" y="572.0" class="m" text-anchor="middle">100</text>
+<text x="400.0" y="454.0" class="" text-anchor="start">rgbcx</text>
+<text x="534.0" y="454.0" class="m" text-anchor="start">not measured</text>
+<text x="400.0" y="478.0" class="" text-anchor="start">NVTT 3</text>
+<circle cx="688.7" cy="474.0" r="5" class="f2 ring"/>
+<text x="698.7" y="478.0" class="" text-anchor="start">94%</text>
+<text x="400.0" y="502.0" class="" text-anchor="start">Compressonator</text>
+<circle cx="577.6" cy="498.0" r="5" class="f3 ring"/>
+<text x="587.6" y="502.0" class="" text-anchor="start">29%†</text>
+<text x="400.0" y="526.0" class="" text-anchor="start">Intel ISPC</text>
+<circle cx="565.6" cy="522.0" r="5" class="f1 ring"/>
+<text x="575.6" y="526.0" class="" text-anchor="start">22%</text>
+<text x="400.0" y="550.0" class="" text-anchor="start">texconv (CPU)</text>
+<circle cx="577.6" cy="546.0" r="5" class="f4 ring"/>
+<text x="587.6" y="550.0" class="" text-anchor="start">29%</text>
+<text x="10.0" y="604.0" class="s" text-anchor="start">† Original 4 HDRIs only; Compressonator mPSNR there was 1.2 dB below ISPC.</text>
+</svg>

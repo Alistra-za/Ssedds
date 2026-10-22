@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 846" width="780" height="846" role="img" aria-labelledby="t d">
+<title id="t">BC7 encoders compared by measure</title>
+<desc id="d">BC7 encoders at maximum settings, one panel per measure. bc7e u5 matches the best quality on real colour and decals and takes 0.22 s per megapixel. NVTT 3 Production and Compressonator score higher on synthetic smooth gradients, but take about 14 and 33 s per megapixel. texconv CPU is last on every quality measure. bc7e u5 turns 28 percent of opaque input into alpha 254, against 0 percent for NVTT. Compressonator packed-data and normal-map values were not measured.</desc>
+<style>
+svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+--ink:#1f2328;--mute:#59636e;--grid:#d1d9e0;--bg:#ffffff;--c0:#2a78d6;--c1:#eb6834;--c2:#1baf7a;--c3:#6250d6;--c4:#e87ba4;}
+@media (prefers-color-scheme: dark){svg{--ink:#e6edf3;--mute:#9198a1;--grid:#30363d;--bg:#0d1117;--c0:#3987e5;--c1:#d95926;--c2:#199e70;--c3:#9085e9;--c4:#d55181;}}
+.bg{fill:var(--bg)}
+text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
+.m{fill:var(--mute)}
+.t{font-size:14px;font-weight:600}
+.s{font-size:11px;fill:var(--mute)}
+.g{stroke:var(--grid);stroke-width:1;fill:none}
+.z{stroke:var(--mute);stroke-width:1;fill:none}
+.ring{stroke:var(--bg);stroke-width:2}
+.f0{fill:var(--c0)}.k0{stroke:var(--c0);fill:none}.f1{fill:var(--c1)}.k1{stroke:var(--c1);fill:none}.f2{fill:var(--c2)}.k2{stroke:var(--c2);fill:none}.f3{fill:var(--c3)}.k3{stroke:var(--c3);fill:none}.f4{fill:var(--c4)}.k4{stroke:var(--c4);fill:none}</style>
+<rect class="bg" width="780" height="846"/>
+<text x="10.0" y="22.0" class="t" text-anchor="start">Real colour textures</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">Δ vs bc7e u6, dB. Higher is better.</text>
+<path class="g" d="M207.0 50.0V170.0"/>
+<text x="207.0" y="184.0" class="m" text-anchor="middle">−1</text>
+<path class="g" d="M282.0 50.0V170.0"/>
+<text x="282.0" y="184.0" class="m" text-anchor="middle">0</text>
+<path class="z" d="M282.0 50.0V170.0"/>
+<text x="10.0" y="66.0" class="" text-anchor="start">bc7e -u5</text>
+<path d="M282.0 62.0H284.2" class="k0" stroke-width="2"/>
+<circle cx="284.2" cy="62.0" r="5" class="f0 ring"/>
+<text x="294.2" y="66.0" class="" text-anchor="start">+0.03</text>
+<text x="10.0" y="90.0" class="" text-anchor="start">NVTT 3 Production</text>
+<path d="M282.0 86.0H261.8" class="k2" stroke-width="2"/>
+<circle cx="261.8" cy="86.0" r="5" class="f2 ring"/>
+<text x="251.8" y="90.0" class="" text-anchor="end">−0.27</text>
+<text x="10.0" y="114.0" class="" text-anchor="start">Compressonator q1.0</text>
+<path d="M282.0 110.0H270.0" class="k3" stroke-width="2"/>
+<circle cx="270.0" cy="110.0" r="5" class="f3 ring"/>
+<text x="260.0" y="114.0" class="" text-anchor="end">−0.16†</text>
+<text x="10.0" y="138.0" class="" text-anchor="start">Intel ISPC slow</text>
+<path d="M282.0 134.0H249.0" class="k1" stroke-width="2"/>
+<circle cx="249.0" cy="134.0" r="5" class="f1 ring"/>
+<text x="239.0" y="138.0" class="" text-anchor="end">−0.44</text>
+<text x="10.0" y="162.0" class="" text-anchor="start">texconv -bc x</text>
+<path d="M282.0 158.0H171.8" class="k4" stroke-width="2"/>
+<circle cx="171.8" cy="158.0" r="5" class="f4 ring"/>
+<text x="161.8" y="162.0" class="" text-anchor="end">−1.47</text>
+<text x="400.0" y="22.0" class="t" text-anchor="start">Smooth gradients (synthetic)</text>
+<text x="400.0" y="38.0" class="s" text-anchor="start">Δ vs bc7e u6, dB. Higher is better.</text>
+<path class="g" d="M529.2 50.0V170.0"/>
+<text x="529.2" y="184.0" class="m" text-anchor="middle">−10</text>
+<path class="g" d="M633.9 50.0V170.0"/>
+<text x="633.9" y="184.0" class="m" text-anchor="middle">0</text>
+<path class="z" d="M633.9 50.0V170.0"/>
+<text x="400.0" y="66.0" class="" text-anchor="start">bc7e -u5</text>
+<path d="M633.9 62.0H633.9" class="k0" stroke-width="2"/>
+<circle cx="633.9" cy="62.0" r="5" class="f0 ring"/>
+<text x="643.9" y="66.0" class="" text-anchor="start">0.00</text>
+<text x="400.0" y="90.0" class="" text-anchor="start">NVTT 3 Production</text>
+<path d="M633.9 86.0H674.2" class="k2" stroke-width="2"/>
+<circle cx="674.2" cy="86.0" r="5" class="f2 ring"/>
+<text x="684.2" y="90.0" class="" text-anchor="start">+3.86</text>
+<text x="400.0" y="114.0" class="" text-anchor="start">Compressonator q1.0</text>
+<path d="M633.9 110.0H667.4" class="k3" stroke-width="2"/>
+<circle cx="667.4" cy="110.0" r="5" class="f3 ring"/>
+<text x="677.4" y="114.0" class="" text-anchor="start">+3.21</text>
+<text x="400.0" y="138.0" class="" text-anchor="start">Intel ISPC slow</text>
+<path d="M633.9 134.0H641.5" class="k1" stroke-width="2"/>
+<circle cx="641.5" cy="134.0" r="5" class="f1 ring"/>
+<text x="651.5" y="138.0" class="" text-anchor="start">+0.73</text>
+<text x="400.0" y="162.0" class="" text-anchor="start">texconv -bc x</text>
+<path d="M633.9 158.0H561.8" class="k4" stroke-width="2"/>
+<circle cx="561.8" cy="158.0" r="5" class="f4 ring"/>
+<text x="551.8" y="162.0" class="" text-anchor="end">−6.89</text>
+<text x="10.0" y="216.0" class="t" text-anchor="start">Real decals, smooth alpha</text>
+<text x="10.0" y="232.0" class="s" text-anchor="start">Δ vs bc7e u6, dB. Higher is better.</text>
+<path class="g" d="M174.0 244.0V364.0"/>
+<text x="174.0" y="378.0" class="m" text-anchor="middle">−2</text>
+<path class="g" d="M284.2 244.0V364.0"/>
+<text x="284.2" y="378.0" class="m" text-anchor="middle">0</text>
+<path class="z" d="M284.2 244.0V364.0"/>
+<text x="10.0" y="260.0" class="" text-anchor="start">bc7e -u5</text>
+<path d="M284.2 256.0H283.1" class="k0" stroke-width="2"/>
+<circle cx="283.1" cy="256.0" r="5" class="f0 ring"/>
+<text x="273.1" y="260.0" class="" text-anchor="end">−0.02</text>
+<text x="10.0" y="284.0" class="" text-anchor="start">NVTT 3 Production</text>
+<path d="M284.2 280.0H280.9" class="k2" stroke-width="2"/>
+<circle cx="280.9" cy="280.0" r="5" class="f2 ring"/>
+<text x="270.9" y="284.0" class="" text-anchor="end">−0.06</text>
+<text x="10.0" y="308.0" class="" text-anchor="start">Compressonator q1.0</text>
+<path d="M284.2 304.0H201.5" class="k3" stroke-width="2"/>
+<circle cx="201.5" cy="304.0" r="5" class="f3 ring"/>
+<text x="191.5" y="308.0" class="" text-anchor="end">−1.50†</text>
+<text x="10.0" y="332.0" class="" text-anchor="start">Intel ISPC slow</text>
+<path d="M284.2 328.0H252.3" class="k1" stroke-width="2"/>
+<circle cx="252.3" cy="328.0" r="5" class="f1 ring"/>
+<text x="242.3" y="332.0" class="" text-anchor="end">−0.58</text>
+<text x="10.0" y="356.0" class="" text-anchor="start">texconv -bc x</text>
+<path d="M284.2 352.0H171.8" class="k4" stroke-width="2"/>
+<circle cx="171.8" cy="352.0" r="5" class="f4 ring"/>
+<text x="161.8" y="356.0" class="" text-anchor="end">−2.04</text>
+<text x="400.0" y="216.0" class="t" text-anchor="start">Packed data maps</text>
+<text x="400.0" y="232.0" class="s" text-anchor="start">RGB PSNR, dB. Higher is better.</text>
+<path class="g" d="M559.9 244.0V364.0"/>
+<text x="559.9" y="378.0" class="m" text-anchor="middle">40.5</text>
+<path class="g" d="M620.4 244.0V364.0"/>
+<text x="620.4" y="378.0" class="m" text-anchor="middle">41.0</text>
+<path class="g" d="M680.9 244.0V364.0"/>
+<text x="680.9" y="378.0" class="m" text-anchor="middle">41.5</text>
+<text x="400.0" y="260.0" class="" text-anchor="start">bc7e -u5</text>
+<circle cx="647.0" cy="256.0" r="5" class="f0 ring"/>
+<text x="657.0" y="260.0" class="" text-anchor="start">41.22</text>
+<text x="400.0" y="284.0" class="" text-anchor="start">NVTT 3 Production</text>
+<circle cx="690.6" cy="280.0" r="5" class="f2 ring"/>
+<text x="700.6" y="284.0" class="" text-anchor="start">41.58</text>
+<text x="400.0" y="308.0" class="" text-anchor="start">Compressonator q1.0</text>
+<text x="534.0" y="308.0" class="m" text-anchor="start">not measured†</text>
+<text x="400.0" y="332.0" class="" text-anchor="start">Intel ISPC slow</text>
+<circle cx="644.6" cy="328.0" r="5" class="f1 ring"/>
+<text x="654.6" y="332.0" class="" text-anchor="start">41.20</text>
+<text x="400.0" y="356.0" class="" text-anchor="start">texconv -bc x</text>
+<circle cx="545.4" cy="352.0" r="5" class="f4 ring"/>
+<text x="555.4" y="356.0" class="" text-anchor="start">40.38</text>
+<text x="10.0" y="410.0" class="t" text-anchor="start">Normal maps</text>
+<text x="10.0" y="426.0" class="s" text-anchor="start">Mean angle error, degrees. Lower is better.</text>
+<path class="g" d="M182.6 438.0V558.0"/>
+<text x="182.6" y="572.0" class="m" text-anchor="middle">1.8</text>
+<path class="g" d="M243.1 438.0V558.0"/>
+<text x="243.1" y="572.0" class="m" text-anchor="middle">2.0</text>
+<path class="g" d="M303.6 438.0V558.0"/>
+<text x="303.6" y="572.0" class="m" text-anchor="middle">2.2</text>
+<text x="10.0" y="454.0" class="" text-anchor="start">bc7e -u5</text>
+<circle cx="173.6" cy="450.0" r="5" class="f0 ring"/>
+<text x="183.6" y="454.0" class="" text-anchor="start">1.77°</text>
+<text x="10.0" y="478.0" class="" text-anchor="start">NVTT 3 Production</text>
+<circle cx="155.4" cy="474.0" r="5" class="f2 ring"/>
+<text x="165.4" y="478.0" class="" text-anchor="start">1.71°</text>
+<text x="10.0" y="502.0" class="" text-anchor="start">Compressonator q1.0</text>
+<text x="144.0" y="502.0" class="m" text-anchor="start">not measured†</text>
+<text x="10.0" y="526.0" class="" text-anchor="start">Intel ISPC slow</text>
+<circle cx="179.6" cy="522.0" r="5" class="f1 ring"/>
+<text x="189.6" y="526.0" class="" text-anchor="start">1.79°</text>
+<text x="10.0" y="550.0" class="" text-anchor="start">texconv -bc x</text>
+<circle cx="300.6" cy="546.0" r="5" class="f4 ring"/>
+<text x="310.6" y="550.0" class="" text-anchor="start">2.19°</text>
+<text x="400.0" y="410.0" class="t" text-anchor="start">Opaque input decoded with alpha 254</text>
+<text x="400.0" y="426.0" class="s" text-anchor="start">Share of texels. Lower is better.</text>
+<path class="g" d="M528.0 438.0V558.0"/>
+<text x="528.0" y="572.0" class="m" text-anchor="middle">0</text>
+<path class="g" d="M642.8 438.0V558.0"/>
+<text x="642.8" y="572.0" class="m" text-anchor="middle">20</text>
+<text x="400.0" y="454.0" class="" text-anchor="start">bc7e -u5</text>
+<circle cx="688.7" cy="450.0" r="5" class="f0 ring"/>
+<text x="698.7" y="454.0" class="" text-anchor="start">28%*</text>
+<text x="400.0" y="478.0" class="" text-anchor="start">NVTT 3 Production</text>
+<circle cx="528.0" cy="474.0" r="5" class="f2 ring"/>
+<text x="538.0" y="478.0" class="" text-anchor="start">0%</text>
+<text x="400.0" y="502.0" class="" text-anchor="start">Compressonator q1.0</text>
+<circle cx="534.3" cy="498.0" r="5" class="f3 ring"/>
+<text x="544.3" y="502.0" class="" text-anchor="start">1.1%</text>
+<text x="400.0" y="526.0" class="" text-anchor="start">Intel ISPC slow</text>
+<circle cx="614.1" cy="522.0" r="5" class="f1 ring"/>
+<text x="624.1" y="526.0" class="" text-anchor="start">15%</text>
+<text x="400.0" y="550.0" class="" text-anchor="start">texconv -bc x</text>
+<circle cx="541.8" cy="546.0" r="5" class="f4 ring"/>
+<text x="551.8" y="550.0" class="" text-anchor="start">2.4%</text>
+<text x="10.0" y="604.0" class="t" text-anchor="start">Time per megapixel</text>
+<text x="10.0" y="620.0" class="s" text-anchor="start">Seconds, log scale. Lower is faster.</text>
+<path class="g" d="M138.0 632.0V752.0"/>
+<text x="138.0" y="766.0" class="m" text-anchor="middle">0.1</text>
+<path class="g" d="M198.0 632.0V752.0"/>
+<text x="198.0" y="766.0" class="m" text-anchor="middle">1</text>
+<path class="g" d="M258.0 632.0V752.0"/>
+<text x="258.0" y="766.0" class="m" text-anchor="middle">10</text>
+<path class="g" d="M318.0 632.0V752.0"/>
+<text x="318.0" y="766.0" class="m" text-anchor="middle">100</text>
+<text x="10.0" y="648.0" class="" text-anchor="start">bc7e -u5</text>
+<circle cx="158.5" cy="644.0" r="5" class="f0 ring"/>
+<text x="168.5" y="648.0" class="" text-anchor="start">0.22 s</text>
+<text x="10.0" y="672.0" class="" text-anchor="start">NVTT 3 Production</text>
+<circle cx="266.8" cy="668.0" r="5" class="f2 ring"/>
+<text x="276.8" y="672.0" class="" text-anchor="start">~14 s</text>
+<text x="10.0" y="696.0" class="" text-anchor="start">Compressonator q1.0</text>
+<circle cx="289.1" cy="692.0" r="5" class="f3 ring"/>
+<text x="299.1" y="696.0" class="" text-anchor="start">~33 s</text>
+<text x="10.0" y="720.0" class="" text-anchor="start">Intel ISPC slow</text>
+<circle cx="166.6" cy="716.0" r="5" class="f1 ring"/>
+<text x="176.6" y="720.0" class="" text-anchor="start">0.30 s</text>
+<text x="10.0" y="744.0" class="" text-anchor="start">texconv -bc x</text>
+<circle cx="276.1" cy="740.0" r="5" class="f4 ring"/>
+<text x="286.1" y="744.0" class="" text-anchor="start">~20 s</text>
+<text x="10.0" y="798.0" class="s" text-anchor="start">† Compressonator q1.0 was not re-measured on the wider set: its values come from the original 4–7 images.</text>
+<text x="10.0" y="814.0" class="s" text-anchor="start">  There it was 0.15 dB behind NVTT on packed data and 0.27° behind on normals. The alpha-254 and time rows are also from the original run.</text>
+<text x="10.0" y="830.0" class="s" text-anchor="start">* The opt-in mode 6 p-bit override (exact opaque alpha) is for when this is not acceptable.</text>
+</svg>
