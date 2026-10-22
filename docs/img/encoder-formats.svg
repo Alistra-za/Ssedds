@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 696" width="780" height="696" role="img" aria-labelledby="t d">
 <title id="t">Encoders compared by format, PSNR</title>
-<desc id="d">Bar chart of PSNR in dB, grouped by format (BC1 RGB, BC3 premultiplied, BC4, BC5 RG, BC6H multi-exposure), one bar per encoder, with the encoder shown by a stripe pattern. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 on BC3 (49.20 against 49.29), and best on BC5 (47.03). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator BC6H values were not measured. texconv CPU is last or near last.</desc>
+<desc id="d">Bar chart of PSNR in dB, grouped by format (BC1 RGB, BC3 premultiplied, BC4, BC5 RG, BC6H multi-exposure), one bar per encoder, with the encoder shown by a stripe pattern. rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 on BC3 (49.20 against 49.29), and best on BC5 (47.03). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator BC6H values were not measured. texconv CPU is last or near last. The Tessalith default encoder per format (rgbcx for BC1 to BC5, Intel ISPC for BC6H) has an outline and a bold label.</desc>
 <style>
 svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
 --ink:#1f2328;--mute:#59636e;--grid:#d1d9e0;--bg:#ffffff;--c0:#2a78d6;--c1:#eb6834;--c2:#1baf7a;--c3:#6250d6;--c4:#e87ba4;}
@@ -17,11 +17,12 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
 .nf{fill:var(--mute)}
+.df{fill:none;stroke:var(--ink);stroke-width:2}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
 <rect class="bg" width="780" height="696"/>
 <defs><pattern id="pd" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3.5" height="8" class="pl"/></pattern><pattern id="ph" width="8" height="7" patternUnits="userSpaceOnUse"><rect width="8" height="3" class="pl"/></pattern><pattern id="px" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="2.4" class="pl"/><rect width="2.4" height="8" class="pl"/></pattern><pattern id="pv" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="3.5" height="8" class="pl"/></pattern></defs>
 <text x="10.0" y="20.0" class="t" text-anchor="start">Best encoder per format: PSNR in dB, grouped by format</text>
-<text x="10.0" y="38.0" class="s" text-anchor="start">Higher is better. Bars start at 35 dB, not zero. The stripe shows the encoder.</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">Higher is better. Bars start at 35 dB, not zero. The stripe shows the encoder. Bold label and outline = Tessalith default.</text>
 <rect x="10" y="48" width="14" height="12" class="nf"/>
 <text x="30.0" y="58.0" class="s" text-anchor="start">rgbcx</text>
 <rect x="83" y="48" width="14" height="12" class="nf"/>
@@ -46,7 +47,8 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="620.6" y="646.0" class="m" text-anchor="middle">50</text>
 <text x="10.0" y="88.0" class="b" text-anchor="start">BC1 colour (RGB PSNR)</text>
 <rect x="30.0" y="94" width="191.0" height="14" class="nf"/>
-<text x="226.0" y="106.0" class="s" text-anchor="start">39.85</text>
+<rect x="30.0" y="94" width="191.0" height="14" class="df"/>
+<text x="228.0" y="106.0" class="b" text-anchor="start">39.85</text>
 <rect x="30.0" y="112" width="186.6" height="14" class="nf"/>
 <rect x="30.0" y="112" width="186.6" height="14" fill="url(#pd)"/>
 <text x="221.6" y="124.0" class="s" text-anchor="start">39.74</text>
@@ -61,7 +63,8 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="129.9" y="178.0" class="s" text-anchor="start">37.41</text>
 <text x="10.0" y="200.0" class="b" text-anchor="start">BC3 colour + alpha (premultiplied PSNR)</text>
 <rect x="30.0" y="206" width="559.1" height="14" class="nf"/>
-<text x="594.1" y="218.0" class="s" text-anchor="start">49.20</text>
+<rect x="30.0" y="206" width="559.1" height="14" class="df"/>
+<text x="596.1" y="218.0" class="b" text-anchor="start">49.20</text>
 <rect x="30.0" y="224" width="562.7" height="14" class="nf"/>
 <rect x="30.0" y="224" width="562.7" height="14" fill="url(#pd)"/>
 <text x="597.7" y="236.0" class="s" text-anchor="start">49.29</text>
@@ -76,7 +79,8 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="549.6" y="290.0" class="s" text-anchor="start">48.07</text>
 <text x="10.0" y="312.0" class="b" text-anchor="start">BC4 masks (PSNR)</text>
 <rect x="30.0" y="318" width="417.0" height="14" class="nf"/>
-<text x="452.0" y="330.0" class="s" text-anchor="start">45.59</text>
+<rect x="30.0" y="318" width="417.0" height="14" class="df"/>
+<text x="454.0" y="330.0" class="b" text-anchor="start">45.59</text>
 <rect x="30.0" y="336" width="395.7" height="14" class="nf"/>
 <rect x="30.0" y="336" width="395.7" height="14" fill="url(#pd)"/>
 <text x="430.7" y="348.0" class="s" text-anchor="start">45.05</text>
@@ -91,7 +95,8 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="387.0" y="402.0" class="s" text-anchor="start">43.94</text>
 <text x="10.0" y="424.0" class="b" text-anchor="start">BC5 normals (RG PSNR, n = 93)</text>
 <rect x="30.0" y="430" width="473.7" height="14" class="nf"/>
-<text x="508.7" y="442.0" class="s" text-anchor="start">47.03</text>
+<rect x="30.0" y="430" width="473.7" height="14" class="df"/>
+<text x="510.7" y="442.0" class="b" text-anchor="start">47.03</text>
 <rect x="30.0" y="448" width="436.3" height="14" class="nf"/>
 <rect x="30.0" y="448" width="436.3" height="14" fill="url(#pd)"/>
 <text x="471.3" y="460.0" class="s" text-anchor="start">46.08</text>
@@ -112,7 +117,8 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="36.0" y="590.0" class="s" text-anchor="start">not measured</text>
 <rect x="30.0" y="596" width="605.6" height="14" class="nf"/>
 <rect x="30.0" y="596" width="605.6" height="14" fill="url(#px)"/>
-<text x="640.6" y="608.0" class="s" text-anchor="start">50.38</text>
+<rect x="30.0" y="596" width="605.6" height="14" class="df"/>
+<text x="642.6" y="608.0" class="b" text-anchor="start">50.38</text>
 <rect x="30.0" y="614" width="575.7" height="14" class="nf"/>
 <rect x="30.0" y="614" width="575.7" height="14" fill="url(#pv)"/>
 <text x="610.7" y="626.0" class="s" text-anchor="start">49.62</text>

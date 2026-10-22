@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 552" width="780" height="552" role="img" aria-labelledby="t d">
 <title id="t">BC7 encoders: speed against quality</title>
-<desc id="d">Back-to-back bar chart of BC7 encoders. Left bars show speed in seconds per megapixel on a log scale, shorter is faster. Right bars show quality in dB against bc7e u6. Tessalith's opt-in bc7e max is best at +0.32 dB RGB and alpha, about 0.6 s per megapixel. The default bc7e u5 is level with u6 at 0.22 s. NVTT Production, Compressonator and texconv CPU take 14 to 33 s and do not beat it. GPU encoders take 0.03 to 0.09 s and lose 1.4 to 2.8 dB.</desc>
+<desc id="d">Back-to-back bar chart of BC7 encoders. Left bars show speed in seconds per megapixel on a log scale, shorter is faster. Right bars show quality in dB against bc7e u6. Tessalith's opt-in bc7e max is best at +0.32 dB RGB and alpha, about 0.6 s per megapixel. The default, bc7e u5 (in bold), is level with u6 at 0.22 s. NVTT Production, Compressonator and texconv CPU take 14 to 33 s and do not beat it. GPU encoders take 0.03 to 0.09 s and lose 1.4 to 2.8 dB.</desc>
 <style>
 svg{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
 --ink:#1f2328;--mute:#59636e;--grid:#d1d9e0;--bg:#ffffff;--c0:#2a78d6;--c1:#eb6834;--c2:#1baf7a;--c3:#6250d6;--c4:#e87ba4;}
@@ -17,10 +17,11 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
 .nf{fill:var(--mute)}
+.df{fill:none;stroke:var(--ink);stroke-width:2}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
 <rect class="bg" width="780" height="552"/>
 <text x="10.0" y="20.0" class="t" text-anchor="start">BC7 encoders: speed against quality</text>
-<text x="10.0" y="38.0" class="s" text-anchor="start">Left: speed, s per megapixel, log scale. Shorter bar = faster. Right: Δ dB against bc7e u6. Higher is better. Sorted by RGB.</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">Left: speed, s per megapixel, log scale. Shorter bar = faster. Right: Δ dB against bc7e u6. Higher is better. Sorted by RGB. Bold = Tessalith default.</text>
 <rect x="10" y="48" width="14" height="10" class="mu"/>
 <text x="30.0" y="57.0" class="s" text-anchor="start">Speed, or RGB</text>
 <rect x="130" y="48" width="14" height="10" class="mu lt"/>
@@ -45,14 +46,14 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="655.1" y="501.0" class="m" text-anchor="middle">−1</text>
 <path class="z" d="M715.6 112V486"/>
 <text x="715.6" y="501.0" class="m" text-anchor="middle">0</text>
-<text x="302.0" y="133.0" class="b" text-anchor="start">bc7e max‡ (Tessalith opt-in)</text>
+<text x="302.0" y="133.0" class="" text-anchor="start">bc7e max‡ (Tessalith opt-in)</text>
 <rect x="178.9" y="122.0" width="111.1" height="14" class="f0"/>
 <text x="173.9" y="133.0" class="s" text-anchor="end">~0.6</text>
 <rect x="715.6" y="118.0" width="19.3" height="10" class="f0"/>
 <text x="739.9" y="127.0" class="s" text-anchor="start">+0.32</text>
 <rect x="715.6" y="130.0" width="19.3" height="10" class="f0 lt"/>
 <text x="739.9" y="139.0" class="s" text-anchor="start">+0.32</text>
-<text x="302.0" y="167.0" class="" text-anchor="start">bc7e u5 (Tessalith default)</text>
+<text x="302.0" y="167.0" class="b" text-anchor="start">bc7e u5 (Tessalith default)</text>
 <rect x="206.1" y="156.0" width="83.9" height="14" class="f0"/>
 <text x="201.1" y="167.0" class="s" text-anchor="end">0.22</text>
 <rect x="715.6" y="152.0" width="0.6" height="10" class="f0"/>

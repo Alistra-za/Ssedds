@@ -32,6 +32,7 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
 .nf{fill:var(--mute)}
+.df{fill:none;stroke:var(--ink);stroke-width:2}
 """ % (
     "".join("--c%d:%s;" % (i, s[0]) for i, s in enumerate(SLOTS)),
     "".join("--c%d:%s;" % (i, s[1]) for i, s in enumerate(SLOTS)),
@@ -132,7 +133,8 @@ def chart_bc7():
     bot = top + RH * len(T)
     b = text(10, 20, "BC7 encoders: speed against quality", "t")
     b += text(10, 38, "Left: speed, s per megapixel, log scale. Shorter bar = faster. "
-              "Right: Δ dB against bc7e u6. Higher is better. Sorted by RGB.", "s")
+              "Right: Δ dB against bc7e u6. Higher is better. Sorted by RGB. "
+              "Bold = Tessalith default.", "s")
     b += '<rect x="10" y="48" width="14" height="10" class="mu"/>\n' + text(30, 57, "Speed, or RGB", "s")
     b += '<rect x="130" y="48" width="14" height="10" class="mu lt"/>\n'
     b += text(150, 57, "Range of speed, or real alpha", "s")
@@ -147,7 +149,7 @@ def chart_bc7():
     for i, (name, (lo, hi), slab, d, a, c, dl, al) in enumerate(T):
         y = top + i * RH
         cy = y + RH / 2
-        b += text(302, cy + 4, name, "b" if name.startswith("bc7e max") else "")
+        b += text(302, cy + 4, name, "b" if "default" in name else "")
         # speed bar: solid to the faster end, pale from there to the slower end of a range
         near = lo
         far = hi if hi else lo
@@ -175,7 +177,7 @@ def chart_bc7():
     desc = ("Back-to-back bar chart of BC7 encoders. Left bars show speed in seconds per megapixel "
             "on a log scale, shorter is faster. Right bars show quality in dB against bc7e u6. "
             "Tessalith's opt-in bc7e max is best at +0.32 dB RGB and alpha, about 0.6 s per "
-            "megapixel. The default bc7e u5 is level with u6 at 0.22 s. NVTT Production, "
+            "megapixel. The default, bc7e u5 (in bold), is level with u6 at 0.22 s. NVTT Production, "
             "Compressonator and texconv CPU take 14 to 33 s and do not beat it. GPU encoders take "
             "0.03 to 0.09 s and lose 1.4 to 2.8 dB.")
     return svg(780, bot + 66, "BC7 encoders: speed against quality", desc, b)
@@ -214,7 +216,7 @@ def chart_formats():
         '<rect width="3.5" height="8" class="pl"/></pattern></defs>\n'
     )
     b = text(10, 20, "Best encoder per format: PSNR in dB, grouped by format", "t")
-    b += text(10, 38, "Higher is better. Bars start at 35 dB, not zero. The stripe shows the encoder.",
+    b += text(10, 38, "Higher is better. Bars start at 35 dB, not zero. The stripe shows the encoder. Bold label and outline = Tessalith default.",
               "s")
     lx = 10
     for i, name in enumerate(ENC):
@@ -244,7 +246,11 @@ def chart_formats():
             if PAT[k]:
                 b += '<rect x="%.1f" y="%d" width="%.1f" height="%d" fill="url(#%s)"/>\n' % (
                     sx(vmin), by, w, bh, PAT[k])
-            b += text(sx(v) + 5, by + bh - 2, "%.2f" % v, "s")
+            dflt = (k == 0 and gi < 4) or (k == 3 and gi == 4)  # Tessalith defaults: rgbcx BC1-5, ISPC BC6H
+            if dflt:
+                b += '<rect x="%.1f" y="%d" width="%.1f" height="%d" class="df"/>\n' % (
+                    sx(vmin), by, w, bh)
+            b += text(sx(v) + (7 if dflt else 5), by + bh - 2, "%.2f" % v, "b" if dflt else "s")
     b += text(10, bot + 32, "† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB "
               "below ISPC.", "s")
     b += text(10, bot + 48, "BC5 angle error and BC6H highlight share are not dB; the full table "
@@ -253,7 +259,8 @@ def chart_formats():
             "multi-exposure), one bar per encoder, with the encoder shown by a stripe pattern. "
             "rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 on BC3 "
             "(49.20 against 49.29), and best on BC5 (47.03). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator "
-            "BC6H values were not measured. texconv CPU is last or near last.")
+            "BC6H values were not measured. texconv CPU is last or near last. The Tessalith default encoder per format "
+            "(rgbcx for BC1 to BC5, Intel ISPC for BC6H) has an outline and a bold label.")
     return svg(780, bot + 58, "Encoders compared by format, PSNR", desc, defs + b)
 
 
@@ -276,14 +283,14 @@ def chart_alpha_weights():
     ]
     b = text(10, 20, "BC3 against BC7 alpha weights: mean PSNR in dB", "t")
     b += text(10, 38, "Higher is better. Bars start at 30 dB, not zero. "
-              "Perceptual was measured on the first class only.", "s")
+              "Perceptual was measured on the first class only. Bold = Tessalith default.", "s")
     b += '<rect x="10" y="48" width="14" height="10" class="f0"/>\n' + text(30, 57, "RGB", "s")
     b += '<rect x="76" y="48" width="14" height="10" class="f1"/>\n' + text(96, 57, "Alpha", "s")
     y = 76
     x0, x1, vmin, vmax = 235, 655, 30, 60
     for title, sub, data in CLASSES:
         b += text(10, y + 10, title, "t") + text(10 + 8 + len(title) * 7.3, y + 10, sub, "s")
-        rows = [dict(name=NAMES[i], bold=(i == 0), vals=[r, a], labels=["%.2f" % r, "%.2f" % a],
+        rows = [dict(name=NAMES[i], bold=(i == 1), vals=[r, a], labels=["%.2f" % r, "%.2f" % a],
                      colors=[BLUE, ORANGE]) for i, (r, a) in enumerate(data)]
         body, bot = hbars(y + 20, rows, 2, x0, x1, vmin, vmax, vmin, [30, 40, 50, 60])
         b += body
@@ -318,13 +325,13 @@ def chart_ssim_vif():
     b += text(10, 38, "Mean difference over 99 images, on luma. Higher is better; 0 is bc7e u6.", "s")
     b += text(180, 66, "ΔSSIM × 10³", "b")
     b += text(520, 66, "ΔVIF × 10²", "b")
-    r1 = [dict(name=n, vals=[s], labels=[sl], colors=[c]) for n, c, s, v, sl, vl in T]
+    r1 = [dict(name=n, bold=(n == "bc7e u5"), vals=[s], labels=[sl], colors=[c]) for n, c, s, v, sl, vl in T]
     r2 = [dict(name="", vals=[v], labels=[vl], colors=[c]) for n, c, s, v, sl, vl in T]
     kw = dict(bh=14, gap=8)
     p1, bot = hbars(76, r1, 1, 180, 430, -1.9, 2.0, 0, [-1, 0, 1, 2], **kw)
     p2, _ = hbars(76, r2, 1, 520, 770, -3.0, 4.2, 0, [-2, 0, 2, 4], **kw)
     b += p1 + p2
-    b += text(10, bot + 40, "Bars below zero are worse than bc7e u6 (Compressonator, n = 7, is a tie). "
+    b += text(10, bot + 40, "Bars below zero are worse than bc7e u6 (Compressonator, n = 7, is a tie). Bold = Tessalith default. "
               "The full tables are in the wiki (Research).", "s")
     desc = ("Two bar charts of the mean SSIM and VIF difference against bc7e u6 on 99 real colour "
             "textures. bc7e perceptual is the only encoder above zero, at plus 1.63 SSIM and plus "
