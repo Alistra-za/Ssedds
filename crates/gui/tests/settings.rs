@@ -302,3 +302,28 @@ fn a_locked_broken_gui_toml_keeps_the_earlier_bad_copy() {
     assert_eq!(GuiSettings::default().save(&p).unwrap(), Some(bad.clone()));
     assert_eq!(std::fs::read_to_string(&bad).unwrap(), "preview_max = [");
 }
+
+/// Trace #31: a folder name that is not valid Unicode (a lone surrogate) cannot be written to TOML. It is left out of
+/// the file; the rest of the settings still save.
+#[cfg(windows)]
+#[test]
+fn a_non_unicode_path_does_not_stop_the_settings_saving() {
+    use std::os::windows::ffi::OsStringExt;
+    let bad = std::path::PathBuf::from(std::ffi::OsString::from_wide(&[0x43, 0x3a, 0x5c, 0xD800]));
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc/gui.toml");
+    let mut s = GuiSettings {
+        live_encode: true,
+        nvtt_path: Some(bad.clone()),
+        ..Default::default()
+    };
+    s.meshes.folder = Some(bad.clone());
+    s.push_recent("C:/a".into());
+    s.push_recent(bad);
+    s.save(&p).unwrap();
+    let (back, err) = GuiSettings::load(&p);
+    assert_eq!(err, None);
+    assert!(back.live_encode);
+    assert_eq!(back.recent, [std::path::PathBuf::from("C:/a")]);
+    assert!(back.nvtt_path.is_none() && back.meshes.folder.is_none());
+}
