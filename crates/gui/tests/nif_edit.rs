@@ -1247,6 +1247,23 @@ fn edit_cards_equal_the_scan_before_any_edit() {
     assert_eq!(e.cards, scanned);
 }
 
+/// Review Minor 6 (bug 1, rename half): when the source on disk renames its shapes, the cards follow the new names
+/// with their full content, not a title only.
+#[test]
+fn edit_cards_follow_a_source_that_renamed_its_shapes() {
+    let mut m = direct(two_named(false));
+    let e = m.edit.as_mut().unwrap();
+    assert_eq!(e.cards[0].name.as_deref(), Some("A"));
+    e.reload_source(two_named(true)).unwrap();
+    let names: Vec<_> = e.cards.iter().map(|c| c.name.as_deref()).collect();
+    assert_eq!(names, [Some("B"), Some("A")]);
+    assert!(
+        e.cards.iter().all(|c| c.shader_kind == 1),
+        "full cards: {:?}",
+        e.cards
+    );
+}
+
 /// Meshes UI T1 (bug 1): a card shows the edited shader type, flags, alpha and texture path, not the scanned ones.
 #[test]
 fn edit_cards_show_the_edited_values() {
@@ -1823,7 +1840,9 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         export.min.y > tabs.max.y,
         "Export NIF {export:?} above the tabs {tabs:?}"
     );
-    h.get_by_label("Blocked: No edits to export.");
+    // Minor 5: an untouched session is idle, not blocked: weak text, no red.
+    h.get_by_label("No edits to export.");
+    assert!(h.query_by_label("Blocked: No edits to export.").is_none());
 }
 
 // ---- v2 A18: Controllers (scalars) and Extra data tabs ----

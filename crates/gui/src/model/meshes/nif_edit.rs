@@ -165,6 +165,8 @@ pub struct GuardAsk {
     pub never_exported: bool,
 }
 
+/// The idle reason Export NIF is off: drawn neutral, not as a block (review Minor 5).
+pub const NO_EDITS: &str = "No edits to export.";
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
 /// No Textures export folder and no MO2 instance: the session is read-only (Note CI29).
 pub const NO_EXPORT_FOLDER: &str =
@@ -398,7 +400,7 @@ impl NifEdit {
             return Some(e.clone());
         }
         if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
-            return Some("No edits to export.".into());
+            return Some(NO_EDITS.into());
         }
         let refused = self
             .outcomes
@@ -522,6 +524,7 @@ impl NifEdit {
             Err(e) => {
                 self.error = Some(e.to_string());
                 self.apply_err = Some(e.to_string());
+                self.up_to_date = false; // review Minor 3: the stale bytes are not what the last export wrote
                 self.refresh_blocked();
                 return;
             }
@@ -986,6 +989,8 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
     use nif::path::TexPath;
     use nif::scan::Shader;
     let Ok(scan) = nif::scan::scan(bytes) else {
+        // Silent on purpose (review Minor 4): the cards fall back to titles, and the same failure blocks Export NIF
+        // with its reason, since `read_back` scans the patched bytes too.
         return vec![];
     };
     // modscan's `keep_raw`: the raw string says more than the canonical path.

@@ -4,7 +4,7 @@ use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
 use crate::model::meshes::export::{GuardChoice, Placement};
-use crate::model::meshes::nif_edit::NifEdit;
+use crate::model::meshes::nif_edit::{NifEdit, NO_EDITS};
 use crate::model::meshes::MeshesModel;
 use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
@@ -186,6 +186,15 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             None => {
                 status::dot(ui, Status::Ready);
                 ui.colored_label(GREEN, "Ready");
+            }
+            // Review Minor 5: nothing edited yet is an idle state, not a block: a weak dot and weak text.
+            Some(why) if why == NO_EDITS => {
+                let (rect, r) =
+                    ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
+                let c = ui.visuals().weak_text_color();
+                ui.painter().circle_filled(rect.center(), 4.0, c);
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "idle"));
+                ui.weak(NO_EDITS);
             }
             Some(why) => {
                 status::dot(ui, Status::Blocks);
