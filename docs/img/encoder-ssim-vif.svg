@@ -16,6 +16,8 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .lt{opacity:.5}
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
+.nf{fill:var(--mute)}
+.df{fill:none;stroke:var(--ink);stroke-width:2}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
 <rect class="bg" width="780" height="346"/>
 <text x="10.0" y="20.0" class="t" text-anchor="start">BC7 opaque colour: SSIM and VIF against bc7e u6</text>
@@ -34,7 +36,7 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="10.0" y="91.0" class="" text-anchor="start">bc7e u6 perceptual</text>
 <rect x="301.8" y="80.0" width="104.5" height="14" class="f0"/>
 <text x="411.3" y="93.0" class="" text-anchor="start">+1.63</text>
-<text x="10.0" y="113.0" class="" text-anchor="start">bc7e u5</text>
+<text x="10.0" y="113.0" class="b" text-anchor="start">bc7e u5</text>
 <rect x="298.1" y="102.0" width="3.7" height="14" class="f0"/>
 <text x="293.1" y="115.0" class="" text-anchor="end">−0.058</text>
 <text x="10.0" y="135.0" class="" text-anchor="start">Compressonator q1.0 (n = 7)</text>
@@ -100,5 +102,5 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="10.0" y="289.0" class="" text-anchor="start"></text>
 <rect x="540.8" y="278.0" width="83.3" height="14" class="f4"/>
 <text x="535.8" y="291.0" class="" text-anchor="end">−2.40</text>
-<text x="10.0" y="336.0" class="s" text-anchor="start">Bars below zero are worse than bc7e u6 (Compressonator, n = 7, is a tie). The full tables are in the wiki (Research).</text>
+<text x="10.0" y="336.0" class="s" text-anchor="start">Bars below zero are worse than bc7e u6 (Compressonator, n = 7, is a tie). Bold = Tessalith default. The full tables are in the wiki (Research).</text>
 </svg>

@@ -100,11 +100,12 @@ BC7E for BC7, rgbcx for BC1–BC5, Intel ISPC for BC6H.
 | BC1 colour (RGB PSNR, dB) | 39.85 | 39.74 | 39.05 | 38.11 | 37.41 |
 | BC3 colour + alpha (premultiplied PSNR, dB) | 49.20 | 49.29 | 48.75 | 48.02 | 48.07 |
 | BC4 masks (PSNR, dB) | 45.59 | 45.05 | 45.19 | 43.70 | 43.94 |
+| BC5 normals (RG PSNR, dB, n = 93) | 47.03 | 46.08 | 46.27 | 44.57 | 44.83 |
 | BC5 normals (mean angle error) | 0.41° | 0.47° | 0.45° | 0.55° | 0.56° |
 | BC6H HDR (multi-exposure PSNR, dB) | — | 48.00 | —† | 50.38 | 49.62 |
 | BC6H brightest highlight kept (worst image) | — | 94% | 29%† | 22% | 29% |
 
-rgbcx beats NVTT on BC1 on 96 of 100 images, and BC3 is a tie. The texconv GPU path is slower than ISPC on BC6H and loses 1.8 dB.
+rgbcx beats NVTT on BC1 on 96 of 100 images, and BC3 is a tie. On BC6H the texconv GPU path is slower than ISPC (0.41 against 0.19 s/Mpix) and 2.2 dB lower in mPSNR (4 HDR images).
 
 † Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB below ISPC.
 

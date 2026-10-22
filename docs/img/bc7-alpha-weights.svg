@@ -16,10 +16,12 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 .lt{opacity:.5}
 .mu{fill:var(--mute)}
 .pl{fill:var(--bg)}
+.nf{fill:var(--mute)}
+.df{fill:none;stroke:var(--ink);stroke-width:2}
 .f0{fill:var(--c0)}.f1{fill:var(--c1)}.f2{fill:var(--c2)}.f3{fill:var(--c3)}.f4{fill:var(--c4)}</style>
 <rect class="bg" width="780" height="908"/>
 <text x="10.0" y="20.0" class="t" text-anchor="start">BC3 against BC7 alpha weights: mean PSNR in dB</text>
-<text x="10.0" y="38.0" class="s" text-anchor="start">Higher is better. Bars start at 30 dB, not zero. Perceptual was measured on the first class only.</text>
+<text x="10.0" y="38.0" class="s" text-anchor="start">Higher is better. Bars start at 30 dB, not zero. Perceptual was measured on the first class only. Bold = Tessalith default.</text>
 <rect x="10" y="48" width="14" height="10" class="f0"/>
 <text x="30.0" y="57.0" class="s" text-anchor="start">RGB</text>
 <rect x="76" y="48" width="14" height="10" class="f1"/>
@@ -34,12 +36,12 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="515.0" y="349.0" class="m" text-anchor="middle">50</text>
 <path class="g" d="M655.0 96.0V334.0"/>
 <text x="655.0" y="349.0" class="m" text-anchor="middle">60</text>
-<text x="10.0" y="116.0" class="b" text-anchor="start">BC3 (rgbcx L18 -r)</text>
+<text x="10.0" y="116.0" class="" text-anchor="start">BC3 (rgbcx L18 -r)</text>
 <rect x="235.0" y="102.0" width="154.0" height="10" class="f0"/>
 <text x="394.0" y="111.0" class="s" text-anchor="start">41.00</text>
 <rect x="235.0" y="114.0" width="241.4" height="10" class="f1"/>
 <text x="481.4" y="123.0" class="s" text-anchor="start">47.24</text>
-<text x="10.0" y="150.0" class="" text-anchor="start">Linear (w1, default)</text>
+<text x="10.0" y="150.0" class="b" text-anchor="start">Linear (w1, default)</text>
 <rect x="235.0" y="136.0" width="257.6" height="10" class="f0"/>
 <text x="497.6" y="145.0" class="s" text-anchor="start">48.40</text>
 <rect x="235.0" y="148.0" width="251.0" height="10" class="f1"/>
@@ -79,12 +81,12 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="515.0" y="613.0" class="m" text-anchor="middle">50</text>
 <path class="g" d="M655.0 394.0V598.0"/>
 <text x="655.0" y="613.0" class="m" text-anchor="middle">60</text>
-<text x="10.0" y="414.0" class="b" text-anchor="start">BC3 (rgbcx L18 -r)</text>
+<text x="10.0" y="414.0" class="" text-anchor="start">BC3 (rgbcx L18 -r)</text>
 <rect x="235.0" y="400.0" width="48.6" height="10" class="f0"/>
 <text x="288.6" y="409.0" class="s" text-anchor="start">33.47</text>
 <rect x="235.0" y="412.0" width="224.8" height="10" class="f1"/>
 <text x="464.8" y="421.0" class="s" text-anchor="start">46.06</text>
-<text x="10.0" y="448.0" class="" text-anchor="start">Linear (w1, default)</text>
+<text x="10.0" y="448.0" class="b" text-anchor="start">Linear (w1, default)</text>
 <rect x="235.0" y="434.0" width="105.6" height="10" class="f0"/>
 <text x="345.6" y="443.0" class="s" text-anchor="start">37.54</text>
 <rect x="235.0" y="446.0" width="101.4" height="10" class="f1"/>
@@ -119,12 +121,12 @@ text{fill:var(--ink);font-size:12px;paint-order:stroke;stroke:var(--bg);stroke-w
 <text x="515.0" y="877.0" class="m" text-anchor="middle">50</text>
 <path class="g" d="M655.0 658.0V862.0"/>
 <text x="655.0" y="877.0" class="m" text-anchor="middle">60</text>
-<text x="10.0" y="678.0" class="b" text-anchor="start">BC3 (rgbcx L18 -r)</text>
+<text x="10.0" y="678.0" class="" text-anchor="start">BC3 (rgbcx L18 -r)</text>
 <rect x="235.0" y="664.0" width="121.0" height="10" class="f0"/>
 <text x="361.0" y="673.0" class="s" text-anchor="start">38.64</text>
 <rect x="235.0" y="676.0" width="405.7" height="10" class="f1"/>
 <text x="645.7" y="685.0" class="s" text-anchor="start">58.98</text>
-<text x="10.0" y="712.0" class="" text-anchor="start">Linear (w1, default)</text>
+<text x="10.0" y="712.0" class="b" text-anchor="start">Linear (w1, default)</text>
 <rect x="235.0" y="698.0" width="213.8" height="10" class="f0"/>
 <text x="453.8" y="707.0" class="s" text-anchor="start">45.27</text>
 <rect x="235.0" y="710.0" width="278.9" height="10" class="f1"/>
