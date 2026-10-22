@@ -125,12 +125,9 @@ fn read_ini(p: &Path) -> Option<Ini> {
     read_text(p).map(|t| Ini::parse(&t))
 }
 
-/// A game text file: a UTF-8 BOM is dropped, and bytes that are not UTF-8 (an ANSI name) read as Latin-1 instead
-/// of failing the whole file (trace #24). `None` when it cannot be read.
+/// `None` when the file cannot be read; decoding is `crate::read_text`.
 fn read_text(p: &Path) -> Option<String> {
-    let b = std::fs::read(p).ok()?;
-    let b = b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&b);
-    Some(String::from_utf8(b.to_vec()).unwrap_or_else(|_| b.iter().map(|&c| c as char).collect()))
+    crate::read_text(p).ok()
 }
 
 /// Archive-list entries of `Skyrim.ini` + `SkyrimCustom.ini` in `dir` (later file wins per key); `None` when no
