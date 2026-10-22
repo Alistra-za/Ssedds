@@ -463,6 +463,8 @@ pub struct AppModel {
     pub(crate) gen_dims: std::cell::RefCell<from_normal::GenDims>,
     /// Generated-file facts for the slot rows: the normals' hashes by (path, stamp) and `GenInfo` by item (Task 7).
     pub(crate) gen_info: std::cell::RefCell<from_normal::GenInfoCache>,
+    /// The Generate path's alias map by plan, and its lookup counters (Task 10, Task 6 review M6).
+    pub(crate) gen_look: std::cell::RefCell<from_normal::GenLookups>,
     /// The Generate dialog's state while it is open, or while a cancelled Generate that started writing lands.
     pub gen: Option<from_normal::GenDialog>,
     /// The first file the last Generate wrote: selected by the plan that lists it.
@@ -684,6 +686,7 @@ impl AppModel {
             stats: Default::default(),
             gen_dims: Default::default(),
             gen_info: Default::default(),
+            gen_look: Default::default(),
             gen: None,
             gen_select: None,
             gen_ids: 0,

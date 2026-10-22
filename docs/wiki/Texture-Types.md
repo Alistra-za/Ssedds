@@ -320,12 +320,14 @@ The GUI can integrate a set's normal map into a height map (**Generate from norm
 |---|---|
 | `<base>_p_generated.png` | The set's `_p` |
 | `<base>_height_generated.png` | The raw height packed into a complex material `_m` alpha (vanilla target) |
+| `<base>_ao_generated.png` | The AO packed into the `_rmaos` blue channel (PBR sets, `cs` target only) |
 
 - 16-bit grey PNG. `_generated` after a generated role (`_p`, `_height`, `_ao`, `_curves`) is stripped when grouping, so the file joins its set by its base name.
 - **Two ranges:** 0.5 is "no shift" (Parallax, PBR, complex material, landscape); 1.0 is "no shift" for PBR multilayer with inner-layer parallax, where white is the top and nothing is raised. The `_m` alpha is kept strictly between 4/255 and 251/255 so parallax stays on.
 - **A real map always wins.** A real `_p`, `_height` or other height source for the same slot makes the generated file skipped with `GEN-REPLACED` (Info), never `IN-DUPLICATE` or `PACK-CONFLICT`. An earlier export of the generated `_p` sitting in the input folder is not a rival.
 - **Side effect:** a `_p` wins the shader auto-pick, so a default set becomes Parallax and PGPatcher patches its meshes; on a TruePBR set the `parallax` key turns on by itself (Note AJ).
 - `GEN-STALE` (Info, GUI only) marks a generated file whose normal, neutral or shader changed since; it shows on the slot row's hover, never as a problem.
+- **Generated AO** holds raw visibility (1 = open), with no strength baked in. A real `_ao`, or a pre-packed `_rmaos` image, wins over it. It is written at the size of the set's other `_rmaos` sources, so the packed `_rmaos` has one size, and `GEN-AO` (Info) replaces `PACK-DEFAULTED` for blue. A baked AO is better; a generated one cannot see the broad cavity shading a bake gives. If the set's normal has an RNM bent layer, the bent layer is weighted by this AO too, so the normal map changes.
 
 ## Complex grass
 

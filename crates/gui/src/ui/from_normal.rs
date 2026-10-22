@@ -1,9 +1,9 @@
 //! v2 Track B (Note CO): the "Generate from normal map" dialog. The state and jobs are in `model::from_normal`.
 use super::dialogs::{dialog_hover, short_name, Role, HALF_SIZE_LIST_SHARE};
-use crate::model::from_normal::{GenMap, GenResult, GenSize, COMPLEX_USE_P};
+use crate::model::from_normal::{map_label, GenMap, GenResult, GenSize, BENT_NOTE, COMPLEX_USE_P};
 use crate::model::AppModel;
 use eframe::egui;
-use engine::from_normal::{Gray, Tiling};
+use engine::from_normal::{AoOpts, Gray, Tiling};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -16,33 +16,46 @@ pub fn gen_buttons(ticked: bool, running: bool) -> [(&'static str, Role, bool); 
     ]
 }
 
-/// The maps the dialog lists; Tasks 10 and 12 add AO and curvature.
-const MAPS: [(GenMap, &str); 1] = [(GenMap::Height, "Height")];
+/// The maps the dialog lists; Task 12 adds curvature.
+const MAPS: [GenMap; 2] = [GenMap::Height, GenMap::Ao];
+
+/// The AO group's controls, inside the engine's `AoOpts` guards (CO84). Radius is shown as a % of the width.
+pub const AO_RADIUS_PCT: std::ops::RangeInclusive<f32> = 1.5625..=25.0;
+/// Quality: slices; steps stay at 16 (Q17).
+pub const AO_SLICES: [u32; 3] = [8, 16, 32];
+pub const AO_DEPTH: std::ops::RangeInclusive<f32> = 0.25..=4.0;
+pub const AO_INTENSITY: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+pub const AO_INTENSITY_HOVER: &str =
+    "the file holds raw visibility; CS applies AO to indirect light itself. 0.7–1.0 is a good range";
 
 /// The preview tile's side in points.
 const TILE: f32 = 160.0;
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
-    model.gen_frame();
+    if model.gen.is_none() {
+        model.dialog = None;
+        return;
+    }
+    // One set lookup per frame (Task 6 review M6).
+    let facts = model.gen_facts();
+    model.gen_frame_at(facts.normal.clone());
+    let ao_summary = model.gen_ao_summary();
     let Some(g) = model.gen.as_ref() else {
         model.dialog = None;
         return;
     };
-    let set = g.set.clone();
-    let mut ticked = g.ticked.clone();
+    let ticked = g.ticked.clone();
+    let mut toggled = vec![];
     let mut opts = g.opts.clone();
     let m_alpha = g.m_alpha;
     let (preview, error, running) = (g.preview.clone(), g.error.clone(), g.running);
     let progress = g.progress.load(Ordering::Relaxed);
-    let offers: Vec<_> = MAPS
-        .iter()
-        .map(|&(m, label)| (m, label, model.gen_offer(&set, m)))
-        .collect();
-    let size_rule = model.gen_size(&set, GenMap::Height);
     let complex = m_alpha;
-    let format_line = model.gen_format_line();
-    let warning = model.gen_size_warning();
-    let paths = model.gen_paths();
+    let ao_width = facts
+        .paths
+        .iter()
+        .find(|(m, _, _)| *m == GenMap::Ao)
+        .map(|(_, _, (w, _))| *w);
     let buttons = gen_buttons(!ticked.is_empty(), running.is_some());
     let hover = model.gen_generate_hover();
     let max_h = ctx.content_rect().height() * HALF_SIZE_LIST_SHARE;
@@ -62,45 +75,57 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                     .max_height(max_h)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        // 0. The bent-layer note, on the first screen (Q20, spec-M8).
+                        if facts.bent {
+                            ui.colored_label(super::status::AMBER, BENT_NOTE);
+                        }
                         // 1. The maps, each off with its reason.
-                        for (map, label, offer) in &offers {
-                            let mut on = ticked.contains(map);
-                            let r =
-                                ui.add_enabled(offer.is_ok(), egui::Checkbox::new(&mut on, *label));
+                        for (map, offer) in &facts.offers {
+                            if !MAPS.contains(map) {
+                                continue;
+                            }
+                            let was = ticked.contains(map);
+                            let mut on = was;
+                            let r = ui.add_enabled(
+                                offer.is_ok(),
+                                egui::Checkbox::new(&mut on, map_label(*map)),
+                            );
                             if let Err(why) = offer {
                                 r.on_disabled_hover_text(why);
-                            } else if r.changed() {
-                                if on {
-                                    ticked.insert(*map);
-                                } else {
-                                    ticked.remove(map);
-                                }
+                            } else if on != was {
+                                toggled.push((*map, on));
                             }
                         }
                         egui::Grid::new("gen-opts").num_columns(2).show(ui, |ui| {
-                            // 2. Size: a fixed one read-only, else a choice.
+                            // 2. Size: one choice with per-map caps; a map its recipe fixes is read-only.
                             ui.label("Size");
-                            match &size_rule {
-                                Ok(GenSize::Locked(s)) => {
-                                    ui.label(format!("{s} px (matches this set's maps)"));
+                            ui.vertical(|ui| {
+                                match &facts.size {
+                                    Ok(GenSize::Free { sizes, .. }) => {
+                                        egui::ComboBox::from_id_salt("gen-size")
+                                            .selected_text(format!("{} px", opts.size))
+                                            .show_ui(ui, |ui| {
+                                                for s in sizes {
+                                                    ui.selectable_value(
+                                                        &mut opts.size,
+                                                        *s,
+                                                        format!("{s} px"),
+                                                    );
+                                                }
+                                            });
+                                    }
+                                    Ok(GenSize::Locked(_)) => {}
+                                    Err(why) => {
+                                        ui.weak(why);
+                                    }
                                 }
-                                Ok(GenSize::Free { sizes, .. }) => {
-                                    egui::ComboBox::from_id_salt("gen-size")
-                                        .selected_text(format!("{} px", opts.size))
-                                        .show_ui(ui, |ui| {
-                                            for s in sizes {
-                                                ui.selectable_value(
-                                                    &mut opts.size,
-                                                    *s,
-                                                    format!("{s} px"),
-                                                );
-                                            }
-                                        });
+                                for (m, s) in &facts.locked {
+                                    ui.label(format!(
+                                        "{}: {s} px (matches this set's maps)",
+                                        map_label(*m)
+                                    ));
                                 }
-                                Err(why) => {
-                                    ui.weak(why);
-                                }
-                            }
+                            });
                             ui.end_row();
                             // 3. Strength.
                             if let Some(h) = opts.height.as_mut() {
@@ -148,15 +173,19 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                                 });
                                 ui.end_row();
                             }
+                            // 7. The AO group, while AO is ticked.
+                            if let Some(a) = opts.ao.as_mut() {
+                                dragging |= ao_group(ui, a, ao_width);
+                            }
                         });
-                        // 7. The normal's format, read-only.
-                        ui.label(&format_line);
-                        // 8. The size warning.
-                        if let Some(w) = warning {
+                        // 8. The normal's format, read-only.
+                        ui.label(&facts.format_line);
+                        // 9. The size warning.
+                        if let Some(w) = facts.warning {
                             ui.colored_label(super::status::AMBER, w);
                         }
-                        // 9. The output paths, shortened, the full path on hover.
-                        for (_, p, (w, h)) in &paths {
+                        // 10. The output paths, shortened, the full path on hover; each at its own size.
+                        for (_, p, (w, h)) in &facts.paths {
                             let name = p.file_name().unwrap_or_default().to_string_lossy();
                             let full = p.display().to_string();
                             ui.label(format!(
@@ -165,7 +194,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                             ))
                             .on_hover_text(full);
                         }
-                        // 10. The preview tiles; 11. the fit line.
+                        // 11. The preview tiles; 12. the fit and AO lines.
                         if let Some(p) = &preview {
                             tiles(ui, p);
                             let r = &p.maps.report;
@@ -176,10 +205,13 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                                 r.clamped_share * 100.0,
                                 r.tilt_deg
                             ));
+                            if let Some(s) = &ao_summary {
+                                ui.weak(s);
+                            }
                         }
                     });
             });
-            // 12. Progress, and a refusal, below the scrolled body: always on screen beside the footer (CO61).
+            // 13. Progress, and a refusal, below the scrolled body: always on screen beside the footer (CO61).
             if matches!(running, Some((_, false))) {
                 ui.label(format!("Generating… {} %", progress / 10));
             }
@@ -189,9 +221,11 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         },
     );
     if let Some(g) = model.gen.as_mut() {
-        g.ticked = ticked;
         g.opts = opts;
         g.dragging = dragging;
+    }
+    for (map, on) in toggled {
+        model.gen_tick(map, on);
     }
     if clicked == Some(0) || k.cancel {
         model.gen_cancel();
@@ -200,10 +234,52 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     }
 }
 
+/// The AO rows of the options grid (Q17 defaults; CO84 guards). Returns whether a slider is being dragged.
+fn ao_group(ui: &mut egui::Ui, a: &mut AoOpts, width: Option<u32>) -> bool {
+    let mut dragging = false;
+    ui.label("Radius");
+    ui.horizontal(|ui| {
+        let mut pct = a.radius * 100.0;
+        let r = ui.add(
+            egui::Slider::new(&mut pct, AO_RADIUS_PCT)
+                .suffix(" %")
+                .max_decimals(2),
+        );
+        dragging |= r.dragged();
+        if r.changed() {
+            a.radius = pct / 100.0;
+        }
+        if let Some(w) = width {
+            ui.weak(format!("{:.0} texels", a.radius * w as f32));
+        }
+    });
+    ui.end_row();
+    ui.label("Quality");
+    ui.horizontal(|ui| {
+        for s in AO_SLICES {
+            ui.radio_value(&mut a.slices, s, format!("{s} slices"));
+        }
+    });
+    ui.end_row();
+    ui.label("Depth");
+    dragging |= ui.add(egui::Slider::new(&mut a.depth, AO_DEPTH)).dragged();
+    ui.end_row();
+    ui.label("Intensity").on_hover_text(AO_INTENSITY_HOVER);
+    dragging |= ui
+        .add(egui::Slider::new(&mut a.intensity, AO_INTENSITY))
+        .on_hover_text(AO_INTENSITY_HOVER)
+        .dragged();
+    ui.end_row();
+    dragging
+}
+
 /// The preview's maps as grey tiles, each texture loaded once per result.
 fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
     ui.horizontal(|ui| {
-        for (g, label) in [(&p.maps.height, "Height preview")] {
+        for (g, label) in [
+            (&p.maps.height, "Height preview"),
+            (&p.maps.ao, "AO preview"),
+        ] {
             let Some(g) = g else { continue };
             let tex = texture(ui.ctx(), label, p, g);
             let size = egui::vec2(TILE, TILE * g.height as f32 / g.width.max(1) as f32);

@@ -623,7 +623,10 @@ fn row(
     };
     let item = item_key.as_deref().and_then(|k| model.item(k));
     // Note CO (owner answers 2 and 7): a generated file says where it came from; stale turns only this row's dot amber.
-    let gen = item_key.as_deref().and_then(|k| model.generated_info(k));
+    // P20: a packed output (the `_rmaos` row) shows the generated source it reads (a generated AO).
+    let gen = item_key
+        .as_deref()
+        .and_then(|k| model.generated_info(k).or_else(|| model.generated_feed(k)));
 
     // Slot: the title, dim when empty.
     let text = if locked {

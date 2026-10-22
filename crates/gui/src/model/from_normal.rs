@@ -76,10 +76,45 @@ pub const VANILLA_LANDSCAPE: &str =
     "vanilla landscape keeps its height in the diffuse alpha; there is no _p slot";
 pub const COMPLEX_CS: &str =
     "complex material reads height from the _m alpha, which is packed only on the vanilla target";
-/// AO and curvature are offered from Tasks 10 and 12.
+/// Curvature is offered from Task 12.
 pub const NOT_OFFERED: &str = "not offered yet";
-/// The maps the entries offer; Tasks 10 and 12 add AO and curvature.
-const OFFERED: [GenMap; 1] = [GenMap::Height];
+/// The maps the entries offer; Task 12 adds curvature.
+const OFFERED: [GenMap; 2] = [GenMap::Height, GenMap::Ao];
+/// AO only for cs PBR sets: a loose `_ao` is PBR evidence (`suggest::is_pbr_set`), so it never reaches another set.
+pub const NOT_PBR: &str =
+    "AO is generated only for PBR sets under Community Shaders (a loose _ao would start an _rmaos)";
+/// Shown at the top of the dialog for a set whose normal has an RNM bent layer, ticked or not (Q20, spec-M8).
+pub const BENT_NOTE: &str =
+    "This set has an RNM bent layer: a generated AO also changes its normal map, which is weighted by AO.";
+
+fn dds_rmaos(name: &str) -> String {
+    format!("this set's _rmaos is a DDS ({name}), which is never re-encoded")
+}
+
+/// The dialog path's alias map, built once per plan, and its lookup counters (Task 6 review M6; tests read them
+/// through `AppModel::gen_lookups`).
+#[derive(Default)]
+pub struct GenLookups {
+    aliases: Option<(u64, Arc<BTreeMap<String, String>>)>,
+    views: u32,
+    alias_builds: u32,
+}
+
+/// What the dialog draws in one frame, from one set lookup (Task 6 review M6).
+pub struct GenFacts {
+    /// Each map the dialog lists, with its disabled reason.
+    pub offers: Vec<(GenMap, Result<(), String>)>,
+    /// The Size row: the free choice with the largest cap among the ticked maps, else a locked one.
+    pub size: Result<GenSize, String>,
+    /// Ticked maps whose size is fixed by their recipe, shown read-only.
+    pub locked: Vec<(GenMap, u32)>,
+    pub paths: Vec<(GenMap, PathBuf, (u32, u32))>,
+    pub format_line: String,
+    pub warning: Option<&'static str>,
+    pub bent: bool,
+    /// The normal's path and longer side, for the preview.
+    pub normal: Option<(PathBuf, Option<u32>)>,
+}
 
 /// The height's neutral for a set, from Track C's one rule (P8). `resolved` is the set's settings through
 /// `auto_flags::resolved`, so a `_cnr`'s auto multilayer counts (D7).
@@ -145,18 +180,112 @@ fn size_locked((w, h): (u32, u32), what: &str, why: String) -> String {
     format!("this set's maps are {w}×{h}; a generated {what} must match them ({why})")
 }
 
+/// The one size a recipe needs (P6): its sources' `(w, h)`, never upsampled from a smaller or other-aspect normal,
+/// and within `cap`.
+fn locked_to(
+    (w, h): (u32, u32),
+    (nw, nh): (u32, u32),
+    cap: u32,
+    what: &str,
+) -> Result<GenSize, String> {
+    if nw < w || nh < h || u64::from(nw) * u64::from(h) != u64::from(nh) * u64::from(w) {
+        Err(size_locked(
+            (w, h),
+            what,
+            format!("the normal is {nw}×{nh}"),
+        ))
+    } else if w.max(h) > cap {
+        Err(size_locked(
+            (w, h),
+            what,
+            format!("above the {cap} px limit"),
+        ))
+    } else {
+        Ok(GenSize::Locked(w.max(h)))
+    }
+}
+
+/// The longer side a map is written at under the dialog's one Size: its locked size, else the Size within its own
+/// offered sizes.
+fn map_size(rule: &GenSize, size: u32) -> u32 {
+    match rule {
+        GenSize::Locked(s) => *s,
+        GenSize::Free { sizes, .. } => sizes
+            .iter()
+            .copied()
+            .filter(|&s| s <= size)
+            .max()
+            .or(sizes.first().copied())
+            .unwrap_or(size),
+    }
+}
+
+/// The dialog's name for a map.
+pub fn map_label(map: GenMap) -> &'static str {
+    match map {
+        GenMap::Height => "Height",
+        GenMap::Ao => "AO",
+        GenMap::Curvature => "Curvature",
+    }
+}
+
+/// A set's normal: (item key, path, size).
+type NormalAt = (String, PathBuf, Option<(u32, u32)>);
+/// A Generate target: (map, path, the recorded sha256 when the file is ours, its longer side).
+type JobTarget = (GenMap, PathBuf, Option<String>, u32);
+
+/// The dialog's set, the plan's alias map and the set's normal.
+struct GenCtx {
+    v: SetView,
+    aliases: Arc<BTreeMap<String, String>>,
+    normal: Option<NormalAt>,
+}
+
+/// The size warning for the paths about to be written: a `_p` height above `COST_WARN_ABOVE`.
+fn warning_of(g: &GenDialog, paths: &[(GenMap, PathBuf, (u32, u32))]) -> Option<&'static str> {
+    let big = paths
+        .iter()
+        .any(|(m, _, (w, h))| *m == GenMap::Height && (*w).max(*h) > COST_WARN_ABOVE);
+    (big && !g.m_alpha).then_some(SIZE_WARNING)
+}
+
 impl AppModel {
     /// The suffix aliases the last plan matched (each job's `suffix_alias`), so member suffixes read canonical as
     /// the engine's (Task 2: `real_rival` takes a canonical stem).
     /// An alias names only a §6.1 suffix (never a raw role), so every aliased image is a slot file with a job.
     /// shortcut: an alias used only by DDS inputs (no job) is not seen; read the plan's preset registry here if a
     /// DDS `_m` or normal under a user alias ever needs it.
-    fn plan_aliases(&self) -> BTreeMap<String, String> {
-        self.items
-            .iter()
-            .filter_map(|i| i.job.as_ref()?.suffix_alias.as_ref())
-            .map(|a| (a.alias.clone(), a.canonical.clone()))
-            .collect()
+    /// Built once per plan (`items_rev`), not on every offer (Task 6 review M6).
+    fn plan_aliases(&self) -> Arc<BTreeMap<String, String>> {
+        let rev = self.items_rev();
+        let mut c = self.gen_look.borrow_mut();
+        if let Some((r, a)) = &c.aliases {
+            if *r == rev {
+                return a.clone();
+            }
+        }
+        let a: Arc<BTreeMap<String, String>> = Arc::new(
+            self.items
+                .iter()
+                .filter_map(|i| i.job.as_ref()?.suffix_alias.as_ref())
+                .map(|a| (a.alias.clone(), a.canonical.clone()))
+                .collect(),
+        );
+        c.alias_builds += 1;
+        c.aliases = Some((rev, a.clone()));
+        a
+    }
+
+    /// The set `set` for the Generate path; counted (tests).
+    fn gen_view(&self, set: &str) -> Option<SetView> {
+        self.gen_look.borrow_mut().views += 1;
+        self.view_of(set)
+    }
+
+    /// (set lookups, alias map builds) on the Generate path so far (tests: Task 6 review M6).
+    pub fn gen_lookups(&self) -> (u32, u32) {
+        let c = self.gen_look.borrow();
+        (c.views, c.alias_builds)
     }
 
     /// The set's file-backed members with their canonical suffix.
@@ -175,7 +304,7 @@ impl AppModel {
     /// The item key of the set's normal: the Normal slot's own member, else the first file-backed member whose
     /// canonical suffix is `n` (P16; `_msn` is not).
     pub fn set_normal(&self, set: &str) -> Option<String> {
-        self.view_of(set)
+        self.gen_view(set)
             .and_then(|v| self.normal_of(&v, &self.plan_aliases()))
     }
 
@@ -248,7 +377,7 @@ impl AppModel {
 
     /// The set's generated files with their provenance, if recorded.
     pub fn generated_items(&self, set: &str) -> Vec<(String, Option<Provenance>)> {
-        let Some(v) = self.view_of(set) else {
+        let Some(v) = self.gen_view(set) else {
             return vec![];
         };
         self.generated_of(&v)
@@ -259,66 +388,54 @@ impl AppModel {
 
     /// Why `map` cannot be generated for `set`, the first reason in the brief's order, or `Ok`.
     pub fn gen_offer(&self, set: &str, map: GenMap) -> Result<(), String> {
-        let v = self.view_of(set).ok_or_else(|| format!("no set {set}"))?;
-        self.offer(&v, map)
+        let v = self.gen_view(set).ok_or_else(|| format!("no set {set}"))?;
+        self.offer(&v, map, &self.plan_aliases())
     }
 
-    fn offer(&self, v: &SetView, map: GenMap) -> Result<(), String> {
+    fn offer(
+        &self,
+        v: &SetView,
+        map: GenMap,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
         if let Some(e) = self.sets_doc.as_ref().and_then(|d| d.error()) {
             return Err(format!("sdc-project.toml is read-only: {e}"));
         }
-        if map != GenMap::Height {
-            return Err(NOT_OFFERED.into());
-        }
-        if v.locks.contains(&SlotKind::Height.slot_number()) {
+        let slot = match map {
+            GenMap::Height => SlotKind::Height,
+            GenMap::Ao => SlotKind::Rmaos,
+            GenMap::Curvature => return Err(NOT_OFFERED.into()),
+        };
+        if v.locks.contains(&slot.slot_number()) {
             return Err(SLOT_LOCKED.into());
         }
-        let aliases = self.plan_aliases();
-        let normal = self.normal_of(v, &aliases).ok_or(NO_NORMAL)?;
+        let normal = self.normal_of(v, aliases).ok_or(NO_NORMAL)?;
         let dims = self.normal_dims(&normal)?;
         if !dims.0.is_power_of_two() || !dims.1.is_power_of_two() {
             return Err(GenerateError::NotPowerOfTwo(dims.0, dims.1).to_string());
         }
         let shader = shader_of(v);
-        match shader {
-            Shader::Default | Shader::Parallax | Shader::Pbr | Shader::PbrLandscape => {}
-            Shader::ComplexMaterial if self.target == engine::config::Target::Cs => {
-                return Err(COMPLEX_CS.into())
+        let (own, what) = match map {
+            GenMap::Ao => {
+                self.ao_shader_and_rmaos(v, shader, aliases)?;
+                ("ao", "an AO source")
             }
-            Shader::ComplexMaterial => {
-                let m = self
-                    .real_members(v, &aliases)
-                    .find(|(i, s)| s.as_deref() == Some("m") && !is_generated(&stem(&i.key)));
-                if let Some((i, _)) = m {
-                    return Err(format!(
-                        "this set has a pre-packed _m ({}); its alpha already decides the height",
-                        i.name
-                    ));
-                }
+            _ => {
+                self.height_shader(v, shader, aliases)?;
+                let own = if shader == Shader::ComplexMaterial {
+                    "height"
+                } else {
+                    "p"
+                };
+                (own, "a height map")
             }
-            Shader::Multilayer => return Err(MULTILAYER.into()),
-            Shader::Landscape => return Err(VANILLA_LANDSCAPE.into()),
-            Shader::Glow | Shader::Envmap | Shader::Hair | Shader::Eye | Shader::Skin => {
-                return Err(format!(
-                    "a height map would switch this set from {} to Parallax",
-                    shader.label()
-                ))
-            }
-            Shader::AdvancedSkin | Shader::PbrGrass | Shader::ComplexGrass => {
-                return Err(format!("{} reads no height map", shader.label()))
-            }
-        }
-        let own = if shader == Shader::ComplexMaterial {
-            "height"
-        } else {
-            "p"
         };
-        let has_real = |name: &str| format!("this set already has a height map ({name})");
+        let has_real = |name: &str| format!("this set already has {what} ({name})");
         let gens: Vec<(&TextureItem, String)> = self
             .generated_of(v)
             .into_iter()
             .filter_map(|i| Some((i, gen_role(&stem(&i.key))?)))
-            .filter(|(_, r)| map_of(r) == Some(GenMap::Height))
+            .filter(|(_, r)| map_of(r) == Some(map))
             .collect();
         // The engine decided: a generated member it skipped GEN-REPLACED names its rival (P4).
         if let Some(r) = gens.iter().find_map(|(i, _)| replaced_by(i)) {
@@ -330,10 +447,10 @@ impl AppModel {
         }
         if gens.is_empty() {
             let gen_stem = format!("x_{own}_generated");
-            let rival = self.real_members(v, &aliases).find(|(i, s)| {
+            let rival = self.real_members(v, aliases).find(|(i, s)| {
                 let canonical = s.as_ref().map_or_else(
                     || stem(&i.key),
-                    |s| format!("{}_{s}", split_suffix_with(&stem(&i.key), &aliases).base),
+                    |s| format!("{}_{s}", split_suffix_with(&stem(&i.key), aliases).base),
                 );
                 let kind = match i.kind {
                     ItemKind::Dds => InputKind::Dds,
@@ -351,7 +468,69 @@ impl AppModel {
                 i.name
             ));
         }
-        self.gen_size_of(v, map, dims, &aliases).map(|_| ())
+        self.gen_size_of(v, map, dims, aliases).map(|_| ())
+    }
+
+    /// The height's shader rules (Task 5).
+    fn height_shader(
+        &self,
+        v: &SetView,
+        shader: Shader,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        match shader {
+            Shader::Default | Shader::Parallax | Shader::Pbr | Shader::PbrLandscape => Ok(()),
+            Shader::ComplexMaterial if self.target == engine::config::Target::Cs => {
+                Err(COMPLEX_CS.into())
+            }
+            Shader::ComplexMaterial => {
+                let m = self
+                    .real_members(v, aliases)
+                    .find(|(i, s)| s.as_deref() == Some("m") && !is_generated(&stem(&i.key)));
+                match m {
+                    Some((i, _)) => Err(format!(
+                        "this set has a pre-packed _m ({}); its alpha already decides the height",
+                        i.name
+                    )),
+                    None => Ok(()),
+                }
+            }
+            Shader::Multilayer => Err(MULTILAYER.into()),
+            Shader::Landscape => Err(VANILLA_LANDSCAPE.into()),
+            Shader::Glow | Shader::Envmap | Shader::Hair | Shader::Eye | Shader::Skin => {
+                Err(format!(
+                    "a height map would switch this set from {} to Parallax",
+                    shader.label()
+                ))
+            }
+            Shader::AdvancedSkin | Shader::PbrGrass | Shader::ComplexGrass => {
+                Err(format!("{} reads no height map", shader.label()))
+            }
+        }
+    }
+
+    /// AO's `NOT_PBR` (Q21; PbrGrass reads `_rmaos` too) and `DDS_RMAOS`. Part of the offer itself, so it holds from
+    /// the `_rmaos` row, the set menu and Regenerate alike (08e-7).
+    fn ao_shader_and_rmaos(
+        &self,
+        v: &SetView,
+        shader: Shader,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let pbr = matches!(
+            shader,
+            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
+        );
+        if self.target != engine::config::Target::Cs || !pbr {
+            return Err(NOT_PBR.into());
+        }
+        let dds = self.real_members(v, aliases).find(|(i, s)| {
+            matches!(s.as_deref(), Some("rmaos" | "rfaos")) && i.kind == ItemKind::Dds
+        });
+        match dds {
+            Some((i, _)) => Err(dds_rmaos(&i.name)),
+            None => Ok(()),
+        }
     }
 
     fn normal_dims(&self, normal: &str) -> Result<(u32, u32), String> {
@@ -363,7 +542,7 @@ impl AppModel {
 
     /// The Size control of `map` (P6, OWNER-Q1). The dialog (Task 6) only renders it.
     pub fn gen_size(&self, set: &str, map: GenMap) -> Result<GenSize, String> {
-        let v = self.view_of(set).ok_or_else(|| format!("no set {set}"))?;
+        let v = self.gen_view(set).ok_or_else(|| format!("no set {set}"))?;
         let aliases = self.plan_aliases();
         let normal = self.normal_of(&v, &aliases).ok_or(NO_NORMAL)?;
         let dims = self.normal_dims(&normal)?;
@@ -384,33 +563,22 @@ impl AppModel {
                 .unwrap_or_else(|| *s.last().unwrap_or(&nw.max(nh)));
             GenSize::Free { sizes: s, default }
         };
-        if map != GenMap::Height {
-            return Err(NOT_OFFERED.into());
+        match map {
+            // P6: AO packs into `_rmaos` B, so it takes the size of the recipe's other sources.
+            GenMap::Ao => {
+                return match self.recipe_size(v, aliases, "rmaos", RawMap::Ao) {
+                    None => Ok(free(AO_MAX, None)),
+                    Some(s) => locked_to(s, (nw, nh), AO_MAX, "AO"),
+                }
+            }
+            GenMap::Curvature => return Err(NOT_OFFERED.into()),
+            GenMap::Height => {}
         }
         match shader_of(v) {
             // OWNER-Q1: the `_m` alpha takes the size of the `_m` recipe's other sources, up to 2048.
-            Shader::ComplexMaterial => match self.m_recipe_size(v, aliases) {
+            Shader::ComplexMaterial => match self.recipe_size(v, aliases, "m", RawMap::Height) {
                 None => Ok(free(HEIGHT_MAX_RECIPE, None)),
-                Some((w, h)) => {
-                    if nw < w
-                        || nh < h
-                        || u64::from(nw) * u64::from(h) != u64::from(nh) * u64::from(w)
-                    {
-                        Err(size_locked(
-                            (w, h),
-                            "height map",
-                            format!("the normal is {nw}×{nh}"),
-                        ))
-                    } else if w.max(h) > HEIGHT_MAX_RECIPE {
-                        Err(size_locked(
-                            (w, h),
-                            "height map",
-                            format!("above the {HEIGHT_MAX_RECIPE} px limit"),
-                        ))
-                    } else {
-                        Ok(GenSize::Locked(w.max(h)))
-                    }
-                }
+                Some(s) => locked_to(s, (nw, nh), HEIGHT_MAX_RECIPE, "height map"),
             },
             // OWNER-Q1: a cs PBR `_p` may follow the albedo up to 2048 (Also's CM `_m` and landscape diffuse read it).
             Shader::Pbr | Shader::PbrLandscape => {
@@ -425,21 +593,28 @@ impl AppModel {
         }
     }
 
-    /// The size of the vanilla complex `_m` recipe's sources other than the height (P6), from the first readable one.
-    fn m_recipe_size(&self, v: &SetView, aliases: &BTreeMap<String, String>) -> Option<(u32, u32)> {
+    /// The size of the set's packed `suffix` recipe's sources other than `own` (the generated map's role), from the
+    /// first readable one (P6).
+    fn recipe_size(
+        &self,
+        v: &SetView,
+        aliases: &BTreeMap<String, String>,
+        suffix: &str,
+        own: RawMap,
+    ) -> Option<(u32, u32)> {
         let pk = v
             .members
             .iter()
             .filter_map(|k| self.item(k))
             .filter(|i| i.kind == ItemKind::Packed)
-            .find(|i| split_suffix_with(&stem(&i.key), aliases).suffix.as_deref() == Some("m"))?
+            .find(|i| split_suffix_with(&stem(&i.key), aliases).suffix.as_deref() == Some(suffix))?
             .job
             .as_ref()?
             .pack
             .as_ref()?;
         pk.sources
             .iter()
-            .filter(|s| s.role != RawMap::Height)
+            .filter(|s| s.role != own)
             .find_map(|s| self.header_dims(&s.path))
     }
 
@@ -525,11 +700,11 @@ pub struct GenDialog {
     job: Option<(Option<PathBuf>, String)>,
 }
 
-/// What a job made: the maps, and for Generate the files it wrote with their sha256 and the sha256 of the normal it
-/// read (hashed on the worker before the decode).
+/// What a job made: the maps, and for Generate the files it wrote with their sha256 and the opts each was made with
+/// (its own size), and the sha256 of the normal it read (hashed on the worker before the decode).
 pub struct GenResult {
     pub maps: Generated,
-    pub written: Vec<(GenMap, PathBuf, String)>,
+    pub written: Vec<(GenMap, PathBuf, String, Opts)>,
     pub from_sha256: String,
 }
 
@@ -612,11 +787,12 @@ pub fn write_all(
     Ok(targets.iter().map(|t| sha256(&t.1)).collect())
 }
 
-/// One job: decode the normal, generate, and for Generate encode and write the ticked maps.
+/// One job: decode the normal, generate, and for Generate encode and write the ticked maps. `targets` are (map, path,
+/// the recorded sha256 when the file is ours, its longer side): maps of one size come from one `generate` call.
 fn run_job(
     normal: &Path,
     opts: &Opts,
-    targets: Option<Vec<(GenMap, PathBuf, Option<String>)>>,
+    targets: Option<Vec<JobTarget>>,
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<GenResult, String> {
@@ -627,35 +803,54 @@ fn run_job(
         None => String::new(),
     };
     let (img, _) = engine::load::load_image(normal).map_err(|e| e.to_string())?;
-    let maps = generate(&img, opts, progress, cancel).map_err(|e| e.to_string())?;
+    let run = |o: &Opts| generate(&img, o, progress, cancel).map_err(|e| e.to_string());
     let Some(targets) = targets else {
         return Ok(GenResult {
-            maps,
+            maps: run(opts)?,
             written: vec![],
             from_sha256,
         });
     };
-    let mut files = vec![];
-    for (map, path, own) in &targets {
-        let g = match map {
-            GenMap::Height => maps.height.as_ref(),
-            GenMap::Ao => maps.ao.as_ref(),
-            GenMap::Curvature => maps.curvature.as_ref(),
+    let sizes: BTreeSet<u32> = targets.iter().map(|t| t.3).collect();
+    let mut first = None;
+    let mut made = vec![];
+    // shortcut: two sizes (a height at its 1024 cap beside a 2048 AO) solve twice and the progress line restarts;
+    // pass per-map sizes into `generate` if that cost shows.
+    for size in sizes {
+        let has = |m: GenMap| targets.iter().any(|t| t.3 == size && t.0 == m);
+        let o = Opts {
+            size,
+            height: opts.height.clone().filter(|_| has(GenMap::Height)),
+            ao: opts.ao.clone().filter(|_| has(GenMap::Ao)),
+            ..opts.clone()
         };
-        let bytes = g.map(png16).unwrap_or_default();
-        if bytes.is_empty() {
-            return Err(format!("no {map:?} map was made; nothing was written"));
+        let maps = run(&o)?;
+        for (map, path, own, _) in targets.iter().filter(|t| t.3 == size) {
+            let g = match map {
+                GenMap::Height => maps.height.as_ref(),
+                GenMap::Ao => maps.ao.as_ref(),
+                GenMap::Curvature => maps.curvature.as_ref(),
+            };
+            let bytes = g.map(png16).unwrap_or_default();
+            if bytes.is_empty() {
+                return Err(format!("no {map:?} map was made; nothing was written"));
+            }
+            made.push((*map, path.clone(), own.clone(), bytes, o.clone()));
         }
-        files.push((path.clone(), bytes, own.clone()));
+        first.get_or_insert(maps);
     }
+    let files: Vec<_> = made
+        .iter()
+        .map(|(_, p, own, b, _)| (p.clone(), b.clone(), own.clone()))
+        .collect();
     let shas = write_all(&files, cancel)?;
-    let written = targets
+    let written = made
         .into_iter()
         .zip(shas)
-        .map(|((map, path, _), sha)| (map, path, sha))
+        .map(|((map, path, _, _, o), sha)| (map, path, sha, o))
         .collect();
     Ok(GenResult {
-        maps,
+        maps: first.ok_or("nothing to generate")?,
         written,
         from_sha256,
     })
@@ -674,7 +869,7 @@ impl AppModel {
             self.status_line = "Generate is still finishing; try again in a moment".into();
             return;
         }
-        let Some(v) = self.view_of(set) else {
+        let Some(v) = self.gen_view(set) else {
             return;
         };
         let aliases = self.plan_aliases();
@@ -689,7 +884,7 @@ impl AppModel {
                 (gen_role(&stem(&k)).and_then(|r| map_of(&r)) == Some(map)).then_some(p)?
             })
         });
-        let (opts, m_alpha) = match stored {
+        let (mut opts, m_alpha) = match stored {
             Some(p) => {
                 let mut o = p.opts;
                 if let (Some(h), Some(n)) = (o.height.as_mut(), neutral) {
@@ -734,6 +929,15 @@ impl AppModel {
                 };
                 (opts, shader == Shader::ComplexMaterial)
             }
+        };
+        // A record of one map may lack the other's settings; AO's are held only while AO is ticked (`gen_tick`).
+        opts.height.get_or_insert(HeightOpts {
+            strength: 1.0,
+            neutral: neutral.unwrap_or(Neutral::Half),
+        });
+        opts.ao = match pre {
+            Some(GenMap::Ao) => Some(opts.ao.unwrap_or_default()),
+            _ => None,
         };
         self.gen = Some(GenDialog {
             set: set.to_string(),
@@ -781,32 +985,67 @@ impl AppModel {
         }
     }
 
+    /// The dialog's set, alias map and normal (item key, path, size), looked up once (Task 6 review M6).
+    fn gen_ctx(&self) -> Option<GenCtx> {
+        let g = self.gen.as_ref()?;
+        let v = self.gen_view(&g.set)?;
+        let aliases = self.plan_aliases();
+        let normal = self.normal_of(&v, &aliases).and_then(|key| {
+            let path = self.item(&key)?.input.clone();
+            let dims = self.normal_size(&key);
+            Some((key, path, dims))
+        });
+        Some(GenCtx { v, aliases, normal })
+    }
+
     /// The dialog's normal: (item key, path).
     fn gen_normal(&self) -> Option<(String, PathBuf)> {
-        let g = self.gen.as_ref()?;
-        let key = self.set_normal(&g.set)?;
-        let path = self.item(&key)?.input.clone();
+        let (key, path, _) = self.gen_ctx()?.normal?;
         Some((key, path))
     }
 
-    /// The ticked maps' output paths next to the normal, with their dimensions (D4).
-    pub fn gen_paths(&self) -> Vec<(GenMap, PathBuf, (u32, u32))> {
-        let (Some(g), Some((key, path))) = (self.gen.as_ref(), self.gen_normal()) else {
+    /// Each ticked map's size rule (P6, OWNER-Q1).
+    fn gen_rules(&self, c: &GenCtx) -> Vec<(GenMap, Result<GenSize, String>)> {
+        let (Some(g), Some((_, _, Some(dims)))) = (self.gen.as_ref(), c.normal.as_ref()) else {
             return vec![];
         };
-        let Some(dims) = self.normal_size(&key) else {
-            return vec![];
-        };
-        let base = split_suffix_with(&stem(&key), &self.plan_aliases()).base;
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         g.ticked
             .iter()
-            .map(|&map| {
-                let long = g.opts.size.min(cap_of(map)).min(dims.0.max(dims.1));
+            .map(|&m| (m, self.gen_size_of(&c.v, m, *dims, &c.aliases)))
+            .collect()
+    }
+
+    /// The ticked maps' output paths next to the normal, with their dimensions (D4): each map at its own size under
+    /// the one Size (per-map caps).
+    pub fn gen_paths(&self) -> Vec<(GenMap, PathBuf, (u32, u32))> {
+        self.gen_ctx()
+            .map(|c| self.paths_in(&c, &self.gen_rules(&c)))
+            .unwrap_or_default()
+    }
+
+    fn paths_in(
+        &self,
+        c: &GenCtx,
+        rules: &[(GenMap, Result<GenSize, String>)],
+    ) -> Vec<(GenMap, PathBuf, (u32, u32))> {
+        let (Some(g), Some((key, path, Some(dims)))) = (self.gen.as_ref(), c.normal.as_ref())
+        else {
+            return vec![];
+        };
+        let base = split_suffix_with(&stem(key), &c.aliases).base;
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        rules
+            .iter()
+            .map(|(map, rule)| {
+                let long = match rule {
+                    Ok(r) => map_size(r, g.opts.size),
+                    Err(_) => g.opts.size.min(cap_of(*map)),
+                }
+                .min(dims.0.max(dims.1));
                 (
-                    map,
-                    dir.join(output_name(&base, map, g.m_alpha)),
-                    scaled(dims, long),
+                    *map,
+                    dir.join(output_name(&base, *map, g.m_alpha)),
+                    scaled(*dims, long),
                 )
             })
             .collect()
@@ -821,16 +1060,23 @@ impl AppModel {
         }
     }
 
-    /// The parallax cost warning while a `_p` height is ticked above `COST_WARN_ABOVE` (Q11, D2). Not for the `_m`
+    /// The parallax cost warning while a `_p` height is written above `COST_WARN_ABOVE` (Q11, D2). Not for the `_m`
     /// alpha, whose size follows the `_m` at no extra parallax cost (OWNER-Q1).
     pub fn gen_size_warning(&self) -> Option<&'static str> {
-        let g = self.gen.as_ref()?;
-        (g.ticked.contains(&GenMap::Height) && !g.m_alpha && g.opts.size > COST_WARN_ABOVE)
-            .then_some(SIZE_WARNING)
+        warning_of(self.gen.as_ref()?, &self.gen_paths())
     }
 
     /// The read-only normal-format line (07 B3).
     pub fn gen_format_line(&self) -> String {
+        let c = self.gen_ctx();
+        self.format_line_of(
+            c.as_ref()
+                .and_then(|c| c.normal.as_ref())
+                .map(|n| n.0.as_str()),
+        )
+    }
+
+    fn format_line_of(&self, normal: Option<&str>) -> String {
         let name = |c: GreenConvention| match c {
             GreenConvention::Opengl => "OpenGL",
             GreenConvention::Directx => "DirectX",
@@ -839,9 +1085,8 @@ impl AppModel {
             return String::new();
         };
         if let Some(c) = g.opts.green {
-            let has_job = self
-                .gen_normal()
-                .and_then(|(k, _)| self.item(&k).map(|i| i.job.is_some()))
+            let has_job = normal
+                .and_then(|k| self.item(k).map(|i| i.job.is_some()))
                 .unwrap_or(false);
             let from = if has_job {
                 "from the normal's settings"
@@ -857,28 +1102,143 @@ impl AppModel {
         }
     }
 
-    /// Called each frame while the dialog shows: when nothing runs, the opts changed since the last preview and no
-    /// slider is being dragged, start a preview job (at most `PREVIEW_MAX`, CO35).
-    pub fn gen_frame(&mut self) {
-        let normal = self.gen_normal();
-        let long = normal
+    /// Everything the dialog draws this frame, from one set lookup and the plan's alias map (Task 6 review M6).
+    pub fn gen_facts(&self) -> GenFacts {
+        let c = self.gen_ctx();
+        let offers = OFFERED
+            .iter()
+            .map(|&m| {
+                let r = match &c {
+                    Some(c) => self.offer(&c.v, m, &c.aliases),
+                    None => Err(NO_NORMAL.into()),
+                };
+                (m, r)
+            })
+            .collect();
+        let rules = c.as_ref().map(|c| self.gen_rules(c)).unwrap_or_default();
+        let paths = c
             .as_ref()
-            .and_then(|(k, _)| self.normal_size(k))
-            .map(|d| d.0.max(d.1));
+            .map(|c| self.paths_in(c, &rules))
+            .unwrap_or_default();
+        let locked = rules
+            .iter()
+            .filter_map(|(m, r)| match r {
+                Ok(GenSize::Locked(s)) => Some((*m, *s)),
+                _ => None,
+            })
+            .collect();
+        // The Size row: the free rule with the most sizes (the larger cap); else the first rule.
+        let size = rules
+            .iter()
+            .filter_map(|(_, r)| match r {
+                Ok(f @ GenSize::Free { sizes, .. }) => Some((sizes.len(), f.clone())),
+                _ => None,
+            })
+            .max_by_key(|(n, _)| *n)
+            .map(|(_, f)| Ok(f))
+            .or_else(|| rules.first().map(|(_, r)| r.clone()))
+            .unwrap_or_else(|| match &c {
+                Some(c) => match &c.normal {
+                    Some((_, _, Some(d))) => self.gen_size_of(&c.v, GenMap::Height, *d, &c.aliases),
+                    _ => Err(NO_NORMAL.into()),
+                },
+                None => Err(NO_NORMAL.into()),
+            });
+        let normal = c.as_ref().and_then(|c| c.normal.as_ref());
+        GenFacts {
+            offers,
+            size,
+            locked,
+            warning: self.gen.as_ref().and_then(|g| warning_of(g, &paths)),
+            paths,
+            format_line: self.format_line_of(normal.map(|n| n.0.as_str())),
+            bent: normal.is_some_and(|n| self.bent_of(&n.0)),
+            normal: normal.map(|(_, p, d)| (p.clone(), d.map(|d| d.0.max(d.1)))),
+        }
+    }
+
+    /// Tick or untick a map. AO's settings start at their defaults (Q17) when AO is ticked, and go when it is not, so
+    /// a tick changes the preview's opts and starts a preview.
+    pub fn gen_tick(&mut self, map: GenMap, on: bool) {
+        let Some(g) = self.gen.as_mut() else {
+            return;
+        };
+        if on {
+            g.ticked.insert(map);
+        } else {
+            g.ticked.remove(&map);
+        }
+        if map == GenMap::Ao {
+            g.opts.ao = on.then(|| g.opts.ao.take().unwrap_or_default());
+        }
+    }
+
+    /// Whether the set's normal has an RNM bent layer (Q20).
+    pub fn has_bent_layer(&self, set: &str) -> bool {
+        self.set_normal(set).is_some_and(|n| self.bent_of(&n))
+    }
+
+    fn bent_of(&self, normal: &str) -> bool {
+        self.item(normal)
+            .and_then(|i| i.job.as_ref()?.rnm.as_ref())
+            .is_some_and(|r| {
+                r.layers
+                    .iter()
+                    .any(|l| l.id == engine::config::LayerId::Bent)
+            })
+    }
+
+    /// The preview's AO summary line.
+    pub fn gen_ao_summary(&self) -> Option<String> {
+        let r = &self.gen.as_ref()?.preview.as_ref()?.maps.report;
+        Some(format!(
+            "AO: mean {:.2}, {:.0} % of texels below 0.5",
+            r.ao_mean?,
+            r.ao_dark_share? * 100.0
+        ))
+    }
+
+    /// The opts of the last preview started (tests: the preview AO quality).
+    pub fn gen_preview_opts(&self) -> Option<Opts> {
+        self.gen.as_ref()?.previewed.clone()
+    }
+
+    /// Called each frame while the dialog shows: when nothing runs, the preview's opts changed since the last preview
+    /// and no slider is being dragged, start a preview job (at most `PREVIEW_MAX`, CO35; AO at 8 slices × 8 steps).
+    pub fn gen_frame(&mut self) {
+        let normal = self
+            .gen_ctx()
+            .and_then(|c| c.normal)
+            .map(|(_, p, d)| (p, d.map(|d| d.0.max(d.1))));
+        self.gen_frame_at(normal);
+    }
+
+    /// `gen_frame` with the normal's path and longer side already looked up (`GenFacts::normal`).
+    pub fn gen_frame_at(&mut self, normal: Option<(PathBuf, Option<u32>)>) {
         let tx = self.tx.clone();
         let Some(g) = self.gen.as_mut() else {
             return;
         };
-        if g.running.is_some() || g.dragging || g.previewed.as_ref() == Some(&g.opts) {
+        if g.running.is_some() || g.dragging {
             return;
         }
-        g.previewed = Some(g.opts.clone());
-        let Some((_, path)) = normal else {
+        let long = normal.as_ref().and_then(|n| n.1);
+        let mut opts = g.opts.clone();
+        opts.size = opts.size.min(PREVIEW_MAX).min(long.unwrap_or(PREVIEW_MAX));
+        if !g.ticked.contains(&GenMap::Ao) {
+            opts.ao = None;
+        }
+        if let Some(a) = opts.ao.as_mut() {
+            (a.slices, a.steps) = (8, 8);
+        }
+        if g.previewed.as_ref() == Some(&opts) {
+            return;
+        }
+        g.previewed = Some(opts.clone());
+        let Some((path, _)) = normal else {
             g.error = Some(NO_NORMAL.into());
             return;
         };
-        let mut opts = g.opts.clone();
-        opts.size = opts.size.min(PREVIEW_MAX).min(long.unwrap_or(PREVIEW_MAX));
         g.started += 1;
         self.spawn_gen(tx, path, opts, None);
     }
@@ -889,7 +1249,7 @@ impl AppModel {
         tx: std::sync::mpsc::Sender<WorkerMsg>,
         normal: PathBuf,
         opts: Opts,
-        targets: Option<Vec<(GenMap, PathBuf, Option<String>)>>,
+        targets: Option<Vec<JobTarget>>,
     ) {
         let Some(g) = self.gen.as_mut() else {
             return;
@@ -933,10 +1293,10 @@ impl AppModel {
         let targets: Option<Vec<_>> = normal.as_ref().map(|(key, _)| {
             self.gen_paths()
                 .into_iter()
-                .map(|(map, p, _)| {
+                .map(|(map, p, (w, h))| {
                     let name = p.file_name().unwrap_or_default().to_string_lossy();
                     let own = self.provenance(&sibling_key(key, &name)).map(|r| r.sha256);
-                    (map, p, own)
+                    (map, p, own, w.max(h))
                 })
                 .collect()
         });
@@ -953,6 +1313,9 @@ impl AppModel {
         let mut opts = g.opts.clone();
         if !ticked.contains(&GenMap::Height) {
             opts.height = None;
+        }
+        if !ticked.contains(&GenMap::Ao) {
+            opts.ao = None;
         }
         g.job = Some((self.root.clone(), key));
         g.error = None;
@@ -1048,7 +1411,7 @@ impl AppModel {
             let names: Vec<String> = r
                 .written
                 .iter()
-                .map(|(_, p, _)| p.display().to_string())
+                .map(|(_, p, _, _)| p.display().to_string())
                 .collect();
             self.gen_notice(format!(
                 "Generate wrote {}; its project was closed, so they are unrecorded",
@@ -1103,7 +1466,7 @@ impl AppModel {
         let from_sha256 = r.from_sha256.clone();
         let keys: Vec<String> = written
             .iter()
-            .map(|(_, p, _)| {
+            .map(|(_, p, _, _)| {
                 sibling_key(
                     &normal,
                     &p.file_name().unwrap_or_default().to_string_lossy(),
@@ -1114,14 +1477,14 @@ impl AppModel {
             return;
         };
         let was_dirty = d.is_dirty();
-        for ((map, _, sha), key) in written.iter().zip(&keys) {
+        for ((map, _, sha, opts), key) in written.iter().zip(&keys) {
             let p = Provenance {
                 from: normal.clone(),
                 from_sha256: from_sha256.clone(),
                 sha256: sha.clone(),
                 kind: *map,
                 m_alpha: g.m_alpha,
-                opts: g.opts.clone(),
+                opts: opts.clone(),
             };
             if let Ok(v) = serde_json::to_value(p) {
                 d.set_generated(key, Some(&v));
@@ -1236,6 +1599,17 @@ impl AppModel {
             .infos
             .insert(item.to_string(), (rev, info.clone()));
         info
+    }
+
+    /// A packed output's generated source (P20: the `_rmaos` row of a generated AO): the first channel read from a
+    /// recorded generated file.
+    pub fn generated_feed(&self, packed: &str) -> Option<GenInfo> {
+        super::pack_fills::fill_rows(self, packed)
+            .into_iter()
+            .find_map(|r| match r {
+                super::pack_fills::FillRow::FromFile { key, .. } => self.generated_info(&key),
+                _ => None,
+            })
     }
 
     /// Normal hashes taken for the stale check (tests).
@@ -1358,22 +1732,25 @@ impl AppModel {
     /// The slot row's "Delete generated file…": the Height row filled by a generated file, or whose set has a
     /// generated height the engine replaced (P5: found by set key).
     pub(crate) fn delete_slot_entry(&self, v: &SetView, kind: SlotKind) -> Option<MenuEntry> {
-        if kind != SlotKind::Height {
-            return None;
-        }
-        let key = match v.slots.get(&kind) {
-            Some(SlotFill::Own { item }) if is_generated(&stem(item)) => Some(item.clone()),
-            _ => None,
-        }
-        .or_else(|| {
+        let of_map = |map: GenMap| {
             self.generated_of(v)
                 .into_iter()
-                .filter(|i| {
-                    gen_role(&stem(&i.key)).and_then(|r| map_of(&r)) == Some(GenMap::Height)
-                })
-                .find(|i| replaced_by(i).is_some())
-                .map(|i| i.key.clone())
-        })?;
+                .filter(move |i| gen_role(&stem(&i.key)).and_then(|r| map_of(&r)) == Some(map))
+        };
+        let key = match kind {
+            SlotKind::Height => match v.slots.get(&kind) {
+                Some(SlotFill::Own { item }) if is_generated(&stem(item)) => Some(item.clone()),
+                _ => None,
+            }
+            .or_else(|| {
+                of_map(GenMap::Height)
+                    .find(|i| replaced_by(i).is_some())
+                    .map(|i| i.key.clone())
+            }),
+            // P20: a generated AO fills no row; the `_rmaos` row it feeds (or that replaced it) offers its Delete.
+            SlotKind::Rmaos => of_map(GenMap::Ao).next().map(|i| i.key.clone()),
+            _ => None,
+        }?;
         Some(MenuEntry {
             action: MenuAction::Generated {
                 set: v.id.clone(),
@@ -1386,7 +1763,7 @@ impl AppModel {
 
     /// The set card's "Delete generated file" submenu: one entry per generated file of the set (P20), by name.
     pub fn delete_generated_entries(&self, set: &str) -> Vec<MenuEntry> {
-        let Some(v) = self.view_of(set) else {
+        let Some(v) = self.gen_view(set) else {
             return vec![];
         };
         let off = self.project_read_only();

@@ -351,6 +351,8 @@ Right-click the Height row (or open the set card's menu) and pick **Generate fro
 - **Delete generated file…** (row menu, or the set card's submenu) asks first; Cancel is the default. The box says when the file was edited or has no record; your confirm deletes it. It cannot be undone.
 - A new `_p` makes a default set Parallax (PGPatcher then patches its meshes), and turns on `parallax` on a TruePBR set.
 
+**AO.** On a PBR set under Community Shaders, right-click the `_rmaos` row (or tick **AO** in the dialog) to generate `<base>_ao_generated.png`. A baked AO is better; this is for sets with none. The AO group has Radius, Quality, Depth and Intensity (0.7–1.0 is a good range: CS applies AO to indirect light itself). When the set has a roughness or other `_rmaos` source, the AO takes its size. The file becomes the `_rmaos` blue channel (`GEN-AO`); the `_rmaos` row shows where it came from, turns amber when it is stale, and offers **Delete generated file…**. A set with an RNM bent layer gets a note at the top of the dialog: the AO also changes its normal map.
+
 ## Advanced drawer
 
 The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the **Advanced** tab of the set panel instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.

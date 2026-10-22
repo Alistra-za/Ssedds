@@ -1302,8 +1302,10 @@ impl AppModel {
             });
         }
         // Note CO: after the PGPatcher lock, so the existing rows keep their places.
-        if kind == SlotKind::Height {
-            menu.push(self.gen_entry(&id, Some(GenMap::Height)));
+        match kind {
+            SlotKind::Height => menu.push(self.gen_entry(&id, Some(GenMap::Height))),
+            SlotKind::Rmaos => menu.push(self.gen_entry(&id, Some(GenMap::Ao))),
+            _ => {}
         }
         // Task 7: after Generate (P12: tests find it by action).
         menu.extend(self.delete_slot_entry(v, kind));
