@@ -191,6 +191,8 @@ def chart_formats():
         ("BC1 colour (RGB PSNR)", [39.85, 39.74, 39.05, 38.11, 37.41]),
         ("BC3 colour + alpha (premultiplied PSNR)", [49.20, 49.29, 48.75, 48.02, 48.07]),
         ("BC4 masks (PSNR)", [45.59, 45.05, 45.19, 43.70, 43.94]),
+        # bench round 3, normal_real, n = 93, rg_psnr (PSNR of the stored R and G channels)
+        ("BC5 normals (RG PSNR, n = 93)", [47.03, 46.08, 46.27, 44.57, 44.83]),
         ("BC6H HDR (multi-exposure PSNR)", [None, 48.00, None, 50.38, 49.62]),
     ]
     x0, x1, vmin, vmax = 30, 660, 35, 51
@@ -245,12 +247,12 @@ def chart_formats():
             b += text(sx(v) + 5, by + bh - 2, "%.2f" % v, "s")
     b += text(10, bot + 32, "† Original 4 HDRIs only; Compressonator's mPSNR there was 1.2 dB "
               "below ISPC.", "s")
-    b += text(10, bot + 48, "BC5 normals and BC6H highlight share are not dB; the full table "
+    b += text(10, bot + 48, "BC5 angle error and BC6H highlight share are not dB; the full table "
               "is in the wiki (Research).", "s")
-    desc = ("Bar chart of PSNR in dB, grouped by format (BC1 RGB, BC3 premultiplied, BC4, BC6H "
+    desc = ("Bar chart of PSNR in dB, grouped by format (BC1 RGB, BC3 premultiplied, BC4, BC5 RG, BC6H "
             "multi-exposure), one bar per encoder, with the encoder shown by a stripe pattern. "
             "rgbcx is best on BC1 (39.85) and BC4 (45.59), and within 0.09 dB of NVTT 3 on BC3 "
-            "(49.20 against 49.29). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator "
+            "(49.20 against 49.29), and best on BC5 (47.03). Intel ISPC is best on BC6H (50.38). rgbcx and Compressonator "
             "BC6H values were not measured. texconv CPU is last or near last.")
     return svg(780, bot + 58, "Encoders compared by format, PSNR", desc, defs + b)
 

@@ -100,6 +100,7 @@ BC7E for BC7, rgbcx for BC1–BC5, Intel ISPC for BC6H.
 | BC1 colour (RGB PSNR, dB) | 39.85 | 39.74 | 39.05 | 38.11 | 37.41 |
 | BC3 colour + alpha (premultiplied PSNR, dB) | 49.20 | 49.29 | 48.75 | 48.02 | 48.07 |
 | BC4 masks (PSNR, dB) | 45.59 | 45.05 | 45.19 | 43.70 | 43.94 |
+| BC5 normals (RG PSNR, dB, n = 93) | 47.03 | 46.08 | 46.27 | 44.57 | 44.83 |
 | BC5 normals (mean angle error) | 0.41° | 0.47° | 0.45° | 0.55° | 0.56° |
 | BC6H HDR (multi-exposure PSNR, dB) | — | 48.00 | —† | 50.38 | 49.62 |
 | BC6H brightest highlight kept (worst image) | — | 94% | 29%† | 22% | 29% |
