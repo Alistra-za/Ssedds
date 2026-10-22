@@ -1,6 +1,6 @@
 # Security policy
 
-Tessalith is an alpha. Only the latest release gets fixes.
+Only the latest release gets fixes.
 
 ## Reporting a vulnerability
 
