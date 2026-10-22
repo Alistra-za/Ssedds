@@ -268,18 +268,30 @@ def chart_formats():
 def chart_alpha_weights():
     # Names use the GUI dropdown labels where the setting is offered (Note CP1).
     NAMES = ["BC3 (rgbcx L18 -r)", "Linear (w1, default)", "Alpha ×2 (w2)",
-             "w4 (study only)", "Alpha ×8 (w8)", "Alpha ×16 (w16)", "Perceptual"]
-    # (RGB PSNR, alpha PSNR) means, copied from the study's Results tables
+             "w4 (study only)", "Alpha ×8 (w8)", "Alpha ×16 (w16)", "w32 (study only)",
+             "w64 (study only)", "Perceptual"]
+    # (RGB PSNR, alpha PSNR) means, copied from the study's Results tables (w32 and w64 from
+    # Follow-up 3), plus note lines drawn under the class
     CLASSES = [
         ("Colour with smooth alpha", "alpha_real, 96 textures",
          [(41.00, 47.24), (48.40, 47.93), (47.74, 49.39), (47.13, 50.56),
-          (46.60, 51.40), (46.17, 51.93), (46.54, 51.17)]),
+          (46.60, 51.40), (46.17, 51.93), (45.84, 52.23), (45.58, 52.38), (46.54, 51.17)], []),
         ("Normal map with specular in alpha", "n_spec, 30 textures. RGB is the stored normal.",
          [(33.47, 46.06), (37.54, 37.24), (36.79, 39.28), (36.00, 41.39),
-          (35.22, 43.36), (34.53, 44.96)]),
+          (35.22, 43.36), (34.53, 44.96), (33.95, 46.02), (33.49, 46.64)],
+         ["At w64 BC7 passes BC3 on mean specular, but its normals are now worse than BC3's "
+          "(2.85° against 2.81° mean error)."]),
         ("Packed rmaos with specular in alpha", "rmaos_spec, 24 textures",
          [(38.64, 58.98), (45.27, 49.92), (44.95, 51.79), (44.62, 53.36),
-          (44.25, 54.74), (43.82, 56.07)]),
+          (44.25, 54.74), (43.82, 56.07), (43.32, 57.31), (42.77, 58.51)],
+         ["Why BC3 leads on specular here: BC3 gives alpha its own half of the block (two 8-bit "
+          "ends, 8 levels per block).",
+          "BC7 shares one block across RGBA: its alpha either shares the colour indices (mode 6) "
+          "or gets 4 levels (mode 5).",
+          "These RGB channels are three unrelated maps (roughness, metal, AO), so colour needs "
+          "most of BC7's bits, while the specular",
+          "is smooth and near 255. BC3 keeps 91% of specular-255 texels exact against BC7's 65 "
+          "to 74%, and pays 4 to 7 dB of RGB for it."]),
     ]
     b = text(10, 20, "BC3 against BC7 alpha weights: mean PSNR in dB", "t")
     b += text(10, 38, "Higher is better. Bars start at 30 dB, not zero. "
@@ -288,20 +300,26 @@ def chart_alpha_weights():
     b += '<rect x="76" y="48" width="14" height="10" class="f1"/>\n' + text(96, 57, "Alpha", "s")
     y = 76
     x0, x1, vmin, vmax = 235, 655, 30, 60
-    for title, sub, data in CLASSES:
+    for title, sub, data, notes in CLASSES:
         b += text(10, y + 10, title, "t") + text(10 + 8 + len(title) * 7.3, y + 10, sub, "s")
         rows = [dict(name=NAMES[i], bold=(i == 1), vals=[r, a], labels=["%.2f" % r, "%.2f" % a],
                      colors=[BLUE, ORANGE]) for i, (r, a) in enumerate(data)]
         body, bot = hbars(y + 20, rows, 2, x0, x1, vmin, vmax, vmin, [30, 40, 50, 60])
         b += body
-        y = bot + 40
-    b += text(10, y - 8, "Local study, 2026-10-21 (DECISIONS Note CP). Alpha ×8 is the "
-              "BC3 replacement the study found for smooth alpha.", "s")
-    desc = ("Grouped bars of mean RGB and alpha PSNR for BC3 and BC7 with alpha weights, in three "
-            "texture classes. On colour with smooth alpha, Alpha x8 gives 51.40 dB alpha against "
-            "47.24 for BC3 and keeps 46.60 dB RGB against 41.00. On a normal map or packed rmaos "
-            "with specular in alpha, BC3 keeps the highest alpha, 46.06 and 58.98 dB, and BC7 "
-            "alpha rises with the weight.")
+        for k, line in enumerate(notes):
+            b += text(10, bot + 34 + k * 15, line, "s")
+        y = bot + 40 + len(notes) * 15 + (8 if notes else 0)
+    b += text(10, y - 8, "Local study, 2026-10-21 and 2026-10-22 (DECISIONS Note CP). Alpha ×8 "
+              "is the BC3 replacement the study found for smooth alpha.", "s")
+    b += text(10, y + 7, "No weight up to ×64 beats BC3 on alpha on every texture in any class; "
+              "every doubling costs 0.25 to 0.55 dB RGB.", "s")
+    y += 15
+    desc = ("Grouped bars of mean RGB and alpha PSNR for BC3 and BC7 with alpha weights 1 to 64, "
+            "in three texture classes. On colour with smooth alpha, Alpha x8 gives 51.40 dB alpha "
+            "against 47.24 for BC3 and keeps 46.60 dB RGB against 41.00. On a normal map with "
+            "specular, w64 passes BC3 on alpha (46.64 against 46.06) but its normals fall behind. "
+            "On packed rmaos with specular, BC3 keeps the highest alpha, 58.98 dB against 58.51 "
+            "at w64, because BC3 gives alpha its own half of the block.")
     return svg(780, y + 6, "BC3 against BC7 alpha weights", desc, b)
 
 
