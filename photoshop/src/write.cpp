@@ -14,7 +14,6 @@ int16 write_start(FormatRecord *r) {
         return report_error(r, "Tessalith DDS saves only 8-bit and 16-bit RGB documents.");
     if (!r->HostSupports32BitCoordinates)
         return report_error(r, "this Photoshop version is too old for Tessalith DDS.");
-    r->PluginUsing32BitCoordinates = 1;
 
     const int32 width = r->imageSize32.h, height = r->imageSize32.v;
     if (width <= 0 || height <= 0) return report_error(r, "the image is empty.");

@@ -49,6 +49,8 @@ extern "C" __declspec(dllexport) void PluginMain(const int16 selector, FormatRec
         *result = noErr;
         return;
     }
+    // Declared on every call, so the host reads theRect32 / imageSize32 whichever selector it checks the flag on.
+    if (record->HostSupports32BitCoordinates) record->PluginUsing32BitCoordinates = 1;
     // Nothing may throw across the plug-in boundary.
     try {
         *result = dispatch(selector, record);
