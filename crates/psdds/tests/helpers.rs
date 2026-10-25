@@ -52,6 +52,13 @@ fn only_openable_headers_are_claimed() {
     assert_eq!(unsafe { psdds_dds_openable(std::ptr::null(), 148) }, 0);
 }
 
+#[test]
+fn openable_refuses_a_len_over_isize_max() {
+    let h = dds_header(*b"DXT5", 0, 0, 0, 0);
+    // A caller bug; without the bound, the debug from_raw_parts check aborts the host.
+    assert_eq!(unsafe { psdds_dds_openable(h.as_ptr(), usize::MAX) }, 0);
+}
+
 fn opens(px: &[u8], has_alpha: u32) -> bool {
     unsafe { psdds_opens_with_alpha(px.as_ptr(), px.len() / 4, has_alpha) == 1 }
 }

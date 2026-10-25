@@ -301,11 +301,12 @@ pub unsafe extern "C" fn psdds_check_size(
 /// `head` is null or valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn psdds_dds_openable(head: *const u8, len: usize) -> i32 {
-    if head.is_null() {
+    // A len over isize::MAX would abort in from_raw_parts's check, which catch_unwind cannot catch.
+    if head.is_null() || len > isize::MAX as usize {
         return 0;
     }
-    let head = std::slice::from_raw_parts(head, len);
-    catch_unwind(|| i32::from(helpers::dds_openable(head))).unwrap_or(0)
+    catch_unwind(|| i32::from(helpers::dds_openable(std::slice::from_raw_parts(head, len))))
+        .unwrap_or(0)
 }
 
 /// Open's alpha rule (DC23) over `pixels` 4-byte pixels; a NULL buffer or an overflowing size gives 0.
@@ -364,6 +365,10 @@ unsafe fn decode(
     if dds.is_null() || width.is_null() || height.is_null() || has_alpha.is_null() || out.is_null()
     {
         return Err("psdds_decode: null pointer argument".into());
+    }
+    // A len over isize::MAX would abort in from_raw_parts's check, which catch_unwind cannot catch.
+    if len > isize::MAX as usize {
+        return Err("psdds_decode: len is larger than isize::MAX".into());
     }
     let bytes = std::slice::from_raw_parts(dds, len);
     // DC12 (I2) again: a header claiming a huge side is refused before `read_dds` copies the payload.

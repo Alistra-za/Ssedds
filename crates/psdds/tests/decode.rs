@@ -275,6 +275,34 @@ fn null_pointers_and_tiny_err_buffers_do_not_crash() {
 }
 
 #[test]
+fn decode_refuses_a_len_over_isize_max() {
+    let dds = raw(4, 4, b"DXT1", 0, 0, 1, 0, &[0; 8]);
+    let (mut w, mut h, mut a) = (0u32, 0u32, 0u32);
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut err = [0 as c_char; 256];
+    // A caller bug; without the bound, the debug from_raw_parts check aborts the host.
+    let rc = unsafe {
+        psdds_decode(
+            dds.as_ptr(),
+            usize::MAX,
+            &mut w,
+            &mut h,
+            &mut a,
+            &mut out,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    assert_ne!(rc, 0);
+    assert!(out.data.is_null());
+    let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_string_lossy();
+    assert!(msg.contains("isize::MAX"), "{msg}");
+}
+
+#[test]
 fn bc1_alpha_is_real_only_with_punch_through() {
     let w565 = |r: u16, g: u16, b: u16| (r << 11) | (g << 5) | b;
     let block = |c0: u16, c1: u16, idx: u32| {
