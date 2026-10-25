@@ -3,7 +3,7 @@
 `TessalithDDS.8bi` is a Photoshop file-format plugin (Windows x64, Photoshop 2020+) that opens and saves Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `photoshop/README.md`; the rulings are Note DC in [DECISIONS.md](DECISIONS.md).
 
 ## Layout
-- `crates/psdds`: a Rust static library with a C ABI (`photoshop/psdds.h`): settings rules (greying, the formats each texture type offers via `psdds_format_allowed`), encode, decode. The dialog asks psdds for every rule, so they exist once. It links only `engine` and `encoders-sys`.
+- `crates/psdds`: a Rust static library (and, for other hosts, a DLL; see below) with a C ABI (`photoshop/psdds.h`): settings rules (greying, the formats each texture type offers via `psdds_format_allowed`), encode, decode. The dialog asks psdds for every rule, so they exist once. It links only `engine` and `encoders-sys`.
 - `photoshop/`: the C++ plugin (PiPL, Save dialog with presets, Open, row-band transfer), `build.ps1`, `package.ps1`. Save presets are a UTF-8 file, `%APPDATA%\Tessalith DDS\presets\presets.txt`, seeded from psdds's `psdds_preset_*` list on first use (Note DC, DC35 and DC37); tests point `TESSALITH_DDS_PRESETS_DIR` at a temp folder.
 
 ## Build
@@ -15,6 +15,8 @@ The Photoshop SDK is not in the repository. Set `PS_SDK` to the folder that hold
 ```
 `package.ps1` needs `cargo-about` on PATH (`cargo install cargo-about --locked`, once per machine). It fails if cargo-about is missing or cannot run, if a dependency has a licence outside `crates/psdds/about.toml`, or if the plugin links a VC++ runtime DLL. Public CI cannot build the plugin; releases are built locally.
 
+## psdds.dll for other hosts
+`crates/psdds` is also built as a DLL so other host plugins (Paint.NET, GIMP, chaiNNer) share the same rules. Build it with `.\crates\psdds\build.ps1` (add `-Test` to run the DLL host check); it writes `target\psdds\x86_64-pc-windows-msvc\release\psdds.dll` and fails if the DLL depends on a VC++ runtime or its exports differ from `photoshop/psdds.h`. The ABI is `PSDDS_ABI_VERSION` (2): a host loads only a DLL whose `psdds_abi_version()` equals its own, and ships its own copy. Third-party notices for any psdds binary come from `crates\psdds\notices.ps1 -Binary <name> -Product <name> -Out <file>`. The rulings are Note DD in [DECISIONS.md](DECISIONS.md); the C ABI overview is `crates/psdds/README.md`.
 ## Install
 Copy `TessalithDDS.8bi` into Photoshop's `Plug-ins` folder (administrator rights needed). The plugin is unsigned, so SmartScreen may warn.
 
