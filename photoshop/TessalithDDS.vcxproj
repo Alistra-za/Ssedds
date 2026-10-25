@@ -58,6 +58,7 @@
     <ClCompile Include="src\dialog.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\pixels.cpp" />
+    <ClCompile Include="src\presets.cpp" />
     <ClCompile Include="src\read.cpp" />
     <ClCompile Include="src\settings_store.cpp" />
     <ClCompile Include="src\write.cpp" />

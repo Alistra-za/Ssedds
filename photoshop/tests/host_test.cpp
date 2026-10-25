@@ -161,6 +161,8 @@ struct DialogUser {
     const wchar_t *pick = nullptr; // filter label to choose, or nullptr
     bool cancel = false;
     bool untick_mips = false; // click the Mipmaps checkbox (after any pick)
+    bool tick_discard = false; // click the Discard transparency checkbox (after any pick)
+    wchar_t preset_before[64] = {}, preset_after[64] = {}; // the preset list's text before and after the sRGB tick
     bool seen = false, filter_enabled_before_srgb = true, filter_enabled = false, filter_enabled_after = false;
     LRESULT formats = 0; // entries in the Format list
     wchar_t filter_shown[32] = {};
@@ -190,15 +192,18 @@ static DWORD WINAPI play_dialog(void *arg) {
     u->seen = true;
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
     u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
+    GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_before, 64);
     // DC34: sRGB starts off (linear content, Box mips, filter greyed); tick it so the filter can be picked.
     if (IsDlgButtonChecked(dlg, IDC_SRGB) != BST_CHECKED) SendMessageW(GetDlgItem(dlg, IDC_SRGB), BM_CLICK, 0, 0);
     u->filter_enabled = IsWindowEnabled(filter) != 0;
+    GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_after, 64);
     if (u->pick) {
         SendMessageW(filter, CB_SELECTSTRING, WPARAM(-1), reinterpret_cast<LPARAM>(u->pick));
         SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_FILTER, CBN_SELCHANGE), reinterpret_cast<LPARAM>(filter));
     }
     u->formats = SendMessageW(GetDlgItem(dlg, IDC_FORMAT), CB_GETCOUNT, 0, 0);
     if (u->untick_mips) SendMessageW(GetDlgItem(dlg, IDC_MIPS), BM_CLICK, 0, 0);
+    if (u->tick_discard) SendMessageW(GetDlgItem(dlg, IDC_DISCARD), BM_CLICK, 0, 0);
     u->filter_enabled_after = IsWindowEnabled(filter) != 0;
     GetWindowTextW(filter, u->filter_shown, 32);
     PostMessageW(dlg, WM_COMMAND, u->cancel ? IDCANCEL : IDOK, 0);
@@ -250,7 +255,8 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         const int16 result = interactive_save(entry, path, i == 0 ? opaque_alpha : floor_alpha, &u);
         (i == 0 ? kaiser : box) = contents(path);
         expect(result == 0 && u.seen && !u.filter_enabled_before_srgb && u.filter_enabled &&
-                   wcscmp(u.filter_shown, u.pick) == 0,
+                   wcscmp(u.filter_shown, u.pick) == 0 && wcscmp(u.preset_before, L"Colour BC7") == 0 &&
+                   wcscmp(u.preset_after, L"Custom") == 0,
                i == 0 ? "opaque layer: dialog after the pixels, sRGB off greys the filter, ticking it frees it, "
                         "Kaiser picked"
                       : "alpha 254/255 counts as opaque: filter editable, Box picked");
@@ -280,6 +286,21 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
                "Colour: 4 formats; Mipmaps unticked greys the filter and saves one level");
     }
 
+    // DC36: Discard transparency on a transparent layer frees the filter and saves an opaque DDS.
+    {
+        write_file(path, original);
+        DialogUser u;
+        u.tick_discard = true;
+        const int16 result = interactive_save(entry, path, real_alpha, &u);
+        const std::string discarded = contents(path);
+        write_file(path, original);
+        DialogUser o;
+        const int16 opaque_result = interactive_save(entry, path, opaque_alpha, &o);
+        expect(result == 0 && opaque_result == 0 && u.seen && !u.filter_enabled && u.filter_enabled_after &&
+                   discarded.compare(0, 4, "DDS ") == 0 && discarded == contents(path),
+               "transparent layer + Discard transparency: filter editable, same DDS as the opaque layer");
+    }
+
     // Cancel at the end: userCanceledErr and the file untouched.
     {
         write_file(path, original);
@@ -301,6 +322,13 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t out[MAX_PATH + 1] = {};
     GetTempPathW(MAX_PATH, out);
     wcscat_s(out, L"tessalith_host_test.dds");
+    // DC37: the dialog's preset store goes to a temp folder, never the user's %APPDATA%.
+    wchar_t presets[MAX_PATH + 1] = {};
+    GetTempPathW(MAX_PATH, presets);
+    wcscat_s(presets, L"tessalith_host_test_presets");
+    std::wstring preset_file = std::wstring(presets) + L"\\presets.txt";
+    DeleteFileW(preset_file.c_str());
+    SetEnvironmentVariableW(L"TESSALITH_DDS_PRESETS_DIR", presets);
 
     const std::set<DWORD> before = own_threads();
     HMODULE m = LoadLibraryW(argv[1]);
@@ -312,6 +340,11 @@ int wmain(int argc, wchar_t **argv) {
     const uintptr_t base = reinterpret_cast<uintptr_t>(m);
     int failed = save_without_image_fails(entry, out); // also runs one full save, which starts the workers
     failed += dialog_after_pixels(entry, out);
+    const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
+    printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
+    failed += seeded ? 0 : 1;
+    DeleteFileW(preset_file.c_str());
+    RemoveDirectoryW(presets);
 
     std::vector<DWORD> workers;
     for (DWORD id : own_threads())

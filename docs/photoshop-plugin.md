@@ -4,7 +4,7 @@
 
 ## Layout
 - `crates/psdds`: a Rust static library with a C ABI (`photoshop/psdds.h`): settings rules (greying, the formats each texture type offers via `psdds_format_allowed`), encode, decode. The dialog asks psdds for every rule, so they exist once. It links only `engine` and `encoders-sys`.
-- `photoshop/`: the C++ plugin (PiPL, Save dialog, Open, row-band transfer), `build.ps1`, `package.ps1`.
+- `photoshop/`: the C++ plugin (PiPL, Save dialog with presets, Open, row-band transfer), `build.ps1`, `package.ps1`. Save presets are a UTF-8 file, `%APPDATA%\Tessalith DDS\presets\presets.txt`, seeded from psdds's `psdds_preset_*` list on first use (Note DC, DC35 and DC37); tests point `TESSALITH_DDS_PRESETS_DIR` at a temp folder.
 
 ## Build
 The Photoshop SDK is not in the repository. Set `PS_SDK` to the folder that holds `pluginsdk\`, or put it in `tools\adobe photoshop sdk 2026` of the main checkout.

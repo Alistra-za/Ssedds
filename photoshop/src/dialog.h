@@ -9,6 +9,12 @@
 #define IDC_FILTER 1004
 #define IDC_MIPS 1005
 #define IDC_QUALITY 1006
+#define IDC_PRESET 1007
+#define IDC_PRESET_SAVE 1008
+#define IDC_PRESET_DELETE 1009
+#define IDC_DISCARD 1010
+#define IDD_PRESET_NAME 101
+#define IDC_PRESET_NAME 1011
 
 #ifndef RC_INVOKED
 #include <windows.h>

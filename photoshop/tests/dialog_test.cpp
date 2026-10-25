@@ -1,8 +1,10 @@
 // Tessalith DDS: tests for the Save dialog's control states, built and run by `build.ps1 -Test`.
 // MIT licence (see photoshop/LICENSE).
 #include "../src/dialog.h"
+#include "../src/presets.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int failures = 0;
 
@@ -92,6 +94,104 @@ static void dialog_controls_follow_type_and_mips() {
           "mips off: filter greyed, Kaiser kept");
 }
 
+static std::wstring temp_dir() {
+    wchar_t tmp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tmp);
+    return std::wstring(tmp) + L"tdds_presets_test_" + std::to_wstring(GetCurrentProcessId());
+}
+
+static void write_text(const std::wstring &path, const char *utf8) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    DWORD n = 0;
+    WriteFile(f, utf8, DWORD(strlen(utf8)), &n, nullptr);
+    CloseHandle(f);
+}
+
+static bool same(const PsddsSettings &a, const PsddsSettings &b) { return memcmp(&a, &b, sizeof a) == 0; }
+
+static std::wstring widen(const char *ascii) {
+    std::wstring w;
+    for (; ascii && *ascii; ascii++) w += wchar_t(*ascii);
+    return w;
+}
+
+// DC37: the preset file: seeded once, round trip, corrupt lines skipped, an empty file stays empty.
+static void presets_store_round_trip() {
+    const char *t = __func__;
+    const std::wstring dir = temp_dir();
+    const std::wstring file = dir + L"\\presets.txt";
+    DeleteFileW(file.c_str());
+    RemoveDirectoryW(dir.c_str());
+
+    std::vector<Preset> seeded = LoadPresets(dir);
+    check(seeded.size() == psdds_preset_count() && seeded.size() == 5, t, "absent file: the five seeds");
+    check(GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES, t, "absent file: seeds written");
+    for (uint32_t i = 0; i < seeded.size(); i++) {
+        PsddsSettings s = {};
+        psdds_preset_settings(i, &s);
+        check(same(seeded[i].settings, s), t, "seed settings");
+    }
+    check(seeded.size() == 5 && seeded[1].name == L"Colour BC1 (small, opaque)", t, "seed names");
+
+    std::vector<Preset> list = seeded;
+    PsddsSettings mine = psdds_defaults(PSDDS_LINEAR_MASK);
+    mine.format = PSDDS_BC5;
+    mine.discard_alpha = 1;
+    list.push_back({L"Mine ü猫", mine});
+    check(SavePresets(dir, list), t, "save");
+    std::vector<Preset> back = LoadPresets(dir);
+    bool equal = back.size() == list.size();
+    for (size_t i = 0; equal && i < list.size(); i++)
+        equal = back[i].name == list[i].name && same(back[i].settings, list[i].settings);
+    check(equal, t, "round trip keeps order, names (UTF-8) and all seven values");
+
+    check(SavePresets(dir, {}), t, "save empty");
+    check(LoadPresets(dir).empty() && LoadPresets(dir).empty(), t, "an empty store stays empty (no reseed)");
+
+    write_text(file, "# comment\r\nGood\t4\t0\t0\t0\t1\t4\t0\r\nShort\t4\t0\t0\r\nBadFormat\t9\t0\t0\t0\t1\t4\t0\n"
+                     "Neg\t-1\t0\t0\t0\t1\t4\t0\nDisc\t4\t0\t0\t0\t1\t4\t2\n\t4\t0\t0\t0\t1\t4\t0\n");
+    back = LoadPresets(dir);
+    check(back.size() == 1 && back[0].name == L"Good", t, "only the valid line loads");
+
+    DeleteFileW(file.c_str());
+    RemoveDirectoryW(dir.c_str());
+}
+
+static void preset_names_and_matching() {
+    const char *t = __func__;
+    check(CleanPresetName(L"  Rock wall  ") == L"Rock wall", t, "trimmed");
+    check(CleanPresetName(L"   ").empty() && CleanPresetName(L"").empty(), t, "empty refused");
+    check(CleanPresetName(std::wstring(64, L'x')).size() == 64, t, "64 characters allowed");
+    check(CleanPresetName(std::wstring(65, L'x')).empty(), t, "65 refused");
+    check(CleanPresetName(L"a\tb").empty() && CleanPresetName(L"a\nb").empty(), t, "control characters refused");
+
+    std::vector<Preset> list;
+    for (uint32_t i = 0; i < psdds_preset_count(); i++) {
+        Preset p;
+        p.name = widen(psdds_preset_name(i));
+        psdds_preset_settings(i, &p.settings);
+        list.push_back(p);
+    }
+    check(FindPreset(list, L"colour bc7") == 0 && FindPreset(list, L"NORMAL BC7") == 2, t, "find ignores case");
+    check(FindPreset(list, L"Colour") == -1, t, "find is whole-name");
+
+    // Preset -> edit -> Custom -> edit back -> preset.
+    PsddsSettings raw = list[1].settings;
+    check(MatchPreset(list, raw, 0) == 1, t, "BC1 preset matches itself");
+    raw.quality = 3;
+    check(MatchPreset(list, raw, 0) == -1, t, "an edit shows Custom");
+    raw.quality = list[1].settings.quality;
+    check(MatchPreset(list, raw, 0) == 1, t, "editing back shows the preset again");
+    raw.discard_alpha = 0;
+    check(MatchPreset(list, raw, 0) == -1, t, "discard transparency is part of a preset");
+    check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 1) == 0, t, "the defaults are Colour BC7");
+    // A greyed difference does not make it Custom: Normal with a remembered sRGB On still shows Normal BC7.
+    PsddsSettings n = list[2].settings;
+    n.srgb = 1;
+    check(MatchPreset(list, n, 0) == 2, t, "matching uses effective values");
+    check(MatchPreset({}, raw, 0) == -1, t, "an empty store: Custom");
+}
+
 static void dialog_follows_play_info() {
     const char *t = __func__;
     check(ShouldShowDialog(false, 0), t, "no descriptor: interactive save shows the dialog");
@@ -108,6 +208,12 @@ int main() {
     before = failures;
     dialog_controls_follow_type_and_mips();
     printf("  %s dialog_controls_follow_type_and_mips\n", failures == before ? "PASS" : "FAIL");
+    before = failures;
+    presets_store_round_trip();
+    printf("  %s presets_store_round_trip\n", failures == before ? "PASS" : "FAIL");
+    before = failures;
+    preset_names_and_matching();
+    printf("  %s preset_names_and_matching\n", failures == before ? "PASS" : "FAIL");
     before = failures;
     dialog_follows_play_info();
     printf("  %s dialog_follows_play_info\n", failures == before ? "PASS" : "FAIL");
