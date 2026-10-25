@@ -1,6 +1,6 @@
 // Tessalith DDS: the Save dialog's presets in <dir>\presets.txt (DC37). One preset per line, UTF-8:
-// name TAB format TAB texture_type TAB srgb TAB filter TAB mips TAB quality TAB discard_alpha. Lines starting with
-// '#' are comments. MIT licence (see photoshop/LICENSE).
+// name TAB format TAB texture_type TAB srgb TAB filter TAB mips TAB quality TAB discard_alpha, after a header line
+// without tabs. A name may start with '#'. MIT licence (see photoshop/LICENSE).
 #include "presets.h"
 
 #include <windows.h>
@@ -129,7 +129,7 @@ std::vector<Preset> LoadPresets(const std::wstring &dir) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         start = end + 1;
         Preset p;
-        if (!line.empty() && line[0] != '#' && parse_line(from_utf8(line), &p)) list.push_back(p);
+        if (parse_line(from_utf8(line), &p)) list.push_back(p); // the header has no tabs, so it fails here
     }
     return list;
 }

@@ -138,6 +138,7 @@ static void presets_store_round_trip() {
     mine.format = PSDDS_BC5;
     mine.discard_alpha = 1;
     list.push_back({L"Mine ü猫", mine});
+    list.push_back({L"#1 rocks", mine}); // a leading '#' is a name, not a comment
     check(SavePresets(dir, list), t, "save");
     std::vector<Preset> back = LoadPresets(dir);
     bool equal = back.size() == list.size();
