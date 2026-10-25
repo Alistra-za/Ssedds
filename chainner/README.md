@@ -32,6 +32,20 @@ With *Skip existing files*, the pair is skipped only when both files exist; othe
 
 Size limits and other refusals come from psdds as one plain sentence in the node's error. Not reproduced from a project export: generated AO, and glossiness or `_orm`/fuzz roles (invert glossiness with chaiNNer's own nodes). **Load DDS is not in v1**: chaiNNer's Load Image already reads DDS.
 
+## Check after installing
+
+Tests cannot see chaiNNer's window. After `install.ps1` (run by you, with chaiNNer closed), open chaiNNer and check:
+
+1. The three nodes appear under **Image > Tessalith DDS** and the console shows no load error.
+2. Wire RMAOS to Save Normal's RMAOS input: it connects (the type matches), and *Discard transparency* on Save Normal disappears. Disconnect and it returns.
+3. On RMAOS, a role with a 3- or 4-channel image shows its channel dropdown and hides its fill; with no image it shows the fill and no dropdown.
+4. The RMAOS node icon renders.
+5. A paired save writes `<name>_n.dds` and `<name>_rmaos.dds`; the log says whether the roughness bake ran and lists any defaulted channels.
+6. Save DDS with a seed preset hides the settings; Custom shows them again with their values.
+7. After a chaiNNer update, re-run `install.ps1` and repeat step 1.
+
+For developers: `SDC_CHAINNER_SRC=<resources\src>` enables `chainner\tests\test_load_nodes.py`, which loads all nodes with `CHECK_LEVEL=error` in a scratch copy (the install is only read):
+`& "$env:APPDATA\chaiNNer\python\python\python.exe" -I -m unittest discover -s chainner\tests -v`
 ## Licences
 
 The nodes are GPL-3.0-or-later (`COPYING`; chaiNNer is GPLv3). `psdds.dll` is MIT (`LICENSE`); the engine and encoders-sys code inside it are MPL-2.0. Third-party notices are in `THIRD_PARTY_NOTICES.md` (generated at install; it names the source repository and commit).
