@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PsddsSettings {
-    /// 0 BC1, 1 BC3, 2 BC4, 3 BC5, 4 BC7, 5 RGBA8.
+    /// 0 BC1, 1 BC3, 2 BC4, 3 BC5, 4 BC7, 5 RGBA8, 6 BC6H, 7 RGBA16F (6 and 7 need a 16 or 32-bit document).
     pub format: u32,
     /// 0 Colour, 1 Normal, 2 Linear mask.
     pub texture_type: u32,
@@ -38,13 +38,15 @@ pub struct PsddsControls {
     pub quality_enabled: u32,
 }
 
-const FORMATS: [Format; 6] = [
+const FORMATS: [Format; 8] = [
     Format::Bc1,
     Format::Bc3,
     Format::Bc4,
     Format::Bc5,
     Format::Bc7,
     Format::Rgba8,
+    Format::Bc6hUf16,
+    Format::Rgba16f,
 ];
 const SUBTYPES: [Subtype; 3] = [Subtype::Diffuse, Subtype::Normal, Subtype::GenericData];
 const FILTERS: [MipFilter; 4] = [
@@ -68,6 +70,13 @@ pub(crate) const EFFORTS: [(Effort, &CStr); 7] = [
     (Effort::Slowest, c"Slowest"),
     (Effort::Max, c"Max"),
 ];
+// The four distinct ISPC levels `engine::encode::bc6h_level` reaches; listing all 7 efforts would show duplicates.
+const BC6H_LEVELS: [(Effort, &CStr); 4] = [
+    (Effort::Veryfast, c"Veryfast"),
+    (Effort::Fast, c"Fast"),
+    (Effort::Basic, c"Basic"),
+    (Effort::Veryslow, c"Veryslow"),
+];
 const RADII: [(SearchRadius, &CStr); 3] = [
     (SearchRadius::Default, c"Default"),
     (SearchRadius::Max, c"Maximum"),
@@ -86,19 +95,28 @@ pub fn quality_labels(format: u32) -> Vec<&'static CStr> {
         0 | 1 => RGBCX_LEVELS.to_vec(),
         2 | 3 => RADII.iter().map(|r| r.1).collect(),
         4 => EFFORTS.iter().map(|e| e.1).collect(),
+        6 => BC6H_LEVELS.iter().map(|e| e.1).collect(),
         _ => vec![],
     }
 }
 
 /// DC32: the formats each texture type offers. BC4 (one channel) only for Linear mask; BC5 (two channels) for
-/// Normal and Linear mask. False for an unknown type or format.
+/// Normal and Linear mask. BC6H and RGBA16F (6, 7) are Colour only (DE2). False for an unknown type or format.
 pub fn format_allowed(texture_type: u32, format: u32) -> bool {
     match texture_type {
-        0 => matches!(format, 0 | 1 | 4 | 5),
+        0 => matches!(format, 0 | 1 | 4 | 5 | 6 | 7),
         1 => matches!(format, 0 | 1 | 3 | 4 | 5),
         2 => format < 6,
         _ => false,
     }
+}
+
+/// DE2: whether the dialog lists `format` for a document of `depth` bits (8, 16 or 32): allowed for the type, and the
+/// HDR formats (6, 7) only for 16 and 32-bit documents. False for any other depth.
+pub fn format_offered(texture_type: u32, format: u32, depth: u32) -> bool {
+    matches!(depth, 8 | 16 | 32)
+        && format_allowed(texture_type, format)
+        && (format < 6 || depth >= 16)
 }
 
 /// The `cs-quality` profile each texture type starts from (R3).
@@ -150,6 +168,12 @@ pub(crate) fn preset_quality(format: u32, p: &Profile) -> u32 {
             .iter()
             .position(|r| r.0 == p.encoder.bc45_search_radius)),
         4 => at(EFFORTS.iter().position(|e| e.0 == p.encoder.effort)),
+        6 => {
+            let lv = engine::encode::bc6h_level(p.encoder.effort);
+            at(BC6H_LEVELS
+                .iter()
+                .position(|l| engine::encode::bc6h_level(l.0) == lv))
+        }
         _ => 0,
     }
 }
@@ -179,7 +203,7 @@ const SEEDS: [(&CStr, u32, u32, u32); 5] = [
     (c"Colour BC1 (small, opaque)", 0, 0, 1),
     (c"Normal BC7", 1, FORMAT_BC7, 0),
     (c"Mask/data BC7", 2, FORMAT_BC7, 0),
-    (c"Greyscale mask BC4", 2, 2, 0),
+    (c"Greyscale mask BC4", 2, 2, 1),
 ];
 
 /// The seed presets, in dropdown order.
@@ -202,11 +226,21 @@ pub fn seed_presets() -> Vec<(&'static CStr, PsddsSettings)> {
         .collect()
 }
 
-/// The greying rules: the values the dialog shows and the encoder uses, and which controls are editable.
+/// The greying rules at depth 8 (the old, depth-less form).
 pub fn resolve(
     s: &PsddsSettings,
     has_alpha: bool,
 ) -> Result<(PsddsSettings, PsddsControls), String> {
+    resolve_depth(s, has_alpha, 8).map(|(e, c, _)| (e, c))
+}
+
+/// The greying rules: the values the dialog shows and the encoder uses, which controls are editable, and whether
+/// Discard transparency is (DE2: it is ticked and greyed where the format stores no alpha).
+pub fn resolve_depth(
+    s: &PsddsSettings,
+    has_alpha: bool,
+    depth: u32,
+) -> Result<(PsddsSettings, PsddsControls, bool), String> {
     let range = |name: &str, v: u32, n: u32| {
         if v < n {
             Ok(())
@@ -214,7 +248,10 @@ pub fn resolve(
             Err(format!("{name} {v} out of range 0..{n}"))
         }
     };
-    range("format", s.format, 6)?;
+    if !matches!(depth, 8 | 16 | 32) {
+        return Err(format!("depth {depth} out of range"));
+    }
+    range("format", s.format, 8)?;
     range("texture type", s.texture_type, 3)?;
     range("sRGB", s.srgb, 2)?;
     range("filter", s.filter, 4)?;
@@ -222,7 +259,7 @@ pub fn resolve(
     range("discard transparency", s.discard_alpha, 2)?;
     // DC32: a format the type does not offer becomes the type's default (like DC8's quality), not an error.
     let s = &PsddsSettings {
-        format: if format_allowed(s.texture_type, s.format) {
+        format: if format_offered(s.texture_type, s.format, depth) {
             s.format
         } else {
             defaults(s.texture_type).format
@@ -233,6 +270,8 @@ pub fn resolve(
     let colour = s.texture_type == 0;
     // R1: only BC1, BC3, BC7 and RGBA8 have an _SRGB form.
     let srgb_capable = matches!(s.format, 0 | 1 | 4 | 5);
+    // DE2 (amends DC36): formats that store no alpha show Discard transparency ticked and greyed.
+    let discard_enabled = matches!(s.format, 1 | 4 | 5 | 7);
     let mut controls = PsddsControls {
         srgb_enabled: u32::from(colour && srgb_capable),
         // DC33: without mips the filter does nothing.
@@ -256,6 +295,7 @@ pub fn resolve(
         } else {
             preset_quality(s.format, base(s.texture_type)?)
         },
+        discard_alpha: if discard_enabled { s.discard_alpha } else { 1 },
         ..*s
     };
     // DC12: where the engine's own rule would mip with box (alpha-weighted Blend mips; Colour content is sRGB, DC39), the
@@ -273,12 +313,21 @@ pub fn resolve(
             effective.filter = filter_index(MipFilter::Box);
         }
     }
-    Ok((effective, controls))
+    Ok((effective, controls, discard_enabled))
 }
 
-/// The engine profile for the dialog's values (R2–R4), after the greying rules.
+/// The engine profile for the dialog's values (R2–R4), after the greying rules at depth 8.
 pub fn profile_for(s: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
-    build(&resolve(s, has_alpha)?.0, has_alpha)
+    profile_for_depth(s, has_alpha, 8)
+}
+
+/// [`profile_for`] for a document of `depth` bits.
+pub fn profile_for_depth(
+    s: &PsddsSettings,
+    has_alpha: bool,
+    depth: u32,
+) -> Result<Profile, String> {
+    build(&resolve_depth(s, has_alpha, depth)?.0, has_alpha)
 }
 
 /// [`profile_for`] with the `cs-quality` profile of `st` as the base (the TruePBR `_n` is `PbrNormal`, R12).
@@ -306,7 +355,9 @@ pub(crate) fn build_from_base(mut p: Profile, e: &PsddsSettings, has_alpha: bool
     // DC39 (supersedes DC9): the sRGB control sets only the DDS tag. The content (gamma-correct or linear
     // filtering) stays the type's base profile's: Colour sRGB, Normal and Linear mask linear. A preset with tag n/a
     // keeps its colour fields.
-    if p.color.tag != ColorTag::NotApplicable {
+    if matches!(e.format, 6 | 7) {
+        p.color.tag = ColorTag::NotApplicable; // engine Note S4: HDR files carry no sRGB tag
+    } else if p.color.tag != ColorTag::NotApplicable {
         p.color.tag = if e.srgb == 1 {
             ColorTag::Srgb
         } else {
@@ -320,7 +371,7 @@ pub(crate) fn build_from_base(mut p: Profile, e: &PsddsSettings, has_alpha: bool
         MipKeyword::None
     });
     // R2: keep alpha only where the document has it, the format stores it and the user keeps it (DC36).
-    p.alpha.policy = if has_alpha && e.discard_alpha == 0 && matches!(e.format, 1 | 4 | 5) {
+    p.alpha.policy = if has_alpha && e.discard_alpha == 0 && matches!(e.format, 1 | 4 | 5 | 7) {
         AlphaPolicy::Blend
     } else {
         AlphaPolicy::Remove
@@ -329,6 +380,7 @@ pub(crate) fn build_from_base(mut p: Profile, e: &PsddsSettings, has_alpha: bool
         0 | 1 => p.encoder.rgbcx_level = e.quality,
         2 | 3 => p.encoder.bc45_search_radius = RADII[e.quality as usize].0,
         4 => p.encoder.effort = EFFORTS[e.quality as usize].0,
+        6 => p.encoder.effort = BC6H_LEVELS[e.quality as usize].0,
         _ => {}
     }
     p.resize = ResizeMode::None;

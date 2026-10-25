@@ -184,8 +184,11 @@ static void preset_names_and_matching() {
     raw.quality = list[1].settings.quality;
     check(MatchPreset(list, raw, 0) == 1, t, "editing back shows the preset again");
     raw.discard_alpha = 0;
-    check(MatchPreset(list, raw, 1) == -1, t, "discard transparency is part of a preset (with alpha)");
-    check(MatchPreset(list, raw, 0) == 1, t, "without alpha, discard transparency has no effect (DC40)");
+    check(MatchPreset(list, raw, 1) == 1, t, "BC1 stores no alpha, so discard 0 is the effective 1 (DE2)");
+    PsddsSettings k = list[0].settings;
+    k.discard_alpha = 1;
+    check(MatchPreset(list, k, 1) == -1, t, "discard transparency is part of a preset (with alpha)");
+    check(MatchPreset(list, k, 0) == 0, t, "without alpha, discard transparency has no effect (DC40)");
     check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 1) == 0, t, "the defaults are Colour BC7");
     // A greyed difference does not make it Custom: Normal with a remembered sRGB On still shows Normal BC7.
     PsddsSettings n = list[2].settings;

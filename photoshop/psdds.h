@@ -17,19 +17,20 @@ extern "C" {
 
 /* Bumped on ANY change to this header's declarations or documented behaviour. 2 = the 7-field PsddsSettings and the
  * preset exports, plus abi/version, the host helpers and the rmaos pair (first shipped ABI); 1 was the 6-field struct
- * and never shipped. A host refuses a library whose psdds_abi_version()
+ * and never shipped; 3 = BC6H/RGBA16F and the depth-aware exports. A host refuses a library whose psdds_abi_version()
  * differs from the value it was compiled against. */
-#define PSDDS_ABI_VERSION 2u
+#define PSDDS_ABI_VERSION 3u
 
 uint32_t psdds_abi_version(void); /* PSDDS_ABI_VERSION the library was built with */
 const char *psdds_version(void);  /* static UTF-8 workspace (engine) version, e.g. "1.0.0" */
 
-enum { PSDDS_BC1 = 0, PSDDS_BC3 = 1, PSDDS_BC4 = 2, PSDDS_BC5 = 3, PSDDS_BC7 = 4, PSDDS_RGBA8 = 5 };
+enum { PSDDS_BC1 = 0, PSDDS_BC3 = 1, PSDDS_BC4 = 2, PSDDS_BC5 = 3, PSDDS_BC7 = 4, PSDDS_RGBA8 = 5, PSDDS_BC6H = 6,
+       PSDDS_RGBA16F = 7 };
 enum { PSDDS_COLOUR = 0, PSDDS_NORMAL = 1, PSDDS_LINEAR_MASK = 2 };
 enum { PSDDS_BOX = 0, PSDDS_TENT = 1, PSDDS_MITCHELL = 2, PSDDS_KAISER = 3 };
 
 typedef struct PsddsSettings {
-    uint32_t format;       /* PSDDS_BC1 .. PSDDS_RGBA8 */
+    uint32_t format;       /* PSDDS_BC1 .. PSDDS_RGBA16F */
     uint32_t texture_type; /* PSDDS_COLOUR, PSDDS_NORMAL, PSDDS_LINEAR_MASK */
     uint32_t srgb;         /* 0 off, 1 on */
     uint32_t filter;       /* PSDDS_BOX .. PSDDS_KAISER */
@@ -69,15 +70,31 @@ int32_t psdds_preset_settings(uint32_t i, PsddsSettings *out);
  * type's default format (psdds_defaults), and the quality index is then checked against that format's list.
  * has_alpha (0/1) is the document's, as passed to psdds_encode: for Colour, where the engine would mip with Box
  * anyway (alpha kept in BC3/BC7/RGBA8; discard_alpha 1 never keeps it), the filter greys and shows
- * Box. With mips 0 the filter greys too, keeping its value. */
+ * Box. With mips 0 the filter greys too, keeping its value.
+ * This is the 8-bit form: BC6H and RGBA16F (6, 7) become the type's default format. Formats 8 and up give -1.
+ * Since ABI 3 (Note DE2) the effective discard_alpha is 1 for every format that stores no alpha (BC1, BC4, BC5,
+ * BC6H), whatever was passed; the encoded bytes of BC1/BC4/BC5 are unchanged (alpha was removed for them already). */
 int32_t psdds_resolve(const PsddsSettings *input, uint32_t has_alpha, PsddsSettings *effective,
                       PsddsControls *controls);
 
+/* psdds_resolve for a document of `depth` bits (8, 16 or 32; any other depth gives -1, as do a NULL input, effective
+ * or controls and an out-of-range field). BC6H and RGBA16F are offered only at 16 and 32; at 8 they resolve to the
+ * type's default format. *discard_enabled (may be NULL) is 1 when Discard transparency is editable (BC3, BC7, RGBA8,
+ * RGBA16F), 0 when it is ticked and greyed (BC1, BC4, BC5, BC6H). The HDR formats grey the filter at Box, grey sRGB
+ * (effective 0) and carry no sRGB tag; RGBA16F greys quality. */
+int32_t psdds_resolve_depth(const PsddsSettings *input, uint32_t has_alpha, uint32_t depth,
+                            PsddsSettings *effective, PsddsControls *controls, uint32_t *discard_enabled);
+
 /* 1 when the texture type offers the format, else 0 (also for an unknown type or format). Colour: BC1, BC3, BC7,
- * RGBA8. Normal: those and BC5. Linear mask: every format. */
+ * RGBA8, BC6H, RGBA16F. Normal: BC1, BC3, BC5, BC7, RGBA8. Linear mask: BC1 .. RGBA8 (not BC6H or RGBA16F). */
 uint32_t psdds_format_allowed(uint32_t texture_type, uint32_t format);
 
-/* Entries in a format's quality list (0 for RGBA8 and an unknown format). */
+/* 1 when psdds_format_allowed is 1 and either the format is below PSDDS_BC6H or depth is 16 or 32. 0 for unknown
+ * values and for any depth other than 8, 16 or 32. */
+uint32_t psdds_format_offered(uint32_t texture_type, uint32_t format, uint32_t depth);
+
+/* Entries in a format's quality list (0 for RGBA8, RGBA16F and an unknown format; BC6H has 4: Veryfast, Fast, Basic,
+ * Veryslow). */
 uint32_t psdds_quality_count(uint32_t format);
 /* A static UTF-8 label, or NULL when out of range. */
 const char *psdds_quality_label(uint32_t format, uint32_t i);

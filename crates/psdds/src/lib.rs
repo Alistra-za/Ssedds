@@ -47,7 +47,7 @@ unsafe fn write_err(err: *mut c_char, cap: usize, msg: &str) {
 }
 
 /// Bumped on any change to `photoshop/psdds.h`'s declarations or documented behaviour (pinned by tests/abi.rs).
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 /// The `PSDDS_ABI_VERSION` this library was built with.
 #[no_mangle]
@@ -127,15 +127,51 @@ pub unsafe extern "C" fn psdds_resolve(
     if input.is_null() || effective.is_null() || controls.is_null() {
         return -1;
     }
+    psdds_resolve_depth(
+        input,
+        has_alpha,
+        8,
+        effective,
+        controls,
+        std::ptr::null_mut(),
+    )
+}
+
+/// [`psdds_resolve`] for a document of `depth` bits (8, 16 or 32) that also reports whether Discard transparency is
+/// editable in `discard_enabled` (may be NULL). -1 also for any other depth.
+///
+/// # Safety
+/// Each pointer is null or valid for its type.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_resolve_depth(
+    input: *const PsddsSettings,
+    has_alpha: u32,
+    depth: u32,
+    effective: *mut PsddsSettings,
+    controls: *mut PsddsControls,
+    discard_enabled: *mut u32,
+) -> i32 {
+    if input.is_null() || effective.is_null() || controls.is_null() {
+        return -1;
+    }
     let s = *input;
-    match catch_unwind(|| settings::resolve(&s, has_alpha != 0)) {
-        Ok(Ok((e, c))) => {
+    match catch_unwind(|| settings::resolve_depth(&s, has_alpha != 0, depth)) {
+        Ok(Ok((e, c, d))) => {
             *effective = e;
             *controls = c;
+            if !discard_enabled.is_null() {
+                *discard_enabled = u32::from(d);
+            }
             0
         }
         _ => -1,
     }
+}
+
+/// 1 when the dialog lists `format` for this texture type and document depth, else 0 (also for unknown values).
+#[no_mangle]
+pub extern "C" fn psdds_format_offered(texture_type: u32, format: u32, depth: u32) -> u32 {
+    catch_unwind(|| u32::from(settings::format_offered(texture_type, format, depth))).unwrap_or(0)
 }
 
 /// 1 when the texture type offers the format (the dialog lists only these), else 0 (also for unknown values).

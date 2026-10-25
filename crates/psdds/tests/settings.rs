@@ -4,11 +4,11 @@ use engine::config::{
     Profile, SearchRadius, Subtype, Target,
 };
 use engine::presets::PresetRegistry;
-use psdds::settings::profile_for;
+use psdds::settings::{format_offered, profile_for, resolve_depth};
 use psdds::{
     psdds_defaults, psdds_format_allowed, psdds_preset_count, psdds_preset_name,
-    psdds_preset_settings, psdds_quality_count, psdds_quality_label, psdds_resolve, PsddsControls,
-    PsddsSettings,
+    psdds_preset_settings, psdds_quality_count, psdds_quality_label, psdds_resolve,
+    psdds_resolve_depth, PsddsControls, PsddsSettings,
 };
 use std::ffi::CStr;
 
@@ -18,6 +18,8 @@ const BC4: u32 = 2;
 const BC5: u32 = 3;
 const BC7: u32 = 4;
 const RGBA8: u32 = 5;
+const BC6H: u32 = 6;
+const RGBA16F: u32 = 7;
 const FORMATS: [u32; 6] = [BC1, BC3, BC4, BC5, BC7, RGBA8];
 const COLOUR: u32 = 0;
 const NORMAL: u32 = 1;
@@ -189,7 +191,10 @@ fn formats_allowed_per_type() {
             allowed(ty, psdds_defaults(ty).format),
             "default of type {ty}"
         );
-        assert!(!allowed(ty, 6));
+        // Formats 6 and 7 (BC6H, RGBA16F) are Colour only.
+        assert_eq!(allowed(ty, BC6H), ty == COLOUR);
+        assert_eq!(allowed(ty, RGBA16F), ty == COLOUR);
+        assert!(!allowed(ty, 8));
     }
     assert!(!allowed(3, BC7));
 }
@@ -313,6 +318,8 @@ fn quality_lists_are_pinned() {
     assert_eq!(labels(BC4), radius);
     assert_eq!(labels(BC5), radius);
     assert!(labels(RGBA8).is_empty());
+    assert_eq!(labels(BC6H), ["Veryfast", "Fast", "Basic", "Veryslow"]);
+    assert!(labels(RGBA16F).is_empty());
     for f in FORMATS {
         assert!(psdds_quality_label(f, psdds_quality_count(f)).is_null());
     }
@@ -351,7 +358,7 @@ fn out_of_range_field_is_refused() {
     let ok = s(BC7, COLOUR, 1, 0, 4);
     assert_eq!(resolve(ok).0, 0);
     let bad = [
-        PsddsSettings { format: 6, ..ok },
+        PsddsSettings { format: 8, ..ok },
         PsddsSettings {
             texture_type: 3,
             ..ok
@@ -379,8 +386,9 @@ fn out_of_range_field_is_refused() {
         assert_eq!(psdds_resolve(&ok, 0, std::ptr::null_mut(), &mut c), -1);
         assert_eq!(psdds_resolve(&ok, 0, &mut e, std::ptr::null_mut()), -1);
     }
-    assert_eq!(psdds_quality_count(6), 0);
-    assert!(psdds_quality_label(6, 0).is_null());
+    assert_eq!(resolve(PsddsSettings { format: BC6H, ..ok }).0, 0);
+    assert_eq!(psdds_quality_count(8), 0);
+    assert!(psdds_quality_label(8, 0).is_null());
 }
 
 #[test]
@@ -464,7 +472,7 @@ fn seed_presets_are_pinned() {
         ("Colour BC1 (small, opaque)", COLOUR, BC1, 1),
         ("Normal BC7", NORMAL, BC7, 0),
         ("Mask/data BC7", MASK, BC7, 0),
-        ("Greyscale mask BC4", MASK, BC4, 0),
+        ("Greyscale mask BC4", MASK, BC4, 1),
     ];
     assert_eq!(psdds_preset_count(), want.len() as u32);
     for (i, (name, ty, f, discard)) in want.into_iter().enumerate() {
@@ -532,4 +540,161 @@ fn discard_transparency_removes_alpha() {
         assert_eq!(p.alpha.policy, AlphaPolicy::Remove, "format {f}");
         assert_eq!(p.mips.filter, MipFilter::Kaiser);
     }
+}
+
+fn rd(set: PsddsSettings, alpha: bool, depth: u32) -> (PsddsSettings, PsddsControls, bool) {
+    resolve_depth(&set, alpha, depth).unwrap()
+}
+
+#[test]
+fn hdr_formats_need_a_deep_document() {
+    let hdr = s(BC6H, COLOUR, 0, 0, 3);
+    assert_eq!(rd(hdr, false, 8).0.format, BC7);
+    assert_eq!(rd(hdr, false, 16).0.format, BC6H);
+    assert_eq!(rd(hdr, false, 32).0.format, BC6H);
+    // The old call is the depth-8 form for every format, type and alpha.
+    for f in 0..8 {
+        for ty in [COLOUR, NORMAL, MASK] {
+            for alpha in [false, true] {
+                let set = s(f, ty, 1, 3, 2);
+                let (rc, e, c) = resolve_with(set, alpha);
+                let (e8, c8, _) = rd(set, alpha, 8);
+                assert_eq!(
+                    (rc, e, c),
+                    (0, e8, c8),
+                    "format {f} type {ty} alpha {alpha}"
+                );
+            }
+        }
+    }
+    assert!(!format_offered(COLOUR, BC6H, 8));
+    assert!(format_offered(COLOUR, BC6H, 16));
+    assert!(!format_offered(NORMAL, BC6H, 32));
+    assert!(format_offered(COLOUR, RGBA16F, 32));
+    assert!(format_offered(COLOUR, BC7, 8));
+    assert!(!format_offered(COLOUR, BC7, 24));
+    assert!(!format_offered(3, BC7, 8) && !format_offered(COLOUR, 8, 32));
+    assert!(resolve_depth(&hdr, false, 24).is_err());
+    let mut e = zero();
+    let mut c = PsddsControls {
+        srgb_enabled: 9,
+        filter_enabled: 9,
+        quality_enabled: 9,
+    };
+    let mut d = 9u32;
+    unsafe {
+        assert_eq!(psdds_resolve_depth(&hdr, 0, 24, &mut e, &mut c, &mut d), -1);
+        let null = std::ptr::null_mut::<u32>();
+        assert_eq!(psdds_resolve_depth(&hdr, 0, 32, &mut e, &mut c, null), 0);
+        assert_eq!(e.format, BC6H);
+        assert_eq!(psdds_resolve_depth(&hdr, 0, 32, &mut e, &mut c, &mut d), 0);
+        assert_eq!(d, 0);
+        let nul = std::ptr::null();
+        assert_eq!(psdds_resolve_depth(nul, 0, 8, &mut e, &mut c, &mut d), -1);
+        assert_eq!(
+            psdds_resolve_depth(&hdr, 0, 8, std::ptr::null_mut(), &mut c, &mut d),
+            -1
+        );
+        assert_eq!(
+            psdds_resolve_depth(&hdr, 0, 8, &mut e, std::ptr::null_mut(), &mut d),
+            -1
+        );
+    }
+}
+
+#[test]
+fn hdr_controls() {
+    // Formats that store no alpha: Discard ticked and greyed at every depth (owner 2026-10-25, amends DC36).
+    for depth in [8, 16, 32] {
+        for (f, ty, enabled) in [
+            (BC1, COLOUR, false),
+            (BC4, MASK, false),
+            (BC5, MASK, false),
+            (BC3, COLOUR, true),
+            (BC7, COLOUR, true),
+            (RGBA8, COLOUR, true),
+        ] {
+            let set = PsddsSettings {
+                discard_alpha: 0,
+                ..s(f, ty, 0, 0, 0)
+            };
+            let (e, _, en) = rd(set, true, depth);
+            assert_eq!(en, enabled, "format {f} depth {depth}");
+            assert_eq!(
+                e.discard_alpha,
+                u32::from(!enabled),
+                "format {f} depth {depth}"
+            );
+        }
+        // A stored discard 0 on BC1 is the same effective setting as discard 1.
+        let bc1 = s(BC1, COLOUR, 1, 3, 0);
+        let off = PsddsSettings {
+            discard_alpha: 0,
+            ..bc1
+        };
+        let on = PsddsSettings {
+            discard_alpha: 1,
+            ..bc1
+        };
+        assert_eq!(rd(off, true, depth), rd(on, true, depth));
+    }
+    let (e, c, en) = rd(s(BC6H, COLOUR, 1, 3, 3), true, 32);
+    assert_eq!((c.srgb_enabled, e.srgb), (0, 0));
+    assert_eq!(c.quality_enabled, 1);
+    assert!(!en);
+    assert_eq!(e.discard_alpha, 1);
+    assert_eq!(
+        (c.filter_enabled, e.filter),
+        (0, 0),
+        "HDR greys the filter at Box"
+    );
+    let (e, c, en) = rd(s(RGBA16F, COLOUR, 1, 3, 5), true, 32);
+    assert_eq!((c.srgb_enabled, e.srgb), (0, 0));
+    assert_eq!((c.quality_enabled, e.quality), (0, 0));
+    assert!(en);
+    assert_eq!(e.discard_alpha, 0);
+    assert_eq!((c.filter_enabled, e.filter), (0, 0));
+    // The bytes for BC1/BC4/BC5 do not change: alpha is removed with or without the forced tick.
+    for (f, ty) in [(BC1, COLOUR), (BC5, MASK)] {
+        let p = profile_for(&s(f, ty, 0, 0, 0), true).unwrap();
+        assert_eq!(p.alpha.policy, AlphaPolicy::Remove);
+    }
+}
+
+#[test]
+fn hdr_profile_overrides() {
+    use psdds::settings::profile_for_depth;
+    let levels = [
+        Effort::Veryfast,
+        Effort::Fast,
+        Effort::Basic,
+        Effort::Veryslow,
+    ];
+    for (i, l) in levels.iter().enumerate() {
+        let p = profile_for_depth(&s(BC6H, COLOUR, 0, 0, i as u32), true, 16).unwrap();
+        assert_eq!(p.format, Format::Bc6hUf16);
+        assert_eq!(p.encoder.backend, Backend::IspcBc6h);
+        assert_eq!(p.color.tag, ColorTag::NotApplicable);
+        assert_eq!(p.alpha.policy, AlphaPolicy::Remove);
+        assert_eq!(p.encoder.effort, *l);
+    }
+    let f16 = s(RGBA16F, COLOUR, 0, 0, 0);
+    let p = profile_for_depth(&f16, true, 32).unwrap();
+    assert_eq!(p.format, Format::Rgba16f);
+    assert_eq!(p.encoder.backend, Backend::Uncompressed);
+    assert_eq!(p.color.tag, ColorTag::NotApplicable);
+    assert_eq!(p.alpha.policy, AlphaPolicy::Blend);
+    let discard = PsddsSettings {
+        discard_alpha: 1,
+        ..f16
+    };
+    let p = profile_for_depth(&discard, true, 32).unwrap();
+    assert_eq!(p.alpha.policy, AlphaPolicy::Remove);
+    // The default BC6H quality is the base effort's ISPC level.
+    let base_level = engine::encode::bc6h_level(base(COLOUR).encoder.effort);
+    let want = levels
+        .iter()
+        .position(|&l| engine::encode::bc6h_level(l) == base_level)
+        .unwrap() as u32;
+    assert_eq!(rd(s(BC6H, COLOUR, 0, 0, 99), false, 16).0.quality, want);
 }
