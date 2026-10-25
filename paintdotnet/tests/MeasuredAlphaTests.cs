@@ -14,6 +14,15 @@ public class MeasuredAlphaTests
     }
 
     [Fact]
+    public void SetReportsWhetherTheValueChanged()
+    {
+        var a = new MeasuredAlpha();
+        Assert.True(a.Set(false)); // unknown -> known
+        Assert.False(a.Set(false)); // same value: the widget skips its refresh
+        Assert.True(a.Set(true));
+    }
+
+    [Fact]
     public async Task SetFromAnotherThreadIsSeen()
     {
         var a = new MeasuredAlpha();

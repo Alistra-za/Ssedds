@@ -115,10 +115,12 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     // Raised on the preview save's worker thread; must never throw into the save.
     void OnMeasured(bool used)
     {
-        _alpha.Set(used);
+        if (!_alpha.Set(used)) return; // every preview reports: refresh only on a change
         try
         {
-            if (!IsDisposed && IsHandleCreated) BeginInvoke(() => { if (!IsDisposed) Sync(null); });
+            // has_alpha changes only the filter and the preset match, never type or format (psdds resolve), so no list
+            // refill: Sync(_preset) keeps an open Format or Quality dropdown open.
+            if (!IsDisposed && IsHandleCreated) BeginInvoke(() => { if (!IsDisposed) Sync(_preset); });
         }
         catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException) { } // disposed meanwhile: nothing to show
     }
@@ -168,7 +170,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         _refreshing = was;
     }
 
-    /// <summary>dialog.cpp refresh(): changed null = start, a preset pick or a has_alpha report (rebuild Format and Quality);
+    /// <summary>dialog.cpp refresh(): changed null = start or a preset pick (rebuild Format and Quality);
     /// the Type list rebuilds Format; Type or Format refills Quality. Named Sync: Control.Refresh() repaints.</summary>
     void Sync(Control? changed)
     {
