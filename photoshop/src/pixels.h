@@ -29,6 +29,10 @@ constexpr int64_t kMaxDdsFileBytes = max_dds_file_bytes();
 // guarantees only alpha >= 254 for opaque BC7 (DECISIONS Notes A/C/D/S5), so its own opaque files open opaque.
 bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_alpha);
 
+// Save's alpha rule (DC31), Open's rule on the float image: true when some alpha is below 254/255 (8-bit: a byte
+// below 254; 16-bit: below 254/255 of 32768). An image whose alpha is all 254 or more saves as opaque.
+bool floats_have_transparency(const float *rgba, size_t pixels);
+
 // Estimate (PIFormat.h minDataBytes / maxDataBytes) for a width x height save: the smallest file (BC1/BC4, no mips,
 // legacy header) to the largest (RGBA8, full mip chain, DX10 header).
 void dds_size_range(int64_t width, int64_t height, int64_t *min_bytes, int64_t *max_bytes);

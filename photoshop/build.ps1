@@ -65,7 +65,7 @@ if ($Test) {
     $tests = @(
         @{ exe = 'pixels_test.exe'; src = "`"$here\tests\pixels_test.cpp`" `"$here\src\pixels.cpp`""; link = '' },
         @{ exe = 'dialog_test.exe'; src = "`"$here\tests\dialog_test.cpp`" `"$here\src\dialog.cpp`""; link = "/link /LIBPATH:`"$libDir`" $libs" },
-        @{ exe = 'host_test.exe'; src = "$sdkInc `"$here\tests\host_test.cpp`""; link = ''; args = @($plugin) }
+        @{ exe = 'host_test.exe'; src = "$sdkInc `"$here\tests\host_test.cpp`""; link = '/link user32.lib'; args = @($plugin) }
     )
     $failed = 0
     foreach ($t in $tests) {

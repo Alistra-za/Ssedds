@@ -49,6 +49,7 @@ void free_state(FormatRecord *r, intptr_t *data) {
         delete g->save;
         g->save = nullptr;
         g->have_settings = false; // the next save without OptionsStart loads the remembered settings again
+        g->show_dialog = false;
     }
     r->data = nullptr;
     r->theRect32 = VRect{};
@@ -117,23 +118,14 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
     static_assert(kPlayInfoDisplay == plugInDialogDisplay, "dialog.h mirrors PIActions.h");
     r->data = nullptr; // no OptionsContinue: the options do not depend on the pixels
     Globals *g = globals_of(data);
-    // The same has_alpha the write will pass to psdds (alpha_plane), so the dialog greys what the encoder does.
-    const uint32_t has_alpha = alpha_plane(r) >= 0 ? 1 : 0;
-    PsddsSettings chosen = load_settings(r->sSPBasic, has_alpha);
+    // Only prepares the save (DC31): the dialog needs the pixels' alpha, so it opens after the last band arrives.
+    // has_alpha here only validates the stored values; the greying is decided again from the pixels.
+    g->settings = load_settings(r->sSPBasic, alpha_plane(r) >= 0 ? 1 : 0);
+    g->have_settings = true;
     // shortcut: the descriptor's contents are neither read nor written; a script, action or batch saves with the
     // remembered settings. Add descriptor keys when recorded actions need their own settings.
     const PIDescriptorParameters *script = r->descriptorParameters;
-    if (ShouldShowDialog(script != nullptr, script ? script->playInfo : 0)) {
-        const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
-        HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
-        const DialogResult shown = ShowSaveDialog(owner, has_alpha, &chosen);
-        if (shown == DialogResult::Cancel) return userCanceledErr;
-        if (shown == DialogResult::Failed) return report_error(r, "the Tessalith DDS options dialog could not be shown.");
-        save_settings(r->sSPBasic, chosen);
-    }
-
-    g->settings = chosen;
-    g->have_settings = true;
+    g->show_dialog = ShouldShowDialog(script != nullptr, script ? script->playInfo : 0);
     return noErr;
 }
 
@@ -194,7 +186,19 @@ int16 write_continue(FormatRecord *r, intptr_t *data) {
         return noErr;
     }
     // Last band: the request loop ends here whatever the outcome.
-    const int16 result = encode_and_write(r, reinterpret_cast<Globals *>(*data)->settings, s, channels == 4 ? 1 : 0);
+    Globals *g = reinterpret_cast<Globals *>(*data);
+    // Alpha from the pixels, not the planes (DC31): a normal layer always has a transparency plane.
+    const uint32_t has_alpha = channels == 4 && floats_have_transparency(s->rgba.data(), s->rgba.size() / 4) ? 1 : 0;
+    int16 result = noErr;
+    if (g->show_dialog) { // modal UI inside the write is allowed without SupportsBackgroundSave (PiPL keys)
+        const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
+        HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
+        const DialogResult shown = ShowSaveDialog(owner, has_alpha, &g->settings);
+        if (shown == DialogResult::Cancel) result = userCanceledErr; // nothing has been written
+        else if (shown == DialogResult::Failed) result = report_error(r, "the Tessalith DDS options dialog could not be shown");
+        else save_settings(r->sSPBasic, g->settings);
+    }
+    if (result == noErr) result = encode_and_write(r, g->settings, s, has_alpha);
     free_state(r, data);
     return result;
 }

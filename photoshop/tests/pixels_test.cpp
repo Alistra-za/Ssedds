@@ -162,6 +162,25 @@ static void open_alpha_rule() {
     check(!opens_with_transparency(cut, 2, 0), __func__, "has_alpha 0: opaque whatever the bytes");
 }
 
+// Save decides alpha from the pixels with Open's threshold, after the host samples became floats.
+static void save_alpha_rule() {
+    const uint8_t floor8[8] = {1, 2, 3, 254, 4, 5, 6, 255};
+    const uint8_t real8[8] = {1, 2, 3, 255, 4, 5, 6, 253};
+    const uint16_t opaque16[8] = {1, 2, 3, 32768, 4, 5, 6, 32640}; // 32640 / 32768 is just above 254/255
+    const uint16_t real16[8] = {1, 2, 3, 32768, 4, 5, 6, 32639};   // just below
+    float f[8];
+    to_rgba_floats(floor8, 2, 4, 8, f);
+    check(!floats_have_transparency(f, 2), __func__, "8-bit alpha 254 and 255: opaque");
+    to_rgba_floats(real8, 2, 4, 8, f);
+    check(floats_have_transparency(f, 2), __func__, "8-bit alpha 253: transparency");
+    to_rgba_floats(opaque16, 2, 4, 16, f);
+    check(!floats_have_transparency(f, 2), __func__, "16-bit alpha >= 254/255: opaque");
+    to_rgba_floats(real16, 2, 4, 16, f);
+    check(floats_have_transparency(f, 2), __func__, "16-bit alpha below 254/255: transparency");
+    to_rgba_floats(real8, 2, 3, 8, f);
+    check(!floats_have_transparency(f, 2), __func__, "no alpha plane: opaque");
+}
+
 static void estimate_covers_every_format() {
     int64_t lo = 0, hi = 0;
     dds_size_range(1024, 1024, &lo, &hi);
@@ -188,6 +207,7 @@ int main() {
         {"largest_dds_is_16k_rgba8_full_chain", largest_dds_is_16k_rgba8_full_chain},
         {"filter_file_claims_only_openable_headers", filter_file_claims_only_openable_headers},
         {"open_alpha_rule", open_alpha_rule},
+        {"save_alpha_rule", save_alpha_rule},
         {"estimate_covers_every_format", estimate_covers_every_format},
     };
     for (auto &t : tests) {

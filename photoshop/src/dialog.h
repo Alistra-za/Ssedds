@@ -30,7 +30,7 @@ ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha);
 // PIActions.h plugInDialogDisplay (dialogPlayEnum); write.cpp checks it against the SDK's value.
 constexpr int32_t kPlayInfoDisplay = 1;
 
-// Whether OptionsStart may show the dialog. With descriptor parameters (a script, an action, a batch), the host's
+// Whether the save shows the dialog (decided in OptionsStart, shown after the pixels are read, DC31). With descriptor parameters (a script, an action, a batch), the host's
 // playInfo decides: only plugInDialogDisplay shows it; plugInDialogDontDisplay and plugInDialogSilent do not.
 // Without them (an interactive Save or Save As) the dialog always shows (DC22).
 bool ShouldShowDialog(bool has_descriptor, int32_t play_info);

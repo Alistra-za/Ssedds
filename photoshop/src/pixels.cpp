@@ -59,6 +59,14 @@ bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_al
     return false;
 }
 
+bool floats_have_transparency(const float *rgba, size_t pixels) {
+    // Just under 254/255, so the float of byte 254 (254 * (1/255)) never counts as transparent through rounding.
+    const float limit = 254.0f / 255.0f - 1e-6f;
+    for (size_t p = 0; p < pixels; p++)
+        if (rgba[p * 4 + 3] < limit) return true;
+    return false;
+}
+
 void dds_size_range(int64_t width, int64_t height, int64_t *min_bytes, int64_t *max_bytes) {
     // BC1/BC4 store a 4x4 block in 8 bytes.
     *min_bytes = ((width + 3) / 4) * ((height + 3) / 4) * 8 + 128;

@@ -1,6 +1,8 @@
 // Tessalith DDS: drives TessalithDDS.8bi through its selectors as Photoshop would. MIT licence (see photoshop/LICENSE).
 //   save_without_image_fails  a save that ends before the last band (Escape, or a host that stops sending rows)
 //                             reports an error and leaves the existing file untouched (Note DC27).
+//   dialog_after_pixels       the Save dialog opens after the pixels are read, greys the mip filter only for real
+//                             transparency, honours the filter picked, and Cancel writes nothing (Note DC31).
 //   unload_after_save         the plug-in survives Photoshop unloading it after a save (Note DC25). The engine's rayon
 //                             workers outlive the save; if the module's code were unmapped under them, their next
 //                             wake-up would execute freed memory (the BEX64 crash at TessalithDDS.8bi_unloaded+0x9483).
@@ -10,6 +12,8 @@
 #pragma warning(disable : 4121) // the SDK's FormatRecord layout (see write.h)
 #include "PIFormat.h"
 #pragma warning(pop)
+
+#include "../src/dialog.h" // the Save dialog's control IDs
 
 #include <tlhelp32.h>
 
@@ -69,6 +73,23 @@ struct Host {
         int16 result = 0;
         while (result == 0 && r->data) {
             memset(r->data, 0x80, size_t(r->theRect32.bottom - r->theRect32.top) * size_t(r->rowBytes));
+            result = call(formatSelectorWriteContinue);
+        }
+        return result;
+    }
+    // Fills every requested band with a gradient (8-bit) and alpha(x, y) on plane 3 when requested.
+    int16 send_rgba(int (*alpha)(int x, int y)) {
+        int16 result = 0;
+        while (result == 0 && r->data) {
+            const VRect q = r->theRect32;
+            for (int y = q.top; y < q.bottom; y++)
+                for (int x = q.left; x < q.right; x++) {
+                    unsigned char *px = static_cast<unsigned char *>(r->data) + (y - q.top) * r->rowBytes + x * r->colBytes;
+                    px[0] = (unsigned char)(x * 4);
+                    px[1] = (unsigned char)(y * 4);
+                    px[2] = (unsigned char)((x ^ y) * 4);
+                    if (r->hiPlane >= 3) px[3] = (unsigned char)alpha(x, y);
+                }
             result = call(formatSelectorWriteContinue);
         }
         return result;
@@ -134,6 +155,121 @@ static int save_without_image_fails(Entry entry, const wchar_t *path) {
     return bad;
 }
 
+// Plays the user at the Save dialog from another thread: reads the mip filter control, optionally picks a filter by
+// its label, then presses OK or Cancel.
+struct DialogUser {
+    const wchar_t *pick = nullptr; // filter label to choose, or nullptr
+    bool cancel = false;
+    bool seen = false, filter_enabled = false;
+    wchar_t filter_shown[32] = {};
+};
+
+static BOOL CALLBACK find_dialog(HWND w, LPARAM out) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    wchar_t cls[16] = {};
+    GetClassNameW(w, cls, 16);
+    if (pid == GetCurrentProcessId() && IsWindowVisible(w) && wcscmp(cls, L"#32770") == 0) {
+        *reinterpret_cast<HWND *>(out) = w;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static DWORD WINAPI play_dialog(void *arg) {
+    DialogUser *u = static_cast<DialogUser *>(arg);
+    HWND dlg = nullptr;
+    for (int i = 0; i < 500 && !dlg; i++) {
+        Sleep(20);
+        EnumWindows(find_dialog, reinterpret_cast<LPARAM>(&dlg));
+    }
+    if (!dlg) return 0;
+    Sleep(100); // let WM_INITDIALOG finish filling the controls
+    u->seen = true;
+    HWND filter = GetDlgItem(dlg, IDC_FILTER);
+    u->filter_enabled = IsWindowEnabled(filter) != 0;
+    if (u->pick) {
+        SendMessageW(filter, CB_SELECTSTRING, WPARAM(-1), reinterpret_cast<LPARAM>(u->pick));
+        SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_FILTER, CBN_SELCHANGE), reinterpret_cast<LPARAM>(filter));
+    }
+    GetWindowTextW(filter, u->filter_shown, 32);
+    PostMessageW(dlg, WM_COMMAND, u->cancel ? IDCANCEL : IDOK, 0);
+    return 0;
+}
+
+static int opaque_alpha(int, int) { return 255; }
+static int floor_alpha(int x, int) { return x % 2 ? 254 : 255; } // Tessalith's own opaque BC7 floor
+static int real_alpha(int x, int) { return x < 32 ? 255 : 100; }
+
+// One interactive save of a 64 x 64 layer document (planes 4, transparency plane 3) into `path`: OptionsStart, the
+// write selectors, and the dialog played by `u` once the pixels are in. Returns the last selector's result.
+static int16 interactive_save(Entry entry, const wchar_t *path, int (*alpha)(int, int), DialogUser *u) {
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    h.r->planes = 4;
+    h.r->transparencyPlane = 3;
+    int16 result = h.call(formatSelectorOptionsStart);
+    if (!result) result = h.call(formatSelectorWritePrepare);
+    if (!result) result = h.call(formatSelectorWriteStart);
+    const bool started = result == 0; // WriteFinish follows if and only if WriteStart succeeded (PIFormat.h)
+    HANDLE t = CreateThread(nullptr, 0, play_dialog, u, 0, nullptr);
+    if (!result) result = h.send_rgba(alpha);
+    WaitForSingleObject(t, 15000);
+    CloseHandle(t);
+    if (started) {
+        const int16 finish = h.call(formatSelectorWriteFinish);
+        if (!result) result = finish;
+    }
+    CloseHandle(f);
+    return result;
+}
+
+// The dialog opens after the pixels are read and greys the filter from the pixels' alpha (DC31).
+static int dialog_after_pixels(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    auto expect = [&](bool ok, const char *what) {
+        printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
+        bad += ok ? 0 : 1;
+    };
+    const std::string original(20000, 'x');
+
+    // Opaque layer: filter editable; a Kaiser pick changes the mips compared with Box.
+    std::string kaiser, box;
+    for (int i = 0; i < 2; i++) {
+        write_file(path, original);
+        DialogUser u;
+        u.pick = i == 0 ? L"Kaiser" : L"Box";
+        const int16 result = interactive_save(entry, path, i == 0 ? opaque_alpha : floor_alpha, &u);
+        (i == 0 ? kaiser : box) = contents(path);
+        expect(result == 0 && u.seen && u.filter_enabled && wcscmp(u.filter_shown, u.pick) == 0,
+               i == 0 ? "opaque layer: dialog after the pixels, filter editable, Kaiser picked"
+                      : "alpha 254/255 counts as opaque: filter editable, Box picked");
+    }
+    expect(kaiser.compare(0, 4, "DDS ") == 0 && box.compare(0, 4, "DDS ") == 0 && kaiser != box,
+           "Kaiser is honoured (its DDS differs from the Box one)");
+
+    // Real transparency: the filter is greyed and shows Box.
+    {
+        write_file(path, original);
+        DialogUser u;
+        const int16 result = interactive_save(entry, path, real_alpha, &u);
+        expect(result == 0 && u.seen && !u.filter_enabled && wcscmp(u.filter_shown, L"Box") == 0,
+               "transparent layer: filter greyed, shows Box");
+    }
+
+    // Cancel at the end: userCanceledErr and the file untouched.
+    {
+        write_file(path, original);
+        DialogUser u;
+        u.cancel = true;
+        const int16 result = interactive_save(entry, path, opaque_alpha, &u);
+        expect(result == userCanceledErr && u.seen && contents(path) == original, "Cancel writes nothing");
+    }
+    DeleteFileW(path);
+    printf("%s dialog_after_pixels\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc != 2) {
         printf("usage: host_test <TessalithDDS.8bi>\n");
@@ -152,6 +288,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     const uintptr_t base = reinterpret_cast<uintptr_t>(m);
     int failed = save_without_image_fails(entry, out); // also runs one full save, which starts the workers
+    failed += dialog_after_pixels(entry, out);
 
     std::vector<DWORD> workers;
     for (DWORD id : own_threads())

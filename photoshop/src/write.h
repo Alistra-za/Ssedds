@@ -32,13 +32,15 @@ struct Globals {
     bool have_settings = false; // false: WriteStart loads the remembered settings (no OptionsStart this save)
     SaveState *save = nullptr;
     ReadState *read = nullptr; // the decoded image, from ReadStart to the end of the open
+    bool show_dialog = false;  // OptionsStart's playInfo rule: show the dialog once the pixels are in (DC31)
 };
 
 // The Globals behind `data`, allocated on first use.
 Globals *globals_of(intptr_t *data);
 
 
-// OptionsStart: shows the Save dialog with the remembered settings; OK stores them, Cancel returns userCanceledErr.
+// OptionsStart: loads the remembered settings and decides whether the dialog shows. The dialog itself opens in the
+// last WriteContinue, after the pixels are read (DC31); OK stores the settings, Cancel returns userCanceledErr.
 int16 options_start(FormatRecord *record, intptr_t *data);
 
 // The Open selectors (read.cpp). filter_file: noErr for a file starting with "DDS ", else formatCannotRead.
