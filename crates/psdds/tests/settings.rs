@@ -1,7 +1,7 @@
 //! The dialog's greying rules (spec + plan ruling R1), the quality lists (R4) and the profile overrides (R2, R3).
 use engine::config::{
-    AlphaPolicy, Backend, ColorTag, Effort, Format, MipFilter, MipKeyword, MipLevels, Profile,
-    SearchRadius, Subtype, Target,
+    AlphaPolicy, Backend, ColorContent, ColorTag, Effort, Format, MipFilter, MipKeyword, MipLevels,
+    Profile, SearchRadius, Subtype, Target,
 };
 use engine::presets::PresetRegistry;
 use psdds::settings::profile_for;
@@ -96,12 +96,13 @@ fn colour_keeps_srgb_and_filter_editable() {
             assert_eq!((c.srgb_enabled, c.filter_enabled), (1, 1), "format {f}");
             assert_eq!((e.srgb, e.filter), (srgb, filter));
             let p = profile_for(&s(f, COLOUR, srgb, filter, 0), false).unwrap();
-            let tag = if srgb == 1 {
-                ColorTag::Srgb
+            // The control sets both content and tag.
+            let colour = if srgb == 1 {
+                (ColorContent::Srgb, ColorTag::Srgb)
             } else {
-                ColorTag::Unorm
+                (ColorContent::Linear, ColorTag::Unorm)
             };
-            assert_eq!(p.color.tag, tag);
+            assert_eq!((p.color.content, p.color.tag), colour);
             assert_eq!(p.mips.filter, FILTERS[filter as usize]);
         }
     }
@@ -117,7 +118,43 @@ fn srgb_forced_off_without_srgb_variant() {
         assert_eq!(c.filter_enabled, 1);
         assert_eq!(e.filter, 2);
         let p = profile_for(&s(f, COLOUR, 1, 2, 0), false).unwrap();
-        assert_eq!(p.color.tag, ColorTag::Unorm);
+        assert_eq!(
+            (p.color.content, p.color.tag),
+            (ColorContent::Linear, ColorTag::Unorm)
+        );
+    }
+}
+
+#[test]
+fn stale_quality_falls_back_to_the_preset() {
+    // Preset quality index per format for cs-quality: rgbcx 18, radius default, effort veryslow.
+    let preset = |f: u32, ty: u32| {
+        let b = base(ty);
+        let radii = [SearchRadius::Default, SearchRadius::Max, SearchRadius::Fast];
+        match f {
+            BC1 | BC3 => b.encoder.rgbcx_level,
+            BC4 | BC5 => radii
+                .iter()
+                .position(|&r| r == b.encoder.bc45_search_radius)
+                .unwrap() as u32,
+            BC7 => 4,
+            _ => 0,
+        }
+    };
+    for ty in [COLOUR, NORMAL, MASK] {
+        // A BC7 Veryslow (4) remembered and the format switched to BC4.
+        let (rc, e, _) = resolve(s(BC4, ty, 0, 0, 4));
+        assert_eq!(rc, 0);
+        assert_eq!(e.quality, preset(BC4, ty));
+        for (f, q) in [(BC5, 3), (BC1, 19), (BC3, 99), (BC7, 7), (RGBA8, 7)] {
+            let (rc, e, _) = resolve(s(f, ty, 0, 0, q));
+            assert_eq!(
+                (rc, e.quality),
+                (0, preset(f, ty)),
+                "format {f} quality {q}"
+            );
+            assert!(profile_for(&s(f, ty, 0, 0, q), false).is_ok());
+        }
     }
 }
 
@@ -212,17 +249,6 @@ fn out_of_range_field_is_refused() {
         PsddsSettings { srgb: 2, ..ok },
         PsddsSettings { filter: 4, ..ok },
         PsddsSettings { mips: 2, ..ok },
-        PsddsSettings { quality: 7, ..ok },
-        PsddsSettings {
-            format: BC4,
-            quality: 3,
-            ..ok
-        },
-        PsddsSettings {
-            format: BC1,
-            quality: 19,
-            ..ok
-        },
     ];
     for b in bad {
         assert_eq!(resolve(b).0, -1, "{b:?}");
@@ -292,7 +318,13 @@ fn profile_overrides_follow_r2_r3() {
                 assert_eq!(p.format, formats[f as usize]);
                 assert_eq!(p.encoder.backend, backends[f as usize]);
                 assert_eq!(p.mips.levels, MipLevels::Keyword(MipKeyword::None));
-                assert_eq!(p.color.content, b.color.content);
+                // Normal and Linear mask: sRGB greyed Off → linear content, UNORM tag.
+                if ty != COLOUR {
+                    assert_eq!(
+                        (p.color.content, p.color.tag),
+                        (ColorContent::Linear, ColorTag::Unorm)
+                    );
+                }
                 let keeps = has_alpha && matches!(f, BC3 | BC7 | RGBA8);
                 let policy = if keeps {
                     AlphaPolicy::Blend

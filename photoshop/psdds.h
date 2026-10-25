@@ -43,8 +43,9 @@ typedef struct PsddsBuf {
 PsddsSettings psdds_defaults(uint32_t texture_type);
 
 /* Greying rules: `effective` = the values the dialog shows and the encoder uses; `controls` = which are editable.
- * Returns 0, or -1 for a NULL pointer or an out-of-range field (outputs untouched). A quality index outside the
- * format's list is out of range, so reset quality when the format changes; RGBA8 ignores quality. */
+ * Returns 0, or -1 for a NULL pointer or an out-of-range format, texture_type, srgb, filter or mips (outputs
+ * untouched). A quality index outside the format's list (e.g. remembered from another format) is not an error:
+ * effective quality becomes the preset's default for that type and format. RGBA8's quality is always 0. */
 int32_t psdds_resolve(const PsddsSettings *input, PsddsSettings *effective, PsddsControls *controls);
 
 /* Entries in a format's quality list (0 for RGBA8 and an unknown format). */

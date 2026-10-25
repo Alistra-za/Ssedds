@@ -157,6 +157,10 @@ fn srgb_forced_off_without_srgb_variant() {
     };
     let dds = read_dds(&encode(&px, 8, 8, false, &bc7).unwrap()).unwrap();
     assert_eq!(dds.dx10.unwrap().dxgi, 99, "BC7_UNORM_SRGB");
+    // And sRGB Off writes the non-sRGB form.
+    let off = PsddsSettings { srgb: 0, ..bc7 };
+    let dds = read_dds(&encode(&px, 8, 8, false, &off).unwrap()).unwrap();
+    assert_eq!(dds.dx10.unwrap().dxgi, 98, "BC7_UNORM");
 }
 
 #[test]

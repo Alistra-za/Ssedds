@@ -55,7 +55,8 @@ pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
 }
 
 /// Apply the greying rules: `effective` gets the values the dialog shows and the encoder uses, `controls` which
-/// controls are editable. 0, or -1 for a null pointer or an out-of-range field (outputs untouched).
+/// controls are editable. 0, or -1 for a null pointer or an out-of-range field other than quality (outputs
+/// untouched); a quality index outside the format's list becomes the preset's.
 ///
 /// # Safety
 /// Each pointer is null or valid for its type.

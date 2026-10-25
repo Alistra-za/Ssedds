@@ -1,8 +1,8 @@
 //! Dialog settings → engine profile: the greying rules (spec + plan ruling R1), the quality lists (R4) and the
 //! profile overrides (R2, R3).
 use engine::config::{
-    AlphaPolicy, ColorTag, Effort, Format, MipFilter, MipKeyword, MipLevels, Profile, ResizeMode,
-    SearchRadius, Subtype, Target,
+    AlphaPolicy, ColorContent, ColorTag, Effort, Format, MipFilter, MipKeyword, MipLevels, Profile,
+    ResizeMode, SearchRadius, Subtype, Target,
 };
 use engine::policy::default_backend;
 use engine::presets::PresetRegistry;
@@ -154,9 +154,6 @@ pub fn resolve(s: &PsddsSettings) -> Result<(PsddsSettings, PsddsControls), Stri
     range("filter", s.filter, 4)?;
     range("mips", s.mips, 2)?;
     let count = quality_labels(s.format).len() as u32;
-    if count > 0 {
-        range("quality", s.quality, count)?;
-    }
     let colour = s.texture_type == 0;
     // R1: only BC1, BC3, BC7 and RGBA8 have an _SRGB form.
     let srgb_capable = matches!(s.format, 0 | 1 | 4 | 5);
@@ -176,7 +173,12 @@ pub fn resolve(s: &PsddsSettings) -> Result<(PsddsSettings, PsddsControls), Stri
         } else {
             filter_index(base(s.texture_type)?.mips.filter)
         },
-        quality: if count > 0 { s.quality } else { 0 },
+        // DC8: an index outside the format's list (remembered from another format) falls back to the preset's.
+        quality: if s.quality < count {
+            s.quality
+        } else {
+            preset_quality(s.format, base(s.texture_type)?)
+        },
         ..*s
     };
     Ok((effective, controls))
@@ -188,12 +190,14 @@ pub fn profile_for(s: &PsddsSettings, has_alpha: bool) -> Result<Profile, String
     let mut p = base(e.texture_type)?.clone();
     p.format = FORMATS[e.format as usize];
     p.encoder.backend = default_backend(p.format);
-    // The sRGB control is the file's tag; the colour content stays the preset's (Colour: sRGB-encoded).
-    p.color.tag = if e.srgb == 1 {
-        ColorTag::Srgb
-    } else {
-        ColorTag::Unorm
-    };
+    // DC9: the sRGB control sets content and tag together; a preset with tag n/a keeps its colour fields.
+    if p.color.tag != ColorTag::NotApplicable {
+        (p.color.content, p.color.tag) = if e.srgb == 1 {
+            (ColorContent::Srgb, ColorTag::Srgb)
+        } else {
+            (ColorContent::Linear, ColorTag::Unorm)
+        };
+    }
     p.mips.filter = FILTERS[e.filter as usize];
     p.mips.levels = MipLevels::Keyword(if e.mips == 1 {
         MipKeyword::Full
