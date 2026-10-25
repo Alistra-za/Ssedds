@@ -121,6 +121,7 @@ See [Known issues](docs/wiki/Known-Issues.md) and the [CHANGELOG](CHANGELOG.md).
 | [Troubleshooting](docs/wiki/Troubleshooting.md) | [Research behind the defaults](docs/wiki/Research.md) | |
 
 Photoshop: an optional [Tessalith DDS plugin](docs/photoshop-plugin.md) (MIT, with the engine under MPL-2.0) opens and saves DDS in Photoshop.
+chaiNNer: three optional [Tessalith DDS nodes](chainner/README.md) (GPL-3.0-or-later, with the same MIT/MPL-2.0 `psdds.dll`) save DDS from chaiNNer.
 
 Design records: [docs/DECISIONS.md](docs/DECISIONS.md), [docs/RULINGS.md](docs/RULINGS.md), [docs/presets-changelog.md](docs/presets-changelog.md) and the research pages in [docs/research/](docs/research/README.md).
 
