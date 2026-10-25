@@ -2,7 +2,7 @@
 #
 #   .\photoshop\build.ps1                  Release build (static CRT); prints the .8bi path
 #   .\photoshop\build.ps1 -Configuration Debug
-#   .\photoshop\build.ps1 -Test            build psdds, then build and run the console tests only
+#   .\photoshop\build.ps1 -Test            build the plugin, then build and run the console tests (unload_test loads the .8bi)
 #
 # The Photoshop SDK is read from $env:PS_SDK, or from "tools\adobe photoshop sdk 2026" in the repo's main checkout.
 # Build outputs go to photoshop\build\ (ignored) and the Rust library to target\psdds\.
@@ -37,24 +37,6 @@ try {
 }
 $libDir = Join-Path $repo 'target\psdds\x86_64-pc-windows-msvc\release'
 
-if ($Test) {
-    $devCmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
-    $libs = "psdds.lib ws2_32.lib userenv.lib ntdll.lib dbghelp.lib user32.lib"
-    $tests = @(
-        @{ exe = 'pixels_test.exe'; src = "`"$here\tests\pixels_test.cpp`" `"$here\src\pixels.cpp`""; link = '' },
-        @{ exe = 'dialog_test.exe'; src = "`"$here\tests\dialog_test.cpp`" `"$here\src\dialog.cpp`""; link = "/link /LIBPATH:`"$libDir`" $libs" }
-    )
-    $failed = 0
-    foreach ($t in $tests) {
-        $exe = Join-Path $out $t.exe
-        $cl = "cl /nologo /EHsc /MT /W4 /WX /DNOMINMAX /Fe`"$exe`" $($t.src) $($t.link)"
-        & $env:ComSpec /c "`"$devCmd`" -arch=x64 -no_logo && cd /d `"$out`" && $cl"
-        if ($LASTEXITCODE -ne 0) { Write-Host "$($t.exe): FAILED to build"; $failed++; continue }
-        & $exe
-        if ($LASTEXITCODE -ne 0) { $failed++ }
-    }
-    exit [int]($failed -ne 0)
-}
 $sdk = $env:PS_SDK
 if (-not $sdk) {
     $common = (git -C $repo rev-parse --path-format=absolute --git-common-dir).Trim()
@@ -74,3 +56,25 @@ if ($LASTEXITCODE -ne 0) { throw "MSBuild failed ($LASTEXITCODE)" }
 $plugin = Join-Path $out "$Configuration\TessalithDDS.8bi"
 if (-not (Test-Path $plugin)) { throw "Build finished but $plugin is missing." }
 Write-Host "Built $plugin"
+
+if ($Test) {
+    $devCmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+    $libs = "psdds.lib ws2_32.lib userenv.lib ntdll.lib dbghelp.lib user32.lib"
+    $api = Join-Path $sdk 'pluginsdk\photoshopapi'
+    $sdkInc = "/DWIN32 /D_WINDOWS /I`"$api\photoshop`" /I`"$api\pica_sp`""
+    $tests = @(
+        @{ exe = 'pixels_test.exe'; src = "`"$here\tests\pixels_test.cpp`" `"$here\src\pixels.cpp`""; link = '' },
+        @{ exe = 'dialog_test.exe'; src = "`"$here\tests\dialog_test.cpp`" `"$here\src\dialog.cpp`""; link = "/link /LIBPATH:`"$libDir`" $libs" },
+        @{ exe = 'unload_test.exe'; src = "$sdkInc `"$here\tests\unload_test.cpp`""; link = ''; args = @($plugin) }
+    )
+    $failed = 0
+    foreach ($t in $tests) {
+        $exe = Join-Path $out $t.exe
+        $cl = "cl /nologo /EHsc /MT /W4 /WX /DNOMINMAX /Fe`"$exe`" $($t.src) $($t.link)"
+        & $env:ComSpec /c "`"$devCmd`" -arch=x64 -no_logo && cd /d `"$out`" && $cl"
+        if ($LASTEXITCODE -ne 0) { Write-Host "$($t.exe): FAILED to build"; $failed++; continue }
+        & $exe @($t.args)
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+    exit [int]($failed -ne 0)
+}

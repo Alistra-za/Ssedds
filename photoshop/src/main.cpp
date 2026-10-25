@@ -56,6 +56,14 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
 
 extern "C" __declspec(dllexport) void PluginMain(const int16 selector, FormatRecordPtr record, intptr_t *data,
                                                  int16 *result) {
+    // Pin the module (Note DC25): the engine's rayon workers live on after a save and sleep inside this module's
+    // code, so if Photoshop unloaded it, their next wake-up would execute unmapped memory.
+    static const bool pinned = [] {
+        HMODULE self = nullptr;
+        return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                  reinterpret_cast<LPCWSTR>(&PluginMain), &self) != 0;
+    }();
+    (void)pinned;
     // The About call passes an AboutRecord, not a FormatRecord; Tessalith DDS has no About box.
     if (selector == formatSelectorAbout || !record) {
         *result = noErr;
