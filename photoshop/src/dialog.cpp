@@ -44,6 +44,7 @@ struct Context {
     bool writable = true;                  // false: the preset file could not be read in full, so it is never written (DC40)
     std::vector<std::string> unparsed;     // lines of the file that did not parse, written back unchanged
     int picked = -1;                       // the preset the user chose; shown while its settings still match (DC40)
+    bool custom = false;                   // the user picked "Custom": shown until a preset is picked or saved (DC45)
 };
 
 const wchar_t kReadOnlyMessage[] = L"The preset file could not be read, so presets can't be changed.";
@@ -112,7 +113,7 @@ void refresh(HWND dlg, Context &ctx, int changed) {
             if (s.formats[it.value]) add(combo, it.label, it.value);
     }
     if (changed == 0 || changed == IDC_TYPE || changed == IDC_FORMAT) fill_quality(dlg, s.shown.format);
-    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
     ctx.picked = match;
     select_value(dlg, IDC_PRESET, match < 0 ? kCustom : uint32_t(match));
     select_value(dlg, IDC_FORMAT, s.shown.format);
@@ -167,7 +168,7 @@ INT_PTR CALLBACK name_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 // Save preset: name it (an existing name, in any case, asks to replace that preset), then write the file.
 void save_preset(HWND dlg, Context &ctx) {
     if (!ctx.writable) return message(dlg, kReadOnlyMessage);
-    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
     std::wstring name = match < 0 ? std::wstring() : ctx.presets[size_t(match)].name;
     HMODULE self = reinterpret_cast<HMODULE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
     if (DialogBoxParamW(self, MAKEINTRESOURCEW(IDD_PRESET_NAME), dlg, name_proc, LPARAM(&name)) != IDOK) return;
@@ -186,12 +187,13 @@ void save_preset(HWND dlg, Context &ctx) {
     }
     ctx.presets = next;
     ctx.picked = at;
+    ctx.custom = false;
     fill_presets(dlg, ctx);
 }
 
 void delete_preset(HWND dlg, Context &ctx) {
     if (!ctx.writable) return message(dlg, kReadOnlyMessage);
-    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
     if (match < 0) return;
     if (!ask(dlg, L"Delete the preset \"" + ctx.presets[size_t(match)].name + L"\"?")) return;
     std::vector<Preset> next = ctx.presets;
@@ -236,7 +238,8 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         int changed = id;
         switch (id) {
         case IDC_PRESET:
-            if (v >= ctx->presets.size()) break; // Custom: nothing to apply; refresh shows the match again
+            ctx->custom = v >= ctx->presets.size();
+            if (ctx->custom) break; // Custom: keep the settings, show Custom even if they match a preset
             ctx->raw = ctx->presets[v].settings;
             ctx->picked = int(v);
             changed = 0; // type and format may both change

@@ -168,6 +168,8 @@ struct DialogUser {
     bool untick_mips = false; // click the Mipmaps checkbox (after any pick)
     bool tick_discard = false; // click the Discard transparency checkbox (after any pick)
     wchar_t preset_before[64] = {}, preset_after[64] = {}; // the preset list's text before and after the sRGB tick
+    wchar_t preset_custom[64] = {}; // the preset list's text after picking "Custom" over a matching preset
+    bool delete_enabled_custom = true; // the Delete button after that pick
     bool seen = false, filter_enabled_before_srgb = true, filter_enabled = false, filter_enabled_after = false;
     LRESULT formats = 0; // entries in the Format list
     wchar_t filter_shown[32] = {};
@@ -225,6 +227,11 @@ static DWORD WINAPI play_dialog(void *arg) {
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
     u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
     GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_before, 64);
+    HWND preset = GetDlgItem(dlg, IDC_PRESET);
+    SendMessageW(preset, CB_SELECTSTRING, WPARAM(-1), reinterpret_cast<LPARAM>(L"Custom"));
+    SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_PRESET, CBN_SELCHANGE), reinterpret_cast<LPARAM>(preset));
+    GetWindowTextW(preset, u->preset_custom, 64);
+    u->delete_enabled_custom = IsWindowEnabled(GetDlgItem(dlg, IDC_PRESET_DELETE)) != 0;
     // DC34: sRGB starts off; since DC39 the filter is editable either way. Tick it to check the preset turns Custom.
     if (IsDlgButtonChecked(dlg, IDC_SRGB) != BST_CHECKED) SendMessageW(GetDlgItem(dlg, IDC_SRGB), BM_CLICK, 0, 0);
     u->filter_enabled = IsWindowEnabled(filter) != 0;
@@ -288,7 +295,8 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         (i == 0 ? kaiser : box) = contents(path);
         expect(result == 0 && u.seen && u.filter_enabled_before_srgb && u.filter_enabled &&
                    wcscmp(u.filter_shown, u.pick) == 0 && wcscmp(u.preset_before, L"Colour BC7") == 0 &&
-                   wcscmp(u.preset_after, L"Custom") == 0,
+                   wcscmp(u.preset_after, L"Custom") == 0 && wcscmp(u.preset_custom, L"Custom") == 0 &&
+                   !u.delete_enabled_custom,
                i == 0 ? "opaque layer: dialog after the pixels, filter editable with sRGB off and on (DC39), "
                         "Kaiser picked"
                       : "alpha 254/255 counts as opaque: filter editable, Box picked");
