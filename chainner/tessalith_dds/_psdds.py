@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-ABI_VERSION = 2  # must equal PSDDS_ABI_VERSION in photoshop/psdds.h (a test parses it)
+ABI_VERSION = 3  # must equal PSDDS_ABI_VERSION in photoshop/psdds.h (a test parses it)
 # Labels for the header's enum indices; they are the ABI, not a rule.
 FORMATS = ("BC1", "BC3", "BC4", "BC5", "BC7", "RGBA8")
 TYPES = ("Colour", "Normal", "Linear mask")

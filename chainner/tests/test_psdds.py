@@ -109,7 +109,7 @@ class PsddsTests(unittest.TestCase):
                                               "Mask/data BC7", "Greyscale mask BC4"])
         for i, (name, s) in enumerate(ps):
             self.assertEqual(s["srgb"], 0, name)
-            self.assertEqual(s["discard_alpha"], 1 if i == 1 else 0, name)
+            self.assertEqual(s["discard_alpha"], 1 if i in (1, 4) else 0, name)
             self.assertEqual(s, P.resolve(s, False)[0], name)
             e = P.resolve(s, True)[0]
             self.assertEqual({k: v for k, v in s.items() if k != "filter"}, {k: v for k, v in e.items() if k != "filter"}, name)
@@ -231,8 +231,8 @@ class PsddsTests(unittest.TestCase):
             self.assertEqual(Path(d, "x.dds.tmp").read_bytes(), b"user")
 
     def test_abi_mismatch(self):
-        with mock.patch.object(P, "ABI_VERSION", 3):
-            with self.assertRaisesRegex(P.PsddsError, r"ABI 2, these nodes need 3"):
+        with mock.patch.object(P, "ABI_VERSION", 4):
+            with self.assertRaisesRegex(P.PsddsError, r"ABI 3, these nodes need 4"):
                 P._load()
 
     def test_rmaos_fills(self):
