@@ -4,6 +4,7 @@ from nodes.groups import Condition
 from nodes.properties.inputs import BoolInput, DropDownInput, NumberInput
 
 from . import _psdds as P
+from ._pbr import FILL_DEFAULTS
 
 PRESET_ID, TYPE_ID, SRGB_ID = 4, 5, 6
 FMT_ID = {0: 7, 1: 8, 2: 9}
@@ -139,7 +140,7 @@ def visible(control):
 NORMAL = P.TYPES.index("Normal")
 N_FMT_ID, N_DISCARD_ID, N_MIPS_ID, N_QUALITY_ID0, N_RMAOS_ID = 4, 5, 6, 7, 10  # quality 7, 8, 9
 ROLE_LABELS = ("Roughness", "Metallic", "AO", "Specular")  # psdds role order (P.ROLES)
-CHANNEL_ID0, FILL_MODE_ID0, FILL_ID0 = 10, 20, 30  # + role index
+CHANNEL_ID0, FILL_ID0 = 10, 30  # + role index; 20-23 were the Default/Custom fill dropdowns (retired)
 RMAOS_QUALITY_ID, RMAOS_MIPS_ID = 40, 41
 
 
@@ -162,14 +163,10 @@ def channel_input(role):
     return _dd(f"{ROLE_LABELS[role]} channel", ("R", "G", "B", "A"), 0, CHANNEL_ID0 + role)
 
 
-def fill_mode_input(role):
-    return _dd(f"{ROLE_LABELS[role]} fill", ("Default", "Custom"), 0, FILL_MODE_ID0 + role).with_docs(
-        "Default uses the engine's neutral value for this channel; Custom uses the number below (0-255)."
-    )
-
-
 def fill_input(role):
-    return NumberInput(f"{ROLE_LABELS[role]} value", min=0, max=255, default=0).with_id(FILL_ID0 + role)
+    return NumberInput(f"{ROLE_LABELS[role]} value", min=0, max=255, default=FILL_DEFAULTS[role]).with_id(
+        FILL_ID0 + role
+    ).with_docs("The value (0-255) for this channel when no image is connected.")
 
 
 def rmaos_quality_input():

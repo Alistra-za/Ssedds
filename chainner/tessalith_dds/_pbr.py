@@ -17,7 +17,9 @@ RMAOS_TYPE = "TessalithRmaos"
 RMAOS_TYPE_DEF = "struct TessalithRmaos;"
 NORMAL = _psdds.TYPES.index("Normal")
 CHANNEL = (2, 1, 0, 3)  # dropdown R, G, B, A -> index in chaiNNer's BGR(A) array (layout fact)
-FILL_DEFAULT, FILL_CUSTOM = 0, 1
+# fill shown for an unconnected role: the engine's neutral defaults (pack::default_for), so the bytes match a -1 fill.
+# Roughness is required, so it has none.
+FILL_DEFAULTS = (None, 0, 255, 255)
 
 
 @dataclass(frozen=True)
@@ -36,13 +38,9 @@ def sources(images, picks) -> tuple:
     )
 
 
-def fill(mode: int, number: int) -> int:
-    return -1 if mode == FILL_DEFAULT else int(number)
-
-
-def fills(srcs, modes, numbers) -> tuple:
-    """A connected role's fill inputs are hidden, so ignored."""
-    return tuple(-1 if s is not None else fill(m, n) for s, m, n in zip(srcs, modes, numbers))
+def fills(srcs, numbers) -> tuple:
+    """A connected role's fill input is hidden, so ignored."""
+    return tuple(-1 if s is not None else int(n) for s, n in zip(srcs, numbers))
 
 
 def normal_settings(fmt: int, mips: bool, quality: int, discard: bool) -> dict:
