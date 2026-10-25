@@ -305,8 +305,8 @@ pub unsafe extern "C" fn psdds_encode(
 
 /// [`psdds_encode`] for a document of `depth` bits (8, 16 or 32; any other depth is refused as "depth <d> out of
 /// range" before `rgba` is read). Depth 8 and 16 take 0..1 floats as `psdds_encode` does. Depth 32 takes
-/// Photoshop's raw samples: for Colour they are linear light (RGB unchanged, alpha clamped; the engine handles
-/// NaN, negatives and the half range), for every other type they are clamped as before (DF3).
+/// Photoshop's raw samples: for Colour they are linear light (RGB unchanged for BC6H/RGBA16F and clipped to 0..1 for the
+/// 8-bit formats, alpha clamped; the engine handles NaN, negatives and the half range), for every other type they are clamped as before (DF3).
 ///
 /// # Safety
 /// As `psdds_encode`.
@@ -619,7 +619,7 @@ pub unsafe extern "C" fn psdds_decode(
 /// `has_alpha` are then byte-identical to it), or 32 for BC6H UF16/SF16, RGBA16F and RGBA32F: `out` then holds
 /// `width * height * 16` bytes of native-endian f32 RGBA (the top mip; NaN -> 0, ±inf -> ±65504, negatives and values
 /// above 1 kept; BC6H alpha 1.0). Read it with memcpy: the alignment is not promised. `has_alpha` is 1 for the float
-/// formats only when RGBA16F/RGBA32F has an alpha below 254/255. Cube maps, arrays, the size rule and too little
+/// formats only when RGBA16F/RGBA32F has an alpha below 254/255. Alpha is clamped to 0..1. Cube maps, arrays, the size rule and too little
 /// memory are refused as `psdds_decode` refuses them.
 ///
 /// # Safety

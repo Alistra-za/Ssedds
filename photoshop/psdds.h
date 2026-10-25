@@ -111,9 +111,10 @@ int32_t psdds_encode(const float *rgba, uint32_t width, uint32_t height, uint32_
 
 /* psdds_encode for a document of `depth` bits: 8, 16 or 32 (anything else: "depth <d> out of range", before rgba is
  * read). psdds_encode is this call with depth 8. At depth 8 and 16 the input is 0..1 floats as above. At depth 32 it is
- * Photoshop's raw samples: a Colour image is linear light (for BC6H/RGBA16F RGB is unchanged, and the engine maps NaN and
- * -inf to 0 and +inf to 65504; for the 8-bit formats RGB is clamped to 0..1 first, NaN to 0; alpha is clamped), every other type is clamped as above (Note DF3). BC6H and
- * RGBA16F need depth 16 or 32 (psdds_resolve_depth); at depth 8 they fall back to the type's default format. */
+ * Photoshop's raw samples: a Colour image is linear light (for BC6H/RGBA16F RGB is unchanged, and the engine maps NaN
+ * and -inf to 0 and +inf to 65504; for the 8-bit formats RGB is clamped to 0..1 first, NaN to 0; alpha is clamped),
+ * every other type is clamped as above (Note DF3). BC6H and RGBA16F need depth 16 or 32 (psdds_resolve_depth); at
+ * depth 8 they fall back to the type's default format. */
 int32_t psdds_encode_depth(const float *rgba, uint32_t width, uint32_t height, uint32_t has_alpha, uint32_t depth,
                            const PsddsSettings *settings, PsddsBuf *out, char *err, size_t err_cap);
 /* Decode the top mip of a DDS file (len bytes) to RGBA8 in *out: *width * *height pixels, row-major, exactly
@@ -127,7 +128,8 @@ int32_t psdds_decode(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *
 /* psdds_decode that also opens HDR (Note DF4). *depth = 8: every format psdds_decode opens; out and has_alpha are
  * byte-identical to it. *depth = 32: BC6H UF16/SF16, RGBA16F and RGBA32F; out holds width*height*16 bytes of
  * native-endian f32 RGBA (top mip). NaN becomes 0 and +-inf becomes +-65504; negatives and values above 1 are kept;
- * BC6H alpha is 1.0. *has_alpha = 1 only for RGBA16F/RGBA32F with an alpha below 254/255 (psdds_alpha_used's rule).
+ * BC6H alpha is 1.0; alpha is clamped to 0..1. *has_alpha = 1 only for RGBA16F/RGBA32F with an alpha below 254/255
+ * (psdds_alpha_used's rule).
  * The buffer is bytes: its alignment is not promised, so read it with memcpy. Release with psdds_free. Cube maps,
  * arrays, the size rule and too little memory are refused as psdds_decode refuses them. NULL depth: refused. */
 int32_t psdds_decode_depth(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *height, uint32_t *has_alpha,
