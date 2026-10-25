@@ -597,6 +597,63 @@ static int band_alpha_plane(Entry entry, const wchar_t *path) {
     return bad;
 }
 
+// Drives Open as Photoshop would: ReadPrepare, ReadStart, ReadContinue until data is NULL, ReadFinish. Returns every
+// band's planes concatenated; *described gets the mode, depth and planes the plug-in set.
+static std::string open_planes(Entry entry, const wchar_t *path, FormatRecord *described) {
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    h.r->planes = 0;
+    h.r->transparencyPlane = -1; // the host passes -1 before the plug-in decides
+    std::string all;
+    int16 result = h.call(formatSelectorReadPrepare);
+    if (!result) result = h.call(formatSelectorReadStart);
+    while (result == 0 && h.r->data) {
+        const size_t bytes = size_t(h.r->planeBytes) * size_t(h.r->hiPlane - h.r->loPlane + 1);
+        all.append(static_cast<const char *>(h.r->data), bytes);
+        result = h.call(formatSelectorReadContinue);
+    }
+    h.call(formatSelectorReadFinish);
+    CloseHandle(f);
+    described->imageMode = h.r->imageMode;
+    described->depth = h.r->depth;
+    described->planes = h.r->planes;
+    if (result) all.clear();
+    return all;
+}
+
+static unsigned long long fnv1a(const std::string &s) {
+    unsigned long long h = 14695981039346656037ull;
+    for (unsigned char c : s) h = (h ^ c) * 1099511628211ull;
+    return h;
+}
+
+// The 8-bit and 16-bit save bytes and the 8-bit Open planes, hashed before the HDR work (DE1): they must not move.
+static int eight_bit_bytes_pinned(Entry entry, const wchar_t *path) {
+    const unsigned long long want[4] = {0xbc136741f290c000ull, 0xbc136741f290c000ull, 0x105ec8cf089b51a6ull, 0xd8b29c71aaa18d25ull};
+    unsigned long long got[4] = {};
+    got[0] = fnv1a(flat_save(entry, path, 8, gradient8));
+    FormatRecord described = {};
+    got[3] = fnv1a(open_planes(entry, path, &described)); // reads the 8-bit file just written
+    {
+        MergedDoc m(8, gradient8, AlphaSource::Merged);
+        bool bands = false;
+        std::string out;
+        layered_save(entry, path, 8, &m, &bands, &out);
+        got[1] = fnv1a(out);
+    }
+    got[2] = fnv1a(flat_save(entry, path, 16, gradient16));
+    DeleteFileW(path);
+    const char *names[4] = {"flat 8-bit save", "layered 8-bit save", "flat 16-bit save", "8-bit Open planes"};
+    int bad = 0;
+    for (int i = 0; i < 4; i++) {
+        printf("  %s %s 0x%016llx\n", got[i] == want[i] ? "ok  " : "FAIL", names[i], got[i]);
+        bad += got[i] == want[i] ? 0 : 1;
+    }
+    printf("  Open described mode %d depth %d planes %d\n", int(described.imageMode), int(described.depth), int(described.planes));
+    printf("%s eight_bit_bytes_pinned\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc != 2) {
         printf("usage: host_test <TessalithDDS.8bi>\n");
@@ -625,6 +682,7 @@ int wmain(int argc, wchar_t **argv) {
     failed += dialog_after_pixels(entry, out);
     failed += merged_composite_save(entry, out);
     failed += band_alpha_plane(entry, out);
+    failed += eight_bit_bytes_pinned(entry, out);
     const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
     printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
     failed += seeded ? 0 : 1;
