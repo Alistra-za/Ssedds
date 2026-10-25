@@ -238,17 +238,24 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
 }
 
 
+// A refusal before any pixel is read: the options chosen for this save must not leak into the next one (a script or
+// batch that skips OptionsStart), so the flags are reset as on every other end of a save (Note DC40).
+static int16 refuse(FormatRecord *r, intptr_t *data, const char *message) {
+    free_state(r, data);
+    return report_error(r, message);
+}
+
 int16 write_start(FormatRecord *r, intptr_t *data) {
     const bool rgb = r->imageMode == plugInModeRGBColor || r->imageMode == plugInModeRGB48;
     if (!rgb || (r->depth != 8 && r->depth != 16))
-        return report_error(r, "Tessalith DDS saves only 8-bit and 16-bit RGB documents.");
+        return refuse(r, data, "Tessalith DDS saves only 8-bit and 16-bit RGB documents.");
     if (!r->HostSupports32BitCoordinates)
-        return report_error(r, "this Photoshop version is too old for Tessalith DDS.");
+        return refuse(r, data, "this Photoshop version is too old for Tessalith DDS.");
 
     const int32 width = r->imageSize32.h, height = r->imageSize32.v;
-    if (width <= 0 || height <= 0) return report_error(r, "the image is empty.");
+    if (width <= 0 || height <= 0) return refuse(r, data, "the image is empty.");
     if (width > kMaxSide || height > kMaxSide)
-        return report_error(r, "this image is larger than 16384 pixels on a side, the most Skyrim supports.");
+        return refuse(r, data, "this image is larger than 16384 pixels on a side, the most Skyrim supports.");
 
     const int16 alpha = alpha_plane(r);
     const int16 channels = alpha >= 0 ? 4 : 3;
@@ -268,7 +275,14 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
             char note[160];
             snprintf(note, sizeof note, "layered save without a usable merged composite: %s", why);
             trace_note(note);
-            return report_error(r, kNothingSaved);
+            return refuse(r, data, kNothingSaved);
+        }
+        if (merged == 3) { // shortcut: no field proved reliable for "no Background layer" (DC40), so this saves opaque
+            char note[160];
+            snprintf(note, sizeof note, "layered save without an alpha source: transparencyPlane %d layers %d alphas %d",
+                     int(r->transparencyPlane), r->documentInfo ? int(r->documentInfo->layerCount) : -1,
+                     r->documentInfo ? int(r->documentInfo->alphaChannelCount) : -1);
+            trace_note(note);
         }
         trace_note(merged == 4 ? "saving from the merged composite with alpha" : "saving from the merged composite");
         return write_merged(r, data, ch, merged);

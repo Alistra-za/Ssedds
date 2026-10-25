@@ -122,6 +122,14 @@ void trace_document(const FormatRecord *r) {
         describe_list(line, "merged", d->mergedCompositeChannels);
         describe_list(line, "mergedTransparency", d->mergedTransparency);
         describe_list(line, "alpha", d->alphaChannels);
+        // Per layer: name and whether it has a transparency channel (a Background layer should not). Evidence for
+        // telling "no Background layer" apart later (DC40); first 8 layers only.
+        if (d->maxVersion >= 2) {
+            line.add(" layerlist");
+            int shown = 0;
+            for (const ReadLayerDesc *l = d->layersDescriptor; l && shown < 8; l = l->next, shown++)
+                line.add(" {\"%.24s\" T%d}", l->name ? l->name : "", l->transparency != nullptr);
+        }
     }
     memcpy(line.text + line.n, "\r\n", 3);
     append_trace(line.text, int(line.n + 2));
