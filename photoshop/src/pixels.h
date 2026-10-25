@@ -24,3 +24,8 @@ constexpr int64_t max_dds_file_bytes() {
     return bytes;
 }
 constexpr int64_t kMaxDdsFileBytes = max_dds_file_bytes();
+
+// FilterFile: false when the first len bytes of a file (up to 148: magic, header, DX10 header) show a DDS that Open
+// will refuse, so another DDS plug-in can open it: BC6H or float formats, cube maps, texture arrays. A file shorter than
+// the headers is claimed, so the reader can say why it fails. Not a DDS (no magic): false.
+bool dds_header_openable(const uint8_t *h, size_t len);

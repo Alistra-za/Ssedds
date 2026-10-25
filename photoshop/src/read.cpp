@@ -71,6 +71,7 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
         if (psdds_decode(bytes.data(), bytes.size(), &width, &height, &has_alpha, &s->pixels, err, sizeof err) != 0)
             return report_error(r, err[0] ? as_reason(err) : "of an internal error in Tessalith DDS.");
     }
+    if (width == 0 || height == 0) return report_error(r, "the DDS image has no pixels.");
     // psdds reports alpha for every BC3/BC7/RGBA8 file; a fully opaque one opens without transparency (DC20), so a
     // re-save keeps the colour mip filter instead of the alpha rule's Box.
     bool translucent = false;
@@ -98,10 +99,14 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
 } // namespace
 
 int16 filter_file(FormatRecord *r) {
-    // PIFormat.h FilterFile: claim only files that start with the DDS magic, so other files get Photoshop's message.
-    uint8_t magic[4] = {};
-    const bool dds = read_all(reinterpret_cast<HANDLE>(r->dataFork), magic, 4) && memcmp(magic, "DDS ", 4) == 0;
-    return dds ? noErr : formatCannotRead;
+    // PIFormat.h FilterFile: claim only files this plug-in can open, so Photoshop offers the rest (HDR, cube maps,
+    // texture arrays, non-DDS) to other plug-ins or shows its own message. Only the headers are read.
+    uint8_t head[148] = {};
+    DWORD got = 0;
+    const HANDLE file = reinterpret_cast<HANDLE>(r->dataFork);
+    LARGE_INTEGER start = {};
+    const bool read = SetFilePointerEx(file, start, nullptr, FILE_BEGIN) && ReadFile(file, head, sizeof head, &got, nullptr);
+    return read && dds_header_openable(head, got) ? noErr : formatCannotRead;
 }
 
 int16 read_start(FormatRecord *r, intptr_t *data) {
@@ -113,6 +118,8 @@ int16 read_start(FormatRecord *r, intptr_t *data) {
     // Refused before allocating: nothing this plug-in opens is larger (pixels.h kMaxDdsFileBytes).
     if (size.QuadPart > kMaxDdsFileBytes)
         return report_error(r, "this file is too large to be a DDS this plugin can open.");
+
+    if (size.QuadPart == 0) return report_error(r, "the DDS file is empty.");
 
     Globals *g = globals_of(data);
     free_read(r, data); // a stale state from an earlier open that never reached ReadFinish

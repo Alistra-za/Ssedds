@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 static int failures = 0;
 
@@ -106,7 +107,49 @@ static void largest_dds_is_16k_rgba8_full_chain() {
     check(kMaxDdsFileBytes == 1431655912, __func__, "1,431,655,912 bytes");
 }
 
-int main() {    struct {
+static void header(uint8_t *h, size_t n, const char *fourcc, uint32_t caps2, uint32_t dxgi, uint32_t misc, uint32_t array) {
+    memset(h, 0, n);
+    memcpy(h, "DDS ", 4);
+    if (fourcc) memcpy(h + 84, fourcc, 4);
+    memcpy(h + 112, &caps2, 4);
+    memcpy(h + 128, &dxgi, 4);
+    memcpy(h + 136, &misc, 4);
+    memcpy(h + 140, &array, 4);
+}
+
+static void filter_file_claims_only_openable_headers() {
+    uint8_t h[148];
+    header(h, sizeof h, "DXT5", 0, 0, 0, 0);
+    check(dds_header_openable(h, 148), __func__, "legacy BC3 opens");
+    header(h, sizeof h, "DX10", 0, 98, 0, 1);
+    check(dds_header_openable(h, 148), __func__, "DX10 BC7, array size 1, opens");
+    header(h, sizeof h, "DX10", 0, 95, 0, 1);
+    check(!dds_header_openable(h, 148), __func__, "BC6H UF16 declined");
+    header(h, sizeof h, "DX10", 0, 96, 0, 1);
+    check(!dds_header_openable(h, 148), __func__, "BC6H SF16 declined");
+    header(h, sizeof h, "DX10", 0, 10, 0, 1);
+    check(!dds_header_openable(h, 148), __func__, "RGBA16F declined");
+    header(h, sizeof h, "DX10", 0, 2, 0, 1);
+    check(!dds_header_openable(h, 148), __func__, "RGBA32F declined");
+    header(h, sizeof h, "DX10", 0, 98, 0x4, 1);
+    check(!dds_header_openable(h, 148), __func__, "DX10 cube map declined");
+    header(h, sizeof h, "DX10", 0, 98, 0, 6);
+    check(!dds_header_openable(h, 148), __func__, "DX10 array declined");
+    header(h, sizeof h, "DXT1", 0x200, 0, 0, 0);
+    check(!dds_header_openable(h, 148), __func__, "legacy cube map (caps2 0x200) declined");
+    header(h, sizeof h, nullptr, 0, 0, 0, 0);
+    uint32_t f16 = 113;
+    memcpy(h + 84, &f16, 4);
+    check(!dds_header_openable(h, 148), __func__, "legacy A16B16G16R16F declined");
+    header(h, sizeof h, "DXT5", 0, 0, 0, 0);
+    check(dds_header_openable(h, 128), __func__, "128 bytes, no DX10 header needed");
+    check(dds_header_openable(h, 40), __func__, "truncated file is claimed so the reader says why");
+    check(!dds_header_openable(h, 3), __func__, "too short for the magic");
+    h[0] = 'X';
+    check(!dds_header_openable(h, 148), __func__, "wrong magic");
+}
+int main() {
+    struct {
         const char *name;
         void (*run)();
     } tests[] = {
@@ -119,6 +162,7 @@ int main() {    struct {
         {"bands_convert_into_their_rows", bands_convert_into_their_rows},
         {"deinterleave_rgba8_to_planes", deinterleave_rgba8_to_planes_test},
         {"largest_dds_is_16k_rgba8_full_chain", largest_dds_is_16k_rgba8_full_chain},
+        {"filter_file_claims_only_openable_headers", filter_file_claims_only_openable_headers},
     };
     for (auto &t : tests) {
         int before = failures;
