@@ -1,5 +1,5 @@
 // Tessalith DDS: the Open path. Reads the whole file through the host's file handle, decodes the top mip with psdds
-// (RGBA8, or RGBA f32 for BC6H and the float formats, DF7) and hands it to Photoshop as an 8-bit RGB or 32-bit RGB96
+// (RGBA8, or RGBA f32 for BC6H and the float formats, DF7) and hands it to Photoshop as an 8-bit or 32-bit RGB
 // document in planar bands of whole rows.
 // MIT licence (see photoshop/LICENSE).
 #include "write.h"
@@ -87,8 +87,8 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
                                  : opens_with_transparency(s->pixels.data, size_t(width) * size_t(height), has_alpha);
     s->planes = translucent ? 4 : 3;
 
-    // 32-bit documents are RGB96 with no ICC profile (DF7); depth 8 is the old path.
-    r->imageMode = s->depth == 32 ? plugInModeRGB96 : plugInModeRGBColor;
+    // RGB mode at depth 8 or 32; Photoshop derives the deep mode from depth (RGB96 on read is rejected, DF7). No ICC profile.
+    r->imageMode = plugInModeRGBColor;
     r->depth = int16(s->depth);
     r->planes = s->planes;
     r->imageSize32.h = int32(width);

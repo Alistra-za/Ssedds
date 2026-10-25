@@ -833,9 +833,9 @@ static int hdr_open(Entry entry, const wchar_t *path) {
         const int16 saved = interactive_save32(entry, path, hdr_pixel, &u);
         const OpenedDoc d = open_doc(entry, path);
         const int i = 40; // x >= 32: alpha 0.5
-        expect(saved == 0 && d.result == 0 && d.described.imageMode == plugInModeRGB96 && d.described.depth == 32 &&
+        expect(saved == 0 && d.result == 0 && d.described.imageMode == plugInModeRGBColor && d.described.depth == 32 &&
                    d.described.planes == 4 && d.described.transparencyPlane == 3,
-               "RGBA16F opens as RGB96, depth 32, 4 planes, transparencyPlane 3");
+               "RGBA16F opens as RGB mode, depth 32, 4 planes, transparencyPlane 3");
         expect(d.samples[0][i] == 4.0f && d.samples[1][i] == 0.5f && d.samples[2][i] == 0.25f && d.samples[3][i] == 0.5f,
                "RGBA16F samples 4.0, 0.5, 0.25, 0.5 kept");
         expect(d.data_null_after_continue && d.data_null_after_finish, "state freed: data NULL after the last ReadContinue and ReadFinish");
@@ -847,9 +847,9 @@ static int hdr_open(Entry entry, const wchar_t *path) {
         const int16 saved = interactive_save32(entry, path, hdr_pixel, &u);
         const OpenedDoc d = open_doc(entry, path);
         const float r = d.samples[0][40];
-        expect(saved == 0 && d.result == 0 && d.described.imageMode == plugInModeRGB96 && d.described.depth == 32 &&
+        expect(saved == 0 && d.result == 0 && d.described.imageMode == plugInModeRGBColor && d.described.depth == 32 &&
                    d.described.planes == 3 && d.described.transparencyPlane == 0,
-               "BC6H opens as RGB96, 3 planes, transparencyPlane 0");
+               "BC6H opens as RGB mode, depth 32, 3 planes, transparencyPlane 0");
         expect(r > 3.92f && r < 4.08f, "BC6H red within 2% of 4.0");
     }
     {
