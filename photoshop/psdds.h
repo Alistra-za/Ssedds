@@ -121,7 +121,47 @@ int32_t psdds_alpha_used(const float *rgba, size_t pixels);
 /* The largest DDS file psdds_decode accepts by policy: 16384^2 RGBA8, full chain, magic + header + DX10 header. */
 uint64_t psdds_max_file_bytes(void);
 
-/* Release a buffer from psdds_encode or psdds_decode. Pass the PsddsBuf exactly as returned (data and len unchanged),
+enum { PSDDS_ROLE_ROUGHNESS = 0, PSDDS_ROLE_METALLIC = 1, PSDDS_ROLE_AO = 2, PSDDS_ROLE_SPECULAR = 3,
+       PSDDS_ROLE_COUNT = 4 };
+
+/* One channel of an interleaved float image: pixel i's value is px[i * channels + channel]. px NULL = no source.
+ * channels is 1..4 and channel < channels. Several roles may point at the same image with different channels.
+ * Values are clamped to [0,1], NaN -> 0. A side above 16384 is refused (psdds_check_size's text) before px is read. */
+typedef struct PsddsSource {
+    const float *px;
+    uint32_t width, height, channels, channel;
+} PsddsSource;
+
+typedef struct PsddsRmaosJob {
+    PsddsSource source[PSDDS_ROLE_COUNT];
+    int32_t fill[PSDDS_ROLE_COUNT]; /* -1 = unset (neutral default), 0..255 = packing.fill for that role */
+    uint32_t quality;               /* BC7 effort index (psdds_quality_label(PSDDS_BC7, i)); out of range = profile's */
+    uint32_t mips;                  /* 0 top level only, 1 the rmaos profile's chain */
+    const float *normal;            /* RGBA floats of the set's _n, or NULL: no _n is written and nothing bakes */
+    uint32_t normal_width, normal_height;
+    PsddsSettings normal_settings;  /* texture_type must be PSDDS_NORMAL; resolved as psdds_resolve does (DC32);
+                                     * discard_alpha is checked (0/1) but changes nothing here (DC36: the _n is built
+                                     * without alpha, and the _rmaos alpha is the specular data channel) */
+} PsddsRmaosJob;
+
+typedef struct PsddsRmaosResult {
+    PsddsBuf rmaos;      /* the _rmaos DDS; release with psdds_free */
+    PsddsBuf normal;     /* the _n DDS (empty when job->normal is NULL); release with psdds_free */
+    uint32_t defaulted;  /* bit 1<<c for each channel R,G,B,A that took a neutral default (PACK-DEFAULTED) */
+    uint32_t baked;      /* 1 when the _n's footprint variance was baked into the roughness mips */
+} PsddsRmaosResult;
+
+/* A TruePBR pair as a project export writes it (target cs, preset cs-quality): _rmaos (R roughness, G metallic,
+ * B AO, A specular) by the engine's own recipe, fills, defaults and size rule; with a normal, the _n encoded with the
+ * pbr_normal profile and the dialog's Normal settings, and its variance baked into the roughness mips (spec 6.2)
+ * when the engine's bake rule allows. 0 on success; else non-zero, both buffers empty, the reason in err.
+ * note (may be NULL) gets the engine's reason when the pair did not bake (no normal, or e.g. "variance bake off: ..."),
+ * empty when it baked. */
+int32_t psdds_rmaos_encode(const PsddsRmaosJob *job, PsddsRmaosResult *result, char *note, size_t note_cap,
+                           char *err, size_t err_cap);
+uint32_t psdds_rmaos_default_quality(void); /* the rmaos profile's BC7 effort as a list index */
+
+/* Release a buffer from psdds_encode, psdds_decode or psdds_rmaos_encode. Pass the PsddsBuf exactly as returned (data and len unchanged),
  * exactly once, then set data = NULL; a second free is a double free. An empty buffer (data NULL) is a no-op. */
 void psdds_free(PsddsBuf buf);
 

@@ -433,6 +433,9 @@ fn a_baking_pair_equals_the_batch_at_1_to_1_and_2_to_1() {
         );
         let r = memory_set(Some(nw), &profile());
         assert!(r.rmaos == b.rmaos, "{nw}: registry-profile _rmaos differs");
+        // Task 7: the set takes that step itself, so the profile it encodes with is the planned one.
+        assert_eq!(r.rmaos_profile, b.plan_rmaos.profile, "{nw}");
+        assert_eq!(m.normal_profile.as_ref(), Some(&b.plan_n.profile), "{nw}");
     }
 }
 

@@ -2,6 +2,7 @@
 //! `_rmaos` + `_n` pair with the variance bake ([`encode_rmaos_set`]). The steps and their order are those of
 //! `pipeline::prepare_then` → `encode_levels` → the `DdsDesc` write in `process_file`, so the bytes equal a file run
 //! of the same pixels and profiles (tests/memory.rs, tests/memory_rmaos.rs).
+use crate::analyse::analyse;
 use crate::bake::plan::{decide_bake, mark_normal_baking, BakeDecision, NO_NORMAL};
 use crate::bake::{lengths_from, NormalVariance};
 use crate::config::{PackRecipe, Profile, RawMap, Subtype, Target};
@@ -13,7 +14,9 @@ use crate::mips::build_chain_with;
 use crate::ops::{preprocess_with, SourceTransfer};
 use crate::pack::assemble::{assemble_channels_with, check_sizes_with, PackError};
 use crate::pack::{recipes_for_with, resolve_channels, PackSource, RawInput, Recipe};
+use crate::policy::near_binary;
 use crate::quantize::to_encoder_input;
+use crate::suggest::{suggest_alpha, Confidence};
 use std::path::{Path, PathBuf};
 
 /// One channel of an interleaved float image: value i = `px[i * channels + channel]`; `px.len() == w * h * channels`.
@@ -91,6 +94,15 @@ pub fn pack_rmaos(
     fill: [Option<u8>; 4],
     p: &Profile,
 ) -> Result<(Rgba32F, Vec<usize>), String> {
+    pack_with_info(src, fill, p).map(|(img, _, d)| (img, d))
+}
+
+/// [`pack_rmaos`] with the assembled image's `SourceInfo`, which the batch analyses.
+fn pack_with_info(
+    src: [Option<Channel>; 4],
+    fill: [Option<u8>; 4],
+    p: &Profile,
+) -> Result<(Rgba32F, SourceInfo, Vec<usize>), String> {
     let recipe = &rmaos_recipe(&src)?;
     let mut packing = p.packing.clone();
     for (f, role) in fill.into_iter().zip(ROLES) {
@@ -145,7 +157,11 @@ pub fn pack_rmaos(
         },
     )
     .map_err(|e| e.to_string())?;
-    Ok((a.image, defaulted.into_iter().map(|(i, _)| i).collect()))
+    Ok((
+        a.image,
+        a.info,
+        defaulted.into_iter().map(|(i, _)| i).collect(),
+    ))
 }
 
 /// The bytes of a whole DDS file. Refuses what the plugin does not use: complex grass, RNM, `drop_top_mip` and a
@@ -203,6 +219,10 @@ pub struct RmaosSet {
     pub baked: bool,
     /// Why it was not baked; `None` when it was.
     pub bake_note: Option<String>,
+    /// The profile the `_rmaos` was encoded with: `rmaos_p` after the planner's alpha analysis.
+    pub rmaos_profile: Profile,
+    /// The profile the `_n` was encoded with (`normal`'s, marked when it bakes).
+    pub normal_profile: Option<Profile>,
 }
 
 /// A TruePBR pair as `Engine::plan` + `run` writes it (target cs): the `_rmaos` packed from `src`/`fill` by
@@ -210,7 +230,8 @@ pub struct RmaosSet {
 /// and its variance baked into the roughness mips by the planner's rule ([`decide_bake`]). Not baked, with a note:
 /// no normal, an sRGB `_rmaos` (R10) or sizes that cannot bake (`SET-BAKE-RATIO`'s text). A one-level chain bakes
 /// mip 0 as the batch does (it changes only when the `_n` is larger). Sources are checked and the recipe found before
-/// any encode. Values are not clamped here (the host does). Order keeps the peak near two normals + the packed image
+/// any encode. Values are not clamped here (the host does). The `_rmaos` is encoded with `rmaos_p` after the planner's
+/// alpha analysis of the packed image ([`RmaosSet::rmaos_profile`]). Order keeps the peak near two normals + the packed image
 /// + one source.
 pub fn encode_rmaos_set(
     src: [Option<Channel>; 4],
@@ -221,7 +242,8 @@ pub fn encode_rmaos_set(
     // A set that cannot pack fails before any encode work.
     rmaos_recipe(&src)?;
     let mdims = check_sources(&src)?;
-    let (mut bake, mut note, mut normal_dds) = (None, Some(NO_NORMAL.to_string()), None);
+    let (mut bake, mut note, mut normal_dds, mut normal_profile) =
+        (None, Some(NO_NORMAL.to_string()), None, None);
     if let Some((img, mut normal_p)) = normal {
         let ndims = (img.width, img.height);
         note = match decide_bake(false, ndims, rmaos_p, mdims) {
@@ -244,13 +266,27 @@ pub fn encode_rmaos_set(
             }
         };
         normal_dds = Some(encode_image(img, &normal_p)?);
+        normal_profile = Some(normal_p);
     }
-    let (packed, defaulted) = pack_rmaos(src, fill, rmaos_p)?;
+    let (packed, info, defaulted) = pack_with_info(src, fill, rmaos_p)?;
+    // The planner's analysis step for a packed output (`policy::layered_profile`): a High-confidence alpha
+    // suggestion (e.g. a constant-255 specular) sets `alpha.policy`.
+    // shortcut: applied unconditionally, as for a builtin-preset profile (psdds's only caller); a caller whose
+    // profile sets the policy on purpose would need the planner's "explicit layer" test here.
+    let mut rmaos_profile = rmaos_p.clone();
+    let a = analyse(&packed, &info);
+    if let Some((policy, Confidence::High, _)) =
+        suggest_alpha(rmaos_profile.subtype, a.alpha, near_binary(&a))
+    {
+        rmaos_profile.alpha.policy = policy;
+    }
     Ok(RmaosSet {
-        rmaos: encode_image_with(packed, rmaos_p, bake.as_ref())?,
+        rmaos: encode_image_with(packed, &rmaos_profile, bake.as_ref())?,
         normal: normal_dds,
         defaulted,
         baked: bake.is_some(),
         bake_note: note,
+        rmaos_profile,
+        normal_profile,
     })
 }

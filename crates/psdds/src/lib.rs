@@ -1,8 +1,12 @@
 //! Tessalith DDS: the Photoshop plugin's bridge to the engine, as a C ABI (`photoshop/psdds.h`). Every exported
 //! function checks its pointers and runs inside `catch_unwind`, so no panic crosses the boundary.
 pub mod helpers;
+pub mod rmaos;
 pub mod settings;
 
+pub use rmaos::{
+    psdds_rmaos_default_quality, psdds_rmaos_encode, PsddsRmaosJob, PsddsRmaosResult, PsddsSource,
+};
 pub use settings::{PsddsControls, PsddsSettings};
 
 use engine::image::Rgba32F;
@@ -464,10 +468,11 @@ pub unsafe extern "C" fn psdds_decode(
         }
     }
 }
-/// Release a buffer from `psdds_encode` or `psdds_decode`. An empty buffer (null `data`) is a no-op.
+/// Release a buffer from `psdds_encode`, `psdds_decode` or `psdds_rmaos_encode`. An empty buffer (null `data`) is a
+/// no-op.
 ///
 /// # Safety
-/// `buf` came from `psdds_encode` or `psdds_decode` and is freed once.
+/// `buf` came from one of those and is freed once.
 #[no_mangle]
 pub unsafe extern "C" fn psdds_free(buf: PsddsBuf) {
     if buf.data.is_null() {
