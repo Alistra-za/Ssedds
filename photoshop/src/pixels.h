@@ -41,8 +41,9 @@ bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_al
 bool floats_have_transparency(const float *rgba, size_t pixels);
 
 // Estimate (PIFormat.h minDataBytes / maxDataBytes) for a width x height save: the smallest file (BC1/BC4, no mips,
-// legacy header) to the largest (RGBA8, full mip chain, DX10 header).
-void dds_size_range(int64_t width, int64_t height, int64_t *min_bytes, int64_t *max_bytes);
+// legacy header) to the largest (RGBA8, full mip chain, DX10 header). Above 8 bits the largest is RGBA16F (8 bytes a pixel):
+// the 32-bit estimate is the same two figures with that size (amends DC24, Note DE6).
+void dds_size_range(int64_t width, int64_t height, int depth, int64_t *min_bytes, int64_t *max_bytes);
 
 // FilterFile: false when the first len bytes of a file (up to 148: magic, header, DX10 header) show a DDS that Open
 // will refuse, so another DDS plug-in can open it: BC6H or float formats, cube maps, texture arrays. A file shorter than

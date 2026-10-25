@@ -97,12 +97,12 @@ bool write_all(HANDLE file, const uint8_t *bytes, size_t len) {
 int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *s, uint32_t has_alpha) {
     PsddsSettings effective;
     PsddsControls controls;
-    if (psdds_resolve(&chosen, has_alpha, &effective, &controls) != 0)
+    if (psdds_resolve_depth(&chosen, has_alpha, uint32_t(r->depth), &effective, &controls, nullptr) != 0)
         return report_error(r, "of an internal error in Tessalith DDS.");
 
     PsddsBuf dds = {};
     char err[256] = {};
-    if (psdds_encode(s->rgba.data(), uint32_t(r->imageSize32.h), uint32_t(r->imageSize32.v), has_alpha,
+    if (psdds_encode_depth(s->rgba.data(), uint32_t(r->imageSize32.h), uint32_t(r->imageSize32.v), has_alpha, uint32_t(r->depth),
                      &effective, &dds, err, sizeof err) != 0)
         return report_error(r, err[0] ? as_reason(err) : "of an internal error in Tessalith DDS.");
 
@@ -125,10 +125,6 @@ int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels, c
         const int head = snprintf(note, sizeof note, "samples %s depth %d channels %d: ", path, int(r->depth), channels);
         describe_samples(s->rgba.data(), s->rgba.size() / 4, note + head, sizeof note - size_t(head));
         trace_note(note);
-    }
-    if (r->depth == 32) { // shortcut: probe refusal, removed in the HDR plan's Task 6
-        free_state(r, data);
-        return report_error(r, "Tessalith DDS cannot save 32-bit documents in this build, so nothing was saved.");
     }
     // Alpha from the pixels, not the planes (DC31): a normal layer always has a transparency plane.
     const uint32_t has_alpha = channels == 4 && floats_have_transparency(s->rgba.data(), s->rgba.size() / 4) ? 1 : 0;
@@ -186,6 +182,7 @@ int16 write_merged(FormatRecord *r, intptr_t *data, const ReadChannelDesc *const
     delete g->save; // a stale state from an earlier save that never reached WriteFinish
     auto *s = new SaveState;
     g->save = s;
+    // shortcut: the whole image as floats (about 4 GiB at 16384 x 16384) plus the engine's work, and a 32-bit save of that size writes an RGBA16F file over the Open cap (preflight B11, Note DE6); fine at sane sizes, stream or refuse early if it bites.
     s->rgba.resize(size_t(width) * size_t(height) * 4);
     s->rows_per_band = band_rows(row_bytes, height, kBandCap);
     s->band.resize(size_t(row_bytes) * size_t(s->rows_per_band));
@@ -305,6 +302,7 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
     g->save = nullptr;
     auto *s = new SaveState;
     g->save = s;
+    // shortcut: the whole image as floats (about 4 GiB at 16384 x 16384) plus the engine's work, and a 32-bit save of that size writes an RGBA16F file over the Open cap (preflight B11, Note DE6); fine at sane sizes, stream or refuse early if it bites.
     s->rgba.resize(size_t(width) * size_t(height) * 4);
     s->rows_per_band = band_rows(row_bytes, height, kBandCap);
     s->band.resize(size_t(row_bytes) * size_t(s->rows_per_band));

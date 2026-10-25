@@ -165,7 +165,7 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
         // A range over every format the dialog offers, smallest to largest file (pixels.h dds_size_range).
         const bool wide = r->HostSupports32BitCoordinates != 0;
         int64_t lo = 0, hi = 0;
-        dds_size_range(wide ? r->imageSize32.h : r->imageSize.h, wide ? r->imageSize32.v : r->imageSize.v, &lo, &hi);
+        dds_size_range(wide ? r->imageSize32.h : r->imageSize.h, wide ? r->imageSize32.v : r->imageSize.v, r->depth, &lo, &hi);
         r->minDataBytes = int32(lo > INT32_MAX ? INT32_MAX : lo);
         r->maxDataBytes = int32(hi > INT32_MAX ? INT32_MAX : hi);
         r->data = nullptr;

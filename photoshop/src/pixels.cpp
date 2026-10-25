@@ -97,12 +97,13 @@ bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_al
 
 bool floats_have_transparency(const float *rgba, size_t pixels) { return psdds_alpha_used(rgba, pixels) != 0; }
 
-void dds_size_range(int64_t width, int64_t height, int64_t *min_bytes, int64_t *max_bytes) {
+void dds_size_range(int64_t width, int64_t height, int depth, int64_t *min_bytes, int64_t *max_bytes) {
     // BC1/BC4 store a 4x4 block in 8 bytes.
     *min_bytes = ((width + 3) / 4) * ((height + 3) / 4) * 8 + 128;
+    const int64_t texel = depth > 8 ? 8 : 4; // RGBA16F above 8 bits
     int64_t bytes = 148;
     for (int64_t w = width, h = height;; w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
-        bytes += w * h * 4;
+        bytes += w * h * texel;
         if (w == 1 && h == 1) break;
     }
     *max_bytes = bytes;

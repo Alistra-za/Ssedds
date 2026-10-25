@@ -205,12 +205,16 @@ static void save_alpha_rule() {
 
 static void estimate_covers_every_format() {
     int64_t lo = 0, hi = 0;
-    dds_size_range(1024, 1024, &lo, &hi);
+    dds_size_range(1024, 1024, 8, &lo, &hi);
     // BC1/BC4 without mips is the smallest (half a byte per pixel); RGBA8 with a full chain the largest.
     check(lo == 1024 * 1024 / 2 + 128, __func__, "minimum: BC1, no mips, legacy header");
     check(hi == int64_t(4) * (int64_t(1024) * 1024 * 4 - 1) / 3 + 148, __func__, "maximum: RGBA8, full chain");
-    dds_size_range(16384, 16384, &lo, &hi);
+    dds_size_range(16384, 16384, 8, &lo, &hi);
     check(hi == kMaxDdsFileBytes, __func__, "16k maximum equals the Open cap");
+    dds_size_range(16384, 16384, 32, &lo, &hi);
+    check(hi == (kMaxDdsFileBytes - 148) * 2 + 148, __func__, "32-bit maximum: RGBA16F, full chain");
+    dds_size_range(1024, 1024, 16, &lo, &hi);
+    check(lo == 1024 * 1024 / 2 + 128 && hi == int64_t(8) * (int64_t(1024) * 1024 * 4 - 1) / 3 + 148, __func__, "16-bit: BC1 minimum, RGBA16F maximum");
 }
 
 int main() {

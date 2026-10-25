@@ -182,6 +182,7 @@ static int save_without_image_fails(Entry entry, const wchar_t *path) {
 // its label, then presses OK or Cancel.
 struct DialogUser {
     const wchar_t *pick = nullptr; // filter label to choose, or nullptr
+    const wchar_t *format = nullptr; // Format label to choose (after any filter pick), or nullptr
     bool cancel = false;
     bool untick_mips = false; // click the Mipmaps checkbox (after any pick)
     bool tick_discard = false; // click the Discard transparency checkbox (after any pick)
@@ -271,6 +272,11 @@ static DWORD WINAPI play_dialog(void *arg) {
         SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_FILTER, CBN_SELCHANGE), reinterpret_cast<LPARAM>(filter));
     }
     u->formats = SendMessageW(GetDlgItem(dlg, IDC_FORMAT), CB_GETCOUNT, 0, 0);
+    if (u->format) {
+        HWND fc = GetDlgItem(dlg, IDC_FORMAT);
+        SendMessageW(fc, CB_SELECTSTRING, WPARAM(-1), reinterpret_cast<LPARAM>(u->format));
+        SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_FORMAT, CBN_SELCHANGE), reinterpret_cast<LPARAM>(fc));
+    }
     if (u->untick_mips) SendMessageW(GetDlgItem(dlg, IDC_MIPS), BM_CLICK, 0, 0);
     if (u->tick_discard) SendMessageW(GetDlgItem(dlg, IDC_DISCARD), BM_CLICK, 0, 0);
     u->filter_enabled_after = IsWindowEnabled(filter) != 0;
@@ -644,56 +650,111 @@ static int band_alpha_plane(Entry entry, const wchar_t *path) {
     return bad;
 }
 
-static float hdr_gradient(int c, int x, int y) { return c == 0 ? x / 16.0f : c == 1 ? y / 64.0f : c == 2 ? -0.25f : 1.0f; }
+static float checks32(int c, int x, int y) { return c == 3 ? 1.0f : float(((x / 4 + y / 4 + c) % 2)); }
+static float hdr_pixel(int c, int x, int) { return c == 0 ? 4.0f : c == 1 ? 0.5f : c == 2 ? 0.25f : x < 32 ? 1.0f : 0.5f; }
 
-// Task 1 probe: a 32-bit RGB document is accepted on both read paths (band and merged composite), the pixels are read
-// as 4-byte samples, and the save then refuses with the file untouched. Removed with the probe refusal in Task 6.
-static int thirty_two_bit_read_probe(Entry entry, const wchar_t *path) {
+// The 32-bit band path on a flat document (layerData 0, no OptionsStart: the defaults, Colour BC7).
+static std::string flat_save32(Entry entry, const wchar_t *path, FSample s) {
+    write_file(path, std::string());
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    set_depth(h, 32);
+    int16 result = h.call(formatSelectorWritePrepare);
+    if (!result) result = h.call(formatSelectorWriteStart);
+    if (!result) result = h.send_rgba32(s);
+    if (!result) result = h.call(formatSelectorWriteFinish);
+    CloseHandle(f);
+    return result == 0 ? contents(path) : std::string();
+}
+
+// The 32-bit form of interactive_save: a 64 x 64 RGB96 layer document with a transparency plane.
+static int16 interactive_save32(Entry entry, const wchar_t *path, FSample s, DialogUser *u) {
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    set_depth(h, 32);
+    h.r->planes = 4;
+    h.r->transparencyPlane = 3;
+    int16 result = h.call(formatSelectorOptionsStart);
+    if (!result) result = h.call(formatSelectorWritePrepare);
+    if (!result) result = h.call(formatSelectorWriteStart);
+    const bool started = result == 0;
+    HANDLE t = CreateThread(nullptr, 0, play_dialog, u, 0, nullptr);
+    if (!result) result = h.send_rgba32(s);
+    WaitForSingleObject(t, 15000);
+    CloseHandle(t);
+    if (started) {
+        const int16 finish = h.call(formatSelectorWriteFinish);
+        if (!result) result = finish;
+    }
+    CloseHandle(f);
+    return result;
+}
+
+static uint16_t u16_at(const std::string &s, size_t off) { return off + 2 <= s.size() ? uint16_t(uint8_t(s[off]) | uint8_t(s[off + 1]) << 8) : 0; }
+static uint32_t dxgi_of(const std::string &s) { return s.size() > 132 ? uint32_t(uint8_t(s[128])) : 0; }
+
+// 32-bit band path (DE6): the defaults match the 8-bit file, the HDR formats keep values above 1.
+static int hdr_band_save(Entry entry, const wchar_t *path) {
     int bad = 0;
-    auto expect = [&](bool ok, const char *what, int16 result) {
-        printf("  %s %s: result %d\n", ok ? "ok  " : "FAIL", what, result);
+    auto expect = [&](bool ok, const char *what) {
+        printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
         bad += ok ? 0 : 1;
     };
-    const std::string original(20000, 'x');
-    const char *refusal = "Tessalith DDS cannot save 32-bit documents in this build, so nothing was saved";
-    { // band path
-        write_file(path, original);
-        HANDLE f = open_existing(path);
-        Host h(entry, f);
-        set_depth(h, 32);
-        int16 result = h.call(formatSelectorWritePrepare);
-        if (!result) result = h.call(formatSelectorWriteStart);
-        const bool asked = result == 0 && h.r->planeBytes == 4 && h.r->colBytes == 12 && h.r->rowBytes == 64 * 12;
-        const bool started = result == 0;
-        if (!result) result = h.send_rgba32(hdr_gradient);
-        if (started) h.call(formatSelectorWriteFinish);
-        CloseHandle(f);
-        expect(asked && result == errReportString && h.message() == refusal && contents(path) == original,
-               "flat RGB96: 4-byte samples asked, probe refusal, file untouched", result);
+    const std::string f32 = flat_save32(entry, path, checks32), f8 = flat_save(entry, path, 8, checks8);
+    expect(f32.size() > 128 && f32 == f8, "flat RGB96 0/1 checks equal the 8-bit file (defaults, Colour BC7)");
+    {
+        write_file(path, std::string(20000, 'x'));
+        DialogUser u;
+        u.format = L"RGBA16F (uncompressed)";
+        const int16 result = interactive_save32(entry, path, hdr_pixel, &u);
+        const std::string o = contents(path);
+        expect(result == 0 && u.seen && dxgi_of(o) == 10 && u16_at(o, 148) == 0x4400 && u16_at(o, 148 + 6) == 0x3C00 &&
+                   u16_at(o, 148 + 40 * 8 + 6) == 0x3800 && u.formats == 6,
+               "RGBA16F: DXGI 10, 4.0 kept, alpha 0.5 kept, opaque alpha saved as 1, 6 formats offered");
     }
-    { // merged path
-        write_file(path, original);
-        MergedDoc m(32, hdr_gradient, AlphaSource::None);
-        HANDLE f = open_existing(path);
-        Host h(entry, f);
-        set_depth(h, 32);
-        h.r->layerData = 2;
-        h.r->documentInfo = &m.doc;
-        h.r->channelPortProcs = &m.procs;
-        int16 result = h.call(formatSelectorWritePrepare);
-        if (!result) result = h.call(formatSelectorWriteStart);
-        const bool bands = h.r->data != nullptr;
-        if (result == 0) h.call(formatSelectorWriteFinish);
-        CloseHandle(f);
-        expect(!bands && result == errReportString && h.message() == refusal && contents(path) == original &&
-                   m.planes[0].col_bits == 96 && m.planes[2].col_bits == 96,
-               "layered RGB96: float ports read at 4 bytes per sample, probe refusal, file untouched", result);
+    {
+        write_file(path, std::string(20000, 'x'));
+        DialogUser u;
+        u.format = L"BC6H (HDR)";
+        const int16 result = interactive_save32(entry, path, hdr_pixel, &u);
+        expect(result == 0 && dxgi_of(contents(path)) == 95, "BC6H (HDR): DXGI 95");
+    }
+    {
+        write_file(path, std::string(20000, 'x'));
+        DialogUser u;
+        const int16 result = interactive_save(entry, path, opaque_alpha, &u);
+        expect(result == 0 && u.formats == 4, "an 8-bit Colour document offers 4 formats");
     }
     DeleteFileW(path);
-    printf("%s thirty_two_bit_read_probe\n", bad ? "FAIL" : "PASS");
+    printf("%s hdr_band_save\n", bad ? "FAIL" : "PASS");
     return bad;
 }
 
+// 32-bit merged composite (DE1 PASS): the same file as the band path; a port depth mismatch writes nothing.
+static int hdr_merged_save(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    auto expect = [&](bool ok, const char *what) {
+        printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
+        bad += ok ? 0 : 1;
+    };
+    bool bands = true;
+    std::string out;
+    {
+        MergedDoc m(32, checks32, AlphaSource::None);
+        const int16 result = layered_save(entry, path, 32, &m, &bands, &out);
+        const std::string flat = flat_save32(entry, path, checks32);
+        expect(result == 0 && !bands && out.size() > 128 && out == flat && m.planes[0].col_bits == 96,
+               "layered RGB96 equals the band path, no bands asked");
+    }
+    {
+        MergedDoc shallow(8, gradient8, AlphaSource::None); // 8-bit ports on a 32-bit document
+        const int16 result = layered_save(entry, path, 32, &shallow, &bands, &out);
+        expect(result == errReportString && out == std::string(20000, 'x'), "depth mismatch writes nothing");
+    }
+    DeleteFileW(path);
+    printf("%s hdr_merged_save\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
 // Drives Open as Photoshop would: ReadPrepare, ReadStart, ReadContinue until data is NULL, ReadFinish. Returns every
 // band's planes concatenated; *described gets the mode, depth and planes the plug-in set.
 static std::string open_planes(Entry entry, const wchar_t *path, FormatRecord *described) {
@@ -780,7 +841,8 @@ int wmain(int argc, wchar_t **argv) {
     failed += merged_composite_save(entry, out);
     failed += band_alpha_plane(entry, out);
     failed += eight_bit_bytes_pinned(entry, out);
-    failed += thirty_two_bit_read_probe(entry, out);
+    failed += hdr_band_save(entry, out);
+    failed += hdr_merged_save(entry, out);
     const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
     printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
     failed += seeded ? 0 : 1;
