@@ -32,7 +32,7 @@ Greyed controls show the value the encoder will use and remember your own pick. 
 Alpha is kept when some pixel's alpha is below 254 of 255, as in the Photoshop plugin, and the format stores alpha (BC3, BC7, RGBA8). Alpha of 254 or 255 counts as opaque. Tick **Discard transparency** to save an opaque file whatever the pixels hold.
 
 ## Presets
-The Preset list starts with Custom and five presets Tessalith provides. **Save preset...** stores the current choices under a name (1 to 64 characters; an existing name asks before replacing), and **Delete** removes the shown preset. Choosing Custom in the list keeps your settings and shows Custom until you pick or save a preset. Presets are kept in `%APPDATA%\Tessalith DDS\presets\paintdotnet.txt`, separate from the Photoshop plugin's. Deleting that file brings the five back.
+The Preset list starts with Custom and five presets Tessalith provides. **Save preset...** stores the current choices under a name (up to 64 characters, where an emoji or other symbol outside the basic range counts as two; an existing name asks before replacing), and **Delete** removes the shown preset. Choosing Custom in the list keeps your settings and shows Custom until you pick or save a preset. Presets are kept in `%APPDATA%\Tessalith DDS\presets\paintdotnet.txt`, separate from the Photoshop plugin's. Deleting that file brings the five back.
 
 ## Open
 Paint.NET always opens `.dds` files with its own DDS support, also for files Tessalith wrote, even if Tessalith DDS is picked in the Open dialog's type list. To re-save such a file with Tessalith, use Save As once and pick Tessalith DDS; after that Ctrl+S uses it.

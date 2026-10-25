@@ -21,3 +21,5 @@ Paint.NET's assemblies are ReadyToRun-compiled against its private runtime, so l
 
 ## Licence split
 The plugin C# is GPL-3.0-or-later with a section 7 additional permission for Paint.NET (`paintdotnet/COPYING`). `psdds.dll` is separate: the `psdds` crate is MIT (`paintdotnet/LICENSE`), and the `engine` and `encoders-sys` code in it is MPL-2.0 (Note DC41), with the source pointer in the shipped `THIRD_PARTY_NOTICES.md`. Copyright holder: Alistraza.
+
+Run package.ps1 with pwsh (PowerShell 7): Windows PowerShell 5.1 can write backslash entry names into the zip.

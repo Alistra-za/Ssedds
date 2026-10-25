@@ -35,8 +35,11 @@ if ($count -ne 7) { throw "Expected 7 staged files, found $count." }
 $dist = Join-Path $repo 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
 $zip = Join-Path $dist "TessalithDDS-PaintDotNet-$version.zip"
-Remove-Item $zip -ErrorAction SilentlyContinue
-Compress-Archive -Path $stage -DestinationPath $zip
+Remove-Item $zip, "$zip.sha256.txt" -ErrorAction SilentlyContinue
+$tmp = "$zip.tmp.zip"
+Remove-Item $tmp -ErrorAction SilentlyContinue
+Compress-Archive -Path $stage -DestinationPath $tmp
+Move-Item $tmp $zip -Force
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 "$hash  $(Split-Path $zip -Leaf)" | Set-Content "$zip.sha256.txt" -Encoding ascii
 Write-Host "Packaged $zip"
