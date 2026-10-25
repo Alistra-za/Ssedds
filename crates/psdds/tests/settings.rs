@@ -6,8 +6,8 @@ use engine::config::{
 use engine::presets::PresetRegistry;
 use psdds::settings::profile_for;
 use psdds::{
-    psdds_defaults, psdds_quality_count, psdds_quality_label, psdds_resolve, PsddsControls,
-    PsddsSettings,
+    psdds_defaults, psdds_format_allowed, psdds_quality_count, psdds_quality_label, psdds_resolve,
+    PsddsControls, PsddsSettings,
 };
 use std::ffi::CStr;
 
@@ -125,8 +125,6 @@ fn filter_greys_where_the_engine_uses_box() {
     let greyed = [
         (kaiser(BC7, 0), false), // sRGB Off: linear content
         (kaiser(BC1, 0), false),
-        (kaiser(BC5, 1), false), // BC4/BC5: sRGB forced Off
-        (kaiser(BC4, 1), false),
         (kaiser(BC7, 1), true), // alpha kept (Blend): alpha-weighted box
         (kaiser(BC3, 1), true),
         (kaiser(RGBA8, 1), true),
@@ -158,21 +156,64 @@ fn filter_greys_where_the_engine_uses_box() {
     }
 }
 
+fn allowed(texture_type: u32, format: u32) -> bool {
+    psdds_format_allowed(texture_type, format) == 1
+}
+
+/// DC32: BC4 only for Linear mask; BC5 for Normal and Linear mask.
 #[test]
-fn srgb_forced_off_without_srgb_variant() {
-    for f in [BC4, BC5] {
-        let (rc, e, c) = resolve(s(f, COLOUR, 1, 2, 0));
-        assert_eq!(rc, 0);
-        assert_eq!(e.srgb, 0);
-        assert_eq!(c.srgb_enabled, 0);
-        // Linear content mips with box (DC12), so the filter greys too.
-        assert_eq!((c.filter_enabled, e.filter), (0, 0));
-        let p = profile_for(&s(f, COLOUR, 1, 2, 0), false).unwrap();
-        assert_eq!(
-            (p.color.content, p.color.tag),
-            (ColorContent::Linear, ColorTag::Unorm)
+fn formats_allowed_per_type() {
+    let lists = [
+        (COLOUR, vec![BC1, BC3, BC7, RGBA8]),
+        (NORMAL, vec![BC1, BC3, BC5, BC7, RGBA8]),
+        (MASK, vec![BC1, BC3, BC4, BC5, BC7, RGBA8]),
+    ];
+    for (ty, list) in lists {
+        let got: Vec<u32> = FORMATS.into_iter().filter(|&f| allowed(ty, f)).collect();
+        assert_eq!(got, list, "type {ty}");
+        assert!(
+            allowed(ty, psdds_defaults(ty).format),
+            "default of type {ty}"
         );
+        assert!(!allowed(ty, 6));
     }
+    assert!(!allowed(3, BC7));
+}
+
+/// DC32: a format the type does not offer resolves to the type's default format (not an error); the quality index
+/// is then checked against that format's list.
+#[test]
+fn disallowed_format_falls_back_to_the_default() {
+    for (ty, f) in [(COLOUR, BC4), (COLOUR, BC5), (NORMAL, BC4)] {
+        let d = psdds_defaults(ty);
+        let (rc, e, _) = resolve(s(f, ty, d.srgb, d.filter, 99));
+        assert_eq!((rc, e.format), (0, d.format), "type {ty} format {f}");
+        assert_eq!(e.quality, d.quality, "type {ty} format {f}");
+        let p = profile_for(&s(f, ty, d.srgb, d.filter, 99), false).unwrap();
+        assert_eq!(p.format, Format::Bc7);
+    }
+    // An index valid for the default format is kept, as DC8 keeps any in-range index.
+    let (rc, e, c) = resolve(s(BC4, COLOUR, 1, 3, 6));
+    assert_eq!((rc, e.format, e.quality), (0, BC7, 6));
+    assert_eq!(
+        (c.srgb_enabled, e.srgb),
+        (1, 1),
+        "sRGB follows the effective BC7"
+    );
+    let (rc, e, _) = resolve(s(BC4, MASK, 0, 0, 1));
+    assert_eq!((rc, e.format, e.quality), (0, BC4, 1));
+    let (rc, e, _) = resolve(s(BC5, NORMAL, 0, 0, 1));
+    assert_eq!((rc, e.format, e.quality), (0, BC5, 1));
+}
+
+/// DC33: without mips the filter does nothing, so it greys (keeping its value).
+#[test]
+fn filter_greys_without_mips() {
+    let on = s(BC7, COLOUR, 1, 3, 4);
+    let (_, e, c) = resolve(on);
+    assert_eq!((c.filter_enabled, e.filter), (1, 3));
+    let (rc, e, c) = resolve(PsddsSettings { mips: 0, ..on });
+    assert_eq!((rc, c.filter_enabled, e.filter, e.mips), (0, 0, 3, 0));
 }
 
 #[test]
@@ -193,10 +234,15 @@ fn stale_quality_falls_back_to_the_preset() {
     };
     for ty in [COLOUR, NORMAL, MASK] {
         // A BC7 Veryslow (4) remembered and the format switched to BC4.
-        let (rc, e, _) = resolve(s(BC4, ty, 0, 0, 4));
-        assert_eq!(rc, 0);
-        assert_eq!(e.quality, preset(BC4, ty));
+        if ty == MASK {
+            let (rc, e, _) = resolve(s(BC4, ty, 0, 0, 4));
+            assert_eq!(rc, 0);
+            assert_eq!(e.quality, preset(BC4, ty));
+        }
         for (f, q) in [(BC5, 3), (BC1, 19), (BC3, 99), (BC7, 7), (RGBA8, 7)] {
+            if !allowed(ty, f) {
+                continue;
+            }
             let (rc, e, _) = resolve(s(f, ty, 0, 0, q));
             assert_eq!(
                 (rc, e.quality),
@@ -217,7 +263,7 @@ fn rgba8_greys_quality() {
     assert_eq!(rc, 0);
     assert_eq!((c.quality_enabled, e.quality), (0, 0));
     for f in [BC1, BC3, BC4, BC5, BC7] {
-        assert_eq!(resolve(s(f, COLOUR, 1, 0, 0)).2.quality_enabled, 1);
+        assert_eq!(resolve(s(f, MASK, 1, 0, 0)).2.quality_enabled, 1);
     }
 }
 
@@ -356,7 +402,7 @@ fn profile_overrides_follow_r2_r3() {
         Format::Rgba8,
     ];
     for ty in [COLOUR, NORMAL, MASK] {
-        for f in FORMATS {
+        for f in FORMATS.into_iter().filter(|&f| allowed(ty, f)) {
             for has_alpha in [false, true] {
                 let mut set = psdds_defaults(ty);
                 set.format = f;

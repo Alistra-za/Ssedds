@@ -110,7 +110,7 @@ fn odd_sizes_encode_and_read_back() {
             let px = gradient(w, h, false);
             let s = PsddsSettings {
                 mips,
-                ..settings(f, 0)
+                ..settings(f, 2) // Linear mask offers every format
             };
             let bytes = encode(&px, w, h, false, &s).unwrap();
             let dds = read_dds(&bytes).unwrap_or_else(|e| panic!("{f} {w}x{h}: {e}"));
@@ -164,7 +164,6 @@ fn kaiser_applies_only_where_the_dialog_shows_it() {
             },
             false,
         ),
-        (settings(BC5, 0), false),
         (srgb_bc7, true),
     ];
     for (set, alpha) in fallbacks {
@@ -195,7 +194,7 @@ fn alpha_dropped_for_formats_without_alpha() {
     let with = gradient(w, h, true);
     let opaque = gradient(w, h, false);
     for f in [BC1, BC4, BC5] {
-        let s = settings(f, 0);
+        let s = settings(f, 2);
         let bytes = encode(&with, w, h, true, &s).unwrap();
         let dds = read_dds(&bytes).unwrap();
         assert_eq!(dds.pf_flags & DDPF_ALPHAPIXELS, 0, "format {f}");
@@ -212,7 +211,7 @@ fn srgb_forced_off_without_srgb_variant() {
     let px = gradient(8, 8, false);
     let bc5 = PsddsSettings {
         srgb: 1,
-        ..settings(BC5, 0)
+        ..settings(BC5, 2)
     };
     // BC5 has no _SRGB form, so 83 holds either way: this pins only that the encode succeeds and is untagged. The
     // rule itself is checked in tests/settings.rs; the BC7 cases below show the tag does follow the setting.

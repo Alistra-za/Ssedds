@@ -34,12 +34,16 @@ static void dialog_state_follows_resolve() {
     check(n.shown.format == PSDDS_BC7 && n.shown.texture_type == PSDDS_NORMAL && n.shown.mips == 1, t,
           "Normal+BC7 shows format, type, mips");
 
-    // Colour + BC5 with sRGB on: BC5 has no sRGB form, and mips with Box.
+    // Colour + BC5 (a remembered pick): Colour does not offer BC5, so it shows the Colour default, BC7 (DC32).
     ControlStates c5 = FromResolve(make(PSDDS_BC5, PSDDS_COLOUR, 1, PSDDS_KAISER), 0);
-    check(c5.ok, t, "Colour+BC5 resolves");
-    check(!c5.srgb_enabled && c5.shown.srgb == 0, t, "Colour+BC5 greys sRGB showing Off");
-    check(!c5.filter_enabled && c5.shown.filter == PSDDS_BOX, t, "Colour+BC5 greys filter showing Box");
-    check(c5.quality_enabled, t, "Colour+BC5 quality editable");
+    check(c5.ok && c5.shown.format == PSDDS_BC7, t, "Colour+BC5 resolves to BC7");
+    check(c5.srgb_enabled && c5.shown.srgb == 1, t, "Colour+BC5 -> BC7 keeps sRGB editable, On");
+
+    // Linear mask + BC5 with sRGB on: no sRGB form, sRGB greys showing Off.
+    ControlStates m5 = FromResolve(make(PSDDS_BC5, PSDDS_LINEAR_MASK, 1, PSDDS_KAISER), 0);
+    check(m5.ok && m5.shown.format == PSDDS_BC5, t, "Mask+BC5 kept");
+    check(!m5.srgb_enabled && m5.shown.srgb == 0, t, "Mask+BC5 greys sRGB showing Off");
+    check(m5.quality_enabled, t, "Mask+BC5 quality editable");
 
     // Colour + RGBA8, no alpha: sRGB and filter editable, quality greyed at 0.
     ControlStates r = FromResolve(make(PSDDS_RGBA8, PSDDS_COLOUR, 1, PSDDS_KAISER), 0);

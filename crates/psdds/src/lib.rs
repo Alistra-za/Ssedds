@@ -56,7 +56,8 @@ pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
 
 /// Apply the greying rules: `effective` gets the values the dialog shows and the encoder uses, `controls` which
 /// controls are editable. 0, or -1 for a null pointer or an out-of-range field other than quality (outputs
-/// untouched); a quality index outside the format's list becomes the preset's.
+/// untouched); a format the type does not offer becomes the type's default, and a quality index outside the
+/// format's list becomes the preset's.
 ///
 /// # Safety
 /// Each pointer is null or valid for its type.
@@ -79,6 +80,12 @@ pub unsafe extern "C" fn psdds_resolve(
         }
         _ => -1,
     }
+}
+
+/// 1 when the texture type offers the format (the dialog lists only these), else 0 (also for unknown values).
+#[no_mangle]
+pub extern "C" fn psdds_format_allowed(texture_type: u32, format: u32) -> u32 {
+    catch_unwind(|| u32::from(settings::format_allowed(texture_type, format))).unwrap_or(0)
 }
 
 /// Entries in a format's quality list; 0 for RGBA8 (quality greyed) and an unknown format.

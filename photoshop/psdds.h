@@ -46,10 +46,17 @@ PsddsSettings psdds_defaults(uint32_t texture_type);
  * Returns 0, or -1 for a NULL pointer or an out-of-range format, texture_type, srgb, filter or mips (outputs
  * untouched). A quality index outside the format's list (e.g. remembered from another format) is not an error:
  * effective quality becomes the preset's default for that type and format. RGBA8's quality is always 0.
- * has_alpha (0/1) is the document's, as passed to psdds_encode: where the engine would mip with Box anyway
- * (sRGB Off, BC4/BC5, or alpha kept in BC3/BC7/RGBA8), the filter greys and shows Box. */
+ * Likewise a format the type does not offer (psdds_format_allowed) is not an error: effective format becomes the
+ * type's default format (psdds_defaults), and the quality index is then checked against that format's list.
+ * has_alpha (0/1) is the document's, as passed to psdds_encode: for Colour, where the engine would mip with Box
+ * anyway (sRGB Off, or alpha kept in BC3/BC7/RGBA8), the filter greys and shows Box. With mips 0 the filter greys
+ * too, keeping its value. */
 int32_t psdds_resolve(const PsddsSettings *input, uint32_t has_alpha, PsddsSettings *effective,
                       PsddsControls *controls);
+
+/* 1 when the texture type offers the format, else 0 (also for an unknown type or format). Colour: BC1, BC3, BC7,
+ * RGBA8. Normal: those and BC5. Linear mask: every format. */
+uint32_t psdds_format_allowed(uint32_t texture_type, uint32_t format);
 
 /* Entries in a format's quality list (0 for RGBA8 and an unknown format). */
 uint32_t psdds_quality_count(uint32_t format);

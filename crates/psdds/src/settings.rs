@@ -88,6 +88,17 @@ pub fn quality_labels(format: u32) -> Vec<&'static CStr> {
     }
 }
 
+/// DC32: the formats each texture type offers. BC4 (one channel) only for Linear mask; BC5 (two channels) for
+/// Normal and Linear mask. False for an unknown type or format.
+pub fn format_allowed(texture_type: u32, format: u32) -> bool {
+    match texture_type {
+        0 => matches!(format, 0 | 1 | 4 | 5),
+        1 => matches!(format, 0 | 1 | 3 | 4 | 5),
+        2 => format < 6,
+        _ => false,
+    }
+}
+
 /// The `cs-quality` profile each texture type starts from (R3).
 fn base(texture_type: u32) -> Result<&'static Profile, String> {
     static BASES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
@@ -158,13 +169,23 @@ pub fn resolve(
     range("sRGB", s.srgb, 2)?;
     range("filter", s.filter, 4)?;
     range("mips", s.mips, 2)?;
+    // DC32: a format the type does not offer becomes the type's default (like DC8's quality), not an error.
+    let s = &PsddsSettings {
+        format: if format_allowed(s.texture_type, s.format) {
+            s.format
+        } else {
+            defaults(s.texture_type).format
+        },
+        ..*s
+    };
     let count = quality_labels(s.format).len() as u32;
     let colour = s.texture_type == 0;
     // R1: only BC1, BC3, BC7 and RGBA8 have an _SRGB form.
     let srgb_capable = matches!(s.format, 0 | 1 | 4 | 5);
     let mut controls = PsddsControls {
         srgb_enabled: u32::from(colour && srgb_capable),
-        filter_enabled: u32::from(colour),
+        // DC33: without mips the filter does nothing.
+        filter_enabled: u32::from(colour && s.mips == 1),
         quality_enabled: u32::from(count > 0),
     };
     let mut effective = PsddsSettings {
