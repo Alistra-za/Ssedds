@@ -6,7 +6,7 @@ namespace Tessalith.Dds;
 /// form open until the name passes PresetStore.CleanName; PresetName is then the clean name.</summary>
 sealed class NamePrompt : Form
 {
-    readonly TextBox _text = new() { MaxLength = 64, Width = 240, TabIndex = 1, AccessibleName = "Name" };
+    readonly TextBox _text = new() { MaxLength = 64, TabIndex = 1, AccessibleName = "Name" };
 
     public string PresetName { get; private set; } = "";
 
@@ -18,6 +18,7 @@ sealed class NamePrompt : Form
         MinimizeBox = MaximizeBox = ShowInTaskbar = false;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _text.Width = LogicalToDeviceUnits(240); // scaled like the widget's fixed pixels
         _text.Text = proposed;
         var ok = new Button { Text = "OK", TabIndex = 2, AutoSize = true };
         var cancel = new Button { Text = "Cancel", TabIndex = 3, AutoSize = true, DialogResult = DialogResult.Cancel };
@@ -36,7 +37,7 @@ sealed class NamePrompt : Form
         CancelButton = cancel;
         var buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Right, TabIndex = 2, Margin = Padding.Empty };
         buttons.Controls.AddRange([ok, cancel]);
-        var table = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Padding = new Padding(8) };
+        var table = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Padding = new Padding(LogicalToDeviceUnits(8)) };
         table.Controls.Add(new Label { Text = "&Name:", AutoSize = true, Anchor = AnchorStyles.Left, TabIndex = 0 }, 0, 0);
         table.Controls.Add(_text, 1, 0);
         table.Controls.Add(buttons, 0, 1);
