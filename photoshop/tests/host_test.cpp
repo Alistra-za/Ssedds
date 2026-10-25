@@ -3,6 +3,9 @@
 //                             reports an error and leaves the existing file untouched (Note DC27).
 //   dialog_after_pixels       the Save dialog opens after the pixels are read, greys the mip filter only for real
 //                             transparency, honours the filter picked, and Cancel writes nothing (Note DC31).
+//   merged_composite_save     a layered save reads the merged composite through fake channel ports (8 and 16-bit,
+//                             scaling pinned), takes its alpha like the band path, and writes nothing on any failure
+//                             (Note DC38).
 //   unload_after_save         the plug-in survives Photoshop unloading it after a save (Note DC25). The engine's rayon
 //                             workers outlive the save; if the module's code were unmapped under them, their next
 //                             wake-up would execute freed memory (the BEX64 crash at TessalithDDS.8bi_unloaded+0x9483).
@@ -314,6 +317,190 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
     return bad;
 }
 
+// Note DC38: a layered save reads Photoshop's merged composite through channel ports. A fake port holds one
+// 64 x 64 plane at 8 or 16 bits, in the document's scale (8-bit 0..255, 16-bit 0..32768).
+typedef unsigned (*Sample)(int channel, int x, int y);
+
+struct FakePlane {
+    std::vector<uint16_t> v = std::vector<uint16_t>(64 * 64);
+    bool fail = false;
+};
+
+static OSErr fake_read(ChannelReadPort port, const PSScaling *, const VRect *rect, const PixelMemoryDesc *d, VRect *wrote) {
+    const FakePlane *p = reinterpret_cast<const FakePlane *>(port);
+    if (p->fail) return -1;
+    unsigned char *base = static_cast<unsigned char *>(d->data) + d->bitOffset / 8;
+    for (int y = rect->top; y < rect->bottom; y++)
+        for (int x = rect->left; x < rect->right; x++) {
+            unsigned char *at = base + size_t(y - rect->top) * size_t(d->rowBits / 8) + size_t(x - rect->left) * size_t(d->colBits / 8);
+            const uint16_t value = p->v[size_t(y) * 64 + size_t(x)];
+            if (d->depth == 16) memcpy(at, &value, 2);
+            else *at = (unsigned char)value;
+        }
+    *wrote = *rect;
+    return noErr;
+}
+
+enum class AlphaSource { None, Merged, AlphaChannel };
+
+// documentInfo and channel ports for a 64 x 64 document whose merged composite is `s`. The alpha source is the
+// merged transparency, or (AlphaChannel) a spot channel of zeros followed by an alpha channel holding s(3, ...).
+struct MergedDoc {
+    FakePlane planes[5];
+    ReadChannelDesc ch[5];
+    ReadImageDocumentDesc doc;
+    ChannelPortProcs procs = {};
+
+    MergedDoc(int depth, Sample s, AlphaSource alpha) {
+        for (int i = 0; i < 5; i++) {
+            for (int y = 0; y < 64; y++)
+                for (int x = 0; x < 64; x++) planes[i].v[size_t(y) * 64 + size_t(x)] = uint16_t(i == 4 ? 0 : s(i < 4 ? i : 3, x, y));
+            ch[i].port = reinterpret_cast<PIChannelPort>(&planes[i]);
+            ch[i].bounds = VRect{0, 0, 64, 64};
+            ch[i].depth = depth;
+            ch[i].tileSize = VPoint{64, 64};
+            ch[i].tileOrigin = VPoint{0, 0};
+        }
+        ch[0].next = &ch[1];
+        ch[1].next = &ch[2];
+        doc.bounds = VRect{0, 0, 64, 64};
+        doc.imageMode = depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
+        doc.depth = depth;
+        doc.mergedCompositeChannels = &ch[0];
+        if (alpha == AlphaSource::Merged) doc.mergedTransparency = &ch[3];
+        if (alpha == AlphaSource::AlphaChannel) {
+            ch[4].channelType = ctSpotColor; // listed first, never alpha
+            ch[4].next = &ch[3];
+            doc.alphaChannels = &ch[4];
+        }
+        procs.channelPortProcsVersion = 1;
+        procs.numChannelPortProcs = 1;
+        procs.readPixelsProc = fake_read;
+    }
+};
+
+static void set_depth(Host &h, int depth) {
+    h.r->depth = int16(depth);
+    h.r->imageMode = depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
+}
+
+// One save of `m` as a layered document (layerData 2, the Layer selectors after WriteStart as Photoshop 26.9 sends
+// them). Returns the result; *bands tells whether the plug-in asked for bands, *out is the file afterwards.
+static int16 layered_save(Entry entry, const wchar_t *path, int depth, MergedDoc *m, bool *bands, std::string *out) {
+    write_file(path, std::string(20000, 'x'));
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    set_depth(h, depth);
+    h.r->layerData = 2;
+    h.r->documentInfo = m ? &m->doc : nullptr;
+    h.r->channelPortProcs = m ? &m->procs : nullptr;
+    int16 result = h.call(formatSelectorWritePrepare);
+    if (!result) result = h.call(formatSelectorWriteStart);
+    *bands = result == 0 && h.r->data != nullptr;
+    const bool started = result == 0;
+    if (!result) result = h.call(formatSelectorWriteLayerStart);
+    if (!result) result = h.call(formatSelectorWriteLayerFinish);
+    if (started) {
+        const int16 finish = h.call(formatSelectorWriteFinish);
+        if (!result) result = finish;
+    }
+    CloseHandle(f);
+    *out = contents(path);
+    return result;
+}
+
+// The same pixels through the band path (a flat document, layerData 0), for byte comparisons.
+static std::string flat_save(Entry entry, const wchar_t *path, int depth, Sample s) {
+    write_file(path, std::string());
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    set_depth(h, depth);
+    int16 result = h.call(formatSelectorWritePrepare);
+    if (!result) result = h.call(formatSelectorWriteStart);
+    while (result == 0 && h.r->data) {
+        const VRect q = h.r->theRect32;
+        for (int y = q.top; y < q.bottom; y++)
+            for (int x = q.left; x < q.right; x++)
+                for (int c = 0; c <= h.r->hiPlane - h.r->loPlane; c++) {
+                    unsigned char *at = static_cast<unsigned char *>(h.r->data) + (y - q.top) * h.r->rowBytes +
+                                        x * h.r->colBytes + c * h.r->planeBytes;
+                    const uint16_t value = uint16_t(s(c, x, y));
+                    if (depth == 16) memcpy(at, &value, 2);
+                    else *at = (unsigned char)value;
+                }
+        result = h.call(formatSelectorWriteContinue);
+    }
+    if (!result) result = h.call(formatSelectorWriteFinish);
+    CloseHandle(f);
+    return result == 0 ? contents(path) : std::string();
+}
+
+static unsigned gradient8(int c, int x, int y) { return c == 0 ? x * 4 : c == 1 ? y * 4 : c == 2 ? 0x40 : 255; }
+static unsigned gradient16(int c, int x, int y) { return gradient8(c, x, y) * 128; }
+// Black and white checks: the 16-bit doc's white is 32768 (PIGeneral channel ports: 16-bit is 0..32768).
+static unsigned checks8(int c, int x, int y) { return c == 3 ? 255 : ((x / 4 + y / 4 + c) % 2) * 255; }
+static unsigned checks16(int c, int x, int y) { return c == 3 ? 32768 : ((x / 4 + y / 4 + c) % 2) * 32768; }
+static unsigned with_alpha8(int c, int x, int y) { return c == 3 ? (x < 32 ? 255 : 100) : gradient8(c, x, y); }
+
+static int merged_composite_save(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    const std::string untouched(20000, 'x');
+    auto expect = [&](bool ok, const char *what, int16 result, size_t bytes) {
+        printf("  %s %s: result %d, %zu bytes\n", ok ? "ok  " : "FAIL", what, result, bytes);
+        bad += ok ? 0 : 1;
+    };
+    bool bands = false;
+    std::string out;
+    auto is_dds = [&] { return out.size() > 128 && out.compare(0, 4, "DDS ") == 0 && out.find("xxx") == out.npos; };
+
+    { // 8-bit with merged transparency: written from the ports, no bands asked, old tail gone
+        MergedDoc m(8, gradient8, AlphaSource::Merged);
+        const int16 result = layered_save(entry, path, 8, &m, &bands, &out);
+        expect(result == 0 && !bands && is_dds(), "8-bit merged composite, no bands asked", result, out.size());
+    }
+    { // 16-bit scaling: 0..32768 checks give the same DDS as 8-bit 0..255 checks (both 0.0 and 1.0)
+        MergedDoc m16(16, checks16, AlphaSource::None), m8(8, checks8, AlphaSource::None);
+        std::string out8;
+        const int16 r16 = layered_save(entry, path, 16, &m16, &bands, &out);
+        const int16 r8 = layered_save(entry, path, 8, &m8, &bands, &out8);
+        expect(r16 == 0 && r8 == 0 && is_dds() && out == out8, "16-bit 32768 reads as white (same DDS as 8-bit 255)",
+               r16, out.size());
+    }
+    { // 16-bit merged equals the 16-bit band path on the same samples (interleave and scale shared)
+        MergedDoc m(16, gradient16, AlphaSource::None);
+        const int16 result = layered_save(entry, path, 16, &m, &bands, &out);
+        const std::string flat = flat_save(entry, path, 16, gradient16);
+        expect(result == 0 && is_dds() && out == flat, "16-bit merged equals the band path", result, out.size());
+    }
+    { // no merged transparency: the first non-spot alpha channel is the alpha, as on the band path
+        MergedDoc via_channel(8, with_alpha8, AlphaSource::AlphaChannel), via_merged(8, with_alpha8, AlphaSource::Merged),
+            opaque(8, with_alpha8, AlphaSource::None);
+        std::string merged_out, opaque_out;
+        const int16 result = layered_save(entry, path, 8, &via_channel, &bands, &out);
+        layered_save(entry, path, 8, &via_merged, &bands, &merged_out);
+        layered_save(entry, path, 8, &opaque, &bands, &opaque_out);
+        expect(result == 0 && is_dds() && out == merged_out && out != opaque_out,
+               "alpha channel (after a spot channel) is the alpha source", result, out.size());
+    }
+    { // failures: nothing written, the old file untouched
+        MergedDoc fails(8, gradient8, AlphaSource::Merged);
+        fails.planes[1].fail = true;
+        int16 result = layered_save(entry, path, 8, &fails, &bands, &out);
+        expect(result == errReportString && out == untouched, "failed port read writes nothing", result, out.size());
+        result = layered_save(entry, path, 8, nullptr, &bands, &out);
+        expect(result == errReportString && out == untouched, "no documentInfo writes nothing", result, out.size());
+        MergedDoc shallow(8, gradient8, AlphaSource::None); // ports at 8 bits on a 16-bit document
+        result = layered_save(entry, path, 16, &shallow, &bands, &out);
+        expect(result == errReportString && out == untouched, "depth mismatch writes nothing", result, out.size());
+        MergedDoc short_list(8, gradient8, AlphaSource::None);
+        short_list.ch[1].next = nullptr; // only two merged channels
+        result = layered_save(entry, path, 8, &short_list, &bands, &out);
+        expect(result == errReportString && out == untouched, "missing merged channel writes nothing", result, out.size());
+    }
+    DeleteFileW(path);
+    printf("%s merged_composite_save\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
 int wmain(int argc, wchar_t **argv) {
     if (argc != 2) {
         printf("usage: host_test <TessalithDDS.8bi>\n");
@@ -340,6 +527,7 @@ int wmain(int argc, wchar_t **argv) {
     const uintptr_t base = reinterpret_cast<uintptr_t>(m);
     int failed = save_without_image_fails(entry, out); // also runs one full save, which starts the workers
     failed += dialog_after_pixels(entry, out);
+    failed += merged_composite_save(entry, out);
     const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
     printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
     failed += seeded ? 0 : 1;

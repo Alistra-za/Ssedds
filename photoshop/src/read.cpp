@@ -107,6 +107,7 @@ int16 filter_file(FormatRecord *r) {
 
 int16 read_start(FormatRecord *r, intptr_t *data) {
     if (!r->HostSupports32BitCoordinates) return report_error(r, "this Photoshop version is too old for Tessalith DDS.");
+    r->layerData = 0; // the PiPL claims layers (DC38); a DDS opens as one composite
 
     const HANDLE file = reinterpret_cast<HANDLE>(r->dataFork); // the open file's Windows handle (PIFormat.h dataFork)
     LARGE_INTEGER size = {};

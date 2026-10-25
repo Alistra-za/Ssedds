@@ -8,6 +8,7 @@
 #include "settings_store.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <vector>
 
 namespace {
@@ -112,8 +113,115 @@ int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *
     return ok ? noErr : report_error(r, "the DDS file could not be written.");
 }
 
+// The last-band step shared by the band path and the merged path (DC38): alpha from the pixels, the dialog, the
+// encode and the single write; frees the save state whatever the outcome.
+int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels) {
+    Globals *g = reinterpret_cast<Globals *>(*data);
+    // Alpha from the pixels, not the planes (DC31): a normal layer always has a transparency plane.
+    const uint32_t has_alpha = channels == 4 && floats_have_transparency(s->rgba.data(), s->rgba.size() / 4) ? 1 : 0;
+    int16 result = noErr;
+    if (g->show_dialog) { // modal UI inside the write is allowed without SupportsBackgroundSave (PiPL keys)
+        const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
+        HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
+        const DialogResult shown = ShowSaveDialog(owner, has_alpha, &g->settings);
+        if (shown == DialogResult::Cancel) result = userCanceledErr; // nothing has been written
+        else if (shown == DialogResult::Failed) result = report_error(r, "the Tessalith DDS options dialog could not be shown");
+        else save_settings(r->sSPBasic, g->settings);
+    }
+    if (result == noErr) result = encode_and_write(r, g->settings, s, has_alpha);
+    free_state(r, data);
+    return result;
+}
+
+// A channel-port channel usable for this save: a port, the image's depth and the image's size (Note DC38).
+bool usable_channel(const FormatRecord *r, const ReadChannelDesc *c) {
+    return c && c->port && c->depth == r->depth && c->bounds.right - c->bounds.left == r->imageSize32.h &&
+           c->bounds.bottom - c->bounds.top == r->imageSize32.v;
+}
+
+// Photoshop's merged composite for a layered save (DC38): R, G, B, then the alpha source, the same policy as
+// alpha_plane: the merged transparency, else the first non-spot alpha channel, else none. Returns 3 or 4 and fills
+// ch, or 0 with `why` set when something needed is missing or does not match the image.
+int merged_source(const FormatRecord *r, const ReadChannelDesc *ch[4], const char **why) {
+    const ReadImageDocumentDesc *doc = r->documentInfo;
+    if (!doc) return *why = "no documentInfo", 0;
+    if (!r->channelPortProcs || !r->channelPortProcs->readPixelsProc) return *why = "no channel ports", 0;
+    const ReadChannelDesc *c = doc->mergedCompositeChannels;
+    for (int i = 0; i < 3; i++, c = c ? c->next : nullptr) {
+        if (!usable_channel(r, c)) return *why = "merged colour channels missing or not the image's depth and size", 0;
+        ch[i] = c;
+    }
+    const ReadChannelDesc *alpha = doc->mergedTransparency;
+    if (!alpha)
+        for (const ReadChannelDesc *a = doc->alphaChannels; a && !alpha; a = a->next)
+            if (a->channelType != ctSpotColor) alpha = a;
+    if (!alpha) return 3;
+    if (!usable_channel(r, alpha)) return *why = "the alpha source is not the image's depth and size", 0;
+    ch[3] = alpha;
+    return 4;
+}
+
+// Reads the merged composite in bands through the channel ports, each channel written straight into its slot of
+// the interleaved band (PixelMemoryDesc colBits), at the document depth: the same samples the band path gets
+// (16-bit 0..32768), so to_rgba_floats converts them unchanged. Then finishes as the last band would. A failed or
+// short read writes nothing.
+int16 write_merged(FormatRecord *r, intptr_t *data, const ReadChannelDesc *const ch[4], int channels) {
+    const int32 width = r->imageSize32.h, height = r->imageSize32.v;
+    const int32 sample = r->depth / 8;
+    const int64_t row_bytes = int64_t(width) * channels * sample;
+    Globals *g = globals_of(data);
+    delete g->save; // a stale state from an earlier save that never reached WriteFinish
+    auto *s = new SaveState;
+    g->save = s;
+    s->rgba.resize(size_t(width) * size_t(height) * 4);
+    s->rows_per_band = band_rows(row_bytes, height, kBandCap);
+    s->band.resize(size_t(row_bytes) * size_t(s->rows_per_band));
+    for (int32 top = 0; top < height; top += s->rows_per_band) {
+        const int32 rows = top + s->rows_per_band > height ? height - top : s->rows_per_band;
+        for (int c = 0; c < channels; c++) {
+            const VRect b = ch[c]->bounds;
+            const VRect rect = {b.top + top, b.left, b.top + top + rows, b.left + width};
+            VRect wrote = {};
+            const OSErr e = read_port(r, ch[c], rect, s->band.data() + size_t(c) * size_t(sample),
+                                      int32(row_bytes * 8), channels * r->depth, &wrote);
+            if (e != noErr || wrote.top != rect.top || wrote.left != rect.left || wrote.bottom != rect.bottom ||
+                wrote.right != rect.right) {
+                char note[128];
+                snprintf(note, sizeof note, "merged read failed: channel %d rows %d..%d result %d", c, top, top + rows, e);
+                trace_note(note);
+                free_state(r, data); // WriteFinish does not follow a failed WriteStart
+                return report_error(r, kNothingSaved);
+            }
+        }
+        to_rgba_floats(s->band.data(), size_t(width) * size_t(rows), channels, r->depth,
+                       s->rgba.data() + size_t(top) * size_t(width) * 4);
+    }
+    return finish_save(r, data, s, channels); // frees the state and leaves theRect32 empty: no WriteContinue
+}
+
 } // namespace
 
+OSErr read_port(const FormatRecord *r, const ReadChannelDesc *c, const VRect &rect, void *dst, int32 row_bits,
+                int32 col_bits, VRect *wrote) {
+    if (!r->channelPortProcs || !r->channelPortProcs->readPixelsProc || !c || !c->port) return -1;
+    PSScaling scaling;
+    scaling.sourceRect = rect;
+    scaling.destinationRect = rect; // equal rectangles: an unscaled read (PIGeneral.h PSScaling)
+    PixelMemoryDesc mem;
+    mem.data = dst;
+    mem.rowBits = row_bits;
+    mem.colBits = col_bits;
+    mem.bitOffset = 0;
+    mem.depth = c->depth;
+    VRect write_rect = rect;
+    ReadPixelsProc read = r->channelPortProcs->readPixelsProc;
+    PIChannelPort port = c->port;
+    __try { // a fault inside the host's read fails this save instead of crashing Photoshop
+        return read(port, &scaling, &write_rect, &mem, wrote);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -2;
+    }
+}
 int16 options_start(FormatRecord *r, intptr_t *data) {
     static_assert(kPlayInfoDisplay == plugInDialogDisplay, "dialog.h mirrors PIActions.h");
     r->data = nullptr; // no OptionsContinue: the options do not depend on the pixels
@@ -152,6 +260,19 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
         g->settings = load_settings(r->sSPBasic, uint32_t(channels == 4));
         g->have_settings = true;
     }
+    if (r->layerData > 0) { // a layered save: Photoshop sends layers, not the composite, so read its merged image (DC38)
+        const ReadChannelDesc *ch[4] = {};
+        const char *why = "";
+        const int merged = merged_source(r, ch, &why);
+        if (!merged) {
+            char note[160];
+            snprintf(note, sizeof note, "layered save without a usable merged composite: %s", why);
+            trace_note(note);
+            return report_error(r, kNothingSaved);
+        }
+        trace_note(merged == 4 ? "saving from the merged composite with alpha" : "saving from the merged composite");
+        return write_merged(r, data, ch, merged);
+    }
     delete g->save; // a stale state from an earlier save that never reached WriteFinish
     g->save = nullptr;
     auto *s = new SaveState;
@@ -186,21 +307,7 @@ int16 write_continue(FormatRecord *r, intptr_t *data) {
         return noErr;
     }
     // Last band: the request loop ends here whatever the outcome.
-    Globals *g = reinterpret_cast<Globals *>(*data);
-    // Alpha from the pixels, not the planes (DC31): a normal layer always has a transparency plane.
-    const uint32_t has_alpha = channels == 4 && floats_have_transparency(s->rgba.data(), s->rgba.size() / 4) ? 1 : 0;
-    int16 result = noErr;
-    if (g->show_dialog) { // modal UI inside the write is allowed without SupportsBackgroundSave (PiPL keys)
-        const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
-        HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
-        const DialogResult shown = ShowSaveDialog(owner, has_alpha, &g->settings);
-        if (shown == DialogResult::Cancel) result = userCanceledErr; // nothing has been written
-        else if (shown == DialogResult::Failed) result = report_error(r, "the Tessalith DDS options dialog could not be shown");
-        else save_settings(r->sSPBasic, g->settings);
-    }
-    if (result == noErr) result = encode_and_write(r, g->settings, s, has_alpha);
-    free_state(r, data);
-    return result;
+    return finish_save(r, data, s, channels);
 }
 
 int16 write_finish(FormatRecord *r, intptr_t *data) {

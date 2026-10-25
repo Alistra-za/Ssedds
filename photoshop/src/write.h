@@ -54,3 +54,10 @@ int16 write_start(FormatRecord *record, intptr_t *data);
 int16 write_continue(FormatRecord *record, intptr_t *data);
 // Refuses a save that ends with no DDS written, when the image never fully arrived (Note DC27).
 int16 write_finish(FormatRecord *record, intptr_t *data);
+
+// One unscaled channel-port read (DC38) through FormatRecord::channelPortProcs.
+// Returns the host's result, -1 when the suite or port is missing, -2 when the host call faulted.
+OSErr read_port(const FormatRecord *record, const ReadChannelDesc *channel, const VRect &rect, void *dst,
+                int32 row_bits, int32 col_bits, VRect *wrote);
+// Appends one line to the selector trace (main.cpp) when TESSALITH_DDS_TRACE=1.
+void trace_note(const char *line);

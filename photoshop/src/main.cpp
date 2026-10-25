@@ -4,6 +4,7 @@
 #include "pixels.h"
 
 #include <new>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -36,6 +37,18 @@ const char *selector_name(int16 s) {
     }
 }
 
+void append_trace(const char *line, int n) {
+    wchar_t path[MAX_PATH + 1] = {};
+    const DWORD len = GetTempPathW(MAX_PATH, path);
+    if (len == 0 || len > MAX_PATH - 24) return;
+    wcscat_s(path, L"TessalithDDS-trace.txt");
+    HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(f, line, DWORD(n), &written, nullptr);
+    CloseHandle(f);
+}
+
 // One line per call: "in" with what the host set, "out" with the result and what the plug-in requested next.
 void trace(const char *when, int16 selector, const FormatRecord *r, int16 result) {
     char line[640];
@@ -58,18 +71,69 @@ void trace(const char *when, int16 selector, const FormatRecord *r, int16 result
         n += snprintf(line + n, sizeof line - size_t(n), "\"");
     }
     n += snprintf(line + n, sizeof line - size_t(n), "\r\n");
-    wchar_t path[MAX_PATH + 1] = {};
-    const DWORD len = GetTempPathW(MAX_PATH, path);
-    if (len == 0 || len > MAX_PATH - 24) return;
-    wcscat_s(path, L"TessalithDDS-trace.txt");
-    HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, 0, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return;
-    DWORD written = 0;
-    WriteFile(f, line, DWORD(n), &written, nullptr);
-    CloseHandle(f);
+    append_trace(line, n);
 }
 
+// On WriteStart (DC38): what the host offers through documentInfo and the channel ports, the source of a layered
+// save. Every pointer is checked before use.
+struct Line {
+    char text[4096];
+    size_t n = 0;
+    void add(const char *fmt, ...) {
+        if (n >= sizeof text - 3) return;
+        va_list args;
+        va_start(args, fmt);
+        const int m = vsnprintf(text + n, sizeof text - 3 - n, fmt, args);
+        va_end(args);
+        if (m > 0) n = n + size_t(m) < sizeof text - 3 ? n + size_t(m) : sizeof text - 4; // truncated: keep what fit
+    }
+};
+
+void describe_channel(Line &out, const ReadChannelDesc *c) {
+    const VRect b = c->bounds;
+    char name[40] = {};
+    if (c->name) strncpy_s(name, c->name, _TRUNCATE);
+    out.add(" {\"%s\" type %d depth %d bounds %d,%d,%d,%d tile %dx%d port %d", name, c->channelType, c->depth, b.top,
+            b.left, b.bottom, b.right, c->tileSize.h, c->tileSize.v, c->port != nullptr);
+    out.add("}");
+}
+
+void describe_list(Line &out, const char *label, const ReadChannelDesc *c) {
+    out.add(" %s", label);
+    if (!c) out.add(" null");
+    for (int i = 0; c && i < 6; c = c->next, i++) describe_channel(out, c);
+}
+
+void trace_document(const FormatRecord *r) {
+    Line line;
+    const ChannelPortProcs *procs = r->channelPortProcs;
+    line.add("    doc channelPortProcs %d", procs != nullptr);
+    if (procs)
+        line.add(" (version %d count %d readPixels %d)", procs->channelPortProcsVersion, procs->numChannelPortProcs,
+                 procs->readPixelsProc != nullptr);
+    const ReadImageDocumentDesc *d = r->documentInfo;
+    line.add(" documentInfo %d", d != nullptr);
+    if (d) {
+        line.add(" version %d..%d mode %d depth %d bounds %d,%d,%d,%d", d->minVersion, d->maxVersion, d->imageMode,
+                 d->depth, d->bounds.top, d->bounds.left, d->bounds.bottom, d->bounds.right);
+        if (d->maxVersion >= 3)
+            line.add(" composites %d layers %d alphas %d", d->compositeChannelCount, d->layerCount, d->alphaChannelCount);
+        line.add(" layersDescriptor %d", d->maxVersion >= 2 && d->layersDescriptor != nullptr);
+        describe_list(line, "merged", d->mergedCompositeChannels);
+        describe_list(line, "mergedTransparency", d->mergedTransparency);
+        describe_list(line, "alpha", d->alphaChannels);
+    }
+    memcpy(line.text + line.n, "\r\n", 3);
+    append_trace(line.text, int(line.n + 2));
+}
 } // namespace
+
+void trace_note(const char *note) {
+    if (!trace_enabled()) return;
+    char line[256];
+    const int n = snprintf(line, sizeof line, "%lu    %s\r\n", GetTickCount(), note);
+    if (n > 0) append_trace(line, n < int(sizeof line) ? n : int(sizeof line) - 1);
+}
 
 int16 report_error(FormatRecord *r, const char *message) {
     if (!r->errorString) return formatBadParameters;
@@ -116,6 +180,15 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
 
     case formatSelectorFilterFile:
         return filter_file(r);
+    case formatSelectorReadLayerStart: // the PiPL claims layers (DC38); no layer pixels are exchanged
+    case formatSelectorReadLayerContinue:
+    case formatSelectorReadLayerFinish:
+    case formatSelectorWriteLayerStart:
+    case formatSelectorWriteLayerContinue:
+    case formatSelectorWriteLayerFinish:
+        r->data = nullptr;
+        r->theRect32 = VRect{};
+        return noErr;
     default:
         return noErr;
     }
@@ -138,7 +211,10 @@ extern "C" __declspec(dllexport) void PluginMain(const int16 selector, FormatRec
     }
     // Declared on every call, so the host reads theRect32 / imageSize32 whichever selector it checks the flag on.
     if (record->HostSupports32BitCoordinates) record->PluginUsing32BitCoordinates = 1;
-    if (trace_enabled()) trace("in ", selector, record, 0);
+    if (trace_enabled()) {
+        trace("in ", selector, record, 0);
+        if (selector == formatSelectorWriteStart) trace_document(record);
+    }
     // Nothing may throw across the plug-in boundary.
     try {
         *result = dispatch(selector, record, data);
