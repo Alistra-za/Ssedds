@@ -8,13 +8,11 @@
 #include "settings_store.h"
 
 #include <ctype.h>
+#include <string.h>
 #include <vector>
 
 namespace {
 
-// Largest single request: PIFormat.h asks for pieces no larger than maxData; we set maxData to 0 in WritePrepare
-// and use our own memory, so this cap keeps each band small instead.
-constexpr int64_t kBandCap = int64_t(64) << 20;
 // psdds refuses larger sides; checked here too so the size message wins over a failed allocation.
 constexpr int32 kMaxSide = 16384;
 
@@ -26,12 +24,31 @@ struct SaveState {
     int32 rows_per_band = 0;
 };
 
-namespace {
-
 Globals *globals_of(intptr_t *data) {
     if (!*data) *data = reinterpret_cast<intptr_t>(new Globals);
     return reinterpret_cast<Globals *>(*data);
 }
+
+const char *as_reason(char *message) {
+    if (isupper(static_cast<unsigned char>(message[0])) && islower(static_cast<unsigned char>(message[1])))
+        message[0] = char(tolower(static_cast<unsigned char>(message[0])));
+    return message;
+}
+
+void set_revert_info(FormatRecord *r) {
+    if (r->revertInfo) return;
+    // PIFormat.h: the handle must come from the host, which disposes of it with the document.
+    NewPIHandleProc make = r->hostNewHdl ? r->hostNewHdl : r->handleProcs ? r->handleProcs->newProc : nullptr;
+    Handle h = make ? make(4) : nullptr;
+    if (!h) return;
+    if (r->handleProcs && r->handleProcs->lockProc && r->handleProcs->unlockProc) {
+        if (Ptr p = r->handleProcs->lockProc(h, false)) memcpy(p, "TDDS", 4); // a marker for anyone inspecting it
+        r->handleProcs->unlockProc(h);
+    }
+    r->revertInfo = h;
+}
+
+namespace {
 
 SaveState *state_of(intptr_t *data) { return *data ? reinterpret_cast<Globals *>(*data)->save : nullptr; }
 
@@ -82,13 +99,6 @@ bool write_all(HANDLE file, const uint8_t *bytes, size_t len) {
     return true;
 }
 
-// psdds messages start with a capital; Photoshop puts "Cannot complete operation because " in front.
-const char *as_reason(char *message) {
-    if (isupper(static_cast<unsigned char>(message[0])) && islower(static_cast<unsigned char>(message[1])))
-        message[0] = char(tolower(static_cast<unsigned char>(message[0])));
-    return message;
-}
-
 int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *s, uint32_t has_alpha) {
     PsddsSettings effective;
     PsddsControls controls;
@@ -119,7 +129,8 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
     // shortcut: the descriptor's contents are neither read nor written; a script, action or batch saves with the
     // remembered settings. Add descriptor keys when recorded actions need their own settings.
     const PIDescriptorParameters *script = r->descriptorParameters;
-    if (ShouldShowDialog(script != nullptr, script ? script->playInfo : 0)) {
+    // revertInfo (set by Open or an earlier Save as DDS): a plain Save reuses the remembered settings (DC21).
+    if (ShouldShowDialog(script != nullptr, script ? script->playInfo : 0, r->revertInfo != nullptr)) {
         const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
         HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
         const DialogResult shown = ShowSaveDialog(owner, has_alpha, &chosen);
@@ -127,6 +138,7 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
         if (shown == DialogResult::Failed) return report_error(r, "the Tessalith DDS options dialog could not be shown.");
         save_settings(r->sSPBasic, chosen);
     }
+    set_revert_info(r); // PIFormat.h: every options call leaves revertInfo able to revert the document
     g->settings = chosen;
     g->have_settings = true;
     return noErr;

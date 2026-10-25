@@ -16,8 +16,8 @@ ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha) {
     return s;
 }
 
-bool ShouldShowDialog(bool has_descriptor, int32_t play_info) {
-    return !has_descriptor || play_info == kPlayInfoDisplay;
+bool ShouldShowDialog(bool has_descriptor, int32_t play_info, bool has_revert_info) {
+    return has_descriptor ? play_info == kPlayInfoDisplay : !has_revert_info;
 }
 
 namespace {

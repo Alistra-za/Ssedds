@@ -87,8 +87,26 @@ static void bands_convert_into_their_rows() {
     check(near(image[5 * 4 + 3], 1.0f), __func__, "row 2 opaque");
 }
 
-int main() {
-    struct {
+static void deinterleave_rgba8_to_planes_test() {
+    // Two RGBA8 pixels become planar R, G, B (and A) blocks of `pixels` bytes each.
+    const uint8_t px[8] = {10, 20, 30, 40, 50, 60, 70, 80};
+    uint8_t out[8] = {};
+    deinterleave_rgba8_to_planes(px, 2, 4, out);
+    const uint8_t want4[8] = {10, 50, 20, 60, 30, 70, 40, 80};
+    for (int i = 0; i < 8; i++) check(out[i] == want4[i], __func__, "4 planes: R, G, B, A blocks");
+    uint8_t out3[8] = {0, 0, 0, 0, 0, 0, 99, 99};
+    deinterleave_rgba8_to_planes(px, 2, 3, out3);
+    const uint8_t want3[8] = {10, 50, 20, 60, 30, 70, 99, 99};
+    for (int i = 0; i < 8; i++) check(out3[i] == want3[i], __func__, "3 planes: alpha dropped, nothing written past B");
+}
+
+static void largest_dds_is_16k_rgba8_full_chain() {
+    // 16384^2 RGBA8 with 15 mip levels: 4 * (4^15 - 1) / 3 bytes of pixels, plus magic, header and DX10 header.
+    check(kMaxDdsFileBytes == int64_t(4) * ((int64_t(1) << 30) - 1) / 3 + 4 + 124 + 20, __func__, "closed form");
+    check(kMaxDdsFileBytes == 1431655912, __func__, "1,431,655,912 bytes");
+}
+
+int main() {    struct {
         const char *name;
         void (*run)();
     } tests[] = {
@@ -99,6 +117,8 @@ int main() {
         {"bands_cover_largest_image_within_cap", bands_cover_largest_image_within_cap},
         {"band_rows_edges", band_rows_edges},
         {"bands_convert_into_their_rows", bands_convert_into_their_rows},
+        {"deinterleave_rgba8_to_planes", deinterleave_rgba8_to_planes_test},
+        {"largest_dds_is_16k_rgba8_full_chain", largest_dds_is_16k_rgba8_full_chain},
     };
     for (auto &t : tests) {
         int before = failures;

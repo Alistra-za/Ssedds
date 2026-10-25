@@ -13,7 +13,7 @@
       "WriteExtensions": ["DDS "],
       "FormatFlags": {
         "SavesImageResources": false,
-        "CanRead": false,
+        "CanRead": true,
         "CanWrite": true,
         "CanWriteIfRead": true,
         "CanWriteTransparency": true,

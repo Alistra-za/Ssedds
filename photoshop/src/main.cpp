@@ -27,6 +27,7 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
         r->data = nullptr;
         return noErr;
     }
+    case formatSelectorReadPrepare:
     case formatSelectorWritePrepare:
         r->maxData = 0; // the plug-in uses its own memory for the image (PIFormat.h maxData)
         return noErr;
@@ -37,7 +38,11 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
     case formatSelectorWriteFinish:
         return write_finish(r, data);
     case formatSelectorReadStart:
-        return report_error(r, "opening DDS files is not supported yet.");
+        return read_start(r, data);
+    case formatSelectorReadContinue:
+        return read_continue(r, data);
+    case formatSelectorReadFinish:
+        return read_finish(r, data);
     default:
         return noErr;
     }
@@ -56,7 +61,9 @@ extern "C" __declspec(dllexport) void PluginMain(const int16 selector, FormatRec
     try {
         *result = dispatch(selector, record, data);
     } catch (const std::bad_alloc &) {
-        *result = report_error(record, "there is not enough memory to save this image.");
+        const bool reading = selector >= formatSelectorReadPrepare && selector <= formatSelectorReadFinish;
+        *result = report_error(record, reading ? "there is not enough memory to open this DDS."
+                                               : "there is not enough memory to save this image.");
     } catch (...) {
         *result = report_error(record, "of an internal error in Tessalith DDS.");
     }

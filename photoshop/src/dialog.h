@@ -32,7 +32,9 @@ constexpr int32_t kPlayInfoDisplay = 1;
 
 // Whether OptionsStart may show the dialog. With descriptor parameters (a script, an action, a batch), the host's
 // playInfo decides: only plugInDialogDisplay shows it; plugInDialogDontDisplay and plugInDialogSilent do not.
-bool ShouldShowDialog(bool has_descriptor, int32_t play_info);
+// Without them, a document carrying Tessalith revertInfo (opened from DDS or saved as DDS before, PIFormat.h
+// revertInfo) saves without the dialog; otherwise the dialog shows.
+bool ShouldShowDialog(bool has_descriptor, int32_t play_info, bool has_revert_info);
 
 enum class DialogResult { Ok, Cancel, Failed };
 

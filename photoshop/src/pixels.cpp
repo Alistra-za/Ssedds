@@ -24,3 +24,8 @@ void to_rgba_floats(const void *src, size_t pixels, int channels, int depth, flo
     else
         convert(static_cast<const uint8_t *>(src), pixels, channels, 1.0f / 255.0f, out);
 }
+
+void deinterleave_rgba8_to_planes(const uint8_t *rgba, size_t pixels, int planes, uint8_t *out) {
+    for (int c = 0; c < planes; c++, out += pixels)
+        for (size_t p = 0; p < pixels; p++) out[p] = rgba[p * 4 + c];
+}
