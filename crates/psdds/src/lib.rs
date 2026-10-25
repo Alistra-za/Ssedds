@@ -223,20 +223,37 @@ unsafe fn decode(
         .first()
         .ok_or("This DDS has no mip levels.")?
         .clone();
-    let px = engine::decode::decode_level_rgba(f.format, w, h, &f.data[range], None)
-        .map_err(|e| e.to_string())?;
-    let rgba: Box<[u8]> = px
-        .iter()
-        .flatten()
-        .map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8)
-        .collect();
+    let engine::decode::Decoded::Ldr(px) =
+        engine::decode::decode_level(f.format, w, h, &f.data[range], None)
+            .map_err(|e| e.to_string())?
+    else {
+        return Err(HDR_REFUSAL.into());
+    };
+    // A failed allocation aborts the host, so the output buffer is reserved fallibly.
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(px.len() * 4)
+        .map_err(|_| "Not enough memory to open this DDS.")?;
+    let stores_alpha = matches!(
+        f.format,
+        Bc2 { .. } | Bc3 { .. } | Bc7 { .. } | Rgba8 { .. } | Bgra8 { .. }
+    );
+    let mut any_clear = false;
+    for p in &px {
+        // Formats without stored alpha are opaque; BC1's 1-bit alpha is real only where a texel uses it.
+        let a = if stores_alpha || matches!(f.format, Bc1 { .. }) {
+            p[3]
+        } else {
+            255
+        };
+        any_clear |= a < 255;
+        rgba.extend_from_slice(&[p[0], p[1], p[2], a]);
+    }
+    drop(px);
+    let rgba = rgba.into_boxed_slice();
     let len = rgba.len();
     *width = w;
     *height = h;
-    *has_alpha = u32::from(matches!(
-        f.format,
-        Bc2 { .. } | Bc3 { .. } | Bc7 { .. } | Rgba8 { .. } | Bgra8 { .. }
-    ));
+    *has_alpha = u32::from(stores_alpha || any_clear);
     *out = PsddsBuf {
         data: Box::into_raw(rgba).cast::<u8>(),
         len,
@@ -285,7 +302,7 @@ pub unsafe extern "C" fn psdds_decode(
 /// Release a buffer from `psdds_encode` or `psdds_decode`. An empty buffer (null `data`) is a no-op.
 ///
 /// # Safety
-/// `buf` came from `psdds_encode` and is freed once.
+/// `buf` came from `psdds_encode` or `psdds_decode` and is freed once.
 #[no_mangle]
 pub unsafe extern "C" fn psdds_free(buf: PsddsBuf) {
     if buf.data.is_null() {

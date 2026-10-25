@@ -123,7 +123,8 @@ const HDR: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not 
 #[test]
 fn round_trips_every_format() {
     let (w, h) = (64, 32);
-    // (format, texture type, max error allowed, channels checked). Measured: BC1/BC3 13 (565 endpoints; the brief's 12\n    // was a guess), BC7 7, BC4/BC5/RGBA8 0. BC5 uses the linear type: the Normal type renormalises the gradient.
+    // (format, texture type, max error allowed, channels checked). Measured: BC1/BC3 13 (565 endpoints; the brief's 12
+    // was a guess), BC7 7, BC4/BC5/RGBA8 0. BC5 uses the linear type: the Normal type renormalises the gradient.
     let cases: [(u32, u32, i32, &[usize]); 6] = [
         (0, 0, 14, &[0, 1, 2]),
         (1, 0, 14, &[0, 1, 2, 3]),
@@ -153,6 +154,26 @@ fn round_trips_every_format() {
             }
         }
         println!("format {f}: max error {worst}");
+        // The channels not stored decode to fixed values; without stored alpha every alpha byte is 255.
+        for p in d.rgba.chunks(4) {
+            match f {
+                2 => assert!(p[1] == p[0] && p[2] == p[0] && p[3] == 255),
+                3 => assert!(p[2] == 0 && p[3] == 255),
+                0 => assert_eq!(p[3], 255),
+                _ => {}
+            }
+        }
+        // Same codes as the engine's f32 path, rounded.
+        let file = engine::dds::read_dds(&dds).unwrap();
+        let (lw, lh, r) = file.levels[0].clone();
+        let old =
+            engine::decode::decode_level_rgba(file.format, lw, lh, &file.data[r], None).unwrap();
+        let old: Vec<u8> = old
+            .iter()
+            .flatten()
+            .map(|v| (v * 255.0).round() as u8)
+            .collect();
+        assert!(old == d.rgba, "format {f}: differs from decode_level_rgba");
         assert!(worst <= tol, "format {f}: max error {worst} > {tol}");
     }
 }
@@ -251,4 +272,44 @@ fn null_pointers_and_tiny_err_buffers_do_not_crash() {
     };
     assert_ne!(rc, 0);
     assert_eq!(e[0], 0);
+}
+
+#[test]
+fn bc1_alpha_is_real_only_with_punch_through() {
+    let w565 = |r: u16, g: u16, b: u16| (r << 11) | (g << 5) | b;
+    let block = |c0: u16, c1: u16, idx: u32| {
+        let mut b = c0.to_le_bytes().to_vec();
+        b.extend_from_slice(&c1.to_le_bytes());
+        b.extend_from_slice(&idx.to_le_bytes());
+        b
+    };
+    // color0 <= color1: 3-colour mode, index 3 is transparent. Texel 0 gets index 3, the rest index 0.
+    let punch = decode(&raw(
+        4,
+        4,
+        b"DXT1",
+        0,
+        0,
+        1,
+        0,
+        &block(w565(0, 0, 0), w565(31, 63, 31), 3),
+    ))
+    .unwrap();
+    assert_eq!(punch.has_alpha, 1);
+    assert_eq!(punch.rgba[3], 0);
+    assert_eq!(punch.rgba[7], 255);
+    // color0 > color1: 4-colour mode, opaque.
+    let opaque = decode(&raw(
+        4,
+        4,
+        b"DXT1",
+        0,
+        0,
+        1,
+        0,
+        &block(w565(31, 63, 31), w565(0, 0, 0), 3),
+    ))
+    .unwrap();
+    assert_eq!(opaque.has_alpha, 0);
+    assert!(opaque.rgba.chunks(4).all(|p| p[3] == 255));
 }
