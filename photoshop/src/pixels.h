@@ -9,9 +9,16 @@
 int32_t band_rows(int64_t row_bytes, int32_t height, int64_t cap_bytes);
 
 // Converts `pixels` interleaved pixels from Photoshop into RGBA floats in [0, 1] (Note DC6):
-// 8-bit samples (uint8) scale by 1/255, 16-bit samples (uint16, Photoshop's 0..32768 range) by 1/32768.
+// 8-bit samples (uint8) scale by 1/255, 16-bit samples (uint16, Photoshop's 0..32768 range) by 1/32768,
+// 32-bit samples (float) are copied unchanged: no scale, no clamp, NaN kept (Note DE1).
 // `channels` is 3 (RGB, alpha becomes 1) or 4 (RGB plus the alpha source). `out` receives pixels * 4 floats.
 void to_rgba_floats(const void *src, size_t pixels, int channels, int depth, float *out);
+
+// Writes one NUL-terminated trace line for a float image and returns its length (cap bounds the write, NUL included):
+//   px (r,g,b,a) ... r[min,max] g[min,max] b[min,max] a[min,max] nan N above1 N below0 N
+// The first 4 pixels use %.9g (NaN prints as nan); min and max are over finite values (0,0 when none); the three
+// counts cover RGB only.
+size_t describe_samples(const float *rgba, size_t pixels, char *out, size_t cap);
 
 // Copies `pixels` interleaved RGBA8 pixels into planar blocks of `pixels` bytes each: R, G, B and, when `planes`
 // is 4, A (3 drops alpha). `out` receives pixels * planes bytes.

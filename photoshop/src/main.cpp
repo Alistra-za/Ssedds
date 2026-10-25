@@ -138,7 +138,7 @@ void trace_document(const FormatRecord *r) {
 
 void trace_note(const char *note) {
     if (!trace_enabled()) return;
-    char line[256];
+    char line[768]; // the samples line (write.cpp finish_save) is about 400 characters
     const int n = snprintf(line, sizeof line, "%lu    %s\r\n", GetTickCount(), note);
     if (n > 0) append_trace(line, n < int(sizeof line) ? n : int(sizeof line) - 1);
 }

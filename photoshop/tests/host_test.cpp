@@ -28,6 +28,7 @@
 #include <vector>
 
 typedef void (*Entry)(const int16, FormatRecordPtr, intptr_t *, int16 *);
+typedef float (*FSample)(int channel, int x, int y); // 32-bit samples
 
 static std::set<DWORD> own_threads() {
     std::set<DWORD> ids;
@@ -95,6 +96,23 @@ struct Host {
                     px[2] = (unsigned char)((x ^ y) * 4);
                     if (r->hiPlane >= 3) px[3] = (unsigned char)alpha(x, y);
                 }
+            result = call(formatSelectorWriteContinue);
+        }
+        return result;
+    }
+    // The 32-bit form of send_rgba: float samples from s(channel, x, y) for every requested plane.
+    int16 send_rgba32(FSample s) {
+        int16 result = 0;
+        while (result == 0 && r->data) {
+            const VRect q = r->theRect32;
+            for (int y = q.top; y < q.bottom; y++)
+                for (int x = q.left; x < q.right; x++)
+                    for (int c = 0; c <= r->hiPlane - r->loPlane; c++) {
+                        unsigned char *at = static_cast<unsigned char *>(r->data) + (y - q.top) * r->rowBytes +
+                                            x * r->colBytes + c * r->planeBytes;
+                        const float v = s(c, x, y);
+                        memcpy(at, &v, 4);
+                    }
             result = call(formatSelectorWriteContinue);
         }
         return result;
@@ -367,18 +385,22 @@ typedef unsigned (*Sample)(int channel, int x, int y);
 
 struct FakePlane {
     std::vector<uint16_t> v = std::vector<uint16_t>(64 * 64);
+    std::vector<float> f = std::vector<float>(64 * 64); // used when the port depth is 32
     bool fail = false;
+    mutable int col_bits = 0; // what the last read asked for
 };
 
 static OSErr fake_read(ChannelReadPort port, const PSScaling *, const VRect *rect, const PixelMemoryDesc *d, VRect *wrote) {
     const FakePlane *p = reinterpret_cast<const FakePlane *>(port);
     if (p->fail) return -1;
+    p->col_bits = d->colBits;
     unsigned char *base = static_cast<unsigned char *>(d->data) + d->bitOffset / 8;
     for (int y = rect->top; y < rect->bottom; y++)
         for (int x = rect->left; x < rect->right; x++) {
             unsigned char *at = base + size_t(y - rect->top) * size_t(d->rowBits / 8) + size_t(x - rect->left) * size_t(d->colBits / 8);
             const uint16_t value = p->v[size_t(y) * 64 + size_t(x)];
-            if (d->depth == 16) memcpy(at, &value, 2);
+            if (d->depth == 32) memcpy(at, &p->f[size_t(y) * 64 + size_t(x)], 4);
+            else if (d->depth == 16) memcpy(at, &value, 2);
             else *at = (unsigned char)value;
         }
     *wrote = *rect;
@@ -396,10 +418,22 @@ struct MergedDoc {
     ChannelPortProcs procs = {};
 
     MergedDoc(int depth, Sample s, AlphaSource alpha) {
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 6; i++)
             for (int y = 0; y < 64; y++)
                 for (int x = 0; x < 64; x++)
                     planes[i].v[size_t(y) * 64 + size_t(x)] = uint16_t(i == 4 ? 0 : i == 5 ? x < 16 ? 255 : 50 : s(i < 4 ? i : 3, x, y));
+        wire(depth, alpha);
+    }
+    // 32-bit: float ports; the spare channels (4, 5) hold zeros.
+    MergedDoc(int depth, FSample s, AlphaSource alpha) {
+        for (int i = 0; i < 6; i++)
+            for (int y = 0; y < 64; y++)
+                for (int x = 0; x < 64; x++)
+                    planes[i].f[size_t(y) * 64 + size_t(x)] = i >= 4 ? 0.0f : s(i, x, y);
+        wire(depth, alpha);
+    }
+    void wire(int depth, AlphaSource alpha) {
+        for (int i = 0; i < 6; i++) {
             ch[i].port = reinterpret_cast<PIChannelPort>(&planes[i]);
             ch[i].bounds = VRect{0, 0, 64, 64};
             ch[i].depth = depth;
@@ -409,7 +443,7 @@ struct MergedDoc {
         ch[0].next = &ch[1];
         ch[1].next = &ch[2];
         doc.bounds = VRect{0, 0, 64, 64};
-        doc.imageMode = depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
+        doc.imageMode = depth == 32 ? plugInModeRGB96 : depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
         doc.depth = depth;
         doc.mergedCompositeChannels = &ch[0];
         if (alpha == AlphaSource::Merged || alpha == AlphaSource::Both) doc.mergedTransparency = &ch[3];
@@ -431,7 +465,7 @@ struct MergedDoc {
 
 static void set_depth(Host &h, int depth) {
     h.r->depth = int16(depth);
-    h.r->imageMode = depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
+    h.r->imageMode = depth == 32 ? plugInModeRGB96 : depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
 }
 
 // One save of `m` as a layered document (layerData 2, the Layer selectors after WriteStart as Photoshop 26.9 sends
@@ -597,6 +631,56 @@ static int band_alpha_plane(Entry entry, const wchar_t *path) {
     return bad;
 }
 
+static float hdr_gradient(int c, int x, int y) { return c == 0 ? x / 16.0f : c == 1 ? y / 64.0f : c == 2 ? -0.25f : 1.0f; }
+
+// Task 1 probe: a 32-bit RGB document is accepted on both read paths (band and merged composite), the pixels are read
+// as 4-byte samples, and the save then refuses with the file untouched. Removed with the probe refusal in Task 6.
+static int thirty_two_bit_read_probe(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    auto expect = [&](bool ok, const char *what, int16 result) {
+        printf("  %s %s: result %d\n", ok ? "ok  " : "FAIL", what, result);
+        bad += ok ? 0 : 1;
+    };
+    const std::string original(20000, 'x');
+    const char *refusal = "Tessalith DDS cannot save 32-bit documents in this build, so nothing was saved";
+    { // band path
+        write_file(path, original);
+        HANDLE f = open_existing(path);
+        Host h(entry, f);
+        set_depth(h, 32);
+        int16 result = h.call(formatSelectorWritePrepare);
+        if (!result) result = h.call(formatSelectorWriteStart);
+        const bool asked = result == 0 && h.r->planeBytes == 4 && h.r->colBytes == 12 && h.r->rowBytes == 64 * 12;
+        const bool started = result == 0;
+        if (!result) result = h.send_rgba32(hdr_gradient);
+        if (started) h.call(formatSelectorWriteFinish);
+        CloseHandle(f);
+        expect(asked && result == errReportString && h.message() == refusal && contents(path) == original,
+               "flat RGB96: 4-byte samples asked, probe refusal, file untouched", result);
+    }
+    { // merged path
+        write_file(path, original);
+        MergedDoc m(32, hdr_gradient, AlphaSource::None);
+        HANDLE f = open_existing(path);
+        Host h(entry, f);
+        set_depth(h, 32);
+        h.r->layerData = 2;
+        h.r->documentInfo = &m.doc;
+        h.r->channelPortProcs = &m.procs;
+        int16 result = h.call(formatSelectorWritePrepare);
+        if (!result) result = h.call(formatSelectorWriteStart);
+        const bool bands = h.r->data != nullptr;
+        if (result == 0) h.call(formatSelectorWriteFinish);
+        CloseHandle(f);
+        expect(!bands && result == errReportString && h.message() == refusal && contents(path) == original &&
+                   m.planes[0].col_bits == 96 && m.planes[2].col_bits == 96,
+               "layered RGB96: float ports read at 4 bytes per sample, probe refusal, file untouched", result);
+    }
+    DeleteFileW(path);
+    printf("%s thirty_two_bit_read_probe\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 // Drives Open as Photoshop would: ReadPrepare, ReadStart, ReadContinue until data is NULL, ReadFinish. Returns every
 // band's planes concatenated; *described gets the mode, depth and planes the plug-in set.
 static std::string open_planes(Entry entry, const wchar_t *path, FormatRecord *described) {
@@ -683,6 +767,7 @@ int wmain(int argc, wchar_t **argv) {
     failed += merged_composite_save(entry, out);
     failed += band_alpha_plane(entry, out);
     failed += eight_bit_bytes_pinned(entry, out);
+    failed += thirty_two_bit_read_probe(entry, out);
     const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
     printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
     failed += seeded ? 0 : 1;

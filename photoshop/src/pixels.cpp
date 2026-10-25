@@ -4,6 +4,7 @@
 #include "../psdds.h"
 
 #include <stdint.h>
+#include <stdio.h>
 
 template <typename T>
 static void convert(const T *src, size_t pixels, int channels, float scale, float *out) {
@@ -21,10 +22,65 @@ int32_t band_rows(int64_t row_bytes, int32_t height, int64_t cap_bytes) {
 }
 
 void to_rgba_floats(const void *src, size_t pixels, int channels, int depth, float *out) {
-    if (depth == 16)
+    if (depth == 32)
+        convert(static_cast<const float *>(src), pixels, channels, 1.0f, out); // x * 1.0f keeps every float, NaN too
+    else if (depth == 16)
         convert(static_cast<const uint16_t *>(src), pixels, channels, 1.0f / 32768.0f, out);
     else
         convert(static_cast<const uint8_t *>(src), pixels, channels, 1.0f / 255.0f, out);
+}
+
+static void put_float(char *&at, char *end, float v) {
+    if (at >= end) return;
+    at += v != v ? snprintf(at, size_t(end - at), "nan") : snprintf(at, size_t(end - at), "%.9g", double(v));
+    if (at > end) at = end;
+}
+
+size_t describe_samples(const float *rgba, size_t pixels, char *out, size_t cap) {
+    if (cap == 0) return 0;
+    char *at = out, *end = out + cap - 1; // room for the NUL
+    auto text = [&](const char *fmt, auto... args) {
+        if (at < end) at += snprintf(at, size_t(end - at) + 1, fmt, args...);
+        if (at > end) at = end;
+    };
+    text("px");
+    for (size_t p = 0; p < pixels && p < 4; p++) {
+        text(" (");
+        for (int c = 0; c < 4; c++) {
+            if (c) text(",");
+            put_float(at, end, rgba[p * 4 + c]);
+        }
+        text(")");
+    }
+    float lo[4], hi[4];
+    bool seen[4] = {};
+    size_t nan = 0, above = 0, below = 0;
+    for (size_t p = 0; p < pixels; p++)
+        for (int c = 0; c < 4; c++) {
+            const float v = rgba[p * 4 + c];
+            if (v != v) {
+                nan += c < 3;
+                continue;
+            }
+            if (v - v != 0.0f) continue; // infinity: not finite
+            if (!seen[c] || v < lo[c]) lo[c] = v;
+            if (!seen[c] || v > hi[c]) hi[c] = v;
+            seen[c] = true;
+            if (c < 3) {
+                above += v > 1.0f;
+                below += v < 0.0f;
+            }
+        }
+    for (int c = 0; c < 4; c++) {
+        text(" %c[", "rgba"[c]);
+        put_float(at, end, seen[c] ? lo[c] : 0.0f);
+        text(",");
+        put_float(at, end, seen[c] ? hi[c] : 0.0f);
+        text("]");
+    }
+    text(" nan %zu above1 %zu below0 %zu", nan, above, below);
+    *at = 0;
+    return size_t(at - out);
 }
 
 void deinterleave_rgba8_to_planes(const uint8_t *rgba, size_t pixels, int planes, uint8_t *out) {

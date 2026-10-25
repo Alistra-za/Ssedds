@@ -1,6 +1,7 @@
 // Tessalith DDS: tests for pixels.cpp, built and run by `build.ps1 -Test`. MIT licence (see photoshop/LICENSE).
 #include "../src/pixels.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +33,27 @@ static void eight_bit_codes_scale_by_255() {
     check(near(out[0], 1.0f), __func__, "255 -> 1.0");
     check(near(out[1], 0.2f), __func__, "51 -> 0.2");
     check(near(out[2], 0.0f), __func__, "0 -> 0.0");
+}
+
+static void thirty_two_bit_floats_pass_through() {
+    const float px[4] = {0.5f, 4.0f, -0.25f, NAN};
+    float out[4];
+    to_rgba_floats(px, 1, 4, 32, out);
+    check(out[0] == 0.5f && out[1] == 4.0f && out[2] == -0.25f, __func__, "RGB unchanged: no scale, no clamp");
+    check(isnan(out[3]), __func__, "NaN kept");
+    to_rgba_floats(px, 1, 3, 32, out);
+    check(out[1] == 4.0f && out[3] == 1.0f, __func__, "3 channels: alpha becomes 1");
+}
+
+static void describe_samples_reports_range() {
+    const float px[8] = {0.5f, 4.0f, -1.0f, 1.0f, NAN, 0.0f, 0.0f, 0.5f};
+    char line[512];
+    const size_t n = describe_samples(px, 2, line, sizeof line);
+    check(n == strlen(line), __func__, "returns the length written");
+    check(strcmp(line, "px (0.5,4,-1,1) (nan,0,0,0.5) r[0.5,0.5] g[0,4] b[-1,0] a[0.5,1] nan 1 above1 1 below0 1") == 0, __func__,
+          line);
+    char tiny[8];
+    check(describe_samples(px, 2, tiny, sizeof tiny) == 7 && tiny[7] == 0, __func__, "a short buffer is cut and terminated");
 }
 
 static void interleaves_planes_with_alpha() {
@@ -198,6 +220,8 @@ int main() {
     } tests[] = {
         {"sixteen_bit_white_is_white", sixteen_bit_white_is_white},
         {"eight_bit_codes_scale_by_255", eight_bit_codes_scale_by_255},
+        {"thirty_two_bit_floats_pass_through", thirty_two_bit_floats_pass_through},
+        {"describe_samples_reports_range", describe_samples_reports_range},
         {"interleaves_planes_with_alpha", interleaves_planes_with_alpha},
         {"no_alpha_plane_gives_opaque", no_alpha_plane_gives_opaque},
         {"bands_cover_largest_image_within_cap", bands_cover_largest_image_within_cap},

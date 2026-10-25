@@ -117,8 +117,17 @@ int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *
 
 // The last-band step shared by the band path and the merged path (DC38): alpha from the pixels, the dialog, the
 // encode and the single write; frees the save state whatever the outcome.
-int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels) {
+// `path` is "band" or "merged", for the trace.
+int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels, const char *path) {
     Globals *g = reinterpret_cast<Globals *>(*data);
+    char note[640];
+    const int head = snprintf(note, sizeof note, "samples %s depth %d channels %d: ", path, int(r->depth), channels);
+    describe_samples(s->rgba.data(), s->rgba.size() / 4, note + head, sizeof note - size_t(head));
+    trace_note(note);
+    if (r->depth == 32) { // shortcut: probe refusal, removed in the HDR plan's Task 6
+        free_state(r, data);
+        return report_error(r, "Tessalith DDS cannot save 32-bit documents in this build, so nothing was saved.");
+    }
     // Alpha from the pixels, not the planes (DC31): a normal layer always has a transparency plane.
     const uint32_t has_alpha = channels == 4 && floats_have_transparency(s->rgba.data(), s->rgba.size() / 4) ? 1 : 0;
     int16 result = noErr;
@@ -198,7 +207,7 @@ int16 write_merged(FormatRecord *r, intptr_t *data, const ReadChannelDesc *const
         to_rgba_floats(s->band.data(), size_t(width) * size_t(rows), channels, r->depth,
                        s->rgba.data() + size_t(top) * size_t(width) * 4);
     }
-    return finish_save(r, data, s, channels); // frees the state and leaves theRect32 empty: no WriteContinue
+    return finish_save(r, data, s, channels, "merged"); // frees the state and leaves theRect32 empty: no WriteContinue
 }
 
 } // namespace
@@ -248,9 +257,10 @@ static int16 refuse(FormatRecord *r, intptr_t *data, const char *message) {
 }
 
 int16 write_start(FormatRecord *r, intptr_t *data) {
-    const bool rgb = r->imageMode == plugInModeRGBColor || r->imageMode == plugInModeRGB48;
-    if (!rgb || (r->depth != 8 && r->depth != 16))
-        return refuse(r, data, "Tessalith DDS saves only 8-bit and 16-bit RGB documents.");
+    const bool rgb = r->imageMode == plugInModeRGBColor || r->imageMode == plugInModeRGB48 ||
+                     r->imageMode == plugInModeRGB96;
+    if (!rgb || (r->depth != 8 && r->depth != 16 && r->depth != 32))
+        return refuse(r, data, "Tessalith DDS saves only 8-bit, 16-bit and 32-bit RGB documents.");
     if (!r->HostSupports32BitCoordinates)
         return refuse(r, data, "this Photoshop version is too old for Tessalith DDS.");
 
@@ -323,7 +333,7 @@ int16 write_continue(FormatRecord *r, intptr_t *data) {
         return noErr;
     }
     // Last band: the request loop ends here whatever the outcome.
-    return finish_save(r, data, s, channels);
+    return finish_save(r, data, s, channels, "band");
 }
 
 int16 write_finish(FormatRecord *r, intptr_t *data) {
