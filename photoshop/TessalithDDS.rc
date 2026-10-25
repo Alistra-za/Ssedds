@@ -1,0 +1,3 @@
+// Tessalith DDS: resources. MIT licence (see photoshop/LICENSE).
+// Photoshop reads the plug-in's properties from a JSON resource named JSON_PIPL of type JSON (SDK: PiPL Resources).
+JSON_PIPL JSON "PiPL.json"

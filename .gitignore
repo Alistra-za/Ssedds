@@ -19,3 +19,6 @@ CLAUDE.local.md
 
 # Adobe Photoshop SDK (licensed, not redistributable)
 /tools/adobe photoshop sdk*/
+
+# Photoshop plugin build outputs (photoshop/build.ps1)
+/photoshop/build/

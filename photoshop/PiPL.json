@@ -1,0 +1,26 @@
+{
+  "PiPLs": [
+    {
+      "Kind": "Format",
+      "Name": "Tessalith DDS",
+      "Version": 1,
+      "SubVersion": 0,
+      "CodeEntryPointWin64": "PluginMain",
+      "SupportedModes": { "RGBColor": true },
+      "EnableInfo": "in (PSHOP_ImageMode, RGBMode, RGB48Mode)",
+      "FmtFileType": { "Type": "DDS ", "Creator": "8BIM" },
+      "ReadExtensions": ["DDS "],
+      "WriteExtensions": ["DDS "],
+      "FormatFlags": {
+        "SavesImageResources": false,
+        "CanRead": false,
+        "CanWrite": true,
+        "CanWriteIfRead": true,
+        "CanWriteTransparency": true,
+        "CanCreateThumbnail": false
+      },
+      "FormatMaxSize": [16384, 16384],
+      "FormatMaxChannels": [0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0]
+    }
+  ]
+}
