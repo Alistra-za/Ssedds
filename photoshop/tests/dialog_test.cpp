@@ -72,6 +72,7 @@ static void dialog_skipped_with_revert_info() {
     check(ShouldShowDialog(true, 1, true), t, "a script asking for the dialog still gets it");
     check(!ShouldShowDialog(true, 2, true), t, "silent script: no dialog");
 }
+
 int main() {
     int before = failures;
     dialog_state_follows_resolve();
