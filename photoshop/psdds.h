@@ -64,7 +64,15 @@ const char *psdds_quality_label(uint32_t format, uint32_t i);
 int32_t psdds_encode(const float *rgba, uint32_t width, uint32_t height, uint32_t has_alpha,
                      const PsddsSettings *settings, PsddsBuf *out, char *err, size_t err_cap);
 
-/* Release a buffer from psdds_encode. Pass the PsddsBuf exactly as returned (data and len unchanged), exactly
+/* Decode the top mip of a DDS file (len bytes) to RGBA8 in *out: *width * *height pixels, row-major, exactly
+ * width*height*4 bytes; release with psdds_free, once. *has_alpha = 1 when the format stores alpha (BC2, BC3, BC7,
+ * RGBA8, BGRA8), else 0 (the alpha bytes are then 255). Refused with a message: HDR formats (BC6H, RGBA16F,
+ * RGBA32F), cube maps, texture arrays, a side above 16384, and anything the DDS reader rejects.
+ * Returns 0 on success; otherwise non-zero, *out empty, and the reason in err (NULL or err_cap 0: no text). */
+int32_t psdds_decode(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *height, uint32_t *has_alpha,
+                     PsddsBuf *out, char *err, size_t err_cap);
+
+/* Release a buffer from psdds_encode or psdds_decode. Pass the PsddsBuf exactly as returned (data and len unchanged), exactly
  * once, then set data = NULL; a second free is a double free. An empty buffer (data NULL) is a no-op. */
 void psdds_free(PsddsBuf buf);
 

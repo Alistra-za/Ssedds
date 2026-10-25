@@ -181,7 +181,108 @@ pub unsafe extern "C" fn psdds_encode(
     }
 }
 
-/// Release a buffer from `psdds_encode`. An empty buffer (null `data`) is a no-op.
+const HDR_REFUSAL: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not open yet.";
+
+/// # Safety
+/// As `psdds_decode`.
+unsafe fn decode(
+    dds: *const u8,
+    len: usize,
+    width: *mut u32,
+    height: *mut u32,
+    has_alpha: *mut u32,
+    out: *mut PsddsBuf,
+) -> Result<(), String> {
+    use engine::dds::DdsPixelFormat::*;
+    if dds.is_null() || width.is_null() || height.is_null() || has_alpha.is_null() || out.is_null()
+    {
+        return Err("psdds_decode: null pointer argument".into());
+    }
+    let bytes = std::slice::from_raw_parts(dds, len);
+    // DC12 (I2) again: a header claiming a huge side is refused before `read_dds` copies the payload.
+    let side = |i: usize| {
+        bytes
+            .get(i..i + 4)
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if bytes.starts_with(b"DDS ") && (side(12) > MAX_SIDE || side(16) > MAX_SIDE) {
+        return Err(TOO_LARGE.into());
+    }
+    let f = engine::dds::read_dds(bytes).map_err(|e| e.to_string())?;
+    if matches!(f.format, Bc6hUf16 | Bc6hSf16 | Rgba16f | Rgba32f) {
+        return Err(HDR_REFUSAL.into());
+    }
+    if f.is_cubemap || f.caps2 & 0x200 != 0 || f.dx10.is_some_and(|d| d.misc & 0x4 != 0) {
+        return Err("This DDS is a cube map, which this plugin does not open.".into());
+    }
+    if f.dx10.is_some_and(|d| d.array_size > 1) {
+        return Err("This DDS is a texture array, which this plugin does not open.".into());
+    }
+    let (w, h, range) = f
+        .levels
+        .first()
+        .ok_or("This DDS has no mip levels.")?
+        .clone();
+    let px = engine::decode::decode_level_rgba(f.format, w, h, &f.data[range], None)
+        .map_err(|e| e.to_string())?;
+    let rgba: Box<[u8]> = px
+        .iter()
+        .flatten()
+        .map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8)
+        .collect();
+    let len = rgba.len();
+    *width = w;
+    *height = h;
+    *has_alpha = u32::from(matches!(
+        f.format,
+        Bc2 { .. } | Bc3 { .. } | Bc7 { .. } | Rgba8 { .. } | Bgra8 { .. }
+    ));
+    *out = PsddsBuf {
+        data: Box::into_raw(rgba).cast::<u8>(),
+        len,
+    };
+    Ok(())
+}
+
+/// Decode the top mip of a DDS file to `*width * *height` RGBA8 pixels (row-major, `width * height * 4` bytes) in
+/// `out`; release it once with `psdds_free`. `has_alpha` is 1 when the format stores alpha. 0 on success; otherwise
+/// non-zero, `out` set empty when non-null, and the reason in `err` (UTF-8, NUL-terminated, truncated to `err_cap`).
+/// HDR formats, cube maps and texture arrays are refused with a message; so is a side over 16384.
+///
+/// # Safety
+/// `dds` is null or valid for `len` bytes; `width`, `height`, `has_alpha` and `out` are null or valid; `err` is
+/// null or valid for `err_cap` bytes.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn psdds_decode(
+    dds: *const u8,
+    len: usize,
+    width: *mut u32,
+    height: *mut u32,
+    has_alpha: *mut u32,
+    out: *mut PsddsBuf,
+    err: *mut c_char,
+    err_cap: usize,
+) -> i32 {
+    if !out.is_null() {
+        *out = PsddsBuf {
+            data: std::ptr::null_mut(),
+            len: 0,
+        };
+    }
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        decode(dds, len, width, height, has_alpha, out)
+    }))
+    .unwrap_or_else(|e| Err(panic_text(e)));
+    match r {
+        Ok(()) => 0,
+        Err(m) => {
+            write_err(err, err_cap, &m);
+            1
+        }
+    }
+}
+/// Release a buffer from `psdds_encode` or `psdds_decode`. An empty buffer (null `data`) is a no-op.
 ///
 /// # Safety
 /// `buf` came from `psdds_encode` and is freed once.

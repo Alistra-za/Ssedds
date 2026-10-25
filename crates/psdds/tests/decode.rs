@@ -1,0 +1,254 @@
+//! `psdds_decode` turns a DDS top mip into RGBA8 within each codec's tolerance, and refuses what Open cannot show.
+use psdds::{psdds_decode, psdds_defaults, psdds_encode, psdds_free, PsddsBuf, PsddsSettings};
+use std::ffi::{c_char, CStr};
+
+fn gradient(w: u32, h: u32, alpha: bool) -> Vec<f32> {
+    let c = |v: u32| (v % 256) as f32 / 255.0;
+    (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let a = if alpha { c(255 - x * 3) } else { 1.0 };
+            [c(x * 4), c(y * 8), c(x * 2 + y * 3), a]
+        })
+        .collect()
+}
+
+fn encode(px: &[f32], w: u32, h: u32, has_alpha: bool, s: &PsddsSettings) -> Vec<u8> {
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut err = [0 as c_char; 256];
+    let rc = unsafe {
+        psdds_encode(
+            px.as_ptr(),
+            w,
+            h,
+            u32::from(has_alpha),
+            s,
+            &mut out,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    assert_eq!(rc, 0);
+    let v = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
+    unsafe { psdds_free(out) };
+    v
+}
+
+struct Decoded {
+    w: u32,
+    h: u32,
+    has_alpha: u32,
+    rgba: Vec<u8>,
+}
+
+fn decode(dds: &[u8]) -> Result<Decoded, (i32, String)> {
+    let (mut w, mut h, mut a) = (0u32, 0u32, 7u32);
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut err = [0 as c_char; 256];
+    let rc = unsafe {
+        psdds_decode(
+            dds.as_ptr(),
+            dds.len(),
+            &mut w,
+            &mut h,
+            &mut a,
+            &mut out,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if rc != 0 {
+        assert!(out.data.is_null());
+        let m = unsafe { CStr::from_ptr(err.as_ptr()) };
+        return Err((rc, m.to_str().unwrap().to_owned()));
+    }
+    let rgba = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
+    unsafe { psdds_free(out) };
+    Ok(Decoded {
+        w,
+        h,
+        has_alpha: a,
+        rgba,
+    })
+}
+
+fn err_of(dds: &[u8]) -> String {
+    decode(dds).err().expect("must refuse").1
+}
+
+#[allow(clippy::too_many_arguments)]
+/// A minimal DDS: legacy FourCC header (`dxgi == 0`) or DX10; `payload` is everything after the header(s).
+fn raw(
+    w: u32,
+    h: u32,
+    fourcc: &[u8; 4],
+    dxgi: u32,
+    misc: u32,
+    array: u32,
+    caps2: u32,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut b = vec![0u8; 128];
+    let put =
+        |b: &mut Vec<u8>, off: usize, v: u32| b[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    b[..4].copy_from_slice(b"DDS ");
+    put(&mut b, 4, 124);
+    put(&mut b, 8, 0x8_1007);
+    put(&mut b, 12, h);
+    put(&mut b, 16, w);
+    put(&mut b, 20, payload.len() as u32);
+    put(&mut b, 28, 1);
+    put(&mut b, 76, 32);
+    put(&mut b, 80, 4);
+    b[84..88].copy_from_slice(fourcc);
+    put(&mut b, 108, 0x1000);
+    put(&mut b, 112, caps2);
+    if dxgi != 0 {
+        for v in [dxgi, 3, misc, array, 0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    b.extend_from_slice(payload);
+    b
+}
+
+const HDR: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not open yet.";
+
+#[test]
+fn round_trips_every_format() {
+    let (w, h) = (64, 32);
+    // (format, texture type, max error allowed, channels checked). Measured: BC1/BC3 13 (565 endpoints; the brief's 12\n    // was a guess), BC7 7, BC4/BC5/RGBA8 0. BC5 uses the linear type: the Normal type renormalises the gradient.
+    let cases: [(u32, u32, i32, &[usize]); 6] = [
+        (0, 0, 14, &[0, 1, 2]),
+        (1, 0, 14, &[0, 1, 2, 3]),
+        (2, 2, 1, &[0]),
+        (3, 2, 1, &[0, 1]),
+        (4, 0, 8, &[0, 1, 2, 3]),
+        (5, 0, 0, &[0, 1, 2, 3]),
+    ];
+    for (f, ty, tol, chans) in cases {
+        let px = gradient(w, h, true);
+        let s = PsddsSettings {
+            format: f,
+            mips: 1,
+            ..psdds_defaults(ty)
+        };
+        let s = PsddsSettings { quality: 0, ..s };
+        let dds = encode(&px, w, h, true, &s);
+        let d = decode(&dds).unwrap();
+        assert_eq!((d.w, d.h), (w, h), "format {f}");
+        assert_eq!(d.rgba.len(), (w * h * 4) as usize);
+        assert_eq!(d.has_alpha, u32::from(matches!(f, 1 | 4 | 5)), "format {f}");
+        let mut worst = 0i32;
+        for (i, p) in d.rgba.chunks(4).enumerate() {
+            for &c in chans {
+                let want = (px[i * 4 + c] * 255.0).round() as i32;
+                worst = worst.max((i32::from(p[c]) - want).abs());
+            }
+        }
+        println!("format {f}: max error {worst}");
+        assert!(worst <= tol, "format {f}: max error {worst} > {tol}");
+    }
+}
+
+#[test]
+fn bc2_decodes_with_alpha() {
+    // One 4x4 block: explicit 4-bit alpha 0xF in every texel, colour endpoints white.
+    let mut blk = vec![0xFFu8; 8];
+    blk.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
+    let d = decode(&raw(4, 4, b"DXT3", 0, 0, 1, 0, &blk)).unwrap();
+    assert_eq!((d.w, d.h, d.has_alpha), (4, 4, 1));
+    assert_eq!(&d.rgba[..4], &[255, 255, 255, 255]);
+}
+
+#[test]
+fn refuses_what_open_cannot_show() {
+    // BC6H and float formats
+    assert_eq!(err_of(&raw(4, 4, b"DX10", 95, 0, 1, 0, &[0; 16])), HDR);
+    assert_eq!(err_of(&raw(4, 4, b"DX10", 10, 0, 1, 0, &[0; 128])), HDR);
+    assert_eq!(err_of(&raw(4, 4, b"DX10", 2, 0, 1, 0, &[0; 256])), HDR);
+    // cube map: legacy caps2 bit, and the DX10 misc flag
+    let cube = "This DDS is a cube map, which this plugin does not open.";
+    assert_eq!(err_of(&raw(4, 4, b"DXT1", 0, 0, 1, 0x200, &[0; 48])), cube);
+    assert_eq!(err_of(&raw(4, 4, b"DX10", 98, 4, 1, 0, &[0; 96])), cube);
+    // array
+    assert_eq!(
+        err_of(&raw(4, 4, b"DX10", 98, 0, 2, 0, &[0; 32])),
+        "This DDS is a texture array, which this plugin does not open."
+    );
+    // whatever read_dds rejects: its own text
+    let good = raw(4, 4, b"DXT1", 0, 0, 1, 0, &[0; 8]);
+    for bad in [
+        good[..good.len() - 1].to_vec(),
+        good[..50].to_vec(),
+        b"not a dds file at all".to_vec(),
+        vec![],
+        vec![0xA5; 300],
+    ] {
+        let want = engine::dds::read_dds(&bad).unwrap_err().to_string();
+        assert_eq!(err_of(&bad), want);
+    }
+    // a side over 16384 is refused before any allocation
+    let big = raw(16385, 4, b"DXT1", 0, 0, 1, 0, &[0; 8]);
+    assert_eq!(
+        err_of(&big),
+        "This image is larger than 16384 pixels on a side, the most Skyrim supports."
+    );
+}
+
+#[test]
+fn null_pointers_and_tiny_err_buffers_do_not_crash() {
+    let dds = raw(4, 4, b"DXT1", 0, 0, 1, 0, &[0; 8]);
+    let (mut w, mut h, mut a) = (0u32, 0u32, 0u32);
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let rc = unsafe {
+        psdds_decode(
+            std::ptr::null(),
+            0,
+            &mut w,
+            &mut h,
+            &mut a,
+            &mut out,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    assert_ne!(rc, 0);
+    let rc = unsafe {
+        psdds_decode(
+            dds.as_ptr(),
+            dds.len(),
+            std::ptr::null_mut(),
+            &mut h,
+            &mut a,
+            &mut out,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    assert_ne!(rc, 0);
+    let mut e = [0x55 as c_char; 1];
+    let rc = unsafe {
+        psdds_decode(
+            b"xx".as_ptr(),
+            2,
+            &mut w,
+            &mut h,
+            &mut a,
+            &mut out,
+            e.as_mut_ptr(),
+            1,
+        )
+    };
+    assert_ne!(rc, 0);
+    assert_eq!(e[0], 0);
+}
