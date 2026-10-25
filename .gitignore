@@ -22,3 +22,4 @@ CLAUDE.local.md
 
 # Photoshop plugin build outputs (photoshop/build.ps1)
 /photoshop/build/
+/dist/TessalithDDS-*
