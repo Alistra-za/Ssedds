@@ -115,6 +115,7 @@ def load_cube_delegates():
     assert not psdds.openable(data), "fixture is openable by psdds, so it does not test delegation"
     layer = _first_layer(img := _load(_write("cube.dds", data)))
     assert layer.get_name() != "Background", "cube map opened by Tessalith, not file-dds"
+    assert (img.get_width(), img.get_height()) == (4, 4), f"cube opened as {img.get_width()}x{img.get_height()}"
     img.delete()
 
 
@@ -170,6 +171,18 @@ def load_too_large_file_refused():
         os.remove(path)
 
 
+def load_non_local_error_text():
+    # Called directly: gimp-file-load would fetch a remote file to a local copy first.
+    proc = Gimp.get_pdb().lookup_procedure("file-tessalith-dds-load")
+    cfg = proc.create_config()
+    cfg.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    cfg.set_property("file", Gio.File.new_for_uri("http://127.0.0.1:9/remote.dds"))
+    res = proc.run(cfg)
+    assert res.index(0) == Gimp.PDBStatusType.EXECUTION_ERROR, f"status {res.index(0)}"
+    msg = res.index(1) if res.length() > 1 else None
+    assert msg == "Tessalith DDS can open only files on a local disk.", f"error text {msg!r}"
+
+
 def load_procedure_wins_for_dds():
     layer = _first_layer(img := _load(_write("plain.dds", _encode(GRADIENT, RGBA8))))
     assert layer.get_name() == "Background", f"first layer is {layer.get_name()!r}: file-dds handled .dds"
@@ -183,6 +196,7 @@ CASES = {f.__name__: f for f in (
     load_cube_delegates,
     load_garbage_error_text,
     load_too_large_file_refused,
+    load_non_local_error_text,
     load_procedure_wins_for_dds,
 )}
 

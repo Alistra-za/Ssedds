@@ -14,6 +14,7 @@ from tdds_pixels import band_rows  # noqa: E402
 
 LOAD_PROC = "file-tessalith-dds-load"
 TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
+NOT_LOCAL = "Tessalith DDS can open only files on a local disk."
 NO_FILE_DDS = ("GIMP's own DDS plug-in is needed for this file (HDR, cube map or texture array), "
                "and it is not installed.")
 
@@ -38,13 +39,16 @@ def _load(procedure, run_mode, file):
     try:
         psdds = Psdds()
         path = file.peek_path()
+        if path is None:
+            return error(procedure, NOT_LOCAL)
         if os.path.getsize(path) > psdds.max_file_bytes():
             return error(procedure, TOO_LARGE)
         with open(path, "rb") as f:
             head = f.read(148)
             if not psdds.openable(head):
                 return _delegate(procedure, run_mode, file)
-            w, h, has_alpha, rgba = psdds.decode(head + f.read())  # the file bytes die with this call
+            f.seek(0)
+            w, h, has_alpha, rgba = psdds.decode(f.read())  # the file bytes die with this call
     except (PsddsError, OSError) as e:
         return error(procedure, str(e))
     with_alpha = psdds.opens_with_alpha(rgba, has_alpha)

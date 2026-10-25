@@ -19,6 +19,7 @@ foreach ($k in 'GIMP3_DIRECTORY', 'GIMP3_CACHEDIR', 'TDDS_OUT', 'TDDS_REPO', 'TE
 try {
     Copy-Item (Join-Path $repo 'gimp\tessalith-dds\*.py') $plug
     Copy-Item $dll (Join-Path $plug 'psdds.dll')
+    [IO.File]::WriteAllText((Join-Path $tmp 'gimprc'), "(check-updates no)`n")  # no network call from tests
     $env:GIMP3_DIRECTORY = $tmp
     $env:GIMP3_CACHEDIR = Join-Path $tmp 'cache'  # pluginrc lives in the cache dir, not the profile
     $env:TDDS_OUT = $out
@@ -43,6 +44,9 @@ try {
     $resFile = Join-Path $out 'results.json'
     if (-not (Test-Path $resFile)) { throw 'the batch script wrote no results.json' }
     $results = Get-Content -Raw $resFile | ConvertFrom-Json
+    # Every public top-level def in the batch script is a case; a case missing from results.json fails.
+    $wanted = Select-String -Path $script -Pattern '^def ([a-z]\w*)\(\):' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+    foreach ($n in $wanted) { if (-not $results.PSObject.Properties[$n]) { "FAIL ${n}: no result"; $code = 1 } }
     $expect = Get-Content -Raw (Join-Path $out 'expect_log.json') | ConvertFrom-Json
     foreach ($r in $results.PSObject.Properties) {
         $v = $r.Value
