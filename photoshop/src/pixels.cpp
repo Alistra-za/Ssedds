@@ -51,3 +51,21 @@ bool dds_header_openable(const uint8_t *h, size_t len) {
     if (le32(h, 136) & 0x4) return false; // miscFlag D3D11_RESOURCE_MISC_TEXTURECUBE
     return le32(h, 140) <= 1;             // arraySize
 }
+
+bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_alpha) {
+    if (!has_alpha) return false;
+    for (size_t p = 0; p < pixels; p++)
+        if (rgba[p * 4 + 3] < 254) return true;
+    return false;
+}
+
+void dds_size_range(int64_t width, int64_t height, int64_t *min_bytes, int64_t *max_bytes) {
+    // BC1/BC4 store a 4x4 block in 8 bytes.
+    *min_bytes = ((width + 3) / 4) * ((height + 3) / 4) * 8 + 128;
+    int64_t bytes = 148;
+    for (int64_t w = width, h = height;; w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
+        bytes += w * h * 4;
+        if (w == 1 && h == 1) break;
+    }
+    *max_bytes = bytes;
+}

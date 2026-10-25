@@ -36,9 +36,6 @@ struct Globals {
 // The Globals behind `data`, allocated on first use.
 Globals *globals_of(intptr_t *data);
 
-// PIFormat.h revertInfo: gives the document a Tessalith handle if it has none. Its presence is the information:
-// Open has no options, and Save then uses the remembered settings without the dialog.
-void set_revert_info(FormatRecord *record);
 
 // OptionsStart: shows the Save dialog with the remembered settings; OK stores them, Cancel returns userCanceledErr.
 int16 options_start(FormatRecord *record, intptr_t *data);

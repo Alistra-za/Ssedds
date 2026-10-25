@@ -1,6 +1,8 @@
 // Tessalith DDS: the format plug-in entry point and selector dispatch. MIT licence (see photoshop/LICENSE).
 #include "write.h"
 
+#include "pixels.h"
+
 #include <new>
 #include <string.h>
 
@@ -20,10 +22,12 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
     case formatSelectorOptionsStart:
         return options_start(r, data);
     case formatSelectorEstimateStart: {
-        // About a byte per pixel (BC7) plus a third for the mips and the header.
-        const int64_t pixels = int64_t(r->imageSize32.h) * r->imageSize32.v;
-        const int64_t bytes = pixels + pixels / 3 + 148;
-        r->minDataBytes = r->maxDataBytes = int32(bytes > INT32_MAX ? INT32_MAX : bytes);
+        // A range over every format the dialog offers, smallest to largest file (pixels.h dds_size_range).
+        const bool wide = r->HostSupports32BitCoordinates != 0;
+        int64_t lo = 0, hi = 0;
+        dds_size_range(wide ? r->imageSize32.h : r->imageSize.h, wide ? r->imageSize32.v : r->imageSize.v, &lo, &hi);
+        r->minDataBytes = int32(lo > INT32_MAX ? INT32_MAX : lo);
+        r->maxDataBytes = int32(hi > INT32_MAX ? INT32_MAX : hi);
         r->data = nullptr;
         return noErr;
     }

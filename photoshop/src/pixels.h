@@ -25,6 +25,14 @@ constexpr int64_t max_dds_file_bytes() {
 }
 constexpr int64_t kMaxDdsFileBytes = max_dds_file_bytes();
 
+// Open's alpha rule (DC23): transparency only when psdds reports alpha and some alpha byte is below 254. The engine
+// guarantees only alpha >= 254 for opaque BC7 (DECISIONS Notes A/C/D/S5), so its own opaque files open opaque.
+bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_alpha);
+
+// Estimate (PIFormat.h minDataBytes / maxDataBytes) for a width x height save: the smallest file (BC1/BC4, no mips,
+// legacy header) to the largest (RGBA8, full mip chain, DX10 header).
+void dds_size_range(int64_t width, int64_t height, int64_t *min_bytes, int64_t *max_bytes);
+
 // FilterFile: false when the first len bytes of a file (up to 148: magic, header, DX10 header) show a DDS that Open
 // will refuse, so another DDS plug-in can open it: BC6H or float formats, cube maps, texture arrays. A file shorter than
 // the headers is claimed, so the reader can say why it fails. Not a DDS (no magic): false.

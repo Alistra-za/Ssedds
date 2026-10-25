@@ -8,7 +8,6 @@
 #include "settings_store.h"
 
 #include <ctype.h>
-#include <string.h>
 #include <vector>
 
 namespace {
@@ -35,18 +34,6 @@ const char *as_reason(char *message) {
     return message;
 }
 
-void set_revert_info(FormatRecord *r) {
-    if (r->revertInfo) return;
-    // PIFormat.h: the handle must come from the host, which disposes of it with the document.
-    NewPIHandleProc make = r->hostNewHdl ? r->hostNewHdl : r->handleProcs ? r->handleProcs->newProc : nullptr;
-    Handle h = make ? make(4) : nullptr;
-    if (!h) return;
-    if (r->handleProcs && r->handleProcs->lockProc && r->handleProcs->unlockProc) {
-        if (Ptr p = r->handleProcs->lockProc(h, false)) memcpy(p, "TDDS", 4); // a marker for anyone inspecting it
-        r->handleProcs->unlockProc(h);
-    }
-    r->revertInfo = h;
-}
 
 namespace {
 
@@ -58,6 +45,7 @@ void free_state(FormatRecord *r, intptr_t *data) {
         Globals *g = reinterpret_cast<Globals *>(*data);
         delete g->save;
         g->save = nullptr;
+        g->have_settings = false; // the next save without OptionsStart loads the remembered settings again
     }
     r->data = nullptr;
     r->theRect32 = VRect{};
@@ -129,8 +117,7 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
     // shortcut: the descriptor's contents are neither read nor written; a script, action or batch saves with the
     // remembered settings. Add descriptor keys when recorded actions need their own settings.
     const PIDescriptorParameters *script = r->descriptorParameters;
-    // revertInfo (set by Open or an earlier Save as DDS): a plain Save reuses the remembered settings (DC21).
-    if (ShouldShowDialog(script != nullptr, script ? script->playInfo : 0, r->revertInfo != nullptr)) {
+    if (ShouldShowDialog(script != nullptr, script ? script->playInfo : 0)) {
         const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
         HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
         const DialogResult shown = ShowSaveDialog(owner, has_alpha, &chosen);
@@ -138,7 +125,7 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
         if (shown == DialogResult::Failed) return report_error(r, "the Tessalith DDS options dialog could not be shown.");
         save_settings(r->sSPBasic, chosen);
     }
-    set_revert_info(r); // PIFormat.h: every options call leaves revertInfo able to revert the document
+
     g->settings = chosen;
     g->have_settings = true;
     return noErr;

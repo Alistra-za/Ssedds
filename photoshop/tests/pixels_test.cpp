@@ -148,6 +148,30 @@ static void filter_file_claims_only_openable_headers() {
     h[0] = 'X';
     check(!dds_header_openable(h, 148), __func__, "wrong magic");
 }
+
+static void open_alpha_rule() {
+    // Alpha >= 254 everywhere is the engine's opaque floor for BC7 (DECISIONS Notes A/C/D/S5): open opaque.
+    const uint8_t opaque[8] = {1, 2, 3, 255, 4, 5, 6, 255};
+    const uint8_t floor[8] = {1, 2, 3, 254, 4, 5, 6, 255};
+    const uint8_t real[8] = {1, 2, 3, 255, 4, 5, 6, 253};
+    const uint8_t cut[8] = {1, 2, 3, 0, 4, 5, 6, 255};
+    check(!opens_with_transparency(opaque, 2, 1), __func__, "all 255: opaque");
+    check(!opens_with_transparency(floor, 2, 1), __func__, "all >= 254 with some 254: opaque");
+    check(opens_with_transparency(real, 2, 1), __func__, "a byte of 253: transparency");
+    check(opens_with_transparency(cut, 2, 1), __func__, "a byte of 0: transparency");
+    check(!opens_with_transparency(cut, 2, 0), __func__, "has_alpha 0: opaque whatever the bytes");
+}
+
+static void estimate_covers_every_format() {
+    int64_t lo = 0, hi = 0;
+    dds_size_range(1024, 1024, &lo, &hi);
+    // BC1/BC4 without mips is the smallest (half a byte per pixel); RGBA8 with a full chain the largest.
+    check(lo == 1024 * 1024 / 2 + 128, __func__, "minimum: BC1, no mips, legacy header");
+    check(hi == int64_t(4) * (int64_t(1024) * 1024 * 4 - 1) / 3 + 148, __func__, "maximum: RGBA8, full chain");
+    dds_size_range(16384, 16384, &lo, &hi);
+    check(hi == kMaxDdsFileBytes, __func__, "16k maximum equals the Open cap");
+}
+
 int main() {
     struct {
         const char *name;
@@ -163,6 +187,8 @@ int main() {
         {"deinterleave_rgba8_to_planes", deinterleave_rgba8_to_planes_test},
         {"largest_dds_is_16k_rgba8_full_chain", largest_dds_is_16k_rgba8_full_chain},
         {"filter_file_claims_only_openable_headers", filter_file_claims_only_openable_headers},
+        {"open_alpha_rule", open_alpha_rule},
+        {"estimate_covers_every_format", estimate_covers_every_format},
     };
     for (auto &t : tests) {
         int before = failures;

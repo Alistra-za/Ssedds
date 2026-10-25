@@ -59,18 +59,11 @@ static void dialog_state_follows_resolve() {
 
 static void dialog_follows_play_info() {
     const char *t = __func__;
-    check(ShouldShowDialog(false, 0, false), t, "no descriptor: interactive save shows the dialog");
-    check(ShouldShowDialog(false, 2, false), t, "no descriptor: playInfo is not read");
-    check(ShouldShowDialog(true, 1, false), t, "plugInDialogDisplay shows it");
-    check(!ShouldShowDialog(true, 0, false), t, "plugInDialogDontDisplay does not");
-    check(!ShouldShowDialog(true, 2, false), t, "plugInDialogSilent does not");
-}
-
-static void dialog_skipped_with_revert_info() {
-    const char *t = __func__;
-    check(!ShouldShowDialog(false, 0, true), t, "plain Save of a document with revertInfo: no dialog");
-    check(ShouldShowDialog(true, 1, true), t, "a script asking for the dialog still gets it");
-    check(!ShouldShowDialog(true, 2, true), t, "silent script: no dialog");
+    check(ShouldShowDialog(false, 0), t, "no descriptor: interactive save shows the dialog");
+    check(ShouldShowDialog(false, 2), t, "no descriptor: playInfo is not read");
+    check(ShouldShowDialog(true, 1), t, "plugInDialogDisplay shows it");
+    check(!ShouldShowDialog(true, 0), t, "plugInDialogDontDisplay does not");
+    check(!ShouldShowDialog(true, 2), t, "plugInDialogSilent does not");
 }
 
 int main() {
@@ -80,9 +73,6 @@ int main() {
     before = failures;
     dialog_follows_play_info();
     printf("  %s dialog_follows_play_info\n", failures == before ? "PASS" : "FAIL");
-    before = failures;
-    dialog_skipped_with_revert_info();
-    printf("  %s dialog_skipped_with_revert_info\n", failures == before ? "PASS" : "FAIL");
     if (failures) {
         printf("dialog_test: FAILED\n");
         return 1;

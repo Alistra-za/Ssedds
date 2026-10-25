@@ -5,7 +5,6 @@
 
 #include "pixels.h"
 
-#include <string.h>
 #include <vector>
 
 struct ReadState {
@@ -72,11 +71,9 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
             return report_error(r, err[0] ? as_reason(err) : "of an internal error in Tessalith DDS.");
     }
     if (width == 0 || height == 0) return report_error(r, "the DDS image has no pixels.");
-    // psdds reports alpha for every BC3/BC7/RGBA8 file; a fully opaque one opens without transparency (DC20), so a
-    // re-save keeps the colour mip filter instead of the alpha rule's Box.
-    bool translucent = false;
-    const size_t count = size_t(width) * size_t(height);
-    for (size_t p = 0; has_alpha && !translucent && p < count; p++) translucent = s->pixels.data[p * 4 + 3] != 255;
+    // An opaque file (alpha >= 254, DC23) opens without transparency, so a re-save keeps the colour mip filter
+    // instead of the alpha rule's Box.
+    const bool translucent = opens_with_transparency(s->pixels.data, size_t(width) * size_t(height), has_alpha);
     s->planes = translucent ? 4 : 3;
 
     r->imageMode = plugInModeRGBColor;
@@ -92,7 +89,6 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
     s->rows_per_band = band_rows(int64_t(width) * s->planes, int32(height), kBandCap);
     s->band.resize(size_t(width) * size_t(s->rows_per_band) * size_t(s->planes));
     hand_band(r, s, 0);
-    set_revert_info(r);
     return noErr;
 }
 
