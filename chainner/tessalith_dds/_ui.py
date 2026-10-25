@@ -126,13 +126,19 @@ def quality_condition(g):
 
 
 def visible(control):
-    """Table collapsed to enum sets per (type, that type's format, srgb) with the mips values it holds."""
+    """Table collapsed per (type, that type's format), naming Mipmaps only where it matters. sRGB is never named: chaiNNer
+    evaluates a dropdown condition together with that dropdown's own condition, so the sRGB input naming itself recursed
+    forever and crashed the editor. psdds's rules make no control depend on sRGB; if that changes, fail at import."""
     groups = {}
-    for t, f, srgb, mips in sorted(TABLE[control]):
-        groups.setdefault((t, f, srgb), []).append(mips)
+    for t, f, srgb, mips in TABLE[control]:
+        groups.setdefault((t, f), set()).add((srgb, mips))
     c = Condition.const(False)
-    for (t, f, srgb), mips in groups.items():
-        c = c | (Condition.enum(TYPE_ID, t) & Condition.enum(FMT_ID[t], f) & Condition.enum(SRGB_ID, srgb) & Condition.enum(MIPS_ID, mips))
+    for (t, f), held in sorted(groups.items()):
+        mips = sorted({m for _, m in held})
+        if held != {(s, m) for s in (0, 1) for m in mips}:
+            raise RuntimeError(f"{control} visibility depends on sRGB (type {t}, format {f}); chaiNNer cannot express that")
+        term = Condition.enum(TYPE_ID, t) & Condition.enum(FMT_ID[t], f)
+        c = c | (term if mips == [0, 1] else term & Condition.enum(MIPS_ID, mips))
     return custom() & c
 
 

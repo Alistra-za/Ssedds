@@ -49,7 +49,44 @@ def condition_errors(node_id, node):
     return sorted(set(out))
 
 
+def enum_refs(c):
+    if c["kind"] == "not":
+        return enum_refs(c["condition"])
+    if c["kind"] in ("and", "or"):
+        return set().union(*map(enum_refs, c["items"]))
+    return {c["enum"]} if c["kind"] == "enum" else set()
+
+
+def condition_cycles(node_id, node):
+    """The frontend evaluates an enum condition together with that dropdown's own conditions (index.js zJt), so an
+    input whose visibility leads back to itself recurses until the stack overflows and the editor crashes."""
+    refs = {}  # input id -> enum inputs named by the conditions of the groups around it
+
+    def walk(items, outer):
+        for x in items:
+            if isinstance(x, api.Group):
+                c = x.info.options.get("condition")
+                walk(x.items, outer | (enum_refs(json.loads(json.dumps(c))) if c else set()))
+            else:
+                refs[int(x)] = outer
+
+    walk(node.group_layout, set())
+    out = []
+    for start in refs:
+        seen, todo = set(), list(refs[start])
+        while todo:
+            i = todo.pop()
+            if i == start:
+                out.append(f"{node_id}: input {start}'s visibility depends on itself")
+                break
+            if i not in seen:
+                seen.add(i)
+                todo += refs.get(i, ())
+    return out
+
+
 print("REPORT " + json.dumps({
+    "condition_cycles": [e for k, n in nodes.items() for e in condition_cycles(k, n)],
     "condition_errors": [e for k, n in nodes.items() for e in condition_errors(k, n)],
     "rmaos_optional": {i.label: i.optional for i in nodes["tessalith:dds:rmaos"].inputs if i.kind == "generic"},
     "errors": [f"{e.module}: {e.error!r}" for e in errors],
