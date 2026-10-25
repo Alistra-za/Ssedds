@@ -1,8 +1,8 @@
 //! Dialog settings → engine profile: the greying rules (spec + plan ruling R1), the quality lists (R4) and the
 //! profile overrides (R2, R3).
 use engine::config::{
-    AlphaPolicy, ColorContent, ColorTag, Effort, Format, MipFilter, MipKeyword, MipLevels, Profile,
-    ResizeMode, SearchRadius, Subtype, Target,
+    AlphaPolicy, ColorTag, Effort, Format, MipFilter, MipKeyword, MipLevels, Profile, ResizeMode,
+    SearchRadius, Subtype, Target,
 };
 use engine::policy::default_backend;
 use engine::presets::PresetRegistry;
@@ -241,7 +241,7 @@ pub fn resolve(
         },
         ..*s
     };
-    // DC12: where the engine's own rule would mip with box (linear content, alpha-weighted Blend mips), the
+    // DC12: where the engine's own rule would mip with box (alpha-weighted Blend mips; Colour content is sRGB, DC39), the
     // filter greys and shows Box. Probed with Kaiser, as every non-box filter shares the rule outside HDR.
     if colour {
         let probe = build(
@@ -269,12 +269,14 @@ fn build(e: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
     let mut p = base(e.texture_type)?.clone();
     p.format = FORMATS[e.format as usize];
     p.encoder.backend = default_backend(p.format);
-    // DC9: the sRGB control sets content and tag together; a preset with tag n/a keeps its colour fields.
+    // DC39 (supersedes DC9): the sRGB control sets only the DDS tag. The content (gamma-correct or linear
+    // filtering) stays the type's base profile's: Colour sRGB, Normal and Linear mask linear. A preset with tag n/a
+    // keeps its colour fields.
     if p.color.tag != ColorTag::NotApplicable {
-        (p.color.content, p.color.tag) = if e.srgb == 1 {
-            (ColorContent::Srgb, ColorTag::Srgb)
+        p.color.tag = if e.srgb == 1 {
+            ColorTag::Srgb
         } else {
-            (ColorContent::Linear, ColorTag::Unorm)
+            ColorTag::Unorm
         };
     }
     p.mips.filter = FILTERS[e.filter as usize];

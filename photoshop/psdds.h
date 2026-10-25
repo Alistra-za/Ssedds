@@ -56,7 +56,7 @@ int32_t psdds_preset_settings(uint32_t i, PsddsSettings *out);
  * Likewise a format the type does not offer (psdds_format_allowed) is not an error: effective format becomes the
  * type's default format (psdds_defaults), and the quality index is then checked against that format's list.
  * has_alpha (0/1) is the document's, as passed to psdds_encode: for Colour, where the engine would mip with Box
- * anyway (sRGB Off, or alpha kept in BC3/BC7/RGBA8; discard_alpha 1 never keeps it), the filter greys and shows
+ * anyway (alpha kept in BC3/BC7/RGBA8; discard_alpha 1 never keeps it), the filter greys and shows
  * Box. With mips 0 the filter greys too, keeping its value. */
 int32_t psdds_resolve(const PsddsSettings *input, uint32_t has_alpha, PsddsSettings *effective,
                       PsddsControls *controls);

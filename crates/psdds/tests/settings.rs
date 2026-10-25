@@ -108,26 +108,31 @@ fn colour_keeps_srgb_and_filter_editable() {
             );
             assert_eq!(p.mips.filter, FILTERS[filter as usize]);
         }
-        // sRGB stays editable when Off; the control sets both content and tag.
-        let (_, e, c) = resolve(s(f, COLOUR, 0, 0, 0));
-        assert_eq!((c.srgb_enabled, e.srgb), (1, 0));
-        let p = profile_for(&s(f, COLOUR, 0, 0, 0), false).unwrap();
-        assert_eq!(
-            (p.color.content, p.color.tag),
-            (ColorContent::Linear, ColorTag::Unorm)
-        );
+        // DC39: sRGB stays editable when Off and sets only the tag; the content stays the Diffuse profile's
+        // (sRGB, gamma-correct filtering), and the filter stays editable.
+        for filter in 0..4 {
+            let (_, e, c) = resolve(s(f, COLOUR, 0, filter, 0));
+            assert_eq!((c.srgb_enabled, c.filter_enabled), (1, 1), "format {f}");
+            assert_eq!((e.srgb, e.filter), (0, filter));
+            let p = profile_for(&s(f, COLOUR, 0, filter, 0), false).unwrap();
+            assert_eq!(
+                (p.color.content, p.color.tag),
+                (base(COLOUR).color.content, ColorTag::Unorm)
+            );
+            assert_eq!(p.color.content, ColorContent::Srgb);
+            assert_eq!(p.mips.filter, FILTERS[filter as usize]);
+        }
     }
 }
 
-/// DC12 (I1): where the engine would mip with box anyway (linear content, or alpha-weighted Blend mips), the filter
-/// greys and shows Box.
+/// DC12 (I1): where the engine would mip with box anyway (alpha-weighted Blend mips), the filter greys and shows
+/// Box. Since DC39 sRGB Off no longer greys it: Colour content stays sRGB.
 #[test]
 fn filter_greys_where_the_engine_uses_box() {
     let kaiser = |f, srgb| s(f, COLOUR, srgb, 3, 0);
     let greyed = [
-        (kaiser(BC7, 0), false), // sRGB Off: linear content
-        (kaiser(BC1, 0), false),
-        (kaiser(BC7, 1), true), // alpha kept (Blend): alpha-weighted box
+        (kaiser(BC7, 0), true), // alpha kept (Blend): alpha-weighted box, whatever the tag
+        (kaiser(BC7, 1), true),
         (kaiser(BC3, 1), true),
         (kaiser(RGBA8, 1), true),
     ];
@@ -143,7 +148,14 @@ fn filter_greys_where_the_engine_uses_box() {
         assert_eq!(p.mips.filter, MipFilter::Box);
     }
     // BC1 drops alpha (Remove), so Kaiser still applies with an alpha document.
-    for (set, alpha) in [(kaiser(BC7, 1), false), (kaiser(BC1, 1), true)] {
+    // sRGB Off or On, opaque: Kaiser applies (DC39).
+    for (set, alpha) in [
+        (kaiser(BC7, 1), false),
+        (kaiser(BC1, 1), true),
+        (kaiser(BC7, 0), false),
+        (kaiser(BC1, 0), false),
+        (kaiser(RGBA8, 0), false),
+    ] {
         let (rc, e, c) = resolve_with(set, alpha);
         assert_eq!(rc, 0);
         assert_eq!(

@@ -196,7 +196,7 @@ static DWORD WINAPI play_dialog(void *arg) {
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
     u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
     GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_before, 64);
-    // DC34: sRGB starts off (linear content, Box mips, filter greyed); tick it so the filter can be picked.
+    // DC34: sRGB starts off; since DC39 the filter is editable either way. Tick it to check the preset turns Custom.
     if (IsDlgButtonChecked(dlg, IDC_SRGB) != BST_CHECKED) SendMessageW(GetDlgItem(dlg, IDC_SRGB), BM_CLICK, 0, 0);
     u->filter_enabled = IsWindowEnabled(filter) != 0;
     GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_after, 64);
@@ -257,10 +257,10 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         u.pick = i == 0 ? L"Kaiser" : L"Box";
         const int16 result = interactive_save(entry, path, i == 0 ? opaque_alpha : floor_alpha, &u);
         (i == 0 ? kaiser : box) = contents(path);
-        expect(result == 0 && u.seen && !u.filter_enabled_before_srgb && u.filter_enabled &&
+        expect(result == 0 && u.seen && u.filter_enabled_before_srgb && u.filter_enabled &&
                    wcscmp(u.filter_shown, u.pick) == 0 && wcscmp(u.preset_before, L"Colour BC7") == 0 &&
                    wcscmp(u.preset_after, L"Custom") == 0,
-               i == 0 ? "opaque layer: dialog after the pixels, sRGB off greys the filter, ticking it frees it, "
+               i == 0 ? "opaque layer: dialog after the pixels, filter editable with sRGB off and on (DC39), "
                         "Kaiser picked"
                       : "alpha 254/255 counts as opaque: filter editable, Box picked");
     }

@@ -158,21 +158,45 @@ fn kaiser_applies_only_where_the_dialog_shows_it() {
         with(srgb_bc7, 3, false) != with(srgb_bc7, 0, false),
         "Kaiser must change the mips"
     );
-    let fallbacks = [
-        (
-            PsddsSettings {
-                srgb: 0,
-                ..srgb_bc7
-            },
-            false,
-        ),
-        (srgb_bc7, true),
-    ];
-    for (set, alpha) in fallbacks {
-        assert!(
-            with(set, 3, alpha) == with(set, 0, alpha),
-            "{set:?} alpha {alpha}"
+    // DC39: sRGB Off keeps the Diffuse profile's sRGB content, so Kaiser still applies.
+    let unorm_bc7 = PsddsSettings {
+        srgb: 0,
+        ..srgb_bc7
+    };
+    assert!(
+        with(unorm_bc7, 3, false) != with(unorm_bc7, 0, false),
+        "Kaiser must change the mips with sRGB Off"
+    );
+    // Kept alpha (Blend) mips with box whatever the filter.
+    for set in [srgb_bc7, unorm_bc7] {
+        assert!(with(set, 3, true) == with(set, 0, true), "{set:?}");
+    }
+}
+
+/// DC39: the sRGB checkbox sets only the DDS tag. Colour content (gamma-correct filtering) follows the type, so
+/// sRGB On and Off give the same mips and differ only in the DXGI format.
+#[test]
+fn srgb_sets_only_the_tag() {
+    let (w, h) = (32, 32);
+    let px = noise(w, h);
+    for filter in [0, 3] {
+        let on = PsddsSettings {
+            srgb: 1,
+            filter,
+            ..settings(BC7, 0)
+        };
+        let off = PsddsSettings { srgb: 0, ..on };
+        let a = encode(&px, w, h, false, &on).unwrap();
+        let b = encode(&px, w, h, false, &off).unwrap();
+        assert_eq!(
+            read_dds(&a).unwrap().dx10.unwrap().dxgi,
+            99,
+            "BC7_UNORM_SRGB"
         );
+        assert_eq!(read_dds(&b).unwrap().dx10.unwrap().dxgi, 98, "BC7_UNORM");
+        // 4 magic + 124 header + 20 DX10 header, then the same blocks.
+        assert_eq!(a.len(), b.len());
+        assert!(a[148..] == b[148..], "filter {filter}: same mips");
     }
 }
 
