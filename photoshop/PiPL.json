@@ -20,7 +20,7 @@
         "CanCreateThumbnail": false
       },
       "FormatMaxSize": [16384, 16384],
-      "FormatMaxChannels": [0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0],
+      "FormatMaxChannels": [0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0],
       "FormatLayerSupport": true
     }
   ]
