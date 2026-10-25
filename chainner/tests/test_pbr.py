@@ -34,7 +34,6 @@ if DLL.is_file():
 
 BC7 = 4
 R, G, B_, A = range(4)  # channel dropdown values
-DEFAULT, CUSTOM = 0, 1  # fill dropdown values
 H = W = 64
 
 
@@ -119,12 +118,19 @@ class PbrTests(unittest.TestCase):
         self.assertEqual(list(self.dir.iterdir()), [])
 
     def test_fill_mapping(self):
-        self.assertEqual(B.fill(DEFAULT, 77), -1)
-        self.assertEqual(B.fill(CUSTOM, 77), 77)
-        self.assertEqual(B.fill(CUSTOM, 0), 0)
         srcs = (None, (grey(0.5), 0), None, None)
-        # a connected role's (hidden) fill is ignored; Default is -1
-        self.assertEqual(B.fills(srcs, [CUSTOM, CUSTOM, DEFAULT, CUSTOM], [10, 20, 30, 40]), (10, -1, -1, 40))
+        # a connected role's (hidden) fill is ignored; an unconnected one passes its number, 0 included
+        self.assertEqual(B.fills(srcs, [10, 20, 0, 40]), (10, -1, 0, 40))
+
+    def test_shown_fills_equal_engine_defaults(self):
+        # the values shown for unconnected roles (owner: no "Default" label) write the engine's neutral-default bytes
+        srcs = ((grey(0.5), 0), None, None, None)
+        shown = B.fills(srcs, (0, *B.FILL_DEFAULTS[1:]))
+        self.assertEqual(shown, (-1, 0, 255, 255))
+        self.save(self.job(srcs), name="d")
+        self.save(self.job(srcs, shown), name="s")
+        for a, b in zip(self.files("d"), self.files("s")):
+            self.assertEqual(a.read_bytes(), b.read_bytes())
 
     def test_alone_equals_save_dds_normal(self):
         out = self.save(None)
@@ -199,8 +205,8 @@ class PbrTests(unittest.TestCase):
     def test_custom_fill_reaches_bytes(self):
         srcs = ((grey(0.5), 0), None, None, None)
         self.save(self.job(srcs), name="d")
-        custom = B.fills(srcs, [DEFAULT, CUSTOM, DEFAULT, CUSTOM], [0, 200, 0, 30])
-        self.assertEqual(custom, (-1, 200, -1, 30))
+        custom = B.fills(srcs, [0, 200, 255, 30])
+        self.assertEqual(custom, (-1, 200, 255, 30))
         self.save(self.job(srcs, custom), name="c")
         rm, nm, *_ = P.rmaos_encode(list(srcs), list(custom), P.rmaos_default_quality(), 1, normal=self.n,
                                     normal_settings=self.s)
@@ -264,12 +270,11 @@ class NodeTests(unittest.TestCase):
         self.rough, self.ao = grey(0.25), grey(0.75)
 
     def rmaos(self, **kw):
-        a = dict(r=self.rough, m=None, ao=self.ao, sp=None, picks=(R, R, R, R), modes=(DEFAULT,) * 4, nums=(0,) * 4)
+        a = dict(r=self.rough, m=None, ao=self.ao, sp=None, picks=(R, R, R, R), nums=B.FILL_DEFAULTS[1:])
         a.update(kw)
-        imgs = (a["r"], a["m"], a["ao"], a["sp"])
-        args = []
-        for i in range(4):
-            args += [imgs[i], a["picks"][i], a["modes"][i], a["nums"][i]]
+        args = [a["r"], a["picks"][0]]
+        for i, img in enumerate((a["m"], a["ao"], a["sp"]), 1):
+            args += [img, a["picks"][i], a["nums"][i - 1]]
         return RN(*args, P.rmaos_default_quality(), True)
 
     def save(self, rmaos_lazy, skip=False, discard=False, normal_lazy=None):
@@ -281,13 +286,13 @@ class NodeTests(unittest.TestCase):
         mod = sys.modules["tessalith_t.rmaos_tessalith"]
         with mock.patch.object(mod._pbr._psdds, "rmaos_encode") as enc, \
                 mock.patch.object(mod._pbr._psdds, "write_files") as wf:
-            job = self.rmaos(modes=(DEFAULT, CUSTOM, DEFAULT, DEFAULT), nums=(9, 200, 9, 9))
+            job = self.rmaos(nums=(200, 9, 255))
         enc.assert_not_called()
         wf.assert_not_called()
         self.assertEqual(list(self.dir.iterdir()), [])  # a lone RMAOS writes nothing
         self.assertIsInstance(job, B.RmaosJob)
         self.assertIs(job.sources[0][0], self.rough)
-        self.assertEqual(job.fills, (-1, 200, -1, -1))
+        self.assertEqual(job.fills, (-1, 200, -1, 255))  # AO is connected, so its 9 is ignored
         self.assertEqual((job.quality, job.mips), (P.rmaos_default_quality(), True))
 
     def test_paired_node_matches_body(self):

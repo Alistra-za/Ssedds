@@ -51,6 +51,7 @@ def condition_errors(node_id, node):
 
 print("REPORT " + json.dumps({
     "condition_errors": [e for k, n in nodes.items() for e in condition_errors(k, n)],
+    "rmaos_optional": {i.label: i.optional for i in nodes["tessalith:dds:rmaos"].inputs if i.kind == "generic"},
     "errors": [f"{e.module}: {e.error!r}" for e in errors],
     "total": len(api.registry.nodes),
     "ids": sorted(nodes),
