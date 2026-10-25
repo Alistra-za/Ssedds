@@ -1,0 +1,17 @@
+[package]
+name = "psdds"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish.workspace = true
+rust-version.workspace = true
+description = "Tessalith DDS Photoshop plugin bridge: dialog settings, greying rules and encode over a C ABI"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+engine.workspace = true
+
+[dev-dependencies]
+encoders-sys.workspace = true
