@@ -53,8 +53,8 @@ try {
     Get-ChildItem (Join-Path $here 'tessalith_dds') -File -Filter '*.py' | Copy-Item -Destination $dest
     Copy-Item $Dll (Join-Path $dest 'psdds.dll')
     Copy-Item $notices (Join-Path $dest 'THIRD_PARTY_NOTICES.md')
+    Copy-Item (Join-Path $here 'COPYING') (Join-Path $dest 'COPYING')
     Copy-Item (Join-Path $here 'LICENSE') (Join-Path $dest 'LICENSE')
-    Copy-Item (Join-Path $here 'LICENSE-psdds.txt') (Join-Path $dest 'LICENSE-psdds.txt')
 
     $py = Join-Path $env:APPDATA 'chaiNNer\python\python\python.exe'
     "Installed to $dest"

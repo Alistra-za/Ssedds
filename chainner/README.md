@@ -34,5 +34,4 @@ Size limits and other refusals come from psdds as one plain sentence in the node
 
 ## Licences
 
-- The nodes (`tessalith_dds\*.py`) are **GPL-3.0-or-later** (chaiNNer is GPLv3): `LICENSE`.
-- `psdds.dll`: the `psdds` crate is **MIT** (`LICENSE-psdds.txt`); the engine and encoders-sys code inside it are **MPL-2.0**. `THIRD_PARTY_NOTICES.md` (generated at install) lists every component and names the source repository and commit.
+The nodes are GPL-3.0-or-later (`COPYING`; chaiNNer is GPLv3). `psdds.dll` is MIT (`LICENSE`); the engine and encoders-sys code inside it are MPL-2.0. Third-party notices are in `THIRD_PARTY_NOTICES.md` (generated at install; it names the source repository and commit).
