@@ -82,6 +82,7 @@ const char *psdds_quality_label(uint32_t format, uint32_t i);
 
 /* Encode width*height RGBA float pixels (row-major, in [0, 1], already scaled) to a DDS file in *out.
  * rgba must hold exactly width*height*4 floats and be 4-byte aligned; the library cannot check its length.
+ * Values outside [0, 1] are clamped; NaN becomes 0 (+inf 1, -inf 0).
  * A side above 16384 is refused before rgba is read. Encodes with the same effective settings psdds_resolve
  * reports for (settings, has_alpha).
  * Returns 0 on success; otherwise non-zero, *out empty, and the reason in err (NULL or err_cap 0: no text). */

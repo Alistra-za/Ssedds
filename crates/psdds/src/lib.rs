@@ -214,7 +214,10 @@ unsafe fn encode(
         width,
         height,
         // `[f32; 4]` has f32's alignment, so the caller's float array is read as whole pixels.
-        px: std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n).to_vec(),
+        px: std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n)
+            .iter()
+            .map(|p| p.map(clamp01))
+            .collect(),
     };
     let bytes = engine::memory::encode_image(img, &profile)?.into_boxed_slice();
     let len = bytes.len();
@@ -262,6 +265,15 @@ pub unsafe extern "C" fn psdds_encode(
             write_err(err, err_cap, &m);
             1
         }
+    }
+}
+
+/// The one input rule for float hosts (M8): [0,1], NaN -> 0, +inf -> 1, -inf -> 0.
+pub(crate) fn clamp01(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(0.0, 1.0)
     }
 }
 
