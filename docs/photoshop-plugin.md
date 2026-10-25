@@ -3,7 +3,7 @@
 `TessalithDDS.8bi` is a Photoshop file-format plugin (Windows x64, Photoshop 2020+) that opens and saves Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `photoshop/README.md`; the rulings are Note DC in [DECISIONS.md](DECISIONS.md).
 
 ## Layout
-- `crates/psdds`: a Rust static library with a C ABI (`photoshop/psdds.h`): settings rules, encode, decode. It links only `engine` and `encoders-sys`.
+- `crates/psdds`: a Rust static library with a C ABI (`photoshop/psdds.h`): settings rules (greying, the formats each texture type offers via `psdds_format_allowed`), encode, decode. The dialog asks psdds for every rule, so they exist once. It links only `engine` and `encoders-sys`.
 - `photoshop/`: the C++ plugin (PiPL, Save dialog, Open, row-band transfer), `build.ps1`, `package.ps1`.
 
 ## Build

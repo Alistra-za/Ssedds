@@ -1,5 +1,6 @@
 // Tessalith DDS: the Save dialog. Every control is always shown; after each change the dialog asks psdds_resolve
-// what each control shows and whether it is editable, so the greying rules live only in psdds.
+// what each control shows and whether it is editable, and psdds_format_allowed which formats the Format list offers,
+// so the greying and format rules live only in psdds.
 // MIT licence (see photoshop/LICENSE).
 #include "dialog.h"
 
@@ -13,6 +14,7 @@ ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha) {
     s.srgb_enabled = c.srgb_enabled != 0;
     s.filter_enabled = c.filter_enabled != 0;
     s.quality_enabled = c.quality_enabled != 0;
+    for (uint32_t f = 0; f < 6; f++) s.formats[f] = psdds_format_allowed(s.shown.texture_type, f) != 0;
     return s;
 }
 
@@ -30,9 +32,7 @@ struct Item {
 const Item kFormats[] = {{L"BC1", PSDDS_BC1}, {L"BC3", PSDDS_BC3},  {L"BC4", PSDDS_BC4},
                          {L"BC5", PSDDS_BC5}, {L"BC7", PSDDS_BC7}, {L"RGBA8 (uncompressed)", PSDDS_RGBA8}};
 const Item kTypes[] = {{L"Colour", PSDDS_COLOUR}, {L"Normal", PSDDS_NORMAL}, {L"Linear mask", PSDDS_LINEAR_MASK}};
-const Item kSrgb[] = {{L"On", 1}, {L"Off", 0}};
 const Item kFilters[] = {{L"Box", PSDDS_BOX}, {L"Tent", PSDDS_TENT}, {L"Mitchell", PSDDS_MITCHELL}, {L"Kaiser", PSDDS_KAISER}};
-const Item kMips[] = {{L"Full chain", 1}, {L"None", 0}};
 
 struct Context {
     PsddsSettings raw; // the user's picks; greyed controls keep theirs, so switching back restores them
@@ -80,16 +80,24 @@ void fill_quality(HWND dlg, uint32_t format) {
         if (const char *label = psdds_quality_label(format, i)) add(combo, widen(label).c_str(), i);
 }
 
-void refresh(HWND dlg, const Context &ctx, bool format_changed) {
+// `changed`: the control the user just changed, or 0 at start. The Format list is rebuilt when the type changes (it
+// offers only psdds_format_allowed formats), the Quality list when the shown format may have changed.
+void refresh(HWND dlg, const Context &ctx, int changed) {
     const ControlStates s = FromResolve(ctx.raw, ctx.has_alpha);
-    if (!s.ok) return; // unreachable: every list offers only in-range values
-    if (format_changed) fill_quality(dlg, s.shown.format);
+    if (!s.ok) return; // unreachable: every control offers only in-range values
+    if (changed == 0 || changed == IDC_TYPE) {
+        HWND combo = GetDlgItem(dlg, IDC_FORMAT);
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        for (const Item &it : kFormats)
+            if (s.formats[it.value]) add(combo, it.label, it.value);
+    }
+    if (changed == 0 || changed == IDC_TYPE || changed == IDC_FORMAT) fill_quality(dlg, s.shown.format);
     select_value(dlg, IDC_FORMAT, s.shown.format);
     select_value(dlg, IDC_TYPE, s.shown.texture_type);
-    select_value(dlg, IDC_SRGB, s.shown.srgb);
     select_value(dlg, IDC_FILTER, s.shown.filter);
-    select_value(dlg, IDC_MIPS, s.shown.mips);
     select_value(dlg, IDC_QUALITY, s.shown.quality);
+    CheckDlgButton(dlg, IDC_SRGB, s.shown.srgb ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_MIPS, s.shown.mips ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_SRGB), s.srgb_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_FILTER), s.filter_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_QUALITY), s.quality_enabled);
@@ -101,21 +109,20 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_INITDIALOG:
         SetWindowLongPtrW(dlg, DWLP_USER, lp);
         ctx = reinterpret_cast<Context *>(lp);
-        fill(dlg, IDC_FORMAT, kFormats);
         fill(dlg, IDC_TYPE, kTypes);
-        fill(dlg, IDC_SRGB, kSrgb);
         fill(dlg, IDC_FILTER, kFilters);
-        fill(dlg, IDC_MIPS, kMips);
-        refresh(dlg, *ctx, true);
-        return TRUE; // focus goes to the first tab stop (Format)
+        refresh(dlg, *ctx, 0);
+        return TRUE; // focus goes to the first tab stop (Texture type)
     case WM_COMMAND: {
         const int id = LOWORD(wp);
         if (id == IDOK || id == IDCANCEL) {
             EndDialog(dlg, id);
             return TRUE;
         }
-        if (HIWORD(wp) != CBN_SELCHANGE || !ctx) return FALSE;
-        const uint32_t v = selected_value(dlg, id);
+        if (!ctx) return FALSE;
+        const bool checkbox = id == IDC_SRGB || id == IDC_MIPS;
+        if (HIWORD(wp) != (checkbox ? BN_CLICKED : CBN_SELCHANGE)) return FALSE;
+        const uint32_t v = checkbox ? uint32_t(IsDlgButtonChecked(dlg, id) == BST_CHECKED) : selected_value(dlg, id);
         switch (id) {
         case IDC_FORMAT: ctx->raw.format = v; break;
         case IDC_TYPE: ctx->raw.texture_type = v; break;
@@ -125,14 +132,13 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         case IDC_QUALITY: ctx->raw.quality = v; break;
         default: return FALSE;
         }
-        refresh(dlg, *ctx, id == IDC_FORMAT);
+        refresh(dlg, *ctx, id);
         return TRUE;
     }
     default:
         return FALSE;
     }
 }
-
 } // namespace
 
 DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout) {

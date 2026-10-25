@@ -61,6 +61,37 @@ static void dialog_state_follows_resolve() {
     check(!FromResolve(make(9, PSDDS_COLOUR, 1, 0), 0).ok, t, "format 9 refused");
 }
 
+// DC33: the Format list per type, the sRGB checkbox and the filter beside the Mipmaps checkbox.
+static void dialog_controls_follow_type_and_mips() {
+    const char *t = __func__;
+    const bool colour[6] = {true, true, false, false, true, true};
+    const bool normal[6] = {true, true, false, true, true, true};
+    const bool mask[6] = {true, true, true, true, true, true};
+    const bool *want[3] = {colour, normal, mask};
+    for (uint32_t ty = 0; ty < 3; ty++) {
+        ControlStates s = FromResolve(make(PSDDS_BC7, ty, 1, PSDDS_KAISER), 0);
+        check(s.ok, t, "resolves");
+        for (uint32_t f = 0; f < 6; f++) check(s.formats[f] == want[ty][f], t, "format list per type");
+        check(s.formats[s.shown.format], t, "shown format is in the list");
+    }
+
+    // sRGB checkbox: editable and checked for Colour + BC7 On; editable unchecked for Off; greyed unchecked for Normal.
+    ControlStates on = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 0);
+    check(on.srgb_enabled && on.shown.srgb == 1, t, "Colour sRGB On: enabled, checked");
+    ControlStates off = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 0, PSDDS_KAISER), 0);
+    check(off.srgb_enabled && off.shown.srgb == 0, t, "Colour sRGB Off: enabled, unchecked");
+    ControlStates nrm = FromResolve(make(PSDDS_BC7, PSDDS_NORMAL, 1, PSDDS_KAISER), 0);
+    check(!nrm.srgb_enabled && nrm.shown.srgb == 0, t, "Normal: greyed, unchecked");
+
+    // Filter: editable with mips on, greyed (keeping Kaiser) with mips off.
+    check(on.filter_enabled && on.shown.mips == 1, t, "mips on: filter editable");
+    PsddsSettings nomips = make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER);
+    nomips.mips = 0;
+    ControlStates nm = FromResolve(nomips, 0);
+    check(nm.ok && !nm.filter_enabled && nm.shown.filter == PSDDS_KAISER && nm.shown.mips == 0, t,
+          "mips off: filter greyed, Kaiser kept");
+}
+
 static void dialog_follows_play_info() {
     const char *t = __func__;
     check(ShouldShowDialog(false, 0), t, "no descriptor: interactive save shows the dialog");
@@ -74,6 +105,9 @@ int main() {
     int before = failures;
     dialog_state_follows_resolve();
     printf("  %s dialog_state_follows_resolve\n", failures == before ? "PASS" : "FAIL");
+    before = failures;
+    dialog_controls_follow_type_and_mips();
+    printf("  %s dialog_controls_follow_type_and_mips\n", failures == before ? "PASS" : "FAIL");
     before = failures;
     dialog_follows_play_info();
     printf("  %s dialog_follows_play_info\n", failures == before ? "PASS" : "FAIL");

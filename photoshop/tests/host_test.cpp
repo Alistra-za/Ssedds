@@ -160,7 +160,9 @@ static int save_without_image_fails(Entry entry, const wchar_t *path) {
 struct DialogUser {
     const wchar_t *pick = nullptr; // filter label to choose, or nullptr
     bool cancel = false;
-    bool seen = false, filter_enabled = false;
+    bool untick_mips = false; // click the Mipmaps checkbox (after any pick)
+    bool seen = false, filter_enabled = false, filter_enabled_after = false;
+    LRESULT formats = 0; // entries in the Format list
     wchar_t filter_shown[32] = {};
 };
 
@@ -192,6 +194,9 @@ static DWORD WINAPI play_dialog(void *arg) {
         SendMessageW(filter, CB_SELECTSTRING, WPARAM(-1), reinterpret_cast<LPARAM>(u->pick));
         SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_FILTER, CBN_SELCHANGE), reinterpret_cast<LPARAM>(filter));
     }
+    u->formats = SendMessageW(GetDlgItem(dlg, IDC_FORMAT), CB_GETCOUNT, 0, 0);
+    if (u->untick_mips) SendMessageW(GetDlgItem(dlg, IDC_MIPS), BM_CLICK, 0, 0);
+    u->filter_enabled_after = IsWindowEnabled(filter) != 0;
     GetWindowTextW(filter, u->filter_shown, 32);
     PostMessageW(dlg, WM_COMMAND, u->cancel ? IDCANCEL : IDOK, 0);
     return 0;
@@ -255,6 +260,19 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         const int16 result = interactive_save(entry, path, real_alpha, &u);
         expect(result == 0 && u.seen && !u.filter_enabled && wcscmp(u.filter_shown, L"Box") == 0,
                "transparent layer: filter greyed, shows Box");
+    }
+
+    // DC33: Colour lists four formats; unticking Mipmaps greys the filter and saves a single level.
+    {
+        write_file(path, original);
+        DialogUser u;
+        u.untick_mips = true;
+        const int16 result = interactive_save(entry, path, opaque_alpha, &u);
+        const std::string dds = contents(path);
+        const bool one_level = dds.size() > 32 && dds.compare(0, 4, "DDS ") == 0 &&
+                               (unsigned char)dds[28] <= 1 && dds[29] == 0 && dds[30] == 0 && dds[31] == 0;
+        expect(result == 0 && u.seen && u.formats == 4 && u.filter_enabled && !u.filter_enabled_after && one_level,
+               "Colour: 4 formats; Mipmaps unticked greys the filter and saves one level");
     }
 
     // Cancel at the end: userCanceledErr and the file untouched.

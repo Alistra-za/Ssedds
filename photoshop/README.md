@@ -15,11 +15,11 @@ The plugin is unsigned, so Windows SmartScreen may warn when you download or unz
 
 ## Save
 Choose File > Save a Copy > **Tessalith DDS**. Photoshop 2022 and later list DDS (like other formats that cannot keep layers) only under Save a Copy; to have it under Save As too, turn on Preferences > File Handling > "Enable legacy Save As". The plugin saves the merged image: all visible layers flattened, plus one alpha (the layer transparency, else the first alpha channel). Alpha is kept only when some pixel is actually transparent (below 254 of 255), so a fully opaque layer saves as an opaque texture. Layers, extra alpha channels and spot channels are not kept, so keep a PSD of layered work. The options dialog opens once Photoshop has handed over the image (a large image takes a moment), so it can show what the encoder will do with these pixels. It has:
-- **Format**: BC1, BC3, BC4, BC5, BC7 or uncompressed RGBA8.
-- **Texture type**: Colour, Normal map or Linear mask. It sets the colour handling and mip rules, as in Tessalith's presets.
-- **sRGB**: tags the file as sRGB. It is greyed where the format or type has no sRGB variant (BC4, BC5, Normal, Linear mask).
-- **Mip filter**: how mips are shrunk. It is greyed, showing Box, where the encoder would use Box anyway (for example when the image has real transparency and alpha is kept).
-- **Mipmaps**: a full chain or none.
+- **Texture type**: Colour, Normal map or Linear mask. It sets the colour handling and mip rules, as in Tessalith's presets, and which formats are offered.
+- **sRGB** (checkbox beside the type): tags the file as sRGB. It is greyed and unticked for Normal and Linear mask (BC4 and BC5 have no sRGB variant either).
+- **Format**: Colour offers BC1, BC3, BC7 and uncompressed RGBA8; Normal map adds BC5; Linear mask also offers BC4 (one channel). A format the type does not offer (for example a remembered BC4 after switching to Colour) is replaced by BC7.
+- **Mipmaps** (checkbox): a full mip chain, or none when unticked.
+- **Filter** (beside Mipmaps): how mips are shrunk. It is greyed when Mipmaps is unticked, and greyed showing Box where the encoder would use Box anyway (for example when the image has real transparency and alpha is kept).
 - **Quality**: the encoder effort for the chosen format (BC7 effort, BC1/BC3 level, BC4/BC5 search). Greyed for RGBA8.
 
 Your last choices are remembered and preselected the next time the dialog opens. The dialog opens on every interactive save, and Cancel there writes nothing; only actions and batches run with dialogs off skip it and use the remembered choices. Images up to 16384 x 16384 are accepted; Skyrim supports no more.

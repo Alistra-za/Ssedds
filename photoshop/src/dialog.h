@@ -19,9 +19,10 @@
 struct ControlStates {
     bool ok;               // false: psdds_resolve refused the input (out-of-range value)
     PsddsSettings shown;   // the effective values
-    bool srgb_enabled;
-    bool filter_enabled;
+    bool srgb_enabled;     // the sRGB checkbox; checked = shown.srgb
+    bool filter_enabled;   // false also with Mipmaps unchecked
     bool quality_enabled;
+    bool formats[6];       // the Format list: psdds_format_allowed(shown.texture_type, PSDDS_BC1 .. PSDDS_RGBA8)
 };
 
 // Runs `input` through psdds_resolve with the document's has_alpha (0/1). Format, type and mips are always editable.
