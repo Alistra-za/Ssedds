@@ -13,6 +13,11 @@ static void convert(const T *src, size_t pixels, int channels, float scale, floa
     }
 }
 
+int32_t band_rows(int64_t row_bytes, int32_t height, int64_t cap_bytes) {
+    const int64_t rows = row_bytes > 0 ? cap_bytes / row_bytes : height;
+    return rows < 1 ? 1 : rows > height ? height : int32_t(rows);
+}
+
 void to_rgba_floats(const void *src, size_t pixels, int channels, int depth, float *out) {
     if (depth == 16)
         convert(static_cast<const uint16_t *>(src), pixels, channels, 1.0f / 32768.0f, out);

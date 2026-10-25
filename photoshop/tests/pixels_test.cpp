@@ -50,6 +50,43 @@ static void no_alpha_plane_gives_opaque() {
     check(near(out[4], 1.0f), __func__, "pixel 1 red 1");
 }
 
+static void bands_cover_largest_image_within_cap() {
+    const int64_t cap = int64_t(64) << 20;
+    const int32_t height = 16384;
+    const int64_t row_bytes = int64_t(16384) * 4 * 2;
+    const int32_t rows = band_rows(row_bytes, height, cap);
+    check(rows > 0 && rows * row_bytes <= cap, __func__, "one band fits the cap");
+    static unsigned char seen[16384];
+    for (int32_t top = 0; top < height; top += rows) {
+        const int32_t n = top + rows > height ? height - top : rows;
+        check(n * row_bytes <= cap, __func__, "every band fits the cap");
+        for (int32_t y = top; y < top + n; y++) seen[y]++;
+    }
+    bool once = true;
+    for (int32_t y = 0; y < height; y++) once = once && seen[y] == 1;
+    check(once, __func__, "every row requested exactly once");
+}
+
+static void band_rows_edges() {
+    check(band_rows(1000, 10, 64) == 1, __func__, "a row wider than the cap still gets one row");
+    check(band_rows(300, 1000, 1000) == 3, __func__, "rows round down to fit");
+    check(band_rows(300, 2, 1 << 20) == 2, __func__, "never more rows than the image");
+}
+
+static void bands_convert_into_their_rows() {
+    // A 2x3 RGB 8-bit image delivered as bands of 2 rows and 1 row lands in the right rows of the float image.
+    const uint8_t band0[12] = {255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0};
+    const uint8_t band1[6] = {0, 0, 255, 0, 0, 255};
+    float image[2 * 3 * 4] = {};
+    const size_t width = 2;
+    to_rgba_floats(band0, width * 2, 3, 8, image + 0 * width * 4);
+    to_rgba_floats(band1, width * 1, 3, 8, image + 2 * width * 4);
+    check(near(image[0], 1.0f) && near(image[1 * 4 + 0], 1.0f), __func__, "row 0 red");
+    check(near(image[2 * 4 + 1], 1.0f) && near(image[3 * 4 + 1], 1.0f), __func__, "row 1 green");
+    check(near(image[4 * 4 + 2], 1.0f) && near(image[5 * 4 + 2], 1.0f), __func__, "row 2 blue");
+    check(near(image[5 * 4 + 3], 1.0f), __func__, "row 2 opaque");
+}
+
 int main() {
     struct {
         const char *name;
@@ -59,6 +96,9 @@ int main() {
         {"eight_bit_codes_scale_by_255", eight_bit_codes_scale_by_255},
         {"interleaves_planes_with_alpha", interleaves_planes_with_alpha},
         {"no_alpha_plane_gives_opaque", no_alpha_plane_gives_opaque},
+        {"bands_cover_largest_image_within_cap", bands_cover_largest_image_within_cap},
+        {"band_rows_edges", band_rows_edges},
+        {"bands_convert_into_their_rows", bands_convert_into_their_rows},
     };
     for (auto &t : tests) {
         int before = failures;

@@ -15,7 +15,7 @@ int16 report_error(FormatRecord *r, const char *message) {
     return errReportString;
 }
 
-static int16 dispatch(int16 selector, FormatRecord *r) {
+static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
     switch (selector) {
     case formatSelectorOptionsStart:
         r->data = nullptr; // no options dialog yet; nothing to look at
@@ -28,12 +28,15 @@ static int16 dispatch(int16 selector, FormatRecord *r) {
         r->data = nullptr;
         return noErr;
     }
+    case formatSelectorWritePrepare:
+        r->maxData = 0; // the plug-in uses its own memory for the image (PIFormat.h maxData)
+        return noErr;
     case formatSelectorWriteStart:
-        return write_start(r);
+        return write_start(r, data);
     case formatSelectorWriteContinue:
-        return write_continue(r);
+        return write_continue(r, data);
     case formatSelectorWriteFinish:
-        return write_finish(r);
+        return write_finish(r, data);
     case formatSelectorReadStart:
         return report_error(r, "opening DDS files is not supported yet.");
     default:
@@ -43,7 +46,6 @@ static int16 dispatch(int16 selector, FormatRecord *r) {
 
 extern "C" __declspec(dllexport) void PluginMain(const int16 selector, FormatRecordPtr record, intptr_t *data,
                                                  int16 *result) {
-    (void)data;
     // The About call passes an AboutRecord, not a FormatRecord; Tessalith DDS has no About box.
     if (selector == formatSelectorAbout || !record) {
         *result = noErr;
@@ -53,7 +55,7 @@ extern "C" __declspec(dllexport) void PluginMain(const int16 selector, FormatRec
     if (record->HostSupports32BitCoordinates) record->PluginUsing32BitCoordinates = 1;
     // Nothing may throw across the plug-in boundary.
     try {
-        *result = dispatch(selector, record);
+        *result = dispatch(selector, record, data);
     } catch (const std::bad_alloc &) {
         *result = report_error(record, "there is not enough memory to save this image.");
     } catch (...) {

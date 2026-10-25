@@ -2,6 +2,11 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
+
+// Rows per Photoshop request so that one band (rows * row_bytes) stays within cap_bytes: at least one row,
+// at most `height`.
+int32_t band_rows(int64_t row_bytes, int32_t height, int64_t cap_bytes);
 
 // Converts `pixels` interleaved pixels from Photoshop into RGBA floats in [0, 1] (Note DC6):
 // 8-bit samples (uint8) scale by 1/255, 16-bit samples (uint16, Photoshop's 0..32768 range) by 1/32768.

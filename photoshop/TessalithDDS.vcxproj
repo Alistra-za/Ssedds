@@ -37,7 +37,8 @@
     <ClCompile>
       <AdditionalIncludeDirectories>$(PsSdk)\pluginsdk\photoshopapi\photoshop;$(PsSdk)\pluginsdk\photoshopapi\pica_sp;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_WINDOWS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <!-- /MT in both configurations: psdds.lib holds the encoders' C++ objects built for the release static CRT,
            and the linker refuses to mix them with /MTd (LNK2038). Debug = no optimisation, same CRT. -->
@@ -48,8 +49,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <AdditionalLibraryDirectories>$(PsddsLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <!-- What psdds.lib needs: cargo rustc -p psdds with print native-static-libs, plus bcrypt from the plan. -->
-      <AdditionalDependencies>psdds.lib;ws2_32.lib;bcrypt.lib;userenv.lib;ntdll.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- What psdds.lib needs: cargo rustc -p psdds with print native-static-libs. -->
+      <AdditionalDependencies>psdds.lib;ws2_32.lib;userenv.lib;ntdll.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
