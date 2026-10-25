@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Input builders and visibility rules for Save DDS, derived at import by probing psdds (no rule lives here)."""
 from nodes.groups import Condition
-from nodes.properties.inputs import BoolInput, DropDownInput
+from nodes.properties.inputs import BoolInput, DropDownInput, NumberInput
 
 from . import _psdds as P
 
@@ -93,12 +93,12 @@ def srgb_input():
     return BoolInput("sRGB", default=bool(P.defaults(0)["srgb"])).with_id(SRGB_ID)
 
 
-def discard_input():
-    return BoolInput("Discard transparency", default=bool(P.defaults(0)["discard_alpha"])).with_id(DISCARD_ID)
+def discard_input(id_=DISCARD_ID):
+    return BoolInput("Discard transparency", default=bool(P.defaults(0)["discard_alpha"])).with_id(id_)
 
 
-def mips_input():
-    return BoolInput("Mipmaps", default=bool(P.defaults(0)["mips"])).with_id(MIPS_ID)
+def mips_input(id_=MIPS_ID, texture_type=0):
+    return BoolInput("Mipmaps", default=bool(P.defaults(texture_type)["mips"])).with_id(id_)
 
 
 def quality_inputs():
@@ -133,6 +133,48 @@ def visible(control):
     for (t, f, srgb), mips in groups.items():
         c = c | (Condition.enum(TYPE_ID, t) & Condition.enum(FMT_ID[t], f) & Condition.enum(SRGB_ID, srgb) & Condition.enum(MIPS_ID, mips))
     return custom() & c
+
+
+# --- Save Normal (Tessalith) and RMAOS (Tessalith) (Task 3) ---
+NORMAL = P.TYPES.index("Normal")
+N_FMT_ID, N_DISCARD_ID, N_MIPS_ID, N_QUALITY_ID0, N_RMAOS_ID = 4, 5, 6, 7, 10  # quality 7, 8, 9
+ROLE_LABELS = ("Roughness", "Metallic", "AO", "Specular")  # psdds role order (P.ROLES)
+CHANNEL_ID0, FILL_MODE_ID0, FILL_ID0 = 10, 20, 30  # + role index
+RMAOS_QUALITY_ID, RMAOS_MIPS_ID = 40, 41
+
+
+def normal_format_input():
+    fs = allowed(NORMAL)
+    return _dd("Format", [P.FORMATS[f] for f in fs], P.defaults(NORMAL)["format"], N_FMT_ID, fs)
+
+
+def normal_quality_inputs():
+    """[(condition, input)] per quality group, shown while the Normal format is one of that group's allowed formats."""
+    out = []
+    for g, (fs, labels) in enumerate(QUALITY_GROUPS):
+        ok = [f for f in fs if P.format_allowed(NORMAL, f)]
+        default = P.resolve({**P.defaults(NORMAL), "format": ok[0]}, False)[0]["quality"] if ok else 0
+        out.append((Condition.enum(N_FMT_ID, ok), _dd("Quality", labels, default, N_QUALITY_ID0 + g)))
+    return out
+
+
+def channel_input(role):
+    return _dd(f"{ROLE_LABELS[role]} channel", ("R", "G", "B", "A"), 0, CHANNEL_ID0 + role)
+
+
+def fill_mode_input(role):
+    return _dd(f"{ROLE_LABELS[role]} fill", ("Default", "Custom"), 0, FILL_MODE_ID0 + role).with_docs(
+        "Default uses the engine's neutral value for this channel; Custom uses the number below (0-255)."
+    )
+
+
+def fill_input(role):
+    return NumberInput(f"{ROLE_LABELS[role]} value", min=0, max=255, default=0).with_id(FILL_ID0 + role)
+
+
+def rmaos_quality_input():
+    labels = P.quality_labels(P.FORMATS.index("BC7"))  # the rmaos profile is BC7 (label lookup only)
+    return _dd("Quality", labels, P.rmaos_default_quality(), RMAOS_QUALITY_ID)
 
 
 def selected(texture_type, formats_by_type, qualities_by_group):
