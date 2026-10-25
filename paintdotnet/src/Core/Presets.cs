@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
 
@@ -10,18 +11,25 @@ namespace Tessalith.Dds;
 public sealed record Preset(string Name, PsddsSettings Raw);
 
 /// <summary>What Load read (DC40 PresetFileInfo). Complete false: the file exists but was not read in full and must
-/// never be written. Extra: lines that did not parse, written back verbatim after the presets.</summary>
+/// never be written. Extra: lines that did not parse, one Latin-1 char per byte, written back as those bytes (+ CRLF, as presets.cpp)
+/// after the presets.</summary>
 public sealed record PresetFile(List<Preset> List, bool Complete, List<string> Extra);
 
 /// <summary>The dialog's presets in one UTF-8 file, behaviour and format as photoshop/src/presets.cpp (DC37, DC40):
 /// a header line without tabs, then name TAB format TAB type TAB srgb TAB filter TAB mips TAB quality TAB discard, CRLF.</summary>
-public static class PresetStore
+public static partial class PresetStore
 {
     public const string FileName = "paintdotnet.txt"; // not Photoshop's presets.txt (Owner decision 10)
     const string Header = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency";
     const int MaxFileBytes = 1 << 20; // a preset line is under 300 bytes; bounds what a corrupt file can allocate
-    static readonly char[] Space = [' ', '\t', '\r', '\n', '\v', '\f', ' ', '　']; // presets.cpp CleanPresetName
-    static readonly UTF8Encoding Strict = new(false, true), Lenient = new(false, false);
+    static readonly char[] Space = [' ', '\t', '\r', '\n', '\v', '\f', '\u00A0', '\u3000']; // presets.cpp CleanPresetName
+    static readonly UTF8Encoding Strict = new(false, true);
+    const uint MoveFileReplaceExisting = 0x1, MoveFileWriteThrough = 0x8;
+
+    // presets.cpp's rename, with MOVEFILE_WRITE_THROUGH (File.Move does not pass it).
+    [LibraryImport("kernel32.dll", EntryPoint = "MoveFileExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MoveFileExW(string existing, string replacement, uint flags);
 
     /// <summary>TESSALITH_DDS_PRESETS_DIR when set (tests), else %APPDATA%\Tessalith DDS\presets; null when neither is set.</summary>
     public static string? Dir()
@@ -67,9 +75,7 @@ public static class PresetStore
             string? text = null;
             try { text = Strict.GetString(line); } catch (DecoderFallbackException) { }
             if (text != null && ParseLine(text) is { } p) file.List.Add(p);
-            // shortcut: a line that is not valid UTF-8 is kept with U+FFFD in place of its bad bytes (Extra holds
-            // strings), so it is not byte-for-byte verbatim; keep bytes in Extra if foreign files ever matter.
-            else if (line.Length > 0 && text != Header) file.Extra.Add(text ?? Lenient.GetString(line));
+            else if (line.Length > 0 && text != Header) file.Extra.Add(Encoding.Latin1.GetString(line)); // one char per byte: kept verbatim
         }
         return file;
     }
@@ -113,7 +119,6 @@ public static class PresetStore
             var s = p.Raw;
             text.Append(p.Name).Append($"\t{s.Format}\t{s.TextureType}\t{s.Srgb}\t{s.Filter}\t{s.Mips}\t{s.Quality}\t{s.DiscardAlpha}\r\n");
         }
-        foreach (var line in file.Extra) text.Append(line).Append("\r\n");
         var path = Path.Combine(dir, FileName);
         var tmp = path + ".tmp";
         try
@@ -121,10 +126,16 @@ public static class PresetStore
             Directory.CreateDirectory(dir);
             using (var f = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                f.Write(Strict.GetBytes(text.ToString()));
+                f.Write(Strict.GetBytes(text.ToString())); // header and presets in UTF-8
+                foreach (var line in file.Extra)
+                {
+                    f.Write(Encoding.Latin1.GetBytes(line)); // the bytes Load read
+                    f.Write("\r\n"u8);
+                }
                 f.Flush(flushToDisk: true);
             }
-            File.Move(tmp, path, overwrite: true);
+            if (!MoveFileExW(tmp, path, MoveFileReplaceExisting | MoveFileWriteThrough))
+                throw new IOException("The preset file could not be replaced");
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or SecurityException or NotSupportedException or ArgumentException or EncoderFallbackException)

@@ -128,6 +128,63 @@ public sealed class PresetsTests : IDisposable
     }
 
     [Fact]
+    public void Presets_foreign_bytes_survive()
+    {
+        // A Windows-1252 "café" line, a lone 0xFF, and a line starting with a UTF-16 LE BOM: none parses (presets.cpp
+        // keeps them as unparsed lines), and each must be written back as the same bytes.
+        var bytes = new List<byte>();
+        void Add(params byte[] b) { bytes.AddRange(b); bytes.Add(13); bytes.Add(10); }
+        Add(Encoding.UTF8.GetBytes(Header));
+        Add(0xFF, 0xFE, (byte)'x');
+        Add(Encoding.UTF8.GetBytes(Good1));
+        Add(0x63, 0x61, 0x66, 0xE9);
+        Add(0xFF);
+        File.WriteAllBytes(FilePath, bytes.ToArray());
+
+        var f = PresetStore.Load(_dir);
+        Assert.Single(f.List);
+        Assert.Equal(3, f.Extra.Count);
+        Assert.True(PresetStore.Save(_dir, f));
+        var expected = new List<byte>();
+        foreach (var part in new[] { Encoding.UTF8.GetBytes(Header), Encoding.UTF8.GetBytes(Good1), [0xFF, 0xFE, (byte)'x'], [0x63, 0x61, 0x66, 0xE9], new byte[] { 0xFF } })
+        {
+            expected.AddRange(part);
+            expected.AddRange("\r\n"u8.ToArray());
+        }
+        var once = File.ReadAllBytes(FilePath);
+        Assert.Equal(expected.ToArray(), once);
+        Assert.True(PresetStore.Save(_dir, PresetStore.Load(_dir)));
+        Assert.True(PresetStore.Save(_dir, PresetStore.Load(_dir)));
+        Assert.Equal(once, File.ReadAllBytes(FilePath));
+    }
+
+    [Fact]
+    public void Presets_first_run_creates_the_folder()
+    {
+        var dir = Path.Combine(_dir, "new", "sub");
+        var f = PresetStore.Load(dir);
+        Assert.True(f.Complete);
+        Assert.Equal(Seeds(), f.List);
+        Assert.True(File.Exists(Path.Combine(dir, PresetStore.FileName)));
+    }
+
+    [Fact]
+    public void Presets_size_cap_boundary()
+    {
+        var head = Encoding.UTF8.GetBytes(Header + "\r\n" + Good1 + "\r\n");
+        var exact = new byte[1 << 20];
+        head.CopyTo(exact, 0);
+        exact.AsSpan(head.Length).Fill((byte)'x');
+        File.WriteAllBytes(FilePath, exact);
+        var f = PresetStore.Load(_dir);
+        Assert.True(f.Complete);
+        Assert.Single(f.List);
+
+        File.WriteAllBytes(FilePath, [.. exact, (byte)'x']);
+        Assert.False(PresetStore.Load(_dir).Complete);
+    }
+
+    [Fact]
     public void Presets_empty_lines_and_header_are_not_extra()
     {
         WriteFile(Header, "", Good1, "", Header);
@@ -235,28 +292,6 @@ public sealed class PresetsTests : IDisposable
     }
 
     [Fact]
-    public void Preset_dir_env()
-    {
-        var env = Environment.GetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR");
-        var appdata = Environment.GetEnvironmentVariable("APPDATA");
-        try
-        {
-            Environment.SetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR", _dir);
-            Assert.Equal(_dir, PresetStore.Dir());
-            Environment.SetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR", null);
-            Environment.SetEnvironmentVariable("APPDATA", null);
-            Assert.Null(PresetStore.Dir());
-            Environment.SetEnvironmentVariable("APPDATA", @"C:\x");
-            Assert.Equal(@"C:\x\Tessalith DDS\presets", PresetStore.Dir());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR", env);
-            Environment.SetEnvironmentVariable("APPDATA", appdata);
-        }
-    }
-
-    [Fact]
     public void PresetSelection_dc45()
     {
         var list = Seeds();
@@ -299,5 +334,37 @@ public sealed class PresetsTests : IDisposable
         sel.Deleted();
         Assert.Equal(-1, sel.Picked);
         Assert.Equal(0, sel.Shown(list, raw, false)); // without the reset, index 5 (now Twin B) would stay shown
+    }
+}
+
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class PresetDirEnvCollection { public const string Name = "Preset dir environment"; }
+
+// Tasks 5/6: any test that calls PresetStore.Dir(), loads from the default folder, or sets TESSALITH_DDS_PRESETS_DIR
+// or APPDATA joins this collection, so it never runs beside this one. Preset I/O tests pass a temp dir instead.
+[Collection(PresetDirEnvCollection.Name)]
+public sealed class PresetDirEnvTests
+{
+    [Fact]
+    public void Preset_dir_env()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tessalith-pdn-presets-env");
+        var env = Environment.GetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR");
+        var appdata = Environment.GetEnvironmentVariable("APPDATA");
+        try
+        {
+            Environment.SetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR", dir);
+            Assert.Equal(dir, PresetStore.Dir());
+            Environment.SetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR", null);
+            Environment.SetEnvironmentVariable("APPDATA", null);
+            Assert.Null(PresetStore.Dir());
+            Environment.SetEnvironmentVariable("APPDATA", @"C:\x");
+            Assert.Equal(@"C:\x\Tessalith DDS\presets", PresetStore.Dir());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TESSALITH_DDS_PRESETS_DIR", env);
+            Environment.SetEnvironmentVariable("APPDATA", appdata);
+        }
     }
 }
