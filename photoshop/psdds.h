@@ -23,6 +23,7 @@ typedef struct PsddsSettings {
     uint32_t filter;       /* PSDDS_BOX .. PSDDS_KAISER */
     uint32_t mips;         /* 0 none, 1 full chain */
     uint32_t quality;      /* index into the format's list (psdds_quality_label); 0 when the list is empty */
+    uint32_t discard_alpha; /* 1: "Discard transparency", alpha removed whatever the pixels; 0: the pixels decide */
 } PsddsSettings;
 
 /* 1 = editable, 0 = greyed (showing the effective value). */
@@ -38,19 +39,25 @@ typedef struct PsddsBuf {
     size_t len;
 } PsddsBuf;
 
-/* Start values for a texture type: BC7, sRGB on for Colour, the preset's filter, full mips, the preset's quality.
- * An unknown type gets Colour's. */
+/* Start values for a texture type: BC7, sRGB off, the preset's filter, full mips, the preset's quality,
+ * transparency kept (discard_alpha 0). An unknown type gets Colour's. */
 PsddsSettings psdds_defaults(uint32_t texture_type);
 
+/* The presets seeded into a new preset store, in order (5). name: a static UTF-8 string, NULL when out of range.
+ * settings: 0, or -1 for a NULL pointer or an index out of range (*out untouched). */
+uint32_t psdds_preset_count(void);
+const char *psdds_preset_name(uint32_t i);
+int32_t psdds_preset_settings(uint32_t i, PsddsSettings *out);
+
 /* Greying rules: `effective` = the values the dialog shows and the encoder uses; `controls` = which are editable.
- * Returns 0, or -1 for a NULL pointer or an out-of-range format, texture_type, srgb, filter or mips (outputs
- * untouched). A quality index outside the format's list (e.g. remembered from another format) is not an error:
- * effective quality becomes the preset's default for that type and format. RGBA8's quality is always 0.
+ * Returns 0, or -1 for a NULL pointer or an out-of-range format, texture_type, srgb, filter, mips or discard_alpha
+ * (outputs untouched). A quality index outside the format's list (e.g. remembered from another format) is not an
+ * error: effective quality becomes the preset's default for that type and format. RGBA8's quality is always 0.
  * Likewise a format the type does not offer (psdds_format_allowed) is not an error: effective format becomes the
  * type's default format (psdds_defaults), and the quality index is then checked against that format's list.
  * has_alpha (0/1) is the document's, as passed to psdds_encode: for Colour, where the engine would mip with Box
- * anyway (sRGB Off, or alpha kept in BC3/BC7/RGBA8), the filter greys and shows Box. With mips 0 the filter greys
- * too, keeping its value. */
+ * anyway (sRGB Off, or alpha kept in BC3/BC7/RGBA8; discard_alpha 1 never keeps it), the filter greys and shows
+ * Box. With mips 0 the filter greys too, keeping its value. */
 int32_t psdds_resolve(const PsddsSettings *input, uint32_t has_alpha, PsddsSettings *effective,
                       PsddsControls *controls);
 

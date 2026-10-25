@@ -25,6 +25,8 @@ pub struct PsddsSettings {
     pub mips: u32,
     /// Index into the format's quality list (`psdds_quality_label`); 0 where the list is empty.
     pub quality: u32,
+    /// 1: "Discard transparency", alpha is removed whatever the pixels (DC36). 0: the pixels decide (DC31).
+    pub discard_alpha: u32,
 }
 
 /// Which dialog controls are editable (1) or greyed (0).
@@ -135,8 +137,8 @@ fn preset_quality(format: u32, p: &Profile) -> u32 {
     }
 }
 
-/// The dialog's start values for a texture type: BC7, sRGB on for Colour, the preset's filter, full mips and the
-/// preset's quality. An unknown type gets Colour's.
+/// The dialog's start values for a texture type: BC7, sRGB off (DC34), the preset's filter, full mips, the preset's
+/// quality, transparency kept. An unknown type gets Colour's.
 pub fn defaults(texture_type: u32) -> PsddsSettings {
     let ty = if texture_type < 3 { texture_type } else { 0 };
     let (filter, quality) = base(ty).map_or((0, FALLBACK_QUALITY), |p| {
@@ -145,11 +147,42 @@ pub fn defaults(texture_type: u32) -> PsddsSettings {
     PsddsSettings {
         format: FORMAT_BC7,
         texture_type: ty,
-        srgb: u32::from(ty == 0),
+        srgb: 0,
         filter,
         mips: 1,
         quality,
+        discard_alpha: 0,
     }
+}
+
+/// DC35: the presets seeded into a new preset store: (name, type, format, discard transparency). Each is the type's
+/// defaults with the format and that format's preset quality.
+const SEEDS: [(&CStr, u32, u32, u32); 5] = [
+    (c"Colour BC7", 0, FORMAT_BC7, 0),
+    (c"Colour BC1 (small, opaque)", 0, 0, 1),
+    (c"Normal BC7", 1, FORMAT_BC7, 0),
+    (c"Mask/data BC7", 2, FORMAT_BC7, 0),
+    (c"Greyscale mask BC4", 2, 2, 0),
+];
+
+/// The seed presets, in dropdown order.
+pub fn seed_presets() -> Vec<(&'static CStr, PsddsSettings)> {
+    SEEDS
+        .iter()
+        .map(|&(name, ty, format, discard_alpha)| {
+            let d = defaults(ty);
+            let quality = base(ty).map_or(d.quality, |p| preset_quality(format, p));
+            (
+                name,
+                PsddsSettings {
+                    format,
+                    quality,
+                    discard_alpha,
+                    ..d
+                },
+            )
+        })
+        .collect()
 }
 
 /// The greying rules: the values the dialog shows and the encoder uses, and which controls are editable.
@@ -169,6 +202,7 @@ pub fn resolve(
     range("sRGB", s.srgb, 2)?;
     range("filter", s.filter, 4)?;
     range("mips", s.mips, 2)?;
+    range("discard transparency", s.discard_alpha, 2)?;
     // DC32: a format the type does not offer becomes the type's default (like DC8's quality), not an error.
     let s = &PsddsSettings {
         format: if format_allowed(s.texture_type, s.format) {
@@ -249,8 +283,8 @@ fn build(e: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
     } else {
         MipKeyword::None
     });
-    // R2: keep alpha only where the document has it and the format stores it.
-    p.alpha.policy = if has_alpha && matches!(e.format, 1 | 4 | 5) {
+    // R2: keep alpha only where the document has it, the format stores it and the user keeps it (DC36).
+    p.alpha.policy = if has_alpha && e.discard_alpha == 0 && matches!(e.format, 1 | 4 | 5) {
         AlphaPolicy::Blend
     } else {
         AlphaPolicy::Remove

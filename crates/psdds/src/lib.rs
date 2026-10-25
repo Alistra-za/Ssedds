@@ -47,11 +47,47 @@ pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
     catch_unwind(|| settings::defaults(texture_type)).unwrap_or(PsddsSettings {
         format: 4,
         texture_type: 0,
-        srgb: 1,
+        srgb: 0,
         filter: 0,
         mips: 1,
         quality: settings::FALLBACK_QUALITY,
+        discard_alpha: 0,
     })
+}
+
+/// The number of seed presets (DC35).
+#[no_mangle]
+pub extern "C" fn psdds_preset_count() -> u32 {
+    catch_unwind(|| settings::seed_presets().len() as u32).unwrap_or(0)
+}
+
+/// A seed preset's static UTF-8 name, or NULL when out of range.
+#[no_mangle]
+pub extern "C" fn psdds_preset_name(i: u32) -> *const c_char {
+    catch_unwind(|| {
+        settings::seed_presets()
+            .get(i as usize)
+            .map_or(std::ptr::null(), |p| p.0.as_ptr())
+    })
+    .unwrap_or(std::ptr::null())
+}
+
+/// A seed preset's settings in `out`: 0, or -1 for a null pointer or an index out of range (`out` untouched).
+///
+/// # Safety
+/// `out` is null or valid for a `PsddsSettings`.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_preset_settings(i: u32, out: *mut PsddsSettings) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    match catch_unwind(|| settings::seed_presets().get(i as usize).map(|p| p.1)) {
+        Ok(Some(s)) => {
+            *out = s;
+            0
+        }
+        _ => -1,
+    }
 }
 
 /// Apply the greying rules: `effective` gets the values the dialog shows and the encoder uses, `controls` which

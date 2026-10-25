@@ -6,8 +6,9 @@ use engine::config::{
 use engine::presets::PresetRegistry;
 use psdds::settings::profile_for;
 use psdds::{
-    psdds_defaults, psdds_format_allowed, psdds_quality_count, psdds_quality_label, psdds_resolve,
-    PsddsControls, PsddsSettings,
+    psdds_defaults, psdds_format_allowed, psdds_preset_count, psdds_preset_name,
+    psdds_preset_settings, psdds_quality_count, psdds_quality_label, psdds_resolve, PsddsControls,
+    PsddsSettings,
 };
 use std::ffi::CStr;
 
@@ -36,6 +37,7 @@ fn s(format: u32, texture_type: u32, srgb: u32, filter: u32, quality: u32) -> Ps
         filter,
         mips: 1,
         quality,
+        discard_alpha: 0,
     }
 }
 
@@ -342,6 +344,10 @@ fn out_of_range_field_is_refused() {
             texture_type: 3,
             ..ok
         },
+        PsddsSettings {
+            discard_alpha: 2,
+            ..ok
+        },
         PsddsSettings { srgb: 2, ..ok },
         PsddsSettings { filter: 4, ..ok },
         PsddsSettings { mips: 2, ..ok },
@@ -372,7 +378,8 @@ fn defaults_follow_the_preset() {
         let b = base(ty);
         assert_eq!(d.format, BC7);
         assert_eq!(d.texture_type, ty);
-        assert_eq!(d.srgb, u32::from(ty == COLOUR));
+        assert_eq!(d.srgb, 0, "DC34: sRGB off for every type");
+        assert_eq!(d.discard_alpha, 0);
         assert_eq!(d.filter, preset_filter(ty));
         assert_eq!(d.mips, 1);
         assert_eq!(
@@ -434,5 +441,83 @@ fn profile_overrides_follow_r2_r3() {
                 assert!(p.resize.is_none() && !p.drop_top_mip);
             }
         }
+    }
+}
+
+/// DC35: the five seed presets, pinned. Each is a fixed point of `psdds_resolve`, so the dialog can match it.
+#[test]
+fn seed_presets_are_pinned() {
+    let want = [
+        ("Colour BC7", COLOUR, BC7, 0),
+        ("Colour BC1 (small, opaque)", COLOUR, BC1, 1),
+        ("Normal BC7", NORMAL, BC7, 0),
+        ("Mask/data BC7", MASK, BC7, 0),
+        ("Greyscale mask BC4", MASK, BC4, 0),
+    ];
+    assert_eq!(psdds_preset_count(), want.len() as u32);
+    for (i, (name, ty, f, discard)) in want.into_iter().enumerate() {
+        let i = i as u32;
+        let label = unsafe { CStr::from_ptr(psdds_preset_name(i)) };
+        assert_eq!(label.to_str().unwrap(), name);
+        let mut p = zero();
+        assert_eq!(unsafe { psdds_preset_settings(i, &mut p) }, 0, "{name}");
+        let d = psdds_defaults(ty);
+        // The format's own preset quality: what resolve gives for an out-of-range index.
+        let quality = resolve(PsddsSettings {
+            format: f,
+            quality: 99,
+            ..d
+        })
+        .1
+        .quality;
+        let expect = PsddsSettings {
+            format: f,
+            texture_type: ty,
+            srgb: 0,
+            filter: d.filter,
+            mips: 1,
+            quality,
+            discard_alpha: discard,
+        };
+        assert_eq!(p, expect, "{name}");
+        for has_alpha in [false, true] {
+            assert_eq!(resolve_with(p, has_alpha).1, p, "{name} is a fixed point");
+        }
+    }
+    assert!(psdds_preset_name(5).is_null());
+    let mut p = zero();
+    assert_eq!(unsafe { psdds_preset_settings(5, &mut p) }, -1);
+    assert_eq!(p, zero(), "untouched");
+    assert_eq!(
+        unsafe { psdds_preset_settings(0, std::ptr::null_mut()) },
+        -1
+    );
+}
+
+/// DC36: "Discard transparency" removes alpha whatever the pixels, so the filter is no longer greyed by alpha.
+#[test]
+fn discard_transparency_removes_alpha() {
+    for f in [BC3, BC7, RGBA8] {
+        let keep = s(f, COLOUR, 1, 3, 0);
+        let discard = PsddsSettings {
+            discard_alpha: 1,
+            ..keep
+        };
+        let (_, e, c) = resolve_with(keep, true);
+        assert_eq!(
+            (c.filter_enabled, e.filter),
+            (0, 0),
+            "format {f}: alpha greys"
+        );
+        assert_eq!(
+            profile_for(&keep, true).unwrap().alpha.policy,
+            AlphaPolicy::Blend
+        );
+        let (rc, e, c) = resolve_with(discard, true);
+        assert_eq!((rc, c.filter_enabled, e.filter), (0, 1, 3), "format {f}");
+        assert_eq!(e.discard_alpha, 1);
+        let p = profile_for(&discard, true).unwrap();
+        assert_eq!(p.alpha.policy, AlphaPolicy::Remove, "format {f}");
+        assert_eq!(p.mips.filter, MipFilter::Kaiser);
     }
 }

@@ -7,9 +7,11 @@ use psdds::{psdds_defaults, psdds_encode, psdds_free, PsddsBuf, PsddsSettings};
 use std::ffi::CStr;
 
 const BC1: u32 = 0;
+const BC3: u32 = 1;
 const BC4: u32 = 2;
 const BC5: u32 = 3;
 const BC7: u32 = 4;
+const RGBA8: u32 = 5;
 
 fn gradient(w: u32, h: u32, alpha: bool) -> Vec<f32> {
     let c = |v: u32| (v % 256) as f32 / 255.0;
@@ -288,4 +290,28 @@ fn bad_input_is_an_error_not_a_panic() {
     assert_eq!(one[0], 0);
     // Freeing an empty buffer is a no-op.
     unsafe { psdds_free(out) };
+}
+
+/// DC36: with "Discard transparency" a document with alpha saves exactly as the same pixels fully opaque.
+#[test]
+fn discard_transparency_saves_opaque() {
+    let (w, h) = (16, 8);
+    let with = gradient(w, h, true);
+    let opaque = gradient(w, h, false);
+    for f in [BC3, BC7, RGBA8] {
+        let s = PsddsSettings {
+            discard_alpha: 1,
+            ..settings(f, 0)
+        };
+        let bytes = encode(&with, w, h, true, &s).unwrap();
+        assert!(
+            bytes == encode(&opaque, w, h, false, &s).unwrap(),
+            "format {f}"
+        );
+        let kept = encode(&with, w, h, true, &settings(f, 0)).unwrap();
+        assert!(
+            bytes != kept,
+            "format {f}: without discard the alpha is kept"
+        );
+    }
 }

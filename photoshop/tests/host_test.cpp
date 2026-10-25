@@ -161,7 +161,7 @@ struct DialogUser {
     const wchar_t *pick = nullptr; // filter label to choose, or nullptr
     bool cancel = false;
     bool untick_mips = false; // click the Mipmaps checkbox (after any pick)
-    bool seen = false, filter_enabled = false, filter_enabled_after = false;
+    bool seen = false, filter_enabled_before_srgb = true, filter_enabled = false, filter_enabled_after = false;
     LRESULT formats = 0; // entries in the Format list
     wchar_t filter_shown[32] = {};
 };
@@ -189,6 +189,9 @@ static DWORD WINAPI play_dialog(void *arg) {
     Sleep(100); // let WM_INITDIALOG finish filling the controls
     u->seen = true;
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
+    u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
+    // DC34: sRGB starts off (linear content, Box mips, filter greyed); tick it so the filter can be picked.
+    if (IsDlgButtonChecked(dlg, IDC_SRGB) != BST_CHECKED) SendMessageW(GetDlgItem(dlg, IDC_SRGB), BM_CLICK, 0, 0);
     u->filter_enabled = IsWindowEnabled(filter) != 0;
     if (u->pick) {
         SendMessageW(filter, CB_SELECTSTRING, WPARAM(-1), reinterpret_cast<LPARAM>(u->pick));
@@ -246,8 +249,10 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         u.pick = i == 0 ? L"Kaiser" : L"Box";
         const int16 result = interactive_save(entry, path, i == 0 ? opaque_alpha : floor_alpha, &u);
         (i == 0 ? kaiser : box) = contents(path);
-        expect(result == 0 && u.seen && u.filter_enabled && wcscmp(u.filter_shown, u.pick) == 0,
-               i == 0 ? "opaque layer: dialog after the pixels, filter editable, Kaiser picked"
+        expect(result == 0 && u.seen && !u.filter_enabled_before_srgb && u.filter_enabled &&
+                   wcscmp(u.filter_shown, u.pick) == 0,
+               i == 0 ? "opaque layer: dialog after the pixels, sRGB off greys the filter, ticking it frees it, "
+                        "Kaiser picked"
                       : "alpha 254/255 counts as opaque: filter editable, Box picked");
     }
     expect(kaiser.compare(0, 4, "DDS ") == 0 && box.compare(0, 4, "DDS ") == 0 && kaiser != box,
