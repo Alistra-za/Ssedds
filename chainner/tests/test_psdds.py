@@ -13,6 +13,7 @@ from unittest import mock
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
+DLL_EXPLICIT = bool(os.environ.get("TESSALITH_PSDDS_DLL"))
 DLL = Path(os.environ.get("TESSALITH_PSDDS_DLL") or REPO / "target/psdds/x86_64-pc-windows-msvc/release/psdds.dll")
 MOD = REPO / "chainner/tessalith_dds/_psdds.py"
 
@@ -38,6 +39,10 @@ def settings(fmt=RGBA8, **kw):
     s = P.defaults(COLOUR)
     s.update(format=fmt, srgb=0, mips=0, **kw)
     return s
+
+
+if P is None and DLL_EXPLICIT:
+    raise RuntimeError(f"TESSALITH_PSDDS_DLL is set but {DLL} does not exist")
 
 
 @unittest.skipIf(P is None, f"psdds.dll not found at {DLL} (run crates\\psdds\\build.ps1)")
@@ -184,16 +189,43 @@ class PsddsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p, q = Path(d, "a.dds"), Path(d, "b.dds")
             p.write_bytes(b"old")
-            try:
-                data = P.encode(np.zeros((1, 16385, 3), np.float32), settings())
-                P.write_files([(p, data)])
-            except P.PsddsError:
-                pass
-            self.assertEqual(p.read_bytes(), b"old")
             P.write_files([(p, b"new1"), (q, b"new2")])
             self.assertEqual((p.read_bytes(), q.read_bytes()), (b"new1", b"new2"))
             self.assertEqual(sorted(x.name for x in Path(d).iterdir()), ["a.dds", "b.dds"])
 
+    def test_write_files_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "a.dds")
+            p.write_bytes(b"old")
+            with self.assertRaises(OSError):  # second temp cannot be created
+                P.write_files([(p, b"new"), (Path(d, "missing", "b.dds"), b"x")])
+            self.assertEqual(p.read_bytes(), b"old")
+            blocker = Path(d, "b.dds")
+            blocker.mkdir()
+            with self.assertRaises(OSError):  # second replace fails after the first succeeded
+                P.write_files([(p, b"new"), (blocker, b"x")])
+            self.assertEqual(p.read_bytes(), b"old")
+            self.assertEqual(sorted(x.name for x in Path(d).iterdir()), ["a.dds", "b.dds"])
+
+    def test_abi_mismatch(self):
+        with mock.patch.object(P, "ABI_VERSION", 3):
+            with self.assertRaisesRegex(P.PsddsError, r"ABI 2, these nodes need 3"):
+                P._load()
+
+    def test_rmaos_fills(self):
+        a = np.full((8, 8), 0.5, np.float32)
+        with self.assertRaises(ValueError):
+            self._rmaos([(a, 0), None, None, None], fills=(-1, -1, -1))
+        none = P.rmaos_encode([(a, 0), None, None, None], None, P.rmaos_default_quality(), 0)
+        self.assertEqual(none[2], ["G", "B", "A"])
+
+    def test_array_shape_checks(self):
+        with self.assertRaises(ValueError):
+            P.alpha_used(np.zeros((4, 4, 3), np.float32))
+        with self.assertRaises(ValueError):
+            P.alpha_used(np.zeros((4, 4, 4), np.float64))
+        with self.assertRaises(ValueError):
+            P.opens_with_alpha(np.zeros((4, 4), np.uint8))
     def test_decode_helpers(self):
         px = np.full((2, 2, 4), 255, np.uint8)
         self.assertFalse(P.opens_with_alpha(px))

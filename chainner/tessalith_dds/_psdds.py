@@ -53,6 +53,10 @@ def _load():
         dll = C.CDLL(str(path))
     except OSError as e:
         raise PsddsError(f"cannot load {path}: {e}") from e
+    dll.psdds_abi_version.argtypes, dll.psdds_abi_version.restype = [], C.c_uint32
+    got = dll.psdds_abi_version()  # first, so an older DLL lacking later symbols still gets this message
+    if got != ABI_VERSION:
+        raise PsddsError(f"psdds.dll ABI {got}, these nodes need {ABI_VERSION}")
     p, u32, sz, cp = C.POINTER, C.c_uint32, C.c_size_t, C.c_char_p
     fp, bp, ep = p(C.c_float), p(C.c_uint8), C.c_char_p  # ep: writable error/note buffers
     sig = {
@@ -77,9 +81,6 @@ def _load():
     for name, (args, res) in sig.items():
         f = getattr(dll, name)
         f.argtypes, f.restype = args, res
-    got = dll.psdds_abi_version()
-    if got != ABI_VERSION:
-        raise PsddsError(f"psdds.dll ABI {got}, these nodes need {ABI_VERSION}")
     return dll
 
 
@@ -116,7 +117,10 @@ def presets() -> list:
         s = _Settings()
         if lib.psdds_preset_settings(i, C.byref(s)) != 0:
             raise PsddsError(f"preset {i} unavailable")
-        out.append((lib.psdds_preset_name(i).decode(), _d(s)))
+        name = lib.psdds_preset_name(i)
+        if name is None:
+            raise PsddsError(f"preset {i} has no name")
+        out.append((name.decode(), _d(s)))
     return out
 
 
@@ -166,8 +170,14 @@ def to_rgba(img: np.ndarray) -> np.ndarray:
     return out
 
 
+def _need(a: np.ndarray, dtype) -> np.ndarray:
+    if a.dtype != dtype or a.ndim != 3 or a.shape[2] != 4 or not a.flags.c_contiguous:
+        raise ValueError(f"expected a C-contiguous {np.dtype(dtype).name} array of shape (h, w, 4)")
+    return a
+
+
 def alpha_used(rgba: np.ndarray) -> bool:
-    a = _f32(rgba)
+    a = _need(rgba, np.float32)
     return bool(lib.psdds_alpha_used(a.ctypes.data_as(C.POINTER(C.c_float)), a.shape[0] * a.shape[1]))
 
 
@@ -199,7 +209,7 @@ def decode(data: bytes) -> tuple:
 
 
 def opens_with_alpha(rgba8: np.ndarray, has_alpha: bool = True) -> bool:
-    a = np.ascontiguousarray(rgba8, dtype=np.uint8)
+    a = _need(rgba8, np.uint8)
     return bool(lib.psdds_opens_with_alpha(a.ctypes.data_as(C.POINTER(C.c_uint8)), a.shape[0] * a.shape[1], int(has_alpha)))
 
 
@@ -215,6 +225,11 @@ def dds_openable(head: bytes) -> bool:
 def rmaos_encode(sources, fills, quality, mips, normal=None, normal_settings=None):
     """sources: 4 x (array, channel index in that array as given) or None. -> (rmaos, normal|None, defaulted, baked, note)."""
     job = _Job()
+    job.fill[:] = [-1] * 4
+    if fills is None:
+        fills = [None] * 4
+    if len(fills) != 4:
+        raise ValueError("fills must have exactly 4 entries")
     keep = []  # arrays must outlive the call
     for i, s in enumerate(sources):
         if s is None:
@@ -247,23 +262,30 @@ def rmaos_encode(sources, fills, quality, mips, normal=None, normal_settings=Non
 
 
 def write_files(pairs) -> None:
-    """Write every <path>.tmp (flushed + fsynced), then os.replace each; a failure removes the temps."""
-    tmps = []
+    """Write every <path>.tmp (flushed + fsynced), then os.replace each. A failure removes the temps and, if an
+    earlier replace already happened, restores that target's previous bytes (or removes a file that was new)."""
+    pairs = [(Path(p), d) for p, d in pairs]
+    tmps = [Path(str(p) + ".tmp") for p, _ in pairs]
+    done = []  # (path, previous bytes or None)
     try:
-        for path, data in pairs:
-            tmp = Path(str(path) + ".tmp")
-            tmps.append((tmp, Path(path)))
+        for tmp, (_, data) in zip(tmps, pairs):
             with open(tmp, "wb") as f:
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
-        for tmp, path in tmps:
+        for tmp, (path, _) in zip(tmps, pairs):
+            old = path.read_bytes() if path.is_file() else None
             os.replace(tmp, path)
+            done.append((path, old))
     except BaseException:
-        for tmp, _ in tmps:
+        for tmp in tmps:
             tmp.unlink(missing_ok=True)
+        for path, old in reversed(done):
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(old)  # shortcut: best-effort restore, not itself atomic
         raise
-
 
 if __name__ == "__main__":
     print(version(), lib.psdds_abi_version())
