@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+from sanic.log import logger
+
+from api import KeyInfo, Lazy
+from nodes.groups import Condition, if_group
+from nodes.properties.inputs import BoolInput, DirectoryInput, ImageInput, RelativePathInput
+
+from . import _psdds, _ui, tessalith_group
+
+assert len(_ui.QUALITY_GROUPS) == 3, "save_dds_tessalith_node takes three quality inputs; psdds now has another count"
+_FMT = _ui.format_inputs()
+_Q = _ui.quality_inputs()
+
+
+@tessalith_group.register(
+    schema_id="tessalith:dds:save",
+    name="Save DDS (Tessalith)",
+    description="Save an image as a DDS texture with Tessalith's encoder, using the same settings and bytes as Tessalith itself.",
+    icon="MdSave",
+    inputs=[
+        ImageInput().make_lazy(),
+        DirectoryInput(must_exist=False),
+        RelativePathInput("Subdirectory Path")
+        .make_optional()
+        .with_docs("An optional subdirectory path, created if missing. Separate levels with `/`."),
+        RelativePathInput("Image Name").with_docs("The file name **without** the extension. Existing files are overwritten."),
+        _ui.preset_input().with_docs(
+            "Custom shows every setting. A preset hides them and uses that preset's settings."
+        ),
+        if_group(_ui.custom())(_ui.type_input()),
+        if_group(_ui.visible("srgb"))(_ui.srgb_input()),
+        *[if_group(Condition.enum(_ui.TYPE_ID, t) & _ui.custom())(_FMT[t]) for t in range(len(_FMT))],
+        if_group(_ui.custom())(_ui.discard_input()),
+        _ui.mips_input(),
+        if_group(Condition.bool(_ui.MIPS_ID, True) & _ui.visible("filter"))(_ui.filter_input()),
+        *[if_group(_ui.quality_condition(g))(_Q[g]) for g in range(len(_Q))],
+        BoolInput("Skip existing files", default=False).with_id(1000).with_docs("If enabled, existing files are not overwritten."),
+    ],
+    outputs=[],
+    key_info=KeyInfo.enum(_ui.TYPE_ID),
+    side_effects=True,
+)
+def save_dds_tessalith_node(
+    lazy_image: Lazy[np.ndarray],
+    base_directory: Path,
+    relative_path: str | None,
+    filename: str,
+    preset: int,
+    texture_type: int,
+    srgb: bool,
+    fmt_colour: int,
+    fmt_normal: int,
+    fmt_mask: int,
+    discard: bool,
+    mips: bool,
+    mip_filter: int,
+    quality_0: int,
+    quality_1: int,
+    quality_2: int,
+    skip_existing_files: bool,
+) -> None:
+    if relative_path and relative_path != ".":
+        base_directory = base_directory / relative_path
+    full_path = (base_directory / f"{filename}.dds").resolve()
+
+    if full_path.exists():
+        if skip_existing_files:
+            logger.debug(f"Skipping existing file: {full_path}")
+            return
+    else:
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+
+    img = lazy_image.value
+    fmt, quality = _ui.selected(
+        texture_type, {0: fmt_colour, 1: fmt_normal, 2: fmt_mask}, {0: quality_0, 1: quality_1, 2: quality_2}
+    )
+    raw = {
+        **_psdds.defaults(texture_type),
+        "format": fmt,
+        "texture_type": texture_type,
+        "srgb": int(srgb),
+        "filter": mip_filter,
+        "mips": int(mips),
+        "quality": quality,
+        "discard_alpha": int(discard),
+    }
+    settings = _ui.settings_for(preset, raw)
+    data = _psdds.encode(img, settings)  # PsddsError (a RuntimeError) carries psdds's text untrimmed
+    # alpha is unknown here without a second pass; 4 channels is the upper bound
+    channels = 1 if img.ndim == 2 else img.shape[2]
+    eff, _ = _psdds.resolve(settings, channels == 4 and not settings["discard_alpha"])
+    logger.debug(f"Tessalith DDS effective settings (alpha assumed if 4 channels): {eff}")
+    _psdds.write_files([(full_path, data)])
