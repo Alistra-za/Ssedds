@@ -31,7 +31,7 @@ pub fn dds_openable(head: &[u8]) -> bool {
     openable(head, false)
 }
 
-/// [`dds_openable`] for `psdds_decode_depth` (DE4): also true for the float formats `read_dds` maps to RGBA32F,
+/// [`dds_openable`] for `psdds_decode_depth` (DF4): also true for the float formats `read_dds` maps to RGBA32F,
 /// RGBA16F and BC6H: DXGI 2, 10, 95, 96 and D3DFMT 113, 116. Other float formats stay false.
 pub fn dds_openable_float(head: &[u8]) -> bool {
     openable(head, true)

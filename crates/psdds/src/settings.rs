@@ -101,7 +101,7 @@ pub fn quality_labels(format: u32) -> Vec<&'static CStr> {
 }
 
 /// DC32: the formats each texture type offers. BC4 (one channel) only for Linear mask; BC5 (two channels) for
-/// Normal and Linear mask. BC6H and RGBA16F (6, 7) are Colour only (DE2). False for an unknown type or format.
+/// Normal and Linear mask. BC6H and RGBA16F (6, 7) are Colour only (DF2). False for an unknown type or format.
 pub fn format_allowed(texture_type: u32, format: u32) -> bool {
     match texture_type {
         0 => matches!(format, 0 | 1 | 4 | 5 | 6 | 7),
@@ -111,7 +111,7 @@ pub fn format_allowed(texture_type: u32, format: u32) -> bool {
     }
 }
 
-/// DE2: whether the dialog lists `format` for a document of `depth` bits (8, 16 or 32): allowed for the type, and the
+/// DF2: whether the dialog lists `format` for a document of `depth` bits (8, 16 or 32): allowed for the type, and the
 /// HDR formats (6, 7) only for 16 and 32-bit documents. False for any other depth.
 pub fn format_offered(texture_type: u32, format: u32, depth: u32) -> bool {
     matches!(depth, 8 | 16 | 32)
@@ -235,7 +235,7 @@ pub fn resolve(
 }
 
 /// The greying rules: the values the dialog shows and the encoder uses, which controls are editable, and whether
-/// Discard transparency is (DE2: it is ticked and greyed where the format stores no alpha).
+/// Discard transparency is (DF2: it is ticked and greyed where the format stores no alpha).
 pub fn resolve_depth(
     s: &PsddsSettings,
     has_alpha: bool,
@@ -270,7 +270,7 @@ pub fn resolve_depth(
     let colour = s.texture_type == 0;
     // R1: only BC1, BC3, BC7 and RGBA8 have an _SRGB form.
     let srgb_capable = matches!(s.format, 0 | 1 | 4 | 5);
-    // DE2 (amends DC36): formats that store no alpha show Discard transparency ticked and greyed.
+    // DF2 (amends DC36): formats that store no alpha show Discard transparency ticked and greyed.
     let discard_enabled = matches!(s.format, 1 | 4 | 5 | 7);
     let mut controls = PsddsControls {
         srgb_enabled: u32::from(colour && srgb_capable),

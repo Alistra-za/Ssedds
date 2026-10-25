@@ -182,7 +182,7 @@ int16 write_merged(FormatRecord *r, intptr_t *data, const ReadChannelDesc *const
     delete g->save; // a stale state from an earlier save that never reached WriteFinish
     auto *s = new SaveState;
     g->save = s;
-    // shortcut: the whole image as floats (about 4 GiB at 16384 x 16384) plus the engine's work, and a 32-bit save of that size writes an RGBA16F file over the Open cap (preflight B11, Note DE6); fine at sane sizes, stream or refuse early if it bites.
+    // shortcut: the whole image as floats (about 4 GiB at 16384 x 16384) plus the engine's work, and a 32-bit save of that size writes an RGBA16F file over the Open cap (preflight B11, Note DF6); fine at sane sizes, stream or refuse early if it bites.
     s->rgba.resize(size_t(width) * size_t(height) * 4);
     s->rows_per_band = band_rows(row_bytes, height, kBandCap);
     s->band.resize(size_t(row_bytes) * size_t(s->rows_per_band));
@@ -302,7 +302,7 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
     g->save = nullptr;
     auto *s = new SaveState;
     g->save = s;
-    // shortcut: the whole image as floats (about 4 GiB at 16384 x 16384) plus the engine's work, and a 32-bit save of that size writes an RGBA16F file over the Open cap (preflight B11, Note DE6); fine at sane sizes, stream or refuse early if it bites.
+    // shortcut: the whole image as floats (about 4 GiB at 16384 x 16384) plus the engine's work, and a 32-bit save of that size writes an RGBA16F file over the Open cap (preflight B11, Note DF6); fine at sane sizes, stream or refuse early if it bites.
     s->rgba.resize(size_t(width) * size_t(height) * 4);
     s->rows_per_band = band_rows(row_bytes, height, kBandCap);
     s->band.resize(size_t(row_bytes) * size_t(s->rows_per_band));

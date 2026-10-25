@@ -85,7 +85,7 @@ fn nan_and_infinities_encode_as_their_clamped_copy() {
     check(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.5, -0.25]);
 }
 
-/// DE3: only a 32-bit Colour document skips the clamp; 8 and 16 bits clamp as before.
+/// DF3: only a 32-bit Colour document skips the clamp; 8 and 16 bits clamp as before.
 #[test]
 fn clamp_holds_at_depth_8_and_16() {
     for depth in [8, 16] {

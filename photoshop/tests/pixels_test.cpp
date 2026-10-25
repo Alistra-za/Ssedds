@@ -168,7 +168,7 @@ static void filter_file_claims_only_openable_headers() {
     header(h, sizeof h, "DX10", 0, 98, 0, 1);
     check(dds_header_openable(h, 148), __func__, "DX10 BC7, array size 1, opens");
     header(h, sizeof h, "DX10", 0, 95, 0, 1);
-    check(dds_header_openable(h, 148), __func__, "BC6H UF16 claimed (DE7)");
+    check(dds_header_openable(h, 148), __func__, "BC6H UF16 claimed (DF7)");
     header(h, sizeof h, "DX10", 0, 96, 0, 1);
     check(dds_header_openable(h, 148), __func__, "BC6H SF16 claimed");
     header(h, sizeof h, "DX10", 0, 10, 0, 1);

@@ -72,7 +72,7 @@ int32_t psdds_preset_settings(uint32_t i, PsddsSettings *out);
  * anyway (alpha kept in BC3/BC7/RGBA8; discard_alpha 1 never keeps it), the filter greys and shows
  * Box. With mips 0 the filter greys too, keeping its value.
  * This is the 8-bit form: BC6H and RGBA16F (6, 7) become the type's default format. Formats 8 and up give -1.
- * Since ABI 3 (Note DE2) the effective discard_alpha is 1 for every format that stores no alpha (BC1, BC4, BC5,
+ * Since ABI 3 (Note DF2) the effective discard_alpha is 1 for every format that stores no alpha (BC1, BC4, BC5,
  * BC6H), whatever was passed; the encoded bytes of BC1/BC4/BC5 are unchanged (alpha was removed for them already). */
 int32_t psdds_resolve(const PsddsSettings *input, uint32_t has_alpha, PsddsSettings *effective,
                       PsddsControls *controls);
@@ -111,7 +111,7 @@ int32_t psdds_encode(const float *rgba, uint32_t width, uint32_t height, uint32_
 /* psdds_encode for a document of `depth` bits: 8, 16 or 32 (anything else: "depth <d> out of range", before rgba is
  * read). psdds_encode is this call with depth 8. At depth 8 and 16 the input is 0..1 floats as above. At depth 32 it is
  * Photoshop's raw samples: a Colour image is linear light (RGB unchanged, alpha clamped; the engine maps NaN and -inf to
- * 0, +inf to 65504 for BC6H/RGBA16F and 1 otherwise), every other type is clamped as above (Note DE3). BC6H and
+ * 0, +inf to 65504 for BC6H/RGBA16F and 1 otherwise), every other type is clamped as above (Note DF3). BC6H and
  * RGBA16F need depth 16 or 32 (psdds_resolve_depth); at depth 8 they fall back to the type's default format. */
 int32_t psdds_encode_depth(const float *rgba, uint32_t width, uint32_t height, uint32_t has_alpha, uint32_t depth,
                            const PsddsSettings *settings, PsddsBuf *out, char *err, size_t err_cap);
@@ -123,7 +123,7 @@ int32_t psdds_encode_depth(const float *rgba, uint32_t width, uint32_t height, u
  * Returns 0 on success; otherwise non-zero, *out empty, and the reason in err (NULL or err_cap 0: no text). */
 int32_t psdds_decode(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *height, uint32_t *has_alpha,
                      PsddsBuf *out, char *err, size_t err_cap);
-/* psdds_decode that also opens HDR (Note DE4). *depth = 8: every format psdds_decode opens; out and has_alpha are
+/* psdds_decode that also opens HDR (Note DF4). *depth = 8: every format psdds_decode opens; out and has_alpha are
  * byte-identical to it. *depth = 32: BC6H UF16/SF16, RGBA16F and RGBA32F; out holds width*height*16 bytes of
  * native-endian f32 RGBA (top mip). NaN becomes 0 and +-inf becomes +-65504; negatives and values above 1 are kept;
  * BC6H alpha is 1.0. *has_alpha = 1 only for RGBA16F/RGBA32F with an alpha below 254/255 (psdds_alpha_used's rule).

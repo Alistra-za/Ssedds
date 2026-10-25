@@ -241,7 +241,7 @@ unsafe fn encode(
     let n = helpers::check_size(width, height)?;
     let (e, _, _) = settings::resolve_depth(&*s, has_alpha != 0, depth)?;
     let profile = settings::profile_for_depth(&*s, has_alpha != 0, depth)?;
-    // DE3: a 32-bit Colour document is linear light and keeps its range for the engine; everything else is
+    // DF3: a 32-bit Colour document is linear light and keeps its range for the engine; everything else is
     // DD5's clamp of stored values.
     let linear = e.texture_type == 0 && depth == 32;
     let src = std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n); // `[f32; 4]` has f32's alignment
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn psdds_encode(
 /// [`psdds_encode`] for a document of `depth` bits (8, 16 or 32; any other depth is refused as "depth <d> out of
 /// range" before `rgba` is read). Depth 8 and 16 take 0..1 floats as `psdds_encode` does. Depth 32 takes
 /// Photoshop's raw samples: for Colour they are linear light (RGB unchanged, alpha clamped; the engine handles
-/// NaN, negatives and the half range), for every other type they are clamped as before (DE3).
+/// NaN, negatives and the half range), for every other type they are clamped as before (DF3).
 ///
 /// # Safety
 /// As `psdds_encode`.
@@ -447,7 +447,7 @@ pub extern "C" fn psdds_max_file_bytes() -> u64 {
 
 const HDR_REFUSAL: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not open yet.";
 
-/// `depth` null: `psdds_decode` (HDR refused). Otherwise `psdds_decode_depth` (DE4): `*depth` is 8, or 32 for the
+/// `depth` null: `psdds_decode` (HDR refused). Otherwise `psdds_decode_depth` (DF4): `*depth` is 8, or 32 for the
 /// float formats.
 ///
 /// # Safety
@@ -607,7 +607,7 @@ pub unsafe extern "C" fn psdds_decode(
     )
 }
 
-/// [`psdds_decode`] that also opens HDR (DE4). `*depth` is 8 for every format `psdds_decode` opens (`out` and
+/// [`psdds_decode`] that also opens HDR (DF4). `*depth` is 8 for every format `psdds_decode` opens (`out` and
 /// `has_alpha` are then byte-identical to it), or 32 for BC6H UF16/SF16, RGBA16F and RGBA32F: `out` then holds
 /// `width * height * 16` bytes of native-endian f32 RGBA (the top mip; NaN -> 0, ±inf -> ±65504, negatives and values
 /// above 1 kept; BC6H alpha 1.0). Read it with memcpy: the alignment is not promised. `has_alpha` is 1 for the float

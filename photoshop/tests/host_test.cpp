@@ -693,7 +693,7 @@ static int16 interactive_save32(Entry entry, const wchar_t *path, FSample s, Dia
 static uint16_t u16_at(const std::string &s, size_t off) { return off + 2 <= s.size() ? uint16_t(uint8_t(s[off]) | uint8_t(s[off + 1]) << 8) : 0; }
 static uint32_t dxgi_of(const std::string &s) { return s.size() > 132 ? uint32_t(uint8_t(s[128])) : 0; }
 
-// 32-bit band path (DE6): the defaults match the 8-bit file, the HDR formats keep values above 1.
+// 32-bit band path (DF6): the defaults match the 8-bit file, the HDR formats keep values above 1.
 static int hdr_band_save(Entry entry, const wchar_t *path) {
     int bad = 0;
     auto expect = [&](bool ok, const char *what) {
@@ -730,7 +730,7 @@ static int hdr_band_save(Entry entry, const wchar_t *path) {
     return bad;
 }
 
-// 32-bit merged composite (DE1 PASS): the same file as the band path; a port depth mismatch writes nothing.
+// 32-bit merged composite (DF1 PASS): the same file as the band path; a port depth mismatch writes nothing.
 static int hdr_merged_save(Entry entry, const wchar_t *path) {
     int bad = 0;
     auto expect = [&](bool ok, const char *what) {
@@ -779,7 +779,7 @@ static std::string open_planes(Entry entry, const wchar_t *path, FormatRecord *d
     return all;
 }
 
-// Open at 32 bits (DE7): the file at `path`, read back as Photoshop would. Fills *got with the document the plug-in
+// Open at 32 bits (DF7): the file at `path`, read back as Photoshop would. Fills *got with the document the plug-in
 // described and samples[plane][y * 64 + x] with the float planes (4 planes max, 64 x 64).
 struct OpenedDoc {
     FormatRecord described = {};
@@ -819,7 +819,7 @@ static OpenedDoc open_doc(Entry entry, const wchar_t *path) {
     return d;
 }
 
-// Open of the 32-bit formats (DE7): a 32-bit RGB document that keeps values above 1; BC1-BC7 stay 8-bit.
+// Open of the 32-bit formats (DF7): a 32-bit RGB document that keeps values above 1; BC1-BC7 stay 8-bit.
 static int hdr_open(Entry entry, const wchar_t *path) {
     int bad = 0;
     auto expect = [&](bool ok, const char *what) {
@@ -869,7 +869,7 @@ static unsigned long long fnv1a(const std::string &s) {
     return h;
 }
 
-// The 8-bit and 16-bit save bytes and the 8-bit Open planes, hashed before the HDR work (DE1): they must not move.
+// The 8-bit and 16-bit save bytes and the 8-bit Open planes, hashed before the HDR work (DF1): they must not move.
 static int eight_bit_bytes_pinned(Entry entry, const wchar_t *path) {
     const unsigned long long want[4] = {0xbc136741f290c000ull, 0xbc136741f290c000ull, 0x105ec8cf089b51a6ull, 0xd8b29c71aaa18d25ull};
     unsigned long long got[4] = {};

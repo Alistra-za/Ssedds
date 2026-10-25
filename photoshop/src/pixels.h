@@ -10,7 +10,7 @@ int32_t band_rows(int64_t row_bytes, int32_t height, int64_t cap_bytes);
 
 // Converts `pixels` interleaved pixels from Photoshop into RGBA floats in [0, 1] (Note DC6):
 // 8-bit samples (uint8) scale by 1/255, 16-bit samples (uint16, Photoshop's 0..32768 range) by 1/32768,
-// 32-bit samples (float) are copied unchanged: no scale, no clamp, NaN kept (Note DE1).
+// 32-bit samples (float) are copied unchanged: no scale, no clamp, NaN kept (Note DF1).
 // `channels` is 3 (RGB, alpha becomes 1) or 4 (RGB plus the alpha source). `out` receives pixels * 4 floats.
 void to_rgba_floats(const void *src, size_t pixels, int channels, int depth, float *out);
 
@@ -24,7 +24,7 @@ size_t describe_samples(const float *rgba, size_t pixels, char *out, size_t cap)
 // is 4, A (3 drops alpha). `out` receives pixels * planes bytes.
 void deinterleave_rgba8_to_planes(const uint8_t *rgba, size_t pixels, int planes, uint8_t *out);
 
-// The float form of deinterleave_rgba8_to_planes (DE7): `rgba_f32` holds `pixels` RGBA pixels of native-endian f32, read
+// The float form of deinterleave_rgba8_to_planes (DF7): `rgba_f32` holds `pixels` RGBA pixels of native-endian f32, read
 // with memcpy (no alignment assumed); `out` receives `planes` blocks of pixels * 4 bytes.
 void deinterleave_rgba32f_to_planes(const uint8_t *rgba_f32, size_t pixels, int planes, uint8_t *out);
 
@@ -46,11 +46,11 @@ bool floats_have_transparency(const float *rgba, size_t pixels);
 
 // Estimate (PIFormat.h minDataBytes / maxDataBytes) for a width x height save: the smallest file (BC1/BC4, no mips,
 // legacy header) to the largest (RGBA8, full mip chain, DX10 header). Above 8 bits the largest is RGBA16F (8 bytes a pixel):
-// the 32-bit estimate is the same two figures with that size (amends DC24, Note DE6).
+// the 32-bit estimate is the same two figures with that size (amends DC24, Note DF6).
 void dds_size_range(int64_t width, int64_t height, int depth, int64_t *min_bytes, int64_t *max_bytes);
 
 // FilterFile: false when the first len bytes of a file (up to 148: magic, header, DX10 header) show a DDS that Open
 // will refuse, so another DDS plug-in can open it: other float formats (DXGI 94 and the like), cube maps, texture
-// arrays. BC6H, RGBA16F, RGBA32F and FourCC 113/116 are claimed: they open at 32 bits (DE7). A file shorter than
+// arrays. BC6H, RGBA16F, RGBA32F and FourCC 113/116 are claimed: they open at 32 bits (DF7). A file shorter than
 // the headers is claimed, so the reader can say why it fails. Not a DDS (no magic): false.
 bool dds_header_openable(const uint8_t *h, size_t len);

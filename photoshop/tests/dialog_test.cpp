@@ -184,7 +184,7 @@ static void preset_names_and_matching() {
     raw.quality = list[1].settings.quality;
     check(MatchPreset(list, raw, 0, 8) == 1, t, "editing back shows the preset again");
     raw.discard_alpha = 0;
-    check(MatchPreset(list, raw, 1, 8) == 1, t, "BC1 stores no alpha, so discard 0 is the effective 1 (DE2)");
+    check(MatchPreset(list, raw, 1, 8) == 1, t, "BC1 stores no alpha, so discard 0 is the effective 1 (DF2)");
     PsddsSettings k = list[0].settings;
     k.discard_alpha = 1;
     check(MatchPreset(list, k, 1, 8) == -1, t, "discard transparency is part of a preset (with alpha)");
@@ -250,7 +250,7 @@ static void presets_file_is_protected() {
     RemoveDirectoryW(dir.c_str());
 }
 
-// Task 5: the Format list, the Discard checkbox and preset matching follow the document depth (DE5).
+// Task 5: the Format list, the Discard checkbox and preset matching follow the document depth (DF5).
 static void formats_follow_document_depth() {
     const char *t = __func__;
     const uint32_t depths[3] = {8, 16, 32};

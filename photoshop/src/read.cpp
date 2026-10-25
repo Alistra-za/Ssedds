@@ -1,5 +1,5 @@
 // Tessalith DDS: the Open path. Reads the whole file through the host's file handle, decodes the top mip with psdds
-// (RGBA8, or RGBA f32 for BC6H and the float formats, DE7) and hands it to Photoshop as an 8-bit RGB or 32-bit RGB96
+// (RGBA8, or RGBA f32 for BC6H and the float formats, DF7) and hands it to Photoshop as an 8-bit RGB or 32-bit RGB96
 // document in planar bands of whole rows.
 // MIT licence (see photoshop/LICENSE).
 #include "write.h"
@@ -14,7 +14,7 @@ struct ReadState {
     int32 rows_per_band = 0;
     int32 next_top = 0;        // first row of the band after the one the host holds
     int16 planes = 3;
-    uint32_t depth = 8;        // 8: RGBA8 pixels; 32: RGBA f32 pixels (DE7)
+    uint32_t depth = 8;        // 8: RGBA8 pixels; 32: RGBA f32 pixels (DF7)
 };
 
 namespace {
@@ -81,13 +81,13 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
     if (width == 0 || height == 0) return report_error(r, "the DDS image has no pixels.");
     if (s->depth != 8 && s->depth != 32) return report_error(r, "of an internal error in Tessalith DDS.");
     // An opaque file (alpha >= 254, DC23) opens without transparency, so a re-save keeps the colour mip filter
-    // instead of the alpha rule's Box. A float file's has_alpha already applies that rule (psdds, DE4).
+    // instead of the alpha rule's Box. A float file's has_alpha already applies that rule (psdds, DF4).
     const bool translucent = s->depth == 32
                                  ? has_alpha != 0
                                  : opens_with_transparency(s->pixels.data, size_t(width) * size_t(height), has_alpha);
     s->planes = translucent ? 4 : 3;
 
-    // 32-bit documents are RGB96 with no ICC profile (DE7); depth 8 is the old path.
+    // 32-bit documents are RGB96 with no ICC profile (DF7); depth 8 is the old path.
     r->imageMode = s->depth == 32 ? plugInModeRGB96 : plugInModeRGBColor;
     r->depth = int16(s->depth);
     r->planes = s->planes;
