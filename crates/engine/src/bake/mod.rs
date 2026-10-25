@@ -220,20 +220,12 @@ impl BakeJob {
     /// dropped before this returns (DECISIONS R4).
     pub fn load_lengths(&self) -> Result<LengthPyramid, String> {
         let (img, info) = crate::load::load_image(&self.normal).map_err(|e| e.to_string())?;
-        let mut work = crate::ops::preprocess_with(
+        lengths_from(
             img,
-            &self.normal_profile,
             crate::ops::SourceTransfer::of(&info),
-        );
-        if let Some(r) = &self.rnm {
-            crate::rnm::blend::apply(&mut work.img, r, &self.normal_profile)?;
-        }
-        if self.normal_profile.mips.normal_base == crate::config::NormalBase::Renormalize {
-            for px in &mut work.img.px {
-                crate::mips::normalize_vector(px, work.domain);
-            }
-        }
-        Ok(LengthPyramid::build(&work.img))
+            &self.normal_profile,
+            self.rnm.as_ref(),
+        )
     }
 
     /// Peak bytes the bake holds, for `--mem-budget` admission (DECISIONS R4, Task 7 review I2): the `_n`'s
@@ -260,6 +252,27 @@ impl BakeJob {
     pub fn peak_bytes(w: u32, h: u32, decoded: u64) -> u64 {
         u64::from(w) * u64::from(h) * (decoded + 16 + 16)
     }
+}
+
+/// [`BakeJob::load_lengths`] on an image already decoded: preprocess `img` with the `_n`'s `normal_profile`, blend
+/// its `rnm` layers, write mip 0 as the `_n`'s job does (unit length unless `mips.normal_base = keep`) and keep only
+/// the footprint lengths. The image is dropped before this returns.
+pub fn lengths_from(
+    img: Rgba32F,
+    transfer: crate::ops::SourceTransfer,
+    normal_profile: &Profile,
+    rnm: Option<&crate::rnm::RnmJob>,
+) -> Result<LengthPyramid, String> {
+    let mut work = crate::ops::preprocess_with(img, normal_profile, transfer);
+    if let Some(r) = rnm {
+        crate::rnm::blend::apply(&mut work.img, r, normal_profile)?;
+    }
+    if normal_profile.mips.normal_base == crate::config::NormalBase::Renormalize {
+        for px in &mut work.img.px {
+            crate::mips::normalize_vector(px, work.domain);
+        }
+    }
+    Ok(LengthPyramid::build(&work.img))
 }
 
 /// `load::load_image`'s peak on `path`, from its header: [`BakeJob::peak_bytes`] of its size and decoded texel width.

@@ -241,3 +241,216 @@ fn a_profile_fill_survives_an_unset_argument() {
     assert!(img.px.iter().all(|px| px[1] == 1.0));
     assert_eq!(defaulted, vec![2, 3]);
 }
+
+// ---- Task 6: the normal-into-roughness bake from memory (encode_rmaos_set) ----
+
+use engine::bake::plan::{decide_bake, mark_normal_baking, BakeDecision};
+use engine::codes::Code;
+use engine::image::Rgba32F;
+use engine::memory::encode_rmaos_set;
+
+/// A bumpy RGB normal on the 8-bit grid (as the bake goldens' `bumpy`), so the PNG and the memory image hold the
+/// same values; its footprints fall far below `NOISE_FLOOR_L`.
+fn bumpy_u8(w: u32) -> Vec<u8> {
+    let b = |v: f32| ((v * 0.5 + 0.5) * 255.0).round() as u8;
+    (0..w * w)
+        .flat_map(|i| {
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            let nx = 0.6 * (x * 1.3 + y * 0.7).sin();
+            let ny = 0.6 * (x * 0.9 - y * 1.1).cos();
+            let nz = (1.0 - nx * nx - ny * ny).sqrt();
+            [b(nx), b(ny), b(nz)]
+        })
+        .collect()
+}
+fn normal_img(w: u32) -> Rgba32F {
+    let raw = bumpy_u8(w);
+    let mut img = Rgba32F::new(w, w, [0.0, 0.0, 0.0, 1.0]);
+    for (p, c) in img.px.iter_mut().zip(raw.as_chunks::<3>().0) {
+        let [r, g, b] = c.map(|v| f32::from(v) / 255.0);
+        *p = [r, g, b, 1.0];
+    }
+    img
+}
+fn pbr_normal_profile() -> Profile {
+    PresetRegistry::builtin()
+        .unwrap()
+        .profile("cs-quality", Target::Cs, Subtype::PbrNormal)
+        .unwrap()
+}
+
+struct Batch {
+    plan_n: ResolvedJob,
+    plan_rmaos: ResolvedJob,
+    n: Vec<u8>,
+    rmaos: Vec<u8>,
+}
+
+/// A real `Engine::plan` + `Engine::run` of `iron_n.png` (nw x nw) beside `iron_roughness.png` and `iron_ao.png` (64x64),
+/// target cs, preset cs-quality, no user config.
+fn batch(nw: u32) -> Batch {
+    let d = tempfile::tempdir().unwrap();
+    let (r, a) = (rough_px(), ao_px());
+    save(d.path(), "iron_roughness.png", &r);
+    save(d.path(), "iron_ao.png", &a);
+    image::RgbImage::from_raw(nw, nw, bumpy_u8(nw))
+        .unwrap()
+        .save(d.path().join("in/iron_n.png"))
+        .unwrap();
+    let mut req = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+    req.preset = Some("cs-quality".into());
+    req.on_existing = OnExisting::Overwrite;
+    // As the bake tests plan a set: High-confidence sub-types (`_n` in a PBR set: pbr_normal) are taken.
+    req.accept = AcceptSuggestions::High;
+    // The 96x96 case: acknowledged, it gates the write and changes no byte.
+    req.allow = [Code::DimNpot].into();
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "mem-rmaos-bake");
+    let e = Engine::new().unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
+    let find = |st: Subtype| {
+        plan.jobs
+            .iter()
+            .find(|j| j.profile.subtype == st)
+            .unwrap_or_else(|| panic!("no {st:?} job: {:#?}", plan.jobs))
+            .clone()
+    };
+    let (plan_n, plan_rmaos) = (find(Subtype::PbrNormal), find(Subtype::Rmaos));
+    let s = e.run(plan, &rep, &CancelToken::default()).unwrap();
+    assert_eq!(s.converted, 2, "{:#?}", sink.take());
+    Batch {
+        n: std::fs::read(&plan_n.output).unwrap(),
+        rmaos: std::fs::read(&plan_rmaos.output).unwrap(),
+        plan_n,
+        plan_rmaos,
+    }
+}
+
+fn memory_set(nw: Option<u32>, p: &Profile) -> engine::memory::RmaosSet {
+    let (r, a) = (rough_px(), ao_px());
+    encode_rmaos_set(
+        [Some(ch(&r, N)), None, Some(ch(&a, N)), None],
+        [None; 4],
+        p,
+        nw.map(|w| (normal_img(w), pbr_normal_profile())),
+    )
+    .unwrap()
+}
+
+fn json<T: serde::Serialize>(v: &T) -> serde_json::Value {
+    serde_json::to_value(v).unwrap()
+}
+
+/// The owner's "exactly as in a project export": a chaiNNer pair equals the batch's `_n` and `_rmaos`.
+#[test]
+fn a_baking_pair_equals_the_batch_at_1_to_1_and_2_to_1() {
+    for (nw, shift) in [(64u32, 0i32), (128, 1)] {
+        let b = batch(nw);
+        let bake = b.plan_rmaos.bake.as_ref().expect("the _rmaos must bake");
+        assert_eq!(bake.shift, shift);
+        // Profile check (R12): psdds's choice is the batch's.
+        let mut np = pbr_normal_profile();
+        mark_normal_baking(&mut np);
+        assert_eq!(json(&b.plan_n.profile), json(&np), "{nw}: _n profile");
+        // Task 5 carry: the planned channels and PACK-DEFAULTED are pack_rmaos's.
+        let pk = b.plan_rmaos.pack.as_ref().unwrap();
+        let roles: Vec<String> = pk
+            .channels
+            .iter()
+            .map(|c| match c {
+                ChannelSource::Source { role, .. } => role.id().to_string(),
+                ChannelSource::Default { value } => format!("default {value}"),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(roles, ["roughness", "default 0", "ao", "default 1"], "{nw}");
+        assert_eq!(pk.gray, profile().channels.grayscale_source);
+        let planned_defaults: Vec<String> = b
+            .plan_rmaos
+            .warnings
+            .iter()
+            .filter(|w| w.code == Code::PackDefaulted)
+            .map(|w| w.data["channel"].as_str().unwrap().to_string())
+            .collect();
+        let m = memory_set(Some(nw), &b.plan_rmaos.profile);
+        let names = ["R", "G", "B", "A"];
+        let mem_defaults: Vec<String> = m.defaulted.iter().map(|&i| names[i].to_string()).collect();
+        assert_eq!(planned_defaults, mem_defaults, "{nw}: PACK-DEFAULTED");
+        assert!(m.baked, "{nw}");
+        assert_eq!(m.bake_note, None, "{nw}");
+        assert!(
+            m.normal.as_deref() == Some(&b.n[..]),
+            "{nw}: _n bytes differ"
+        );
+        assert!(m.rmaos == b.rmaos, "{nw}: _rmaos bytes differ");
+        // The bake really changed the bytes.
+        assert!(
+            memory_set(None, &b.plan_rmaos.profile).rmaos != b.rmaos,
+            "{nw}: bake had no effect"
+        );
+        // The one policy-layer difference: the High-confidence alpha suggestion ("alpha is constant 255", the
+        // defaulted specular) takes `alpha.policy = remove`. It changes no byte: the registry profile (`data`) writes
+        // the same `_rmaos`.
+        let mut rp = profile();
+        rp.alpha.policy = AlphaPolicy::Remove;
+        assert_eq!(
+            json(&b.plan_rmaos.profile),
+            json(&rp),
+            "{nw}: _rmaos profile"
+        );
+        let r = memory_set(Some(nw), &profile());
+        assert!(r.rmaos == b.rmaos, "{nw}: registry-profile _rmaos differs");
+    }
+}
+
+#[test]
+fn a_size_that_cannot_bake_notes_why_and_writes_the_unbaked_rmaos() {
+    let b = batch(96);
+    assert!(b.plan_rmaos.bake.is_none());
+    let m = memory_set(Some(96), &profile());
+    assert!(!m.baked);
+    let note = m.bake_note.unwrap();
+    assert!(note.starts_with("variance bake off:"), "{note}");
+    assert!(m.rmaos == memory_set(None, &profile()).rmaos);
+    assert!(m.rmaos == b.rmaos && m.normal.as_deref() == Some(&b.n[..]));
+}
+
+#[test]
+fn no_normal_writes_no_n_and_notes_why() {
+    let m = memory_set(None, &profile());
+    assert!(m.normal.is_none() && !m.baked);
+    assert!(m.bake_note.unwrap().starts_with("no _n"));
+}
+
+#[test]
+fn an_srgb_member_never_bakes() {
+    let mut p = profile();
+    p.color.content = ColorContent::Srgb;
+    let m = memory_set(Some(64), &p);
+    assert!(!m.baked && m.normal.is_some());
+    assert!(m.bake_note.unwrap().contains("sRGB"));
+    assert!(m.rmaos == memory_set(None, &p).rmaos);
+}
+
+#[test]
+fn no_mips_does_not_bake() {
+    let mut p = profile();
+    p.mips.levels = MipLevels::Keyword(MipKeyword::None);
+    let m = memory_set(Some(64), &p);
+    assert!(!m.baked);
+    assert!(m.bake_note.unwrap().contains("no mips"));
+    assert!(m.rmaos == memory_set(None, &p).rmaos);
+}
+
+/// R6: a `_n` that opts out never bakes (reachable only through `decide_bake`: memory has no provenance).
+#[test]
+fn an_opted_out_normal_never_bakes() {
+    assert!(matches!(
+        decide_bake(true, (64, 64), &profile(), (64, 64)),
+        BakeDecision::Never
+    ));
+    assert!(matches!(
+        decide_bake(false, (64, 64), &profile(), (64, 64)),
+        BakeDecision::Bake { shift: 0 }
+    ));
+}
