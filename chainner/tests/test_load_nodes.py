@@ -20,7 +20,8 @@ class LoadNodes(unittest.TestCase):
     def test_load_with_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             scratch = Path(tmp) / "src"
-            shutil.copytree(SRC, scratch, ignore=shutil.ignore_patterns("__pycache__"))
+            # skip an installed copy so the repo's nodes are the ones tested
+            shutil.copytree(SRC, scratch, ignore=shutil.ignore_patterns("__pycache__", "tessalith_dds*"))
             shutil.copytree(REPO / "chainner/tessalith_dds", scratch / "packages/chaiNNer_standard/tessalith_dds",
                             ignore=shutil.ignore_patterns("__pycache__"))
             env = dict(os.environ, CHECK_LEVEL="error", TESSALITH_PSDDS_DLL=str(DLL))
@@ -29,7 +30,9 @@ class LoadNodes(unittest.TestCase):
             line = [x for x in p.stdout.splitlines() if x.startswith("REPORT ")]
             self.assertTrue(line, f"no report (exit {p.returncode}):\n{p.stdout[-2000:]}\n{p.stderr[-2000:]}")
             r = json.loads(line[0][len("REPORT "):])
-        # other packages may fail on this machine (e.g. onnx DLL); only ours count\n        self.assertEqual([e for e in r["errors"] if "tessalith_dds" in e], [])
+        # other packages may fail on this machine (e.g. onnx DLL); only ours count
+        self.assertEqual([e for e in r["errors"] if "tessalith_dds" in e], [])
+        self.assertEqual(r["condition_errors"], [])
         self.assertEqual(r["ids"], ["tessalith:dds:rmaos", "tessalith:dds:save", "tessalith:dds:save_normal"])
         self.assertEqual(r["struct_defs"], 1)
         se = r["side_effects"]

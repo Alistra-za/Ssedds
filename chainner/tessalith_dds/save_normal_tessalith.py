@@ -39,7 +39,8 @@ INPUTS = [
         "Writes `<base>_n.dds`, plus `<base>_rmaos.dds` with RMAOS connected. Existing files are overwritten."
     ),
     _ui.normal_format_input(),
-    if_group(~Condition.type(_ui.N_RMAOS_ID, _pbr.RMAOS_TYPE))(_ui.discard_input(_ui.N_DISCARD_ID)),
+    # shown while RMAOS is unconnected; the frontend checks conditions in its built-in scope, so no TessalithRmaos here
+    if_group(~Condition.type(_ui.N_RMAOS_ID, "any"))(_ui.discard_input(_ui.N_DISCARD_ID)),
     _ui.mips_input(_ui.N_MIPS_ID, _ui.NORMAL),
     *[if_group(c)(q) for c, q in _Q],
     _rmaos_input(),
