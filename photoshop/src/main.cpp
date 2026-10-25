@@ -18,8 +18,7 @@ int16 report_error(FormatRecord *r, const char *message) {
 static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
     switch (selector) {
     case formatSelectorOptionsStart:
-        r->data = nullptr; // no options dialog yet; nothing to look at
-        return noErr;
+        return options_start(r, data);
     case formatSelectorEstimateStart: {
         // About a byte per pixel (BC7) plus a third for the mips and the header.
         const int64_t pixels = int64_t(r->imageSize32.h) * r->imageSize32.v;

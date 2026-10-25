@@ -1,0 +1,26 @@
+// Tessalith DDS: the Save dialog template. MIT licence (see photoshop/LICENSE).
+// Fixed layout: every control is always present; each label comes right before its list, so it names the list
+// for screen readers and its mnemonic moves focus there. Tab order is the order below.
+#include <windows.h>
+#include "dialog.h"
+
+IDD_SAVE DIALOGEX 0, 0, 206, 150
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Tessalith DDS options"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "&Format:", -1, 7, 9, 62, 8
+    COMBOBOX        IDC_FORMAT, 72, 7, 127, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&Texture type:", -1, 7, 27, 62, 8
+    COMBOBOX        IDC_TYPE, 72, 25, 127, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&sRGB:", -1, 7, 45, 62, 8
+    COMBOBOX        IDC_SRGB, 72, 43, 127, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Mip f&ilter:", -1, 7, 63, 62, 8
+    COMBOBOX        IDC_FILTER, 72, 61, 127, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&Mipmaps:", -1, 7, 81, 62, 8
+    COMBOBOX        IDC_MIPS, 72, 79, 127, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&Quality:", -1, 7, 99, 62, 8
+    COMBOBOX        IDC_QUALITY, 72, 97, 127, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "OK", IDOK, 95, 129, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 149, 129, 50, 14
+END

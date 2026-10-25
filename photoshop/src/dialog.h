@@ -1,0 +1,33 @@
+// Tessalith DDS: the Save dialog. MIT licence (see photoshop/LICENSE).
+#pragma once
+
+// Control IDs, shared with dialog.rc (rc.exe reads only the #defines).
+#define IDD_SAVE 100
+#define IDC_FORMAT 1001
+#define IDC_TYPE 1002
+#define IDC_SRGB 1003
+#define IDC_FILTER 1004
+#define IDC_MIPS 1005
+#define IDC_QUALITY 1006
+
+#ifndef RC_INVOKED
+#include <windows.h>
+
+#include "../psdds.h"
+
+// What each control shows and whether it is editable, straight from psdds_resolve.
+struct ControlStates {
+    bool ok;               // false: psdds_resolve refused the input (out-of-range value)
+    PsddsSettings shown;   // the effective values
+    bool srgb_enabled;
+    bool filter_enabled;
+    bool quality_enabled;
+};
+
+// Runs `input` through psdds_resolve with the document's has_alpha (0/1). Format, type and mips are always editable.
+ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha);
+
+// Modal Save options. *inout holds the raw choices (what the user picked, including values of greyed controls) on
+// entry and, after OK, on return. Returns false on Cancel or when the dialog could not be shown.
+bool ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout);
+#endif

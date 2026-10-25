@@ -55,17 +55,22 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\dialog.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\pixels.cpp" />
+    <ClCompile Include="src\settings_store.cpp" />
     <ClCompile Include="src\write.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="psdds.h" />
+    <ClInclude Include="src\dialog.h" />
     <ClInclude Include="src\pixels.h" />
+    <ClInclude Include="src\settings_store.h" />
     <ClInclude Include="src\write.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="TessalithDDS.rc" />
+    <ResourceCompile Include="src\dialog.rc" />
     <None Include="PiPL.json" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
