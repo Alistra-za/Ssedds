@@ -74,8 +74,7 @@ int32_t psdds_decode(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *
                      PsddsBuf *out, char *err, size_t err_cap);
 
 /* Release a buffer from psdds_encode or psdds_decode. Pass the PsddsBuf exactly as returned (data and len unchanged),
- * exactly
- * once, then set data = NULL; a second free is a double free. An empty buffer (data NULL) is a no-op. */
+ * exactly once, then set data = NULL; a second free is a double free. An empty buffer (data NULL) is a no-op. */
 void psdds_free(PsddsBuf buf);
 
 #ifdef __cplusplus
