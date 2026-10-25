@@ -339,3 +339,26 @@ fn discard_transparency_saves_opaque() {
         );
     }
 }
+
+#[test]
+fn same_input_gives_same_bytes() {
+    // Owner saw two saves of one document differ by a few levels; this pins the encoder side.
+    let (w, h) = (512, 512);
+    let mut px = noise(w, h);
+    for a in px.iter_mut().skip(3).step_by(4) {
+        *a = 1.0;
+    }
+    for quality in 0..psdds::psdds_quality_count(BC7) {
+        let s = PsddsSettings {
+            quality,
+            ..settings(BC7, 0)
+        };
+        let first = encode(&px, w, h, false, &s).unwrap();
+        for _ in 0..3 {
+            assert!(
+                encode(&px, w, h, false, &s).unwrap() == first,
+                "BC7 quality {quality}: bytes changed between runs"
+            );
+        }
+    }
+}
