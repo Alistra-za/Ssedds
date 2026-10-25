@@ -102,6 +102,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         int w = DialogLists.Formats.Concat(DialogLists.Types).Max(c => TextRenderer.MeasureText(c.Label, _format.Font).Width)
                 + SystemInformation.VerticalScrollBarWidth + LogicalToDeviceUnits(12);
         _preset.Width = _type.Width = _format.Width = w;
+        FillPresets(); // again, now that the box width is known (DropDownWidth)
         Sync(null); // also applies a measurement that arrived before the handle existed (ruling 7)
         _preset.Select(); // initial focus: Preset (dialog.rc's first tab stop)
     }
@@ -168,6 +169,10 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         _preset.Items.Clear();
         _preset.Items.Add("Custom");
         foreach (var p in _presets.List) _preset.Items.Add(p.Name);
+        // the open list shows long names (up to 64 characters) in full; the closed box truncates, as Win32 does
+        int widest = _presets.List.Select(p => TextRenderer.MeasureText(p.Name, _preset.Font).Width).DefaultIfEmpty(0).Max()
+                     + SystemInformation.VerticalScrollBarWidth + LogicalToDeviceUnits(12);
+        _preset.DropDownWidth = Math.Max(_preset.Width, Math.Min(widest, LogicalToDeviceUnits(400)));
         _refreshing = was;
     }
 
