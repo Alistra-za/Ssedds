@@ -33,7 +33,7 @@ try {
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $p.Handle  # keeps the exit code readable after exit
     if (-not $p.WaitForExit(240000)) {
-        & taskkill.exe /T /F /PID $p.Id | Out-Null
+        & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id | Out-Null  # not always on PATH
         throw 'gimp-console did not finish in 240 s; killed it and its plug-ins'
     }
     $log = (Get-Content -Raw $stdout) + "`n" + (Get-Content -Raw $stderr)
