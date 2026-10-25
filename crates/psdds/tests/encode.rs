@@ -87,6 +87,14 @@ fn encode_matches_engine() {
             assert!(got == want, "type {ty} format {f}");
         }
     }
+    // BC7 Max needs the patch-0002 bc7e objects; it must encode, not fail.
+    let max = PsddsSettings {
+        quality: 6,
+        ..settings(BC7, 0)
+    };
+    let px = gradient(4, 4, true);
+    let want = encode_image(image(&px, 4, 4), &profile_for(&max, true).unwrap()).unwrap();
+    assert!(encode(&px, 4, 4, true, &max).unwrap() == want, "BC7 Max");
 }
 
 #[test]
@@ -164,7 +172,8 @@ fn bad_input_is_an_error_not_a_panic() {
         let rc = unsafe { psdds_encode(rgba, w, h, 0, s, out, err.as_mut_ptr(), err.len()) };
         assert_ne!(rc, 0);
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_bytes();
-        assert!(!msg.is_empty() && msg.len() <= 15, "{msg:?}");
+        // Every message is longer than 15 bytes, so each one is cut to fit with its NUL.
+        assert_eq!(msg.len(), 15, "{msg:?}");
         std::str::from_utf8(msg).unwrap().to_owned()
     };
     call(std::ptr::null(), 4, 4, &ok, &mut out);
