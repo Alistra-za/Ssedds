@@ -97,6 +97,82 @@ class T(unittest.TestCase):
         self.assertEqual(st.shown(ps, ps[0][1], False), 0)
         self.assertEqual(P.PresetState(DLL.resolve, 5).shown(ps, ps[0][1], False), 0)
 
+    # Task 5: the logic the export dialog's refresh() relies on (M5: pure, gi-free).
+    def test_raw_kept_across_type_switch(self):
+        raw = DLL.defaults(P.COLOUR)
+        raw.srgb = 1
+        raw.texture_type = P.NORMAL
+        e, c = DLL.resolve(raw, False)
+        self.assertEqual((e.srgb, c.srgb_enabled), (0, 0))
+        raw.texture_type = P.COLOUR
+        self.assertEqual(DLL.resolve(raw, False)[0].srgb, 1)  # DC19: Normal -> Colour restores sRGB On
+        self.assertEqual(raw.srgb, 1)
+
+    def test_raw_format_kept_across_type_switch(self):
+        raw = DLL.defaults(P.NORMAL)
+        raw.format = P.BC5
+        raw.texture_type = P.COLOUR
+        self.assertEqual(DLL.resolve(raw, False)[0].format, DLL.defaults(P.COLOUR).format)
+        self.assertNotIn(P.BC5, DLL.allowed_formats(P.COLOUR))
+        raw.texture_type = P.NORMAL
+        self.assertEqual(DLL.resolve(raw, False)[0].format, P.BC5)  # DC33
+
+    def test_quality_from_other_format_falls_back(self):
+        raw = DLL.defaults(P.LINEAR_MASK)
+        raw.format, raw.quality = P.BC4, 6  # 6 is a BC7 index, outside BC4's list
+        q = DLL.resolve(raw, False)[0].quality
+        self.assertLess(q, len(DLL.quality_labels(P.BC4)))
+        other = copy(raw)
+        other.quality = 18
+        self.assertEqual(DLL.resolve(other, False)[0].quality, q)  # the one BC4 default, not a clamp
+        self.assertEqual(raw.quality, 6)  # DC8
+
+    def test_filter_follows_mipmaps(self):
+        def ctl(srgb, mips, alpha, discard=0, flt=P.KAISER):
+            raw = DLL.defaults(P.COLOUR)
+            raw.format, raw.srgb, raw.mips, raw.discard_alpha, raw.filter = P.BC7, srgb, mips, discard, flt
+            e, c = DLL.resolve(raw, alpha)
+            return c.filter_enabled, e.filter
+        self.assertEqual(ctl(1, 0, False)[0], 0)
+        self.assertEqual(ctl(1, 1, False), (1, P.KAISER))
+        self.assertEqual(ctl(1, 1, True), (0, P.BOX))  # DC12, DC31
+        self.assertEqual(ctl(1, 1, True, discard=1), (1, P.KAISER))  # DC36
+        d = DLL.defaults(P.COLOUR)
+        self.assertEqual(d.srgb, 0)
+        self.assertEqual(DLL.resolve(d, False)[1].filter_enabled, 1)  # DC39
+        for srgb in (0, 1):
+            self.assertEqual(ctl(srgb, d.mips, False)[0], 1)
+            self.assertEqual(ctl(srgb, d.mips, True), (0, P.BOX))
+
+    def test_seed_pick_dc40(self):
+        ps = DLL.presets()
+        st = P.PresetState(DLL.resolve, len(ps))
+        st.pick(1)
+        raw = P.apply_preset(DLL.defaults(P.COLOUR), ps, 1)
+        self.assertEqual(raw.discard_alpha, 1)
+        self.assertEqual(st.shown(ps, raw, False), 1)  # discard ignored in the match, seed 1 still shown
+        twin = ps + [("twin", copy(ps[0][1]))]
+        st = P.PresetState(DLL.resolve, len(twin))
+        self.assertEqual(st.shown(twin, ps[0][1], False), 0)
+        st.pick(5)
+        self.assertEqual(st.shown(twin, P.apply_preset(raw, twin, 5), False), 5)
+
+    def test_seed_pick_sets_all_seven_raw(self):
+        ps = DLL.presets()
+        for i, (_, s) in enumerate(ps):
+            raw = P.apply_preset(DLL.defaults(P.NORMAL), ps, i)
+            self.assertEqual(raw.key(), s.key())
+            self.assertEqual(DLL.match_preset(ps, raw, False), i)
+            self.assertEqual(DLL.match_preset(ps, raw, True), i)
+        self.assertEqual(P.apply_preset(DLL.defaults(P.NORMAL), ps, 1).discard_alpha, 1)
+        raw = DLL.defaults(P.NORMAL)
+        raw.quality = 3
+        for custom in (None, -1):  # M4: Custom is None/-1 in seed-index space; raw is left alone
+            self.assertIs(P.apply_preset(raw, ps, custom), raw)
+        raw2 = P.apply_preset(raw, ps, 0)
+        raw2.format = P.RGBA8
+        self.assertEqual(ps[0][1].format, DLL.presets()[0][1].format)  # a copy, never the seed itself
+
     def test_preset_state_pick_validates(self):
         st = P.PresetState(DLL.resolve, len(DLL.presets()))
         for bad in (5, -2, 99):

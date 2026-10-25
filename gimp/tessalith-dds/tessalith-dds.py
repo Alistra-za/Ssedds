@@ -11,7 +11,7 @@ gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, GLib, GObject  # noqa: E402
 
 from psdds_ctypes import (BC1, BC3, BC4, BC5, BC7, BOX, COLOUR, KAISER, LINEAR_MASK, MITCHELL,  # noqa: E402
-                          NORMAL, RGBA8, TENT, Psdds, PsddsError, Settings)
+                          NORMAL, RGBA8, TENT, PresetState, Psdds, PsddsError, Settings, apply_preset)
 from tdds_pixels import band_rows  # noqa: E402
 
 LOAD_PROC = "file-tessalith-dds-load"
@@ -135,6 +135,114 @@ def _write_atomic(path, data):
         raise
 
 
+RAW_ARGS = ("format", "texture-type", "srgb", "mip-filter", "mipmaps", "quality", "discard-alpha")
+SHOWN_RAW = {"shown-format": "format", "shown-srgb": "srgb", "shown-mip-filter": "mip-filter",
+             "shown-quality": "quality"}
+ENABLED = {"shown-srgb": "srgb-enabled", "shown-mip-filter": "mip-filter-enabled",
+           "shown-quality": "quality-enabled"}
+# DC33/DC43 rows; Discard transparency shares the Format row's right-hand slot, under sRGB.
+ROWS = (("preset",), ("texture-type", "shown-srgb"), ("shown-format", "discard-alpha"),
+        ("mipmaps", "shown-mip-filter"), ("shown-quality",))
+
+
+def _set_raw(config, s):
+    config.set_property("format", _nick(FORMATS, s.format))
+    config.set_property("texture-type", _nick(TYPES, s.texture_type))
+    config.set_property("srgb", bool(s.srgb))
+    config.set_property("mip-filter", _nick(FILTERS, s.filter))
+    config.set_property("mipmaps", bool(s.mips))
+    config.set_property("quality", s.quality)
+    config.set_property("discard-alpha", bool(s.discard_alpha))
+
+
+def show_dialog(procedure, config, image, has_alpha):
+    """The export dialog (DC33); has_alpha is the pixels' (DC31). False on Cancel."""
+    gi.require_version("GimpUi", "3.0")
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import GimpUi, Gtk  # only here: headless runs never load GTK
+
+    def fill_store(store, rows):
+        store.clear()  # IntStore.new([]) starts with one empty row
+        for value, label in rows:
+            store.set(store.append(), [GimpUi.IntStoreColumns.VALUE, GimpUi.IntStoreColumns.LABEL], [value, label])
+
+    GimpUi.init(EXPORT_PROC)
+    psdds = Psdds()
+    presets = psdds.presets()  # read once per dialog
+    state = PresetState(psdds.resolve, len(presets))
+    labels = {f: label for _, f, label in FORMATS}
+    stores = {n: GimpUi.IntStore.new([]) for n in ("preset", "shown-format", "shown-mip-filter", "shown-quality")}
+    fill_store(stores["preset"], [(0, "Custom")] + [(i + 1, name) for i, (name, _) in enumerate(presets)])
+    fill_store(stores["shown-mip-filter"], [(f, label) for _, f, label in FILTERS])
+    shown = {}  # the type and format the stores were last built for
+    busy = [False]
+
+    def refresh(*_):
+        if busy[0]:
+            return
+        busy[0] = True  # store rebuilds and the shown-* writes below bounce through notify
+        try:
+            raw = raw_settings(config)
+            eff, ctl = psdds.resolve(raw, has_alpha)
+            if shown.get("type") != eff.texture_type:
+                fill_store(stores["shown-format"], [(f, labels[f]) for f in psdds.allowed_formats(eff.texture_type)])
+                shown["type"] = eff.texture_type
+            if shown.get("format") != eff.format:
+                fill_store(stores["shown-quality"], list(enumerate(psdds.quality_labels(eff.format))))
+                shown["format"] = eff.format
+            config.set_property("shown-format", eff.format)
+            config.set_property("shown-srgb", bool(eff.srgb))
+            config.set_property("shown-mip-filter", eff.filter)
+            config.set_property("shown-quality", eff.quality)
+            config.set_property("srgb-enabled", bool(ctl.srgb_enabled))
+            config.set_property("mip-filter-enabled", bool(ctl.filter_enabled))
+            config.set_property("quality-enabled", bool(ctl.quality_enabled))
+            config.set_property("preset", state.shown(presets, raw, has_alpha) + 1)  # M4: list 0 = Custom
+        finally:
+            busy[0] = False
+
+    def on_shown(cfg, pspec):
+        # Only a user edit of an enabled control reaches the raw argument; greyed ones keep the raw pick.
+        flag = ENABLED.get(pspec.name)
+        if busy[0] or (flag and not cfg.get_property(flag)):
+            return
+        v = cfg.get_property(pspec.name)
+        items = {"shown-format": FORMATS, "shown-mip-filter": FILTERS}.get(pspec.name)
+        cfg.set_property(SHOWN_RAW[pspec.name], _nick(items, v) if items else v)
+
+    def on_preset(cfg, _):
+        if busy[0]:
+            return
+        seed = cfg.get_property("preset") - 1  # M4: -1 = Custom
+        state.pick(seed)
+        busy[0] = True  # one refresh after all seven, not one per argument
+        try:
+            _set_raw(cfg, apply_preset(raw_settings(cfg), presets, seed))
+        finally:
+            busy[0] = False
+        refresh()
+
+    dialog = GimpUi.ExportProcedureDialog.new(procedure, config, image)
+    for n, store in stores.items():
+        dialog.get_int_combo(n, store)
+    refresh()
+    for n in RAW_ARGS:
+        config.connect(f"notify::{n}", refresh)
+    for n in SHOWN_RAW:
+        config.connect(f"notify::{n}", on_shown)
+    config.connect("notify::preset", on_preset)
+    ids = []
+    for i, props in enumerate(ROWS):
+        ids.append(f"tdds-row-{i}")
+        dialog.fill_box(ids[-1], list(props)).set_orientation(Gtk.Orientation.HORIZONTAL)
+    for prop, flag in ENABLED.items():
+        dialog.set_sensitive(prop, True, config, flag, False)
+    dialog.fill(ids)
+    ok = dialog.run()
+    dialog.destroy()
+    return ok
+
+
 def export_dds(procedure, run_mode, image, file, options, metadata, config, data):
     path = file.get_path()
     if path is None:
@@ -147,6 +255,10 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
     try:
         psdds = Psdds()
         w, h, has_alpha, rgba = export_pixels(psdds, img)
+        # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config; NONINTERACTIVE
+        # uses the arguments as given. The dialog comes after the pixel read so its greying matches (DC31).
+        if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha):
+            return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, None)
         s = raw_settings(config)
         out = psdds.encode(rgba, w, h, has_alpha and not s.discard_alpha, s)  # DC36
         del rgba
@@ -213,6 +325,20 @@ class TessalithDds(Gimp.PlugIn):
         proc.add_boolean_argument("mipmaps", "Mipmaps", "Write mipmaps", bool(d.mips), rw)
         proc.add_boolean_argument("discard-alpha", "Discard transparency", "Save opaque", bool(d.discard_alpha), rw)
         proc.add_int_argument("quality", "Quality", "Quality index", 0, top_q, d.quality, rw)
+        # Dialog state (aux, never passed to the encode): the shown-* widgets show psdds's effective values
+        # while the raw arguments above keep the user's picks (DC19).
+        proc.add_int_aux_argument("preset", "Preset", "0 = Custom, then the psdds seeds", 0,
+                                  len(psdds.presets()), 0, rw)
+        proc.add_int_aux_argument("shown-format", "Format", "Shown format", 0, max(f for _, f, _ in FORMATS),
+                                  d.format, rw)
+        proc.add_boolean_aux_argument("shown-srgb", "sRGB", "Shown sRGB", bool(d.srgb), rw)
+        # Measured on 3.0.4: add_choice_aux_argument crashed the plug-in (freed Gimp.Choice in the config
+        # class), so the shown filter is an int combo like shown-format.
+        proc.add_int_aux_argument("shown-mip-filter", "Filter", "Shown mip filter", 0,
+                                  max(f for _, f, _ in FILTERS), d.filter, rw)
+        proc.add_int_aux_argument("shown-quality", "Quality", "Shown quality", 0, top_q, d.quality, rw)
+        for flag in ENABLED.values():
+            proc.add_boolean_aux_argument(flag, flag, "Dialog greying", True, rw)
         return proc
 
     @staticmethod

@@ -50,6 +50,13 @@ def match_preset(presets, raw, has_alpha, preferred, resolve):
     return hits[0] if hits else -1
 
 
+def apply_preset(raw, presets, index):
+    """A copy of seed index's seven values; Custom (None or -1, M4) leaves raw as it is (DC45)."""
+    if index is None or index == -1:
+        return raw
+    return Settings.from_buffer_copy(presets[index][1])
+
+
 class PresetState:
     """DC40 picked seed, DC45 custom. Indices are psdds seed indices (M4); None or -1 = Custom."""
 

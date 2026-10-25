@@ -215,11 +215,11 @@ def _gradient(w, h, alpha=255):
                  for v in ((x * 4) % 256, (y * 4) % 256, ((x + y) * 2) % 256, alpha))
 
 
-def _export_run(img, name, **args):
-    """Runs the export procedure NONINTERACTIVE; returns (result values, path)."""
+def _export_run(img, name, run_mode=Gimp.RunMode.NONINTERACTIVE, **args):
+    """Runs the export procedure (NONINTERACTIVE by default); returns (result values, path)."""
     path = _path(name)
     cfg = Gimp.get_pdb().lookup_procedure(EXPORT).create_config()
-    cfg.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    cfg.set_property("run-mode", run_mode)
     cfg.set_property("image", img)
     cfg.set_property("file", Gio.File.new_for_path(path))
     for k, v in args.items():
@@ -227,10 +227,10 @@ def _export_run(img, name, **args):
     return Gimp.get_pdb().lookup_procedure(EXPORT).run(cfg), path
 
 
-def _export(img, name, **args):
+def _export(img, name, run_mode=Gimp.RunMode.NONINTERACTIVE, **args):
     """Exports and returns the file's bytes."""
     assert Gimp.get_pdb().lookup_procedure(EXPORT) is not None, f"{EXPORT} is not registered"
-    res, path = _export_run(img, name, **args)
+    res, path = _export_run(img, name, run_mode, **args)
     assert res.index(0) == Gimp.PDBStatusType.SUCCESS, \
         f"export status {res.index(0)}: {res.index(1) if res.length() > 1 else ''}"
     with open(path, "rb") as f:
@@ -464,6 +464,35 @@ def export_procedure_wins_for_dds():
     img.delete()
 
 
+def export_noninteractive_never_opens_dialog():
+    # Measured: on Windows gimp-console -i still shows a dialog, so a wrong run-mode branch hangs this case until
+    # run_batch.ps1's 240 s kill (FAIL). The arguments are used as given.
+    img = _image(8, 8, _rgb(_gradient(8, 8)), "R'G'B' u8", Gimp.ImageType.RGB_IMAGE)
+    s = psdds.defaults(COLOUR)
+    s.format = RGBA8
+    assert _export(img, "nonint.dds", format="rgba8") == _direct(img, False, s), "arguments were not used as given"
+    img.delete()
+
+
+def export_with_last_vals_skips_dialog():
+    """WITH_LAST_VALS opens no dialog and uses GIMP's remembered values (here a .last file in the temp profile)."""
+    settings = os.path.join(Gimp.directory(), "plug-in-settings")
+    os.makedirs(settings, exist_ok=True)
+    last = os.path.join(settings, f"GimpProcedureConfigRun-{EXPORT}.last")
+    assert os.path.dirname(OUT) in last, f"{last} is outside the test's temp profile"
+    with open(last, "w", encoding="utf-8") as f:
+        f.write('(format "rgba8")\n(mipmaps no)\n')
+    img = _image(8, 8, _rgb(_gradient(8, 8)), "R'G'B' u8", Gimp.ImageType.RGB_IMAGE)
+    try:
+        got = _export(img, "lastvals.dds", Gimp.RunMode.WITH_LAST_VALS, format="bc1")
+        s = psdds.defaults(COLOUR)
+        s.format, s.mips = RGBA8, 0
+        assert got == _direct(img, False, s), "WITH_LAST_VALS did not use the remembered values"
+    finally:
+        os.remove(last)
+        img.delete()
+
+
 CASES = {f.__name__: f for f in (
     load_rgba8_opaque_opens_rgb,
     load_alpha_opens_rgba,
@@ -490,6 +519,8 @@ CASES = {f.__name__: f for f in (
     export_defaults_have_srgb_off,
     export_disallowed_format_saves_default,
     export_procedure_wins_for_dds,
+    export_noninteractive_never_opens_dialog,
+    export_with_last_vals_skips_dialog,
 )}
 
 _results = {}
