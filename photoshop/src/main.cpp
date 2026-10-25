@@ -32,9 +32,10 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
         return noErr;
     }
     case formatSelectorReadPrepare:
-    case formatSelectorWritePrepare:
         r->maxData = 0; // the plug-in uses its own memory for the image (PIFormat.h maxData)
         return noErr;
+    case formatSelectorWritePrepare:
+        return write_prepare(r, data);
     case formatSelectorWriteStart:
         return write_start(r, data);
     case formatSelectorWriteContinue:
@@ -48,12 +49,13 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
         return read_continue(r, data);
     case formatSelectorReadFinish:
         return read_finish(r, data);
+    case formatSelectorWriteLayerFinish:
+        return write_layer_finish(r, data);
     case formatSelectorReadLayerStart:
     case formatSelectorReadLayerContinue:
     case formatSelectorReadLayerFinish:
     case formatSelectorWriteLayerStart:
     case formatSelectorWriteLayerContinue:
-    case formatSelectorWriteLayerFinish:
         // Claimed only so Save As lists the format (DC26); DDS has no layers, so no layer pixels are requested.
         r->data = nullptr;
         r->theRect32 = VRect{};

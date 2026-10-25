@@ -9,12 +9,12 @@ A Photoshop file-format plugin that opens and saves Skyrim SE/AE DDS textures, u
 ## Install
 1. Close Photoshop.
 2. Copy `TessalithDDS.8bi` into Photoshop's `Plug-ins` folder, for example `C:\Program Files\Adobe\Adobe Photoshop 2025\Plug-ins\`. Writing there needs administrator rights.
-3. Start Photoshop. **Tessalith DDS** appears in the Save As and Save a Copy format lists, and Open recognises `.dds` files.
+3. Start Photoshop. **Tessalith DDS** appears in the Save a Copy format list and should appear under Save As too (Photoshop 2025 test by the owner pending). Open recognises `.dds` files.
 
 The plugin is unsigned, so Windows SmartScreen may warn when you download or unzip it. Choose "More info", then "Run anyway" (or unblock the zip in its file properties) before copying. To uninstall, delete the `.8bi`.
 
 ## Save
-Choose File > Save As (or Save a Copy) > **Tessalith DDS**. The plugin saves the merged image: all visible layers flattened, plus one alpha (the layer transparency, else the first alpha channel). Layers, extra alpha channels and spot channels are not kept, so keep a PSD of layered work. If Photoshop lists Tessalith DDS only under Save a Copy for some document, use Save a Copy, or turn on Preferences > File Handling > "Enable legacy Save As". The options dialog has:
+Choose File > Save As (should be listed there; Photoshop 2025 test by the owner pending) or Save a Copy > **Tessalith DDS**. The plugin saves the merged image: all visible layers flattened, plus one alpha (the layer transparency, else the first alpha channel). Layers, extra alpha channels and spot channels are not kept, so keep a PSD of layered work. If Photoshop does not hand the plugin the image, the save stops with "Tessalith DDS could not read the image from Photoshop, so nothing was saved." and the plugin writes nothing. If Photoshop lists Tessalith DDS only under Save a Copy for some document, use Save a Copy, or turn on Preferences > File Handling > "Enable legacy Save As". The options dialog has:
 - **Format**: BC1, BC3, BC4, BC5, BC7 or uncompressed RGBA8.
 - **Texture type**: Colour, Normal map or Linear mask. It sets the colour handling and mip rules, as in Tessalith's presets.
 - **sRGB**: tags the file as sRGB. It is greyed where the format or type has no sRGB variant (BC4, BC5, Normal, Linear mask).

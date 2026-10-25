@@ -2,7 +2,7 @@
 #
 #   .\photoshop\build.ps1                  Release build (static CRT); prints the .8bi path
 #   .\photoshop\build.ps1 -Configuration Debug
-#   .\photoshop\build.ps1 -Test            build the plugin, then build and run the console tests (unload_test loads the .8bi)
+#   .\photoshop\build.ps1 -Test            build the plugin, then build and run the console tests (host_test loads the .8bi)
 #
 # The Photoshop SDK is read from $env:PS_SDK, or from "tools\adobe photoshop sdk 2026" in the repo's main checkout.
 # Build outputs go to photoshop\build\ (ignored) and the Rust library to target\psdds\.
@@ -65,7 +65,7 @@ if ($Test) {
     $tests = @(
         @{ exe = 'pixels_test.exe'; src = "`"$here\tests\pixels_test.cpp`" `"$here\src\pixels.cpp`""; link = '' },
         @{ exe = 'dialog_test.exe'; src = "`"$here\tests\dialog_test.cpp`" `"$here\src\dialog.cpp`""; link = "/link /LIBPATH:`"$libDir`" $libs" },
-        @{ exe = 'unload_test.exe'; src = "$sdkInc `"$here\tests\unload_test.cpp`""; link = ''; args = @($plugin) }
+        @{ exe = 'host_test.exe'; src = "$sdkInc `"$here\tests\host_test.cpp`""; link = ''; args = @($plugin) }
     )
     $failed = 0
     foreach ($t in $tests) {

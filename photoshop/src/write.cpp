@@ -15,6 +15,9 @@ namespace {
 // psdds refuses larger sides; checked here too so the size message wins over a failed allocation.
 constexpr int32 kMaxSide = 16384;
 
+// A save that ends before the encoded bytes exist; the file was never written to (Note DC27).
+const char kNothingSaved[] = "Tessalith DDS could not read the image from Photoshop, so nothing was saved.";
+
 } // namespace
 
 struct SaveState {
@@ -100,7 +103,10 @@ int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *
         return report_error(r, err[0] ? as_reason(err) : "of an internal error in Tessalith DDS.");
 
     // dataFork is the Windows file handle of the open, empty output file (PIFormat.h).
-    const bool ok = write_all(reinterpret_cast<HANDLE>(r->dataFork), dds.data, dds.len);
+    // The only write of a save, after the encode succeeded. SetEndOfFile drops any old tail if the host passed an
+    // existing file without truncating it.
+    const HANDLE file = reinterpret_cast<HANDLE>(r->dataFork);
+    const bool ok = write_all(file, dds.data, dds.len) && SetEndOfFile(file);
     psdds_free(dds);
     return ok ? noErr : report_error(r, "the DDS file could not be written.");
 }
@@ -111,6 +117,7 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
     static_assert(kPlayInfoDisplay == plugInDialogDisplay, "dialog.h mirrors PIActions.h");
     r->data = nullptr; // no OptionsContinue: the options do not depend on the pixels
     Globals *g = globals_of(data);
+    g->write_started = false; // a new save
     // The same has_alpha the write will pass to psdds (alpha_plane), so the dialog greys what the encoder does.
     const uint32_t has_alpha = alpha_plane(r) >= 0 ? 1 : 0;
     PsddsSettings chosen = load_settings(r->sSPBasic, has_alpha);
@@ -128,6 +135,12 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
 
     g->settings = chosen;
     g->have_settings = true;
+    return noErr;
+}
+
+int16 write_prepare(FormatRecord *r, intptr_t *data) {
+    globals_of(data)->write_started = false; // a new save
+    r->maxData = 0; // the plug-in uses its own memory for the image (PIFormat.h maxData)
     return noErr;
 }
 
@@ -169,6 +182,7 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
     for (int16 i = 0; i < 3; i++) r->planeMap[i] = i;
     if (alpha >= 0) r->planeMap[3] = alpha;
     request_band(r, s, 0);
+    g->write_started = true;
     return noErr;
 }
 
@@ -193,7 +207,17 @@ int16 write_continue(FormatRecord *r, intptr_t *data) {
 }
 
 int16 write_finish(FormatRecord *r, intptr_t *data) {
-    // Reached after a cancel or an error too, when write_continue has not freed the state.
+    // The state survives only when the last band never arrived (a cancel, or a host that stopped sending rows):
+    // nothing was encoded or written. write_continue frees it on the last band and reports its own errors.
+    const bool incomplete = state_of(data) != nullptr;
     free_state(r, data);
-    return noErr;
+    return incomplete ? report_error(r, kNothingSaved) : noErr;
+}
+
+int16 write_layer_finish(FormatRecord *r, intptr_t *data) {
+    // PIFormat.h layerData: the host sets the layer count "prior to calling Start", so layers follow WriteStart.
+    // Layers with no WriteStart in this save mean the composite never comes and no DDS would be written.
+    r->data = nullptr;
+    r->theRect32 = VRect{};
+    return globals_of(data)->write_started ? noErr : report_error(r, kNothingSaved);
 }
