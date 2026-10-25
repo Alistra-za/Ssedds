@@ -199,20 +199,21 @@ int FindPreset(const std::vector<Preset> &list, const std::wstring &name) {
 }
 
 // The effective settings; Discard transparency has no effect without alpha, so it is zeroed there (DC40).
-static bool effective_of(const PsddsSettings &raw, uint32_t has_alpha, PsddsSettings *out) {
+static bool effective_of(const PsddsSettings &raw, uint32_t has_alpha, uint32_t depth, PsddsSettings *out) {
     PsddsControls c;
-    if (psdds_resolve(&raw, has_alpha, out, &c) != 0) return false;
+    uint32_t discard_enabled = 0;
+    if (psdds_resolve_depth(&raw, has_alpha, depth, out, &c, &discard_enabled) != 0) return false;
     if (!has_alpha) out->discard_alpha = 0;
     return true;
 }
 
-int MatchPreset(const std::vector<Preset> &list, const PsddsSettings &raw, uint32_t has_alpha, int preferred) {
+int MatchPreset(const std::vector<Preset> &list, const PsddsSettings &raw, uint32_t has_alpha, uint32_t depth, int preferred) {
     PsddsSettings want, got;
-    if (!effective_of(raw, has_alpha, &want)) return -1;
+    if (!effective_of(raw, has_alpha, depth, &want)) return -1;
     if (preferred >= 0 && size_t(preferred) < list.size() &&
-        effective_of(list[size_t(preferred)].settings, has_alpha, &got) && memcmp(&want, &got, sizeof want) == 0)
+        effective_of(list[size_t(preferred)].settings, has_alpha, depth, &got) && memcmp(&want, &got, sizeof want) == 0)
         return preferred;
     for (size_t i = 0; i < list.size(); i++)
-        if (effective_of(list[i].settings, has_alpha, &got) && memcmp(&want, &got, sizeof want) == 0) return int(i);
+        if (effective_of(list[i].settings, has_alpha, depth, &got) && memcmp(&want, &got, sizeof want) == 0) return int(i);
     return -1;
 }

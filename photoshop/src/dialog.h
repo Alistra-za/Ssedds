@@ -28,11 +28,12 @@ struct ControlStates {
     bool srgb_enabled;     // the sRGB checkbox; checked = shown.srgb
     bool filter_enabled;   // false also with Mipmaps unchecked
     bool quality_enabled;
-    bool formats[6];       // the Format list: psdds_format_allowed(shown.texture_type, PSDDS_BC1 .. PSDDS_RGBA8)
+    bool discard_enabled;  // the Discard transparency checkbox; unchecked-able only for formats that store alpha; checked = shown.discard_alpha
+    bool formats[8];       // the Format list: psdds_format_offered(shown.texture_type, PSDDS_BC1 .. PSDDS_RGBA16F, depth)
 };
 
-// Runs `input` through psdds_resolve with the document's has_alpha (0/1). Format, type and mips are always editable.
-ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha);
+// Runs `input` through psdds_resolve_depth with the document's has_alpha (0/1) and depth (8, 16 or 32). Format, type and mips are always editable.
+ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha, uint32_t depth);
 
 // PIActions.h plugInDialogDisplay (dialogPlayEnum); write.cpp checks it against the SDK's value.
 constexpr int32_t kPlayInfoDisplay = 1;
@@ -46,5 +47,5 @@ enum class DialogResult { Ok, Cancel, Failed };
 
 // Modal Save options. *inout holds the raw choices (what the user picked, including values of greyed controls) on
 // entry and, after Ok, on return. Failed: the dialog could not be created.
-DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout);
+DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, uint32_t depth, PsddsSettings *inout);
 #endif

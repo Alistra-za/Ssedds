@@ -27,7 +27,7 @@ static void dialog_state_follows_resolve() {
     const char *t = __func__;
 
     // Normal + BC7: sRGB greys showing Off, filter greys showing the Normal preset's filter.
-    ControlStates n = FromResolve(make(PSDDS_BC7, PSDDS_NORMAL, 1, PSDDS_KAISER), 0);
+    ControlStates n = FromResolve(make(PSDDS_BC7, PSDDS_NORMAL, 1, PSDDS_KAISER), 0, 8);
     check(n.ok, t, "Normal+BC7 resolves");
     check(!n.srgb_enabled && n.shown.srgb == 0, t, "Normal greys sRGB showing Off");
     check(!n.filter_enabled && n.shown.filter == psdds_defaults(PSDDS_NORMAL).filter, t,
@@ -37,30 +37,30 @@ static void dialog_state_follows_resolve() {
           "Normal+BC7 shows format, type, mips");
 
     // Colour + BC5 (a remembered pick): Colour does not offer BC5, so it shows the Colour default, BC7 (DC32).
-    ControlStates c5 = FromResolve(make(PSDDS_BC5, PSDDS_COLOUR, 1, PSDDS_KAISER), 0);
+    ControlStates c5 = FromResolve(make(PSDDS_BC5, PSDDS_COLOUR, 1, PSDDS_KAISER), 0, 8);
     check(c5.ok && c5.shown.format == PSDDS_BC7, t, "Colour+BC5 resolves to BC7");
     check(c5.srgb_enabled && c5.shown.srgb == 1, t, "Colour+BC5 -> BC7 keeps sRGB editable, On");
 
     // Linear mask + BC5 with sRGB on: no sRGB form, sRGB greys showing Off.
-    ControlStates m5 = FromResolve(make(PSDDS_BC5, PSDDS_LINEAR_MASK, 1, PSDDS_KAISER), 0);
+    ControlStates m5 = FromResolve(make(PSDDS_BC5, PSDDS_LINEAR_MASK, 1, PSDDS_KAISER), 0, 8);
     check(m5.ok && m5.shown.format == PSDDS_BC5, t, "Mask+BC5 kept");
     check(!m5.srgb_enabled && m5.shown.srgb == 0, t, "Mask+BC5 greys sRGB showing Off");
     check(m5.quality_enabled, t, "Mask+BC5 quality editable");
 
     // Colour + RGBA8, no alpha: sRGB and filter editable, quality greyed at 0.
-    ControlStates r = FromResolve(make(PSDDS_RGBA8, PSDDS_COLOUR, 1, PSDDS_KAISER), 0);
+    ControlStates r = FromResolve(make(PSDDS_RGBA8, PSDDS_COLOUR, 1, PSDDS_KAISER), 0, 8);
     check(r.ok, t, "Colour+RGBA8 resolves");
     check(r.srgb_enabled && r.shown.srgb == 1, t, "Colour+RGBA8 sRGB editable, On");
     check(r.filter_enabled && r.shown.filter == PSDDS_KAISER, t, "Colour+RGBA8 filter editable, Kaiser");
     check(!r.quality_enabled && r.shown.quality == 0, t, "RGBA8 greys quality at 0");
 
     // Colour + BC7 with alpha: the filter greys showing Box.
-    ControlStates a = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 1);
+    ControlStates a = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 1, 8);
     check(a.ok && !a.filter_enabled && a.shown.filter == PSDDS_BOX, t, "alpha greys filter showing Box");
     check(a.srgb_enabled && a.shown.srgb == 1, t, "alpha leaves sRGB editable");
 
     // An out-of-range value (a corrupt remembered setting) is refused, not shown.
-    check(!FromResolve(make(9, PSDDS_COLOUR, 1, 0), 0).ok, t, "format 9 refused");
+    check(!FromResolve(make(9, PSDDS_COLOUR, 1, 0), 0, 8).ok, t, "format 9 refused");
 }
 
 // DC33: the Format list per type, the sRGB checkbox and the filter beside the Mipmaps checkbox.
@@ -71,25 +71,25 @@ static void dialog_controls_follow_type_and_mips() {
     const bool mask[6] = {true, true, true, true, true, true};
     const bool *want[3] = {colour, normal, mask};
     for (uint32_t ty = 0; ty < 3; ty++) {
-        ControlStates s = FromResolve(make(PSDDS_BC7, ty, 1, PSDDS_KAISER), 0);
+        ControlStates s = FromResolve(make(PSDDS_BC7, ty, 1, PSDDS_KAISER), 0, 8);
         check(s.ok, t, "resolves");
         for (uint32_t f = 0; f < 6; f++) check(s.formats[f] == want[ty][f], t, "format list per type");
         check(s.formats[s.shown.format], t, "shown format is in the list");
     }
 
     // sRGB checkbox: editable and checked for Colour + BC7 On; editable unchecked for Off; greyed unchecked for Normal.
-    ControlStates on = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 0);
+    ControlStates on = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 0, 8);
     check(on.srgb_enabled && on.shown.srgb == 1, t, "Colour sRGB On: enabled, checked");
-    ControlStates off = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 0, PSDDS_KAISER), 0);
+    ControlStates off = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 0, PSDDS_KAISER), 0, 8);
     check(off.srgb_enabled && off.shown.srgb == 0, t, "Colour sRGB Off: enabled, unchecked");
-    ControlStates nrm = FromResolve(make(PSDDS_BC7, PSDDS_NORMAL, 1, PSDDS_KAISER), 0);
+    ControlStates nrm = FromResolve(make(PSDDS_BC7, PSDDS_NORMAL, 1, PSDDS_KAISER), 0, 8);
     check(!nrm.srgb_enabled && nrm.shown.srgb == 0, t, "Normal: greyed, unchecked");
 
     // Filter: editable with mips on, greyed (keeping Kaiser) with mips off.
     check(on.filter_enabled && on.shown.mips == 1, t, "mips on: filter editable");
     PsddsSettings nomips = make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER);
     nomips.mips = 0;
-    ControlStates nm = FromResolve(nomips, 0);
+    ControlStates nm = FromResolve(nomips, 0, 8);
     check(nm.ok && !nm.filter_enabled && nm.shown.filter == PSDDS_KAISER && nm.shown.mips == 0, t,
           "mips off: filter greyed, Kaiser kept");
 }
@@ -178,31 +178,31 @@ static void preset_names_and_matching() {
 
     // Preset -> edit -> Custom -> edit back -> preset.
     PsddsSettings raw = list[1].settings;
-    check(MatchPreset(list, raw, 0) == 1, t, "BC1 preset matches itself");
+    check(MatchPreset(list, raw, 0, 8) == 1, t, "BC1 preset matches itself");
     raw.quality = 3;
-    check(MatchPreset(list, raw, 0) == -1, t, "an edit shows Custom");
+    check(MatchPreset(list, raw, 0, 8) == -1, t, "an edit shows Custom");
     raw.quality = list[1].settings.quality;
-    check(MatchPreset(list, raw, 0) == 1, t, "editing back shows the preset again");
+    check(MatchPreset(list, raw, 0, 8) == 1, t, "editing back shows the preset again");
     raw.discard_alpha = 0;
-    check(MatchPreset(list, raw, 1) == 1, t, "BC1 stores no alpha, so discard 0 is the effective 1 (DE2)");
+    check(MatchPreset(list, raw, 1, 8) == 1, t, "BC1 stores no alpha, so discard 0 is the effective 1 (DE2)");
     PsddsSettings k = list[0].settings;
     k.discard_alpha = 1;
-    check(MatchPreset(list, k, 1) == -1, t, "discard transparency is part of a preset (with alpha)");
-    check(MatchPreset(list, k, 0) == 0, t, "without alpha, discard transparency has no effect (DC40)");
-    check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 1) == 0, t, "the defaults are Colour BC7");
+    check(MatchPreset(list, k, 1, 8) == -1, t, "discard transparency is part of a preset (with alpha)");
+    check(MatchPreset(list, k, 0, 8) == 0, t, "without alpha, discard transparency has no effect (DC40)");
+    check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 1, 8) == 0, t, "the defaults are Colour BC7");
     // A greyed difference does not make it Custom: Normal with a remembered sRGB On still shows Normal BC7.
     PsddsSettings n = list[2].settings;
     n.srgb = 1;
-    check(MatchPreset(list, n, 0) == 2, t, "matching uses effective values");
-    check(MatchPreset({}, raw, 0) == -1, t, "an empty store: Custom");
+    check(MatchPreset(list, n, 0, 8) == 2, t, "matching uses effective values");
+    check(MatchPreset({}, raw, 0, 8) == -1, t, "an empty store: Custom");
 
     // DC40: two presets with equal effective settings; the picked one stays shown, an edit falls back to the first.
     std::vector<Preset> twin = {{L"First", psdds_defaults(PSDDS_COLOUR)}, {L"Second", psdds_defaults(PSDDS_COLOUR)}};
-    check(MatchPreset(twin, twin[1].settings, 1) == 0, t, "no pick: the first equal preset");
-    check(MatchPreset(twin, twin[1].settings, 1, 1) == 1, t, "the picked preset stays while it matches");
+    check(MatchPreset(twin, twin[1].settings, 1, 8) == 0, t, "no pick: the first equal preset");
+    check(MatchPreset(twin, twin[1].settings, 1, 8, 1) == 1, t, "the picked preset stays while it matches");
     PsddsSettings edited = twin[1].settings;
     edited.quality = 3;
-    check(MatchPreset(twin, edited, 1, 1) == -1, t, "an edit away from the pick shows Custom");
+    check(MatchPreset(twin, edited, 1, 8, 1) == -1, t, "an edit away from the pick shows Custom");
 
     // DC40: non-ASCII white space is trimmed from the UTF-16 code points, not from compiler-code-page bytes.
     check(CleanPresetName(L"\u00A0Ma\u00E7\u00E3\u3000") == L"Ma\u00E7\u00E3", t, "NBSP and U+3000 trimmed, accents kept");
@@ -250,6 +250,46 @@ static void presets_file_is_protected() {
     RemoveDirectoryW(dir.c_str());
 }
 
+// Task 5: the Format list, the Discard checkbox and preset matching follow the document depth (DE5).
+static void formats_follow_document_depth() {
+    const char *t = __func__;
+    const uint32_t depths[3] = {8, 16, 32};
+    for (uint32_t d : depths) {
+        ControlStates col = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 0, d);
+        check(col.formats[PSDDS_BC6H] == (d != 8) && col.formats[PSDDS_RGBA16F] == (d != 8), t, "Colour offers HDR formats at 16/32 only");
+        ControlStates nrm = FromResolve(make(PSDDS_BC7, PSDDS_NORMAL, 1, PSDDS_KAISER), 0, d);
+        ControlStates msk = FromResolve(make(PSDDS_BC7, PSDDS_LINEAR_MASK, 1, PSDDS_KAISER), 0, d);
+        check(!nrm.formats[PSDDS_BC6H] && !nrm.formats[PSDDS_RGBA16F], t, "Normal never offers HDR formats");
+        check(!msk.formats[PSDDS_BC6H] && !msk.formats[PSDDS_RGBA16F], t, "Linear mask never offers HDR formats");
+    }
+
+    PsddsSettings h = make(PSDDS_BC6H, PSDDS_COLOUR, 1, PSDDS_KAISER);
+    h.quality = 3;
+    ControlStates s = FromResolve(h, 0, 32);
+    check(s.ok && s.shown.format == PSDDS_BC6H, t, "BC6H kept at 32");
+    check(!s.srgb_enabled && !s.discard_enabled && s.shown.discard_alpha == 1 && s.quality_enabled, t,
+          "BC6H: sRGB greyed, Discard greyed and ticked, quality editable");
+    ControlStates raw8 = FromResolve(h, 0, 8);
+    check(raw8.ok && raw8.shown.format == PSDDS_BC7, t, "raw BC6H shows BC7 at depth 8");
+    check(raw8.discard_enabled, t, "BC7 at depth 8 keeps Discard editable");
+    ControlStates f16 = FromResolve(make(PSDDS_RGBA16F, PSDDS_COLOUR, 1, PSDDS_KAISER), 1, 16);
+    check(f16.ok && f16.shown.format == PSDDS_RGBA16F && !f16.quality_enabled && !f16.srgb_enabled, t, "RGBA16F: no quality, no sRGB");
+
+    // BC1/BC4/BC5: Discard greyed and ticked (owner ruling), at every depth.
+    const struct { uint32_t format, type; } fixed[3] = {{PSDDS_BC1, PSDDS_COLOUR}, {PSDDS_BC4, PSDDS_LINEAR_MASK}, {PSDDS_BC5, PSDDS_NORMAL}};
+    for (const auto &f : fixed)
+        for (uint32_t d : depths) {
+            ControlStates b = FromResolve(make(f.format, f.type, 0, PSDDS_KAISER), 1, d);
+            check(b.ok && !b.discard_enabled && b.shown.discard_alpha == 1, t, "BC1/BC4/BC5: Discard greyed, shown ticked");
+        }
+
+    // MatchPreset: a BC6H preset (quality 3) and Colour BC7 (quality 4).
+    std::vector<Preset> list = {{L"HDR BC6H", h}, {L"Colour BC7", psdds_defaults(PSDDS_COLOUR)}};
+    check(MatchPreset(list, h, 0, 32) == 0, t, "depth 32: raw BC6H matches the BC6H preset");
+    check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 0, 32) == 1, t, "depth 32: BC7 matches Colour BC7");
+    check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 0, 8) == 1, t, "depth 8: raw BC7 (quality 4) matches Colour BC7 only");
+    check(MatchPreset(list, h, 0, 8) == 0, t, "depth 8: raw BC6H shows BC7 with quality 3, matching the BC6H preset's own effective value");
+}
 static void dialog_follows_play_info() {
     const char *t = __func__;
     check(ShouldShowDialog(false, 0), t, "no descriptor: interactive save shows the dialog");
@@ -275,6 +315,9 @@ int main() {
     before = failures;
     presets_file_is_protected();
     printf("  %s presets_file_is_protected\n", failures == before ? "PASS" : "FAIL");
+    before = failures;
+    formats_follow_document_depth();
+    printf("  %s formats_follow_document_depth\n", failures == before ? "PASS" : "FAIL");
     before = failures;
     dialog_follows_play_info();
     printf("  %s dialog_follows_play_info\n", failures == before ? "PASS" : "FAIL");

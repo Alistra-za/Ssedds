@@ -39,8 +39,8 @@ std::wstring CleanPresetName(const std::wstring &name);
 // The index of the preset called `name`, compared ordinally ignoring case, or -1.
 int FindPreset(const std::vector<Preset> &list, const std::wstring &name);
 
-// The first preset whose effective settings (psdds_resolve with the document's has_alpha) equal those of `raw`, or
+// The first preset whose effective settings (psdds_resolve_depth with the document's has_alpha and depth) equal those of `raw`, or
 // -1 when none does ("Custom").
 // Discard transparency is ignored when has_alpha is 0 (it has no effect). `preferred` (the preset the user picked) wins
 // over an earlier preset with equal settings when it still matches (DC40).
-int MatchPreset(const std::vector<Preset> &list, const PsddsSettings &raw, uint32_t has_alpha, int preferred = -1);
+int MatchPreset(const std::vector<Preset> &list, const PsddsSettings &raw, uint32_t has_alpha, uint32_t depth, int preferred = -1);

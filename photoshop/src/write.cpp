@@ -136,7 +136,7 @@ int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels, c
     if (g->show_dialog) { // modal UI inside the write is allowed without SupportsBackgroundSave (PiPL keys)
         const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
         HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
-        const DialogResult shown = ShowSaveDialog(owner, has_alpha, &g->settings);
+        const DialogResult shown = ShowSaveDialog(owner, has_alpha, uint32_t(r->depth), &g->settings);
         if (shown == DialogResult::Cancel) result = userCanceledErr; // nothing has been written
         else if (shown == DialogResult::Failed) result = report_error(r, "the Tessalith DDS options dialog could not be shown");
         else save_settings(r->sSPBasic, g->settings);

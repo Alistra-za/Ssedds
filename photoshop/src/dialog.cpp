@@ -8,15 +8,17 @@
 #include <string>
 #include <vector>
 
-ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha) {
+ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha, uint32_t depth) {
     ControlStates s = {};
     PsddsControls c = {};
-    s.ok = psdds_resolve(&input, has_alpha, &s.shown, &c) == 0;
+    uint32_t discard_enabled = 0;
+    s.ok = psdds_resolve_depth(&input, has_alpha, depth, &s.shown, &c, &discard_enabled) == 0;
     if (!s.ok) return s;
+    s.discard_enabled = discard_enabled != 0;
     s.srgb_enabled = c.srgb_enabled != 0;
     s.filter_enabled = c.filter_enabled != 0;
     s.quality_enabled = c.quality_enabled != 0;
-    for (uint32_t f = 0; f < 6; f++) s.formats[f] = psdds_format_allowed(s.shown.texture_type, f) != 0;
+    for (uint32_t f = 0; f < 8; f++) s.formats[f] = psdds_format_offered(s.shown.texture_type, f, depth) != 0;
     return s;
 }
 
@@ -32,13 +34,15 @@ struct Item {
 };
 
 const Item kFormats[] = {{L"BC1", PSDDS_BC1}, {L"BC3", PSDDS_BC3},  {L"BC4", PSDDS_BC4},
-                         {L"BC5", PSDDS_BC5}, {L"BC7", PSDDS_BC7}, {L"RGBA8 (uncompressed)", PSDDS_RGBA8}};
+                         {L"BC5", PSDDS_BC5}, {L"BC7", PSDDS_BC7}, {L"RGBA8 (uncompressed)", PSDDS_RGBA8},
+                         {L"BC6H (HDR)", PSDDS_BC6H}, {L"RGBA16F (uncompressed)", PSDDS_RGBA16F}};
 const Item kTypes[] = {{L"Colour", PSDDS_COLOUR}, {L"Normal", PSDDS_NORMAL}, {L"Linear mask", PSDDS_LINEAR_MASK}};
 const Item kFilters[] = {{L"Box", PSDDS_BOX}, {L"Tent", PSDDS_TENT}, {L"Mitchell", PSDDS_MITCHELL}, {L"Kaiser", PSDDS_KAISER}};
 
 struct Context {
     PsddsSettings raw; // the user's picks; greyed controls keep theirs, so switching back restores them
     uint32_t has_alpha;
+    uint32_t depth;              // the document's bit depth: 8, 16 or 32 (decides the HDR formats)
     std::wstring preset_dir;     // empty: presets cannot be stored (no %APPDATA%)
     std::vector<Preset> presets; // as in the preset file (DC37)
     bool writable = true;                  // false: the preset file could not be read in full, so it is never written (DC40)
@@ -104,7 +108,7 @@ void fill_presets(HWND dlg, const Context &ctx) {
 // when the type changes (it offers only psdds_format_allowed formats), the Quality list when the shown format may have
 // changed. The preset list shows the first preset whose effective values match, else Custom (DC37).
 void refresh(HWND dlg, Context &ctx, int changed) {
-    const ControlStates s = FromResolve(ctx.raw, ctx.has_alpha);
+    const ControlStates s = FromResolve(ctx.raw, ctx.has_alpha, ctx.depth);
     if (!s.ok) return; // unreachable: every control offers only in-range values
     if (changed == 0 || changed == IDC_TYPE) {
         HWND combo = GetDlgItem(dlg, IDC_FORMAT);
@@ -113,7 +117,7 @@ void refresh(HWND dlg, Context &ctx, int changed) {
             if (s.formats[it.value]) add(combo, it.label, it.value);
     }
     if (changed == 0 || changed == IDC_TYPE || changed == IDC_FORMAT) fill_quality(dlg, s.shown.format);
-    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.depth, ctx.picked);
     ctx.picked = match;
     select_value(dlg, IDC_PRESET, match < 0 ? kCustom : uint32_t(match));
     select_value(dlg, IDC_FORMAT, s.shown.format);
@@ -124,6 +128,7 @@ void refresh(HWND dlg, Context &ctx, int changed) {
     CheckDlgButton(dlg, IDC_DISCARD, s.shown.discard_alpha ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(dlg, IDC_MIPS, s.shown.mips ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_SRGB), s.srgb_enabled);
+    EnableWindow(GetDlgItem(dlg, IDC_DISCARD), s.discard_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_FILTER), s.filter_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_QUALITY), s.quality_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_PRESET_DELETE), match >= 0);
@@ -168,7 +173,7 @@ INT_PTR CALLBACK name_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 // Save preset: name it (an existing name, in any case, asks to replace that preset), then write the file.
 void save_preset(HWND dlg, Context &ctx) {
     if (!ctx.writable) return message(dlg, kReadOnlyMessage);
-    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.depth, ctx.picked);
     std::wstring name = match < 0 ? std::wstring() : ctx.presets[size_t(match)].name;
     HMODULE self = reinterpret_cast<HMODULE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
     if (DialogBoxParamW(self, MAKEINTRESOURCEW(IDD_PRESET_NAME), dlg, name_proc, LPARAM(&name)) != IDOK) return;
@@ -193,7 +198,7 @@ void save_preset(HWND dlg, Context &ctx) {
 
 void delete_preset(HWND dlg, Context &ctx) {
     if (!ctx.writable) return message(dlg, kReadOnlyMessage);
-    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    const int match = ctx.custom ? -1 : MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.depth, ctx.picked);
     if (match < 0) return;
     if (!ask(dlg, L"Delete the preset \"" + ctx.presets[size_t(match)].name + L"\"?")) return;
     std::vector<Preset> next = ctx.presets;
@@ -215,6 +220,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         ctx = reinterpret_cast<Context *>(lp);
         fill(dlg, IDC_TYPE, kTypes);
         fill(dlg, IDC_FILTER, kFilters);
+        SendDlgItemMessageW(dlg, IDC_FORMAT, CB_SETDROPPEDWIDTH, 220, 0); // "RGBA16F (uncompressed)" is wider than the 85-unit combo (DC43)
         fill_presets(dlg, *ctx);
         refresh(dlg, *ctx, 0);
         return TRUE; // focus goes to the first tab stop (Preset)
@@ -262,12 +268,12 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 }
 } // namespace
 
-DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout) {
+DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, uint32_t depth, PsddsSettings *inout) {
     HMODULE self = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&ShowSaveDialog), &self))
         return DialogResult::Failed;
-    Context ctx = {*inout, has_alpha, PresetDir(), {}};
+    Context ctx = {*inout, has_alpha, depth, PresetDir(), {}};
     PresetFileInfo file;
     ctx.presets = LoadPresets(ctx.preset_dir, &file);
     ctx.writable = file.complete;
