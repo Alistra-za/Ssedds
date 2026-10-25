@@ -27,33 +27,39 @@ def _rmaos_input():
     )
 
 
+# Module-level so a test can read the visibility. With RMAOS connected only Discard is hidden: psdds_rmaos_encode's
+# normal_settings uses Format, Mipmaps and Quality (over the pbr_normal base) and ignores discard_alpha (R19).
+INPUTS = [
+    ImageInput("Normal").make_lazy(),
+    DirectoryInput(must_exist=False),
+    RelativePathInput("Subdirectory Path")
+    .make_optional()
+    .with_docs("An optional subdirectory path, created if missing. Separate levels with `/`."),
+    RelativePathInput("Base Name").with_docs(
+        "Writes `<base>_n.dds`, plus `<base>_rmaos.dds` with RMAOS connected. Existing files are overwritten."
+    ),
+    _ui.normal_format_input(),
+    if_group(~Condition.type(_ui.N_RMAOS_ID, _pbr.RMAOS_TYPE))(_ui.discard_input(_ui.N_DISCARD_ID)),
+    _ui.mips_input(_ui.N_MIPS_ID, _ui.NORMAL),
+    *[if_group(c)(q) for c, q in _Q],
+    _rmaos_input(),
+    BoolInput("Skip existing files", default=False)
+    .with_id(1000)
+    .with_docs("If enabled, existing files are not overwritten. With RMAOS connected, skips only when both files exist."),
+]
+
+
 @tessalith_group.register(
     schema_id="tessalith:dds:save_normal",
     name="Save Normal (Tessalith)",
     description=[
         "Save a normal map as `<base>_n.dds` with Tessalith's encoder (the same bytes as Save DDS with type Normal).",
         "With RMAOS (Tessalith) connected, also writes `<base>_rmaos.dds` from one engine call: the `_n` uses the "
-        "TruePBR normal profile and the normal is baked into the roughness mips.",
+        "TruePBR normal profile with this node's Format, Mipmaps and Quality, and the normal is baked into the "
+        "roughness mips.",
     ],
     icon="MdSave",
-    inputs=[
-        ImageInput("Normal").make_lazy(),
-        DirectoryInput(must_exist=False),
-        RelativePathInput("Subdirectory Path")
-        .make_optional()
-        .with_docs("An optional subdirectory path, created if missing. Separate levels with `/`."),
-        RelativePathInput("Base Name").with_docs(
-            "Writes `<base>_n.dds`, plus `<base>_rmaos.dds` with RMAOS connected. Existing files are overwritten."
-        ),
-        _ui.normal_format_input(),
-        if_group(~Condition.type(_ui.N_RMAOS_ID, _pbr.RMAOS_TYPE))(_ui.discard_input(_ui.N_DISCARD_ID)),
-        _ui.mips_input(_ui.N_MIPS_ID, _ui.NORMAL),
-        *[if_group(c)(q) for c, q in _Q],
-        _rmaos_input(),
-        BoolInput("Skip existing files", default=False)
-        .with_id(1000)
-        .with_docs("If enabled, existing files are not overwritten. With RMAOS connected, skips only when both files exist."),
-    ],
+    inputs=INPUTS,
     outputs=[],
     side_effects=True,
 )

@@ -29,8 +29,11 @@ class RmaosJob:
 
 
 def sources(images, picks) -> tuple:
-    """A 2-D grey image has only channel 0 (its dropdown is hidden); no copy, no BGR->RGB for sources."""
-    return tuple(None if img is None else (img, 0 if img.ndim == 2 else CHANNEL[pick]) for img, pick in zip(images, picks))
+    """A grey image (HxW or HxWx1) has only channel 0 (its dropdown is hidden); no copy, no BGR->RGB for sources."""
+    return tuple(
+        None if img is None else (img, 0 if img.ndim == 2 or img.shape[2] == 1 else CHANNEL[pick])
+        for img, pick in zip(images, picks)
+    )
 
 
 def fill(mode: int, number: int) -> int:
@@ -63,11 +66,12 @@ def save_normal(
     if skip_existing and all(p.exists() for p in targets):
         logger.debug(f"Skipping existing file(s): {', '.join(map(str, targets))}")
         return []
-    n_path.parent.mkdir(parents=True, exist_ok=True)
 
     img = normal()
     if rmaos is None:
-        _psdds.write_files([(n_path, _psdds.encode(img, settings))])
+        data = _psdds.encode(img, settings)
+        n_path.parent.mkdir(parents=True, exist_ok=True)  # only after a successful encode
+        _psdds.write_files([(n_path, data)])
         return [n_path]
 
     job = rmaos()
@@ -76,10 +80,11 @@ def save_normal(
         list(job.sources), list(job.fills), job.quality, job.mips, normal=img,
         normal_settings={**settings, "discard_alpha": 0},
     )
+    n_path.parent.mkdir(parents=True, exist_ok=True)
+    _psdds.write_files([(rm_path, rm), (n_path, nm)])
     logger.info(f"Tessalith RMAOS {rm_path.name}: baked {baked}")
     if note:
         logger.info(f"Tessalith RMAOS {rm_path.name}: {note}")
     if defaulted:
         logger.info(f"Tessalith RMAOS {rm_path.name}: PACK-DEFAULTED {''.join(defaulted)}")
-    _psdds.write_files([(rm_path, rm), (n_path, nm)])
     return [rm_path, n_path]

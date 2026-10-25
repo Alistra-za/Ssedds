@@ -196,6 +196,59 @@ class PbrTests(unittest.TestCase):
         self.assertEqual(len(self.save(job, skip=True)), 2)
         self.assertEqual(rm_path.read_bytes()[:4], b"DDS ")
 
+    def test_custom_fill_reaches_bytes(self):
+        srcs = ((grey(0.5), 0), None, None, None)
+        self.save(self.job(srcs), name="d")
+        custom = B.fills(srcs, [DEFAULT, CUSTOM, DEFAULT, CUSTOM], [0, 200, 0, 30])
+        self.assertEqual(custom, (-1, 200, -1, 30))
+        self.save(self.job(srcs, custom), name="c")
+        rm, nm, *_ = P.rmaos_encode(list(srcs), list(custom), P.rmaos_default_quality(), 1, normal=self.n,
+                                    normal_settings=self.s)
+        self.assertEqual([p.read_bytes() for p in self.files("c")], [nm, rm])
+        self.assertNotEqual(self.files("c")[1].read_bytes(), self.files("d")[1].read_bytes())
+
+    def test_pair_write_failure_restores_first_file(self):
+        for p in self.files():
+            p.write_bytes(b"old")
+        real, calls = os.replace, []
+
+        def flaky(a, b):
+            calls.append(b)
+            if len(calls) == 2:
+                raise OSError("disk full")
+            real(a, b)
+
+        # assertNoLogs outermost: it skips its check when an exception passes through it
+        with self.assertNoLogs("sanic.root", "INFO"), mock.patch.object(P.os, "replace", flaky), \
+                self.assertRaises(OSError):  # no "baked" line for a pair that was not written
+            self.save(self.job([(grey(0.5), 0), None, None, None]))
+        self.assertEqual([p.read_bytes() for p in self.files()], [b"old", b"old"])
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["x_n.dds", "x_rmaos.dds"])
+
+    def test_hxwx1_is_grey(self):
+        g = np.full((4, 4, 1), 0.5, np.float32)
+        self.assertEqual(B.sources([g, None, None, None], [A, R, R, R])[0], (g, 0))
+
+    def test_failed_encode_makes_no_directory(self):
+        sub = self.dir / "new"
+        job = self.job([(grey(0.5), 0), (grey(0.5, 32, 32), 0), None, None])
+        with self.assertRaises(P.PsddsError):
+            B.save_normal(lambda: self.n, self.s, lambda: job, sub, "x", False)
+        with self.assertRaises(P.PsddsError):
+            B.save_normal(lambda: np.zeros((1, 1, 2), np.float32), self.s, None, sub, "x", False)
+        self.assertFalse(sub.exists())
+
+    def test_pair_uses_format_mips_quality_not_discard(self):
+        # why only Discard is hidden on Save Normal while RMAOS is connected
+        job = self.job([(grey(0.5), 0), None, None, None])
+        self.save(job, name="b")
+        base = self.files("b")[0].read_bytes()
+        for i, (fmt, mips, q, d) in enumerate([(3, True, 0, False), (BC7, False, 4, False), (BC7, True, 0, False)]):
+            self.save(job, name=f"v{i}", settings=B.normal_settings(fmt, mips, q, d))
+            self.assertNotEqual(self.files(f"v{i}")[0].read_bytes(), base)
+        self.save(job, name="dsc", settings=B.normal_settings(BC7, True, self.s["quality"], True))
+        self.assertEqual(self.files("dsc")[0].read_bytes(), base)
+
     def test_type_names(self):
         self.assertEqual(B.RMAOS_TYPE, "TessalithRmaos")
         self.assertEqual(B.RMAOS_TYPE_DEF, "struct TessalithRmaos;")
@@ -252,6 +305,44 @@ class NodeTests(unittest.TestCase):
         s = B.normal_settings(BC7, True, P.defaults(1)["quality"], False)
         self.assertEqual((self.dir / "x_n.dds").read_bytes(), P.encode(self.n, s))
         self.assertFalse((self.dir / "x_rmaos.dds").exists())
+
+    def test_grey_source_ignores_channel_pick(self):
+        from api import Lazy
+        job = self.rmaos(picks=(G, R, A, R))
+        self.assertEqual([job.sources[0][1], job.sources[2][1]], [0, 0])
+        self.save(Lazy.ready(job))
+        self.assertTrue((self.dir / "x_rmaos.dds").exists())
+
+    def test_lone_skip_existing(self):
+        from api import Lazy
+
+        def boom():
+            raise AssertionError("evaluated")
+
+        (self.dir / "x_n.dds").write_bytes(b"old")
+        self.save(Lazy.ready(None), skip=True, normal_lazy=Lazy(boom))
+        self.assertEqual((self.dir / "x_n.dds").read_bytes(), b"old")
+        self.assertFalse((self.dir / "x_rmaos.dds").exists())
+
+    def test_rmaos_connected_hides_only_discard(self):
+        from api.group import Group
+        mod = sys.modules["tessalith_t.save_normal_tessalith"]
+        U = mod._ui
+
+        def mentions_rmaos(j):
+            if j.get("kind") == "type":
+                return j["input"] == U.N_RMAOS_ID
+            return any(mentions_rmaos(x) for x in j.get("items", [])) or ("condition" in j and mentions_rmaos(j["condition"]))
+
+        hidden, shown = set(), set()
+        for x in mod.INPUTS:
+            if isinstance(x, Group):
+                ids = {i.id for i in x.items}
+                (hidden if mentions_rmaos(x.info.options["condition"]) else shown).update(ids)
+            else:
+                shown.add(x.id)
+        self.assertEqual(hidden, {U.N_DISCARD_ID})
+        self.assertTrue({U.N_FMT_ID, U.N_MIPS_ID, U.N_QUALITY_ID0, U.N_QUALITY_ID0 + 1, U.N_QUALITY_ID0 + 2} <= shown)
 
     def test_skip_pair_evaluates_nothing(self):
         from api import Lazy
