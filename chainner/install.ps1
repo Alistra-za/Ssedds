@@ -27,6 +27,15 @@ if ($Target) {
         Sort-Object { [version]($_.Name -replace '^app-', '') } | Select-Object -Last 1
     if (-not $app) { throw "no app-<version> folder (like app-0.25.1) under $ChaiNNerRoot; is chaiNNer installed there?" }
     $src = Join-Path $app.FullName 'resources\src'
+    # Closing chaiNNer can leave its Python backend running, which keeps psdds.dll open; stop it (chaiNNer is closed).
+    $py = Join-Path $env:APPDATA 'chaiNNer\python\'
+    Get-Process python, pythonw -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($py, [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object {
+            Stop-Process -Id $_.Id -Force
+            $_.WaitForExit(10000) | Out-Null
+            "Stopped a leftover chaiNNer backend (pid $($_.Id))"
+        }
 }
 $pkg = Join-Path $src 'packages\chaiNNer_standard'
 if (-not (Test-Path $pkg)) { throw "not a chaiNNer src folder (missing $pkg)" }
