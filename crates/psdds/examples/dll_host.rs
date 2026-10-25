@@ -1,6 +1,7 @@
 //! DC25 check for any host: load psdds.dll by path, encode, FreeLibrary, and the DLL must stay mapped because
 //! psdds pinned itself (rayon workers are still parked in its code). Exiting with them parked must be safe too.
 //! Usage: dll_host <path to psdds.dll>. MIT licence.
+#![cfg(windows)]
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 
@@ -23,6 +24,7 @@ struct Buf {
     data: *mut u8,
     len: usize,
 }
+type Free = unsafe extern "C" fn(Buf);
 type Encode = unsafe extern "C" fn(
     *const f32,
     u32,
@@ -38,6 +40,7 @@ fn main() {
     let path = std::env::args_os()
         .nth(1)
         .expect("usage: dll_host <psdds.dll>");
+    // SAFETY: exports are looked up by name and cast to the signatures declared in psdds.h; buffers outlive the calls.
     unsafe {
         let m = LoadLibraryW(wide(&path).as_ptr());
         assert!(!m.is_null(), "LoadLibraryW failed");
@@ -69,7 +72,11 @@ fn main() {
         assert_eq!(rc, 0, "encode failed: {}", String::from_utf8_lossy(&err));
         println!("encoded {} bytes", buf.len);
 
-        FreeLibrary(m);
+        let free = GetProcAddress(m, c"psdds_free".as_ptr().cast());
+        assert!(!free.is_null(), "psdds_free missing");
+        let free: Free = std::mem::transmute(free);
+        free(buf);
+        assert!(FreeLibrary(m) != 0, "FreeLibrary failed");
         let name = wide(std::ffi::OsStr::new("psdds.dll"));
         if GetModuleHandleW(name.as_ptr()).is_null() {
             eprintln!("psdds.dll was unmapped after FreeLibrary");
