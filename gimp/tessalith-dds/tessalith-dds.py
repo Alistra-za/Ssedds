@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Tessalith DDS for GIMP 3: opens DDS files through psdds.dll. Every rule lives in psdds."""
+"""Tessalith DDS for GIMP 3: opens and exports DDS files through psdds.dll. Every rule lives in psdds."""
 import os
 import sys
 
@@ -9,10 +9,19 @@ gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, GLib, GObject  # noqa: E402
 
-from psdds_ctypes import Psdds, PsddsError  # noqa: E402
+from psdds_ctypes import (BC1, BC3, BC4, BC5, BC7, BOX, COLOUR, KAISER, LINEAR_MASK, MITCHELL,  # noqa: E402
+                          NORMAL, RGBA8, TENT, Psdds, PsddsError, Settings)
 from tdds_pixels import band_rows  # noqa: E402
 
 LOAD_PROC = "file-tessalith-dds-load"
+EXPORT_PROC = "file-tessalith-dds-export"
+# (nick, psdds id, label). All six formats stay valid arguments (DC32); psdds decides which apply.
+FORMATS = [("bc1", BC1, "BC1"), ("bc3", BC3, "BC3"), ("bc4", BC4, "BC4"), ("bc5", BC5, "BC5"),
+           ("bc7", BC7, "BC7"), ("rgba8", RGBA8, "RGBA8 (uncompressed)")]
+TYPES = [("colour", COLOUR, "Colour"), ("normal", NORMAL, "Normal"), ("linear-mask", LINEAR_MASK, "Linear mask")]
+FILTERS = [("box", BOX, "Box"), ("tent", TENT, "Tent"), ("mitchell", MITCHELL, "Mitchell"),
+           ("kaiser", KAISER, "Kaiser")]
+NOT_LOCAL_SAVE = "Tessalith DDS can save only to files on a local disk."
 TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
 NOT_LOCAL = "Tessalith DDS can open only files on a local disk."
 NO_FILE_DDS = ("GIMP's own DDS plug-in is needed for this file (HDR, cube map or texture array), "
@@ -74,18 +83,120 @@ def load_dds(procedure, run_mode, file, metadata, flags, config, data):
     return _load(procedure, run_mode, file), flags
 
 
+def raw_settings(config):
+    """The seven raw arguments, in psdds.h order. psdds resolves them; nothing is adjusted here."""
+    return Settings(config.get_choice_id("format"), config.get_choice_id("texture-type"),
+                    int(config.get_property("srgb")), config.get_choice_id("mip-filter"),
+                    int(config.get_property("mipmaps")), config.get_property("quality"),
+                    int(config.get_property("discard-alpha")))
+
+
+def export_pixels(psdds, img):
+    """Reads img (the plug-in's own copy) as sRGB-encoded floats: (w, h, has_alpha, rgba).
+
+    Merges and resizes img's layers, so it must never be the user's image (M7).
+    """
+    layer = img.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
+    w, h = img.get_width(), img.get_height()
+    if (layer.get_width(), layer.get_height()) != (w, h) or layer.get_offsets()[1:] != (0, 0):
+        layer.resize_to_image_size()
+    psdds.check_size(w, h)
+    rgba = bytearray(w * h * 16)
+    buf = layer.get_buffer()
+    rows = band_rows(w * 16, h)
+    # shortcut: always reads sRGB-encoded sRGB floats (babl converts linear and other profiles), like
+    # GIMP's 8-bit PNG export; upgrade when an HDR/linear export path exists (NIF team owns it).
+    for y in range(0, h, rows):
+        n = min(rows, h - y)
+        rgba[y * w * 16:(y + n) * w * 16] = buf.get(Gegl.Rectangle.new(0, y, w, n), 1.0, "R'G'B'A float",
+                                                    Gegl.AbyssPolicy.CLAMP)
+    return w, h, psdds.alpha_used(rgba, w, h), rgba  # DC31: alpha comes from the pixels
+
+
+def _write_atomic(path, data):
+    tmp = path + ".tmpsave"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def export_dds(procedure, run_mode, image, file, options, metadata, config, data):
+    path = file.get_path()
+    if path is None:
+        return error(procedure, NOT_LOCAL_SAVE)
+    res, img = options.get_image(image)
+    if res != Gimp.ExportReturn.EXPORT:
+        img = img.duplicate()  # never merge or resize the user's image (M7)
+    try:
+        psdds = Psdds()
+        w, h, has_alpha, rgba = export_pixels(psdds, img)
+        s = raw_settings(config)
+        out = psdds.encode(rgba, w, h, has_alpha and not s.discard_alpha, s)  # DC36
+        del rgba
+        _write_atomic(path, out)
+    except (PsddsError, OSError) as e:
+        return error(procedure, str(e))
+    finally:
+        img.delete()
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
+
+
+def _choice(items):
+    c = Gimp.Choice.new()
+    for nick, cid, label in items:
+        c.add(nick, cid, label, "")
+    return c
+
+
+def _nick(items, cid):
+    return next(n for n, i, _ in items if i == cid)
+
+
 class TessalithDds(Gimp.PlugIn):
-    # Export (file-tessalith-dds-export) is registered with its procedure in Task 4.
     def do_query_procedures(self):
-        return [LOAD_PROC]
+        return [LOAD_PROC, EXPORT_PROC]
 
     def do_set_i18n(self, name):
         return False
 
     def do_create_procedure(self, name):
+        if name == EXPORT_PROC:
+            return self._export_procedure(name)
         if name != LOAD_PROC:
             return None
         proc = Gimp.LoadProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, load_dds, None)
+        self._file_info(proc)
+        return proc
+
+    def _export_procedure(self, name):
+        psdds = Psdds()
+        d = psdds.defaults(COLOUR)
+        top_q = max(len(psdds.quality_labels(f)) for _, f, _ in FORMATS) - 1
+        proc = Gimp.ExportProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, False, export_dds, None)
+        proc.set_image_types("*")
+        proc.set_capabilities(Gimp.ExportCapabilities.CAN_HANDLE_RGB | Gimp.ExportCapabilities.CAN_HANDLE_ALPHA,
+                              None, None)
+        self._file_info(proc)
+        rw = GObject.ParamFlags.READWRITE
+        proc.add_choice_argument("format", "Format", "DDS format", _choice(FORMATS), _nick(FORMATS, d.format), rw)
+        proc.add_choice_argument("texture-type", "Texture type", "Texture type", _choice(TYPES),
+                                 _nick(TYPES, d.texture_type), rw)
+        proc.add_boolean_argument("srgb", "sRGB", "Tag the file as sRGB", bool(d.srgb), rw)
+        proc.add_choice_argument("mip-filter", "Filter", "Mip filter", _choice(FILTERS), _nick(FILTERS, d.filter), rw)
+        proc.add_boolean_argument("mipmaps", "Mipmaps", "Write mipmaps", bool(d.mips), rw)
+        proc.add_boolean_argument("discard-alpha", "Discard transparency", "Save opaque", bool(d.discard_alpha), rw)
+        proc.add_int_argument("quality", "Quality", "Quality index", 0, top_q, d.quality, rw)
+        return proc
+
+    @staticmethod
+    def _file_info(proc):
         proc.set_menu_label("Tessalith DDS")
         proc.set_format_name("Tessalith DDS")
         proc.set_extensions("dds")
@@ -95,7 +206,6 @@ class TessalithDds(Gimp.PlugIn):
         proc.set_priority(-1)
         proc.set_attribution("Alistraza", "Alistraza", "2026")
         # Never persistent_enable (DC25): one process per call keeps the DLL mapped while its pool lives.
-        return proc
 
 
 Gimp.main(TessalithDds.__gtype__, sys.argv)
