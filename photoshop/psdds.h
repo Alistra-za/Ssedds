@@ -3,7 +3,8 @@
  * a panic is reported as an error ("internal error: ..."). Error text is UTF-8, NUL-terminated, truncated to the
  * caller's buffer. Every export may be called concurrently from any thread, and a buffer may be freed on any thread.
  * Error text is one plain sentence and may end with one full stop; a host that adds punctuation trims trailing full
- * stops and never re-words. */
+ * stops and never re-words. The library pins itself on first use and stays loaded until the process exits, with the
+ * engine's worker threads parked; a host's FreeLibrary does not unload it. */
 #ifndef PSDDS_H
 #define PSDDS_H
 
@@ -97,6 +98,28 @@ int32_t psdds_encode(const float *rgba, uint32_t width, uint32_t height, uint32_
  * Returns 0 on success; otherwise non-zero, *out empty, and the reason in err (NULL or err_cap 0: no text). */
 int32_t psdds_decode(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *height, uint32_t *has_alpha,
                      PsddsBuf *out, char *err, size_t err_cap);
+
+/* 0 when width x height can be encoded or opened; else 1 and the reason in err (a side over 16384: "This image is
+ * larger than 16384 pixels on a side, the most Skyrim supports."; a zero side: its own text). psdds_encode and
+ * psdds_decode apply this rule and report its text unchanged. */
+int32_t psdds_check_size(uint32_t width, uint32_t height, char *err, size_t err_cap);
+
+/* 1 when the first len bytes of a file (magic, header, DX10 header; up to 148) show a DDS psdds_decode can open; 0 for
+ * no "DDS " magic, BC6H/float DXGI formats, D3DFMT float FourCCs 111-117, cube maps and arrays. A file shorter than the
+ * headers is openable, so the reader can say why it fails. NULL head: 0. */
+int32_t psdds_dds_openable(const uint8_t *head, size_t len);
+
+/* Open's alpha rule (DC23): 1 when has_alpha != 0 and some alpha byte (byte 3 of each 4-byte pixel: RGBA8 or BGRA8)
+ * is below 254. NULL px8 or an overflowing pixel count: 0. */
+int32_t psdds_opens_with_alpha(const uint8_t *px8, size_t pixels, uint32_t has_alpha);
+
+/* Save's alpha rule (DC31): 1 when some alpha (rgba[4k+3]) of `pixels` RGBA float pixels is below 254/255 (limit
+ * 254/255 - 1e-6; NaN does not count). Pass the result as psdds_encode's has_alpha and to psdds_resolve. NULL rgba or an
+ * overflowing pixel count: 0. */
+int32_t psdds_alpha_used(const float *rgba, size_t pixels);
+
+/* The largest DDS file psdds_decode accepts by policy: 16384^2 RGBA8, full chain, magic + header + DX10 header. */
+uint64_t psdds_max_file_bytes(void);
 
 /* Release a buffer from psdds_encode or psdds_decode. Pass the PsddsBuf exactly as returned (data and len unchanged),
  * exactly once, then set data = NULL; a second free is a double free. An empty buffer (data NULL) is a no-op. */

@@ -1,5 +1,6 @@
 //! Tessalith DDS: the Photoshop plugin's bridge to the engine, as a C ABI (`photoshop/psdds.h`). Every exported
 //! function checks its pointers and runs inside `catch_unwind`, so no panic crosses the boundary.
+pub mod helpers;
 pub mod settings;
 
 pub use settings::{PsddsControls, PsddsSettings};
@@ -181,11 +182,6 @@ fn pin_self() {
         }
     });
 }
-/// The largest side Skyrim (D3D11) loads.
-const MAX_SIDE: u32 = 16384;
-const TOO_LARGE: &str =
-    "This image is larger than 16384 pixels on a side, the most Skyrim supports.";
-
 /// # Safety
 /// As `psdds_encode`.
 unsafe fn encode(
@@ -199,16 +195,8 @@ unsafe fn encode(
     if rgba.is_null() || s.is_null() || out.is_null() {
         return Err("psdds_encode: null pointer argument".into());
     }
-    if width == 0 || height == 0 {
-        return Err(format!("psdds_encode: image is {width}x{height}"));
-    }
-    // DC12 (I2): refused before the caller's buffer is touched. The isize bound is `from_raw_parts`' precondition
-    // (already implied by the side limit on 64-bit).
-    let n = (width <= MAX_SIDE && height <= MAX_SIDE)
-        .then(|| (width as usize).checked_mul(height as usize))
-        .flatten()
-        .filter(|n| n.checked_mul(16).is_some_and(|b| b <= isize::MAX as usize))
-        .ok_or(TOO_LARGE)?;
+    // DC12 (I2): refused before the caller's buffer is touched.
+    let n = helpers::check_size(width, height)?;
     let profile = settings::profile_for(&*s, has_alpha != 0)?;
     let img = Rgba32F {
         width,
@@ -277,6 +265,85 @@ pub(crate) fn clamp01(v: f32) -> f32 {
     }
 }
 
+/// 0 when `width` x `height` can be encoded or opened; else 1 and the reason in `err` (UTF-8, NUL-terminated,
+/// truncated to `err_cap`).
+///
+/// # Safety
+/// `err` is null or valid for `err_cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_check_size(
+    width: u32,
+    height: u32,
+    err: *mut c_char,
+    err_cap: usize,
+) -> i32 {
+    match catch_unwind(|| helpers::check_size(width, height)) {
+        Ok(Ok(_)) => 0,
+        Ok(Err(m)) => {
+            write_err(err, err_cap, &m);
+            1
+        }
+        Err(e) => {
+            write_err(err, err_cap, &panic_text(e));
+            1
+        }
+    }
+}
+
+/// 1 when the first `len` bytes of a file show a DDS `psdds_decode` can open (see `helpers::dds_openable`); a NULL
+/// `head` gives 0.
+///
+/// # Safety
+/// `head` is null or valid for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_dds_openable(head: *const u8, len: usize) -> i32 {
+    if head.is_null() {
+        return 0;
+    }
+    let head = std::slice::from_raw_parts(head, len);
+    catch_unwind(|| i32::from(helpers::dds_openable(head))).unwrap_or(0)
+}
+
+/// Open's alpha rule (DC23) over `pixels` 4-byte pixels; a NULL buffer or an overflowing size gives 0.
+///
+/// # Safety
+/// `px8` is null or valid for `pixels * 4` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_opens_with_alpha(
+    px8: *const u8,
+    pixels: usize,
+    has_alpha: u32,
+) -> i32 {
+    match pixels.checked_mul(4) {
+        Some(n) if !px8.is_null() && n <= isize::MAX as usize => {
+            let px = std::slice::from_raw_parts(px8, n);
+            catch_unwind(|| i32::from(helpers::opens_with_alpha(px, has_alpha != 0))).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// Save's alpha rule (DC31) over `pixels` RGBA float pixels; a NULL buffer or an overflowing size gives 0.
+///
+/// # Safety
+/// `rgba` is null or valid for `pixels * 4` floats and 4-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_alpha_used(rgba: *const f32, pixels: usize) -> i32 {
+    match pixels.checked_mul(16) {
+        Some(n) if !rgba.is_null() && n <= isize::MAX as usize => {
+            let px = std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), pixels);
+            catch_unwind(|| i32::from(helpers::alpha_used(px))).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// The largest DDS file `psdds_decode` accepts by policy.
+#[no_mangle]
+pub extern "C" fn psdds_max_file_bytes() -> u64 {
+    helpers::MAX_DDS_FILE_BYTES
+}
+
 const HDR_REFUSAL: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not open yet.";
 
 /// # Safety
@@ -301,8 +368,9 @@ unsafe fn decode(
             .get(i..i + 4)
             .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     };
-    if bytes.starts_with(b"DDS ") && (side(12) > MAX_SIDE || side(16) > MAX_SIDE) {
-        return Err(TOO_LARGE.into());
+    // A missing or zero side is left to `read_dds`, which names the real fault.
+    if bytes.starts_with(b"DDS ") && side(12) != 0 && side(16) != 0 {
+        helpers::check_size(side(16), side(12))?;
     }
     let f = engine::dds::read_dds(bytes).map_err(|e| e.to_string())?;
     if matches!(f.format, Bc6hUf16 | Bc6hSf16 | Rgba16f | Rgba32f) {
