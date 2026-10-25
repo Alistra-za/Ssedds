@@ -20,6 +20,8 @@
 
 #include <tlhelp32.h>
 
+#pragma comment(lib, "gdi32.lib")
+
 #include <set>
 #include <stdio.h>
 #include <string>
@@ -169,6 +171,7 @@ struct DialogUser {
     bool seen = false, filter_enabled_before_srgb = true, filter_enabled = false, filter_enabled_after = false;
     LRESULT formats = 0; // entries in the Format list
     wchar_t filter_shown[32] = {};
+    bool layout_ok = false; // DC43: Discard under sRGB, Type and Format combos equally wide, the label fits
 };
 
 static BOOL CALLBACK find_dialog(HWND w, LPARAM out) {
@@ -193,6 +196,32 @@ static DWORD WINAPI play_dialog(void *arg) {
     if (!dlg) return 0;
     Sleep(100); // let WM_INITDIALOG finish filling the controls
     u->seen = true;
+    { // DC43 layout, in client pixels of the dialog
+        auto box = [&](int id) {
+            RECT rc;
+            HWND c = GetDlgItem(dlg, id);
+            GetWindowRect(c, &rc);
+            MapWindowPoints(nullptr, dlg, reinterpret_cast<POINT *>(&rc), 2);
+            return rc;
+        };
+        const RECT srgb = box(IDC_SRGB), discard = box(IDC_DISCARD), type = box(IDC_TYPE), format = box(IDC_FORMAT);
+        HWND d = GetDlgItem(dlg, IDC_DISCARD);
+        wchar_t label[64] = {};
+        GetWindowTextW(d, label, 64);
+        std::wstring plain;
+        for (const wchar_t *p = label; *p; p++)
+            if (*p != L'&') plain += *p;
+        HDC dc = GetDC(d);
+        HGDIOBJ old = SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(d, WM_GETFONT, 0, 0)));
+        SIZE text = {};
+        GetTextExtentPoint32W(dc, plain.c_str(), int(plain.size()), &text);
+        SelectObject(dc, old);
+        ReleaseDC(d, dc);
+        u->layout_ok = format.right - format.left == type.right - type.left && discard.left == srgb.left &&
+                       discard.top >= format.top - 2 && discard.top > srgb.bottom &&
+                       discard.right - discard.left >= text.cx + GetSystemMetrics(SM_CXMENUCHECK) + 4 &&
+                       discard.right <= srgb.right && format.right <= discard.left;
+    }
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
     u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
     GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_before, 64);
@@ -302,6 +331,13 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         expect(result == 0 && opaque_result == 0 && u.seen && !u.filter_enabled && u.filter_enabled_after &&
                    discarded.compare(0, 4, "DDS ") == 0 && discarded == contents(path),
                "transparent layer + Discard transparency: filter editable, same DDS as the opaque layer");
+    }
+
+    {
+        write_file(path, original);
+        DialogUser u;
+        const int16 result = interactive_save(entry, path, opaque_alpha, &u);
+        expect(result == 0 && u.seen && u.layout_ok, "layout: Discard transparency under sRGB, Type and Format equally wide (DC43)");
     }
 
     // Cancel at the end: userCanceledErr and the file untouched.

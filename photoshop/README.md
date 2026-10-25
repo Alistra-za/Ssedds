@@ -19,7 +19,7 @@ Choose File > Save As (or Save a Copy) > **Tessalith DDS**. The plugin saves the
 - **Texture type**: Colour, Normal map or Linear mask. It sets the colour handling and mip rules, as in Tessalith's presets, and which formats are offered.
 - **sRGB** (checkbox beside the type): tags the file as sRGB; it changes only the tag, not the pixels or the mips (Colour mips are always filtered gamma-correctly). Off by default, because Skyrim's non-PBR textures are not sRGB-tagged. It is greyed and unticked for Normal and Linear mask (BC4 and BC5 have no sRGB variant either).
 - **Format**: Colour offers BC1, BC3, BC7 and uncompressed RGBA8; Normal map adds BC5; Linear mask also offers BC4 (one channel). A format the type does not offer (for example a remembered BC4 after switching to Colour) is replaced by BC7.
-- **Discard transparency** (checkbox): saves the texture opaque even when the image has transparent pixels. Without it, transparency is kept when some pixel is actually transparent and the format stores alpha (BC3, BC7, RGBA8).
+- **Discard transparency** (checkbox, under sRGB): saves the texture opaque even when the image has transparent pixels. Without it, transparency is kept when some pixel is actually transparent and the format stores alpha (BC3, BC7, RGBA8).
 - **Mipmaps** (checkbox): a full mip chain, or none when unticked.
 - **Filter** (beside Mipmaps): how mips are shrunk. It is greyed when Mipmaps is unticked, and greyed showing Box where the encoder would use Box anyway (for example when the image has real transparency and alpha is kept).
 - **Quality**: the encoder effort for the chosen format (BC7 effort, BC1/BC3 level, BC4/BC5 search). Greyed for RGBA8.
