@@ -7,4 +7,6 @@ accepted = [
     "BSL-1.0",
     "Zlib",
     "Unicode-3.0",
+    # engine and encoders-sys (Note DC, DC1 and DC41); file-level copyleft, not GPL.
+    "MPL-2.0",
 ]

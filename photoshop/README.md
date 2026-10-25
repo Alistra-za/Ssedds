@@ -1,6 +1,6 @@
 # Tessalith DDS for Adobe Photoshop
 
-A Photoshop file-format plugin that opens and saves Skyrim SE/AE DDS textures, using the same encoders and rules as Tessalith. MIT licence (see `LICENSE`); third-party licences are in `THIRD_PARTY_NOTICES.md`. Not made by or endorsed by Adobe.
+A Photoshop file-format plugin that opens and saves Skyrim SE/AE DDS textures, using the same encoders and rules as Tessalith. MIT licence (see `LICENSE`), except the Tessalith engine code inside it (the `engine` and `encoders-sys` crates), which is under the Mozilla Public License 2.0; its source is at https://github.com/Alistra-za/Tessalith. Third-party licences are in `THIRD_PARTY_NOTICES.md`. Not made by or endorsed by Adobe.
 
 ## Requirements
 - Windows x64.

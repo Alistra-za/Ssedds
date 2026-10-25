@@ -51,10 +51,14 @@ if ($aboutExit -ne 0) {
 
 $lic = Join-Path $repo 'LICENSES'
 $notices = Join-Path $stage 'THIRD_PARTY_NOTICES.md'
+$commit = git -C $repo rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or -not $commit) { throw 'git rev-parse HEAD failed; the notices must name the source commit (MPL-2.0 section 3.2).' }
 $head = @"
 # Third-party notices (Tessalith DDS)
 
-Tessalith DDS (``TessalithDDS.8bi``) is MIT-licensed (see ``LICENSE``). It contains the code below. Full licence texts follow.
+Tessalith DDS (``TessalithDDS.8bi``) is MIT-licensed (see ``LICENSE``), except the Tessalith engine inside it (the ``engine`` and ``encoders-sys`` crates), which is under the Mozilla Public License 2.0 (its text is in the MPL-2.0 section below). Their source code is at https://github.com/Alistra-za/Tessalith, commit ``$commit`` (version $version).
+
+It contains the code below. Full licence texts follow.
 
 ## Vendored encoders
 
