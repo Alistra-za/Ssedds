@@ -94,6 +94,7 @@ def load_alpha_opens_rgba():
 
 def load_alpha_254_opens_opaque():
     data = _encode([p[:3] + (254,) for p in GRADIENT], RGBA8)
+    assert psdds.decode(data)[3][3::4] == bytes([254] * 16), "fixture alpha is not 254"
     layer = _first_layer(img := _load(_write("alpha254.dds", data)))
     assert layer.has_alpha() is False, "alpha 254 everywhere opened with alpha (DC23)"
     img.delete()
