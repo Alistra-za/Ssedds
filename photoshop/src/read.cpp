@@ -5,6 +5,7 @@
 
 #include "pixels.h"
 
+#include <string.h>
 #include <vector>
 
 struct ReadState {
@@ -95,6 +96,13 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
 }
 
 } // namespace
+
+int16 filter_file(FormatRecord *r) {
+    // PIFormat.h FilterFile: claim only files that start with the DDS magic, so other files get Photoshop's message.
+    uint8_t magic[4] = {};
+    const bool dds = read_all(reinterpret_cast<HANDLE>(r->dataFork), magic, 4) && memcmp(magic, "DDS ", 4) == 0;
+    return dds ? noErr : formatCannotRead;
+}
 
 int16 read_start(FormatRecord *r, intptr_t *data) {
     if (!r->HostSupports32BitCoordinates) return report_error(r, "this Photoshop version is too old for Tessalith DDS.");

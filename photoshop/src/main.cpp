@@ -43,6 +43,8 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
         return read_continue(r, data);
     case formatSelectorReadFinish:
         return read_finish(r, data);
+    case formatSelectorFilterFile:
+        return filter_file(r);
     default:
         return noErr;
     }

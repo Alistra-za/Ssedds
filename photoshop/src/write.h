@@ -43,7 +43,8 @@ void set_revert_info(FormatRecord *record);
 // OptionsStart: shows the Save dialog with the remembered settings; OK stores them, Cancel returns userCanceledErr.
 int16 options_start(FormatRecord *record, intptr_t *data);
 
-// The Open selectors (read.cpp).
+// The Open selectors (read.cpp). filter_file: noErr for a file starting with "DDS ", else formatCannotRead.
+int16 filter_file(FormatRecord *record);
 int16 read_start(FormatRecord *record, intptr_t *data);
 int16 read_continue(FormatRecord *record, intptr_t *data);
 int16 read_finish(FormatRecord *record, intptr_t *data);
