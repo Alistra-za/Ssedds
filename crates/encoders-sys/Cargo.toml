@@ -2,7 +2,7 @@
 name = "encoders-sys"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MPL-2.0" # Tessalith's own files; vendor/ keeps its own licences (THIRD_PARTY_NOTICES.md)
 publish.workspace = true
 rust-version.workspace = true
 build = "build.rs"

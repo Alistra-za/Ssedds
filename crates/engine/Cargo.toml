@@ -2,7 +2,7 @@
 name = "engine"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MPL-2.0"
 publish.workspace = true
 rust-version.workspace = true
 build = "build.rs"

@@ -2731,3 +2731,15 @@ The letters CZ are provisional: take the next free letter on `main` at merge and
 ## Note DB — Version 1.0.0, first official release (owner, 2026-10-22)
 
 - **DB1 Version.** The workspace version moves 0.9.0 → 1.0.0 for the first official (non-alpha) release (owner: "bump engine to 1", "this will be an official release build"). 0.9.0 was never released, so the CHANGELOG's 1.0.0 section covers everything since 0.8.0-alpha.2. As in CH1, `ENGINE_VERSION` follows `CARGO_PKG_VERSION` and is part of `is_up_to_date`, so every `--on-existing if-changed` run re-encodes each recorded output once after upgrading. No preset or pixel output changes; goldens are unchanged. `docs/presets-changelog.md` gets a 1.0.0 entry and README names the version. The release zip is built without a suffix (`Tessalith-1.0.0-win-x64.zip`) and the commit it is built from is tagged `v1.0.0` locally; the owner pushes.
+
+## Note DC — Photoshop DDS plugin (owner, 2026-10-24)
+
+The letter DC is provisional (next free letter on main at 2026-10-24); rename at merge if taken.
+
+- **DC1 Licence grant.** The owner grants Tessalith's own code in `crates/engine` and `crates/encoders-sys` under `MPL-2.0` (no Exhibit B) so the Photoshop plugin (`crates/psdds`, `photoshop/`, MIT) can link them. Adobe's SDK licence (section 12) bars software licensed under the GNU GPL, so the plugin carries no GPL, not even as one choice of a dual licence. MPL-2.0 is file-level copyleft and lets Tessalith, which stays GPL-3.0-or-later, keep linking the two crates (MPL section 3.3). The vendored encoders in `crates/encoders-sys/vendor` keep their own licences. The plugin never links GPL, LGPL or AGPL code.
+- **DC2 (R1) sRGB per format.** sRGB applies only to formats with an sRGB variant (BC1, BC3, BC7, RGBA8). With Colour + BC4/BC5 the sRGB control greys and shows Off.
+- **DC3 (R2) Alpha.** Alpha is kept (`AlphaPolicy::Blend`, no coverage preservation) when the document has alpha and the format stores it (BC3, BC7, RGBA8); otherwise `AlphaPolicy::Remove`. No alpha-test option.
+- **DC4 (R3) Base profile.** Each texture type starts from the built-in `cs-quality` profile (`Target::Cs`): Colour -> `Subtype::Diffuse`, Normal -> `Subtype::Normal`, Linear mask -> `Subtype::GenericData`; the dialog's values then override `format`, `color`, `mips.filter`, `mips.levels`, `alpha.policy` and the quality field. `resize = none`, `drop_top_mip = false`.
+- **DC5 (R4) Quality lists.** Per format, the same values the GUI preset editor offers (`crates/gui/src/ui/presets.rs`): BC7 -> `encoder.effort`; BC1/BC3 -> `encoder.rgbcx_level`; BC4/BC5 -> `encoder.bc45_search_radius`; RGBA8 greyed. Default = the `cs-quality` value for the type.
+- **DC6 (R5) Input scale.** The plugin passes float RGBA in [0, 1]: 8-bit `v / 255`, 16-bit `v / 32768` (Photoshop's 16-bit range is 0..32768). Transfer `SourceTransfer::Stored`.
+- **DC7 (R6) No cancel or progress** during encode. Revisit if an 8k BC7 Max save is reported as unusable.

@@ -16,3 +16,6 @@ CLAUDE.local.md
 # Working docs kept locally, not shipped (owner 2026-10-16)
 /docs/superpowers/
 /docs/spikes/
+
+# Adobe Photoshop SDK (licensed, not redistributable)
+/tools/adobe photoshop sdk*/
