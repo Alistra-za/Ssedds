@@ -16,7 +16,8 @@ extern "C" {
 #endif
 
 /* Bumped on ANY change to this header's declarations or documented behaviour. 2 = the 7-field PsddsSettings and the
- * preset exports; 1 was the 6-field struct and never shipped. A host refuses a library whose psdds_abi_version()
+ * preset exports, plus abi/version, the host helpers and the rmaos pair (first shipped ABI); 1 was the 6-field struct
+ * and never shipped. A host refuses a library whose psdds_abi_version()
  * differs from the value it was compiled against. */
 #define PSDDS_ABI_VERSION 2u
 
@@ -114,11 +115,12 @@ int32_t psdds_dds_openable(const uint8_t *head, size_t len);
 int32_t psdds_opens_with_alpha(const uint8_t *px8, size_t pixels, uint32_t has_alpha);
 
 /* Save's alpha rule (DC31): 1 when some alpha (rgba[4k+3]) of `pixels` RGBA float pixels is below 254/255 (limit
- * 254/255 - 1e-6; NaN does not count). Pass the result as psdds_encode's has_alpha and to psdds_resolve. NULL rgba or an
- * overflowing pixel count: 0. */
+ * 254/255 - 1e-6; NaN does not count). Pass the result as psdds_encode's has_alpha and to psdds_resolve. rgba must be
+ * 4-byte aligned. NULL rgba or an overflowing pixel count: 0. */
 int32_t psdds_alpha_used(const float *rgba, size_t pixels);
 
-/* The largest DDS file psdds_decode accepts by policy: 16384^2 RGBA8, full chain, magic + header + DX10 header. */
+/* The bound a host applies before reading a file (psdds_decode does not check it): 16384^2 RGBA8, full chain, magic +
+ * header + DX10 header. */
 uint64_t psdds_max_file_bytes(void);
 
 enum { PSDDS_ROLE_ROUGHNESS = 0, PSDDS_ROLE_METALLIC = 1, PSDDS_ROLE_AO = 2, PSDDS_ROLE_SPECULAR = 3,
@@ -137,7 +139,10 @@ typedef struct PsddsRmaosJob {
     int32_t fill[PSDDS_ROLE_COUNT]; /* -1 = unset (neutral default), 0..255 = packing.fill for that role */
     uint32_t quality;               /* BC7 effort index (psdds_quality_label(PSDDS_BC7, i)); out of range = profile's */
     uint32_t mips;                  /* 0 top level only, 1 the rmaos profile's chain; other values are refused */
-    const float *normal;            /* RGBA floats of the set's _n, or NULL: no _n is written and nothing bakes */
+    const float *normal;            /* RGBA floats of the set's _n (normal_width*normal_height*4, 4-byte aligned), or
+                                     * NULL: no _n is written and nothing bakes. Its size is checked with
+                                     * psdds_check_size before it is read (that text does not name the normal); values
+                                     * are clamped like a PsddsSource's */
     uint32_t normal_width, normal_height;
     PsddsSettings normal_settings;  /* texture_type must be PSDDS_NORMAL; resolved as psdds_resolve does (DC32);
                                      * discard_alpha is checked (0/1) but changes nothing here (DC36: the _n is built

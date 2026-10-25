@@ -343,7 +343,7 @@ pub unsafe extern "C" fn psdds_alpha_used(rgba: *const f32, pixels: usize) -> i3
     }
 }
 
-/// The largest DDS file `psdds_decode` accepts by policy.
+/// The bound a host applies before reading a DDS file (`psdds_decode` does not check it).
 #[no_mangle]
 pub extern "C" fn psdds_max_file_bytes() -> u64 {
     helpers::MAX_DDS_FILE_BYTES
