@@ -13,6 +13,7 @@ from nodes.properties.inputs import BoolInput, DirectoryInput, ImageInput, Relat
 from . import _psdds, _ui, tessalith_group
 
 assert len(_ui.QUALITY_GROUPS) == 3, "save_dds_tessalith_node takes three quality inputs; psdds now has another count"
+assert _ui.NTYPES == 3, "save_dds_tessalith_node takes one format input per texture type (3)"
 _FMT = _ui.format_inputs()
 _Q = _ui.quality_inputs()
 
@@ -36,7 +37,7 @@ _Q = _ui.quality_inputs()
         if_group(_ui.visible("srgb"))(_ui.srgb_input()),
         *[if_group(Condition.enum(_ui.TYPE_ID, t) & _ui.custom())(_FMT[t]) for t in range(len(_FMT))],
         if_group(_ui.custom())(_ui.discard_input()),
-        _ui.mips_input(),
+        if_group(_ui.custom())(_ui.mips_input()),
         if_group(Condition.bool(_ui.MIPS_ID, True) & _ui.visible("filter"))(_ui.filter_input()),
         *[if_group(_ui.quality_condition(g))(_Q[g]) for g in range(len(_Q))],
         BoolInput("Skip existing files", default=False).with_id(1000).with_docs("If enabled, existing files are not overwritten."),
@@ -92,7 +93,8 @@ def save_dds_tessalith_node(
     settings = _ui.settings_for(preset, raw)
     data = _psdds.encode(img, settings)  # PsddsError (a RuntimeError) carries psdds's text untrimmed
     # alpha is unknown here without a second pass; 4 channels is the upper bound
-    channels = 1 if img.ndim == 2 else img.shape[2]
-    eff, _ = _psdds.resolve(settings, channels == 4 and not settings["discard_alpha"])
-    logger.debug(f"Tessalith DDS effective settings (alpha assumed if 4 channels): {eff}")
+    if logger.isEnabledFor(10):  # DEBUG
+        channels = 1 if img.ndim == 2 else img.shape[2]
+        eff, _ = _psdds.resolve(settings, channels == 4 and not settings["discard_alpha"])
+        logger.debug(f"Tessalith DDS effective settings (alpha assumed if 4 channels): {eff}")
     _psdds.write_files([(full_path, data)])

@@ -3,9 +3,13 @@
 import importlib
 import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 DLL = Path(os.environ.get("TESSALITH_PSDDS_DLL") or REPO / "target/psdds/x86_64-pc-windows-msvc/release/psdds.dll")
@@ -18,9 +22,11 @@ if DLL.is_file() and SRC.is_dir():
     sys.path.insert(0, str(SRC))
     pkg = types.ModuleType("tessalith_t")  # a bare package, so the real __init__ (needs chaiNNer's category) is not run
     pkg.__path__ = [str(PKG)]
+    pkg.tessalith_group = types.SimpleNamespace(register=lambda **kw: (lambda fn: fn))  # the real group needs chaiNNer's category
     sys.modules["tessalith_t"] = pkg
     P = importlib.import_module("tessalith_t._psdds")
     U = importlib.import_module("tessalith_t._ui")
+    N = importlib.import_module("tessalith_t.save_dds_tessalith").save_dds_tessalith_node
 
 COLOUR, NORMAL, MASK = 0, 1, 2
 BC1, BC3, BC4, BC5, BC7, RGBA8 = range(6)
@@ -96,16 +102,19 @@ class UiTests(unittest.TestCase):
         self.assertEqual(U.settings_for(3, raw), P.presets()[2][1])
         self.assertEqual(U.settings_for(3, raw)["texture_type"], NORMAL)
         self.assertEqual(U.settings_for(2, raw)["discard_alpha"], 1)
-        U.settings_for(2, raw)
-        self.assertIs(U.settings_for(0, raw), raw)  # DC45: Custom never snaps to a seed
-        self.assertEqual(raw["format"], BC1)
+        self.assertEqual(raw["format"], BC1)  # DC45: Custom keeps the raw inputs
 
     def test_discard_only_by_preset(self):
-        self.assertTrue(ev(U.custom(), state(NORMAL, BC5)))
-        self.assertTrue(ev(U.custom(), state(MASK, RGBA8)))
-        self.assertFalse(ev(U.custom(), state(preset=1)))
-        t = U.visibility_table()
-        self.assertEqual(set(t), {"srgb", "filter", "quality"})
+        # DC36: the node gates Discard and Mipmaps by custom() only
+        for t in range(3):
+            for f in range(6):
+                if P.format_allowed(t, f):
+                    self.assertTrue(ev(U.custom(), state(t, f)))
+                    for preset in range(1, 6):
+                        self.assertFalse(ev(U.custom(), state(t, f, preset=preset)))
+        # the srgb/filter table is probed with has_alpha 0; Discard never enters it
+        self.assertEqual(set(U.TABLE), {"srgb", "filter", "quality"})
+        self.assertEqual(U.TABLE, U.visibility_table())
 
     def test_formats_per_type(self):
         n = [len(i.to_dict()["options"]) for i in U.format_inputs()]
@@ -125,6 +134,61 @@ class UiTests(unittest.TestCase):
         self.assertEqual(U.selected(COLOUR, fm, {0: 9, 1: 1, 2: 6}), (BC1, 9))  # hidden groups 1, 2 ignored
         fm[COLOUR] = RGBA8
         self.assertEqual(U.selected(COLOUR, fm, {0: 9, 1: 1, 2: 6})[0], RGBA8)
+
+
+@unittest.skipIf(U is None, "psdds.dll or chaiNNer src missing")
+class NodeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.img = np.random.default_rng(1).random((16, 16, 3), dtype=np.float32)
+
+    def run_node(self, img=None, preset=0, t=COLOUR, fmts=(BC7, BC7, BC7), skip=False, name="x"):
+        from api import Lazy
+        lazy = Lazy.ready(self.img if img is None else img)
+        return N(lazy, self.dir, None, name, preset, t, False, *fmts, False, True, 0, 4, 0, 4, skip)
+
+    def test_skip_existing_does_not_evaluate_image(self):
+        p = self.dir / "x.dds"
+        p.write_bytes(b"old")
+
+        class Boom:
+            @property
+            def value(self):
+                raise AssertionError("lazy image evaluated")
+
+        N(Boom(), self.dir, None, "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, True)
+        self.assertEqual(p.read_bytes(), b"old")
+
+    def test_overwrite_goes_through_write_files(self):
+        (self.dir / "x.dds").write_bytes(b"old")
+        mod = sys.modules["tessalith_t.save_dds_tessalith"]
+        with mock.patch.object(mod._psdds, "write_files", wraps=mod._psdds.write_files) as w:
+            self.run_node()
+        w.assert_called_once()
+        self.assertEqual((self.dir / "x.dds").read_bytes()[:4], b"DDS ")
+
+    def test_preset_writes_seed_bytes(self):
+        for k in (2, 3):
+            self.run_node(preset=k, name=f"p{k}")
+            want = P.encode(self.img, P.presets()[k - 1][1])
+            self.assertEqual((self.dir / f"p{k}.dds").read_bytes(), want)
+
+    def test_custom_maps_inputs(self):
+        self.run_node(t=NORMAL, fmts=(BC7, BC1, BC7))
+        s = {**P.defaults(NORMAL), "format": BC1, "quality": 4, "mips": 1}
+        s["quality"] = U.selected(NORMAL, {0: BC7, 1: BC1, 2: BC7}, {0: 4, 1: 0, 2: 4})[1]
+        self.assertEqual((self.dir / "x.dds").read_bytes(), P.encode(self.img, s))
+
+    def test_psdds_error_text_surfaces(self):
+        with self.assertRaises(P.PsddsError) as cm:
+            P.check_size(1 << 20, 1 << 20)
+        want = str(cm.exception)
+        with self.assertRaises(RuntimeError) as cm2:
+            self.run_node(img=np.broadcast_to(np.zeros((1, 1, 3), np.float32), (1 << 20, 1 << 20, 3)))
+        self.assertEqual(str(cm2.exception), want)
+        self.assertFalse((self.dir / "x.dds").exists())
 
 
 if __name__ == "__main__":
