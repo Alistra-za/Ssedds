@@ -85,7 +85,7 @@ class T(unittest.TestCase):
     def test_preset_state_custom_sticks(self):
         # PresetState indices are psdds seed indices (M4); the UI adds 1 for Custom.
         ps = DLL.presets()
-        st = P.PresetState(DLL.resolve)
+        st = P.PresetState(DLL.resolve, 5)
         self.assertEqual(st.shown(ps, ps[0][1], False), 0)
         st.pick(None)
         self.assertEqual(st.shown(ps, ps[0][1], False), -1)
@@ -95,7 +95,44 @@ class T(unittest.TestCase):
         st.pick(None)
         st.saved()
         self.assertEqual(st.shown(ps, ps[0][1], False), 0)
-        self.assertEqual(P.PresetState(DLL.resolve).shown(ps, ps[0][1], False), 0)
+        self.assertEqual(P.PresetState(DLL.resolve, 5).shown(ps, ps[0][1], False), 0)
+
+    def test_preset_state_pick_validates(self):
+        st = P.PresetState(DLL.resolve, len(DLL.presets()))
+        for bad in (5, -2, 99):
+            with self.assertRaises(ValueError):
+                st.pick(bad)
+        st.pick(4)
+        self.assertEqual(st.picked, 4)
+
+    def test_discard_matters_only_with_alpha_in_psdds(self):
+        # match_preset zeroes discard_alpha without alpha (DC40); this pins that psdds still needs it done by the host.
+        a = DLL.presets()[1][1]
+        b = copy(a)
+        b.discard_alpha = 0
+        self.assertNotEqual(DLL.resolve(a, False)[0].key(), DLL.resolve(b, False)[0].key())
+
+    def test_missing_abi_symbol(self):
+        with mock.patch.object(P.ctypes, "CDLL", return_value=object()):
+            with self.assertRaises(P.PsddsError) as c:
+                P.Psdds()
+        self.assertIn("needs 2", str(c.exception))
+
+    def test_floats_length_mismatch(self):
+        with self.assertRaises(ValueError):
+            DLL.alpha_used(bytearray(15), 1, 1)
+        with self.assertRaises(ValueError):
+            DLL.encode(bytearray(15), 1, 1, False, DLL.defaults(P.COLOUR))
+
+    def test_encode_error_path(self):
+        with self.assertRaises(P.PsddsError) as c:
+            DLL.encode(bytearray(16385 * 16), 16385, 1, False, DLL.defaults(P.COLOUR))
+        self.assertTrue(str(c.exception).startswith("This image is larger than"))
+
+    def test_err_truncation(self):
+        buf = ctypes.create_string_buffer(8)
+        self.assertNotEqual(DLL._dll.psdds_check_size(16385, 1, buf, 8), 0)
+        self.assertEqual(len(buf.value), 7)  # truncated and NUL-terminated
 
     def test_resolve_srgb_off_keeps_filter(self):
         raw = DLL.defaults(P.COLOUR)

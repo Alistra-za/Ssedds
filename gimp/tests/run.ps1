@@ -12,8 +12,10 @@ if (-not (Test-Path $py)) { $missing += "GIMP's Python not found at ${py}: set S
 if ($missing) { [Console]::Error.WriteLine(($missing -join '; ')); exit 1 }
 Push-Location $repo
 try {
-    & $py -I -m unittest discover -s gimp\tests -p 'test_*.py'
+    $lines = & $py -I -m unittest discover -s gimp\tests -p 'test_*.py' 2>&1 | ForEach-Object { "$_" }
     $code = $LASTEXITCODE
+    $lines
+    if ($code -eq 0 -and ($lines -match '^Ran 0 tests')) { [Console]::Error.WriteLine('no tests were discovered'); $code = 1 }
     if ($Gimp -and $code -eq 0) {
         $batch = 'gimp\tests\batch\run_batch.ps1'
         if (-not (Test-Path $batch)) { [Console]::Error.WriteLine("$batch does not exist yet (Task 3)"); $code = 1 } else { & $batch; $code = $LASTEXITCODE }

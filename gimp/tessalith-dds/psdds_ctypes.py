@@ -36,7 +36,7 @@ def _text(buf):
     return buf.value.decode("utf-8", errors="replace")
 
 
-def match_preset(presets, raw, has_alpha, preferred=-1, resolve=None):
+def match_preset(presets, raw, has_alpha, preferred, resolve):
     """Index of the preset whose effective values equal raw's: preferred if it still does, else the first, else -1."""
     def eff(s):
         s = Settings.from_buffer_copy(s)
@@ -53,15 +53,18 @@ def match_preset(presets, raw, has_alpha, preferred=-1, resolve=None):
 class PresetState:
     """DC40 picked seed, DC45 custom. Indices are psdds seed indices (M4); None or -1 = Custom."""
 
-    def __init__(self, resolve):
+    def __init__(self, resolve, count):
         self._resolve = resolve
+        self._count = count
         self.picked = -1
         self.custom = False
 
     def pick(self, index):
-        if index is None or index < 0:
+        if index is None or index == -1:
             self.custom = True
         else:
+            if not 0 <= index < self._count:
+                raise ValueError(f"preset index {index} is out of range")
             self.custom = False
             self.picked = index
 
@@ -84,8 +87,11 @@ class Psdds:
         except OSError as e:
             raise PsddsError(f"Cannot load psdds.dll: {e}") from e
         # Check the ABI before touching anything else.
-        d.psdds_abi_version.argtypes, d.psdds_abi_version.restype = [], ctypes.c_uint32
-        got = d.psdds_abi_version()
+        try:
+            d.psdds_abi_version.argtypes, d.psdds_abi_version.restype = [], ctypes.c_uint32
+            got = d.psdds_abi_version()
+        except AttributeError as e:
+            raise PsddsError(f"psdds.dll has no ABI version, this plug-in needs {EXPECTED_ABI}") from e
         if got != EXPECTED_ABI:
             raise PsddsError(f"psdds.dll has ABI version {got}, this plug-in needs {EXPECTED_ABI}")
         u32, vp, sz, cp = ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p
@@ -150,6 +156,7 @@ class Psdds:
             raise PsddsError(_text(err))
 
     def openable(self, head):
+        # shortcut: 148 = magic + header + DX10 header, the "up to 148" of psdds.h's psdds_dds_openable; revisit if that changes.
         head = bytes(head[:148])
         return bool(self._dll.psdds_dds_openable(head, len(head)))
 
@@ -171,6 +178,7 @@ class Psdds:
         return self._dll.psdds_max_file_bytes()
 
     def encode(self, rgba, w, h, has_alpha, s):
+        """rgba must be a writable buffer (bytearray), not bytes: ctypes from_buffer needs it."""
         arr = self._floats(rgba, w, h)
         out, err = _Buf(), ctypes.create_string_buffer(_ERR_CAP)
         rc = self._dll.psdds_encode(arr, w, h, int(bool(has_alpha)), ctypes.byref(s), ctypes.byref(out), err, _ERR_CAP)
