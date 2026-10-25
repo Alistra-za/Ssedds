@@ -387,6 +387,24 @@ pub unsafe extern "C" fn psdds_dds_openable(head: *const u8, len: usize) -> i32 
         .unwrap_or(0)
 }
 
+/// [`psdds_dds_openable`] that also claims the float formats `psdds_decode_depth` opens (DXGI 2, 10, 95, 96; D3DFMT
+/// 113, 116). `psdds_dds_openable` itself does not change.
+///
+/// # Safety
+/// `head` is null or valid for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_dds_openable_float(head: *const u8, len: usize) -> i32 {
+    if head.is_null() || len > isize::MAX as usize {
+        return 0;
+    }
+    catch_unwind(|| {
+        i32::from(helpers::dds_openable_float(std::slice::from_raw_parts(
+            head, len,
+        )))
+    })
+    .unwrap_or(0)
+}
+
 /// Open's alpha rule (DC23) over `pixels` 4-byte pixels; a NULL buffer or an overflowing size gives 0.
 ///
 /// # Safety
@@ -429,14 +447,18 @@ pub extern "C" fn psdds_max_file_bytes() -> u64 {
 
 const HDR_REFUSAL: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not open yet.";
 
+/// `depth` null: `psdds_decode` (HDR refused). Otherwise `psdds_decode_depth` (DE4): `*depth` is 8, or 32 for the
+/// float formats.
+///
 /// # Safety
-/// As `psdds_decode`.
+/// As `psdds_decode`; `depth` is null or valid.
 unsafe fn decode(
     dds: *const u8,
     len: usize,
     width: *mut u32,
     height: *mut u32,
     has_alpha: *mut u32,
+    depth: *mut u32,
     out: *mut PsddsBuf,
 ) -> Result<(), String> {
     use engine::dds::DdsPixelFormat::*;
@@ -460,7 +482,8 @@ unsafe fn decode(
         helpers::check_size(side(16), side(12))?;
     }
     let f = engine::dds::read_dds(bytes).map_err(|e| e.to_string())?;
-    if matches!(f.format, Bc6hUf16 | Bc6hSf16 | Rgba16f | Rgba32f) {
+    let float = matches!(f.format, Bc6hUf16 | Bc6hSf16 | Rgba16f | Rgba32f);
+    if float && depth.is_null() {
         return Err(HDR_REFUSAL.into());
     }
     if f.is_cubemap || f.caps2 & 0x200 != 0 || f.dx10.is_some_and(|d| d.misc & 0x4 != 0) {
@@ -474,6 +497,42 @@ unsafe fn decode(
         .first()
         .ok_or("This DDS has no mip levels.")?
         .clone();
+    if float {
+        // shortcut: decode_level_rgba allocates the float image infallibly (4 GiB at 16384²); make it fallible if a large HDR open aborts
+        let px = engine::decode::decode_level_rgba(f.format, w, h, &f.data[range], None)
+            .map_err(|e| e.to_string())?;
+        // NaN -> 0, ±inf -> ±65504 (the half range); negatives and values above 1 are kept.
+        let px: Vec<[f32; 4]> = px
+            .into_iter()
+            .map(|p| {
+                p.map(|v| {
+                    if v.is_nan() {
+                        0.0
+                    } else {
+                        v.clamp(-65504.0, 65504.0)
+                    }
+                })
+            })
+            .collect();
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(px.len() * 16)
+            .map_err(|_| "Not enough memory to open this DDS.")?;
+        px.iter()
+            .flatten()
+            .for_each(|v| buf.extend_from_slice(&v.to_ne_bytes()));
+        let alpha = matches!(f.format, Rgba16f | Rgba32f) && helpers::alpha_used(&px);
+        let buf = buf.into_boxed_slice();
+        let blen = buf.len();
+        *width = w;
+        *height = h;
+        *has_alpha = u32::from(alpha);
+        *depth = 32;
+        *out = PsddsBuf {
+            data: Box::into_raw(buf).cast::<u8>(),
+            len: blen,
+        };
+        return Ok(());
+    }
     let engine::decode::Decoded::Ldr(px) =
         engine::decode::decode_level(f.format, w, h, &f.data[range], None)
             .map_err(|e| e.to_string())?
@@ -505,6 +564,9 @@ unsafe fn decode(
     *width = w;
     *height = h;
     *has_alpha = u32::from(stores_alpha || any_clear);
+    if !depth.is_null() {
+        *depth = 8;
+    }
     *out = PsddsBuf {
         data: Box::into_raw(rgba).cast::<u8>(),
         len,
@@ -532,6 +594,68 @@ pub unsafe extern "C" fn psdds_decode(
     err: *mut c_char,
     err_cap: usize,
 ) -> i32 {
+    decode_entry(
+        dds,
+        len,
+        width,
+        height,
+        has_alpha,
+        std::ptr::null_mut(),
+        out,
+        err,
+        err_cap,
+    )
+}
+
+/// [`psdds_decode`] that also opens HDR (DE4). `*depth` is 8 for every format `psdds_decode` opens (`out` and
+/// `has_alpha` are then byte-identical to it), or 32 for BC6H UF16/SF16, RGBA16F and RGBA32F: `out` then holds
+/// `width * height * 16` bytes of native-endian f32 RGBA (the top mip; NaN -> 0, ±inf -> ±65504, negatives and values
+/// above 1 kept; BC6H alpha 1.0). Read it with memcpy: the alignment is not promised. `has_alpha` is 1 for the float
+/// formats only when RGBA16F/RGBA32F has an alpha below 254/255. Cube maps, arrays, the size rule and too little
+/// memory are refused as `psdds_decode` refuses them.
+///
+/// # Safety
+/// As `psdds_decode`; `depth` is null or valid (null is refused).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn psdds_decode_depth(
+    dds: *const u8,
+    len: usize,
+    width: *mut u32,
+    height: *mut u32,
+    has_alpha: *mut u32,
+    depth: *mut u32,
+    out: *mut PsddsBuf,
+    err: *mut c_char,
+    err_cap: usize,
+) -> i32 {
+    if depth.is_null() {
+        if !out.is_null() {
+            *out = PsddsBuf {
+                data: std::ptr::null_mut(),
+                len: 0,
+            };
+        }
+        write_err(err, err_cap, "psdds_decode_depth: null pointer argument");
+        return 1;
+    }
+    decode_entry(dds, len, width, height, has_alpha, depth, out, err, err_cap)
+}
+
+/// # Safety
+/// As `decode`.
+#[allow(clippy::too_many_arguments)]
+unsafe fn decode_entry(
+    dds: *const u8,
+    len: usize,
+    width: *mut u32,
+    height: *mut u32,
+    has_alpha: *mut u32,
+    depth: *mut u32,
+    out: *mut PsddsBuf,
+    err: *mut c_char,
+    err_cap: usize,
+) -> i32 {
     if !out.is_null() {
         *out = PsddsBuf {
             data: std::ptr::null_mut(),
@@ -540,7 +664,7 @@ pub unsafe extern "C" fn psdds_decode(
     }
     let r = catch_unwind(AssertUnwindSafe(|| {
         pin_self();
-        decode(dds, len, width, height, has_alpha, out)
+        decode(dds, len, width, height, has_alpha, depth, out)
     }))
     .unwrap_or_else(|e| Err(panic_text(e)));
     match r {

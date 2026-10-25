@@ -1,7 +1,7 @@
 //! The shared host rules, through the C ABI: size check, openable, DC23 open alpha, DC31 save alpha, file bound.
 use psdds::{
-    psdds_alpha_used, psdds_check_size, psdds_dds_openable, psdds_encode, psdds_max_file_bytes,
-    psdds_opens_with_alpha, PsddsBuf,
+    psdds_alpha_used, psdds_check_size, psdds_dds_openable, psdds_dds_openable_float, psdds_encode,
+    psdds_max_file_bytes, psdds_opens_with_alpha, PsddsBuf,
 };
 use std::ffi::{c_char, CStr};
 
@@ -160,5 +160,33 @@ fn encode_reports_check_size_text_and_keeps_its_order() {
     assert_eq!(
         encode_err(std::ptr::null(), 16385, 1),
         "psdds_encode: null pointer argument"
+    );
+}
+
+#[test]
+fn float_headers_are_claimed() {
+    let both = |h: &[u8]| {
+        let f = unsafe { psdds_dds_openable_float(h.as_ptr(), h.len()) };
+        (f, unsafe { psdds_dds_openable(h.as_ptr(), h.len()) })
+    };
+    let dx10 = *b"DX10";
+    for d in [2, 10, 95, 96] {
+        assert_eq!(both(&dds_header(dx10, 0, d, 0, 1)), (1, 0), "dxgi {d}");
+    }
+    for f in [113u32, 116] {
+        let cc = f.to_le_bytes();
+        assert_eq!(both(&dds_header(cc, 0, 0, 0, 0)), (1, 0), "fourcc {f}");
+    }
+    for d in [6, 26, 94] {
+        assert_eq!(both(&dds_header(dx10, 0, d, 0, 1)), (0, 0), "dxgi {d}");
+    }
+    let f111 = 111u32.to_le_bytes();
+    assert_eq!(both(&dds_header(f111, 0, 0, 0, 0)), (0, 0));
+    assert_eq!(both(&dds_header(dx10, 0, 10, 4, 1)), (0, 0), "cube");
+    assert_eq!(both(&dds_header(dx10, 0, 10, 0, 6)), (0, 0), "array");
+    assert_eq!(both(&dds_header(*b"DXT1", 0x200, 0, 0, 0)), (0, 0));
+    assert_eq!(
+        unsafe { psdds_dds_openable_float(std::ptr::null(), 148) },
+        0
     );
 }

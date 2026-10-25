@@ -1,5 +1,8 @@
 //! `psdds_decode` turns a DDS top mip into RGBA8 within each codec's tolerance, and refuses what Open cannot show.
-use psdds::{psdds_decode, psdds_defaults, psdds_encode, psdds_free, PsddsBuf, PsddsSettings};
+use psdds::{
+    psdds_decode, psdds_decode_depth, psdds_defaults, psdds_encode, psdds_encode_depth, psdds_free,
+    PsddsBuf, PsddsSettings,
+};
 use std::ffi::{c_char, CStr};
 
 fn gradient(w: u32, h: u32, alpha: bool) -> Vec<f32> {
@@ -340,4 +343,193 @@ fn bc1_alpha_is_real_only_with_punch_through() {
     .unwrap();
     assert_eq!(opaque.has_alpha, 0);
     assert!(opaque.rgba.chunks(4).all(|p| p[3] == 255));
+}
+
+struct DecodedF {
+    w: u32,
+    h: u32,
+    has_alpha: u32,
+    depth: u32,
+    px: Vec<f32>,
+    raw: Vec<u8>,
+}
+
+fn decode_depth(dds: &[u8]) -> Result<DecodedF, (i32, String)> {
+    let (mut w, mut h, mut a, mut d) = (0u32, 0u32, 7u32, 7u32);
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut err = [0 as c_char; 256];
+    let rc = unsafe {
+        psdds_decode_depth(
+            dds.as_ptr(),
+            dds.len(),
+            &mut w,
+            &mut h,
+            &mut a,
+            &mut d,
+            &mut out,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if rc != 0 {
+        assert!(out.data.is_null());
+        let m = unsafe { CStr::from_ptr(err.as_ptr()) };
+        return Err((rc, m.to_str().unwrap().to_owned()));
+    }
+    let raw = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
+    unsafe { psdds_free(out) };
+    let px = if d == 32 {
+        raw.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
+            .collect()
+    } else {
+        vec![]
+    };
+    Ok(DecodedF {
+        w,
+        h,
+        has_alpha: a,
+        depth: d,
+        px,
+        raw,
+    })
+}
+
+fn encode_f32(px: &[f32], w: u32, h: u32, has_alpha: bool, format: u32) -> Vec<u8> {
+    let s = PsddsSettings {
+        format,
+        mips: 1,
+        ..psdds_defaults(0)
+    };
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut err = [0 as c_char; 256];
+    let rc = unsafe {
+        psdds_encode_depth(
+            px.as_ptr(),
+            w,
+            h,
+            u32::from(has_alpha),
+            32,
+            &s,
+            &mut out,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    assert_eq!(rc, 0);
+    let v = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
+    unsafe { psdds_free(out) };
+    v
+}
+
+#[test]
+fn float_open_round_trips() {
+    let (w, h) = (8, 8);
+    let px: Vec<f32> = (0..w * h).flat_map(|_| [4.0, 0.5, 0.25, 0.5]).collect();
+    let d = decode_depth(&encode_f32(&px, w, h, true, 7)).unwrap();
+    assert_eq!((d.w, d.h, d.depth, d.has_alpha), (w, h, 32, 1));
+    assert_eq!(d.raw.len(), (w * h * 16) as usize);
+    assert!(d.px.chunks(4).all(|p| p == [4.0, 0.5, 0.25, 0.5]));
+    // opaque RGBA16F: no alpha
+    let op: Vec<f32> = (0..w * h).flat_map(|_| [4.0, 0.5, 0.25, 1.0]).collect();
+    let d = decode_depth(&encode_f32(&op, w, h, true, 7)).unwrap();
+    assert_eq!((d.depth, d.has_alpha), (32, 0));
+    // BC6H: alpha 1.0, has_alpha 0, RGB within 2%
+    let d = decode_depth(&encode_f32(&px, w, h, true, 6)).unwrap();
+    assert_eq!((d.depth, d.has_alpha), (32, 0));
+    for p in d.px.chunks(4) {
+        assert_eq!(p[3], 1.0);
+        for (g, want) in p[..3].iter().zip([4.0f32, 0.5, 0.25]) {
+            assert!((g - want).abs() <= want * 0.02, "{g} vs {want}");
+        }
+    }
+}
+
+#[test]
+fn ldr_open_is_unchanged() {
+    let (w, h) = (64, 32);
+    for (f, ty) in [(0, 0), (1, 0), (2, 2), (3, 2), (4, 0), (5, 0)] {
+        let px = gradient(w, h, true);
+        let s = PsddsSettings {
+            format: f,
+            mips: 1,
+            quality: 0,
+            ..psdds_defaults(ty)
+        };
+        let dds = encode(&px, w, h, true, &s);
+        let (old, new) = (decode(&dds).unwrap(), decode_depth(&dds).unwrap());
+        assert_eq!(new.depth, 8, "format {f}");
+        assert_eq!((new.w, new.h, new.has_alpha), (old.w, old.h, old.has_alpha));
+        assert!(new.raw == old.rgba, "format {f}");
+    }
+}
+
+fn f32_bytes(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+#[test]
+fn float_open_sanitises_non_finite() {
+    let px = [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        1.0,
+        -2.0,
+        3.0,
+        0.5,
+        1.0,
+    ];
+    let d = decode_depth(&raw(2, 1, b"DX10", 2, 0, 1, 0, &f32_bytes(&px))).unwrap();
+    assert_eq!(d.px, [0.0, 65504.0, -65504.0, 1.0, -2.0, 3.0, 0.5, 1.0]);
+    // BC6H SF16 (mode 11, 10-bit endpoints, all indices 0): R endpoint 0 is negative; expected values come from
+    // the engine's decoder.
+    let mut blk = [0u8; 16];
+    let mut set = |at: usize, n: usize, v: u32| {
+        for i in 0..n {
+            if v >> i & 1 == 1 {
+                blk[(at + i) / 8] |= 1 << ((at + i) % 8);
+            }
+        }
+    };
+    set(0, 5, 0b00011); // mode 11
+    set(5, 10, 0x3F0); // R endpoint 0 = -16 (two's complement)
+    let dds = raw(4, 4, b"DX10", 96, 0, 1, 0, &blk);
+    let f = engine::dds::read_dds(&dds).unwrap();
+    let (lw, lh, r) = f.levels[0].clone();
+    let want = engine::decode::decode_level_rgba(f.format, lw, lh, &f.data[r], None).unwrap();
+    assert!(want[0][0] < 0.0, "fixture must be negative: {}", want[0][0]);
+    let d = decode_depth(&dds).unwrap();
+    assert_eq!(d.depth, 32);
+    assert_eq!(d.px[0], want[0][0]);
+    assert_eq!(d.px[3], 1.0);
+}
+
+#[test]
+fn float_open_still_refuses_cube_and_array() {
+    let cube = "This DDS is a cube map, which this plugin does not open.";
+    assert_eq!(
+        decode_depth(&raw(4, 4, b"DX10", 10, 4, 1, 0, &[0; 768]))
+            .err()
+            .unwrap()
+            .1,
+        cube
+    );
+    assert_eq!(
+        decode_depth(&raw(4, 4, b"DX10", 98, 0, 2, 0, &[0; 32]))
+            .err()
+            .unwrap()
+            .1,
+        "This DDS is a texture array, which this plugin does not open."
+    );
+    // psdds_decode keeps the old HDR text
+    assert_eq!(err_of(&raw(4, 4, b"DX10", 10, 0, 1, 0, &[0; 128])), HDR);
 }

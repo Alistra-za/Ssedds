@@ -123,6 +123,14 @@ int32_t psdds_encode_depth(const float *rgba, uint32_t width, uint32_t height, u
  * Returns 0 on success; otherwise non-zero, *out empty, and the reason in err (NULL or err_cap 0: no text). */
 int32_t psdds_decode(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *height, uint32_t *has_alpha,
                      PsddsBuf *out, char *err, size_t err_cap);
+/* psdds_decode that also opens HDR (Note DE4). *depth = 8: every format psdds_decode opens; out and has_alpha are
+ * byte-identical to it. *depth = 32: BC6H UF16/SF16, RGBA16F and RGBA32F; out holds width*height*16 bytes of
+ * native-endian f32 RGBA (top mip). NaN becomes 0 and +-inf becomes +-65504; negatives and values above 1 are kept;
+ * BC6H alpha is 1.0. *has_alpha = 1 only for RGBA16F/RGBA32F with an alpha below 254/255 (psdds_alpha_used's rule).
+ * The buffer is bytes: its alignment is not promised, so read it with memcpy. Release with psdds_free. Cube maps,
+ * arrays, the size rule and too little memory are refused as psdds_decode refuses them. NULL depth: refused. */
+int32_t psdds_decode_depth(const uint8_t *dds, size_t len, uint32_t *width, uint32_t *height, uint32_t *has_alpha,
+                           uint32_t *depth, PsddsBuf *out, char *err, size_t err_cap);
 
 /* 0 when width x height can be encoded or opened; else 1 and the reason in err (a side over 16384: "This image is
  * larger than 16384 pixels on a side, the most Skyrim supports."; a zero side: its own text). psdds_encode and
@@ -133,6 +141,9 @@ int32_t psdds_check_size(uint32_t width, uint32_t height, char *err, size_t err_
  * no "DDS " magic, BC6H/float DXGI formats, D3DFMT float FourCCs 111-117, cube maps and arrays. A file shorter than the
  * headers is openable, so the reader can say why it fails. NULL head: 0. */
 int32_t psdds_dds_openable(const uint8_t *head, size_t len);
+/* psdds_dds_openable, but also 1 for the float formats psdds_decode_depth opens: DXGI 2, 10, 95, 96 and D3DFMT 113,
+ * 116. DXGI 94 and the other float formats stay 0. psdds_dds_openable itself does not change. */
+int32_t psdds_dds_openable_float(const uint8_t *head, size_t len);
 
 /* Open's alpha rule (DC23): 1 when has_alpha != 0 and some alpha byte (byte 3 of each 4-byte pixel: RGBA8 or BGRA8)
  * is below 254. NULL px8 or an overflowing pixel count: 0. */

@@ -28,6 +28,16 @@ fn le32(h: &[u8], at: usize) -> u32 {
 /// No magic, BC6H or float DXGI formats, float D3DFMT FourCCs 111-117, cube maps and arrays are not. A file shorter
 /// than the headers is openable, so the reader can say why it fails.
 pub fn dds_openable(head: &[u8]) -> bool {
+    openable(head, false)
+}
+
+/// [`dds_openable`] for `psdds_decode_depth` (DE4): also true for the float formats `read_dds` maps to RGBA32F,
+/// RGBA16F and BC6H: DXGI 2, 10, 95, 96 and D3DFMT 113, 116. Other float formats stay false.
+pub fn dds_openable_float(head: &[u8]) -> bool {
+    openable(head, true)
+}
+
+fn openable(head: &[u8], float: bool) -> bool {
     if !head.starts_with(b"DDS ") {
         return false;
     }
@@ -38,7 +48,7 @@ pub fn dds_openable(head: &[u8]) -> bool {
         return false; // caps2 DDSCAPS2_CUBEMAP
     }
     let fourcc = le32(head, 84);
-    if (111..=117).contains(&fourcc) {
+    if (111..=117).contains(&fourcc) && !(float && matches!(fourcc, 113 | 116)) {
         return false; // D3DFMT float formats (R16F .. A32B32G32R32F)
     }
     if fourcc != 0x3031_5844 /* "DX10" */ || head.len() < 148 {
@@ -49,7 +59,8 @@ pub fn dds_openable(head: &[u8]) -> bool {
     if matches!(
         le32(head, 128),
         2 | 6 | 10 | 16 | 26 | 34 | 41 | 54 | 67 | 94..=96
-    ) {
+    ) && !(float && matches!(le32(head, 128), 2 | 10 | 95 | 96))
+    {
         return false;
     }
     if le32(head, 136) & 0x4 != 0 {
