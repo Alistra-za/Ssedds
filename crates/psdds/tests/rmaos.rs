@@ -293,6 +293,22 @@ fn multi_channel_equals_single_channel() {
     assert!(ok(&j).rmaos == a);
 }
 
+/// Two roles on one buffer with different channel counts (the second a smaller view of it) equal two separate
+/// buffers: the shared clamped copy is keyed on the whole view, not on `px` alone.
+#[test]
+fn views_of_one_buffer_are_not_merged() {
+    let buf: Vec<f32> = (0..64 * 4).map(|i| (i % 97) as f32 / 96.0).collect();
+    let mut j = job();
+    j.source[0] = src(&buf, 8, 4, 1);
+    j.source[2] = src(&buf[..64 * 2], 8, 2, 1);
+    assert_eq!(j.source[0].px, j.source[2].px);
+    let shared = ok(&j).rmaos;
+    let (a, b) = (buf.clone(), buf[..64 * 2].to_vec());
+    j.source[0] = src(&a, 8, 4, 1);
+    j.source[2] = src(&b, 8, 2, 1);
+    assert!(ok(&j).rmaos == shared);
+}
+
 /// (j) a channel the image does not have.
 #[test]
 fn a_bad_channel_is_refused() {
