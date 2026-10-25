@@ -59,6 +59,41 @@ public unsafe class PsddsTests
         Psdds.CheckAbi(Psdds.ExpectedAbiVersion);
     }
 
+    [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern nint GetModuleHandleW(string name);
+
+    [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint GetModuleFileNameW(nint module, char[] buf, uint size);
+
+    [Fact]
+    public void DllIsLoadedFromBesideTheAssembly()
+    {
+        Psdds.EnsureCompatible();
+        var h = GetModuleHandleW("psdds.dll");
+        Assert.NotEqual(0, h);
+        var buf = new char[1024];
+        var n = GetModuleFileNameW(h, buf, (uint)buf.Length);
+        var expected = Path.Combine(Path.GetDirectoryName(typeof(Psdds).Assembly.Location)!, "psdds.dll");
+        Assert.Equal(Path.GetFullPath(expected), new string(buf, 0, (int)n), ignoreCase: true);
+    }
+
+    [Fact]
+    public void MissingOrWrongBitnessDllMessage()
+    {
+        const string msg = "psdds.dll is missing or is not the 64-bit build; reinstall Tessalith DDS next to TessalithDds.dll";
+        Assert.Equal(msg, Assert.Throws<PsddsException>(() => Psdds.Check(() => throw new DllNotFoundException())).Message);
+        Assert.Equal(msg, Assert.Throws<PsddsException>(() => Psdds.Check(() => throw new BadImageFormatException())).Message);
+    }
+
+    [Fact]
+    public void ErrorTextCutsWholeCharactersAndOneFullStop()
+    {
+        Assert.Equal("ab", Psdds.Utf8Text("abé"u8[..3]));
+        Assert.Equal("ab€", Psdds.Utf8Text("ab€"u8));
+        Assert.Equal("a.", Psdds.Utf8Text("a.."u8));
+        Assert.Equal("a", Psdds.Utf8Text("a."u8));
+    }
+
     [Fact]
     public void DefaultsAndLayout()
     {
@@ -220,8 +255,19 @@ public unsafe class PsddsTests
     }
 
     [Fact]
-    public void DecodeGarbageThrows() =>
+    public void DecodeGarbageThrows()
+    {
         Assert.Throws<PsddsException>(() => Psdds.Decode(new byte[10]));
+        Assert.Throws<PsddsException>(() => Psdds.Decode(ReadOnlySpan<byte>.Empty));
+    }
+
+    [Fact]
+    public void AlphaUsedSpanChecksShape()
+    {
+        Assert.Throws<ArgumentException>(() => Psdds.AlphaUsed(new float[5]));
+        Assert.True(Psdds.AlphaUsed(new float[] { 1, 1, 1, 0 }));
+        Assert.False(Psdds.AlphaUsed(new float[] { 1, 1, 1, 1 }));
+    }
 
     [Fact]
     public void ConcurrentEncodesMatchSequential()

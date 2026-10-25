@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -41,18 +42,40 @@ public static unsafe partial class Psdds
     [LibraryImport("psdds")] private static partial int psdds_alpha_used(float* rgba, nuint pixels);
     [LibraryImport("psdds")] private static partial void psdds_free(PsddsBuf buf);
 
-    /// <summary>Refuses any psdds.dll whose ABI version is not the one this plugin was written for. Runs once.</summary>
+    static string? _failure; // the first failure's text, replayed so later calls fail the same way without probing again
+
+    // Load psdds.dll only from beside this assembly, never from PATH or the working directory.
+    static Psdds()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(Psdds).Assembly, (name, asm, _) =>
+        {
+            if (name != "psdds") return IntPtr.Zero;
+            var dir = Path.GetDirectoryName(asm.Location);
+            var path = dir == null ? null : Path.Combine(dir, "psdds.dll");
+            if (path != null && NativeLibrary.TryLoad(path, out var h)) return h;
+            throw new DllNotFoundException("psdds.dll was not found beside " + asm.Location);
+        });
+    }
+
+    /// <summary>Refuses any psdds.dll whose ABI version is not the one this plugin was written for. Runs once; a failure is remembered.</summary>
     public static void EnsureCompatible()
     {
         if (_compatible) return;
+        if (_failure != null) throw new PsddsException(_failure);
+        try { Check(psdds_abi_version); }
+        catch (PsddsException e) { _failure = e.Message; throw; }
+        _compatible = true;
+    }
+
+    internal static void Check(Func<uint> abiVersion)
+    {
         uint found;
-        try { found = psdds_abi_version(); }
+        try { found = abiVersion(); }
         catch (Exception e) when (e is DllNotFoundException or BadImageFormatException or EntryPointNotFoundException)
         {
             throw new PsddsException("psdds.dll is missing or is not the 64-bit build; reinstall Tessalith DDS next to TessalithDds.dll");
         }
         CheckAbi(found);
-        _compatible = true;
     }
 
     internal static void CheckAbi(uint found)
@@ -65,7 +88,22 @@ public static unsafe partial class Psdds
     {
         int n = 0;
         while (n < ErrCap && err[n] != 0) n++;
-        return Encoding.UTF8.GetString(err, n).TrimEnd('.');
+        return Utf8Text(new ReadOnlySpan<byte>(err, n));
+    }
+
+    // Drops a final character cut by the buffer cap, then the single full stop the header allows
+    // (the wrapper trims it because Paint.NET's own error text adds its punctuation).
+    internal static string Utf8Text(ReadOnlySpan<byte> b)
+    {
+        int i = b.Length - 1;
+        while (i > 0 && (b[i] & 0xC0) == 0x80) i--;
+        if (i >= 0 && b[i] >= 0xC0)
+        {
+            int need = b[i] >= 0xF0 ? 4 : b[i] >= 0xE0 ? 3 : 2;
+            if (b.Length - i < need) b = b[..i];
+        }
+        var s = Encoding.UTF8.GetString(b);
+        return s.EndsWith('.') ? s[..^1] : s;
     }
 
     static string Utf8(nint p) => Marshal.PtrToStringUTF8(p) ?? "";
@@ -133,14 +171,20 @@ public static unsafe partial class Psdds
         return psdds_check_size(width, height, err, ErrCap) == 0 ? null : ErrText(err);
     }
 
-    public static bool AlphaUsed(float* rgba, nuint pixels)
+    internal static bool AlphaUsed(float* rgba, nuint pixels)
     {
         EnsureCompatible();
         return psdds_alpha_used(rgba, pixels) != 0;
     }
 
-    /// <summary>rgba must hold exactly width*height*4 floats (psdds cannot check); prefer the span overload.</summary>
-    public static byte[] Encode(float* rgba, uint width, uint height, bool hasAlpha, in PsddsSettings raw)
+    public static bool AlphaUsed(ReadOnlySpan<float> rgba)
+    {
+        if (rgba.Length % 4 != 0) throw new ArgumentException("RGBA floats come in fours", nameof(rgba));
+        fixed (float* p = rgba) return AlphaUsed(p, (nuint)(rgba.Length / 4));
+    }
+
+    /// <summary>rgba must hold exactly width*height*4 floats (psdds cannot check); the public span overload checks.</summary>
+    internal static byte[] Encode(float* rgba, uint width, uint height, bool hasAlpha, in PsddsSettings raw)
     {
         EnsureCompatible();
         var settings = raw;
@@ -166,6 +210,7 @@ public static unsafe partial class Psdds
     public static (byte[] Rgba, uint Width, uint Height, bool HasAlpha) Decode(ReadOnlySpan<byte> dds)
     {
         EnsureCompatible();
+        if (dds.IsEmpty) throw new PsddsException("The file is empty");
         PsddsBuf buf = default;
         uint w = 0, h = 0, a = 0;
         byte* err = stackalloc byte[ErrCap];
