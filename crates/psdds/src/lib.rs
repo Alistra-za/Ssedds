@@ -1,7 +1,12 @@
 //! Tessalith DDS: the Photoshop plugin's bridge to the engine, as a C ABI (`photoshop/psdds.h`). Every exported
 //! function checks its pointers and runs inside `catch_unwind`, so no panic crosses the boundary.
+pub mod helpers;
+pub mod rmaos;
 pub mod settings;
 
+pub use rmaos::{
+    psdds_rmaos_default_quality, psdds_rmaos_encode, PsddsRmaosJob, PsddsRmaosResult, PsddsSource,
+};
 pub use settings::{PsddsControls, PsddsSettings};
 
 use engine::image::Rgba32F;
@@ -39,6 +44,21 @@ unsafe fn write_err(err: *mut c_char, cap: usize, msg: &str) {
     }
     std::ptr::copy_nonoverlapping(msg.as_ptr(), err.cast::<u8>(), n);
     *err.add(n) = 0;
+}
+
+/// Bumped on any change to `photoshop/psdds.h`'s declarations or documented behaviour (pinned by tests/abi.rs).
+pub const ABI_VERSION: u32 = 2;
+
+/// The `PSDDS_ABI_VERSION` this library was built with.
+#[no_mangle]
+pub extern "C" fn psdds_abi_version() -> u32 {
+    ABI_VERSION
+}
+
+/// The workspace (engine) version as a static NUL-terminated UTF-8 string.
+#[no_mangle]
+pub extern "C" fn psdds_version() -> *const c_char {
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
 }
 
 /// The dialog's start values for a texture type (0 Colour, 1 Normal, 2 Linear mask; anything else: Colour).
@@ -141,11 +161,31 @@ pub extern "C" fn psdds_quality_label(format: u32, i: u32) -> *const c_char {
     .unwrap_or(std::ptr::null())
 }
 
-/// The largest side Skyrim (D3D11) loads.
-const MAX_SIDE: u32 = 16384;
-const TOO_LARGE: &str =
-    "This image is larger than 16384 pixels on a side, the most Skyrim supports.";
-
+/// DC25 for every host: pin the module holding this code (the DLL, or the .8bi linking psdds.lib) on the first call
+/// that can start the engine's rayon pool, so FreeLibrary never unmaps code under parked workers. Nothing runs in
+/// DllMain; a failure is ignored (the module then stays unpinned, as before).
+fn pin_self() {
+    static PIN: std::sync::Once = std::sync::Once::new();
+    PIN.call_once(|| {
+        #[cfg(windows)]
+        {
+            extern "system" {
+                fn GetModuleHandleExW(
+                    flags: u32,
+                    addr: *const u16,
+                    out: *mut *mut std::ffi::c_void,
+                ) -> i32;
+            }
+            const PIN_FLAG: u32 = 0x1;
+            const FROM_ADDRESS: u32 = 0x4;
+            let mut module = std::ptr::null_mut();
+            // SAFETY: FROM_ADDRESS takes a code address; `module` is a valid out pointer.
+            unsafe {
+                GetModuleHandleExW(PIN_FLAG | FROM_ADDRESS, pin_self as *const u16, &mut module)
+            };
+        }
+    });
+}
 /// # Safety
 /// As `psdds_encode`.
 unsafe fn encode(
@@ -159,22 +199,17 @@ unsafe fn encode(
     if rgba.is_null() || s.is_null() || out.is_null() {
         return Err("psdds_encode: null pointer argument".into());
     }
-    if width == 0 || height == 0 {
-        return Err(format!("psdds_encode: image is {width}x{height}"));
-    }
-    // DC12 (I2): refused before the caller's buffer is touched. The isize bound is `from_raw_parts`' precondition
-    // (already implied by the side limit on 64-bit).
-    let n = (width <= MAX_SIDE && height <= MAX_SIDE)
-        .then(|| (width as usize).checked_mul(height as usize))
-        .flatten()
-        .filter(|n| n.checked_mul(16).is_some_and(|b| b <= isize::MAX as usize))
-        .ok_or(TOO_LARGE)?;
+    // DC12 (I2): refused before the caller's buffer is touched.
+    let n = helpers::check_size(width, height)?;
     let profile = settings::profile_for(&*s, has_alpha != 0)?;
     let img = Rgba32F {
         width,
         height,
         // `[f32; 4]` has f32's alignment, so the caller's float array is read as whole pixels.
-        px: std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n).to_vec(),
+        px: std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n)
+            .iter()
+            .map(|p| p.map(clamp01))
+            .collect(),
     };
     let bytes = engine::memory::encode_image(img, &profile)?.into_boxed_slice();
     let len = bytes.len();
@@ -211,6 +246,7 @@ pub unsafe extern "C" fn psdds_encode(
         };
     }
     let r = catch_unwind(AssertUnwindSafe(|| {
+        pin_self();
         encode(rgba, width, height, has_alpha, settings, out)
     }))
     .unwrap_or_else(|e| Err(panic_text(e)));
@@ -222,6 +258,95 @@ pub unsafe extern "C" fn psdds_encode(
             1
         }
     }
+}
+
+/// The one input rule for float hosts (M8): [0,1], NaN -> 0, +inf -> 1, -inf -> 0.
+pub(crate) fn clamp01(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
+
+/// 0 when `width` x `height` can be encoded or opened; else 1 and the reason in `err` (UTF-8, NUL-terminated,
+/// truncated to `err_cap`).
+///
+/// # Safety
+/// `err` is null or valid for `err_cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_check_size(
+    width: u32,
+    height: u32,
+    err: *mut c_char,
+    err_cap: usize,
+) -> i32 {
+    match catch_unwind(|| helpers::check_size(width, height)) {
+        Ok(Ok(_)) => 0,
+        Ok(Err(m)) => {
+            write_err(err, err_cap, &m);
+            1
+        }
+        Err(e) => {
+            write_err(err, err_cap, &panic_text(e));
+            1
+        }
+    }
+}
+
+/// 1 when the first `len` bytes of a file show a DDS `psdds_decode` can open (see `helpers::dds_openable`); a NULL
+/// `head` gives 0.
+///
+/// # Safety
+/// `head` is null or valid for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_dds_openable(head: *const u8, len: usize) -> i32 {
+    // A len over isize::MAX would abort in from_raw_parts's check, which catch_unwind cannot catch.
+    if head.is_null() || len > isize::MAX as usize {
+        return 0;
+    }
+    catch_unwind(|| i32::from(helpers::dds_openable(std::slice::from_raw_parts(head, len))))
+        .unwrap_or(0)
+}
+
+/// Open's alpha rule (DC23) over `pixels` 4-byte pixels; a NULL buffer or an overflowing size gives 0.
+///
+/// # Safety
+/// `px8` is null or valid for `pixels * 4` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_opens_with_alpha(
+    px8: *const u8,
+    pixels: usize,
+    has_alpha: u32,
+) -> i32 {
+    match pixels.checked_mul(4) {
+        Some(n) if !px8.is_null() && n <= isize::MAX as usize => {
+            let px = std::slice::from_raw_parts(px8, n);
+            catch_unwind(|| i32::from(helpers::opens_with_alpha(px, has_alpha != 0))).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// Save's alpha rule (DC31) over `pixels` RGBA float pixels; a NULL buffer or an overflowing size gives 0.
+///
+/// # Safety
+/// `rgba` is null or valid for `pixels * 4` floats and 4-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn psdds_alpha_used(rgba: *const f32, pixels: usize) -> i32 {
+    match pixels.checked_mul(16) {
+        Some(n) if !rgba.is_null() && n <= isize::MAX as usize => {
+            let px = std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), pixels);
+            catch_unwind(|| i32::from(helpers::alpha_used(px))).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// The bound a host applies before reading a DDS file (`psdds_decode` does not check it).
+#[no_mangle]
+pub extern "C" fn psdds_max_file_bytes() -> u64 {
+    helpers::MAX_DDS_FILE_BYTES
 }
 
 const HDR_REFUSAL: &str = "This DDS holds 32-bit (HDR) data, which this plugin does not open yet.";
@@ -241,6 +366,10 @@ unsafe fn decode(
     {
         return Err("psdds_decode: null pointer argument".into());
     }
+    // A len over isize::MAX would abort in from_raw_parts's check, which catch_unwind cannot catch.
+    if len > isize::MAX as usize {
+        return Err("psdds_decode: len is larger than isize::MAX".into());
+    }
     let bytes = std::slice::from_raw_parts(dds, len);
     // DC12 (I2) again: a header claiming a huge side is refused before `read_dds` copies the payload.
     let side = |i: usize| {
@@ -248,8 +377,9 @@ unsafe fn decode(
             .get(i..i + 4)
             .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     };
-    if bytes.starts_with(b"DDS ") && (side(12) > MAX_SIDE || side(16) > MAX_SIDE) {
-        return Err(TOO_LARGE.into());
+    // A missing or zero side is left to `read_dds`, which names the real fault.
+    if bytes.starts_with(b"DDS ") && side(12) != 0 && side(16) != 0 {
+        helpers::check_size(side(16), side(12))?;
     }
     let f = engine::dds::read_dds(bytes).map_err(|e| e.to_string())?;
     if matches!(f.format, Bc6hUf16 | Bc6hSf16 | Rgba16f | Rgba32f) {
@@ -331,6 +461,7 @@ pub unsafe extern "C" fn psdds_decode(
         };
     }
     let r = catch_unwind(AssertUnwindSafe(|| {
+        pin_self();
         decode(dds, len, width, height, has_alpha, out)
     }))
     .unwrap_or_else(|e| Err(panic_text(e)));
@@ -342,10 +473,11 @@ pub unsafe extern "C" fn psdds_decode(
         }
     }
 }
-/// Release a buffer from `psdds_encode` or `psdds_decode`. An empty buffer (null `data`) is a no-op.
+/// Release a buffer from `psdds_encode`, `psdds_decode` or `psdds_rmaos_encode`. An empty buffer (null `data`) is a
+/// no-op.
 ///
 /// # Safety
-/// `buf` came from `psdds_encode` or `psdds_decode` and is freed once.
+/// `buf` came from one of those and is freed once.
 #[no_mangle]
 pub unsafe extern "C" fn psdds_free(buf: PsddsBuf) {
     if buf.data.is_null() {

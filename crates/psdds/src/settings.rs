@@ -59,7 +59,7 @@ pub(crate) const FALLBACK_QUALITY: u32 = 4;
 
 // The GUI's per-format quality values (crates/gui/src/ui/settings_panel.rs `options_of` and the rgbcx slider),
 // copied here because psdds must not depend on the GPL-only gui crate.
-const EFFORTS: [(Effort, &CStr); 7] = [
+pub(crate) const EFFORTS: [(Effort, &CStr); 7] = [
     (Effort::Ultrafast, c"Ultrafast"),
     (Effort::Veryfast, c"Veryfast"),
     (Effort::Fast, c"Fast"),
@@ -102,11 +102,26 @@ pub fn format_allowed(texture_type: u32, format: u32) -> bool {
 }
 
 /// The `cs-quality` profile each texture type starts from (R3).
-fn base(texture_type: u32) -> Result<&'static Profile, String> {
+pub(crate) fn base(texture_type: u32) -> Result<&'static Profile, String> {
+    let st = SUBTYPES
+        .get(texture_type as usize)
+        .ok_or_else(|| format!("texture type {texture_type} out of range"))?;
+    base_of(*st)
+}
+
+/// The `cs-quality` profile of a sub-type psdds writes: the three texture types and the TruePBR pair's (R12).
+pub(crate) fn base_of(st: Subtype) -> Result<&'static Profile, String> {
+    const CACHED: [Subtype; 5] = [
+        Subtype::Diffuse,
+        Subtype::Normal,
+        Subtype::GenericData,
+        Subtype::PbrNormal,
+        Subtype::Rmaos,
+    ];
     static BASES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     let bases = BASES.get_or_init(|| {
         let reg = PresetRegistry::builtin().map_err(|e| e.to_string())?;
-        SUBTYPES
+        CACHED
             .iter()
             .map(|&st| {
                 reg.profile("cs-quality", Target::Cs, st)
@@ -115,9 +130,11 @@ fn base(texture_type: u32) -> Result<&'static Profile, String> {
             .collect()
     });
     let bases = bases.as_ref().map_err(Clone::clone)?;
-    bases
-        .get(texture_type as usize)
-        .ok_or_else(|| format!("texture type {texture_type} out of range"))
+    CACHED
+        .iter()
+        .position(|&c| c == st)
+        .map(|i| &bases[i])
+        .ok_or_else(|| format!("sub-type {st:?} has no psdds profile"))
 }
 
 fn filter_index(f: MipFilter) -> u32 {
@@ -125,7 +142,7 @@ fn filter_index(f: MipFilter) -> u32 {
 }
 
 /// The base profile's value as an index into the format's quality list (R4 default).
-fn preset_quality(format: u32, p: &Profile) -> u32 {
+pub(crate) fn preset_quality(format: u32, p: &Profile) -> u32 {
     let at = |i: Option<usize>| i.unwrap_or(0) as u32;
     match format {
         0 | 1 => p.encoder.rgbcx_level.min(RGBCX_LEVELS.len() as u32 - 1),
@@ -264,9 +281,26 @@ pub fn profile_for(s: &PsddsSettings, has_alpha: bool) -> Result<Profile, String
     build(&resolve(s, has_alpha)?.0, has_alpha)
 }
 
+/// [`profile_for`] with the `cs-quality` profile of `st` as the base (the TruePBR `_n` is `PbrNormal`, R12).
+pub(crate) fn profile_for_base(
+    s: &PsddsSettings,
+    has_alpha: bool,
+    st: Subtype,
+) -> Result<Profile, String> {
+    Ok(build_from_base(
+        base_of(st)?.clone(),
+        &resolve(s, has_alpha)?.0,
+        has_alpha,
+    ))
+}
+
 /// The profile for settings that are already resolved.
 fn build(e: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
-    let mut p = base(e.texture_type)?.clone();
+    Ok(build_from_base(base(e.texture_type)?.clone(), e, has_alpha))
+}
+
+/// [`build`] over a given base profile.
+pub(crate) fn build_from_base(mut p: Profile, e: &PsddsSettings, has_alpha: bool) -> Profile {
     p.format = FORMATS[e.format as usize];
     p.encoder.backend = default_backend(p.format);
     // DC39 (supersedes DC9): the sRGB control sets only the DDS tag. The content (gamma-correct or linear
@@ -299,5 +333,5 @@ fn build(e: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
     }
     p.resize = ResizeMode::None;
     p.drop_top_mip = false;
-    Ok(p)
+    p
 }

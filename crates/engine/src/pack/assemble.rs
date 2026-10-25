@@ -9,7 +9,7 @@ use crate::analyse::code8;
 use crate::config::GraySource;
 use crate::image::{Rgba32F, SourceInfo};
 use crate::load::{image_size, load_image, LoadError};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
@@ -43,9 +43,17 @@ pub struct Assembled {
 /// The width and height every source shares, from the file headers alone (read by content, MAX_DIM-checked, so
 /// the packed canvas is never sized by a file `load_image` would refuse).
 pub fn check_sizes(sources: &[PathBuf]) -> Result<(u32, u32), PackError> {
+    check_sizes_with(sources, |p| Ok(image_size(p)?))
+}
+
+/// [`check_sizes`] with each source's size supplied by `size` (headers for files, the image for memory).
+pub fn check_sizes_with(
+    sources: &[PathBuf],
+    mut size: impl FnMut(&Path) -> Result<(u32, u32), PackError>,
+) -> Result<(u32, u32), PackError> {
     let mut found = vec![];
     for p in sources {
-        let (w, h) = image_size(p)?;
+        let (w, h) = size(p)?;
         found.push((p.clone(), w, h));
     }
     let (w, h) = found.first().map_or((0, 0), |f| (f.1, f.2));
@@ -84,8 +92,26 @@ pub fn assemble_channels(
     sources: &[PackSource],
     gray: GraySource,
 ) -> Result<Assembled, PackError> {
+    assemble_channels_with(
+        channels,
+        sources,
+        gray,
+        |p| Ok(image_size(p)?),
+        |p| Ok(load_image(p)?),
+    )
+}
+
+/// [`assemble_channels`] with each source's size and pixels supplied by `size` and `load`, so one packing rule
+/// serves files and in-memory images. `load` is called for one source at a time.
+pub fn assemble_channels_with(
+    channels: &[ChannelSource; 4],
+    sources: &[PackSource],
+    gray: GraySource,
+    size: impl FnMut(&Path) -> Result<(u32, u32), PackError>,
+    mut load: impl FnMut(&Path) -> Result<(Rgba32F, SourceInfo), PackError>,
+) -> Result<Assembled, PackError> {
     let paths: Vec<PathBuf> = sources.iter().map(|s| s.path.clone()).collect();
-    let (w, h) = check_sizes(&paths)?;
+    let (w, h) = check_sizes_with(&paths, size)?;
     let mut image = Rgba32F::new(w, h, [0.0, 0.0, 0.0, 1.0]);
     let mut info = SourceInfo {
         bit_depth: 8,
@@ -117,7 +143,7 @@ pub fn assemble_channels(
             .collect();
         // An `_orm` is colour by design (Note AL): never `CHAN-NOT-GRAY`.
         let multi = targets.iter().any(|t| t.2.is_some());
-        let (src, si) = load_image(&s.path)?;
+        let (src, si) = load(&s.path)?;
         // `check_sizes` read the headers; a file replaced since then is caught here.
         if (src.width, src.height) != (w, h) {
             return Err(PackError::SizeMismatch(vec![

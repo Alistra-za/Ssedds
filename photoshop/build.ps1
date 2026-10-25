@@ -23,18 +23,7 @@ if (-not $vs) { throw 'No Visual Studio with the C++ x64 tools was found (vswher
 $env:PATH = "$env:SystemRoot\System32;$(Split-Path $vswhere);$env:PATH"
 
 # 1. The Rust bridge as a static library with the static CRT.
-$saved = @{ CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR; RUSTFLAGS = $env:RUSTFLAGS; CARGO_BUILD_JOBS = $env:CARGO_BUILD_JOBS }
-try {
-    $env:CARGO_TARGET_DIR = Join-Path $repo 'target\psdds'
-    $env:RUSTFLAGS = '-C target-feature=+crt-static'
-    if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = '4' }
-    cargo build -p psdds --release --offline --manifest-path (Join-Path $repo 'Cargo.toml')
-    if ($LASTEXITCODE -ne 0) { throw "cargo build -p psdds failed ($LASTEXITCODE)" }
-} finally {
-    foreach ($k in $saved.Keys) {
-        if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } else { Set-Item "env:$k" $saved[$k] }
-    }
-}
+& (Join-Path $repo 'crates\psdds\build.ps1')
 $libDir = Join-Path $repo 'target\psdds\x86_64-pc-windows-msvc\release'
 
 $sdk = $env:PS_SDK
@@ -63,7 +52,7 @@ if ($Test) {
     $api = Join-Path $sdk 'pluginsdk\photoshopapi'
     $sdkInc = "/DWIN32 /D_WINDOWS /I`"$api\photoshop`" /I`"$api\pica_sp`""
     $tests = @(
-        @{ exe = 'pixels_test.exe'; src = "`"$here\tests\pixels_test.cpp`" `"$here\src\pixels.cpp`""; link = '' },
+        @{ exe = 'pixels_test.exe'; src = "`"$here\tests\pixels_test.cpp`" `"$here\src\pixels.cpp`""; link = "/link /LIBPATH:`"$libDir`" $libs" },
         @{ exe = 'dialog_test.exe'; src = "`"$here\tests\dialog_test.cpp`" `"$here\src\dialog.cpp`" `"$here\src\presets.cpp`""; link = "/link /LIBPATH:`"$libDir`" $libs" },
         @{ exe = 'host_test.exe'; src = "$sdkInc `"$here\tests\host_test.cpp`""; link = '/link user32.lib'; args = @($plugin) }
     )

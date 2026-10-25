@@ -1,4 +1,4 @@
-# cargo-about config for the Photoshop plugin: only these licences are accepted.
+# cargo-about config for any psdds binary (the Photoshop plugin, psdds.dll): only these licences are accepted.
 accepted = [
     "MIT",
     "Apache-2.0",

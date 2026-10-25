@@ -3,7 +3,7 @@
 //! pre-packed one, and before `set_resolved` and `file_planned`, so both show the decision.
 use super::{bake_shift, BakeJob};
 use crate::codes::{Code, Warning};
-use crate::config::{ColorContent, NormalMips, RawMap, Subtype, Target};
+use crate::config::{ColorContent, NormalMips, Profile, RawMap, Subtype, Target};
 use crate::discover::{InputFile, InputKind, IMAGE_EXTS};
 use crate::group::{split_suffix_with, TextureSet};
 use crate::policy::{JobStatus, Provenance, ResolvedJob};
@@ -183,14 +183,13 @@ fn missing_normal(cx: &BakeCtx, set: &TextureSet, outside: &Outside, j: &mut Res
             );
             note(j, Code::SetCompanionOutside, msg, Some(&p));
         }
-        None => note(
-            j,
-            Code::SetMissingCompanion,
-            "no _n in this PBR set: the roughness is written without the variance bake".into(),
-            None,
-        ),
+        None => note(j, Code::SetMissingCompanion, NO_NORMAL.into(), None),
     }
 }
+
+/// `SET-MISSING-COMPANION`'s text for a roughness member with no `_n` at all (also `memory::encode_rmaos_set`'s note).
+pub const NO_NORMAL: &str =
+    "no _n in this PBR set: the roughness is written without the variance bake";
 
 /// Why a roughness member whose set borrows the `_n` of set `owner` has nothing to bake from (DECISIONS Note R
 /// M4-final-1): the owner has no usable `pbr_normal` job.
@@ -274,17 +273,13 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     }
     // DECISIONS R6: an explicit `mips.normal = renormalize` on the `_n` (any layer but the built-in default) opts out.
     let nj = &jobs[n];
-    if nj.profile.mips.normal == NormalMips::Renormalize
+    let opted_out = nj.profile.mips.normal == NormalMips::Renormalize
         && nj
             .provenance
             .get("mips.normal")
-            .is_some_and(|p| *p != Provenance::Builtin)
-    {
-        return false;
-    }
-    let any = attach(jobs, n, members);
-    if any && jobs[n].profile.mips.normal != NormalMips::RenormalizeBake {
-        jobs[n].profile.mips.normal = NormalMips::RenormalizeBake;
+            .is_some_and(|p| *p != Provenance::Builtin);
+    let any = attach(jobs, n, members, opted_out);
+    if any && mark_normal_baking(&mut jobs[n].profile) {
         jobs[n]
             .provenance
             .insert("mips.normal".into(), Provenance::Set);
@@ -292,9 +287,54 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     any
 }
 
+/// How one roughness member bakes its set's `_n` (spec §6.2–6.3), from the post-resize sizes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BakeDecision {
+    /// Bake with this level shift ([`bake_shift`]).
+    Bake { shift: i32 },
+    /// Never, silently: the `_n` opted out (DECISIONS R6) or the member is sRGB (R10).
+    Never,
+    /// `SET-BAKE-RATIO`: the sizes cannot bake.
+    Off(Warning),
+}
+
+/// The bake rule for one roughness `member`: `normal_opted_out` is `bake_set`'s R6 check (false in memory, which has
+/// no provenance); `ndims`/`mdims` are the `_n`'s and the member's post-resize sizes.
+pub fn decide_bake(
+    normal_opted_out: bool,
+    ndims: (u32, u32),
+    member: &Profile,
+    mdims: (u32, u32),
+) -> BakeDecision {
+    // DECISIONS R10: an sRGB member never bakes. `check_profile` raised TAG-CONTENT-MISMATCH for a roughness
+    // member; an sRGB complex `_m` (Note CL40) is skipped with no code.
+    if normal_opted_out || member.color.content == ColorContent::Srgb {
+        return BakeDecision::Never;
+    }
+    match bake_shift(ndims, mdims) {
+        Ok(shift) => BakeDecision::Bake { shift },
+        Err(why) => BakeDecision::Off(
+            Warning::new(Code::SetBakeRatio, format!("variance bake off: {why}")).with_data(
+                json!({
+                    "normal": [ndims.0, ndims.1],
+                    "member": [mdims.0, mdims.1],
+                }),
+            ),
+        ),
+    }
+}
+
+/// The `_n` profile change a baking set makes (`mips.normal = renormalize_bake`); true when it changed. Recording
+/// provenance `set` stays `bake_set`'s job.
+pub fn mark_normal_baking(p: &mut Profile) -> bool {
+    let changed = p.mips.normal != NormalMips::RenormalizeBake;
+    p.mips.normal = NormalMips::RenormalizeBake;
+    changed
+}
+
 /// Attach a `BakeJob` from the `_n` at `n` to every member whose size allows it; `SET-BAKE-RATIO` on the others.
 /// Returns whether any member bakes.
-fn attach(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
+fn attach(jobs: &mut [ResolvedJob], n: usize, members: &[usize], opted_out: bool) -> bool {
     let nj = &jobs[n];
     // S-mips-7: both sizes are the post-resize ones Preprocess writes, so SET-BAKE-RATIO's data reports those too.
     let Some(ndims) = post_resize_dims(nj) else {
@@ -304,16 +344,12 @@ fn attach(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     let rnm = nj.active_rnm().cloned();
     let mut any = false;
     for &m in members {
-        // DECISIONS R10: an sRGB member never bakes. `check_profile` raised TAG-CONTENT-MISMATCH for a roughness
-        // member; an sRGB complex `_m` (Note CL40) is skipped with no code.
-        if jobs[m].profile.color.content == ColorContent::Srgb {
-            continue;
-        }
         let Some(mdims) = post_resize_dims(&jobs[m]) else {
             continue;
         };
-        match bake_shift(ndims, mdims) {
-            Ok(shift) => {
+        match decide_bake(opted_out, ndims, &jobs[m].profile, mdims) {
+            BakeDecision::Never => {}
+            BakeDecision::Bake { shift } => {
                 jobs[m].bake = Some(BakeJob {
                     normal: normal.clone(),
                     normal_profile: normal_profile.clone(),
@@ -323,14 +359,7 @@ fn attach(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
                 });
                 any = true;
             }
-            Err(why) => {
-                let w = Warning::new(Code::SetBakeRatio, format!("variance bake off: {why}"))
-                    .with_data(json!({
-                        "normal": [ndims.0, ndims.1],
-                        "member": [mdims.0, mdims.1],
-                    }));
-                jobs[m].warnings.push(w);
-            }
+            BakeDecision::Off(w) => jobs[m].warnings.push(w),
         }
     }
     any
@@ -507,7 +536,7 @@ pub fn plan_gloss_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<Stri
                     && writable(&jobs[i])
             })
             .collect();
-        if !members.is_empty() && attach(jobs, n, &members) {
+        if !members.is_empty() && attach(jobs, n, &members, false) {
             baking.insert(set.key.clone());
         }
     }
