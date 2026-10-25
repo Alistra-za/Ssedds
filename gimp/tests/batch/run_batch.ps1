@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Runs gimp\tests\gimp_batch.py in headless gimp-console with a throwaway GIMP profile.
 # Never touches %APPDATA%\GIMP or the GIMP install. Called by gimp\tests\run.ps1 -Gimp.
+# -KillProbe: the batch script only parks a sleeping child and hangs, to prove the timeout kill (no window).
+param([int]$TimeoutSec = 240, [switch]$KillProbe)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
 $gimpDir = if ($env:SDC_GIMP_DIR) { $env:SDC_GIMP_DIR } else { 'C:\Program Files\GIMP 3' }
@@ -15,7 +17,7 @@ $out = Join-Path $tmp 'out'
 New-Item -ItemType Directory -Force $plug, $out | Out-Null
 $code = 1
 $saved = @{}
-foreach ($k in 'GIMP3_DIRECTORY', 'GIMP3_CACHEDIR', 'TDDS_OUT', 'TDDS_REPO', 'TESSALITH_PSDDS_DLL') { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+foreach ($k in 'GIMP3_DIRECTORY', 'GIMP3_CACHEDIR', 'TDDS_OUT', 'TDDS_REPO', 'TESSALITH_PSDDS_DLL', 'TDDS_NO_UI', 'TDDS_KILL_PROBE') { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
 try {
     Copy-Item (Join-Path $repo 'gimp\tessalith-dds\*.py') $plug
     Copy-Item $dll (Join-Path $plug 'psdds.dll')
@@ -25,6 +27,9 @@ try {
     $env:TDDS_OUT = $out
     $env:TDDS_REPO = $repo
     $env:TESSALITH_PSDDS_DLL = Join-Path $plug 'psdds.dll'
+    # gimp-console -i still shows plug-in dialogs on Windows; under this show_dialog raises before any UI.
+    $env:TDDS_NO_UI = '1'
+    if ($KillProbe) { $env:TDDS_KILL_PROBE = '1' } else { Remove-Item Env:TDDS_KILL_PROBE -ErrorAction SilentlyContinue }
     $script = Join-Path $repo 'gimp\tests\gimp_batch.py'
     $stdout = Join-Path $tmp 'stdout.txt'
     $stderr = Join-Path $tmp 'stderr.txt'
@@ -32,9 +37,16 @@ try {
     $p = Start-Process -FilePath $console -ArgumentList $argLine -NoNewWindow -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $p.Handle  # keeps the exit code readable after exit
-    if (-not $p.WaitForExit(240000)) {
-        & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id | Out-Null  # not always on PATH
-        throw 'gimp-console did not finish in 240 s; killed it and its plug-ins'
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+        # Full path: taskkill is not always on PATH. /T takes the plug-in processes with gimp-console.
+        $kill = & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id 2>&1 | ForEach-Object { "$_" }
+        $killCode = $LASTEXITCODE
+        $exited = $p.WaitForExit(10000)
+        "FAIL timeout: gimp-console did not finish in $TimeoutSec s; taskkill /T exit $killCode, gimp-console exited: $exited"
+        if ($killCode -ne 0) { $kill }
+        $probe = Join-Path $out 'probe.txt'
+        if (Test-Path $probe) { "probe pids: $((Get-Content -Raw $probe).Trim())" }
+        throw "timeout after $TimeoutSec s"
     }
     $log = (Get-Content -Raw $stdout) + "`n" + (Get-Content -Raw $stderr)
     $log

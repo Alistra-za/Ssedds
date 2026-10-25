@@ -11,7 +11,8 @@ gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, GLib, GObject  # noqa: E402
 
 from psdds_ctypes import (BC1, BC3, BC4, BC5, BC7, BOX, COLOUR, KAISER, LINEAR_MASK, MITCHELL,  # noqa: E402
-                          NORMAL, RGBA8, TENT, PresetState, Psdds, PsddsError, Settings, apply_preset)
+                          NORMAL, RGBA8, TENT, PresetState, Psdds, PsddsError, Settings, apply_preset,
+                          plan_refresh, preset_event, refuse_ui)
 from tdds_pixels import band_rows  # noqa: E402
 
 LOAD_PROC = "file-tessalith-dds-load"
@@ -157,6 +158,7 @@ def _set_raw(config, s):
 
 def show_dialog(procedure, config, image, has_alpha):
     """The export dialog (DC33); has_alpha is the pixels' (DC31). False on Cancel."""
+    refuse_ui()  # first: the headless tests set TDDS_NO_UI; real use never does
     gi.require_version("GimpUi", "3.0")
     gi.require_version("Gtk", "3.0")
     from gi.repository import GimpUi, Gtk  # only here: headless runs never load GTK
@@ -174,7 +176,7 @@ def show_dialog(procedure, config, image, has_alpha):
     stores = {n: GimpUi.IntStore.new([]) for n in ("preset", "shown-format", "shown-mip-filter", "shown-quality")}
     fill_store(stores["preset"], [(0, "Custom")] + [(i + 1, name) for i, (name, _) in enumerate(presets)])
     fill_store(stores["shown-mip-filter"], [(f, label) for _, f, label in FILTERS])
-    shown = {}  # the type and format the stores were last built for
+    ui = {"built": (None, None), "preset": None, "reset": False}  # lists built for (type, format); shown preset
     busy = [False]
 
     def refresh(*_):
@@ -182,14 +184,13 @@ def show_dialog(procedure, config, image, has_alpha):
             return
         busy[0] = True  # store rebuilds and the shown-* writes below bounce through notify
         try:
-            raw = raw_settings(config)
-            eff, ctl = psdds.resolve(raw, has_alpha)
-            if shown.get("type") != eff.texture_type:
-                fill_store(stores["shown-format"], [(f, labels[f]) for f in psdds.allowed_formats(eff.texture_type)])
-                shown["type"] = eff.texture_type
-            if shown.get("format") != eff.format:
-                fill_store(stores["shown-quality"], list(enumerate(psdds.quality_labels(eff.format))))
-                shown["format"] = eff.format
+            v = plan_refresh(psdds, raw_settings(config), has_alpha, state, presets, ui["built"])
+            eff, ctl = v["eff"], v["ctl"]
+            if v["formats"] is not None:
+                fill_store(stores["shown-format"], [(f, labels[f]) for f in v["formats"]])
+            if v["qualities"] is not None:
+                fill_store(stores["shown-quality"], list(enumerate(v["qualities"])))
+            ui["built"] = (eff.texture_type, eff.format)
             config.set_property("shown-format", eff.format)
             config.set_property("shown-srgb", bool(eff.srgb))
             config.set_property("shown-mip-filter", eff.filter)
@@ -197,7 +198,8 @@ def show_dialog(procedure, config, image, has_alpha):
             config.set_property("srgb-enabled", bool(ctl.srgb_enabled))
             config.set_property("mip-filter-enabled", bool(ctl.filter_enabled))
             config.set_property("quality-enabled", bool(ctl.quality_enabled))
-            config.set_property("preset", state.shown(presets, raw, has_alpha) + 1)  # M4: list 0 = Custom
+            ui["preset"] = v["preset"]
+            config.set_property("preset", v["preset"])  # M4: list 0 = Custom
         finally:
             busy[0] = False
 
@@ -213,7 +215,16 @@ def show_dialog(procedure, config, image, has_alpha):
     def on_preset(cfg, _):
         if busy[0]:
             return
-        seed = cfg.get_property("preset") - 1  # M4: -1 = Custom
+        index = cfg.get_property("preset")
+        event = preset_event(index, ui["preset"], ui["reset"])
+        ui["reset"] = False
+        if event == "reset":  # Reset means defaults: it clears the Custom latch
+            state.saved()
+            refresh()
+            return
+        if event == "echo":
+            return
+        seed = index - 1  # M4: -1 = Custom
         state.pick(seed)
         busy[0] = True  # one refresh after all seven, not one per argument
         try:
@@ -231,6 +242,15 @@ def show_dialog(procedure, config, image, has_alpha):
     for n in SHOWN_RAW:
         config.connect(f"notify::{n}", on_shown)
     config.connect("notify::preset", on_preset)
+
+    def on_response(_dialog, rid):
+        # GIMP's Reset response id is private (not in the typelib or headers): any response that is not one of
+        # GTK's own is Reset, which opens GIMP's reset menu; the reset itself comes later as notifies.
+        if rid not in (Gtk.ResponseType.OK, Gtk.ResponseType.CANCEL, Gtk.ResponseType.HELP,
+                       Gtk.ResponseType.DELETE_EVENT):
+            ui["reset"] = True
+
+    dialog.connect("response", on_response)
     ids = []
     for i, props in enumerate(ROWS):
         ids.append(f"tdds-row-{i}")
@@ -257,6 +277,8 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         w, h, has_alpha, rgba = export_pixels(psdds, img)
         # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config; NONINTERACTIVE
         # uses the arguments as given. The dialog comes after the pixel read so its greying matches (DC31).
+        # shortcut: the float RGBA buffer (16 B/px) and the copy image stay alive while the modal dialog is open,
+        # hundreds of MB at 4k; upgrade by re-reading the pixels after OK if that memory matters.
         if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha):
             return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, None)
         s = raw_settings(config)

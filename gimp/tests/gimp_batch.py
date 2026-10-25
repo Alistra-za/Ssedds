@@ -474,6 +474,20 @@ def export_noninteractive_never_opens_dialog():
     img.delete()
 
 
+def export_interactive_refused_under_ui_guard():
+    """INTERACTIVE reaches show_dialog, whose TDDS_NO_UI guard raises before any UI: an error, no file, no window."""
+    assert os.environ.get("TDDS_NO_UI"), "run_batch.ps1 did not set TDDS_NO_UI"
+    img = _image(8, 8, _rgb(_gradient(8, 8)), "R'G'B' u8", Gimp.ImageType.RGB_IMAGE)
+    try:
+        res, path = _export_run(img, "interactive.dds", Gimp.RunMode.INTERACTIVE)
+        assert res.index(0) == Gimp.PDBStatusType.EXECUTION_ERROR, f"status {res.index(0)}"
+        msg = res.index(1) if res.length() > 1 else ""
+        assert "TDDS_NO_UI" in msg, f"error text {msg!r}: the guard did not trip"
+        assert not os.path.exists(path) and not os.path.exists(path + ".tmpsave"), "a file was written"
+    finally:
+        img.delete()
+
+
 def export_with_last_vals_skips_dialog():
     """WITH_LAST_VALS opens no dialog and uses GIMP's remembered values (here a .last file in the temp profile)."""
     settings = os.path.join(Gimp.directory(), "plug-in-settings")
@@ -520,8 +534,19 @@ CASES = {f.__name__: f for f in (
     export_disallowed_format_saves_default,
     export_procedure_wins_for_dds,
     export_noninteractive_never_opens_dialog,
+    export_interactive_refused_under_ui_guard,
     export_with_last_vals_skips_dialog,
 )}
+
+if os.environ.get("TDDS_KILL_PROBE"):
+    # run_batch.ps1 -KillProbe: park a windowless sleeping child, record both PIDs, hang until the timeout kill.
+    import subprocess
+    import time
+    _child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(600)"],
+                              creationflags=subprocess.CREATE_NO_WINDOW)
+    with open(_path("probe.txt"), "w", encoding="utf-8") as _f:
+        _f.write(f"{os.getpid()} {_child.pid}")
+    time.sleep(600)
 
 _results = {}
 for _name, _fn in CASES.items():

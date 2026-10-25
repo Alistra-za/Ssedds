@@ -50,6 +50,37 @@ def match_preset(presets, raw, has_alpha, preferred, resolve):
     return hits[0] if hits else -1
 
 
+def refuse_ui():
+    """Raises under TDDS_NO_UI, which only gimp\\tests\\batch\\run_batch.ps1 sets: headless tests never show a
+    window, even through a wrong run-mode branch (gimp-console -i does not stop dialogs on Windows)."""
+    if os.environ.get("TDDS_NO_UI"):
+        raise RuntimeError("dialog refused under TDDS_NO_UI")
+
+
+def plan_refresh(psdds, raw, has_alpha, state, presets, built):
+    """What the export dialog shows for raw. built = (type, format) its Format and Quality lists were last built for.
+
+    formats / qualities are None when that list stays as it is. preset is the list index (0 = Custom, M4).
+    """
+    eff, ctl = psdds.resolve(raw, has_alpha)
+    return {"eff": eff, "ctl": ctl, "preset": state.shown(presets, raw, has_alpha) + 1,
+            "formats": psdds.allowed_formats(eff.texture_type) if built[0] != eff.texture_type else None,
+            "qualities": psdds.quality_labels(eff.format) if built[1] != eff.format else None}
+
+
+def preset_event(value, shown, reset_pending):
+    """What a notify of the dialog's preset list (list indices, 0 = Custom) means.
+
+    GIMP's Reset rewrites every argument with notify frozen, so its preset write arrives as 0 (factory) or as
+    the value the list already shows (refresh ran first): "reset". Otherwise a value the list already shows is
+    no user pick ("echo"), and anything else is one ("pick"). After Reset is dismissed without resetting, a
+    pick of Custom reads as a reset, which only skips the Custom latch.
+    """
+    if reset_pending and value in (0, shown):
+        return "reset"
+    return "echo" if value == shown else "pick"
+
+
 def apply_preset(raw, presets, index):
     """A copy of seed index's seven values; Custom (None or -1, M4) leaves raw as it is (DC45)."""
     if index is None or index == -1:

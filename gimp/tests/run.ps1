@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Runs the GIMP plug-in tests with GIMP's own Python. -Gimp also runs the batch suite (Task 3).
-param([switch]$Gimp)
+# -KillProbe also proves the batch timeout kills gimp-console and its plug-in tree (no window).
+param([switch]$Gimp, [switch]$KillProbe, [int]$ProbeTimeoutSec = 20)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $gimpDir = if ($env:SDC_GIMP_DIR) { $env:SDC_GIMP_DIR } else { 'C:\Program Files\GIMP 3' }
@@ -19,6 +20,21 @@ try {
     if ($Gimp -and $code -eq 0) {
         $batch = 'gimp\tests\batch\run_batch.ps1'
         if (-not (Test-Path $batch)) { [Console]::Error.WriteLine("$batch does not exist yet (Task 3)"); $code = 1 } else { & $batch; $code = $LASTEXITCODE }
+    }
+    if ($KillProbe -and $code -eq 0) {
+        # Proves run_batch.ps1's timeout kill: gimp-console's batch plug-in and its sleeping child must be gone.
+        $out = & 'gimp\tests\batch\run_batch.ps1' -KillProbe -TimeoutSec $ProbeTimeoutSec 2>&1 | ForEach-Object { "$_" }
+        $probeCode = $LASTEXITCODE
+        $out | Select-String 'FAIL timeout|probe pids|taskkill' | ForEach-Object { "$_" }
+        $m = [regex]::Match(($out -join "`n"), 'probe pids: (\d+) (\d+)')
+        $why = if ($probeCode -ne 1) { "run_batch.ps1 exited $probeCode, not 1" }
+               elseif (-not ($out -match '^FAIL timeout')) { 'no FAIL timeout line' }
+               elseif (-not $m.Success) { "no probe pids (the batch did not reach the probe in $ProbeTimeoutSec s)" }
+               else {
+                   $alive = @($m.Groups[1].Value, $m.Groups[2].Value) | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+                   if ($alive) { "still running after the kill: PID $($alive -join ', ')" }
+               }
+        if ($why) { "FAIL kill_probe: $why"; $code = 1 } else { 'PASS kill_probe' }
     }
 } finally { Pop-Location }
 exit $code

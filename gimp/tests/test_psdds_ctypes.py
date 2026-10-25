@@ -173,6 +173,49 @@ class T(unittest.TestCase):
         raw2.format = P.RGBA8
         self.assertEqual(ps[0][1].format, DLL.presets()[0][1].format)  # a copy, never the seed itself
 
+    def test_refuse_ui_guard(self):
+        with mock.patch.dict(os.environ, {"TDDS_NO_UI": "1"}):
+            with self.assertRaises(RuntimeError) as c:
+                P.refuse_ui()
+        self.assertIn("TDDS_NO_UI", str(c.exception))
+        env = {k: v for k, v in os.environ.items() if k != "TDDS_NO_UI"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertIsNone(P.refuse_ui())
+
+    def test_plan_refresh_type_switch(self):
+        ps = DLL.presets()
+        st = P.PresetState(DLL.resolve, len(ps))
+        raw = DLL.defaults(P.NORMAL)
+        raw.format = P.BC5
+        v = P.plan_refresh(DLL, raw, False, st, ps, (None, None))
+        self.assertEqual((v["eff"].format, v["formats"]), (P.BC5, DLL.allowed_formats(P.NORMAL)))
+        self.assertEqual(v["qualities"], DLL.quality_labels(P.BC5))
+        built = (v["eff"].texture_type, v["eff"].format)
+        self.assertEqual(P.plan_refresh(DLL, raw, False, st, ps, built)["formats"], None)  # nothing to rebuild
+        raw.texture_type = P.COLOUR
+        v = P.plan_refresh(DLL, raw, False, st, ps, built)
+        self.assertEqual(v["eff"].format, DLL.defaults(P.COLOUR).format)
+        self.assertEqual(v["formats"], DLL.allowed_formats(P.COLOUR))
+        self.assertEqual(v["qualities"], DLL.quality_labels(v["eff"].format))
+        self.assertEqual(raw.format, P.BC5)  # DC19/DC33: the raw pick is kept
+        built = (v["eff"].texture_type, v["eff"].format)
+        raw.texture_type = P.NORMAL
+        v = P.plan_refresh(DLL, raw, False, st, ps, built)
+        self.assertEqual((v["eff"].format, v["formats"]), (P.BC5, DLL.allowed_formats(P.NORMAL)))
+        seed = P.apply_preset(raw, ps, 2)
+        self.assertEqual(P.plan_refresh(DLL, seed, False, st, ps, built)["preset"], 3)  # list index = seed + 1
+        st.pick(None)
+        self.assertEqual(P.plan_refresh(DLL, seed, False, st, ps, built)["preset"], 0)
+
+    def test_preset_event(self):
+        e = P.preset_event
+        self.assertEqual(e(3, 1, False), "pick")
+        self.assertEqual(e(0, 1, False), "pick")  # a user pick of Custom
+        self.assertEqual(e(1, 1, False), "echo")
+        self.assertEqual(e(0, 1, True), "reset")  # factory reset writes the default 0
+        self.assertEqual(e(1, 1, True), "reset")  # refresh ran first in the reset's notify batch
+        self.assertEqual(e(3, 1, True), "pick")  # Reset dismissed, then a seed picked
+
     def test_preset_state_pick_validates(self):
         st = P.PresetState(DLL.resolve, len(DLL.presets()))
         for bad in (5, -2, 99):
