@@ -779,6 +779,90 @@ static std::string open_planes(Entry entry, const wchar_t *path, FormatRecord *d
     return all;
 }
 
+// Open at 32 bits (DE7): the file at `path`, read back as Photoshop would. Fills *got with the document the plug-in
+// described and samples[plane][y * 64 + x] with the float planes (4 planes max, 64 x 64).
+struct OpenedDoc {
+    FormatRecord described = {};
+    std::vector<float> samples[4];
+    bool data_null_after_continue = false, data_null_after_finish = false;
+    int16 result = 0;
+};
+static OpenedDoc open_doc(Entry entry, const wchar_t *path) {
+    OpenedDoc d;
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    h.r->planes = 0;
+    h.r->transparencyPlane = -1;
+    for (auto &p : d.samples) p.assign(64 * 64, -1.0f);
+    int16 result = h.call(formatSelectorReadPrepare);
+    if (!result) result = h.call(formatSelectorReadStart);
+    d.described.imageMode = h.r->imageMode;
+    d.described.depth = h.r->depth;
+    d.described.planes = h.r->planes;
+    d.described.transparencyPlane = h.r->transparencyPlane;
+    while (result == 0 && h.r->data) {
+        const VRect q = h.r->theRect32;
+        for (int c = 0; c <= h.r->hiPlane - h.r->loPlane; c++)
+            for (int y = q.top; y < q.bottom; y++)
+                for (int x = q.left; x < q.right; x++) {
+                    const unsigned char *at = static_cast<const unsigned char *>(h.r->data) + (y - q.top) * h.r->rowBytes +
+                                              x * h.r->colBytes + c * h.r->planeBytes;
+                    if (h.r->depth == 32) memcpy(&d.samples[c][y * 64 + x], at, 4);
+                }
+        result = h.call(formatSelectorReadContinue);
+    }
+    d.data_null_after_continue = result == 0 && h.r->data == nullptr;
+    h.call(formatSelectorReadFinish);
+    d.data_null_after_finish = h.r->data == nullptr;
+    CloseHandle(f);
+    d.result = result;
+    return d;
+}
+
+// Open of the 32-bit formats (DE7): a 32-bit RGB document that keeps values above 1; BC1-BC7 stay 8-bit.
+static int hdr_open(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    auto expect = [&](bool ok, const char *what) {
+        printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
+        bad += ok ? 0 : 1;
+    };
+    {
+        write_file(path, std::string(20000, 'x'));
+        DialogUser u;
+        u.format = L"RGBA16F (uncompressed)";
+        const int16 saved = interactive_save32(entry, path, hdr_pixel, &u);
+        const OpenedDoc d = open_doc(entry, path);
+        const int i = 40; // x >= 32: alpha 0.5
+        expect(saved == 0 && d.result == 0 && d.described.imageMode == plugInModeRGB96 && d.described.depth == 32 &&
+                   d.described.planes == 4 && d.described.transparencyPlane == 3,
+               "RGBA16F opens as RGB96, depth 32, 4 planes, transparencyPlane 3");
+        expect(d.samples[0][i] == 4.0f && d.samples[1][i] == 0.5f && d.samples[2][i] == 0.25f && d.samples[3][i] == 0.5f,
+               "RGBA16F samples 4.0, 0.5, 0.25, 0.5 kept");
+        expect(d.data_null_after_continue && d.data_null_after_finish, "state freed: data NULL after the last ReadContinue and ReadFinish");
+    }
+    {
+        write_file(path, std::string(20000, 'x'));
+        DialogUser u;
+        u.format = L"BC6H (HDR)";
+        const int16 saved = interactive_save32(entry, path, hdr_pixel, &u);
+        const OpenedDoc d = open_doc(entry, path);
+        const float r = d.samples[0][40];
+        expect(saved == 0 && d.result == 0 && d.described.imageMode == plugInModeRGB96 && d.described.depth == 32 &&
+                   d.described.planes == 3 && d.described.transparencyPlane == 0,
+               "BC6H opens as RGB96, 3 planes, transparencyPlane 0");
+        expect(r > 3.92f && r < 4.08f, "BC6H red within 2% of 4.0");
+    }
+    {
+        flat_save(entry, path, 8, checks8);
+        const OpenedDoc d = open_doc(entry, path);
+        expect(d.result == 0 && d.described.imageMode == plugInModeRGBColor && d.described.depth == 8,
+               "an 8-bit BC7 file reopens as 8-bit RGB");
+    }
+    DeleteFileW(path);
+    printf("%s hdr_open\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 static unsigned long long fnv1a(const std::string &s) {
     unsigned long long h = 14695981039346656037ull;
     for (unsigned char c : s) h = (h ^ c) * 1099511628211ull;
@@ -843,6 +927,7 @@ int wmain(int argc, wchar_t **argv) {
     failed += eight_bit_bytes_pinned(entry, out);
     failed += hdr_band_save(entry, out);
     failed += hdr_merged_save(entry, out);
+    failed += hdr_open(entry, out);
     const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
     printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
     failed += seeded ? 0 : 1;

@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 template <typename T>
 static void convert(const T *src, size_t pixels, int channels, float scale, float *out) {
@@ -88,8 +89,13 @@ void deinterleave_rgba8_to_planes(const uint8_t *rgba, size_t pixels, int planes
         for (size_t p = 0; p < pixels; p++) out[p] = rgba[p * 4 + c];
 }
 
+void deinterleave_rgba32f_to_planes(const uint8_t *rgba_f32, size_t pixels, int planes, uint8_t *out) {
+    for (int c = 0; c < planes; c++, out += pixels * 4)
+        for (size_t p = 0; p < pixels; p++) memcpy(out + p * 4, rgba_f32 + (p * 4 + size_t(c)) * 4, 4);
+}
+
 // The rules live in psdds (crates/psdds/src/helpers.rs); these keep the plug-in's names.
-bool dds_header_openable(const uint8_t *h, size_t len) { return psdds_dds_openable(h, len) != 0; }
+bool dds_header_openable(const uint8_t *h, size_t len) { return psdds_dds_openable_float(h, len) != 0; }
 
 bool opens_with_transparency(const uint8_t *rgba, size_t pixels, uint32_t has_alpha) {
     return psdds_opens_with_alpha(rgba, pixels, has_alpha) != 0;

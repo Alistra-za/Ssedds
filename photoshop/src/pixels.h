@@ -24,6 +24,10 @@ size_t describe_samples(const float *rgba, size_t pixels, char *out, size_t cap)
 // is 4, A (3 drops alpha). `out` receives pixels * planes bytes.
 void deinterleave_rgba8_to_planes(const uint8_t *rgba, size_t pixels, int planes, uint8_t *out);
 
+// The float form of deinterleave_rgba8_to_planes (DE7): `rgba_f32` holds `pixels` RGBA pixels of native-endian f32, read
+// with memcpy (no alignment assumed); `out` receives `planes` blocks of pixels * 4 bytes.
+void deinterleave_rgba32f_to_planes(const uint8_t *rgba_f32, size_t pixels, int planes, uint8_t *out);
+
 // The largest DDS Open accepts: 16384 x 16384 RGBA8 with a full mip chain, plus magic, header and DX10 header.
 constexpr int64_t max_dds_file_bytes() {
     int64_t bytes = 4 + 124 + 20;
@@ -46,6 +50,7 @@ bool floats_have_transparency(const float *rgba, size_t pixels);
 void dds_size_range(int64_t width, int64_t height, int depth, int64_t *min_bytes, int64_t *max_bytes);
 
 // FilterFile: false when the first len bytes of a file (up to 148: magic, header, DX10 header) show a DDS that Open
-// will refuse, so another DDS plug-in can open it: BC6H or float formats, cube maps, texture arrays. A file shorter than
+// will refuse, so another DDS plug-in can open it: other float formats (DXGI 94 and the like), cube maps, texture
+// arrays. BC6H, RGBA16F, RGBA32F and FourCC 113/116 are claimed: they open at 32 bits (DE7). A file shorter than
 // the headers is claimed, so the reader can say why it fails. Not a DDS (no magic): false.
 bool dds_header_openable(const uint8_t *h, size_t len);

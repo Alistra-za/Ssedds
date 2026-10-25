@@ -123,6 +123,28 @@ static void deinterleave_rgba8_to_planes_test() {
     for (int i = 0; i < 8; i++) check(out3[i] == want3[i], __func__, "3 planes: alpha dropped, nothing written past B");
 }
 
+static void deinterleave_rgba32f_to_planes_test() {
+    const float px[8] = {1.5f, 2.5f, 3.5f, 4.5f, -5.0f, 6.0f, 70000.0f, 0.25f};
+    uint8_t buf[1 + 32] = {}; // odd offset: no alignment assumed
+    uint8_t *src = buf + 1;
+    memcpy(src, px, sizeof px);
+    uint8_t out[32];
+    deinterleave_rgba32f_to_planes(src, 2, 4, out);
+    const float want4[8] = {1.5f, -5.0f, 2.5f, 6.0f, 3.5f, 70000.0f, 4.5f, 0.25f};
+    for (int i = 0; i < 8; i++) {
+        float v;
+        memcpy(&v, out + i * 4, 4);
+        check(v == want4[i], __func__, "4 planes: R, G, B, A blocks");
+    }
+    uint8_t out3[32];
+    memset(out3, 0x77, sizeof out3);
+    deinterleave_rgba32f_to_planes(src, 2, 3, out3);
+    float v;
+    memcpy(&v, out3 + 5 * 4, 4);
+    check(v == 70000.0f, __func__, "3 planes: B block");
+    check(out3[24] == 0x77 && out3[31] == 0x77, __func__, "3 planes: nothing written past B");
+}
+
 static void largest_dds_is_16k_rgba8_full_chain() {
     // 16384^2 RGBA8 with 15 mip levels: 4 * (4^15 - 1) / 3 bytes of pixels, plus magic, header and DX10 header.
     check(kMaxDdsFileBytes == int64_t(4) * ((int64_t(1) << 30) - 1) / 3 + 4 + 124 + 20, __func__, "closed form");
@@ -146,13 +168,18 @@ static void filter_file_claims_only_openable_headers() {
     header(h, sizeof h, "DX10", 0, 98, 0, 1);
     check(dds_header_openable(h, 148), __func__, "DX10 BC7, array size 1, opens");
     header(h, sizeof h, "DX10", 0, 95, 0, 1);
-    check(!dds_header_openable(h, 148), __func__, "BC6H UF16 declined");
+    check(dds_header_openable(h, 148), __func__, "BC6H UF16 claimed (DE7)");
     header(h, sizeof h, "DX10", 0, 96, 0, 1);
-    check(!dds_header_openable(h, 148), __func__, "BC6H SF16 declined");
+    check(dds_header_openable(h, 148), __func__, "BC6H SF16 claimed");
     header(h, sizeof h, "DX10", 0, 10, 0, 1);
-    check(!dds_header_openable(h, 148), __func__, "RGBA16F declined");
+    check(dds_header_openable(h, 148), __func__, "RGBA16F claimed");
     header(h, sizeof h, "DX10", 0, 2, 0, 1);
-    check(!dds_header_openable(h, 148), __func__, "RGBA32F declined");
+    check(dds_header_openable(h, 148), __func__, "RGBA32F claimed");
+    const uint32_t others[3] = {6, 26, 94};
+    for (uint32_t other : others) {
+        header(h, sizeof h, "DX10", 0, other, 0, 1);
+        check(!dds_header_openable(h, 148), __func__, "DXGI 6, 26 and 94 declined");
+    }
     header(h, sizeof h, "DX10", 0, 98, 0x4, 1);
     check(!dds_header_openable(h, 148), __func__, "DX10 cube map declined");
     header(h, sizeof h, "DX10", 0, 98, 0, 6);
@@ -162,7 +189,7 @@ static void filter_file_claims_only_openable_headers() {
     header(h, sizeof h, nullptr, 0, 0, 0, 0);
     uint32_t f16 = 113;
     memcpy(h + 84, &f16, 4);
-    check(!dds_header_openable(h, 148), __func__, "legacy A16B16G16R16F declined");
+    check(dds_header_openable(h, 148), __func__, "legacy A16B16G16R16F (FourCC 113) claimed");
     header(h, sizeof h, "DXT5", 0, 0, 0, 0);
     check(dds_header_openable(h, 128), __func__, "128 bytes, no DX10 header needed");
     check(dds_header_openable(h, 40), __func__, "truncated file is claimed so the reader says why");
@@ -232,7 +259,8 @@ int main() {
         {"band_rows_edges", band_rows_edges},
         {"bands_convert_into_their_rows", bands_convert_into_their_rows},
         {"deinterleave_rgba8_to_planes", deinterleave_rgba8_to_planes_test},
-        {"largest_dds_is_16k_rgba8_full_chain", largest_dds_is_16k_rgba8_full_chain},
+        {"deinterleave_rgba32f_to_planes", deinterleave_rgba32f_to_planes_test},
+        {"largest_dds_is_16k_rgba8_full_chain",largest_dds_is_16k_rgba8_full_chain},
         {"filter_file_claims_only_openable_headers", filter_file_claims_only_openable_headers},
         {"open_alpha_rule", open_alpha_rule},
         {"save_alpha_rule", save_alpha_rule},

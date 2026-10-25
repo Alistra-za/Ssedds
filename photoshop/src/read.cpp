@@ -1,5 +1,6 @@
-// Tessalith DDS: the Open path. Reads the whole file through the host's file handle, decodes the top mip to RGBA8
-// with psdds and hands it to Photoshop as an 8-bit RGB document in planar bands of whole rows.
+// Tessalith DDS: the Open path. Reads the whole file through the host's file handle, decodes the top mip with psdds
+// (RGBA8, or RGBA f32 for BC6H and the float formats, DE7) and hands it to Photoshop as an 8-bit RGB or 32-bit RGB96
+// document in planar bands of whole rows.
 // MIT licence (see photoshop/LICENSE).
 #include "write.h"
 
@@ -13,6 +14,7 @@ struct ReadState {
     int32 rows_per_band = 0;
     int32 next_top = 0;        // first row of the band after the one the host holds
     int16 planes = 3;
+    uint32_t depth = 8;        // 8: RGBA8 pixels; 32: RGBA f32 pixels (DE7)
 };
 
 namespace {
@@ -45,16 +47,21 @@ void hand_band(FormatRecord *r, ReadState *s, int32 top) {
     const int32 width = r->imageSize32.h, height = r->imageSize32.v;
     const int32 bottom = top + s->rows_per_band > height ? height : top + s->rows_per_band;
     const size_t pixels = size_t(width) * size_t(bottom - top);
-    deinterleave_rgba8_to_planes(s->pixels.data + size_t(top) * size_t(width) * 4, pixels, s->planes, s->band.data());
+    const int16 sample = s->depth == 32 ? 4 : 1; // bytes per sample
+    const uint8_t *from = s->pixels.data + size_t(top) * size_t(width) * 4 * size_t(sample);
+    if (s->depth == 32)
+        deinterleave_rgba32f_to_planes(from, pixels, s->planes, s->band.data());
+    else
+        deinterleave_rgba8_to_planes(from, pixels, s->planes, s->band.data());
     r->theRect32.top = top;
     r->theRect32.left = 0;
     r->theRect32.bottom = bottom;
     r->theRect32.right = width;
     r->loPlane = 0;
     r->hiPlane = s->planes - 1;
-    r->colBytes = 1;
-    r->rowBytes = width;
-    r->planeBytes = int32(pixels);
+    r->colBytes = sample;
+    r->rowBytes = width * sample;
+    r->planeBytes = int32(pixels * size_t(sample));
     for (int16 i = 0; i < s->planes; i++) r->planeMap[i] = i;
     r->data = s->band.data();
     s->next_top = bottom;
@@ -67,17 +74,22 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
     {
         std::vector<uint8_t> bytes(size); // freed before the image goes to the host
         if (!read_all(file, bytes.data(), bytes.size())) return report_error(r, "the DDS file could not be read.");
-        if (psdds_decode(bytes.data(), bytes.size(), &width, &height, &has_alpha, &s->pixels, err, sizeof err) != 0)
+        if (psdds_decode_depth(bytes.data(), bytes.size(), &width, &height, &has_alpha, &s->depth, &s->pixels, err,
+                               sizeof err) != 0)
             return report_error(r, err[0] ? as_reason(err) : "of an internal error in Tessalith DDS.");
     }
     if (width == 0 || height == 0) return report_error(r, "the DDS image has no pixels.");
+    if (s->depth != 8 && s->depth != 32) return report_error(r, "of an internal error in Tessalith DDS.");
     // An opaque file (alpha >= 254, DC23) opens without transparency, so a re-save keeps the colour mip filter
-    // instead of the alpha rule's Box.
-    const bool translucent = opens_with_transparency(s->pixels.data, size_t(width) * size_t(height), has_alpha);
+    // instead of the alpha rule's Box. A float file's has_alpha already applies that rule (psdds, DE4).
+    const bool translucent = s->depth == 32
+                                 ? has_alpha != 0
+                                 : opens_with_transparency(s->pixels.data, size_t(width) * size_t(height), has_alpha);
     s->planes = translucent ? 4 : 3;
 
-    r->imageMode = plugInModeRGBColor;
-    r->depth = 8;
+    // 32-bit documents are RGB96 with no ICC profile (DE7); depth 8 is the old path.
+    r->imageMode = s->depth == 32 ? plugInModeRGB96 : plugInModeRGBColor;
+    r->depth = int16(s->depth);
     r->planes = s->planes;
     r->imageSize32.h = int32(width);
     r->imageSize32.v = int32(height);
@@ -86,8 +98,9 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
     // gets the fourth plane as an alpha channel instead.
     if (r->transparencyPlane == -1) r->transparencyPlane = translucent ? 3 : 0;
 
-    s->rows_per_band = band_rows(int64_t(width) * s->planes, int32(height), kBandCap);
-    s->band.resize(size_t(width) * size_t(s->rows_per_band) * size_t(s->planes));
+    const int32 sample = s->depth == 32 ? 4 : 1;
+    s->rows_per_band = band_rows(int64_t(width) * s->planes * sample, int32(height), kBandCap);
+    s->band.resize(size_t(width) * size_t(s->rows_per_band) * size_t(s->planes) * size_t(sample));
     hand_band(r, s, 0);
     return noErr;
 }
@@ -95,8 +108,8 @@ int16 decode_and_describe(FormatRecord *r, HANDLE file, size_t size, ReadState *
 } // namespace
 
 int16 filter_file(FormatRecord *r) {
-    // PIFormat.h FilterFile: claim only files this plug-in can open, so Photoshop offers the rest (HDR, cube maps,
-    // texture arrays, non-DDS) to other plug-ins or shows its own message. Only the headers are read.
+    // PIFormat.h FilterFile: claim only files this plug-in can open, so Photoshop offers the rest (other float
+    // formats, cube maps, texture arrays, non-DDS) to other plug-ins or shows its own message. Only the headers are read.
     uint8_t head[148] = {};
     DWORD got = 0;
     const HANDLE file = reinterpret_cast<HANDLE>(r->dataFork);
