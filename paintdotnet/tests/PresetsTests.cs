@@ -321,6 +321,22 @@ public sealed class PresetsTests : IDisposable
     }
 
     [Fact]
+    public void PresetSelection_reset_rematches_like_an_edit()
+    {
+        var list = Seeds();
+        list.Add(new Preset("Twin", list[0].Raw));
+        var sel = new PresetSelection();
+        sel.PickCustom();
+        sel.Reset(); // the host's Defaults button: a stale Custom does not survive
+        Assert.Equal(0, sel.Shown(list, list[0].Raw, false));
+        Assert.False(sel.Custom);
+
+        sel.Pick(5);
+        sel.Reset(); // nor a stale twin pick
+        Assert.Equal(0, sel.Shown(list, list[0].Raw, false));
+    }
+
+    [Fact]
     public void PresetSelection_reset_after_delete()
     {
         var list = Seeds();

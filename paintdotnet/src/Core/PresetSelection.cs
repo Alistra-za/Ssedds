@@ -17,6 +17,9 @@ public sealed class PresetSelection
     public void PickCustom() => Custom = true;
     public void Saved(int index) { Picked = index; Custom = false; }
 
+    /// <summary>New settings from outside (the host's Defaults button): drop a Custom or picked state and match afresh.</summary>
+    public void Reset() { Picked = -1; Custom = false; }
+
     /// <summary>After the shown preset was deleted: indexes moved, so match afresh (dialog.cpp delete_preset).</summary>
     public void Deleted() => Picked = -1;
 

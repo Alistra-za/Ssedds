@@ -128,6 +128,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     protected override void InitWidgetFromToken(TessalithDdsToken token)
     {
         _raw = token.Raw;
+        _selection.Reset(); // also the host's Defaults button: no stale Custom or twin pick survives
         Sync(null);
     }
 
