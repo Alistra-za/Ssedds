@@ -214,7 +214,11 @@ fn a_bad_channel_is_refused() {
         channels: 3,
         channel: 3,
     };
-    assert!(pack_rmaos([Some(bad), None, None, None], [None; 4], &profile()).is_err());
+    let want = "roughness: invalid source image or channel";
+    assert_eq!(
+        pack_rmaos([Some(bad), None, None, None], [None; 4], &profile()).unwrap_err(),
+        want
+    );
     let short = Channel {
         px: &v[..5],
         width: 2,
@@ -222,5 +226,18 @@ fn a_bad_channel_is_refused() {
         channels: 1,
         channel: 0,
     };
-    assert!(pack_rmaos([Some(short), None, None, None], [None; 4], &profile()).is_err());
+    assert_eq!(
+        pack_rmaos([Some(short), None, None, None], [None; 4], &profile()).unwrap_err(),
+        want
+    );
+}
+
+#[test]
+fn a_profile_fill_survives_an_unset_argument() {
+    let r = rough_px();
+    let mut p = profile();
+    p.packing.fill.metallic = Some(255);
+    let (img, defaulted) = pack_rmaos([Some(ch(&r, N)), None, None, None], [None; 4], &p).unwrap();
+    assert!(img.px.iter().all(|px| px[1] == 1.0));
+    assert_eq!(defaulted, vec![2, 3]);
 }

@@ -1,7 +1,7 @@
 //! Encode an in-memory image with an explicit profile (the Photoshop plugin's path). The steps and their order are
 //! those of `pipeline::prepare_then` → `encode_levels` → the `DdsDesc` write in `process_file`, so the bytes equal a
 //! file run of the same pixels and profile (tests/memory.rs).
-use crate::config::{GraySource, PackRecipe, Profile, RawMap, Subtype, Target};
+use crate::config::{PackRecipe, Profile, RawMap, Subtype, Target};
 use crate::coverage::preserve_coverage;
 use crate::dds::{dds_bytes, resolve_header, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
@@ -68,10 +68,10 @@ pub fn pack_rmaos(
     let mut packing = p.packing.clone();
     for (f, role) in fill.into_iter().zip(ROLES) {
         match role {
-            RawMap::Roughness => packing.fill.roughness = f,
-            RawMap::Metallic => packing.fill.metallic = f,
-            RawMap::Ao => packing.fill.ao = f,
-            _ => packing.fill.specular = f,
+            RawMap::Roughness => packing.fill.roughness = f.or(packing.fill.roughness),
+            RawMap::Metallic => packing.fill.metallic = f.or(packing.fill.metallic),
+            RawMap::Ao => packing.fill.ao = f.or(packing.fill.ao),
+            _ => packing.fill.specular = f.or(packing.fill.specular),
         }
     }
     let (channels, defaulted) = resolve_channels(recipe, &packing);
@@ -94,7 +94,7 @@ pub fn pack_rmaos(
     let a = assemble_channels_with(
         &channels,
         &sources,
-        GraySource::R,
+        p.channels.grayscale_source,
         |q| {
             let c = find(q);
             Ok((c.width, c.height))
