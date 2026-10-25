@@ -29,7 +29,8 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
         SaveExtensions = [".dds"],
     }) { }
 
-    /// <summary>psdds_alpha_used of the last save (the preview's); raised on the save's worker thread (Task 6).</summary>
+    /// <summary>psdds_alpha_used of the last save (the preview's); raised on the save's worker thread. An instance event
+    /// suffices: this is the one instance per process, and the host builds the widget from it and previews through it.</summary>
     internal event Action<bool>? HasAlphaMeasured;
 
     protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() => new() { Raw = Psdds.Defaults(Psdds.Colour) };
@@ -44,6 +45,9 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
     {
         // before the render too: the preview re-saves on every dialog change (DdsSave.Write checks again before allocating)
         if (Psdds.CheckSize((uint)input.Width, (uint)input.Height) is { } why) throw new PsddsException(why);
+        // DdsSave reads width x height pixels from row 0 at Stride: a surface of another size would be read out of bounds
+        if (scratchSurface.Width != input.Width || scratchSurface.Height != input.Height)
+            throw new InvalidOperationException($"the scratch surface is {scratchSurface.Width}x{scratchSurface.Height}, the image {input.Width}x{input.Height}");
         scratchSurface.Clear();
         input.CreateRenderer().Render(scratchSurface);
         DdsSave.Write(output, (byte*)scratchSurface.GetRowPointer(0), scratchSurface.Stride, input.Width, input.Height, token.Raw,
