@@ -5,7 +5,7 @@ Three nodes, in the **Image > Tessalith DDS** group, that save Skyrim SE/AE DDS 
 ## Install
 
 1. Build the DLL if you have not (`crates\psdds\build.ps1`).
-2. Close chaiNNer, then run `chainner\install.ps1`. It copies the nodes, `psdds.dll` and the notices into the newest `%LOCALAPPDATA%\chaiNNer\app-*` folder and prints the psdds version.
+2. Close chaiNNer, then run `chainner\install.ps1`. It copies the nodes, `psdds.dll`, `COPYING`, `LICENSE` and `THIRD_PARTY_NOTICES.md` into the newest `%LOCALAPPDATA%\chaiNNer\app-*` folder and prints the psdds version.
 3. `-Target <resources\src folder>` installs into a given folder instead; `-Uninstall` removes only the `tessalith_dds` folder.
 
 **Re-run after every chaiNNer update.** An update installs a new `app-<version>` folder and deletes the old one, taking the nodes with it.
@@ -13,7 +13,7 @@ Three nodes, in the **Image > Tessalith DDS** group, that save Skyrim SE/AE DDS 
 ## Nodes
 
 - **Save DDS (Tessalith)**: image, folder, subdirectory, image name, then the settings. *Preset* is Custom (every setting shown) or one of Tessalith's seed presets (the settings are hidden and the preset's values are used). Custom shows texture type, sRGB, discard transparency, mipmaps, mip filter, and a format with its quality list. Inputs that do not apply to the chosen type or format are hidden. Alpha is taken from the pixels: an image without used alpha is saved opaque. Existing files are overwritten unless *Skip existing files* is on. A file is written only after the encode succeeded.
-- **RMAOS (Tessalith)**: builds a TruePBR `_rmaos` from up to four images: roughness, metallic, AO, specular. Each image input has a *channel* dropdown (R, G, B, A; hidden for a grey image), so one `_orm` image can feed three roles. An unconnected role gets a *fill* (Default, or Custom 0-255). Sizes must match; nothing is resized. Quality and Mipmaps are set here. The layout and the defaults are in the wiki's Texture-Types page. Specular alone builds nothing.
+- **RMAOS (Tessalith)**: builds a TruePBR `_rmaos` from up to four images: roughness, metallic, AO, specular. Each image input has a *channel* dropdown (R, G, B, A; hidden for a grey image), so one `_orm` image can feed three roles. An unconnected role gets a *fill* (Default, or Custom 0-255). Sizes must match; nothing is resized. Quality and Mipmaps are set here. The layout and the defaults are in the wiki's Texture-Types page. A specular-only RMAOS is an error ("nothing to pack"): connect at least roughness, metallic or AO.
 - **Save Normal (Tessalith)**: normal image, folder, subdirectory, base name, format, mipmaps, quality, skip existing, and an optional *RMAOS* input.
 
 ### RMAOS to Save Normal
