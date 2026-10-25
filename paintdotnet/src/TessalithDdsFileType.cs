@@ -42,6 +42,8 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
 
     protected override void OnSaveT(Document input, Stream output, TessalithDdsToken token, Surface scratchSurface, ProgressEventHandler progressCallback)
     {
+        // before the render too: the preview re-saves on every dialog change (DdsSave.Write checks again before allocating)
+        if (Psdds.CheckSize((uint)input.Width, (uint)input.Height) is { } why) throw new PsddsException(why);
         scratchSurface.Clear();
         input.CreateRenderer().Render(scratchSurface);
         DdsSave.Write(output, (byte*)scratchSurface.GetRowPointer(0), scratchSurface.Stride, input.Width, input.Height, token.Raw,
