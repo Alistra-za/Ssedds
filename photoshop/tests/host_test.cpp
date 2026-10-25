@@ -101,7 +101,7 @@ static void write_file(const wchar_t *path, const std::string &bytes) {
 // The existing file must survive a save that never got its image; the host opens it without truncating.
 static int save_without_image_fails(Entry entry, const wchar_t *path) {
     const std::string original(20000, 'x'); // longer than the DDS written below, so a left-over tail shows
-    const char *expected = "Tessalith DDS could not read the image from Photoshop, so nothing was saved.";
+    const char *expected = "Tessalith DDS could not read the image from Photoshop, so nothing was saved"; // no full stop (DC30)
     int bad = 0;
     { // WriteStart, then WriteFinish before any band (as after Escape)
         write_file(path, original);

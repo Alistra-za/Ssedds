@@ -75,7 +75,8 @@ int16 report_error(FormatRecord *r, const char *message) {
     if (!r->errorString) return formatBadParameters;
     // Str255 is a Pascal string: byte 0 holds the length (at most 255).
     unsigned char *s = *r->errorString;
-    const size_t len = strnlen(message, 255);
+    size_t len = strnlen(message, 255);
+    while (len > 0 && message[len - 1] == '.') len--; // Photoshop ends the sentence itself (Note DC30)
     s[0] = static_cast<unsigned char>(len);
     memcpy(s + 1, message, len);
     if (len < 255) s[len + 1] = 0;

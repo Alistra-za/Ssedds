@@ -10,7 +10,8 @@
 #include "../psdds.h"
 
 // Puts `message` in the host's error string and returns errReportString, so Photoshop shows
-// "Cannot complete operation because <message>". Without an error string it returns formatBadParameters.
+// "Cannot complete operation because <message>." Trailing full stops are dropped, since Photoshop adds its own.
+// Without an error string it returns formatBadParameters.
 int16 report_error(FormatRecord *record, const char *message);
 
 // psdds messages start with a capital; lower-cases it in place, since Photoshop puts "because " in front.
