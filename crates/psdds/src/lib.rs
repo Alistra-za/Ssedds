@@ -510,17 +510,19 @@ unsafe fn decode(
         // shortcut: the engine's decode_level_rgba still allocates its float image infallibly (4 GiB at 16384²); make it fallible if a large HDR open aborts
         let px = engine::decode::decode_level_rgba(f.format, w, h, &f.data[range], None)
             .map_err(|e| e.to_string())?;
-        // NaN -> 0, ±inf -> ±65504 (the half range); negatives and values above 1 are kept.
+        // NaN -> 0, ±inf -> ±65504 (the half range); negatives and values above 1 are kept in RGB, alpha is 0..1.
         let px: Vec<[f32; 4]> = px
             .into_iter()
             .map(|p| {
-                p.map(|v| {
+                let mut p = p.map(|v| {
                     if v.is_nan() {
                         0.0
                     } else {
                         v.clamp(-65504.0, 65504.0)
                     }
-                })
+                });
+                p[3] = p[3].clamp(0.0, 1.0);
+                p
             })
             .collect();
         px.iter()

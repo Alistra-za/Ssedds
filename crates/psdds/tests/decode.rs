@@ -533,3 +533,11 @@ fn float_open_still_refuses_cube_and_array() {
     // psdds_decode keeps the old HDR text
     assert_eq!(err_of(&raw(4, 4, b"DX10", 10, 0, 1, 0, &[0; 128])), HDR);
 }
+
+/// Open keeps the range of RGB but alpha is a coverage, so it is clamped to 0..1.
+#[test]
+fn float_open_clamps_alpha() {
+    let px = [2.0, -1.0, 0.5, -2.0, 0.5, 0.5, 0.5, 3.0];
+    let d = decode_depth(&raw(2, 1, b"DX10", 2, 0, 1, 0, &f32_bytes(&px))).unwrap();
+    assert_eq!(d.px, [2.0, -1.0, 0.5, 0.0, 0.5, 0.5, 0.5, 1.0]);
+}
