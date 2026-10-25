@@ -22,13 +22,13 @@ Choose File > Save As > **Tessalith DDS**. The options dialog has:
 - **Mipmaps**: a full chain or none.
 - **Quality**: the encoder effort for the chosen format (BC7 effort, BC1/BC3 level, BC4/BC5 search). Greyed for RGBA8.
 
-Your last choices are remembered. A plain Save of a document opened from a DDS reuses them without the dialog; use Save As to see the dialog. Images up to 16384 x 16384 are accepted; Skyrim supports no more.
+Your last choices are remembered and preselected the next time the dialog opens. The dialog opens on every Save, Save As and Ctrl+S; only actions and batches run with dialogs off skip it and use the remembered choices. Images up to 16384 x 16384 are accepted; Skyrim supports no more.
 
 ## Open
-File > Open on a `.dds` gives an 8-bit RGB document (the top mip only), with transparency when the file has any. HDR files (BC6H, float formats), cube maps and texture arrays are not opened by this plugin; it leaves them to any other DDS plugin you have installed.
+File > Open on a `.dds` gives an 8-bit RGB document (the top mip only), with transparency when the file has any (alpha of 254 or 255 everywhere counts as opaque, because Tessalith's own BC7 encoder may store opaque pixels as 254). HDR files (BC6H, float formats), cube maps and texture arrays are not opened by this plugin; it leaves them to any other DDS plugin you have installed.
 
 ## Memory
-Large images need a lot of free RAM. Opening a 16384 x 16384 RGBA8 DDS needs about 3.4 GB beyond Photoshop's own use (the file, the decoded image and a copy of it exist together briefly), and saving one needs several GB more (the image is held as 16-byte float pixels, over 4 GB, plus the encoded file). Saving very large images on a machine with little free RAM can still fail, with a "not enough memory" message or, in the worst case, a Photoshop crash. Close other programs or save at 8192 x 8192 or smaller if that happens.
+Large images need a lot of free RAM. Opening a 16384 x 16384 RGBA8 DDS needs about 3.4 GB beyond Photoshop's own use (the file, the decoded image and a copy of it exist together briefly), and saving one needs about 10 GB (the image is held as 16-byte float pixels, 4 GB, the encoder takes its own 4 GB copy, plus its working buffers and the encoded file). Saving very large images on a machine with little free RAM can still fail, with a "not enough memory" message or, in the worst case, a Photoshop crash. Close other programs or save at 8192 x 8192 or smaller if that happens.
 
 ## Support
 Tessalith: https://github.com/Alistra-za/Tessalith

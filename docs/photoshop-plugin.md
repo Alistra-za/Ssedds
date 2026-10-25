@@ -13,7 +13,7 @@ The Photoshop SDK is not in the repository. Set `PS_SDK` to the folder that hold
 .\photoshop\build.ps1 -Test      # console tests only (no SDK needed)
 .\photoshop\package.ps1          # dist\TessalithDDS-<version>.zip + .sha256.txt
 ```
-`package.ps1` fails if a dependency has a licence outside `photoshop/about.toml`, or if the plugin links a VC++ runtime DLL. Public CI cannot build the plugin; releases are built locally.
+`package.ps1` needs `cargo-about` on PATH (`cargo install cargo-about --locked`, once per machine). It fails if cargo-about is missing or cannot run, if a dependency has a licence outside `photoshop/about.toml`, or if the plugin links a VC++ runtime DLL. Public CI cannot build the plugin; releases are built locally.
 
 ## Install
 Copy `TessalithDDS.8bi` into Photoshop's `Plug-ins` folder (administrator rights needed). The plugin is unsigned, so SmartScreen may warn.

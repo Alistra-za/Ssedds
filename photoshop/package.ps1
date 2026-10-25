@@ -5,6 +5,8 @@
 # Runs build.ps1 (Release), the licence check (cargo about over the psdds crate tree; fails on any licence outside
 # photoshop\about.toml), checks the plugin links no VC++ runtime DLL, then zips TessalithDDS.8bi, LICENSE,
 # THIRD_PARTY_NOTICES.md and README.md. Writes dist\TessalithDDS-<version>.zip.sha256.txt next to it.
+#
+# Needs cargo-about on PATH (cargo install cargo-about --locked), besides what build.ps1 needs.
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $repo = Split-Path $here -Parent
@@ -30,8 +32,22 @@ $stage = Join-Path $here 'build\zip'
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
 $about = Join-Path $stage 'about.md'
-cargo about generate --offline --frozen --fail -c (Join-Path $here 'about.toml') -m (Join-Path $repo 'crates\psdds\Cargo.toml') (Join-Path $here 'about.hbs') -o $about
-if ($LASTEXITCODE -ne 0) { throw "Licence check failed ($LASTEXITCODE): a dependency has a licence outside photoshop\about.toml." }
+if (-not (Get-Command cargo-about -ErrorAction SilentlyContinue)) {
+    throw 'cargo-about is not installed (cargo install cargo-about --locked); the licence check needs it.'
+}
+$aboutLog = Join-Path $stage 'about.log'
+cargo about generate --offline --frozen --fail -c (Join-Path $here 'about.toml') -m (Join-Path $repo 'crates\psdds\Cargo.toml') (Join-Path $here 'about.hbs') -o $about 2> $aboutLog
+$aboutExit = $LASTEXITCODE
+$aboutErr = Get-Content $aboutLog -Raw -ErrorAction SilentlyContinue
+Remove-Item $aboutLog -ErrorAction SilentlyContinue
+if ($aboutExit -ne 0) {
+    if ($aboutErr) { Write-Host $aboutErr }
+    # cargo-about reports a rejected licence as "failed to satisfy license requirements"; any other failure is the tool.
+    if ($aboutErr -match 'failed to satisfy license requirements') {
+        throw "Licence check failed ($aboutExit): a dependency has a licence outside photoshop\about.toml (see above)."
+    }
+    throw "cargo about failed to run ($aboutExit); see its output above. This is not a licence verdict."
+}
 
 $lic = Join-Path $repo 'LICENSES'
 $notices = Join-Path $stage 'THIRD_PARTY_NOTICES.md'
