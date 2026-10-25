@@ -281,7 +281,9 @@ def write_files(pairs) -> None:
         for i, (tmp, (path, _)) in enumerate(zip(tmps, pairs)):
             # the last replace never needs a restore, and skipping its read avoids racing a concurrent writer
             old = path.read_bytes() if i < len(pairs) - 1 and path.is_file() else None
-            for attempt in range(20):  # Windows refuses a replace while another replace/open of the target is in flight
+            # Windows refuses a replace while another replace/open of the target is in flight.
+            # shortcut: about 2 s of retries; a lock held longer still raises, so retry for longer if users hit it.
+            for attempt in range(20):
                 try:
                     os.replace(tmp, path)
                     break
