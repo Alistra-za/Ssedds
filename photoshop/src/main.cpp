@@ -42,11 +42,22 @@ static int16 dispatch(int16 selector, FormatRecord *r, intptr_t *data) {
     case formatSelectorWriteFinish:
         return write_finish(r, data);
     case formatSelectorReadStart:
+        r->layerData = 0; // no layers: the image comes as one composite (PiPL FormatLayerSupport, Note DC26)
         return read_start(r, data);
     case formatSelectorReadContinue:
         return read_continue(r, data);
     case formatSelectorReadFinish:
         return read_finish(r, data);
+    case formatSelectorReadLayerStart:
+    case formatSelectorReadLayerContinue:
+    case formatSelectorReadLayerFinish:
+    case formatSelectorWriteLayerStart:
+    case formatSelectorWriteLayerContinue:
+    case formatSelectorWriteLayerFinish:
+        // Claimed only so Save As lists the format (DC26); DDS has no layers, so no layer pixels are requested.
+        r->data = nullptr;
+        r->theRect32 = VRect{};
+        return noErr;
     case formatSelectorFilterFile:
         return filter_file(r);
     default:
