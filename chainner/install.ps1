@@ -38,8 +38,8 @@ if ($Uninstall) {
     return
 }
 
-if (-not (Test-Path $Dll)) {
-    throw "psdds.dll not found at $Dll. Build it with crates\psdds\build.ps1 (or pass -Dll)."
+if (-not (Test-Path $Dll -PathType Leaf)) {
+    throw "psdds.dll (a file) not found at $Dll. Build it with crates\psdds\build.ps1 (or pass -Dll)."
 }
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tessalith-install-" + [guid]::NewGuid().ToString('N'))
@@ -58,19 +58,20 @@ try {
     Copy-Item $notices (Join-Path $stage 'THIRD_PARTY_NOTICES.md')
     Copy-Item (Join-Path $here 'COPYING') (Join-Path $stage 'COPYING')
     Copy-Item (Join-Path $here 'LICENSE') (Join-Path $stage 'LICENSE')
-    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-    Rename-Item $stage 'tessalith_dds'
     $py = Join-Path $env:APPDATA 'chaiNNer\python\python\python.exe'
-    "Installed to $dest"
+    
     if (Test-Path $py) {
         $ErrorActionPreference = 'Continue'   # Windows PowerShell 5.1 turns native stderr into a terminating error under Stop
-        $out = & $py -I (Join-Path $dest '_psdds.py') 2>&1   # prints "<psdds version> <ABI>"
+        $out = & $py -I (Join-Path $stage '_psdds.py') 2>&1   # prints "<psdds version> <ABI>"
         $ErrorActionPreference = 'Stop'
-        if ($LASTEXITCODE -ne 0) { throw "psdds.dll failed to load: $out" }
+        $rc = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; if ($rc -ne 0) { throw "psdds.dll failed to load: $out" }
         "psdds version and ABI: $out"
     } else {
         "chaiNNer's bundled Python not found at $py; version not checked."
     }
+    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+    Rename-Item $stage 'tessalith_dds'
+    "Installed to $dest"
     'Re-run after every chaiNNer update; updates replace the app folder.'
 } finally {
     Remove-Item $tmp, $stage -Recurse -Force -ErrorAction SilentlyContinue
