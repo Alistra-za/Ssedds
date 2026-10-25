@@ -207,6 +207,29 @@ class PsddsTests(unittest.TestCase):
             self.assertEqual(p.read_bytes(), b"old")
             self.assertEqual(sorted(x.name for x in Path(d).iterdir()), ["a.dds", "b.dds"])
 
+    def test_write_files_concurrent(self):
+        # Two saves to one target (chaiNNer runs nodes in parallel): the file is always one writer's complete bytes.
+        a, b = b"A" * 12_000_000, b"B" * 8_000_000
+        with tempfile.TemporaryDirectory() as d:
+            t = Path(d, "x.dds")
+            Path(d, "x.dds.tmp").write_bytes(b"user")  # a user's own file with the old temp name is never touched
+            errs = []
+
+            def w(data):
+                try:
+                    P.write_files([(t, data)])
+                except BaseException as e:
+                    errs.append(repr(e))
+
+            for _ in range(15):
+                th = [threading.Thread(target=w, args=(x,)) for x in (a, b)]
+                [x.start() for x in th]
+                [x.join() for x in th]
+                self.assertIn(t.read_bytes(), (a, b))
+            self.assertEqual(errs, [])
+            self.assertEqual(sorted(x.name for x in Path(d).iterdir()), ["x.dds", "x.dds.tmp"])
+            self.assertEqual(Path(d, "x.dds.tmp").read_bytes(), b"user")
+
     def test_abi_mismatch(self):
         with mock.patch.object(P, "ABI_VERSION", 3):
             with self.assertRaisesRegex(P.PsddsError, r"ABI 2, these nodes need 3"):

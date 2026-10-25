@@ -4,7 +4,7 @@ Three nodes, in the **Image > Tessalith DDS** group, that save Skyrim SE/AE DDS 
 
 ## Install
 
-1. Build the DLL if you have not (`crates\psdds\build.ps1`).
+1. Build the DLL if you have not (`crates\psdds\build.ps1`). `install.ps1` also generates the licence notices with `crates\psdds\notices.ps1`, which needs `cargo-about` (`cargo install cargo-about --locked`).
 2. Close chaiNNer, then run `chainner\install.ps1`. It copies the nodes, `psdds.dll`, `COPYING`, `LICENSE` and `THIRD_PARTY_NOTICES.md` into the newest `%LOCALAPPDATA%\chaiNNer\app-*` folder and prints the psdds version.
 3. `-Target <resources\src folder>` installs into a given folder instead; `-Uninstall` removes only the `tessalith_dds` folder.
 
@@ -44,7 +44,7 @@ Tests cannot see chaiNNer's window. After `install.ps1` (run by you, with chaiNN
 6. Save DDS with a seed preset hides the settings; Custom shows them again with their values.
 7. After a chaiNNer update, re-run `install.ps1` and repeat step 1.
 
-For developers: `SDC_CHAINNER_SRC=<resources\src>` enables `chainner\tests\test_load_nodes.py`, which loads all nodes with `CHECK_LEVEL=error` in a scratch copy (the install is only read):
+For developers: `TESSALITH_PSDDS_DLL=<path>` makes the nodes load that DLL instead of the one beside them (developer use only; unset it for normal use; `install.ps1` ignores it when checking the staged copy). `SDC_CHAINNER_SRC=<resources\src>` enables `chainner\tests\test_load_nodes.py`, which loads all nodes with `CHECK_LEVEL=error` in a scratch copy (the install is only read):
 `& "$env:APPDATA\chaiNNer\python\python\python.exe" -I -m unittest discover -s chainner\tests -v`
 ## Licences
 

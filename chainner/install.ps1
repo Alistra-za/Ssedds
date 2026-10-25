@@ -59,12 +59,13 @@ try {
     Copy-Item (Join-Path $here 'COPYING') (Join-Path $stage 'COPYING')
     Copy-Item (Join-Path $here 'LICENSE') (Join-Path $stage 'LICENSE')
     $py = Join-Path $env:APPDATA 'chaiNNer\python\python\python.exe'
-    
     if (Test-Path $py) {
         $ErrorActionPreference = 'Continue'   # Windows PowerShell 5.1 turns native stderr into a terminating error under Stop
-        $out = & $py -I (Join-Path $stage '_psdds.py') 2>&1   # prints "<psdds version> <ABI>"
-        $ErrorActionPreference = 'Stop'
-        $rc = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; if ($rc -ne 0) { throw "psdds.dll failed to load: $out" }
+        $prevDll = $env:TESSALITH_PSDDS_DLL
+        $env:TESSALITH_PSDDS_DLL = $null      # check the staged copy, not a developer override
+        try { $out = & $py -I (Join-Path $stage '_psdds.py') 2>&1; $rc = $LASTEXITCODE }   # prints "<psdds version> <ABI>"
+        finally { $env:TESSALITH_PSDDS_DLL = $prevDll; $ErrorActionPreference = 'Stop' }
+        if ($rc -ne 0) { throw "psdds.dll failed to load: $out" }
         "psdds version and ABI: $out"
     } else {
         "chaiNNer's bundled Python not found at $py; version not checked."

@@ -73,8 +73,6 @@ def save_dds_tessalith_node(
         if skip_existing_files:
             logger.debug(f"Skipping existing file: {full_path}")
             return
-    else:
-        full_path.parent.mkdir(parents=True, exist_ok=True)
 
     img = lazy_image.value
     fmt, quality = _ui.selected(
@@ -92,9 +90,9 @@ def save_dds_tessalith_node(
     }
     settings = _ui.settings_for(preset, raw)
     data = _psdds.encode(img, settings)  # PsddsError (a RuntimeError) carries psdds's text untrimmed
-    # alpha is unknown here without a second pass; 4 channels is the upper bound
     if logger.isEnabledFor(10):  # DEBUG
-        channels = 1 if img.ndim == 2 else img.shape[2]
-        eff, _ = _psdds.resolve(settings, channels == 4 and not settings["discard_alpha"])
-        logger.debug(f"Tessalith DDS effective settings (alpha assumed if 4 channels): {eff}")
+        has_alpha = not settings["discard_alpha"] and _psdds.alpha_used(_psdds.to_rgba(img))
+        eff, _ = _psdds.resolve(settings, has_alpha)
+        logger.debug(f"Tessalith DDS effective settings (has_alpha {has_alpha}): {eff}")
+    full_path.parent.mkdir(parents=True, exist_ok=True)
     _psdds.write_files([(full_path, data)])

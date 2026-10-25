@@ -190,6 +190,13 @@ class NodeTests(unittest.TestCase):
         self.assertEqual(str(cm2.exception), want)
         self.assertFalse((self.dir / "x.dds").exists())
 
+    def test_failed_encode_makes_no_directory(self):
+        from api import Lazy
+        big = np.broadcast_to(np.zeros((1, 1, 3), np.float32), (1 << 20, 1 << 20, 3))
+        with self.assertRaises(RuntimeError):
+            N(Lazy.ready(big), self.dir, "new", "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, False)
+        self.assertFalse((self.dir / "new").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

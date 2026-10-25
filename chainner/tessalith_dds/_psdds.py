@@ -2,6 +2,8 @@
 """ctypes wrapper around psdds.dll (photoshop/psdds.h). numpy + ctypes only; every rule lives in the DLL."""
 import ctypes as C
 import os
+import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -262,20 +264,31 @@ def rmaos_encode(sources, fills, quality, mips, normal=None, normal_settings=Non
 
 
 def write_files(pairs) -> None:
-    """Write every <path>.tmp (flushed + fsynced), then os.replace each. A failure removes the temps and, if an
-    earlier replace already happened, restores that target's previous bytes (or removes a file that was new)."""
+    """Write every pair to its own unique temp file beside the target (flushed + fsynced), then os.replace each.
+    Unique names keep concurrent saves to one target apart. A failure removes the temps and, if an earlier replace
+    already happened, restores that target's previous bytes (or removes a file that was new)."""
     pairs = [(Path(p), d) for p, d in pairs]
-    tmps = [Path(str(p) + ".tmp") for p, _ in pairs]
+    tmps = []
     done = []  # (path, previous bytes or None)
     try:
-        for tmp, (_, data) in zip(tmps, pairs):
-            with open(tmp, "wb") as f:
+        for path, data in pairs:
+            fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+            tmps.append(Path(name))
+            with os.fdopen(fd, "wb") as f:
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
-        for tmp, (path, _) in zip(tmps, pairs):
-            old = path.read_bytes() if path.is_file() else None
-            os.replace(tmp, path)
+        for i, (tmp, (path, _)) in enumerate(zip(tmps, pairs)):
+            # the last replace never needs a restore, and skipping its read avoids racing a concurrent writer
+            old = path.read_bytes() if i < len(pairs) - 1 and path.is_file() else None
+            for attempt in range(20):  # Windows refuses a replace while another replace/open of the target is in flight
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
             done.append((path, old))
     except BaseException:
         for tmp in tmps:
