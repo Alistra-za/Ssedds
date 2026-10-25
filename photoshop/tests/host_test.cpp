@@ -341,20 +341,21 @@ static OSErr fake_read(ChannelReadPort port, const PSScaling *, const VRect *rec
     return noErr;
 }
 
-enum class AlphaSource { None, Merged, AlphaChannel };
+enum class AlphaSource { None, Merged, AlphaChannel, Both };
 
 // documentInfo and channel ports for a 64 x 64 document whose merged composite is `s`. The alpha source is the
-// merged transparency, or (AlphaChannel) a spot channel of zeros followed by an alpha channel holding s(3, ...).
+// merged transparency, or (AlphaChannel) a spot channel of zeros followed by an alpha channel holding s(3, ...).\n// Both: the merged transparency holds s(3, ...) and the alpha channel holds alt_alpha8 (DC42).
 struct MergedDoc {
-    FakePlane planes[5];
-    ReadChannelDesc ch[5];
+    FakePlane planes[6];
+    ReadChannelDesc ch[6];
     ReadImageDocumentDesc doc;
     ChannelPortProcs procs = {};
 
     MergedDoc(int depth, Sample s, AlphaSource alpha) {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 6; i++) {
             for (int y = 0; y < 64; y++)
-                for (int x = 0; x < 64; x++) planes[i].v[size_t(y) * 64 + size_t(x)] = uint16_t(i == 4 ? 0 : s(i < 4 ? i : 3, x, y));
+                for (int x = 0; x < 64; x++)
+                    planes[i].v[size_t(y) * 64 + size_t(x)] = uint16_t(i == 4 ? 0 : i == 5 ? x < 16 ? 255 : 50 : s(i < 4 ? i : 3, x, y));
             ch[i].port = reinterpret_cast<PIChannelPort>(&planes[i]);
             ch[i].bounds = VRect{0, 0, 64, 64};
             ch[i].depth = depth;
@@ -367,7 +368,12 @@ struct MergedDoc {
         doc.imageMode = depth == 16 ? plugInModeRGB48 : plugInModeRGBColor;
         doc.depth = depth;
         doc.mergedCompositeChannels = &ch[0];
-        if (alpha == AlphaSource::Merged) doc.mergedTransparency = &ch[3];
+        if (alpha == AlphaSource::Merged || alpha == AlphaSource::Both) doc.mergedTransparency = &ch[3];
+        if (alpha == AlphaSource::Both) {
+            ch[4].channelType = ctSpotColor;
+            ch[4].next = &ch[5];
+            doc.alphaChannels = &ch[4];
+        }
         if (alpha == AlphaSource::AlphaChannel) {
             ch[4].channelType = ctSpotColor; // listed first, never alpha
             ch[4].next = &ch[3];
@@ -441,6 +447,7 @@ static unsigned gradient16(int c, int x, int y) { return gradient8(c, x, y) * 12
 static unsigned checks8(int c, int x, int y) { return c == 3 ? 255 : ((x / 4 + y / 4 + c) % 2) * 255; }
 static unsigned checks16(int c, int x, int y) { return c == 3 ? 32768 : ((x / 4 + y / 4 + c) % 2) * 32768; }
 static unsigned with_alpha8(int c, int x, int y) { return c == 3 ? (x < 32 ? 255 : 100) : gradient8(c, x, y); }
+static unsigned with_alt8(int c, int x, int y) { return c == 3 ? (x < 16 ? 255 : 50) : gradient8(c, x, y); } // alt_alpha8 as the alpha
 
 static int merged_composite_save(Entry entry, const wchar_t *path) {
     int bad = 0;
@@ -482,6 +489,16 @@ static int merged_composite_save(Entry entry, const wchar_t *path) {
         expect(result == 0 && is_dds() && out == merged_out && out != opaque_out,
                "alpha channel (after a spot channel) is the alpha source", result, out.size());
     }
+    { // DC42: a non-spot alpha channel wins over the merged transparency
+        MergedDoc both(8, with_alpha8, AlphaSource::Both), channel_only(8, with_alt8, AlphaSource::Merged),
+            merged_only(8, with_alpha8, AlphaSource::Merged);
+        std::string channel_out, merged_out;
+        const int16 result = layered_save(entry, path, 8, &both, &bands, &out);
+        layered_save(entry, path, 8, &channel_only, &bands, &channel_out);
+        layered_save(entry, path, 8, &merged_only, &bands, &merged_out);
+        expect(result == 0 && is_dds() && out == channel_out && out != merged_out,
+               "layered: the alpha channel, not the merged transparency, is the alpha (DC42)", result, out.size());
+    }
     { // failures: nothing written, the old file untouched
         MergedDoc fails(8, gradient8, AlphaSource::Merged);
         fails.planes[1].fail = true;
@@ -501,6 +518,41 @@ static int merged_composite_save(Entry entry, const wchar_t *path) {
     printf("%s merged_composite_save\n", bad ? "FAIL" : "PASS");
     return bad;
 }
+// DC42 on the band path: transparency plane 3 plus a spot channel and an alpha channel (planes R G B T spot A) maps
+// the alpha channel (plane 5 when the host sends the spot channel), not the transparency plane; with only the
+// transparency and a spot channel it stays plane 3.
+static int band_alpha_plane(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    auto plane_of = [&](int planes, bool alpha_channel, bool spot_listed) {
+        write_file(path, std::string());
+        HANDLE f = open_existing(path);
+        Host h(entry, f);
+        ReadChannelDesc spot = {}, alpha = {};
+        spot.channelType = ctSpotColor;
+        ReadImageDocumentDesc doc = {};
+        if (spot_listed) doc.alphaChannels = &spot;
+        if (alpha_channel) (spot_listed ? spot.next : doc.alphaChannels) = &alpha;
+        h.r->planes = int16(planes);
+        h.r->transparencyPlane = 3;
+        h.r->documentInfo = &doc;
+        int16 result = h.call(formatSelectorWritePrepare);
+        if (!result) result = h.call(formatSelectorWriteStart);
+        const int plane = result == 0 ? h.r->planeMap[3] : -1;
+        if (!result) result = h.send_rgba(real_alpha);
+        if (!result) h.call(formatSelectorWriteFinish);
+        CloseHandle(f);
+        return plane;
+    };
+    const int with_channel = plane_of(6, true, true), without = plane_of(5, false, true), plain = plane_of(5, true, false);
+    const bool ok = with_channel == 5 && without == 3 && plain == 4;
+    printf("  %s band path: alpha channel planes %d (want 5), transparency only %d (want 3), channel no spot %d (want 4)\n",
+           ok ? "ok  " : "FAIL", with_channel, without, plain);
+    bad += ok ? 0 : 1;
+    DeleteFileW(path);
+    printf("%s band_alpha_plane\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc != 2) {
         printf("usage: host_test <TessalithDDS.8bi>\n");
@@ -528,6 +580,7 @@ int wmain(int argc, wchar_t **argv) {
     int failed = save_without_image_fails(entry, out); // also runs one full save, which starts the workers
     failed += dialog_after_pixels(entry, out);
     failed += merged_composite_save(entry, out);
+    failed += band_alpha_plane(entry, out);
     const bool seeded = GetFileAttributesW(preset_file.c_str()) != INVALID_FILE_ATTRIBUTES;
     printf("%s preset store seeded in the temp folder\n", seeded ? "PASS" : "FAIL");
     failed += seeded ? 0 : 1;

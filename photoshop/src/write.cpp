@@ -56,20 +56,22 @@ void free_state(FormatRecord *r, intptr_t *data) {
     r->theRect32 = VRect{};
 }
 
-// The host plane holding the alpha source, or -1 for none. Spec "Save dialog": the transparency plane first, else
-// the first alpha channel. A spot channel is never alpha (PIGeneral.h channel types): the document's channel list
-// marks them ctSpotColor. If the host also sends spot channels as planes, the list order is the plane order after
-// RGB; if it drops them (the PiPL does not claim spot-channel support), the first non-spot channel is plane 3.
+// The host plane holding the alpha source, or -1 for none (DC42): the first non-spot alpha channel, else the
+// transparency plane, else none. A spot channel is never alpha (PIGeneral.h channel types): the document's channel
+// list marks them ctSpotColor. The planes after RGB are the transparency plane (if any), then the channels in list
+// order; if the host drops the spot channels (the PiPL does not claim spot-channel support), the first non-spot
+// channel is the first plane after those.
 int16 alpha_plane(const FormatRecord *r) {
-    if (r->transparencyPlane > 0) return int16(r->transparencyPlane);
-    if (r->planes <= 3) return -1;
+    const int base = r->transparencyPlane > 0 ? int(r->transparencyPlane) + 1 : 3;
+    const int16 fallback = r->transparencyPlane > 0 ? int16(r->transparencyPlane) : int16(-1);
+    if (r->planes <= base) return fallback;
     const ReadImageDocumentDesc *doc = r->documentInfo;
-    if (!doc || !doc->alphaChannels) return 3;
+    if (!doc || !doc->alphaChannels) return int16(base);
     int listed = 0, first_alpha = -1;
     for (const ReadChannelDesc *c = doc->alphaChannels; c; c = c->next, listed++)
         if (first_alpha < 0 && c->channelType != ctSpotColor) first_alpha = listed;
-    if (first_alpha < 0) return -1;
-    return int16(r->planes - 3 == listed ? 3 + first_alpha : 3);
+    if (first_alpha < 0) return fallback;
+    return int16(r->planes - base == listed ? base + first_alpha : base);
 }
 
 void request_band(FormatRecord *r, SaveState *s, int32 top) {
@@ -140,7 +142,7 @@ bool usable_channel(const FormatRecord *r, const ReadChannelDesc *c) {
 }
 
 // Photoshop's merged composite for a layered save (DC38): R, G, B, then the alpha source, the same policy as
-// alpha_plane: the merged transparency, else the first non-spot alpha channel, else none. Returns 3 or 4 and fills
+// alpha_plane (DC42): the first non-spot alpha channel, else the merged transparency, else none. Returns 3 or 4 and fills
 // ch, or 0 with `why` set when something needed is missing or does not match the image.
 int merged_source(const FormatRecord *r, const ReadChannelDesc *ch[4], const char **why) {
     const ReadImageDocumentDesc *doc = r->documentInfo;
@@ -151,10 +153,10 @@ int merged_source(const FormatRecord *r, const ReadChannelDesc *ch[4], const cha
         if (!usable_channel(r, c)) return *why = "merged colour channels missing or not the image's depth and size", 0;
         ch[i] = c;
     }
-    const ReadChannelDesc *alpha = doc->mergedTransparency;
-    if (!alpha)
-        for (const ReadChannelDesc *a = doc->alphaChannels; a && !alpha; a = a->next)
-            if (a->channelType != ctSpotColor) alpha = a;
+    const ReadChannelDesc *alpha = nullptr;
+    for (const ReadChannelDesc *a = doc->alphaChannels; a && !alpha; a = a->next)
+        if (a->channelType != ctSpotColor) alpha = a;
+    if (!alpha) alpha = doc->mergedTransparency;
     if (!alpha) return 3;
     if (!usable_channel(r, alpha)) return *why = "the alpha source is not the image's depth and size", 0;
     ch[3] = alpha;
