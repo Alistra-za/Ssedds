@@ -57,10 +57,22 @@ static void dialog_state_follows_resolve() {
     check(!FromResolve(make(9, PSDDS_COLOUR, 1, 0), 0).ok, t, "format 9 refused");
 }
 
+static void dialog_follows_play_info() {
+    const char *t = __func__;
+    check(ShouldShowDialog(false, 0), t, "no descriptor: interactive save shows the dialog");
+    check(ShouldShowDialog(false, 2), t, "no descriptor: playInfo is not read");
+    check(ShouldShowDialog(true, 1), t, "plugInDialogDisplay shows it");
+    check(!ShouldShowDialog(true, 0), t, "plugInDialogDontDisplay does not");
+    check(!ShouldShowDialog(true, 2), t, "plugInDialogSilent does not");
+}
+
 int main() {
-    const int before = failures;
+    int before = failures;
     dialog_state_follows_resolve();
     printf("  %s dialog_state_follows_resolve\n", failures == before ? "PASS" : "FAIL");
+    before = failures;
+    dialog_follows_play_info();
+    printf("  %s dialog_follows_play_info\n", failures == before ? "PASS" : "FAIL");
     if (failures) {
         printf("dialog_test: FAILED\n");
         return 1;

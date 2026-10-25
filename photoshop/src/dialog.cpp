@@ -16,6 +16,10 @@ ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha) {
     return s;
 }
 
+bool ShouldShowDialog(bool has_descriptor, int32_t play_info) {
+    return !has_descriptor || play_info == kPlayInfoDisplay;
+}
+
 namespace {
 
 struct Item {
@@ -131,14 +135,15 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 
 } // namespace
 
-bool ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout) {
+DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout) {
     HMODULE self = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&ShowSaveDialog), &self))
-        return false;
+        return DialogResult::Failed;
     Context ctx = {*inout, has_alpha};
     const INT_PTR r = DialogBoxParamW(self, MAKEINTRESOURCEW(IDD_SAVE), owner, dialog_proc, LPARAM(&ctx));
-    if (r != IDOK) return false;
+    if (r == -1 || r == 0) return DialogResult::Failed; // 0: the owner window was invalid
+    if (r != IDOK) return DialogResult::Cancel;
     *inout = ctx.raw;
-    return true;
+    return DialogResult::Ok;
 }

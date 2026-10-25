@@ -27,7 +27,16 @@ struct ControlStates {
 // Runs `input` through psdds_resolve with the document's has_alpha (0/1). Format, type and mips are always editable.
 ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha);
 
+// PIActions.h plugInDialogDisplay (dialogPlayEnum); write.cpp checks it against the SDK's value.
+constexpr int32_t kPlayInfoDisplay = 1;
+
+// Whether OptionsStart may show the dialog. With descriptor parameters (a script, an action, a batch), the host's
+// playInfo decides: only plugInDialogDisplay shows it; plugInDialogDontDisplay and plugInDialogSilent do not.
+bool ShouldShowDialog(bool has_descriptor, int32_t play_info);
+
+enum class DialogResult { Ok, Cancel, Failed };
+
 // Modal Save options. *inout holds the raw choices (what the user picked, including values of greyed controls) on
-// entry and, after OK, on return. Returns false on Cancel or when the dialog could not be shown.
-bool ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout);
+// entry and, after Ok, on return. Failed: the dialog could not be created.
+DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout);
 #endif

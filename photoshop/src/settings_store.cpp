@@ -44,13 +44,16 @@ struct Suites {
 
 } // namespace
 
-PsddsSettings load_settings(SPBasicSuite *basic) {
+PsddsSettings load_settings(SPBasicSuite *basic, uint32_t has_alpha) {
     const PsddsSettings defaults = psdds_defaults(PSDDS_COLOUR);
     Suites suites(basic);
     if (!suites.ok()) return defaults;
 
     PIActionDescriptor d = nullptr;
-    if (suites.registry->Get(kRegistryKey, &d) != 0 || !d) return defaults; // first run
+    if (suites.registry->Get(kRegistryKey, &d) != 0 || !d) { // first run
+        if (d) suites.descriptor->Free(d); // a host that set one despite the error
+        return defaults;
+    }
     PsddsSettings s = defaults;
     bool complete = true;
     for (int i = 0; i < 6 && complete; i++) {
@@ -63,7 +66,7 @@ PsddsSettings load_settings(SPBasicSuite *basic) {
     // psdds_resolve validates the stored values; an out-of-range quality is fine (it is replaced when shown).
     PsddsSettings effective;
     PsddsControls controls;
-    if (!complete || psdds_resolve(&s, 0, &effective, &controls) != 0) return defaults;
+    if (!complete || psdds_resolve(&s, has_alpha, &effective, &controls) != 0) return defaults;
     return s;
 }
 

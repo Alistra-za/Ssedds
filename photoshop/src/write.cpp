@@ -110,16 +110,23 @@ int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *
 } // namespace
 
 int16 options_start(FormatRecord *r, intptr_t *data) {
+    static_assert(kPlayInfoDisplay == plugInDialogDisplay, "dialog.h mirrors PIActions.h");
     r->data = nullptr; // no OptionsContinue: the options do not depend on the pixels
-    // shortcut: scripting parameters (descriptorParameters) are not read or written, so actions save with the
-    // remembered settings; add them when recorded actions need their own settings.
     Globals *g = globals_of(data);
-    PsddsSettings chosen = load_settings(r->sSPBasic);
-    const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
-    HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
     // The same has_alpha the write will pass to psdds (alpha_plane), so the dialog greys what the encoder does.
-    if (!ShowSaveDialog(owner, alpha_plane(r) >= 0 ? 1 : 0, &chosen)) return userCanceledErr;
-    save_settings(r->sSPBasic, chosen);
+    const uint32_t has_alpha = alpha_plane(r) >= 0 ? 1 : 0;
+    PsddsSettings chosen = load_settings(r->sSPBasic, has_alpha);
+    // shortcut: the descriptor's contents are neither read nor written; a script, action or batch saves with the
+    // remembered settings. Add descriptor keys when recorded actions need their own settings.
+    const PIDescriptorParameters *script = r->descriptorParameters;
+    if (ShouldShowDialog(script != nullptr, script ? script->playInfo : 0)) {
+        const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
+        HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
+        const DialogResult shown = ShowSaveDialog(owner, has_alpha, &chosen);
+        if (shown == DialogResult::Cancel) return userCanceledErr;
+        if (shown == DialogResult::Failed) return report_error(r, "the Tessalith DDS options dialog could not be shown.");
+        save_settings(r->sSPBasic, chosen);
+    }
     g->settings = chosen;
     g->have_settings = true;
     return noErr;
@@ -143,8 +150,8 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
     const int64_t row_bytes = int64_t(width) * channels * sample;
 
     Globals *g = globals_of(data);
-    if (!g->have_settings) { // saved without OptionsStart (e.g. a script): the remembered settings
-        g->settings = load_settings(r->sSPBasic);
+    if (!g->have_settings) { // the host skipped OptionsStart: the remembered settings
+        g->settings = load_settings(r->sSPBasic, uint32_t(channels == 4));
         g->have_settings = true;
     }
     delete g->save; // a stale state from an earlier save that never reached WriteFinish
