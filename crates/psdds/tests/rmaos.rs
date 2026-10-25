@@ -265,6 +265,8 @@ fn no_mips_is_one_level() {
     assert!(mip_count(&ok(&j).rmaos) > 1);
     j.mips = 0;
     assert_eq!(mip_count(&ok(&j).rmaos), 1);
+    j.mips = 2;
+    assert_eq!(fails(&j), "mips 2 out of range 0..2");
 }
 
 /// (i) one 4-channel image feeding all four roles equals four 1-channel images.

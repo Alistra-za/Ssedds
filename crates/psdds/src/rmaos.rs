@@ -121,23 +121,31 @@ unsafe fn encode(
     }
     let rp = rmaos_profile(j.quality, j.mips)?;
     let np = normal_profile_if(&j, normal_n)?;
-    // M8: every value clamped in the copy, as psdds_encode's input.
-    let copies: [Option<(Vec<f32>, PsddsSource)>; 4] = checked.map(|c| {
-        c.map(|(s, len)| {
-            let v = std::slice::from_raw_parts(s.px, len)
-                .iter()
-                .map(|&x| clamp01(x))
-                .collect();
-            (v, s)
-        })
-    });
+    // M8: every value clamped in the copy, as psdds_encode's input. Roles sharing one image share one copy.
+    let key = |s: &PsddsSource| (s.px, s.width, s.height, s.channels);
+    let mut images: Vec<(PsddsSource, Vec<f32>)> = vec![];
+    let mut at = [None; 4];
+    for (k, c) in checked.iter().enumerate() {
+        let Some((s, len)) = c else { continue };
+        at[k] = Some(match images.iter().position(|(o, _)| key(o) == key(s)) {
+            Some(i) => i,
+            None => {
+                let v = std::slice::from_raw_parts(s.px, *len)
+                    .iter()
+                    .map(|&x| clamp01(x))
+                    .collect();
+                images.push((*s, v));
+                images.len() - 1
+            }
+        });
+    }
     let src: [Option<Channel>; 4] = std::array::from_fn(|k| {
-        copies[k].as_ref().map(|(px, s)| Channel {
-            px,
-            width: s.width,
-            height: s.height,
-            channels: s.channels,
-            channel: s.channel,
+        at[k].map(|i| Channel {
+            px: &images[i].1,
+            width: j.source[k].width,
+            height: j.source[k].height,
+            channels: j.source[k].channels,
+            channel: j.source[k].channel,
         })
     });
     let normal = np.map(|(n, p)| {

@@ -136,7 +136,7 @@ typedef struct PsddsRmaosJob {
     PsddsSource source[PSDDS_ROLE_COUNT];
     int32_t fill[PSDDS_ROLE_COUNT]; /* -1 = unset (neutral default), 0..255 = packing.fill for that role */
     uint32_t quality;               /* BC7 effort index (psdds_quality_label(PSDDS_BC7, i)); out of range = profile's */
-    uint32_t mips;                  /* 0 top level only, 1 the rmaos profile's chain */
+    uint32_t mips;                  /* 0 top level only, 1 the rmaos profile's chain; other values are refused */
     const float *normal;            /* RGBA floats of the set's _n, or NULL: no _n is written and nothing bakes */
     uint32_t normal_width, normal_height;
     PsddsSettings normal_settings;  /* texture_type must be PSDDS_NORMAL; resolved as psdds_resolve does (DC32);
