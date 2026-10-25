@@ -1,7 +1,9 @@
-/* Tessalith DDS: the C ABI of the psdds static library (crates/psdds/src/lib.rs). MIT licence.
+/* Tessalith DDS: the C ABI of psdds (static library psdds.lib and psdds.dll; crates/psdds/src/lib.rs). MIT licence.
  * Hand-written; keep it in step with lib.rs and settings.rs. No function lets a Rust panic cross this boundary:
  * a panic is reported as an error ("internal error: ..."). Error text is UTF-8, NUL-terminated, truncated to the
- * caller's buffer. */
+ * caller's buffer. Every export may be called concurrently from any thread, and a buffer may be freed on any thread.
+ * Error text is one plain sentence and may end with one full stop; a host that adds punctuation trims trailing full
+ * stops and never re-words. */
 #ifndef PSDDS_H
 #define PSDDS_H
 
@@ -11,6 +13,14 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Bumped on ANY change to this header's declarations or documented behaviour. 2 = the 7-field PsddsSettings and the
+ * preset exports; 1 was the 6-field struct and never shipped. A host refuses a library whose psdds_abi_version()
+ * differs from the value it was compiled against. */
+#define PSDDS_ABI_VERSION 2u
+
+uint32_t psdds_abi_version(void); /* PSDDS_ABI_VERSION the library was built with */
+const char *psdds_version(void);  /* static UTF-8 workspace (engine) version, e.g. "1.0.0" */
 
 enum { PSDDS_BC1 = 0, PSDDS_BC3 = 1, PSDDS_BC4 = 2, PSDDS_BC5 = 3, PSDDS_BC7 = 4, PSDDS_RGBA8 = 5 };
 enum { PSDDS_COLOUR = 0, PSDDS_NORMAL = 1, PSDDS_LINEAR_MASK = 2 };

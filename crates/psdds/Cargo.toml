@@ -8,7 +8,7 @@ rust-version.workspace = true
 description = "Tessalith DDS Photoshop plugin bridge: dialog settings, greying rules and encode over a C ABI"
 
 [lib]
-crate-type = ["staticlib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 engine.workspace = true

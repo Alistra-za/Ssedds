@@ -41,6 +41,21 @@ unsafe fn write_err(err: *mut c_char, cap: usize, msg: &str) {
     *err.add(n) = 0;
 }
 
+/// Bumped on any change to `photoshop/psdds.h`'s declarations or documented behaviour (pinned by tests/abi.rs).
+pub const ABI_VERSION: u32 = 2;
+
+/// The `PSDDS_ABI_VERSION` this library was built with.
+#[no_mangle]
+pub extern "C" fn psdds_abi_version() -> u32 {
+    ABI_VERSION
+}
+
+/// The workspace (engine) version as a static NUL-terminated UTF-8 string.
+#[no_mangle]
+pub extern "C" fn psdds_version() -> *const c_char {
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
+}
+
 /// The dialog's start values for a texture type (0 Colour, 1 Normal, 2 Linear mask; anything else: Colour).
 #[no_mangle]
 pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
