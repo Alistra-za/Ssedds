@@ -10,6 +10,7 @@ pub use rmaos::{
 pub use settings::{PsddsControls, PsddsSettings};
 
 use engine::image::Rgba32F;
+use engine::ops::SourceTransfer;
 use std::ffi::{c_char, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -223,31 +224,48 @@ fn pin_self() {
     });
 }
 /// # Safety
-/// As `psdds_encode`.
+/// As `psdds_encode_depth`.
 unsafe fn encode(
     rgba: *const f32,
     width: u32,
     height: u32,
     has_alpha: u32,
+    depth: u32,
     s: *const PsddsSettings,
     out: *mut PsddsBuf,
 ) -> Result<(), String> {
     if rgba.is_null() || s.is_null() || out.is_null() {
         return Err("psdds_encode: null pointer argument".into());
     }
-    // DC12 (I2): refused before the caller's buffer is touched.
+    // DC12 (I2): refused before the caller's buffer is touched. So is a depth that is not 8, 16 or 32.
     let n = helpers::check_size(width, height)?;
-    let profile = settings::profile_for(&*s, has_alpha != 0)?;
+    let (e, _, _) = settings::resolve_depth(&*s, has_alpha != 0, depth)?;
+    let profile = settings::profile_for_depth(&*s, has_alpha != 0, depth)?;
+    // DE3: a 32-bit Colour document is linear light and keeps its range for the engine; everything else is
+    // DD5's clamp of stored values.
+    let linear = e.texture_type == 0 && depth == 32;
+    let src = std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n); // `[f32; 4]` has f32's alignment
     let img = Rgba32F {
         width,
         height,
-        // `[f32; 4]` has f32's alignment, so the caller's float array is read as whole pixels.
-        px: std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n)
+        px: src
             .iter()
-            .map(|p| p.map(clamp01))
+            .map(|p| {
+                if linear {
+                    [p[0], p[1], p[2], clamp01(p[3])]
+                } else {
+                    p.map(clamp01)
+                }
+            })
             .collect(),
     };
-    let bytes = engine::memory::encode_image(img, &profile)?.into_boxed_slice();
+    let transfer = if linear {
+        SourceTransfer::Linear
+    } else {
+        SourceTransfer::Stored
+    };
+    let bytes =
+        engine::memory::encode_image_with(img, &profile, None, transfer)?.into_boxed_slice();
     let len = bytes.len();
     *out = PsddsBuf {
         data: Box::into_raw(bytes).cast::<u8>(),
@@ -258,7 +276,7 @@ unsafe fn encode(
 
 /// Encode `width * height` RGBA float pixels (row-major, [0, 1], already scaled by the caller) to a whole DDS file
 /// in `out`. 0 on success; otherwise non-zero, `out` set empty when non-null, and the reason in `err`
-/// (UTF-8, NUL-terminated, truncated to `err_cap`).
+/// (UTF-8, NUL-terminated, truncated to `err_cap`). The 8-bit form of `psdds_encode_depth`.
 ///
 /// # Safety
 /// `rgba` is null or valid for `width * height * 4` floats; `settings` and `out` are null or valid; `err` is null
@@ -275,6 +293,31 @@ pub unsafe extern "C" fn psdds_encode(
     err: *mut c_char,
     err_cap: usize,
 ) -> i32 {
+    psdds_encode_depth(
+        rgba, width, height, has_alpha, 8, settings, out, err, err_cap,
+    )
+}
+
+/// [`psdds_encode`] for a document of `depth` bits (8, 16 or 32; any other depth is refused as "depth <d> out of
+/// range" before `rgba` is read). Depth 8 and 16 take 0..1 floats as `psdds_encode` does. Depth 32 takes
+/// Photoshop's raw samples: for Colour they are linear light (RGB unchanged, alpha clamped; the engine handles
+/// NaN, negatives and the half range), for every other type they are clamped as before (DE3).
+///
+/// # Safety
+/// As `psdds_encode`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn psdds_encode_depth(
+    rgba: *const f32,
+    width: u32,
+    height: u32,
+    has_alpha: u32,
+    depth: u32,
+    settings: *const PsddsSettings,
+    out: *mut PsddsBuf,
+    err: *mut c_char,
+    err_cap: usize,
+) -> i32 {
     if !out.is_null() {
         *out = PsddsBuf {
             data: std::ptr::null_mut(),
@@ -283,7 +326,7 @@ pub unsafe extern "C" fn psdds_encode(
     }
     let r = catch_unwind(AssertUnwindSafe(|| {
         pin_self();
-        encode(rgba, width, height, has_alpha, settings, out)
+        encode(rgba, width, height, has_alpha, depth, settings, out)
     }))
     .unwrap_or_else(|e| Err(panic_text(e)));
     match r {
@@ -295,7 +338,6 @@ pub unsafe extern "C" fn psdds_encode(
         }
     }
 }
-
 /// The one input rule for float hosts (M8): [0,1], NaN -> 0, +inf -> 1, -inf -> 0.
 pub(crate) fn clamp01(v: f32) -> f32 {
     if v.is_nan() {

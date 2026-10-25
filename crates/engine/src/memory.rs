@@ -167,14 +167,16 @@ fn pack_with_info(
 /// The bytes of a whole DDS file. Refuses what the plugin does not use: complex grass, RNM, `drop_top_mip` and a
 /// resize. No bake: [`encode_image_with`] with `None`.
 pub fn encode_image(img: Rgba32F, p: &Profile) -> Result<Vec<u8>, String> {
-    encode_image_with(img, p, None)
+    encode_image_with(img, p, None, SourceTransfer::Stored)
 }
 
-/// [`encode_image`] with a roughness member's variance bake (`build_chain_with(&work, p, bake)`, as the file run).
+/// [`encode_image`] with a roughness member's variance bake (`build_chain_with(&work, p, bake)`, as the file run)
+/// and the source transfer: `Linear` for pixels already in linear light (a 32-bit document), else `Stored`.
 pub fn encode_image_with(
     img: Rgba32F,
     p: &Profile,
     bake: Option<&NormalVariance>,
+    transfer: SourceTransfer,
 ) -> Result<Vec<u8>, String> {
     if p.subtype == Subtype::ComplexGrass
         || p.rnm != Default::default()
@@ -185,7 +187,7 @@ pub fn encode_image_with(
             "encode_image: complex grass, RNM, drop_top_mip and resize are not supported".into(),
         );
     }
-    let work = preprocess_with(img, p, SourceTransfer::Stored);
+    let work = preprocess_with(img, p, transfer);
     let mut chain = build_chain_with(&work, p, bake);
     if work.alpha_present && p.coverage_enabled() {
         preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
@@ -281,7 +283,12 @@ pub fn encode_rmaos_set(
         rmaos_profile.alpha.policy = policy;
     }
     Ok(RmaosSet {
-        rmaos: encode_image_with(packed, &rmaos_profile, bake.as_ref())?,
+        rmaos: encode_image_with(
+            packed,
+            &rmaos_profile,
+            bake.as_ref(),
+            SourceTransfer::Stored,
+        )?,
         normal: normal_dds,
         defaulted,
         baked: bake.is_some(),

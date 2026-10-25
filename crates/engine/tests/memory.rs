@@ -208,3 +208,53 @@ fn encode_image_matches_the_file_pipeline() {
         );
     }
 }
+
+/// A Diffuse cs-quality profile with no mips and the given format; `encode_image_with` takes the source transfer.
+fn flat_profile(format: Format) -> engine::config::Profile {
+    let reg = PresetRegistry::builtin().unwrap();
+    let mut p = reg
+        .profile("cs-quality", Target::Cs, Subtype::Diffuse)
+        .unwrap();
+    p.format = format;
+    p.mips.levels = MipLevels::Keyword(MipKeyword::None);
+    p.alpha.policy = AlphaPolicy::Remove;
+    if format == Format::Bc6hUf16 {
+        p.encoder.backend = Backend::IspcBc6h;
+        p.color.tag = ColorTag::NotApplicable;
+    }
+    p
+}
+
+fn decode_top(bytes: &[u8]) -> Vec<[f32; 4]> {
+    let dds = engine::dds::read_dds(bytes).unwrap();
+    let (w, h, r) = dds.levels[0].clone();
+    engine::decode::decode_level_rgba(dds.format, w, h, &dds.data[r], None).unwrap()
+}
+
+#[test]
+fn linear_transfer_skips_the_srgb_decode() {
+    use engine::memory::encode_image_with;
+    use engine::ops::{srgb_to_linear, SourceTransfer};
+    let flat = |v: f32| Rgba32F::new(4, 4, [v, v, v, 1.0]);
+    let p = flat_profile(Format::Rgba8);
+    // Linear light 0.2140... is sRGB 0.5, so it is the code Stored 0.5 gives (rounding may differ by one).
+    let lin =
+        encode_image_with(flat(srgb_to_linear(0.5)), &p, None, SourceTransfer::Linear).unwrap();
+    let sto = encode_image_with(flat(0.5), &p, None, SourceTransfer::Stored).unwrap();
+    let (a, b) = (decode_top(&lin)[0][0], decode_top(&sto)[0][0]);
+    assert!((a - b).abs() <= 1.0 / 255.0 + 1e-6, "{a} vs {b}");
+    assert!((b - 0.5).abs() <= 1.0 / 255.0 + 1e-6, "{b}");
+    // Exact ends are identical.
+    for v in [0.0, 1.0] {
+        let l = encode_image_with(flat(v), &p, None, SourceTransfer::Linear).unwrap();
+        let s = encode_image_with(flat(v), &p, None, SourceTransfer::Stored).unwrap();
+        assert!(l == s, "{v}");
+    }
+    // Stored is encode_image.
+    assert!(sto == encode_image(flat(0.5), &p).unwrap());
+    // HDR: Linear keeps 4.0 through BC6H.
+    let hp = flat_profile(Format::Bc6hUf16);
+    let hdr = encode_image_with(flat(4.0), &hp, None, SourceTransfer::Linear).unwrap();
+    let got = decode_top(&hdr)[0][0];
+    assert!((got - 4.0).abs() <= 0.08, "{got}");
+}

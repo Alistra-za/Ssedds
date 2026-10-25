@@ -3,7 +3,9 @@ use engine::dds::{check_header, full_chain_len, read_dds, DDPF_ALPHAPIXELS};
 use engine::image::Rgba32F;
 use engine::memory::encode_image;
 use psdds::settings::profile_for;
-use psdds::{psdds_defaults, psdds_encode, psdds_free, PsddsBuf, PsddsSettings};
+use psdds::{
+    psdds_defaults, psdds_encode, psdds_encode_depth, psdds_free, PsddsBuf, PsddsSettings,
+};
 use std::ffi::CStr;
 
 const BC1: u32 = 0;
@@ -67,12 +69,56 @@ fn encode(
     Ok(bytes)
 }
 
+/// psdds_encode_depth: the bytes, or the return code and error text.
+fn encode_d(
+    px: &[f32],
+    w: u32,
+    h: u32,
+    has_alpha: bool,
+    depth: u32,
+    s: &PsddsSettings,
+) -> Result<Vec<u8>, (i32, String)> {
+    let mut out = PsddsBuf {
+        data: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut err = [0 as std::ffi::c_char; 256];
+    let rc = unsafe {
+        psdds_encode_depth(
+            px.as_ptr(),
+            w,
+            h,
+            u32::from(has_alpha),
+            depth,
+            s,
+            &mut out,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if rc != 0 {
+        assert!(out.data.is_null());
+        let msg = unsafe { CStr::from_ptr(err.as_ptr()) };
+        return Err((rc, msg.to_str().unwrap().to_owned()));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(out.data, out.len) }.to_vec();
+    unsafe { psdds_free(out) };
+    Ok(bytes)
+}
+
+/// The top mip as floats, whatever the format (psdds_decode_depth comes later; this is the engine's decode).
+fn decode_top(bytes: &[u8]) -> Vec<[f32; 4]> {
+    let dds = read_dds(bytes).unwrap();
+    let (w, h, r) = dds.levels[0].clone();
+    engine::decode::decode_level_rgba(dds.format, w, h, &dds.data[r], None).unwrap()
+}
+
 /// The type's defaults with another format, at the `cs-quality` quality for it (rgbcx 18, radius default,
 /// effort veryslow); a quality index belongs to its format's list.
 fn settings(format: u32, texture_type: u32) -> PsddsSettings {
     PsddsSettings {
         format,
-        quality: [18, 18, 0, 0, 4, 0][format as usize],
+        quality: [18, 18, 0, 0, 4, 0, 1, 0][format as usize],
         ..psdds_defaults(texture_type)
     }
 }
@@ -273,6 +319,40 @@ fn bad_input_is_an_error_not_a_panic() {
         assert_eq!(msg.len(), 15, "{msg:?}");
         std::str::from_utf8(msg).unwrap().to_owned()
     };
+    // Depths other than 8, 16 and 32 are refused before rgba is read.
+    let call_d = |depth: u32, rgba: *const f32, cap: usize| {
+        let mut err = [0x7f as std::ffi::c_char; 64];
+        let mut o = PsddsBuf {
+            data: std::ptr::null_mut(),
+            len: 0,
+        };
+        let rc = unsafe {
+            psdds_encode_depth(
+                rgba,
+                4,
+                4,
+                0,
+                depth,
+                &ok,
+                &mut o,
+                err.as_mut_ptr(),
+                cap.min(64),
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(o.data.is_null());
+        unsafe { CStr::from_ptr(err.as_ptr()) }
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(call_d(24, px.as_ptr(), 64), "depth 24 out of range");
+    assert_eq!(call_d(0, px.as_ptr(), 64), "depth 0 out of range");
+    assert_eq!(
+        call_d(24, std::ptr::null(), 64),
+        "psdds_encode: null pointer argument"
+    );
+    assert_eq!(call_d(24, px.as_ptr(), 16).len(), 15, "cut to fit");
     call(std::ptr::null(), 4, 4, &ok, &mut out);
     call(px.as_ptr(), 0, 4, &ok, &mut out);
     call(px.as_ptr(), 4, 0, &ok, &mut out);
@@ -361,4 +441,189 @@ fn same_input_gives_same_bytes() {
             );
         }
     }
+}
+
+fn colour(format: u32) -> PsddsSettings {
+    settings(format, 0)
+}
+
+fn dxgi(bytes: &[u8]) -> u32 {
+    read_dds(bytes).unwrap().dx10.unwrap().dxgi
+}
+
+fn lin(v: f32) -> f32 {
+    engine::ops::srgb_to_linear(v)
+}
+
+/// Spec table row 1: the old call is the 8-bit call, and a deep document with an old format saves the same bytes.
+#[test]
+fn old_calls_are_depth_8() {
+    let (w, h) = (32, 16);
+    for px in [gradient(w, h, true), noise(w, h)] {
+        for ty in 0..3 {
+            for f in 0..6 {
+                for alpha in [false, true] {
+                    let s = settings(f, ty);
+                    let old = encode(&px, w, h, alpha, &s).unwrap();
+                    let d8 = encode_d(&px, w, h, alpha, 8, &s).unwrap();
+                    let d16 = encode_d(&px, w, h, alpha, 16, &s).unwrap();
+                    assert!(
+                        old == d8 && old == d16,
+                        "type {ty} format {f} alpha {alpha}"
+                    );
+                }
+            }
+        }
+        // Review Focus 4: BC6H at depth 8 is the DC32 fallback, BC7 at the same quality index (DC32 keeps it).
+        let bc6h = colour(6);
+        let bc7 = PsddsSettings {
+            format: BC7,
+            quality: bc6h.quality,
+            ..bc6h
+        };
+        for alpha in [false, true] {
+            let want = encode(&px, w, h, alpha, &bc7).unwrap();
+            assert!(encode(&px, w, h, alpha, &bc6h).unwrap() == want, "old call");
+            assert!(
+                encode_d(&px, w, h, alpha, 8, &bc6h).unwrap() == want,
+                "depth 8"
+            );
+        }
+    }
+}
+
+#[test]
+fn colour_32_bit_to_hdr_keeps_values_above_one() {
+    let px: Vec<f32> = (0..16).flat_map(|_| [4.0, 0.5, 0.25, 1.0]).collect();
+    let bytes = encode_d(&px, 4, 4, false, 32, &colour(7)).unwrap();
+    assert_eq!(dxgi(&bytes), 10);
+    // DX10 header ends at 148; halves follow.
+    let at = |i: usize| engine_half(u16::from_le_bytes([bytes[148 + 2 * i], bytes[149 + 2 * i]]));
+    assert_eq!([at(0), at(1), at(2)], [4.0, 0.5, 0.25]);
+    let bc6h = encode_d(&px, 4, 4, false, 32, &colour(6)).unwrap();
+    assert_eq!(dxgi(&bc6h), 95);
+    let got = decode_top(&bc6h)[0][0];
+    assert!((got - 4.0).abs() <= 0.08, "{got}");
+    // An odd size keeps its size.
+    let px: Vec<f32> = (0..15).flat_map(|_| [4.0, 0.5, 0.25, 1.0]).collect();
+    for f in [6, 7] {
+        let dds = read_dds(&encode_d(&px, 5, 3, false, 32, &colour(f)).unwrap()).unwrap();
+        assert_eq!((dds.width, dds.height), (5, 3), "format {f}");
+    }
+}
+
+/// The half-float value of IEEE binary16 bits (exact in f32).
+fn engine_half(b: u16) -> f32 {
+    let (s, e, m) = (b >> 15, i32::from((b >> 10) & 31), f32::from(b & 1023));
+    let v = if e == 0 {
+        m * 2f32.powi(-24)
+    } else {
+        (1.0 + m / 1024.0) * 2f32.powi(e - 15)
+    };
+    if s == 1 {
+        -v
+    } else {
+        v
+    }
+}
+
+#[test]
+fn colour_32_bit_to_ldr_is_linear_then_srgb() {
+    let (w, h) = (8, 8);
+    let img = |v: f32| -> Vec<f32> { (0..w * h).flat_map(|_| [v, v, v, 1.0]).collect() };
+    for (f, tol) in [(RGBA8, 1.0), (BC7, 2.0)] {
+        let s = colour(f);
+        // Linear 0.214... at depth 32 is sRGB 0.5 at depth 16.
+        let a = decode_top(&encode_d(&img(lin(0.5)), w, h, false, 32, &s).unwrap())[0][0];
+        let b = decode_top(&encode_d(&img(0.5), w, h, false, 16, &s).unwrap())[0][0];
+        assert!(
+            (a - b).abs() <= tol / 255.0 + 1e-6,
+            "format {f}: {a} vs {b}"
+        );
+        // The ends are exact, and 4.0 clips to 1.0 after the conversion.
+        for (v32, v16) in [(0.0, 0.0), (1.0, 1.0), (4.0, 1.0)] {
+            assert!(
+                encode_d(&img(v32), w, h, false, 32, &s).unwrap()
+                    == encode_d(&img(v16), w, h, false, 16, &s).unwrap(),
+                "format {f} value {v32}"
+            );
+        }
+    }
+}
+
+/// Review Focus 2: Normal and Linear mask data is not light, so 32 bits are clamped, not converted.
+#[test]
+fn raw_data_from_32_bit_is_clamped_not_converted() {
+    let (w, h) = (8, 8);
+    let clamp = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    for odd in [[1.2, -0.1, f32::NAN, 0.5], [f32::INFINITY, 2.0, -5.0, 1.5]] {
+        let px: Vec<f32> = (0..w * h).flat_map(|_| odd).collect();
+        let want: Vec<f32> = px.iter().map(|&v| clamp(v)).collect();
+        for (ty, f) in [(1, BC5), (1, BC7), (2, BC4), (2, BC7)] {
+            let s = settings(f, ty);
+            assert!(
+                encode_d(&px, w, h, true, 32, &s).unwrap()
+                    == encode_d(&want, w, h, true, 16, &s).unwrap(),
+                "type {ty} format {f} {odd:?}"
+            );
+        }
+    }
+}
+
+/// Review Focus 3: a stored (sRGB-coded) 16-bit Colour value goes to HDR as linear light.
+#[test]
+fn sixteen_bit_colour_to_hdr_is_decoded_to_linear() {
+    let px: Vec<f32> = (0..16).flat_map(|_| [0.5, 0.5, 0.5, 1.0]).collect();
+    let got = decode_top(&encode_d(&px, 4, 4, false, 16, &colour(7)).unwrap())[0][0];
+    assert!((got - lin(0.5)).abs() <= 1e-3, "{got}");
+}
+
+/// Review Focus 5: nothing non-finite reaches the file, and huge values stop at the half maximum.
+#[test]
+fn hdr_non_finite_and_huge_values() {
+    let px = [
+        f32::INFINITY,
+        f32::NAN,
+        1e9,
+        1.5, // RGB is not clamped; alpha is
+        -3.0,
+        -3.0,
+        -3.0,
+        1.5,
+    ];
+    let s = PsddsSettings {
+        mips: 0,
+        ..colour(7)
+    };
+    let bytes = encode_d(&px, 2, 1, true, 32, &s).unwrap();
+    let halves: Vec<u16> = bytes[148..]
+        .chunks(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    assert_eq!(halves.len(), 8);
+    assert!(halves.iter().all(|h| (h >> 10) & 31 != 31), "inf or NaN");
+    let v: Vec<f32> = halves.into_iter().map(engine_half).collect();
+    assert_eq!(v, [65504.0, 0.0, 65504.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn rgba16f_keeps_alpha_bc6h_drops_it() {
+    let (w, h) = (8, 8);
+    let rgb = |i: u32| (i % 7) as f32 * 0.3;
+    let make = |a: f32| -> Vec<f32> {
+        (0..w * h)
+            .flat_map(|i| [rgb(i), rgb(i + 2), rgb(i + 4), a])
+            .collect()
+    };
+    let s = PsddsSettings {
+        mips: 0,
+        ..colour(7)
+    };
+    let d = decode_top(&encode_d(&make(0.5), w, h, true, 32, &s).unwrap());
+    assert!(d.iter().all(|p| p[3] == 0.5));
+    let b = colour(6);
+    assert!(
+        encode_d(&make(0.5), w, h, true, 32, &b).unwrap()
+            == encode_d(&make(1.0), w, h, false, 32, &b).unwrap()
+    );
 }

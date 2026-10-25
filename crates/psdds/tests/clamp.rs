@@ -1,18 +1,19 @@
 //! `psdds_encode` clamps input to [0,1] (NaN -> 0, +inf -> 1, -inf -> 0), so float hosts need no copy of the rule.
-use psdds::{psdds_defaults, psdds_encode, psdds_free, PsddsBuf, PsddsSettings};
+use psdds::{psdds_defaults, psdds_encode_depth, psdds_free, PsddsBuf, PsddsSettings};
 
-fn encode(px: &[f32], w: u32, h: u32, s: &PsddsSettings) -> Vec<u8> {
+fn encode_d(px: &[f32], w: u32, h: u32, s: &PsddsSettings, depth: u32) -> Vec<u8> {
     let mut out = PsddsBuf {
         data: std::ptr::null_mut(),
         len: 0,
     };
     let mut err = [0 as std::ffi::c_char; 256];
     let rc = unsafe {
-        psdds_encode(
+        psdds_encode_depth(
             px.as_ptr(),
             w,
             h,
             1,
+            depth,
             s,
             &mut out,
             err.as_mut_ptr(),
@@ -46,6 +47,10 @@ fn clamped(px: &[f32]) -> Vec<f32> {
 }
 
 fn check(odd: &[f32]) {
+    check_at(odd, 8);
+}
+
+fn check_at(odd: &[f32], depth: u32) {
     let px = wild(odd);
     let want = clamped(&px);
     // BC7 Colour with sRGB set explicitly (DC34), alpha kept; and an RGBA8 Linear mask.
@@ -64,8 +69,8 @@ fn check(odd: &[f32]) {
     };
     for (name, s) in [("BC7 colour", bc7), ("RGBA8 mask", rgba8)] {
         assert!(
-            encode(&px, 16, 16, &s) == encode(&want, 16, 16, &s),
-            "{name}"
+            encode_d(&px, 16, 16, &s, depth) == encode_d(&want, 16, 16, &s, depth),
+            "{name} depth {depth}"
         );
     }
 }
@@ -78,4 +83,16 @@ fn finite_out_of_range_input_encodes_as_its_clamped_copy() {
 #[test]
 fn nan_and_infinities_encode_as_their_clamped_copy() {
     check(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.5, -0.25]);
+}
+
+/// DE3: only a 32-bit Colour document skips the clamp; 8 and 16 bits clamp as before.
+#[test]
+fn clamp_holds_at_depth_8_and_16() {
+    for depth in [8, 16] {
+        check_at(&[1.5, -0.25, 2.0, 7.0, -3.0], depth);
+        check_at(
+            &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.5, -0.25],
+            depth,
+        );
+    }
 }
