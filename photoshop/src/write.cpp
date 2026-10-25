@@ -117,7 +117,6 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
     static_assert(kPlayInfoDisplay == plugInDialogDisplay, "dialog.h mirrors PIActions.h");
     r->data = nullptr; // no OptionsContinue: the options do not depend on the pixels
     Globals *g = globals_of(data);
-    g->write_started = false; // a new save
     // The same has_alpha the write will pass to psdds (alpha_plane), so the dialog greys what the encoder does.
     const uint32_t has_alpha = alpha_plane(r) >= 0 ? 1 : 0;
     PsddsSettings chosen = load_settings(r->sSPBasic, has_alpha);
@@ -138,11 +137,6 @@ int16 options_start(FormatRecord *r, intptr_t *data) {
     return noErr;
 }
 
-int16 write_prepare(FormatRecord *r, intptr_t *data) {
-    globals_of(data)->write_started = false; // a new save
-    r->maxData = 0; // the plug-in uses its own memory for the image (PIFormat.h maxData)
-    return noErr;
-}
 
 int16 write_start(FormatRecord *r, intptr_t *data) {
     const bool rgb = r->imageMode == plugInModeRGBColor || r->imageMode == plugInModeRGB48;
@@ -182,7 +176,6 @@ int16 write_start(FormatRecord *r, intptr_t *data) {
     for (int16 i = 0; i < 3; i++) r->planeMap[i] = i;
     if (alpha >= 0) r->planeMap[3] = alpha;
     request_band(r, s, 0);
-    g->write_started = true;
     return noErr;
 }
 
@@ -214,10 +207,3 @@ int16 write_finish(FormatRecord *r, intptr_t *data) {
     return incomplete ? report_error(r, kNothingSaved) : noErr;
 }
 
-int16 write_layer_finish(FormatRecord *r, intptr_t *data) {
-    // PIFormat.h layerData: the host sets the layer count "prior to calling Start", so layers follow WriteStart.
-    // Layers with no WriteStart in this save mean the composite never comes and no DDS would be written.
-    r->data = nullptr;
-    r->theRect32 = VRect{};
-    return globals_of(data)->write_started ? noErr : report_error(r, kNothingSaved);
-}

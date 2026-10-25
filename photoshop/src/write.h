@@ -31,7 +31,6 @@ struct Globals {
     bool have_settings = false; // false: WriteStart loads the remembered settings (no OptionsStart this save)
     SaveState *save = nullptr;
     ReadState *read = nullptr; // the decoded image, from ReadStart to the end of the open
-    bool write_started = false; // WriteStart succeeded in this save (cleared by OptionsStart and WritePrepare)
 };
 
 // The Globals behind `data`, allocated on first use.
@@ -48,10 +47,7 @@ int16 read_continue(FormatRecord *record, intptr_t *data);
 int16 read_finish(FormatRecord *record, intptr_t *data);
 
 // `data` is the plug-in's globals pointer from PluginMain (see Globals).
-int16 write_prepare(FormatRecord *record, intptr_t *data);
 int16 write_start(FormatRecord *record, intptr_t *data);
 int16 write_continue(FormatRecord *record, intptr_t *data);
-// Both refuse a save that ends with no DDS written (Note DC27): WriteFinish when the image never fully arrived,
-// WriteLayerFinish when no WriteStart came first (the host sent layers only).
+// Refuses a save that ends with no DDS written, when the image never fully arrived (Note DC27).
 int16 write_finish(FormatRecord *record, intptr_t *data);
-int16 write_layer_finish(FormatRecord *record, intptr_t *data);

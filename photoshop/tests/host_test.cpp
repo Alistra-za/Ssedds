@@ -1,6 +1,6 @@
 // Tessalith DDS: drives TessalithDDS.8bi through its selectors as Photoshop would. MIT licence (see photoshop/LICENSE).
-//   save_without_image_fails  a save that ends with no image (layer selectors only, or WriteFinish before the last
-//                             band) reports an error and leaves the existing file untouched (Note DC27).
+//   save_without_image_fails  a save that ends before the last band (Escape, or a host that stops sending rows)
+//                             reports an error and leaves the existing file untouched (Note DC27).
 //   unload_after_save         the plug-in survives Photoshop unloading it after a save (Note DC25). The engine's rayon
 //                             workers outlive the save; if the module's code were unmapped under them, their next
 //                             wake-up would execute freed memory (the BEX64 crash at TessalithDDS.8bi_unloaded+0x9483).
@@ -91,52 +91,42 @@ static HANDLE open_existing(const wchar_t *path) {
     return CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 }
 
+static void write_file(const wchar_t *path, const std::string &bytes) {
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    DWORD n = 0;
+    WriteFile(f, bytes.data(), DWORD(bytes.size()), &n, nullptr);
+    CloseHandle(f);
+}
+
 // The existing file must survive a save that never got its image; the host opens it without truncating.
 static int save_without_image_fails(Entry entry, const wchar_t *path) {
     const std::string original(20000, 'x'); // longer than the DDS written below, so a left-over tail shows
     const char *expected = "Tessalith DDS could not read the image from Photoshop, so nothing was saved.";
     int bad = 0;
-    for (int variant = 0; variant < 2; variant++) {
-        HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-        DWORD n = 0;
-        WriteFile(f, original.data(), DWORD(original.size()), &n, nullptr);
-        CloseHandle(f);
-
-        f = open_existing(path);
+    { // WriteStart, then WriteFinish before any band (as after Escape)
+        write_file(path, original);
+        HANDLE f = open_existing(path);
         Host h(entry, f);
         int16 result = h.call(formatSelectorWritePrepare);
-        const char *name = nullptr;
-        if (variant == 0) { // layers only: no WriteStart, so no WriteFinish either (PIFormat.h)
-            name = "layer selectors only";
-            result |= h.call(formatSelectorWriteLayerStart);
-            if (!result && h.r->data) result = h.call(formatSelectorWriteLayerContinue);
-            if (!result) result = h.call(formatSelectorWriteLayerFinish);
-        } else { // WriteStart, then WriteFinish before any band (as after Escape)
-            name = "WriteFinish before the image";
-            result = h.call(formatSelectorWriteStart);
-            if (!result) result = h.call(formatSelectorWriteFinish);
-        }
+        result |= h.call(formatSelectorWriteStart);
+        if (!result) result = h.call(formatSelectorWriteFinish);
         CloseHandle(f);
         const bool ok = result == errReportString && h.message() == expected && contents(path) == original;
-        printf("  %s %s: result %d \"%s\", file %s\n", ok ? "ok  " : "FAIL", name, result, h.message().c_str(),
-               contents(path) == original ? "untouched" : "CHANGED");
+        printf("  %s WriteFinish before the image: result %d \"%s\", file %s\n", ok ? "ok  " : "FAIL", result,
+               h.message().c_str(), contents(path) == original ? "untouched" : "CHANGED");
         bad += ok ? 0 : 1;
     }
-
-    // Composite then layers (the documented order) still saves, and replaces the old bytes exactly.
-    {
+    { // A full save over the same file replaces the old bytes exactly.
         HANDLE f = open_existing(path);
         Host h(entry, f);
         int16 result = h.call(formatSelectorWritePrepare);
         result |= h.call(formatSelectorWriteStart);
         if (!result) result = h.send_image();
-        if (!result) result = h.call(formatSelectorWriteLayerStart);
-        if (!result) result = h.call(formatSelectorWriteLayerFinish);
         if (!result) result = h.call(formatSelectorWriteFinish);
         CloseHandle(f);
         const std::string out = contents(path);
         const bool ok = result == 0 && out.size() > 128 && out.compare(0, 4, "DDS ") == 0 && out.find("xxx") == out.npos;
-        printf("  %s composite then layers: result %d, %zu bytes\n", ok ? "ok  " : "FAIL", result, out.size());
+        printf("  %s full save over a longer file: result %d, %zu bytes\n", ok ? "ok  " : "FAIL", result, out.size());
         bad += ok ? 0 : 1;
     }
     DeleteFileW(path);
