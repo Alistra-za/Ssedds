@@ -156,6 +156,31 @@ pub extern "C" fn psdds_quality_label(format: u32, i: u32) -> *const c_char {
     .unwrap_or(std::ptr::null())
 }
 
+/// DC25 for every host: pin the module holding this code (the DLL, or the .8bi linking psdds.lib) on the first call
+/// that can start the engine's rayon pool, so FreeLibrary never unmaps code under parked workers. Nothing runs in
+/// DllMain; a failure is ignored (the module then stays unpinned, as before).
+fn pin_self() {
+    static PIN: std::sync::Once = std::sync::Once::new();
+    PIN.call_once(|| {
+        #[cfg(windows)]
+        {
+            extern "system" {
+                fn GetModuleHandleExW(
+                    flags: u32,
+                    addr: *const u16,
+                    out: *mut *mut std::ffi::c_void,
+                ) -> i32;
+            }
+            const PIN_FLAG: u32 = 0x1;
+            const FROM_ADDRESS: u32 = 0x4;
+            let mut module = std::ptr::null_mut();
+            // SAFETY: FROM_ADDRESS takes a code address; `module` is a valid out pointer.
+            unsafe {
+                GetModuleHandleExW(PIN_FLAG | FROM_ADDRESS, pin_self as *const u16, &mut module)
+            };
+        }
+    });
+}
 /// The largest side Skyrim (D3D11) loads.
 const MAX_SIDE: u32 = 16384;
 const TOO_LARGE: &str =
@@ -226,6 +251,7 @@ pub unsafe extern "C" fn psdds_encode(
         };
     }
     let r = catch_unwind(AssertUnwindSafe(|| {
+        pin_self();
         encode(rgba, width, height, has_alpha, settings, out)
     }))
     .unwrap_or_else(|e| Err(panic_text(e)));
@@ -346,6 +372,7 @@ pub unsafe extern "C" fn psdds_decode(
         };
     }
     let r = catch_unwind(AssertUnwindSafe(|| {
+        pin_self();
         decode(dds, len, width, height, has_alpha, out)
     }))
     .unwrap_or_else(|e| Err(panic_text(e)));

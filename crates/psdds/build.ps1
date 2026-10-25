@@ -1,7 +1,7 @@
 # Tessalith DDS: builds psdds (static CRT) as psdds.dll + psdds.lib for every host. MIT licence.
 #
 #   .\crates\psdds\build.ps1          release build into target\psdds, then the dependents and exports checks
-#   .\crates\psdds\build.ps1 -Test    also runs the DLL host check (examples\dll_host.rs, once it exists)
+#   .\crates\psdds\build.ps1 -Test    also runs the DLL host check (examples\dll_host.rs: FreeLibrary must leave psdds.dll mapped)
 param([switch]$Test)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -13,10 +13,7 @@ try {
     if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = '4' }
     cargo build -p psdds --release --offline --manifest-path (Join-Path $repo 'Cargo.toml')
     if ($LASTEXITCODE -ne 0) { throw "cargo build -p psdds failed ($LASTEXITCODE)" }
-    if ($Test) {
-        cargo run -p psdds --release --offline --example dll_host --manifest-path (Join-Path $repo 'Cargo.toml')
-        if ($LASTEXITCODE -ne 0) { throw "dll_host failed ($LASTEXITCODE)" }
-    }
+
 } finally {
     foreach ($k in $saved.Keys) {
         if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } else { Set-Item "env:$k" $saved[$k] }
@@ -46,3 +43,15 @@ $diff = Compare-Object $hdr $exp
 if ($diff) { throw "psdds.dll exports differ from photoshop\psdds.h:`n$($diff | Out-String)" }
 
 Write-Host "Built $dll ($($exp.Count) exports)"
+
+if ($Test) {
+    $saved = @{ CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR; RUSTFLAGS = $env:RUSTFLAGS }
+    try {
+        $env:CARGO_TARGET_DIR = Join-Path $repo 'target\psdds'
+        $env:RUSTFLAGS = '-C target-feature=+crt-static'
+        cargo run -p psdds --example dll_host --release --offline --manifest-path (Join-Path $repo 'Cargo.toml') -- $dll
+        if ($LASTEXITCODE -ne 0) { throw "dll_host failed ($LASTEXITCODE)" }
+    } finally {
+        foreach ($k in $saved.Keys) { if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } else { Set-Item "env:$k" $saved[$k] } }
+    }
+}
