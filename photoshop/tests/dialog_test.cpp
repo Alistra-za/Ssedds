@@ -184,13 +184,67 @@ static void preset_names_and_matching() {
     raw.quality = list[1].settings.quality;
     check(MatchPreset(list, raw, 0) == 1, t, "editing back shows the preset again");
     raw.discard_alpha = 0;
-    check(MatchPreset(list, raw, 0) == -1, t, "discard transparency is part of a preset");
+    check(MatchPreset(list, raw, 1) == -1, t, "discard transparency is part of a preset (with alpha)");
+    check(MatchPreset(list, raw, 0) == 1, t, "without alpha, discard transparency has no effect (DC40)");
     check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 1) == 0, t, "the defaults are Colour BC7");
     // A greyed difference does not make it Custom: Normal with a remembered sRGB On still shows Normal BC7.
     PsddsSettings n = list[2].settings;
     n.srgb = 1;
     check(MatchPreset(list, n, 0) == 2, t, "matching uses effective values");
     check(MatchPreset({}, raw, 0) == -1, t, "an empty store: Custom");
+
+    // DC40: two presets with equal effective settings; the picked one stays shown, an edit falls back to the first.
+    std::vector<Preset> twin = {{L"First", psdds_defaults(PSDDS_COLOUR)}, {L"Second", psdds_defaults(PSDDS_COLOUR)}};
+    check(MatchPreset(twin, twin[1].settings, 1) == 0, t, "no pick: the first equal preset");
+    check(MatchPreset(twin, twin[1].settings, 1, 1) == 1, t, "the picked preset stays while it matches");
+    PsddsSettings edited = twin[1].settings;
+    edited.quality = 3;
+    check(MatchPreset(twin, edited, 1, 1) == -1, t, "an edit away from the pick shows Custom");
+
+    // DC40: non-ASCII white space is trimmed from the UTF-16 code points, not from compiler-code-page bytes.
+    check(CleanPresetName(L"\u00A0Ma\u00E7\u00E3\u3000") == L"Ma\u00E7\u00E3", t, "NBSP and U+3000 trimmed, accents kept");
+}
+
+// DC40: a preset file that was not read in full is reported, and lines that do not parse are written back verbatim.
+static void presets_file_is_protected() {
+    const char *t = __func__;
+    const std::wstring dir = temp_dir() + L"p";
+    const std::wstring file = dir + L"\\presets.txt";
+    DeleteFileW(file.c_str());
+    RemoveDirectoryW(dir.c_str());
+    check(LoadPresets(dir).size() == 5, t, "seeded");
+
+    // Unparseable lines (a typo, invalid UTF-8, a future 9-field line) survive a save.
+    const char *odd = "Typo\t4\t0\t0\t0\t1\t4\r\nBad\xE9utf\t4\t0\t0\t0\t1\t4\t0\r\nFuture\t4\t0\t0\t0\t1\t4\t0\t7\r\n";
+    std::string text = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency\r\nGood\t4\t0\t0\t0\t1\t4\t0\r\n";
+    text += odd;
+    write_text(file, text.c_str());
+    PresetFileInfo info;
+    std::vector<Preset> list = LoadPresets(dir, &info);
+    check(info.complete && list.size() == 1 && info.unparsed.size() == 3, t, "complete read keeps the three bad lines");
+    list.push_back({L"Added", list[0].settings});
+    check(SavePresets(dir, list, info.unparsed), t, "save");
+    HANDLE f = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    char buf[2048] = {};
+    DWORD got = 0;
+    ReadFile(f, buf, sizeof buf - 1, &got, nullptr);
+    CloseHandle(f);
+    check(strstr(buf, odd) != nullptr && strstr(buf, "Added") != nullptr, t, "bad lines are in the saved file verbatim");
+
+    // A file that cannot be opened (held exclusively) or is over 1 MiB is not complete, and stays as it is.
+    HANDLE held = CreateFileW(file.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    info = PresetFileInfo();
+    check(LoadPresets(dir, &info).empty() && !info.complete, t, "a locked file is not complete");
+    CloseHandle(held);
+    std::string big(1100000, 'x');
+    write_text(file, big.c_str());
+    info = PresetFileInfo();
+    check(LoadPresets(dir, &info).empty() && !info.complete, t, "an oversized file is not complete");
+    DeleteFileW(file.c_str());
+    check(LoadPresets(dir, &info).size() == 5 && info.complete, t, "a missing file is complete (seeds)");
+
+    DeleteFileW(file.c_str());
+    RemoveDirectoryW(dir.c_str());
 }
 
 static void dialog_follows_play_info() {
@@ -215,6 +269,9 @@ int main() {
     before = failures;
     preset_names_and_matching();
     printf("  %s preset_names_and_matching\n", failures == before ? "PASS" : "FAIL");
+    before = failures;
+    presets_file_is_protected();
+    printf("  %s presets_file_is_protected\n", failures == before ? "PASS" : "FAIL");
     before = failures;
     dialog_follows_play_info();
     printf("  %s dialog_follows_play_info\n", failures == before ? "PASS" : "FAIL");

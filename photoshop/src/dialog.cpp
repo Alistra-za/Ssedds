@@ -41,7 +41,12 @@ struct Context {
     uint32_t has_alpha;
     std::wstring preset_dir;     // empty: presets cannot be stored (no %APPDATA%)
     std::vector<Preset> presets; // as in the preset file (DC37)
+    bool writable = true;                  // false: the preset file could not be read in full, so it is never written (DC40)
+    std::vector<std::string> unparsed;     // lines of the file that did not parse, written back unchanged
+    int picked = -1;                       // the preset the user chose; shown while its settings still match (DC40)
 };
+
+const wchar_t kReadOnlyMessage[] = L"The preset file could not be read, so presets can't be changed.";
 
 constexpr uint32_t kCustom = 0xFFFFFFFFu; // the preset list's "Custom" entry
 
@@ -97,7 +102,7 @@ void fill_presets(HWND dlg, const Context &ctx) {
 // `changed`: the control the user just changed, or 0 at start (and after a preset pick). The Format list is rebuilt
 // when the type changes (it offers only psdds_format_allowed formats), the Quality list when the shown format may have
 // changed. The preset list shows the first preset whose effective values match, else Custom (DC37).
-void refresh(HWND dlg, const Context &ctx, int changed) {
+void refresh(HWND dlg, Context &ctx, int changed) {
     const ControlStates s = FromResolve(ctx.raw, ctx.has_alpha);
     if (!s.ok) return; // unreachable: every control offers only in-range values
     if (changed == 0 || changed == IDC_TYPE) {
@@ -107,7 +112,8 @@ void refresh(HWND dlg, const Context &ctx, int changed) {
             if (s.formats[it.value]) add(combo, it.label, it.value);
     }
     if (changed == 0 || changed == IDC_TYPE || changed == IDC_FORMAT) fill_quality(dlg, s.shown.format);
-    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha);
+    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
+    ctx.picked = match;
     select_value(dlg, IDC_PRESET, match < 0 ? kCustom : uint32_t(match));
     select_value(dlg, IDC_FORMAT, s.shown.format);
     select_value(dlg, IDC_TYPE, s.shown.texture_type);
@@ -160,37 +166,42 @@ INT_PTR CALLBACK name_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 
 // Save preset: name it (an existing name, in any case, asks to replace that preset), then write the file.
 void save_preset(HWND dlg, Context &ctx) {
-    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha);
+    if (!ctx.writable) return message(dlg, kReadOnlyMessage);
+    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
     std::wstring name = match < 0 ? std::wstring() : ctx.presets[size_t(match)].name;
     HMODULE self = reinterpret_cast<HMODULE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
     if (DialogBoxParamW(self, MAKEINTRESOURCEW(IDD_PRESET_NAME), dlg, name_proc, LPARAM(&name)) != IDOK) return;
     std::vector<Preset> next = ctx.presets;
-    const int at = FindPreset(next, name);
+    int at = FindPreset(next, name);
     if (at >= 0) {
         if (!ask(dlg, L"A preset named \"" + next[size_t(at)].name + L"\" already exists. Replace it?")) return;
         next[size_t(at)] = {name, ctx.raw};
     } else {
         next.push_back({name, ctx.raw});
+        at = int(next.size()) - 1;
     }
-    if (!SavePresets(ctx.preset_dir, next)) {
+    if (!SavePresets(ctx.preset_dir, next, ctx.unparsed)) {
         message(dlg, L"The preset could not be saved.");
         return;
     }
     ctx.presets = next;
+    ctx.picked = at;
     fill_presets(dlg, ctx);
 }
 
 void delete_preset(HWND dlg, Context &ctx) {
-    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha);
+    if (!ctx.writable) return message(dlg, kReadOnlyMessage);
+    const int match = MatchPreset(ctx.presets, ctx.raw, ctx.has_alpha, ctx.picked);
     if (match < 0) return;
     if (!ask(dlg, L"Delete the preset \"" + ctx.presets[size_t(match)].name + L"\"?")) return;
     std::vector<Preset> next = ctx.presets;
     next.erase(next.begin() + match);
-    if (!SavePresets(ctx.preset_dir, next)) {
+    if (!SavePresets(ctx.preset_dir, next, ctx.unparsed)) {
         message(dlg, L"The preset could not be deleted.");
         return;
     }
     ctx.presets = next;
+    ctx.picked = -1;
     fill_presets(dlg, ctx);
 }
 
@@ -227,6 +238,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         case IDC_PRESET:
             if (v >= ctx->presets.size()) break; // Custom: nothing to apply; refresh shows the match again
             ctx->raw = ctx->presets[v].settings;
+            ctx->picked = int(v);
             changed = 0; // type and format may both change
             break;
         case IDC_FORMAT: ctx->raw.format = v; break;
@@ -253,7 +265,10 @@ DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, PsddsSettings *inout
                             reinterpret_cast<LPCWSTR>(&ShowSaveDialog), &self))
         return DialogResult::Failed;
     Context ctx = {*inout, has_alpha, PresetDir(), {}};
-    ctx.presets = LoadPresets(ctx.preset_dir);
+    PresetFileInfo file;
+    ctx.presets = LoadPresets(ctx.preset_dir, &file);
+    ctx.writable = file.complete;
+    ctx.unparsed = file.unparsed;
     const INT_PTR r = DialogBoxParamW(self, MAKEINTRESOURCEW(IDD_SAVE), owner, dialog_proc, LPARAM(&ctx));
     if (r == -1 || r == 0) return DialogResult::Failed; // 0: the owner window was invalid
     if (r != IDOK) return DialogResult::Cancel;

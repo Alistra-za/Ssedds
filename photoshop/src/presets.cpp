@@ -74,8 +74,15 @@ bool parse_line(const std::wstring &line, Preset *out) {
 }
 
 bool make_dirs(const std::wstring &dir) {
-    // Create each missing folder from the left; an existing one is fine.
-    for (size_t i = dir.find(L'\\', 3); ; i = dir.find(L'\\', i + 1)) {
+    // Create each missing folder from the left; an existing one is fine. A UNC path (a redirected %APPDATA%) starts
+    // below \\server\share, which cannot be created.
+    size_t first = 3;
+    if (dir.compare(0, 2, L"\\\\") == 0) {
+        const size_t server = dir.find(L'\\', 2), share = server == std::wstring::npos ? server : dir.find(L'\\', server + 1);
+        if (share == std::wstring::npos) return true;
+        first = share + 1;
+    }
+    for (size_t i = dir.find(L'\\', first); ; i = dir.find(L'\\', i + 1)) {
         const std::wstring part = dir.substr(0, i);
         if (!CreateDirectoryW(part.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
         if (i == std::wstring::npos) return true;
@@ -93,15 +100,21 @@ std::wstring PresetDir() {
     return std::wstring(buf, n) + L"\\Tessalith DDS\\presets";
 }
 
-std::vector<Preset> LoadPresets(const std::wstring &dir) {
+std::vector<Preset> LoadPresets(const std::wstring &dir, PresetFileInfo *info) {
     std::vector<Preset> list;
+    PresetFileInfo none;
+    PresetFileInfo &out = info ? *info : none;
+    out = PresetFileInfo{};
     if (dir.empty()) return list;
     const std::wstring path = dir + kFile;
     HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
                            nullptr);
     if (f == INVALID_HANDLE_VALUE) {
         const DWORD e = GetLastError();
-        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND) return list; // there but unreadable: leave it
+        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND) { // there but unreadable: never written over (DC40)
+            out.complete = false;
+            return list;
+        }
         for (uint32_t i = 0; i < psdds_preset_count(); i++) {
             Preset p;
             const char *name = psdds_preset_name(i);
@@ -114,11 +127,12 @@ std::vector<Preset> LoadPresets(const std::wstring &dir) {
     }
     LARGE_INTEGER size = {};
     std::string bytes;
+    out.complete = false;
     if (GetFileSizeEx(f, &size) && size.QuadPart <= kMaxFileBytes) {
         bytes.resize(size_t(size.QuadPart));
         DWORD got = 0;
-        if (!bytes.empty() && (!ReadFile(f, &bytes[0], DWORD(bytes.size()), &got, nullptr) || got != bytes.size()))
-            bytes.clear();
+        out.complete = bytes.empty() || (ReadFile(f, &bytes[0], DWORD(bytes.size()), &got, nullptr) && got == bytes.size());
+        if (!out.complete) bytes.clear();
     }
     CloseHandle(f);
     size_t start = 0;
@@ -129,12 +143,13 @@ std::vector<Preset> LoadPresets(const std::wstring &dir) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         start = end + 1;
         Preset p;
-        if (parse_line(from_utf8(line), &p)) list.push_back(p); // the header has no tabs, so it fails here
+        if (parse_line(from_utf8(line), &p)) list.push_back(p);
+        else if (!line.empty() && line + "\r\n" != kHeader) out.unparsed.push_back(line); // kept verbatim on the next write
     }
     return list;
 }
 
-bool SavePresets(const std::wstring &dir, const std::vector<Preset> &list) {
+bool SavePresets(const std::wstring &dir, const std::vector<Preset> &list, const std::vector<std::string> &unparsed) {
     if (dir.empty() || !make_dirs(dir)) return false;
     std::string text = kHeader;
     for (const Preset &p : list) {
@@ -148,6 +163,7 @@ bool SavePresets(const std::wstring &dir, const std::vector<Preset> &list) {
         }
         text += "\r\n";
     }
+    for (const std::string &line : unparsed) text += line + "\r\n";
     const std::wstring path = dir + kFile;
     const std::wstring tmp = path + L".tmp";
     HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -164,7 +180,7 @@ bool SavePresets(const std::wstring &dir, const std::vector<Preset> &list) {
 }
 
 std::wstring CleanPresetName(const std::wstring &name) {
-    const wchar_t *space = L" \t\r\n\v\f 　";
+    const wchar_t *space = L" \t\r\n\v\f\u00A0\u3000";
     const size_t first = name.find_first_not_of(space);
     if (first == std::wstring::npos) return std::wstring();
     const std::wstring t = name.substr(first, name.find_last_not_of(space) - first + 1);
@@ -182,12 +198,21 @@ int FindPreset(const std::vector<Preset> &list, const std::wstring &name) {
     return -1;
 }
 
-int MatchPreset(const std::vector<Preset> &list, const PsddsSettings &raw, uint32_t has_alpha) {
-    PsddsSettings want, got;
+// The effective settings; Discard transparency has no effect without alpha, so it is zeroed there (DC40).
+static bool effective_of(const PsddsSettings &raw, uint32_t has_alpha, PsddsSettings *out) {
     PsddsControls c;
-    if (psdds_resolve(&raw, has_alpha, &want, &c) != 0) return -1;
+    if (psdds_resolve(&raw, has_alpha, out, &c) != 0) return false;
+    if (!has_alpha) out->discard_alpha = 0;
+    return true;
+}
+
+int MatchPreset(const std::vector<Preset> &list, const PsddsSettings &raw, uint32_t has_alpha, int preferred) {
+    PsddsSettings want, got;
+    if (!effective_of(raw, has_alpha, &want)) return -1;
+    if (preferred >= 0 && size_t(preferred) < list.size() &&
+        effective_of(list[size_t(preferred)].settings, has_alpha, &got) && memcmp(&want, &got, sizeof want) == 0)
+        return preferred;
     for (size_t i = 0; i < list.size(); i++)
-        if (psdds_resolve(&list[i].settings, has_alpha, &got, &c) == 0 && memcmp(&want, &got, sizeof want) == 0)
-            return int(i);
+        if (effective_of(list[i].settings, has_alpha, &got) && memcmp(&want, &got, sizeof want) == 0) return int(i);
     return -1;
 }
