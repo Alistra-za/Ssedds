@@ -23,6 +23,7 @@ pub mod group;
 pub mod image;
 pub mod load;
 pub mod manifest;
+pub mod memory;
 pub mod migrate;
 pub mod mips;
 pub mod nvtt;
