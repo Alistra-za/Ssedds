@@ -1,5 +1,5 @@
 // Tessalith DDS: the Save dialog. Every control is always shown; after each change the dialog asks psdds_resolve
-// what each control shows and whether it is editable, and psdds_format_allowed which formats the Format list offers,
+// what each control shows and whether it is editable, and psdds_format_offered which formats the Format list offers,
 // so the greying and format rules live only in psdds.
 // MIT licence (see photoshop/LICENSE).
 #include "dialog.h"
@@ -88,6 +88,26 @@ std::wstring widen(const char *utf8) {
     return w;
 }
 
+// The Format combo stays at its fixed size (DC43); its drop-down is as wide as the longest label (measured in the combo's
+// own font, so DPI and font scaling follow) plus the scroll bar and edges, never narrower than the combo.
+void widen_format_dropdown(HWND dlg) {
+    HWND combo = GetDlgItem(dlg, IDC_FORMAT);
+    HDC dc = GetDC(combo);
+    HGDIOBJ old = SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(combo, WM_GETFONT, 0, 0)));
+    LONG widest = 0;
+    for (const Item &it : kFormats) {
+        SIZE text = {};
+        GetTextExtentPoint32W(dc, it.label, int(wcslen(it.label)), &text);
+        if (text.cx > widest) widest = text.cx;
+    }
+    SelectObject(dc, old);
+    ReleaseDC(combo, dc);
+    RECT rc;
+    GetWindowRect(combo, &rc);
+    const LONG want = widest + GetSystemMetrics(SM_CXVSCROLL) + 4 * GetSystemMetrics(SM_CXEDGE);
+    SendMessageW(combo, CB_SETDROPPEDWIDTH, WPARAM(want > rc.right - rc.left ? want : rc.right - rc.left), 0);
+}
+
 void fill_quality(HWND dlg, uint32_t format) {
     HWND combo = GetDlgItem(dlg, IDC_QUALITY);
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
@@ -105,7 +125,7 @@ void fill_presets(HWND dlg, const Context &ctx) {
 }
 
 // `changed`: the control the user just changed, or 0 at start (and after a preset pick). The Format list is rebuilt
-// when the type changes (it offers only psdds_format_allowed formats), the Quality list when the shown format may have
+// when the type changes (it offers only psdds_format_offered formats), the Quality list when the shown format may have
 // changed. The preset list shows the first preset whose effective values match, else Custom (DC37).
 void refresh(HWND dlg, Context &ctx, int changed) {
     const ControlStates s = FromResolve(ctx.raw, ctx.has_alpha, ctx.depth);
@@ -220,7 +240,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         ctx = reinterpret_cast<Context *>(lp);
         fill(dlg, IDC_TYPE, kTypes);
         fill(dlg, IDC_FILTER, kFilters);
-        SendDlgItemMessageW(dlg, IDC_FORMAT, CB_SETDROPPEDWIDTH, 220, 0); // "RGBA16F (uncompressed)" is wider than the 85-unit combo (DC43)
+        widen_format_dropdown(dlg);
         fill_presets(dlg, *ctx);
         refresh(dlg, *ctx, 0);
         return TRUE; // focus goes to the first tab stop (Preset)

@@ -48,7 +48,7 @@ Write-Host "Built $plugin"
 
 if ($Test) {
     $devCmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
-    $libs = "psdds.lib ws2_32.lib userenv.lib ntdll.lib dbghelp.lib user32.lib"
+    $libs = "psdds.lib ws2_32.lib userenv.lib ntdll.lib dbghelp.lib user32.lib gdi32.lib"
     $api = Join-Path $sdk 'pluginsdk\photoshopapi'
     $sdkInc = "/DWIN32 /D_WINDOWS /I`"$api\photoshop`" /I`"$api\pica_sp`""
     $tests = @(

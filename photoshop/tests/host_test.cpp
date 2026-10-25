@@ -191,6 +191,7 @@ struct DialogUser {
     bool seen = false, filter_enabled_before_srgb = true, filter_enabled = false, filter_enabled_after = false;
     LRESULT formats = 0; // entries in the Format list
     wchar_t filter_shown[32] = {};
+    bool dropdown_ok = false; // the Format drop-down fits the longest label
     bool layout_ok = false; // DC43: Discard under sRGB, Type and Format combos equally wide, the label fits
 };
 
@@ -237,6 +238,17 @@ static DWORD WINAPI play_dialog(void *arg) {
         GetTextExtentPoint32W(dc, plain.c_str(), int(plain.size()), &text);
         SelectObject(dc, old);
         ReleaseDC(d, dc);
+        { // Task 5: the Format drop-down is wide enough for the longest label ("RGBA16F (uncompressed)"), in the combo's font
+            HWND fc = GetDlgItem(dlg, IDC_FORMAT);
+            HDC fdc = GetDC(fc);
+            HGDIOBJ fold = SelectObject(fdc, reinterpret_cast<HFONT>(SendMessageW(fc, WM_GETFONT, 0, 0)));
+            SIZE hdr = {};
+            const wchar_t longest[] = L"RGBA16F (uncompressed)";
+            GetTextExtentPoint32W(fdc, longest, int(wcslen(longest)), &hdr);
+            SelectObject(fdc, fold);
+            ReleaseDC(fc, fdc);
+            u->dropdown_ok = SendMessageW(fc, CB_GETDROPPEDWIDTH, 0, 0) >= hdr.cx + GetSystemMetrics(SM_CXVSCROLL) + 2;
+        }
         u->layout_ok = format.right - format.left == type.right - type.left && discard.left == srgb.left &&
                        discard.top >= format.top - 2 && discard.top > srgb.bottom &&
                        discard.right - discard.left >= text.cx + GetSystemMetrics(SM_CXMENUCHECK) + 4 &&
@@ -363,6 +375,7 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         write_file(path, original);
         DialogUser u;
         const int16 result = interactive_save(entry, path, opaque_alpha, &u);
+        expect(u.dropdown_ok, "Format drop-down is wide enough for RGBA16F (uncompressed) at this DPI and font");
         expect(result == 0 && u.seen && u.layout_ok, "layout: Discard transparency under sRGB, Type and Format equally wide (DC43)");
     }
 
