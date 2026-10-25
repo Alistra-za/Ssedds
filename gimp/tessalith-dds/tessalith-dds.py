@@ -3,6 +3,7 @@
 """Tessalith DDS for GIMP 3: opens and exports DDS files through psdds.dll. Every rule lives in psdds."""
 import os
 import sys
+import traceback
 
 import gi
 gi.require_version("Gimp", "3.0")
@@ -22,6 +23,11 @@ TYPES = [("colour", COLOUR, "Colour"), ("normal", NORMAL, "Normal"), ("linear-ma
 FILTERS = [("box", BOX, "Box"), ("tent", TENT, "Tent"), ("mitchell", MITCHELL, "Mitchell"),
            ("kaiser", KAISER, "Kaiser")]
 NOT_LOCAL_SAVE = "Tessalith DDS can save only to files on a local disk."
+NO_VISIBLE = "There are no visible layers to export."
+
+
+class ExportError(Exception):
+    pass
 TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
 NOT_LOCAL = "Tessalith DDS can open only files on a local disk."
 NO_FILE_DDS = ("GIMP's own DDS plug-in is needed for this file (HDR, cube map or texture array), "
@@ -96,11 +102,13 @@ def export_pixels(psdds, img):
 
     Merges and resizes img's layers, so it must never be the user's image (M7).
     """
-    layer = img.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
     w, h = img.get_width(), img.get_height()
+    psdds.check_size(w, h)  # before the merge allocates anything
+    layer = img.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
+    if layer is None:  # e.g. a visible group holding only hidden layers
+        raise ExportError(NO_VISIBLE)
     if (layer.get_width(), layer.get_height()) != (w, h) or layer.get_offsets()[1:] != (0, 0):
         layer.resize_to_image_size()
-    psdds.check_size(w, h)
     rgba = bytearray(w * h * 16)
     buf = layer.get_buffer()
     rows = band_rows(w * 16, h)
@@ -131,6 +139,8 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
     path = file.get_path()
     if path is None:
         return error(procedure, NOT_LOCAL_SAVE)
+    if not any(lay.get_visible() for lay in image.get_layers()):
+        return error(procedure, NO_VISIBLE)
     res, img = options.get_image(image)
     if res != Gimp.ExportReturn.EXPORT:
         img = img.duplicate()  # never merge or resize the user's image (M7)
@@ -141,8 +151,11 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         out = psdds.encode(rgba, w, h, has_alpha and not s.discard_alpha, s)  # DC36
         del rgba
         _write_atomic(path, out)
-    except (PsddsError, OSError) as e:
+    except (PsddsError, OSError, ExportError) as e:
         return error(procedure, str(e))
+    except Exception as e:  # noqa: BLE001 - the user gets a message, the traceback goes to stderr
+        traceback.print_exc()
+        return error(procedure, f"Tessalith DDS export failed ({type(e).__name__}): {e}")
     finally:
         img.delete()
     return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
@@ -161,6 +174,13 @@ def _nick(items, cid):
 
 class TessalithDds(Gimp.PlugIn):
     def do_query_procedures(self):
+        try:
+            Psdds()  # the export's defaults and quality range come from psdds
+        except PsddsError as e:
+            # GIMP caches this list until the .py file's mtime changes, so the user must reinstall.
+            print(f"Tessalith DDS: export is not registered: {e}. Fix psdds.dll, then reinstall the plug-in.",
+                  file=sys.stderr)
+            return [LOAD_PROC]
         return [LOAD_PROC, EXPORT_PROC]
 
     def do_set_i18n(self, name):

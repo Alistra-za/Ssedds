@@ -367,6 +367,61 @@ def export_failure_keeps_old_file():
     img.delete()
 
 
+def export_failure_via_file_save_keeps_old_file():
+    old = b"\xab" * 20000
+    path = _write("fail_save.dds", old)
+    img = Gimp.Image.new(17000, 4, Gimp.ImageBaseType.RGB)
+    img.insert_layer(Gimp.Layer.new(img, "L", 17000, 4, Gimp.ImageType.RGB_IMAGE, 100, Gimp.LayerMode.NORMAL),
+                     None, 0)
+    try:
+        ok = Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, img, Gio.File.new_for_path(path), None)
+    except GLib.Error:
+        ok = False
+    assert not ok, "file_save of a 17000-wide image succeeded"
+    with open(path, "rb") as f:
+        assert f.read() == old, "the old file changed"
+    assert not os.path.exists(path + ".tmpsave"), ".tmpsave left behind"
+    img.delete()
+
+
+def _layers_state(img):
+    return [(lay.get_id(), lay.get_width(), lay.get_height(), tuple(lay.get_offsets()[1:]), lay.get_visible(),
+             _read(lay, "R'G'B'A u8")) for lay in img.get_layers()]
+
+
+def export_single_layer_user_image_unchanged():
+    img = _image(8, 8, _rgb(_gradient(8, 8)), "R'G'B' u8", Gimp.ImageType.RGB_IMAGE)
+    before, n_images = _layers_state(img), len(Gimp.get_images())
+    _export(img, "single.dds", format="rgba8")
+    assert _layers_state(img) == before, "the user's layer changed"
+    assert len(Gimp.get_images()) == n_images, "the export left an image behind"
+    img.delete()
+
+
+def export_all_hidden_layers_error():
+    img = Gimp.Image.new(8, 8, Gimp.ImageBaseType.RGB)
+    for lay in (_add_layer(img, 8, 8, _gradient(8, 8)), _add_layer(img, 4, 4, _gradient(4, 4), x=2, y=2)):
+        lay.set_visible(False)
+    before, n_images = _layers_state(img), len(Gimp.get_images())
+    res, path = _export_run(img, "hidden.dds")
+    assert res.index(0) == Gimp.PDBStatusType.EXECUTION_ERROR, f"status {res.index(0)}"
+    msg = res.index(1) if res.length() > 1 else None
+    assert msg == "There are no visible layers to export.", f"error text {msg!r}"
+    assert not os.path.exists(path) and not os.path.exists(path + ".tmpsave"), "a file was written"
+    assert _layers_state(img) == before, "the user's layers changed"
+    assert len(Gimp.get_images()) == n_images, "the export left an image behind"
+    img.delete()
+
+
+def export_one_visible_among_hidden():
+    img = Gimp.Image.new(8, 8, Gimp.ImageBaseType.RGB)
+    _add_layer(img, 8, 8, bytes([255, 0, 0]) * 64, "R'G'B' u8", Gimp.ImageType.RGB_IMAGE)
+    _add_layer(img, 8, 8, bytes([0, 0, 255]) * 64, "R'G'B' u8", Gimp.ImageType.RGB_IMAGE).set_visible(False)
+    _, _, _, rgba = psdds.decode(_export(img, "onevis.dds", format="rgba8"))
+    assert rgba[0:3] == bytes([255, 0, 0]), f"pixel 0,0 is {tuple(rgba[0:3])}, not the visible layer's red"
+    img.delete()
+
+
 def export_discard_transparency_saves_opaque():
     px = bytearray(_gradient(8, 8))
     px[4 * 9 + 3] = 64
@@ -427,6 +482,10 @@ CASES = {f.__name__: f for f in (
     export_float_out_of_range_clamps,
     export_gray_image,
     export_failure_keeps_old_file,
+    export_failure_via_file_save_keeps_old_file,
+    export_single_layer_user_image_unchanged,
+    export_all_hidden_layers_error,
+    export_one_visible_among_hidden,
     export_discard_transparency_saves_opaque,
     export_defaults_have_srgb_off,
     export_disallowed_format_saves_default,
