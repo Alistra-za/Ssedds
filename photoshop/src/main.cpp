@@ -136,6 +136,8 @@ void trace_document(const FormatRecord *r) {
 }
 } // namespace
 
+bool trace_on() { return trace_enabled(); }
+
 void trace_note(const char *note) {
     if (!trace_enabled()) return;
     char line[768]; // the samples line (write.cpp finish_save) is about 400 characters

@@ -59,5 +59,7 @@ int16 write_finish(FormatRecord *record, intptr_t *data);
 // Returns the host's result, -1 when the suite or port is missing, -2 when the host call faulted.
 OSErr read_port(const FormatRecord *record, const ReadChannelDesc *channel, const VRect &rect, void *dst,
                 int32 row_bits, int32 col_bits, VRect *wrote);
+// True when TESSALITH_DDS_TRACE=1: callers skip building trace text that costs a pass over the pixels.
+bool trace_on();
 // Appends one line to the selector trace (main.cpp) when TESSALITH_DDS_TRACE=1.
 void trace_note(const char *line);

@@ -120,10 +120,12 @@ int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *
 // `path` is "band" or "merged", for the trace.
 int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels, const char *path) {
     Globals *g = reinterpret_cast<Globals *>(*data);
-    char note[640];
-    const int head = snprintf(note, sizeof note, "samples %s depth %d channels %d: ", path, int(r->depth), channels);
-    describe_samples(s->rgba.data(), s->rgba.size() / 4, note + head, sizeof note - size_t(head));
-    trace_note(note);
+    if (trace_on()) {
+        char note[640];
+        const int head = snprintf(note, sizeof note, "samples %s depth %d channels %d: ", path, int(r->depth), channels);
+        describe_samples(s->rgba.data(), s->rgba.size() / 4, note + head, sizeof note - size_t(head));
+        trace_note(note);
+    }
     if (r->depth == 32) { // shortcut: probe refusal, removed in the HDR plan's Task 6
         free_state(r, data);
         return report_error(r, "Tessalith DDS cannot save 32-bit documents in this build, so nothing was saved.");
