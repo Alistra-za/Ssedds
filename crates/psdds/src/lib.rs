@@ -498,7 +498,11 @@ unsafe fn decode(
         .ok_or("This DDS has no mip levels.")?
         .clone();
     if float {
-        // shortcut: decode_level_rgba allocates the float image infallibly (4 GiB at 16384²); make it fallible if a large HDR open aborts
+        // Reserve the output first, so a machine short of memory gets an error, not an abort.
+        let mut buf: Vec<u8> = Vec::new();
+        buf.try_reserve_exact(w as usize * h as usize * 16)
+            .map_err(|_| "Not enough memory to open this DDS.")?;
+        // shortcut: the engine's decode_level_rgba still allocates its float image infallibly (4 GiB at 16384²); make it fallible if a large HDR open aborts
         let px = engine::decode::decode_level_rgba(f.format, w, h, &f.data[range], None)
             .map_err(|e| e.to_string())?;
         // NaN -> 0, ±inf -> ±65504 (the half range); negatives and values above 1 are kept.
@@ -514,9 +518,6 @@ unsafe fn decode(
                 })
             })
             .collect();
-        let mut buf = Vec::new();
-        buf.try_reserve_exact(px.len() * 16)
-            .map_err(|_| "Not enough memory to open this DDS.")?;
         px.iter()
             .flatten()
             .for_each(|v| buf.extend_from_slice(&v.to_ne_bytes()));
