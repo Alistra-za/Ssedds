@@ -192,16 +192,40 @@ fn sizes_must_match() {
     assert_eq!(e, "sources differ in size: roughness 8x8, ao 16x16");
 }
 
+/// One rule for out-of-range values: a float roughness file (below 0 and above 1) packs and encodes as the same
+/// floats from memory; the engine clamps neither (the host clamps memory input, M8).
 #[test]
-fn out_of_range_values_are_clamped() {
-    let wild = vec![-1.0f32, 2.0, f32::NAN, 0.25];
-    let clamped = vec![0.0f32, 1.0, 0.0, 0.25];
-    let p = |v: &[f32]| {
-        pack_rmaos([Some(ch(v, 2)), None, None, None], [None; 4], &profile())
-            .unwrap()
-            .0
-    };
-    assert_eq!(p(&wild), p(&clamped));
+fn out_of_range_float_sources_match_the_file_path() {
+    let d = tempfile::tempdir().unwrap();
+    let r: Vec<f32> = (0..N * N)
+        .map(|i| -0.5 + 2.0 * (i % N) as f32 / (N - 1) as f32)
+        .collect();
+    let a = ao_px();
+    let rp = d.path().join("in/iron_roughness.exr");
+    std::fs::create_dir_all(rp.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgb32F(ImageBuffer::from_fn(N, N, |x, y| {
+        let v = r[(y * N + x) as usize];
+        image::Rgb([v, v, v])
+    }))
+    .save(&rp)
+    .unwrap();
+    let ap = save(d.path(), "iron_ao.png", &a);
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "mem-rmaos-float");
+    let s = Engine::new()
+        .unwrap()
+        .run(plan(d.path(), &rp, &ap), &rep, &CancelToken::default())
+        .unwrap();
+    assert_eq!(s.converted, 1, "{:#?}", sink.take());
+    let file = std::fs::read(d.path().join("out/iron_rmaos.dds")).unwrap();
+    let (img, _) = pack_rmaos(
+        [Some(ch(&r, N)), None, Some(ch(&a, N)), None],
+        [None; 4],
+        &profile(),
+    )
+    .unwrap();
+    assert!(img.px.iter().any(|p| p[0] < 0.0) && img.px.iter().any(|p| p[0] > 1.0));
+    assert!(encode_image(img, &profile()).unwrap() == file);
 }
 
 #[test]
@@ -289,6 +313,11 @@ struct Batch {
 /// A real `Engine::plan` + `Engine::run` of `iron_n.png` (nw x nw) beside `iron_roughness.png` and `iron_ao.png` (64x64),
 /// target cs, preset cs-quality, no user config.
 fn batch(nw: u32) -> Batch {
+    batch_with(nw, &[])
+}
+
+/// [`batch`] with `--set` overrides.
+fn batch_with(nw: u32, sets: &[&str]) -> Batch {
     let d = tempfile::tempdir().unwrap();
     let (r, a) = (rough_px(), ao_px());
     save(d.path(), "iron_roughness.png", &r);
@@ -304,6 +333,10 @@ fn batch(nw: u32) -> Batch {
     req.accept = AcceptSuggestions::High;
     // The 96x96 case: acknowledged, it gates the write and changes no byte.
     req.allow = [Code::DimNpot].into();
+    req.overrides = sets
+        .iter()
+        .map(|s| engine::overrides::parse_set(s).unwrap())
+        .collect();
     let sink = Arc::new(VecSink::default());
     let rep = Reporter::new(sink.clone(), "mem-rmaos-bake");
     let e = Engine::new().unwrap();
@@ -432,14 +465,62 @@ fn an_srgb_member_never_bakes() {
     assert!(m.rmaos == memory_set(None, &p).rmaos);
 }
 
+/// M5 as amended: without mips the batch still bakes (mip 0 changes when the `_n` is larger), and so does memory.
 #[test]
-fn no_mips_does_not_bake() {
-    let mut p = profile();
-    p.mips.levels = MipLevels::Keyword(MipKeyword::None);
-    let m = memory_set(Some(64), &p);
-    assert!(!m.baked);
-    assert!(m.bake_note.unwrap().contains("no mips"));
-    assert!(m.rmaos == memory_set(None, &p).rmaos);
+fn no_mips_bakes_as_the_batch_does() {
+    for (nw, shift) in [(128u32, 1i32), (64, 0)] {
+        let b = batch_with(nw, &["subtype:rmaos.mips.levels=none"]);
+        assert_eq!(
+            b.plan_rmaos.bake.as_ref().map(|j| j.shift),
+            Some(shift),
+            "{nw}"
+        );
+        let p = &b.plan_rmaos.profile;
+        assert_eq!(p.mips.levels, MipLevels::Keyword(MipKeyword::None));
+        let m = memory_set(Some(nw), p);
+        assert!(m.baked && m.bake_note.is_none(), "{nw}");
+        assert!(
+            m.rmaos == b.rmaos && m.normal.as_deref() == Some(&b.n[..]),
+            "{nw}"
+        );
+        // Mip 0 changes only when the `_n` is larger.
+        assert_eq!(memory_set(None, p).rmaos != b.rmaos, shift > 0, "{nw}");
+    }
+}
+
+/// A set that cannot pack fails before the `_n` is encoded: the normal profile here would fail its own encode.
+#[test]
+fn a_bad_set_fails_before_any_encode() {
+    let mut np = pbr_normal_profile();
+    np.drop_top_mip = true;
+    let s = vec![0.5f32; (N * N) as usize];
+    let run = |src: [Option<Channel>; 4]| {
+        encode_rmaos_set(
+            src,
+            [None; 4],
+            &profile(),
+            Some((normal_img(N), np.clone())),
+        )
+        .unwrap_err()
+    };
+    assert!(run([None, None, None, None]).contains("nothing to pack"));
+    assert!(run([None, None, None, Some(ch(&s, N))]).contains("nothing to pack"));
+    let bad = Channel {
+        px: &s,
+        width: N,
+        height: N,
+        channels: 1,
+        channel: 1,
+    };
+    assert_eq!(
+        run([Some(bad), None, None, None]),
+        "roughness: invalid source image or channel"
+    );
+    let small = vec![0.5f32; 16];
+    assert!(run([Some(ch(&s, N)), None, Some(ch(&small, 4)), None])
+        .starts_with("sources differ in size"));
+    // The same normal profile does reach its encode once the set is valid.
+    assert!(run([Some(ch(&s, N)), None, None, None]).contains("drop_top_mip"));
 }
 
 /// R6: a `_n` that opts out never bakes (reachable only through `decide_bake`: memory has no provenance).

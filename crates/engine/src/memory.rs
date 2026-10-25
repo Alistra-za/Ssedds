@@ -9,10 +9,10 @@ use crate::coverage::preserve_coverage;
 use crate::dds::{dds_bytes, resolve_header, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
 use crate::image::{Rgba32F, SourceInfo};
-use crate::mips::{build_chain_with, level_count};
+use crate::mips::build_chain_with;
 use crate::ops::{preprocess_with, SourceTransfer};
 use crate::pack::assemble::{assemble_channels_with, check_sizes_with, PackError};
-use crate::pack::{recipes_for_with, resolve_channels, PackSource, RawInput};
+use crate::pack::{recipes_for_with, resolve_channels, PackSource, RawInput, Recipe};
 use crate::quantize::to_encoder_input;
 use std::path::{Path, PathBuf};
 
@@ -60,33 +60,38 @@ fn check_sources(src: &[Option<Channel>; 4]) -> Result<(u32, u32), String> {
     .map_err(|e| e.to_string())
 }
 
+/// The sources checked ([`check_sources`]) and the cs `_rmaos` recipe they build, or why none builds.
+fn rmaos_recipe(src: &[Option<Channel>; 4]) -> Result<Recipe, String> {
+    check_sources(src)?;
+    let raw: Vec<RawInput> = src
+        .iter()
+        .zip(ROLES)
+        .filter(|(c, _)| c.is_some())
+        .map(|(_, role)| RawInput {
+            path: PathBuf::from(role.id()),
+            role,
+        })
+        .collect();
+    let (recipes, unused) = recipes_for_with(Target::Cs, &raw, PackRecipe::Rmaos, false);
+    recipes.into_iter().next().ok_or_else(|| {
+        unused
+            .into_iter()
+            .next()
+            .map_or_else(|| "nothing to pack".into(), |u| u.reason)
+    })
+}
+
 /// The cs `_rmaos` image of in-memory sources (role order roughness, metallic, AO, specular), by the engine's own
 /// rule: the recipe, `resolve_channels` (fills and neutral defaults) and `assemble_channels_with` over synthetic
-/// paths named by role id. Values are clamped to 0..=1 (NaN to 0). No recipe: the first unused-input reason.
+/// paths named by role id. Values pass through as the file path's packer reads them (no clamp: the host clamps).
+/// No recipe: the first unused-input reason.
 /// Returns the packed image and the indices (0..4) of the channels that took a neutral default.
 pub fn pack_rmaos(
     src: [Option<Channel>; 4],
     fill: [Option<u8>; 4],
     p: &Profile,
 ) -> Result<(Rgba32F, Vec<usize>), String> {
-    check_sources(&src)?;
-    let path = |role: RawMap| PathBuf::from(role.id());
-    let raw: Vec<RawInput> = src
-        .iter()
-        .zip(ROLES)
-        .filter(|(c, _)| c.is_some())
-        .map(|(_, role)| RawInput {
-            path: path(role),
-            role,
-        })
-        .collect();
-    let (recipes, unused) = recipes_for_with(Target::Cs, &raw, PackRecipe::Rmaos, false);
-    let Some(recipe) = recipes.first() else {
-        return Err(unused
-            .into_iter()
-            .next()
-            .map_or_else(|| "nothing to pack".into(), |u| u.reason));
-    };
+    let recipe = &rmaos_recipe(&src)?;
     let mut packing = p.packing.clone();
     for (f, role) in fill.into_iter().zip(ROLES) {
         match role {
@@ -126,12 +131,7 @@ pub fn pack_rmaos(
             let (n, k) = (c.channels as usize, c.channel as usize);
             let mut img = Rgba32F::new(c.width, c.height, [0.0, 0.0, 0.0, 1.0]);
             for (o, i) in img.px.iter_mut().zip(c.px.chunks_exact(n)) {
-                let v = if i[k].is_nan() {
-                    0.0
-                } else {
-                    i[k].clamp(0.0, 1.0)
-                };
-                *o = [v, v, v, 1.0];
+                *o = [i[k], i[k], i[k], 1.0];
             }
             // shortcut: 8-bit `Stored` is what `encode_image` always uses; the float precision is kept regardless.
             // Upgrade if encode_image ever takes a transfer.
@@ -208,14 +208,18 @@ pub struct RmaosSet {
 /// A TruePBR pair as `Engine::plan` + `run` writes it (target cs): the `_rmaos` packed from `src`/`fill` by
 /// [`pack_rmaos`] and encoded with `rmaos_p`, and, with a `normal` (image, its unbaked `pbr_normal` profile), the `_n`
 /// and its variance baked into the roughness mips by the planner's rule ([`decide_bake`]). Not baked, with a note:
-/// no normal, an sRGB `_rmaos` (R10), sizes that cannot bake (`SET-BAKE-RATIO`'s text) or a one-level chain. Values
-/// are not clamped here (the host does). Order keeps the peak near two normals + the packed image + one source.
+/// no normal, an sRGB `_rmaos` (R10) or sizes that cannot bake (`SET-BAKE-RATIO`'s text). A one-level chain bakes
+/// mip 0 as the batch does (it changes only when the `_n` is larger). Sources are checked and the recipe found before
+/// any encode. Values are not clamped here (the host does). Order keeps the peak near two normals + the packed image
+/// + one source.
 pub fn encode_rmaos_set(
     src: [Option<Channel>; 4],
     fill: [Option<u8>; 4],
     rmaos_p: &Profile,
     normal: Option<(Rgba32F, Profile)>,
 ) -> Result<RmaosSet, String> {
+    // A set that cannot pack fails before any encode work.
+    rmaos_recipe(&src)?;
     let mdims = check_sources(&src)?;
     let (mut bake, mut note, mut normal_dds) = (None, Some(NO_NORMAL.to_string()), None);
     if let Some((img, mut normal_p)) = normal {
@@ -225,11 +229,6 @@ pub fn encode_rmaos_set(
                 Some("variance bake off: an sRGB roughness member never bakes".into())
             }
             BakeDecision::Off(w) => Some(w.message),
-            BakeDecision::Bake { .. }
-                if level_count(mdims.0, mdims.1, &rmaos_p.mips.levels) <= 1 =>
-            {
-                Some("variance bake off: the _rmaos has no mips".into())
-            }
             BakeDecision::Bake { .. } => {
                 mark_normal_baking(&mut normal_p);
                 // shortcut: the normal is cloned once for the lengths, a 2x normal peak (8 GiB at 16384²); the
