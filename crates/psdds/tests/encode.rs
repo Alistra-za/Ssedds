@@ -123,6 +123,72 @@ fn odd_sizes_encode_and_read_back() {
     }
 }
 
+/// Hash noise: a gradient can box- and Kaiser-filter to the same blocks; noise cannot.
+fn noise(w: u32, h: u32) -> Vec<f32> {
+    (0..w * h * 4)
+        .map(|i| {
+            let mut x = i.wrapping_mul(0x9E37_79B9) ^ 0x5bd1_e995;
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x2c1b_3c6d);
+            x ^= x >> 12;
+            if i % 4 == 3 {
+                0.5 // translucent, so a kept alpha means Blend
+            } else {
+                (x % 256) as f32 / 255.0
+            }
+        })
+        .collect()
+}
+
+/// DC12 (I1): the filter the dialog shows is the one the file gets.
+#[test]
+fn kaiser_applies_only_where_the_dialog_shows_it() {
+    let (w, h) = (32, 32);
+    let px = noise(w, h);
+    let with = |set: PsddsSettings, filter: u32, alpha: bool| {
+        encode(&px, w, h, alpha, &PsddsSettings { filter, ..set }).unwrap()
+    };
+    let srgb_bc7 = PsddsSettings {
+        srgb: 1,
+        ..settings(BC7, 0)
+    };
+    assert!(
+        with(srgb_bc7, 3, false) != with(srgb_bc7, 0, false),
+        "Kaiser must change the mips"
+    );
+    let fallbacks = [
+        (
+            PsddsSettings {
+                srgb: 0,
+                ..srgb_bc7
+            },
+            false,
+        ),
+        (settings(BC5, 0), false),
+        (srgb_bc7, true),
+    ];
+    for (set, alpha) in fallbacks {
+        assert!(
+            with(set, 3, alpha) == with(set, 0, alpha),
+            "{set:?} alpha {alpha}"
+        );
+    }
+}
+
+/// DC12 (I2): a side above 16384 is refused before the caller's buffer is read.
+#[test]
+fn oversized_image_is_refused() {
+    let px = [0.0f32; 4]; // far smaller than the claimed size: reading it would be out of bounds
+    for (w, h) in [(16385, 1), (1, 16385), (u32::MAX, u32::MAX)] {
+        let (rc, msg) = encode(&px, w, h, false, &settings(BC7, 0)).unwrap_err();
+        assert_ne!(rc, 0);
+        assert_eq!(
+            msg,
+            "This image is larger than 16384 pixels on a side, the most Skyrim supports."
+        );
+    }
+}
+
 #[test]
 fn alpha_dropped_for_formats_without_alpha() {
     let (w, h) = (16, 8);
@@ -148,6 +214,8 @@ fn srgb_forced_off_without_srgb_variant() {
         srgb: 1,
         ..settings(BC5, 0)
     };
+    // BC5 has no _SRGB form, so 83 holds either way: this pins only that the encode succeeds and is untagged. The
+    // rule itself is checked in tests/settings.rs; the BC7 cases below show the tag does follow the setting.
     let dds = read_dds(&encode(&px, 8, 8, false, &bc5).unwrap()).unwrap();
     assert_eq!(dds.dx10.unwrap().dxgi, 83, "BC5_UNORM");
     // The same remembered sRGB On does tag a BC7 file.
@@ -203,6 +271,22 @@ fn bad_input_is_an_error_not_a_panic() {
         )
     };
     assert_ne!(rc, 0);
+    // A one-byte error buffer gets just the NUL.
+    let mut one = [0x7f as std::ffi::c_char; 1];
+    let rc = unsafe {
+        psdds_encode(
+            std::ptr::null(),
+            4,
+            4,
+            0,
+            &ok,
+            &mut out,
+            one.as_mut_ptr(),
+            1,
+        )
+    };
+    assert_ne!(rc, 0);
+    assert_eq!(one[0], 0);
     // Freeing an empty buffer is a no-op.
     unsafe { psdds_free(out) };
 }

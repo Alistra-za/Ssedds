@@ -50,7 +50,7 @@ pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
         srgb: 1,
         filter: 0,
         mips: 1,
-        quality: 0,
+        quality: settings::FALLBACK_QUALITY,
     })
 }
 
@@ -63,6 +63,7 @@ pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
 #[no_mangle]
 pub unsafe extern "C" fn psdds_resolve(
     input: *const PsddsSettings,
+    has_alpha: u32,
     effective: *mut PsddsSettings,
     controls: *mut PsddsControls,
 ) -> i32 {
@@ -70,7 +71,7 @@ pub unsafe extern "C" fn psdds_resolve(
         return -1;
     }
     let s = *input;
-    match catch_unwind(|| settings::resolve(&s)) {
+    match catch_unwind(|| settings::resolve(&s, has_alpha != 0)) {
         Ok(Ok((e, c))) => {
             *effective = e;
             *controls = c;
@@ -97,6 +98,11 @@ pub extern "C" fn psdds_quality_label(format: u32, i: u32) -> *const c_char {
     .unwrap_or(std::ptr::null())
 }
 
+/// The largest side Skyrim (D3D11) loads.
+const MAX_SIDE: u32 = 16384;
+const TOO_LARGE: &str =
+    "This image is larger than 16384 pixels on a side, the most Skyrim supports.";
+
 /// # Safety
 /// As `psdds_encode`.
 unsafe fn encode(
@@ -113,10 +119,13 @@ unsafe fn encode(
     if width == 0 || height == 0 {
         return Err(format!("psdds_encode: image is {width}x{height}"));
     }
-    let n = (width as usize)
-        .checked_mul(height as usize)
-        .filter(|n| n.checked_mul(4 * 4).is_some())
-        .ok_or_else(|| format!("psdds_encode: image {width}x{height} is too large"))?;
+    // DC12 (I2): refused before the caller's buffer is touched. The isize bound is `from_raw_parts`' precondition
+    // (already implied by the side limit on 64-bit).
+    let n = (width <= MAX_SIDE && height <= MAX_SIDE)
+        .then(|| (width as usize).checked_mul(height as usize))
+        .flatten()
+        .filter(|n| n.checked_mul(16).is_some_and(|b| b <= isize::MAX as usize))
+        .ok_or(TOO_LARGE)?;
     let profile = settings::profile_for(&*s, has_alpha != 0)?;
     let img = Rgba32F {
         width,

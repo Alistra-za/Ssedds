@@ -52,6 +52,8 @@ const FILTERS: [MipFilter; 4] = [
     MipFilter::Kaiser,
 ];
 const FORMAT_BC7: u32 = 4;
+/// BC7 Veryslow, the `sdc-base` effort: `defaults`' value when the presets cannot be read (never in practice).
+pub(crate) const FALLBACK_QUALITY: u32 = 4;
 
 // The GUI's per-format quality values (crates/gui/src/ui/settings_panel.rs `options_of` and the rgbcx slider),
 // copied here because psdds must not depend on the GPL-only gui crate.
@@ -126,7 +128,7 @@ fn preset_quality(format: u32, p: &Profile) -> u32 {
 /// preset's quality. An unknown type gets Colour's.
 pub fn defaults(texture_type: u32) -> PsddsSettings {
     let ty = if texture_type < 3 { texture_type } else { 0 };
-    let (filter, quality) = base(ty).map_or((0, 0), |p| {
+    let (filter, quality) = base(ty).map_or((0, FALLBACK_QUALITY), |p| {
         (filter_index(p.mips.filter), preset_quality(FORMAT_BC7, p))
     });
     PsddsSettings {
@@ -140,7 +142,10 @@ pub fn defaults(texture_type: u32) -> PsddsSettings {
 }
 
 /// The greying rules: the values the dialog shows and the encoder uses, and which controls are editable.
-pub fn resolve(s: &PsddsSettings) -> Result<(PsddsSettings, PsddsControls), String> {
+pub fn resolve(
+    s: &PsddsSettings,
+    has_alpha: bool,
+) -> Result<(PsddsSettings, PsddsControls), String> {
     let range = |name: &str, v: u32, n: u32| {
         if v < n {
             Ok(())
@@ -157,12 +162,12 @@ pub fn resolve(s: &PsddsSettings) -> Result<(PsddsSettings, PsddsControls), Stri
     let colour = s.texture_type == 0;
     // R1: only BC1, BC3, BC7 and RGBA8 have an _SRGB form.
     let srgb_capable = matches!(s.format, 0 | 1 | 4 | 5);
-    let controls = PsddsControls {
+    let mut controls = PsddsControls {
         srgb_enabled: u32::from(colour && srgb_capable),
         filter_enabled: u32::from(colour),
         quality_enabled: u32::from(count > 0),
     };
-    let effective = PsddsSettings {
+    let mut effective = PsddsSettings {
         srgb: if controls.srgb_enabled == 1 {
             s.srgb
         } else {
@@ -181,12 +186,31 @@ pub fn resolve(s: &PsddsSettings) -> Result<(PsddsSettings, PsddsControls), Stri
         },
         ..*s
     };
+    // DC12: where the engine's own rule would mip with box (linear content, alpha-weighted Blend mips), the
+    // filter greys and shows Box. Probed with Kaiser, as every non-box filter shares the rule outside HDR.
+    if colour {
+        let probe = build(
+            &PsddsSettings {
+                filter: 3,
+                ..effective
+            },
+            has_alpha,
+        )?;
+        if engine::filter::filter_allowed(&probe).is_err() {
+            controls.filter_enabled = 0;
+            effective.filter = filter_index(MipFilter::Box);
+        }
+    }
     Ok((effective, controls))
 }
 
 /// The engine profile for the dialog's values (R2–R4), after the greying rules.
 pub fn profile_for(s: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
-    let (e, _) = resolve(s)?;
+    build(&resolve(s, has_alpha)?.0, has_alpha)
+}
+
+/// The profile for settings that are already resolved.
+fn build(e: &PsddsSettings, has_alpha: bool) -> Result<Profile, String> {
     let mut p = base(e.texture_type)?.clone();
     p.format = FORMATS[e.format as usize];
     p.encoder.backend = default_backend(p.format);

@@ -44,13 +44,17 @@ fn zero() -> PsddsSettings {
 }
 
 fn resolve(input: PsddsSettings) -> (i32, PsddsSettings, PsddsControls) {
+    resolve_with(input, false)
+}
+
+fn resolve_with(input: PsddsSettings, has_alpha: bool) -> (i32, PsddsSettings, PsddsControls) {
     let mut e = zero();
     let mut c = PsddsControls {
         srgb_enabled: 9,
         filter_enabled: 9,
         quality_enabled: 9,
     };
-    let rc = unsafe { psdds_resolve(&input, &mut e, &mut c) };
+    let rc = unsafe { psdds_resolve(&input, u32::from(has_alpha), &mut e, &mut c) };
     (rc, e, c)
 }
 
@@ -90,21 +94,67 @@ fn normal_and_mask_grey_srgb_and_filter() {
 #[test]
 fn colour_keeps_srgb_and_filter_editable() {
     for f in [BC1, BC3, BC7, RGBA8] {
-        for (srgb, filter) in [(1, 2), (0, 3), (1, 0)] {
-            let (rc, e, c) = resolve(s(f, COLOUR, srgb, filter, 0));
+        for filter in 0..4 {
+            let (rc, e, c) = resolve(s(f, COLOUR, 1, filter, 0));
             assert_eq!(rc, 0);
             assert_eq!((c.srgb_enabled, c.filter_enabled), (1, 1), "format {f}");
-            assert_eq!((e.srgb, e.filter), (srgb, filter));
-            let p = profile_for(&s(f, COLOUR, srgb, filter, 0), false).unwrap();
-            // The control sets both content and tag.
-            let colour = if srgb == 1 {
+            assert_eq!((e.srgb, e.filter), (1, filter));
+            let p = profile_for(&s(f, COLOUR, 1, filter, 0), false).unwrap();
+            assert_eq!(
+                (p.color.content, p.color.tag),
                 (ColorContent::Srgb, ColorTag::Srgb)
-            } else {
-                (ColorContent::Linear, ColorTag::Unorm)
-            };
-            assert_eq!((p.color.content, p.color.tag), colour);
+            );
             assert_eq!(p.mips.filter, FILTERS[filter as usize]);
         }
+        // sRGB stays editable when Off; the control sets both content and tag.
+        let (_, e, c) = resolve(s(f, COLOUR, 0, 0, 0));
+        assert_eq!((c.srgb_enabled, e.srgb), (1, 0));
+        let p = profile_for(&s(f, COLOUR, 0, 0, 0), false).unwrap();
+        assert_eq!(
+            (p.color.content, p.color.tag),
+            (ColorContent::Linear, ColorTag::Unorm)
+        );
+    }
+}
+
+/// DC12 (I1): where the engine would mip with box anyway (linear content, or alpha-weighted Blend mips), the filter
+/// greys and shows Box.
+#[test]
+fn filter_greys_where_the_engine_uses_box() {
+    let kaiser = |f, srgb| s(f, COLOUR, srgb, 3, 0);
+    let greyed = [
+        (kaiser(BC7, 0), false), // sRGB Off: linear content
+        (kaiser(BC1, 0), false),
+        (kaiser(BC5, 1), false), // BC4/BC5: sRGB forced Off
+        (kaiser(BC4, 1), false),
+        (kaiser(BC7, 1), true), // alpha kept (Blend): alpha-weighted box
+        (kaiser(BC3, 1), true),
+        (kaiser(RGBA8, 1), true),
+    ];
+    for (set, alpha) in greyed {
+        let (rc, e, c) = resolve_with(set, alpha);
+        assert_eq!(rc, 0);
+        assert_eq!(
+            (c.filter_enabled, e.filter),
+            (0, 0),
+            "{set:?} alpha {alpha}"
+        );
+        let p = profile_for(&set, alpha).unwrap();
+        assert_eq!(p.mips.filter, MipFilter::Box);
+    }
+    // BC1 drops alpha (Remove), so Kaiser still applies with an alpha document.
+    for (set, alpha) in [(kaiser(BC7, 1), false), (kaiser(BC1, 1), true)] {
+        let (rc, e, c) = resolve_with(set, alpha);
+        assert_eq!(rc, 0);
+        assert_eq!(
+            (c.filter_enabled, e.filter),
+            (1, 3),
+            "{set:?} alpha {alpha}"
+        );
+        assert_eq!(
+            profile_for(&set, alpha).unwrap().mips.filter,
+            MipFilter::Kaiser
+        );
     }
 }
 
@@ -115,8 +165,8 @@ fn srgb_forced_off_without_srgb_variant() {
         assert_eq!(rc, 0);
         assert_eq!(e.srgb, 0);
         assert_eq!(c.srgb_enabled, 0);
-        assert_eq!(c.filter_enabled, 1);
-        assert_eq!(e.filter, 2);
+        // Linear content mips with box (DC12), so the filter greys too.
+        assert_eq!((c.filter_enabled, e.filter), (0, 0));
         let p = profile_for(&s(f, COLOUR, 1, 2, 0), false).unwrap();
         assert_eq!(
             (p.color.content, p.color.tag),
@@ -261,9 +311,9 @@ fn out_of_range_field_is_refused() {
         quality_enabled: 0,
     };
     unsafe {
-        assert_eq!(psdds_resolve(std::ptr::null(), &mut e, &mut c), -1);
-        assert_eq!(psdds_resolve(&ok, std::ptr::null_mut(), &mut c), -1);
-        assert_eq!(psdds_resolve(&ok, &mut e, std::ptr::null_mut()), -1);
+        assert_eq!(psdds_resolve(std::ptr::null(), 0, &mut e, &mut c), -1);
+        assert_eq!(psdds_resolve(&ok, 0, std::ptr::null_mut(), &mut c), -1);
+        assert_eq!(psdds_resolve(&ok, 0, &mut e, std::ptr::null_mut()), -1);
     }
     assert_eq!(psdds_quality_count(6), 0);
     assert!(psdds_quality_label(6, 0).is_null());

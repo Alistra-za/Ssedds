@@ -45,8 +45,11 @@ PsddsSettings psdds_defaults(uint32_t texture_type);
 /* Greying rules: `effective` = the values the dialog shows and the encoder uses; `controls` = which are editable.
  * Returns 0, or -1 for a NULL pointer or an out-of-range format, texture_type, srgb, filter or mips (outputs
  * untouched). A quality index outside the format's list (e.g. remembered from another format) is not an error:
- * effective quality becomes the preset's default for that type and format. RGBA8's quality is always 0. */
-int32_t psdds_resolve(const PsddsSettings *input, PsddsSettings *effective, PsddsControls *controls);
+ * effective quality becomes the preset's default for that type and format. RGBA8's quality is always 0.
+ * has_alpha (0/1) is the document's, as passed to psdds_encode: where the engine would mip with Box anyway
+ * (sRGB Off, BC4/BC5, or alpha kept in BC3/BC7/RGBA8), the filter greys and shows Box. */
+int32_t psdds_resolve(const PsddsSettings *input, uint32_t has_alpha, PsddsSettings *effective,
+                      PsddsControls *controls);
 
 /* Entries in a format's quality list (0 for RGBA8 and an unknown format). */
 uint32_t psdds_quality_count(uint32_t format);
@@ -54,11 +57,15 @@ uint32_t psdds_quality_count(uint32_t format);
 const char *psdds_quality_label(uint32_t format, uint32_t i);
 
 /* Encode width*height RGBA float pixels (row-major, in [0, 1], already scaled) to a DDS file in *out.
+ * rgba must hold exactly width*height*4 floats and be 4-byte aligned; the library cannot check its length.
+ * A side above 16384 is refused before rgba is read. Encodes with the same effective settings psdds_resolve
+ * reports for (settings, has_alpha).
  * Returns 0 on success; otherwise non-zero, *out empty, and the reason in err (NULL or err_cap 0: no text). */
 int32_t psdds_encode(const float *rgba, uint32_t width, uint32_t height, uint32_t has_alpha,
                      const PsddsSettings *settings, PsddsBuf *out, char *err, size_t err_cap);
 
-/* Release a buffer from psdds_encode; an empty buffer is a no-op. */
+/* Release a buffer from psdds_encode. Pass the PsddsBuf exactly as returned (data and len unchanged), exactly
+ * once, then set data = NULL; a second free is a double free. An empty buffer (data NULL) is a no-op. */
 void psdds_free(PsddsBuf buf);
 
 #ifdef __cplusplus
