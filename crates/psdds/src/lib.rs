@@ -244,6 +244,9 @@ unsafe fn encode(
     // DF3: a 32-bit Colour document is linear light and keeps its range for the engine; everything else is
     // DD5's clamp of stored values.
     let linear = e.texture_type == 0 && depth == 32;
+    // DF3: an 8-bit format cannot hold more than 0..1, so clip RGB here and the mips are made from the clipped image,
+    // as at 16 bits. The transfer stays Linear; only BC6H (6) and RGBA16F (7) keep the range.
+    let clip_rgb = linear && !matches!(e.format, 6 | 7);
     let src = std::slice::from_raw_parts(rgba.cast::<[f32; 4]>(), n); // `[f32; 4]` has f32's alignment
     let img = Rgba32F {
         width,
@@ -251,7 +254,9 @@ unsafe fn encode(
         px: src
             .iter()
             .map(|p| {
-                if linear {
+                if clip_rgb {
+                    [clamp01(p[0]), clamp01(p[1]), clamp01(p[2]), clamp01(p[3])]
+                } else if linear {
                     [p[0], p[1], p[2], clamp01(p[3])]
                 } else {
                     p.map(clamp01)

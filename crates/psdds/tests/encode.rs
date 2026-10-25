@@ -627,3 +627,31 @@ fn rgba16f_keeps_alpha_bc6h_drops_it() {
             == encode_d(&make(1.0), w, h, false, 32, &b).unwrap()
     );
 }
+
+/// DF3: 32-bit Colour saved as an 8-bit format is clipped before the mips are made, so a hot spot does not
+/// brighten the smaller levels more than the same image clipped by hand.
+#[test]
+fn colour_32_bit_hot_spot_is_clipped_before_mips() {
+    let (w, h) = (16u32, 16u32);
+    let img = |hot: f32| -> Vec<f32> {
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                let v = if x < 2 && y < 2 { hot } else { 0.1 };
+                [v, v, v, 1.0]
+            })
+            .collect()
+    };
+    let level = |bytes: &[u8], i: usize| {
+        let dds = read_dds(bytes).unwrap();
+        let (lw, lh, r) = dds.levels[i].clone();
+        engine::decode::decode_level_rgba(dds.format, lw, lh, &dds.data[r], None).unwrap()
+    };
+    for f in [RGBA8, BC7] {
+        let s = colour(f);
+        let hot = encode_d(&img(50.0), w, h, false, 32, &s).unwrap();
+        let clipped = encode_d(&img(1.0), w, h, false, 32, &s).unwrap();
+        assert!(level(&hot, 2) == level(&clipped, 2), "format {f} mip 2");
+        assert!(level(&hot, 0) == level(&clipped, 0), "format {f} mip 0");
+    }
+}
