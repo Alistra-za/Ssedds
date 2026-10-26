@@ -29,7 +29,7 @@ if DLL.is_file() and SRC.is_dir():
     N = importlib.import_module("tessalith_t.save_dds_tessalith").save_dds_tessalith_node
 
 COLOUR, NORMAL, MASK = 0, 1, 2
-BC1, BC3, BC4, BC5, BC7, RGBA8 = range(6)
+BC1, BC3, BC4, BC5, BC7, RGBA8, BC6H, RGBA16F = range(8)
 
 
 def ev(c, st):
@@ -51,14 +51,14 @@ def ev(c, st):
     return go(j)
 
 
-def state(t=COLOUR, fmt=BC7, srgb=0, mips=1, preset=0):
-    return {U.PRESET_ID: preset, U.TYPE_ID: t, U.FMT_ID[t]: fmt, U.SRGB_ID: srgb, U.MIPS_ID: mips}
+def state(t=COLOUR, fmt=BC7, srgb=0, mips=1, preset=0, hdr=0):
+    return {U.PRESET_ID: preset, U.TYPE_ID: t, U.FMT_ID[t]: fmt, U.SRGB_ID: srgb, U.MIPS_ID: mips, U.HDR_ID: hdr}
 
 
 @unittest.skipIf(U is None, "psdds.dll or chaiNNer src missing")
 class UiTests(unittest.TestCase):
     def test_srgb_never_for_normal_or_mask_bc45(self):
-        for fmt in range(6):
+        for fmt in range(8):
             for srgb in (0, 1):
                 for mips in (0, 1):
                     self.assertFalse(ev(U.visible("srgb"), state(NORMAL, fmt, srgb, mips)))
@@ -113,27 +113,60 @@ class UiTests(unittest.TestCase):
                     for preset in range(1, 6):
                         self.assertFalse(ev(U.custom(), state(t, f, preset=preset)))
         # the srgb/filter table is probed with has_alpha 0; Discard never enters it
-        self.assertEqual(set(U.TABLE), {"srgb", "filter", "quality"})
+        self.assertEqual(set(U.TABLE), {"srgb", "filter", "quality", "discard"})
         self.assertEqual(U.TABLE, U.visibility_table())
 
     def test_formats_per_type(self):
-        n = [len(i.to_dict()["options"]) for i in U.format_inputs()]
-        self.assertEqual(n, [4, 5, 6])
-        self.assertEqual([o["value"] for o in U.format_inputs()[COLOUR].to_dict()["options"]], [BC1, BC3, BC7, RGBA8])
+        vals = [[o["value"] for o in i.to_dict()["options"]] for i in U.format_inputs()]
+        self.assertEqual(vals[COLOUR], [BC1, BC3, BC7, RGBA8, BC6H, RGBA16F])  # HDR formats for Colour only
+        self.assertEqual(vals[NORMAL], [BC1, BC3, BC5, BC7, RGBA8])
+        self.assertEqual(vals[MASK], [BC1, BC3, BC4, BC5, BC7, RGBA8])
+
+    def test_discard_visibility(self):
+        shown = {(t, f): ev(U.visible("discard"), state(t, f)) for t in range(3) for f in range(8) if P.format_allowed(t, f)}
+        for f in (BC1, BC4, BC5, BC6H):
+            for t in range(3):
+                if (t, f) in shown:
+                    self.assertFalse(shown[(t, f)], (t, f))
+        for f in (BC3, BC7, RGBA8, RGBA16F):
+            self.assertTrue(shown[(COLOUR, f)], f)
+        for hdr in (0, 1):  # the HDR switch changes no control (and is never named inside its own condition)
+            for f in (BC6H, RGBA16F):
+                self.assertEqual(ev(U.visible("discard"), state(COLOUR, f, hdr=hdr)), f == RGBA16F)
+        self.assertFalse(ev(U.visible("discard"), state(COLOUR, BC7, preset=2)))
+
+    def test_quality_bc6h(self):
+        self.assertEqual(len(U.QUALITY_GROUPS), 4)
+        self.assertEqual(U.QUALITY_GROUPS[3], ((BC6H,), P.quality_labels(BC6H)))
+        self.assertEqual(len(P.quality_labels(BC6H)), 4)
+        self.assertEqual(len(U.quality_inputs()[3].to_dict()["options"]), 4)
+        ids = [i.id for i in U.quality_inputs()]
+        self.assertEqual(len(set(ids)), 4)
+        self.assertTrue(ev(U.quality_condition(3), state(COLOUR, BC6H)))
+        self.assertFalse(any(ev(U.quality_condition(g), state(COLOUR, RGBA16F)) for g in range(4)))
+        self.assertFalse(ev(U.quality_condition(3), state(NORMAL, BC5)))
+        # Save Normal keeps its three groups and ids clear of the RMAOS input
+        nq = U.normal_quality_inputs()
+        self.assertEqual(len(nq), 3)
+        self.assertNotIn(U.N_RMAOS_ID, [i.id for _, i in nq])
+
+    def test_colour_format_list_has_hdr(self):
+        self.assertNotIn(BC6H, [o["value"] for o in U.format_inputs()[NORMAL].to_dict()["options"]])
+        self.assertNotIn(RGBA16F, [o["value"] for o in U.format_inputs()[MASK].to_dict()["options"]])
 
     def test_quality_groups(self):
-        self.assertEqual([g[0] for g in U.QUALITY_GROUPS], [(BC1, BC3), (BC4, BC5), (BC7,)])
+        self.assertEqual([g[0] for g in U.QUALITY_GROUPS], [(BC1, BC3), (BC4, BC5), (BC7,), (BC6H,)])
         st = state(COLOUR, BC7)
-        self.assertEqual([ev(U.quality_condition(g), st) for g in range(3)], [False, False, True])
-        self.assertEqual([ev(U.quality_condition(g), state(NORMAL, BC5)) for g in range(3)], [False, True, False])
-        self.assertFalse(any(ev(U.quality_condition(g), state(COLOUR, RGBA8)) for g in range(3)))
+        self.assertEqual([ev(U.quality_condition(g), st) for g in range(4)], [False, False, True, False])
+        self.assertEqual([ev(U.quality_condition(g), state(NORMAL, BC5)) for g in range(4)], [False, True, False, False])
+        self.assertFalse(any(ev(U.quality_condition(g), state(COLOUR, RGBA8)) for g in range(4)))
 
     def test_selected(self):
         fm = {COLOUR: BC1, NORMAL: BC5, MASK: BC7}
-        self.assertEqual(U.selected(NORMAL, fm, {0: 3, 1: 1, 2: 6}), (BC5, 1))
-        self.assertEqual(U.selected(COLOUR, fm, {0: 9, 1: 1, 2: 6}), (BC1, 9))  # hidden groups 1, 2 ignored
+        self.assertEqual(U.selected(NORMAL, fm, {0: 3, 1: 1, 2: 6, 3: 0}), (BC5, 1))
+        self.assertEqual(U.selected(COLOUR, fm, {0: 9, 1: 1, 2: 6, 3: 0}), (BC1, 9))  # hidden groups 1, 2 ignored
         fm[COLOUR] = RGBA8
-        self.assertEqual(U.selected(COLOUR, fm, {0: 9, 1: 1, 2: 6})[0], RGBA8)
+        self.assertEqual(U.selected(COLOUR, fm, {0: 9, 1: 1, 2: 6, 3: 0})[0], RGBA8)
 
 
 @unittest.skipIf(U is None, "psdds.dll or chaiNNer src missing")
@@ -144,10 +177,10 @@ class NodeTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.img = np.random.default_rng(1).random((16, 16, 3), dtype=np.float32)
 
-    def run_node(self, img=None, preset=0, t=COLOUR, fmts=(BC7, BC7, BC7), skip=False, name="x"):
+    def run_node(self, img=None, preset=0, t=COLOUR, fmts=(BC7, BC7, BC7), skip=False, name="x", hdr=False):
         from api import Lazy
         lazy = Lazy.ready(self.img if img is None else img)
-        return N(lazy, self.dir, None, name, preset, t, False, *fmts, False, True, 0, 4, 0, 4, skip)
+        return N(lazy, self.dir, None, name, preset, t, False, *fmts, False, True, 0, 4, 0, 4, 0, hdr, skip)
 
     def test_skip_existing_does_not_evaluate_image(self):
         p = self.dir / "x.dds"
@@ -158,7 +191,7 @@ class NodeTests(unittest.TestCase):
             def value(self):
                 raise AssertionError("lazy image evaluated")
 
-        N(Boom(), self.dir, None, "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, True)
+        N(Boom(), self.dir, None, "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, 0, False, True)
         self.assertEqual(p.read_bytes(), b"old")
 
     def test_overwrite_goes_through_write_files(self):
@@ -178,7 +211,7 @@ class NodeTests(unittest.TestCase):
     def test_custom_maps_inputs(self):
         self.run_node(t=NORMAL, fmts=(BC7, BC1, BC7))
         s = {**P.defaults(NORMAL), "format": BC1, "quality": 4, "mips": 1}
-        s["quality"] = U.selected(NORMAL, {0: BC7, 1: BC1, 2: BC7}, {0: 4, 1: 0, 2: 4})[1]
+        s["quality"] = U.selected(NORMAL, {0: BC7, 1: BC1, 2: BC7}, {0: 4, 1: 0, 2: 4, 3: 0})[1]
         self.assertEqual((self.dir / "x.dds").read_bytes(), P.encode(self.img, s))
 
     def test_psdds_error_text_surfaces(self):
@@ -194,8 +227,66 @@ class NodeTests(unittest.TestCase):
         from api import Lazy
         big = np.broadcast_to(np.zeros((1, 1, 3), np.float32), (1 << 20, 1 << 20, 3))
         with self.assertRaises(RuntimeError):
-            N(Lazy.ready(big), self.dir, "new", "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, False)
+            N(Lazy.ready(big), self.dir, "new", "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, 0, False, False)
         self.assertFalse((self.dir / "new").exists())
+
+
+@unittest.skipIf(U is None, "psdds.dll or chaiNNer src missing")
+class HdrTests(unittest.TestCase):
+    def setUp(self):
+        self.img = np.random.default_rng(7).random((16, 16, 4), dtype=np.float32)
+        self.img[..., 3] = np.where(np.arange(256).reshape(16, 16) % 2, 1.0, 0.4)  # real alpha
+
+    @staticmethod
+    def old_encode(img, s):
+        """Today's bytes: psdds_encode (depth 8), as the node called it before the HDR switch."""
+        import ctypes as C
+        rgba = P.to_rgba(img)
+        ha = 0 if s["discard_alpha"] == 1 else int(P.alpha_used(rgba))
+        out, err = P._Buf(), C.create_string_buffer(1024)
+        assert P.lib.psdds_encode(rgba.ctypes.data_as(C.POINTER(C.c_float)), 16, 16, ha, C.byref(P._s(s)), C.byref(out), err, 1024) == 0
+        try:
+            return C.string_at(out.data, out.len)
+        finally:
+            P.lib.psdds_free(out)
+
+    def test_switch_off_is_todays_bytes(self):
+        n = 0
+        for t in range(3):
+            for f in range(6):  # the formats that existed before
+                if P.format_allowed(t, f):
+                    s = {**P.defaults(t), "format": f}
+                    self.assertEqual(P.encode(self.img, s, 16), self.old_encode(self.img, s), (t, f))
+                    n += 1
+        for _, s in P.presets():
+            self.assertEqual(P.encode(self.img, s, 16), self.old_encode(self.img, s), s)
+            n += 1
+        self.assertGreaterEqual(n, 15)
+
+    def test_bc6h_off_decodes_srgb_grey_to_linear(self):
+        grey = np.full((8, 8, 3), 0.5, np.float32)
+        dds = P.encode(grey, {**P.defaults(COLOUR), "format": BC6H}, 16)
+        px = P.decode_depth32(dds)
+        self.assertLess(abs(float(px[..., :3].mean()) - 0.2140), 0.01)
+
+    def test_hdr_on_keeps_values_above_one(self):
+        img = np.full((8, 8, 3), 4.0, np.float32)
+        px = P.decode_depth32(P.encode(img, {**P.defaults(COLOUR), "format": BC6H}, 32))
+        self.assertLess(abs(float(px[..., :3].mean()) - 4.0), 0.1)
+        s = {**P.defaults(COLOUR), "format": RGBA16F, "mips": 0}
+        half = np.frombuffer(P.encode(img, s, 32)[-8 * 8 * 8:], np.float16).reshape(-1, 4)
+        self.assertTrue((half[:, :3] == 4.0).all())
+
+    def test_nodes_hdr_switch_reaches_psdds(self):
+        # the node passes depth 32 only when the switch is on: BC6H of 4.0 keeps 4.0, off clamps to 1.0 (then decodes to 1.0)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        from api import Lazy
+        img = np.full((8, 8, 3), 4.0, np.float32)
+        for hdr, want in ((True, 4.0), (False, 1.0)):
+            N(Lazy.ready(img), Path(tmp.name), None, f"h{hdr}", 0, COLOUR, False, BC6H, BC7, BC7, False, True, 0, 4, 0, 4, 0, hdr, False)
+            px = P.decode_depth32((Path(tmp.name) / f"h{hdr}.dds").read_bytes())
+            self.assertLess(abs(float(px[..., :3].mean()) - want), 0.1)
 
 
 if __name__ == "__main__":

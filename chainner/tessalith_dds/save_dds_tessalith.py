@@ -12,7 +12,7 @@ from nodes.properties.inputs import BoolInput, DirectoryInput, ImageInput, Relat
 
 from . import _psdds, _ui, tessalith_group
 
-assert len(_ui.QUALITY_GROUPS) == 3, "save_dds_tessalith_node takes three quality inputs; psdds now has another count"
+assert len(_ui.QUALITY_GROUPS) == 4, "save_dds_tessalith_node takes four quality inputs; psdds now has another count"
 assert _ui.NTYPES == 3, "save_dds_tessalith_node takes one format input per texture type (3)"
 _FMT = _ui.format_inputs()
 _Q = _ui.quality_inputs()
@@ -36,10 +36,11 @@ _Q = _ui.quality_inputs()
         if_group(_ui.custom())(_ui.type_input()),
         if_group(_ui.visible("srgb"))(_ui.srgb_input()),
         *[if_group(Condition.enum(_ui.TYPE_ID, t) & _ui.custom())(_FMT[t]) for t in range(len(_FMT))],
-        if_group(_ui.custom())(_ui.discard_input()),
+        if_group(_ui.visible("discard"))(_ui.discard_input()),
         if_group(_ui.custom())(_ui.mips_input()),
         if_group(Condition.bool(_ui.MIPS_ID, True) & _ui.visible("filter"))(_ui.filter_input()),
         *[if_group(_ui.quality_condition(g))(_Q[g]) for g in range(len(_Q))],
+        _ui.hdr_input(),
         BoolInput("Skip existing files", default=False).with_id(1000).with_docs("If enabled, existing files are not overwritten."),
     ],
     outputs=[],
@@ -63,6 +64,8 @@ def save_dds_tessalith_node(
     quality_0: int,
     quality_1: int,
     quality_2: int,
+    quality_3: int,
+    linear_hdr_input: bool,
     skip_existing_files: bool,
 ) -> None:
     if relative_path and relative_path != ".":
@@ -76,7 +79,7 @@ def save_dds_tessalith_node(
 
     img = lazy_image.value
     fmt, quality = _ui.selected(
-        texture_type, {0: fmt_colour, 1: fmt_normal, 2: fmt_mask}, {0: quality_0, 1: quality_1, 2: quality_2}
+        texture_type, {0: fmt_colour, 1: fmt_normal, 2: fmt_mask}, {0: quality_0, 1: quality_1, 2: quality_2, 3: quality_3}
     )
     raw = {
         **_psdds.defaults(texture_type),
@@ -89,10 +92,11 @@ def save_dds_tessalith_node(
         "discard_alpha": int(discard),
     }
     settings = _ui.settings_for(preset, raw)
-    data = _psdds.encode(img, settings)  # PsddsError (a RuntimeError) carries psdds's text untrimmed
+    depth = _ui.depth_for(linear_hdr_input)
+    data = _psdds.encode(img, settings, depth)  # PsddsError (a RuntimeError) carries psdds's text untrimmed
     if logger.isEnabledFor(10):  # DEBUG
         has_alpha = not settings["discard_alpha"] and _psdds.alpha_used(_psdds.to_rgba(img))
-        eff, _ = _psdds.resolve(settings, has_alpha)
+        eff, _, _ = _psdds.resolve_depth(settings, has_alpha, depth)
         logger.debug(f"Tessalith DDS effective settings (has_alpha {has_alpha}): {eff}")
     full_path.parent.mkdir(parents=True, exist_ok=True)
     _psdds.write_files([(full_path, data)])

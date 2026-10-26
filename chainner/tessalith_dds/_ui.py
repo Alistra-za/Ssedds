@@ -9,28 +9,38 @@ from ._pbr import FILL_DEFAULTS
 PRESET_ID, TYPE_ID, SRGB_ID = 4, 5, 6
 FMT_ID = {0: 7, 1: 8, 2: 9}
 DISCARD_ID, MIPS_ID, FILTER_ID = 10, 11, 12
-QUALITY_ID0 = 13  # one input per quality group: 13, 14, 15
+QUALITY_ID0 = 13  # one input per quality group: 13, 14, 15, 16 (BC6H)
+HDR_ID = 17  # "Linear HDR input" (depth 32 when on, 16 when off)
+DEPTHS = (16, 32)  # chaiNNer images are float32: 16 = sRGB-coded 0..1, 32 = linear light
 
 NTYPES, NFMT = len(P.TYPES), len(P.FORMATS)
-_CONTROL = {"srgb": "srgb_enabled", "filter": "filter_enabled", "quality": "quality_enabled"}
+_CONTROL = {"srgb": "srgb_enabled", "filter": "filter_enabled", "quality": "quality_enabled", "discard": None}  # None: discard_enabled
 SEEDS = P.presets()
 
 
 def allowed(t):
-    return [f for f in range(NFMT) if P.format_allowed(t, f)]
+    out = []
+    for f in range(NFMT):
+        o = {P.format_offered(t, f, d) for d in DEPTHS}
+        if len(o) > 1:
+            raise RuntimeError(f"psdds offers format {f} for type {t} at only one of depths {DEPTHS}; chaiNNer cannot tell them apart")
+        if o == {True}:
+            out.append(f)
+    return out
 
 
 def visibility_table():
-    """{control: {(type, fmt, srgb, mips)}} probed with has_alpha = 0 (pixels are unknown when visibility is evaluated)."""
+    """{control: {(type, fmt, srgb, mips, depth)}} probed with has_alpha = 0 (pixels are unknown when visibility is evaluated)."""
     out = {k: set() for k in _CONTROL}
     for t in range(NTYPES):
         for f in allowed(t):
             for srgb in (0, 1):
                 for mips in (0, 1):
-                    _, ctl = P.resolve({**P.defaults(t), "format": f, "srgb": srgb, "mips": mips}, False)
-                    for k, c in _CONTROL.items():
-                        if ctl[c]:
-                            out[k].add((t, f, srgb, mips))
+                    for depth in DEPTHS:
+                        _, ctl, discard = P.resolve_depth({**P.defaults(t), "format": f, "srgb": srgb, "mips": mips}, False, depth)
+                        for k, c in _CONTROL.items():
+                            if discard if c is None else ctl[c]:
+                                out[k].add((t, f, srgb, mips, depth))
     return out
 
 
@@ -98,6 +108,17 @@ def discard_input(id_=DISCARD_ID):
     return BoolInput("Discard transparency", default=bool(P.defaults(0)["discard_alpha"])).with_id(id_)
 
 
+def hdr_input():
+    return BoolInput("Linear HDR input", default=False).with_id(HDR_ID).with_docs(
+        "Off: pixels are sRGB-coded 0..1 (a PNG), clamped to 0..1. On: pixels are linear light and values above 1 are kept "
+        "for BC6H and RGBA16F (an EXR); 8-bit formats clip and convert."
+    )
+
+
+def depth_for(hdr):
+    return DEPTHS[1] if hdr else DEPTHS[0]
+
+
 def mips_input(id_=MIPS_ID, texture_type=0):
     return BoolInput("Mipmaps", default=bool(P.defaults(texture_type)["mips"])).with_id(id_)
 
@@ -105,9 +126,9 @@ def mips_input(id_=MIPS_ID, texture_type=0):
 def quality_inputs():
     out = []
     for g, (fs, labels) in enumerate(QUALITY_GROUPS):
-        t = next(t for t in range(NTYPES) if any(P.format_allowed(t, f) for f in fs))
-        f = next(f for f in fs if P.format_allowed(t, f))
-        eff, _ = P.resolve({**P.defaults(t), "format": f}, False)
+        t = next(t for t in range(NTYPES) if any(f in allowed(t) for f in fs))
+        f = next(f for f in fs if f in allowed(t))
+        eff, _, _ = P.resolve_depth({**P.defaults(t), "format": f}, False, DEPTHS[0])
         out.append(_dd("Quality", labels, eff["quality"], QUALITY_ID0 + g))
     return out
 
@@ -116,7 +137,7 @@ def quality_condition(g):
     fs = QUALITY_GROUPS[g][0]
     terms = []
     for t in range(NTYPES):
-        ok = [f for f in fs if P.format_allowed(t, f)]
+        ok = [f for f in fs if f in allowed(t)]
         if ok:
             terms.append(Condition.enum(TYPE_ID, t) & Condition.enum(FMT_ID[t], ok))
     c = Condition.const(False)
@@ -126,19 +147,25 @@ def quality_condition(g):
 
 
 def visible(control):
-    """Table collapsed per (type, that type's format), naming Mipmaps only where it matters. sRGB is never named: chaiNNer
-    evaluates a dropdown condition together with that dropdown's own condition, so the sRGB input naming itself recursed
-    forever and crashed the editor. psdds's rules make no control depend on sRGB; if that changes, fail at import."""
+    """Table collapsed per (type, that type's format), naming Mipmaps and the HDR switch only where they matter. sRGB is never
+    named: chaiNNer evaluates a dropdown condition together with that dropdown's own condition, so an input naming itself
+    recursed forever and crashed the editor (DE20); none of the controls here names itself either.
+    psdds's rules make no control depend on sRGB; if that changes, fail at import."""
     groups = {}
-    for t, f, srgb, mips in TABLE[control]:
-        groups.setdefault((t, f), set()).add((srgb, mips))
+    for t, f, srgb, mips, depth in TABLE[control]:
+        groups.setdefault((t, f), set()).add((srgb, mips, depth))
     c = Condition.const(False)
     for (t, f), held in sorted(groups.items()):
-        mips = sorted({m for _, m in held})
-        if held != {(s, m) for s in (0, 1) for m in mips}:
-            raise RuntimeError(f"{control} visibility depends on sRGB (type {t}, format {f}); chaiNNer cannot express that")
+        mips = sorted({m for _, m, _ in held})
+        depths = sorted({d for _, _, d in held})
+        if held != {(s, m, d) for s in (0, 1) for m in mips for d in depths}:
+            raise RuntimeError(f"{control} visibility depends on sRGB or couples Mipmaps and depth (type {t}, format {f}); chaiNNer cannot express that")
         term = Condition.enum(TYPE_ID, t) & Condition.enum(FMT_ID[t], f)
-        c = c | (term if mips == [0, 1] else term & Condition.enum(MIPS_ID, mips))
+        if mips != [0, 1]:
+            term = term & Condition.enum(MIPS_ID, mips)
+        if len(depths) == 1:
+            term = term & Condition.bool(HDR_ID, depths[0] == 32)
+        c = c | term
     return custom() & c
 
 
@@ -159,8 +186,10 @@ def normal_quality_inputs():
     """[(condition, input)] per quality group, shown while the Normal format is one of that group's allowed formats."""
     out = []
     for g, (fs, labels) in enumerate(QUALITY_GROUPS):
-        ok = [f for f in fs if P.format_allowed(NORMAL, f)]
-        default = P.resolve({**P.defaults(NORMAL), "format": ok[0]}, False)[0]["quality"] if ok else 0
+        ok = [f for f in fs if f in allowed(NORMAL)]
+        if not ok:
+            continue  # BC6H: Normal does not offer it, and its id would collide with the RMAOS input
+        default = P.resolve({**P.defaults(NORMAL), "format": ok[0]}, False)[0]["quality"]
         out.append((Condition.enum(N_FMT_ID, ok), _dd("Quality", labels, default, N_QUALITY_ID0 + g)))
     return out
 

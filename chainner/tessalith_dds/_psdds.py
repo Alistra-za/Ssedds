@@ -10,7 +10,7 @@ import numpy as np
 
 ABI_VERSION = 3  # must equal PSDDS_ABI_VERSION in photoshop/psdds.h (a test parses it)
 # Labels for the header's enum indices; they are the ABI, not a rule.
-FORMATS = ("BC1", "BC3", "BC4", "BC5", "BC7", "RGBA8")
+FORMATS = ("BC1", "BC3", "BC4", "BC5", "BC7", "RGBA8", "BC6H", "RGBA16F")
 TYPES = ("Colour", "Normal", "Linear mask")
 FILTERS = ("Box", "Tent", "Mitchell", "Kaiser")
 ROLES = ("roughness", "metallic", "ao", "specular")
@@ -67,7 +67,10 @@ def _load():
         "psdds_preset_count": ([], u32), "psdds_preset_name": ([u32], cp),
         "psdds_preset_settings": ([u32, p(_Settings)], C.c_int32),
         "psdds_resolve": ([p(_Settings), u32, p(_Settings), p(_Controls)], C.c_int32),
-        "psdds_format_allowed": ([u32, u32], u32),
+        "psdds_format_allowed": ([u32, u32], u32), "psdds_format_offered": ([u32, u32, u32], u32),
+        "psdds_resolve_depth": ([p(_Settings), u32, u32, p(_Settings), p(_Controls), p(u32)], C.c_int32),
+        "psdds_encode_depth": ([fp, u32, u32, u32, u32, p(_Settings), p(_Buf), ep, sz], C.c_int32),
+        "psdds_decode_depth": ([bp, sz, p(u32), p(u32), p(u32), p(u32), p(_Buf), ep, sz], C.c_int32),
         "psdds_quality_count": ([u32], u32), "psdds_quality_label": ([u32, u32], cp),
         "psdds_encode": ([fp, u32, u32, u32, p(_Settings), p(_Buf), ep, sz], C.c_int32),
         "psdds_decode": ([bp, sz, p(u32), p(u32), p(u32), p(_Buf), ep, sz], C.c_int32),
@@ -133,6 +136,18 @@ def resolve(settings: dict, has_alpha: bool) -> tuple:
     return _d(eff), {k: getattr(ctl, k) for k, _ in ctl._fields_}
 
 
+def resolve_depth(settings: dict, has_alpha: bool, depth: int) -> tuple:
+    """-> (effective, controls, discard_enabled); depth is 8, 16 or 32."""
+    eff, ctl, de = _Settings(), _Controls(), C.c_uint32()
+    if lib.psdds_resolve_depth(C.byref(_s(settings)), int(bool(has_alpha)), depth, C.byref(eff), C.byref(ctl), C.byref(de)) != 0:
+        raise PsddsError("settings or depth out of range")
+    return _d(eff), {k: getattr(ctl, k) for k, _ in ctl._fields_}, bool(de.value)
+
+
+def format_offered(texture_type: int, fmt: int, depth: int) -> bool:
+    return bool(lib.psdds_format_offered(texture_type, fmt, depth))
+
+
 def format_allowed(texture_type: int, fmt: int) -> bool:
     return bool(lib.psdds_format_allowed(texture_type, fmt))
 
@@ -183,14 +198,15 @@ def alpha_used(rgba: np.ndarray) -> bool:
     return bool(lib.psdds_alpha_used(a.ctypes.data_as(C.POINTER(C.c_float)), a.shape[0] * a.shape[1]))
 
 
-def encode(img: np.ndarray, settings: dict) -> bytes:
+def encode(img: np.ndarray, settings: dict, depth: int = 8) -> bytes:
+    """depth 8 is psdds_encode; 16 (sRGB-coded 0..1) and 32 (linear light, HDR kept) use psdds_encode_depth."""
     rgba = to_rgba(img)
     has_alpha = 0 if settings["discard_alpha"] == 1 else int(alpha_used(rgba))
     h, w = rgba.shape[:2]
     out, err = _Buf(), C.create_string_buffer(_ERR)
     try:
-        if lib.psdds_encode(rgba.ctypes.data_as(C.POINTER(C.c_float)), w, h, has_alpha, C.byref(_s(settings)),
-                            C.byref(out), err, _ERR) != 0:
+        if lib.psdds_encode_depth(rgba.ctypes.data_as(C.POINTER(C.c_float)), w, h, has_alpha, depth, C.byref(_s(settings)),
+                                  C.byref(out), err, _ERR) != 0:
             _raise(err)
         return C.string_at(out.data, out.len)
     finally:
@@ -208,6 +224,21 @@ def decode(data: bytes) -> tuple:
     finally:
         lib.psdds_free(out)
     return px[..., [2, 1, 0, 3]].astype(np.float32) / 255, bool(ha.value)
+
+
+def decode_depth32(data: bytes) -> np.ndarray:
+    """Top mip of an HDR DDS as float32 RGBA (h, w, 4), top row first."""
+    buf = (C.c_uint8 * len(data)).from_buffer_copy(data)
+    w, h, ha, d = C.c_uint32(), C.c_uint32(), C.c_uint32(), C.c_uint32()
+    out, err = _Buf(), C.create_string_buffer(_ERR)
+    try:
+        if lib.psdds_decode_depth(buf, len(data), C.byref(w), C.byref(h), C.byref(ha), C.byref(d), C.byref(out), err, _ERR) != 0:
+            _raise(err)
+        if d.value != 32:
+            raise PsddsError(f"expected a depth 32 decode, got {d.value}")
+        return np.frombuffer(C.string_at(out.data, out.len), np.float32).reshape(h.value, w.value, 4).copy()
+    finally:
+        lib.psdds_free(out)
 
 
 def opens_with_alpha(rgba8: np.ndarray, has_alpha: bool = True) -> bool:
