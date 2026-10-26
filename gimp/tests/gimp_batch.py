@@ -19,7 +19,8 @@ import gi  # noqa: E402
 gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, Gio, GLib  # noqa: E402
-from psdds_ctypes import BC4, BC5, BC6H, BC7, COLOUR, NORMAL, RGBA8, Psdds, PsddsError  # noqa: E402
+from psdds_ctypes import (BC4, BC5, BC6H, BC7, COLOUR, LINEAR_MASK, NORMAL, RGBA8, Psdds,  # noqa: E402
+                          PsddsError)
 
 OUT = os.environ["TDDS_OUT"]
 TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
@@ -514,7 +515,8 @@ def export_precision_table_matches_gimp():
     got = {m.name: int(m) for m in Gimp.Precision}
     assert got == PRECISIONS, f"GIMP's precisions differ from the unit table: {got}"
     for v in got.values():
-        precision_depth(v)
+        for t in (COLOUR, NORMAL, LINEAR_MASK):
+            precision_depth(v, t)
 
 
 def _settings(fmt, texture_type=COLOUR, discard=0):
@@ -570,6 +572,27 @@ def export_float32_bc6h_keeps_above_one():
     img.delete()
 
 
+def export_float_non_linear_normal_keeps_stored_values():
+    """Normal maps are data: a stored 0.5 reaches psdds as 0.5, not linearised to 0.214 (controller 2026-10-26)."""
+    vals = [0.5, 0.5, 1.0, 1.0] * 16
+    img = _image(4, 4, struct.pack(f"<{len(vals)}f", *vals), "R'G'B'A float",
+                 precision=Gimp.Precision.FLOAT_NON_LINEAR)
+    _, _, _, rgba = psdds.decode(_export(img, "n_f32.dds", format="bc5", texture_type="normal", mipmaps=False))
+    assert all(abs(rgba[i] - 128) <= 2 and abs(rgba[i + 1] - 128) <= 2 for i in range(0, len(rgba), 4)), \
+        f"BC5 decodes as {tuple(rgba[:4])}, not the stored 0.5 (about 128)"
+    img.delete()
+
+
+def export_u16_linear_mask_keeps_stored_values():
+    vals = [v / 15 for i in range(16) for v in (i, 15 - i, 7, 15)]
+    img = _image(4, 4, struct.pack(f"<{len(vals)}f", *vals), "RGBA float", precision=Gimp.Precision.U16_LINEAR)
+    _, _, _, rgba = psdds.decode(_export(img, "m_u16.dds", format="rgba8", texture_type="linear-mask",
+                                         mipmaps=False))
+    want = [round(v * 255) for v in vals]
+    assert all(abs(a - b) <= 1 for a, b in zip(rgba, want)), f"mask decodes as {list(rgba[:8])}, want {want[:8]}"
+    img.delete()
+
+
 CASES = {f.__name__: f for f in (
     load_rgba8_opaque_opens_rgb,
     load_alpha_opens_rgba,
@@ -603,6 +626,8 @@ CASES = {f.__name__: f for f in (
     export_8_bit_bytes_unchanged,
     export_u16_is_depth_16,
     export_float32_bc6h_keeps_above_one,
+    export_float_non_linear_normal_keeps_stored_values,
+    export_u16_linear_mask_keeps_stored_values,
 )}
 
 if os.environ.get("TDDS_KILL_PROBE"):

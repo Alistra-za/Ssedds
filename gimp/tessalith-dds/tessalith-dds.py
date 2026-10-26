@@ -100,10 +100,10 @@ def raw_settings(config):
                     int(config.get_property("discard-alpha")))
 
 
-def export_pixels(psdds, img, fmt):
-    """Reads img (the plug-in's own copy) as babl format fmt (precision_depth's): (w, h, has_alpha, rgba).
+def export_layer(psdds, img):
+    """img's visible layers merged into one canvas-sized layer.
 
-    Merges and resizes img's layers, so it must never be the user's image (M7).
+    Merges and resizes img's layers, so img must be the plug-in's own copy, never the user's image (M7).
     """
     w, h = img.get_width(), img.get_height()
     psdds.check_size(w, h)  # before the merge allocates anything
@@ -112,15 +112,20 @@ def export_pixels(psdds, img, fmt):
         raise ExportError(NO_VISIBLE)
     if (layer.get_width(), layer.get_height()) != (w, h) or layer.get_offsets()[1:] != (0, 0):
         layer.resize_to_image_size()
+    return layer
+
+
+def read_pixels(layer, fmt):
+    """The layer as RGBA floats in babl format fmt (precision_depth's)."""
+    w, h = layer.get_width(), layer.get_height()
     rgba = bytearray(w * h * 16)
     buf = layer.get_buffer()
     rows = band_rows(w * 16, h)
-    # babl converts the image's own trc to fmt: sRGB-coded for 8/16 bits, linear (values above 1 kept) for 32.
     for y in range(0, h, rows):
         n = min(rows, h - y)
         rgba[y * w * 16:(y + n) * w * 16] = buf.get(Gegl.Rectangle.new(0, y, w, n), 1.0, fmt,
                                                     Gegl.AbyssPolicy.CLAMP)
-    return w, h, psdds.alpha_used(rgba, w, h), rgba  # DC31: alpha comes from the pixels
+    return rgba
 
 
 def _write_atomic(path, data):
@@ -277,16 +282,29 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         img = img.duplicate()  # never merge or resize the user's image (M7); the copy keeps the precision
     try:
         psdds = Psdds()
-        depth, fmt = precision_depth(image.get_precision())
-        w, h, has_alpha, rgba = export_pixels(psdds, img, fmt)
+        precision = image.get_precision()
+
+        def read_format(raw):
+            # The read follows the effective type: Normal and Linear mask are data, never colour-converted.
+            return precision_depth(precision, psdds.resolve(raw, False, 8)[0].texture_type)
+
+        layer = export_layer(psdds, img)
+        w, h = layer.get_width(), layer.get_height()
+        depth, fmt = read_format(raw_settings(config))
+        rgba = read_pixels(layer, fmt)
+        has_alpha = psdds.alpha_used(rgba, w, h)  # DC31; alpha is the same in either read format
         # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config; NONINTERACTIVE
         # uses the arguments as given. The dialog comes after the pixel read so its greying matches (DC31).
         # shortcut: the float RGBA buffer (16 B/px) and the copy image stay alive while the modal dialog is open,
         # hundreds of MB at 4k; upgrade by re-reading the pixels after OK if that memory matters.
         if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha, depth):
             return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, None)
+        s = raw_settings(config)
+        chosen = read_format(s)[1]
+        if chosen != fmt:  # the dialog switched the type between light (Colour) and data
+            rgba = read_pixels(layer, chosen)
         # The pixels' has_alpha as the dialog resolved it; psdds applies Discard itself (DC36).
-        out = psdds.encode(rgba, w, h, has_alpha, raw_settings(config), depth)
+        out = psdds.encode(rgba, w, h, has_alpha, s, depth)
         del rgba
         _write_atomic(path, out)
     except (PsddsError, OSError, ExportError) as e:
