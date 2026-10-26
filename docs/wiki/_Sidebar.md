@@ -10,6 +10,7 @@ Using it
 - [GUI guide](GUI-Guide.md)
 - [Project config](Project-Config.md)
 - [Presets and targets](Presets-and-Targets.md)
+- [Plugins compared](Plugins-Compared.md)
 
 Concepts
 

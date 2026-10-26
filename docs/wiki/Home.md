@@ -26,6 +26,7 @@ This wiki covers version 0.7.0. Tessalith is licensed GPL-3.0-or-later.
 | [Project config](Project-Config.md) | Every `sdc.toml` key, its default, and how settings layer. |
 | [Presets and targets](Presets-and-Targets.md) | The built-in presets, writing your own, and what each target allows. |
 | [GUI guide](GUI-Guide.md) | Every panel in the GUI: the converter, set editor, bulk editing, 3D preview, TruePBR JSON editor, settings. |
+| [Plugins compared](Plugins-Compared.md) | What the Photoshop, GIMP, Paint.NET and chaiNNer plugins do, against Tessalith itself. |
 | [Texture types](Texture-Types.md) | Sub-types, file suffixes, naming, formats, packing and set shaders. |
 | [Mod scanning](Mod-Scanning.md) | Scanning meshes and plugins from an MO2 instance or a folder, and what the scan feeds back. |
 | [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools 3.2.5 as an optional BC7/BC6H encoder. |
