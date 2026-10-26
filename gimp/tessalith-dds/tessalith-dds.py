@@ -10,16 +10,18 @@ gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, GLib, GObject  # noqa: E402
 
-from psdds_ctypes import (BC1, BC3, BC4, BC5, BC7, BOX, COLOUR, KAISER, LINEAR_MASK, MITCHELL,  # noqa: E402
-                          NORMAL, RGBA8, TENT, PresetState, Psdds, PsddsError, Settings, apply_preset,
-                          plan_refresh, preset_event, refuse_ui)
-from tdds_pixels import band_rows  # noqa: E402
+from psdds_ctypes import (BC1, BC3, BC4, BC5, BC6H, BC7, BOX, COLOUR, KAISER, LINEAR_MASK,  # noqa: E402
+                          MITCHELL, NORMAL, RGBA8, RGBA16F, TENT, PresetState, Psdds, PsddsError, Settings,
+                          apply_preset, plan_refresh, preset_event, refuse_ui)
+from tdds_pixels import band_rows, precision_depth  # noqa: E402
 
 LOAD_PROC = "file-tessalith-dds-load"
 EXPORT_PROC = "file-tessalith-dds-export"
-# (nick, psdds id, label). All six formats stay valid arguments (DC32); psdds decides which apply.
+# (nick, psdds id, label). All eight formats stay valid arguments (DC32); psdds decides which apply at the
+# image's depth (BC6H and RGBA16F only for 16- and 32-bit images, DF2). Labels as Photoshop's (DF5).
 FORMATS = [("bc1", BC1, "BC1"), ("bc3", BC3, "BC3"), ("bc4", BC4, "BC4"), ("bc5", BC5, "BC5"),
-           ("bc7", BC7, "BC7"), ("rgba8", RGBA8, "RGBA8 (uncompressed)")]
+           ("bc7", BC7, "BC7"), ("rgba8", RGBA8, "RGBA8 (uncompressed)"), ("bc6h", BC6H, "BC6H (HDR)"),
+           ("rgba16f", RGBA16F, "RGBA16F (uncompressed)")]
 TYPES = [("colour", COLOUR, "Colour"), ("normal", NORMAL, "Normal"), ("linear-mask", LINEAR_MASK, "Linear mask")]
 FILTERS = [("box", BOX, "Box"), ("tent", TENT, "Tent"), ("mitchell", MITCHELL, "Mitchell"),
            ("kaiser", KAISER, "Kaiser")]
@@ -98,8 +100,8 @@ def raw_settings(config):
                     int(config.get_property("discard-alpha")))
 
 
-def export_pixels(psdds, img):
-    """Reads img (the plug-in's own copy) as sRGB-encoded floats: (w, h, has_alpha, rgba).
+def export_pixels(psdds, img, fmt):
+    """Reads img (the plug-in's own copy) as babl format fmt (precision_depth's): (w, h, has_alpha, rgba).
 
     Merges and resizes img's layers, so it must never be the user's image (M7).
     """
@@ -113,11 +115,10 @@ def export_pixels(psdds, img):
     rgba = bytearray(w * h * 16)
     buf = layer.get_buffer()
     rows = band_rows(w * 16, h)
-    # shortcut: always reads sRGB-encoded sRGB floats (babl converts linear and other profiles), like
-    # GIMP's 8-bit PNG export; upgrade when an HDR/linear export path exists (NIF team owns it).
+    # babl converts the image's own trc to fmt: sRGB-coded for 8/16 bits, linear (values above 1 kept) for 32.
     for y in range(0, h, rows):
         n = min(rows, h - y)
-        rgba[y * w * 16:(y + n) * w * 16] = buf.get(Gegl.Rectangle.new(0, y, w, n), 1.0, "R'G'B'A float",
+        rgba[y * w * 16:(y + n) * w * 16] = buf.get(Gegl.Rectangle.new(0, y, w, n), 1.0, fmt,
                                                     Gegl.AbyssPolicy.CLAMP)
     return w, h, psdds.alpha_used(rgba, w, h), rgba  # DC31: alpha comes from the pixels
 
@@ -138,11 +139,11 @@ def _write_atomic(path, data):
 
 RAW_ARGS = ("format", "texture-type", "srgb", "mip-filter", "mipmaps", "quality", "discard-alpha")
 SHOWN_RAW = {"shown-format": "format", "shown-srgb": "srgb", "shown-mip-filter": "mip-filter",
-             "shown-quality": "quality"}
+             "shown-quality": "quality", "shown-discard-alpha": "discard-alpha"}
 ENABLED = {"shown-srgb": "srgb-enabled", "shown-mip-filter": "mip-filter-enabled",
-           "shown-quality": "quality-enabled"}
+           "shown-quality": "quality-enabled", "shown-discard-alpha": "discard-alpha-enabled"}
 # DC33/DC43 rows; Discard transparency shares the Format row's right-hand slot, under sRGB.
-ROWS = (("preset",), ("texture-type", "shown-srgb"), ("shown-format", "discard-alpha"),
+ROWS = (("preset",), ("texture-type", "shown-srgb"), ("shown-format", "shown-discard-alpha"),
         ("mipmaps", "shown-mip-filter"), ("shown-quality",))
 
 
@@ -156,8 +157,8 @@ def _set_raw(config, s):
     config.set_property("discard-alpha", bool(s.discard_alpha))
 
 
-def show_dialog(procedure, config, image, has_alpha):
-    """The export dialog (DC33); has_alpha is the pixels' (DC31). False on Cancel."""
+def show_dialog(procedure, config, image, has_alpha, depth):
+    """The export dialog (DC33); has_alpha is the pixels' (DC31), depth the image's (DF5). False on Cancel."""
     refuse_ui()  # first: the headless tests set TDDS_NO_UI; real use never does
     gi.require_version("GimpUi", "3.0")
     gi.require_version("Gtk", "3.0")
@@ -171,7 +172,7 @@ def show_dialog(procedure, config, image, has_alpha):
     GimpUi.init(EXPORT_PROC)
     psdds = Psdds()
     presets = psdds.presets()  # read once per dialog
-    state = PresetState(psdds.resolve, len(presets))
+    state = PresetState(lambda s, a: psdds.resolve(s, a, depth), len(presets))  # matched at the image's depth
     labels = {f: label for _, f, label in FORMATS}
     stores = {n: GimpUi.IntStore.new([]) for n in ("preset", "shown-format", "shown-mip-filter", "shown-quality")}
     fill_store(stores["preset"], [(0, "Custom")] + [(i + 1, name) for i, (name, _) in enumerate(presets)])
@@ -184,7 +185,7 @@ def show_dialog(procedure, config, image, has_alpha):
             return
         busy[0] = True  # store rebuilds and the shown-* writes below bounce through notify
         try:
-            v = plan_refresh(psdds, raw_settings(config), has_alpha, state, presets, ui["built"])
+            v = plan_refresh(psdds, raw_settings(config), has_alpha, depth, state, presets, ui["built"])
             eff, ctl = v["eff"], v["ctl"]
             if v["formats"] is not None:
                 fill_store(stores["shown-format"], [(f, labels[f]) for f in v["formats"]])
@@ -195,9 +196,11 @@ def show_dialog(procedure, config, image, has_alpha):
             config.set_property("shown-srgb", bool(eff.srgb))
             config.set_property("shown-mip-filter", eff.filter)
             config.set_property("shown-quality", eff.quality)
+            config.set_property("shown-discard-alpha", bool(eff.discard_alpha))
             config.set_property("srgb-enabled", bool(ctl.srgb_enabled))
             config.set_property("mip-filter-enabled", bool(ctl.filter_enabled))
             config.set_property("quality-enabled", bool(ctl.quality_enabled))
+            config.set_property("discard-alpha-enabled", bool(ctl.discard_enabled))  # DF2
             ui["preset"] = v["preset"]
             config.set_property("preset", v["preset"])  # M4: list 0 = Custom
         finally:
@@ -271,18 +274,19 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         return error(procedure, NO_VISIBLE)
     res, img = options.get_image(image)
     if res != Gimp.ExportReturn.EXPORT:
-        img = img.duplicate()  # never merge or resize the user's image (M7)
+        img = img.duplicate()  # never merge or resize the user's image (M7); the copy keeps the precision
     try:
         psdds = Psdds()
-        w, h, has_alpha, rgba = export_pixels(psdds, img)
+        depth, fmt = precision_depth(image.get_precision())
+        w, h, has_alpha, rgba = export_pixels(psdds, img, fmt)
         # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config; NONINTERACTIVE
         # uses the arguments as given. The dialog comes after the pixel read so its greying matches (DC31).
         # shortcut: the float RGBA buffer (16 B/px) and the copy image stay alive while the modal dialog is open,
         # hundreds of MB at 4k; upgrade by re-reading the pixels after OK if that memory matters.
-        if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha):
+        if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha, depth):
             return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, None)
-        s = raw_settings(config)
-        out = psdds.encode(rgba, w, h, has_alpha and not s.discard_alpha, s)  # DC36
+        # The pixels' has_alpha as the dialog resolved it; psdds applies Discard itself (DC36).
+        out = psdds.encode(rgba, w, h, has_alpha, raw_settings(config), depth)
         del rgba
         _write_atomic(path, out)
     except (PsddsError, OSError, ExportError) as e:
@@ -359,6 +363,8 @@ class TessalithDds(Gimp.PlugIn):
         proc.add_int_aux_argument("shown-mip-filter", "Filter", "Shown mip filter", 0,
                                   max(f for _, f, _ in FILTERS), d.filter, rw)
         proc.add_int_aux_argument("shown-quality", "Quality", "Shown quality", 0, top_q, d.quality, rw)
+        proc.add_boolean_aux_argument("shown-discard-alpha", "Discard transparency", "Shown discard transparency",
+                                      bool(d.discard_alpha), rw)
         for flag in ENABLED.values():
             proc.add_boolean_aux_argument(flag, flag, "Dialog greying", True, rw)
         return proc

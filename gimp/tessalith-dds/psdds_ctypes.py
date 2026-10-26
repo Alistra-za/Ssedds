@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""ctypes wrapper over psdds.dll (photoshop/psdds.h, ABI 2). No gi import; every rule lives in psdds."""
+"""ctypes wrapper over psdds.dll (photoshop/psdds.h, ABI 3). No gi import; every rule lives in psdds."""
 import ctypes
 import os
 
-EXPECTED_ABI = 2
-BC1, BC3, BC4, BC5, BC7, RGBA8 = range(6)
+EXPECTED_ABI = 3
+BC1, BC3, BC4, BC5, BC7, RGBA8, BC6H, RGBA16F = range(8)
 COLOUR, NORMAL, LINEAR_MASK = range(3)
 BOX, TENT, MITCHELL, KAISER = range(4)
 
 _ERR_CAP = 512
-_FORMATS = (BC1, BC3, BC4, BC5, BC7, RGBA8)
+_FORMATS = (BC1, BC3, BC4, BC5, BC7, RGBA8, BC6H, RGBA16F)
 
 
 class Settings(ctypes.Structure):
@@ -57,14 +57,15 @@ def refuse_ui():
         raise RuntimeError("dialog refused under TDDS_NO_UI")
 
 
-def plan_refresh(psdds, raw, has_alpha, state, presets, built):
-    """What the export dialog shows for raw. built = (type, format) its Format and Quality lists were last built for.
+def plan_refresh(psdds, raw, has_alpha, depth, state, presets, built):
+    """What the export dialog shows for raw in an image of depth bits (8, 16 or 32; state must resolve at the same
+    depth). built = (type, format) its Format and Quality lists were last built for.
 
     formats / qualities are None when that list stays as it is. preset is the list index (0 = Custom, M4).
     """
-    eff, ctl = psdds.resolve(raw, has_alpha)
+    eff, ctl = psdds.resolve(raw, has_alpha, depth)
     return {"eff": eff, "ctl": ctl, "preset": state.shown(presets, raw, has_alpha) + 1,
-            "formats": psdds.allowed_formats(eff.texture_type) if built[0] != eff.texture_type else None,
+            "formats": psdds.offered_formats(eff.texture_type, depth) if built[0] != eff.texture_type else None,
             "qualities": psdds.quality_labels(eff.format) if built[1] != eff.format else None}
 
 
@@ -141,12 +142,15 @@ class Psdds:
             ("psdds_preset_count", [], u32),
             ("psdds_preset_name", [u32], cp),
             ("psdds_preset_settings", [u32, S], i32),
-            ("psdds_resolve", [S, u32, S, C], i32),
+            ("psdds_resolve_depth", [S, u32, u32, S, C, pu32], i32),
             ("psdds_format_allowed", [u32, u32], u32),
+            ("psdds_format_offered", [u32, u32, u32], u32),
             ("psdds_quality_count", [u32], u32),
             ("psdds_quality_label", [u32, u32], cp),
             ("psdds_encode", [vp, u32, u32, u32, S, B, eb, sz], i32),
+            ("psdds_encode_depth", [vp, u32, u32, u32, u32, S, B, eb, sz], i32),
             ("psdds_decode", [cp, sz, pu32, pu32, pu32, B, eb, sz], i32),
+            ("psdds_decode_depth", [cp, sz, pu32, pu32, pu32, pu32, B, eb, sz], i32),
             ("psdds_check_size", [u32, u32, eb, sz], i32),
             ("psdds_dds_openable", [cp, sz], i32),
             ("psdds_opens_with_alpha", [cp, sz, u32], i32),
@@ -172,17 +176,21 @@ class Psdds:
     def match_preset(self, presets, raw, has_alpha, preferred=-1):
         return match_preset(presets, raw, has_alpha, preferred, self.resolve)
 
-    def resolve(self, raw, has_alpha):
-        eff, ctl = Settings(), Controls()
-        if self._dll.psdds_resolve(ctypes.byref(raw), int(bool(has_alpha)), ctypes.byref(eff), ctypes.byref(ctl)) != 0:
+    def resolve(self, raw, has_alpha, depth=8):
+        """(effective, controls) for an image of depth bits; controls.discard_enabled is 0 when Discard
+        transparency is ticked and greyed (DF2)."""
+        eff, ctl, de = Settings(), Controls(), ctypes.c_uint32()
+        if self._dll.psdds_resolve_depth(ctypes.byref(raw), int(bool(has_alpha)), depth, ctypes.byref(eff),
+                                         ctypes.byref(ctl), ctypes.byref(de)) != 0:
             raise ValueError("psdds rejected the settings (a value is out of range)")
+        ctl.discard_enabled = de.value
         return eff, ctl
 
     def format_allowed(self, texture_type, fmt):
         return bool(self._dll.psdds_format_allowed(texture_type, fmt))
 
-    def allowed_formats(self, texture_type):
-        return [f for f in _FORMATS if self.format_allowed(texture_type, f)]
+    def offered_formats(self, texture_type, depth):
+        return [f for f in _FORMATS if self._dll.psdds_format_offered(texture_type, f, depth)]
 
     def quality_labels(self, fmt):
         d = self._dll
@@ -215,11 +223,16 @@ class Psdds:
     def max_file_bytes(self):
         return self._dll.psdds_max_file_bytes()
 
-    def encode(self, rgba, w, h, has_alpha, s):
-        """rgba must be a writable buffer (bytearray), not bytes: ctypes from_buffer needs it."""
+    def encode(self, rgba, w, h, has_alpha, s, depth=None):
+        """rgba must be a writable buffer (bytearray), not bytes: ctypes from_buffer needs it.
+        depth None calls psdds_encode (the depth-8 form); 8, 16 or 32 calls psdds_encode_depth."""
         arr = self._floats(rgba, w, h)
         out, err = _Buf(), ctypes.create_string_buffer(_ERR_CAP)
-        rc = self._dll.psdds_encode(arr, w, h, int(bool(has_alpha)), ctypes.byref(s), ctypes.byref(out), err, _ERR_CAP)
+        a = int(bool(has_alpha))
+        if depth is None:
+            rc = self._dll.psdds_encode(arr, w, h, a, ctypes.byref(s), ctypes.byref(out), err, _ERR_CAP)
+        else:
+            rc = self._dll.psdds_encode_depth(arr, w, h, a, depth, ctypes.byref(s), ctypes.byref(out), err, _ERR_CAP)
         try:
             if rc != 0:
                 raise PsddsError(_text(err))
@@ -237,5 +250,19 @@ class Psdds:
             if rc != 0:
                 raise PsddsError(_text(err))
             return w.value, h.value, bool(a.value), ctypes.string_at(out.data, out.len)
+        finally:
+            self._dll.psdds_free(out)
+
+    def decode_depth(self, data):
+        """(w, h, has_alpha, depth, pixels): depth 8 gives RGBA8 bytes, 32 native-endian f32 RGBA bytes (DF4)."""
+        data = bytes(data)
+        w, h, a, d = ctypes.c_uint32(), ctypes.c_uint32(), ctypes.c_uint32(), ctypes.c_uint32()
+        out, err = _Buf(), ctypes.create_string_buffer(_ERR_CAP)
+        rc = self._dll.psdds_decode_depth(data, len(data), ctypes.byref(w), ctypes.byref(h), ctypes.byref(a),
+                                          ctypes.byref(d), ctypes.byref(out), err, _ERR_CAP)
+        try:
+            if rc != 0:
+                raise PsddsError(_text(err))
+            return w.value, h.value, bool(a.value), d.value, ctypes.string_at(out.data, out.len)
         finally:
             self._dll.psdds_free(out)

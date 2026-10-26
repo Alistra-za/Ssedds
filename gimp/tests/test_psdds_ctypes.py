@@ -30,11 +30,11 @@ class T(unittest.TestCase):
             hdr = int(re.search(r"#define PSDDS_ABI_VERSION (\d+)u", f.read()).group(1))
         self.assertEqual(hdr, P.EXPECTED_ABI)
         self.assertEqual(DLL._dll.psdds_abi_version(), P.EXPECTED_ABI)
-        with mock.patch.object(P, "EXPECTED_ABI", 3):
+        with mock.patch.object(P, "EXPECTED_ABI", 4):
             with self.assertRaises(P.PsddsError) as c:
                 P.Psdds()
-        self.assertIn("ABI version 2", str(c.exception))
-        self.assertIn("needs 3", str(c.exception))
+        self.assertIn("ABI version 3", str(c.exception))
+        self.assertIn("needs 4", str(c.exception))
 
     def test_defaults_colour(self):
         d = DLL.defaults(P.COLOUR)
@@ -48,7 +48,7 @@ class T(unittest.TestCase):
         self.assertEqual([n for n, _ in ps], NAMES)
         for i, (_, s) in enumerate(ps):
             self.assertEqual(s.srgb, 0)
-            self.assertEqual(s.discard_alpha, 1 if i == 1 else 0)
+            self.assertEqual(s.discard_alpha, 1 if i in (1, 4) else 0)  # DF2: the BC4 seed is discard 1
             self.assertEqual(DLL.resolve(s, False)[0].key(), s.key())
             # with alpha kept only the filter may differ (a Colour seed keeping alpha greys it to Box)
             e = DLL.resolve(s, True)[0].key()
@@ -69,13 +69,14 @@ class T(unittest.TestCase):
         n.srgb = 1  # greyed for Normal, so it still matches
         self.assertEqual(m(ps, n, False), 2)
         b = copy(ps[1][1])
-        b.discard_alpha = 0
-        self.assertEqual(m(ps, b, True), -1)
-        b.discard_alpha = 1
-        self.assertEqual(m(ps, b, True), 1)
-        for d in (0, 1):
-            b.discard_alpha = d
-            self.assertEqual(m(ps, b, False), 1)
+        for alpha in (False, True):
+            for d in (0, 1):  # DF2: BC1's discard is ticked and greyed, so the raw value never matters
+                b.discard_alpha = d
+                self.assertEqual(m(ps, b, alpha), 1)
+        c7 = copy(ps[0][1])  # BC7 keeps discard editable
+        c7.discard_alpha = 1
+        self.assertEqual(m(ps, c7, True), -1)
+        self.assertEqual(m(ps, c7, False), 0)  # DC40: ignored without alpha
         twin = [ps[0], ("twin", copy(ps[0][1]))]
         self.assertEqual(m(twin, ps[0][1], False, preferred=1), 1)
         self.assertEqual(m(twin, ps[0][1], False, preferred=-1), 0)
@@ -113,7 +114,7 @@ class T(unittest.TestCase):
         raw.format = P.BC5
         raw.texture_type = P.COLOUR
         self.assertEqual(DLL.resolve(raw, False)[0].format, DLL.defaults(P.COLOUR).format)
-        self.assertNotIn(P.BC5, DLL.allowed_formats(P.COLOUR))
+        self.assertNotIn(P.BC5, DLL.offered_formats(P.COLOUR, 8))
         raw.texture_type = P.NORMAL
         self.assertEqual(DLL.resolve(raw, False)[0].format, P.BC5)  # DC33
 
@@ -187,25 +188,25 @@ class T(unittest.TestCase):
         st = P.PresetState(DLL.resolve, len(ps))
         raw = DLL.defaults(P.NORMAL)
         raw.format = P.BC5
-        v = P.plan_refresh(DLL, raw, False, st, ps, (None, None))
-        self.assertEqual((v["eff"].format, v["formats"]), (P.BC5, DLL.allowed_formats(P.NORMAL)))
+        v = P.plan_refresh(DLL, raw, False, 8, st, ps, (None, None))
+        self.assertEqual((v["eff"].format, v["formats"]), (P.BC5, DLL.offered_formats(P.NORMAL, 8)))
         self.assertEqual(v["qualities"], DLL.quality_labels(P.BC5))
         built = (v["eff"].texture_type, v["eff"].format)
-        self.assertEqual(P.plan_refresh(DLL, raw, False, st, ps, built)["formats"], None)  # nothing to rebuild
+        self.assertEqual(P.plan_refresh(DLL, raw, False, 8, st, ps, built)["formats"], None)  # nothing to rebuild
         raw.texture_type = P.COLOUR
-        v = P.plan_refresh(DLL, raw, False, st, ps, built)
+        v = P.plan_refresh(DLL, raw, False, 8, st, ps, built)
         self.assertEqual(v["eff"].format, DLL.defaults(P.COLOUR).format)
-        self.assertEqual(v["formats"], DLL.allowed_formats(P.COLOUR))
+        self.assertEqual(v["formats"], DLL.offered_formats(P.COLOUR, 8))
         self.assertEqual(v["qualities"], DLL.quality_labels(v["eff"].format))
         self.assertEqual(raw.format, P.BC5)  # DC19/DC33: the raw pick is kept
         built = (v["eff"].texture_type, v["eff"].format)
         raw.texture_type = P.NORMAL
-        v = P.plan_refresh(DLL, raw, False, st, ps, built)
-        self.assertEqual((v["eff"].format, v["formats"]), (P.BC5, DLL.allowed_formats(P.NORMAL)))
+        v = P.plan_refresh(DLL, raw, False, 8, st, ps, built)
+        self.assertEqual((v["eff"].format, v["formats"]), (P.BC5, DLL.offered_formats(P.NORMAL, 8)))
         seed = P.apply_preset(raw, ps, 2)
-        self.assertEqual(P.plan_refresh(DLL, seed, False, st, ps, built)["preset"], 3)  # list index = seed + 1
+        self.assertEqual(P.plan_refresh(DLL, seed, False, 8, st, ps, built)["preset"], 3)  # list index = seed + 1
         st.pick(None)
-        self.assertEqual(P.plan_refresh(DLL, seed, False, st, ps, built)["preset"], 0)
+        self.assertEqual(P.plan_refresh(DLL, seed, False, 8, st, ps, built)["preset"], 0)
 
     def test_preset_event(self):
         e = P.preset_event
@@ -226,7 +227,8 @@ class T(unittest.TestCase):
 
     def test_discard_matters_only_with_alpha_in_psdds(self):
         # match_preset zeroes discard_alpha without alpha (DC40); this pins that psdds still needs it done by the host.
-        a = DLL.presets()[1][1]
+        a = copy(DLL.presets()[0][1])  # BC7: discard is editable (DF2)
+        a.discard_alpha = 1
         b = copy(a)
         b.discard_alpha = 0
         self.assertNotEqual(DLL.resolve(a, False)[0].key(), DLL.resolve(b, False)[0].key())
@@ -235,7 +237,7 @@ class T(unittest.TestCase):
         with mock.patch.object(P.ctypes, "CDLL", return_value=object()):
             with self.assertRaises(P.PsddsError) as c:
                 P.Psdds()
-        self.assertIn("needs 2", str(c.exception))
+        self.assertIn("needs 3", str(c.exception))
 
     def test_floats_length_mismatch(self):
         with self.assertRaises(ValueError):
@@ -305,9 +307,46 @@ class T(unittest.TestCase):
             DLL.resolve(raw, False)
 
     def test_formats_per_type(self):
-        self.assertEqual(DLL.allowed_formats(P.COLOUR), [P.BC1, P.BC3, P.BC7, P.RGBA8])
-        self.assertEqual(DLL.allowed_formats(P.NORMAL), [P.BC1, P.BC3, P.BC5, P.BC7, P.RGBA8])
-        self.assertEqual(DLL.allowed_formats(P.LINEAR_MASK), [P.BC1, P.BC3, P.BC4, P.BC5, P.BC7, P.RGBA8])
+        for depth in (8, 16, 32):
+            hdr = [P.BC6H, P.RGBA16F] if depth > 8 else []  # Colour only, 16 and 32 bits only (owner 2026-10-26)
+            self.assertEqual(DLL.offered_formats(P.COLOUR, depth), [P.BC1, P.BC3, P.BC7, P.RGBA8] + hdr)
+            self.assertEqual(DLL.offered_formats(P.NORMAL, depth), [P.BC1, P.BC3, P.BC5, P.BC7, P.RGBA8])
+            self.assertEqual(DLL.offered_formats(P.LINEAR_MASK, depth),
+                             [P.BC1, P.BC3, P.BC4, P.BC5, P.BC7, P.RGBA8])
+
+    def test_discard_greyed_for_formats_without_alpha(self):
+        for depth in (8, 16, 32):
+            for t, fmt in ((P.COLOUR, P.BC1), (P.LINEAR_MASK, P.BC4), (P.NORMAL, P.BC5), (P.COLOUR, P.BC6H),
+                           (P.COLOUR, P.BC3), (P.COLOUR, P.BC7), (P.COLOUR, P.RGBA8), (P.COLOUR, P.RGBA16F)):
+                raw = DLL.defaults(t)
+                raw.format, raw.discard_alpha = fmt, 0
+                for alpha in (False, True):
+                    e, c = DLL.resolve(raw, alpha, depth)
+                    greyed = e.format in (P.BC1, P.BC4, P.BC5, P.BC6H)
+                    self.assertEqual((c.discard_enabled, e.discard_alpha), (0, 1) if greyed else (1, 0),
+                                     (depth, fmt, alpha))
+                    if fmt in (P.BC6H, P.RGBA16F):
+                        self.assertEqual(e.format, fmt if depth > 8 else P.BC7)  # DC32 fallback at 8 bits
+        raw = DLL.defaults(P.COLOUR)
+        raw.format = P.BC6H
+        self.assertEqual(DLL.resolve(raw, False, 16)[1].discard_enabled, 0)
+        with self.assertRaises(ValueError):
+            DLL.resolve(raw, False, 24)
+
+    def test_plan_refresh_follows_depth(self):
+        ps = DLL.presets()
+        raw = DLL.defaults(P.COLOUR)
+        raw.format = P.BC6H
+        for depth, fmt in ((8, P.BC7), (16, P.BC6H), (32, P.BC6H)):
+            st = P.PresetState(lambda s, a, d=depth: DLL.resolve(s, a, d), len(ps))
+            v = P.plan_refresh(DLL, raw, False, depth, st, ps, (None, None))
+            self.assertEqual(v["eff"].format, fmt)
+            self.assertEqual(v["formats"], DLL.offered_formats(P.COLOUR, depth))
+            self.assertEqual(v["qualities"], DLL.quality_labels(fmt))
+            self.assertEqual(v["ctl"].discard_enabled, 0 if fmt == P.BC6H else 1)
+        raw.format = P.RGBA16F
+        v = P.plan_refresh(DLL, raw, False, 32, st, ps, (None, None))
+        self.assertEqual((v["eff"].format, v["qualities"], v["ctl"].quality_enabled), (P.RGBA16F, [], 0))
 
     def test_disallowed_format_resolves_to_default(self):
         raw = DLL.defaults(P.COLOUR)
@@ -320,6 +359,8 @@ class T(unittest.TestCase):
         self.assertEqual(len(DLL.quality_labels(P.BC1)), 19)
         self.assertEqual(len(DLL.quality_labels(P.BC4)), 3)
         self.assertEqual(DLL.quality_labels(P.RGBA8), [])
+        self.assertEqual(DLL.quality_labels(P.BC6H), ["Veryfast", "Fast", "Basic", "Veryslow"])
+        self.assertEqual(DLL.quality_labels(P.RGBA16F), [])
 
     def test_encode_decode_roundtrip(self):
         vals = [(i / 15, (15 - i) / 15, 0.5, 1.0) for i in range(16)]
