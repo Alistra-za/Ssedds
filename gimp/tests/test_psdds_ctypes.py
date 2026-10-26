@@ -20,6 +20,14 @@ DLL = P.Psdds()
 NAMES = ["Colour BC7", "Colour BC1 (small, opaque)", "Normal BC7", "Mask/data BC7", "Greyscale mask BC4"]
 
 
+def header_struct(name):
+    """(field names, byte size) of a header struct, all uint32_t."""
+    with open(os.path.join(REPO, "photoshop", "psdds.h")) as f:
+        body = re.search(r"typedef struct " + name + r" \{(.*?)\} " + name + ";", f.read(), re.S).group(1)
+    names = re.findall(r"uint32_t (\w+);", body)
+    return names, 4 * len(names)
+
+
 def copy(s):
     return P.Settings.from_buffer_copy(s)
 
@@ -30,24 +38,33 @@ class T(unittest.TestCase):
             hdr = int(re.search(r"#define PSDDS_ABI_VERSION (\d+)u", f.read()).group(1))
         self.assertEqual(hdr, P.EXPECTED_ABI)
         self.assertEqual(DLL._dll.psdds_abi_version(), P.EXPECTED_ABI)
-        with mock.patch.object(P, "EXPECTED_ABI", 4):
+        with mock.patch.object(P, "EXPECTED_ABI", 5):
             with self.assertRaises(P.PsddsError) as c:
                 P.Psdds()
-        self.assertIn("ABI version 3", str(c.exception))
-        self.assertIn("needs 4", str(c.exception))
+        self.assertIn("ABI version 4", str(c.exception))
+        self.assertIn("needs 5", str(c.exception))
+
+    def test_layout_follows_header(self):
+        for cls, name in ((P.Settings, "PsddsSettings"), (P.Controls, "PsddsControls")):
+            names, size = header_struct(name)
+            self.assertEqual([n for n, _ in cls._fields_], names)
+            self.assertEqual(ctypes.sizeof(cls), size)
+        self.assertEqual((ctypes.sizeof(P.Settings), P.Settings.alpha_mode.offset), (32, 28))  # DH4
+        self.assertEqual((ctypes.sizeof(P.Controls), P.Controls.alpha_mode_enabled.offset), (16, 12))
 
     def test_defaults_colour(self):
         d = DLL.defaults(P.COLOUR)
-        self.assertEqual((d.format, d.srgb, d.mips, d.discard_alpha), (P.BC7, 0, 1, 0))
+        self.assertEqual((d.format, d.srgb, d.mips, d.discard_alpha, d.alpha_mode), (P.BC7, 0, 1, 0, 0))
         for t in (P.NORMAL, P.LINEAR_MASK):
             self.assertEqual(DLL.defaults(t).srgb, 0)
-        self.assertEqual(ctypes.sizeof(P.Settings), 28)
+        for t in (P.COLOUR, P.NORMAL, P.LINEAR_MASK):
+            self.assertEqual(DLL.defaults(t).alpha_mode, 0)  # DH1
 
     def test_preset_seeds(self):
         ps = DLL.presets()
         self.assertEqual([n for n, _ in ps], NAMES)
         for i, (_, s) in enumerate(ps):
-            self.assertEqual(s.srgb, 0)
+            self.assertEqual((s.srgb, s.alpha_mode), (0, 0))
             self.assertEqual(s.discard_alpha, 1 if i in (1, 4) else 0)  # DF2: the BC4 seed is discard 1
             self.assertEqual(DLL.resolve(s, False)[0].key(), s.key())
             # with alpha kept only the filter may differ (a Colour seed keeping alpha greys it to Box)
@@ -129,14 +146,16 @@ class T(unittest.TestCase):
         self.assertEqual(raw.quality, 6)  # DC8
 
     def test_filter_follows_mipmaps(self):
-        def ctl(srgb, mips, alpha, discard=0, flt=P.KAISER):
+        def ctl(srgb, mips, alpha, discard=0, flt=P.KAISER, mode=1):
             raw = DLL.defaults(P.COLOUR)
             raw.format, raw.srgb, raw.mips, raw.discard_alpha, raw.filter = P.BC7, srgb, mips, discard, flt
+            raw.alpha_mode = mode
             e, c = DLL.resolve(raw, alpha)
             return c.filter_enabled, e.filter
         self.assertEqual(ctl(1, 0, False)[0], 0)
         self.assertEqual(ctl(1, 1, False), (1, P.KAISER))
-        self.assertEqual(ctl(1, 1, True), (0, P.BOX))  # DC12, DC31
+        self.assertEqual(ctl(1, 1, True), (0, P.BOX))  # DC12, DC31: alpha kept as transparency
+        self.assertEqual(ctl(1, 1, True, mode=0), (1, P.KAISER))  # DH6: alpha kept as data
         self.assertEqual(ctl(1, 1, True, discard=1), (1, P.KAISER))  # DC36
         d = DLL.defaults(P.COLOUR)
         self.assertEqual(d.srgb, 0)
@@ -158,7 +177,7 @@ class T(unittest.TestCase):
         st.pick(5)
         self.assertEqual(st.shown(twin, P.apply_preset(raw, twin, 5), False), 5)
 
-    def test_seed_pick_sets_all_seven_raw(self):
+    def test_seed_pick_sets_all_eight_raw(self):
         ps = DLL.presets()
         for i, (_, s) in enumerate(ps):
             raw = P.apply_preset(DLL.defaults(P.NORMAL), ps, i)
@@ -233,11 +252,55 @@ class T(unittest.TestCase):
         b.discard_alpha = 0
         self.assertNotEqual(DLL.resolve(a, False)[0].key(), DLL.resolve(b, False)[0].key())
 
+    def test_alpha_mode_greying(self):
+        # DH2: enabled exactly when alpha is kept (has_alpha, effective discard 0); otherwise effective 0 (DH3).
+        for depth in (8, 16, 32):
+            for t, fmt in ((P.COLOUR, P.BC7), (P.COLOUR, P.BC3), (P.COLOUR, P.RGBA8), (P.COLOUR, P.BC1),
+                           (P.NORMAL, P.BC5), (P.LINEAR_MASK, P.BC4), (P.COLOUR, P.RGBA16F)):
+                for discard in (0, 1):
+                    for alpha in (False, True):
+                        raw = DLL.defaults(t)
+                        raw.format, raw.discard_alpha, raw.alpha_mode = fmt, discard, 1
+                        e, c = DLL.resolve(raw, alpha, depth)
+                        kept = alpha and e.discard_alpha == 0
+                        self.assertEqual((c.alpha_mode_enabled, e.alpha_mode), (int(kept), int(kept)),
+                                         (depth, t, fmt, discard, alpha))
+                        self.assertEqual(raw.alpha_mode, 1)  # the raw pick is kept
+        raw = DLL.defaults(P.COLOUR)
+        raw.alpha_mode = 2
+        with self.assertRaises(ValueError):
+            DLL.resolve(raw, True)
+
+    def test_match_preset_uses_effective_alpha_mode(self):
+        ps = DLL.presets()
+        raw = copy(ps[0][1])
+        raw.alpha_mode = 1
+        self.assertEqual(DLL.match_preset(ps, raw, False), 0)  # greyed without alpha, so no spurious Custom
+        self.assertEqual(DLL.match_preset(ps, raw, True), -1)  # enabled: a real difference
+        raw.discard_alpha = 1
+        self.assertEqual(DLL.match_preset(ps, raw, True), -1)
+        raw.alpha_mode = 0
+        raw.discard_alpha = 0
+        self.assertEqual(DLL.match_preset(ps, raw, True), 0)
+
+    def test_encode_passes_alpha_mode_through(self):
+        px = [(0.9, 0.1, 0.2, 1.0)] * 16
+        px[3] = (0.9, 0.1, 0.2, 0.0)
+        px[7] = (0.1, 0.8, 0.2, 0.0)
+        data, blend = DLL.defaults(P.COLOUR), DLL.defaults(P.COLOUR)
+        blend.alpha_mode = 1
+        d = DLL.encode(rgba_floats(px), 4, 4, True, data)
+        b = DLL.encode(rgba_floats(px), 4, 4, True, blend)
+        self.assertNotEqual(d, b)
+        self.assertEqual(DLL.encode(rgba_floats(px), 4, 4, True, blend, 8), b)
+        # without alpha the mode changes nothing (DH2)
+        self.assertEqual(DLL.encode(rgba_floats(px), 4, 4, False, data), DLL.encode(rgba_floats(px), 4, 4, False, blend))
+
     def test_missing_abi_symbol(self):
         with mock.patch.object(P.ctypes, "CDLL", return_value=object()):
             with self.assertRaises(P.PsddsError) as c:
                 P.Psdds()
-        self.assertIn("needs 3", str(c.exception))
+        self.assertIn("needs 4", str(c.exception))
 
     def test_floats_length_mismatch(self):
         with self.assertRaises(ValueError):
@@ -263,7 +326,11 @@ class T(unittest.TestCase):
             e, c = DLL.resolve(raw, False)
             self.assertEqual((c.filter_enabled, e.filter), (1, P.KAISER))
             e, c = DLL.resolve(raw, True)
+            self.assertEqual((c.filter_enabled, e.filter), (1, P.KAISER))  # DH6: alpha as data
+            raw.alpha_mode = 1
+            e, c = DLL.resolve(raw, True)
             self.assertEqual((c.filter_enabled, e.filter), (0, P.BOX))
+            raw.alpha_mode = 0
         img = rgba_floats([(0.2, 0.4, 0.6, 1.0)] * 16)
         a, b = DLL.defaults(P.COLOUR), DLL.defaults(P.COLOUR)
         b.srgb = 1

@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""ctypes wrapper over psdds.dll (photoshop/psdds.h, ABI 3). No gi import; every rule lives in psdds."""
+"""ctypes wrapper over psdds.dll (photoshop/psdds.h, ABI 4). No gi import; every rule lives in psdds."""
 import ctypes
 import os
 
-EXPECTED_ABI = 3
+EXPECTED_ABI = 4
 BC1, BC3, BC4, BC5, BC7, RGBA8, BC6H, RGBA16F = range(8)
 COLOUR, NORMAL, LINEAR_MASK = range(3)
 BOX, TENT, MITCHELL, KAISER = range(4)
@@ -14,14 +14,14 @@ _FORMATS = (BC1, BC3, BC4, BC5, BC7, RGBA8, BC6H, RGBA16F)
 
 class Settings(ctypes.Structure):
     _fields_ = [(n, ctypes.c_uint32) for n in
-                ("format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha")]
+                ("format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha", "alpha_mode")]
 
     def key(self):
         return tuple(getattr(self, n) for n, _ in self._fields_)
 
 
 class Controls(ctypes.Structure):
-    _fields_ = [(n, ctypes.c_uint32) for n in ("srgb_enabled", "filter_enabled", "quality_enabled")]
+    _fields_ = [(n, ctypes.c_uint32) for n in ("srgb_enabled", "filter_enabled", "quality_enabled", "alpha_mode_enabled")]
 
 
 class _Buf(ctypes.Structure):
@@ -83,7 +83,7 @@ def preset_event(value, shown, reset_pending):
 
 
 def apply_preset(raw, presets, index):
-    """A copy of seed index's seven values; Custom (None or -1, M4) leaves raw as it is (DC45)."""
+    """A copy of seed index's eight values; Custom (None or -1, M4) leaves raw as it is (DC45)."""
     if index is None or index == -1:
         return raw
     return Settings.from_buffer_copy(presets[index][1])

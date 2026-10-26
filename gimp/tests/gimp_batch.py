@@ -593,8 +593,27 @@ def export_u16_linear_mask_keeps_stored_values():
     img.delete()
 
 
-CASES = {f.__name__: f for f in (
-    load_rgba8_opaque_opens_rgb,
+def export_alpha_mode_keeps_colour_or_transparency():
+    """DH: alpha 0 pixels keep their colour by default (alpha_mode 0); alpha-mode on equals psdds's transparency bytes."""
+    cfg = Gimp.get_pdb().lookup_procedure(EXPORT).create_config()
+    assert cfg.get_property("alpha-mode") is False, "alpha-mode defaults on (DH1)"
+    px = bytes(v for y in range(8) for x in range(8)
+               for v in ((200, 30, 60, 0) if x < 4 else (20, 200, 90, 255)))
+    img = _image(8, 8, px)
+    s0, s1 = _settings(BC7), _settings(BC7)
+    s1.alpha_mode = 1
+    data, blend = _export(img, "am_default.dds", format="bc7"), _export(img, "am_on.dds", format="bc7", alpha_mode=True)
+    assert data == _direct(img, True, s0), "default export differs from psdds alpha_mode 0"
+    assert blend == _direct(img, True, s1), "alpha-mode export differs from psdds alpha_mode 1 (transparency)"
+    assert data != blend, "alpha-mode changes nothing, so this case tests nothing"
+    rgb = lambda d: psdds.decode(d)[3][0:3]  # noqa: E731 - pixel 0,0 is under alpha 0
+    err = lambda d: max(abs(a - b) for a, b in zip(rgb(d), (200, 30, 60)))  # noqa: E731
+    assert err(data) <= 12, f"colour under alpha 0 was changed: {tuple(rgb(data))}"
+    assert err(blend) > 60, f"transparency mode kept the colour under alpha 0: {tuple(rgb(blend))}"
+    img.delete()
+
+
+CASES = {f.__name__: f for f in (    load_rgba8_opaque_opens_rgb,
     load_alpha_opens_rgba,
     load_alpha_254_opens_opaque,
     load_cube_delegates,
@@ -628,6 +647,7 @@ CASES = {f.__name__: f for f in (
     export_float32_bc6h_keeps_above_one,
     export_float_non_linear_normal_keeps_stored_values,
     export_u16_linear_mask_keeps_stored_values,
+    export_alpha_mode_keeps_colour_or_transparency,
 )}
 
 if os.environ.get("TDDS_KILL_PROBE"):

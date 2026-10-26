@@ -76,7 +76,7 @@ try {
     if ($n -notmatch 'MPL-2\.0') { $fail += 'THIRD_PARTY_NOTICES.md has no MPL-2.0 text' }
     if ($n -match '(?i)(engine|encoders-sys)[^.\r\n]{0,80}\bMIT\b' -and $n -notmatch 'MPL') { $fail += 'notices describe the engine as MIT' }
 
-    # ABI: the packaged wrapper loads the packaged DLL and refuses unless psdds_abi_version() == EXPECTED_ABI.
+    # ABI: the packaged wrapper loads the packaged DLL and refuses unless psdds_abi_version() == EXPECTED_ABI; the check asserts that value is 4 (Note DG17).
     $gimpDir = if ($env:SDC_GIMP_DIR) { $env:SDC_GIMP_DIR } else { 'C:\Program Files\GIMP 3' }
     $py = Join-Path $gimpDir 'bin\python.exe'
     if (-not (Test-Path $py)) { $fail += "GIMP's Python not found at $py (set SDC_GIMP_DIR); cannot check the ABI" }
@@ -84,7 +84,7 @@ try {
         $saved = $env:TESSALITH_PSDDS_DLL; Remove-Item env:TESSALITH_PSDDS_DLL -ErrorAction SilentlyContinue
         try {
             $out = & $py -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import psdds_ctypes as p; p.Psdds(); print("abi", p.EXPECTED_ABI)' (Join-Path $probe 'tessalith-dds') 2>&1 | ForEach-Object { "$_" }
-            if ($LASTEXITCODE -ne 0 -or -not ($out -match '^abi \d+$')) { $fail += "ABI check failed: $($out -join ' ')" } else { Write-Host "ABI ok: $($out -join ' ')" }
+            if ($LASTEXITCODE -ne 0 -or -not ($out -match '^abi 4$')) { $fail += "ABI check failed: $($out -join ' ')" } else { Write-Host "ABI ok: $($out -join ' ')" }
         } finally { if ($saved) { $env:TESSALITH_PSDDS_DLL = $saved } }
     }
 } finally { Remove-Item $probe -Recurse -Force -ErrorAction SilentlyContinue }

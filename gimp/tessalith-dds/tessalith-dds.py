@@ -93,11 +93,11 @@ def load_dds(procedure, run_mode, file, metadata, flags, config, data):
 
 
 def raw_settings(config):
-    """The seven raw arguments, in psdds.h order. psdds resolves them; nothing is adjusted here."""
+    """The eight raw arguments, in psdds.h order. psdds resolves them; nothing is adjusted here."""
     return Settings(config.get_choice_id("format"), config.get_choice_id("texture-type"),
                     int(config.get_property("srgb")), config.get_choice_id("mip-filter"),
                     int(config.get_property("mipmaps")), config.get_property("quality"),
-                    int(config.get_property("discard-alpha")))
+                    int(config.get_property("discard-alpha")), int(config.get_property("alpha-mode")))
 
 
 def export_layer(psdds, img):
@@ -142,14 +142,17 @@ def _write_atomic(path, data):
         raise
 
 
-RAW_ARGS = ("format", "texture-type", "srgb", "mip-filter", "mipmaps", "quality", "discard-alpha")
+RAW_ARGS = ("format", "texture-type", "srgb", "mip-filter", "mipmaps", "quality", "discard-alpha",
+            "alpha-mode")
 SHOWN_RAW = {"shown-format": "format", "shown-srgb": "srgb", "shown-mip-filter": "mip-filter",
-             "shown-quality": "quality", "shown-discard-alpha": "discard-alpha"}
+             "shown-quality": "quality", "shown-discard-alpha": "discard-alpha",
+             "shown-alpha-mode": "alpha-mode"}
 ENABLED = {"shown-srgb": "srgb-enabled", "shown-mip-filter": "mip-filter-enabled",
-           "shown-quality": "quality-enabled", "shown-discard-alpha": "discard-alpha-enabled"}
+           "shown-quality": "quality-enabled", "shown-discard-alpha": "discard-alpha-enabled",
+           "shown-alpha-mode": "alpha-mode-enabled"}
 # DC33/DC43 rows; Discard transparency shares the Format row's right-hand slot, under sRGB.
 ROWS = (("preset",), ("texture-type", "shown-srgb"), ("shown-format", "shown-discard-alpha"),
-        ("mipmaps", "shown-mip-filter"), ("shown-quality",))
+        ("shown-alpha-mode",), ("mipmaps", "shown-mip-filter"), ("shown-quality",))
 
 
 def _set_raw(config, s):
@@ -160,6 +163,7 @@ def _set_raw(config, s):
     config.set_property("mipmaps", bool(s.mips))
     config.set_property("quality", s.quality)
     config.set_property("discard-alpha", bool(s.discard_alpha))
+    config.set_property("alpha-mode", bool(s.alpha_mode))
 
 
 def show_dialog(procedure, config, image, has_alpha, depth):
@@ -202,10 +206,12 @@ def show_dialog(procedure, config, image, has_alpha, depth):
             config.set_property("shown-mip-filter", eff.filter)
             config.set_property("shown-quality", eff.quality)
             config.set_property("shown-discard-alpha", bool(eff.discard_alpha))
+            config.set_property("shown-alpha-mode", bool(eff.alpha_mode))
             config.set_property("srgb-enabled", bool(ctl.srgb_enabled))
             config.set_property("mip-filter-enabled", bool(ctl.filter_enabled))
             config.set_property("quality-enabled", bool(ctl.quality_enabled))
             config.set_property("discard-alpha-enabled", bool(ctl.discard_enabled))  # DF2
+            config.set_property("alpha-mode-enabled", bool(ctl.alpha_mode_enabled))  # DH2
             ui["preset"] = v["preset"]
             config.set_property("preset", v["preset"])  # M4: list 0 = Custom
         finally:
@@ -234,7 +240,7 @@ def show_dialog(procedure, config, image, has_alpha, depth):
             return
         seed = index - 1  # M4: -1 = Custom
         state.pick(seed)
-        busy[0] = True  # one refresh after all seven, not one per argument
+        busy[0] = True  # one refresh after all eight, not one per argument
         try:
             _set_raw(cfg, apply_preset(raw_settings(cfg), presets, seed))
         finally:
@@ -369,6 +375,8 @@ class TessalithDds(Gimp.PlugIn):
         proc.add_choice_argument("mip-filter", "Filter", "Mip filter", _choice(FILTERS), _nick(FILTERS, d.filter), rw)
         proc.add_boolean_argument("mipmaps", "Mipmaps", "Write mipmaps", bool(d.mips), rw)
         proc.add_boolean_argument("discard-alpha", "Discard transparency", "Save opaque", bool(d.discard_alpha), rw)
+        proc.add_boolean_argument("alpha-mode", "Alpha is transparency", "Treat alpha as transparency, not data",
+                                  bool(d.alpha_mode), rw)
         proc.add_int_argument("quality", "Quality", "Quality index", 0, top_q, d.quality, rw)
         # Dialog state (aux, never passed to the encode): the shown-* widgets show psdds's effective values
         # while the raw arguments above keep the user's picks (DC19).
@@ -384,6 +392,8 @@ class TessalithDds(Gimp.PlugIn):
         proc.add_int_aux_argument("shown-quality", "Quality", "Shown quality", 0, top_q, d.quality, rw)
         proc.add_boolean_aux_argument("shown-discard-alpha", "Discard transparency", "Shown discard transparency",
                                       bool(d.discard_alpha), rw)
+        proc.add_boolean_aux_argument("shown-alpha-mode", "Alpha is transparency", "Shown alpha is transparency",
+                                      bool(d.alpha_mode), rw)
         for flag in ENABLED.values():
             proc.add_boolean_aux_argument(flag, flag, "Dialog greying", True, rw)
         return proc
