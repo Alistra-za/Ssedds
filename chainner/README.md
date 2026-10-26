@@ -4,6 +4,13 @@ Three nodes, in the **Image > Tessalith DDS** group, that save Skyrim SE/AE DDS 
 
 ## Install
 
+From the release zip (`TessalithDDS-chaiNNer-<version>.zip`):
+
+1. Unzip it anywhere, keeping its folders, and right-click the zip > Properties > Unblock first if Windows blocked it.
+2. Close chaiNNer, then run `install.ps1` from the unzipped folder: `powershell -ExecutionPolicy Bypass -File install.ps1`. It uses the `psdds.dll` and notices in the zip; nothing is built.
+
+From a repo checkout:
+
 1. Build the DLL if you have not (`crates\psdds\build.ps1`). `install.ps1` also generates the licence notices with `crates\psdds\notices.ps1`, which needs `cargo-about` (`cargo install cargo-about --locked`).
 2. Close chaiNNer, then run `chainner\install.ps1`. It first stops any chaiNNer Python backend left running after chaiNNer closed (it holds `psdds.dll` open), then copies the nodes, `psdds.dll`, `COPYING`, `LICENSE` and `THIRD_PARTY_NOTICES.md` into the newest `%LOCALAPPDATA%\chaiNNer\app-*` folder and prints the psdds version.
 3. `-Target <resources\src folder>` installs into a given folder instead; `-Uninstall` removes only the `tessalith_dds` folder.
