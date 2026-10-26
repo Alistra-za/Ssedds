@@ -37,6 +37,7 @@ _Q = _ui.quality_inputs()
         if_group(_ui.visible("srgb"))(_ui.srgb_input()),
         *[if_group(Condition.enum(_ui.TYPE_ID, t) & _ui.custom())(_FMT[t]) for t in range(len(_FMT))],
         if_group(_ui.visible("discard"))(_ui.discard_input()),
+        if_group(_ui.alpha_mode_visible())(_ui.alpha_mode_input()),
         if_group(_ui.custom())(_ui.mips_input()),
         if_group(Condition.bool(_ui.MIPS_ID, True) & _ui.visible("filter"))(_ui.filter_input()),
         *[if_group(_ui.quality_condition(g))(_Q[g]) for g in range(len(_Q))],
@@ -59,6 +60,7 @@ def save_dds_tessalith_node(
     fmt_normal: int,
     fmt_mask: int,
     discard: bool,
+    alpha_is_transparency: bool,
     mips: bool,
     mip_filter: int,
     quality_0: int,
@@ -90,6 +92,7 @@ def save_dds_tessalith_node(
         "mips": int(mips),
         "quality": quality,
         "discard_alpha": int(discard),
+        "alpha_mode": int(alpha_is_transparency),
     }
     settings = _ui.settings_for(preset, raw)
     depth = _ui.depth_for(linear_hdr_input)

@@ -11,10 +11,15 @@ FMT_ID = {0: 7, 1: 8, 2: 9}
 DISCARD_ID, MIPS_ID, FILTER_ID = 10, 11, 12
 QUALITY_ID0 = 13  # one input per quality group: 13, 14, 15, 16 (BC6H)
 HDR_ID = 17  # "Linear HDR input" (depth 32 when on, 16 when off)
+ALPHA_MODE_ID = 18  # "Alpha is transparency" (Note DH)
 DEPTHS = (16, 32)  # chaiNNer images are float32: 16 = sRGB-coded 0..1, 32 = linear light
 
 NTYPES, NFMT = len(P.TYPES), len(P.FORMATS)
-_CONTROL = {"srgb": "srgb_enabled", "filter": "filter_enabled", "quality": "quality_enabled", "discard": None}  # None: discard_enabled
+_CONTROL = {"srgb": "srgb_enabled", "filter": "filter_enabled", "quality": "quality_enabled", "discard": None,  # None: discard_enabled
+            "alpha_mode": "alpha_mode_enabled"}
+# Note DH: Alpha is transparency is enabled only where alpha is kept, so it is probed with has_alpha 1 (and Discard off);
+# every other control with has_alpha 0 (DE10).
+_PROBE_ALPHA = {"alpha_mode": True}
 SEEDS = P.presets()
 
 
@@ -30,15 +35,18 @@ def allowed(t):
 
 
 def visibility_table():
-    """{control: {(type, fmt, srgb, mips, depth)}} probed with has_alpha = 0 (pixels are unknown when visibility is evaluated)."""
+    """{control: {(type, fmt, srgb, mips, depth)}} probed with has_alpha = 0 (pixels are unknown when visibility is evaluated),
+    except _PROBE_ALPHA controls, probed with has_alpha = 1."""
     out = {k: set() for k in _CONTROL}
     for t in range(NTYPES):
         for f in allowed(t):
             for srgb in (0, 1):
                 for mips in (0, 1):
                     for depth in DEPTHS:
-                        _, ctl, discard = P.resolve_depth({**P.defaults(t), "format": f, "srgb": srgb, "mips": mips}, False, depth)
+                        s = {**P.defaults(t), "format": f, "srgb": srgb, "mips": mips}
+                        probe = {a: P.resolve_depth(s, a, depth) for a in (False, True)}
                         for k, c in _CONTROL.items():
+                            _, ctl, discard = probe[_PROBE_ALPHA.get(k, False)]
                             if discard if c is None else ctl[c]:
                                 out[k].add((t, f, srgb, mips, depth))
     return out
@@ -106,6 +114,20 @@ def srgb_input():
 
 def discard_input(id_=DISCARD_ID):
     return BoolInput("Discard transparency", default=bool(P.defaults(0)["discard_alpha"])).with_id(id_)
+
+
+def alpha_mode_input():
+    return BoolInput("Alpha is transparency", default=bool(P.defaults(0)["alpha_mode"])).with_id(ALPHA_MODE_ID).with_docs(
+        "Off: alpha is data (a mask), and the colour under fully transparent pixels is saved as it is. On: alpha is "
+        "see-through, so that colour is replaced by the nearest visible colour and the mips are alpha-weighted. Shown only "
+        "where alpha can be kept; it applies only when the image has transparent pixels."
+    )
+
+
+def alpha_mode_visible():
+    """Where psdds can keep alpha (probed with has_alpha 1) and Discard transparency is off. Discard's own condition never
+    names this input (DE20)."""
+    return visible("alpha_mode") & Condition.bool(DISCARD_ID, False)
 
 
 def hdr_input():
