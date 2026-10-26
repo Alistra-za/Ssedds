@@ -14,7 +14,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $repo = Split-Path $here -Parent
-if (-not $Dll) { $Dll = Join-Path $repo 'target\psdds\x86_64-pc-windows-msvc\release\psdds.dll' }
+# A release zip (chainner\package.ps1) ships psdds.dll and the notices beside this script; a repo checkout builds them.
+$released = Test-Path (Join-Path $here 'THIRD_PARTY_NOTICES.md')
+if (-not $Dll) {
+    $Dll = if ($released) { Join-Path $here 'tessalith_dds\psdds.dll' } else { Join-Path $repo 'target\psdds\x86_64-pc-windows-msvc\release\psdds.dll' }
+}
 
 if (Get-Process chaiNNer -ErrorAction SilentlyContinue) {
     throw 'chaiNNer is running (its worker holds files open). Close chaiNNer, then run this again.'
@@ -48,7 +52,7 @@ if ($Uninstall) {
 }
 
 if (-not (Test-Path $Dll -PathType Leaf)) {
-    throw "psdds.dll (a file) not found at $Dll. Build it with crates\psdds\build.ps1 (or pass -Dll)."
+    throw "psdds.dll (a file) not found at $Dll. Build it with crates\psdds\build.ps1 (or pass -Dll), or unzip the whole release zip."
 }
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tessalith-install-" + [guid]::NewGuid().ToString('N'))
@@ -56,7 +60,8 @@ New-Item -ItemType Directory $tmp | Out-Null
 try {
     # Generate first, so a failed licence check leaves any existing install untouched.
     $notices = Join-Path $tmp 'THIRD_PARTY_NOTICES.md'
-    & (Join-Path $repo 'crates\psdds\notices.ps1') -Binary psdds.dll -Product 'Tessalith psdds.dll' -Out $notices
+    if ($released) { Copy-Item (Join-Path $here 'THIRD_PARTY_NOTICES.md') $notices }
+    else { & (Join-Path $repo 'crates\psdds\notices.ps1') -Binary psdds.dll -Product 'Tessalith psdds.dll' -Out $notices }
     if (-not (Test-Path $notices)) { throw 'notices.ps1 wrote no THIRD_PARTY_NOTICES.md' }
 
     # Stage beside the target and swap, so an interrupted copy never leaves a half-populated install.
