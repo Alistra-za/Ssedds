@@ -14,7 +14,7 @@ Tessalith builds for two targets:
 | Community Shaders | `cs` (default) | You play with Community Shaders, including TruePBR materials. |
 | Vanilla | `vanilla` | You want textures that load without Community Shaders. A set given the complex material shader packs the complex `_m` (environment, gloss, metal, height). |
 
-This wiki covers version 0.7.0. Tessalith is licensed GPL-3.0-or-later.
+This wiki covers version 1.0.0. Tessalith is licensed GPL-3.0-or-later, except its engine code (the `engine` and `encoders-sys` crates), which is MPL-2.0 so the plugins can use it. See [Plugins compared](Plugins-Compared.md).
 
 ## Pages
 

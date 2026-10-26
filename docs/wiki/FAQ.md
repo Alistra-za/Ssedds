@@ -96,4 +96,4 @@ See the table in [GUI guide](GUI-Guide.md#where-settings-live).
 
 ### What licence is it under?
 
-GPL-3.0-or-later. The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`.
+GPL-3.0-or-later, except the `engine` and `encoders-sys` crates, which are MPL-2.0 so the plugins can use them. The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`.
