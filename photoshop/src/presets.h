@@ -39,6 +39,7 @@ std::wstring CleanPresetName(const std::wstring &name);
 // The index of the preset called `name`, compared ordinally ignoring case, or -1.
 int FindPreset(const std::vector<Preset> &list, const std::wstring &name);
 
+// Alpha is transparency needs no such rule: psdds reports it as 0 wherever it is disabled (Note DH).
 // The first preset whose effective settings (psdds_resolve_depth with the document's has_alpha and depth) equal those of `raw`, or
 // -1 when none does ("Custom").
 // Discard transparency is ignored when has_alpha is 0 (it has no effect). `preferred` (the preset the user picked) wins

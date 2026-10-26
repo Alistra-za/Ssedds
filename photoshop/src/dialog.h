@@ -15,6 +15,7 @@
 #define IDC_DISCARD 1010
 #define IDD_PRESET_NAME 101
 #define IDC_PRESET_NAME 1011
+#define IDC_ALPHA_MODE 1012
 
 #ifndef RC_INVOKED
 #include <windows.h>
@@ -29,6 +30,7 @@ struct ControlStates {
     bool filter_enabled;   // false also with Mipmaps unchecked
     bool quality_enabled;
     bool discard_enabled;  // the Discard transparency checkbox; unchecked-able only for formats that store alpha; checked = shown.discard_alpha
+    bool alpha_mode_enabled; // the Alpha is transparency checkbox: editable only where alpha is kept (Note DH); it shows the raw pick
     bool formats[8];       // the Format list: psdds_format_offered(shown.texture_type, PSDDS_BC1 .. PSDDS_RGBA16F, depth)
 };
 

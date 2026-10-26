@@ -18,6 +18,7 @@ ControlStates FromResolve(const PsddsSettings &input, uint32_t has_alpha, uint32
     s.srgb_enabled = c.srgb_enabled != 0;
     s.filter_enabled = c.filter_enabled != 0;
     s.quality_enabled = c.quality_enabled != 0;
+    s.alpha_mode_enabled = c.alpha_mode_enabled != 0;
     for (uint32_t f = 0; f < 8; f++) s.formats[f] = psdds_format_offered(s.shown.texture_type, f, depth) != 0;
     return s;
 }
@@ -146,9 +147,12 @@ void refresh(HWND dlg, Context &ctx, int changed) {
     select_value(dlg, IDC_QUALITY, s.shown.quality);
     CheckDlgButton(dlg, IDC_SRGB, s.shown.srgb ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(dlg, IDC_DISCARD, s.shown.discard_alpha ? BST_CHECKED : BST_UNCHECKED);
+    // DH: greyed, it still shows the raw pick (it has no effect there; its effective value is 0).
+    CheckDlgButton(dlg, IDC_ALPHA_MODE, ctx.raw.alpha_mode ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(dlg, IDC_MIPS, s.shown.mips ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_SRGB), s.srgb_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_DISCARD), s.discard_enabled);
+    EnableWindow(GetDlgItem(dlg, IDC_ALPHA_MODE), s.alpha_mode_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_FILTER), s.filter_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_QUALITY), s.quality_enabled);
     EnableWindow(GetDlgItem(dlg, IDC_PRESET_DELETE), match >= 0);
@@ -258,7 +262,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             refresh(dlg, *ctx, IDC_PRESET);
             return TRUE;
         }
-        const bool checkbox = id == IDC_SRGB || id == IDC_MIPS || id == IDC_DISCARD;
+        const bool checkbox = id == IDC_SRGB || id == IDC_MIPS || id == IDC_DISCARD || id == IDC_ALPHA_MODE;
         if (HIWORD(wp) != (checkbox ? BN_CLICKED : CBN_SELCHANGE)) return FALSE;
         const uint32_t v = checkbox ? uint32_t(IsDlgButtonChecked(dlg, id) == BST_CHECKED) : selected_value(dlg, id);
         int changed = id;
@@ -274,6 +278,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         case IDC_TYPE: ctx->raw.texture_type = v; break;
         case IDC_SRGB: ctx->raw.srgb = v; break;
         case IDC_DISCARD: ctx->raw.discard_alpha = v; break;
+        case IDC_ALPHA_MODE: ctx->raw.alpha_mode = v; break;
         case IDC_FILTER: ctx->raw.filter = v; break;
         case IDC_MIPS: ctx->raw.mips = v; break;
         case IDC_QUALITY: ctx->raw.quality = v; break;
