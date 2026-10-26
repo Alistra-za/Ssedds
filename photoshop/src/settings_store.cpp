@@ -1,5 +1,5 @@
 // Tessalith DDS: the remembered Save settings in Photoshop's Descriptor Registry (PIActions.h), stored as seven
-// integers in one persistent descriptor. MIT licence (see photoshop/LICENSE).
+// integers in one persistent descriptor (eight since Note DH). MIT licence (see photoshop/LICENSE).
 #include "settings_store.h"
 
 #include "PIActions.h"
@@ -11,12 +11,14 @@ namespace {
 const char kRegistryKey[] = "3845e6ae-fbf3-46dc-9b93-f505f11cd107";
 
 // Descriptor keys: four-character codes read back only by this plug-in. The first six are required; 'disc' (DC36)
-// came later, so settings stored before it load with discard_alpha 0.
-constexpr DescriptorKeyID kKeys[7] = {'fmt ', 'type', 'srgb', 'filt', 'mips', 'qual', 'disc'};
+// came later, so settings stored before it load with discard_alpha 0; likewise 'alph' (Note DH) loads as alpha_mode 0.
+constexpr int kCount = 8;
+constexpr DescriptorKeyID kKeys[kCount] = {'fmt ', 'type', 'srgb', 'filt', 'mips', 'qual', 'disc', 'alph'};
 constexpr int kRequired = 6;
 
 uint32_t *field(PsddsSettings &s, int i) {
-    uint32_t *f[7] = {&s.format, &s.texture_type, &s.srgb, &s.filter, &s.mips, &s.quality, &s.discard_alpha};
+    uint32_t *f[kCount] = {&s.format, &s.texture_type, &s.srgb,         &s.filter,
+                           &s.mips,   &s.quality,      &s.discard_alpha, &s.alpha_mode};
     return f[i];
 }
 
@@ -58,7 +60,7 @@ PsddsSettings load_settings(SPBasicSuite *basic, uint32_t has_alpha) {
     }
     PsddsSettings s = defaults;
     bool complete = true;
-    for (int i = 0; i < 7 && complete; i++) {
+    for (int i = 0; i < kCount && complete; i++) {
         int32 v = 0;
         const bool got = suites.descriptor->GetInteger(d, kKeys[i], &v) == 0;
         complete = got || i >= kRequired;
@@ -80,7 +82,7 @@ void save_settings(SPBasicSuite *basic, const PsddsSettings &s) {
     if (suites.descriptor->Make(&d) != 0 || !d) return;
     PsddsSettings copy = s;
     bool ok = true;
-    for (int i = 0; i < 7 && ok; i++) ok = suites.descriptor->PutInteger(d, kKeys[i], int32(*field(copy, i))) == 0;
+    for (int i = 0; i < kCount && ok; i++) ok = suites.descriptor->PutInteger(d, kKeys[i], int32(*field(copy, i))) == 0;
     if (ok) suites.registry->Register(kRegistryKey, d, true);
     suites.descriptor->Free(d); // the caller frees its descriptor after Register
 }

@@ -153,7 +153,7 @@ fn near(a: u8, b: u8) -> bool {
 
 #[test]
 fn layouts_match_the_header() {
-    assert_eq!(size_of::<PsddsSettings>(), 28);
+    assert_eq!(size_of::<PsddsSettings>(), 32);
     assert_eq!(size_of::<PsddsSource>(), 24);
     assert_eq!(offset_of!(PsddsSource, width), 8);
     assert_eq!(offset_of!(PsddsSource, channel), 20);
@@ -424,6 +424,13 @@ fn discard_alpha_has_no_effect_on_the_pair() {
     assert!(a.rmaos == b.rmaos && a.normal == b.normal);
     assert_eq!(a.defaulted & 0b1000, 0, "specular lands in A");
     j.normal_settings.discard_alpha = 2;
+    fails(&j);
+    // DH: alpha_mode is checked the same way and changes nothing either.
+    j.normal_settings.discard_alpha = 0;
+    j.normal_settings.alpha_mode = 1;
+    let c = ok(&j);
+    assert!(a.rmaos == c.rmaos && a.normal == c.normal);
+    j.normal_settings.alpha_mode = 2;
     fails(&j);
 }
 

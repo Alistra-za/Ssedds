@@ -40,6 +40,7 @@ fn s(format: u32, texture_type: u32, srgb: u32, filter: u32, quality: u32) -> Ps
         mips: 1,
         quality,
         discard_alpha: 0,
+        alpha_mode: 0,
     }
 }
 
@@ -57,6 +58,7 @@ fn resolve_with(input: PsddsSettings, has_alpha: bool) -> (i32, PsddsSettings, P
         srgb_enabled: 9,
         filter_enabled: 9,
         quality_enabled: 9,
+        alpha_mode_enabled: 9,
     };
     let rc = unsafe { psdds_resolve(&input, u32::from(has_alpha), &mut e, &mut c) };
     (rc, e, c)
@@ -129,14 +131,19 @@ fn colour_keeps_srgb_and_filter_editable() {
 
 /// DC12 (I1): where the engine would mip with box anyway (alpha-weighted Blend mips), the filter greys and shows
 /// Box. Since DC39 sRGB Off no longer greys it: Colour content stays sRGB.
+/// DH: only "Alpha is transparency" (Blend) greys it; kept alpha as data (the default) leaves it editable.
 #[test]
 fn filter_greys_where_the_engine_uses_box() {
     let kaiser = |f, srgb| s(f, COLOUR, srgb, 3, 0);
+    let transparency = |set: PsddsSettings| PsddsSettings {
+        alpha_mode: 1,
+        ..set
+    };
     let greyed = [
-        (kaiser(BC7, 0), true), // alpha kept (Blend): alpha-weighted box, whatever the tag
-        (kaiser(BC7, 1), true),
-        (kaiser(BC3, 1), true),
-        (kaiser(RGBA8, 1), true),
+        (transparency(kaiser(BC7, 0)), true), // alpha kept (Blend): alpha-weighted box, whatever the tag
+        (transparency(kaiser(BC7, 1)), true),
+        (transparency(kaiser(BC3, 1)), true),
+        (transparency(kaiser(RGBA8, 1)), true),
     ];
     for (set, alpha) in greyed {
         let (rc, e, c) = resolve_with(set, alpha);
@@ -157,6 +164,10 @@ fn filter_greys_where_the_engine_uses_box() {
         (kaiser(BC7, 0), false),
         (kaiser(BC1, 0), false),
         (kaiser(RGBA8, 0), false),
+        // DH: alpha kept as data (alpha_mode 0) is not alpha-weighted, so Kaiser applies.
+        (kaiser(BC7, 0), true),
+        (kaiser(BC3, 1), true),
+        (kaiser(RGBA8, 1), true),
     ] {
         let (rc, e, c) = resolve_with(set, alpha);
         assert_eq!(rc, 0);
@@ -380,6 +391,7 @@ fn out_of_range_field_is_refused() {
         srgb_enabled: 0,
         filter_enabled: 0,
         quality_enabled: 0,
+        alpha_mode_enabled: 0,
     };
     unsafe {
         assert_eq!(psdds_resolve(std::ptr::null(), 0, &mut e, &mut c), -1);
@@ -449,15 +461,22 @@ fn profile_overrides_follow_r2_r3() {
                     );
                 }
                 let keeps = has_alpha && matches!(f, BC3 | BC7 | RGBA8);
-                let policy = if keeps {
-                    AlphaPolicy::Blend
-                } else {
-                    AlphaPolicy::Remove
-                };
-                assert_eq!(
-                    p.alpha.policy, policy,
-                    "type {ty} format {f} alpha {has_alpha}"
-                );
+                // DH: kept alpha is Data by default, Blend with "Alpha is transparency".
+                for (mode, kept) in [(0, AlphaPolicy::Data), (1, AlphaPolicy::Blend)] {
+                    let p = profile_for(
+                        &PsddsSettings {
+                            alpha_mode: mode,
+                            ..set
+                        },
+                        has_alpha,
+                    )
+                    .unwrap();
+                    let policy = if keeps { kept } else { AlphaPolicy::Remove };
+                    assert_eq!(
+                        p.alpha.policy, policy,
+                        "type {ty} format {f} alpha {has_alpha} mode {mode}"
+                    );
+                }
                 assert!(p.resize.is_none() && !p.drop_top_mip);
             }
         }
@@ -498,6 +517,7 @@ fn seed_presets_are_pinned() {
             mips: 1,
             quality,
             discard_alpha: discard,
+            alpha_mode: 0,
         };
         assert_eq!(p, expect, "{name}");
         for has_alpha in [false, true] {
@@ -518,7 +538,10 @@ fn seed_presets_are_pinned() {
 #[test]
 fn discard_transparency_removes_alpha() {
     for f in [BC3, BC7, RGBA8] {
-        let keep = s(f, COLOUR, 1, 3, 0);
+        let keep = PsddsSettings {
+            alpha_mode: 1,
+            ..s(f, COLOUR, 1, 3, 0)
+        };
         let discard = PsddsSettings {
             discard_alpha: 1,
             ..keep
@@ -536,6 +559,8 @@ fn discard_transparency_removes_alpha() {
         let (rc, e, c) = resolve_with(discard, true);
         assert_eq!((rc, c.filter_enabled, e.filter), (0, 1, 3), "format {f}");
         assert_eq!(e.discard_alpha, 1);
+        // DH: with alpha discarded, alpha_mode is greyed and effectively 0.
+        assert_eq!((c.alpha_mode_enabled, e.alpha_mode), (0, 0), "format {f}");
         let p = profile_for(&discard, true).unwrap();
         assert_eq!(p.alpha.policy, AlphaPolicy::Remove, "format {f}");
         assert_eq!(p.mips.filter, MipFilter::Kaiser);
@@ -580,6 +605,7 @@ fn hdr_formats_need_a_deep_document() {
         srgb_enabled: 9,
         filter_enabled: 9,
         quality_enabled: 9,
+        alpha_mode_enabled: 9,
     };
     let mut d = 9u32;
     unsafe {
@@ -683,6 +709,20 @@ fn hdr_profile_overrides() {
     assert_eq!(p.format, Format::Rgba16f);
     assert_eq!(p.encoder.backend, Backend::Uncompressed);
     assert_eq!(p.color.tag, ColorTag::NotApplicable);
+    assert_eq!(
+        p.alpha.policy,
+        AlphaPolicy::Data,
+        "DH: kept alpha is data by default"
+    );
+    let p = profile_for_depth(
+        &PsddsSettings {
+            alpha_mode: 1,
+            ..f16
+        },
+        true,
+        32,
+    )
+    .unwrap();
     assert_eq!(p.alpha.policy, AlphaPolicy::Blend);
     let discard = PsddsSettings {
         discard_alpha: 1,
@@ -697,4 +737,61 @@ fn hdr_profile_overrides() {
         .position(|&l| engine::encode::bc6h_level(l) == base_level)
         .unwrap() as u32;
     assert_eq!(rd(s(BC6H, COLOUR, 0, 0, 99), false, 16).0.quality, want);
+}
+
+/// DH: "Alpha is transparency" is enabled exactly where alpha is kept; elsewhere its effective value is 0, so a raw 1
+/// there resolves like 0 (no spurious Custom in preset matching). 2 is refused like the other fields.
+#[test]
+fn alpha_mode_is_enabled_only_where_alpha_is_kept() {
+    for depth in [8, 16, 32] {
+        for f in 0..8 {
+            for ty in [COLOUR, NORMAL, MASK] {
+                for has_alpha in [false, true] {
+                    for discard in [0, 1] {
+                        for mode in [0, 1] {
+                            let set = PsddsSettings {
+                                discard_alpha: discard,
+                                alpha_mode: mode,
+                                ..s(f, ty, 0, 3, 0)
+                            };
+                            let (e, c, _) = rd(set, has_alpha, depth);
+                            let kept = has_alpha
+                                && discard == 0
+                                && matches!(e.format, BC3 | BC7 | RGBA8 | RGBA16F);
+                            let at = format!("f {f} ty {ty} alpha {has_alpha} discard {discard} mode {mode} depth {depth}");
+                            assert_eq!(c.alpha_mode_enabled, u32::from(kept), "{at}");
+                            assert_eq!(e.alpha_mode, if kept { mode } else { 0 }, "{at}");
+                            let disabled_raw_1 = PsddsSettings {
+                                alpha_mode: 1,
+                                ..set
+                            };
+                            if !kept {
+                                assert_eq!(
+                                    rd(disabled_raw_1, has_alpha, depth),
+                                    rd(set, has_alpha, depth),
+                                    "{at}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let ok = s(BC7, COLOUR, 0, 0, 4);
+    let bad = PsddsSettings {
+        alpha_mode: 2,
+        ..ok
+    };
+    assert_eq!(resolve_with(bad, true).0, -1);
+    assert!(profile_for(&bad, true).is_err());
+    // The seeds and the defaults are alpha as data.
+    for i in 0..psdds_preset_count() {
+        let mut p = zero();
+        assert_eq!(unsafe { psdds_preset_settings(i, &mut p) }, 0);
+        assert_eq!(p.alpha_mode, 0);
+    }
+    for ty in [COLOUR, NORMAL, MASK] {
+        assert_eq!(psdds_defaults(ty).alpha_mode, 0);
+    }
 }

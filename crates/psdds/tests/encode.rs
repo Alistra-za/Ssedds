@@ -213,9 +213,15 @@ fn kaiser_applies_only_where_the_dialog_shows_it() {
         with(unorm_bc7, 3, false) != with(unorm_bc7, 0, false),
         "Kaiser must change the mips with sRGB Off"
     );
-    // Kept alpha (Blend) mips with box whatever the filter.
+    // Kept alpha with "Alpha is transparency" (Blend) mips with box whatever the filter.
     for set in [srgb_bc7, unorm_bc7] {
-        assert!(with(set, 3, true) == with(set, 0, true), "{set:?}");
+        let blend = PsddsSettings {
+            alpha_mode: 1,
+            ..set
+        };
+        assert!(with(blend, 3, true) == with(blend, 0, true), "{set:?}");
+        // DH: kept alpha as data (the default) is not alpha-weighted, so the filter shows and applies.
+        assert!(with(set, 3, true) != with(set, 0, true), "{set:?}");
     }
 }
 

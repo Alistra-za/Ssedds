@@ -75,7 +75,8 @@ pub fn normal_profile(ns: &PsddsSettings) -> Result<Profile, String> {
     if ns.texture_type != 1 {
         return Err("normal_settings must use texture type Normal".into());
     }
-    // No image alpha in a `_n`: `build` removes it, so discard_alpha (checked by resolve) changes nothing (R19).
+    // No image alpha in a `_n`: `build` removes it, so discard_alpha and alpha_mode (checked by resolve) change
+    // nothing (R19, DH).
     settings::profile_for_base(ns, false, Subtype::PbrNormal)
 }
 

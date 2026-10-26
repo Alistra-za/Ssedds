@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for _ui.py (needs chaiNNer's src for Condition/DropDownInput; skipped if it is not installed)."""
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -112,8 +113,8 @@ class UiTests(unittest.TestCase):
                     self.assertTrue(ev(U.custom(), state(t, f)))
                     for preset in range(1, 6):
                         self.assertFalse(ev(U.custom(), state(t, f, preset=preset)))
-        # the srgb/filter table is probed with has_alpha 0; Discard never enters it
-        self.assertEqual(set(U.TABLE), {"srgb", "filter", "quality", "discard"})
+        # the srgb/filter table is probed with has_alpha 0 (alpha_mode with 1, Note DH); Discard never enters it
+        self.assertEqual(set(U.TABLE), {"srgb", "filter", "quality", "discard", "alpha_mode"})
         self.assertEqual(U.TABLE, U.visibility_table())
 
     def test_formats_per_type(self):
@@ -135,6 +136,24 @@ class UiTests(unittest.TestCase):
                 self.assertEqual(ev(U.visible("discard"), state(COLOUR, f, hdr=hdr)), f == RGBA16F)
         self.assertFalse(ev(U.visible("discard"), state(COLOUR, BC7, preset=2)))
 
+    def test_alpha_mode_visibility(self):
+        # Note DH: shown where psdds can keep alpha (probed with has_alpha 1) and Discard is off; hidden elsewhere
+        def shown(t, f, discard=0, **kw):
+            return ev(U.alpha_mode_visible(), {**state(t, f, **kw), U.DISCARD_ID: discard})
+        for t in range(3):
+            for f in range(8):
+                if P.format_allowed(t, f):
+                    keeps = f in (BC3, BC7, RGBA8, RGBA16F)
+                    self.assertEqual(shown(t, f), keeps, (t, f))
+                    self.assertFalse(shown(t, f, discard=1), (t, f))
+        for hdr in (0, 1):
+            self.assertTrue(shown(COLOUR, RGBA16F, hdr=hdr))
+        self.assertFalse(shown(COLOUR, BC7, preset=2))
+        self.assertEqual(U.alpha_mode_input().default, 0)
+        # DE20: Discard's own condition never names this input; this input's never names itself
+        self.assertNotIn(f'"enum": {U.ALPHA_MODE_ID}', json.dumps(U.visible("discard").to_json()))
+        self.assertNotIn(f'"enum": {U.ALPHA_MODE_ID}', json.dumps(U.alpha_mode_visible().to_json()))
+        self.assertIn(f'"enum": {U.DISCARD_ID}', json.dumps(U.alpha_mode_visible().to_json()))
     def test_quality_bc6h(self):
         self.assertEqual(len(U.QUALITY_GROUPS), 4)
         self.assertEqual(U.QUALITY_GROUPS[3], ((BC6H,), P.quality_labels(BC6H)))
@@ -177,10 +196,10 @@ class NodeTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.img = np.random.default_rng(1).random((16, 16, 3), dtype=np.float32)
 
-    def run_node(self, img=None, preset=0, t=COLOUR, fmts=(BC7, BC7, BC7), skip=False, name="x", hdr=False):
+    def run_node(self, img=None, preset=0, t=COLOUR, fmts=(BC7, BC7, BC7), skip=False, name="x", hdr=False, transparency=False):
         from api import Lazy
         lazy = Lazy.ready(self.img if img is None else img)
-        return N(lazy, self.dir, None, name, preset, t, False, *fmts, False, True, 0, 4, 0, 4, 0, hdr, skip)
+        return N(lazy, self.dir, None, name, preset, t, False, *fmts, False, transparency, True, 0, 4, 0, 4, 0, hdr, skip)
 
     def test_skip_existing_does_not_evaluate_image(self):
         p = self.dir / "x.dds"
@@ -191,7 +210,7 @@ class NodeTests(unittest.TestCase):
             def value(self):
                 raise AssertionError("lazy image evaluated")
 
-        N(Boom(), self.dir, None, "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, 0, False, True)
+        N(Boom(), self.dir, None, "x", 0, COLOUR, False, BC7, BC7, BC7, False, False, True, 0, 4, 0, 4, 0, False, True)
         self.assertEqual(p.read_bytes(), b"old")
 
     def test_overwrite_goes_through_write_files(self):
@@ -202,6 +221,15 @@ class NodeTests(unittest.TestCase):
         w.assert_called_once()
         self.assertEqual((self.dir / "x.dds").read_bytes()[:4], b"DDS ")
 
+    def test_alpha_is_transparency_reaches_psdds(self):
+        # Note DH: off (default) = alpha as data, on = Blend; each equals psdds's own encode of those settings
+        img = np.random.default_rng(3).random((16, 16, 4), dtype=np.float32)
+        img[:, :4, 3] = 0.0
+        s = {**P.defaults(COLOUR), "format": BC7, "quality": 4, "mips": 1}
+        for on in (False, True):
+            self.run_node(img=img, name=f"a{on}", transparency=on)
+            self.assertEqual((self.dir / f"a{on}.dds").read_bytes(), P.encode(img, {**s, "alpha_mode": int(on)}, 16))
+        self.assertNotEqual((self.dir / "aFalse.dds").read_bytes(), (self.dir / "aTrue.dds").read_bytes())
     def test_preset_writes_seed_bytes(self):
         for k in (2, 3):
             self.run_node(preset=k, name=f"p{k}")
@@ -227,7 +255,7 @@ class NodeTests(unittest.TestCase):
         from api import Lazy
         big = np.broadcast_to(np.zeros((1, 1, 3), np.float32), (1 << 20, 1 << 20, 3))
         with self.assertRaises(RuntimeError):
-            N(Lazy.ready(big), self.dir, "new", "x", 0, COLOUR, False, BC7, BC7, BC7, False, True, 0, 4, 0, 4, 0, False, False)
+            N(Lazy.ready(big), self.dir, "new", "x", 0, COLOUR, False, BC7, BC7, BC7, False, False, True, 0, 4, 0, 4, 0, False, False)
         self.assertFalse((self.dir / "new").exists())
 
 
@@ -284,7 +312,7 @@ class HdrTests(unittest.TestCase):
         from api import Lazy
         img = np.full((8, 8, 3), 4.0, np.float32)
         for hdr, want in ((True, 4.0), (False, 1.0)):
-            N(Lazy.ready(img), Path(tmp.name), None, f"h{hdr}", 0, COLOUR, False, BC6H, BC7, BC7, False, True, 0, 4, 0, 4, 0, hdr, False)
+            N(Lazy.ready(img), Path(tmp.name), None, f"h{hdr}", 0, COLOUR, False, BC6H, BC7, BC7, False, False, True, 0, 4, 0, 4, 0, hdr, False)
             px = P.decode_depth32((Path(tmp.name) / f"h{hdr}.dds").read_bytes())
             self.assertLess(abs(float(px[..., :3].mean()) - want), 0.1)
 

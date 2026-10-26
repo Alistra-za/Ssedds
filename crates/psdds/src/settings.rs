@@ -27,6 +27,9 @@ pub struct PsddsSettings {
     pub quality: u32,
     /// 1: "Discard transparency", alpha is removed whatever the pixels (DC36). 0: the pixels decide (DC31).
     pub discard_alpha: u32,
+    /// DH: where alpha is kept, 0 = data (`AlphaPolicy::Data`, colour kept exactly), 1 = "Alpha is transparency"
+    /// (`AlphaPolicy::Blend`). Effective 0 wherever alpha is not kept.
+    pub alpha_mode: u32,
 }
 
 /// Which dialog controls are editable (1) or greyed (0).
@@ -36,6 +39,8 @@ pub struct PsddsControls {
     pub srgb_enabled: u32,
     pub filter_enabled: u32,
     pub quality_enabled: u32,
+    /// DH: 1 exactly when alpha is kept (document alpha, Discard off, a format that stores alpha).
+    pub alpha_mode_enabled: u32,
 }
 
 const FORMATS: [Format; 8] = [
@@ -193,6 +198,7 @@ pub fn defaults(texture_type: u32) -> PsddsSettings {
         mips: 1,
         quality,
         discard_alpha: 0,
+        alpha_mode: 0,
     }
 }
 
@@ -257,6 +263,7 @@ pub fn resolve_depth(
     range("filter", s.filter, 4)?;
     range("mips", s.mips, 2)?;
     range("discard transparency", s.discard_alpha, 2)?;
+    range("alpha mode", s.alpha_mode, 2)?;
     // DC32: a format the type does not offer becomes the type's default (like DC8's quality), not an error.
     let s = &PsddsSettings {
         format: if format_offered(s.texture_type, s.format, depth) {
@@ -277,6 +284,7 @@ pub fn resolve_depth(
         // DC33: without mips the filter does nothing.
         filter_enabled: u32::from(colour && s.mips == 1),
         quality_enabled: u32::from(count > 0),
+        alpha_mode_enabled: 0,
     };
     let mut effective = PsddsSettings {
         srgb: if controls.srgb_enabled == 1 {
@@ -298,6 +306,13 @@ pub fn resolve_depth(
         discard_alpha: if discard_enabled { s.discard_alpha } else { 1 },
         ..*s
     };
+    // DH: build's keep-alpha rule; discard_alpha is already 1 for every format that stores no alpha (DF2). When
+    // disabled the effective value is 0, so a raw 1 there never makes a preset look different.
+    let keeps_alpha = has_alpha && effective.discard_alpha == 0;
+    controls.alpha_mode_enabled = u32::from(keeps_alpha);
+    if !keeps_alpha {
+        effective.alpha_mode = 0;
+    }
     // DC12: where the engine's own rule would mip with box (alpha-weighted Blend mips; Colour content is sRGB, DC39), the
     // filter greys and shows Box. Probed with Kaiser, as every non-box filter shares the rule outside HDR.
     if colour {
@@ -371,8 +386,13 @@ pub(crate) fn build_from_base(mut p: Profile, e: &PsddsSettings, has_alpha: bool
         MipKeyword::None
     });
     // R2: keep alpha only where the document has it, the format stores it and the user keeps it (DC36).
+    // DH: kept alpha is data unless the user ticks "Alpha is transparency".
     p.alpha.policy = if has_alpha && e.discard_alpha == 0 && matches!(e.format, 1 | 4 | 5 | 7) {
-        AlphaPolicy::Blend
+        if e.alpha_mode == 1 {
+            AlphaPolicy::Blend
+        } else {
+            AlphaPolicy::Data
+        }
     } else {
         AlphaPolicy::Remove
     };

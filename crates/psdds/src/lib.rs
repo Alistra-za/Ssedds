@@ -48,7 +48,7 @@ unsafe fn write_err(err: *mut c_char, cap: usize, msg: &str) {
 }
 
 /// Bumped on any change to `photoshop/psdds.h`'s declarations or documented behaviour (pinned by tests/abi.rs).
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 /// The `PSDDS_ABI_VERSION` this library was built with.
 #[no_mangle]
@@ -73,6 +73,7 @@ pub extern "C" fn psdds_defaults(texture_type: u32) -> PsddsSettings {
         mips: 1,
         quality: settings::FALLBACK_QUALITY,
         discard_alpha: 0,
+        alpha_mode: 0,
     })
 }
 
