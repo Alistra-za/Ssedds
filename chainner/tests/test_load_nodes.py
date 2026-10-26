@@ -33,6 +33,7 @@ class LoadNodes(unittest.TestCase):
         # other packages may fail on this machine (e.g. onnx DLL); only ours count
         self.assertEqual([e for e in r["errors"] if "tessalith_dds" in e], [])
         self.assertEqual(r["condition_errors"], [])
+        self.assertEqual(r["condition_cycles"], [])
         # owner 2026-10-25: roughness is required, the other three image inputs stay optional
         self.assertEqual(r["rmaos_optional"], {"Roughness": False, "Metallic": True, "AO": True, "Specular": True})
         self.assertEqual(r["ids"], ["tessalith:dds:rmaos", "tessalith:dds:save", "tessalith:dds:save_normal"])
