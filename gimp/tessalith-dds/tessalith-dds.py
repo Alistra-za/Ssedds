@@ -296,7 +296,8 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config; NONINTERACTIVE
         # uses the arguments as given. The dialog comes after the pixel read so its greying matches (DC31).
         # shortcut: the float RGBA buffer (16 B/px) and the copy image stay alive while the modal dialog is open,
-        # hundreds of MB at 4k; upgrade by re-reading the pixels after OK if that memory matters.
+        # hundreds of MB at 4k; the pixels are re-read after OK only when the type switches between Colour and data,
+        # so freeing the buffer during the dialog would mean re-reading always, if that memory matters.
         if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha, depth):
             return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, None)
         s = raw_settings(config)
