@@ -48,7 +48,7 @@ public unsafe class PsddsTests
     {
         var m = Regex.Match(File.ReadAllText(FindHeader()), @"#define PSDDS_ABI_VERSION (\d+)u");
         Assert.True(m.Success);
-        Assert.Equal(uint.Parse(m.Groups[1].Value), Psdds.ExpectedAbiVersion);
+        Assert.Equal(Psdds.ExpectedAbiVersion, uint.Parse(m.Groups[1].Value));
         Psdds.EnsureCompatible();
     }
 
