@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Not listed here? See [Known issues](Known-Issues.md) for open problems in this alpha.
+Not listed here? See [Known issues](Known-Issues.md) for open problems in this version.
 
 ## Common problems
 

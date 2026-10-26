@@ -94,6 +94,7 @@ Select a mesh to see:
 - **Shapes**: the **Shapes** button next to the list title swaps the list for the selected mesh's shape cards: number and type, shader, SLSF1/SLSF2 flags by name, geometry, alpha in words (blend, test, threshold) and the texture slots, with **Open in Textures** for files in the open folder. The right pane shows the mesh in 3D.
 - **Plugin overrides**: plugin records that use this mesh. **Show inert** includes records that have no effect.
 - Override and conflict information ("Overridden by …").
+- **Edit**: opens the mesh for editing. See [NIF editing](NIF-Editing.md).
 
 ### Plugin file references
 

@@ -1,6 +1,6 @@
 # Getting started
 
-This page takes one small texture set from source images to finished DDS files, first with the `sdc` command line and then with the Tessalith GUI (`tessalith.exe`). It assumes you have built both programs (see [Installation](Installation.md)) and that `sdc` is on your `PATH`.
+This page takes one small texture set from source images to finished DDS files, first with the `sdc` command line and then with the Tessalith GUI (`tessalith.exe`). It assumes you have unzipped the release (or built both programs; see [Installation](Installation.md)) and that `sdc` is on your `PATH`.
 
 ## The example project
 

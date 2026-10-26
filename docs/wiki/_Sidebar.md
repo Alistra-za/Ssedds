@@ -10,6 +10,8 @@ Using it
 - [GUI guide](GUI-Guide.md)
 - [Project config](Project-Config.md)
 - [Presets and targets](Presets-and-Targets.md)
+- [NIF editing](NIF-Editing.md)
+- [Host plugins](Host-Plugins.md)
 
 Concepts
 

@@ -1,8 +1,39 @@
 # Installation
 
-Tessalith has no prebuilt releases or installer yet, so you build it from source.
+Most people should use the release zip. Build from source only if you want to change the code.
 
-## Requirements
+## The release zip
+
+Download `Tessalith-<version>-win-x64.zip` from the [Releases page](https://github.com/Alistra-za/Tessalith/releases). `SHA256SUMS.txt` beside it lists the hashes of the zip and both programs, if you want to check them.
+
+1. Unzip it anywhere. There is no installer and nothing to register.
+2. Double-click `tessalith.exe` for the GUI, or open a terminal in the folder and run `sdc`.
+
+The zip holds:
+
+| File | What it is |
+|---|---|
+| `tessalith.exe` | The GUI. |
+| `sdc.exe` | The command line. It uses the same engine and the same `sdc.toml`. |
+| `README.txt` | A short start guide. |
+| `CHANGELOG.md` | What changed in each version. |
+| `LICENSE`, `LICENSES\`, `THIRD_PARTY_NOTICES.md`, `THIRD_PARTY_LICENSES.md` | Licence texts. |
+
+What you need:
+
+- Windows 10 or 11, x64.
+- A graphics card for the GUI's preview windows. The CLI needs none.
+- Optional: NVIDIA Texture Tools 3.2.5, as another BC7 / BC6H encoder. See [Optional: NVTT 3.2.5](#optional-nvtt-325).
+
+The programs are not code-signed, so Windows SmartScreen may warn the first time. Click **More info**, then **Run anyway**.
+
+To run `sdc` from any folder, add the unzipped folder to your `PATH`.
+
+The plugins for Photoshop, GIMP, Paint.NET and chaiNNer come in their own zips. See [Host plugins](Host-Plugins.md).
+
+## Building from source
+
+### Requirements
 
 | Requirement | Detail |
 |---|---|
@@ -14,14 +45,14 @@ Tessalith has no prebuilt releases or installer yet, so you build it from source
 | ISPC | Not needed for a normal build. See [ISPC objects](#ispc-objects). |
 | NVTT | Optional. See [Optional: NVTT 3.2.5](#optional-nvtt-325). |
 
-## Building from source
+### Build steps
 
 1. Install the Visual Studio Build Tools with the "Desktop development with C++" workload.
 2. Install Rust with `rustup`. You do not need to pick a toolchain by hand: `rust-toolchain.toml` in the repository root makes `cargo` fetch and use the right one, including the MSVC target and components.
 3. Clone the repository and build in release mode:
 
 ```powershell
-git clone <repository url> Tessalith
+git clone https://github.com/Alistra-za/Tessalith.git Tessalith
 cd Tessalith
 cargo build --release
 ```
@@ -134,10 +165,11 @@ Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-
 | `%APPDATA%\sdc\presets\*.toml` | Your own presets. Loaded by the CLI and the GUI on every run. | You |
 | `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, the default export folder, preview limits, threads, NVTT path, window layout. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. | `tessalith.exe` |
+| `%LOCALAPPDATA%\sdc\logs\` | GUI crash logs, `crash-<date>-<time>.log`. The CLI writes none. | `tessalith.exe` |
 | `<project>\sdc.toml` | Project config. | You or `tessalith.exe` |
 | `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `tessalith.exe` |
 | `<output>\_sdc\manifest.jsonl` | Record of every converted file. | `sdc` and `tessalith.exe` |
 
 ## Uninstalling
 
-Delete the two executables and, if you want, the `%APPDATA%\sdc` and `%LOCALAPPDATA%\sdc` folders. Nothing is registered with Windows.
+Delete the unzipped folder (or the two executables) and, if you want, the `%APPDATA%\sdc` and `%LOCALAPPDATA%\sdc` folders. Nothing is registered with Windows.

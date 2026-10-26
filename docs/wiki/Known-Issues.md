@@ -1,6 +1,6 @@
 # Known issues
 
-This is the first public alpha. These are the things you may run into, and what to do about them. For fixes to common errors, see [Troubleshooting](Troubleshooting.md).
+This page covers version 1.0.0. These are the things you may run into, and what to do about them. For fixes to common errors, see [Troubleshooting](Troubleshooting.md).
 
 ## Crashes and memory
 
@@ -49,6 +49,26 @@ These names do not say whether the green channel is DirectX or OpenGL. Tessalith
 **Windows SmartScreen warns on first run**
 
 The program is not code-signed yet. On first run, click **More info**, then **Run anyway**.
+
+## Host plugins
+
+**GIMP: Overwrite reuses your last export settings**
+
+File > Overwrite (or Export to) on a DDS you opened does not show the dialog. It writes with the settings of the last texture you exported, so a normal map can be saved as colour. Use File > Export As to choose.
+
+**Paint.NET opens DDS files with its own reader**
+
+Paint.NET always opens `.dds` with its built-in support, even files Tessalith wrote. To save with Tessalith again, use Save As once and pick **Tessalith DDS**.
+
+**chaiNNer: the nodes vanish after a chaiNNer update**
+
+An update installs chaiNNer into a new folder and deletes the old one. Close chaiNNer and run `install.ps1` again.
+
+**Photoshop: a normal map converted from 16-bit to 32-bit**
+
+Photoshop makes the values linear during that conversion, and the plugin then saves them as raw data. Convert the document back to 16-bit before saving. A normal map that was made as 32-bit (for example a Marmoset bake) is fine.
+
+See [Host plugins](Host-Plugins.md) for more.
 
 ## Reporting a problem
 

@@ -2,7 +2,7 @@
 
 Tessalith (`tessalith.exe`) runs the same engine as `sdc convert`. A folder you decide and export in the GUI converts to the same files from the command line, because every decision is saved in the folder's `sdc.toml`.
 
-The window has two views, picked in the header: the Textures view (converter and set editor) and the Meshes view (mod scanning, covered in [Mod scanning](Mod-Scanning.md)).
+The window has two views, picked in the header: the Textures view (converter and set editor) and the Meshes view (mod scanning and NIF editing, covered in [Mod scanning](Mod-Scanning.md) and [NIF editing](NIF-Editing.md)).
 
 ## Main window
 
