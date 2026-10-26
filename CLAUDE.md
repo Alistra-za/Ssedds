@@ -73,7 +73,7 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 
 ## Where things are
 - `docs/DECISIONS.md`: every ruling. Search it before changing behaviour.
-- `docs/gui.md`, `docs/wiki/`: user-facing behaviour. Update them when the UI changes.
+- `docs/gui.md`, `docs/wiki/`: user-facing behaviour. Update them when the UI changes. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
 - `docs/research/`: the measurements behind encoder, mip-filter and coverage choices.
 - `.claude/workflows/trace-debug.js`: a whole-repo bug hunt with skeptical review.
 - `.claude/workflows/in-game-capture.js`: launch the game through MO2, take RenderDoc captures of test meshes without a keyboard, restore settings, and turn the captures into numbers.
