@@ -24,6 +24,9 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     readonly PresetFile _presets;
     readonly PresetSelection _selection = new();
     readonly MeasuredAlpha _alpha = new();
+    // Never use the FileType property: the SaveConfigWidget(FileType) base ctor does not store it, so it is always null
+    // and its getter throws (Paint.NET 5.1 IL; Note DF).
+    readonly TessalithDdsFileType _fileType;
     PsddsSettings _raw = Psdds.Defaults(Psdds.Colour);
     bool _refreshing;
 
@@ -49,7 +52,8 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
 
         // Paint.NET makes one TessalithDdsFileType per process (GetFileTypeInstances); the host builds this widget from it
         // and runs the preview save on that same instance, so the instance event reaches the open widget.
-        fileType.HasAlphaMeasured += OnMeasured;
+        _fileType = fileType;
+        _fileType.HasAlphaMeasured += OnMeasured;
     }
 
     static ComboBox List(string name) => new() { DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = name, DisplayMember = nameof(Choice.Label), Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -110,7 +114,8 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) FileType.HasAlphaMeasured -= OnMeasured;
+        // the dialog cancels the preview without waiting, so OnMeasured may still run after this; it checks IsDisposed
+        if (disposing) _fileType.HasAlphaMeasured -= OnMeasured;
         base.Dispose(disposing);
     }
 
