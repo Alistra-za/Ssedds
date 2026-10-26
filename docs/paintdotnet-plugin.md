@@ -1,6 +1,6 @@
 # Tessalith DDS plugin for Paint.NET
 
-`TessalithDds.dll` is a Paint.NET 5.1+ file type plugin (Windows x64) that saves Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `paintdotnet/README.md`; the rulings are the Paint.NET note in [DECISIONS.md](DECISIONS.md) (Note DF).
+`TessalithDds.dll` is a Paint.NET 5.1+ file type plugin (Windows x64) that saves Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `paintdotnet/README.md`; the rulings are the Paint.NET note in [DECISIONS.md](DECISIONS.md) (Note DI).
 
 ## Layout
 - `paintdotnet/src/Core/`: the host-free code (P/Invoke and ABI check for `psdds.dll`, pixel conversion, dialog model, preset store and selection). It names no `PaintDotNet` type.

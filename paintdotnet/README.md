@@ -21,9 +21,10 @@ Choose File > Save As and pick **Tessalith DDS** in the type list. Paint.NET fla
 - **Texture type**: Colour, Normal map or Linear mask. It sets the colour handling and mip rules, as in Tessalith's presets, and which formats are offered.
 - **sRGB** (checkbox beside the type): tags the file as sRGB; it changes only the tag, not the pixels or the mips. Off by default, because Skyrim's non-PBR textures are not sRGB-tagged. It is greyed and unticked for Normal and Linear mask.
 - **Format**: the list depends on the texture type. Colour offers BC1, BC3, BC7 and uncompressed RGBA8; Normal map adds BC5; Linear mask also offers BC4. A format the type does not offer is replaced by BC7.
-- **Discard transparency** (checkbox, under sRGB): saves an opaque file whatever the pixels hold.
+- **Discard transparency** (checkbox, under sRGB): saves an opaque file whatever the pixels hold. It is ticked and greyed for BC1, BC4 and BC5, which store no alpha.
+- **Alpha is transparency** (checkbox, under Discard transparency): off by default, so alpha is saved as data (a mask) and the colour under fully transparent pixels is kept exactly. Tick it for cut-out or see-through textures: the colour under transparent pixels is then filled from its neighbours and the mips are weighted by alpha, and the filter shows Box. It is greyed where no alpha is kept.
 - **Mipmaps** (checkbox): a full mip chain, or none when unticked.
-- **Mip filter**: how mips are shrunk. It is greyed when Mipmaps is unticked, and greyed showing Box where the encoder would use Box anyway.
+- **Mip filter**: how mips are shrunk. It is greyed when Mipmaps is unticked, and greyed showing Box where the encoder would use Box anyway (alpha kept with Alpha is transparency ticked).
 - **Quality**: the encoder effort for the chosen format. Greyed for RGBA8.
 
 Greyed controls show the value the encoder will use and remember your own pick. Until the first preview has measured the image, the dialog treats it as opaque. The name prompt and message boxes stay light under Paint.NET's dark theme.

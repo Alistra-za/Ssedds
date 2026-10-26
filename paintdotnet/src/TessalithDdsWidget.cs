@@ -26,7 +26,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     readonly PresetSelection _selection = new();
     readonly MeasuredAlpha _alpha = new();
     // Never use the FileType property: the SaveConfigWidget(FileType) base ctor does not store it, so it is always null
-    // and its getter throws (Paint.NET 5.1 IL; Note DF).
+    // and its getter throws (Paint.NET 5.1 IL; Note DI36).
     readonly TessalithDdsFileType _fileType;
     PsddsSettings _raw = Psdds.Defaults(Psdds.Colour);
     bool _refreshing;
@@ -63,7 +63,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     static Label NewLabel(string text) => new() { Text = text, AutoSize = true, Anchor = AnchorStyles.Left };
 
     // One column in dialog.rc's row order (DC33): Paint.NET gives the options a fixed 200-DIP column and sets this widget's
-    // width to it (Note DF), so the lists fill that width and every label sits above its list. TabIndex is the visual
+    // width to it (Note DI37), so the lists fill that width and every label sits above its list. TabIndex is the visual
     // order; each label sits just before its list so its mnemonic moves focus there.
     readonly TableLayoutPanel _table = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Dock = DockStyle.Top };
 
