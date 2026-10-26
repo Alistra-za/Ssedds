@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/assets/tessalith-emblem.png" alt="Tessalith emblem" width="480"></p>
+<p align="center"><img src="docs/assets/tessalith-emblem.png" alt="Tessalith emblem" width="640"></p>
 
 <h1 align="center">Tessalith</h1>
 
