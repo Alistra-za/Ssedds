@@ -19,7 +19,7 @@ import gi  # noqa: E402
 gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, Gio, GLib  # noqa: E402
-from psdds_ctypes import BC4, BC7, COLOUR, RGBA8, Psdds, PsddsError  # noqa: E402
+from psdds_ctypes import BC4, BC5, BC6H, BC7, COLOUR, NORMAL, RGBA8, Psdds, PsddsError  # noqa: E402
 
 OUT = os.environ["TDDS_OUT"]
 TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
@@ -507,6 +507,68 @@ def export_with_last_vals_skips_dialog():
         img.delete()
 
 
+def export_precision_table_matches_gimp():
+    """The unit test's GimpPrecision table is GIMP's own enum, so precision_depth covers every value."""
+    from tdds_pixels import precision_depth
+    from test_pixels import PRECISIONS
+    got = {m.name: int(m) for m in Gimp.Precision}
+    assert got == PRECISIONS, f"GIMP's precisions differ from the unit table: {got}"
+    for v in got.values():
+        precision_depth(v)
+
+
+def _settings(fmt, texture_type=COLOUR, discard=0):
+    s = psdds.defaults(texture_type)
+    s.format, s.discard_alpha = fmt, discard
+    return s
+
+
+def export_8_bit_bytes_unchanged():
+    """An 8-bit image exports exactly what psdds_encode (the ABI 2 call) made of the same pixels before 5b."""
+    px = bytearray(_gradient(16, 16))
+    for i in range(0, 64, 4):
+        px[i * 4 + 3] = i * 3  # alpha in use
+    img = _image(16, 16, px)
+    assert img.get_precision() == Gimp.Precision.U8_NON_LINEAR, f"precision {img.get_precision()}"
+    rgba = bytearray(_read(img.get_layers()[0], "R'G'B'A float"))
+    assert psdds.alpha_used(rgba, 16, 16), "fixture has no alpha in use"
+    for name, args, has_alpha, s in (
+            ("u8_bc7.dds", dict(format="bc7"), True, _settings(BC7)),
+            ("u8_bc7_disc.dds", dict(format="bc7", discard_alpha=True), False, _settings(BC7, discard=1)),
+            ("u8_bc5.dds", dict(format="bc5", texture_type="normal"), True, _settings(BC5, NORMAL)),
+            ("u8_bc6h.dds", dict(format="bc6h"), True, _settings(BC7))):  # 8 bits: BC6H falls back to BC7
+        # has_alpha False for discard: the pre-5b plug-in passed has_alpha and not discard_alpha.
+        want = psdds.encode(bytearray(rgba), 16, 16, has_alpha, s)
+        assert _export(img, name, **args) == want, f"{name} differs from the pre-5b bytes"
+    img.delete()
+
+
+def export_u16_is_depth_16():
+    vals = [v / 15 for i in range(16) for v in (i, 15 - i, 7, 15)]
+    img = _image(4, 4, struct.pack(f"<{len(vals)}f", *vals), "R'G'B'A float",
+                 precision=Gimp.Precision.U16_NON_LINEAR)
+    rgba = bytearray(_read(img.get_layers()[0], "R'G'B'A float"))
+    for name, fmt in (("u16_bc6h.dds", BC6H), ("u16_bc7.dds", BC7)):
+        want = psdds.encode(bytearray(rgba), 4, 4, False, _settings(fmt), 16)
+        assert _export(img, name, format=name[4:-4]) == want, f"{name} is not psdds_encode_depth at 16"
+    assert psdds.decode_depth(_export(img, "u16_bc6h2.dds", format="bc6h"))[3] == 32, "BC6H fell back at 16 bits"
+    img.delete()
+
+
+def export_float32_bc6h_keeps_above_one():
+    vals = [4.0, 4.0, 4.0, 1.0] + [0.25, 0.5, 1.0, 1.0] * 15
+    img = _image(4, 4, struct.pack(f"<{len(vals)}f", *vals), "RGBA float", precision=Gimp.Precision.FLOAT_LINEAR)
+    got = struct.unpack("<4f", _read(img.get_layers()[0], "RGBA float")[:16])
+    assert got[0] == 4.0, f"fixture does not hold 4.0: {got}"
+    w, h, _, depth, px = psdds.decode_depth(_export(img, "f32_bc6h.dds", format="bc6h", texture_type="colour"))
+    assert (w, h, depth) == (4, 4, 32), f"decoded {w}x{h} at depth {depth}"
+    f = struct.unpack(f"<{w * h * 4}f", px)
+    assert min(f[:3]) > 3.5, f"pixel 0 decodes as {f[:4]}, not about 4.0"
+    # read sRGB-coded, 0.25 would be about 0.54
+    assert abs(f[4] - 0.25) < 0.1 and abs(f[6] - 1.0) < 0.1, f"pixel 1 decodes as {f[4:8]} (not linear)"
+    img.delete()
+
+
 CASES = {f.__name__: f for f in (
     load_rgba8_opaque_opens_rgb,
     load_alpha_opens_rgba,
@@ -536,6 +598,10 @@ CASES = {f.__name__: f for f in (
     export_noninteractive_never_opens_dialog,
     export_interactive_refused_under_ui_guard,
     export_with_last_vals_skips_dialog,
+    export_precision_table_matches_gimp,
+    export_8_bit_bytes_unchanged,
+    export_u16_is_depth_16,
+    export_float32_bc6h_keeps_above_one,
 )}
 
 if os.environ.get("TDDS_KILL_PROBE"):
