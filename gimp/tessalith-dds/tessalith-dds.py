@@ -309,6 +309,7 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         s = raw_settings(config)
         chosen = read_format(s)[1]
         if chosen != fmt:  # the dialog switched the type between light (Colour) and data
+            rgba = None  # free the first read before the second (two float buffers would be ~8 GiB at 16384^2)
             rgba = read_pixels(layer, chosen)
         # The pixels' has_alpha as the dialog resolved it; psdds applies Discard itself (DC36).
         out = psdds.encode(rgba, w, h, has_alpha, s, depth)

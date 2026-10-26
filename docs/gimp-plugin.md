@@ -1,9 +1,9 @@
 # Tessalith DDS plug-in for GIMP
 
-`tessalith-dds` is a GIMP 3 plug-in (Windows x64, GIMP 3.0.x) that opens and exports Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `gimp/README.md`; the rulings are Note DG in [DECISIONS.md](DECISIONS.md), on top of Note DC (Photoshop), DD (psdds.dll) and DF (16-bit, 32-bit and HDR).
+`tessalith-dds` is a GIMP 3 plug-in (Windows x64, GIMP 3.0.x) that opens and exports Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `gimp/README.md`; the rulings are Note DG in [DECISIONS.md](DECISIONS.md), on top of Note DC (Photoshop), DD (psdds.dll), DF (16-bit, 32-bit and HDR) and DH (Alpha is transparency).
 
 ## Layout
-- `crates/psdds`: the shared DLL (`psdds.dll`, C ABI in `photoshop/psdds.h`, ABI 3). Every rule lives there: greying, formats per type, presets, alpha, clamp, size limits, encode, decode.
+- `crates/psdds`: the shared DLL (`psdds.dll`, C ABI in `photoshop/psdds.h`, ABI 4). Every rule lives there: greying, formats per type, presets, alpha, clamp, size limits, encode, decode.
 - `gimp/tessalith-dds/tessalith-dds.py`: the plug-in (registration, Open, Export, the dialog; the only file that imports `gi`).
 - `gimp/tessalith-dds/psdds_ctypes.py`: the `ctypes` wrapper (ABI check on first use) and the pure, gi-free dialog logic (`apply_preset`, `match_preset`, `PresetState`, `plan_refresh`, `preset_event`).
 - `gimp/tessalith-dds/tdds_pixels.py`: pure pixel helpers (`band_rows`, `precision_depth`).

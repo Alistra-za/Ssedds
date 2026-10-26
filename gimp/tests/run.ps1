@@ -6,11 +6,12 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $gimpDir = if ($env:SDC_GIMP_DIR) { $env:SDC_GIMP_DIR } else { 'C:\Program Files\GIMP 3' }
 $py = Join-Path $gimpDir 'bin\python.exe'
+$prevDll = $env:TESSALITH_PSDDS_DLL  # restored at exit, so the caller's shell is left as it was
 if (-not $env:TESSALITH_PSDDS_DLL) { $env:TESSALITH_PSDDS_DLL = Join-Path $repo 'target\psdds\x86_64-pc-windows-msvc\release\psdds.dll' }
 $missing = @()
 if (-not (Test-Path $env:TESSALITH_PSDDS_DLL)) { $missing += "psdds.dll not found at $($env:TESSALITH_PSDDS_DLL): run crates\psdds\build.ps1" }
 if (-not (Test-Path $py)) { $missing += "GIMP's Python not found at ${py}: set SDC_GIMP_DIR" }
-if ($missing) { [Console]::Error.WriteLine(($missing -join '; ')); exit 1 }
+if ($missing) { [Console]::Error.WriteLine(($missing -join '; ')); $env:TESSALITH_PSDDS_DLL = $prevDll; exit 1 }
 Push-Location $repo
 try {
     $lines = & $py -I -m unittest discover -s gimp\tests -p 'test_*.py' 2>&1 | ForEach-Object { "$_" }
@@ -36,5 +37,5 @@ try {
                }
         if ($why) { "FAIL kill_probe: $why"; $code = 1 } else { 'PASS kill_probe' }
     }
-} finally { Pop-Location }
+} finally { Pop-Location; $env:TESSALITH_PSDDS_DLL = $prevDll }
 exit $code

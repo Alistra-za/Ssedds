@@ -74,7 +74,7 @@ try {
     if ((Get-Content (Join-Path $probe 'LICENSE') -Raw) -notmatch '^MIT License') { $fail += 'LICENSE is not the MIT text' }
     $n = Get-Content (Join-Path $probe 'THIRD_PARTY_NOTICES.md') -Raw
     if ($n -notmatch 'MPL-2\.0') { $fail += 'THIRD_PARTY_NOTICES.md has no MPL-2.0 text' }
-    if ($n -match '(?i)(engine|encoders-sys)[^.\r\n]{0,80}\bMIT\b' -and $n -notmatch 'MPL') { $fail += 'notices describe the engine as MIT' }
+    if ($n -match '(?i)(engine|encoders-sys)[^.\r\n]{0,80}\bMIT\b') { $fail += 'notices describe the engine as MIT' }
 
     # ABI: the packaged wrapper loads the packaged DLL and refuses unless psdds_abi_version() == EXPECTED_ABI; the check asserts that value is 4 (Note DG17).
     $gimpDir = if ($env:SDC_GIMP_DIR) { $env:SDC_GIMP_DIR } else { 'C:\Program Files\GIMP 3' }
