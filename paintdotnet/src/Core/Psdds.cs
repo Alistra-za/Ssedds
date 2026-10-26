@@ -8,10 +8,10 @@ using System.Text;
 namespace Tessalith.Dds;
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PsddsSettings { public uint Format, TextureType, Srgb, Filter, Mips, Quality, DiscardAlpha; }
+public struct PsddsSettings { public uint Format, TextureType, Srgb, Filter, Mips, Quality, DiscardAlpha, AlphaMode; }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PsddsControls { public uint SrgbEnabled, FilterEnabled, QualityEnabled; }
+public struct PsddsControls { public uint SrgbEnabled, FilterEnabled, QualityEnabled, AlphaModeEnabled; }
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct PsddsBuf { public nint Data; public nuint Len; }
@@ -22,7 +22,7 @@ public sealed class PsddsException(string message) : Exception(message);
 /// <summary>Safe wrappers over psdds.dll (photoshop/psdds.h). Holds no rule: every decision is psdds's.</summary>
 public static unsafe partial class Psdds
 {
-    public const uint ExpectedAbiVersion = 2; // = PSDDS_ABI_VERSION in photoshop/psdds.h; a test pins the equality
+    public const uint ExpectedAbiVersion = 4; // = PSDDS_ABI_VERSION in photoshop/psdds.h; a test pins the equality
     public const uint Colour = 0, Normal = 1, LinearMask = 2; // enum values from psdds.h, not rules
 
     const int ErrCap = 512;
@@ -33,7 +33,7 @@ public static unsafe partial class Psdds
     [LibraryImport("psdds")] private static partial uint psdds_preset_count();
     [LibraryImport("psdds")] private static partial nint psdds_preset_name(uint i);
     [LibraryImport("psdds")] private static partial int psdds_preset_settings(uint i, PsddsSettings* output);
-    [LibraryImport("psdds")] private static partial int psdds_resolve(PsddsSettings* input, uint hasAlpha, PsddsSettings* effective, PsddsControls* controls);
+    [LibraryImport("psdds")] private static partial int psdds_resolve_depth(PsddsSettings* input, uint hasAlpha, uint depth, PsddsSettings* effective, PsddsControls* controls, uint* discardEnabled);
     [LibraryImport("psdds")] private static partial uint psdds_format_allowed(uint textureType, uint format);
     [LibraryImport("psdds")] private static partial uint psdds_quality_count(uint format);
     [LibraryImport("psdds")] private static partial nint psdds_quality_label(uint format, uint i);
@@ -115,15 +115,22 @@ public static unsafe partial class Psdds
         return psdds_defaults(textureType);
     }
 
-    public static bool TryResolve(in PsddsSettings raw, bool hasAlpha, out PsddsSettings shown, out PsddsControls controls)
+    public static bool TryResolve(in PsddsSettings raw, bool hasAlpha, out PsddsSettings shown, out PsddsControls controls) =>
+        TryResolve(raw, hasAlpha, out shown, out controls, out _);
+
+    /// <summary>discardEnabled false: Discard transparency is ticked and greyed (the format stores no alpha).</summary>
+    public static bool TryResolve(in PsddsSettings raw, bool hasAlpha, out PsddsSettings shown, out PsddsControls controls, out bool discardEnabled)
     {
         EnsureCompatible();
         var input = raw;
         PsddsSettings s = default;
         PsddsControls c = default;
-        bool ok = psdds_resolve(&input, hasAlpha ? 1u : 0u, &s, &c) == 0;
+        uint d = 0;
+        // Paint.NET documents are 8-bit; at depth 8 this is psdds_resolve plus discard_enabled
+        bool ok = psdds_resolve_depth(&input, hasAlpha ? 1u : 0u, 8, &s, &c, &d) == 0;
         shown = ok ? s : default;
         controls = ok ? c : default;
+        discardEnabled = ok && d != 0;
         return ok;
     }
 

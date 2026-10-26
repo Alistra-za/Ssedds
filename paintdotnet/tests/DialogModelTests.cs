@@ -5,10 +5,10 @@ public class DialogModelTests
 {
     const uint BC1 = 0, BC3 = 1, BC4 = 2, BC5 = 3, BC7 = 4, RGBA8 = 5;
 
-    static PsddsSettings Raw(uint type, uint format = BC7, uint srgb = 0, uint discard = 0, uint mips = 1)
+    static PsddsSettings Raw(uint type, uint format = BC7, uint srgb = 0, uint discard = 0, uint mips = 1, uint alphaMode = 0)
     {
         var s = Psdds.Defaults(type);
-        s.Format = format; s.Srgb = srgb; s.DiscardAlpha = discard; s.Mips = mips;
+        s.Format = format; s.Srgb = srgb; s.DiscardAlpha = discard; s.Mips = mips; s.AlphaMode = alphaMode;
         return s;
     }
 
@@ -34,11 +34,30 @@ public class DialogModelTests
     [Fact]
     public void Discard_dc36_ungreys_the_filter()
     {
-        var keep = R(Raw(Psdds.Colour, BC7, srgb: 1, discard: 0), true);
+        var keep = R(Raw(Psdds.Colour, BC7, srgb: 1, discard: 0, alphaMode: 1), true);
         Assert.False(keep.FilterEnabled);
-        var discard = R(Raw(Psdds.Colour, BC7, srgb: 1, discard: 1), true);
+        var discard = R(Raw(Psdds.Colour, BC7, srgb: 1, discard: 1, alphaMode: 1), true);
         Assert.True(discard.FilterEnabled);
         Assert.Equal(1u, discard.Shown.DiscardAlpha);
+    }
+
+    [Fact]
+    public void Discard_and_alpha_mode_greying_df2_dh2()
+    {
+        var bc1 = R(Raw(Psdds.Colour, BC1, discard: 0), true);
+        Assert.False(bc1.DiscardEnabled);
+        Assert.Equal(1u, bc1.Shown.DiscardAlpha);
+        Assert.False(bc1.AlphaModeEnabled);
+
+        var kept = R(Raw(Psdds.Colour, BC7), true);
+        Assert.True(kept.DiscardEnabled);
+        Assert.True(kept.AlphaModeEnabled);
+
+        Assert.False(R(Raw(Psdds.Colour, BC7), false).AlphaModeEnabled); // opaque (or not yet measured)
+        var discarded = R(Raw(Psdds.Colour, BC7, discard: 1, alphaMode: 1), true);
+        Assert.True(discarded.DiscardEnabled);
+        Assert.False(discarded.AlphaModeEnabled);
+        Assert.Equal(0u, discarded.Shown.AlphaMode);
     }
 
     [Fact]
@@ -60,14 +79,17 @@ public class DialogModelTests
     {
         foreach (uint srgb in new uint[] { 0, 1 })
         {
-            var raw = Raw(Psdds.Colour, BC7, srgb);
+            var raw = Raw(Psdds.Colour, BC7, srgb, alphaMode: 1);
             raw.Filter = 3;
             var a = R(raw, true);
             Assert.False(a.FilterEnabled);
             Assert.Equal(0u, a.Shown.Filter);
             Assert.True(R(raw, false).FilterEnabled);
+            raw.AlphaMode = 0; // alpha as data: the filter stays editable (Note DH6)
+            Assert.True(R(raw, true).FilterEnabled);
+            Assert.Equal(3u, R(raw, true).Shown.Filter);
         }
-        Assert.True(R(Raw(Psdds.Colour, BC1), true).FilterEnabled);
+        Assert.True(R(Raw(Psdds.Colour, BC1, alphaMode: 1), true).FilterEnabled);
     }
 
     [Fact]
@@ -120,19 +142,23 @@ public class DialogModelTests
     [Fact]
     public void Codec_round_trip_and_rejects()
     {
-        var raw = Raw(Psdds.Colour, BC7, srgb: 1, discard: 1);
+        var raw = Raw(Psdds.Colour, BC7, srgb: 1, discard: 1, alphaMode: 1);
         raw.Filter = 3; raw.Quality = 1;
         var p = DialogModel.ToPortion(raw);
-        Assert.Equal(7, p.Length);
+        Assert.Equal(8, p.Length);
         Assert.Equal(1, p[6]);
+        Assert.Equal(1, p[7]);
         Assert.Equal(raw, DialogModel.FromPortion(p));
 
+        var seven = DialogModel.FromPortion(p[..7]); // stored before Note DH
+        Assert.Equal(raw with { AlphaMode = 0 }, seven);
         var six = DialogModel.FromPortion(p[..6]);
-        Assert.Equal(raw with { DiscardAlpha = 0 }, six);
+        Assert.Equal(raw with { DiscardAlpha = 0, AlphaMode = 0 }, six);
 
         var def = Psdds.Defaults(Psdds.Colour);
-        foreach (var bad in new object?[] { null, "x", new int[5], new int[8], new[] { 99, 0, 0, 0, 0, 0, 0 },
-                                            new[] { 4, 0, 0, 0, 1, 0, 2 }, new[] { -1, 0, 0, 0, 1, 0, 0 } })
+        foreach (var bad in new object?[] { null, "x", new int[5], new int[9], new[] { 99, 0, 0, 0, 0, 0, 0 },
+                                            new[] { 4, 0, 0, 0, 1, 0, 2 }, new[] { -1, 0, 0, 0, 1, 0, 0 },
+                                            new[] { 4, 0, 0, 0, 1, 0, 0, 2 }, new[] { 4, 0, 0, 0, 1, 0, 0, -1 } })
             Assert.Equal(def, DialogModel.FromPortion(bad));
 
         var mask = Raw(Psdds.LinearMask, BC4);

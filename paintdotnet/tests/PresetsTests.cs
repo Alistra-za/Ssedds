@@ -5,7 +5,8 @@ namespace Tessalith.Dds.Tests;
 
 public sealed class PresetsTests : IDisposable
 {
-    const string Header = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency";
+    const string Header = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency, alpha is transparency";
+    const string OldHeader = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency";
     readonly string _dir = Path.Combine(Path.GetTempPath(), "tessalith-pdn-presets-" + Guid.NewGuid().ToString("N"));
     string FilePath => Path.Combine(_dir, PresetStore.FileName);
 
@@ -15,11 +16,11 @@ public sealed class PresetsTests : IDisposable
     static List<Preset> Seeds() =>
         Enumerable.Range(0, Psdds.PresetCount()).Select(i => new Preset(Psdds.PresetName(i), Psdds.PresetSettings(i))).ToList();
 
-    static PsddsSettings S(uint format, uint type, uint srgb, uint filter, uint mips, uint quality, uint discard) =>
-        new() { Format = format, TextureType = type, Srgb = srgb, Filter = filter, Mips = mips, Quality = quality, DiscardAlpha = discard };
+    static PsddsSettings S(uint format, uint type, uint srgb, uint filter, uint mips, uint quality, uint discard, uint alphaMode = 0) =>
+        new() { Format = format, TextureType = type, Srgb = srgb, Filter = filter, Mips = mips, Quality = quality, DiscardAlpha = discard, AlphaMode = alphaMode };
 
     static string Line(string name, PsddsSettings s) =>
-        $"{name}\t{s.Format}\t{s.TextureType}\t{s.Srgb}\t{s.Filter}\t{s.Mips}\t{s.Quality}\t{s.DiscardAlpha}";
+        $"{name}\t{s.Format}\t{s.TextureType}\t{s.Srgb}\t{s.Filter}\t{s.Mips}\t{s.Quality}\t{s.DiscardAlpha}\t{s.AlphaMode}";
 
     void WriteFile(params string[] lines) => File.WriteAllText(FilePath, string.Join("\r\n", lines) + "\r\n", new UTF8Encoding(false));
 
@@ -39,7 +40,7 @@ public sealed class PresetsTests : IDisposable
     {
         var list = new List<Preset>
         {
-            new("日本語 #1 😀", S(4, 0, 1, 3, 1, 2, 1)),
+            new("日本語 #1 😀", S(4, 0, 1, 3, 1, 2, 1, 1)),
             new("#hash", S(2, 2, 0, 1, 0, 0, 0)),
         };
         Assert.True(PresetStore.Save(_dir, new PresetFile(list, true, [])));
@@ -90,7 +91,7 @@ public sealed class PresetsTests : IDisposable
     static readonly string[] Corrupt =
     [
         "seven\t4\t0\t0\t0\t1\t0",
-        "nine\t4\t0\t0\t0\t1\t0\t0\t0",
+        "nine\t4\t0\t0\t0\t1\t0\t0\t0\t0",
         "hex\t0x4\t0\t0\t0\t1\t0\t0",
         "\t4\t0\t0\t0\t1\t0\t0",
         new string('n', 65) + "\t4\t0\t0\t0\t1\t0\t0",
@@ -98,9 +99,24 @@ public sealed class PresetsTests : IDisposable
         " leading\t4\t0\t0\t0\t1\t0\t0",
         "discard2\t4\t0\t0\t0\t1\t0\t2",
         "format99\t99\t0\t0\t0\t1\t0\t0",
+        "alpha2\t4\t0\t0\t0\t1\t0\t0\t2",
     ];
 
-    void WriteCorrupt() => WriteFile([Header, Corrupt[0], Corrupt[1], Good1, Corrupt[2], Corrupt[3], Corrupt[4], Corrupt[5], Good2, Corrupt[6], Corrupt[7], Corrupt[8]]);
+    void WriteCorrupt() => WriteFile([Header, Corrupt[0], Corrupt[1], Good1, Corrupt[2], Corrupt[3], Corrupt[4], Corrupt[5], Good2, Corrupt[6], Corrupt[7], Corrupt[8], Corrupt[9]]);
+
+    [Fact]
+    public void Presets_old_seven_value_lines_and_header_load_dh7()
+    {
+        // a file written before Note DH: old header, 7 values per line
+        const string Old = "Old one\t4\t0\t1\t3\t1\t1\t0";
+        WriteFile(OldHeader, Old, Line("New one", S(4, 0, 0, 3, 1, 1, 0, 1)));
+        var f = PresetStore.Load(_dir);
+        Assert.True(f.Complete);
+        Assert.Empty(f.Extra); // the old header is dropped, not kept as an unparsed line
+        Assert.Equal([new Preset("Old one", S(4, 0, 1, 3, 1, 1, 0)), new Preset("New one", S(4, 0, 0, 3, 1, 1, 0, 1))], f.List);
+        Assert.True(PresetStore.Save(_dir, f));
+        Assert.Equal([Header, Old + "\t0", Line("New one", S(4, 0, 0, 3, 1, 1, 0, 1))], File.ReadAllLines(FilePath));
+    }
 
     [Fact]
     public void Presets_corrupt_lines_are_skipped()
@@ -188,7 +204,7 @@ public sealed class PresetsTests : IDisposable
     [Fact]
     public void Presets_empty_lines_and_header_are_not_extra()
     {
-        WriteFile(Header, "", Good1, "", Header);
+        WriteFile(Header, "", Good1, "", Header, OldHeader);
         var f = PresetStore.Load(_dir);
         Assert.Single(f.List);
         Assert.Empty(f.Extra);
@@ -265,8 +281,8 @@ public sealed class PresetsTests : IDisposable
         Assert.Equal(2, PresetStore.Match(list, normal, false));
 
         var bc1 = list[1].Raw;
-        bc1.DiscardAlpha = 0;
-        Assert.Equal(-1, PresetStore.Match(list, bc1, true));
+        bc1.DiscardAlpha = 0; // BC1 stores no alpha: effective discard is 1 either way (Note DF2), so it still matches
+        Assert.Equal(1, PresetStore.Match(list, bc1, true));
         Assert.Equal(1, PresetStore.Match(list, bc1, false));
         bc1.DiscardAlpha = 1;
         Assert.Equal(1, PresetStore.Match(list, bc1, true));

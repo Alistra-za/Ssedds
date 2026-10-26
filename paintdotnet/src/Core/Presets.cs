@@ -8,7 +8,7 @@ using System.Text;
 
 namespace Tessalith.Dds;
 
-/// <summary>A stored preset. Raw: the seven raw values, as the token keeps them (DC19).</summary>
+/// <summary>A stored preset. Raw: the eight raw values, as the token keeps them (DC19).</summary>
 public sealed record Preset(string Name, PsddsSettings Raw);
 
 /// <summary>What Load read (DC40 PresetFileInfo). Complete false: the file exists but was not read in full and must
@@ -17,11 +17,14 @@ public sealed record Preset(string Name, PsddsSettings Raw);
 public sealed record PresetFile(List<Preset> List, bool Complete, List<string> Extra);
 
 /// <summary>The dialog's presets in one UTF-8 file, behaviour and format as photoshop/src/presets.cpp (DC37, DC40):
-/// a header line without tabs, then name TAB format TAB type TAB srgb TAB filter TAB mips TAB quality TAB discard, CRLF.</summary>
+/// a header line without tabs, then name TAB format TAB type TAB srgb TAB filter TAB mips TAB quality TAB discard TAB
+/// alpha_mode, CRLF. A line without alpha_mode (written before Note DH) loads with alpha_mode 0.</summary>
 public static partial class PresetStore
 {
     public const string FileName = "paintdotnet.txt"; // not Photoshop's presets.txt (Owner decision 10)
-    const string Header = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency";
+    const string Header = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency, alpha is transparency";
+    // The header written before Note DH: dropped on load like Header, so it is not kept as an unparsed line.
+    const string OldHeader = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency";
     const int MaxFileBytes = 1 << 20; // a preset line is under 300 bytes; bounds what a corrupt file can allocate
     static readonly char[] Space = [' ', '\t', '\r', '\n', '\v', '\f', '\u00A0', '\u3000']; // presets.cpp CleanPresetName
     static readonly UTF8Encoding Strict = new(false, true);
@@ -76,7 +79,7 @@ public static partial class PresetStore
             string? text = null;
             try { text = Strict.GetString(line); } catch (DecoderFallbackException) { }
             if (text != null && ParseLine(text) is { } p) file.List.Add(p);
-            else if (line.Length > 0 && text != Header) file.Extra.Add(Encoding.Latin1.GetString(line)); // one char per byte: kept verbatim
+            else if (line.Length > 0 && text != Header && text != OldHeader) file.Extra.Add(Encoding.Latin1.GetString(line)); // one char per byte: kept verbatim
         }
         return file;
     }
@@ -84,11 +87,12 @@ public static partial class PresetStore
     static Preset? ParseLine(string line)
     {
         var parts = line.Split('\t');
-        if (parts.Length != 8 || CleanName(parts[0]) is not { } name || name != parts[0]) return null;
-        var v = new uint[7];
-        for (int i = 0; i < 7; i++)
+        // 8 values, or 7 from before Note DH (alpha_mode stays 0)
+        if (parts.Length is not (9 or 8) || CleanName(parts[0]) is not { } name || name != parts[0]) return null;
+        var v = new uint[8];
+        for (int i = 0; i < parts.Length - 1; i++)
             if (!ParseU32(parts[i + 1], out v[i])) return null;
-        var raw = new PsddsSettings { Format = v[0], TextureType = v[1], Srgb = v[2], Filter = v[3], Mips = v[4], Quality = v[5], DiscardAlpha = v[6] };
+        var raw = new PsddsSettings { Format = v[0], TextureType = v[1], Srgb = v[2], Filter = v[3], Mips = v[4], Quality = v[5], DiscardAlpha = v[6], AlphaMode = v[7] };
         return Psdds.TryResolve(raw, false, out _, out _) ? new Preset(name, raw) : null;
     }
 
@@ -118,7 +122,7 @@ public static partial class PresetStore
         {
             if (CleanName(p.Name) != p.Name) return false;
             var s = p.Raw;
-            text.Append(p.Name).Append($"\t{s.Format}\t{s.TextureType}\t{s.Srgb}\t{s.Filter}\t{s.Mips}\t{s.Quality}\t{s.DiscardAlpha}\r\n");
+            text.Append(p.Name).Append($"\t{s.Format}\t{s.TextureType}\t{s.Srgb}\t{s.Filter}\t{s.Mips}\t{s.Quality}\t{s.DiscardAlpha}\t{s.AlphaMode}\r\n");
         }
         var path = Path.Combine(dir, FileName);
         var tmp = path + ".tmp";

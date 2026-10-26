@@ -42,14 +42,29 @@ public unsafe class DdsSaveTests
         Assert.True(measured);
         var (rgba, dw, dh, hasAlpha) = Psdds.Decode(dds);
         Assert.Equal((4u, 3u, true), (dw, dh, hasAlpha));
-        // alpha-0 texels may get their colour bled from neighbours by the engine; compare colour where alpha > 0 only
+        // alpha as data (alpha_mode 0, the default; Note DH): the colour under alpha 0 is kept too
+        Assert.Equal(0u, Rgba8(0).AlphaMode);
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++)
             {
                 int s = y * stride + x * 4, d = (y * w + x) * 4;
-                Assert.Equal(src[s + 3], rgba[d + 3]);
-                if (src[s + 3] > 0) Assert.Equal(new[] { src[s + 2], src[s + 1], src[s] }, rgba[d..(d + 3)]);
+                Assert.Equal(new[] { src[s + 2], src[s + 1], src[s], src[s + 3] }, rgba[d..(d + 4)]);
             }
+    }
+
+    [Fact]
+    public void AlphaIsTransparencyEqualsPsddsBytes()
+    {
+        const int w = 4, h = 3, stride = 16;
+        var src = Bgra(w, h, stride);
+        var s = Rgba8(0);
+        s.AlphaMode = 1;
+        var (dds, _) = Save(src, w, h, stride, s);
+        var px = new float[w * h * 4];
+        fixed (byte* p = src) fixed (float* f = px)
+            for (int y = 0; y < h; y++) Pixels.BgraRowToRgbaFloats(p + y * stride, w, f + y * w * 4);
+        Assert.Equal(Psdds.Encode(px, w, h, true, s), dds);
+        Assert.NotEqual(Save(src, w, h, stride, Rgba8(0)).Dds, dds); // transparency repaints the colour under alpha 0
     }
 
     [Fact]

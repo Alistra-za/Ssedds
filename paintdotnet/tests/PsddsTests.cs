@@ -9,8 +9,8 @@ public unsafe class PsddsTests
     const uint BC1 = 0, BC4 = 2, BC5 = 3, BC7 = 4, RGBA8 = 5;
     const uint Box = 0, Kaiser = 3;
 
-    static PsddsSettings Colour(uint format = BC7, uint srgb = 0, uint mips = 1, uint filter = Box, uint quality = 0, uint discard = 0) =>
-        new() { Format = format, TextureType = Psdds.Colour, Srgb = srgb, Filter = filter, Mips = mips, Quality = quality, DiscardAlpha = discard };
+    static PsddsSettings Colour(uint format = BC7, uint srgb = 0, uint mips = 1, uint filter = Box, uint quality = 0, uint discard = 0, uint alphaMode = 0) =>
+        new() { Format = format, TextureType = Psdds.Colour, Srgb = srgb, Filter = filter, Mips = mips, Quality = quality, DiscardAlpha = discard, AlphaMode = alphaMode };
 
     // Gradient image; alpha 1 unless given.
     static float[] Image(int w, int h, Func<int, int, float>? alpha = null)
@@ -98,7 +98,11 @@ public unsafe class PsddsTests
     [Fact]
     public void DefaultsAndLayout()
     {
-        Assert.Equal(28, Marshal.SizeOf<PsddsSettings>());
+        // psdds.h ABI 4 (Note DH4): 8 fields, alpha_mode at 28; controls 4 fields, alpha_mode_enabled at 12
+        Assert.Equal(32, Marshal.SizeOf<PsddsSettings>());
+        Assert.Equal(28, (int)Marshal.OffsetOf<PsddsSettings>(nameof(PsddsSettings.AlphaMode)));
+        Assert.Equal(16, Marshal.SizeOf<PsddsControls>());
+        Assert.Equal(12, (int)Marshal.OffsetOf<PsddsControls>(nameof(PsddsControls.AlphaModeEnabled)));
         foreach (var t in new[] { Psdds.Colour, Psdds.Normal, Psdds.LinearMask })
         {
             var d = Psdds.Defaults(t);
@@ -106,6 +110,7 @@ public unsafe class PsddsTests
             Assert.Equal(0u, d.Srgb);
             Assert.Equal(1u, d.Mips);
             Assert.Equal(0u, d.DiscardAlpha);
+            Assert.Equal(0u, d.AlphaMode);
             Assert.Equal(t, d.TextureType);
         }
     }
@@ -120,7 +125,8 @@ public unsafe class PsddsTests
         {
             var s = Psdds.PresetSettings(i);
             Assert.Equal(0u, s.Srgb);
-            Assert.Equal(i == 1 ? 1u : 0u, s.DiscardAlpha);
+            Assert.Equal(i is 1 or 4 ? 1u : 0u, s.DiscardAlpha); // BC1 and BC4 store no alpha (Note DF2)
+            Assert.Equal(0u, s.AlphaMode);
             Assert.True(Psdds.TryResolve(s, false, out var shown, out _));
             Assert.Equal(s, shown);
             Assert.True(Psdds.TryResolve(s, true, out var shownA, out _));
@@ -161,10 +167,52 @@ public unsafe class PsddsTests
             Assert.True(Psdds.TryResolve(Colour(srgb: srgb, filter: Kaiser), false, out var shown, out var c));
             Assert.Equal(1u, c.FilterEnabled);
             Assert.Equal(Kaiser, shown.Filter);
-            Assert.True(Psdds.TryResolve(Colour(srgb: srgb, filter: Kaiser), true, out var shownA, out var cA));
+            // alpha kept as data (alpha_mode 0): the filter stays editable (Note DH6); as transparency it greys at Box
+            Assert.True(Psdds.TryResolve(Colour(srgb: srgb, filter: Kaiser), true, out var shownD, out var cD));
+            Assert.Equal(1u, cD.FilterEnabled);
+            Assert.Equal(Kaiser, shownD.Filter);
+            Assert.True(Psdds.TryResolve(Colour(srgb: srgb, filter: Kaiser, alphaMode: 1), true, out var shownA, out var cA));
             Assert.Equal(0u, cA.FilterEnabled);
             Assert.Equal(Box, shownA.Filter);
         }
+    }
+
+    [Fact]
+    public void DiscardGreying()
+    {
+        foreach (uint f in new[] { BC1, BC4, BC5 })
+        {
+            var s = Psdds.Defaults(Psdds.LinearMask) with { Format = f };
+            Assert.True(Psdds.TryResolve(s, true, out var shown, out _, out bool enabled));
+            Assert.False(enabled);
+            Assert.Equal(1u, shown.DiscardAlpha); // shown ticked whatever the raw pick
+        }
+        foreach (uint f in new[] { 1u /* BC3 */, BC7, RGBA8 })
+            foreach (uint d in new[] { 0u, 1u })
+            {
+                Assert.True(Psdds.TryResolve(Colour(f, discard: d), true, out var shown, out _, out bool enabled));
+                Assert.True(enabled);
+                Assert.Equal(d, shown.DiscardAlpha);
+            }
+    }
+
+    [Fact]
+    public void AlphaModeGreying()
+    {
+        foreach (uint mode in new[] { 0u, 1u })
+        {
+            Assert.True(Psdds.TryResolve(Colour(alphaMode: mode), true, out var kept, out var c));
+            Assert.Equal(1u, c.AlphaModeEnabled);
+            Assert.Equal(mode, kept.AlphaMode);
+            // not kept: no document alpha, Discard ticked, or a format without alpha; the effective value is then 0 (DH3)
+            foreach (var (s, a) in new[] { (Colour(alphaMode: mode), false), (Colour(discard: 1, alphaMode: mode), true), (Colour(BC1, alphaMode: mode), true) })
+            {
+                Assert.True(Psdds.TryResolve(s, a, out var shown, out var g));
+                Assert.Equal(0u, g.AlphaModeEnabled);
+                Assert.Equal(0u, shown.AlphaMode);
+            }
+        }
+        Assert.False(Psdds.TryResolve(Colour(alphaMode: 2), true, out _, out _));
     }
 
     [Fact]

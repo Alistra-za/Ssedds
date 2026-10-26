@@ -16,6 +16,7 @@ public static class DialogLists
 
 /// <summary>What the dialog shows for a raw pick: effective values, enabled states, and the Format and Quality lists.</summary>
 public sealed record DialogState(PsddsSettings Shown, bool SrgbEnabled, bool FilterEnabled, bool QualityEnabled,
+                                 bool DiscardEnabled, bool AlphaModeEnabled,
                                  IReadOnlyList<Choice> Formats, IReadOnlyList<Choice> Quality);
 
 /// <summary>dialog.cpp's FromResolve and refresh lists, plus the token codec. Every rule is psdds's (DC19, DC32, DC33).</summary>
@@ -24,26 +25,28 @@ public static class DialogModel
     /// <summary>null when psdds refuses the raw values (unreachable from the controls).</summary>
     public static DialogState? Refresh(in PsddsSettings raw, bool hasAlpha)
     {
-        if (!Psdds.TryResolve(raw, hasAlpha, out var shown, out var c)) return null;
+        if (!Psdds.TryResolve(raw, hasAlpha, out var shown, out var c, out bool discardEnabled)) return null;
         var formats = DialogLists.Formats.Where(f => Psdds.FormatAllowed(shown.TextureType, f.Value)).ToArray();
         var quality = Psdds.QualityLabels(shown.Format).Select((label, i) => new Choice(label, (uint)i)).ToArray();
-        return new DialogState(shown, c.SrgbEnabled != 0, c.FilterEnabled != 0, c.QualityEnabled != 0, formats, quality);
+        return new DialogState(shown, c.SrgbEnabled != 0, c.FilterEnabled != 0, c.QualityEnabled != 0,
+                               discardEnabled, c.AlphaModeEnabled != 0, formats, quality);
     }
 
-    /// <summary>Seven ints, DiscardAlpha last; a plain array BinaryFormatter can store.</summary>
+    /// <summary>Eight ints, DiscardAlpha then AlphaMode last; a plain array BinaryFormatter can store.</summary>
     public static int[] ToPortion(in PsddsSettings raw) =>
-        [(int)raw.Format, (int)raw.TextureType, (int)raw.Srgb, (int)raw.Filter, (int)raw.Mips, (int)raw.Quality, (int)raw.DiscardAlpha];
+        [(int)raw.Format, (int)raw.TextureType, (int)raw.Srgb, (int)raw.Filter, (int)raw.Mips, (int)raw.Quality, (int)raw.DiscardAlpha, (int)raw.AlphaMode];
 
-    /// <summary>The raw values of a stored portion (int[7], or int[6] without DiscardAlpha, DC36) that psdds accepts;
-    /// anything else gives Colour's defaults without an error (DC19).</summary>
+    /// <summary>The raw values of a stored portion (int[8]; int[7] without AlphaMode, Note DH; int[6] also without
+    /// DiscardAlpha, DC36; missing values are 0) that psdds accepts; anything else gives Colour's defaults without an error (DC19).</summary>
     public static PsddsSettings FromPortion(object? portion)
     {
-        if (portion is int[] { Length: 6 or 7 } a && a.All(v => v >= 0))
+        if (portion is int[] { Length: 6 or 7 or 8 } a && a.All(v => v >= 0))
         {
             var raw = new PsddsSettings
             {
                 Format = (uint)a[0], TextureType = (uint)a[1], Srgb = (uint)a[2], Filter = (uint)a[3],
-                Mips = (uint)a[4], Quality = (uint)a[5], DiscardAlpha = a.Length == 7 ? (uint)a[6] : 0,
+                Mips = (uint)a[4], Quality = (uint)a[5], DiscardAlpha = a.Length >= 7 ? (uint)a[6] : 0,
+                AlphaMode = a.Length == 8 ? (uint)a[7] : 0,
             };
             if (Psdds.TryResolve(raw, false, out _, out _)) return raw;
         }
