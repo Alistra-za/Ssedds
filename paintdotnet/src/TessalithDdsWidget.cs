@@ -60,54 +60,47 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     static CheckBox Box(string text) => new() { Text = text, AutoSize = true, Anchor = AnchorStyles.Left };
     static Label NewLabel(string text) => new() { Text = text, AutoSize = true, Anchor = AnchorStyles.Left };
 
-    // dialog.rc's grid: labels | Type and Format lists (one width) | sRGB and Discard transparency; the Preset row's buttons,
-    // the Filter row and the Quality list span the two right columns. TabIndex is the visual order; each label sits just
-    // before its list so its mnemonic moves focus there.
+    // One column in dialog.rc's row order (DC33): Paint.NET gives the options a fixed 200-DIP column and sets this widget's
+    // width to it (Note DF), so the lists fill that width and every label sits above its list. TabIndex is the visual
+    // order; each label sits just before its list so its mnemonic moves focus there.
+    readonly TableLayoutPanel _table = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Dock = DockStyle.Top };
+
     void BuildLayout()
     {
-        var t = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 3, RowCount = 5 };
+        _table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         int tab = 0;
-        void Add(Control c, int col, int row, int span = 1)
+        foreach (var c in new Control[]
+                 {
+                     NewLabel("&Preset:"), _preset, Row(_save, _delete),
+                     NewLabel("&Texture type:"), _type, _srgb,
+                     NewLabel("&Format:"), _format, _discard,
+                     _mips,
+                     NewLabel("F&ilter:"), _filter,
+                     NewLabel("&Quality:"), _quality,
+                 })
         {
             c.TabIndex = tab++;
-            t.Controls.Add(c, col, row);
-            if (span > 1) t.SetColumnSpan(c, span);
+            _table.Controls.Add(c);
         }
-        Panel Row(params Control[] cs)
+        Controls.Add(_table);
+        _table.SizeChanged += (_, _) => { if (Height != _table.Height) Height = _table.Height; }; // the host reads Height after layout
+
+        // the buttons wrap: Delete moves under Save preset... when the column is too narrow for both
+        static Panel Row(params Control[] cs)
         {
-            var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty, Anchor = AnchorStyles.Left | AnchorStyles.Right };
+            var p = new FlowLayoutPanel { AutoSize = true, Margin = Padding.Empty, Anchor = AnchorStyles.Left | AnchorStyles.Right };
             for (int i = 0; i < cs.Length; i++) { cs[i].TabIndex = i; p.Controls.Add(cs[i]); }
             return p;
         }
-
-        Add(NewLabel("&Preset:"), 0, 0); Add(_preset, 1, 0); Add(Row(_save, _delete), 2, 0);
-        Add(NewLabel("&Texture type:"), 0, 1); Add(_type, 1, 1); Add(_srgb, 2, 1);
-        Add(NewLabel("&Format:"), 0, 2); Add(_format, 1, 2); Add(_discard, 2, 2);
-        Add(_mips, 0, 3);
-        var filterRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Margin = Padding.Empty, Anchor = AnchorStyles.Left | AnchorStyles.Right };
-        filterRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        filterRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var filterLabel = NewLabel("F&ilter:");
-        filterLabel.TabIndex = 0;
-        _filter.TabIndex = 1;
-        filterRow.Controls.Add(filterLabel, 0, 0);
-        filterRow.Controls.Add(_filter, 1, 0);
-        Add(filterRow, 1, 3, 2);
-        Add(NewLabel("&Quality:"), 0, 4); Add(_quality, 1, 4, 2);
-
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        Controls.Add(t);
     }
 
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        // Type and Format share one width, wide enough for the longest label in either (dialog.rc); the Preset list matches.
-        int w = DialogLists.Formats.Concat(DialogLists.Types).Max(c => TextRenderer.MeasureText(c.Label, _format.Font).Width)
-                + SystemInformation.VerticalScrollBarWidth + LogicalToDeviceUnits(12);
-        _preset.Width = _type.Width = _format.Width = w;
-        FillPresets(); // again, now that the box width is known (DropDownWidth)
+        // the lists fill the column and truncate when closed; the open Type and Format lists show the longest label in full
+        _type.DropDownWidth = _format.DropDownWidth = DialogLists.Formats.Concat(DialogLists.Types)
+            .Max(c => TextRenderer.MeasureText(c.Label, _format.Font).Width) + SystemInformation.VerticalScrollBarWidth + LogicalToDeviceUnits(12);
+        FillPresets(); // again, now that the font and DPI are the host's (DropDownWidth)
         Sync(null); // also applies a measurement that arrived before the handle existed (ruling 7)
         _preset.Select(); // initial focus: Preset (dialog.rc's first tab stop)
     }
@@ -178,7 +171,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         // the open list shows long names (up to 64 characters) in full; the closed box truncates, as Win32 does
         int widest = _presets.List.Select(p => TextRenderer.MeasureText(p.Name, _preset.Font).Width).DefaultIfEmpty(0).Max()
                      + SystemInformation.VerticalScrollBarWidth + LogicalToDeviceUnits(12);
-        _preset.DropDownWidth = Math.Max(_preset.Width, Math.Min(widest, LogicalToDeviceUnits(400)));
+        _preset.DropDownWidth = Math.Min(widest, LogicalToDeviceUnits(400)); // Win32 never drops narrower than the box
         _refreshing = was;
     }
 
