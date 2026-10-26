@@ -92,7 +92,7 @@ sdc validate out\textures\armor\iron\iron_n.dds --target cs
 
 Exit codes: 0 done, 1 some files failed or were skipped, 2 usage or config error, 3 fatal, 4 validation failed.
 
-**Unsigned exe.** The release exes are not code-signed, so Windows SmartScreen may warn on first run. Click **More info**, then **Run anyway**. This is an alpha: back up your mod folders first.
+**Unsigned exe.** The release exes are not code-signed, so Windows SmartScreen may warn on first run. Click **More info**, then **Run anyway**. Back up your mod folders before you convert in place.
 
 ## Where your data lives
 
@@ -118,10 +118,14 @@ See [Known issues](docs/wiki/Known-Issues.md) and the [CHANGELOG](CHANGELOG.md).
 | [Installation](docs/wiki/Installation.md) | [Texture types](docs/wiki/Texture-Types.md) (packing, TruePBR, RNM, grass) | [Project config](docs/wiki/Project-Config.md) |
 | [Getting started](docs/wiki/Getting-Started.md) | [Mod scanning](docs/wiki/Mod-Scanning.md) | [Presets and targets](docs/wiki/Presets-and-Targets.md) |
 | [FAQ](docs/wiki/FAQ.md) | [NVTT backend](docs/wiki/NVTT-Backend.md) | [Validation and output](docs/wiki/Validation-and-Output.md) |
-| [Troubleshooting](docs/wiki/Troubleshooting.md) | [Research behind the defaults](docs/wiki/Research.md) | |
+| [Troubleshooting](docs/wiki/Troubleshooting.md) | [Research behind the defaults](docs/wiki/Research.md) | [Host plugins](docs/wiki/Host-Plugins.md) |
+| | [NIF editing](docs/wiki/NIF-Editing.md) | |
 
-Photoshop: an optional [Tessalith DDS plugin](docs/photoshop-plugin.md) (MIT, with the engine under MPL-2.0) opens and saves DDS in Photoshop.
-chaiNNer: three optional [Tessalith DDS nodes](chainner/README.md) (GPL-3.0-or-later, with the same MIT/MPL-2.0 `psdds.dll`) save DDS from chaiNNer.
+Plugins for other programs, all optional (overview: [Host plugins](docs/wiki/Host-Plugins.md)):
+- Photoshop: a [Tessalith DDS plugin](docs/photoshop-plugin.md) (MIT, with the engine under MPL-2.0) opens and saves DDS.
+- GIMP 3: a [Tessalith DDS plug-in](docs/gimp-plugin.md) (GPL-3.0-or-later, with the same MIT/MPL-2.0 `psdds.dll`) opens and exports DDS.
+- Paint.NET: a [Tessalith DDS file type](docs/paintdotnet-plugin.md) (GPL-3.0-or-later with a Paint.NET permission, same `psdds.dll`) saves DDS.
+- chaiNNer: three [Tessalith DDS nodes](chainner/README.md) (GPL-3.0-or-later, same `psdds.dll`) save DDS.
 
 Design records: [docs/DECISIONS.md](docs/DECISIONS.md), [docs/RULINGS.md](docs/RULINGS.md), [docs/presets-changelog.md](docs/presets-changelog.md) and the research pages in [docs/research/](docs/research/README.md).
 

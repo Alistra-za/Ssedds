@@ -65,7 +65,7 @@ Photoshop, GIMP and Paint.NET show the same options in a dialog when you save. T
 | **Mipmaps** and **Filter** | A full mip chain, or none. The filter (Box, Tent, Mitchell, Kaiser) sets how mips are shrunk. It is greyed, showing Box, where the encoder uses Box anyway. |
 | **Quality** | How hard the encoder works for the chosen format. Greyed for RGBA8. |
 
-Your last choices are remembered for the next save. Images up to 16384 x 16384 are accepted; Skyrim supports no more. Large images need a lot of free memory: saving at the largest size takes about 10 GB in Photoshop and Paint.NET. Close other programs or save at 8192 x 8192 if it fails.
+Your last choices are remembered for the next save. Photoshop and GIMP accept images up to 16384 x 16384, the most Skyrim supports; Paint.NET names its limit in the error message. Large images need a lot of free memory: saving at the largest size takes about 10 GB in Photoshop and Paint.NET. Close other programs or save at 8192 x 8192 if it fails.
 
 User presets: Photoshop and Paint.NET can save and delete your own presets (**Save preset...**, **Delete**). They keep them in separate files under `%APPDATA%\Tessalith DDS\presets\`. GIMP has only the five built-in presets. chaiNNer has Custom and the built-in presets.
 
@@ -78,7 +78,7 @@ When alpha is kept, **Alpha is transparency** says what it means:
 - **Off (the default): alpha is data.** This is right for most Skyrim texture sets, where alpha is a mask, specular or height. The colour under fully transparent pixels is saved exactly as painted, and the mips use the filter you picked.
 - **On: alpha is see-through.** Use it for cut-out or glass-like textures. The colour under fully transparent pixels is replaced by the nearest visible colour, so it does not bleed into the mips, and the mips are alpha-weighted with Box.
 
-The option is greyed (Photoshop, GIMP, Paint.NET) or hidden (chaiNNer) when no alpha is kept. Presets saved by older plugin versions load with it off. Before this option existed, the plugins always treated alpha as transparency.
+The option is greyed (Photoshop, GIMP, Paint.NET) or hidden (chaiNNer) when no alpha is kept. In Photoshop, presets saved by older plugin versions load with it off. Before this option existed, the plugins always treated alpha as transparency.
 
 ## 16-bit, 32-bit and HDR
 
