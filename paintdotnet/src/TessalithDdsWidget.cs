@@ -17,7 +17,8 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
 
     readonly ComboBox _preset = List("Preset"), _type = List("Texture type"), _format = List("Format"),
                       _filter = List("Filter"), _quality = List("Quality");
-    readonly CheckBox _srgb = Box("&sRGB"), _discard = Box("Discard t&ransparency"), _mips = Box("&Mipmaps");
+    readonly CheckBox _srgb = Box("&sRGB"), _discard = Box("Discard t&ransparency"), _alphaMode = Box("&Alpha is transparency"),
+                      _mips = Box("&Mipmaps");
     readonly Button _save = new() { Text = "Sa&ve preset...", AutoSize = true }, _delete = new() { Text = "&Delete", AutoSize = true };
 
     readonly string? _dir = PresetStore.Dir();
@@ -46,6 +47,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         _quality.SelectedIndexChanged += (_, _) => OnPick(_quality, (ref PsddsSettings r, uint v) => r.Quality = v);
         _srgb.CheckedChanged += (_, _) => OnPick(_srgb, (ref PsddsSettings r, uint v) => r.Srgb = v);
         _discard.CheckedChanged += (_, _) => OnPick(_discard, (ref PsddsSettings r, uint v) => r.DiscardAlpha = v);
+        _alphaMode.CheckedChanged += (_, _) => OnPick(_alphaMode, (ref PsddsSettings r, uint v) => r.AlphaMode = v);
         _mips.CheckedChanged += (_, _) => OnPick(_mips, (ref PsddsSettings r, uint v) => r.Mips = v);
         _save.Click += (_, _) => SavePreset();
         _delete.Click += (_, _) => DeletePreset();
@@ -73,7 +75,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
                  {
                      NewLabel("&Preset:"), _preset, Row(_save, _delete),
                      NewLabel("&Texture type:"), _type, _srgb,
-                     NewLabel("&Format:"), _format, _discard,
+                     NewLabel("&Format:"), _format, _discard, _alphaMode,
                      _mips,
                      NewLabel("F&ilter:"), _filter,
                      NewLabel("&Quality:"), _quality,
@@ -118,7 +120,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         if (!_alpha.Set(used)) return; // every preview reports: refresh only on a change
         try
         {
-            // has_alpha changes only the filter and the preset match, never type or format (psdds resolve), so no list
+            // has_alpha changes only the filter, Alpha is transparency and the preset match, never type or format (psdds resolve), so no list
             // refill: Sync(_preset) keeps an open Format or Quality dropdown open.
             if (!IsDisposed && IsHandleCreated) BeginInvoke(() => { if (!IsDisposed) Sync(_preset); });
         }
@@ -193,9 +195,12 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
             Select(_filter, s.Shown.Filter);
             Select(_quality, s.Shown.Quality);
             _srgb.Checked = s.Shown.Srgb != 0;
-            _discard.Checked = s.Shown.DiscardAlpha != 0; // always enabled (DC36)
+            _discard.Checked = s.Shown.DiscardAlpha != 0; // ticked and greyed where the format stores no alpha (Note DF2)
+            _alphaMode.Checked = _raw.AlphaMode != 0; // the raw pick, also when greyed, as dialog.cpp (Note DH3)
             _mips.Checked = s.Shown.Mips != 0;
             _srgb.Enabled = s.SrgbEnabled;
+            _discard.Enabled = s.DiscardEnabled;
+            _alphaMode.Enabled = s.AlphaModeEnabled;
             _filter.Enabled = s.FilterEnabled;
             _quality.Enabled = s.QualityEnabled;
             _delete.Enabled = _selection.CanDelete;
