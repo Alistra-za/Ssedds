@@ -24,6 +24,7 @@ CLAUDE.local.md
 /photoshop/build/
 /dist/TessalithDDS-*
 chainner/**/__pycache__/
+gimp/**/__pycache__/
 
 # Paint.NET plugin build outputs (paintdotnet/build.ps1)
 /paintdotnet/bin/

@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Runs gimp\tests\gimp_batch.py in headless gimp-console with a throwaway GIMP profile.
+# Never touches %APPDATA%\GIMP or the GIMP install. Called by gimp\tests\run.ps1 -Gimp.
+# -KillProbe: the batch script only parks a sleeping child and hangs, to prove the timeout kill (no window).
+param([int]$TimeoutSec = 240, [switch]$KillProbe)
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
+$gimpDir = if ($env:SDC_GIMP_DIR) { $env:SDC_GIMP_DIR } else { 'C:\Program Files\GIMP 3' }
+$console = Join-Path $gimpDir 'bin\gimp-console-3.0.exe'
+$dll = if ($env:TESSALITH_PSDDS_DLL) { $env:TESSALITH_PSDDS_DLL } else { Join-Path $repo 'target\psdds\x86_64-pc-windows-msvc\release\psdds.dll' }
+if (-not (Test-Path $console)) { [Console]::Error.WriteLine("gimp-console not found at ${console}: set SDC_GIMP_DIR"); exit 1 }
+if (-not (Test-Path $dll)) { [Console]::Error.WriteLine("psdds.dll not found at ${dll}: run crates\psdds\build.ps1"); exit 1 }
+
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ("tdds-gimp-" + [Guid]::NewGuid().ToString('N'))
+$plug = Join-Path $tmp 'plug-ins\tessalith-dds'
+$out = Join-Path $tmp 'out'
+New-Item -ItemType Directory -Force $plug, $out | Out-Null
+$code = 1
+$saved = @{}
+foreach ($k in 'GIMP3_DIRECTORY', 'GIMP3_CACHEDIR', 'TDDS_OUT', 'TDDS_REPO', 'TESSALITH_PSDDS_DLL', 'TDDS_NO_UI', 'TDDS_KILL_PROBE') { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+try {
+    Copy-Item (Join-Path $repo 'gimp\tessalith-dds\*.py') $plug
+    Copy-Item $dll (Join-Path $plug 'psdds.dll')
+    [IO.File]::WriteAllText((Join-Path $tmp 'gimprc'), "(check-updates no)`n")  # no network call from tests
+    $env:GIMP3_DIRECTORY = $tmp
+    $env:GIMP3_CACHEDIR = Join-Path $tmp 'cache'  # pluginrc lives in the cache dir, not the profile
+    $env:TDDS_OUT = $out
+    $env:TDDS_REPO = $repo
+    $env:TESSALITH_PSDDS_DLL = Join-Path $plug 'psdds.dll'
+    # gimp-console -i still shows plug-in dialogs on Windows; under this show_dialog raises before any UI.
+    $env:TDDS_NO_UI = '1'
+    if ($KillProbe) { $env:TDDS_KILL_PROBE = '1' } else { Remove-Item Env:TDDS_KILL_PROBE -ErrorAction SilentlyContinue }
+    $script = Join-Path $repo 'gimp\tests\gimp_batch.py'
+    $stdout = Join-Path $tmp 'stdout.txt'
+    $stderr = Join-Path $tmp 'stderr.txt'
+    $argLine = "-i --batch-interpreter=python-fu-eval -b `"exec(open(r'$script').read())`" --quit"
+    $p = Start-Process -FilePath $console -ArgumentList $argLine -NoNewWindow -PassThru `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $null = $p.Handle  # keeps the exit code readable after exit
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+        # Full path: taskkill is not always on PATH. /T takes the plug-in processes with gimp-console.
+        $kill = & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id 2>&1 | ForEach-Object { "$_" }
+        $killCode = $LASTEXITCODE
+        $exited = $p.WaitForExit(10000)
+        "FAIL timeout: gimp-console did not finish in $TimeoutSec s; taskkill /T exit $killCode, gimp-console exited: $exited"
+        if ($killCode -ne 0) { $kill }
+        $probe = Join-Path $out 'probe.txt'
+        if (Test-Path $probe) { "probe pids: $((Get-Content -Raw $probe).Trim())" }
+        throw "timeout after $TimeoutSec s"
+    }
+    $log = (Get-Content -Raw $stdout) + "`n" + (Get-Content -Raw $stderr)
+    $log
+    $code = 0
+    if ($p.ExitCode -ne 0) { [Console]::Error.WriteLine("gimp-console exited $($p.ExitCode) (64 = the batch script raised)"); $code = 1 }
+    if ((Get-Content -Raw $stderr) -match 'crashed') { [Console]::Error.WriteLine('GIMP stderr says a plug-in crashed (DC25)'); $code = 1 }
+    $resFile = Join-Path $out 'results.json'
+    if (-not (Test-Path $resFile)) { throw 'the batch script wrote no results.json' }
+    $results = Get-Content -Raw $resFile | ConvertFrom-Json
+    # Every public top-level def in the batch script is a case; a case missing from results.json fails.
+    $wanted = Select-String -Path $script -Pattern '^def ([a-z]\w*)\(\):' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+    foreach ($n in $wanted) { if (-not $results.PSObject.Properties[$n]) { "FAIL ${n}: no result"; $code = 1 } }
+    $expect = Get-Content -Raw (Join-Path $out 'expect_log.json') | ConvertFrom-Json
+    foreach ($r in $results.PSObject.Properties) {
+        $v = $r.Value
+        if ($v -eq 'pass') {
+            foreach ($text in @($expect.($r.Name))) {
+                if ($text -and -not $log.Contains($text)) { $v = "GIMP log lacks: $text" }
+            }
+        }
+        if ($v -eq 'pass') { "PASS $($r.Name)" }
+        elseif ($v -like 'skip:*') { "SKIP $($r.Name): $v" }
+        else { "FAIL $($r.Name): $v"; $code = 1 }
+    }
+} catch {
+    [Console]::Error.WriteLine("$_")
+    $code = 1
+} finally {
+    foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    foreach ($i in 1..5) {
+        try { Remove-Item -Recurse -Force $tmp -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (Test-Path $tmp) { [Console]::Error.WriteLine("could not delete $tmp") }
+}
+exit $code
