@@ -535,6 +535,7 @@ def export_8_bit_bytes_unchanged():
     for name, args, has_alpha, s in (
             ("u8_bc7.dds", dict(format="bc7"), True, _settings(BC7)),
             ("u8_bc7_disc.dds", dict(format="bc7", discard_alpha=True), False, _settings(BC7, discard=1)),
+            ("u8_rgba8_disc.dds", dict(format="rgba8", discard_alpha=True), False, _settings(RGBA8, discard=1)),
             ("u8_bc5.dds", dict(format="bc5", texture_type="normal"), True, _settings(BC5, NORMAL)),
             ("u8_bc6h.dds", dict(format="bc6h"), True, _settings(BC7))):  # 8 bits: BC6H falls back to BC7
         # has_alpha False for discard: the pre-5b plug-in passed has_alpha and not discard_alpha.
