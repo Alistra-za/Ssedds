@@ -27,6 +27,7 @@ fn cases() -> Vec<(PsddsSettings, Vec<f32>)> {
         mips: 1,
         quality: 0,
         discard_alpha,
+        alpha_mode: 0,
     };
     vec![
         (s(4, 0, 1, 0), pixels(1)),
