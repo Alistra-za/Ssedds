@@ -27,7 +27,7 @@ pub const WINDOW_TITLE: &str = "TruePBR JSON";
 const ENTRY_RADIUS: u8 = 12;
 const PILL_RADIUS: u8 = 10;
 /// The slot names of `match1`–`match8`.
-const SLOT_NAMES: [&str; 8] = [
+pub(crate) const SLOT_NAMES: [&str; 8] = [
     "diffuse",
     "normal",
     "glow",

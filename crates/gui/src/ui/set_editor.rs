@@ -104,7 +104,7 @@ pub fn draw(
             super::set_preview::view_switch(ui, model);
         }
         // The set's path and its input name box share the row where the width allows (AO5).
-        super::input_name::picker(ui, model, &v);
+        super::input_name::picker(ui, model, &v, !view.three_d);
         if view.three_d {
             super::set_preview::settings_toggle(ui, model);
         }
@@ -311,18 +311,27 @@ fn set_panel(
                     return;
                 }
                 if json {
-                    ui.horizontal(|ui| {
-                        ui.strong(&v.label);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // G3: the whole file, every set and the delete sections, in its own window.
-                            if ui
-                                .small_button("TruePBR JSON editor…")
-                                .on_hover_text("Every set's entry and the delete sections of the PGPatcher JSON, in one window")
-                                .clicked()
-                            {
-                                model.json_editor_open = true;
-                            }
-                        });
+                    // Note DO: the button first, the name truncated in what is left (rule 3.3), both kept inside the
+                    // visible edge when a wider card below widens the scroll content (rule 3.8).
+                    ui.scope(|ui| {
+                        let w = ui.available_width().min(ui.clip_rect().right() - ui.cursor().left() - 8.0);
+                        ui.set_max_width(w);
+                        egui::Sides::new().shrink_left().truncate().show(
+                            ui,
+                            |ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
+                            },
+                            |ui| {
+                                // G3: the whole file, every set and the delete sections, in its own window.
+                                if ui
+                                    .small_button("TruePBR JSON editor…")
+                                    .on_hover_text("Every set's entry and the delete sections of the PGPatcher JSON, in one window")
+                                    .clicked()
+                                {
+                                    model.json_editor_open = true;
+                                }
+                            },
+                        );
                     });
                 }
                 super::cs_pbr::card(ui, model, v);

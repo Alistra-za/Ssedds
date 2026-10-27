@@ -3,7 +3,7 @@ mod support;
 use eframe::egui::{self, accesskit::Role, Key, Modifiers};
 use egui_kittest::kittest::{by, NodeT as _, Queryable};
 use egui_kittest::Harness;
-use sdc_gui::model::input_name::{completion, lock_cut, separator_stops, tab_part};
+use sdc_gui::model::input_name::{completion, in_form_of, lock_cut, separator_stops, tab_part};
 use sdc_gui::model::known_paths::KnownPaths;
 use sdc_gui::model::pbr_export::json_entries;
 use sdc_gui::model::AppModel;
@@ -43,6 +43,18 @@ fn the_ghost_completes_a_prefix_and_tab_takes_it_to_the_next_separator() {
     assert_eq!(completion(&list, "meshes/"), None);
     assert_eq!(completion(&list, "textures/landscape/rock02"), None);
     assert_eq!(tab_part(&list, "meshes/"), None);
+}
+
+/// Note DO: a project with no `textures` folder in its path names its sets `clutter/...` (`discover::game_path`);
+/// the scan's `textures/...` paths are offered in that form, so they fall under the lock.
+#[test]
+fn a_set_named_without_textures_is_offered_paths_without_it() {
+    let list = paths(&["textures/clutter/lumbermill/saw01", "textures/other/thing"]);
+    assert_eq!(
+        in_form_of(list.clone(), "clutter/lumbermill/saw02"),
+        paths(&["clutter/lumbermill/saw01", "other/thing"])
+    );
+    assert_eq!(in_form_of(list.clone(), "Textures\\clutter/saw02"), list);
 }
 
 #[test]
@@ -169,6 +181,63 @@ fn the_dropdown_lists_only_paths_under_the_lock() {
     h.get_by_label("Read this set's textures as");
     h.get_by_label("textures/landscape/rock02");
     assert!(h.query_by_label("textures/other/thing").is_none());
+}
+
+/// Note DO: a pick from another slot switches the match to the slot the scan saw it in; unknown or in-slot keeps it.
+#[test]
+fn a_pick_matches_in_the_slot_the_scan_saw_it_in() {
+    use sdc_gui::model::input_name::pick_slot;
+    assert_eq!(pick_slot(0b10, 1), 2, "a normal picked in slot 1");
+    assert_eq!(pick_slot(0b11, 1), 1, "used in slot 1 too");
+    assert_eq!(pick_slot(0b1, 2), 1, "a diffuse picked in slot 2");
+    assert_eq!(pick_slot(0, 3), 3, "unknown");
+    assert_eq!(
+        pick_slot(1 << 9, 4),
+        4,
+        "only in a slot PGPatcher has no match for"
+    );
+}
+
+/// Note DO: "All slots" lists every known texture; picking a normal sets `match2` (no rename) and the header's match
+/// selector follows to slot 2, whose list is the normals only.
+#[test]
+fn picking_a_normal_from_all_slots_sets_match2_and_switches_the_selector() {
+    let (_d, mut h) = harness();
+    let mut known = h.state().0.known.as_ref().clone();
+    known
+        .textures
+        .insert("textures/landscape/rock02_n.dds".into(), 1 << 1);
+    h.state_mut().0.set_known(known);
+    h.run();
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
+    h.run();
+    assert!(
+        h.query_by_label("textures/landscape/rock02_n").is_none(),
+        "slot 1 lists diffuses only"
+    );
+    h.get_by_label(sdc_gui::ui::input_name::ALL_SLOTS).click();
+    h.run();
+    h.get_by_label("textures/landscape/rock02_n").click();
+    h.run();
+    assert!(h.state_mut().0.wait_idle(Duration::from_secs(60)));
+    h.run();
+    let m = &h.state().0;
+    let v = json_entries(m)
+        .into_iter()
+        .find(|(v, _)| v.id == ROCK_SET)
+        .expect("the rock set")
+        .0;
+    assert_eq!(
+        v.settings.get("match2").and_then(|x| x.as_str()),
+        Some("textures\\landscape\\rock02_n")
+    );
+    assert_eq!(
+        m.input_name_of(ROCK_SET).as_deref(),
+        Some("textures/landscape/rock01"),
+        "no rename"
+    );
+    // A combo's accessible text is its value (egui-ui-rules 10.8).
+    h.get_by_value("Match 2");
 }
 
 #[test]

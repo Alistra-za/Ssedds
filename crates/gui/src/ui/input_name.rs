@@ -1,11 +1,16 @@
 //! GUI tweaks G1, Note AO: the set header's input name box. A text box with gray Tab completion, a path lock rail
 //! and a ▾ list of known paths. Drawing only; the change is `AppModel::set_input_name`.
 use super::columns::RED;
+use super::json_editor::SLOT_NAMES;
 use super::path_picker;
-use crate::model::input_name::{completion, live_rows, lock_cut, separator_stops, tab_part};
+use crate::model::input_name::{
+    bare_name, completion, in_form_of, live_rows, lock_cut, pick_slot, separator_stops, tab_part,
+};
 use crate::model::known_paths::strip_dds;
+use crate::model::sets::is_json_set;
 use crate::model::sets::SetView;
 use crate::model::AppModel;
+use crate::pgp::prefix::stored_set_match;
 use eframe::egui::{self, text::CCursor, text::CCursorRange, Key, Modifiers};
 use std::sync::Arc;
 
@@ -15,6 +20,8 @@ pub const HINT: &str = "Input name";
 pub const DROPDOWN: &str = "▾";
 /// The list's heading.
 pub const HEADING: &str = "Read this set's textures as";
+/// Note DO: the list's "show every slot" toggle (TruePBR JSON sets only).
+pub const ALL_SLOTS: &str = "All slots";
 /// The free (editable) part of the box is never narrower than this.
 const MIN_FREE: f32 = 56.0;
 /// What the box needs besides its text: its margins, the ▾ and the spacing between them.
@@ -100,7 +107,8 @@ fn plan_error(
 }
 
 /// The set's input name box, which also names the set (Note BH1); a set without an own diffuse shows its path.
-pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
+/// `matching`: draw the Note DO match selector (a JSON set's 2D view; the 3D view's header row has no room).
+pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bool) {
     let Some(current) = model.input_name_of(&v.id) else {
         ui.heading(&v.label);
         return;
@@ -120,7 +128,14 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     let buf = id.with("buf");
     let lock_id = id.with("lock");
     let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
-    let paths = path_picker::cached(ui, "input-name", key, || model.input_name_candidates());
+    let salt = if bare_name(&current) {
+        "input-name-bare"
+    } else {
+        "input-name"
+    };
+    let paths = path_picker::cached(ui, salt, key, || {
+        in_form_of(model.input_name_candidates(), &current)
+    });
     // The edit buffer carries the frame it was last drawn in (as the colour hex box does).
     let frame = ui.ctx().cumulative_frame_nr();
     let mut text = ui
@@ -440,27 +455,101 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             );
             paint_lock(painter, egui::pos2(hx, lock_y), blue);
         }
-        let menu = path_picker::menu(ui, DROPDOWN, |ui| {
-            ui.label(egui::RichText::new(HEADING).strong());
-            ui.weak(format!("now: {current}"));
-            // Only paths under the lock.
-            let pre = text[..cut].replace('\\', "/");
-            let under_key = (Arc::as_ptr(&paths) as usize, egui::Id::new(&pre).value());
-            let under = path_picker::cached(ui, "input-name-under", under_key, || {
-                paths
-                    .iter()
-                    .filter(|p| p.get(..cut).is_some_and(|h| h.eq_ignore_ascii_case(&pre)))
-                    .cloned()
-                    .collect()
-            });
-            if let Some(p) = path_picker::list(ui, ("input-name", &v.id), &under, false) {
-                match model.set_input_name(&v.id, &p) {
-                    Ok(()) => {
-                        ui.data_mut(|d| d.remove::<String>(err_id));
-                        ui.close();
+        // Note DO: on a TruePBR JSON set, the slot the ▾ list picks for. Slot 1 names the set (the rename below);
+        // slots 2–8 set that slot's match. A pick the scan saw only in another slot moves the selector there.
+        let json = matching && is_json_set(v, model.target);
+        let slot_id = id.with("match-slot");
+        let all_id = id.with("all-slots");
+        let mut slot: u8 = if json {
+            ui.data(|d| d.get_temp(slot_id)).unwrap_or(1)
+        } else {
+            1
+        };
+        let mut all = json && ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
+        let name = |n: u8| format!("Match {n} · {}", SLOT_NAMES[n as usize - 1]);
+        if json {
+            egui::ComboBox::from_id_salt(slot_id)
+                // Short in the header row, so it does not wrap a narrow 3D view's header; the list names the slots.
+                .selected_text(format!("Match {slot}"))
+                .width(64.0)
+                .show_ui(ui, |ui| {
+                    for n in 1..=8 {
+                        ui.selectable_value(&mut slot, n, name(n));
                     }
-                    Err(e) => {
-                        ui.data_mut(|d| d.insert_temp(err_id, e));
+                })
+                .response
+                .on_hover_text(
+                    "The slot the ▾ list picks for. Slot 1 renames this set's textures; slots 2–8 set that slot's \
+                     match in the PGPatcher JSON.",
+                );
+        }
+        let derived = v.derived_match.clone().unwrap_or_default();
+        let menu = path_picker::menu(ui, DROPDOWN, |ui| {
+            if json {
+                let r = ui
+                    .checkbox(&mut all, ALL_SLOTS)
+                    .on_hover_text("List textures used in any slot. A pick from another slot switches the match to it.");
+                if r.changed() {
+                    ui.data_mut(|d| d.insert_temp(all_id, all));
+                }
+            }
+            if slot == 1 && !all {
+                ui.label(egui::RichText::new(HEADING).strong());
+                ui.weak(format!("now: {current}"));
+                // Only paths under the lock.
+                let pre = text[..cut].replace('\\', "/");
+                let under_key = (Arc::as_ptr(&paths) as usize, egui::Id::new(&pre).value());
+                let under = path_picker::cached(ui, "input-name-under", under_key, || {
+                    paths
+                        .iter()
+                        .filter(|p| p.get(..cut).is_some_and(|h| h.eq_ignore_ascii_case(&pre)))
+                        .cloned()
+                        .collect()
+                });
+                if under.is_empty() && !paths.is_empty() {
+                    // Note DO: the scan knows paths, just none under the lock.
+                    ui.weak(format!(
+                        "No known paths under {pre}: move the path lock left to see more."
+                    ));
+                } else if let Some(p) = path_picker::list(ui, ("input-name", &v.id), &under, false) {
+                    match model.set_input_name(&v.id, &p) {
+                        Ok(()) => {
+                            ui.data_mut(|d| d.remove::<String>(err_id));
+                            ui.close();
+                        }
+                        Err(e) => {
+                            ui.data_mut(|d| d.insert_temp(err_id, e));
+                        }
+                    }
+                }
+            } else {
+                let what = if all { "any slot".to_string() } else { format!("slot {slot}") };
+                ui.label(egui::RichText::new(format!("Textures used in {what}")).strong());
+                let list_key = (Arc::as_ptr(&model.known) as usize, egui::Id::new((model.items_rev(), slot, all)).value());
+                let list = path_picker::cached(ui, "input-name-slot", list_key, || {
+                    let mut l = model.known_textures((!all).then_some(slot - 1));
+                    // AO8: PGPatcher's own outputs are never a match.
+                    l.retain(|p| !p.get(..13).is_some_and(|h| h.eq_ignore_ascii_case("textures/pbr/")));
+                    l
+                });
+                if let Some(p) = path_picker::list(ui, ("input-name-slot", &v.id, slot, all), &list, false) {
+                    slot = pick_slot(model.known_slot_bits(&p), slot);
+                    let done = if slot == 1 {
+                        let p = in_form_of(vec![p], &current).remove(0);
+                        model.set_input_name(&v.id, &p)
+                    } else {
+                        let value = stored_set_match(slot, &p.replace('/', "\\"), &derived);
+                        model.set_json_value(&v.id, &format!("match{slot}"), value);
+                        Ok(())
+                    };
+                    match done {
+                        Ok(()) => {
+                            ui.data_mut(|d| d.remove::<String>(err_id));
+                            ui.close();
+                        }
+                        Err(e) => {
+                            ui.data_mut(|d| d.insert_temp(err_id, e));
+                        }
                     }
                 }
             }
@@ -468,6 +557,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                 ui.colored_label(RED, e);
             }
         });
+        ui.data_mut(|d| d.insert_temp(slot_id, slot));
         menu.response.on_hover_text(
             "Pick the game path this set's textures are read as. Each texture keeps its own suffix; files on \
              disk are not renamed (an [inputs] alias in sdc.toml).",

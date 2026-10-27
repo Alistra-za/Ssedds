@@ -294,6 +294,50 @@ fn the_json_editor_button_is_small_and_in_the_panel_header() {
     assert!(h.state().0.json_editor_open);
 }
 
+/// Note DO: in a narrow set panel the button stays inside the panel and the set's name never runs under it.
+#[test]
+fn the_json_editor_button_stays_beside_the_name_in_a_narrow_panel() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    // The screenshot's case: a long name.
+    m.set_input_name(
+        "landscape/rock01",
+        "textures/landscape/kingolafeffigy/kingolafeffigyeffigy01",
+    )
+    .unwrap();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("kingolafeffigyeffigy01"))
+        .expect("the renamed set")
+        .key
+        .clone();
+    m.select_set(&key);
+    let mut h = harness_with(m, 1000.0, 800.0, false);
+    // The panel at its narrowest: a drag far right on its left edge.
+    h.run();
+    let p = panel(&h);
+    let edge = egui::pos2(p.min.x + 1.0, p.center().y);
+    h.drag_at(edge);
+    h.hover_at(edge + egui::vec2(600.0, 0.0));
+    h.drop_at(edge + egui::vec2(600.0, 0.0));
+    h.run();
+    let p = panel(&h);
+    let b = h.get_by_label("TruePBR JSON editor…").rect();
+    assert!(b.max.x <= p.max.x, "button {b:?} inside panel {p:?}");
+    let name = h
+        .query_all_by_role(Role::Label)
+        .map(|n| n.rect())
+        .filter(|r| p.contains_rect(*r) && r.y_range().intersects(b.y_range()))
+        .collect::<Vec<_>>();
+    assert!(!name.is_empty(), "the name is on the button's row");
+    for r in name {
+        assert!(r.max.x <= b.min.x, "name {r:?} runs under the button {b:?}");
+    }
+}
+
 /// `set_editor_shown` mirrors `centre`'s and `set_editor::draw`'s routing: in every centre state exactly one of the
 /// window-edge drawer and the set panel is drawn (3D: the drawer); with no folder (the start screen), neither. Each
 /// case is a fresh harness, so the persisted panel states are this case's own. The last field is (panel, drawer).

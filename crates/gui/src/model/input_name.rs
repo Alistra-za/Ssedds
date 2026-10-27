@@ -27,6 +27,34 @@ pub(super) fn no_ext(p: &str) -> &str {
     &p[..dir.len() + split_ext(name).0.len()]
 }
 
+/// Note DO: `list` (the scan's `textures/...` paths) in the form of input name `current`. A project with no
+/// `textures` folder in its path names its sets without it (`discover::game_path`), so the paths drop it too.
+pub fn in_form_of(list: Vec<String>, current: &str) -> Vec<String> {
+    if !bare_name(current) {
+        return list;
+    }
+    list.into_iter()
+        .map(|p| if bare_name(&p) { p } else { p[9..].to_string() })
+        .collect()
+}
+
+/// Note DO: the slot (1-based) a path picked in the header's slot `current` is matched in: `current` when the scan saw
+/// it there or never saw it in slots 1–8 (`bits`, 0-based), else the lowest slot it is used in.
+pub fn pick_slot(bits: u16, current: u8) -> u8 {
+    let bits = bits & 0xFF;
+    if bits == 0 || bits & (1 << (current - 1)) != 0 {
+        current
+    } else {
+        bits.trailing_zeros() as u8 + 1
+    }
+}
+
+/// An input name without the leading `textures/`.
+pub fn bare_name(p: &str) -> bool {
+    !p.get(..9)
+        .is_some_and(|h| h.replace('\\', "/").eq_ignore_ascii_case("textures/"))
+}
+
 impl AppModel {
     /// Note AO: what the input name box offers (its ▾ rows and gray completion): the known diffuse paths, without
     /// those under `textures\pbr\`, which are PGPatcher's outputs, not input names (AO8).
@@ -38,6 +66,22 @@ impl AppModel {
                 .is_some_and(|h| h.eq_ignore_ascii_case("textures/pbr/"))
         });
         list
+    }
+
+    /// Note DO: the lighting slots (0-based bits) the scan saw texture `path` in, with or without `textures/` and
+    /// `.dds`; 0 when the scan does not know it.
+    pub fn known_slot_bits(&self, path: &str) -> u16 {
+        let p = lower(super::known_paths::strip_dds(path.trim()));
+        let p = if bare_name(&p) {
+            format!("textures/{p}")
+        } else {
+            p
+        };
+        self.known
+            .textures
+            .get(&format!("{p}.dds"))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The current input name of set `set_id`: its own diffuse's game path without extension.
