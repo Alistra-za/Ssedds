@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 520" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#222">
+  <title>The six faces as stored in the DDS, with the world direction each image edge points to</title>
+  <rect width="700" height="520" rx="10" fill="#ffffff"/>
+  <text x="350" y="30" text-anchor="middle" font-weight="600" font-size="15">Each face as stored in the file (the top-left corner is the first pixel)</text>
+  <text x="350" y="50" text-anchor="middle" font-size="12" fill="#555">White strip: where the image's top edge points. Dark strip: where its left edge points.</text>
+
+  <!-- face template: 170 px square, top strip 24 px, left strip 24 px -->
+  <!-- +X -->
+  <g transform="translate(40,75)">
+    <rect width="170" height="170" fill="#f6c9c9" stroke="#b83232" stroke-width="2"/>
+    <rect width="170" height="24" fill="#ffffff" stroke="#b83232"/>
+    <rect y="24" width="24" height="146" fill="#333"/>
+    <text x="97" y="17" text-anchor="middle">top → north (+Y)</text>
+    <text transform="translate(17,97) rotate(-90)" text-anchor="middle" fill="#fff">left → up (+Z)</text>
+    <text x="97" y="100" text-anchor="middle" font-size="30" font-weight="700" fill="#b83232">+X</text>
+    <text x="97" y="125" text-anchor="middle">face 0 · east</text>
+  </g>
+  <!-- −X -->
+  <g transform="translate(265,75)">
+    <rect width="170" height="170" fill="#c4ecf1" stroke="#127f8c" stroke-width="2"/>
+    <rect width="170" height="24" fill="#ffffff" stroke="#127f8c"/>
+    <rect y="24" width="24" height="146" fill="#333"/>
+    <text x="97" y="17" text-anchor="middle">top → north (+Y)</text>
+    <text transform="translate(17,97) rotate(-90)" text-anchor="middle" fill="#fff">left → down (−Z)</text>
+    <text x="97" y="100" text-anchor="middle" font-size="30" font-weight="700" fill="#127f8c">−X</text>
+    <text x="97" y="125" text-anchor="middle">face 1 · west</text>
+  </g>
+  <!-- +Y -->
+  <g transform="translate(490,75)">
+    <rect width="170" height="170" fill="#cfeccf" stroke="#2e7d2e" stroke-width="2"/>
+    <rect width="170" height="24" fill="#ffffff" stroke="#2e7d2e"/>
+    <rect y="24" width="24" height="146" fill="#333"/>
+    <text x="97" y="17" text-anchor="middle">top → down (−Z)</text>
+    <text transform="translate(17,97) rotate(-90)" text-anchor="middle" fill="#fff">left → west (−X)</text>
+    <text x="97" y="100" text-anchor="middle" font-size="30" font-weight="700" fill="#2e7d2e">+Y</text>
+    <text x="97" y="125" text-anchor="middle">face 2 · north</text>
+  </g>
+  <!-- −Y -->
+  <g transform="translate(40,300)">
+    <rect width="170" height="170" fill="#efcdef" stroke="#a03aa0" stroke-width="2"/>
+    <rect width="170" height="24" fill="#ffffff" stroke="#a03aa0"/>
+    <rect y="24" width="24" height="146" fill="#333"/>
+    <text x="97" y="17" text-anchor="middle">top → up (+Z)</text>
+    <text transform="translate(17,97) rotate(-90)" text-anchor="middle" fill="#fff">left → west (−X)</text>
+    <text x="97" y="100" text-anchor="middle" font-size="30" font-weight="700" fill="#a03aa0">−Y</text>
+    <text x="97" y="125" text-anchor="middle">face 3 · south</text>
+  </g>
+  <!-- +Z -->
+  <g transform="translate(265,300)">
+    <rect width="170" height="170" fill="#cfdbf7" stroke="#2c56b0" stroke-width="2"/>
+    <rect width="170" height="24" fill="#ffffff" stroke="#2c56b0"/>
+    <rect y="24" width="24" height="146" fill="#333"/>
+    <text x="97" y="17" text-anchor="middle">top → north (+Y)</text>
+    <text transform="translate(17,97) rotate(-90)" text-anchor="middle" fill="#fff">left → west (−X)</text>
+    <text x="97" y="100" text-anchor="middle" font-size="30" font-weight="700" fill="#2c56b0">+Z</text>
+    <text x="97" y="125" text-anchor="middle">face 4 · up (sky)</text>
+  </g>
+  <!-- −Z -->
+  <g transform="translate(490,300)">
+    <rect width="170" height="170" fill="#f3e6b8" stroke="#98780f" stroke-width="2"/>
+    <rect width="170" height="24" fill="#ffffff" stroke="#98780f"/>
+    <rect y="24" width="24" height="146" fill="#333"/>
+    <text x="97" y="17" text-anchor="middle">top → north (+Y)</text>
+    <text transform="translate(17,97) rotate(-90)" text-anchor="middle" fill="#fff">left → east (+X)</text>
+    <text x="97" y="100" text-anchor="middle" font-size="30" font-weight="700" fill="#98780f">−Z</text>
+    <text x="97" y="125" text-anchor="middle">face 5 · down (ground)</text>
+  </g>
+  <text x="350" y="505" text-anchor="middle" font-size="12" fill="#555">Measured in game, 2026-10-26: this is plain DirectX cube addressing with Skyrim's X east, Y north, Z up.</text>
+</svg>

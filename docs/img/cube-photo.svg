@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 280" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#222">
+  <title>Single photo: how Tessalith builds a fake panorama from one picture</title>
+  <defs>
+    <linearGradient id="topf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9fb8d8"/><stop offset="1" stop-color="#c9d9ec"/></linearGradient>
+    <linearGradient id="botf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b9a6e"/><stop offset="1" stop-color="#6d7a55"/></linearGradient>
+    <linearGradient id="ph" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#e6b98a"/><stop offset="0.5" stop-color="#c98b5a"/><stop offset="1" stop-color="#7d9bc4"/></linearGradient>
+    <linearGradient id="phm" x1="1" y1="0" x2="0" y2="0"><stop offset="0" stop-color="#e6b98a"/><stop offset="0.5" stop-color="#c98b5a"/><stop offset="1" stop-color="#7d9bc4"/></linearGradient>
+  </defs>
+  <rect width="700" height="280" rx="10" fill="#ffffff"/>
+  <text x="290" y="26" text-anchor="middle" font-weight="600" font-size="14">Single photo → fake panorama → blurred cube</text>
+  <g transform="translate(50,45)">
+    <rect width="480" height="60" fill="url(#topf)"/>
+    <rect y="60" width="120" height="70" fill="url(#phm)" opacity="0.85"/>
+    <rect x="120" y="60" width="240" height="70" fill="url(#ph)"/>
+    <rect x="360" y="60" width="120" height="70" fill="url(#phm)" opacity="0.85"/>
+    <rect y="130" width="480" height="60" fill="url(#botf)"/>
+    <rect x="120" y="60" width="240" height="70" fill="none" stroke="#222" stroke-width="2"/>
+    <rect width="480" height="190" fill="none" stroke="#333"/>
+    <text x="240" y="100" text-anchor="middle" font-weight="700" fill="#fff">your photo (front half)</text>
+    <text x="60" y="100" text-anchor="middle" fill="#fff">mirrored</text>
+    <text x="420" y="100" text-anchor="middle" fill="#fff">mirrored</text>
+    <text x="240" y="34" text-anchor="middle">fades to the average of the photo's top row</text>
+    <text x="240" y="166" text-anchor="middle" fill="#fff">fades to the average of the photo's bottom row</text>
+  </g>
+  <g font-size="12">
+    <text x="545" y="110">then: read as a</text>
+    <text x="545" y="126">panorama, blurred</text>
+    <text x="545" y="142">(blur 0.6 by default)</text>
+    <text x="290" y="258" text-anchor="middle" fill="#555">An approximation: one photo cannot show what is behind you. Blur hides the guesswork.</text>
+  </g>
+</svg>

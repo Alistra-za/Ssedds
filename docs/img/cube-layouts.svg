@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 470" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#222">
+  <title>Cross and strip layouts: which cell holds which face</title>
+  <rect width="640" height="470" rx="10" fill="#ffffff"/>
+  <defs>
+    <g id="px"><rect width="56" height="56" fill="#f6c9c9" stroke="#b83232"/><text x="28" y="25" text-anchor="middle" font-weight="700" font-size="14" fill="#b83232">+X</text><text x="28" y="42" text-anchor="middle" font-size="11">east</text></g>
+    <g id="nx"><rect width="56" height="56" fill="#c4ecf1" stroke="#127f8c"/><text x="28" y="25" text-anchor="middle" font-weight="700" font-size="14" fill="#127f8c">−X</text><text x="28" y="42" text-anchor="middle" font-size="11">west</text></g>
+    <g id="py"><rect width="56" height="56" fill="#cfeccf" stroke="#2e7d2e"/><text x="28" y="25" text-anchor="middle" font-weight="700" font-size="14" fill="#2e7d2e">+Y</text><text x="28" y="42" text-anchor="middle" font-size="11">north</text></g>
+    <g id="ny"><rect width="56" height="56" fill="#efcdef" stroke="#a03aa0"/><text x="28" y="25" text-anchor="middle" font-weight="700" font-size="14" fill="#a03aa0">−Y</text><text x="28" y="42" text-anchor="middle" font-size="11">south</text></g>
+    <g id="pz"><rect width="56" height="56" fill="#cfdbf7" stroke="#2c56b0"/><text x="28" y="25" text-anchor="middle" font-weight="700" font-size="14" fill="#2c56b0">+Z</text><text x="28" y="42" text-anchor="middle" font-size="11">sky</text></g>
+    <g id="nz"><rect width="56" height="56" fill="#f3e6b8" stroke="#98780f"/><text x="28" y="25" text-anchor="middle" font-weight="700" font-size="14" fill="#98780f">−Z</text><text x="28" y="42" text-anchor="middle" font-size="11">ground</text></g>
+    <g id="nzr"><rect width="56" height="56" fill="#f3e6b8" stroke="#98780f"/><text x="28" y="23" text-anchor="middle" font-weight="700" font-size="14" fill="#98780f">−Z</text><text x="28" y="38" text-anchor="middle" font-size="11">ground</text><text x="28" y="51" text-anchor="middle" font-size="10" fill="#555">turned 180°</text></g>
+    <rect id="no" width="56" height="56" fill="#f2f2f2" stroke="#ccc" stroke-dasharray="4 3"/>
+  </defs>
+
+  <text x="142" y="34" text-anchor="middle" font-weight="600" font-size="14">Horizontal cross (4:3)</text>
+  <g transform="translate(30,50)">
+    <use href="#no"/><use href="#py" x="56"/><use href="#no" x="112"/><use href="#no" x="168"/>
+    <use href="#nx" y="56"/><use href="#pz" x="56" y="56"/><use href="#px" x="112" y="56"/><use href="#nz" x="168" y="56"/>
+    <use href="#no" y="112"/><use href="#ny" x="56" y="112"/><use href="#no" x="112" y="112"/><use href="#no" x="168" y="112"/>
+  </g>
+
+  <text x="384" y="34" text-anchor="middle" font-weight="600" font-size="14">Vertical cross (3:4)</text>
+  <g transform="translate(300,50)">
+    <use href="#no"/><use href="#py" x="56"/><use href="#no" x="112"/>
+    <use href="#nx" y="56"/><use href="#pz" x="56" y="56"/><use href="#px" x="112" y="56"/>
+    <use href="#no" y="112"/><use href="#ny" x="56" y="112"/><use href="#no" x="112" y="112"/>
+    <use href="#no" y="168"/><use href="#nzr" x="56" y="168"/><use href="#no" x="112" y="168"/>
+  </g>
+
+  <text x="568" y="34" text-anchor="middle" font-weight="600" font-size="14">Vertical strip (1:6)</text>
+  <g transform="translate(540,50)">
+    <use href="#px"/><use href="#nx" y="56"/><use href="#py" y="112"/><use href="#ny" y="168"/><use href="#pz" y="224"/><use href="#nz" y="280"/>
+  </g>
+
+  <text x="198" y="320" text-anchor="middle" font-weight="600" font-size="14">Horizontal strip (6:1)</text>
+  <g transform="translate(30,335)">
+    <use href="#px"/><use href="#nx" x="56"/><use href="#py" x="112"/><use href="#ny" x="168"/><use href="#pz" x="224"/><use href="#nz" x="280"/>
+  </g>
+  <text x="30" y="420" font-size="12" fill="#555">Cells are the same squares as the stored faces: no cell is moved or turned,</text>
+  <text x="30" y="436" font-size="12" fill="#555">except the vertical cross's −Z (turned 180°; switch with cubemap.vcross_negz_rotate).</text>
+  <text x="30" y="452" font-size="12" fill="#555">Skyrim's sky is +Z, so in a cross the sky sits in the centre cell, not the top one.</text>
+</svg>

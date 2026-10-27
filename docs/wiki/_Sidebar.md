@@ -17,6 +17,7 @@ Using it
 Concepts
 
 - [Texture types](Texture-Types.md)
+- [Cubemaps](Cubemaps.md)
 - [Mod scanning](Mod-Scanning.md)
 - [NVTT backend](NVTT-Backend.md)
 - [Validation and output](Validation-and-Output.md)

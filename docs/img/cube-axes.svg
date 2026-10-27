@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#222">
+  <title>Skyrim's world directions and the cube face each one uses</title>
+  <defs>
+    <marker id="h" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="720" height="320" rx="10" fill="#ffffff"/>
+  <!-- Seen from above -->
+  <text x="190" y="30" text-anchor="middle" font-weight="600">Seen from above</text>
+  <circle cx="190" cy="170" r="105" fill="#f4f6f8" stroke="#c9ced4"/>
+  <circle cx="190" cy="170" r="5" fill="#222"/>
+  <line x1="190" y1="170" x2="190" y2="80" stroke="#3a9d3a" stroke-width="4" marker-end="url(#h)"/>
+  <line x1="190" y1="170" x2="280" y2="170" stroke="#d64545" stroke-width="4" marker-end="url(#h)"/>
+  <line x1="190" y1="170" x2="190" y2="260" stroke="#c04fc0" stroke-width="4" marker-end="url(#h)"/>
+  <line x1="190" y1="170" x2="100" y2="170" stroke="#1aa6b7" stroke-width="4" marker-end="url(#h)"/>
+  <text x="190" y="58" text-anchor="middle"><tspan font-weight="700" fill="#2e7d2e">+Y</tspan> north · face 2</text>
+  <text x="300" y="166"><tspan font-weight="700" fill="#b83232">+X</tspan> east</text>
+  <text x="300" y="184">face 0</text>
+  <text x="190" y="292" text-anchor="middle"><tspan font-weight="700" fill="#a03aa0">−Y</tspan> south · face 3</text>
+  <text x="80" y="166" text-anchor="end"><tspan font-weight="700" fill="#127f8c">−X</tspan> west</text>
+  <text x="80" y="184" text-anchor="end">face 1</text>
+  <!-- Seen from the side -->
+  <text x="540" y="30" text-anchor="middle" font-weight="600">Seen from the side</text>
+  <rect x="400" y="190" width="280" height="80" fill="#efe6d2"/>
+  <line x1="400" y1="190" x2="680" y2="190" stroke="#8a7a55" stroke-width="2"/>
+  <text x="670" y="210" text-anchor="end" font-size="12" fill="#6b5d3c">ground</text>
+  <circle cx="540" cy="190" r="5" fill="#222"/>
+  <line x1="540" y1="190" x2="540" y2="80" stroke="#3b6fd8" stroke-width="4" marker-end="url(#h)"/>
+  <line x1="540" y1="190" x2="540" y2="265" stroke="#c9a227" stroke-width="4" marker-end="url(#h)"/>
+  <text x="552" y="66"><tspan font-weight="700" fill="#2c56b0">+Z</tspan> up, the sky</text><text x="552" y="82">face 4</text>
+  <text x="552" y="290"><tspan font-weight="700" fill="#98780f">−Z</tspan> down, the ground</text><text x="552" y="306">face 5</text>
+</svg>
