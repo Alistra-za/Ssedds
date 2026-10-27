@@ -71,10 +71,16 @@ pub(crate) fn prepare(
     stop()?;
     let src = (works[0].img.width, works[0].img.height);
     let n = layout::face_size(p, cj.layout, src);
-    let faces: [Rgba32F; 6] = if cj.layout == CubeLayout::Equirect {
-        // Any loaded size reads as a panorama (DN14), sampled straight at the face size, so the resize below is a
-        // no-op.
-        let Cube { faces, .. } = import_dir::equirect(&works[0].img, n);
+    let direct: Option<fn(&Rgba32F, u32) -> Cube> = match cj.layout {
+        CubeLayout::Equirect => Some(import_dir::equirect),
+        CubeLayout::MirrorBall => Some(import_dir::mirror_ball),
+        CubeLayout::Angular => Some(import_dir::angular),
+        _ => None,
+    };
+    let faces: [Rgba32F; 6] = if let Some(import) = direct {
+        // Any loaded size reads as a panorama (DN14, DN15), sampled straight at the face size, so the resize below
+        // is a no-op.
+        let Cube { faces, .. } = import(&works[0].img, n);
         let mut k = 0;
         faces.map(|f| {
             k += 1;

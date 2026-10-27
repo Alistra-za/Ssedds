@@ -3879,6 +3879,27 @@ fn cube_equirect_hdr() {
     );
 }
 
+/// Task 14 (DECISIONS DN15): a square mirror-ball or angular photo needs `cubemap.layout`; one cube, 7 mips at 64.
+#[test]
+fn cube_mirror_ball_and_angular() {
+    for layout in ["mirror_ball", "angular"] {
+        let d = tempfile::tempdir().unwrap();
+        let img =
+            image::RgbImage::from_fn(128, 128, |x, y| Rgb([(x * 2) as u8, (y * 2) as u8, 90]));
+        put(
+            d.path(),
+            "textures/cubemaps/ball.png",
+            DynamicImage::ImageRgb8(img),
+        );
+        let set = format!("file:**/ball.png.cubemap.layout={layout}");
+        let o = convert(d.path(), Target::Cs, &[set.as_str()], &[]);
+        assert_eq!(o.summary.converted, 1, "{layout}: {:?}", warnings(&o));
+        let f = dds(d.path(), "textures/cubemaps/ball.dds");
+        assert!(f.is_cubemap, "{layout}");
+        assert_eq!((f.width, f.height, f.mip_count), (64, 64, 7), "{layout}");
+    }
+}
+
 #[test]
 fn cube_hstrip_bc3_keeps_alpha() {
     let d = tempfile::tempdir().unwrap();

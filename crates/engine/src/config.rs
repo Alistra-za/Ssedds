@@ -736,7 +736,7 @@ pub struct ValidationSpec {
 // no explicit layer set them.
 cfg_enum!(CubeStyle, "snake_case" { VanillaMetal, Room, Eye, Hd });
 // How a cubemap source is laid out; unset = from the aspect ratio. `equirect` is a 2:1 360-degree panorama.
-cfg_enum!(CubeLayout, "snake_case" { Faces, Hcross, Vcross, Hstrip, Vstrip, Equirect });
+cfg_enum!(CubeLayout, "snake_case" { Faces, Hcross, Vcross, Hstrip, Vstrip, Equirect, MirrorBall, Angular });
 cfg_enum!(#[derive(Default)] FaceFlip, "lowercase" { #[default] None, H, V });
 
 fn is_zero(v: &f64) -> bool {

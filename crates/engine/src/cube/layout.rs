@@ -38,7 +38,9 @@ pub fn cells(layout: CubeLayout, w: u32, h: u32) -> Option<(u32, [(u32, u32); 6]
         CubeLayout::Vcross => (w / 3, VCROSS),
         CubeLayout::Hstrip => (h, [0, 1, 2, 3, 4, 5].map(|k| (k, 0))),
         CubeLayout::Vstrip => (w, [0, 1, 2, 3, 4, 5].map(|k| (0, k))),
-        CubeLayout::Faces | CubeLayout::Equirect => return None,
+        CubeLayout::Faces | CubeLayout::Equirect | CubeLayout::MirrorBall | CubeLayout::Angular => {
+            return None
+        }
     })
 }
 
@@ -160,16 +162,18 @@ pub(crate) fn orient(face: Rgba32F, k: usize, spec: &CubemapSpec) -> Rgba32F {
 /// auto-detection needs exact 2:1), the exact cells otherwise.
 pub fn fits(layout: CubeLayout, w: u32, h: u32) -> bool {
     match layout {
-        CubeLayout::Equirect => w > 0 && h > 0,
+        CubeLayout::Equirect | CubeLayout::MirrorBall | CubeLayout::Angular => w > 0 && h > 0,
         _ => cells(layout, w, h).is_some(),
     }
 }
 
-/// The source's face-sized cell: a quarter of an equirect's width (its 90 degrees), the cross or strip cell, else the
-/// shorter side. `src` is the source image size (one face's size for `Faces`).
+/// The source's face-sized cell: a quarter of an equirect's width (its 90 degrees), half a mirror ball's or angular
+/// map's width, the cross or strip cell, else the shorter side. `src` is the source image size (one face's size for `Faces`).
 pub fn source_cell(layout: CubeLayout, src: (u32, u32)) -> u32 {
     if layout == CubeLayout::Equirect {
         src.0 / 4
+    } else if matches!(layout, CubeLayout::MirrorBall | CubeLayout::Angular) {
+        src.0 / 2
     } else {
         cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0)
     }

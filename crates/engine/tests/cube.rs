@@ -1230,3 +1230,81 @@ fn marker_reads_back_as_a_dynamic_marker() {
         assert!(engine::cube::checks::inspect_issues("textures/x_e.dds", &f).is_empty());
     }
 }
+
+// ---- Task 14: mirror ball and angular map (DECISIONS DN15) ----
+
+/// A square image whose red is x/w and green is y/h, so a sample says where in the image it came from.
+fn coord_image(n: u32) -> Rgba32F {
+    let mut img = Rgba32F::new(n, n, [0.0; 4]);
+    for y in 0..n {
+        for x in 0..n {
+            *img.at_mut(x, y) = [
+                (x as f32 + 0.5) / n as f32,
+                (y as f32 + 0.5) / n as f32,
+                0.0,
+                1.0,
+            ];
+        }
+    }
+    img
+}
+
+/// Where in the unit disc (u right, v up) the cube's colour toward world `d` was read from.
+fn disc_at(c: &Cube, d: [f32; 3]) -> (f32, f32) {
+    let p = fetch(c, to_cube(d));
+    assert!(p.iter().all(|v| v.is_finite()), "{d:?} -> {p:?}");
+    (2.0 * p[0] - 1.0, 1.0 - 2.0 * p[1])
+}
+
+fn close(got: (f32, f32), want: (f32, f32)) {
+    assert!(
+        (got.0 - want.0).abs() < 0.03 && (got.1 - want.1).abs() < 0.03,
+        "{got:?} vs {want:?}"
+    );
+}
+
+#[test]
+fn mirror_ball_centre_is_behind_the_camera() {
+    let c = import_dir::mirror_ball(&coord_image(256), 64);
+    close(disc_at(&c, SOUTH), (0.0, 0.0));
+    close(disc_at(&c, UPW), (0.0, 0.707));
+    close(disc_at(&c, DOWN), (0.0, -0.707));
+    close(disc_at(&c, EAST), (0.707, 0.0));
+    // North is the rim (clamped to 0.98): a direction just east of north reads from the ring on the east side. The
+    // exact back pole itself has no unique ring point, so it is only checked to be finite below.
+    close(disc_at(&c, [0.3, 0.954, 0.0]), (0.98, 0.0));
+    let c = import_dir::mirror_ball(&coord_image(256), 8);
+    assert!(c
+        .faces
+        .iter()
+        .all(|f| f.px.iter().all(|p| p[0].is_finite())));
+}
+
+#[test]
+fn angular_centre_is_forward() {
+    let c = import_dir::angular(&coord_image(256), 64);
+    close(disc_at(&c, NORTH), (0.0, 0.0));
+    close(disc_at(&c, EAST), (0.5, 0.0));
+    close(disc_at(&c, UPW), (0.0, 0.5));
+    close(disc_at(&c, WEST), (-0.5, 0.0));
+    // Just east of north: acos(0.954) / pi = 0.098 along +x.
+    close(disc_at(&c, [0.3, 0.954, 0.0]), (0.098, 0.0));
+}
+
+#[test]
+fn square_images_are_never_auto_detected() {
+    assert_eq!(detect(512, 512), None);
+    assert!(layout::fits(CubeLayout::MirrorBall, 512, 512));
+    assert!(layout::fits(CubeLayout::Angular, 512, 512));
+    assert_eq!(cells(CubeLayout::MirrorBall, 512, 512), None);
+    let p = PresetRegistry::builtin()
+        .unwrap()
+        .profile("cs-quality", Target::Cs, Subtype::Cubemap)
+        .unwrap();
+    assert_eq!(
+        layout::face_size(&p, CubeLayout::MirrorBall, (512, 512)),
+        256
+    );
+    assert_eq!(layout::face_size(&p, CubeLayout::Angular, (700, 700)), 256);
+    assert_eq!(layout::source_cell(CubeLayout::Angular, (700, 700)), 350);
+}

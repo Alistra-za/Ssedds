@@ -215,7 +215,9 @@
         "vcross",
         "hstrip",
         "vstrip",
-        "equirect"
+        "equirect",
+        "mirror_ball",
+        "angular"
       ],
       "type": "string"
     },
