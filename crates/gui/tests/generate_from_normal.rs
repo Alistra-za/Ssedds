@@ -3706,7 +3706,7 @@ fn the_rmaos_row_has_the_button_unless_packed() {
 }
 
 #[test]
-fn a_borrowed_packed_rmaos_has_no_button() {
+fn a_shared_packed_rmaos_has_no_button() {
     use sdc_gui::model::items::ItemKind;
     use sdc_gui::model::sets::{set_views, DropChoice, DropOutcome, SlotFill};
     let d = tempfile::tempdir().unwrap();
