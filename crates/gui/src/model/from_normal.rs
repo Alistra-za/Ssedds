@@ -867,6 +867,8 @@ pub struct GenDialog {
     pub dragging: bool,
     /// Preview jobs started (tests).
     pub started: u32,
+    /// Which open this is; the UI clears the preview zoom when it changes.
+    pub opened: u64,
     next_id: u64,
     /// The opts of the last preview started.
     previewed: Option<Opts>,
@@ -1128,7 +1130,9 @@ impl AppModel {
         };
         // Kept with the tick, like AO's settings.
         opts.curvature = pre == Some(GenMap::Curvature);
+        self.gen_opens += 1;
         self.gen = Some(GenDialog {
+            opened: self.gen_opens,
             set: set.to_string(),
             ticked: pre.into_iter().collect(),
             opts,

@@ -473,6 +473,8 @@ pub struct AppModel {
     pub gen_select: Option<String>,
     /// The last Generate job id, so a new dialog's ids never repeat a closed one's.
     pub(crate) gen_ids: u64,
+    /// Generate dialogs opened so far; the preview zoom is reset when this changes.
+    pub(crate) gen_opens: u64,
     /// A Save report write is on a worker (AG130); the app keeps frames coming until it lands.
     pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -693,6 +695,7 @@ impl AppModel {
             gen: None,
             gen_select: None,
             gen_ids: 0,
+            gen_opens: 0,
             report_saving: false,
             last_inputs: None,
             auto_replans: 0,

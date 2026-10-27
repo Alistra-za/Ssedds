@@ -3779,3 +3779,178 @@ fn an_npot_normal_shows_the_button_disabled_with_the_reason() {
     );
     assert!(h.state().gen.is_none());
 }
+
+// ---- Task 2: zoom and pan in the Generate preview ----
+
+use sdc_gui::ui::from_normal::{zoom_uv, PreviewZoom, TILE, ZOOM_MAX};
+
+fn zoom_key() -> eframe::egui::Id {
+    eframe::egui::Id::new("gen-preview-zoom")
+}
+
+fn zoom_of(h: &egui_kittest::Harness<'static, AppModel>) -> PreviewZoom {
+    h.ctx
+        .data(|d| d.get_temp::<PreviewZoom>(zoom_key()))
+        .unwrap_or_default()
+}
+
+/// An open dialog with its preview shown, `h` tall.
+fn zoom_harness(d: &Path, h: f32) -> egui_kittest::Harness<'static, AppModel> {
+    let mut m = relief_rock(d);
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    let mut h = gen_harness(m, 1500.0, h);
+    h.run_steps(3);
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(5);
+    h
+}
+
+fn wheel(h: &mut egui_kittest::Harness<'static, AppModel>, label: &str, dy: f32) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_label(label).hover();
+    h.run_steps(2);
+    h.input_mut().events.push(eframe::egui::Event::MouseWheel {
+        unit: eframe::egui::MouseWheelUnit::Point,
+        delta: eframe::egui::vec2(0.0, dy),
+        phase: eframe::egui::TouchPhase::Move,
+        modifiers: eframe::egui::Modifiers::NONE,
+    });
+    // The wheel is smoothed over several frames; never idle meanwhile.
+    h.run_steps(8);
+}
+
+#[test]
+fn zoom_uv_stays_inside_the_texture() {
+    use eframe::egui::{pos2, vec2, Rect};
+    let near =
+        |a: Rect, b: Rect| (a.min - b.min).length() < 1e-6 && (a.max - b.max).length() < 1e-6;
+    let z = |zoom, x, y| PreviewZoom {
+        zoom,
+        centre: vec2(x, y),
+    };
+    let r = |a, b, c, d| Rect::from_min_max(pos2(a, b), pos2(c, d));
+    assert!(near(zoom_uv(&z(1.0, 0.5, 0.5)), r(0.0, 0.0, 1.0, 1.0)));
+    assert!(near(
+        zoom_uv(&z(4.0, 0.5, 0.5)),
+        r(0.375, 0.375, 0.625, 0.625)
+    ));
+    assert!(near(zoom_uv(&z(4.0, 0.0, 1.0)), r(0.0, 0.75, 0.25, 1.0)));
+    assert_eq!(PreviewZoom::default().zoom, 1.0);
+    assert_eq!(PreviewZoom::default().centre, vec2(0.5, 0.5));
+    assert_eq!((TILE, ZOOM_MAX), (240.0, 16.0));
+}
+
+#[test]
+fn a_wheel_over_a_tile_zooms_it_and_not_the_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    // Short, so the body scrolls.
+    let mut h = zoom_harness(d.path(), 520.0);
+    // Scroll the body down off its top with a wheel over a grid label, so a leaked wheel would move it back up.
+    wheel(&mut h, "Size", -60.0);
+    h.run_steps(3);
+    let before = h.get_by_label("Height preview").rect();
+    assert!(
+        before.min.y < 400.0,
+        "the tile is still on screen: {before:?}"
+    );
+    wheel(&mut h, "Height preview", 3.0);
+    h.run_steps(3);
+    assert!(zoom_of(&h).zoom > 1.0, "zoomed: {:?}", zoom_of(&h));
+    let after = h.get_by_label("Height preview").rect();
+    assert_eq!(before.min.y, after.min.y, "the dialog body did not scroll");
+}
+
+#[test]
+fn the_zoom_survives_a_new_preview() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = zoom_harness(d.path(), 900.0);
+    wheel(&mut h, "Height preview", 200.0);
+    h.run_steps(3);
+    let z = zoom_of(&h);
+    assert!(z.zoom > 1.0);
+    let started = h.state().gen.as_ref().unwrap().started;
+    h.state_mut()
+        .gen
+        .as_mut()
+        .unwrap()
+        .opts
+        .height
+        .as_mut()
+        .unwrap()
+        .strength = 0.5;
+    h.run_steps(3);
+    assert!(
+        h.state().gen.as_ref().unwrap().started > started,
+        "re-previewed"
+    );
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(5);
+    assert_eq!(zoom_of(&h), z);
+}
+
+#[test]
+fn double_click_resets_the_zoom() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = zoom_harness(d.path(), 900.0);
+    wheel(&mut h, "Height preview", 200.0);
+    h.run_steps(3);
+    assert!(zoom_of(&h).zoom > 1.0);
+    let pos = h.get_by_label("Height preview").rect().center();
+    h.get_by_label("Height preview").hover();
+    h.run_steps(2);
+    for pressed in [true, false, true, false] {
+        h.input_mut()
+            .events
+            .push(eframe::egui::Event::PointerButton {
+                pos,
+                button: eframe::egui::PointerButton::Primary,
+                pressed,
+                modifiers: eframe::egui::Modifiers::NONE,
+            });
+    }
+    h.run_steps(3);
+    let z = zoom_of(&h);
+    assert_eq!((z.zoom, z.centre), (1.0, eframe::egui::vec2(0.5, 0.5)));
+}
+
+#[test]
+fn a_reopened_dialog_starts_at_fit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = zoom_harness(d.path(), 900.0);
+    wheel(&mut h, "Height preview", 200.0);
+    h.run_steps(3);
+    assert!(zoom_of(&h).zoom > 1.0);
+    h.state_mut().gen_cancel();
+    h.run_steps(3);
+    h.state_mut().open_gen(ROCK_SET, Some(GenMap::Height));
+    h.run_steps(3);
+    assert_eq!(zoom_of(&h).zoom, 1.0);
+}
+
+#[test]
+fn the_three_tiles_fit_the_dialog_body_without_a_horizontal_scroll() {
+    use egui_kittest::kittest::Queryable;
+    for w in [1100.0, 1280.0, 1600.0] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = relief_rock(d.path());
+        std::fs::remove_file(land(d.path()).join("rock01_ao.png")).unwrap();
+        reopen(&mut m, d.path());
+        m.open_gen(ROCK_SET, Some(GenMap::Height));
+        m.gen_tick(GenMap::Ao, true);
+        m.gen_tick(GenMap::Curvature, true);
+        let mut h = gen_harness(m, w, 900.0);
+        h.run_steps(3);
+        assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+        h.run_steps(5);
+        let rects: Vec<_> = ["Height preview", "AO preview", "Curvature preview"]
+            .iter()
+            .map(|l| h.get_by_label(l).rect())
+            .collect();
+        let left = rects.iter().map(|r| r.min.x).fold(f32::MAX, f32::min);
+        let right = rects.iter().map(|r| r.max.x).fold(0.0, f32::max);
+        assert!(right - left <= 640.0, "tiles span {left}..{right} at {w}");
+        assert!(right <= w, "{right} past the window at {w}");
+    }
+}

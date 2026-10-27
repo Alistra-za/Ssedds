@@ -30,7 +30,40 @@ pub const AO_INTENSITY_HOVER: &str =
     "the file holds raw visibility; CS applies AO to indirect light itself. 0.7–1.0 is a good range";
 
 /// The preview tile's side in points.
-const TILE: f32 = 160.0;
+pub const TILE: f32 = 240.0;
+pub const ZOOM_MAX: f32 = 16.0;
+const ZOOM_HOVER: &str = "Wheel: zoom · drag: pan · double-click: fit";
+
+/// The preview's zoom, shared by all tiles and kept per dialog session in egui temp data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreviewZoom {
+    pub zoom: f32,
+    /// In UV, 0..1 per axis.
+    pub centre: egui::Vec2,
+}
+
+impl Default for PreviewZoom {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            centre: egui::vec2(0.5, 0.5),
+        }
+    }
+}
+
+/// The UV rect a tile shows: `1 / zoom` wide, centred on `centre`, shifted to stay inside 0..1.
+pub fn zoom_uv(z: &PreviewZoom) -> egui::Rect {
+    let s = 1.0 / z.zoom.max(1.0);
+    let min = |c: f32| (c - s / 2.0).clamp(0.0, 1.0 - s);
+    egui::Rect::from_min_size(
+        egui::pos2(min(z.centre.x), min(z.centre.y)),
+        egui::vec2(s, s),
+    )
+}
+
+fn zoom_id() -> egui::Id {
+    egui::Id::new("gen-preview-zoom")
+}
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     if model.gen.is_none() {
@@ -58,6 +91,15 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         .find(|(m, _, _)| *m == GenMap::Ao)
         .map(|(_, _, (w, _))| *w);
     let buttons = gen_buttons(!ticked.is_empty(), running.is_some());
+    // The zoom is per dialog session: a new open starts at fit.
+    let opened_id = egui::Id::new("gen-preview-zoom-open");
+    let opened = model.gen.as_ref().map_or(0, |g| g.opened);
+    if ctx.data(|d| d.get_temp::<u64>(opened_id)) != Some(opened) {
+        ctx.data_mut(|d| {
+            d.remove::<PreviewZoom>(zoom_id());
+            d.insert_temp(opened_id, opened);
+        });
+    }
     let hover = model.gen_generate_hover();
     let max_h = ctx.content_rect().height() * HALF_SIZE_LIST_SHARE;
     let mut dragging = false;
@@ -294,7 +336,12 @@ fn ao_group(ui: &mut egui::Ui, a: &mut AoOpts, width: Option<u32>) -> bool {
 
 /// The preview's maps as grey tiles, each texture loaded once per result.
 fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
-    ui.horizontal(|ui| {
+    let mut z = ui
+        .ctx()
+        .data(|d| d.get_temp::<PreviewZoom>(zoom_id()))
+        .unwrap_or_default();
+    // Wrapped, so three tiles never push the body wider than the dialog.
+    ui.horizontal_wrapped(|ui| {
         for (g, label) in [
             (&p.maps.height, "Height preview"),
             (&p.maps.ao, "AO preview"),
@@ -303,10 +350,44 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
             let Some(g) = g else { continue };
             let tex = texture(ui.ctx(), label, p, g);
             let size = egui::vec2(TILE, TILE * g.height as f32 / g.width.max(1) as f32);
-            let r = ui.add(egui::Image::new((tex.id(), size)));
+            let r = ui.add(
+                egui::Image::new((tex.id(), size))
+                    .uv(zoom_uv(&z))
+                    .sense(egui::Sense::click_and_drag()),
+            );
             r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, label));
+            let r = r.on_hover_text(ZOOM_HOVER);
+            if r.hovered() {
+                let (dy, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+                let f = 1.0015f32.powf(dy) * pinch;
+                if let (true, Some(ptr)) = (f != 1.0, r.hover_pos()) {
+                    // Keep the UV under the pointer under the pointer.
+                    let uv = zoom_uv(&z);
+                    let frac = (ptr - r.rect.min) / r.rect.size();
+                    let under = uv.min.to_vec2() + frac * uv.size();
+                    z.zoom = (z.zoom * f).clamp(1.0, ZOOM_MAX);
+                    let s = 1.0 / z.zoom;
+                    z.centre = under - frac * s + egui::vec2(s, s) * 0.5;
+                }
+                // The enclosing ScrollArea reads the delta after its content (scroll_area.rs `end`), so this stops it.
+                // (0.36.2 has no raw_scroll_delta field; the area reads only `smooth_scroll_delta`.)
+                ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+            }
+            if r.dragged() {
+                z.centre -= r.drag_delta() / r.rect.size() / z.zoom;
+            }
+            if r.double_clicked() {
+                z = PreviewZoom::default();
+            }
         }
     });
+    // Keep the stored centre inside the texture, so a pan past the edge doesn't build up.
+    let uv = zoom_uv(&z);
+    z.centre = uv.center().to_vec2();
+    ui.ctx().data_mut(|d| d.insert_temp(zoom_id(), z));
+    if z.zoom > 1.0 {
+        ui.weak(format!("{:.1}×", z.zoom));
+    }
 }
 
 fn texture(ctx: &egui::Context, label: &str, p: &Arc<GenResult>, g: &Gray) -> egui::TextureHandle {
