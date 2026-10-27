@@ -72,13 +72,8 @@ pub(crate) fn prepare(
     let src = (works[0].img.width, works[0].img.height);
     let n = layout::face_size(p, cj.layout, src);
     let faces: [Rgba32F; 6] = if cj.layout == CubeLayout::Equirect {
-        if !layout::fits(cj.layout, src.0, src.1) {
-            return Err(failed(Stage::Preprocess)(format!(
-                "{}x{} is not a 2:1 panorama: set cubemap.layout for this file",
-                src.0, src.1
-            )));
-        }
-        // Sampled straight at the face size, so the resize below is a no-op.
+        // Any loaded size reads as a panorama (DN14), sampled straight at the face size, so the resize below is a
+        // no-op.
         let Cube { faces, .. } = import_dir::equirect(&works[0].img, n);
         let mut k = 0;
         faces.map(|f| {

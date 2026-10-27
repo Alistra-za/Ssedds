@@ -3810,32 +3810,58 @@ fn cube_vcross_rgba8() {
 /// Task 13 (DECISIONS DN14): a 2:1 HDR panorama, light sky over brown ground with a hot sun, as a `room` cube.
 #[test]
 fn cube_equirect_hdr() {
-    let d = tempfile::tempdir().unwrap();
-    let img = image::Rgb32FImage::from_fn(256, 128, |x, y| {
-        if (120..136).contains(&x) && (20..28).contains(&y) {
-            image::Rgb([40.0, 38.0, 30.0])
-        } else if y < 64 {
-            image::Rgb([0.5, 0.7, 1.0])
-        } else {
-            image::Rgb([0.3, 0.15, 0.05])
-        }
-    });
-    put(
-        d.path(),
-        "textures/cubemaps/sky.hdr",
-        DynamicImage::ImageRgb32F(img),
+    // The sun sits on the horizon at u 0.5, which is world east (+X).
+    let convert_sky = |sets: &[&str]| {
+        let d = tempfile::tempdir().unwrap();
+        let img = image::Rgb32FImage::from_fn(256, 128, |x, y| {
+            if (124..132).contains(&x) && (60..68).contains(&y) {
+                image::Rgb([40.0, 38.0, 30.0])
+            } else if y < 64 {
+                image::Rgb([0.5, 0.7, 1.0])
+            } else {
+                image::Rgb([0.3, 0.15, 0.05])
+            }
+        });
+        put(
+            d.path(),
+            "textures/cubemaps/sky.hdr",
+            DynamicImage::ImageRgb32F(img),
+        );
+        let o = convert(d.path(), Target::Cs, sets, &[]);
+        assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+        dds(d.path(), "textures/cubemaps/sky.dds")
+    };
+    // Texels of +X mip 0 at full red, and where the brightest texel of all six faces is.
+    let sun = |f: &DdsFile| {
+        let s = surfaces(f);
+        let per = f.mip_count as usize;
+        let hot = s[0].iter().filter(|p| p[0] >= 250).count();
+        let (face, i) = (0..6)
+            .flat_map(|k| s[k * per].iter().enumerate().map(move |(i, p)| (k, i, p)))
+            .max_by_key(|(_, _, p)| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .map(|(k, i, _)| (k, i))
+            .unwrap();
+        (hot, face, (i % 128, i / 128))
+    };
+    let unclamped = convert_sky(&["file:**/sky.hdr.cubemap.style=room"]);
+    let f = convert_sky(&[
+        "file:**/sky.hdr.cubemap.style=room",
+        "file:**/sky.hdr.cubemap.highlight_clamp=4",
+    ]);
+    let (hot, face, at) = sun(&f);
+    let (hot_unclamped, face_unclamped, _) = sun(&unclamped);
+    eprintln!("cube_equirect_hdr: sun on face {face} at {at:?}; red-saturated +X texels {hot} clamped, {hot_unclamped} unclamped");
+    assert_eq!(
+        (face, face_unclamped),
+        (0, 0),
+        "the sun is not on +X (east)"
     );
-    let o = convert(
-        d.path(),
-        Target::Cs,
-        &[
-            "file:**/sky.hdr.cubemap.style=room",
-            "file:**/sky.hdr.cubemap.highlight_clamp=4",
-        ],
-        &[],
+    assert!(
+        (48..80).contains(&at.0) && (48..80).contains(&at.1),
+        "sun off the +X centre: {at:?}"
     );
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
-    let f = dds(d.path(), "textures/cubemaps/sky.dds");
+    // highlight_clamp 4 rolls the sun off instead of clipping a wide disc.
+    assert!(hot * 4 < hot_unclamped, "{hot} vs {hot_unclamped}");
     assert_dds(
         &f,
         DdsPixelFormat::Bc1 { srgb: false },

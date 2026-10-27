@@ -312,15 +312,21 @@ const WEST: [f32; 3] = [-1.0, 0.0, 0.0];
 const NORTH: [f32; 3] = [0.0, 1.0, 0.0];
 const SOUTH: [f32; 3] = [0.0, -1.0, 0.0];
 
-/// A black cube with a red patch around world east.
-fn red_east(n: u32) -> Cube {
+const UPW: [f32; 3] = [0.0, 0.0, 1.0];
+const DOWN: [f32; 3] = [0.0, 0.0, -1.0];
+
+/// A black cube with patches around world east (red), north (green) and up (blue).
+fn markers(n: u32) -> Cube {
     let faces = std::array::from_fn(|f| {
         let mut img = Rgba32F::new(n, n, [0.0, 0.0, 0.0, 1.0]);
         for y in 0..n {
             for x in 0..n {
                 let d = engine::cube::world::to_world(cube_dir(f, x, y, n));
-                if d[0] > 0.9 {
-                    *img.at_mut(x, y) = [1.0, 0.0, 0.0, 1.0];
+                let p = img.at_mut(x, y);
+                for k in 0..3 {
+                    if d[k] > 0.9 {
+                        p[k] = 1.0;
+                    }
                 }
             }
         }
@@ -329,23 +335,129 @@ fn red_east(n: u32) -> Cube {
     Cube { size: n, faces }
 }
 
+/// Each world direction's face centre is the colour of the marker expected there (black for none).
+fn assert_markers(c: &Cube, red: [f32; 3], green: [f32; 3]) {
+    for w in [EAST, WEST, NORTH, SOUTH, UPW, DOWN] {
+        let want = [w == red, w == green, w == UPW].map(|on| if on { 1.0 } else { 0.0 });
+        let got = centre(c, w);
+        assert!(
+            (0..3).all(|k| (got[k] - want[k]).abs() < 0.1),
+            "{w:?}: {got:?}, want {want:?}"
+        );
+    }
+}
+
 #[test]
 fn yaw_quarter_turn_moves_east_to_south() {
-    let c = filter::yaw(&red_east(32), 90.0);
-    assert!(centre(&c, SOUTH)[0] > 0.9, "south {:?}", centre(&c, SOUTH));
-    for w in [EAST, NORTH, WEST] {
-        assert!(centre(&c, w)[0] < 0.1, "{w:?}: {:?}", centre(&c, w));
-    }
-    assert_eq!(filter::yaw(&red_east(8), 0.0), red_east(8));
+    assert_markers(&markers(32), EAST, NORTH);
+    // Clockwise seen from above: east to south, north to east, up stays up.
+    assert_markers(&filter::yaw(&markers(32), 90.0), SOUTH, EAST);
+    assert_eq!(filter::yaw(&markers(8), 0.0), markers(8));
 }
 
 #[test]
 fn mirror_swaps_east_and_west() {
-    let c = filter::mirror(&red_east(32));
-    assert!(centre(&c, WEST)[0] > 0.9, "west {:?}", centre(&c, WEST));
-    for w in [EAST, NORTH, SOUTH] {
-        assert!(centre(&c, w)[0] < 0.1, "{w:?}: {:?}", centre(&c, w));
+    // North and up stay put.
+    assert_markers(&filter::mirror(&markers(32)), WEST, NORTH);
+}
+
+/// A smooth field of world direction: no hard edges, so any sub-texel offset in the importer shows.
+fn smooth(d: [f32; 3]) -> [f32; 4] {
+    [
+        0.5 + 0.5 * (6.0 * d[0]).sin(),
+        0.5 + 0.5 * (6.0 * d[1]).sin(),
+        0.5 + 0.5 * (6.0 * d[2]).sin(),
+        1.0,
+    ]
+}
+
+#[test]
+fn equirect_of_a_smooth_field_round_trips() {
+    let (w, h, n) = (512, 256, 64);
+    let mut pano = Rgba32F::new(w, h, [0.0; 4]);
+    for y in 0..h {
+        for x in 0..w {
+            let d = uv_to_dir(
+                (x as f32 + 0.5) / w as f32,
+                (y as f32 + 0.5) / h as f32,
+                0.0,
+            );
+            *pano.at_mut(x, y) = smooth(d);
+        }
     }
+    let got = import_dir::equirect(&pano, n);
+    let q: Vec<f64> = (0..6)
+        .map(|f| {
+            let mut want = Rgba32F::new(n, n, [0.0; 4]);
+            for y in 0..n {
+                for x in 0..n {
+                    let d = engine::cube::world::to_world(cube_dir(f, x, y, n));
+                    *want.at_mut(x, y) = smooth(d);
+                }
+            }
+            rgb_psnr(&got.faces[f], &want)
+        })
+        .collect();
+    eprintln!("smooth round trip, per-face PSNR: {q:.2?}");
+    assert!(q.iter().all(|&q| q > 35.0), "{q:.2?}");
+}
+
+#[test]
+fn explicit_equirect_reads_any_size() {
+    // 64x33 is a small 4096x2049: unclear when guessed, read as a panorama when set.
+    assert_eq!(detect(64, 33), None);
+    assert!(layout::fits(CubeLayout::Equirect, 64, 33));
+    let d = tempfile::tempdir().unwrap();
+    png(
+        d.path(),
+        "textures/cubemaps/pano.png",
+        64,
+        33,
+        [90, 120, 200],
+    );
+    let (p, ev) = plan_of(req(
+        d.path(),
+        &["file:**/pano.png.cubemap.layout=equirect"],
+        true,
+    ));
+    let (s, run_ev) = run(p);
+    assert_eq!(s.converted, 1, "{ev:#?} {run_ev:#?}");
+}
+
+#[test]
+fn default_panorama_is_not_resized() {
+    let d = tempfile::tempdir().unwrap();
+    png(
+        d.path(),
+        "textures/cubemaps/pano.png",
+        512,
+        256,
+        [90, 120, 200],
+    );
+    let (p, ev) = plan_of(req(d.path(), &[], true));
+    let j = job(&p, "pano.dds");
+    assert_eq!(j.cube.as_ref().unwrap().layout, CubeLayout::Equirect);
+    assert!(
+        !j.warnings.iter().any(|w| w.code == Code::DimResized),
+        "{:?} {ev:#?}",
+        j.warnings
+    );
+    // A non-power-of-two width: the 250 cell is named, not min(w, h).
+    let d = tempfile::tempdir().unwrap();
+    png(
+        d.path(),
+        "textures/cubemaps/pano.png",
+        1000,
+        500,
+        [90, 120, 200],
+    );
+    let p = plan(d.path(), &[]);
+    let w = job(&p, "pano.dds")
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::DimResized)
+        .expect("DIM-RESIZED");
+    assert_eq!(w.message, "face 250 → 128");
 }
 
 #[test]

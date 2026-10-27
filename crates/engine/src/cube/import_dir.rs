@@ -26,6 +26,8 @@ fn bilinear(img: &Rgba32F, u: f32, v: f32) -> [f32; 4] {
 /// A `size` cube from the equirect `img` (standard 360-degree mapping, `latlong::dir_to_uv` at yaw 0): each texel is
 /// the mean of 3x3 bilinear samples over its footprint.
 pub fn equirect(img: &Rgba32F, size: u32) -> Cube {
+    // shortcut: fixed 3x3 taps alias when face_size is far below w/4 (a large panorama to a small cube); scale the
+    // tap count with (w/4)/size when that matters.
     const K: u32 = 3;
     sample::build(size, |face, x, y| {
         let mut sum = [0.0f32; 4];

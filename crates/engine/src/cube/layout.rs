@@ -156,23 +156,28 @@ pub(crate) fn orient(face: Rgba32F, k: usize, spec: &CubemapSpec) -> Rgba32F {
     }
 }
 
-/// Whether a `w` x `h` image can be read as `layout` (a 2:1 image for `Equirect`, the exact cells otherwise).
+/// Whether a `w` x `h` image can be read as `layout`: any non-empty image as `Equirect` (the importer resamples; only
+/// auto-detection needs exact 2:1), the exact cells otherwise.
 pub fn fits(layout: CubeLayout, w: u32, h: u32) -> bool {
     match layout {
-        CubeLayout::Equirect => detect(w, h) == Some(layout),
+        CubeLayout::Equirect => w > 0 && h > 0,
         _ => cells(layout, w, h).is_some(),
     }
 }
 
-/// The face edge written: `cubemap.face_size`, else the largest power of two within the source cell (a quarter of an
-/// equirect's width, its 90 degrees). `src` is the source image size (one face's size for `Faces`).
+/// The source's face-sized cell: a quarter of an equirect's width (its 90 degrees), the cross or strip cell, else the
+/// shorter side. `src` is the source image size (one face's size for `Faces`).
+pub fn source_cell(layout: CubeLayout, src: (u32, u32)) -> u32 {
+    if layout == CubeLayout::Equirect {
+        src.0 / 4
+    } else {
+        cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0)
+    }
+}
+
+/// The face edge written: `cubemap.face_size`, else the largest power of two within [`source_cell`].
 pub fn face_size(p: &Profile, layout: CubeLayout, src: (u32, u32)) -> u32 {
-    p.cubemap.face_size.unwrap_or_else(|| {
-        let cell = if layout == CubeLayout::Equirect {
-            src.0 / 4
-        } else {
-            cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0)
-        };
-        1 << cell.max(1).ilog2()
-    })
+    p.cubemap
+        .face_size
+        .unwrap_or_else(|| 1 << source_cell(layout, src).max(1).ilog2())
 }

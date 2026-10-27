@@ -1,5 +1,5 @@
 //! Cube yaw and mirror (DECISIONS DN14), and colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DN11). Alpha is untouched.
-use super::world::{to_cube, to_world, UP};
+use super::world::{to_cube, to_world};
 use super::Cube;
 use crate::config::CubemapSpec;
 use crate::ops::{game_gamma_to_linear, linear_to_game_gamma};
@@ -10,17 +10,11 @@ pub fn yaw(c: &Cube, degrees: f64) -> Cube {
     if degrees == 0.0 {
         return c.clone();
     }
-    // out(d) = in(R d), R the right-handed (counter-clockwise from above) turn by `degrees` about UP.
+    // out(d) = in(R d), R the counter-clockwise-from-above turn by `degrees` about world Z (up), in world space.
     let (s, co) = (degrees.to_radians() as f32).sin_cos();
-    let k = UP;
     super::sample::resample(c, c.size, |d| {
-        let kd = k[0] * d[0] + k[1] * d[1] + k[2] * d[2];
-        let kxd = [
-            k[1] * d[2] - k[2] * d[1],
-            k[2] * d[0] - k[0] * d[2],
-            k[0] * d[1] - k[1] * d[0],
-        ];
-        std::array::from_fn(|i| d[i] * co + kxd[i] * s + k[i] * kd * (1.0 - co))
+        let w = to_world(d);
+        to_cube([w[0] * co - w[1] * s, w[0] * s + w[1] * co, w[2]])
     })
 }
 

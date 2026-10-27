@@ -2107,9 +2107,9 @@ pub fn check_profile(
     if st == Subtype::Cubemap {
         resized = None;
         if let Some(layout) = cube_layout(p, f) {
-            use crate::cube::layout::{cells, face_size};
+            use crate::cube::layout::{face_size, source_cell};
             let src = (a.width, a.height);
-            let cell = cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0);
+            let cell = source_cell(layout, src);
             let face = face_size(p, layout, src);
             let shown =
                 if p.drop_top_mip && crate::mips::level_count(face, face, &p.mips.levels) > 1 {
