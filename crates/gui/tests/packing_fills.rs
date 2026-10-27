@@ -637,6 +637,37 @@ fn picking_rfaos_takes_the_set_out_of_the_json() {
     h.get_by_label("skin");
 }
 
+/// Owner 2026-10-27: making the diffuse Advanced skin switches the set's packed `_rmaos` to `_rfaos`, as one undo step.
+#[test]
+fn a_diffuse_made_skin_albedo_switches_the_packed_rmaos_to_rfaos() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    assert!(m.item(RMAOS).is_some());
+    let before = texts(&m);
+    m.set_field(DIFFUSE, "subtype", json!(Subtype::SkinAlbedo));
+    idle(&mut m);
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
+    assert!(m.item(RFAOS).is_some(), "the packed output is _rfaos");
+    assert!(m.item(RMAOS).is_none());
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(p.file_value(RFAOS, "packing.recipe"), Some(json!("rfaos")));
+    m.undo();
+    idle(&mut m);
+    assert_eq!(texts(&m), before, "one undo step");
+    assert!(m.item(RMAOS).is_some());
+}
+
+/// The same edit on a set that cannot build `_rfaos` (metallic only) still sets the sub-type and keeps `_rmaos`.
+#[test]
+fn a_skin_albedo_diffuse_keeps_rmaos_when_rfaos_cannot_be_built() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = metallic_only(d.path());
+    m.set_field(DIFFUSE, "subtype", json!(Subtype::SkinAlbedo));
+    idle(&mut m);
+    assert_eq!(subtype(&m, DIFFUSE), Some(json!(Subtype::SkinAlbedo)));
+    assert!(m.item(RMAOS).is_some());
+}
+
 /// A metallic-only cs set: `_rmaos` from a metallic map, which `_rfaos` (no metallic channel) cannot be built from.
 fn metallic_only(dir: &Path) -> AppModel {
     metallic_only_with(dir, "")

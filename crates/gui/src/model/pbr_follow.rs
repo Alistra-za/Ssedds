@@ -9,7 +9,7 @@
 use super::items::Decision;
 use super::sets::{is_pbr_diffuse, locked_items, set_views, SlotFill, SlotKind};
 use super::AppModel;
-use engine::config::Subtype;
+use engine::config::{PackRecipe, Subtype};
 use engine::presets::Provenance;
 use serde_json::json;
 
@@ -40,6 +40,35 @@ enum Follow {
 impl AppModel {
     /// Change (`Some`) or reset (`None`) `key`'s sub-type, with the PBR follow-on for its set, as one step.
     pub(super) fn edit_subtype(&mut self, label: &str, key: &str, new: Option<Subtype>) {
+        // Owner 2026-10-27: a diffuse made Advanced skin takes its set's packed `_rmaos` to `_rfaos` in the same step
+        // (`set_packing_recipe` keeps `_rmaos` when `_rfaos` cannot be built).
+        if let Some(rmaos) = self.rmaos_of_new_skin(key, new) {
+            self.batch_edit(label, |m| {
+                m.edit_subtype_alone(label, key, new);
+                m.set_packing_recipe(&rmaos, PackRecipe::Rfaos);
+            });
+            return;
+        }
+        self.edit_subtype_alone(label, key, new);
+    }
+
+    /// The packed `_rmaos` key of the set whose Diffuse-slot member `key` becomes `skin_albedo` with `new`.
+    fn rmaos_of_new_skin(&self, key: &str, new: Option<Subtype>) -> Option<String> {
+        let was = self.item(key)?.job.as_ref()?.profile.subtype;
+        if new != Some(Subtype::SkinAlbedo) || was == Subtype::SkinAlbedo {
+            return None;
+        }
+        let views = set_views(self);
+        let v = views.iter().find(|v| {
+            matches!(v.slots.get(&SlotKind::Diffuse), Some(SlotFill::Own { item }) if item == key)
+        })?;
+        match v.slots.get(&SlotKind::Rmaos) {
+            Some(SlotFill::Own { item }) if item.ends_with("_rmaos") => Some(item.clone()),
+            _ => None,
+        }
+    }
+
+    fn edit_subtype_alone(&mut self, label: &str, key: &str, new: Option<Subtype>) {
         if self.project.as_ref().is_none_or(|p| p.read_only()) {
             return;
         }
