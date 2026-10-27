@@ -337,8 +337,21 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         // a switch change reaches this build through `refresh_checks`' `invalidate_views()`.
         let on = &m.settings.checks;
         for r in &m.export.rows {
+            // Note DP4: the live item row is the current truth and carries the fix, so a same-code copy of it from
+            // the last export is dropped. Only when the job maps to exactly one item (several share a job_key).
+            let mut owners = m.items.iter().filter(|i| i.job_key == r.job_key);
+            let live = match (owners.next(), owners.next()) {
+                (Some(i), None) => Some(i),
+                _ => None,
+            };
             // P11 (owner answer 2): Info stays on the row's hover, as for item and set rows (`DERIVE-*` included).
             for w in r.warnings.iter().filter(|w| counts_toward_badge(w)) {
+                if live.is_some_and(|i| {
+                    i.status != ItemStatus::NeedsDecision
+                        && i.warnings.iter().any(|x| x.code == w.code)
+                }) {
+                    continue;
+                }
                 let level = match checks::check_of(w.code) {
                     Some(c) if !checks::switch_on(on, c) => continue,
                     Some(_) => Level::Check,

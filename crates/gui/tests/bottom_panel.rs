@@ -324,6 +324,47 @@ fn the_z_row_offers_rebuild_z_and_it_clears_the_row() {
     assert!(!z_row_code(h.state(), Code::SugContradiction));
 }
 
+/// Note DP4: the last export repeats the live warning on an `At::File` row; only the live row is listed.
+#[test]
+fn an_exported_short_normal_still_shows_one_z_row() {
+    use engine::codes::Code;
+    use sdc_gui::model::bottom::{problems, At};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = short_normal_model(d.path(), None);
+    decide_all(&mut m);
+    m.decide(
+        "landscape/x_n.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Normal),
+    );
+    m.decide(
+        "landscape/x_n.png",
+        sdc_gui::model::Answer::Green(engine::config::GreenConvention::Directx),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.export_clicked();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    let z = |m: &AppModel| {
+        problems(m)
+            .iter()
+            .filter(|p| p.code == Some(Code::ChanNormalLength))
+            .map(|p| p.at.clone())
+            .collect::<Vec<_>>()
+    };
+    let rows = &m.export.rows;
+    assert!(
+        rows.iter()
+            .any(|r| r.warnings.iter().any(|w| w.code == Code::ChanNormalLength)),
+        "the export row carries the warning"
+    );
+    assert_eq!(z(&m), vec![At::Texture("landscape/x_n.png".into())]);
+    m.open_problems(None);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label(sdc_gui::ui::problems::REBUILD_Z).click();
+    idle(&mut h);
+    assert!(!z(h.state()).contains(&At::Texture("landscape/x_n.png".into())));
+}
+
 #[test]
 fn rebuild_z_is_disabled_on_a_read_only_sdc_toml() {
     let d = tempfile::tempdir().unwrap();
