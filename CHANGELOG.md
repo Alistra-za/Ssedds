@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `--on-existing if-changed` now re-encodes only the texture types whose output changed in a new version. Upgrading from 1.0.0 re-encodes nothing.
+
 ## 1.0.0
 
 First official release. It covers everything since 0.8.0-alpha.2 (0.9.0 was never released).

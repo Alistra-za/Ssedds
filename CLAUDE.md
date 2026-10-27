@@ -24,6 +24,7 @@ cargo test --workspace -- render_ --test-threads=1
 ```
 - **GPU tests (`render_*`) run alone.** They can hang for 30+ minutes when the GPU is busy.
 - **`cargo test -p engine --test golden`** is a quick pre-check; the workspace run already includes it.
+- **`cargo test -p engine --test encode_versions`** pins encoder inputs and built-in profile hashes; a change it accepts rewrites `crates/engine/tests/encode_versions/*.json`. Commit that diff with the change.
 - **Capture test output to a file** and read the `test result:` lines. Never pipe it through `head`: truncated output has been mistaken for a pass.
 - **On Windows, set `CARGO_BUILD_JOBS=4`** when several builds run at once. Otherwise linking fails with os error 1450 ("insufficient system resources"). That error is not a code failure.
 - **Release exes land in `target\x86_64-pc-windows-msvc\release\`**, because `.cargo/config` sets the target triple, not in `target\release\`. An `sdc-gui.exe` there is stale; the GUI is `tessalith.exe`.
@@ -43,7 +44,7 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 - **NVTT is never bundled.** It is an optional external tool.
 - **Files the user edits are written with `engine::dds::write_atomic`**, which flushes before the rename. That covers `sdc.toml`, `sdc-project.toml`, `gui.toml`, presets and exported JSON. DDS outputs use it too (owner decision, Note BC10).
 - **Never overwrite a file Tessalith did not write.** This matters most next to PGPatcher's outputs. Exports check the recorded hash first, as the PGPatcher, CS PBR and complex-material JSON exports do.
-- **Version:** the workspace version is the engine version, and it is part of every output's identity. Bump it only on purpose.
+- **Version:** the workspace version is the engine version, and it is part of every output's identity. Bump it only on purpose. An engine change that alters a type's output bytes or validation verdict sets that type's arm in `engine::manifest::encode_version` to the new engine version (Note DL). New `Profile` fields are `#[serde(default, skip_serializing_if = ...)]`. A release commit sets `RELEASED_ENGINE_VERSION` to the released version. The version follows semantic versioning (Note DL8): MAJOR breaks existing use, MINOR adds a backward-compatible feature, PATCH fixes a bug.
 - **Schemas:** after adding a code, shader or config field, regenerate with `sdc presets schema all --out schema` and commit only real diffs. A `///` doc comment on an enum variant turns that schema into `oneOf`, so use `//` there.
 
 ## How work is recorded

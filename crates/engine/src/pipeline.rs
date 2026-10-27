@@ -125,7 +125,7 @@ fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationR
     }
 }
 
-/// Test hook (Note DJ): SHA-256 of everything that decides a file's encoded bytes and validation verdict, so the
+/// Test hook (Note DL): SHA-256 of everything that decides a file's encoded bytes and validation verdict, so the
 /// encode-version guard pins it per sub-type without depending on ISA-specific encoder output. Covers the header,
 /// each level's quantised encoder input (length-prefixed), the resolved profile and the verdict.
 #[cfg(feature = "test-hooks")]
@@ -626,7 +626,7 @@ pub fn process_file(
         bc1_model: req.bc1_model,
         expected_levels: Some(total),
     });
-    // Test hook (Note DJ, `test-hooks` only): record this output's encode-input hash for the encode-version guard.
+    // Test hook (Note DL, `test-hooks` only): record this output's encode-input hash for the encode-version guard.
     #[cfg(feature = "test-hooks")]
     if let Some(dir) = std::env::var_os("SDC_TEST_ENCODE_INPUT_DIR") {
         let header = crate::dds::header_bytes(&desc, total).expect("header");

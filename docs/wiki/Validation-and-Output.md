@@ -110,6 +110,7 @@ The JSON Schema is available with `sdc presets schema manifest`.
 - the BC1 decoder model, for BC1 and BC3;
 - the record passed validation;
 - the engine version;
+- the texture type's encode version (the engine version at which that type's output last changed);
 - every source file's content (by SHA-256), including packing sources, the baked normal map and RNM layers;
 - the resolved settings (by hash).
 

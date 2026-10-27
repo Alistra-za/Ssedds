@@ -126,7 +126,7 @@ When the project `sdc.toml` has `[export] also` (see [Project Config](Project-Co
 
 | Value | Behaviour |
 |---|---|
-| `if-changed` | Re-encode only when the manifest record differs: source content, resolved settings, engine version, encoder versions, NVTT version (only for outputs encoded with NVTT), BC1 decoder model (for BC1/BC3), a record that failed validation, or an output file whose size or modified time changed. An output with no manifest record is kept and reported as `OUT-UNKNOWN-EXISTING`. With `--sidecar`, a missing sidecar on an up-to-date output is written from the manifest record; the file re-encodes only if that write fails. |
+| `if-changed` | Re-encode only when the manifest record differs: source content, resolved settings, the texture type's encode version (bumped only when a release changes that type's output), encoder versions, NVTT version (only for outputs encoded with NVTT), BC1 decoder model (for BC1/BC3), a record that failed validation, or an output file whose size or modified time changed. An output with no manifest record is kept and reported as `OUT-UNKNOWN-EXISTING`. With `--sidecar`, a missing sidecar on an up-to-date output is written from the manifest record; the file re-encodes only if that write fails. |
 | `skip` | Keep every existing output. Counted as skipped on purpose. |
 | `overwrite` | Always re-encode. |
 
