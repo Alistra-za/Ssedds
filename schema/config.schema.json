@@ -233,7 +233,8 @@
         "vstrip",
         "equirect",
         "mirror_ball",
-        "angular"
+        "angular",
+        "photo"
       ],
       "type": "string"
     },

@@ -841,6 +841,7 @@ fn cube_style_layer(
     let style = doc
         .pointer("/cubemap/style")
         .and_then(|v| serde_json::from_value::<CubeStyle>(v.clone()).ok());
+    let photo = doc.pointer("/cubemap/layout").and_then(Value::as_str) == Some("photo");
     let mut fill = |field: &str, value: Value| {
         if !field_explicit(ctx, prov, field) {
             let patch = to_patch(field, &value);
@@ -867,6 +868,10 @@ fn cube_style_layer(
         if let Some(s) = saturation {
             fill("cubemap.saturation", json!(s));
         }
+    }
+    // DN16: a single photo is soft by nature, so it blurs heavily unless `cubemap.blur` is explicit.
+    if photo {
+        fill("cubemap.blur", json!(0.6));
     }
     fill("color.tag", json!(ColorTag::Unorm));
 }

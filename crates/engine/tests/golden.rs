@@ -3900,6 +3900,28 @@ fn cube_mirror_ball_and_angular() {
     }
 }
 
+/// Task 15 (DECISIONS DN16): a 400x300 photo with `cubemap.layout = photo` is one valid cube.
+#[test]
+fn cube_single_photo() {
+    let d = tempfile::tempdir().unwrap();
+    let img = image::RgbImage::from_fn(400, 300, |x, y| Rgb([(x / 2) as u8, (y / 2) as u8, 90]));
+    put(
+        d.path(),
+        "textures/cubemaps/view.png",
+        DynamicImage::ImageRgb8(img),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["file:**/view.png.cubemap.layout=photo"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/view.dds");
+    assert!(f.is_cubemap);
+    assert_eq!((f.width, f.height), (128, 128));
+}
+
 #[test]
 fn cube_hstrip_bc3_keeps_alpha() {
     let d = tempfile::tempdir().unwrap();

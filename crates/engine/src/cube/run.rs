@@ -75,6 +75,9 @@ pub(crate) fn prepare(
         CubeLayout::Equirect => Some(import_dir::equirect),
         CubeLayout::MirrorBall => Some(import_dir::mirror_ball),
         CubeLayout::Angular => Some(import_dir::angular),
+        CubeLayout::Photo => {
+            Some(|img, n| import_dir::equirect(&import_dir::photo_panorama(img), n))
+        }
         _ => None,
     };
     let faces: [Rgba32F; 6] = if let Some(import) = direct {

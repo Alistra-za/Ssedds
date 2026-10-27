@@ -38,9 +38,11 @@ pub fn cells(layout: CubeLayout, w: u32, h: u32) -> Option<(u32, [(u32, u32); 6]
         CubeLayout::Vcross => (w / 3, VCROSS),
         CubeLayout::Hstrip => (h, [0, 1, 2, 3, 4, 5].map(|k| (k, 0))),
         CubeLayout::Vstrip => (w, [0, 1, 2, 3, 4, 5].map(|k| (0, k))),
-        CubeLayout::Faces | CubeLayout::Equirect | CubeLayout::MirrorBall | CubeLayout::Angular => {
-            return None
-        }
+        CubeLayout::Faces
+        | CubeLayout::Equirect
+        | CubeLayout::MirrorBall
+        | CubeLayout::Angular
+        | CubeLayout::Photo => return None,
     })
 }
 
@@ -162,7 +164,9 @@ pub(crate) fn orient(face: Rgba32F, k: usize, spec: &CubemapSpec) -> Rgba32F {
 /// auto-detection needs exact 2:1), the exact cells otherwise.
 pub fn fits(layout: CubeLayout, w: u32, h: u32) -> bool {
     match layout {
-        CubeLayout::Equirect | CubeLayout::MirrorBall | CubeLayout::Angular => w > 0 && h > 0,
+        CubeLayout::Equirect | CubeLayout::MirrorBall | CubeLayout::Angular | CubeLayout::Photo => {
+            w > 0 && h > 0
+        }
         _ => cells(layout, w, h).is_some(),
     }
 }
@@ -172,6 +176,9 @@ pub fn fits(layout: CubeLayout, w: u32, h: u32) -> bool {
 pub fn source_cell(layout: CubeLayout, src: (u32, u32)) -> u32 {
     if layout == CubeLayout::Equirect {
         src.0 / 4
+    } else if layout == CubeLayout::Photo {
+        // The fake panorama is twice the photo wide (DN16), so its quarter is half the photo.
+        src.0 / 2
     } else if matches!(layout, CubeLayout::MirrorBall | CubeLayout::Angular) {
         src.0 / 2
     } else {

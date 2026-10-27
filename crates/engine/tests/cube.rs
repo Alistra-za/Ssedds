@@ -1308,3 +1308,75 @@ fn square_images_are_never_auto_detected() {
     assert_eq!(layout::face_size(&p, CubeLayout::Angular, (700, 700)), 256);
     assert_eq!(layout::source_cell(CubeLayout::Angular, (700, 700)), 350);
 }
+
+// ---- Task 15: single photo (DECISIONS DN16) ----
+
+#[test]
+fn photo_panorama_is_seamless_and_mirrored() {
+    let (w, h) = (64u32, 32u32);
+    let mut img = Rgba32F::new(w, h, [0.0; 4]);
+    for y in 0..h {
+        for x in 0..w {
+            *img.at_mut(x, y) = [x as f32 * 0.003, 0.2 + y as f32 * 0.002, 0.5, 1.0];
+        }
+    }
+    let p = import_dir::photo_panorama(&img);
+    let ww = 2 * w;
+    assert_eq!((p.width, p.height), (ww, ww / 2));
+    for y in 0..p.height {
+        let (a, b) = (p.at(0, y), p.at(ww - 1, y));
+        for k in 0..4 {
+            assert!((a[k] - b[k]).abs() < 1.0 / 255.0, "seam row {y}");
+        }
+        for k in 0..ww / 4 {
+            assert_eq!(p.at(ww / 4 - 1 - k, y), p.at(ww / 4 + k, y), "left {k}");
+            assert_eq!(
+                p.at(3 * ww / 4 + k, y),
+                p.at(3 * ww / 4 - 1 - k, y),
+                "right {k}"
+            );
+        }
+    }
+    // The front half is the photo, centred on the horizon row.
+    let top = (p.height - h) / 2;
+    assert_eq!(p.at(ww / 4 + 5, top + 7), img.at(5, 7));
+}
+
+#[test]
+fn photo_poles_are_the_row_means() {
+    let (w, h) = (64u32, 32u32);
+    let mut img = Rgba32F::new(w, h, [0.0; 4]);
+    for y in 0..h {
+        for x in 0..w {
+            *img.at_mut(x, y) = [(x * 7 % 13) as f32 / 13.0, y as f32 / h as f32, 0.1, 1.0];
+        }
+    }
+    let p = import_dir::photo_panorama(&img);
+    let mean = |row: u32| {
+        let mut m = [0.0f32; 4];
+        for x in 0..w {
+            for (k, mk) in m.iter_mut().enumerate() {
+                *mk += img.at(x, row)[k] / w as f32;
+            }
+        }
+        m
+    };
+    for (row, want) in [(0, mean(0)), (p.height - 1, mean(h - 1))] {
+        for x in [0, 17, p.width / 2, p.width - 1] {
+            let got = p.at(x, row);
+            for k in 0..4 {
+                assert!((got[k] - want[k]).abs() < 1e-5, "row {row} x {x}");
+            }
+        }
+    }
+}
+
+#[test]
+fn photo_fits_any_size_and_cell_matches_the_panorama() {
+    assert_eq!(detect(400, 301), None);
+    assert!(layout::fits(CubeLayout::Photo, 400, 300));
+    assert!(!layout::fits(CubeLayout::Photo, 0, 300));
+    assert_eq!(cells(CubeLayout::Photo, 400, 300), None);
+    // Panorama width 800, so a quarter of that.
+    assert_eq!(layout::source_cell(CubeLayout::Photo, (400, 300)), 200);
+}

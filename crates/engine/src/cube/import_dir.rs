@@ -36,6 +36,55 @@ pub fn equirect(img: &Rgba32F, size: u32) -> Cube {
     project(img, size, true, |d| dir_to_uv(d, 0.0))
 }
 
+/// The fake 2:1 panorama of a single photo (DN16): `W = 2 * img.w`, `H = W / 2`. The photo fills the front half
+/// (centred on `u = 0.5` and on the horizon row), the back half is it mirrored about `u = 0.25` and `u = 0.75` so the
+/// wrap seam is continuous, and above and below it each column fades linearly to the mean of the photo's top and
+/// bottom row (the poles).
+pub fn photo_panorama(img: &Rgba32F) -> Rgba32F {
+    let (w, h) = (img.width as i64, img.height as i64);
+    let (ww, hh) = (2 * w, w);
+    let (fx, top) = ((ww - w) / 2, (hh - h) / 2);
+    let mean = |row: i64| {
+        let mut m = [0.0f32; 4];
+        for x in 0..w {
+            let p = img.at(x as u32, row as u32);
+            for k in 0..4 {
+                m[k] += p[k] / w as f32;
+            }
+        }
+        m
+    };
+    let (pole_n, pole_s) = (mean(0), mean(h - 1));
+    let lerp = |a: [f32; 4], b: [f32; 4], t: f32| -> [f32; 4] {
+        std::array::from_fn(|k| a[k] * (1.0 - t) + b[k] * t)
+    };
+    let mut out = Rgba32F::new(ww as u32, hh as u32, [0.0; 4]);
+    for x in 0..ww {
+        let c = if x < fx {
+            fx - 1 - x
+        } else if x < fx + w {
+            x - fx
+        } else {
+            2 * w - 1 - x + fx
+        } as u32;
+        let (edge_n, edge_s) = (img.at(c, 0), img.at(c, (h - 1) as u32));
+        for y in 0..hh {
+            let r = y - top;
+            *out.at_mut(x as u32, y as u32) = if r < 0 {
+                lerp(pole_n, edge_n, y as f32 / top as f32)
+            } else if r >= h {
+                lerp(
+                    edge_s,
+                    pole_s,
+                    (y - top - h + 1) as f32 / (hh - top - h) as f32,
+                )
+            } else {
+                img.at(c, r as u32)
+            };
+        }
+    }
+    out
+}
 /// Camera-space `(east, up, south)` of a world direction (DN15): the camera stands at world south looking north.
 fn camera(d: [f32; 3]) -> [f32; 3] {
     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-12);

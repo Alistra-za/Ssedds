@@ -2897,3 +2897,18 @@ fn cube_dds_is_decided_as_a_cubemap() {
         j.warnings
     );
 }
+
+#[test]
+fn photo_defaults_to_heavy_blur() {
+    assert_eq!(
+        cube(&["cubemap.layout=photo"]).profile.cubemap.blur,
+        Some(0.6)
+    );
+    let j = cube(&["cubemap.layout=photo", "cubemap.blur=0.2"]);
+    assert_eq!(j.profile.cubemap.blur, Some(0.2));
+    assert_eq!(cube(&[]).profile.cubemap.blur, None);
+    assert_eq!(
+        cube(&["cubemap.layout=equirect"]).profile.cubemap.blur,
+        None
+    );
+}
