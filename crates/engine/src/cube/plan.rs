@@ -207,6 +207,15 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
                     });
                 }
                 ids.truncate(1);
+                // The lead file only, so the run reports it consumed into the cube's (untagged) output.
+                job.cube = Some(CubeJob {
+                    layout: CubeLayout::Faces,
+                    sources: vec![CubeSource {
+                        path: job.input.clone(),
+                        stamp: job.source,
+                        face: Some(group[0].1),
+                    }],
+                });
             }
             None => {
                 job.status = merge(by_face.iter().map(|v| &jobs[v[0]].status));

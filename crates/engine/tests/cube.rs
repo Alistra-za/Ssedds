@@ -366,12 +366,16 @@ fn every_face_file_gets_a_terminal_event() {
         }
         let (p, plan_ev) = plan_of(req(d.path(), &[], true));
         let (_, run_ev) = run(p);
-        let found: std::collections::BTreeSet<String> = plan_ev
+        let all: Vec<&EngineEvent> = plan_ev.iter().chain(&run_ev).collect();
+        // A GUI row is keyed by (path, output key): it ends on a terminal event for that key, or when its path is
+        // consumed into another output (a PackedSource skip).
+        let row = |e: &EngineEvent| (e.path.clone(), e.job.clone());
+        let found: Vec<_> = all
             .iter()
             .filter(|e| matches!(e.kind, EventKind::FileDiscovered { .. }))
-            .filter_map(|e| e.path.clone())
+            .map(|e| row(e))
             .collect();
-        let ended: std::collections::BTreeSet<String> = run_ev
+        let ended: std::collections::BTreeSet<_> = all
             .iter()
             .filter(|e| {
                 matches!(
@@ -381,10 +385,26 @@ fn every_face_file_gets_a_terminal_event() {
                         | EventKind::FileFailed { .. }
                 )
             })
-            .filter_map(|e| e.path.clone())
+            .map(|e| row(e))
+            .collect();
+        let consumed: std::collections::BTreeSet<_> = all
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    EventKind::FileSkipped {
+                        kind: SkipKind::PackedSource,
+                        ..
+                    }
+                )
+            })
+            .map(|e| e.path.clone())
             .collect();
         assert_eq!(found.len(), if broken { 5 } else { 6 });
-        let open: Vec<_> = found.difference(&ended).collect();
+        let open: Vec<_> = found
+            .iter()
+            .filter(|r| !ended.contains(*r) && !consumed.contains(&r.0))
+            .collect();
         assert!(
             open.is_empty(),
             "broken={broken}: no terminal event for {open:?}"
