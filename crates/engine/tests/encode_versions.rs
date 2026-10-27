@@ -278,3 +278,36 @@ fn check_pins_fails_an_unbumped_change_and_accepts_a_bumped_one() {
     assert!(f.is_empty(), "{f:?}");
     assert!(read().get("h/msn.dds").is_none(), "unobserved key dropped");
 }
+
+/// Adding a `Profile` field must not change any built-in preset's `profile_sha256`, or `--on-existing if-changed`
+/// re-encodes everything. Optional fields need `skip_serializing_if` so they vanish from the hash while unset.
+#[test]
+fn builtin_profile_hashes_are_pinned() {
+    let reg = engine::presets::PresetRegistry::builtin().unwrap();
+    let mut ids: Vec<String> = reg.selectable().iter().map(|p| p.id.clone()).collect();
+    ids.push("sdc-base".into());
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "a new built-in preset: check it is pinned");
+    let mut observed = BTreeMap::new();
+    for id in &ids {
+        for (target, tid) in [(Target::Cs, "cs"), (Target::Vanilla, "vanilla")] {
+            for st in Subtype::ALL {
+                if let Ok(p) = reg.profile(id, target, st) {
+                    let sha = engine::manifest::profile_sha256(&p).unwrap();
+                    observed.insert(format!("{id}/{tid}/{}", st.id()), (st, sha));
+                }
+            }
+        }
+    }
+    assert!(observed.keys().any(|k| k.starts_with("cs-quality/cs/")));
+    // Every id x target x sub-type resolves today; Err stays a skip for a combination that later becomes invalid.
+    let file =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/encode_versions/profile_hashes.json");
+    let failures = check_pins(&file, observed, "profile_sha256", &bumped);
+    assert!(
+        failures.is_empty(),
+        "{}\nif a new Profile field caused it, make the field `#[serde(default, skip_serializing_if = ...)]` instead",
+        failures.join("\n")
+    );
+}
