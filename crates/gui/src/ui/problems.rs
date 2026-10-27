@@ -144,7 +144,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                             At::Texture(k) if p.code == Some(Code::ChanNormalLength) => {
                                 let b = ui.add_enabled(off.is_none(), egui::Button::new(REBUILD_Z));
                                 let tip = "Rebuild the blue (Z) channel from red and green for this file \
-                                           (channels.reconstruct_z)";
+                                           (channels.reconstruct_z). Only for normal maps: it replaces the \
+                                           file's blue channel.";
                                 let b = match &off {
                                     Some(why) => b.on_disabled_hover_text(why.as_str()),
                                     None => b.on_hover_text(tip),
