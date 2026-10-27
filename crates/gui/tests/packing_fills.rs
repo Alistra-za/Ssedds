@@ -657,6 +657,25 @@ fn a_diffuse_made_skin_albedo_switches_the_packed_rmaos_to_rfaos() {
     assert!(m.item(RMAOS).is_some());
 }
 
+/// Owner 2026-10-27: taking the diffuse off Advanced skin switches the packed `_rfaos` back to `_rmaos`.
+#[test]
+fn a_diffuse_taken_off_skin_albedo_switches_the_packed_rfaos_back() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
+    assert!(m.item(RFAOS).is_some());
+    m.set_field(DIFFUSE, "subtype", json!(Subtype::PbrAlbedo));
+    idle(&mut m);
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::PbrAlbedo);
+    assert!(m.item(RMAOS).is_some(), "the packed output is _rmaos again");
+    assert!(m.item(RFAOS).is_none());
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(p.file_value(RMAOS, "packing.recipe"), Some(json!("rmaos")));
+    assert_eq!(p.file_value(RFAOS, "packing.recipe"), None);
+}
+
 /// The same edit on a set that cannot build `_rfaos` (metallic only) still sets the sub-type and keeps `_rmaos`.
 #[test]
 fn a_skin_albedo_diffuse_keeps_rmaos_when_rfaos_cannot_be_built() {

@@ -40,30 +40,38 @@ enum Follow {
 impl AppModel {
     /// Change (`Some`) or reset (`None`) `key`'s sub-type, with the PBR follow-on for its set, as one step.
     pub(super) fn edit_subtype(&mut self, label: &str, key: &str, new: Option<Subtype>) {
-        // Owner 2026-10-27: a diffuse made Advanced skin takes its set's packed `_rmaos` to `_rfaos` in the same step
-        // (`set_packing_recipe` keeps `_rmaos` when `_rfaos` cannot be built).
-        if let Some(rmaos) = self.rmaos_of_new_skin(key, new) {
+        // Owner 2026-10-27 (Note DQ): a diffuse made Advanced skin takes its set's packed `_rmaos` to `_rfaos`, and one
+        // taken off it goes back, in the same step (`set_packing_recipe` keeps `_rmaos` when `_rfaos` cannot be built).
+        if let Some((packed, recipe)) = self.packed_recipe_follow(key, new) {
             self.batch_edit(label, |m| {
                 m.edit_subtype_alone(label, key, new);
-                m.set_packing_recipe(&rmaos, PackRecipe::Rfaos);
+                m.set_packing_recipe(&packed, recipe);
             });
             return;
         }
         self.edit_subtype_alone(label, key, new);
     }
 
-    /// The packed `_rmaos` key of the set whose Diffuse-slot member `key` becomes `skin_albedo` with `new`.
-    fn rmaos_of_new_skin(&self, key: &str, new: Option<Subtype>) -> Option<String> {
-        let was = self.item(key)?.job.as_ref()?.profile.subtype;
-        if new != Some(Subtype::SkinAlbedo) || was == Subtype::SkinAlbedo {
-            return None;
-        }
+    /// The set's packed output key and its new recipe when its Diffuse-slot member `key` moves onto `skin_albedo`
+    /// (`_rmaos` to RFAOS) or off it to another sub-type (`_rfaos` to RMAOS). A reset (`None`) changes nothing: it
+    /// falls back to the engine's suggestion, which is `skin_albedo` again while the set packs `_rfaos`.
+    fn packed_recipe_follow(
+        &self,
+        key: &str,
+        new: Option<Subtype>,
+    ) -> Option<(String, PackRecipe)> {
+        let (was, new) = (self.item(key)?.job.as_ref()?.profile.subtype, new?);
+        let (from, recipe) = match (was == Subtype::SkinAlbedo, new == Subtype::SkinAlbedo) {
+            (false, true) => ("_rmaos", PackRecipe::Rfaos),
+            (true, false) => ("_rfaos", PackRecipe::Rmaos),
+            _ => return None,
+        };
         let views = set_views(self);
         let v = views.iter().find(|v| {
             matches!(v.slots.get(&SlotKind::Diffuse), Some(SlotFill::Own { item }) if item == key)
         })?;
         match v.slots.get(&SlotKind::Rmaos) {
-            Some(SlotFill::Own { item }) if item.ends_with("_rmaos") => Some(item.clone()),
+            Some(SlotFill::Own { item }) if item.ends_with(from) => Some((item.clone(), recipe)),
             _ => None,
         }
     }
