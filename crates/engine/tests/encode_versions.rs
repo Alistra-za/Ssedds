@@ -1,4 +1,4 @@
-//! Per-sub-type encode versions (DECISIONS Note DL): the guard that fails when a sub-type's encode input changes
+//! Per-sub-type encode versions (DECISIONS Note DM): the guard that fails when a sub-type's encode input changes
 //! without its `encode_version` arm being bumped.
 use engine::analyse::code8;
 use engine::api::*;
@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
-/// Sub-types no forced fixture can encode, with the reason. Each one is also listed in Note DL.
+/// Sub-types no forced fixture can encode, with the reason. Each one is also listed in Note DM.
 const UNGUARDED: &[(Subtype, &str)] = &[];
 
 /// Checks `observed` (output key -> (sub-type, hash)) against the pins in `file` and rewrites the file when the

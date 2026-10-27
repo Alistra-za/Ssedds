@@ -738,7 +738,7 @@ fn encode_current(e: &ManifestEntry, now: &str) -> bool {
 
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
 /// (the bytes of every source and the channel each feeds, for a packed output), profile, the sub-type's encode
-/// version (DECISIONS Note DL; a record from 1.0.0 without one counts as 1.0.0) and encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
+/// version (DECISIONS Note DM; a record from 1.0.0 without one counts as 1.0.0) and encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
 /// failed output is re-encoded and reported again rather than counted as up to date
 /// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
 /// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
