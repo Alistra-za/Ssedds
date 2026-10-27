@@ -7830,6 +7830,32 @@ fn a_shader_type_change_clears_the_flag_in_the_same_undo_step() {
 }
 
 #[test]
+fn a_type_change_off_11_clears_the_mlp_flag_in_the_same_undo_step() {
+    // Note DJ: type 11 with SLSF2 24, changed to Environment Map
+    let mut b = scenes::lsp_shape(11, &[5.0, 1.0, 1.0, 1.0, 1.0]);
+    let hd = nif::header::Header::parse(&b).unwrap();
+    let (rel, _) = nif::fields::locate(&hd, &b, 1, Field::Slsf2).unwrap();
+    let at = hd.offsets()[1] + rel;
+    b[at..at + 4].copy_from_slice(&((1u32 << 24) | 1).to_le_bytes());
+    let mut m = direct(b);
+    select(&mut m, "S");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::ComboBox, "Shader type")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Environment Map (1)").click();
+    h.run_steps(3);
+    h.get_by_label("Multi-layer parallax flag cleared: it needs shader type 11.");
+    let m = h.state_mut();
+    let got = ops(m);
+    assert_eq!(got.len(), 2, "{got:?}");
+    let l = &m.edit.as_ref().unwrap().model.lighting[&1].lighting;
+    assert_eq!((l.shader_type, l.slsf2), (1, 1));
+    assert!(m.undo_edit());
+    assert!(ops(m).is_empty(), "type and flag are one undo step");
+}
+#[test]
 fn flags_that_need_another_type_are_greyed_with_the_reason() {
     let mut m = direct(typed(0, 0));
     select(&mut m, "S");

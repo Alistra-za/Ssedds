@@ -6,7 +6,9 @@ use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::ui::status::{AMBER, RED};
 use eframe::egui;
-use nif::edit::validate::{type_flag_errors, type_flag_lock, Level, Target, Warning};
+use nif::edit::validate::{
+    type_flag_errors, type_flag_lock, type_slsf2_fix, Level, Target, Warning,
+};
 use nif::edit::{anchor_role, anchor_shape, merge_key, Anchor, Op, Role};
 use nif::fields::{Field, Value};
 use nif::material::{SLSF1_NAMES, SLSF2_NAMES, SLSF2_TRUE_PBR};
@@ -389,6 +391,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             }];
             // Note CS: the flags the new type needs change in the same undo step.
             let fixes = type_flag_errors(t, lt.slsf1);
+            let mut notice: Vec<_> = fixes.iter().map(|f| f.3).collect();
             if !fixes.is_empty() {
                 let mask = fixes.iter().fold(0, |a, f| a | f.0);
                 let value = fixes.iter().fold(0, |a, f| a | f.1);
@@ -399,7 +402,19 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                     value,
                     base: lt.slsf1,
                 });
-                let notice: Vec<_> = fixes.iter().map(|f| f.3).collect();
+            }
+            // Note DJ: a leftover multi-layer parallax flag crashes an Environment Map shader.
+            if let Some((mask, value, n)) = type_slsf2_fix(t, lt.slsf2) {
+                ops.push(Op::SetBits {
+                    at: at.clone(),
+                    field: Field::Slsf2,
+                    mask,
+                    value,
+                    base: lt.slsf2,
+                });
+                notice.push(n);
+            }
+            if !notice.is_empty() {
                 act.notice = Some(notice.join(" "));
             }
             act.push = Some((ops, None));

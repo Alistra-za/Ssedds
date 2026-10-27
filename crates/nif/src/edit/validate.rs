@@ -75,12 +75,16 @@ pub const EMPTY_MANAGER: &str =
 pub const HEEL_NOT_ON_SHAPE: &str = "The game ignores heel height here. Put it on a shape.";
 /// Heel data on a shape after the first shape that has some: the first shape wins (HH-results).
 pub const HEEL_EARLIER_WINS: &str = "An earlier shape's heel height wins.";
+/// Note DJ (cubemap-up-axis A/B, 2026-10-27): SLSF2 bit 24 without PBR on an Environment Map shader crashes the game.
+pub const MLP_ENV_MAP: &str =
+    "Multi-layer parallax flag (SLSF2 24) on an Environment Map shader crashes the game.";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
-const ALWAYS_BLOCK: [&str; 4] = [
+const ALWAYS_BLOCK: [&str; 5] = [
     ENV_SCALE_PBR,
     SKIN_TINT_TYPE,
     FACEGEN_DETAIL_TYPE,
     FACE_TINT_FLAG,
+    MLP_ENV_MAP,
 ];
 
 /// The SLSF1 bits `shader_type` gets wrong (Note CS), as (mask, value it needs, error, notice for a type change).
@@ -106,6 +110,17 @@ pub fn type_flag_errors(
         _ => {}
     }
     out
+}
+
+/// Note DJ: a type change off 11 clears SLSF2 bit 24 unless PBR (bit 23) makes it the two-layer coat,
+/// as (mask, value, notice).
+pub fn type_slsf2_fix(shader_type: u32, slsf2: u32) -> Option<(u32, u32, &'static str)> {
+    let stale = shader_type != 11 && slsf2 & (1 << 24) != 0 && slsf2 & SLSF2_TRUE_PBR == 0;
+    stale.then_some((
+        1 << 24,
+        0,
+        "Multi-layer parallax flag cleared: it needs shader type 11.",
+    ))
 }
 
 /// Why an SLSF1 checkbox is greyed on `shader_type` (Note CS): the bit cannot apply to it.
@@ -251,7 +266,23 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             let t = "Shader type 11 needs the Multi_Layer_Parallax flag (SLSF2 24) without PBR.";
             push(Level::Warn, slsf2.clone(), t, None);
         }
-        if mlp && lt.shader_type != 11 {
+        let shader_at = l
+            .prop
+            .users
+            .first()
+            .and_then(|&s| anchor_role(m, Some(s), Role::Shader));
+        // shortcut: only type 1 is confirmed to crash (Note DJ); other types keep the Warn until an in-game A/B
+        // shows the same crash for them.
+        if mlp && !pbr && lt.shader_type == 1 && !l.prop.users.is_empty() {
+            let fix = shader_at.clone().map(|at| Op::SetBits {
+                at,
+                field: Field::Slsf2,
+                mask: 1 << 24,
+                value: 0,
+                base: lt.slsf2,
+            });
+            push(Level::Error, slsf2.clone(), MLP_ENV_MAP, fix);
+        } else if mlp && lt.shader_type != 11 {
             let t = "Multi_Layer_Parallax (SLSF2 24) is set but the shader type is not 11.";
             push(Level::Warn, slsf2.clone(), t, None);
         }
@@ -259,11 +290,6 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             let t = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
             push(Level::Warn, slsf2, t, None);
         }
-        let shader_at = l
-            .prop
-            .users
-            .first()
-            .and_then(|&s| anchor_role(m, Some(s), Role::Shader));
         // S-P2: a shader no shape uses is never drawn, so its flags cannot crash or render black.
         let errs = match l.prop.users.is_empty() {
             true => vec![],

@@ -480,13 +480,14 @@ fn untouched_source_errors_are_not_new() {
 const NEEDS_MLP: &str =
     "Shader type 11 needs the Multi_Layer_Parallax flag (SLSF2 24) without PBR.";
 const MLP_NOT_11: &str = "Multi_Layer_Parallax (SLSF2 24) is set but the shader type is not 11.";
+const MLP_ENV_MAP: &str = nif::edit::validate::MLP_ENV_MAP;
 const FIT_SLOPE: &str = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
 
 fn slsf_scene(shader_type: u32, slsf2: u32) -> Vec<Warning> {
-    let trailer: &[f32] = if shader_type == 11 {
-        &[5.0, 1.0, 1.0, 1.0, 1.0]
-    } else {
-        &[]
+    let trailer: &[f32] = match shader_type {
+        11 => &[5.0, 1.0, 1.0, 1.0, 1.0],
+        1 => &[1.0],
+        _ => &[],
     };
     let b = put(
         scenes::lsp_shape(shader_type, trailer),
@@ -527,6 +528,46 @@ fn slsf_mlp_flag_on_other_type_warns() {
     none(&slsf_scene(11, 1 << 24), MLP_NOT_11);
 }
 
+#[test]
+fn slsf_mlp_flag_on_env_map_is_an_error_with_a_fix() {
+    // Note DJ: Environment Map with SLSF2 24 (no PBR) crashed in game; cleared, it drew fine.
+    let w = slsf_scene(1, (1 << 24) | 1);
+    let x = only(&w, MLP_ENV_MAP, Level::Error);
+    match x.fix {
+        Some(Op::SetBits {
+            field: Field::Slsf2,
+            mask,
+            value: 0,
+            base,
+            ..
+        }) => assert_eq!((mask, base), (1 << 24, (1 << 24) | 1)),
+        ref f => panic!("{f:?}"),
+    }
+    none(&w, MLP_NOT_11);
+    // a source that already has it still blocks export
+    assert_eq!(new_errors(&w, &w).len(), 1);
+    // PBR: bit 24 is the two-layer coat
+    none(&slsf_scene(1, (1 << 24) | (1 << 23)), MLP_ENV_MAP);
+    // other types keep the Warn
+    only(&slsf_scene(0, 1 << 24), MLP_NOT_11, Level::Warn);
+    none(&slsf_scene(0, 1 << 24), MLP_ENV_MAP);
+}
+
+#[test]
+fn a_type_change_off_11_clears_the_mlp_flag() {
+    use nif::edit::validate::type_slsf2_fix;
+    assert_eq!(
+        type_slsf2_fix(1, (1 << 24) | 1).map(|f| (f.0, f.1)),
+        Some((1 << 24, 0))
+    );
+    assert_eq!(
+        type_slsf2_fix(0, 1 << 24).map(|f| (f.0, f.1)),
+        Some((1 << 24, 0))
+    );
+    assert_eq!(type_slsf2_fix(11, 1 << 24), None);
+    assert_eq!(type_slsf2_fix(1, 0), None);
+    assert_eq!(type_slsf2_fix(1, (1 << 24) | (1 << 23)), None, "PBR coat");
+}
 #[test]
 fn slsf_fit_slope_without_pbr_warns() {
     let x = only(&slsf_scene(0, 1 << 12), FIT_SLOPE, Level::Warn);
