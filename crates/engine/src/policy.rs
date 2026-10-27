@@ -2152,12 +2152,10 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
     }
     // Note DR: in a set that is Advanced skin by other evidence, `_f` is the fuzz mask (a metal-like grey map), a
     // packing input of the `_rfaos` G; it never makes the set skin itself (`_f` is no `RawMap::INPUTS` member).
-    if f.suffix == Some("f")
-        && !matches!(
-            d.provenance,
-            Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
-        )
-        && set_is_advanced_skin(ctx, f.set, f.input)
+    if !matches!(
+        d.provenance,
+        Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
+    ) && crate::pack::plan::skin_f_candidate(ctx, f.set, f.input)
     {
         return packing_input_job(ctx, f, "f", RawMap::Fuzz);
     }

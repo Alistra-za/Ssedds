@@ -513,6 +513,12 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
 /// Note DR: whether `f` is a `_f` that a set already Advanced skin packs into the `_rfaos` G channel (a `_f` whose
 /// sub-type was requested is converted alone). `policy::resolve_file_with` applies the same test to a planned file.
 pub fn is_skin_f(ctx: &ResolveCtx, set: &TextureSet, f: &InputFile) -> bool {
+    skin_f_candidate(ctx, set, f) && !crate::policy::subtype_requested(ctx, f)
+}
+
+/// The part of the skin `_f` test that needs no provenance: an image with suffix `f` in an Advanced skin set that has
+/// no `_fuzz`/`_sheen` raw map (that one fills G, Note DR7). Policy adds its provenance check to this.
+pub fn skin_f_candidate(ctx: &ResolveCtx, set: &TextureSet, f: &InputFile) -> bool {
     let stem = f
         .rel
         .file_stem()
@@ -524,7 +530,7 @@ pub fn is_skin_f(ctx: &ResolveCtx, set: &TextureSet, f: &InputFile) -> bool {
             .suffix
             .as_deref()
             == Some("f")
-        && !crate::policy::subtype_requested(ctx, f)
+        && !set.suffixes.contains(&RawMap::Fuzz.id())
         && set_is_advanced_skin(ctx, set, f)
 }
 
@@ -576,7 +582,12 @@ pub fn plan_packing(
         for &i in &set.members {
             let f = &files[i];
             let Some(role) = raw_role(f)
-                .or_else(|| waiting.get(&f.path).copied())
+                .or_else(|| {
+                    // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing).
+                    (f.kind == InputKind::Image)
+                        .then(|| waiting.get(&f.path).copied())
+                        .flatten()
+                })
                 .or_else(|| {
                     // A failed or cancelled file has no job, so a skin `_f` is recognised by the same test as policy.
                     // shortcut: a rule-named sub-type needs the analysis a failed file lacks, so it is not seen here.

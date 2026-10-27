@@ -326,4 +326,49 @@ fn a_corrupt_skin_f_fails_the_rfaos_instead_of_building_without_it() {
             && matches!(j.status, engine::policy::JobStatus::Ready)),
         "no built _rfaos"
     );
+    assert!(recipe_failed(d.path()), "the set's recipe report is Failed");
+}
+
+/// `set_resolved.recipes` of a fresh plan of `d/in` has a Failed `_rfaos` report.
+fn recipe_failed(d: &Path) -> bool {
+    let sink = Arc::new(VecSink::default());
+    let mut r = BatchRequest::new(vec![d.join("in")], d.join("out"), Target::Cs);
+    r.recursive = true;
+    let rep = Reporter::new(sink.clone(), "t");
+    Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap();
+    sink.take().iter().any(|e| match &e.kind {
+        EventKind::SetResolved { recipes, .. } => recipes
+            .iter()
+            .any(|r| r.output.ends_with("iron_rfaos.dds") && r.status == RecipeStatus::Failed),
+        _ => false,
+    })
+}
+
+/// Note DR7: a real `_fuzz` fills G; a `_f` beside it stays a PbrFuzz job.
+#[test]
+fn a_fuzz_map_keeps_g_when_a_f_is_beside_it() {
+    let d = fixture(
+        &[
+            "iron_roughness.png",
+            "iron_ao.png",
+            "iron_fuzz.png",
+            "iron_f.png",
+        ],
+        "",
+    );
+    let p = plan(&d);
+    let j = packed(&p, "iron_rfaos.dds").expect("an _rfaos output");
+    match g(j) {
+        ChannelSource::Source { path, .. } => assert!(path.ends_with("iron_fuzz.png"), "{path:?}"),
+        other => panic!("G is {other:?}"),
+    }
+    let f = p
+        .jobs
+        .iter()
+        .find(|j| j.pack.is_none() && j.input.ends_with("iron_f.png"))
+        .expect("_f job");
+    assert_eq!(f.profile.subtype, engine::config::Subtype::PbrFuzz);
 }
