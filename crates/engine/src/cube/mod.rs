@@ -2,6 +2,7 @@
 pub mod filter;
 pub mod latlong;
 pub mod layout;
+pub mod marker;
 pub mod plan;
 pub mod rgbe;
 pub(crate) mod run;
