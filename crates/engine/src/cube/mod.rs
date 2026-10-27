@@ -8,6 +8,7 @@ pub mod plan;
 pub mod rgbe;
 pub(crate) mod run;
 pub mod sample;
+pub mod world;
 
 use crate::config::CubeLayout;
 use crate::image::Rgba32F;
