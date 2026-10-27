@@ -14,8 +14,8 @@ use crate::group::{group_sets_with, join_skin_wet, member_split, SuffixSplit, Te
 use crate::image::SourceInfo;
 use crate::load::{load_image_meta, LoadError};
 use crate::manifest::{
-    bc1_model_id, output_key, profile_sha256, sha256_file, EncoderVersions, Manifest,
-    ManifestEntry, PresetRef, ENGINE_VERSION,
+    bc1_model_id, encode_version, output_key, profile_sha256, sha256_file, EncoderVersions,
+    Manifest, ManifestEntry, PresetRef, LEGACY_ENCODE_VERSION,
 };
 use crate::overrides::{project_rel, to_patch, FileScopes, KeyForms, Scope, SetOverride};
 use crate::pack;
@@ -727,9 +727,18 @@ fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
     }
 }
 
+/// Whether the record's encode version equals the type's version now. A record without one (written by 1.0.0)
+/// counts as `LEGACY_ENCODE_VERSION`, so it is current only when the type's version is still that.
+fn encode_current(e: &ManifestEntry, now: &str) -> bool {
+    match &e.encode_version {
+        Some(v) => v == now,
+        None => e.engine_version == LEGACY_ENCODE_VERSION && now == LEGACY_ENCODE_VERSION,
+    }
+}
+
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
-/// (the bytes of every source and the channel each feeds, for a packed output), profile, engine version and
-/// encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
+/// (the bytes of every source and the channel each feeds, for a packed output), profile, the sub-type's encode
+/// version (DECISIONS Note DJ; a record from 1.0.0 without one counts as 1.0.0) and encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
 /// failed output is re-encoded and reported again rather than counted as up to date
 /// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
 /// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
@@ -776,7 +785,7 @@ pub(crate) fn is_up_to_date(
         .and_then(Value::as_bool)
         == Some(true);
     passed
-        && e.engine_version == ENGINE_VERSION
+        && encode_current(e, encode_version(job.profile.subtype))
         && current_sources(job).is_some_and(|now| {
             now.into_iter().eq(e.sources.iter().map(|r| {
                 (
@@ -2824,6 +2833,7 @@ fn done_event(s: &BatchSummary) -> EventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::ENGINE_VERSION;
 
     #[test]
     fn exit_code_precedence() {
@@ -3158,7 +3168,26 @@ mod tests {
             f(&mut e);
             e
         };
-        let not_up: [(&str, ManifestEntry); 12] = [
+        let not_up: [(&str, ManifestEntry); 15] = [
+            (
+                "no encode version, engine 0.9.0",
+                with(&|e| {
+                    e.encode_version = None;
+                    e.engine_version = "0.9.0".into()
+                }),
+            ),
+            (
+                "newer encode version",
+                with(&|e| e.encode_version = Some("99.0.0".into())),
+            ),
+            (
+                "older encode version",
+                with(&|e| e.encode_version = Some("0.9.0".into())),
+            ),
+            (
+                "empty encode version",
+                with(&|e| e.encode_version = Some(String::new())),
+            ),
             ("no encoders", with(&|e| e.encoders = None)),
             (
                 "other encoders",
@@ -3176,7 +3205,6 @@ mod tests {
                 with(&|e| e.profile_sha256 = "0".repeat(64)),
             ),
             ("other source", with(&|e| e.source_sha256 = "0".repeat(64))),
-            ("other engine", with(&|e| e.engine_version = "0.0.0".into())),
             ("no output stamp", with(&|e| e.output_stamp = None)),
             (
                 "replaced output",
@@ -3201,6 +3229,22 @@ mod tests {
         for (what, e) in &not_up {
             assert!(!up(e, &job, Bc1Model::Ideal), "{what}");
         }
+        // Spec: the engine version no longer decides; a matching encode version from another engine is current.
+        assert!(up(
+            &with(&|e| e.engine_version = "0.0.0".into()),
+            &job,
+            Bc1Model::Ideal
+        ));
+        // A 1.0.0 record has no encode_version: current exactly when the type's arm is still LEGACY_ENCODE_VERSION.
+        let legacy = with(&|e| {
+            e.encode_version = None;
+            e.engine_version = "1.0.0".into()
+        });
+        assert_eq!(
+            up(&legacy, &job, Bc1Model::Ideal),
+            crate::manifest::encode_version(job.profile.subtype)
+                == crate::manifest::LEGACY_ENCODE_VERSION
+        );
         // The BC1 model only matters for formats rgbcx encodes against it.
         assert!(up(&with(&|e| e.bc1_model = None), &job, Bc1Model::Nvidia));
         for format in [Format::Bc1, Format::Bc3] {
@@ -3287,6 +3331,32 @@ mod tests {
             Bc1Model::Ideal,
             Some("3.2.5")
         ));
+    }
+
+    #[test]
+    fn encode_current_compares_the_record_with_the_given_type_version() {
+        let mk = |enc: Option<&str>, engine: &str| ManifestEntry {
+            schema: crate::manifest::MANIFEST_SCHEMA,
+            output: "x.dds".into(),
+            source_sha256: String::new(),
+            sources: vec![],
+            profile_sha256: String::new(),
+            engine_version: engine.into(),
+            encode_version: enc.map(String::from),
+            encoders: None,
+            preset: None,
+            bc1_model: None,
+            output_stamp: None,
+            copied_from: None,
+            raw: serde_json::json!({}),
+        };
+        let e = mk(Some("1.0.0"), "1.1.0");
+        assert!(encode_current(&e, "1.0.0")); // type unchanged in 1.1.0
+        assert!(!encode_current(&e, "1.1.0")); // type bumped in 1.1.0
+        let legacy = mk(None, "1.0.0");
+        assert!(encode_current(&legacy, "1.0.0"));
+        assert!(!encode_current(&legacy, "1.1.0"));
+        assert!(!encode_current(&mk(None, "0.9.0"), "1.0.0"));
     }
 
     /// M1: with bytes to spare, the file cap alone holds the next admission until a file finishes.
