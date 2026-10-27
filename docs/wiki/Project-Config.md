@@ -349,12 +349,12 @@ These apply to the `cubemap` sub-type (`_e` files and files under a `cubemaps` f
 | `cubemap.vcross_negz_rotate` | `true`, `false` | `true` | Turn a vertical cross's bottom cell (−Z) by 180°. Other layouts ignore it. |
 | `cubemap.blur` | 0 to 1 | none (0), or the style's | Cone blur across the faces. |
 | `cubemap.exposure` | −10 to 10 | 0 | Stops, in linear light. 1 doubles the light. |
-| `cubemap.brightness` | −1 to 1 | 0 | On the game curve. |
-| `cubemap.contrast` | −1 to 1 | 0 | On the game curve. |
-| `cubemap.midtones` | 0.1 to 10 | 1 | Mid-tone brightness; 1 leaves it unchanged. |
+| `cubemap.brightness` | −1 to 1 | 0 | Added to each channel, on the game curve. |
+| `cubemap.contrast` | −1 to 1 | 0 | Scales around mid-grey by (1 + contrast), on the game curve. |
+| `cubemap.midtones` | 0.1 to 10 | 1 | A power curve on the game curve: above 1 brightens the mid-tones, below 1 darkens them, 1 is off. |
 | `cubemap.saturation` | 0 to 2 | 1 | 0 is grey. |
-| `cubemap.tint` | `[R, G, B]`, each 0 to 255 | unset | Multiplies the colour. |
-| `cubemap.highlight_clamp` | 1 or more | unset | Linear level that becomes full white; brighter values are clipped. For HDR sources. |
+| `cubemap.tint` | `[R, G, B]`, each 0 to 255 | unset | Each channel is multiplied by its value / 255, on the game curve (255, 255, 255 changes nothing). |
+| `cubemap.highlight_clamp` | 1 or more | unset | Soft-compresses brightness so that this linear level becomes full white; lower values are also pulled down a little, and hue is kept. For HDR sources. Colour filters run in this order: exposure, highlight clamp, brightness and contrast, midtones, saturation, tint. |
 
 A cube is written as BC1, BC3, BC7 or RGBA8 with the UNORM tag; any other `format` or an sRGB tag is `CFG-INVALID`. `mips.levels = "none"` raises `CUBE-NO-MIPS`.
 

@@ -72,7 +72,7 @@ A file with an error from validation is still written. It is reported as `ok ...
 | Format | A cube is UNORM, never an `_SRGB` format. |
 | Cube expected | A file named `_e`, or under `textures\cubemaps\` (a `textures` folder directly followed by `cubemaps`), is a cube DDS, not a 2D one. |
 
-The last check changes the verdict for 2D files: a 2D `_e` or `cubemaps\` file now fails. Every other 2D file is judged as before. A cube is judged on all six faces, and each message names the face and mip. See [Cubemaps](Cubemaps.md).
+The messages are quoted word for word under [Cubemaps](Cubemaps.md#checks). The last check changes the verdict for 2D files: a 2D `_e` or `cubemaps\` file now fails. Every other 2D file is judged as before. A cube is judged on all six faces, and each message names the face and mip. See [Cubemaps](Cubemaps.md).
 
 ### The BC1 decoder model
 

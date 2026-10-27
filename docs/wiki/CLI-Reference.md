@@ -368,9 +368,9 @@ Writes the 1×1 dynamic-cubemap marker that Community Shaders and ENB read as "r
 sdc cubemap-marker --color 200,200,210 --roughness 0.3 -o textures\cubemaps\steel_e.dds
 ```
 
-An existing file that Tessalith did not write is kept, not overwritten.
+An existing file that Tessalith did not write, or cannot read, is kept, not overwritten.
 
-Exit codes: 0 written; 1 kept (a file Tessalith did not write); 2 usage error (a bad colour or a roughness outside 0 to 1); 3 the write failed.
+Exit codes: 0 written; 1 kept (an existing file Tessalith did not write, or one it cannot read); 2 usage error (a bad colour or a roughness outside 0 to 1); 3 the write failed.
 
 ## Exit codes
 

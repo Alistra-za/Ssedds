@@ -130,7 +130,7 @@ The face size is `cubemap.face_size`, or the largest power of two that fits insi
 
 A cube DDS goes through the same size, filter, blur and format settings as any other source. Like any DDS, it is skipped (`IN-DDS-SKIPPED`) unless you set `reencode = true` on the file. That costs some quality, because the faces are decoded and encoded again.
 
-- It is always read as its six mip-0 faces. `cubemap.layout` must be unset for it.
+- It is always read as its six mip-0 faces. `cubemap.layout` must be unset (or `hstrip`) for it.
 - It can only be re-encoded as a cubemap.
 - Cube arrays are refused, and `sdc patch-header` still refuses cubes.
 
@@ -163,7 +163,7 @@ All are optional and set per file or in `sdc.toml`, under `[defaults]`, `[subtyp
 | `cubemap.vcross_negz_rotate` | Whether the vertical cross's bottom cell is turned 180° |
 | `cubemap.blur` | 0 (sharp) to 1 (very soft) |
 | `cubemap.exposure`, `brightness`, `contrast`, `midtones`, `saturation`, `tint` | Colour adjustments |
-| `cubemap.highlight_clamp` | Caps bright HDR highlights before converting to LDR |
+| `cubemap.highlight_clamp` | Soft-compresses bright highlights so a chosen level becomes full white |
 
 ### Styles
 
@@ -182,19 +182,26 @@ Every value a style sets can be overridden by its own key. `vanilla_metal` also 
 
 ### HDR sources
 
-An `.hdr` or `.exr` face whose brightest value is above 1 and that has no `cubemap.highlight_clamp` gets `LOSS-CLAMP-HDR`. A bright sun would otherwise clip to white. Set `cubemap.highlight_clamp` to the level that should become full white.
+An `.hdr` or `.exr` face whose brightest value is above 1 and that has no `cubemap.highlight_clamp` gets `LOSS-CLAMP-HDR`. A bright sun would otherwise clip to white. Set `cubemap.highlight_clamp` to the level that should become full white. Brightness is rolled off smoothly toward it, so darker values come down a little too, and hue is kept.
 
 ## Checks
 
 A cube has no mips: `CUBE-NO-MIPS` warns when `mips.levels` is `none` or 1. A cube without mips sparkles and looks pixelated in game.
 
 `sdc inspect` and `sdc validate` flag these broken cube files (as `VAL-HEADER` warnings in `validate`, and they fail the file):
-- a cube with only one mip;
+- a cube wider than 1 pixel with only one mip (a 1×1 marker is not flagged);
 - a flat 2D texture whose name ends in `_e`, or that sits in `textures\cubemaps\`, where a cube is expected;
 - a 1×1 cube whose +Y isn't black (Community Shaders shows it as a nearly black static reflection);
 - a cube in an sRGB format.
 
 Note that the second check fails a 2D `_e` or `cubemaps\` file that earlier versions passed. The game reads those files as cubes, so a 2D one is a fault.
+
+The messages read:
+
+- `2D texture where a cubemap is expected (the game reads _e and textures\cubemaps\ files as cubes)`
+- `cube has no mips: curved surfaces will sparkle; re-encode it with a full chain`
+- `1x1 cube with a non-black +Y: Community Shaders treats it as a static, near-black reflection, not a dynamic-cubemap marker`
+- `cube uses an sRGB format; Community Shaders expects UNORM cubes`
 
 `sdc validate` judges a cube file as a `cubemap` unless you pass `--subtype`. A marker passes: its colour sits on +X and +Y stays black.
 
