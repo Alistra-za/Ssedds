@@ -2747,6 +2747,16 @@ fn out_of_range_cube_keys_are_invalid() {
 
 /// An `_e` source of `w` x `h` with the given source facts, resolved as a cubemap; `tweak` edits the analysis.
 fn cube_src(
+    size: (u32, u32),
+    info: SourceInfo,
+    tweak: impl FnOnce(&mut engine::analyse::Analysis),
+    sets_cli: &[&str],
+) -> ResolvedJob {
+    cube_src_named("x_e.png", size, info, tweak, sets_cli)
+}
+
+fn cube_src_named(
+    name: &str,
     (w, h): (u32, u32),
     info: SourceInfo,
     tweak: impl FnOnce(&mut engine::analyse::Analysis),
@@ -2770,10 +2780,10 @@ fn cube_src(
         nvtt: None,
     };
     let f = InputFile {
-        path: "x_e.png".into(),
-        rel: "x_e.png".into(),
-        game_path: "textures/a/x_e.png".into(),
-        output: PathBuf::from("x_e.dds"),
+        path: name.into(),
+        rel: name.into(),
+        game_path: format!("textures/a/{name}"),
+        output: PathBuf::from(name).with_extension("dds"),
         kind: InputKind::Image,
         real_rel: None,
     };
@@ -2859,6 +2869,21 @@ fn cube_dds_is_decided_as_a_cubemap() {
     let j = cube_src((48, 8), RGBA8, cube_dds, &[]);
     assert_eq!(j.profile.subtype, Subtype::Cubemap);
     assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
+    // A cube DDS is always its six faces side by side: a face tag in the name does not make it six files, and an
+    // explicit other layout is refused.
+    let j = cube_src_named("foo_px.dds", (48, 8), RGBA8, cube_dds, &["subtype=cubemap"]);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+    assert!(!codes(&j).contains(&Code::DimSmall));
+    let j = cube_src((48, 8), RGBA8, cube_dds, &["cubemap.layout=hcross"]);
+    assert!(
+        j.warnings
+            .iter()
+            .any(|w| w.code == Code::CfgInvalid && w.message.contains("remove cubemap.layout")),
+        "{:?}",
+        j.warnings
+    );
+    let j = cube_src((48, 8), RGBA8, cube_dds, &["cubemap.layout=hstrip"]);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
     let j = cube_src((48, 8), RGBA8, cube_dds, &["subtype=diffuse"]);
     assert_eq!(j.profile.subtype, Subtype::Diffuse);
     assert!(

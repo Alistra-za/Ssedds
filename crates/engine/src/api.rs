@@ -513,10 +513,11 @@ fn is_dds(path: &Path) -> bool {
 /// `None` when the size cannot be read.
 fn input_dims(path: &Path) -> Option<(u32, u32)> {
     if is_dds(path) {
-        let (w, h) = crate::load::dds_header_size(path)?;
+        let ((w, h), cube) = crate::load::dds_header_facts(path)?;
         // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
         let dim = |v: u32| v.min(crate::load::MAX_DIM);
-        return Some((dim(w), dim(h)));
+        // A cube DDS loads as a 6w x h strip (DECISIONS DN7), so that is what it holds.
+        return Some((dim(w) * if cube { 6 } else { 1 }, dim(h)));
     }
     crate::load::image_size(path).ok()
 }
@@ -2835,6 +2836,30 @@ fn done_event(s: &BatchSummary) -> EventKind {
 mod tests {
     use super::*;
     use crate::manifest::ENGINE_VERSION;
+
+    /// DECISIONS DN7: admission counts a cube DDS as the 6w x h strip it loads as, in both header forms.
+    #[test]
+    fn cube_dds_input_dims_are_the_loaded_strip() {
+        use crate::dds::{dds_bytes_cube, DdsDesc, ResolvedHeader};
+        let d = tempfile::tempdir().unwrap();
+        for header in [ResolvedHeader::Dx10, ResolvedHeader::Legacy] {
+            let desc = DdsDesc {
+                width: 8,
+                height: 8,
+                format: crate::config::Format::Rgba8,
+                srgb: false,
+                header,
+            };
+            let levels: Vec<Vec<u8>> = (0..6)
+                .flat_map(|_| [8usize, 4, 2, 1].map(|s| vec![0u8; s * s * 4]))
+                .collect();
+            let p = d.path().join(format!("c{header:?}.dds"));
+            std::fs::write(&p, dds_bytes_cube(&desc, &levels).unwrap()).unwrap();
+            let (img, ..) = crate::load::load_image_meta(&p).unwrap();
+            assert_eq!(input_dims(&p), Some((img.width, img.height)), "{header:?}");
+            assert_eq!(input_dims(&p), Some((48, 8)));
+        }
+    }
 
     #[test]
     fn exit_code_precedence() {

@@ -1560,13 +1560,15 @@ fn encoding_warnings(
 fn cube_layout(p: &Profile, f: &FileFacts) -> Option<crate::config::CubeLayout> {
     use crate::config::CubeLayout;
     let stem = f.input.path.file_stem().and_then(|s| s.to_str());
-    p.cubemap
-        .layout
+    // A cube DDS has loaded as its six faces side by side, whatever its name or `cubemap.layout` say.
+    f.analysis
+        .dds_cube
+        .then_some(CubeLayout::Hstrip)
+        .or(p.cubemap.layout)
         .or_else(|| {
             stem.and_then(crate::cube::layout::face_tag)
                 .map(|_| CubeLayout::Faces)
         })
-        .or(f.analysis.dds_cube.then_some(CubeLayout::Hstrip))
         .or_else(|| crate::cube::layout::detect(f.analysis.width, f.analysis.height))
 }
 
@@ -1702,6 +1704,17 @@ pub fn check_profile(
         add(
             CfgInvalid,
             "a cube DDS can only be re-encoded as a cubemap".into(),
+        );
+    }
+    if a.dds_cube
+        && st == Subtype::Cubemap
+        && p.cubemap
+            .layout
+            .is_some_and(|l| l != crate::config::CubeLayout::Hstrip)
+    {
+        add(
+            CfgInvalid,
+            "a cube DDS loads as its six faces; remove cubemap.layout for this file".into(),
         );
     }
     if !ALPHA_THRESHOLD.contains(&p.alpha.threshold) {

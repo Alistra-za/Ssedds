@@ -195,11 +195,22 @@ pub fn image_size(path: &Path) -> Result<(u32, u32), LoadError> {
 /// Width and height of a DDS from its first 20 bytes (the offsets `dds::read_dds` uses; that reader needs the
 /// whole payload). `None` when the file cannot be read or is not a DDS. Unchecked against MAX_DIM.
 pub(crate) fn dds_header_size(path: &Path) -> Option<(u32, u32)> {
+    dds_header_facts(path).map(|(size, _)| size)
+}
+
+/// [`dds_header_size`] and whether the header says cube (caps2 or the DX10 misc flag, as `dds::read_dds` decides).
+/// The size is the face size; a cube loads as a 6w x h strip (DECISIONS DN7).
+pub(crate) fn dds_header_facts(path: &Path) -> Option<((u32, u32), bool)> {
     use std::io::Read;
-    let mut b = [0u8; 20];
-    std::fs::File::open(path).ok()?.read_exact(&mut b).ok()?;
+    let mut b = [0u8; 144];
+    let n = std::fs::File::open(path).ok()?.read(&mut b).ok()?;
+    if n < 20 || &b[..4] != b"DDS " {
+        return None;
+    }
     let u = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
-    (&b[..4] == b"DDS ").then(|| (u(16), u(12)))
+    let dx10 = n >= 144 && &b[84..88] == b"DX10";
+    let cube = (n >= 116 && u(112) & 0x200 != 0) || (dx10 && u(136) & 0x4 != 0);
+    Some(((u(16), u(12)), cube))
 }
 
 fn psd_error(path: &Path, e: crate::psd::PsdError) -> LoadError {
