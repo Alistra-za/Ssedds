@@ -109,12 +109,11 @@ The JSON Schema is available with `sdc presets schema manifest`.
 - the output file's size and modified time;
 - the BC1 decoder model, for BC1 and BC3;
 - the record passed validation;
-- the engine version;
-- the texture type's encode version (the engine version at which that type's output last changed);
+- the texture type's encode version (bumped only when a release changes that type's output);
 - every source file's content (by SHA-256), including packing sources, the baked normal map and RNM layers;
 - the resolved settings (by hash).
 
-So editing a source, changing a setting in `sdc.toml` or a preset, or updating Tessalith re-encodes exactly the files affected. Touching an output by hand (or replacing it) also re-encodes it.
+So editing a source, changing a setting in `sdc.toml` or a preset re-encodes exactly the files affected. A new Tessalith version re-encodes only the texture types whose output changed, and nothing when none did. Touching an output by hand (or replacing it) also re-encodes it.
 
 An existing output with no manifest record is never overwritten by `if-changed`. It is kept and reported as `OUT-UNKNOWN-EXISTING`, and the run exits with 1. Use `--on-existing overwrite` to replace it.
 
