@@ -1000,6 +1000,13 @@
             "null"
           ]
         },
+        "cube_face": {
+          "description": "The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DN8). Absent on every other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "derive": {
           "description": "Track A (DECISIONS Note CN12): a derived job's source, with the job's `DeriveJob::identity_sha256`. Absent on\nevery other source.",
           "type": [

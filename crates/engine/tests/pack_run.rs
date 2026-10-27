@@ -71,6 +71,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     };
     Plan {
         request,

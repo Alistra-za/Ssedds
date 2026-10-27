@@ -2,10 +2,29 @@
 pub mod filter;
 pub mod latlong;
 pub mod layout;
+pub mod plan;
 pub mod rgbe;
 pub mod sample;
 
+use crate::config::CubeLayout;
 use crate::image::Rgba32F;
+use crate::policy::SourceStamp;
+use std::path::PathBuf;
+
+/// How a cube job is built (`plan::plan_cubes`): one cross/strip/cube DDS file, or six face files in +X..-Z order.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CubeJob {
+    pub layout: CubeLayout,
+    pub sources: Vec<CubeSource>,
+}
+
+/// One source file of a cube job, with its stamp when planned; `face` is its face index for a six-file cube.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct CubeSource {
+    pub path: PathBuf,
+    pub stamp: Option<SourceStamp>,
+    pub face: Option<usize>,
+}
 
 /// Face names in D3D order (+X -X +Y -Y +Z -Z).
 pub const FACES: [&str; 6] = ["posx", "negx", "posy", "negy", "posz", "negz"];

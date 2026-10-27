@@ -569,8 +569,22 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         });
         texels * (filter + resize) + grass + layers + derived
     });
+    // DECISIONS DN8: a cube holds every source plus three float cubes of its face size (base, blur copy, mip chain).
+    let cube = job.cube.as_ref().map_or(0, |c| {
+        let others: u64 = c
+            .sources
+            .iter()
+            .skip(1)
+            .map(|s| estimated_bytes(&s.path))
+            .sum();
+        let face = input_dims(&job.input).map_or(0, |src| {
+            u64::from(crate::cube::layout::face_size(p, c.layout, src))
+        });
+        others + 6 * face * face * 16 * 3
+    });
     estimated_bytes(&job.input)
         + extra
+        + cube
         + job
             .bake
             .as_ref()
@@ -661,6 +675,15 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                 Some(identity.clone()),
             ));
         }
+    }
+    // DECISIONS DN8: a six-file cube's faces in face order; a one-file cube is `source_sha256` alone.
+    for s in job
+        .cube
+        .iter()
+        .filter(|c| c.sources.len() > 1)
+        .flat_map(|c| &c.sources)
+    {
+        v.push((sha256_file(&s.path).ok()?, None, None, None));
     }
     if let Some(b) = &job.bake {
         v.push((
@@ -1481,6 +1504,11 @@ impl Engine {
             .filter(|(_, a, _)| !pack::b_has_content(&a.channels[2]))
             .map(|(wi, _, _)| work[*wi].1.path.clone())
             .collect();
+        // Read by `plan_cubes` (DECISIONS DN8): each input's loaded size and cube-DDS flag.
+        let cube_facts: crate::cube::plan::InputFacts = pass1
+            .iter()
+            .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.width, a.height, a.dds_cube)))
+            .collect();
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
@@ -1555,6 +1583,8 @@ impl Engine {
                 _ => None,
             })
             .collect();
+        // DECISIONS DN8: six face files become one cube job, and one-file cubes get their layout.
+        crate::cube::plan::plan_cubes(&cube_facts, &mut jobs, &mut skipped);
         let mut packed = pack::plan::plan_packing(
             &ctx,
             &sets,
@@ -2970,6 +3000,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         }
     }
 
@@ -3113,6 +3144,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         };
         let texels = 48 * 40;
         assert_eq!(job_bytes(&job), input_bytes(48, 40));
@@ -3165,6 +3197,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         };
         std::fs::write(&job.output, b"dds").unwrap();
         let enc = EncoderVersions::current();
@@ -3248,6 +3281,7 @@ mod tests {
                         rnm: None,
                         derive: None,
                         derive_role: None,
+                        cube_face: None,
                     }]
                 }),
             ),

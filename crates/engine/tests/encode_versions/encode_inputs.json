@@ -16,7 +16,7 @@
     "subtype": "complex_material"
   },
   "textures/h/cubemap.dds": {
-    "sha256": "9baa5f61a503e82ff34138da287b8305aecf99267ba3bbada3bfad678cfccc27",
+    "sha256": "c195f1fbc7883a7ba8a86ca6b241eba5e348bf1b8478810d137441baf6e965de",
     "subtype": "cubemap"
   },
   "textures/h/diffuse.dds": {
@@ -156,7 +156,7 @@
     "subtype": "complex_material"
   },
   "vanilla/textures/h/cubemap.dds": {
-    "sha256": "fba46e68ea96735c9d2dff450e96b0a3bb1c6c8da6b457afd87fa67ddd53c1c0",
+    "sha256": "2712c68ff3b9ec12ff1911a2f402accb094df15d003e1f3676b6fb6d8b426566",
     "subtype": "cubemap"
   },
   "vanilla/textures/h/diffuse.dds": {

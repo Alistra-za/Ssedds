@@ -42,7 +42,9 @@ pub fn colour(c: &mut Cube, s: &CubemapSpec) {
             }
             if display {
                 let mut x = rgb.map(|v| linear_to_srgb(v.clamp(0.0, 1.0)));
-                x = x.map(|v| (v + b - 0.5) * k + 0.5);
+                if s.brightness != 0.0 || s.contrast != 0.0 {
+                    x = x.map(|v| (v + b - 0.5) * k + 0.5);
+                }
                 if s.midtones != 1.0 {
                     x = x.map(|v| v.max(0.0).powf(inv_m));
                 }

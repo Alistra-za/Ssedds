@@ -1,11 +1,20 @@
 //! Cubemap sub-type and its `cubemap` profile section (cubemap support v1, DECISIONS Note DN).
 mod cube_support;
 use cube_support::*;
+use engine::api::*;
+use engine::codes::Code;
 use engine::config::*;
 use engine::cube::layout::{self, cells, detect, import_raw};
+use engine::cube::plan::face_tag;
+use engine::cube::FACES;
+use engine::events::*;
 use engine::image::Rgba32F;
-use engine::policy::allowed_encodings;
+use engine::overrides::parse_set;
+use engine::policy::{allowed_encodings, AcceptSuggestions, JobStatus, ResolvedJob};
 use engine::presets::PresetRegistry;
+use engine::shader::Shader;
+use std::path::Path;
+use std::sync::Arc;
 
 fn builtin_ids(reg: &PresetRegistry) -> Vec<String> {
     let mut ids: Vec<String> = reg.selectable().iter().map(|p| p.id.clone()).collect();
@@ -186,8 +195,308 @@ fn face_size_rule() {
 
 #[test]
 fn face_tags_parse_both_spellings() {
-    assert_eq!(layout::face_tag("chrome_e_posx"), Some(("chrome_e", 0)));
-    assert_eq!(layout::face_tag("chrome_e_NZ"), Some(("chrome_e", 5)));
-    assert_eq!(layout::face_tag("chrome_e"), None);
-    assert_eq!(layout::face_tag("_px"), None);
+    assert_eq!(face_tag("chrome_e_posx"), Some(("chrome_e", 0)));
+    assert_eq!(face_tag("chrome_e_NZ"), Some(("chrome_e", 5)));
+    assert_eq!(face_tag("chrome_e"), None);
+    assert_eq!(face_tag("_px"), None);
+}
+
+// ---- Task 7: batch planning of cube jobs (DECISIONS DN8) ----
+
+fn png(dir: &Path, rel: &str, w: u32, h: u32, rgb: [u8; 3]) {
+    let p = dir.join("in").join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    image::RgbImage::from_fn(w, h, |x, y| {
+        image::Rgb([
+            rgb[0],
+            rgb[1].wrapping_add((x * 2) as u8),
+            rgb[2] ^ (y as u8),
+        ])
+    })
+    .save(p)
+    .unwrap();
+}
+
+/// The six faces `<prefix>_posx.png` .. `<prefix>_negz.png`, `n` x `n`.
+fn faces(dir: &Path, prefix: &str, n: u32) {
+    for (k, f) in FACES.iter().enumerate() {
+        png(
+            dir,
+            &format!("{prefix}_{f}.png"),
+            n,
+            n,
+            [40 * k as u8, 90, 200],
+        );
+    }
+}
+
+fn req(dir: &Path, sets: &[&str], accept: bool) -> BatchRequest {
+    let mut r = BatchRequest::new(vec![dir.join("in")], dir.join("out"), Target::Cs);
+    r.recursive = true;
+    r.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+    if accept {
+        r.accept = AcceptSuggestions::High;
+    }
+    r
+}
+
+fn plan_of(r: BatchRequest) -> (Plan, Vec<EngineEvent>) {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "cube");
+    let p = Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap();
+    (p, sink.take())
+}
+
+fn plan(dir: &Path, sets: &[&str]) -> Plan {
+    plan_of(req(dir, sets, true)).0
+}
+
+fn run(p: Plan) -> (BatchSummary, Vec<EngineEvent>) {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "cube");
+    let s = Engine::new()
+        .unwrap()
+        .run(p, &rep, &CancelToken::default())
+        .unwrap();
+    (s, sink.take())
+}
+
+fn name(p: &Path) -> String {
+    p.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+fn job<'a>(p: &'a Plan, out: &str) -> &'a ResolvedJob {
+    p.jobs
+        .iter()
+        .find(|j| name(&j.output) == out)
+        .unwrap_or_else(|| panic!("no job writing {out}: {:#?}", p.jobs))
+}
+
+#[test]
+fn six_faces_become_one_job() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let p = plan(d.path(), &[]);
+    assert_eq!(p.jobs.len(), 1, "{:#?}", p.jobs);
+    let j = job(&p, "chrome_e.dds");
+    assert_eq!(j.status, JobStatus::Ready, "{:#?}", j.warnings);
+    assert_eq!(j.game_path, "textures/a/chrome_e.png");
+    let cj = j.cube.as_ref().unwrap();
+    assert_eq!(cj.layout, CubeLayout::Faces);
+    let got: Vec<(String, Option<usize>)> =
+        cj.sources.iter().map(|s| (name(&s.path), s.face)).collect();
+    let want: Vec<(String, Option<usize>)> = FACES
+        .iter()
+        .enumerate()
+        .map(|(k, f)| (format!("chrome_e_{f}.png"), Some(k)))
+        .collect();
+    assert_eq!(got, want);
+    assert_eq!(j.input, cj.sources[0].path);
+    assert!(cj.sources.iter().all(|s| s.stamp.is_some()));
+}
+
+#[test]
+fn cubemaps_folder_faces_group_without_e() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/cubemaps/sky", 32);
+    let p = plan(d.path(), &[]);
+    assert_eq!(p.jobs.len(), 1, "{:#?}", p.jobs);
+    assert!(job(&p, "sky.dds").cube.is_some());
+}
+
+/// The CUBE-FACES message of the one job planned from `d`.
+fn fault(d: &Path, sets: &[&str]) -> String {
+    let p = plan(d, sets);
+    assert_eq!(p.jobs.len(), 1, "{:#?}", p.jobs);
+    let j = &p.jobs[0];
+    assert_eq!(
+        j.status,
+        JobStatus::Error {
+            codes: vec![Code::CubeFaces]
+        }
+    );
+    j.warnings
+        .iter()
+        .find(|w| w.code == Code::CubeFaces)
+        .unwrap()
+        .message
+        .clone()
+}
+
+/// Review Focus 3.
+#[test]
+fn broken_face_sets_are_cube_faces_errors() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    std::fs::remove_file(d.path().join("in/textures/a/chrome_e_negy.png")).unwrap();
+    assert!(fault(d.path(), &[]).contains("missing negy"));
+
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    png(d.path(), "textures/a/chrome_e_px.png", 32, 32, [1, 2, 3]);
+    assert!(fault(d.path(), &[]).contains("two files for posx"));
+
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    png(d.path(), "textures/a/chrome_e_posy.png", 64, 64, [1, 2, 3]);
+    assert!(fault(d.path(), &[]).contains("faces differ in size"));
+
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    png(d.path(), "textures/a/chrome_e_posz.png", 64, 32, [1, 2, 3]);
+    assert!(fault(d.path(), &[]).contains("not square"));
+
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let m = fault(d.path(), &["file:**/chrome_e_negz.png.cubemap.blur=0.5"]);
+    assert!(m.contains("faces resolve to different settings"), "{m}");
+}
+
+#[test]
+fn face_status_is_merged() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let sets: Vec<String> = FACES[..5]
+        .iter()
+        .map(|f| format!("file:**/chrome_e_{f}.png.subtype=cubemap"))
+        .collect();
+    let sets: Vec<&str> = sets.iter().map(String::as_str).collect();
+    let (p, _) = plan_of(req(d.path(), &sets, false));
+    assert_eq!(p.jobs.len(), 1, "{:#?}", p.jobs);
+    assert!(
+        matches!(job(&p, "chrome_e.dds").status, JobStatus::Unresolved { .. }),
+        "{:?}",
+        p.jobs[0].status
+    );
+}
+
+#[test]
+fn six_face_cube_fills_envmap_e_role() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["chrome", "chrome_n", "chrome_m"] {
+        png(
+            d.path(),
+            &format!("textures/a/{n}.png"),
+            32,
+            32,
+            [128, 128, 255],
+        );
+    }
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let (p, ev) = plan_of(req(d.path(), &["set:chrome.shader=envmap"], true));
+    assert!(job(&p, "chrome_e.dds").cube.is_some());
+    let warnings = ev
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::SetResolved {
+                warnings, shader, ..
+            } if e
+                .set
+                .as_deref()
+                .is_some_and(|s| s.ends_with("textures/a/chrome")) =>
+            {
+                Some((shader.clone().map(|s| s.shader), warnings.clone()))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(warnings.0, Some(Shader::Envmap));
+    let codes: Vec<Code> = warnings.1.iter().map(|w| w.code).collect();
+    assert!(
+        !codes.contains(&Code::ShaderExtraMap) && !codes.contains(&Code::ShaderMissingMap),
+        "{:#?}",
+        warnings.1
+    );
+}
+
+#[test]
+fn cube_output_collision_is_in_duplicate() {
+    let d = tempfile::tempdir().unwrap();
+    png(d.path(), "textures/a/chrome_e.png", 128, 96, [9, 9, 9]);
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let p = plan(d.path(), &[]);
+    assert!(p.jobs.is_empty(), "{:#?}", p.jobs);
+    let dup: Vec<String> = p
+        .skipped
+        .iter()
+        .filter(|s| s.code == Some(Code::InDuplicate))
+        .map(|s| name(&s.path))
+        .collect();
+    assert!(dup.contains(&"chrome_e.png".to_string()), "{dup:?}");
+    assert!(dup.contains(&"chrome_e_posx.png".to_string()), "{dup:?}");
+    assert_eq!(dup.len(), 7, "{dup:?}");
+}
+
+#[test]
+fn single_file_layout_from_aspect_or_key() {
+    let d = tempfile::tempdir().unwrap();
+    png(d.path(), "textures/cubemaps/x.png", 1024, 768, [9, 9, 9]);
+    png(d.path(), "textures/cubemaps/y.png", 512, 512, [9, 9, 9]);
+    png(d.path(), "textures/cubemaps/z.png", 512, 512, [9, 9, 9]);
+    let p = plan(d.path(), &["file:**/z.png.cubemap.layout=hstrip"]);
+    let x = job(&p, "x.dds").cube.as_ref().unwrap();
+    assert_eq!(x.layout, CubeLayout::Hcross);
+    assert_eq!(x.sources.len(), 1);
+    match &job(&p, "y.dds").status {
+        JobStatus::Unresolved { reasons, needs } => {
+            assert!(
+                reasons.iter().any(|r| r.contains("cubemap.layout")),
+                "{reasons:?}"
+            );
+            assert!(needs.is_empty());
+        }
+        s => panic!("{s:?}"),
+    }
+    let z = job(&p, "z.dds");
+    assert_eq!(
+        z.status,
+        JobStatus::Error {
+            codes: vec![Code::CubeFaces]
+        }
+    );
+    assert!(z
+        .warnings
+        .iter()
+        .any(|w| w.message.contains("layout does not fit 512x512")));
+}
+
+#[test]
+fn cube_sources_drive_if_changed() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let go = || {
+        let mut r = req(d.path(), &[], true);
+        r.on_existing = OnExisting::IfChanged;
+        run(plan_of(r).0).0
+    };
+    assert_eq!(go().converted, 1);
+    let s = go();
+    assert_eq!((s.converted, s.up_to_date), (0, 1));
+    png(d.path(), "textures/a/chrome_e_negz.png", 32, 32, [7, 7, 7]);
+    let s = go();
+    assert_eq!((s.converted, s.up_to_date), (1, 0));
+}
+
+#[test]
+fn cube_stamps_are_checked() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let p = plan(d.path(), &[]);
+    png(d.path(), "textures/a/chrome_e_negz.png", 64, 64, [7, 7, 7]);
+    let (s, ev) = run(p);
+    assert_eq!((s.converted, s.failed), (0, 1));
+    let err = ev
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::FileFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        err.contains("chrome_e_negz.png") && err.contains("source changed since planning"),
+        "{err}"
+    );
 }

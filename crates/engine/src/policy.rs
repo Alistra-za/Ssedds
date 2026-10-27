@@ -1318,6 +1318,10 @@ pub struct ResolvedJob {
     /// job. For a derived job `input` is `derive.sources[0].path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derive: Option<crate::derive::DeriveJob>,
+    /// Cubemap v1 (DECISIONS DN8): how a cube is built from its source file or six face files
+    /// (`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cube: Option<crate::cube::CubeJob>,
 }
 
 impl ResolvedJob {
@@ -1558,18 +1562,28 @@ fn encoding_warnings(
 /// How a cubemap source is laid out: `cubemap.layout`, else six face files for a face-tagged name, else a cube DDS
 /// (a 6:1 strip), else the aspect ratio; `None` when nothing says (DECISIONS DN7).
 fn cube_layout(p: &Profile, f: &FileFacts) -> Option<crate::config::CubeLayout> {
+    let a = f.analysis;
+    cube_layout_of(p, &f.input.path, a.dds_cube, (a.width, a.height))
+}
+
+/// `cube_layout` from the loaded size and the cube-DDS flag; `cube::plan::plan_cubes` reads the same order.
+pub(crate) fn cube_layout_of(
+    p: &Profile,
+    path: &std::path::Path,
+    dds_cube: bool,
+    (w, h): (u32, u32),
+) -> Option<crate::config::CubeLayout> {
     use crate::config::CubeLayout;
-    let stem = f.input.path.file_stem().and_then(|s| s.to_str());
+    let stem = path.file_stem().and_then(|s| s.to_str());
     // A cube DDS has loaded as its six faces side by side, whatever its name or `cubemap.layout` say.
-    f.analysis
-        .dds_cube
+    dds_cube
         .then_some(CubeLayout::Hstrip)
         .or(p.cubemap.layout)
         .or_else(|| {
-            stem.and_then(crate::cube::layout::face_tag)
+            stem.and_then(crate::cube::plan::face_tag)
                 .map(|_| CubeLayout::Faces)
         })
-        .or_else(|| crate::cube::layout::detect(f.analysis.width, f.analysis.height))
+        .or_else(|| crate::cube::layout::detect(w, h))
 }
 
 /// A cubemap's mips and `cubemap.*` ranges (DECISIONS DN4).
@@ -2295,6 +2309,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }
 
@@ -2318,6 +2333,7 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }
 
@@ -2456,6 +2472,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     rnm: None,
                     derive: None,
                     shader: None,
+                    cube: None,
                 };
             }
         };
@@ -2576,5 +2593,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }

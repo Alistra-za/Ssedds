@@ -150,23 +150,3 @@ pub fn face_size(p: &Profile, layout: CubeLayout, src: (u32, u32)) -> u32 {
         1 << cell.max(1).ilog2()
     })
 }
-
-/// A trailing face tag (`_posx` .. `_negz`, `_px` .. `_nz`, ASCII case-insensitive): the stem without it and the
-/// face index. Task 7 moves this to `cube::plan`.
-pub fn face_tag(stem: &str) -> Option<(&str, usize)> {
-    const TAGS: [(&str, &str); 6] = [
-        ("_posx", "_px"),
-        ("_negx", "_nx"),
-        ("_posy", "_py"),
-        ("_negy", "_ny"),
-        ("_posz", "_pz"),
-        ("_negz", "_nz"),
-    ];
-    let lower = stem.to_ascii_lowercase();
-    TAGS.iter().enumerate().find_map(|(k, (long, short))| {
-        [long, short]
-            .into_iter()
-            .find(|t| lower.len() > t.len() && lower.ends_with(*t))
-            .map(|t| (&stem[..stem.len() - t.len()], k))
-    })
-}

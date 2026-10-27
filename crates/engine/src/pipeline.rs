@@ -193,6 +193,11 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
             .collect(),
         (None, None) => vec![(job.input.as_path(), job.source)],
     };
+    // DECISIONS DN8: a six-file cube checks every face (its first is `job.input`, already in the list).
+    let faces = job.cube.as_ref().filter(|c| c.sources.len() > 1);
+    for s in faces.iter().flat_map(|c| c.sources.iter().skip(1)) {
+        stamps.push((s.path.as_path(), s.stamp));
+    }
     if let Some(b) = &job.bake {
         stamps.push((b.normal.as_path(), b.stamp));
     }
@@ -212,6 +217,7 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
     }
     let named = job.pack.is_some()
         || job.derive.is_some()
+        || faces.is_some()
         || job.bake.is_some()
         || job.active_rnm().is_some();
     for (src, planned) in stamps {
@@ -557,6 +563,18 @@ pub fn process_file(
                             .map_err(|e| fail(Stage::Load)(format!("{}: {e}", s.path.display())))?,
                     );
                 }
+            }
+            // DECISIONS DN8: a six-file cube records every face, in face order (`source_sha256` covers a one-file cube).
+            for s in job
+                .cube
+                .iter()
+                .filter(|c| c.sources.len() > 1)
+                .flat_map(|c| &c.sources)
+            {
+                sources.push(
+                    SourceRef::of_cube(&s.path, s.face.unwrap_or(0))
+                        .map_err(|e| fail(Stage::Load)(format!("{}: {e}", s.path.display())))?,
+                );
             }
             // DECISIONS R12: the baked `_n`, with the identity of its decode settings.
             if let Some(b) = &job.bake {

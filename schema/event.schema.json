@@ -551,6 +551,25 @@
       ],
       "type": "string"
     },
+    "CubeJob": {
+      "description": "How a cube job is built (`plan::plan_cubes`): one cross/strip/cube DDS file, or six face files in +X..-Z order.",
+      "properties": {
+        "layout": {
+          "$ref": "#/$defs/CubeLayout"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/CubeSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "layout",
+        "sources"
+      ],
+      "type": "object"
+    },
     "CubeLayout": {
       "enum": [
         "faces",
@@ -560,6 +579,36 @@
         "vstrip"
       ],
       "type": "string"
+    },
+    "CubeSource": {
+      "description": "One source file of a cube job, with its stamp when planned; `face` is its face index for a six-file cube.",
+      "properties": {
+        "face": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceStamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
     },
     "CubeStyle": {
       "enum": [
@@ -1650,6 +1699,17 @@
             }
           ],
           "description": "A roughness member's normal-variance bake (spec §6.2, DECISIONS R4): the `_n` it reads and how. `None` for\nevery other job and for a member that does not bake."
+        },
+        "cube": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Cubemap v1 (DECISIONS DN8): how a cube is built from its source file or six face files\n(`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`."
         },
         "derive": {
           "anyOf": [

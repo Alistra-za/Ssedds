@@ -147,6 +147,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 rnm: None,
                 derive: None,
                 shader: None,
+                cube: None,
             }),
         },
         EventKind::Progress {
@@ -522,6 +523,7 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             rnm: None,
             derive: None,
             derive_role: None,
+            cube_face: None,
         },
         SourceRef {
             path: "in/x_m.png".into(),
@@ -532,6 +534,7 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             rnm: None,
             derive: None,
             derive_role: None,
+            cube_face: None,
         },
     ];
     m.append(&r).unwrap();
