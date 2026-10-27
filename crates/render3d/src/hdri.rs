@@ -4,7 +4,8 @@
 //! RGBE pixels).
 //!
 //! **Mapping (Z-up world, like the renderer):** the image is equirectangular, row 0 = +Z (straight up), the
-//! last row = −Z; the column is the azimuth `atan2(y, x)` turned by [`YAW`]. [`dir_to_uv`] and [`uv_to_dir`]
+//! last row = −Z; the column is the azimuth `atan2(y, x)` turned by [`YAW`], growing clockwise seen from above like a
+//! 360° photo (Note DL). [`dir_to_uv`] and [`uv_to_dir`]
 //! are the one definition: the background shader, the CPU ambient and the tests all go through it.
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
@@ -15,7 +16,8 @@ static STUDIO_HDR: &[u8] = include_bytes!("../assets/hdri/studio_small_09_2k.hdr
 /// Azimuth (radians) added to the world azimuth before the column lookup. Chosen so the image's brightest
 /// region (its key light) lies at the azimuth of the default directional light (`Scene::neutral`), upper front
 /// left of the default camera. See `studio_key_light_faces_the_default_sun`.
-pub const YAW: f32 = -2.798;
+/// Note DL: 0.774 after the clockwise flip (was −2.798), the same key-light azimuth.
+pub const YAW: f32 = 0.774;
 
 /// The HDRI is a photographic exposure (mean luminance 0.85, ambient means 0.65-1.3), several times the
 /// neutral preview's calibrated ambient (0.12-0.30), and on top of the sun it would white out every material.
@@ -36,14 +38,14 @@ pub struct Hdr {
 
 /// World direction (unit, Z-up) → image coordinates `(u, v)` in 0..1 (`v` = 0 at +Z).
 pub fn dir_to_uv(d: [f32; 3]) -> (f32, f32) {
-    let u = ((d[1].atan2(d[0]) + YAW) / TAU + 0.5).rem_euclid(1.0);
+    let u = (0.5 - (d[1].atan2(d[0]) + YAW) / TAU).rem_euclid(1.0);
     let v = d[2].clamp(-1.0, 1.0).acos() / PI;
     (u, v)
 }
 
 /// Inverse of [`dir_to_uv`].
 pub fn uv_to_dir(u: f32, v: f32) -> [f32; 3] {
-    let phi = (u - 0.5) * TAU - YAW;
+    let phi = (0.5 - u) * TAU - YAW;
     let theta = v * PI;
     [
         theta.sin() * phi.cos(),
@@ -295,7 +297,7 @@ pub fn cube_faces(img: &Hdr, size: u32, yaw: f32) -> [Vec<[f32; 4]>; 6] {
         table[f * n..(f + 1) * n]
             .iter()
             .map(|&(a, v)| {
-                let u = ((a - yaw) / TAU + 0.5).rem_euclid(1.0);
+                let u = (0.5 - (a - yaw) / TAU).rem_euclid(1.0);
                 let px = ((u * w as f32) as usize).min(w - 1);
                 let py = ((v * h as f32) as usize).min(h - 1);
                 let i = (py * w + px) * 3;
@@ -448,6 +450,17 @@ mod tests {
                 assert!((d[k] - e[k]).abs() < 1e-4, "{d:?} {e:?}");
             }
         }
+    }
+
+    #[test]
+    fn moving_right_in_the_image_turns_clockwise() {
+        // Note DL: a 360° photo runs clockwise seen from above (in game, cubemap-up-axis "Second check").
+        let az = |u| {
+            let d = uv_to_dir(u, 0.5);
+            d[1].atan2(d[0])
+        };
+        let turn = (az(0.75) - az(0.5) + PI).rem_euclid(TAU) - PI;
+        assert!((turn + PI / 2.0).abs() < 1e-4, "{turn}");
     }
 
     #[test]

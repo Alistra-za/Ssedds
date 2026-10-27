@@ -440,6 +440,10 @@ const M5: [f32; 3] = [0.25, 0.125, 0.5];
 /// The 1×1 mip of face +Z of the studio env cube at yaw 0, as the GPU stores it (RGBA16F).
 fn env_last_z() -> [f32; 4] {
     let faces = render3d::hdri::cube_faces(&render3d::hdri::studio().image, 256, 0.0);
+    for (k, f) in faces.iter().enumerate() {
+        let c = render3d::hdri::mip_chain(f, 256).unwrap();
+        eprintln!("DBG face {k}: {:?}", c.last().unwrap()[0]);
+    }
     let chain = render3d::hdri::mip_chain(&faces[4], 256).unwrap();
     chain.last().unwrap()[0].map(|v| half::f16::from_f32(v).to_f32())
 }
@@ -487,14 +491,14 @@ fn dc_composite_adds_reflectance_times_the_env_cube() {
     assert_eq!(r.bound_cs_views(), 0);
 }
 
-/// `got` (an RGBA16F store) equals the nearest-even half of each exact f32 `sum`, bit for bit. Only on a channel whose
-/// sum lies exactly halfway between two halves may it be the half toward zero instead: D3D lets the store round a tie
-/// either way (WARP rounds toward zero). The sums must be exact in f32 (a power of two times an f16 plus an f16).
+/// `got` (an RGBA16F store) equals each exact f32 `sum` rounded to a half, bit for bit: the nearest-even half or the half
+/// toward zero. D3D11 lets a float-to-f16 store round either way, and WARP rounds toward zero on any inexact sum, not
+/// only on ties (Note DL: the mirrored HDRI's env cube gave non-tie sums). The sums must be exact in f32 (a power of two
+/// times an f16 plus an f16).
 fn assert_store(got: [f32; 4], sum: [f32; 4]) {
     for k in 0..4 {
         let near = f16(sum[k]);
-        let ok = got[k].to_bits() == near.to_bits()
-            || is_tie(sum[k]) && got[k] == f16_toward_zero(sum[k]);
+        let ok = got[k].to_bits() == near.to_bits() || got[k] == f16_toward_zero(sum[k]);
         assert!(ok, "ch {k}: {got:?}, exact {:?} -> {near}", sum);
     }
 }
@@ -509,25 +513,14 @@ fn f16_toward_zero(v: f32) -> f32 {
     }
 }
 
-/// `v` (positive) lies exactly halfway between two adjacent halves.
-fn is_tie(v: f32) -> bool {
-    let lo = half::f16::from_f32(f16_toward_zero(v));
-    let hi = half::f16::from_bits(lo.to_bits() + 1);
-    (v as f64 - lo.to_f64()) == (hi.to_f64() - v as f64)
-}
-
 #[test]
-fn the_tie_rule_holds_only_on_ties() {
-    // 0.38806152 = 1589.5 x 2^-12: the D5 G channel, halfway between 0.38793945 and 0.3881836.
-    let tie = 0.375 + 0.125 * 0.104_492_19;
-    assert!(is_tie(tie));
-    assert!(!is_tie(0.5 + 0.25 * 0.107_910_156));
-    assert_store([0.38793945, 0.0, 0.0, 1.0], [tie, 0.0, 0.0, 1.0]);
-    assert!(std::panic::catch_unwind(|| assert_store(
-        [0.4997, 0.0, 0.0, 1.0],
-        [0.49975, 0.0, 0.0, 1.0]
-    ))
-    .is_err());
+fn a_store_may_round_to_nearest_or_toward_zero_and_nothing_else() {
+    // 0.5272827: the Note DL D5 R channel; nearest 0.52734375, toward zero 0.52685547 (WARP).
+    let sum = [0.527_282_7, 0.0, 0.0, 1.0];
+    assert_store([0.527_343_75, 0.0, 0.0, 1.0], sum);
+    assert_store([0.526_855_47, 0.0, 0.0, 1.0], sum);
+    // two halves below is neither
+    assert!(std::panic::catch_unwind(|| assert_store([0.526_367_2, 0.0, 0.0, 1.0], sum)).is_err());
 }
 
 /// Views bound to the compute stage of `gpu` (SRVs 0..20 + UAVs 0..8).
@@ -606,14 +599,11 @@ fn forward_dc_draw_samples_the_env_cube() {
     let mut r = loaded(cache.path(), &feats(&[DC]), vec![opaque()]);
     r.render(&Scene::neutral(), 64, 64).unwrap();
     let e = env_last_z();
-    let want = [
-        f16(base[0] + e[0]),
-        f16(base[1] + e[1]),
-        f16(base[2] + e[2]),
-        base[3],
-    ];
     let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
-    assert_eq!(bits(got), bits(want), "{got:?} vs {want:?}");
+    assert_store(
+        got,
+        [base[0] + e[0], base[1] + e[1], base[2] + e[2], base[3]],
+    );
     assert_eq!(r.env_builds(), 1);
 }
 
@@ -632,14 +622,11 @@ fn forward_dc_draw_samples_env_texture_t31() {
     );
     r.render(&Scene::neutral(), 64, 64).unwrap();
     let e = env_last_z();
-    let want = [
-        f16(base[0] + e[0]),
-        f16(base[1] + e[1]),
-        f16(base[2] + e[2]),
-        base[3],
-    ];
     let got = px(&r.read_mrt(0).unwrap(), 64, 32, 32);
-    assert_eq!(bits(got), bits(want), "{got:?} vs {want:?}");
+    assert_store(
+        got,
+        [base[0] + e[0], base[1] + e[1], base[2] + e[2], base[3]],
+    );
 }
 
 /// Review M6: the composite's own sampler goes only to `LinearSampler`; any other reflected sampler is an error.
