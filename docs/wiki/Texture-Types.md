@@ -50,7 +50,7 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 | `_sk` | `skin_sk` in an Advanced skin set; otherwise `backlight_tint` | High, Low |
 | `_i` | `diffuse` (multilayer inner layer) | Medium |
 | `_wet` | `skin_wet`, only in a `cs` Advanced skin set; elsewhere `_wet` is part of the base name | High |
-| `_e` | no suggestion; set the sub-type yourself | |
+| `_e`, or a file under `textures\cubemaps\` | `cubemap`; the six-face suffixes `_posx` to `_negz` (or `_px` to `_nz`) after the name are cut off first | High |
 
 A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`.
 
@@ -88,7 +88,7 @@ You can add your own suffixes through a preset's `suffix_aliases`. See [Presets 
 
 ## Sub-types
 
-There are 29 sub-types in five categories.
+There are 30 sub-types in five categories.
 
 | Sub-type | Category | Default format | Tag (`cs`) | Default alpha | Notes |
 |---|---|---|---|---|---|
@@ -121,6 +121,7 @@ There are 29 sub-types in five categories.
 | `generic_data` | MixedPacked | BC7 | UNORM | data | Use for any data map Tessalith has no type for. |
 | `complex_grass` | MixedPacked | BC7 only | UNORM only | cutout (when the alpha varies) | Always BC7 UNORM at its own size. See [Complex grass](#complex-grass). |
 | `hdr_sky` | Hdr | BC6H | n/a | | `cs` only. |
+| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube: six faces, a cross or a strip in, one cube DDS with a full mip chain out. BC1, BC3, BC7 or RGBA8 only. Colour is the game's 1.6 curve, not sRGB. See [Cubemaps](Cubemaps.md). |
 
 Notes on the defaults:
 

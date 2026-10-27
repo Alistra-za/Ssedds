@@ -3,7 +3,9 @@
 ## Unreleased
 
 - `--on-existing if-changed` now re-encodes only the texture types whose output changed in a new version. Upgrading from 1.0.0 re-encodes nothing.
-- Cubemaps (in progress): a new `cubemap` texture type for `_e` environment maps and files under a `cubemaps` folder, with `cubemap.*` settings and four styles (`vanilla_metal`, `room`, `eye`, `hd`). Other texture types are unchanged.
+- Cubemaps: a new `cubemap` texture type for `_e` environment maps and files under a `cubemaps` folder. It reads six face files (`_posx` to `_negz`), crosses and strips, and existing cube DDS files, and writes a cube DDS with a full mip chain. `cubemap.*` settings in `sdc.toml` give four styles (`vanilla_metal`, `room`, `eye`, `hd`), face turns and flips, blur and colour adjustments. Colour uses Community Shaders' game curve (`pow(c, 1.6)`), not sRGB. Panoramas, mirror balls and single photos are not supported yet. Other texture types are unchanged. See docs/wiki/Cubemaps.md.
+- New `sdc cubemap-marker` writes the 1×1 dynamic-cubemap marker.
+- New codes `CUBE-FACES` and `CUBE-NO-MIPS`. `sdc inspect` and `sdc validate` flag cubes with no mips, a lit 1×1 marker, an sRGB cube, and 2D files named `_e` or under `textures\cubemaps\`. **`sdc validate` now fails those 2D files**, because the game reads them as cubes.
 
 ## 1.0.0
 

@@ -220,6 +220,13 @@ Every warning has a code and a severity:
 | `DIM-RESIZED` | info | The input was resized, with the old and new size. | |
 | `DIM-TOO-LARGE` | error | A side is larger than 16384. | Downscale the source. |
 
+### Cubemaps
+
+| Code | Severity | Meaning | Fix |
+|---|---|---|---|
+| `CUBE-FACES` | error | A cube cannot be built. Six face files with two files for one face, a missing face, a face that is not square, faces of different sizes, or faces with different settings; or a layout that does not fit the image (`hstrip` on a 512×512 file). The message names the fault. Nothing is written for that cube. | Fix the files or the layout. See [Cubemaps](Cubemaps.md#six-images). |
+| `CUBE-NO-MIPS` | warning | A cube with `mips.levels` of `none` or 1. It sparkles in game. | Leave `mips.levels` at `full`. |
+
 ### Sets and suggestions
 
 | Code | Severity | Meaning | Fix |
@@ -236,7 +243,7 @@ Every warning has a code and a severity:
 
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
-| `VAL-HEADER` | error | The written header fails the header rules. | Report it as a bug. |
+| `VAL-HEADER` | error | The written header fails the header rules. On `sdc validate`, also a cube with no mips, a 1×1 cube with a non-black +Y, a cube in an sRGB format, or a 2D file named `_e` or under `textures\cubemaps\` (warnings that fail the file; see [Validation and output](Validation-and-Output.md#cube-checks)). | Report it as a bug, or fix the cube. |
 | `VAL-MIP-ERROR` | warning | A mip's PSNR is below `validation.min_mip_psnr_db`. | Check the source, raise the effort, or accept. |
 | `VAL-ALPHA-GUARANTEE` | error | Decoded opaque alpha is below the encoder's guarantee. | Report it as a bug. |
 | `VAL-COVERAGE` | warning | Cutout coverage drifted more than 2 points on a mip. | Adjust the threshold. |

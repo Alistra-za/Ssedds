@@ -255,7 +255,7 @@ Runs the post-encode checks on DDS files that already exist, including files mad
 | `--json` | off | One JSON object per file on stdout; the human report moves to stderr. |
 | `--bc1-decoder <model>` | `ideal` | Decoder model for BC1/BC3. |
 
-The format and `_SRGB` tag are taken from the file, so third-party files are judged on header and alpha rules rather than on Tessalith's preferred format. A format Tessalith never writes has only its header checked and is reported as not judged.
+The format and `_SRGB` tag are taken from the file, so third-party files are judged on header and alpha rules rather than on Tessalith's preferred format. A cube DDS is judged as a `cubemap`, and a 2D file whose name ends in `_e` or that sits under `textures\cubemaps\` fails (the game reads it as a cube). See [Validation and output](Validation-and-Output.md#cube-checks). A format Tessalith never writes has only its header checked and is reported as not judged.
 
 ```text
 ok    C:/out/rock.dds (diffuse, alpha remove)
@@ -349,6 +349,28 @@ sdc patch-header --out-dir fixed --subtype pbr_albedo textures\pbr\rock\rock.dds
 ```
 
 Exit codes: 0; 1 if a file is unreadable or refused; 2 if `--out-dir` would write over an input or two inputs share a file name; 3 if a write fails (files written before it stay written).
+
+## sdc cubemap-marker
+
+```text
+sdc cubemap-marker [--color <R,G,B>] [--roughness <0..1>] -o <file.dds>
+```
+
+Writes the 1×1 dynamic-cubemap marker that Community Shaders and ENB read as "reflect the live scene". The file is 152 bytes: a six-face RGBA8 cube with the colour on +X and every other face black. See [Cubemaps](Cubemaps.md#dynamic-marker).
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--color <R,G,B>` | `0,0,0` | The reflection colour as raw code values, 0 to 255 each. Community Shaders reads it as `(code/255)^1.6`. |
+| `--roughness <0..1>` | none | Stored in alpha as `min(round(r × 255), 254)`. Left out, alpha is 255 and Community Shaders uses its defaults. |
+| `-o`, `--out <file>` | required | The DDS file to write. |
+
+```powershell
+sdc cubemap-marker --color 200,200,210 --roughness 0.3 -o textures\cubemaps\steel_e.dds
+```
+
+An existing file that Tessalith did not write is kept, not overwritten.
+
+Exit codes: 0 written; 1 kept (a file Tessalith did not write); 2 usage error (a bad colour or a roughness outside 0 to 1); 3 the write failed.
 
 ## Exit codes
 
