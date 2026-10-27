@@ -2012,6 +2012,20 @@ fn chan_normal_short_fires_for_msn_and_coexists_with_the_length_warning() {
     assert_eq!(count(&n, Code::ChanNormalLength), 1, "{:?}", n.warnings);
 }
 
+/// Note DP4: a short normal keeps CHAN-NORMAL-LENGTH only; the "unit normals" contradiction is gone.
+#[test]
+fn a_short_normal_gets_one_warning_not_two() {
+    let j = run_normal("n", Rgba32F::new(64, 64, [0.6, 0.55, 0.6, 1.0]), &[]);
+    assert_eq!(count(&j, Code::ChanNormalLength), 1, "{:?}", j.warnings);
+    assert!(
+        !j.warnings
+            .iter()
+            .any(|w| w.code == Code::SugContradiction && w.message.contains("unit normals")),
+        "{:?}",
+        j.warnings
+    );
+}
+
 #[test]
 fn skin_wet_height_form_is_stored_domain_and_the_normal_form_is_not() {
     use engine::ops::{domain_for, Domain};

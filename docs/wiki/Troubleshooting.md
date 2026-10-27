@@ -170,7 +170,7 @@ Every warning has a code and a severity:
 |---|---|---|---|
 | `CHAN-NOT-GRAY` | warning | A grayscale sub-type's R, G and B differ by more than 4/255; only R (or luma) is kept. | Pick the channel or the sub-type. |
 | `CHAN-CONSTANT-ALPHA-DATA` | info | `data` alpha is constant; `remove` would save bits. | |
-| `CHAN-NORMAL-LENGTH` | warning | A normal source is far from unit length, or has no Z. | Check the sub-type; consider `channels.reconstruct_z`. |
+| `CHAN-NORMAL-LENGTH` | warning | A normal source is far from unit length, or has no Z. | Use **Rebuild Z** on its Problems row (sets `channels.reconstruct_z`), or check the sub-type. |
 | `CHAN-NORMAL-SHORT` | info | The normal source's mean length at mip 0 is below 0.9. Mip 0 is renormalised, or kept with `mips.normal_base = "keep"`. | |
 | `CHAN-AO-INVERTED` | warning | The `_rmaos` B channel is mostly black; AO may be inverted. | Check the source. |
 | `CHAN-GLOSS-AS-ROUGH` | warning | The `_rmaos` R channel is mostly high; it may be gloss, not roughness. | Invert it or confirm. |

@@ -266,6 +266,92 @@ fn a_read_only_project_disables_the_fix_buttons_with_the_reason() {
         .contains("sdc.toml is read-only"));
 }
 
+/// A mod folder with one short normal (decodes to length 0.3, R != G) and a model opened on it.
+fn short_normal_model(dir: &std::path::Path, toml: Option<&str>) -> AppModel {
+    let root = mod_folder(dir);
+    image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([153u8, 140, 153]))
+        .save(root.join("landscape/x_n.png"))
+        .unwrap();
+    if let Some(t) = toml {
+        std::fs::write(root.join("sdc.toml"), t).unwrap();
+    }
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: Some(dir.join("export")),
+        ..Default::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.open_problems(None);
+    m
+}
+
+fn z_row_code(m: &AppModel, code: engine::codes::Code) -> bool {
+    sdc_gui::model::bottom::problems(m).iter().any(|p| {
+        p.code == Some(code)
+            && matches!(&p.at, sdc_gui::model::bottom::At::Texture(k) if k == "landscape/x_n.png")
+    })
+}
+
+#[test]
+fn the_z_row_offers_rebuild_z_and_it_clears_the_row() {
+    use engine::codes::Code;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = short_normal_model(d.path(), None);
+    m.decide(
+        "landscape/x_n.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Normal),
+    );
+    m.decide(
+        "landscape/x_n.png",
+        sdc_gui::model::Answer::Green(engine::config::GreenConvention::Directx),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(z_row_code(&m, Code::ChanNormalLength));
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label(sdc_gui::ui::problems::REBUILD_Z).click();
+    idle(&mut h);
+    let v = h
+        .state()
+        .project
+        .as_ref()
+        .unwrap()
+        .file_value("landscape/x_n.png", "channels.reconstruct_z");
+    assert_eq!(v, Some(serde_json::json!(true)));
+    assert!(!z_row_code(h.state(), Code::ChanNormalLength));
+    assert!(!z_row_code(h.state(), Code::SugContradiction));
+}
+
+#[test]
+fn rebuild_z_is_disabled_on_a_read_only_sdc_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = short_normal_model(d.path(), Some("target = [\n"));
+    // Read-only means no decision can be made, so the row is put on the item directly.
+    let w = engine::codes::Warning::new(engine::codes::Code::ChanNormalLength, "not unit length");
+    let i = m
+        .items
+        .iter_mut()
+        .find(|i| i.key == "landscape/x_n.png")
+        .unwrap();
+    i.status = sdc_gui::model::items::ItemStatus::Ready;
+    i.warnings = vec![w];
+    m.invalidate_views();
+    let mut h = harness(m);
+    h.run();
+    let b = h.get_by_label(sdc_gui::ui::problems::REBUILD_Z);
+    assert!(b.accesskit_node().is_disabled());
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    b.hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("sdc.toml is read-only");
+}
+
 #[test]
 fn the_problems_tab_draws_only_the_rows_on_screen() {
     let d = tempfile::tempdir().unwrap();

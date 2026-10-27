@@ -5,7 +5,12 @@ use super::status::{dot, Status};
 use crate::model::bottom::{filtered, flagged, problems, At, Level, Problem, ProblemsFilter};
 use crate::model::AppModel;
 use eframe::egui;
+use engine::codes::Code;
+use serde_json::json;
 use std::sync::Arc;
+
+/// The fix button on a CHAN-NORMAL-LENGTH row (Note DP).
+pub const REBUILD_Z: &str = "Rebuild Z";
 
 pub fn status_of(l: Level) -> Status {
     match l {
@@ -44,6 +49,7 @@ enum Act {
     Set(String),
     File(String),
     Fix(RowPick),
+    RebuildZ(String),
     Filter(Option<ProblemsFilter>),
 }
 
@@ -135,6 +141,18 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                         let mut a = None;
                         // Right to left: the last widget added is the leftmost.
                         match &p.at {
+                            At::Texture(k) if p.code == Some(Code::ChanNormalLength) => {
+                                let b = ui.add_enabled(off.is_none(), egui::Button::new(REBUILD_Z));
+                                let tip = "Rebuild the blue (Z) channel from red and green for this file \
+                                           (channels.reconstruct_z)";
+                                let b = match &off {
+                                    Some(why) => b.on_disabled_hover_text(why.as_str()),
+                                    None => b.on_hover_text(tip),
+                                };
+                                if b.clicked() {
+                                    a = Some(Act::RebuildZ(k.clone()));
+                                }
+                            }
                             At::Texture(k) if p.level == Level::Decide => {
                                 if let Some(r) = fix_buttons(ui, m, k, off.as_deref()) {
                                     a = Some(Act::Fix(r));
@@ -180,6 +198,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             }
         },
         Some(Act::Fix(r)) => apply(model, r),
+        Some(Act::RebuildZ(k)) => model.set_field(&k, "channels.reconstruct_z", json!(true)),
         Some(Act::Filter(f)) => model.bottom.filter = f,
         None => {}
     }

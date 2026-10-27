@@ -1304,7 +1304,7 @@ fn stores_alpha(f: Format) -> bool {
     )
 }
 
-/// `normal_len_err` above this is "far from unit length" (CHAN-NORMAL-LENGTH, SUG-CONTRADICTION).
+/// `normal_len_err` above this is "far from unit length" (CHAN-NORMAL-LENGTH).
 const NORMAL_LEN_TOL: f64 = 0.1;
 
 /// Mean decoded normal length below which mip 0 is "noticeably short" (CHAN-NORMAL-SHORT, DECISIONS R1).
@@ -1318,17 +1318,9 @@ fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
     let a = f.analysis;
     let st = p.subtype;
     let mut v = vec![];
-    if p.category == Category::Normal {
-        if a.grayscale {
-            v.push(format!("{} source is grayscale (R = G = B)", st.id()));
-        }
-        if st != Subtype::Msn && a.normal_len_err > NORMAL_LEN_TOL && !p.channels.reconstruct_z {
-            v.push(format!(
-                "{} source does not decode to unit normals (mean |length-1| = {:.3})",
-                st.id(),
-                a.normal_len_err
-            ));
-        }
+    // Not-unit normals are CHAN-NORMAL-LENGTH's alone (Note DP4).
+    if p.category == Category::Normal && a.grayscale {
+        v.push(format!("{} source is grayscale (R = G = B)", st.id()));
     }
     // DECISIONS AH1/AH2: only a written solid 255 reads as a plain envmask; a 0 fill keeps complex material on.
     if st == Subtype::ComplexMaterial

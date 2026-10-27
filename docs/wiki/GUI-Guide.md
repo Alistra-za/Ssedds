@@ -375,7 +375,7 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 
 ## Generate from normal map
 
-Right-click the Height row (or open the set card's menu) and pick **Generate from normal map…** to make a height map from the set's normal. The dialog has Size, Tiling, Relief balance and Strength, with a preview; **Generate** writes `<base>_p_generated.png` (or `<base>_height_generated.png` for a complex material's `_m` alpha) as a 16-bit grey PNG next to the normal. See [Texture types](Texture-Types.md#generated-height-maps) for names and ranges.
+Right-click the Height row (or open the set card's menu) and pick **Generate from normal map…** to make a height map from the set's normal. The dialog has Size, Tiling, Relief balance and Strength, with a preview; **Generate** writes `<base>_p_generated.png` (or `<base>_height_generated.png` for a complex material's `_m` alpha) as a 16-bit grey PNG next to the normal. See [Texture types](Texture-Types.md#generated-height-maps) for names and ranges. The same entry is a button directly under **Assign…** on an empty Height row (hidden for a packed texture), and in the preview the wheel zooms, a drag pans and a double-click fits.
 
 - The Height row's File hover says "Generated from {normal}", and the Flags cell shows a weak **generated** marker.
 - When the file is stale (the normal changed, the set wants the other neutral, or the shader reads no height), that row's status dot turns amber and its hover gives the reason. No Problems row is added.
@@ -416,6 +416,7 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 | UV coverage | UV islands closer than 8 texels for more than 2 % of used texels, so colour bleeds at a distance. Needs a Meshes scan. |
 
 - **Problems rows.** Each warning is a row in the bottom panel's Problems tab, after the ordinary warnings. **Checks N** narrows the list to them.
+- **Short normals.** A normal far from unit length gets one `CHAN-NORMAL-LENGTH` row with a **Rebuild Z** button (sets `channels.reconstruct_z`); it is greyed out with the reason when `sdc.toml` is read-only.
 - **ⓘ badge.** A set card shows **ⓘ n** beside **⚠ n**. Hover it for the list, click it to open Problems on the set. Info results (the green-direction hint) show only there and in the texture's own settings panel.
 - **End of export.** One Info line counts them, for example "Checks: 3 warnings on 1 texture and 1 set; see Problems".
 - **Range overlay.** The preview's **Range** toggle paints the texels that break the value-range rule magenta on the Source side. It appears only when the texture has a per-texel range warning, and is greyed out while a pin is compared.

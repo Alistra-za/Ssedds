@@ -268,7 +268,7 @@ Community Shaders draws grass with its own shader, which reads only the albedo, 
 
 ## Generate from normal map
 
-Many sets ship a normal map but no height. **Generate from normal map…** integrates the set's normal back into a height map and writes it as a source file next to the normal. Nothing changes until you click **Generate**.
+Many sets ship a normal map but no height. **Generate from normal map…** integrates the set's normal back into a height map and writes it as a source file next to the normal. Nothing changes until you click **Generate**. A **Generate from normal map…** button also sits directly under **Assign…** on an empty Height row (and under the format combo on a filled Height or RMAOS row); it is hidden when the slot's item is a packed texture. In the preview, the wheel zooms 1 to 16 times around the pointer, a drag pans, and a double-click fits; all tiles share one crop.
 
 - **Where:** the Height row's right-click menu (an empty row's **Assign…** opens the same menu), and the set card's menu. The entry is greyed out with the reason when the set cannot use a height (vanilla multilayer, vanilla landscape, a shader that reads no height, no normal map, a normal whose sides are not powers of two, a real height already there).
 - **The dialog:** Size (256, 512 or 1024, up to 2048 on a cs PBR set whose albedo is larger, never larger than the normal; above 512 a warning about parallax cost; the `_m` alpha takes the `_m`'s size), Tiling (Auto, Wrap, Mirror), Relief balance and Strength, with a preview of the height and the fit. It shows the path it will write. On a complex-material set (vanilla target) **Use as** offers *Complex material `_m` alpha*. Enter never generates.
@@ -454,6 +454,7 @@ Six checks read the numbers Tessalith already measures while it plans, and tell 
 
 **Where the results show.**
 - **Problems rows.** Each warning is a row in the bottom panel's Problems tab, after the ordinary warnings, with an amber dot that marks severity only. The tab shows **Checks N** while any exist; click it to narrow the list to check rows (the chip reads *Checks only ×*). With a set filter on, it counts that set's check rows.
+- **Short normals.** A normal that is far from unit length gets one row, `CHAN-NORMAL-LENGTH`, with a **Rebuild Z** button that sets the file's `channels.reconstruct_z`; it is greyed out with the reason when `sdc.toml` is read-only.
 - **The ⓘ badge.** A set card shows **ⓘ n** beside its **⚠ n**, in the weak text colour: *n* counts the set's Warning-level results (a plain **ⓘ** means only Info results). Hover it for the list; click it to open Problems on that set.
 - **Info results** (the green-direction guess) are never Problems rows. They show on the badge's hover and in the texture's own settings panel, next to the *Treat as OpenGL (flip green)* button.
 - **Never in Review or in the Files rows.** A check never opens Review and is not copied into an export's file rows, so it does not show twice.
