@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 360" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#222">
+  <title>Mirror ball and angular map: where each direction sits in the circle</title>
+  <defs>
+    <radialGradient id="ball" cx="0.5" cy="0.42" r="0.6"><stop offset="0" stop-color="#cfe0f4"/><stop offset="0.55" stop-color="#7fa3d6"/><stop offset="0.75" stop-color="#93a876"/><stop offset="1" stop-color="#4c3f2b"/></radialGradient>
+    <linearGradient id="sky2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3f6fb8"/><stop offset="0.5" stop-color="#bcd6f2"/><stop offset="0.5" stop-color="#8fa86a"/><stop offset="1" stop-color="#5a4a32"/></linearGradient>
+  </defs>
+  <rect width="700" height="360" rx="10" fill="#ffffff"/>
+
+  <text x="180" y="28" text-anchor="middle" font-weight="600" font-size="14">Mirror ball (photo of a chrome ball)</text>
+  <circle cx="180" cy="175" r="120" fill="url(#sky2)" stroke="#333"/>
+  <circle cx="180" cy="175" r="120" fill="url(#ball)" opacity="0.55"/>
+  <circle cx="180" cy="175" r="5" fill="#222"/>
+  <text x="180" y="196" text-anchor="middle" font-weight="600">south</text>
+  <text x="180" y="211" text-anchor="middle" font-size="11">(behind the camera)</text>
+  <text x="180" y="100" text-anchor="middle">up</text>
+  <text x="180" y="260" text-anchor="middle">down</text>
+  <text x="248" y="179">east</text>
+  <text x="112" y="179" text-anchor="end">west</text>
+  <text x="180" y="318" text-anchor="middle">outer ring → north (straight ahead)</text>
+  <text x="180" y="336" text-anchor="middle" fill="#555">Camera stands south of the ball, looking north.</text>
+
+  <text x="520" y="28" text-anchor="middle" font-weight="600" font-size="14">Angular map (light probe)</text>
+  <circle cx="520" cy="175" r="120" fill="url(#sky2)" stroke="#333"/>
+  <circle cx="520" cy="175" r="60" fill="none" stroke="#fff" stroke-dasharray="5 4"/>
+  <circle cx="520" cy="175" r="5" fill="#222"/>
+  <text x="520" y="196" text-anchor="middle" font-weight="600">north</text>
+  <text x="520" y="211" text-anchor="middle" font-size="11">(straight ahead)</text>
+  <text x="520" y="108" text-anchor="middle">up</text>
+  <text x="520" y="250" text-anchor="middle">down</text>
+  <text x="588" y="179">east</text>
+  <text x="452" y="179" text-anchor="end">west</text>
+  <text x="520" y="318" text-anchor="middle">dashed ring → 90° off · outer ring → south</text>
+  <text x="520" y="336" text-anchor="middle" fill="#555">Distance from the centre = angle from straight ahead.</text>
+</svg>

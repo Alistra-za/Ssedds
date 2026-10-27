@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 170" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#222">
+  <title>Dynamic cubemap marker: a 1 by 1 cube, colour on +X, every other face black</title>
+  <rect width="700" height="170" rx="10" fill="#ffffff"/>
+  <text x="350" y="26" text-anchor="middle" font-weight="600" font-size="14">Dynamic marker: six faces of one pixel each</text>
+  <g transform="translate(60,45)">
+    <rect width="60" height="60" fill="#8fa3bd" stroke="#b83232" stroke-width="3"/>
+    <text x="30" y="80" text-anchor="middle" font-weight="700" fill="#b83232">+X</text>
+    <rect x="100" width="60" height="60" fill="#000"/>
+    <text x="130" y="80" text-anchor="middle" font-weight="700" fill="#127f8c">−X</text>
+    <rect x="200" width="60" height="60" fill="#000" stroke="#2e7d2e" stroke-width="3"/>
+    <text x="230" y="80" text-anchor="middle" font-weight="700" fill="#2e7d2e">+Y</text>
+    <rect x="300" width="60" height="60" fill="#000"/>
+    <text x="330" y="80" text-anchor="middle" font-weight="700" fill="#a03aa0">−Y</text>
+    <rect x="400" width="60" height="60" fill="#000"/>
+    <text x="430" y="80" text-anchor="middle" font-weight="700" fill="#2c56b0">+Z</text>
+    <rect x="500" width="60" height="60" fill="#000"/>
+    <text x="530" y="80" text-anchor="middle" font-weight="700" fill="#98780f">−Z</text>
+  </g>
+  <text x="90" y="145" text-anchor="middle">colour (RGB)</text>
+  <text x="90" y="160" text-anchor="middle">+ roughness (alpha)</text>
+  <text x="290" y="145" text-anchor="middle" font-size="11">black +Y tells CS:</text>
+  <text x="290" y="160" text-anchor="middle" font-size="11">reflect the live scene</text>
+  <text x="530" y="145" text-anchor="middle" fill="#555">the rest: black</text>
+</svg>
