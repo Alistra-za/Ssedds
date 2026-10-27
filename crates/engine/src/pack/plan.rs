@@ -510,8 +510,8 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
         .any(|r| r.kind == RecipeKind::Rfaos)
 }
 
-/// Note DR: whether  is a _f that a set already Advanced skin packs into the _rfaos G channel (a _f whose
-/// sub-type was requested is converted alone). policy::resolve_file_with applies the same test to a planned file.
+/// Note DR: whether `f` is a `_f` that a set already Advanced skin packs into the `_rfaos` G channel (a `_f` whose
+/// sub-type was requested is converted alone). `policy::resolve_file_with` applies the same test to a planned file.
 pub fn is_skin_f(ctx: &ResolveCtx, set: &TextureSet, f: &InputFile) -> bool {
     let stem = f
         .rel
