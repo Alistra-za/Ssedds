@@ -738,3 +738,86 @@ fn face_rotate_applies_to_six_face_files() {
         assert!(px == texels8(face), "face {k} differs");
     }
 }
+
+/// DECISIONS DN11: a cube's mips average linear light decoded with the game's 1.6 gamma, not sRGB: 0/255 halves give
+/// round(255 * 0.5^(1/1.6)) = 165 (sRGB would give 188).
+#[test]
+fn cube_mips_average_in_game_gamma() {
+    use engine::dds::read_dds;
+    use engine::decode::{decode_level, Decoded};
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in FACES {
+        image::RgbImage::from_fn(2, 2, |x, y| {
+            let v = if (x + y) % 2 == 0 { 255 } else { 0 };
+            image::Rgb([v, v, v])
+        })
+        .save(dir.join(format!("chrome_e_{f}.png")))
+        .unwrap();
+    }
+    let mut r = req(d.path(), &["format=rgba8"], true);
+    r.allow = [Code::DimSmall].into_iter().collect();
+    let (s, ev) = run(plan_of(r).0);
+    assert_eq!(s.converted, 1, "{ev:#?}");
+    let f =
+        read_dds(&std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap()).unwrap();
+    assert_eq!(f.mip_count, 2);
+    for (k, (w, h, r)) in f
+        .surfaces()
+        .into_iter()
+        .enumerate()
+        .filter(|(k, _)| k % 2 == 1)
+    {
+        let Decoded::Ldr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
+            unreachable!()
+        };
+        for c in &px[0][..3] {
+            assert!(
+                (*c as i32 - 165).abs() <= 1,
+                "face {} mip 1: {:?}",
+                k / 2,
+                px[0]
+            );
+        }
+    }
+}
+
+/// DECISIONS DN11: a float source is linear already, so it is only re-encoded: linear 0.25 is
+/// round(255 * 0.25^(1/1.6)) = 107.
+#[test]
+fn cube_float_source_is_only_reencoded() {
+    use engine::dds::read_dds;
+    use engine::decode::{decode_level, Decoded};
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("in/textures/cubemaps/flat.exr");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgb32F(image::Rgb32FImage::from_pixel(
+        64,
+        48,
+        image::Rgb([0.25, 0.25, 0.25]),
+    ))
+    .save(&p)
+    .unwrap();
+    let (s, ev) = run(plan_of(req(d.path(), &["format=rgba8"], true)).0);
+    assert_eq!(s.converted, 1, "{ev:#?}");
+    let f =
+        read_dds(&std::fs::read(d.path().join("out/textures/cubemaps/flat.dds")).unwrap()).unwrap();
+    let per = f.mip_count as usize;
+    for (k, (w, h, r)) in f
+        .surfaces()
+        .into_iter()
+        .enumerate()
+        .filter(|(k, _)| k % per == 0)
+    {
+        let Decoded::Ldr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
+            unreachable!()
+        };
+        assert!(
+            px.iter().all(|p| p[..3] == [107, 107, 107]),
+            "face {}: {:?}",
+            k / per,
+            px[0]
+        );
+    }
+}

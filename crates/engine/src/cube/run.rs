@@ -1,12 +1,14 @@
-//! A cube job's stages up to quantise (cubemap support v1, DECISIONS DN10): load, preprocess to the working domain,
+//! A cube job's stages up to quantise (cubemap support v1, DECISIONS DN10, DN11): load, decode to linear light,
 //! cut the six faces, size them, colour filters, cone blur, then one mip chain built in direction space across faces.
 use super::{filter, layout, sample, Cube, CubeJob};
 use crate::api::CancelToken;
-use crate::config::{CubeLayout, Profile, ResizeMode};
+use crate::config::{ColorContent, CubeLayout, Profile, ResizeMode};
 use crate::events::Stage;
 use crate::image::Rgba32F;
 use crate::load::load_image_as;
-use crate::ops::{preprocess_with, SourceTransfer, Work};
+use crate::ops::{
+    game_gamma_to_linear, linear_to_game_gamma, preprocess_with, SourceTransfer, Work,
+};
 use crate::pipeline::{FileError, FileTracker, Keep, Prepared};
 use crate::policy::ResolvedJob;
 use crate::quantize::to_encoder_input;
@@ -40,11 +42,14 @@ pub(crate) fn prepare(
             cj.sources.len()
         )));
     }
-    // The cube is sized by `cubemap.face_size`, never by `resize`.
-    let flat = Profile {
+    // The cube is sized by `cubemap.face_size`, never by `resize`. DECISIONS DN11: `srgb` content on a cube is the
+    // game's 1.6 gamma, decoded and re-encoded here, so preprocess and quantise see stored values (`content linear`).
+    let mut q = Profile {
         resize: ResizeMode::None,
         ..p.clone()
     };
+    q.color.content = ColorContent::Linear;
+    let gamma = p.color.content == ColorContent::Srgb;
     let mut works: Vec<Work> = Vec::with_capacity(files);
     for s in &cj.sources {
         stop()?;
@@ -52,7 +57,16 @@ pub(crate) fn prepare(
         let (img, info) = load_image_as(&s.path, p.alpha.exr_straight)
             .map_err(|e| failed(Stage::Load)(format!("{}: {e}", s.path.display())))?;
         tracker.stage.set(Stage::Preprocess);
-        works.push(preprocess_with(img, &flat, SourceTransfer::of(&info)));
+        let mut w = preprocess_with(img, &q, SourceTransfer::of(&info));
+        // A float source is linear already.
+        if gamma && !info.is_float {
+            for px in &mut w.img.px {
+                for c in &mut px[..3] {
+                    *c = game_gamma_to_linear(*c);
+                }
+            }
+        }
+        works.push(w);
     }
     stop()?;
     let src = (works[0].img.width, works[0].img.height);
@@ -103,6 +117,17 @@ pub(crate) fn prepare(
     if p.drop_top_mip && chain.len() > 1 {
         chain.remove(0);
     }
+    if gamma {
+        for px in chain
+            .iter_mut()
+            .flat_map(|c| c.faces.iter_mut())
+            .flat_map(|f| f.px.iter_mut())
+        {
+            for c in &mut px[..3] {
+                *c = linear_to_game_gamma(*c);
+            }
+        }
+    }
     stop()?;
     let one: Vec<(u32, u32)> = chain.iter().map(|c| (c.size, c.size)).collect();
     let mut prep = Prepared {
@@ -122,7 +147,7 @@ pub(crate) fn prepare(
             if keep == Keep::Encode {
                 prep.inputs = (0..6)
                     .flat_map(|f| chain.iter().map(move |c| (f, c)))
-                    .map(|(f, c)| to_encoder_input(&c.faces[f], &meta, p))
+                    .map(|(f, c)| to_encoder_input(&c.faces[f], &meta, &q))
                     .collect();
             }
         }
@@ -142,7 +167,7 @@ pub(crate) fn prepare(
             if matches!(keep, Keep::Preview { .. }) {
                 prep.inputs = pos_x
                     .iter()
-                    .map(|l| to_encoder_input(l, &meta, p))
+                    .map(|l| to_encoder_input(l, &meta, &q))
                     .collect();
             }
             prep.chain = pos_x;

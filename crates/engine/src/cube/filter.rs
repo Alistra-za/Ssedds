@@ -1,7 +1,7 @@
-//! Cube colour filters on linear-light faces (exposure, highlight clamp, display-space grading). Alpha is untouched.
+//! Cube colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DN11). Alpha is untouched.
 use super::Cube;
 use crate::config::CubemapSpec;
-use crate::ops::{linear_to_srgb, srgb_to_linear};
+use crate::ops::{game_gamma_to_linear, linear_to_game_gamma};
 
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
@@ -41,7 +41,7 @@ pub fn colour(c: &mut Cube, s: &CubemapSpec) {
                 }
             }
             if display {
-                let mut x = rgb.map(|v| linear_to_srgb(v.clamp(0.0, 1.0)));
+                let mut x = rgb.map(linear_to_game_gamma);
                 if s.brightness != 0.0 || s.contrast != 0.0 {
                     x = x.map(|v| (v + b - 0.5) * k + 0.5);
                 }
@@ -55,7 +55,7 @@ pub fn colour(c: &mut Cube, s: &CubemapSpec) {
                 if let Some(t) = tint {
                     x = [x[0] * t[0], x[1] * t[1], x[2] * t[2]];
                 }
-                rgb = x.map(|v| srgb_to_linear(v.clamp(0.0, 1.0)));
+                rgb = x.map(|v| game_gamma_to_linear(v.clamp(0.0, 1.0)));
             }
             p[..3].copy_from_slice(&rgb);
         }
@@ -130,14 +130,14 @@ mod tests {
     #[test]
     fn tint_multiplies_in_display_space() {
         let mut c = flat([0.5, 0.5, 0.5]);
-        let d = linear_to_srgb(0.5);
+        let d = linear_to_game_gamma(0.5);
         let s = CubemapSpec {
             tint: Some([255, 128, 255]),
             ..Default::default()
         };
         colour(&mut c, &s);
         let p = c.faces[0].px[0];
-        assert!((linear_to_srgb(p[1]) - d * 128.0 / 255.0).abs() < 1e-5);
-        assert!((linear_to_srgb(p[0]) - d).abs() < 1e-5);
+        assert!((linear_to_game_gamma(p[1]) - d * 128.0 / 255.0).abs() < 1e-5);
+        assert!((linear_to_game_gamma(p[0]) - d).abs() < 1e-5);
     }
 }
