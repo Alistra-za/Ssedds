@@ -336,10 +336,12 @@ fn ao_group(ui: &mut egui::Ui, a: &mut AoOpts, width: Option<u32>) -> bool {
 
 /// The preview's maps as grey tiles, each texture loaded once per result.
 fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
-    let mut z = ui
+    let z0 = ui
         .ctx()
         .data(|d| d.get_temp::<PreviewZoom>(zoom_id()))
         .unwrap_or_default();
+    // Every tile paints this one crop; input this frame builds z, stored after the loop (one frame of lag).
+    let (mut z, uv0) = (z0, zoom_uv(&z0));
     // Wrapped, so three tiles never push the body wider than the dialog.
     ui.horizontal_wrapped(|ui| {
         for (g, label) in [
@@ -352,7 +354,7 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
             let size = egui::vec2(TILE, TILE * g.height as f32 / g.width.max(1) as f32);
             let r = ui.add(
                 egui::Image::new((tex.id(), size))
-                    .uv(zoom_uv(&z))
+                    .uv(uv0)
                     .sense(egui::Sense::click_and_drag()),
             );
             r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, label));
@@ -362,7 +364,7 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
                 let f = 1.0015f32.powf(dy) * pinch;
                 if let (true, Some(ptr)) = (f != 1.0, r.hover_pos()) {
                     // Keep the UV under the pointer under the pointer.
-                    let uv = zoom_uv(&z);
+                    let uv = uv0;
                     let frac = (ptr - r.rect.min) / r.rect.size();
                     let under = uv.min.to_vec2() + frac * uv.size();
                     z.zoom = (z.zoom * f).clamp(1.0, ZOOM_MAX);
@@ -385,6 +387,9 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
     let uv = zoom_uv(&z);
     z.centre = uv.center().to_vec2();
     ui.ctx().data_mut(|d| d.insert_temp(zoom_id(), z));
+    if z != z0 {
+        ui.ctx().request_repaint();
+    }
     if z.zoom > 1.0 {
         ui.weak(format!("{:.1}×", z.zoom));
     }

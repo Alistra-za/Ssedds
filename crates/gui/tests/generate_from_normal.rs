@@ -3954,3 +3954,118 @@ fn the_three_tiles_fit_the_dialog_body_without_a_horizontal_scroll() {
         assert!(right <= w, "{right} past the window at {w}");
     }
 }
+
+// ---- Task 2 fix round 1: the drawn crop ----
+
+fn meshes(s: &eframe::egui::Shape, out: &mut Vec<eframe::egui::Rect>, tile: eframe::egui::Rect) {
+    match s {
+        eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| meshes(s, out, tile)),
+        // An egui Image paints a textured rect: the crop is the brush's uv.
+        eframe::egui::Shape::Rect(r) => {
+            if let Some(b) = &r.brush {
+                if (r.rect.min - tile.min).length() < 0.6 && (r.rect.max - tile.max).length() < 0.6
+                {
+                    out.push(b.uv);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The UV rect the tile's image mesh was painted with in the last frame.
+fn drawn_uv(h: &egui_kittest::Harness<'static, AppModel>, label: &str) -> eframe::egui::Rect {
+    use egui_kittest::kittest::Queryable;
+    let tile = h.get_by_label(label).rect();
+    let mut found = vec![];
+    for cs in &h.output().shapes {
+        meshes(&cs.shape, &mut found, tile);
+    }
+    assert_eq!(found.len(), 1, "one mesh over {label} at {tile:?}");
+    found[0]
+}
+
+fn near_uv(a: eframe::egui::Rect, b: eframe::egui::Rect) -> bool {
+    (a.min - b.min).length() < 1e-4 && (a.max - b.max).length() < 1e-4
+}
+
+fn wheel_at(h: &mut egui_kittest::Harness<'static, AppModel>, pos: eframe::egui::Pos2, dy: f32) {
+    h.hover_at(pos);
+    h.run_steps(2);
+    h.input_mut().events.push(eframe::egui::Event::MouseWheel {
+        unit: eframe::egui::MouseWheelUnit::Point,
+        delta: eframe::egui::vec2(0.0, dy),
+        phase: eframe::egui::TouchPhase::Move,
+        modifiers: eframe::egui::Modifiers::NONE,
+    });
+    h.run_steps(10);
+}
+
+#[test]
+fn the_drawn_crop_follows_the_zoom_and_every_tile_shows_the_same_one() {
+    use eframe::egui::{pos2, vec2, Rect};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    std::fs::remove_file(land(d.path()).join("rock01_ao.png")).unwrap();
+    reopen(&mut m, d.path());
+    m.open_gen(ROCK_SET, Some(GenMap::Height));
+    m.gen_tick(GenMap::Ao, true);
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(3);
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run_steps(5);
+    use egui_kittest::kittest::Queryable;
+    let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    assert!(near_uv(drawn_uv(&h, "Height preview"), full));
+    // A first nudge makes the "1.1×" line appear, which re-centres the dialog; measure after that settles.
+    let t0 = h.get_by_label("Height preview").rect();
+    wheel_at(&mut h, t0.center(), 20.0);
+    // Near the tile's top-left corner.
+    let tile = h.get_by_label("Height preview").rect();
+    let pos = tile.min + tile.size() * vec2(0.1, 0.15);
+    let frac = vec2(0.1, 0.15);
+    let under = |uv: Rect| uv.min.to_vec2() + frac * uv.size();
+    let before = under(drawn_uv(&h, "Height preview"));
+    wheel_at(&mut h, pos, 900.0);
+    let z = zoom_of(&h);
+    assert!(z.zoom > 2.0, "{z:?}");
+    let uv = drawn_uv(&h, "Height preview");
+    assert!(near_uv(uv, zoom_uv(&z)), "drawn {uv:?} vs stored {z:?}");
+    assert!(uv.width() < 0.5, "the crop is zoomed: {uv:?}");
+    assert!(
+        (under(uv) - before).length() < 1e-3,
+        "the UV under the pointer moved: {before:?} -> {:?}",
+        under(uv)
+    );
+    // Both tiles show the one crop.
+    assert!(near_uv(drawn_uv(&h, "AO preview"), uv));
+    // Drag far past the edge: the crop stays inside the texture and the centre moved.
+    let c0 = z.centre;
+    let from = h.get_by_label("Height preview").rect().center();
+    h.hover_at(from);
+    h.run_steps(2);
+    h.input_mut()
+        .events
+        .push(eframe::egui::Event::PointerButton {
+            pos: from,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: eframe::egui::Modifiers::NONE,
+        });
+    h.run_steps(2);
+    for i in 1..=25 {
+        h.hover_at(from + vec2(30.0 * i as f32, 0.0));
+        h.run_steps(1);
+    }
+    let z2 = zoom_of(&h);
+    h.run_steps(3);
+    let z2 = zoom_of(&h).centre.x.min(z2.centre.x);
+    assert!(z2 < c0.x - 0.05, "panned: {c0:?} -> {z2}");
+    let uv = drawn_uv(&h, "Height preview");
+    assert!(
+        uv.min.x >= 0.0 && uv.min.y >= 0.0 && uv.max.x <= 1.0 + 1e-6 && uv.max.y <= 1.0 + 1e-6,
+        "inside the texture: {uv:?}"
+    );
+    assert!(near_uv(uv, zoom_uv(&zoom_of(&h))));
+    assert!(uv.min.x < 1e-3, "pinned at the left edge: {uv:?}");
+}
