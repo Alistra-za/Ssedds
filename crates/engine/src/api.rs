@@ -1315,6 +1315,7 @@ impl Engine {
                     let mut a = analyse_with(&img, &info, hints);
                     a.icc_profile = meta.icc_profile;
                     a.dds_dxgi = meta.dds_dxgi;
+                    a.dds_cube = meta.dds_cube;
                     if let Some(s) = source {
                         cache.put_file(&f.path, s, a.clone(), info, cache.make_thumb(&img, &info));
                     }

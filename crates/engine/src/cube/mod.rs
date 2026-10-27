@@ -1,5 +1,6 @@
 //! Cube-map maths shared by the 3D preview and the cubemap pipeline (moved from render3d, Note DN1).
 pub mod latlong;
+pub mod layout;
 pub mod rgbe;
 pub mod sample;
 

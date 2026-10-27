@@ -61,6 +61,9 @@ pub struct Analysis {
     pub icc_profile: bool,
     /// DXGI format of a DDS input (DECISIONS S6, spec §5.1); `None` for images. Set by the caller from `SourceMeta`.
     pub dds_dxgi: Option<u32>,
+    /// The input is a single cube DDS, loaded as a 6:1 strip (DECISIONS DN7). Set by the caller from `SourceMeta`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dds_cube: bool,
     /// NaN and ±∞ samples per channel (R, G, B, A). They are left out of every statistic above; Preprocess replaces
     /// them (DECISIONS S9).
     pub nonfinite: [u64; 4],
@@ -205,6 +208,7 @@ pub fn analyse_with(img: &Rgba32F, info: &SourceInfo, hints: AnalyseHints) -> An
         peak_luminance: peak,
         icc_profile: false,
         dds_dxgi: None,
+        dds_cube: false,
         nonfinite,
         grass: crate::grass::facts(img),
         corner_err: img

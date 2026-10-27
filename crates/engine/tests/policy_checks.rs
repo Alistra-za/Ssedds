@@ -2732,6 +2732,9 @@ fn out_of_range_cube_keys_are_invalid() {
         "cubemap.face_rotate=[45, 0, 0, 0, 0, 0]",
         "cubemap.blur=1.5",
         "cubemap.midtones=0",
+        "cubemap.exposure=11",
+        "cubemap.saturation=2.5",
+        "cubemap.highlight_clamp=0.5",
     ] {
         let j = cube(&[set]);
         assert!(
@@ -2740,4 +2743,129 @@ fn out_of_range_cube_keys_are_invalid() {
             j.warnings
         );
     }
+}
+
+/// An `_e` source of `w` x `h` with the given source facts, resolved as a cubemap; `tweak` edits the analysis.
+fn cube_src(
+    (w, h): (u32, u32),
+    info: SourceInfo,
+    tweak: impl FnOnce(&mut engine::analyse::Analysis),
+    sets_cli: &[&str],
+) -> ResolvedJob {
+    let reg = PresetRegistry::builtin().unwrap();
+    let overrides: Vec<_> = sets_cli.iter().map(|s| parse_set(s).unwrap()).collect();
+    let allow = BTreeSet::new();
+    let ctx = ResolveCtx {
+        target: Target::Cs,
+        registry: &reg,
+        preset: default_preset_for(Target::Cs),
+        user_config: None,
+        project_config: None,
+        overrides: &overrides,
+        accept: AcceptSuggestions::High,
+        allow: &allow,
+        files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
+    };
+    let f = InputFile {
+        path: "x_e.png".into(),
+        rel: "x_e.png".into(),
+        game_path: "textures/a/x_e.png".into(),
+        output: PathBuf::from("x_e.dds"),
+        kind: InputKind::Image,
+        real_rel: None,
+    };
+    let set = TextureSet {
+        key: "k".into(),
+        members: vec![0],
+        suffixes: BTreeSet::from(["e".to_string()]),
+    };
+    let mut a = analyse(&Rgba32F::new(w, h, [0.5, 0.4, 0.3, 1.0]), &info);
+    tweak(&mut a);
+    resolve_file(
+        &ctx,
+        &FileFacts {
+            input: &f,
+            suffix: Some("e"),
+            alias: None,
+            set: &set,
+            analysis: &a,
+            info: &info,
+        },
+    )
+}
+
+fn cube_dims(size: (u32, u32), sets_cli: &[&str]) -> ResolvedJob {
+    cube_src(size, RGBA8, |_| {}, sets_cli)
+}
+
+#[test]
+fn tiny_cube_is_dim_small() {
+    let j = cube_dims((48, 8), &["cubemap.face_size=2"]);
+    assert!(codes(&j).contains(&Code::DimSmall), "{:?}", j.warnings);
+    assert!(codes(&j).contains(&Code::CfgInvalid));
+    let j = cube_dims((24, 4), &["drop_top_mip=true"]);
+    assert!(codes(&j).contains(&Code::DimSmall), "{:?}", j.warnings);
+    let j = cube_dims((24, 4), &[]);
+    assert!(!codes(&j).contains(&Code::DimSmall), "{:?}", j.warnings);
+}
+
+#[test]
+fn cube_source_dims_are_not_npot() {
+    let j = cube_dims((1024, 768), &[]);
+    assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
+    let j = cube_dims((600, 450), &[]);
+    let w = warning(&j, Code::DimResized);
+    assert!(w.message.contains("face 150 → 128"), "{}", w.message);
+    assert!(!codes(&j).contains(&Code::DimNpot));
+    let j = cube_dims((512, 512), &[]);
+    assert!(
+        !codes(&j)
+            .iter()
+            .any(|c| matches!(c, Code::DimNpot | Code::DimSmall | Code::DimResized)),
+        "{:?}",
+        j.warnings
+    );
+}
+
+#[test]
+fn hdr_cube_source_without_clamp_warns() {
+    let float = SourceInfo {
+        bit_depth: 32,
+        channels: 4,
+        has_alpha: true,
+        is_float: true,
+    };
+    let hot = |a: &mut engine::analyse::Analysis| a.peak_luminance = 40.0;
+    let j = cube_src((1024, 768), float, hot, &[]);
+    let w = warning(&j, Code::LossClampHdr);
+    assert!(
+        w.message.contains("cubemap.highlight_clamp"),
+        "{}",
+        w.message
+    );
+    let j = cube_src((1024, 768), float, hot, &["cubemap.highlight_clamp=4"]);
+    assert!(!codes(&j).contains(&Code::LossClampHdr), "{:?}", j.warnings);
+    let j = cube_dims((1024, 768), &[]);
+    assert!(!codes(&j).contains(&Code::LossClampHdr));
+}
+
+/// DECISIONS DN7: a cube DDS is a cubemap; an explicit other sub-type is CFG-INVALID.
+#[test]
+fn cube_dds_is_decided_as_a_cubemap() {
+    let cube_dds = |a: &mut engine::analyse::Analysis| a.dds_cube = true;
+    let j = cube_src((48, 8), RGBA8, cube_dds, &[]);
+    assert_eq!(j.profile.subtype, Subtype::Cubemap);
+    assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
+    let j = cube_src((48, 8), RGBA8, cube_dds, &["subtype=diffuse"]);
+    assert_eq!(j.profile.subtype, Subtype::Diffuse);
+    assert!(
+        j.warnings
+            .iter()
+            .any(|w| w.code == Code::CfgInvalid && w.message.contains("cube DDS")),
+        "{:?}",
+        j.warnings
+    );
 }

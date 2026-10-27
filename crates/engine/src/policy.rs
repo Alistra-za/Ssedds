@@ -412,6 +412,15 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
             }
         }
     }
+    // DECISIONS DN7: a cube DDS can only be a cubemap (an explicit sub-type above gets CFG-INVALID in `check_profile`).
+    if f.analysis.dds_cube {
+        return SubtypeDecision {
+            subtype: Subtype::Cubemap,
+            provenance: Provenance::AnalysisFact("cube-dds".into()),
+            decided: true,
+            suggestions,
+        };
+    }
     // S-shader-4: the set's shader re-types a member (eye `_n` → msn, landscape colour → landscape_diffuse).
     if let Some(p) = ctx.shaders.get(&f.set.key) {
         let id = p.shader.id();
@@ -1546,6 +1555,21 @@ fn encoding_warnings(
     w
 }
 
+/// How a cubemap source is laid out: `cubemap.layout`, else six face files for a face-tagged name, else a cube DDS
+/// (a 6:1 strip), else the aspect ratio; `None` when nothing says (DECISIONS DN7).
+fn cube_layout(p: &Profile, f: &FileFacts) -> Option<crate::config::CubeLayout> {
+    use crate::config::CubeLayout;
+    let stem = f.input.path.file_stem().and_then(|s| s.to_str());
+    p.cubemap
+        .layout
+        .or_else(|| {
+            stem.and_then(crate::cube::layout::face_tag)
+                .map(|_| CubeLayout::Faces)
+        })
+        .or(f.analysis.dds_cube.then_some(CubeLayout::Hstrip))
+        .or_else(|| crate::cube::layout::detect(f.analysis.width, f.analysis.height))
+}
+
 /// A cubemap's mips and `cubemap.*` ranges (DECISIONS DN4).
 fn cube_checks(p: &Profile, add: &mut impl FnMut(Code, String)) {
     if matches!(
@@ -1674,6 +1698,12 @@ pub fn check_profile(
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     // An HDR format (BC6H, RGBA16F) outside cs cannot be acknowledged: an error, added after the other checks.
     let hdr_outside_cs = hdr_outside_cs(p.format, p.target);
+    if a.dds_cube && st != Subtype::Cubemap {
+        add(
+            CfgInvalid,
+            "a cube DDS can only be re-encoded as a cubemap".into(),
+        );
+    }
     if !ALPHA_THRESHOLD.contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
@@ -1889,7 +1919,16 @@ pub fn check_profile(
     }
     // DECISIONS S1: a float source is linear light; Quantise clamps it to [0, 1] and encodes it per color.content.
     // Values outside that range are lost: a warning, never a block. (IN-FLOAT-LDR is retired, DECISIONS S2.)
-    if f.info.is_float && !hdr {
+    if st == Subtype::Cubemap {
+        // A cube's own check (DECISIONS DN7): `cubemap.highlight_clamp` is the way to keep or tame highlights.
+        if f.info.is_float && a.peak_luminance > 1.0 && p.cubemap.highlight_clamp.is_none() {
+            add(
+                LossClampHdr,
+                "highlights above 1.0 will clip: set cubemap.highlight_clamp (for example 4)"
+                    .into(),
+            );
+        }
+    } else if f.info.is_float && !hdr {
         let channels = if f.info.has_alpha { 4 } else { 3 };
         let (lo, hi) = a.channels[..channels]
             .iter()
@@ -2016,7 +2055,7 @@ pub fn check_profile(
         (rw, rh)
     };
     let mode = serde_json::to_value(p.resize).unwrap_or_default();
-    let resized = ((rw, rh) != (a.width, a.height)).then(|| {
+    let mut resized = ((rw, rh) != (a.width, a.height)).then(|| {
         Warning::new(
             DimResized,
             format!(
@@ -2029,7 +2068,8 @@ pub fn check_profile(
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
     });
-    // A cube's source size is not its face size; Task 5's face-size checks replace these for cubes.
+    // A cube's source size is not its face size: its checks read the face (DECISIONS DN7). With no layout the
+    // planner marks the file unclear, so no DIM-* here.
     if st != Subtype::Cubemap && !(ow.is_power_of_two() && oh.is_power_of_two()) {
         add(DimNpot, format!("{ow}x{oh} is not a power of two"));
     }
@@ -2037,6 +2077,28 @@ pub fn check_profile(
         add(DimSmall, "base dimension below 4 px".into());
     }
     if st == Subtype::Cubemap {
+        resized = None;
+        if let Some(layout) = cube_layout(p, f) {
+            use crate::cube::layout::{cells, face_size};
+            let src = (a.width, a.height);
+            let cell = cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0);
+            let face = face_size(p, layout, src);
+            let shown =
+                if p.drop_top_mip && crate::mips::level_count(face, face, &p.mips.levels) > 1 {
+                    face / 2
+                } else {
+                    face
+                };
+            if shown != cell {
+                resized = Some(
+                    Warning::new(DimResized, format!("face {cell} → {shown}"))
+                        .with_data(json!({ "from": [cell, cell], "to": [shown, shown] })),
+                );
+            }
+            if shown < 4 {
+                add(DimSmall, format!("cube face {shown} px is below 4"));
+            }
+        }
         cube_checks(p, &mut add);
     }
     if st == Subtype::Flow && ow.min(oh) <= 32 {
