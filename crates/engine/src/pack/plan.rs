@@ -510,6 +510,24 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
         .any(|r| r.kind == RecipeKind::Rfaos)
 }
 
+/// Note DR: whether  is a _f that a set already Advanced skin packs into the _rfaos G channel (a _f whose
+/// sub-type was requested is converted alone). policy::resolve_file_with applies the same test to a planned file.
+pub fn is_skin_f(ctx: &ResolveCtx, set: &TextureSet, f: &InputFile) -> bool {
+    let stem = f
+        .rel
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    f.kind == InputKind::Image
+        && split_suffix_with(&stem, ctx.registry.alias_table())
+            .suffix
+            .as_deref()
+            == Some("f")
+        && !crate::policy::subtype_requested(ctx, f)
+        && set_is_advanced_skin(ctx, set, f)
+}
+
 /// Pass 1 over every set. `jobs` holds every resolved job of the batch and is changed in place: consumed raw jobs
 /// are removed, unused ones re-tagged `PACK-UNUSED-INPUT` (`IN-PACKING-INPUT` when their recipe is disabled), a
 /// pre-packed job gets `PACK-CONFLICT` or (with `packing.prefer = raw`) moves to `skipped`, and a recipe whose
@@ -542,8 +560,6 @@ pub fn plan_packing(
     let mut heads = vec![];
     // Audit EP-5 (Note BJ): the waiting raw inputs, collected once; `jobs` does not change until the planning loop.
     // Note DR: the role comes from the job too, because a skin `_f` has no file-name role.
-    // shortcut: a failed or cancelled skin `_f` has no job status, so it is not seen as a fuzz input; fine because
-    // the recipe it would join is then failed or unbuilt anyway.
     let waiting: BTreeMap<PathBuf, RawMap> = jobs
         .iter()
         .filter_map(|j| match j.status {
@@ -559,7 +575,16 @@ pub fn plan_packing(
         let mut members: BTreeMap<PathBuf, &InputFile> = BTreeMap::new();
         for &i in &set.members {
             let f = &files[i];
-            let Some(role) = raw_role(f).or_else(|| waiting.get(&f.path).copied()) else {
+            let Some(role) = raw_role(f)
+                .or_else(|| waiting.get(&f.path).copied())
+                .or_else(|| {
+                    // A failed or cancelled file has no job, so a skin `_f` is recognised by the same test as policy.
+                    // shortcut: a rule-named sub-type needs the analysis a failed file lacks, so it is not seen here.
+                    ((failed.contains(&f.path) || cancelled.contains(&f.path))
+                        && is_skin_f(ctx, set, f))
+                    .then_some(RawMap::Fuzz)
+                })
+            else {
                 continue;
             };
             if waiting.contains_key(&f.path)

@@ -307,3 +307,23 @@ fn a_skin_f_with_a_chosen_sub_type_is_converted_alone() {
         .iter()
         .any(|j| j.pack.is_none() && j.input.ends_with("iron_f.png")));
 }
+
+/// Note DR5: a skin `_f` that fails to load fails the `_rfaos` recipe (Note M11); it is never built without it.
+#[test]
+fn a_corrupt_skin_f_fails_the_rfaos_instead_of_building_without_it() {
+    let d = fixture(&["iron_roughness.png", "iron_ao.png"], RFAOS);
+    std::fs::write(d.path().join("in/iron_f.png"), b"not a png").unwrap();
+    let p = plan(&d);
+    assert!(
+        p.failed.iter().any(|f| f.path.ends_with("iron_f.png")),
+        "the _f fails to load"
+    );
+    assert!(
+        !p.jobs.iter().any(|j| j.pack.is_some()
+            && j.output
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy() == "iron_rfaos.dds")
+            && matches!(j.status, engine::policy::JobStatus::Ready)),
+        "no built _rfaos"
+    );
+}
