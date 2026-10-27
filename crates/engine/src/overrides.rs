@@ -286,6 +286,8 @@ pub const FIELD_PATHS: &[&str] = &[
     "cubemap.saturation",
     "cubemap.tint",
     "cubemap.highlight_clamp",
+    "cubemap.ground_fill",
+    "cubemap.horizon",
 ];
 
 pub const REENCODE_FIELD: &str = "reencode";

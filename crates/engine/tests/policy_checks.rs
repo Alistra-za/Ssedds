@@ -2736,6 +2736,7 @@ fn out_of_range_cube_keys_are_invalid() {
         "cubemap.saturation=2.5",
         "cubemap.highlight_clamp=0.5",
         "cubemap.yaw=400",
+        "cubemap.horizon=50",
     ] {
         let j = cube(&[set]);
         assert!(
@@ -2746,6 +2747,10 @@ fn out_of_range_cube_keys_are_invalid() {
     }
     // A NaN never gets that far: --set refuses it (and the range check would too).
     assert!(parse_set("cubemap.yaw=nan").is_err());
+    assert!(parse_set("cubemap.horizon=nan").is_err());
+    // A ground fill at a valid horizon is accepted.
+    let j = cube(&["cubemap.ground_fill=\"gradient\"", "cubemap.horizon=-10"]);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
 }
 
 /// An `_e` source of `w` x `h` with the given source facts, resolved as a cubemap; `tweak` edits the analysis.

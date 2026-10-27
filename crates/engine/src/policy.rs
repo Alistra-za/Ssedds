@@ -1629,6 +1629,7 @@ fn cube_checks(p: &Profile, add: &mut impl FnMut(Code, String)) {
         ("midtones", Some(c.midtones), 0.1..=10.0),
         ("saturation", Some(c.saturation), 0.0..=2.0),
         ("highlight_clamp", c.highlight_clamp, 1.0..=f64::MAX),
+        ("horizon", Some(c.horizon), -45.0..=45.0),
     ];
     for (key, v, range) in ranges {
         if let Some(v) = v.filter(|v| !range.contains(v)) {

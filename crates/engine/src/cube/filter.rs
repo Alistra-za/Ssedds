@@ -1,7 +1,7 @@
 //! Cube yaw and mirror (DECISIONS DN14), and colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DN11). Alpha is untouched.
 use super::world::{to_cube, to_world};
-use super::Cube;
-use crate::config::CubemapSpec;
+use super::{cube_dir, Cube};
+use crate::config::{CubemapSpec, GroundFill};
 use crate::ops::{game_gamma_to_linear, linear_to_game_gamma};
 
 /// The cube turned `degrees` about world up, positive clockwise seen from above (Skyrim's heading sense: 90 moves
@@ -24,6 +24,58 @@ pub fn mirror(c: &Cube) -> Cube {
         let w = to_world(d);
         to_cube([-w[0], w[1], w[2]])
     })
+}
+
+/// Fill the cube below `horizon_deg` (DECISIONS DN17); alpha untouched.
+pub fn ground_fill(c: &mut Cube, fill: &GroundFill, horizon_deg: f64) {
+    let size = c.size;
+    let elev = |f: usize, i: usize| {
+        let d = cube_dir(f, i as u32 % size, i as u32 / size, size);
+        (to_world(d)[2].clamp(-1.0, 1.0) as f64).asin().to_degrees()
+    };
+    // Horizon colour: mean over [h, h+5]; if empty (tiny cubes), mean of the texels nearest above h.
+    let (mut band, mut nb) = ([0f64; 3], 0u32);
+    let mut near: (f64, [f64; 3], u32) = (f64::MAX, [0.0; 3], 0);
+    for (f, face) in c.faces.iter().enumerate() {
+        for (i, p) in face.px.iter().enumerate() {
+            let e = elev(f, i);
+            let rgb = [p[0] as f64, p[1] as f64, p[2] as f64];
+            if (horizon_deg..=horizon_deg + 5.0).contains(&e) {
+                (0..3).for_each(|k| band[k] += rgb[k]);
+                nb += 1;
+            } else if e >= horizon_deg {
+                if e < near.0 - 0.5 {
+                    near = (e, rgb, 1);
+                } else if e < near.0 + 0.5 {
+                    (0..3).for_each(|k| near.1[k] += rgb[k]);
+                    near.2 += 1;
+                }
+            }
+        }
+    }
+    let (sum, n) = if nb > 0 { (band, nb) } else { (near.1, near.2) };
+    let hc = sum.map(|v| (v / n.max(1) as f64) as f32);
+    let ground = match fill {
+        GroundFill::Color(rgb) => Some(rgb.map(|v| game_gamma_to_linear(v as f32 / 255.0))),
+        GroundFill::Mode(_) => None,
+    };
+    for (f, face) in c.faces.iter_mut().enumerate() {
+        for (i, p) in face.px.iter_mut().enumerate() {
+            let e = elev(f, i);
+            // 1 below horizon-1, 0 above horizon+1, linear between.
+            let a = ((horizon_deg + 1.0 - e) / 2.0).clamp(0.0, 1.0) as f32;
+            if a == 0.0 {
+                continue;
+            }
+            let target = ground.unwrap_or_else(|| {
+                let t = ((horizon_deg - e) / (horizon_deg + 90.0)).clamp(0.0, 1.0) as f32;
+                hc.map(|v| v * (1.0 - 0.5 * t))
+            });
+            for k in 0..3 {
+                p[k] = p[k] * (1.0 - a) + target[k] * a;
+            }
+        }
+    }
 }
 
 fn luma(c: [f32; 3]) -> f32 {
@@ -162,5 +214,95 @@ mod tests {
         let p = c.faces[0].px[0];
         assert!((linear_to_game_gamma(p[1]) - d * 128.0 / 255.0).abs() < 1e-5);
         assert!((linear_to_game_gamma(p[0]) - d).abs() < 1e-5);
+    }
+
+    fn elevation(face: usize, x: u32, y: u32, size: u32) -> f64 {
+        let w = to_world(crate::cube::cube_dir(face, x, y, size));
+        (w[2] as f64).asin().to_degrees()
+    }
+
+    fn texels(size: u32) -> impl Iterator<Item = (usize, usize, f64)> {
+        (0..6).flat_map(move |f| {
+            (0..size * size).map(move |i| (f, i as usize, elevation(f, i % size, i / size, size)))
+        })
+    }
+
+    #[test]
+    fn ground_colour_replaces_the_lower_hemisphere() {
+        let mut c = Cube {
+            size: 16,
+            faces: std::array::from_fn(|_| Rgba32F::new(16, 16, [0.5, 0.5, 0.5, 0.7])),
+        };
+        ground_fill(&mut c, &GroundFill::Color([0, 0, 0]), 0.0);
+        let down = crate::cube::dir_to_face(super::super::world::UP.map(|v| -v)).0;
+        assert_eq!(down, 5);
+        assert_eq!(c.faces[5].px[8 * 16 + 8], [0.0, 0.0, 0.0, 0.7]);
+        assert_eq!(c.faces[4].px[8 * 16 + 8], [0.5, 0.5, 0.5, 0.7]);
+    }
+
+    #[test]
+    fn colour_code_decodes_with_game_gamma() {
+        let mut c = flat([0.5; 3]);
+        ground_fill(&mut c, &GroundFill::Color([255, 0, 128]), 0.0);
+        let p = c.faces[5].px[0];
+        assert!((p[0] - 1.0).abs() < 1e-6 && p[1] == 0.0);
+        assert!((p[2] - game_gamma_to_linear(128.0 / 255.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gradient_starts_at_the_horizon_colour() {
+        let size = 64;
+        let mut c = Cube {
+            size,
+            faces: std::array::from_fn(|_| Rgba32F::new(size, size, [0.6, 0.6, 0.6, 1.0])),
+        };
+        ground_fill(
+            &mut c,
+            &GroundFill::Mode(crate::config::GroundMode::Gradient),
+            0.0,
+        );
+        let (mut near, mut nadir) = (f32::MAX, 1.0f32);
+        for (f, i, e) in texels(size) {
+            let v = c.faces[f].px[i][0];
+            if (-3.0..-1.5).contains(&e) {
+                near = near.min(v);
+            }
+            if e < -85.0 {
+                nadir = nadir.min(v);
+            }
+        }
+        assert!(near > 0.585 && near <= 0.6, "{near}");
+        assert!((nadir - 0.3).abs() < 0.01, "{nadir}");
+    }
+
+    #[test]
+    fn empty_band_uses_the_nearest_row_above_and_stays_finite() {
+        let mut c = flat([0.4; 3]);
+        ground_fill(
+            &mut c,
+            &GroundFill::Mode(crate::config::GroundMode::Gradient),
+            0.0,
+        );
+        assert!(c
+            .faces
+            .iter()
+            .all(|f| f.px.iter().all(|p| p[..3].iter().all(|v| v.is_finite()))));
+    }
+
+    #[test]
+    fn horizon_moves_the_line() {
+        let size = 32;
+        let run = |h: f64| {
+            let mut c = Cube {
+                size,
+                faces: std::array::from_fn(|_| Rgba32F::new(size, size, [0.5, 0.5, 0.5, 1.0])),
+            };
+            ground_fill(&mut c, &GroundFill::Color([0, 0, 0]), h);
+            c
+        };
+        let (a, b) = (run(0.0), run(20.0));
+        let (f, i, _) = texels(size).find(|t| (9.0..11.0).contains(&t.2)).unwrap();
+        assert_eq!(a.faces[f].px[i][0], 0.5);
+        assert_eq!(b.faces[f].px[i][0], 0.0);
     }
 }

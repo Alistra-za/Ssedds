@@ -125,12 +125,15 @@ pub(crate) fn prepare(
     } else if n > cell {
         cube = sample::resample(&cube, n, |d| d);
     }
-    // Run order (DECISIONS DN14): import, face rotate/flip, yaw, mirror, then the colour filters.
+    // Run order (DECISIONS DN14): import, face rotate/flip, yaw, mirror, colour filters, ground fill, blur.
     cube = filter::yaw(&cube, p.cubemap.yaw);
     if p.cubemap.mirror {
         cube = filter::mirror(&cube);
     }
     filter::colour(&mut cube, &p.cubemap);
+    if let Some(g) = &p.cubemap.ground_fill {
+        filter::ground_fill(&mut cube, g, p.cubemap.horizon);
+    }
     stop()?;
 
     tracker.stage.set(Stage::Mipmaps);

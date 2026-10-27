@@ -738,6 +738,15 @@ cfg_enum!(CubeStyle, "snake_case" { VanillaMetal, Room, Eye, Hd });
 // How a cubemap source is laid out; unset = from the aspect ratio. `equirect` is a 2:1 360-degree panorama.
 cfg_enum!(CubeLayout, "snake_case" { Faces, Hcross, Vcross, Hstrip, Vstrip, Equirect, MirrorBall, Angular, Photo });
 cfg_enum!(#[derive(Default)] FaceFlip, "lowercase" { #[default] None, H, V });
+// The ground fill look: the horizon colour darkening towards the nadir.
+cfg_enum!(GroundMode, "lowercase" { Gradient });
+/// What fills the cube below `cubemap.horizon`: `"gradient"` or `[r, g, b]` code values (game gamma, like `tint`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum GroundFill {
+    Mode(GroundMode),
+    Color([u8; 3]),
+}
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
@@ -799,6 +808,12 @@ pub struct CubemapSpec {
     /// Highlights above this (linear) are clamped; at least 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highlight_clamp: Option<f64>,
+    /// Fill below the horizon line; unset = no fill (the horizon alone does nothing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ground_fill: Option<GroundFill>,
+    /// Horizon elevation in degrees, -45..=45; read only with ground_fill.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub horizon: f64,
 }
 
 impl Default for CubemapSpec {
@@ -820,6 +835,8 @@ impl Default for CubemapSpec {
             saturation: 1.0,
             tint: None,
             highlight_clamp: None,
+            ground_fill: None,
+            horizon: 0.0,
         }
     }
 }
@@ -938,6 +955,18 @@ mod tests {
         assert!(Subtype::PbrFuzz.is_pbr_color());
         assert!(!Subtype::Glow.is_pbr_color());
         assert_eq!(Subtype::ComplexMaterial.id(), "complex_material");
+    }
+
+    #[test]
+    fn ground_fill_parses_both_forms() {
+        let p = |s: &str| toml::from_str::<CubemapSpec>(s).unwrap();
+        assert_eq!(
+            p("ground_fill = \"gradient\"").ground_fill,
+            Some(GroundFill::Mode(GroundMode::Gradient))
+        );
+        let s = p("ground_fill = [10, 20, 30]\nhorizon = -5.0");
+        assert_eq!(s.ground_fill, Some(GroundFill::Color([10, 20, 30])));
+        assert_eq!(s.horizon, -5.0);
     }
 
     #[test]
