@@ -266,7 +266,7 @@ pub fn header_bytes(desc: &DdsDesc, mips: u32) -> Result<Vec<u8>, DdsError> {
     header_bytes_with(desc, mips, false)
 }
 
-/// header_bytes, or with cube the header of a single cubemap: COMPLEX always set, caps2  xFE00, DX10 misc 4.
+/// header_bytes, or with cube the header of a single cubemap: COMPLEX always set, caps2 0xFE00, DX10 misc 4.
 /// Refuses non-square dimensions for a cube.
 pub fn header_bytes_with(desc: &DdsDesc, mips: u32, cube: bool) -> Result<Vec<u8>, DdsError> {
     let (w, h) = (desc.width, desc.height);
@@ -655,7 +655,7 @@ pub struct DdsFile {
 
 impl DdsFile {
     /// Every surface as (width, height, range into data). 2D: levels. Cube: the six faces' levels, face-major,
-    /// each range offset by ace x chain bytes (levels describes face 0).
+    /// each range offset by face × chain bytes (levels describes face 0).
     pub fn surfaces(&self) -> Vec<(u32, u32, Range<usize>)> {
         if !self.is_cubemap {
             return self.levels.clone();

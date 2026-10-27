@@ -644,6 +644,11 @@ fn cube_bytes_refuse_bad_shapes() {
         dds_bytes_cube(&sq, &bad),
         Err(DdsError::LevelSize { .. })
     ));
+    // 8x8 has a full chain of 4; five per face is too many.
+    assert!(matches!(
+        dds_bytes_cube(&sq, &cube_levels(Format::Bc1, 8, 5)),
+        Err(DdsError::TooManyLevels { .. })
+    ));
     assert!(matches!(
         header_bytes_with(&wide, 1, true),
         Err(DdsError::CubeShape(_))
