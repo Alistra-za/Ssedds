@@ -2182,6 +2182,13 @@ impl Engine {
                         .iter()
                         .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
                         .filter(|(p, _)| derive_read.insert(p.as_path())),
+                )
+                // DECISIONS DN8: each face of a six-file cube, keyed by the cube's output like a packed source.
+                .chain(
+                    job.cube
+                        .iter()
+                        .filter(|c| c.sources.len() > 1)
+                        .flat_map(|c| c.sources.iter().map(|s| (&s.path, "cubed"))),
                 );
             for (path, how) in consumed {
                 rep.emit_job(

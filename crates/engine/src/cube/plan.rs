@@ -183,15 +183,43 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
             job.output.set_file_name(format!("{stem}.dds"));
         }
         job.game_path = untagged(&job.game_path);
+        let mut ids: Vec<usize> = group.iter().map(|g| g.0).collect();
+        members.extend(&ids);
         match fault {
             Some(msg) => {
                 job.warnings.push(Warning::new(Code::CubeFaces, msg));
                 job.status = JobStatus::Error {
                     codes: vec![Code::CubeFaces],
                 };
+                // Each other face ends here, so every discovered file gets a terminal event.
+                let lead = jobs[first]
+                    .input
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                for &i in &ids[1..] {
+                    skipped.push(SkippedFile {
+                        path: jobs[i].input.clone(),
+                        output: jobs[i].output.clone(),
+                        set: Some(jobs[i].set_key.clone()),
+                        code: Some(Code::CubeFaces),
+                        reason: format!("part of {lead}'s cube set"),
+                    });
+                }
+                ids.truncate(1);
             }
             None => {
                 job.status = merge(by_face.iter().map(|v| &jobs[v[0]].status));
+                // The other faces' warnings that explain a merged Error or Blocked code.
+                if let JobStatus::Error { codes } | JobStatus::Blocked { codes } = &job.status {
+                    for v in &by_face[1..] {
+                        for w in &jobs[v[0]].warnings {
+                            if codes.contains(&w.code) && !job.warnings.contains(w) {
+                                job.warnings.push(w.clone());
+                            }
+                        }
+                    }
+                }
                 job.cube = Some(CubeJob {
                     layout: CubeLayout::Faces,
                     sources: (0..6)
@@ -204,8 +232,6 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
                 });
             }
         }
-        let ids: Vec<usize> = group.iter().map(|g| g.0).collect();
-        members.extend(&ids);
         merged.insert(first, (job, ids));
     }
     if merged.is_empty() {
@@ -213,15 +239,20 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
     }
 
     // A merged output was never a discovered file, so `duplicate_outputs_with` could not see it collide.
-    let mut out: Vec<(ResolvedJob, Vec<PathBuf>, bool)> = vec![];
+    // (input, own output) of each file a job stands for, so a skip is keyed like its file's discovery.
+    type Files = Vec<(PathBuf, PathBuf)>;
+    let mut out: Vec<(ResolvedJob, Files, bool)> = vec![];
     let old = std::mem::take(jobs);
-    let inputs: Vec<PathBuf> = old.iter().map(|j| j.input.clone()).collect();
+    let files: Vec<(PathBuf, PathBuf)> = old
+        .iter()
+        .map(|j| (j.input.clone(), j.output.clone()))
+        .collect();
     for (i, j) in old.into_iter().enumerate() {
         if let Some((m, ids)) = merged.remove(&i) {
-            out.push((m, ids.iter().map(|&k| inputs[k].clone()).collect(), true));
+            out.push((m, ids.iter().map(|&k| files[k].clone()).collect(), true));
         } else if !members.contains(&i) {
-            let input = j.input.clone();
-            out.push((j, vec![input], false));
+            let own = files[i].clone();
+            out.push((j, vec![own], false));
         }
     }
     let mut count: BTreeMap<String, usize> = BTreeMap::new();
@@ -238,10 +269,10 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
             jobs.push(j);
             continue;
         }
-        for path in paths {
+        for (path, output) in paths {
             skipped.push(SkippedFile {
                 path,
-                output: j.output.clone(),
+                output,
                 set: Some(j.set_key.clone()),
                 code: Some(Code::InDuplicate),
                 reason: "two inputs map to one output; exclude one".into(),

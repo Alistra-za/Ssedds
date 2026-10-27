@@ -355,6 +355,62 @@ fn broken_face_sets_are_cube_faces_errors() {
     assert!(m.contains("faces resolve to different settings"), "{m}");
 }
 
+/// Fix round 1: every discovered face file ends with a terminal event, for a good and a broken set.
+#[test]
+fn every_face_file_gets_a_terminal_event() {
+    for broken in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        faces(d.path(), "textures/a/chrome_e", 32);
+        if broken {
+            std::fs::remove_file(d.path().join("in/textures/a/chrome_e_negy.png")).unwrap();
+        }
+        let (p, plan_ev) = plan_of(req(d.path(), &[], true));
+        let (_, run_ev) = run(p);
+        let found: std::collections::BTreeSet<String> = plan_ev
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::FileDiscovered { .. }))
+            .filter_map(|e| e.path.clone())
+            .collect();
+        let ended: std::collections::BTreeSet<String> = run_ev
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    EventKind::FileSkipped { .. }
+                        | EventKind::FileDone { .. }
+                        | EventKind::FileFailed { .. }
+                )
+            })
+            .filter_map(|e| e.path.clone())
+            .collect();
+        assert_eq!(found.len(), if broken { 5 } else { 6 });
+        let open: Vec<_> = found.difference(&ended).collect();
+        assert!(
+            open.is_empty(),
+            "broken={broken}: no terminal event for {open:?}"
+        );
+    }
+}
+
+/// Fix round 1: a merged Blocked status carries the warning of the face that blocks it.
+#[test]
+fn a_blocking_face_warning_reaches_the_cube_job() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let p = d.path().join("in/textures/a/chrome_e_negz.png");
+    image::RgbaImage::from_fn(32, 32, |x, _| image::Rgba([9, 9, 9, (x * 8) as u8]))
+        .save(&p)
+        .unwrap();
+    let pl = plan(d.path(), &[]);
+    let j = job(&pl, "chrome_e.dds");
+    assert!(
+        matches!(&j.status, JobStatus::Blocked { codes } if codes.contains(&Code::LossAlphaData)),
+        "{:?}",
+        j.status
+    );
+    assert!(j.warnings.iter().any(|w| w.code == Code::LossAlphaData));
+}
+
 #[test]
 fn face_status_is_merged() {
     let d = tempfile::tempdir().unwrap();
