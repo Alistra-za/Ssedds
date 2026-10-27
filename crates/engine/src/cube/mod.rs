@@ -1,0 +1,54 @@
+//! Cube-map maths shared by the 3D preview and the cubemap pipeline (moved from render3d, Note DN1).
+pub mod latlong;
+pub mod rgbe;
+
+/// Face names in D3D order (+X -X +Y -Y +Z -Z).
+pub const FACES: [&str; 6] = ["posx", "negx", "posy", "negy", "posz", "negz"];
+
+/// CS's GetSamplingVector (DynamicCubemaps/CaptureCommon.hlsli:48): texel centre of face 0..6 (+X -X +Y -Y +Z -Z) ->
+/// unit world direction. This is D3D's cube addressing.
+pub fn cube_dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
+    let s = (x as f32 + 0.5) / size as f32;
+    let t = (y as f32 + 0.5) / size as f32;
+    let (u, v) = (2.0 * s - 1.0, 2.0 * (1.0 - t) - 1.0);
+    let d = match face {
+        0 => [1.0, v, -u],
+        1 => [-1.0, v, u],
+        2 => [u, 1.0, -v],
+        3 => [u, -1.0, v],
+        4 => [u, v, 1.0],
+        _ => [-u, v, -1.0],
+    };
+    let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    d.map(|c| c / n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cube_dir_face_centres_are_the_axes() {
+        let axes = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        for (f, a) in axes.iter().enumerate() {
+            let d = cube_dir(f, 0, 0, 1);
+            assert!(
+                (0..3).all(|k| (d[k] - a[k]).abs() < 1e-6),
+                "face {f}: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cube_dir_row0_of_pos_x_points_up_in_d3d() {
+        assert!(cube_dir(0, 1, 0, 4)[1] > 0.0);
+        assert!(cube_dir(0, 0, 1, 4)[2] > 0.0);
+    }
+}
