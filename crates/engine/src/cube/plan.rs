@@ -107,11 +107,11 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
         let verdict = match layout {
             None => JobStatus::Unresolved {
                 reasons: vec![format!(
-                    "cube layout unclear for {w}x{h}: set cubemap.layout for this file in sdc.toml (hcross, vcross, hstrip, vstrip)"
+                    "cube layout unclear for {w}x{h}: set cubemap.layout for this file in sdc.toml (hcross, vcross, hstrip, vstrip, equirect)"
                 )],
                 needs: vec![],
             },
-            Some(l) if super::layout::cells(l, w, h).is_none() => {
+            Some(l) if !super::layout::fits(l, w, h) => {
                 let msg = if l == CubeLayout::Faces {
                     "cubemap.layout faces is six separate files, not one image".to_string()
                 } else {

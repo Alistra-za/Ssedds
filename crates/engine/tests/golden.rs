@@ -3807,6 +3807,52 @@ fn cube_vcross_rgba8() {
     }
 }
 
+/// Task 13 (DECISIONS DN14): a 2:1 HDR panorama, light sky over brown ground with a hot sun, as a `room` cube.
+#[test]
+fn cube_equirect_hdr() {
+    let d = tempfile::tempdir().unwrap();
+    let img = image::Rgb32FImage::from_fn(256, 128, |x, y| {
+        if (120..136).contains(&x) && (20..28).contains(&y) {
+            image::Rgb([40.0, 38.0, 30.0])
+        } else if y < 64 {
+            image::Rgb([0.5, 0.7, 1.0])
+        } else {
+            image::Rgb([0.3, 0.15, 0.05])
+        }
+    });
+    put(
+        d.path(),
+        "textures/cubemaps/sky.hdr",
+        DynamicImage::ImageRgb32F(img),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &[
+            "file:**/sky.hdr.cubemap.style=room",
+            "file:**/sky.hdr.cubemap.highlight_clamp=4",
+        ],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/sky.dds");
+    assert_dds(
+        &f,
+        DdsPixelFormat::Bc1 { srgb: false },
+        HeaderKind::Legacy,
+        8,
+    );
+    assert!(f.is_cubemap);
+    assert_eq!((f.width, f.height), (128, 128));
+    // +Z (face 4) is the sky, -Z (face 5) the ground.
+    let s = surfaces(&f);
+    let (sky, ground) = (s[4 * 8][64 * 128 + 64], s[5 * 8][64 * 128 + 64]);
+    assert!(
+        sky[2] > sky[0] && ground[0] > ground[2] && sky[2] > ground[2] + 60,
+        "sky {sky:?} ground {ground:?}"
+    );
+}
+
 #[test]
 fn cube_hstrip_bc3_keeps_alpha() {
     let d = tempfile::tempdir().unwrap();

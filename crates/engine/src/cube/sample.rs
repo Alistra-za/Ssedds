@@ -60,7 +60,7 @@ pub fn fetch(c: &Cube, d: [f32; 3]) -> [f32; 4] {
 }
 
 /// A `size` cube whose every texel is `f(face, x, y)`, rows in parallel.
-fn build(size: u32, f: impl Fn(usize, u32, u32) -> [f32; 4] + Sync) -> Cube {
+pub(crate) fn build(size: u32, f: impl Fn(usize, u32, u32) -> [f32; 4] + Sync) -> Cube {
     Cube {
         size,
         faces: std::array::from_fn(|face| {

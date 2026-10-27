@@ -2735,6 +2735,7 @@ fn out_of_range_cube_keys_are_invalid() {
         "cubemap.exposure=11",
         "cubemap.saturation=2.5",
         "cubemap.highlight_clamp=0.5",
+        "cubemap.yaw=400",
     ] {
         let j = cube(&[set]);
         assert!(
@@ -2743,6 +2744,8 @@ fn out_of_range_cube_keys_are_invalid() {
             j.warnings
         );
     }
+    // A NaN never gets that far: --set refuses it (and the range check would too).
+    assert!(parse_set("cubemap.yaw=nan").is_err());
 }
 
 /// An `_e` source of `w` x `h` with the given source facts, resolved as a cubemap; `tweak` edits the analysis.

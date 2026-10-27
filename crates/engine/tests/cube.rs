@@ -74,9 +74,10 @@ fn detect_exact_ratios_only() {
     assert_eq!(detect(768, 1024), Some(CubeLayout::Vcross));
     assert_eq!(detect(1536, 256), Some(CubeLayout::Hstrip));
     assert_eq!(detect(256, 1536), Some(CubeLayout::Vstrip));
+    assert_eq!(detect(2048, 1024), Some(CubeLayout::Equirect));
     for (w, h) in [
         (512, 512),
-        (2048, 1024),
+        (1024, 2048),
         (4096, 2049),
         (1025, 768),
         (6145, 1024),
@@ -189,8 +190,168 @@ fn face_size_rule() {
         .profile("cs-quality", Target::Cs, Subtype::Cubemap)
         .unwrap();
     assert_eq!(layout::face_size(&p, CubeLayout::Hcross, (600, 450)), 128);
+    assert_eq!(layout::face_size(&p, CubeLayout::Equirect, (512, 256)), 128);
+    assert_eq!(
+        layout::face_size(&p, CubeLayout::Equirect, (1000, 500)),
+        128
+    );
     p.cubemap.face_size = Some(64);
     assert_eq!(layout::face_size(&p, CubeLayout::Hcross, (600, 450)), 64);
+}
+
+// ---- Task 13: equirect panoramas, yaw and mirror (DECISIONS DN14) ----
+
+use engine::cube::latlong::{dir_to_uv, uv_to_dir};
+use engine::cube::sample::fetch;
+use engine::cube::world::{to_cube, UP};
+use engine::cube::{cube_dir, dir_to_face, filter, import_dir, Cube};
+
+fn near3(a: [f32; 3], b: [f32; 3]) -> bool {
+    (0..3).all(|k| (a[k] - b[k]).abs() < 1e-4)
+}
+
+#[test]
+fn pano_mapping_matches_the_in_game_check() {
+    // results.md "Second check": u 0 west, 0.25 north, 0.5 east, 0.75 south (clockwise seen from above), row 0 up.
+    let cases = [
+        ((0.0, 0.5), [-1.0, 0.0, 0.0]),
+        ((0.25, 0.5), [0.0, 1.0, 0.0]),
+        ((0.5, 0.5), [1.0, 0.0, 0.0]),
+        ((0.75, 0.5), [0.0, -1.0, 0.0]),
+        ((0.3, 0.0), [0.0, 0.0, 1.0]),
+    ];
+    for ((u, v), want) in cases {
+        let d = uv_to_dir(u, v, 0.0);
+        assert!(near3(d, want), "({u},{v}) -> {d:?}");
+    }
+    for (u, v) in [(0.1, 0.3), (0.6, 0.7), (0.9, 0.45)] {
+        let (u2, v2) = dir_to_uv(uv_to_dir(u, v, 0.0), 0.0);
+        assert!((u - u2).abs() < 1e-4 && (v - v2).abs() < 1e-4, "({u},{v})");
+    }
+}
+
+/// A `w` x `h` equirect of `c`, one fetch per pixel centre.
+fn pano_of(c: &Cube, w: u32, h: u32) -> Rgba32F {
+    let mut img = Rgba32F::new(w, h, [0.0; 4]);
+    for y in 0..h {
+        for x in 0..w {
+            let d = uv_to_dir(
+                (x as f32 + 0.5) / w as f32,
+                (y as f32 + 0.5) / h as f32,
+                0.0,
+            );
+            *img.at_mut(x, y) = fetch(c, to_cube(d));
+        }
+    }
+    img
+}
+
+fn rgb_psnr(a: &Rgba32F, b: &Rgba32F) -> f64 {
+    let mse =
+        a.px.iter()
+            .zip(&b.px)
+            .flat_map(|(p, q)| (0..3).map(move |k| ((p[k] - q[k]) as f64).powi(2)))
+            .sum::<f64>()
+            / (3 * a.px.len()) as f64;
+    10.0 * (1.0 / mse).log10()
+}
+
+#[test]
+fn equirect_of_a_cube_round_trips() {
+    let arrow = Cube {
+        size: 64,
+        faces: arrow_faces(64),
+    };
+    let got = import_dir::equirect(&pano_of(&arrow, 512, 256), 64);
+    assert_eq!(got.size, 64);
+    let q: Vec<f64> = (0..6)
+        .map(|f| rgb_psnr(&got.faces[f], &arrow.faces[f]))
+        .collect();
+    // DN14: the arrow cube's saturated hard edges (face borders, bands) soften by about a texel through the two
+    // bilinear passes, which caps whole-face PSNR near 27-28 dB; away from those edges the round trip is exact.
+    assert!(q.iter().all(|&q| q > 26.0), "{q:.2?}");
+    let away = |v: u32| v > 2 && v < 61 && !(5..=10).contains(&v);
+    let inner = |img: &Rgba32F| {
+        let mut o = Rgba32F::new(1, 0, [0.0; 4]);
+        for y in (0..64).filter(|&y| away(y)) {
+            for x in (0..64).filter(|&x| away(x)) {
+                o.px.push(img.at(x, y));
+            }
+        }
+        o
+    };
+    for f in 0..6 {
+        let q = rgb_psnr(&inner(&got.faces[f]), &inner(&arrow.faces[f]));
+        assert!(q > 40.0, "face {f} away from edges: {q:.2} dB");
+    }
+}
+
+/// The centre texel of the face world direction `w` lands on.
+fn centre(c: &Cube, w: [f32; 3]) -> [f32; 4] {
+    let n = c.size;
+    c.faces[dir_to_face(to_cube(w)).0].at(n / 2, n / 2)
+}
+
+#[test]
+fn equirect_top_row_lands_on_up() {
+    let mut pano = Rgba32F::new(256, 128, [0.0, 0.0, 0.0, 1.0]);
+    for y in 0..32 {
+        for x in 0..256 {
+            *pano.at_mut(x, y) = [1.0; 4];
+        }
+    }
+    let c = import_dir::equirect(&pano, 32);
+    let up = c.faces[dir_to_face(UP).0].at(16, 16);
+    let down = c.faces[dir_to_face(UP.map(|v| -v)).0].at(16, 16);
+    assert!(up[0] > 0.99, "{up:?}");
+    assert!(down[0] < 0.01, "{down:?}");
+}
+
+const EAST: [f32; 3] = [1.0, 0.0, 0.0];
+const WEST: [f32; 3] = [-1.0, 0.0, 0.0];
+const NORTH: [f32; 3] = [0.0, 1.0, 0.0];
+const SOUTH: [f32; 3] = [0.0, -1.0, 0.0];
+
+/// A black cube with a red patch around world east.
+fn red_east(n: u32) -> Cube {
+    let faces = std::array::from_fn(|f| {
+        let mut img = Rgba32F::new(n, n, [0.0, 0.0, 0.0, 1.0]);
+        for y in 0..n {
+            for x in 0..n {
+                let d = engine::cube::world::to_world(cube_dir(f, x, y, n));
+                if d[0] > 0.9 {
+                    *img.at_mut(x, y) = [1.0, 0.0, 0.0, 1.0];
+                }
+            }
+        }
+        img
+    });
+    Cube { size: n, faces }
+}
+
+#[test]
+fn yaw_quarter_turn_moves_east_to_south() {
+    let c = filter::yaw(&red_east(32), 90.0);
+    assert!(centre(&c, SOUTH)[0] > 0.9, "south {:?}", centre(&c, SOUTH));
+    for w in [EAST, NORTH, WEST] {
+        assert!(centre(&c, w)[0] < 0.1, "{w:?}: {:?}", centre(&c, w));
+    }
+    assert_eq!(filter::yaw(&red_east(8), 0.0), red_east(8));
+}
+
+#[test]
+fn mirror_swaps_east_and_west() {
+    let c = filter::mirror(&red_east(32));
+    assert!(centre(&c, WEST)[0] > 0.9, "west {:?}", centre(&c, WEST));
+    for w in [EAST, NORTH, SOUTH] {
+        assert!(centre(&c, w)[0] < 0.1, "{w:?}: {:?}", centre(&c, w));
+    }
+}
+
+#[test]
+fn near_two_to_one_is_unclear() {
+    assert_eq!(detect(4096, 2049), None);
+    assert_eq!(detect(4096, 2048), Some(CubeLayout::Equirect));
 }
 
 #[test]

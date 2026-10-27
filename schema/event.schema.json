@@ -576,7 +576,8 @@
         "hcross",
         "vcross",
         "hstrip",
-        "vstrip"
+        "vstrip",
+        "equirect"
       ],
       "type": "string"
     },
@@ -694,6 +695,10 @@
           "format": "double",
           "type": "number"
         },
+        "mirror": {
+          "description": "Swap world east and west.",
+          "type": "boolean"
+        },
         "saturation": {
           "format": "double",
           "type": "number"
@@ -725,6 +730,11 @@
         "vcross_negz_rotate": {
           "description": "A vertical cross stores -Z upside down; rotate it back.",
           "type": "boolean"
+        },
+        "yaw": {
+          "description": "Turn about world up in degrees, -360..=360; positive is clockwise seen from above (Skyrim's heading).",
+          "format": "double",
+          "type": "number"
         }
       },
       "type": "object"

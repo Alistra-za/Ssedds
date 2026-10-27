@@ -1616,6 +1616,7 @@ fn cube_checks(p: &Profile, add: &mut impl FnMut(Code, String)) {
         bad(format!("cubemap.face_rotate {r} is not 0, 90, 180 or 270"));
     }
     let ranges = [
+        ("yaw", Some(c.yaw), -360.0..=360.0),
         ("blur", c.blur, 0.0..=1.0),
         ("exposure", Some(c.exposure), -10.0..=10.0),
         ("brightness", Some(c.brightness), -1.0..=1.0),

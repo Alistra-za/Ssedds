@@ -1,6 +1,6 @@
 //! A cube job's stages up to quantise (cubemap support v1, DECISIONS DN10, DN11): load, decode to linear light,
 //! cut the six faces, size them, colour filters, cone blur, then one mip chain built in direction space across faces.
-use super::{filter, layout, sample, Cube, CubeJob};
+use super::{filter, import_dir, layout, sample, Cube, CubeJob};
 use crate::api::CancelToken;
 use crate::config::{ColorContent, CubeLayout, Profile, ResizeMode};
 use crate::events::Stage;
@@ -70,7 +70,22 @@ pub(crate) fn prepare(
     }
     stop()?;
     let src = (works[0].img.width, works[0].img.height);
-    let faces: [Rgba32F; 6] = if cj.layout == CubeLayout::Faces {
+    let n = layout::face_size(p, cj.layout, src);
+    let faces: [Rgba32F; 6] = if cj.layout == CubeLayout::Equirect {
+        if !layout::fits(cj.layout, src.0, src.1) {
+            return Err(failed(Stage::Preprocess)(format!(
+                "{}x{} is not a 2:1 panorama: set cubemap.layout for this file",
+                src.0, src.1
+            )));
+        }
+        // Sampled straight at the face size, so the resize below is a no-op.
+        let Cube { faces, .. } = import_dir::equirect(&works[0].img, n);
+        let mut k = 0;
+        faces.map(|f| {
+            k += 1;
+            layout::orient(f, k - 1, &p.cubemap)
+        })
+    } else if cj.layout == CubeLayout::Faces {
         if works
             .iter()
             .any(|w| (w.img.width, w.img.height) != (src.0, src.0))
@@ -96,7 +111,6 @@ pub(crate) fn prepare(
     let mut meta = works.swap_remove(0);
     drop(works);
     meta.img = Rgba32F::new(0, 0, [0.0; 4]);
-    let n = layout::face_size(p, cj.layout, src);
     let cell = faces[0].width;
     let mut cube = Cube { size: cell, faces };
     if n < cell {
@@ -106,6 +120,11 @@ pub(crate) fn prepare(
         cube.size = n;
     } else if n > cell {
         cube = sample::resample(&cube, n, |d| d);
+    }
+    // Run order (DECISIONS DN14): import, face rotate/flip, yaw, mirror, then the colour filters.
+    cube = filter::yaw(&cube, p.cubemap.yaw);
+    if p.cubemap.mirror {
+        cube = filter::mirror(&cube);
     }
     filter::colour(&mut cube, &p.cubemap);
     stop()?;

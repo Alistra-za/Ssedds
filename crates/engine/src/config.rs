@@ -735,8 +735,8 @@ pub struct ValidationSpec {
 // Cubemap styles (DECISIONS DN4): each fills `face_size`, `format`, `blur` (and `vanilla_metal` `saturation`) where
 // no explicit layer set them.
 cfg_enum!(CubeStyle, "snake_case" { VanillaMetal, Room, Eye, Hd });
-// How a cubemap source is laid out; unset = from the aspect ratio.
-cfg_enum!(CubeLayout, "snake_case" { Faces, Hcross, Vcross, Hstrip, Vstrip });
+// How a cubemap source is laid out; unset = from the aspect ratio. `equirect` is a 2:1 360-degree panorama.
+cfg_enum!(CubeLayout, "snake_case" { Faces, Hcross, Vcross, Hstrip, Vstrip, Equirect });
 cfg_enum!(#[derive(Default)] FaceFlip, "lowercase" { #[default] None, H, V });
 
 fn is_zero(v: &f64) -> bool {
@@ -767,6 +767,12 @@ pub struct CubemapSpec {
     /// Face edge in pixels: a power of two in 4..=4096; unset = from the source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face_size: Option<u32>,
+    /// Turn about world up in degrees, -360..=360; positive is clockwise seen from above (Skyrim's heading).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub yaw: f64,
+    /// Swap world east and west.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mirror: bool,
     /// Per-face rotation in degrees (0, 90, 180, 270), in +X, -X, +Y, -Y, +Z, -Z order.
     #[serde(default, skip_serializing_if = "is_zeros")]
     pub face_rotate: [u16; 6],
@@ -801,6 +807,8 @@ impl Default for CubemapSpec {
             style: None,
             layout: None,
             face_size: None,
+            yaw: 0.0,
+            mirror: false,
             face_rotate: [0; 6],
             face_flip: [FaceFlip::None; 6],
             vcross_negz_rotate: true,

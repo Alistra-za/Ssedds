@@ -1,7 +1,36 @@
-//! Cube colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DN11). Alpha is untouched.
+//! Cube yaw and mirror (DECISIONS DN14), and colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DN11). Alpha is untouched.
+use super::world::{to_cube, to_world, UP};
 use super::Cube;
 use crate::config::CubemapSpec;
 use crate::ops::{game_gamma_to_linear, linear_to_game_gamma};
+
+/// The cube turned `degrees` about world up, positive clockwise seen from above (Skyrim's heading sense: 90 moves
+/// east to south). 0 returns the input unchanged.
+pub fn yaw(c: &Cube, degrees: f64) -> Cube {
+    if degrees == 0.0 {
+        return c.clone();
+    }
+    // out(d) = in(R d), R the right-handed (counter-clockwise from above) turn by `degrees` about UP.
+    let (s, co) = (degrees.to_radians() as f32).sin_cos();
+    let k = UP;
+    super::sample::resample(c, c.size, |d| {
+        let kd = k[0] * d[0] + k[1] * d[1] + k[2] * d[2];
+        let kxd = [
+            k[1] * d[2] - k[2] * d[1],
+            k[2] * d[0] - k[0] * d[2],
+            k[0] * d[1] - k[1] * d[0],
+        ];
+        std::array::from_fn(|i| d[i] * co + kxd[i] * s + k[i] * kd * (1.0 - co))
+    })
+}
+
+/// The cube with world east and west swapped: `out(d) = in(to_cube(diag(-1, 1, 1) * to_world(d)))`.
+pub fn mirror(c: &Cube) -> Cube {
+    super::sample::resample(c, c.size, |d| {
+        let w = to_world(d);
+        to_cube([-w[0], w[1], w[2]])
+    })
+}
 
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]

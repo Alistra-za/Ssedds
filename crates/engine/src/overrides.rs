@@ -273,6 +273,8 @@ pub const FIELD_PATHS: &[&str] = &[
     "cubemap.style",
     "cubemap.layout",
     "cubemap.face_size",
+    "cubemap.yaw",
+    "cubemap.mirror",
     "cubemap.face_rotate",
     "cubemap.face_flip",
     "cubemap.vcross_negz_rotate",

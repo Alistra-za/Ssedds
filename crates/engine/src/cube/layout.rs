@@ -20,13 +20,15 @@ pub fn detect(w: u32, h: u32) -> Option<CubeLayout> {
         Some(CubeLayout::Hstrip)
     } else if h == 6 * w {
         Some(CubeLayout::Vstrip)
+    } else if w == 2 * h {
+        Some(CubeLayout::Equirect)
     } else {
         None
     }
 }
 
 /// Cell edge and each face's cell for a `w` x `h` image read as `layout`; `None` when the size is not that layout
-/// (or the layout is `Faces`, which is six files, not one image).
+/// (or the layout is `Faces`, which is six files, not one image, or `Equirect`, which has no cells).
 pub fn cells(layout: CubeLayout, w: u32, h: u32) -> Option<(u32, [(u32, u32); 6])> {
     if w == 0 || h == 0 || detect(w, h) != Some(layout) {
         return None;
@@ -36,7 +38,7 @@ pub fn cells(layout: CubeLayout, w: u32, h: u32) -> Option<(u32, [(u32, u32); 6]
         CubeLayout::Vcross => (w / 3, VCROSS),
         CubeLayout::Hstrip => (h, [0, 1, 2, 3, 4, 5].map(|k| (k, 0))),
         CubeLayout::Vstrip => (w, [0, 1, 2, 3, 4, 5].map(|k| (0, k))),
-        CubeLayout::Faces => return None,
+        CubeLayout::Faces | CubeLayout::Equirect => return None,
     })
 }
 
@@ -154,11 +156,23 @@ pub(crate) fn orient(face: Rgba32F, k: usize, spec: &CubemapSpec) -> Rgba32F {
     }
 }
 
-/// The face edge written: `cubemap.face_size`, else the largest power of two within the source cell. `src` is the
-/// source image size (one face's size for `Faces`).
+/// Whether a `w` x `h` image can be read as `layout` (a 2:1 image for `Equirect`, the exact cells otherwise).
+pub fn fits(layout: CubeLayout, w: u32, h: u32) -> bool {
+    match layout {
+        CubeLayout::Equirect => detect(w, h) == Some(layout),
+        _ => cells(layout, w, h).is_some(),
+    }
+}
+
+/// The face edge written: `cubemap.face_size`, else the largest power of two within the source cell (a quarter of an
+/// equirect's width, its 90 degrees). `src` is the source image size (one face's size for `Faces`).
 pub fn face_size(p: &Profile, layout: CubeLayout, src: (u32, u32)) -> u32 {
     p.cubemap.face_size.unwrap_or_else(|| {
-        let cell = cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0);
+        let cell = if layout == CubeLayout::Equirect {
+            src.0 / 4
+        } else {
+            cells(layout, src.0, src.1).map_or(src.0.min(src.1), |c| c.0)
+        };
         1 << cell.max(1).ilog2()
     })
 }
