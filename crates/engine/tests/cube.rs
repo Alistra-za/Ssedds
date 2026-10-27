@@ -576,3 +576,113 @@ fn cube_stamps_are_checked() {
         "{err}"
     );
 }
+
+// ---- Task 8: encode a cube job end to end (DECISIONS DN10) ----
+
+/// Review Focus 5: an `.hdr` cross with a highlight above 1.0 and no `cubemap.highlight_clamp` converts, and its
+/// events carry LOSS-CLAMP-HDR.
+#[test]
+fn hdr_cross_without_clamp_warns_end_to_end() {
+    let d = tempfile::tempdir().unwrap();
+    let mut cross = hcross(&arrow_faces(16));
+    // +X sits in cell (2, 1).
+    *cross.at_mut(2 * 16 + 8, 16 + 8) = [40.0, 40.0, 40.0, 1.0];
+    let img = image::Rgb32FImage::from_fn(cross.width, cross.height, |x, y| {
+        let p = cross.at(x, y);
+        image::Rgb([p[0], p[1], p[2]])
+    });
+    let p = d.path().join("in/textures/cubemaps/hot.hdr");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgb32F(img).save(&p).unwrap();
+    let (plan, plan_ev) = plan_of(req(d.path(), &[], true));
+    let (s, run_ev) = run(plan);
+    assert_eq!(s.converted, 1, "{plan_ev:#?}");
+    assert!(
+        plan_ev.iter().chain(&run_ev).any(|e| matches!(
+            &e.kind,
+            EventKind::Warning(w) if w.code == Code::LossClampHdr
+        )),
+        "no LOSS-CLAMP-HDR"
+    );
+}
+
+/// Validation decodes all six faces: a corrupted face 3 mip 0 is named in VAL-MIP-ERROR.
+#[test]
+fn cube_validation_reads_every_face() {
+    use engine::dds::read_dds;
+    use engine::decode::{decode_level, Decoded};
+    use engine::quantize::EncoderInput;
+    use engine::validate::{validate, ValidationInput};
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let p = plan(d.path(), &["format=rgba8"]);
+    let profile = job(&p, "chrome_e.dds").profile.clone();
+    let (s, _) = run(p);
+    assert_eq!(s.converted, 1);
+    let mut bytes = std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap();
+    let f = read_dds(&bytes).unwrap();
+    // rgba8 is lossless, so the decoded surfaces are the encoder input.
+    let inputs: Vec<EncoderInput> = f
+        .surfaces()
+        .into_iter()
+        .map(
+            |(w, h, r)| match decode_level(f.format, w, h, &f.data[r], None).unwrap() {
+                Decoded::Ldr(px) => EncoderInput::Ldr(px),
+                Decoded::Hdr(_) => unreachable!(),
+            },
+        )
+        .collect();
+    assert_eq!(inputs.len(), 36);
+    let check = |bytes: &[u8]| {
+        validate(&ValidationInput {
+            bytes,
+            profile: &profile,
+            encoder_input: Some(&inputs),
+            base_coverage: None,
+            source_peak: None,
+            bc1_model: encoders_sys::Bc1Model::Ideal,
+            expected_levels: Some(6),
+        })
+    };
+    assert!(
+        check(&bytes).summary.passed,
+        "{:#?}",
+        check(&bytes).warnings
+    );
+    let header = bytes.len() - f.data.len();
+    let r = f.surfaces()[3 * 6].2.clone();
+    for b in &mut bytes[header + r.start..header + r.end] {
+        *b = !*b;
+    }
+    let rep = check(&bytes);
+    assert!(!rep.summary.passed);
+    let w = rep
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::ValMipError)
+        .unwrap_or_else(|| panic!("{:#?}", rep.warnings));
+    assert!(w.message.starts_with("face 3 mip 0:"), "{}", w.message);
+}
+
+/// The preview of a cube job is its +X face alone.
+#[test]
+fn cube_preview_is_the_pos_x_face() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (k, f) in arrow_faces(32).iter().enumerate() {
+        png8(f)
+            .save(dir.join(format!("chrome_e_{}.png", FACES[k])))
+            .unwrap();
+    }
+    let p = plan(d.path(), &[]);
+    let j = job(&p, "chrome_e.dds");
+    let s = engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap();
+    let pv = s.preview(j, 4096, &CancelToken::default()).unwrap();
+    assert_eq!(pv.source.first_level, 0);
+    assert_eq!(pv.source.dims.len(), 6, "one face's chain");
+    assert_eq!((pv.levels.len(), pv.source.levels.len()), (6, 6));
+    // +X is red under its white and black bands.
+    let c = pv.source.levels[0].at(20, 20);
+    assert!(c[0] > 0.9 && c[1] < 0.1 && c[2] < 0.1, "{c:?}");
+}

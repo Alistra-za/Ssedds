@@ -1,6 +1,27 @@
 //! Shared cube-test fixtures: the arrow cube and the raw layouts built from it with literal cell offsets (not
 //! `layout::cells`, so a wrong table cannot agree with itself).
+// Each test binary uses a different part of this module.
+#![allow(dead_code)]
+use engine::analyse::code8;
 use engine::image::Rgba32F;
+use image::DynamicImage;
+
+/// `img` as an 8-bit PNG-ready image: RGB when every alpha is 1, else RGBA.
+pub fn png8(img: &Rgba32F) -> DynamicImage {
+    let rgba = image::RgbaImage::from_fn(img.width, img.height, |x, y| {
+        image::Rgba(img.at(x, y).map(code8))
+    });
+    if img.px.iter().all(|p| p[3] == 1.0) {
+        DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(rgba).to_rgb8())
+    } else {
+        DynamicImage::ImageRgba8(rgba)
+    }
+}
+
+/// The 8-bit texels of `img`, as `png8` stores them (alpha 255 where it is 1).
+pub fn texels8(img: &Rgba32F) -> Vec<[u8; 4]> {
+    img.px.iter().map(|p| p.map(code8)).collect()
+}
 
 const GREY: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 

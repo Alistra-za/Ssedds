@@ -182,10 +182,19 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         ));
     }
     let model = matches!(p.format, Format::Bc1).then_some(inp.bc1_model);
+    // A cube's surfaces are face-major (DECISIONS DN10); a 2D file has one face.
+    let per_face = file.levels.len().max(1);
+    let mip = |l: usize| {
+        if file.is_cubemap {
+            format!("face {} mip {}", l / per_face, l % per_face)
+        } else {
+            format!("mip {l}")
+        }
+    };
     let mut decoded = vec![];
-    for (lw, lh, range) in &file.levels {
-        match decode_level(file.format, *lw, *lh, &file.data[range.clone()], model) {
-            Ok(d) => decoded.push((*lw, *lh, d)),
+    for (lw, lh, range) in file.surfaces() {
+        match decode_level(file.format, lw, lh, &file.data[range], model) {
+            Ok(d) => decoded.push((lw, lh, d)),
             Err(e) => {
                 w.push(Warning::new(Code::ValHeader, format!("decode failed: {e}")));
                 return finish(s, w);
@@ -213,7 +222,6 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             _ => vec![0, 1, 2],
         };
         // M6 Track D (Note T5): fast preview checks PSNR on the smallest mip only (coverage runs on every level, Note Y6).
-        let last = decoded.len().saturating_sub(1);
         let smallest_only = v.mips == ValidationMips::Smallest;
         for (l, ((lw, lh, d), e)) in decoded.iter().zip(enc).enumerate() {
             // Texel counts are checked for both kinds (Codex-B M1); only LDR levels get the metrics below.
@@ -224,7 +232,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                     w.push(Warning::new(
                         Code::ValHeader,
                         format!(
-                            "caller supplied encoder_input does not match the file: mip {l} LDR/HDR kind differs"
+                            "caller supplied encoder_input does not match the file: {} LDR/HDR kind differs", mip(l)
                         ),
                     ));
                     continue;
@@ -232,7 +240,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             };
             if dn != en {
                 let msg = format!(
-                    "caller supplied encoder_input does not match the file: mip {l} has {en} texels, the decoded level {dn}"
+                    "caller supplied encoder_input does not match the file: {} has {en} texels, the decoded level {dn}", mip(l)
                 );
                 w.push(Warning::new(Code::ValHeader, msg));
                 continue;
@@ -240,14 +248,14 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             let (Decoded::Ldr(d), EncoderInput::Ldr(e)) = (d, e) else {
                 continue;
             };
-            if !smallest_only || l == last {
+            if !smallest_only || (l + 1) % per_face == 0 {
                 let q = psnr(e, d, &ch);
                 s.min_mip_psnr_db = Some(s.min_mip_psnr_db.map_or(q, |m| m.min(q)));
                 if q < v.min_mip_psnr_db {
                     w.push(
                         Warning::new(
                             Code::ValMipError,
-                            format!("mip {l}: {q:.2} dB < {:.1} dB", v.min_mip_psnr_db),
+                            format!("{}: {q:.2} dB < {:.1} dB", mip(l), v.min_mip_psnr_db),
                         )
                         .with_data(json!({"level": l, "psnr": q})),
                     );
@@ -257,7 +265,8 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                 let bad = opaque_block_violations(e, d, *lw, *lh);
                 if bad > 0 {
                     opaque_causes.push(format!(
-                        "mip {l}: {bad} texels of all-255 blocks decode below 255"
+                        "{}: {bad} texels of all-255 blocks decode below 255",
+                        mip(l)
                     ));
                 }
             }
@@ -306,7 +315,8 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             for (l, st) in s.alpha.iter().enumerate() {
                 if st.min < guarantee {
                     causes.push(format!(
-                        "mip {l}: decoded alpha {} below the guarantee {guarantee}",
+                        "{}: decoded alpha {} below the guarantee {guarantee}",
+                        mip(l),
                         st.min
                     ));
                 }
@@ -357,7 +367,8 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                             Warning::new(
                                 Code::ValCoverage,
                                 format!(
-                                    "mip {l}: coverage {:.1}% vs base {:.1}%",
+                                    "{}: coverage {:.1}% vs base {:.1}%",
+                                    mip(l),
                                     c * 100.0,
                                     base * 100.0
                                 ),

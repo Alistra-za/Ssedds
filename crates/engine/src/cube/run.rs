@@ -1,0 +1,149 @@
+//! A cube job's stages up to quantise (cubemap support v1, DECISIONS DN10): load, preprocess to the working domain,
+//! cut the six faces, size them, colour filters, cone blur, then one mip chain built in direction space across faces.
+use super::{filter, layout, sample, Cube, CubeJob};
+use crate::api::CancelToken;
+use crate::config::{CubeLayout, Profile, ResizeMode};
+use crate::events::Stage;
+use crate::image::Rgba32F;
+use crate::load::load_image_as;
+use crate::ops::{preprocess_with, SourceTransfer, Work};
+use crate::pipeline::{FileError, FileTracker, Keep, Prepared};
+use crate::policy::ResolvedJob;
+use crate::quantize::to_encoder_input;
+
+/// The cube's `Prepared`: `inputs` and `dims` face-major (+X..-Z, each face's whole chain) and `faces = 6` for an
+/// encode or a measure; the +X face alone (`faces = 1`) for a preview.
+pub(crate) fn prepare(
+    job: &ResolvedJob,
+    cj: &CubeJob,
+    keep: Keep,
+    cancel: &CancelToken,
+    tracker: &FileTracker,
+) -> Result<Prepared, FileError> {
+    let p = &job.profile;
+    let stop = || {
+        if cancel.is_cancelled() {
+            Err(FileError::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let failed = |st: Stage| move |e: String| FileError::Failed(st, e);
+    let files = match cj.layout {
+        CubeLayout::Faces => 6,
+        _ => 1,
+    };
+    if cj.sources.len() != files {
+        return Err(failed(Stage::Load)(format!(
+            "a {:?} cube reads {files} source file(s), the job has {}",
+            cj.layout,
+            cj.sources.len()
+        )));
+    }
+    // The cube is sized by `cubemap.face_size`, never by `resize`.
+    let flat = Profile {
+        resize: ResizeMode::None,
+        ..p.clone()
+    };
+    let mut works: Vec<Work> = Vec::with_capacity(files);
+    for s in &cj.sources {
+        stop()?;
+        tracker.stage.set(Stage::Load);
+        let (img, info) = load_image_as(&s.path, p.alpha.exr_straight)
+            .map_err(|e| failed(Stage::Load)(format!("{}: {e}", s.path.display())))?;
+        tracker.stage.set(Stage::Preprocess);
+        works.push(preprocess_with(img, &flat, SourceTransfer::of(&info)));
+    }
+    stop()?;
+    let src = (works[0].img.width, works[0].img.height);
+    let faces: [Rgba32F; 6] = if cj.layout == CubeLayout::Faces {
+        if works
+            .iter()
+            .any(|w| (w.img.width, w.img.height) != (src.0, src.0))
+        {
+            return Err(failed(Stage::Load)(
+                "the six faces are not equal squares; re-run".into(),
+            ));
+        }
+        std::array::from_fn(|k| std::mem::replace(&mut works[k].img, Rgba32F::new(0, 0, [0.0; 4])))
+    } else {
+        layout::import_raw(
+            &works[0].img,
+            cj.layout,
+            &p.cubemap,
+            p.cubemap.layout.is_none(),
+        )
+        .map_err(failed(Stage::Preprocess))?
+    };
+    // Only `alpha_present` and `domain` are read at quantise.
+    let mut meta = works.swap_remove(0);
+    drop(works);
+    meta.img = Rgba32F::new(0, 0, [0.0; 4]);
+    let n = layout::face_size(p, cj.layout, src);
+    let cell = faces[0].width;
+    let mut cube = Cube { size: cell, faces };
+    if n < cell {
+        for f in &mut cube.faces {
+            *f = crate::mips::area_resample(f, (n, n), false);
+        }
+        cube.size = n;
+    } else if n > cell {
+        cube = sample::resample(&cube, n, |d| d);
+    }
+    filter::colour(&mut cube, &p.cubemap);
+    stop()?;
+
+    tracker.stage.set(Stage::Mipmaps);
+    let cube = sample::blur(&cube, p.cubemap.blur.unwrap_or(0.0));
+    let levels = crate::mips::level_count(n, n, &p.mips.levels) as usize;
+    let mut chain = sample::mip_chain(cube, levels);
+    if p.drop_top_mip && chain.len() > 1 {
+        chain.remove(0);
+    }
+    stop()?;
+    let one: Vec<(u32, u32)> = chain.iter().map(|c| (c.size, c.size)).collect();
+    let mut prep = Prepared {
+        first_level: 0,
+        dims: vec![],
+        chain: vec![],
+        domain: meta.domain,
+        inputs: vec![],
+        base_coverage: None,
+        source_peak: None,
+        detail_ratio: None,
+        faces: 6,
+    };
+    match keep {
+        Keep::Encode | Keep::Measure => {
+            prep.dims = (0..6).flat_map(|_| one.iter().copied()).collect();
+            if keep == Keep::Encode {
+                prep.inputs = (0..6)
+                    .flat_map(|f| chain.iter().map(move |c| (f, c)))
+                    .map(|(f, c)| to_encoder_input(&c.faces[f], &meta, p))
+                    .collect();
+            }
+        }
+        Keep::Preview { max_size } | Keep::SourceOnly { max_size } => {
+            // shortcut: preview shows +X only; the GUI step brings a cross preview.
+            prep.faces = 1;
+            prep.first_level = crate::session::first_level_within(&one, max_size);
+            prep.dims = one;
+            let pos_x: Vec<Rgba32F> = chain
+                .into_iter()
+                .skip(prep.first_level)
+                .map(|c| {
+                    let [f, ..] = c.faces;
+                    f
+                })
+                .collect();
+            if matches!(keep, Keep::Preview { .. }) {
+                prep.inputs = pos_x
+                    .iter()
+                    .map(|l| to_encoder_input(l, &meta, p))
+                    .collect();
+            }
+            prep.chain = pos_x;
+        }
+    }
+    Ok(prep)
+}

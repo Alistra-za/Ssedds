@@ -4,6 +4,7 @@ pub mod latlong;
 pub mod layout;
 pub mod plan;
 pub mod rgbe;
+pub(crate) mod run;
 pub mod sample;
 
 use crate::config::CubeLayout;

@@ -1,6 +1,7 @@
 //! Golden tests (spec §11.1): each case generates its fixtures, runs the full `Engine::plan` + `Engine::run` and
 //! asserts the format, `_SRGB` tag, header form, mip count, alpha-policy outcome and warning codes. Nothing is
 //! committed but this file and no byte hashes are asserted (those belong to the `pinned-isa` CI job).
+mod cube_support;
 use encoders_sys::Bc1Model;
 use engine::api::*;
 use engine::codes::{Code, Severity, Warning};
@@ -3688,4 +3689,244 @@ fn compact_coat_keeps_its_strength_alpha_as_bc7() {
         |x, _| (x * 4) as u8,
         8,
     );
+}
+
+// ---- Cubemap support v1, Task 8 (DECISIONS DN10): cube jobs end to end ----
+
+/// Decoded RGBA8 texels of every surface, face-major (+X..-Z, each face's whole chain).
+fn surfaces(f: &DdsFile) -> Vec<Vec<[u8; 4]>> {
+    f.surfaces()
+        .into_iter()
+        .map(
+            |(w, h, r)| match decode_level(f.format, w, h, &f.data[r], None).unwrap() {
+                Decoded::Ldr(px) => px,
+                Decoded::Hdr(_) => panic!("expected an LDR format"),
+            },
+        )
+        .collect()
+}
+
+/// Mip 0 of each face decodes to the arrow face (RGB PSNR above `min` dB); returns the lowest PSNR.
+fn assert_faces_in_order(f: &DdsFile, faces: &[Rgba32F; 6], min: f64) -> f64 {
+    assert!(f.is_cubemap);
+    let s = surfaces(f);
+    let per = f.mip_count as usize;
+    assert_eq!(s.len(), 6 * per);
+    let mut low = f64::MAX;
+    for (k, face) in faces.iter().enumerate() {
+        let q = engine::validate::psnr(&s[k * per], &cube_support::texels8(face), &[0, 1, 2]);
+        assert!(q > min, "face {k} mip 0: {q:.2} dB");
+        low = low.min(q);
+    }
+    low
+}
+
+fn put_faces(dir: &Path, prefix: &str, faces: &[Rgba32F; 6]) {
+    for (k, f) in engine::cube::FACES.iter().enumerate() {
+        put(
+            dir,
+            &format!("{prefix}_{f}.png"),
+            cube_support::png8(&faces[k]),
+        );
+    }
+}
+
+#[test]
+fn cube_six_faces_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    let faces = cube_support::arrow_faces(64);
+    put_faces(d.path(), "textures/a/chrome_e", &faces);
+    let o = convert(d.path(), Target::Cs, &[], &[]);
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    let f = dds(d.path(), "textures/a/chrome_e.dds");
+    assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 7);
+    assert_eq!((f.width, f.height), (64, 64));
+    assert!(validation_of(&o, "chrome_e_posx.png").passed);
+    let low = assert_faces_in_order(&f, &faces, 35.0);
+    eprintln!("cube_six_faces_bc7: lowest face mip 0 PSNR {low:.2} dB");
+}
+
+#[test]
+fn cube_hcross_bc1_legacy() {
+    let d = tempfile::tempdir().unwrap();
+    let cross = cube_support::hcross(&cube_support::arrow_faces(128));
+    put(
+        d.path(),
+        "textures/cubemaps/room.png",
+        cube_support::png8(&cross),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["file:**/room.png.cubemap.style=vanilla_metal"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/room.dds");
+    assert_dds(
+        &f,
+        DdsPixelFormat::Bc1 { srgb: false },
+        HeaderKind::Legacy,
+        6,
+    );
+    assert!(f.is_cubemap);
+    assert_eq!((f.width, f.height), (32, 32));
+    let bytes = std::fs::read(d.path().join("out/textures/cubemaps/room.dds")).unwrap();
+    assert_eq!(bytes.len(), 4304);
+}
+
+#[test]
+fn cube_vcross_rgba8() {
+    let d = tempfile::tempdir().unwrap();
+    let faces = cube_support::arrow_faces(64);
+    put(
+        d.path(),
+        "textures/cubemaps/v.png",
+        cube_support::png8(&cube_support::vcross(&faces, true)),
+    );
+    let o = convert(d.path(), Target::Cs, &["format=rgba8"], &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/v.dds");
+    assert_dds(
+        &f,
+        DdsPixelFormat::Bgra8 { srgb: false },
+        HeaderKind::Legacy,
+        7,
+    );
+    let s = surfaces(&f);
+    for (k, face) in faces.iter().enumerate() {
+        assert!(
+            s[k * 7] == cube_support::texels8(face),
+            "face {k} mip 0 differs"
+        );
+    }
+}
+
+#[test]
+fn cube_hstrip_bc3_keeps_alpha() {
+    let d = tempfile::tempdir().unwrap();
+    let mut faces = cube_support::arrow_faces(64);
+    for f in &mut faces {
+        for y in 0..64 {
+            for x in 0..64 {
+                f.at_mut(x, y)[3] = (x * 4) as f32 / 255.0;
+            }
+        }
+    }
+    put(
+        d.path(),
+        "textures/cubemaps/s.png",
+        cube_support::png8(&cube_support::hstrip(&faces)),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["format=bc3", "alpha.policy=data"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/s.dds");
+    assert_dds(
+        &f,
+        DdsPixelFormat::Bc3 { srgb: false },
+        HeaderKind::Legacy,
+        7,
+    );
+    let s = surfaces(&f);
+    for k in 0..6 {
+        for (i, p) in s[k * 7].iter().enumerate() {
+            let want = ((i as u32 % 64) * 4) as i32;
+            assert!(
+                (p[3] as i32 - want).abs() <= 4,
+                "face {k} texel {i}: alpha {} vs {want}",
+                p[3]
+            );
+        }
+    }
+}
+
+#[test]
+fn cube_dds_reencode() {
+    let d = tempfile::tempdir().unwrap();
+    let faces = cube_support::arrow_faces(64);
+    put_faces(d.path(), "textures/a/chrome_e", &faces);
+    let o = convert(d.path(), Target::Cs, &[], &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let cube = std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap();
+
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in/textures/cubemaps")).unwrap();
+    std::fs::write(d.path().join("in/textures/cubemaps/sky.dds"), &cube).unwrap();
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &[
+            "file:**/sky.dds.reencode=true",
+            "file:**/sky.dds.subtype=cubemap",
+            "file:**/sky.dds.cubemap.face_size=32",
+        ],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/sky.dds");
+    assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 6);
+    assert_eq!((f.width, f.height), (32, 32));
+    assert!(f.is_cubemap);
+    // Faces in order: the centre of each face keeps its colour.
+    let s = surfaces(&f);
+    for (k, face) in faces.iter().enumerate() {
+        let want = cube_support::texels8(face)[32 * 64 + 40];
+        let got = s[k * 6][16 * 32 + 20];
+        assert!(
+            (0..3).all(|c| (got[c] as i32 - want[c] as i32).abs() <= 8),
+            "face {k}: {got:?} vs {want:?}"
+        );
+    }
+}
+
+#[test]
+fn cube_vstrip_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    let faces = cube_support::arrow_faces(64);
+    put(
+        d.path(),
+        "textures/cubemaps/tall.png",
+        cube_support::png8(&cube_support::vstrip(&faces)),
+    );
+    let o = convert(d.path(), Target::Cs, &[], &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/cubemaps/tall.dds");
+    assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 7);
+    assert_eq!((f.width, f.height), (64, 64));
+    assert_faces_in_order(&f, &faces, 35.0);
+}
+
+/// The encode-versions guard (`encode_versions.rs`) re-pins every sub-type's encode input and fails a changed hash
+/// unless that sub-type's `encode_version` arm was bumped. Every 2D arm staying at the released version is what makes
+/// it fail on any 2D change; only the cube arm moved (DECISIONS DN6, DN10).
+#[test]
+fn two_d_outputs_unchanged() {
+    use engine::manifest::{encode_version, RELEASED_ENGINE_VERSION};
+    let pins: BTreeMap<String, serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/encode_versions/encode_inputs.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for (key, pin) in &pins {
+        let st: engine::config::Subtype = serde_json::from_value(pin["subtype"].clone()).unwrap();
+        if st != engine::config::Subtype::Cubemap {
+            assert_eq!(
+                encode_version(st),
+                RELEASED_ENGINE_VERSION,
+                "{key}: a 2D arm was bumped"
+            );
+        }
+    }
 }

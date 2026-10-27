@@ -10,7 +10,7 @@ use crate::api::{BatchRequest, CancelToken, LowDetailMode};
 use crate::bake::NormalVariance;
 use crate::config::{Backend, Format, Profile, Subtype};
 use crate::coverage::{coverage_fraction, preserve_coverage};
-use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
+use crate::dds::{dds_bytes, dds_bytes_cube, resolve_header, write_atomic, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
 use crate::events::{EventKind, Reporter, Stage};
 use crate::image::Rgba32F;
@@ -175,6 +175,8 @@ pub(crate) struct Prepared {
     pub source_peak: Option<f32>,
     /// Check 3's ratio, when measuring was asked for and the texture is eligible.
     pub detail_ratio: Option<f64>,
+    /// 6 for an encode or measure of a cube job (`dims` and `inputs` face-major), else 1.
+    pub faces: usize,
 }
 
 /// Source stamps (final review I7): the plan's decisions (alpha policy, sub-type facts, ...) hold only for the
@@ -274,6 +276,13 @@ fn prepare_then<T>(
         check_stamps(job)?;
     }
     let extra = after_stamps()?;
+    // DECISIONS DN10: a cube job builds its faces and mips in direction space.
+    if let Some(cj) = &job.cube {
+        return Ok((
+            crate::cube::run::prepare(job, cj, keep, cancel, tracker)?,
+            extra,
+        ));
+    }
     // Spec §6.2–6.3 (DECISIONS R4): a roughness member decodes its `_n` first and keeps only the footprint lengths,
     // so the two images are never held together.
     let lengths = match &job.bake {
@@ -407,6 +416,7 @@ fn prepare_then<T>(
             base_coverage,
             source_peak,
             detail_ratio,
+            faces: 1,
         },
         extra,
     ))
@@ -617,7 +627,8 @@ pub fn process_file(
 
     enter(Stage::Compress);
     let levels = encode_levels(&prep, p, cancel, rep, &key, set, path, nvtt)?;
-    let total = prep.inputs.len() as u32;
+    // Mips per face: the header's count.
+    let total = (prep.inputs.len() / prep.faces) as u32;
 
     enter(Stage::Write);
     let srgb = p.srgb_tag();
@@ -628,7 +639,12 @@ pub fn process_file(
         srgb,
         header: resolve_header(p.format, srgb, p.header),
     };
-    let bytes = dds_bytes(&desc, &levels).map_err(|e| fail(Stage::Write)(e.to_string()))?;
+    let bytes = if prep.faces == 6 {
+        dds_bytes_cube(&desc, &levels)
+    } else {
+        dds_bytes(&desc, &levels)
+    }
+    .map_err(|e| fail(Stage::Write)(e.to_string()))?;
     drop(levels);
 
     // Validate the exact bytes about to be written: `validate` parses them with the engine's DDS reader (spec §5.8).
@@ -647,7 +663,7 @@ pub fn process_file(
     // Test hook (Note DM, `test-hooks` only): record this output's encode-input hash for the encode-version guard.
     #[cfg(feature = "test-hooks")]
     if let Some(dir) = std::env::var_os("SDC_TEST_ENCODE_INPUT_DIR") {
-        let header = crate::dds::header_bytes(&desc, total).expect("header");
+        let header = crate::dds::header_bytes_with(&desc, total, prep.faces == 6).expect("header");
         let sha256 = encode_input_sha256(&header, &prep.inputs, p, report.summary.passed);
         let json = serde_json::json!({ "subtype": p.subtype.id(), "sha256": sha256 });
         let file = Path::new(&dir).join(format!("{}.json", key.replace('/', "~")));
