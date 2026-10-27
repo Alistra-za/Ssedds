@@ -3103,6 +3103,7 @@ Three small changes to Generate from normal map (Note CO) and to the warning a s
 - DQ1. Setting the Diffuse-slot member's sub-type to `skin_albedo` also sets `packing.recipe = "rfaos"` on the set's packed output (`set_packing_recipe`), in the same undo step. Before, the set became Advanced skin but kept packing `_rmaos`. Picking RFAOS on the packed card already did the reverse (it moves the diffuse to `skin_albedo`).
 - DQ2. A set that cannot build `_rfaos` (metallic-only sources, `PACK-RECIPE-UNBUILDABLE`) still takes the sub-type and keeps `_rmaos`.
 - DQ3. It works both ways (owner, same day): taking the diffuse off `skin_albedo` to another sub-type sets `packing.recipe = "rmaos"` on the set's packed `_rfaos`, in the same undo step. A reset of the diffuse's sub-type changes no recipe, because it falls back to the engine's suggestion, which is `skin_albedo` again while the set packs `_rfaos`. A pre-packed `_rfaos` file (not a packed output) is never touched.
+
 ## Note DR — A skin _f fills the RFAOS fuzz mask (owner, 2026-10-27)
 
 The letter DR is provisional; rename at merge if taken.
