@@ -1,6 +1,9 @@
 //! Cube-map maths shared by the 3D preview and the cubemap pipeline (moved from render3d, Note DN1).
 pub mod latlong;
 pub mod rgbe;
+pub mod sample;
+
+use crate::image::Rgba32F;
 
 /// Face names in D3D order (+X -X +Y -Y +Z -Z).
 pub const FACES: [&str; 6] = ["posx", "negx", "posy", "negy", "posz", "negz"];
@@ -21,6 +24,53 @@ pub fn cube_dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
     };
     let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
     d.map(|c| c / n)
+}
+
+/// Six square faces (+X -X +Y -Y +Z -Z), each `size` x `size`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cube {
+    pub size: u32,
+    pub faces: [Rgba32F; 6],
+}
+
+/// Unit direction at continuous face coordinates `s, t` in `[0, 1]` (same addressing as `cube_dir`; values outside
+/// `[0, 1]` extend the face plane past its edge).
+pub fn dir_at(face: usize, s: f32, t: f32) -> [f32; 3] {
+    let (u, v) = (2.0 * s - 1.0, 1.0 - 2.0 * t);
+    let d = match face {
+        0 => [1.0, v, -u],
+        1 => [-1.0, v, u],
+        2 => [u, 1.0, -v],
+        3 => [u, -1.0, v],
+        4 => [u, v, 1.0],
+        _ => [-u, v, -1.0],
+    };
+    let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    d.map(|c| c / n)
+}
+
+/// Inverse of `dir_at`: the face of the major axis (ties go to X, then Y), then `s, t` in `[0, 1]`.
+pub fn dir_to_face(d: [f32; 3]) -> (usize, f32, f32) {
+    let [x, y, z] = d;
+    let (ax, ay, az) = (x.abs(), y.abs(), z.abs());
+    let (face, u, v) = if ax >= ay && ax >= az {
+        if x > 0.0 {
+            (0, -z / ax, y / ax)
+        } else {
+            (1, z / ax, y / ax)
+        }
+    } else if ay >= az {
+        if y > 0.0 {
+            (2, x / ay, -z / ay)
+        } else {
+            (3, x / ay, z / ay)
+        }
+    } else if z > 0.0 {
+        (4, x / az, y / az)
+    } else {
+        (5, -x / az, y / az)
+    };
+    (face, (u + 1.0) * 0.5, (1.0 - v) * 0.5)
 }
 
 #[cfg(test)]
