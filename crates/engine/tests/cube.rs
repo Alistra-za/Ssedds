@@ -821,3 +821,104 @@ fn cube_float_source_is_only_reencoded() {
         );
     }
 }
+
+// ---- Task 10: cube checks (DECISIONS DN12) ----
+
+/// A RGBA8 cube of `size` with `mips` levels per face (all texels `px`), as written by Task 2's writer.
+fn cube_dds(
+    size: u32,
+    mips: u32,
+    srgb: bool,
+    hdr: engine::dds::ResolvedHeader,
+    px: [u8; 4],
+) -> engine::dds::DdsFile {
+    use engine::dds::*;
+    let d = DdsDesc {
+        width: size,
+        height: size,
+        format: Format::Rgba8,
+        srgb,
+        header: hdr,
+    };
+    let mut levels = vec![];
+    for _ in 0..6 {
+        let mut s = size;
+        for _ in 0..mips {
+            levels.push(px.repeat((s * s) as usize));
+            s = (s / 2).max(1);
+        }
+    }
+    read_dds(&dds_bytes_cube(&d, &levels).unwrap()).unwrap()
+}
+
+#[test]
+fn cube_checks() {
+    use engine::cube::checks::inspect_issues;
+    use engine::dds::ResolvedHeader::{Dx10, Legacy};
+    let none = |p: &str, f| inspect_issues(p, &f);
+    let full = cube_dds(8, 4, false, Legacy, [9, 9, 9, 255]);
+    assert!(none("textures/a/x_e.dds", full).is_empty());
+    let mipless = cube_dds(8, 1, false, Legacy, [9, 9, 9, 255]);
+    assert_eq!(
+        none("textures/a/x_e.dds", mipless),
+        ["cube has no mips: curved surfaces will sparkle; re-encode it with a full chain"]
+    );
+    // +Y is face 2; a lit +X alone is the dynamic marker.
+    let lit = cube_dds(1, 1, false, Legacy, [0, 0, 8, 255]);
+    assert_eq!(
+        none("x_e.dds", lit),
+        ["1x1 cube with a non-black +Y: Community Shaders treats it as a static, near-black reflection, not a dynamic-cubemap marker"]
+    );
+    assert_eq!(
+        none("x_e.dds", cube_dds(8, 4, true, Dx10, [9, 9, 9, 255])),
+        ["cube uses an sRGB format; Community Shaders expects UNORM cubes"]
+    );
+    let flat = engine::dds::read_dds(
+        &engine::dds::dds_bytes(
+            &engine::dds::DdsDesc {
+                width: 4,
+                height: 4,
+                format: Format::Rgba8,
+                srgb: false,
+                header: Legacy,
+            },
+            &[vec![0; 64]],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let want = "2D texture where a cubemap is expected (the game reads _e and textures\\cubemaps\\ files as cubes)";
+    for p in ["Textures\\X_E.DDS", "textures/CubeMaps/sky.dds", "a/b_e"] {
+        assert_eq!(inspect_issues(p, &flat), [want], "{p}");
+    }
+    for p in [
+        "textures/a/x.dds",
+        "textures/a/x_e_n.dds",
+        "textures/cubemapsx/x.dds",
+    ] {
+        assert!(inspect_issues(p, &flat).is_empty(), "{p}");
+    }
+}
+
+#[test]
+fn our_cube_output_has_no_cube_issues() {
+    use engine::dds::read_dds;
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 32);
+    let (s, ev) = run(plan(d.path(), &[]));
+    assert_eq!(s.converted, 1, "{ev:#?}");
+    let f =
+        read_dds(&std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap()).unwrap();
+    assert!(f.is_cubemap);
+    assert!(engine::cube::checks::inspect_issues("textures/a/chrome_e.dds", &f).is_empty());
+}
+
+/// The marker's colour sits on +X and +Y stays black, so any --color reads as a dynamic marker (not a static cube).
+#[test]
+fn marker_reads_back_as_a_dynamic_marker() {
+    use engine::cube::marker::marker_bytes;
+    for rgb in [[0, 0, 0], [255, 197, 78]] {
+        let f = engine::dds::read_dds(&marker_bytes(rgb, 255)).unwrap();
+        assert!(engine::cube::checks::inspect_issues("textures/x_e.dds", &f).is_empty());
+    }
+}

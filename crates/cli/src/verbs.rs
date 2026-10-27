@@ -121,7 +121,7 @@ fn dds_info(path: &Path, model: Bc1Model) -> DdsInfo {
     DdsInfo::Info(DdsHeaderInfo {
         kind: DdsInfoKind::DdsInfo,
         schema: REPORT_SCHEMA,
-        path: path_s,
+        path: path_s.clone(),
         format,
         srgb,
         header: file.header_kind,
@@ -129,7 +129,10 @@ fn dds_info(path: &Path, model: Bc1Model) -> DdsInfo {
         height: file.height,
         mip_count: file.mip_count,
         cubemap: file.is_cubemap,
-        header_issues: check_header(&file),
+        header_issues: check_header(&file)
+            .into_iter()
+            .chain(engine::cube::checks::inspect_issues(&path_s, &file))
+            .collect(),
         mips,
     })
 }
@@ -526,6 +529,9 @@ fn infer_subtype(path: &Path, file: &DdsFile, target: Target, alpha_min: Option<
     let suffix = split_suffix_with(&stem, &BTreeMap::new()).suffix;
     let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let rel = PathBuf::from(path.file_name().unwrap_or_default());
+    if file.is_cubemap {
+        return Subtype::Cubemap;
+    }
     let alpha = if !carries_alpha(file.format) {
         AlphaContent::None
     } else if alpha_min.is_some_and(|m| m < VARYING_ALPHA_BELOW) {
@@ -718,6 +724,11 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
                 })
             }
         };
+        let mut report = report;
+        for m in engine::cube::checks::inspect_issues(&path_s, &file) {
+            report.warnings.push(Warning::new(Code::ValHeader, m));
+            report.summary.passed = false;
+        }
         let passed = report.summary.passed;
         let alpha_part = match policy {
             Some(p) if carries_alpha(file.format) => format!(", alpha {}", policy_id(p)),
