@@ -125,6 +125,32 @@ fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationR
     }
 }
 
+/// Test hook (Note DJ): SHA-256 of everything that decides a file's encoded bytes and validation verdict, so the
+/// encode-version guard pins it per sub-type without depending on ISA-specific encoder output. Covers the header,
+/// each level's quantised encoder input (length-prefixed), the resolved profile and the verdict.
+#[cfg(feature = "test-hooks")]
+fn encode_input_sha256(
+    header: &[u8],
+    inputs: &[EncoderInput],
+    p: &Profile,
+    passed: bool,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(header);
+    for level in inputs {
+        let bytes: Vec<u8> = match level {
+            EncoderInput::Ldr(px) => px.iter().flatten().copied().collect(),
+            EncoderInput::Hdr(px) => px.iter().flatten().flat_map(|v| v.to_le_bytes()).collect(),
+        };
+        h.update((bytes.len() as u64).to_le_bytes());
+        h.update(&bytes);
+    }
+    h.update(crate::manifest::sha256_json(p).expect("profile json"));
+    h.update([passed as u8]);
+    hex::encode(h.finalize())
+}
+
 /// What `prepare` keeps of the chain (M3a spec §6.5). `Encode` is the export: every mip is quantised, none of the
 /// float chain is kept. `Preview` and `SourceOnly` start at the first mip within `max_size`; `SourceOnly` stops
 /// before quantising. `Measure` (check 3's measure-only run, preflight K15) keeps nothing and always measures.
@@ -600,6 +626,15 @@ pub fn process_file(
         bc1_model: req.bc1_model,
         expected_levels: Some(total),
     });
+    // Test hook (Note DJ, `test-hooks` only): record this output's encode-input hash for the encode-version guard.
+    #[cfg(feature = "test-hooks")]
+    if let Some(dir) = std::env::var_os("SDC_TEST_ENCODE_INPUT_DIR") {
+        let header = crate::dds::header_bytes(&desc, total).expect("header");
+        let sha256 = encode_input_sha256(&header, &prep.inputs, p, report.summary.passed);
+        let json = serde_json::json!({ "subtype": p.subtype.id(), "sha256": sha256 });
+        let file = Path::new(&dir).join(format!("{}.json", key.replace('/', "~")));
+        std::fs::write(file, json.to_string()).expect("encode input hook");
+    }
     drop(prep);
     #[cfg(feature = "test-hooks")]
     force_validation_failure_for_test(job, &mut report);
