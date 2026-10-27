@@ -541,10 +541,15 @@ pub fn plan_packing(
     let mut consumed: BTreeSet<PathBuf> = BTreeSet::new();
     let mut heads = vec![];
     // Audit EP-5 (Note BJ): the waiting raw inputs, collected once; `jobs` does not change until the planning loop.
-    let waiting: BTreeSet<PathBuf> = jobs
+    // Note DR: the role comes from the job too, because a skin `_f` has no file-name role.
+    // shortcut: a failed or cancelled skin `_f` has no job status, so it is not seen as a fuzz input; fine because
+    // the recipe it would join is then failed or unbuilt anyway.
+    let waiting: BTreeMap<PathBuf, RawMap> = jobs
         .iter()
-        .filter(|j| matches!(j.status, JobStatus::PackingInput { .. }))
-        .map(|j| j.input.clone())
+        .filter_map(|j| match j.status {
+            JobStatus::PackingInput { role } => Some((j.input.clone(), role)),
+            _ => None,
+        })
         .collect();
     for set in sets {
         // Raw members still waiting for a recipe: a planned packing input, or one that failed to load or was
@@ -554,8 +559,12 @@ pub fn plan_packing(
         let mut members: BTreeMap<PathBuf, &InputFile> = BTreeMap::new();
         for &i in &set.members {
             let f = &files[i];
-            let Some(role) = raw_role(f) else { continue };
-            if waiting.contains(&f.path) || failed.contains(&f.path) || cancelled.contains(&f.path)
+            let Some(role) = raw_role(f).or_else(|| waiting.get(&f.path).copied()) else {
+                continue;
+            };
+            if waiting.contains_key(&f.path)
+                || failed.contains(&f.path)
+                || cancelled.contains(&f.path)
             {
                 raw.push(RawInput {
                     path: f.path.clone(),

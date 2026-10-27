@@ -254,3 +254,56 @@ fn rfaos_on_a_metallic_and_fuzz_set_builds_rfaos_without_warning() {
     let c = conflicts(j, Code::PackRecipeUnbuildable);
     assert!(c.is_empty(), "{c:?}");
 }
+
+/// Note DR: in a set that is Advanced skin by other evidence (an explicit rfaos recipe), a `_f` is the fuzz mask.
+#[test]
+fn a_skin_f_fills_the_rfaos_g_channel_and_is_not_exported() {
+    let d = fixture(&["iron_roughness.png", "iron_ao.png", "iron_f.png"], RFAOS);
+    let p = plan(&d);
+    let j = packed(&p, "iron_rfaos.dds").expect("an _rfaos output");
+    match g(j) {
+        ChannelSource::Source { role, path, .. } => {
+            assert_eq!(*role, engine::config::RawMap::Fuzz);
+            assert!(path.ends_with("iron_f.png"), "{path:?}");
+        }
+        other => panic!("G is {other:?}"),
+    }
+    assert!(
+        !p.jobs.iter().any(|j| j.pack.is_none()
+            && j.output
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy() == "iron_f.dds")),
+        "no _f output job"
+    );
+}
+
+/// Note DR: `_f` alone never makes a set Advanced skin; it stays a PbrFuzz job beside the `_rmaos`.
+#[test]
+fn f_alone_does_not_make_a_set_advanced_skin() {
+    let d = fixture(&["iron_roughness.png", "iron_ao.png", "iron_f.png"], "");
+    let p = plan(&d);
+    assert!(packed(&p, "iron_rmaos.dds").is_some());
+    assert!(packed(&p, "iron_rfaos.dds").is_none());
+    let f = p
+        .jobs
+        .iter()
+        .find(|j| j.pack.is_none() && j.input.ends_with("iron_f.png"))
+        .expect("_f job");
+    assert_eq!(f.profile.subtype, engine::config::Subtype::PbrFuzz);
+}
+
+/// Note DR: a `_f` whose sub-type the user chose is converted alone even in a skin set.
+#[test]
+fn a_skin_f_with_a_chosen_sub_type_is_converted_alone() {
+    let d = fixture(
+        &["iron_roughness.png", "iron_ao.png", "iron_f.png"],
+        "[files.\"iron_rfaos\".packing]\nrecipe = \"rfaos\"\n[files.\"iron_f.png\"]\nsubtype = \"pbr_fuzz\"\n",
+    );
+    let p = plan(&d);
+    let j = packed(&p, "iron_rfaos.dds").expect("an _rfaos output");
+    assert_eq!(*g(j), ChannelSource::Default { value: 0.0 });
+    assert!(p
+        .jobs
+        .iter()
+        .any(|j| j.pack.is_none() && j.input.ends_with("iron_f.png")));
+}
