@@ -3837,7 +3837,7 @@ fn zoom_uv_stays_inside_the_texture() {
     assert!(near(zoom_uv(&z(4.0, 0.0, 1.0)), r(0.0, 0.75, 0.25, 1.0)));
     assert_eq!(PreviewZoom::default().zoom, 1.0);
     assert_eq!(PreviewZoom::default().centre, vec2(0.5, 0.5));
-    assert_eq!((TILE, ZOOM_MAX), (240.0, 16.0));
+    assert_eq!((TILE, ZOOM_MAX), (160.0, 16.0));
 }
 
 #[test]
@@ -3861,6 +3861,76 @@ fn a_wheel_over_a_tile_zooms_it_and_not_the_dialog() {
     assert_eq!(before.min.y, after.min.y, "the dialog body did not scroll");
 }
 
+#[test]
+fn a_wheel_down_over_a_tile_at_fit_scrolls_the_dialog_body() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = zoom_harness(d.path(), 520.0);
+    // Scroll the body a little, so there is room to move both ways.
+    wheel(&mut h, "Size", -20.0);
+    h.run_steps(3);
+    let before = h.get_by_label("Height preview").rect();
+    // Zoom out at fit changes nothing, so the wheel must reach the body.
+    wheel(&mut h, "Height preview", -20.0);
+    h.run_steps(3);
+    assert_eq!(zoom_of(&h).zoom, 1.0);
+    let after = h.get_by_label("Height preview").rect();
+    assert!(
+        after.min.y < before.min.y,
+        "the body scrolled: {before:?} -> {after:?}"
+    );
+}
+/// Strength and the Height tile are inside the dialog body's visible part at once (final review, Important 2).
+/// With Height alone the whole tile fits at 800 pt. With AO (and Curvature) ticked the options grow, and the 160 pt
+/// tile row is cut at the fold (measured: 10 pt for Height + AO, 50 pt for all three at 1100x800): Strength stays in
+/// view and more than half of each tile shows. Set `SDC_GEN_SHOTS` to a folder to also save the PNGs.
+#[test]
+fn the_controls_and_the_tiles_are_visible_together() {
+    use egui_kittest::kittest::Queryable;
+    for (w, hgt) in [(1100.0, 800.0), (1280.0, 800.0), (1600.0, 900.0)] {
+        for ticks in [
+            &[][..],
+            &[GenMap::Ao][..],
+            &[GenMap::Ao, GenMap::Curvature][..],
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let mut m = relief_rock(d.path());
+            std::fs::remove_file(land(d.path()).join("rock01_ao.png")).unwrap();
+            reopen(&mut m, d.path());
+            m.open_gen(ROCK_SET, Some(GenMap::Height));
+            for &t in ticks {
+                m.gen_tick(t, true);
+            }
+            let mut h = gen_harness(m, w, hgt);
+            h.run_steps(3);
+            assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+            h.run_steps(5);
+            if let Ok(dir) = std::env::var("SDC_GEN_SHOTS") {
+                let img = h.render().expect("render");
+                let name = format!("generate-{w}x{hgt}-{}maps.png", ticks.len() + 1);
+                img.save(Path::new(&dir).join(name)).expect("save png");
+            }
+            let strength = h.get_by_label("Strength").rect();
+            let tile = h.get_by_label("Height preview").rect();
+            let top = h.get_by_label("Generate from normal map").rect().max.y;
+            let bottom = top + hgt * 0.6;
+            let ctx = format!(
+                "{} maps at {w}x{hgt}, body {top}..{bottom}",
+                ticks.len() + 1
+            );
+            assert!(
+                strength.min.y >= top && strength.max.y <= bottom,
+                "Strength {strength:?} outside the body: {ctx}"
+            );
+            let need = if ticks.is_empty() {
+                tile.max.y
+            } else {
+                tile.center().y
+            };
+            assert!(need <= bottom, "Height tile {tile:?} below the fold: {ctx}");
+        }
+    }
+}
 #[test]
 fn the_zoom_survives_a_new_preview() {
     let d = tempfile::tempdir().unwrap();

@@ -30,7 +30,7 @@ pub const AO_INTENSITY_HOVER: &str =
     "the file holds raw visibility; CS applies AO to indirect light itself. 0.7–1.0 is a good range";
 
 /// The preview tile's side in points.
-pub const TILE: f32 = 240.0;
+pub const TILE: f32 = 160.0;
 pub const ZOOM_MAX: f32 = 16.0;
 const ZOOM_HOVER: &str = "Wheel: zoom · drag: pan · double-click: fit";
 
@@ -362,7 +362,9 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
             if r.hovered() {
                 let (dy, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
                 let f = 1.0015f32.powf(dy) * pinch;
+                let mut used = false;
                 if let (true, Some(ptr)) = (f != 1.0, r.hover_pos()) {
+                    let was = z.zoom;
                     // Keep the UV under the pointer under the pointer.
                     let uv = uv0;
                     let frac = (ptr - r.rect.min) / r.rect.size();
@@ -370,10 +372,14 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
                     z.zoom = (z.zoom * f).clamp(1.0, ZOOM_MAX);
                     let s = 1.0 / z.zoom;
                     z.centre = under - frac * s + egui::vec2(s, s) * 0.5;
+                    used = z.zoom != was;
                 }
                 // The enclosing ScrollArea reads the delta after its content (scroll_area.rs `end`), so this stops it.
                 // (0.36.2 has no raw_scroll_delta field; the area reads only `smooth_scroll_delta`.)
-                ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+                // At fit (wheel out) or at ZOOM_MAX (wheel in) nothing zoomed, so the wheel scrolls the body.
+                if used {
+                    ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+                }
             }
             if r.dragged() {
                 z.centre -= r.drag_delta() / r.rect.size() / z.zoom;
