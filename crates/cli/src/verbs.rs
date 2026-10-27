@@ -1184,11 +1184,11 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
     Ok(exit)
 }
 
-/// `sdc cubemap-marker`: 0 written, 1 kept (a file Tessalith did not write, or a failed write), 2 usage.
+/// `sdc cubemap-marker`: 0 written, 1 kept (a file Tessalith did not write), 2 usage, 3 write failed.
 pub fn cubemap_marker(a: MarkerArgs) -> Result<i32, EngineError> {
     use engine::cube::marker::{alpha_of, write_marker};
     let alpha = alpha_of(a.roughness).map_err(EngineError::Usage)?;
-    match write_marker(&a.out, a.color, alpha) {
+    match write_marker(&a.out, a.color, alpha).map_err(EngineError::Fatal)? {
         Ok(()) => {
             out!("wrote {}", a.out.display());
             Ok(0)

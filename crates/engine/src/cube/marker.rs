@@ -29,14 +29,18 @@ pub fn alpha_of(roughness: Option<f64>) -> Result<u8, String> {
     }
 }
 
-/// Writes the marker, keeping a file Tessalith did not write; the error text is the reason.
-pub fn write_marker(path: &Path, rgb: [u8; 3], alpha: u8) -> Result<(), String> {
+/// Writes the marker. `Ok(Ok(()))` written; `Ok(Err(note))` kept (a file Tessalith did not write, or an
+/// unreadable one); `Err(msg)` the write itself failed.
+pub fn write_marker(path: &Path, rgb: [u8; 3], alpha: u8) -> Result<Result<(), String>, String> {
     let bytes = marker_bytes(rgb, alpha);
-    may_replace(path, &bytes, |b| {
+    if let Err(k) = may_replace(path, &bytes, |b| {
         b.len() == 152 && read_dds(b).is_ok_and(|f| f.is_cubemap && f.width == 1)
-    })
-    .map_err(|k| k.note(path))?;
-    write_atomic(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+    }) {
+        return Ok(Err(k.note(path)));
+    }
+    write_atomic(path, &bytes)
+        .map(Ok)
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(test)]

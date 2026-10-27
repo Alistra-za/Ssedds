@@ -58,5 +58,23 @@ fn cli_writes_a_marker_and_keeps_foreign_files() {
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(2));
+    for bad in ["1,2", "1,2,300"] {
+        let o = sdc()
+            .args(["cubemap-marker", "--color", bad, "-o"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(2), "--color {bad}");
+    }
+
+    // write_atomic creates missing folders, so make the parent a plain file to force an I/O failure.
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let o = sdc()
+        .args(["cubemap-marker", "-o"])
+        .arg(blocker.join("x_e.dds"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(3));
     let _ = std::fs::remove_dir_all(&dir);
 }
