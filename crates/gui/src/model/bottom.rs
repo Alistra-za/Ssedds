@@ -1,7 +1,7 @@
 //! The bottom panel's state (layout v2 A1, A9; R7, R8): which tab shows, and whether the panel is open.
 use super::items::Decision;
 use super::{checks, counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -336,14 +336,24 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         // K2: an engine CHK-* row is a check row and follows its switch. The switches are not in `ProblemsKey`:
         // a switch change reaches this build through `refresh_checks`' `invalidate_views()`.
         let on = &m.settings.checks;
+        // Note DP4: the live item row is the current truth and carries the fix, so a same-code copy of it from
+        // the last export is dropped. Only when the job maps to exactly one item (None = several share a job_key).
+        // Built once, and only when some export row has a counted warning (no per-row scan of all items).
+        let mut owners: Option<HashMap<&str, Option<&super::items::TextureItem>>> = None;
         for r in &m.export.rows {
-            // Note DP4: the live item row is the current truth and carries the fix, so a same-code copy of it from
-            // the last export is dropped. Only when the job maps to exactly one item (several share a job_key).
-            let mut owners = m.items.iter().filter(|i| i.job_key == r.job_key);
-            let live = match (owners.next(), owners.next()) {
-                (Some(i), None) => Some(i),
-                _ => None,
-            };
+            if !r.warnings.iter().any(counts_toward_badge) {
+                continue;
+            }
+            let owners = owners.get_or_insert_with(|| {
+                let mut map = HashMap::new();
+                for i in &m.items {
+                    map.entry(i.job_key.as_str())
+                        .and_modify(|e| *e = None)
+                        .or_insert(Some(i));
+                }
+                map
+            });
+            let live = owners.get(r.job_key.as_str()).copied().flatten();
             // P11 (owner answer 2): Info stays on the row's hover, as for item and set rows (`DERIVE-*` included).
             for w in r.warnings.iter().filter(|w| counts_toward_badge(w)) {
                 if live.is_some_and(|i| {
