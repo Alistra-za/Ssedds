@@ -39,7 +39,7 @@ float4 ps(VsOut i) : SV_Target
     // The view-projection is camera-relative (no translation), so the far-plane point is the world direction.
     float4 h = mul(InvViewProj, float4(i.ndc, 1.0, 1.0));
     float3 d = normalize(h.xyz / h.w);
-    float u = frac((atan2(d.y, d.x) + YAW - Flags.y) / 6.2831853 + 0.5);
+    float u = frac(0.5 - (atan2(d.y, d.x) + YAW - Flags.y) / 6.2831853);
     float v = acos(clamp(d.z, -1.0, 1.0)) / 3.1415927;
     float3 c = Env.SampleLevel(Smp, float2(u, v), 0).rgb;
     // Flags.x: the readback does not sRGB-encode, so give it display values.

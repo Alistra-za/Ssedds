@@ -3011,6 +3011,49 @@ Written as Note DF; renamed DI at the rebase onto main 60b8db78 (main's DF is th
 - **DG20 Task 7 additions.** (a) The "Alpha is transparency" box sits directly under Discard transparency, is unticked at first, and is greyed on an opaque image, with Discard transparency ticked, and for BC1, BC4, BC5 and BC6H; it is editable for BC3, BC7, RGBA8 and RGBA16F on an image with transparent pixels. (b) Ticking it on such an image greys the filter at Box and shows Custom; unticking restores both (DH6). (c) Reset (DG11) covers this control: after Reset to Initial Values and Reset to Factory Defaults the box is unticked and the Preset list shows the matching seed, and picking Custom afterwards stays on Custom. (d) Re-saving with Overwrite (DG9) uses the remembered `alpha-mode` like the other values.
 - **DG21 Final review follow-ups (controller, 2026-10-26).** `gimp\tests\run.ps1` now restores `TESSALITH_PSDDS_DLL` on exit (closes DG16's leak item and makes DG1 true); the package's engine-MIT check can now fail; a type switch in the dialog frees the first pixel read before the second. Known limit, not measured: data maps (Normal, Linear mask) are read with bare babl names, which assume sRGB primaries, so an image carrying a non-sRGB colour profile may be colour-converted on read. Upgrade if a user reports it: drop the profile on the plug-in's own copy for data types before reading.
 
+## Note DJ — Multi-layer parallax flag on an Environment Map shader (NIF session, 2026-10-27)
+
+- **DJ1 (in-game finding).** Sphere `ShaderSpheres01:9` was changed from type 11 to type 1 (Environment Map) with SLSF2 bit 24 (Multi_Layer_Parallax) left set and no PBR bit. The game crashed the first time it drew it: an access violation under CS `PBR_BSLightingShader_SetupMaterial`, reading through a pointer of 0x3F800000 (1.0f, the Envmap material's env scale).
+  - The A/B rerun cleared only bit 24 and kept the shape's two U/V offset float controllers. It drew and did not crash.
+  - Record: `nifparseref\plan\cubemap-up-axis\results.md`.
+- **DJ2 (validator).** Bit 24 without bit 23 on a drawn type-1 shader is an Error in `ALWAYS_BLOCK` (`MLP_ENV_MAP`), with a fix that clears the bit.
+  - With bit 23 set, bit 24 is the CS two-layer coat, so it is left alone.
+  - Other non-11 types keep the existing Warn: only type 1 is confirmed (`shortcut:` comment in `validate.rs`).
+- **DJ3 (type change).** Changing the shader type away from 11 clears bit 24 in the same undo step, with a notice (`type_slsf2_fix`), unless PBR is on. This applies to every target type, because without type 11 the flag does nothing (the existing Warn).
+- **DJ4.** The controllers are not guarded: the A/B cleared them of blame. `set_shader_type` stays a pure re-emit, so the ops stay explicit.
+## Note DK — Shader-type-bound flags: multi-layer parallax on every type, hair soft lighting, glow map on eyes (owner, 2026-10-27)
+
+- **DK1 (owner).** The Note DJ crash most likely applies to every shader type but 11, not only type 1. With PBR off, SLSF2 bit 24 on any drawn non-11 shader is now an `ALWAYS_BLOCK` Error (`MLP_TYPE`, renamed from DJ's `MLP_ENV_MAP`), with the clear-bit fix. The DJ2 `shortcut:` is gone. With PBR on, the bit is the two-layer coat and keeps the old Warn.
+- **DK2 (owner).** SLSF1 bit 18 Hair_Soft_Lighting off shader type 6 (Hair Tint) draws nothing: no crash, the shape is invisible. It joins the Note CS type-bound flags in `type_flag_errors`:
+  - an `ALWAYS_BLOCK` Error (`HAIR_SOFT_TYPE`) with a clear-bit fix;
+  - cleared on a type change off 6, with a notice;
+  - the checkbox greyed off type 6 (`type_flag_lock`).
+- **DK3 (owner).** Two eye flag mix-ups get a Warn with a clear-bit fix, and never block:
+  - The Eye shader (16) has no glow map, so SLSF2 bit 6 there is benign but misleading (`GLOW_ON_EYE`).
+  - SLSF1 bit 17 Eye_Environment_Mapping off type 16 is bad practice (`EYE_ENV_TYPE`). The common case is setting it instead of Environment_Mapping (bit 7) on an Environment Map shader.
+- **DK4 (index).** Flags per shader type were counted over drawn lighting shaders: vanilla (`SkyrimMeshesExtract`, 22,047 NIFs) plus every mod's loose meshes in the owner's install (87,263 NIFs), 426,197 shaders in all. Findings:
+  - **Bit 24, PBR off:** only on type 11 (4,076).
+  - **Bit 18:** on type 6 (78,329), plus 4 type-0 shaders, all one wig shape: `Modpocalypse NPCs - Resources`, `KSWigsHDT\f\{,Elves\}RosetteRoses_{0,1}.nif`. DK2 blocks re-exporting them until they are fixed.
+  - **Glow map on an eye:** one file, Vigilant facegen `0019EB97.NIF`.
+  - **Eye env mapping off type 16:** one type-1 shader, FEC `Clutter\PO3_FEC\Shock\BodyParts\f_khajiit2.nif`.
+  - **Not ruled (no evidence of an effect), so not guarded:**
+    - SLSF1 11 Parallax off type 3 (5 shaders);
+    - SLSF2 6 Glow_Map on types 0 and 1 (41 shaders).
+  - **Everything else:** every other flag appears across many types. Cells that are empty only because a type is rare (type 14 has 23 shaders) are not treated as rules.
+  - **Reverse rules:** "type needs flag" is not added. Types 2, 3, 6 and 16 each have some shaders without their usual flag.
+## Note DL — The preview's panorama mapping runs clockwise, like a 360° photo (NIF team, owner-directed, 2026-10-27)
+
+- **DL1 (in-game finding).** `hdri::dir_to_uv` had `u` grow counter-clockwise seen from above (east, then north). A normal 360° photo runs the other way.
+  - A cube made with that mapping showed a panorama's N sector on world south in game, while E and W were correct (`nifparseref\plan\cubemap-up-axis\results.md`, "Second check").
+  - So the preview's backdrop, ambient and env cube showed the bundled studio HDRI mirrored.
+- **DL2.** The mapping is now `u = 0.5 − (atan2(y, x) + YAW) / 2π`, and `uv_to_dir` inverts it.
+  - This is used by `dir_to_uv`, `uv_to_dir`, `cube_faces` and the backdrop shader, one definition as before.
+  - The yaw sense is unchanged: a feature at azimuth φ shows at φ + yaw.
+  - Test: `moving_right_in_the_image_turns_clockwise`.
+- **DL3.** `YAW` goes from −2.798 to 0.774 (= −2·atan2(0.8, 0.5) + 2.798), so the HDRI's key light stays at the default sun's azimuth. `studio_key_light_faces_the_default_sun` holds unchanged.
+- **DL4 (tests).** The mirrored sky gives env-cube averages whose sums are not exact halves. WARP stores those rounded toward zero, not to nearest. The composite tests' `assert_store` now accepts nearest-even or toward-zero on every channel, where before it allowed toward-zero only on exact ties. D3D11 allows either rounding for a float-to-f16 store, and the two forward DC tests go through it too.
+- **DL5 (for the main team).** The cubemap plan's equirect importer uses this same lat-long definition at yaw 0 (centre column = east), so it inherits the clockwise sense. The owner is directing the plan fix.
+
 ## Note DL — Per-type encode versions for if-changed (owner, 2026-10-26)
 
 The letter DL is provisional (DJ and DK are taken on nif/main as of 2026-10-27); rename at merge if taken.

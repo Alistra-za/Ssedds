@@ -480,13 +480,15 @@ fn untouched_source_errors_are_not_new() {
 const NEEDS_MLP: &str =
     "Shader type 11 needs the Multi_Layer_Parallax flag (SLSF2 24) without PBR.";
 const MLP_NOT_11: &str = "Multi_Layer_Parallax (SLSF2 24) is set but the shader type is not 11.";
+const MLP_TYPE: &str = nif::edit::validate::MLP_TYPE;
 const FIT_SLOPE: &str = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
 
 fn slsf_scene(shader_type: u32, slsf2: u32) -> Vec<Warning> {
-    let trailer: &[f32] = if shader_type == 11 {
-        &[5.0, 1.0, 1.0, 1.0, 1.0]
-    } else {
-        &[]
+    let trailer: &[f32] = match shader_type {
+        11 => &[5.0, 1.0, 1.0, 1.0, 1.0],
+        1 => &[1.0],
+        16 => &[1.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        _ => &[],
     };
     let b = put(
         scenes::lsp_shape(shader_type, trailer),
@@ -514,19 +516,112 @@ fn slsf_type_11_without_mlp_flag_warns_when_not_pbr() {
 
 #[test]
 fn slsf_mlp_flag_on_other_type_warns() {
-    for (t, f2) in [(0, 1 << 24), (0, (1 << 24) | (1 << 23))] {
-        let x = only(&slsf_scene(t, f2), MLP_NOT_11, Level::Warn);
-        assert_eq!(
-            x.target,
-            Target::Field {
-                block: 1,
-                field: Field::Slsf2
-            }
-        );
-    }
+    // without PBR it is the Note DK error instead
+    let x = only(
+        &slsf_scene(0, (1 << 24) | (1 << 23)),
+        MLP_NOT_11,
+        Level::Warn,
+    );
+    assert_eq!(
+        x.target,
+        Target::Field {
+            block: 1,
+            field: Field::Slsf2
+        }
+    );
     none(&slsf_scene(11, 1 << 24), MLP_NOT_11);
 }
 
+#[test]
+fn slsf_mlp_flag_off_type_11_is_an_error_with_a_fix() {
+    // Note DJ: Environment Map with SLSF2 24 (no PBR) crashed in game; cleared, it drew fine. Note DK: every type.
+    for t in [0, 2, 4] {
+        only(&slsf_scene(t, 1 << 24), MLP_TYPE, Level::Error);
+        none(&slsf_scene(t, 1 << 24), MLP_NOT_11);
+    }
+    let w = slsf_scene(1, (1 << 24) | 1);
+    let x = only(&w, MLP_TYPE, Level::Error);
+    match x.fix {
+        Some(Op::SetBits {
+            field: Field::Slsf2,
+            mask,
+            value: 0,
+            base,
+            ..
+        }) => assert_eq!((mask, base), (1 << 24, (1 << 24) | 1)),
+        ref f => panic!("{f:?}"),
+    }
+    none(&w, MLP_NOT_11);
+    // a source that already has it still blocks export
+    assert_eq!(new_errors(&w, &w).len(), 1);
+    // PBR: bit 24 is the two-layer coat
+    none(&slsf_scene(1, (1 << 24) | (1 << 23)), MLP_TYPE);
+    none(&slsf_scene(11, 1 << 24), MLP_TYPE);
+}
+
+#[test]
+fn glow_map_on_an_eye_shader_warns_with_a_fix() {
+    use nif::edit::validate::GLOW_ON_EYE;
+    let w = slsf_scene(16, 1 << 6);
+    let x = only(&w, GLOW_ON_EYE, Level::Warn);
+    assert!(matches!(
+        x.fix,
+        Some(Op::SetBits {
+            field: Field::Slsf2,
+            mask: 64,
+            value: 0,
+            ..
+        })
+    ));
+    assert!(new_errors(&w, &w).is_empty(), "never blocks");
+    none(&slsf_scene(2, 1 << 6), GLOW_ON_EYE);
+}
+
+#[test]
+fn eye_env_mapping_off_the_eye_shader_warns_with_a_fix() {
+    use nif::edit::validate::EYE_ENV_TYPE;
+    let scene = |ty, trailer: &[f32]| {
+        warnings(&put(
+            scenes::lsp_shape(ty, trailer),
+            1,
+            Field::Slsf1,
+            Value::U32((1 << 17) | (1 << 7)),
+        ))
+    };
+    let w = scene(1, &[1.0]);
+    let x = only(&w, EYE_ENV_TYPE, Level::Warn);
+    assert!(matches!(
+        x.fix,
+        Some(Op::SetBits {
+            field: Field::Slsf1,
+            mask: 0x20000,
+            value: 0,
+            ..
+        })
+    ));
+    assert!(new_errors(&w, &w).is_empty(), "never blocks");
+    only(&scene(0, &[]), EYE_ENV_TYPE, Level::Warn);
+    none(
+        &scene(16, &[1.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        EYE_ENV_TYPE,
+    );
+}
+
+#[test]
+fn a_type_change_off_11_clears_the_mlp_flag() {
+    use nif::edit::validate::type_slsf2_fix;
+    assert_eq!(
+        type_slsf2_fix(1, (1 << 24) | 1).map(|f| (f.0, f.1)),
+        Some((1 << 24, 0))
+    );
+    assert_eq!(
+        type_slsf2_fix(0, 1 << 24).map(|f| (f.0, f.1)),
+        Some((1 << 24, 0))
+    );
+    assert_eq!(type_slsf2_fix(11, 1 << 24), None);
+    assert_eq!(type_slsf2_fix(1, 0), None);
+    assert_eq!(type_slsf2_fix(1, (1 << 24) | (1 << 23)), None, "PBR coat");
+}
 #[test]
 fn slsf_fit_slope_without_pbr_warns() {
     let x = only(&slsf_scene(0, 1 << 12), FIT_SLOPE, Level::Warn);
@@ -934,6 +1029,7 @@ const SKIN_TINT: &str =
     "Skin tint flag needs the Skin Tint shader type: the game crashes otherwise.";
 const FACEGEN_DETAIL: &str =
     "FaceGen detail flag needs the Face Tint or Skin Tint shader type: the mesh renders black otherwise.";
+const HAIR_SOFT: &str = nif::edit::validate::HAIR_SOFT_TYPE;
 const FACE_TINT: &str =
     "Face Tint shader type needs the FaceGen detail flag: the face renders wrong otherwise.";
 
@@ -957,6 +1053,8 @@ fn type_bound_flags_are_errors_with_a_one_click_fix_that_always_blocks() {
         (0, 1 << 10, FACEGEN_DETAIL, 0),
         (2, 1 << 10, FACEGEN_DETAIL, 0),
         (4, 0, FACE_TINT, 1 << 10),
+        (0, 1 << 18, HAIR_SOFT, 0),
+        (2, 1 << 18, HAIR_SOFT, 0),
     ] {
         let b = typed(ty, slsf1 | bits);
         let w = warnings(&b);
@@ -978,7 +1076,11 @@ fn type_bound_flags_are_errors_with_a_one_click_fix_that_always_blocks() {
         else {
             panic!("{x:#?}")
         };
-        let bit = if text == SKIN_TINT { 1 << 21 } else { 1 << 10 };
+        let bit = match text {
+            SKIN_TINT => 1 << 21,
+            HAIR_SOFT => 1 << 18,
+            _ => 1 << 10,
+        };
         assert_eq!(
             (field, mask, v, base),
             (Field::Slsf1, bit, value, slsf1 | bits)
@@ -1022,6 +1124,13 @@ fn a_type_change_fixes_the_flags_it_needs() {
     assert_eq!(f(5, 1 << 10), vec![]);
     assert_eq!(f(1, 1 << 10), vec![(1 << 10, 0)]);
     assert_eq!(f(5, 1 << 21), vec![]);
+    // Note DK: Hair_Soft_Lighting only on Hair Tint
+    assert_eq!(f(0, 1 << 18), vec![(1 << 18, 0)]);
+    assert_eq!(f(6, 1 << 18), vec![]);
+    use nif::edit::validate::{type_flag_lock, HAIR_SOFT_TYPE};
+    assert_eq!(type_flag_errors(1, 1 << 18)[0].2, HAIR_SOFT_TYPE);
+    assert!(type_flag_lock(0, 18).is_some());
+    assert!(type_flag_lock(6, 18).is_none());
     let notice: Vec<_> = type_flag_errors(0, 1 << 21)
         .into_iter()
         .map(|e| e.3)
