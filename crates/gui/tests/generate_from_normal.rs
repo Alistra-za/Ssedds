@@ -454,6 +454,16 @@ fn card_menu(h: &mut egui_kittest::Harness<'static, AppModel>, id: &str) {
 
 const GENERATE: &str = "Generate from normal map…";
 
+/// The open menu's entry. The set editor's Generate button has the same accessible name, but its text is the short
+/// "Generate…", so the menu entry is the widest match.
+fn menu_generate<'a>(
+    h: &'a egui_kittest::Harness<'static, AppModel>,
+) -> Option<egui_kittest::Node<'a>> {
+    use egui_kittest::kittest::Queryable;
+    h.query_all_by_label(GENERATE)
+        .find(|n| n.rect().width() > 120.0)
+}
+
 #[test]
 fn the_set_card_menu_offers_generate_with_its_reason() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -461,8 +471,8 @@ fn the_set_card_menu_offers_generate_with_its_reason() {
     let mut h = harness(pbr_opened_plain(d.path()));
     h.run();
     card_menu(&mut h, ROCK_SET);
-    assert!(!h.get_by_label(GENERATE).accesskit_node().is_disabled());
-    h.get_by_label(GENERATE).click();
+    assert!(!menu_generate(&h).unwrap().accesskit_node().is_disabled());
+    menu_generate(&h).unwrap().click();
     h.run_steps(3);
     assert_eq!(
         h.state().dialog,
@@ -472,13 +482,13 @@ fn the_set_card_menu_offers_generate_with_its_reason() {
     let g = h.state().gen.as_ref().expect("the dialog state");
     assert_eq!(g.set, ROCK_SET);
     assert!(g.ticked.is_empty(), "the set entry pre-ticks nothing");
-    assert!(h.query_by_label(GENERATE).is_none(), "the menu closed");
+    assert!(menu_generate(&h).is_none(), "the menu closed");
     h.key_press(eframe::egui::Key::Escape);
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
     // The leaf set has no normal: off, and the hover says why.
     card_menu(&mut h, LEAF_SET);
-    let b = h.get_by_label(GENERATE);
+    let b = menu_generate(&h).unwrap();
     assert!(b.accesskit_node().is_disabled());
     let r = b.rect();
     h.hover_at(r.center());
@@ -500,7 +510,7 @@ fn the_set_card_menu_offers_generate_with_its_reason() {
     let mut h = harness(m);
     h.run();
     card_menu(&mut h, ROCK_SET);
-    assert!(h.get_by_label(GENERATE).accesskit_node().is_disabled());
+    assert!(menu_generate(&h).unwrap().accesskit_node().is_disabled());
 }
 
 #[test]
@@ -3573,4 +3583,199 @@ fn provenance_is_parsed_once_per_revision() {
     m.confirm_delete_generated();
     idle(&mut m);
     assert!(m.provenance(P_KEY).is_none(), "a forgotten record is gone");
+}
+
+// ---- Generate button on the Height and RMAOS rows ----
+
+const GEN_NAME: &str = "Generate from normal map…";
+
+fn editor_of(mut m: AppModel) -> egui_kittest::Harness<'static, AppModel> {
+    select_rock(&mut m);
+    let mut h = harness(m);
+    h.run();
+    h
+}
+
+/// The set editor's slot row `label` (the leftmost match outside the Sets column).
+fn editor_row(h: &egui_kittest::Harness<'static, AppModel>, label: &str) -> eframe::egui::Rect {
+    use egui_kittest::kittest::Queryable;
+    h.query_all_by_label(label)
+        .map(|n| n.rect())
+        .filter(|r| !in_sets_column(h, *r))
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .unwrap_or_else(|| panic!("no editor row {label:?}"))
+}
+
+/// The Generate buttons (by accessible name) at or below row `label`'s top, nearest first.
+fn gen_buttons_below(
+    h: &egui_kittest::Harness<'static, AppModel>,
+    label: &str,
+) -> Vec<eframe::egui::Rect> {
+    use egui_kittest::kittest::Queryable;
+    let row = editor_row(h, label);
+    let mut v: Vec<_> = h
+        .query_all_by_label(GEN_NAME)
+        .map(|n| n.rect())
+        .filter(|r| {
+            r.min.y >= row.min.y - 2.0 && r.min.y < row.min.y + 70.0 && !in_sets_column(h, *r)
+        })
+        .collect();
+    v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+    v
+}
+
+#[test]
+fn the_height_row_has_a_generate_button_under_assign() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = editor_of(pbr_opened_plain(d.path()));
+    let assign = h
+        .query_all_by_label("Assign…")
+        .map(|n| n.rect())
+        .filter(|r| {
+            let row = editor_row(&h, "Height _p");
+            (r.center().y - row.center().y).abs() < 40.0
+        })
+        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .expect("the Height row's Assign…");
+    let btn = gen_buttons_below(&h, "Height _p")[0];
+    assert!(btn.min.y >= assign.max.y, "{btn:?} under {assign:?}");
+    assert!((btn.min.x - assign.min.x).abs() < 2.0, "{btn:?} {assign:?}");
+    h.get_all_by_label(GEN_NAME)
+        .find(|n| n.rect() == btn)
+        .unwrap()
+        .click();
+    h.run();
+    let g = h.state().gen.as_ref().expect("the Generate dialog opened");
+    assert!(g.ticked.contains(&GenMap::Height), "{:?}", g.ticked);
+}
+
+/// Pre-packed `_rmaos.png` as the set's only R/G/A source, flat B (so AO is offered).
+fn prepacked_rock(d: &Path) -> AppModel {
+    let mut m = ao_rock(d);
+    std::fs::remove_file(land(d).join("rock01_roughness.png")).unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([100u8, 0, 255]))
+        .save(land(d).join("rock01_rmaos.png"))
+        .unwrap();
+    reopen(&mut m, d);
+    m
+}
+
+fn rmaos_slot_kind(m: &AppModel) -> Option<sdc_gui::model::items::ItemKind> {
+    use sdc_gui::model::sets::{set_views, SlotFill};
+    let v = set_views(m).into_iter().find(|v| v.id == ROCK_SET)?;
+    match v.slots.get(&SlotKind::Rmaos)? {
+        SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => m.item(item).map(|i| i.kind),
+        SlotFill::Empty => None,
+    }
+}
+
+#[test]
+fn the_rmaos_row_has_the_button_unless_packed() {
+    use egui_kittest::kittest::Queryable;
+    use sdc_gui::model::items::ItemKind;
+    // A plain `_rmaos` image: the button opens Generate with AO ticked.
+    let d = tempfile::tempdir().unwrap();
+    let m = prepacked_rock(d.path());
+    assert_eq!(rmaos_slot_kind(&m), Some(ItemKind::Image));
+    let mut h = editor_of(m);
+    let btns = gen_buttons_below(&h, "RMAOS");
+    assert_eq!(btns.len(), 1, "{btns:?}");
+    h.get_all_by_label(GEN_NAME)
+        .find(|n| n.rect() == btns[0])
+        .unwrap()
+        .click();
+    h.run();
+    let g = h.state().gen.as_ref().expect("the Generate dialog opened");
+    assert!(g.ticked.contains(&GenMap::Ao), "{:?}", g.ticked);
+
+    // A packed RMAOS (the auto recipe's output): no button on its row.
+    let d = tempfile::tempdir().unwrap();
+    let m = ao_rock(d.path());
+    assert_eq!(rmaos_slot_kind(&m), Some(ItemKind::Packed));
+    let h = editor_of(m);
+    assert!(
+        gen_buttons_below(&h, "RMAOS").is_empty(),
+        "no Generate on a packed row"
+    );
+    assert_eq!(
+        gen_buttons_below(&h, "Height _p").len(),
+        1,
+        "the Height row still has its own"
+    );
+}
+
+#[test]
+fn a_borrowed_packed_rmaos_has_no_button() {
+    use sdc_gui::model::items::ItemKind;
+    use sdc_gui::model::sets::{set_views, DropChoice, DropOutcome, SlotFill};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    let odd = m
+        .items
+        .iter()
+        .find(|i| i.name == "odd.png")
+        .unwrap()
+        .key
+        .clone();
+    let id = m.drop_new_set(&odd).unwrap();
+    idle(&mut m);
+    let rmaos = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("rmaos"))
+        .unwrap()
+        .key
+        .clone();
+    assert!(matches!(
+        m.drop_on_set(&rmaos, &id),
+        DropOutcome::AskChoice { .. }
+    ));
+    assert_eq!(
+        m.drop_choice(&rmaos, &id, DropChoice::Share),
+        DropOutcome::Joined
+    );
+    idle(&mut m);
+    let v = set_views(&m).into_iter().find(|v| v.id == id).unwrap();
+    let Some(SlotFill::Borrowed { item, .. }) = v.slots.get(&SlotKind::Rmaos) else {
+        panic!(
+            "the new set borrows the RMAOS: {:?}",
+            v.slots.get(&SlotKind::Rmaos)
+        );
+    };
+    assert_eq!(m.item(item).map(|i| i.kind), Some(ItemKind::Packed));
+    let key = v.key.clone();
+    m.select_set(&key);
+    let mut h = harness(m);
+    h.run();
+    editor_row(&h, "RMAOS");
+    assert!(gen_buttons_below(&h, "RMAOS").is_empty());
+}
+#[test]
+fn an_npot_normal_shows_the_button_disabled_with_the_reason() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    ImageBuffer::from_fn(48, 48, |_, _| Rgb([128u8, 128, 255]))
+        .save(land(d.path()).join("rock01_normal.png"))
+        .unwrap();
+    reopen(&mut m, d.path());
+    let why = m
+        .gen_entry(ROCK_SET, Some(GenMap::Height))
+        .disabled
+        .unwrap();
+    let mut h = editor_of(m);
+    let btn = gen_buttons_below(&h, "Height _p")[0];
+    let node = h
+        .get_all_by_label(GEN_NAME)
+        .find(|n| n.rect() == btn)
+        .unwrap();
+    assert!(node.accesskit_node().is_disabled());
+    h.hover_at(btn.center());
+    h.run();
+    assert!(
+        h.query_all_by_label_contains(&why).next().is_some(),
+        "the reason on hover"
+    );
+    assert!(h.state().gen.is_none());
 }

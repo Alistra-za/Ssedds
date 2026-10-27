@@ -12,6 +12,7 @@ use crate::model::fields::{
     channel_text, encoding_options, field_hidden, field_lock, field_view, format_label,
     PARALLAX_HOVER,
 };
+use crate::model::from_normal::GenMap;
 use crate::model::items::{ItemKind, ItemStatus, TextureItem};
 use crate::model::out_size::{human, SizeEst};
 use crate::model::pack_fills::{fill_rows, FillRow};
@@ -38,6 +39,10 @@ pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher ent
 /// The right-hand panel's default width (layout v2 A3); resizable, at least 300. Not the plan's 420: at 1400 the
 /// centre's content is 728 px and the slot rows need about 424 (Task 2.2), so only the minimum leaves them room.
 pub const SET_PANEL_WIDTH: f32 = 300.0;
+
+/// The Height and RMAOS rows' Generate button (R1): its text; its accessible name is the entry's full label.
+pub const GEN_BUTTON: &str = "Generate…";
+pub const REGEN_BUTTON: &str = "Regenerate…";
 const THUMB: f32 = 56.0;
 /// The format and recipe combos (A5).
 const COMBO_W: f32 = 96.0;
@@ -791,6 +796,41 @@ fn row(
                     acts.push(Act::Slot(a));
                 }
             }
+            // R1/R2: Generate sits under Assign… (empty) or the format combo (filled); never on a packed item.
+            let gen_btn = |ui: &mut egui::Ui, acts: &mut Vec<Act>| {
+                let pre = match slot {
+                    SlotKind::Height => GenMap::Height,
+                    SlotKind::Rmaos => GenMap::Ao,
+                    _ => return,
+                };
+                if item.is_some_and(|i| i.kind == ItemKind::Packed) {
+                    return;
+                }
+                let e = model.gen_entry(&v.id, Some(pre));
+                let text = if e.label == REGEN_BUTTON {
+                    REGEN_BUTTON
+                } else {
+                    GEN_BUTTON
+                };
+                let r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(text).small());
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        e.disabled.is_none(),
+                        &e.label,
+                    )
+                });
+                let r = match &e.disabled {
+                    Some(why) => r.on_disabled_hover_text(format!("{}\n{why}", e.label)),
+                    None => r.on_hover_text(&e.label),
+                };
+                if r.clicked() {
+                    acts.push(Act::Slot(e.action));
+                }
+            };
+            if own_job.is_none() {
+                gen_btn(ui, acts);
+            }
             let Some((i, job)) = own_job else { return };
             let (cur_f, cur_t) = (job.profile.format, job.profile.color.tag);
             // Format and Opaque write `sdc.toml`: a read-only one would drop the edit silently.
@@ -813,6 +853,7 @@ fn row(
             if choice != (cur_f, cur_t) {
                 acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
             }
+            gen_btn(ui, acts);
             if i.kind == ItemKind::Packed {
                 packed_controls(ui, model, i, toml_read_only.as_deref(), acts);
             }
