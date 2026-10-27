@@ -662,6 +662,15 @@ fn cube_validation_reads_every_face() {
         .find(|w| w.code == Code::ValMipError)
         .unwrap_or_else(|| panic!("{:#?}", rep.warnings));
     assert!(w.message.starts_with("face 3 mip 0:"), "{}", w.message);
+    // Review M1: the data names the face and mip; `level` stays the surface index.
+    assert_eq!(
+        (&w.data["level"], &w.data["face"], &w.data["mip"]),
+        (
+            &serde_json::json!(18),
+            &serde_json::json!(3),
+            &serde_json::json!(0)
+        )
+    );
 }
 
 /// The preview of a cube job is its +X face alone.
@@ -675,14 +684,57 @@ fn cube_preview_is_the_pos_x_face() {
             .save(dir.join(format!("chrome_e_{}.png", FACES[k])))
             .unwrap();
     }
-    let p = plan(d.path(), &[]);
+    // A face size the 2D path would never produce from 32-px files, so this proves the cube path ran.
+    let p = plan(d.path(), &["cubemap.face_size=16"]);
     let j = job(&p, "chrome_e.dds");
     let s = engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap();
     let pv = s.preview(j, 4096, &CancelToken::default()).unwrap();
     assert_eq!(pv.source.first_level, 0);
-    assert_eq!(pv.source.dims.len(), 6, "one face's chain");
-    assert_eq!((pv.levels.len(), pv.source.levels.len()), (6, 6));
+    assert_eq!(pv.source.dims[0], (16, 16));
+    // One face (faces = 1): one 16 -> 1 chain, not six.
+    assert_eq!(pv.source.dims.len(), 5, "one face's chain");
+    assert_eq!((pv.levels.len(), pv.source.levels.len()), (5, 5));
     // +X is red under its white and black bands.
-    let c = pv.source.levels[0].at(20, 20);
+    let c = pv.source.levels[0].at(10, 10);
     assert!(c[0] > 0.9 && c[1] < 0.1 && c[2] < 0.1, "{c:?}");
+}
+
+/// Fix round 1: `face_rotate` corrects a turned file of a six-file cube, as it does a cell of a strip.
+#[test]
+fn face_rotate_applies_to_six_face_files() {
+    use engine::dds::read_dds;
+    use engine::decode::{decode_level, Decoded};
+    let n = 32;
+    let faces = arrow_faces(n);
+    let mut files = faces.clone();
+    // +Y turned a clockwise quarter: its top (white) row becomes the right column.
+    for y in 0..n {
+        for x in 0..n {
+            *files[2].at_mut(x, y) = faces[2].at(y, n - 1 - x);
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (k, f) in files.iter().enumerate() {
+        png8(f)
+            .save(dir.join(format!("chrome_e_{}.png", FACES[k])))
+            .unwrap();
+    }
+    let p = plan(
+        d.path(),
+        &["format=rgba8", "cubemap.face_rotate=[0, 0, 270, 0, 0, 0]"],
+    );
+    let (s, ev) = run(p);
+    assert_eq!(s.converted, 1, "{ev:#?}");
+    let f =
+        read_dds(&std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap()).unwrap();
+    let surf = f.surfaces();
+    for (k, face) in faces.iter().enumerate() {
+        let (w, h, r) = surf[k * 6].clone();
+        let Decoded::Ldr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
+            unreachable!()
+        };
+        assert!(px == texels8(face), "face {k} differs");
+    }
 }

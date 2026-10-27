@@ -65,7 +65,10 @@ pub(crate) fn prepare(
                 "the six faces are not equal squares; re-run".into(),
             ));
         }
-        std::array::from_fn(|k| std::mem::replace(&mut works[k].img, Rgba32F::new(0, 0, [0.0; 4])))
+        std::array::from_fn(|k| {
+            let img = std::mem::replace(&mut works[k].img, Rgba32F::new(0, 0, [0.0; 4]));
+            layout::orient(img, k, &p.cubemap)
+        })
     } else {
         layout::import_raw(
             &works[0].img,

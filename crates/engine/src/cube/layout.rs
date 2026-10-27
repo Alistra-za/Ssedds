@@ -135,11 +135,23 @@ pub fn import_raw(
         if layout == CubeLayout::Vcross && k == 5 && spec.vcross_negz_rotate {
             face = rotate(&face, 180);
         }
-        if spec.face_rotate[k] != 0 {
-            face = rotate(&face, spec.face_rotate[k]);
-        }
-        flip(&face, spec.face_flip[k])
+        orient(face, k, spec)
     }))
+}
+
+/// Face `k` with its `cubemap.face_rotate[k]` and then `face_flip[k]` applied (identity at the defaults); for every
+/// layout, six face files included.
+pub(crate) fn orient(face: Rgba32F, k: usize, spec: &CubemapSpec) -> Rgba32F {
+    let face = if spec.face_rotate[k] != 0 {
+        rotate(&face, spec.face_rotate[k])
+    } else {
+        face
+    };
+    if spec.face_flip[k] == FaceFlip::None {
+        face
+    } else {
+        flip(&face, spec.face_flip[k])
+    }
 }
 
 /// The face edge written: `cubemap.face_size`, else the largest power of two within the source cell. `src` is the

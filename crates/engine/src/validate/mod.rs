@@ -191,6 +191,18 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             format!("mip {l}")
         }
     };
+    // A warning's data: `level` (the surface index), plus `face` and `mip` on a cube, then `extra`'s keys.
+    let level_data = |l: usize, extra: serde_json::Value| {
+        let mut v = json!({ "level": l });
+        if file.is_cubemap {
+            v["face"] = json!(l / per_face);
+            v["mip"] = json!(l % per_face);
+        }
+        if let (Some(m), serde_json::Value::Object(e)) = (v.as_object_mut(), extra) {
+            m.extend(e);
+        }
+        v
+    };
     let mut decoded = vec![];
     for (lw, lh, range) in file.surfaces() {
         match decode_level(file.format, lw, lh, &file.data[range], model) {
@@ -257,7 +269,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                             Code::ValMipError,
                             format!("{}: {q:.2} dB < {:.1} dB", mip(l), v.min_mip_psnr_db),
                         )
-                        .with_data(json!({"level": l, "psnr": q})),
+                        .with_data(level_data(l, json!({"psnr": q}))),
                     );
                 }
             }
@@ -373,7 +385,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                                     base * 100.0
                                 ),
                             )
-                            .with_data(json!({"level": l, "coverage": c, "base": base})),
+                            .with_data(level_data(l, json!({"coverage": c, "base": base}))),
                         );
                     }
                 }
