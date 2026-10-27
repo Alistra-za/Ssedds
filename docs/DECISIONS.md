@@ -3021,3 +3021,23 @@ Written as Note DF; renamed DI at the rebase onto main 60b8db78 (main's DF is th
   - Other non-11 types keep the existing Warn: only type 1 is confirmed (`shortcut:` comment in `validate.rs`).
 - **DJ3 (type change).** Changing the shader type away from 11 clears bit 24 in the same undo step, with a notice (`type_slsf2_fix`), unless PBR is on. This applies to every target type, because without type 11 the flag does nothing (the existing Warn).
 - **DJ4.** The controllers are not guarded: the A/B cleared them of blame. `set_shader_type` stays a pure re-emit, so the ops stay explicit.
+## Note DK — Shader-type-bound flags: multi-layer parallax on every type, hair soft lighting, glow map on eyes (owner, 2026-10-27)
+
+- **DK1 (owner).** The Note DJ crash most likely applies to every shader type but 11, not only type 1. With PBR off, SLSF2 bit 24 on any drawn non-11 shader is now an `ALWAYS_BLOCK` Error (`MLP_TYPE`, renamed from DJ's `MLP_ENV_MAP`), with the clear-bit fix. The DJ2 `shortcut:` is gone. With PBR on, the bit is the two-layer coat and keeps the old Warn.
+- **DK2 (owner).** SLSF1 bit 18 Hair_Soft_Lighting off shader type 6 (Hair Tint) draws nothing: no crash, the shape is invisible. It joins the Note CS type-bound flags in `type_flag_errors`:
+  - an `ALWAYS_BLOCK` Error (`HAIR_SOFT_TYPE`) with a clear-bit fix;
+  - cleared on a type change off 6, with a notice;
+  - the checkbox greyed off type 6 (`type_flag_lock`).
+- **DK3 (owner).** Two eye flag mix-ups get a Warn with a clear-bit fix, and never block:
+  - The Eye shader (16) has no glow map, so SLSF2 bit 6 there is benign but misleading (`GLOW_ON_EYE`).
+  - SLSF1 bit 17 Eye_Environment_Mapping off type 16 is bad practice (`EYE_ENV_TYPE`). The common case is setting it instead of Environment_Mapping (bit 7) on an Environment Map shader.
+- **DK4 (index).** Flags per shader type were counted over drawn lighting shaders: vanilla (`SkyrimMeshesExtract`, 22,047 NIFs) plus every mod's loose meshes in the owner's install (87,263 NIFs), 426,197 shaders in all. Findings:
+  - **Bit 24, PBR off:** only on type 11 (4,076).
+  - **Bit 18:** on type 6 (78,329), plus 4 type-0 shaders, all one wig shape: `Modpocalypse NPCs - Resources`, `KSWigsHDT\f\{,Elves\}RosetteRoses_{0,1}.nif`. DK2 blocks re-exporting them until they are fixed.
+  - **Glow map on an eye:** one file, Vigilant facegen `0019EB97.NIF`.
+  - **Eye env mapping off type 16:** one type-1 shader, FEC `Clutter\PO3_FEC\Shock\BodyParts\f_khajiit2.nif`.
+  - **Not ruled (no evidence of an effect), so not guarded:**
+    - SLSF1 11 Parallax off type 3 (5 shaders);
+    - SLSF2 6 Glow_Map on types 0 and 1 (41 shaders).
+  - **Everything else:** every other flag appears across many types. Cells that are empty only because a type is rare (type 14 has 23 shaders) are not treated as rules.
+  - **Reverse rules:** "type needs flag" is not added. Types 2, 3, 6 and 16 each have some shaders without their usual flag.

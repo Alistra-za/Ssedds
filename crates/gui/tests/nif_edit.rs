@@ -7864,6 +7864,11 @@ fn flags_that_need_another_type_are_greyed_with_the_reason() {
     open_flags(&mut h); // Meshes UI T6: the flag lists start closed
     let skin = h.get_by_label("FaceGen_RGB_Tint");
     assert!(skin.accesskit_node().is_disabled());
+    // Note DK
+    assert!(h
+        .get_by_label("Hair_Soft_Lighting")
+        .accesskit_node()
+        .is_disabled());
     assert!(h
         .get_by_label("Facegen_Detail_Map")
         .accesskit_node()

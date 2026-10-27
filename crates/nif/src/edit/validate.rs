@@ -76,15 +76,25 @@ pub const HEEL_NOT_ON_SHAPE: &str = "The game ignores heel height here. Put it o
 /// Heel data on a shape after the first shape that has some: the first shape wins (HH-results).
 pub const HEEL_EARLIER_WINS: &str = "An earlier shape's heel height wins.";
 /// Note DJ (cubemap-up-axis A/B, 2026-10-27): SLSF2 bit 24 without PBR on an Environment Map shader crashes the game.
-pub const MLP_ENV_MAP: &str =
-    "Multi-layer parallax flag (SLSF2 24) on an Environment Map shader crashes the game.";
+/// Note DK (owner): on every type but 11.
+pub const MLP_TYPE: &str =
+    "Multi-layer parallax flag (SLSF2 24) needs shader type 11: the game crashes otherwise.";
+/// Note DK (owner): SLSF1 bit 18 Hair_Soft_Lighting off shader type 6 (Hair Tint) draws nothing.
+pub const HAIR_SOFT_TYPE: &str =
+    "Hair soft lighting flag needs the Hair Tint shader type: the shape is invisible otherwise.";
+/// Note DK (owner): the Eye shader has no glow map, so SLSF2 bit 6 there does nothing.
+pub const GLOW_ON_EYE: &str = "Glow map has no effect on an Eye shader.";
+/// Note DK (owner): SLSF1 bit 17 Eye_Environment_Mapping belongs to the Eye shader; often set by mistake on type 1.
+pub const EYE_ENV_TYPE: &str =
+    "Eye environment mapping is for the Eye shader type. Use Environment_Mapping here.";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
-const ALWAYS_BLOCK: [&str; 5] = [
+const ALWAYS_BLOCK: [&str; 6] = [
     ENV_SCALE_PBR,
     SKIN_TINT_TYPE,
     FACEGEN_DETAIL_TYPE,
     FACE_TINT_FLAG,
-    MLP_ENV_MAP,
+    MLP_TYPE,
+    HAIR_SOFT_TYPE,
 ];
 
 /// The SLSF1 bits `shader_type` gets wrong (Note CS), as (mask, value it needs, error, notice for a type change).
@@ -92,8 +102,12 @@ pub fn type_flag_errors(
     shader_type: u32,
     slsf1: u32,
 ) -> Vec<(u32, u32, &'static str, &'static str)> {
-    let (skin, detail) = (1 << 21, 1 << 10);
+    let (skin, detail, hair) = (1 << 21, 1 << 10, 1 << 18);
     let mut out = vec![];
+    if slsf1 & hair != 0 && shader_type != 6 {
+        let n = "Hair soft lighting flag cleared: it needs the Hair Tint shader type.";
+        out.push((hair, 0, HAIR_SOFT_TYPE, n));
+    }
     if slsf1 & skin != 0 && shader_type != 5 {
         let n = "Skin tint flag cleared: it needs the Skin Tint shader type.";
         out.push((skin, 0, SKIN_TINT_TYPE, n));
@@ -127,6 +141,7 @@ pub fn type_slsf2_fix(shader_type: u32, slsf2: u32) -> Option<(u32, u32, &'stati
 pub fn type_flag_lock(shader_type: u32, bit: u32) -> Option<&'static str> {
     match bit {
         21 if shader_type != 5 => Some("Needs the Skin Tint shader type."),
+        18 if shader_type != 6 => Some("Needs the Hair Tint shader type."),
         10 if shader_type != 4 && shader_type != 5 => {
             Some("Needs the Face Tint or Skin Tint shader type.")
         }
@@ -271,9 +286,7 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
             .users
             .first()
             .and_then(|&s| anchor_role(m, Some(s), Role::Shader));
-        // shortcut: only type 1 is confirmed to crash (Note DJ); other types keep the Warn until an in-game A/B
-        // shows the same crash for them.
-        if mlp && !pbr && lt.shader_type == 1 && !l.prop.users.is_empty() {
+        if mlp && !pbr && lt.shader_type != 11 && !l.prop.users.is_empty() {
             let fix = shader_at.clone().map(|at| Op::SetBits {
                 at,
                 field: Field::Slsf2,
@@ -281,10 +294,30 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
                 value: 0,
                 base: lt.slsf2,
             });
-            push(Level::Error, slsf2.clone(), MLP_ENV_MAP, fix);
+            push(Level::Error, slsf2.clone(), MLP_TYPE, fix);
         } else if mlp && lt.shader_type != 11 {
             let t = "Multi_Layer_Parallax (SLSF2 24) is set but the shader type is not 11.";
             push(Level::Warn, slsf2.clone(), t, None);
+        }
+        if lt.shader_type == 16 && lt.slsf2 & (1 << 6) != 0 {
+            let fix = shader_at.clone().map(|at| Op::SetBits {
+                at,
+                field: Field::Slsf2,
+                mask: 1 << 6,
+                value: 0,
+                base: lt.slsf2,
+            });
+            push(Level::Warn, slsf2.clone(), GLOW_ON_EYE, fix);
+        }
+        if lt.shader_type != 16 && lt.slsf1 & (1 << 17) != 0 {
+            let fix = shader_at.clone().map(|at| Op::SetBits {
+                at,
+                field: Field::Slsf1,
+                mask: 1 << 17,
+                value: 0,
+                base: lt.slsf1,
+            });
+            push(Level::Warn, fld(block, Field::Slsf1), EYE_ENV_TYPE, fix);
         }
         if !pbr && lt.slsf2 & (1 << 12) != 0 {
             let t = "Fit_Slope (SLSF2 12) does nothing without the PBR flag.";
