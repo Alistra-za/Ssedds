@@ -141,7 +141,7 @@ skip  ...: up to date
 done: 0 converted, 3 up to date, 0 skipped (0 on purpose), 0 failed, 0 failed validation, 0 cancelled
 ```
 
-The default `--on-existing if-changed` compares each output with its record in `C:\Work\IronPlate-out\_sdc\manifest.jsonl` and re-encodes only what changed: the source file, the resolved settings, the engine or encoder version, or the output file itself. Edit `ironplate_roughness.png` and run again, and only the `_rmaos` is rebuilt. See [Validation and output](Validation-and-Output.md).
+The default `--on-existing if-changed` compares each output with its record in `C:\Work\IronPlate-out\_sdc\manifest.jsonl` and re-encodes only what changed: the source file, the resolved settings, the texture type's encode version or the encoder version, or the output file itself. Edit `ironplate_roughness.png` and run again, and only the `_rmaos` is rebuilt. See [Validation and output](Validation-and-Output.md).
 
 ### Step 5. Verify a DDS
 
