@@ -14,6 +14,51 @@ pub use crate::events::now_rfc3339;
 
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// What a manifest record without `encode_version` counts as, and only when its `engine_version` equals it.
+/// Fixed forever.
+pub const LEGACY_ENCODE_VERSION: &str = "1.0.0";
+
+/// The newest released engine version. The release commit sets it to [`ENGINE_VERSION`]; the encode-version guard
+/// accepts a changed hash only for an arm bumped in the current, unreleased cycle.
+pub const RELEASED_ENGINE_VERSION: &str = "1.0.0";
+
+/// The engine version in which each sub-type's output last changed. Set an arm to the current `ENGINE_VERSION` in
+/// the same commit that changes that type's output bytes or validation verdict. Bumping the engine version alone
+/// changes no arm. No `_` arm: a new `Subtype` fails to compile until it gets one.
+pub const fn encode_version(st: Subtype) -> &'static str {
+    match st {
+        Subtype::Diffuse
+        | Subtype::LandscapeDiffuse
+        | Subtype::PbrAlbedo
+        | Subtype::PbrEmissive
+        | Subtype::Glow
+        | Subtype::PbrSubsurface
+        | Subtype::PbrFuzz
+        | Subtype::SubsurfaceTint
+        | Subtype::BacklightTint
+        | Subtype::UiSky
+        | Subtype::Normal
+        | Subtype::LandscapeNormal
+        | Subtype::PbrNormal
+        | Subtype::Msn
+        | Subtype::CoatNormal
+        | Subtype::Envmask
+        | Subtype::ComplexMaterial
+        | Subtype::Rmaos
+        | Subtype::SkinRfaos
+        | Subtype::Flow
+        | Subtype::Height
+        | Subtype::MsnSpecular
+        | Subtype::GenericTwoChannel
+        | Subtype::GenericData
+        | Subtype::HdrSky
+        | Subtype::SkinAlbedo
+        | Subtype::SkinSk
+        | Subtype::SkinWet
+        | Subtype::ComplexGrass => "1.0.0",
+    }
+}
+
 /// The `schema` written into every [`ManifestRecord`]. `load` keeps records of a newer schema as raw entries
 /// (see [`ManifestEntry::is_newer_schema`]) instead of interpreting them.
 pub const MANIFEST_SCHEMA: u32 = 2;
@@ -471,6 +516,49 @@ pub fn profile_sha256(p: &Profile) -> Result<String, serde_json::Error> {
 mod tests {
     use super::*;
     use crate::config::Target;
+
+    /// "1.2.3" or "1.2.3-alpha.1" as ([1,2,3], is_release). A pre-release sorts below its release.
+    fn version_key(v: &str) -> ([u32; 3], bool) {
+        let (core, pre) = match v.split_once('-') {
+            Some((c, _)) => (c, false),
+            None => (v, true),
+        };
+        let parts: Vec<u32> = core
+            .split('.')
+            .map(|p| p.parse().expect("numeric version part"))
+            .collect();
+        (parts.try_into().expect("three version parts"), pre)
+    }
+
+    #[test]
+    fn every_subtype_has_an_encode_version_no_newer_than_the_engine() {
+        let engine = version_key(ENGINE_VERSION);
+        for st in Subtype::ALL {
+            let v = encode_version(st);
+            assert!(
+                version_key(v) <= engine,
+                "{st:?} = {v} is newer than ENGINE_VERSION {ENGINE_VERSION}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_legacy_version_is_a_released_version() {
+        assert_eq!(LEGACY_ENCODE_VERSION, "1.0.0");
+        assert!(version_key(LEGACY_ENCODE_VERSION) <= version_key(ENGINE_VERSION));
+    }
+
+    #[test]
+    fn the_released_version_is_not_ahead_of_the_engine() {
+        assert!(version_key(RELEASED_ENGINE_VERSION) <= version_key(ENGINE_VERSION));
+        assert!(version_key(LEGACY_ENCODE_VERSION) <= version_key(RELEASED_ENGINE_VERSION));
+    }
+
+    #[test]
+    fn version_key_orders_pre_releases_below_releases() {
+        assert!(version_key("1.1.0-alpha.1") < version_key("1.1.0"));
+        assert!(version_key("1.0.9") < version_key("1.1.0"));
+    }
 
     #[test]
     fn profile_hash_is_unchanged_by_the_m6_fields() {
