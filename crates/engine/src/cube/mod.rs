@@ -49,10 +49,14 @@ pub fn dir_at(face: usize, s: f32, t: f32) -> [f32; 3] {
     d.map(|c| c / n)
 }
 
-/// Inverse of `dir_at`: the face of the major axis (ties go to X, then Y), then `s, t` in `[0, 1]`.
+/// Inverse of `dir_at`: the face of the major axis (ties go to X, then Y), then `s, t` in `[0, 1]`. The zero vector
+/// maps to the centre of +X.
 pub fn dir_to_face(d: [f32; 3]) -> (usize, f32, f32) {
     let [x, y, z] = d;
     let (ax, ay, az) = (x.abs(), y.abs(), z.abs());
+    if ax.max(ay).max(az) == 0.0 {
+        return (0, 0.5, 0.5);
+    }
     let (face, u, v) = if ax >= ay && ax >= az {
         if x > 0.0 {
             (0, -z / ax, y / ax)

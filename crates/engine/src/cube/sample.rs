@@ -17,7 +17,9 @@ fn texel(c: &Cube, face: usize, x: i64, y: i64) -> [f32; 4] {
     c.faces[g].at(px, py)
 }
 
-/// Bilinear sample of the cube in direction `d`; neighbours past a face edge come from the adjacent face.
+/// Bilinear sample of the cube in direction `d`; neighbours past a face edge come from the adjacent face. A tap past
+/// a cube corner (outside the face in both x and y) has no texel of its own: it takes the mean of the other three
+/// taps, so the corner direction reads the three meeting faces in equal thirds.
 pub fn fetch(c: &Cube, d: [f32; 3]) -> [f32; 4] {
     let (face, s, t) = dir_to_face(d);
     let n = c.size as f32;
@@ -25,17 +27,31 @@ pub fn fetch(c: &Cube, d: [f32; 3]) -> [f32; 4] {
     let (x0, y0) = (fx.floor(), fy.floor());
     let (wx, wy) = (fx - x0, fy - y0);
     let (x0, y0) = (x0 as i64, y0 as i64);
+    let inside = |v: i64| (0..c.size as i64).contains(&v);
+    let taps = [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(dx, dy)| {
+        let (x, y) = (x0 + dx, y0 + dy);
+        if inside(x) || inside(y) {
+            Some(texel(c, face, x, y))
+        } else {
+            None
+        }
+    });
+    let weights = [
+        (1.0 - wx) * (1.0 - wy),
+        wx * (1.0 - wy),
+        (1.0 - wx) * wy,
+        wx * wy,
+    ];
     let mut out = [0.0f32; 4];
-    for (dx, dy, w) in [
-        (0, 0, (1.0 - wx) * (1.0 - wy)),
-        (1, 0, wx * (1.0 - wy)),
-        (0, 1, (1.0 - wx) * wy),
-        (1, 1, wx * wy),
-    ] {
+    for (i, w) in weights.into_iter().enumerate() {
         if w == 0.0 {
             continue;
         }
-        let p = texel(c, face, x0 + dx, y0 + dy);
+        let p = taps[i].unwrap_or_else(|| {
+            let others = taps.iter().flatten();
+            let m = others.clone().count() as f32;
+            others.fold([0.0; 4], |a, p| std::array::from_fn(|k| a[k] + p[k] / m))
+        });
         for k in 0..4 {
             out[k] += w * p[k];
         }
@@ -116,25 +132,49 @@ pub fn mip_chain(base: Cube, levels: usize) -> Vec<Cube> {
     chain
 }
 
-/// Cone blur: half-angle `amount` x 45 degrees, Gaussian weight with sigma = half the cone, sampled from the
-/// coarsest mip whose texel angle is at most a quarter of the cone. `amount == 0` returns the input.
+/// Cone blur: half-angle `amount` x 45 degrees (`amount` clamped to 0..=1), Gaussian weight with sigma = half the
+/// cone, sampled from the coarsest mip whose texel angle is at most a quarter of the cone. `amount` 0 (or NaN)
+/// returns the input.
 // shortcut: Gaussian cone blur, not GGX prefiltering; upgrade to a GGX split-sum chain if a CS PBR consumer of static cubes appears.
 pub fn blur(c: &Cube, amount: f64) -> Cube {
-    if amount <= 0.0 {
+    if amount.is_nan() || amount <= 0.0 {
         return c.clone();
     }
-    let theta = (amount * std::f64::consts::FRAC_PI_4) as f32;
-    let chain = mip_chain(c.clone(), usize::MAX);
-    // A face spans 90 degrees, so a level of size m has texels about (pi/2)/m wide.
-    let src = chain
-        .iter()
-        .rev()
-        // 1e-4 slack: at amount 1 the size-8 level sits exactly on the bound.
-        .find(|l| std::f32::consts::FRAC_PI_2 / l.size as f32 <= theta / 4.0 * 1.0001)
-        .unwrap_or(&chain[0]);
+    let theta = (amount.min(1.0) * std::f64::consts::FRAC_PI_4) as f32;
+    // A face spans 90 degrees, so a level of size m has texels about (pi/2)/m wide. 1e-4 slack: at amount 1 the
+    // size-8 level sits exactly on the bound.
+    let fits = |m: u32| std::f32::consts::FRAC_PI_2 / m as f32 <= theta / 4.0 * 1.0001;
+    let level = (0..crate::dds::full_chain_len(c.size, c.size))
+        .take_while(|&k| fits((c.size >> k).max(1)))
+        .last()
+        .unwrap_or(0);
+    let coarse;
+    let src = if level == 0 {
+        c
+    } else {
+        coarse = mip_chain(c.clone(), level + 1).pop().unwrap();
+        &coarse
+    };
     // Fixed (2R+1)^2 grid in the tangent plane, step theta/R: bounded cost, about two samples per source texel.
+    // Each entry: (cos a, sin a * ox / a, sin a * oy / a, weight).
     const R: i32 = 8;
     let sigma = theta / 2.0;
+    let mut table = Vec::new();
+    for j in -R..=R {
+        for i in -R..=R {
+            let (ox, oy) = (i as f32 * theta / R as f32, j as f32 * theta / R as f32);
+            let ang = (ox * ox + oy * oy).sqrt();
+            if ang > theta {
+                continue;
+            }
+            // sin(a)/a turns the flat angle grid into equal solid angle per sample.
+            let (sn, cs) = ang.sin_cos();
+            let jac = if ang == 0.0 { 1.0 } else { sn / ang };
+            let w = (-0.5 * (ang / sigma).powi(2)).exp() * jac;
+            table.push((cs, ox * jac, oy * jac, w));
+        }
+    }
+    let wsum: f32 = table.iter().map(|e| e.3).sum();
     build(c.size, |f, x, y| {
         let d = super::cube_dir(f, x, y, c.size);
         // Orthonormal tangent basis around d.
@@ -145,28 +185,14 @@ pub fn blur(c: &Cube, amount: f64) -> Cube {
         };
         let t1 = normalize(cross(d, a));
         let t2 = cross(d, t1);
-        let (mut sum, mut wsum) = ([0.0f32; 4], 0.0f32);
-        for j in -R..=R {
-            for i in -R..=R {
-                let (ox, oy) = (i as f32 * theta / R as f32, j as f32 * theta / R as f32);
-                let ang = (ox * ox + oy * oy).sqrt();
-                if ang > theta {
-                    continue;
-                }
-                let dir = if ang == 0.0 {
-                    d
-                } else {
-                    let (sn, cs) = ang.sin_cos();
-                    std::array::from_fn(|k| cs * d[k] + sn * (ox * t1[k] + oy * t2[k]) / ang)
-                };
-                // sin(a)/a turns the flat angle grid into equal solid angle per sample.
-                let jac = if ang == 0.0 { 1.0 } else { ang.sin() / ang };
-                let w = (-0.5 * (ang / sigma).powi(2)).exp() * jac;
-                let p = fetch(src, dir);
-                for ch in 0..4 {
-                    sum[ch] += w * p[ch];
-                }
-                wsum += w;
+        let mut sum = [0.0f32; 4];
+        for &(cs, a, b, w) in &table {
+            let p = fetch(
+                src,
+                std::array::from_fn(|k| cs * d[k] + a * t1[k] + b * t2[k]),
+            );
+            for ch in 0..4 {
+                sum[ch] += w * p[ch];
             }
         }
         sum.map(|v| v / wsum)
@@ -229,6 +255,31 @@ mod tests {
         let r = 0.5f32.sqrt();
         let v = fetch(&c, [r, r, 0.0]);
         assert!(v.iter().all(|&x| (x - 1.0).abs() < 1e-4), "{v:?}");
+    }
+
+    #[test]
+    fn fetch_at_a_corner_reads_three_faces_in_thirds() {
+        let r = 1.0 / 3f32.sqrt();
+        // (corner direction, the three faces meeting there)
+        for (d, faces) in [([r, r, r], [0, 2, 4]), ([-r, r, -r], [1, 2, 5])] {
+            let c = cube_from(8, |f, _, _| {
+                let mut p = [0.0; 4];
+                if let Some(k) = faces.iter().position(|&g| g == f) {
+                    p[k] = 1.0;
+                }
+                p
+            });
+            let v = fetch(&c, d);
+            assert!(
+                v[..3].iter().all(|&x| (x - 1.0 / 3.0).abs() < 1e-3),
+                "{d:?}: {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_direction_is_the_pos_x_centre() {
+        assert_eq!(dir_to_face([0.0; 3]), (0, 0.5, 0.5));
     }
 
     #[test]
