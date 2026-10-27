@@ -22,6 +22,8 @@ pub const DDPF_NORMAL: u32 = 0x8000_0000;
 pub const DDSCAPS_COMPLEX: u32 = 0x8;
 pub const DDSCAPS_TEXTURE: u32 = 0x1000;
 pub const DDSCAPS_MIPMAP: u32 = 0x40_0000;
+/// caps2 of a complete cubemap: DDSCAPS2_CUBEMAP plus all six face bits.
+pub const DDSCAPS2_CUBE_ALLFACES: u32 = 0xFE00;
 
 /// `D3D10_RESOURCE_DIMENSION_TEXTURE2D`.
 const DIMENSION_TEXTURE2D: u32 = 3;
@@ -153,6 +155,9 @@ pub enum DdsError {
     },
     #[error("no legacy FourCC for {format:?} (srgb={srgb}); use dx10")]
     NoLegacyForm { format: Format, srgb: bool },
+    /// A cube file that is not six square, equal-length chains.
+    #[error("cubemap shape: {0}")]
+    CubeShape(String),
     #[error("level 0 size {0} does not fit the 32-bit linear size field")]
     LinearSizeOverflow(usize),
     #[error("mip level {level} of {width}x{height} overflows the size arithmetic")]
@@ -178,6 +183,44 @@ pub enum DdsError {
 /// every level exactly `level_size` for its dimensions, and a legacy header only where one exists (not for
 /// BC6H, BC7 or any `_SRGB` tag, which would otherwise lose the tag).
 pub fn dds_bytes(desc: &DdsDesc, levels: &[Vec<u8>]) -> Result<Vec<u8>, DdsError> {
+    check_chain(desc, levels)?;
+    let mut out = header_bytes(desc, levels.len() as u32)?;
+    out.reserve(levels.iter().map(Vec::len).sum::<usize>());
+    for l in levels {
+        out.extend_from_slice(l);
+    }
+    Ok(out)
+}
+
+/// Serialise a single cubemap: levels is face-major (+X, -X, +Y, -Y, +Z, -Z, each face's whole chain), so
+/// 6 x n entries. Square faces, equal chains, and every level checked as dds_bytes checks it.
+pub fn dds_bytes_cube(desc: &DdsDesc, levels: &[Vec<u8>]) -> Result<Vec<u8>, DdsError> {
+    if desc.width != desc.height {
+        return Err(DdsError::CubeShape(format!(
+            "faces are {}x{}, not square",
+            desc.width, desc.height
+        )));
+    }
+    if levels.is_empty() || !levels.len().is_multiple_of(6) {
+        return Err(DdsError::CubeShape(format!(
+            "{} levels is not six equal chains",
+            levels.len()
+        )));
+    }
+    let n = levels.len() / 6;
+    for face in levels.chunks(n) {
+        check_chain(desc, face)?;
+    }
+    let mut out = header_bytes_with(desc, n as u32, true)?;
+    out.reserve(levels.iter().map(Vec::len).sum::<usize>());
+    for l in levels {
+        out.extend_from_slice(l);
+    }
+    Ok(out)
+}
+
+/// The shared checks of dds_bytes and dds_bytes_cube for one chain.
+fn check_chain(desc: &DdsDesc, levels: &[Vec<u8>]) -> Result<(), DdsError> {
     let (w, h) = (desc.width, desc.height);
     if w == 0 || h == 0 {
         return Err(DdsError::ZeroDimension {
@@ -214,18 +257,24 @@ pub fn dds_bytes(desc: &DdsDesc, levels: &[Vec<u8>]) -> Result<Vec<u8>, DdsError
             });
         }
     }
-    let mut out = header_bytes(desc, levels.len() as u32)?;
-    out.reserve(levels.iter().map(Vec::len).sum::<usize>());
-    for l in levels {
-        out.extend_from_slice(l);
-    }
-    Ok(out)
+    Ok(())
 }
 
 /// The magic, the 124-byte header and (for DX10) the 20-byte DX10 block of a `desc` file with `mips` levels. A block
 /// format carries `DDSD_LINEARSIZE` and the mip-0 size, an uncompressed one `DDSD_PITCH` and the row pitch.
 pub fn header_bytes(desc: &DdsDesc, mips: u32) -> Result<Vec<u8>, DdsError> {
+    header_bytes_with(desc, mips, false)
+}
+
+/// header_bytes, or with cube the header of a single cubemap: COMPLEX always set, caps2  xFE00, DX10 misc 4.
+/// Refuses non-square dimensions for a cube.
+pub fn header_bytes_with(desc: &DdsDesc, mips: u32, cube: bool) -> Result<Vec<u8>, DdsError> {
     let (w, h) = (desc.width, desc.height);
+    if cube && w != h {
+        return Err(DdsError::CubeShape(format!(
+            "faces are {w}x{h}, not square"
+        )));
+    }
     if w == 0 || h == 0 {
         return Err(DdsError::ZeroDimension {
             width: w,
@@ -286,9 +335,14 @@ pub fn header_bytes(desc: &DdsDesc, mips: u32) -> Result<Vec<u8>, DdsError> {
     hd[26] = DDSCAPS_TEXTURE
         | if mips > 1 {
             DDSCAPS_COMPLEX | DDSCAPS_MIPMAP
+        } else if cube {
+            DDSCAPS_COMPLEX
         } else {
             0
         };
+    if cube {
+        hd[27] = DDSCAPS2_CUBE_ALLFACES;
+    }
     let mut out = Vec::with_capacity(148);
     out.extend_from_slice(b"DDS ");
     for v in hd {
@@ -298,7 +352,7 @@ pub fn header_bytes(desc: &DdsDesc, mips: u32) -> Result<Vec<u8>, DdsError> {
         for v in [
             dxgi_format(desc.format, desc.srgb),
             DIMENSION_TEXTURE2D,
-            0,
+            if cube { DX10_MISC_CUBEMAP } else { 0 },
             1,
             0,
         ] {
@@ -599,6 +653,24 @@ pub struct DdsFile {
     pub data: Vec<u8>,
 }
 
+impl DdsFile {
+    /// Every surface as (width, height, range into data). 2D: levels. Cube: the six faces' levels, face-major,
+    /// each range offset by ace x chain bytes (levels describes face 0).
+    pub fn surfaces(&self) -> Vec<(u32, u32, Range<usize>)> {
+        if !self.is_cubemap {
+            return self.levels.clone();
+        }
+        let chain = self.levels.last().map_or(0, |l| l.2.end);
+        (0..6)
+            .flat_map(|f| {
+                self.levels
+                    .iter()
+                    .map(move |(w, h, r)| (*w, *h, r.start + f * chain..r.end + f * chain))
+            })
+            .collect()
+    }
+}
+
 const MAGIC_AND_HEADER: usize = 128;
 const DX10_END: usize = 148;
 const DDSCAPS2_CUBEMAP: u32 = 0x200;
@@ -833,9 +905,34 @@ pub fn check_header(f: &DdsFile) -> Vec<String> {
         v.push("ATI1/ATI2 FourCC is never written by sdc".into());
     }
     if f.is_cubemap {
-        v.push("cubemap flag set on a 2D texture".into());
-    }
-    if let Some(d) = f.dx10 {
+        if f.caps & DDSCAPS_COMPLEX == 0 {
+            v.push("cubemap caps lack COMPLEX".into());
+        }
+        if f.caps2 != DDSCAPS2_CUBE_ALLFACES {
+            v.push(format!(
+                "partial cube: caps2 {:#x} (want {DDSCAPS2_CUBE_ALLFACES:#x})",
+                f.caps2
+            ));
+        }
+        if f.width != f.height {
+            v.push(format!(
+                "cubemap faces {}x{} are not square",
+                f.width, f.height
+            ));
+        }
+        if let Some(d) = f.dx10 {
+            if d.dimension != DIMENSION_TEXTURE2D
+                || d.array_size != 1
+                || d.misc2 != 0
+                || d.misc & DX10_MISC_CUBEMAP == 0
+            {
+                v.push(format!(
+                    "DX10 cube header: dimension {}, array {}, misc {:#x}, misc2 {} (want {DIMENSION_TEXTURE2D}, 1, 4, 0)",
+                    d.dimension, d.array_size, d.misc, d.misc2
+                ));
+            }
+        }
+    } else if let Some(d) = f.dx10 {
         if d.dimension != DIMENSION_TEXTURE2D || d.array_size != 1 || d.misc2 != 0 {
             v.push(format!(
                 "DX10 header: dimension {}, array {}, misc2 {} (want {DIMENSION_TEXTURE2D}, 1, 0)",

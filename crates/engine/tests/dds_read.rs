@@ -1251,3 +1251,67 @@ fn dx10_texture3d_without_volume_flags_is_unsupported() {
     );
     assert!(engine::dds_patch::plan_patch(&b, &Default::default()).is_err());
 }
+
+#[test]
+fn cube_round_trips_through_the_reader() {
+    for (fmt, hdr) in [
+        (Format::Bc1, ResolvedHeader::Legacy),
+        (Format::Bc7, ResolvedHeader::Dx10),
+    ] {
+        let d = DdsDesc {
+            width: 16,
+            height: 16,
+            format: fmt,
+            srgb: false,
+            header: hdr,
+        };
+        let mut levels = vec![];
+        for face in 0..6u8 {
+            let mut s = 16;
+            for l in 0..5 {
+                levels.push(vec![face * 16 + l; level_size(fmt, s, s)]);
+                s /= 2;
+            }
+        }
+        let f = read_dds(&dds_bytes_cube(&d, &levels).unwrap()).unwrap();
+        assert!(f.is_cubemap);
+        let s = f.surfaces();
+        assert_eq!(s.len(), 30);
+        for (k, (_, _, r)) in s.iter().enumerate() {
+            assert_eq!(&f.data[r.clone()], &levels[k][..], "surface {k}");
+        }
+    }
+}
+
+#[test]
+fn check_header_accepts_a_written_cube_and_flags_partial_ones() {
+    let d = DdsDesc {
+        width: 8,
+        height: 8,
+        format: Format::Bc7,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    let mut levels = vec![];
+    for _ in 0..6 {
+        for s in [8u32, 4, 2, 1] {
+            levels.push(vec![0; level_size(Format::Bc7, s, s)]);
+        }
+    }
+    let good = dds_bytes_cube(&d, &levels).unwrap();
+    assert!(check_header(&read_dds(&good).unwrap()).is_empty());
+    let mut partial = good.clone();
+    put(&mut partial, 112, 0x0600 | 0x200);
+    let issues = check_header(&read_dds(&partial).unwrap());
+    assert!(
+        issues.iter().any(|m| m.contains("partial cube")),
+        "{issues:?}"
+    );
+    let mut wide = good.clone();
+    put(&mut wide, 12, 4);
+    let issues = check_header(&read_dds(&wide).unwrap());
+    assert!(
+        issues.iter().any(|m| m.contains("not square")),
+        "{issues:?}"
+    );
+}
