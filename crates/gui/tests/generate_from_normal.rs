@@ -4015,11 +4015,9 @@ fn the_drawn_crop_follows_the_zoom_and_every_tile_shows_the_same_one() {
     assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
     h.run_steps(5);
     use egui_kittest::kittest::Queryable;
+    h.run_steps(10);
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     assert!(near_uv(drawn_uv(&h, "Height preview"), full));
-    // A first nudge makes the "1.1×" line appear, which re-centres the dialog; measure after that settles.
-    let t0 = h.get_by_label("Height preview").rect();
-    wheel_at(&mut h, t0.center(), 20.0);
     // Near the tile's top-left corner.
     let tile = h.get_by_label("Height preview").rect();
     let pos = tile.min + tile.size() * vec2(0.1, 0.15);

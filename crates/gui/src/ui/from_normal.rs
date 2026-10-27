@@ -390,8 +390,11 @@ fn tiles(ui: &mut egui::Ui, p: &Arc<GenResult>) {
     if z != z0 {
         ui.ctx().request_repaint();
     }
+    // Always one line, so the dialog never re-sizes when zoom starts.
     if z.zoom > 1.0 {
-        ui.weak(format!("{:.1}×", z.zoom));
+        ui.weak(format!("{:.1}×  ·  {ZOOM_HOVER}", z.zoom));
+    } else {
+        ui.weak(ZOOM_HOVER);
     }
 }
 
