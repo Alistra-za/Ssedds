@@ -251,7 +251,7 @@ pub struct ManifestRecord {
     /// RFC 3339, UTC.
     pub ts: String,
     pub engine_version: String,
-    /// The [`encode_version`] of `profile.subtype` when this output was written; absent in records written by 1.0.0 and older.
+    /// The `encode_version` of `profile.subtype` when this output was written; absent in records written by 1.0.0 and older.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encode_version: Option<String>,
     pub engine_commit: String,

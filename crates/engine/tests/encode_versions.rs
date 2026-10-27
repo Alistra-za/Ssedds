@@ -389,7 +389,8 @@ fn builtin_profile_hashes_are_pinned() {
         }
     }
     assert!(observed.keys().any(|k| k.starts_with("cs-quality/cs/")));
-    // Every id x target x sub-type resolves today; Err stays a skip for a combination that later becomes invalid.
+    // Every id x target x sub-type must resolve, so a combination that newly becomes Err shows here.
+    assert_eq!(observed.len(), ids.len() * 2 * Subtype::ALL.len());
     let file =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/encode_versions/profile_hashes.json");
     let failures = check_pins(&file, observed, "profile_sha256", &bumped);

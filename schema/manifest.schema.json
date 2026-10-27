@@ -1091,7 +1091,7 @@
       "description": "Track A (Note CN): a Vanilla-folder copy of a PBR-folder output records the PBR file's `output_stamp` it was\ncopied from, so the copy is redone when the PBR file changes. Absent on every encoded output."
     },
     "encode_version": {
-      "description": "The [`encode_version`] of `profile.subtype` when this output was written; absent in records written by 1.0.0 and older.",
+      "description": "The `encode_version` of `profile.subtype` when this output was written; absent in records written by 1.0.0 and older.",
       "type": [
         "string",
         "null"
