@@ -292,6 +292,10 @@ impl SdcApp {
 
 impl eframe::App for SdcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Note DN: the last frame lost the device; this frame's paint would panic.
+        if crate::crash_log::device_lost() {
+            crate::crash_log::close_after_device_loss();
+        }
         let ctx = ui.ctx().clone();
         self.model.poll();
         let now = std::time::Instant::now();

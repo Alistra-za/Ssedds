@@ -6,7 +6,10 @@ This page covers version 1.0.0. These are the things you may run into, and what 
 
 **The app can crash with a lost graphics device (GPU)**
 
-Sometimes the app closes with a message about failing to create a "staging buffer". It means the graphics device was lost first. The cause is not proven. It often happens after a long session, around alt-tab or screen capture.
+Sometimes the graphics device is lost, and the app has to close. The cause is not proven. It often happens after a long session, around alt-tab or screen capture.
+
+- Version 1.0.0 closes with a crash message about failing to create a "staging buffer".
+- Later versions show a message that the graphics device was lost and list the recovery files, then close.
 
 - Unsaved edits to `sdc.toml` and `sdc-project.toml` are kept beside the original as `<file>.recovery`. The original is not touched.
 - The next time you open the folder, a banner tells you a recovery file exists. To restore, rename the `.recovery` file over the original. Or delete it. Clicking Save also deletes it; the saves Tessalith makes on its own (an export folder, an export's JSON record) keep it.

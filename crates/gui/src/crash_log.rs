@@ -78,6 +78,7 @@ fn append(path: &Path, line: &str) {
 pub fn watch_device(rs: &eframe::egui_wgpu::RenderState, log: Option<PathBuf>) {
     let backend = format!("{:?}", rs.adapter.get_info().backend);
     rs.device.set_device_lost_callback(move |reason, message| {
+        DEVICE_LOST.store(true, std::sync::atomic::Ordering::Release);
         let line = format!("{} wgpu device lost ({reason:?}, {backend}): {message}\n", now_stamp());
         if let Some(path) = &log {
             append(path, &line);
@@ -87,6 +88,49 @@ pub fn watch_device(rs: &eframe::egui_wgpu::RenderState, log: Option<PathBuf>) {
             serde_json::json!({ "reason": format!("{reason:?}"), "backend": backend, "message": message }),
         );
     });
+}
+
+/// Set by the device-lost callback, which wgpu runs inside the present or submit of the frame that lost it.
+static DEVICE_LOST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn device_lost() -> bool {
+    DEVICE_LOST.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Note DN: called from the frame after a device loss, before egui-wgpu's paint would panic. eframe cannot recreate
+/// the device, so the app writes the unsaved documents to their recovery files, says why, and exits.
+/// `on_exit` (the layout save) does not run.
+pub fn close_after_device_loss() -> ! {
+    let files = RECOVERY.lock().map(|r| r.clone()).unwrap_or_default();
+    write_recovery(&files);
+    let kept: Vec<String> = files
+        .iter()
+        .map(|(p, _)| recovery_path(p).display().to_string())
+        .collect();
+    if let Some(path) = RUN_LOG.get() {
+        append(
+            path,
+            &format!(
+                "{} closed after the device loss; recovery files: {kept:?}\n",
+                now_stamp()
+            ),
+        );
+    }
+    let mut text = "The graphics device was lost (a driver reset, or a fault around alt-tab or screen capture), \
+                    so Tessalith has to close."
+        .to_string();
+    if !kept.is_empty() {
+        text += &format!(
+            "\n\nUnsaved edits were kept in:\n{}\n\nRename a .recovery file over its original to restore it.",
+            kept.join("\n")
+        );
+    }
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(crate::PRODUCT_NAME)
+        .set_description(text)
+        .show();
+    std::process::exit(1)
 }
 
 pub fn set_recovery(files: Vec<(PathBuf, String)>) {

@@ -52,6 +52,7 @@ fn a_lost_device_is_logged_and_is_what_the_staging_buffer_panic_means() {
     let d = tempfile::tempdir().unwrap();
     let log = d.path().join("crash.log");
     crash_log::watch_device(&rs, Some(log.clone()));
+    assert!(!crash_log::device_lost());
     let mut renderer =
         egui_wgpu::Renderer::new(device, rs.target_format, RendererOptions::default());
     let screen = egui_wgpu::ScreenDescriptor {
@@ -70,6 +71,8 @@ fn a_lost_device_is_logged_and_is_what_the_staging_buffer_panic_means() {
         text.contains("wgpu device lost (Destroyed, "),
         "the loss is in the crash log: {text:?}"
     );
+    // Note DN: the next frame's `SdcApp::ui` sees this and closes before egui-wgpu's paint panics.
+    assert!(crash_log::device_lost());
 
     // The same frame on the lost device: the panic of the crash.
     let mut encoder = device.create_command_encoder(&Default::default());
