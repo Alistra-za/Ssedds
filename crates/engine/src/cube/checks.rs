@@ -3,14 +3,17 @@ use crate::dds::{DdsFile, DdsPixelFormat};
 use crate::decode::{decode_level, Decoded};
 use encoders_sys::Bc1Model;
 
-/// True when `game_path` has a `cubemaps` component or its stem ends in `_e` (ASCII case-insensitive, either separator).
+/// True when `game_path` has a `textures` component directly followed by `cubemaps` or its stem ends in `_e` (ASCII case-insensitive, either separator).
 fn expects_cube(game_path: &str) -> bool {
     let mut parts = game_path.split(['/', '\\']).filter(|c| !c.is_empty());
     let stem = parts
         .next_back()
         .map(|f| f.rsplit_once('.').map_or(f, |s| s.0));
     stem.is_some_and(|s| s.to_ascii_lowercase().ends_with("_e"))
-        || parts.any(|c| c.eq_ignore_ascii_case("cubemaps"))
+        || parts
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|w| w[0].eq_ignore_ascii_case("textures") && w[1].eq_ignore_ascii_case("cubemaps"))
 }
 
 fn is_srgb(f: DdsPixelFormat) -> bool {

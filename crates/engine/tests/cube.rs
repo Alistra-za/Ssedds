@@ -830,7 +830,7 @@ fn cube_dds(
     mips: u32,
     srgb: bool,
     hdr: engine::dds::ResolvedHeader,
-    px: [u8; 4],
+    px: impl Fn(usize) -> [u8; 4],
 ) -> engine::dds::DdsFile {
     use engine::dds::*;
     let d = DdsDesc {
@@ -841,10 +841,10 @@ fn cube_dds(
         header: hdr,
     };
     let mut levels = vec![];
-    for _ in 0..6 {
+    for face in 0..6 {
         let mut s = size;
         for _ in 0..mips {
-            levels.push(px.repeat((s * s) as usize));
+            levels.push(px(face).repeat((s * s) as usize));
             s = (s / 2).max(1);
         }
     }
@@ -856,23 +856,51 @@ fn cube_checks() {
     use engine::cube::checks::inspect_issues;
     use engine::dds::ResolvedHeader::{Dx10, Legacy};
     let none = |p: &str, f| inspect_issues(p, &f);
-    let full = cube_dds(8, 4, false, Legacy, [9, 9, 9, 255]);
+    let full = cube_dds(8, 4, false, Legacy, |_| [9, 9, 9, 255]);
     assert!(none("textures/a/x_e.dds", full).is_empty());
-    let mipless = cube_dds(8, 1, false, Legacy, [9, 9, 9, 255]);
+    let mipless = cube_dds(8, 1, false, Legacy, |_| [9, 9, 9, 255]);
     assert_eq!(
         none("textures/a/x_e.dds", mipless),
         ["cube has no mips: curved surfaces will sparkle; re-encode it with a full chain"]
     );
-    // +Y is face 2; a lit +X alone is the dynamic marker.
-    let lit = cube_dds(1, 1, false, Legacy, [0, 0, 8, 255]);
+    // +Y is face 2: a lit +X alone is the dynamic marker, a lit +Y alone is not.
+    let only = |k: usize| {
+        cube_dds(1, 1, false, Legacy, move |f| {
+            if f == k {
+                [0, 0, 8, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        })
+    };
+    assert!(none("x_e.dds", only(0)).is_empty());
     assert_eq!(
-        none("x_e.dds", lit),
+        none("x_e.dds", only(2)),
         ["1x1 cube with a non-black +Y: Community Shaders treats it as a static, near-black reflection, not a dynamic-cubemap marker"]
     );
     assert_eq!(
-        none("x_e.dds", cube_dds(8, 4, true, Dx10, [9, 9, 9, 255])),
+        none("x_e.dds", cube_dds(8, 4, true, Dx10, |_| [9, 9, 9, 255])),
         ["cube uses an sRGB format; Community Shaders expects UNORM cubes"]
     );
+    // A BC7 sRGB cube (DX10 header) is flagged too.
+    {
+        use engine::dds::*;
+        let d = DdsDesc {
+            width: 8,
+            height: 8,
+            format: Format::Bc7,
+            srgb: true,
+            header: Dx10,
+        };
+        let levels: Vec<Vec<u8>> = (0..6)
+            .flat_map(|_| [8u32, 4, 2, 1].map(|s| vec![0; level_size(Format::Bc7, s, s)]))
+            .collect();
+        let f = read_dds(&dds_bytes_cube(&d, &levels).unwrap()).unwrap();
+        assert_eq!(
+            none("x_e.dds", f),
+            ["cube uses an sRGB format; Community Shaders expects UNORM cubes"]
+        );
+    }
     let flat = engine::dds::read_dds(
         &engine::dds::dds_bytes(
             &engine::dds::DdsDesc {
@@ -888,13 +916,20 @@ fn cube_checks() {
     )
     .unwrap();
     let want = "2D texture where a cubemap is expected (the game reads _e and textures\\cubemaps\\ files as cubes)";
-    for p in ["Textures\\X_E.DDS", "textures/CubeMaps/sky.dds", "a/b_e"] {
+    for p in [
+        "Textures\\X_E.DDS",
+        "textures/CubeMaps/sky.dds",
+        "a/b_e",
+        "F:\\mods\\Textures\\CubeMaps\\foo.dds",
+    ] {
         assert_eq!(inspect_issues(p, &flat), [want], "{p}");
     }
     for p in [
         "textures/a/x.dds",
         "textures/a/x_e_n.dds",
         "textures/cubemapsx/x.dds",
+        "F:\\mods\\cubemaps\\textures\\armor\\iron_d.dds",
+        "cubemaps/x.dds",
     ] {
         assert!(inspect_issues(p, &flat).is_empty(), "{p}");
     }
