@@ -159,10 +159,85 @@ fn rnm_fixture(dir: &Path) {
     );
 }
 
+/// Sub-types vanilla refuses (CFG-UNAVAILABLE: cs-only, Note DM2), so the vanilla run cannot pin them; the cs run
+/// does.
+const CS_ONLY: &[Subtype] = &[
+    Subtype::PbrAlbedo,
+    Subtype::PbrEmissive,
+    Subtype::PbrSubsurface,
+    Subtype::PbrFuzz,
+    Subtype::PbrNormal,
+    Subtype::CoatNormal,
+    Subtype::Rmaos,
+    Subtype::SkinRfaos,
+    Subtype::Flow,
+    Subtype::HdrSky,
+    Subtype::SkinAlbedo,
+    Subtype::SkinSk,
+    Subtype::SkinWet,
+];
+
+/// Runs the fixture in `d/in` under `target` into `d/out-<prefix>` and returns the summary, the skip and fail
+/// events, and the encode-input hashes keyed `<prefix><output key>`.
+fn run_target(
+    d: &Path,
+    sets: &[String],
+    target: Target,
+    prefix: &str,
+) -> (
+    BatchSummary,
+    Vec<EngineEvent>,
+    BTreeMap<String, (Subtype, String)>,
+) {
+    let hooks = tempfile::tempdir().unwrap();
+    let mut req = BatchRequest::new(
+        vec![d.join("in")],
+        d.join(format!("out-{}", prefix.trim_end_matches('/'))),
+        target,
+    );
+    req.recursive = true;
+    req.accept = AcceptSuggestions::High;
+    req.on_existing = OnExisting::Overwrite;
+    req.overrides = sets
+        .iter()
+        .map(|s| engine::overrides::parse_set(s).unwrap())
+        .collect();
+    // The only test in this binary that encodes, so setting the process-wide variable is safe.
+    std::env::set_var("SDC_TEST_ENCODE_INPUT_DIR", hooks.path());
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "encode-versions");
+    let e = Engine::new().unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
+    let summary = e.run(plan, &rep, &CancelToken::default()).unwrap();
+    std::env::remove_var("SDC_TEST_ENCODE_INPUT_DIR");
+    let events: Vec<_> = sink
+        .take()
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EventKind::FileFailed { .. } | EventKind::FileSkipped { .. }
+            )
+        })
+        .collect();
+    let mut observed = BTreeMap::new();
+    for f in std::fs::read_dir(hooks.path()).unwrap() {
+        let f = f.unwrap().path();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        let st: Subtype = serde_json::from_value(v["subtype"].clone()).unwrap();
+        let name = f.file_name().unwrap().to_str().unwrap();
+        let key = name.strip_suffix(".json").unwrap().replace('~', "/");
+        observed.insert(
+            format!("{prefix}{key}"),
+            (st, v["sha256"].as_str().unwrap().to_string()),
+        );
+    }
+    (summary, events, observed)
+}
+
 #[test]
 fn encode_inputs_are_pinned_or_their_type_was_bumped() {
     let d = tempfile::tempdir().unwrap();
-    let hooks = tempfile::tempdir().unwrap();
     let mut sets = vec![];
     for st in Subtype::ALL {
         use Subtype::*;
@@ -186,55 +261,68 @@ fn encode_inputs_are_pinned_or_their_type_was_bumped() {
         put(d.path(), rel, img);
     }
     rnm_fixture(d.path());
+    let guarded = || {
+        Subtype::ALL
+            .into_iter()
+            .filter(|st| UNGUARDED.iter().all(|(u, _)| u != st))
+    };
+    let seen = |o: &BTreeMap<String, (Subtype, String)>| -> BTreeSet<Subtype> {
+        o.values().map(|(st, _)| *st).collect()
+    };
 
-    let mut req = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
-    req.recursive = true;
-    req.accept = AcceptSuggestions::High;
-    req.on_existing = OnExisting::Overwrite;
-    req.overrides = sets
-        .iter()
-        .map(|s| engine::overrides::parse_set(s).unwrap())
-        .collect();
-    // The only test in this binary that encodes, so setting the process-wide variable is safe.
-    std::env::set_var("SDC_TEST_ENCODE_INPUT_DIR", hooks.path());
-    let sink = Arc::new(VecSink::default());
-    let rep = Reporter::new(sink.clone(), "encode-versions");
-    let e = Engine::new().unwrap();
-    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
-    let summary = e.run(plan, &rep, &CancelToken::default()).unwrap();
-    std::env::remove_var("SDC_TEST_ENCODE_INPUT_DIR");
-    let failed: Vec<_> = sink
-        .take()
-        .into_iter()
-        .filter(|e| {
-            matches!(
-                e.kind,
-                EventKind::FileFailed { .. } | EventKind::FileSkipped { .. }
-            )
-        })
-        .collect();
+    let (summary, events, mut observed) = run_target(d.path(), &sets, Target::Cs, "");
     // Every fixture encodes and passes validation, so each pin covers the passing path (complex_grass included).
     assert_eq!(
         (summary.failed, summary.skipped, summary.validation_failed),
         (0, 0, 0),
-        "{failed:#?}"
+        "{events:#?}"
+    );
+    assert_eq!(
+        seen(&observed),
+        guarded().collect(),
+        "sub-types with a cs encode-input pin"
     );
 
-    let mut observed = BTreeMap::new();
-    for f in std::fs::read_dir(hooks.path()).unwrap() {
-        let f = f.unwrap().path();
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
-        let st: Subtype = serde_json::from_value(v["subtype"].clone()).unwrap();
-        let name = f.file_name().unwrap().to_str().unwrap();
-        let key = name.strip_suffix(".json").unwrap().replace('~', "/");
-        observed.insert(key, (st, v["sha256"].as_str().unwrap().to_string()));
-    }
-    let seen: BTreeSet<Subtype> = observed.values().map(|(st, _)| *st).collect();
-    let want: BTreeSet<Subtype> = Subtype::ALL
-        .into_iter()
-        .filter(|st| UNGUARDED.iter().all(|(u, _)| u != st))
+    // Vanilla has its own pixel paths (packing arms, no PBR), so it is pinned too, under `vanilla/`.
+    let (summary, events, vanilla) = run_target(d.path(), &sets, Target::Vanilla, "vanilla/");
+    assert_eq!(
+        (summary.failed, summary.validation_failed),
+        (0, 0),
+        "{events:#?}"
+    );
+    // Only the cs-only sub-types are refused: their forced fixtures are skipped with CFG-UNAVAILABLE. Uncoded skips
+    // are intentional (vanilla skips the RNM detail layer as a normal layer).
+    let refused: BTreeSet<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FileSkipped { code: None, .. } => None,
+            EventKind::FileSkipped { code: Some(c), .. } if c.as_str() == "CFG-UNAVAILABLE" => {
+                // A forced fixture by its sub-type id, any other file by its path under `in/`.
+                let p = e.path.clone().unwrap_or_default().replace('\\', "/");
+                let rel = p.rsplit_once("/in/").map_or(p.as_str(), |(_, r)| r);
+                Some(
+                    rel.strip_prefix("textures/h/")
+                        .map_or(rel.to_string(), |f| {
+                            f.split('.').next().unwrap().to_string()
+                        }),
+                )
+            }
+            _ => panic!("unexpected vanilla event: {e:#?}"),
+        })
         .collect();
-    assert_eq!(seen, want, "sub-types with an encode-input pin");
+    // The two `_rmaos` fixture members are cs-only rmaos as well.
+    let mut want_refused: BTreeSet<String> = CS_ONLY.iter().map(|st| st.id().to_string()).collect();
+    want_refused.extend([
+        "textures/pbr/rock_rmaos.png".into(),
+        "textures/rnm/iron_rmaos.png".into(),
+    ]);
+    assert_eq!(refused, want_refused, "vanilla refusals: {refused:#?}");
+    assert_eq!(
+        seen(&vanilla),
+        guarded().filter(|st| !CS_ONLY.contains(st)).collect(),
+        "sub-types with a vanilla encode-input pin"
+    );
+    observed.extend(vanilla);
 
     let file =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/encode_versions/encode_inputs.json");

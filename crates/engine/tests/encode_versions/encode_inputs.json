@@ -138,5 +138,85 @@
   "textures/rnm/iron_rmaos.dds": {
     "sha256": "0358ba55acfe0521c8e873be6a0e9f20fa33cd1af58c7e453c9cb65232531205",
     "subtype": "rmaos"
+  },
+  "vanilla/textures/h/backlight_tint.dds": {
+    "sha256": "4e483b174dd8b6459f201b3a9f825836ca8451a795f5f6ee0a0e515a7e611261",
+    "subtype": "backlight_tint"
+  },
+  "vanilla/textures/h/complex_grass.dds": {
+    "sha256": "f876862603cd976f18ee07e3c7fce5e24b9164c2bdfd9967f845f04e6d774c84",
+    "subtype": "complex_grass"
+  },
+  "vanilla/textures/h/complex_material.dds": {
+    "sha256": "77d6306acf5ba7e12c75d5cd63c95b7ad134729765ab539284ab012790e63826",
+    "subtype": "complex_material"
+  },
+  "vanilla/textures/h/diffuse.dds": {
+    "sha256": "03df9bf27a4903ef2853f6618394c76398a3dd3ac4c3ce2a007ac138fecd2554",
+    "subtype": "diffuse"
+  },
+  "vanilla/textures/h/envmask.dds": {
+    "sha256": "ea2172731dd13c7914cef461eba1939eb46af322c61c48a36f4f8f187feeb419",
+    "subtype": "envmask"
+  },
+  "vanilla/textures/h/generic_data.dds": {
+    "sha256": "165779f0f347298bda510681f6bf77b3e06bd2c825bfe9f986e3e9f4bc505328",
+    "subtype": "generic_data"
+  },
+  "vanilla/textures/h/generic_two_channel.dds": {
+    "sha256": "ef37138097cf5968f3fadc10b1f9203eac935a6895aa7ff334ad44ce0775e991",
+    "subtype": "generic_two_channel"
+  },
+  "vanilla/textures/h/glow.dds": {
+    "sha256": "4d9e32b4ecab88d289356fa44c5f839dab8322cb93c3becd546ab3b6df672f5d",
+    "subtype": "glow"
+  },
+  "vanilla/textures/h/height.dds": {
+    "sha256": "572848f1ec6101a4f0c722349c7361bf01f8f50811aeecd8f3af3258877ca8bb",
+    "subtype": "height"
+  },
+  "vanilla/textures/h/landscape.dds": {
+    "sha256": "d49ecaaffa1973ae81be40a0855a6fca9ea29dfc9795415888f381a824ed32ad",
+    "subtype": "landscape_diffuse"
+  },
+  "vanilla/textures/h/landscape_n.dds": {
+    "sha256": "f725fe40ce1d7f8a035cf42b4a4efded5ecc0a12ba7dd1db343f98d0fa513de3",
+    "subtype": "landscape_normal"
+  },
+  "vanilla/textures/h/msn.dds": {
+    "sha256": "d81f656e3d89700725432c1b5cdc9e942bcd6c3cff8634a07e01ec11445df308",
+    "subtype": "msn"
+  },
+  "vanilla/textures/h/msn_specular.dds": {
+    "sha256": "4b9401057a705ab63a633a3c8dabf376d19696ae64c88cf9b6c1cca93304831f",
+    "subtype": "msn_specular"
+  },
+  "vanilla/textures/h/normal.dds": {
+    "sha256": "42d35a11072af9b146a7b2096da4434760fd8c91dac23eccc3b5b3d24962228f",
+    "subtype": "normal"
+  },
+  "vanilla/textures/h/subsurface_tint.dds": {
+    "sha256": "16afe393b42fd4fe135a476e6bf505b6aca71e04d619c4b1ca95f42cd4685c69",
+    "subtype": "subsurface_tint"
+  },
+  "vanilla/textures/h/ui_sky.dds": {
+    "sha256": "1a40401fa230c41de5e526f9089b720ea391d3b508777af44306c6b672077bb4",
+    "subtype": "ui_sky"
+  },
+  "vanilla/textures/pbr/rock.dds": {
+    "sha256": "662838bd7fd978cdeaaf0b920088997812bc18f2a38109092a64f1546136551d",
+    "subtype": "diffuse"
+  },
+  "vanilla/textures/pbr/rock_n.dds": {
+    "sha256": "02164c638fa33c273cbae216a1e2559716fb57bbe5ed496b9a492eb1939837b8",
+    "subtype": "normal"
+  },
+  "vanilla/textures/rnm/iron.dds": {
+    "sha256": "b8fa6b408efe4cd9106fc32ddff8fe72f1316343ef5f7fc1332df121ef1fe327",
+    "subtype": "diffuse"
+  },
+  "vanilla/textures/rnm/iron_n.dds": {
+    "sha256": "a6bdda8940d86f117325b8cc16aad0b8672f1e4bfc4868e0292d5c560ab8315b",
+    "subtype": "normal"
   }
 }
