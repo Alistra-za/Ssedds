@@ -186,6 +186,9 @@ struct DialogUser {
     bool cancel = false;
     bool untick_mips = false; // click the Mipmaps checkbox (after any pick)
     bool tick_discard = false; // click the Discard transparency checkbox (after any pick)
+    bool tick_alpha_mode = false; // click the Alpha is transparency checkbox (before any Discard click)
+    bool alpha_mode_enabled = false, alpha_mode_enabled_after = true; // that checkbox at start and at the end
+    bool alpha_layout_ok = false; // Note DH: Alpha is transparency under Discard, label fits, above the Filter row
     wchar_t preset_before[64] = {}, preset_after[64] = {}; // the preset list's text before and after the sRGB tick
     wchar_t preset_custom[64] = {}; // the preset list's text after picking "Custom" over a matching preset
     bool delete_enabled_custom = true; // the Delete button after that pick
@@ -254,7 +257,30 @@ static DWORD WINAPI play_dialog(void *arg) {
                        discard.top >= format.top - 2 && discard.top > srgb.bottom &&
                        discard.right - discard.left >= text.cx + GetSystemMetrics(SM_CXMENUCHECK) + 4 &&
                        discard.right <= srgb.right && format.right <= discard.left;
+        { // Note DH: the Alpha is transparency checkbox sits under Discard, its label fits, the Filter row is below it
+            const RECT alpha = box(IDC_ALPHA_MODE), filt = box(IDC_FILTER), mips = box(IDC_MIPS);
+            HWND a = GetDlgItem(dlg, IDC_ALPHA_MODE);
+            wchar_t alabel[64] = {};
+            GetWindowTextW(a, alabel, 64);
+            std::wstring aplain;
+            for (const wchar_t *p = alabel; *p; p++)
+                if (*p != L'&') aplain += *p;
+            HDC adc = GetDC(a);
+            HGDIOBJ aold = SelectObject(adc, reinterpret_cast<HFONT>(SendMessageW(a, WM_GETFONT, 0, 0)));
+            SIZE atext = {};
+            GetTextExtentPoint32W(adc, aplain.c_str(), int(aplain.size()), &atext);
+            SelectObject(adc, aold);
+            ReleaseDC(a, adc);
+            u->alpha_layout_ok = aplain == L"Alpha is transparency" && wcschr(alabel, L'&') == alabel &&
+                                 alpha.left == discard.left && alpha.right == discard.right &&
+                                 alpha.top > discard.bottom && alpha.bottom <= filt.top && alpha.bottom <= mips.top &&
+                                 alpha.right - alpha.left >= atext.cx + GetSystemMetrics(SM_CXMENUCHECK) + 4 &&
+                                 // tab order is the window order (GetNextDlgTabItem skips a greyed control)
+                                 GetWindow(d, GW_HWNDNEXT) == a && GetWindow(a, GW_HWNDNEXT) == GetDlgItem(dlg, IDC_MIPS) &&
+                                 (GetWindowLongW(a, GWL_STYLE) & WS_TABSTOP) != 0;
+        }
     }
+    u->alpha_mode_enabled = IsWindowEnabled(GetDlgItem(dlg, IDC_ALPHA_MODE)) != 0;
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
     u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
     GetWindowTextW(GetDlgItem(dlg, IDC_PRESET), u->preset_before, 64);
@@ -278,8 +304,10 @@ static DWORD WINAPI play_dialog(void *arg) {
         SendMessageW(dlg, WM_COMMAND, MAKEWPARAM(IDC_FORMAT, CBN_SELCHANGE), reinterpret_cast<LPARAM>(fc));
     }
     if (u->untick_mips) SendMessageW(GetDlgItem(dlg, IDC_MIPS), BM_CLICK, 0, 0);
+    if (u->tick_alpha_mode) SendMessageW(GetDlgItem(dlg, IDC_ALPHA_MODE), BM_CLICK, 0, 0);
     if (u->tick_discard) SendMessageW(GetDlgItem(dlg, IDC_DISCARD), BM_CLICK, 0, 0);
     u->filter_enabled_after = IsWindowEnabled(filter) != 0;
+    u->alpha_mode_enabled_after = IsWindowEnabled(GetDlgItem(dlg, IDC_ALPHA_MODE)) != 0;
     GetWindowTextW(filter, u->filter_shown, 32);
     PostMessageW(dlg, WM_COMMAND, u->cancel ? IDCANCEL : IDOK, 0);
     return 0;
@@ -340,13 +368,25 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
     expect(kaiser.compare(0, 4, "DDS ") == 0 && box.compare(0, 4, "DDS ") == 0 && kaiser != box,
            "Kaiser is honoured (its DDS differs from the Box one)");
 
-    // Real transparency: the filter is greyed and shows Box.
+    // Note DH: real transparency is kept as data by default: Alpha is transparency is editable and so is the filter.
+    // Ticking Alpha is transparency greys the filter at Box (DC12) and writes different bytes.
     {
         write_file(path, original);
         DialogUser u;
         const int16 result = interactive_save(entry, path, real_alpha, &u);
-        expect(result == 0 && u.seen && !u.filter_enabled && wcscmp(u.filter_shown, L"Box") == 0,
-               "transparent layer: filter greyed, shows Box");
+        const std::string data = contents(path);
+        expect(result == 0 && u.seen && u.alpha_mode_enabled && u.filter_enabled && u.filter_enabled_after,
+               "transparent layer: Alpha is transparency editable, alpha as data keeps the filter editable");
+        write_file(path, original);
+        DialogUser b;
+        b.tick_alpha_mode = true;
+        const int16 blend_result = interactive_save(entry, path, real_alpha, &b);
+        expect(blend_result == 0 && b.seen && b.filter_enabled && !b.filter_enabled_after &&
+                   wcscmp(b.filter_shown, L"Box") == 0 && b.alpha_mode_enabled_after,
+               "transparent layer + Alpha is transparency: filter greyed, shows Box");
+        const std::string blend = contents(path);
+        expect(data.compare(0, 4, "DDS ") == 0 && blend.compare(0, 4, "DDS ") == 0 && data != blend,
+               "Alpha is transparency changes the saved bytes");
     }
 
     // DC33: Colour lists four formats; unticking Mipmaps greys the filter and saves a single level.
@@ -372,9 +412,11 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         write_file(path, original);
         DialogUser o;
         const int16 opaque_result = interactive_save(entry, path, opaque_alpha, &o);
-        expect(result == 0 && opaque_result == 0 && u.seen && !u.filter_enabled && u.filter_enabled_after &&
-                   discarded.compare(0, 4, "DDS ") == 0 && discarded == contents(path),
-               "transparent layer + Discard transparency: filter editable, same DDS as the opaque layer");
+        expect(result == 0 && opaque_result == 0 && u.seen && u.alpha_mode_enabled && !u.alpha_mode_enabled_after &&
+                   u.filter_enabled_after && !o.alpha_mode_enabled && discarded.compare(0, 4, "DDS ") == 0 &&
+                   discarded == contents(path),
+               "transparent layer + Discard transparency: Alpha is transparency greyed, filter editable, same DDS "
+               "as the opaque layer (where it is greyed too)");
     }
 
     {
@@ -383,6 +425,7 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         const int16 result = interactive_save(entry, path, opaque_alpha, &u);
         expect(u.dropdown_ok, "Format drop-down is wide enough for RGBA16F (uncompressed) at this DPI and font");
         expect(result == 0 && u.seen && u.layout_ok, "layout: Discard transparency under sRGB, Type and Format equally wide (DC43)");
+        expect(u.alpha_layout_ok, "layout: Alpha is transparency under Discard, mnemonic A, label fits, tab order (Note DH)");
     }
 
     // Cancel at the end: userCanceledErr and the file untouched.

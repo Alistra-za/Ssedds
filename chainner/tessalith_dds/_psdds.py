@@ -8,13 +8,13 @@ from pathlib import Path
 
 import numpy as np
 
-ABI_VERSION = 3  # must equal PSDDS_ABI_VERSION in photoshop/psdds.h (a test parses it)
+ABI_VERSION = 4  # must equal PSDDS_ABI_VERSION in photoshop/psdds.h (a test parses it)
 # Labels for the header's enum indices; they are the ABI, not a rule.
 FORMATS = ("BC1", "BC3", "BC4", "BC5", "BC7", "RGBA8", "BC6H", "RGBA16F")
 TYPES = ("Colour", "Normal", "Linear mask")
 FILTERS = ("Box", "Tent", "Mitchell", "Kaiser")
 ROLES = ("roughness", "metallic", "ao", "specular")
-_KEYS = ("format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha")
+_KEYS = ("format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha", "alpha_mode")
 _ERR = 1024
 
 
@@ -27,7 +27,7 @@ class _Settings(C.Structure):
 
 
 class _Controls(C.Structure):
-    _fields_ = [(k, C.c_uint32) for k in ("srgb_enabled", "filter_enabled", "quality_enabled")]
+    _fields_ = [(k, C.c_uint32) for k in ("srgb_enabled", "filter_enabled", "quality_enabled", "alpha_mode_enabled")]
 
 
 class _Buf(C.Structure):

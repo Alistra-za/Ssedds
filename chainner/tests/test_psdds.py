@@ -101,7 +101,7 @@ class PsddsTests(unittest.TestCase):
         for t in (COLOUR, NORMAL, MASK):
             self.assertEqual(P.defaults(t)["srgb"], 0)
         self.assertEqual(P.defaults(0)["discard_alpha"], 0)
-        self.assertEqual(list(P.defaults(0)), ["format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha"])
+        self.assertEqual(list(P.defaults(0)), ["format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha", "alpha_mode"])
 
     def test_presets_dc35(self):
         ps = P.presets()
@@ -122,7 +122,10 @@ class PsddsTests(unittest.TestCase):
             eff, ctl = P.resolve(s, False)
             self.assertEqual(ctl["filter_enabled"], 1)
             self.assertEqual(eff["filter"], 3)
+            # Note DH: kept alpha is data by default (filter editable); Alpha is transparency greys it at Box
             eff, ctl = P.resolve(s, True)
+            self.assertEqual((ctl["filter_enabled"], eff["filter"], ctl["alpha_mode_enabled"]), (1, 3, 1))
+            eff, ctl = P.resolve({**s, "alpha_mode": 1}, True)
             self.assertEqual(ctl["filter_enabled"], 0)
             self.assertEqual(eff["filter"], 0)
         img = gradient()
@@ -145,6 +148,25 @@ class PsddsTests(unittest.TestCase):
         self.assertEqual(drop, P.encode(rgb, {**s, "discard_alpha": 1}))
         self.assertNotEqual(drop, keep)
 
+    def test_alpha_mode_dh(self):
+        # Note DH: alpha_mode 0 (default, every seed) keeps the colour under alpha 0; 1 is the old Blend; 2 is refused
+        s = settings(BC7)
+        self.assertEqual(s["alpha_mode"], 0)
+        self.assertTrue(all(p["alpha_mode"] == 0 for _, p in P.presets()))
+        with self.assertRaises(P.PsddsError):
+            P.resolve({**s, "alpha_mode": 2}, True)
+        bgra = np.concatenate([gradient(32, 3), np.ones((32, 32, 1), np.float32)], axis=-1)
+        bgra[:, :8, 3] = 0.0
+        bgra[:, :8, :3] = (0.2, 0.1, 0.9)  # BGR under clear pixels, unlike its neighbours
+        data, blend = (P.encode(bgra, {**s, "alpha_mode": m}) for m in (0, 1))
+        self.assertNotEqual(data, blend)
+        under = lambda b: P.decode(b)[0][:, :8, :3]
+        self.assertLess(float(np.abs(under(data) - bgra[:, :8, :3]).max()), 0.03)
+        self.assertGreater(float(np.abs(under(blend) - bgra[:, :8, :3]).max()), 0.2)
+        # without kept alpha it changes nothing
+        self.assertEqual(P.encode(bgra, {**s, "alpha_mode": 1, "discard_alpha": 1}), P.encode(bgra, {**s, "discard_alpha": 1}))
+        eff, ctl = P.resolve({**s, "alpha_mode": 1}, False)
+        self.assertEqual((eff["alpha_mode"], ctl["alpha_mode_enabled"]), (0, 0))
     def _rmaos(self, sources, fills=(-1, -1, -1, -1), **kw):
         return P.rmaos_encode(sources, list(fills), P.rmaos_default_quality(), 0, **kw)
 
@@ -231,8 +253,8 @@ class PsddsTests(unittest.TestCase):
             self.assertEqual(Path(d, "x.dds.tmp").read_bytes(), b"user")
 
     def test_abi_mismatch(self):
-        with mock.patch.object(P, "ABI_VERSION", 4):
-            with self.assertRaisesRegex(P.PsddsError, r"ABI 3, these nodes need 4"):
+        with mock.patch.object(P, "ABI_VERSION", 5):
+            with self.assertRaisesRegex(P.PsddsError, r"ABI 4, these nodes need 5"):
                 P._load()
 
     def test_rmaos_fills(self):

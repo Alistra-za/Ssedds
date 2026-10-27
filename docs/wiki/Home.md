@@ -5,6 +5,8 @@ Tessalith converts source images (PNG, TGA, TIFF, EXR, PSD and others) into DDS 
 - `sdc`, the command-line tool.
 - `tessalith.exe`, the desktop application (the window says Tessalith).
 
+There are also optional plugins that save DDS straight from Photoshop, GIMP, Paint.NET and chaiNNer with the same encoders and rules. See [Host plugins](Host-Plugins.md).
+
 Each project folder can hold an `sdc.toml` file that records how its textures are converted. The GUI writes it and both programs read it, so you can set a project up in the GUI and then run it from a script.
 
 Tessalith builds for two targets:
@@ -14,21 +16,22 @@ Tessalith builds for two targets:
 | Community Shaders | `cs` (default) | You play with Community Shaders, including TruePBR materials. |
 | Vanilla | `vanilla` | You want textures that load without Community Shaders. A set given the complex material shader packs the complex `_m` (environment, gloss, metal, height). |
 
-This wiki covers version 1.0.0. Tessalith is licensed GPL-3.0-or-later, except its engine code (the `engine` and `encoders-sys` crates), which is MPL-2.0 so the plugins can use it. See [Plugins compared](Plugins-Compared.md).
+This wiki covers version 1.0.0. Tessalith is licensed GPL-3.0-or-later. Its conversion engine (the `engine` and `encoders-sys` crates) is MPL-2.0, and the plugins' shared `psdds.dll` is MIT except for that engine code inside it; see [Host plugins](Host-Plugins.md#licences).
 
 ## Pages
 
 | Page | What it covers |
 |---|---|
-| [Installation](Installation.md) | Requirements, building from source, the encoder libraries, optional NVTT setup. |
+| [Installation](Installation.md) | The release zip, requirements, building from source, the encoder libraries, optional NVTT setup. |
 | [Getting started](Getting-Started.md) | A first project from source folder to finished DDS files, in the CLI and in the GUI. |
 | [CLI reference](CLI-Reference.md) | Every `sdc` subcommand and flag, exit codes, the JSON event stream. |
 | [Project config](Project-Config.md) | Every `sdc.toml` key, its default, and how settings layer. |
 | [Presets and targets](Presets-and-Targets.md) | The built-in presets, writing your own, and what each target allows. |
 | [GUI guide](GUI-Guide.md) | Every panel in the GUI: the converter, set editor, bulk editing, 3D preview, TruePBR JSON editor, settings. |
-| [Plugins compared](Plugins-Compared.md) | What the Photoshop, GIMP, Paint.NET and chaiNNer plugins do, against Tessalith itself. |
 | [Texture types](Texture-Types.md) | Sub-types, file suffixes, naming, formats, packing and set shaders. |
 | [Mod scanning](Mod-Scanning.md) | Scanning meshes and plugins from an MO2 instance or a folder, and what the scan feeds back. |
+| [NIF editing](NIF-Editing.md) | Editing a mesh's shader, alpha, controllers and clips in the Meshes view, and exporting the edited NIF. |
+| [Host plugins](Host-Plugins.md) | Saving DDS from Photoshop, GIMP, Paint.NET and chaiNNer: install, options, HDR. |
 | [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools 3.2.5 as an optional BC7/BC6H encoder. |
 | [Validation and output](Validation-and-Output.md) | What gets checked after encoding, the output layout, the manifest, re-run behaviour. |
 | [Troubleshooting](Troubleshooting.md) | Every diagnostic code, common errors, and the in-game checklist. |

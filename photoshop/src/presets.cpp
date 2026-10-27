@@ -1,6 +1,6 @@
 // Tessalith DDS: the Save dialog's presets in <dir>\presets.txt (DC37). One preset per line, UTF-8:
-// name TAB format TAB texture_type TAB srgb TAB filter TAB mips TAB quality TAB discard_alpha, after a header line
-// without tabs. A name may start with '#'. MIT licence (see photoshop/LICENSE).
+// name TAB format TAB texture_type TAB srgb TAB filter TAB mips TAB quality TAB discard_alpha TAB alpha_mode, after a
+// header line without tabs. A line without alpha_mode (written before Note DH) loads with alpha_mode 0. A name may start with '#'. MIT licence (see photoshop/LICENSE).
 #include "presets.h"
 
 #include <windows.h>
@@ -11,12 +11,18 @@
 namespace {
 
 const wchar_t kFile[] = L"\\presets.txt";
-const char kHeader[] = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency\r\n";
+const char kHeader[] =
+    "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency, alpha is transparency\r\n";
+// The header written before Note DH: dropped on load like kHeader, so it is not kept as an unparsed line.
+const char kOldHeader[] = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency\r\n";
+constexpr int kFields = 8;    // PsddsSettings values on a line written now
+constexpr int kOldFields = 7; // before Note DH (no alpha_mode)
 // A preset line is under 300 bytes; this bounds what a corrupt or foreign file can make the dialog allocate.
 const LONGLONG kMaxFileBytes = 1 << 20;
 
 uint32_t *field(PsddsSettings &s, int i) {
-    uint32_t *f[7] = {&s.format, &s.texture_type, &s.srgb, &s.filter, &s.mips, &s.quality, &s.discard_alpha};
+    uint32_t *f[kFields] = {&s.format, &s.texture_type, &s.srgb,         &s.filter,
+                            &s.mips,   &s.quality,      &s.discard_alpha, &s.alpha_mode};
     return f[i];
 }
 
@@ -60,11 +66,13 @@ bool parse_line(const std::wstring &line, Preset *out) {
         if (tab == std::wstring::npos) break;
         start = tab + 1;
     }
-    if (parts.size() != 8) return false;
+    const int values = int(parts.size()) - 1;
+    if (values != kFields && values != kOldFields) return false;
     Preset p;
+    p.settings.alpha_mode = 0; // a line from before Note DH
     p.name = CleanPresetName(parts[0]);
     if (p.name.empty() || p.name != parts[0]) return false;
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < values; i++)
         if (!parse_u32(parts[size_t(i) + 1], field(p.settings, i))) return false;
     PsddsSettings effective;
     PsddsControls controls;
@@ -144,7 +152,7 @@ std::vector<Preset> LoadPresets(const std::wstring &dir, PresetFileInfo *info) {
         start = end + 1;
         Preset p;
         if (parse_line(from_utf8(line), &p)) list.push_back(p);
-        else if (!line.empty() && line + "\r\n" != kHeader) out.unparsed.push_back(line); // kept verbatim on the next write
+        else if (!line.empty() && line + "\r\n" != kHeader && line + "\r\n" != kOldHeader) out.unparsed.push_back(line); // kept verbatim on the next write
     }
     return list;
 }
@@ -156,7 +164,7 @@ bool SavePresets(const std::wstring &dir, const std::vector<Preset> &list, const
         if (CleanPresetName(p.name) != p.name || p.name.empty()) return false;
         text += to_utf8(p.name);
         PsddsSettings s = p.settings;
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < kFields; i++) {
             char num[16];
             snprintf(num, sizeof num, "\t%u", *field(s, i));
             text += num;

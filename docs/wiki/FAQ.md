@@ -10,7 +10,15 @@ No. Tessalith is Windows-only (x86-64, built with MSVC). The GUI also uses Direc
 
 ### Is there an installer or a prebuilt download?
 
-Not yet. Build from source; see [Installation](Installation.md).
+There is a prebuilt zip, but no installer. Download `Tessalith-<version>-win-x64.zip` from the Releases page, unzip it anywhere and run `tessalith.exe`. See [Installation](Installation.md).
+
+### Can I save DDS straight from Photoshop, GIMP, Paint.NET or chaiNNer?
+
+Yes, with the optional plugins. They use Tessalith's encoders and rules, so a file saves the same way it would from Tessalith. See [Host plugins](Host-Plugins.md).
+
+### Can I edit a mesh (NIF)?
+
+Yes, in the GUI's Meshes view: shader fields and flags, alpha, extra data, controllers and animation clips. **Export NIF** writes an edited copy; the source file never changes. See [NIF editing](NIF-Editing.md).
 
 ### Which target should I pick?
 
@@ -44,7 +52,7 @@ Use the `cs-compact` or `vanilla-compact` preset: BC1 for opaque colour, half si
 sdc convert src --recursive --accept-suggestions high --preset cs-compact
 ```
 
-In the GUI, set `preset = "cs-compact"` in `sdc.toml`; there is no preset picker yet.
+In the GUI, pick it in the header's **Preset** list. It is saved in `sdc.toml` as `preset`.
 
 ### How do I make a quick test conversion?
 
@@ -76,7 +84,7 @@ No. NVTT is an optional encoder for BC7 and BC6H. See [NVTT backend](NVTT-Backen
 
 ### Which source formats work?
 
-PNG, TGA, TIFF, EXR, HDR, BMP, JPEG, WebP, PSD/PSB (merged image, saved with Maximize Compatibility), and Krita/OpenRaster (merged image). GIMP `.xcf` and Paint.NET `.pdn` are not read; export to PNG or TGA first.
+PNG, TGA, TIFF, EXR, HDR, BMP, JPEG, WebP, PSD/PSB (merged image, saved with Maximize Compatibility), and Krita/OpenRaster (merged image). GIMP `.xcf` and Paint.NET `.pdn` are not read; export to PNG or TGA first, or save the DDS straight from GIMP or Paint.NET with the [plugin](Host-Plugins.md).
 
 ### Can I run conversions from a script or another tool?
 
@@ -96,4 +104,4 @@ See the table in [GUI guide](GUI-Guide.md#where-settings-live).
 
 ### What licence is it under?
 
-GPL-3.0-or-later, except the `engine` and `encoders-sys` crates, which are MPL-2.0 so the plugins can use them. The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`.
+Tessalith is GPL-3.0-or-later. Its conversion engine (the `engine` and `encoders-sys` crates) is MPL-2.0. The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`. The plugins have their own split; see [Host plugins](Host-Plugins.md#licences).

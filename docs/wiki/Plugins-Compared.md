@@ -1,13 +1,8 @@
 # Plugins compared
 
-Each plugin saves one image as a Skyrim DDS through `psdds.dll`, which holds Tessalith's encoders and settings rules. Everything else on this page that a plugin does not do needs Tessalith itself (`tessalith.exe` or `sdc`). All of them run on Windows x64 only.
+Each plugin saves one image as a Skyrim DDS through `psdds.dll`, which holds Tessalith's encoders and settings rules. Everything else on this page that a plugin does not do needs Tessalith itself (`tessalith.exe` or `sdc`).
 
-| Plugin | Requires | Status | User guide |
-|---|---|---|---|
-| Photoshop | Photoshop 2020 or later | Released | `photoshop/README.md` |
-| chaiNNer nodes | chaiNNer | Released | `chainner/README.md` |
-| GIMP | GIMP 3.0.x | In development | `gimp/README.md` |
-| Paint.NET | Paint.NET 5.1 or later | In development | `paintdotnet/README.md` |
+Install steps, versions and the full options are on [Host plugins](Host-Plugins.md).
 
 ## Saving
 
@@ -68,12 +63,4 @@ See [Texture types](Texture-Types.md) for the packed layouts, the variance bake,
 - The set editor, 3D set preview and TruePBR JSON editor ([GUI guide](GUI-Guide.md)).
 - The command line, with a JSON event stream ([CLI reference](CLI-Reference.md)).
 
-## Licences
-
-| | Licence |
-|---|---|
-| Tessalith | GPL-3.0-or-later; the `engine` and `encoders-sys` crates are MPL-2.0 |
-| Photoshop plugin | MIT, with the engine code inside it under MPL-2.0. No GPL code: Adobe's SDK licence forbids it |
-| GIMP plug-in | GPL-3.0-or-later; `psdds.dll` is MIT with the engine code under MPL-2.0 |
-| Paint.NET plugin | GPL-3.0-or-later with an additional permission for Paint.NET; `psdds.dll` as above |
-| chaiNNer nodes | GPL-3.0-or-later; `psdds.dll` as above |
+Licences: see [Host plugins](Host-Plugins.md#licences).

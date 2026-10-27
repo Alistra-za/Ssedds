@@ -18,7 +18,7 @@ fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
 }
 
 #[repr(C)]
-struct Settings([u32; 7]);
+struct Settings([u32; 8]);
 #[repr(C)]
 struct Buf {
     data: *mut u8,
@@ -52,8 +52,8 @@ fn main() {
         let enc: Encode = std::mem::transmute(enc);
 
         let px: Vec<f32> = (0..64 * 64 * 4).map(|i| (i % 251) as f32 / 250.0).collect();
-        // BC7 colour, sRGB off, box filter, full mips, quality 0.
-        let s = Settings([4, 0, 0, 0, 1, 0, 0]);
+        // BC7 colour, sRGB off, box filter, full mips, quality 0, alpha kept as data.
+        let s = Settings([4, 0, 0, 0, 1, 0, 0, 0]);
         let mut buf = Buf {
             data: std::ptr::null_mut(),
             len: 0,

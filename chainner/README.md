@@ -4,6 +4,13 @@ Three nodes, in the **Image > Tessalith DDS** group, that save Skyrim SE/AE DDS 
 
 ## Install
 
+From the release zip (`TessalithDDS-chaiNNer-<version>.zip`):
+
+1. Unzip it anywhere, keeping its folders, and right-click the zip > Properties > Unblock first if Windows blocked it.
+2. Close chaiNNer, then run `install.ps1` from the unzipped folder: `powershell -ExecutionPolicy Bypass -File install.ps1`. It uses the `psdds.dll` and notices in the zip; nothing is built.
+
+From a repo checkout:
+
 1. Build the DLL if you have not (`crates\psdds\build.ps1`). `install.ps1` also generates the licence notices with `crates\psdds\notices.ps1`, which needs `cargo-about` (`cargo install cargo-about --locked`).
 2. Close chaiNNer, then run `chainner\install.ps1`. It first stops any chaiNNer Python backend left running after chaiNNer closed (it holds `psdds.dll` open), then copies the nodes, `psdds.dll`, `COPYING`, `LICENSE` and `THIRD_PARTY_NOTICES.md` into the newest `%LOCALAPPDATA%\chaiNNer\app-*` folder and prints the psdds version.
 3. `-Target <resources\src folder>` installs into a given folder instead; `-Uninstall` removes only the `tessalith_dds` folder.
@@ -12,7 +19,7 @@ Three nodes, in the **Image > Tessalith DDS** group, that save Skyrim SE/AE DDS 
 
 ## Nodes
 
-- **Save DDS (Tessalith)**: image, folder, subdirectory, image name, then the settings. *Preset* is Custom (every setting shown) or one of Tessalith's seed presets (the settings are hidden and the preset's values are used). Custom shows texture type, sRGB, discard transparency, mipmaps, mip filter, and a format with its quality list. Inputs that do not apply to the chosen type or format are hidden: *Discard transparency* is hidden for BC1, BC4, BC5 and BC6H, which store no alpha. **Colour** also offers **BC6H** and **RGBA16F**; Normal and Linear mask do not.
+- **Save DDS (Tessalith)**: image, folder, subdirectory, image name, then the settings. *Preset* is Custom (every setting shown) or one of Tessalith's seed presets (the settings are hidden and the preset's values are used). Custom shows texture type, sRGB, discard transparency, mipmaps, mip filter, and a format with its quality list. Inputs that do not apply to the chosen type or format are hidden: *Discard transparency* is hidden for BC1, BC4, BC5 and BC6H, which store no alpha. *Alpha is transparency* (off by default) is shown only where alpha can be kept (BC3, BC7, RGBA8, RGBA16F with *Discard transparency* off). Off: alpha is data (a mask), and the colour under fully transparent pixels is saved exactly. On: alpha is see-through, so that colour is replaced by the nearest visible colour and the mips are alpha-weighted, as before this option existed. It only matters when the image has transparent pixels. **Colour** also offers **BC6H** and **RGBA16F**; Normal and Linear mask do not.
   - **Linear HDR input** (off by default) says what the pixels mean, because chaiNNer images are float32 and do not say. *Off*: sRGB-coded 0..1 (a PNG); values are clamped to 0..1, and BC6H and RGBA16F decode the stored sRGB coding to linear (a flat 0.5 reads back as 0.2140). Every other format writes the same bytes as before the switch existed. *On*: linear light (an EXR); values above 1 are kept for BC6H and RGBA16F, and 8-bit formats clip and convert. The rules come from psdds at depth 16 (off) or 32 (on). Alpha is taken from the pixels: an image without used alpha is saved opaque. Existing files are overwritten unless *Skip existing files* is on. A file is written only after the encode succeeded.
 - **RMAOS (Tessalith)**: builds a TruePBR `_rmaos` from a roughness image (required) and up to three more: metallic, AO, specular. Each image input has a *channel* dropdown (R, G, B, A; hidden for a grey image), so one `_orm` image can feed three roles. An unconnected metallic, AO or specular role shows a *value* (0-255), preset to the engine's neutral default: metallic 0, AO 255, specular 255. Sizes must match; nothing is resized. Quality and Mipmaps are set here. The layout is in the wiki's Texture-Types page.
 - **Save Normal (Tessalith)**: normal image, folder, subdirectory, base name, format, mipmaps, quality, skip existing, and an optional *RMAOS* input.

@@ -54,10 +54,27 @@ static void dialog_state_follows_resolve() {
     check(r.filter_enabled && r.shown.filter == PSDDS_KAISER, t, "Colour+RGBA8 filter editable, Kaiser");
     check(!r.quality_enabled && r.shown.quality == 0, t, "RGBA8 greys quality at 0");
 
-    // Colour + BC7 with alpha: the filter greys showing Box.
-    ControlStates a = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 1, 8);
-    check(a.ok && !a.filter_enabled && a.shown.filter == PSDDS_BOX, t, "alpha greys filter showing Box");
+    // Colour + BC7 with alpha, Alpha is transparency ticked: the filter greys showing Box.
+    PsddsSettings blend = make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER);
+    blend.alpha_mode = 1;
+    ControlStates a = FromResolve(blend, 1, 8);
+    check(a.ok && !a.filter_enabled && a.shown.filter == PSDDS_BOX, t, "transparency greys filter showing Box");
     check(a.srgb_enabled && a.shown.srgb == 1, t, "alpha leaves sRGB editable");
+    check(a.alpha_mode_enabled && a.shown.alpha_mode == 1, t, "alpha kept: Alpha is transparency editable");
+
+    // Note DH: by default kept alpha is data, so the filter stays editable.
+    ControlStates ad = FromResolve(make(PSDDS_BC7, PSDDS_COLOUR, 1, PSDDS_KAISER), 1, 8);
+    check(ad.ok && ad.filter_enabled && ad.shown.filter == PSDDS_KAISER, t, "alpha as data keeps the filter");
+    check(ad.alpha_mode_enabled && ad.shown.alpha_mode == 0, t, "alpha as data: checkbox editable, unticked");
+    // No alpha, Discard ticked or a format without alpha: greyed, effective 0.
+    check(!FromResolve(blend, 0, 8).alpha_mode_enabled && FromResolve(blend, 0, 8).shown.alpha_mode == 0, t,
+          "no alpha: Alpha is transparency greyed, effective 0");
+    PsddsSettings disc = blend;
+    disc.discard_alpha = 1;
+    check(!FromResolve(disc, 1, 8).alpha_mode_enabled, t, "Discard transparency greys Alpha is transparency");
+    PsddsSettings bc1 = blend;
+    bc1.format = PSDDS_BC1;
+    check(!FromResolve(bc1, 1, 8).alpha_mode_enabled, t, "BC1 greys Alpha is transparency");
 
     // An out-of-range value (a corrupt remembered setting) is refused, not shown.
     check(!FromResolve(make(9, PSDDS_COLOUR, 1, 0), 0, 8).ok, t, "format 9 refused");
@@ -138,21 +155,27 @@ static void presets_store_round_trip() {
     mine.format = PSDDS_BC5;
     mine.discard_alpha = 1;
     list.push_back({L"Mine ü猫", mine});
+    PsddsSettings blend = psdds_defaults(PSDDS_COLOUR);
+    blend.alpha_mode = 1;
+    list.push_back({L"Transparent", blend}); // Note DH: the eighth value round-trips
     list.push_back({L"#1 rocks", mine}); // a leading '#' is a name, not a comment
     check(SavePresets(dir, list), t, "save");
     std::vector<Preset> back = LoadPresets(dir);
     bool equal = back.size() == list.size();
     for (size_t i = 0; equal && i < list.size(); i++)
         equal = back[i].name == list[i].name && same(back[i].settings, list[i].settings);
-    check(equal, t, "round trip keeps order, names (UTF-8) and all seven values");
+    check(equal, t, "round trip keeps order, names (UTF-8) and all eight values");
 
     check(SavePresets(dir, {}), t, "save empty");
     check(LoadPresets(dir).empty() && LoadPresets(dir).empty(), t, "an empty store stays empty (no reseed)");
 
     write_text(file, "# comment\r\nGood\t4\t0\t0\t0\t1\t4\t0\r\nShort\t4\t0\t0\r\nBadFormat\t9\t0\t0\t0\t1\t4\t0\n"
-                     "Neg\t-1\t0\t0\t0\t1\t4\t0\nDisc\t4\t0\t0\t0\t1\t4\t2\n\t4\t0\t0\t0\t1\t4\t0\n");
+                     "Neg\t-1\t0\t0\t0\t1\t4\t0\nDisc\t4\t0\t0\t0\t1\t4\t2\n\t4\t0\t0\t0\t1\t4\t0\n"
+                     "Mode\t4\t0\t0\t0\t1\t4\t0\t1\r\nBadMode\t4\t0\t0\t0\t1\t4\t0\t2\r\n");
     back = LoadPresets(dir);
-    check(back.size() == 1 && back[0].name == L"Good", t, "only the valid line loads");
+    check(back.size() == 2 && back[0].name == L"Good" && back[1].name == L"Mode", t, "only the valid lines load");
+    check(back.size() == 2 && back[0].settings.alpha_mode == 0 && back[1].settings.alpha_mode == 1, t,
+          "a 7-value line loads with alpha_mode 0, an 8-value line keeps it");
 
     DeleteFileW(file.c_str());
     RemoveDirectoryW(dir.c_str());
@@ -190,6 +213,14 @@ static void preset_names_and_matching() {
     check(MatchPreset(list, k, 1, 8) == -1, t, "discard transparency is part of a preset (with alpha)");
     check(MatchPreset(list, k, 0, 8) == 0, t, "without alpha, discard transparency has no effect (DC40)");
     check(MatchPreset(list, psdds_defaults(PSDDS_COLOUR), 1, 8) == 0, t, "the defaults are Colour BC7");
+    // Note DH: Alpha is transparency is part of a preset where alpha is kept, and has no effect elsewhere.
+    PsddsSettings tr = list[0].settings;
+    tr.alpha_mode = 1;
+    check(MatchPreset(list, tr, 1, 8) == -1, t, "alpha is transparency is part of a preset (with alpha)");
+    check(MatchPreset(list, tr, 0, 8) == 0, t, "without alpha, alpha is transparency has no effect");
+    PsddsSettings tr1 = list[1].settings;
+    tr1.alpha_mode = 1;
+    check(MatchPreset(list, tr1, 1, 8) == 1, t, "BC1 keeps no alpha, so alpha_mode 1 still matches its seed");
     // A greyed difference does not make it Custom: Normal with a remembered sRGB On still shows Normal BC7.
     PsddsSettings n = list[2].settings;
     n.srgb = 1;
@@ -217,8 +248,8 @@ static void presets_file_is_protected() {
     RemoveDirectoryW(dir.c_str());
     check(LoadPresets(dir).size() == 5, t, "seeded");
 
-    // Unparseable lines (a typo, invalid UTF-8, a future 9-field line) survive a save.
-    const char *odd = "Typo\t4\t0\t0\t0\t1\t4\r\nBad\xE9utf\t4\t0\t0\t0\t1\t4\t0\r\nFuture\t4\t0\t0\t0\t1\t4\t0\t7\r\n";
+    // Unparseable lines (a typo, invalid UTF-8, a future 10-field line) survive a save. The pre-DH header is dropped.
+    const char *odd = "Typo\t4\t0\t0\t0\t1\t4\r\nBad\xE9utf\t4\t0\t0\t0\t1\t4\t0\r\nFuture\t4\t0\t0\t0\t1\t4\t0\t0\t7\r\n";
     std::string text = "# Tessalith DDS presets: name, format, type, sRGB, filter, mips, quality, discard transparency\r\nGood\t4\t0\t0\t0\t1\t4\t0\r\n";
     text += odd;
     write_text(file, text.c_str());
@@ -233,6 +264,11 @@ static void presets_file_is_protected() {
     ReadFile(f, buf, sizeof buf - 1, &got, nullptr);
     CloseHandle(f);
     check(strstr(buf, odd) != nullptr && strstr(buf, "Added") != nullptr, t, "bad lines are in the saved file verbatim");
+    // Note DH: the old 7-field line loaded with alpha_mode 0 and is written back with 8 fields under the new header.
+    check(list[0].settings.alpha_mode == 0, t, "a 7-field line loads with alpha_mode 0");
+    check(strstr(buf, "Good\t4\t0\t0\t0\t1\t4\t0\t0\r\n") != nullptr, t, "presets are written with 8 values");
+    check(strstr(buf, "discard transparency\r\n") == nullptr && strstr(buf, "alpha is transparency\r\n") != nullptr, t,
+          "the old header is replaced, not kept as an unparsed line");
 
     // A file that cannot be opened (held exclusively) or is over 1 MiB is not complete, and stays as it is.
     HANDLE held = CreateFileW(file.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);

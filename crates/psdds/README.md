@@ -20,7 +20,7 @@ All calls are thread-safe. Errors are one plain sentence in a caller buffer.
 ```
 
 ## ABI policy
-`PSDDS_ABI_VERSION` changes on any change to the header's declarations or documented behaviour. A host requires an exact match with `psdds_abi_version()` and ships its own copy of the DLL. The current ABI is 3 (Note DF adds the depth-aware exports; the old exports keep their behaviour except as recorded there). See Notes DD and DF in `docs/DECISIONS.md`.
+`PSDDS_ABI_VERSION` changes on any change to the header's declarations or documented behaviour. A host requires an exact match with `psdds_abi_version()` and ships its own copy of the DLL. The current ABI is 4 (Note DH: `PsddsSettings.alpha_mode`, "Alpha is transparency", and `PsddsControls.alpha_mode_enabled`; kept alpha is data by default). ABI 3 was Note DF's depth-aware exports. See Notes DD, DF and DH in `docs/DECISIONS.md`.
 
 ## Licence
 MIT. It links `crates/engine` and `crates/encoders-sys`, which are under the Mozilla Public License 2.0 (`MPL-2.0`, no Exhibit B; each crate carries the text as `LICENSE`; Notes DC1, DC41); their source is at https://github.com/Alistra-za/Tessalith. `notices.ps1` names that repository and the commit a binary was built from (MPL-2.0 section 3.2).
