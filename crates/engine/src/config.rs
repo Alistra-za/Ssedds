@@ -741,13 +741,47 @@ cfg_enum!(#[derive(Default)] FaceFlip, "lowercase" { #[default] None, H, V });
 // The ground fill look: the horizon colour darkening towards the nadir.
 cfg_enum!(GroundMode, "lowercase" { Gradient });
 /// What fills the cube below `cubemap.horizon`: `"gradient"` or `[r, g, b]` code values (game gamma, like `tint`).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum GroundFill {
     Mode(GroundMode),
     Color([u8; 3]),
 }
 
+// Hand-written so a bad value names the accepted forms (an untagged derive says only "did not match any variant").
+impl<'de> Deserialize<'de> for GroundFill {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, SeqAccess, Unexpected, Visitor};
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = GroundFill;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("\"gradient\" or [r, g, b] with each 0..=255")
+            }
+            fn visit_str<E: Error>(self, s: &str) -> Result<GroundFill, E> {
+                match s {
+                    "gradient" => Ok(GroundFill::Mode(GroundMode::Gradient)),
+                    _ => Err(E::invalid_value(Unexpected::Str(s), &self)),
+                }
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<GroundFill, A::Error> {
+                let mut rgb = [0u8; 3];
+                for (i, c) in rgb.iter_mut().enumerate() {
+                    let v: i64 = a
+                        .next_element()?
+                        .ok_or_else(|| A::Error::invalid_length(i, &self))?;
+                    *c = u8::try_from(v)
+                        .map_err(|_| A::Error::invalid_value(Unexpected::Signed(v), &self))?;
+                }
+                match a.next_element::<serde::de::IgnoredAny>()? {
+                    None => Ok(GroundFill::Color(rgb)),
+                    Some(_) => Err(A::Error::invalid_length(4, &self)),
+                }
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
@@ -969,6 +1003,25 @@ mod tests {
         assert_eq!(s.horizon, -5.0);
     }
 
+    #[test]
+    fn bad_ground_fill_names_the_accepted_forms() {
+        for bad in [
+            "\"gradiant\"",
+            "[1, 2]",
+            "[300, 0, 0]",
+            "[1, 2, 3, 4]",
+            "[-1, 0, 0]",
+            "5",
+        ] {
+            let e = toml::from_str::<CubemapSpec>(&format!("ground_fill = {bad}"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("\"gradient\" or [r, g, b] with each 0..=255"),
+                "{bad}: {e}"
+            );
+        }
+    }
     #[test]
     fn cubemap_is_the_last_subtype() {
         assert_eq!(Subtype::ALL.len(), 30);

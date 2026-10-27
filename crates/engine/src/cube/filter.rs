@@ -26,6 +26,11 @@ pub fn mirror(c: &Cube) -> Cube {
     })
 }
 
+/// Blend weight of the fill at elevation `e`: 1 below `h - 1`, 0 above `h + 1`, linear between.
+fn fill_weight(e: f64, h: f64) -> f32 {
+    ((h + 1.0 - e) / 2.0).clamp(0.0, 1.0) as f32
+}
+
 /// Fill the cube below `horizon_deg` (DECISIONS DN17); alpha untouched.
 pub fn ground_fill(c: &mut Cube, fill: &GroundFill, horizon_deg: f64) {
     let size = c.size;
@@ -33,27 +38,32 @@ pub fn ground_fill(c: &mut Cube, fill: &GroundFill, horizon_deg: f64) {
         let d = cube_dir(f, i as u32 % size, i as u32 / size, size);
         (to_world(d)[2].clamp(-1.0, 1.0) as f64).asin().to_degrees()
     };
-    // Horizon colour: mean over [h, h+5]; if empty (tiny cubes), mean of the texels nearest above h.
-    let (mut band, mut nb) = ([0f64; 3], 0u32);
-    let mut near: (f64, [f64; 3], u32) = (f64::MAX, [0.0; 3], 0);
-    for (f, face) in c.faces.iter().enumerate() {
-        for (i, p) in face.px.iter().enumerate() {
-            let e = elev(f, i);
-            let rgb = [p[0] as f64, p[1] as f64, p[2] as f64];
-            if (horizon_deg..=horizon_deg + 5.0).contains(&e) {
-                (0..3).for_each(|k| band[k] += rgb[k]);
-                nb += 1;
-            } else if e >= horizon_deg {
-                if e < near.0 - 0.5 {
-                    near = (e, rgb, 1);
-                } else if e < near.0 + 0.5 {
-                    (0..3).for_each(|k| near.1[k] += rgb[k]);
-                    near.2 += 1;
+    let h = horizon_deg;
+    let rgb_of = |p: &[f32; 4]| [p[0] as f64, p[1] as f64, p[2] as f64];
+    let mean_where = |c: &Cube, keep: &dyn Fn(f64) -> bool| {
+        let (mut sum, mut n) = ([0f64; 3], 0u32);
+        for (f, face) in c.faces.iter().enumerate() {
+            for (i, p) in face.px.iter().enumerate() {
+                if keep(elev(f, i)) {
+                    let v = rgb_of(p);
+                    (0..3).for_each(|k| sum[k] += v[k]);
+                    n += 1;
                 }
             }
         }
+        (sum, n)
+    };
+    // Horizon colour: mean over [h, h+5]. If no texel is there (very small cubes), pass 1 finds the smallest
+    // elevation e0 >= h and pass 2 averages the texels with e < e0 + 0.5.
+    let (mut sum, mut n) = mean_where(c, &|e| (h..=h + 5.0).contains(&e));
+    if n == 0 {
+        let e0 = (0..6)
+            .flat_map(|f| (0..(size * size) as usize).map(move |i| (f, i)))
+            .map(|(f, i)| elev(f, i))
+            .filter(|&e| e >= h)
+            .fold(f64::MAX, f64::min);
+        (sum, n) = mean_where(c, &|e| e >= h && e < e0 + 0.5);
     }
-    let (sum, n) = if nb > 0 { (band, nb) } else { (near.1, near.2) };
     let hc = sum.map(|v| (v / n.max(1) as f64) as f32);
     let ground = match fill {
         GroundFill::Color(rgb) => Some(rgb.map(|v| game_gamma_to_linear(v as f32 / 255.0))),
@@ -62,13 +72,12 @@ pub fn ground_fill(c: &mut Cube, fill: &GroundFill, horizon_deg: f64) {
     for (f, face) in c.faces.iter_mut().enumerate() {
         for (i, p) in face.px.iter_mut().enumerate() {
             let e = elev(f, i);
-            // 1 below horizon-1, 0 above horizon+1, linear between.
-            let a = ((horizon_deg + 1.0 - e) / 2.0).clamp(0.0, 1.0) as f32;
+            let a = fill_weight(e, h);
             if a == 0.0 {
                 continue;
             }
             let target = ground.unwrap_or_else(|| {
-                let t = ((horizon_deg - e) / (horizon_deg + 90.0)).clamp(0.0, 1.0) as f32;
+                let t = ((h - e) / (h + 90.0)).clamp(0.0, 1.0) as f32;
                 hc.map(|v| v * (1.0 - 0.5 * t))
             });
             for k in 0..3 {
@@ -77,7 +86,6 @@ pub fn ground_fill(c: &mut Cube, fill: &GroundFill, horizon_deg: f64) {
         }
     }
 }
-
 fn luma(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
@@ -249,46 +257,120 @@ mod tests {
         assert!((p[2] - game_gamma_to_linear(128.0 / 255.0)).abs() < 1e-6);
     }
 
-    #[test]
-    fn gradient_starts_at_the_horizon_colour() {
-        let size = 64;
-        let mut c = Cube {
+    fn grad(c: &mut Cube, h: f64) {
+        ground_fill(c, &GroundFill::Mode(crate::config::GroundMode::Gradient), h);
+    }
+
+    fn flat_size(size: u32, v: f32) -> Cube {
+        Cube {
             size,
-            faces: std::array::from_fn(|_| Rgba32F::new(size, size, [0.6, 0.6, 0.6, 1.0])),
-        };
-        ground_fill(
-            &mut c,
-            &GroundFill::Mode(crate::config::GroundMode::Gradient),
-            0.0,
-        );
-        let (mut near, mut nadir) = (f32::MAX, 1.0f32);
-        for (f, i, e) in texels(size) {
-            let v = c.faces[f].px[i][0];
-            if (-3.0..-1.5).contains(&e) {
-                near = near.min(v);
+            faces: std::array::from_fn(|_| Rgba32F::new(size, size, [v, v, v, 1.0])),
+        }
+    }
+
+    #[test]
+    fn gradient_follows_the_pinned_ramp_at_any_horizon() {
+        let size = 64;
+        for h in [0.0, 30.0, -30.0] {
+            let mut c = flat_size(size, 0.6);
+            grad(&mut c, h);
+            let mut checked = 0;
+            for (f, i, e) in texels(size) {
+                if e < h - 1.0 {
+                    let t = ((h - e) / (h + 90.0)) as f32;
+                    let want = 0.6 * (1.0 - 0.5 * t);
+                    let got = c.faces[f].px[i][0];
+                    assert!((got - want).abs() < 1e-4, "h {h} e {e}: {got} vs {want}");
+                    checked += 1;
+                } else if e > h + 1.0 {
+                    assert_eq!(c.faces[f].px[i][0], 0.6);
+                }
             }
-            if e < -85.0 {
-                nadir = nadir.min(v);
+            assert!(checked > 100);
+        }
+    }
+
+    #[test]
+    fn blend_weights_at_the_edges() {
+        for h in [0.0, 30.0, -30.0] {
+            assert_eq!(fill_weight(h - 1.0, h), 1.0);
+            assert_eq!(fill_weight(h, h), 0.5);
+            assert_eq!(fill_weight(h + 1.0, h), 0.0);
+        }
+        // Texels inside the blend zone land strictly between the original and the fill.
+        let size = 64;
+        let mut c = flat_size(size, 0.5);
+        ground_fill(&mut c, &GroundFill::Color([0, 0, 0]), 20.0);
+        let mut seen = 0;
+        for (f, i, e) in texels(size) {
+            if (19.1..20.9).contains(&e) {
+                let v = c.faces[f].px[i][0];
+                assert!(
+                    (v - 0.5 * (1.0 - fill_weight(e, 20.0))).abs() < 1e-6 && v > 0.0 && v < 0.5
+                );
+                seen += 1;
             }
         }
-        assert!(near > 0.585 && near <= 0.6, "{near}");
-        assert!((nadir - 0.3).abs() < 0.01, "{nadir}");
+        assert!(seen > 0);
     }
 
     #[test]
-    fn empty_band_uses_the_nearest_row_above_and_stays_finite() {
-        let mut c = flat([0.4; 3]);
-        ground_fill(
-            &mut c,
-            &GroundFill::Mode(crate::config::GroundMode::Gradient),
-            0.0,
-        );
-        assert!(c
-            .faces
-            .iter()
-            .all(|f| f.px.iter().all(|p| p[..3].iter().all(|v| v.is_finite()))));
+    fn horizon_colour_is_the_in_band_mean() {
+        let size = 64;
+        let h = 10.0;
+        let mut c = flat_size(size, 0.0);
+        for (f, i, e) in texels(size) {
+            // Distinct values above, in and below the band, so a wrong band or a whole-cube mean shows.
+            c.faces[f].px[i][..3].fill(if e > h + 5.0 {
+                1.0
+            } else if e >= h {
+                0.2
+            } else {
+                0.7
+            });
+        }
+        grad(&mut c, h);
+        let mut checked = 0;
+        for (f, i, e) in texels(size) {
+            if e < h - 1.0 {
+                let t = ((h - e) / (h + 90.0)) as f32;
+                let got = c.faces[f].px[i][0];
+                assert!((got - 0.2 * (1.0 - 0.5 * t)).abs() < 1e-4, "e {e}: {got}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100);
     }
 
+    #[test]
+    fn empty_band_uses_the_nearest_row_above() {
+        // A 2x2 cube has texels only at e = +-24.1 and +-41.8 degrees, so [0, 5] is empty.
+        let mut c = flat_size(2, 0.0);
+        let mut rows = 0;
+        for (f, i, e) in texels(2) {
+            assert!(!(0.0..=5.0).contains(&e));
+            c.faces[f].px[i][..3].fill(if e > 30.0 {
+                0.2
+            } else if e > 0.0 {
+                rows += 1;
+                0.8
+            } else {
+                0.5
+            });
+        }
+        assert!(rows > 0);
+        grad(&mut c, 0.0);
+        for (f, i, e) in texels(2) {
+            if e < -1.0 {
+                let want = 0.8 * (1.0 - 0.5 * (-e / 90.0) as f32);
+                let got = c.faces[f].px[i][0];
+                assert!(
+                    (got - want).abs() < 1e-4 && got > 0.0,
+                    "e {e}: {got} vs {want}"
+                );
+            }
+        }
+    }
     #[test]
     fn horizon_moves_the_line() {
         let size = 32;
