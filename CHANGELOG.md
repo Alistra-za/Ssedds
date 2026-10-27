@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `--on-existing if-changed` now re-encodes only the texture types whose output changed in a new version. Upgrading from 1.0.0 re-encodes nothing.
+- Cubemaps (in progress): a new `cubemap` texture type for `_e` environment maps and files under a `cubemaps` folder, with `cubemap.*` settings and four styles (`vanilla_metal`, `room`, `eye`, `hd`). Other texture types are unchanged.
 
 ## 1.0.0
 

@@ -267,7 +267,7 @@ pub fn low_detail_profile_eligible(p: &Profile) -> bool {
     p.resize == ResizeMode::None
         && !p.drop_top_mip
         && matches!(p.category, Category::Color | Category::Normal)
-        && p.subtype != Subtype::ComplexGrass
+        && !matches!(p.subtype, Subtype::ComplexGrass | Subtype::Cubemap)
         && !matches!(
             p.mips.levels,
             MipLevels::Keyword(MipKeyword::None) | MipLevels::Count(0..=2)

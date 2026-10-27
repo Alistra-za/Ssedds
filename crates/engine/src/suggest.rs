@@ -117,6 +117,10 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
         }
         Some("i") => vec![s(Diffuse, Medium, "_i multilayer inner layer (colour)")],
         Some("b") | Some("bl") => vec![s(BacklightTint, High, "_b/_bl backlight")],
+        Some("e") => vec![s(Cubemap, High, "_e environment cubemap")],
+        None | Some("d") if has_component(c.game_path, "cubemaps") => {
+            vec![s(Cubemap, High, "under a cubemaps folder")]
+        }
         Some("sk") => vec![s(BacklightTint, Low, "_sk (unconfirmed meaning)")],
         Some("d") | None if landscape => {
             vec![s(LandscapeDiffuse, High, "colour under textures/landscape")]
@@ -423,14 +427,23 @@ mod tests {
             .subtype,
             Subtype::Glow
         );
-        assert!(suggest(&ctx(
-            Target::Cs,
-            Some("e"),
-            "textures/a/x_e.png",
-            &none,
-            AlphaContent::None
-        ))
-        .is_empty());
+    }
+
+    #[test]
+    fn underscore_e_and_cubemaps_folder_suggest_cubemap() {
+        let none = BTreeSet::new();
+        for (suffix, path) in [
+            (Some("e"), "textures/a/x_e.png"),
+            (None, "textures/cubemaps/sky.png"),
+        ] {
+            let v = suggest(&ctx(Target::Cs, suffix, path, &none, AlphaContent::None));
+            assert_eq!(v.len(), 1, "{path}: {v:?}");
+            assert_eq!(
+                (v[0].subtype, v[0].confidence),
+                (Subtype::Cubemap, Confidence::High),
+                "{path}"
+            );
+        }
     }
 
     #[test]

@@ -760,6 +760,9 @@ fn layered_profile_with(
             );
         }
     }
+    if st == Subtype::Cubemap {
+        cube_style_layer(ctx, &mut doc, &mut prov, &mut sources);
+    }
     let mut profile = finish_profile(doc, ctx.target, st)?;
     // The skin_wet height form is a grayscale map: R is taken and copied to RGB in Preprocess.
     profile.category = category_of(st, profile.format, f.analysis.grayscale);
@@ -801,6 +804,11 @@ fn layered_profile_with(
         profile.rnm = crate::config::RnmSpec::default();
         prov.retain(|k, _| !k.starts_with("rnm."));
     }
+    // DECISIONS DN4: only a cubemap reads `cubemap`, so another sub-type keeps the default (and its hash).
+    if st != Subtype::Cubemap && !profile.cubemap.is_default() {
+        profile.cubemap = CubemapSpec::default();
+        prov.retain(|k, _| !k.starts_with("cubemap."));
+    }
     // An order that resolves to the default order is the default (no re-encode); any other is stored normalised.
     if profile.rnm.order.is_some() {
         let eff = profile.rnm.effective_order();
@@ -809,6 +817,49 @@ fn layered_profile_with(
     // Last: `filter_allowed` reads the final format, content, category and alpha policy.
     let dropped = unscoped_filter_falls_back(&mut profile, &mut prov, &sources);
     Ok((profile, prov, dropped))
+}
+
+/// DECISIONS DN4: a cubemap's `cubemap.style` fills `face_size`, `format`, `blur` (and `saturation`) where no
+/// explicit layer set them, and the tag is UNORM unless set explicitly (an explicit sRGB is refused by
+/// `encoding_warnings`). At sub-type-table reach without a pin, so `backend_follows_format` moves the backend with
+/// the style's format.
+fn cube_style_layer(
+    ctx: &ResolveCtx,
+    doc: &mut Value,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
+) {
+    let style = doc
+        .pointer("/cubemap/style")
+        .and_then(|v| serde_json::from_value::<CubeStyle>(v.clone()).ok());
+    let mut fill = |field: &str, value: Value| {
+        if !field_explicit(ctx, prov, field) {
+            let patch = to_patch(field, &value);
+            apply(
+                doc,
+                prov,
+                sources,
+                &patch,
+                Provenance::Builtin,
+                SUBTYPE_TABLE,
+            );
+        }
+    };
+    if let Some(style) = style {
+        let (size, format, blur, saturation) = match style {
+            CubeStyle::VanillaMetal => (32, Format::Bc1, 0.6, Some(0.8)),
+            CubeStyle::Room => (128, Format::Bc1, 0.35, None),
+            CubeStyle::Eye => (256, Format::Bc7, 0.35, None),
+            CubeStyle::Hd => (512, Format::Bc7, 0.1, None),
+        };
+        fill("cubemap.face_size", json!(size));
+        fill("format", json!(format));
+        fill("cubemap.blur", json!(blur));
+        if let Some(s) = saturation {
+            fill("cubemap.saturation", json!(s));
+        }
+    }
+    fill("color.tag", json!(ColorTag::Unorm));
 }
 
 /// DECISIONS S-mips-13 (owner, 2026-10-11): a non-box `mips.filter` this profile may not use
@@ -1481,7 +1532,63 @@ fn encoding_warnings(
                 .into(),
         );
     }
+    if st == Subtype::Cubemap
+        && !(matches!(
+            format,
+            Format::Bc1 | Format::Bc3 | Format::Bc7 | Format::Rgba8
+        ) && tag == ColorTag::Unorm)
+    {
+        add(
+            CfgInvalid,
+            "cubemaps are written as BC1, BC3, BC7 or RGBA8, UNORM".into(),
+        );
+    }
     w
+}
+
+/// A cubemap's mips and `cubemap.*` ranges (DECISIONS DN4).
+fn cube_checks(p: &Profile, add: &mut impl FnMut(Code, String)) {
+    if matches!(
+        p.mips.levels,
+        MipLevels::Keyword(MipKeyword::None) | MipLevels::Count(0..=1)
+    ) {
+        add(
+            Code::CubeNoMips,
+            "a cubemap without mips sparkles on curved surfaces, and CS reads its last mip as the average colour"
+                .into(),
+        );
+    }
+    let c = &p.cubemap;
+    let mut bad = |what: String| add(Code::CfgInvalid, what);
+    if let Some(n) = c
+        .face_size
+        .filter(|n| !(n.is_power_of_two() && (4..=4096).contains(n)))
+    {
+        bad(format!(
+            "cubemap.face_size {n} is not a power of two in 4..=4096"
+        ));
+    }
+    if let Some(r) = c
+        .face_rotate
+        .iter()
+        .find(|r| ![0, 90, 180, 270].contains(*r))
+    {
+        bad(format!("cubemap.face_rotate {r} is not 0, 90, 180 or 270"));
+    }
+    let ranges = [
+        ("blur", c.blur, 0.0..=1.0),
+        ("exposure", Some(c.exposure), -10.0..=10.0),
+        ("brightness", Some(c.brightness), -1.0..=1.0),
+        ("contrast", Some(c.contrast), -1.0..=1.0),
+        ("midtones", Some(c.midtones), 0.1..=10.0),
+        ("saturation", Some(c.saturation), 0.0..=2.0),
+        ("highlight_clamp", c.highlight_clamp, 1.0..=f64::MAX),
+    ];
+    for (key, v, range) in ranges {
+        if let Some(v) = v.filter(|v| !range.contains(v)) {
+            bad(format!("cubemap.{key} {v} outside {range:?}"));
+        }
+    }
 }
 
 /// The category a profile of `st` written as `format` has: a `skin_wet` height form (grey, or BC4) is a grayscale
@@ -1922,11 +2029,15 @@ pub fn check_profile(
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
     });
-    if !(ow.is_power_of_two() && oh.is_power_of_two()) {
+    // A cube's source size is not its face size; Task 5's face-size checks replace these for cubes.
+    if st != Subtype::Cubemap && !(ow.is_power_of_two() && oh.is_power_of_two()) {
         add(DimNpot, format!("{ow}x{oh} is not a power of two"));
     }
-    if ow.min(oh) < 4 {
+    if st != Subtype::Cubemap && ow.min(oh) < 4 {
         add(DimSmall, "base dimension below 4 px".into());
+    }
+    if st == Subtype::Cubemap {
+        cube_checks(p, &mut add);
     }
     if st == Subtype::Flow && ow.min(oh) <= 32 {
         add(

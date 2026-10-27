@@ -208,6 +208,135 @@
       ],
       "type": "string"
     },
+    "CubeLayout": {
+      "enum": [
+        "faces",
+        "hcross",
+        "vcross",
+        "hstrip",
+        "vstrip"
+      ],
+      "type": "string"
+    },
+    "CubeStyle": {
+      "enum": [
+        "vanilla_metal",
+        "room",
+        "eye",
+        "hd"
+      ],
+      "type": "string"
+    },
+    "CubemapSpec": {
+      "additionalProperties": false,
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DN4).",
+      "properties": {
+        "blur": {
+          "description": "Cone blur amount, 0..=1; unset = none.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "brightness": {
+          "format": "double",
+          "type": "number"
+        },
+        "contrast": {
+          "format": "double",
+          "type": "number"
+        },
+        "exposure": {
+          "format": "double",
+          "type": "number"
+        },
+        "face_flip": {
+          "items": {
+            "$ref": "#/$defs/FaceFlip"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "face_rotate": {
+          "description": "Per-face rotation in degrees (0, 90, 180, 270), in +X, -X, +Y, -Y, +Z, -Z order.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "face_size": {
+          "description": "Face edge in pixels: a power of two in 4..=4096; unset = from the source.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "highlight_clamp": {
+          "description": "Highlights above this (linear) are clamped; at least 1.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeLayout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "midtones": {
+          "format": "double",
+          "type": "number"
+        },
+        "saturation": {
+          "format": "double",
+          "type": "number"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tint": {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "vcross_negz_rotate": {
+          "description": "A vertical cross stores -Z upside down; rotate it back.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "Effort": {
       "enum": [
         "ultrafast",
@@ -264,6 +393,14 @@
         "bc45_search_radius"
       ],
       "type": "object"
+    },
+    "FaceFlip": {
+      "enum": [
+        "none",
+        "h",
+        "v"
+      ],
+      "type": "string"
     },
     "FillSpec": {
       "additionalProperties": false,
@@ -636,6 +773,7 @@
         "skin_sk",
         "skin_wet",
         "complex_grass",
+        "cubemap",
         "rfaos"
       ],
       "type": "string"
@@ -708,6 +846,10 @@
     },
     "color": {
       "$ref": "#/$defs/ColorSpec"
+    },
+    "cubemap": {
+      "$ref": "#/$defs/CubemapSpec",
+      "description": "Cubemap settings; read only by `Subtype::Cubemap`, reset for every other sub-type."
     },
     "drop_top_mip": {
       "description": "Write the texture at half size, from its mip 1; every lower level is unchanged.",

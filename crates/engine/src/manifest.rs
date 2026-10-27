@@ -56,6 +56,7 @@ pub const fn encode_version(st: Subtype) -> &'static str {
         | Subtype::SkinSk
         | Subtype::SkinWet
         | Subtype::ComplexGrass => "1.0.0",
+        Subtype::Cubemap => "1.1.0",
     }
 }
 

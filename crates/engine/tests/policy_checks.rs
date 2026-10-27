@@ -2652,3 +2652,92 @@ fn builtin_backend_does_not_probe() {
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
     assert_eq!(cell.into_probed(), None);
 }
+
+/// An `_e` cubemap source (cubemap support v1), resolved with `sets_cli`.
+fn cube(sets_cli: &[&str]) -> ResolvedJob {
+    run(
+        Target::Cs,
+        "textures/a/x_e.png",
+        Some("e"),
+        &["e"],
+        Rgba32F::new(64, 64, [0.5, 0.4, 0.3, 1.0]),
+        sets_cli,
+        &[],
+    )
+}
+
+#[test]
+fn non_cube_subtypes_ignore_cubemap_keys() {
+    let diffuse = |sets: &[&str]| {
+        run(
+            Target::Cs,
+            "textures/a/x.png",
+            None,
+            &[],
+            Rgba32F::new(64, 64, [0.5, 0.4, 0.3, 1.0]),
+            sets,
+            &[],
+        )
+    };
+    let plain = diffuse(&[]);
+    let set = diffuse(&["cubemap.blur=0.5"]);
+    assert_eq!(set.profile.subtype, Subtype::Diffuse);
+    assert!(set.profile.cubemap.is_default());
+    assert!(!set.provenance.keys().any(|k| k.starts_with("cubemap.")));
+    assert_eq!(
+        engine::manifest::profile_sha256(&set.profile).unwrap(),
+        engine::manifest::profile_sha256(&plain.profile).unwrap()
+    );
+}
+
+#[test]
+fn styles_fill_unset_keys_only() {
+    let j = cube(&["cubemap.style=room"]);
+    assert_eq!(j.profile.subtype, Subtype::Cubemap);
+    assert_eq!(j.profile.cubemap.face_size, Some(128));
+    assert_eq!(j.profile.format, Format::Bc1);
+    assert_eq!(j.profile.encoder.backend, Backend::Rgbcx);
+    assert_eq!(j.profile.cubemap.blur, Some(0.35));
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+
+    let j = cube(&["cubemap.style=room", "format=bc7"]);
+    assert_eq!(j.profile.format, Format::Bc7);
+    assert_eq!(j.profile.encoder.backend, Backend::Bc7e);
+    assert_eq!(j.profile.cubemap.face_size, Some(128));
+
+    let j = cube(&["cubemap.style=vanilla_metal", "cubemap.face_size=64"]);
+    assert_eq!(j.profile.cubemap.face_size, Some(64));
+    assert_eq!(j.profile.cubemap.saturation, 0.8);
+}
+
+#[test]
+fn cubemap_srgb_tag_is_invalid() {
+    assert_eq!(cube(&[]).profile.color.tag, ColorTag::Unorm);
+    let j = cube(&["color.tag=srgb"]);
+    assert!(codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+}
+
+#[test]
+fn mips_none_on_a_cube_warns() {
+    assert!(!codes(&cube(&[])).contains(&Code::CubeNoMips));
+    let j = cube(&["mips.levels=none"]);
+    assert!(codes(&j).contains(&Code::CubeNoMips), "{:?}", j.warnings);
+}
+
+#[test]
+fn out_of_range_cube_keys_are_invalid() {
+    assert!(!codes(&cube(&[])).contains(&Code::CfgInvalid));
+    for set in [
+        "cubemap.face_size=100",
+        "cubemap.face_rotate=[45, 0, 0, 0, 0, 0]",
+        "cubemap.blur=1.5",
+        "cubemap.midtones=0",
+    ] {
+        let j = cube(&[set]);
+        assert!(
+            codes(&j).contains(&Code::CfgInvalid),
+            "{set}: {:?}",
+            j.warnings
+        );
+    }
+}

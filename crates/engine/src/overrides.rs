@@ -270,6 +270,20 @@ pub const FIELD_PATHS: &[&str] = &[
     "rnm.bent.ao_power",
     "rnm.bent.ao",
     "rnm.target",
+    "cubemap.style",
+    "cubemap.layout",
+    "cubemap.face_size",
+    "cubemap.face_rotate",
+    "cubemap.face_flip",
+    "cubemap.vcross_negz_rotate",
+    "cubemap.blur",
+    "cubemap.exposure",
+    "cubemap.brightness",
+    "cubemap.contrast",
+    "cubemap.midtones",
+    "cubemap.saturation",
+    "cubemap.tint",
+    "cubemap.highlight_clamp",
 ];
 
 pub const REENCODE_FIELD: &str = "reencode";

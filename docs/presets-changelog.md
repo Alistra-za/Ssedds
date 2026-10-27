@@ -3,6 +3,22 @@
 One entry per built-in preset version. A version changes when anything the preset resolves to changes; the workspace
 version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
 
+## Unreleased — sdc 1.1.0 (sdc-base 1.2.0)
+
+- New sub-type `cubemap` (`_e`, or any file under a `cubemaps` folder): sRGB content, UNORM tag; format BC7, alpha
+  remove and full mips come from `[defaults]`. Cubes are written as BC1, BC3, BC7 or RGBA8, UNORM only.
+- New `cubemap.*` keys, read only by `cubemap` and skipped at their defaults, so no 2D profile hash changes.
+- `cubemap.style` fills the keys you did not set yourself:
+
+  | style | face_size | format | blur | saturation |
+  |---|---|---|---|---|
+  | `vanilla_metal` | 32 | bc1 | 0.6 | 0.8 |
+  | `room` | 128 | bc1 | 0.35 | — |
+  | `eye` | 256 | bc7 | 0.35 | — |
+  | `hd` | 512 | bc7 | 0.1 | — |
+
+- No 2D output changes, and `if-changed` re-encodes nothing that is not a cube (per-type encode versions, Note DM).
+
 ## 2026-10-22 — sdc 1.0.0
 
 - Version bump only; no preset or output change. Every output re-encodes once under `if-changed` (engine version 1.0.0).
