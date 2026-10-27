@@ -17,6 +17,7 @@ fn record(
         schema: MANIFEST_SCHEMA,
         ts: now_rfc3339(),
         engine_version: ENGINE_VERSION.into(),
+        encode_version: Some(encode_version(profile.subtype).into()),
         engine_commit: engine_commit().into(),
         encoders: EncoderVersions::current(),
         isa: dispatched_isa().into(),
@@ -700,4 +701,46 @@ fn an_append_during_compaction_is_kept() {
     let all = m.load().unwrap();
     assert_eq!(all.len(), 2 + appended);
     assert_eq!(all["b.dds"].source_sha256, "2");
+}
+
+mod also_support;
+
+#[test]
+fn records_carry_the_encode_version_of_their_subtype() {
+    use also_support::*;
+    let (_d, m, loc) = project(cup);
+    let sp = spec(&loc, &[engine::presets::AlsoTarget::Vanilla]);
+    also(request(&m, &loc), &sp).0.unwrap();
+    let e = record(&loc.join("Mod PBR"), "textures/clutter/cup.dds");
+    let rec: ManifestRecord = serde_json::from_value(e.raw.clone()).unwrap();
+    let want = encode_version(rec.profile.subtype);
+    assert_eq!(e.encode_version.as_deref(), Some(want));
+    assert!(e.raw["encode_version"].is_string());
+}
+
+#[test]
+fn a_record_without_encode_version_loads_with_none() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let (profile, preset) = cs_quality();
+    let r = record("x_n.dds", "aa", profile, preset);
+    let line = |v: Option<serde_json::Value>| {
+        let mut j = serde_json::to_value(&r).unwrap();
+        let o = j.as_object_mut().unwrap();
+        match v {
+            Some(v) => o.insert("encode_version".into(), v),
+            None => o.remove("encode_version"),
+        };
+        j
+    };
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    for (v, want) in [
+        (None, None),
+        (Some(serde_json::json!(7)), None),
+        (Some(serde_json::json!("")), Some("")),
+    ] {
+        std::fs::write(m.path(), format!("{}\n", line(v))).unwrap();
+        let all = m.load().unwrap();
+        assert_eq!(all["x_n.dds"].encode_version.as_deref(), want);
+    }
 }

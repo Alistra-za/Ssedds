@@ -608,6 +608,7 @@ pub fn process_file(
         schema: MANIFEST_SCHEMA,
         ts: now_rfc3339(),
         engine_version: ENGINE_VERSION.into(),
+        encode_version: Some(crate::manifest::encode_version(p.subtype).into()),
         engine_commit: engine_commit().into(),
         encoders: EncoderVersions {
             nvtt: nvtt

@@ -251,6 +251,9 @@ pub struct ManifestRecord {
     /// RFC 3339, UTC.
     pub ts: String,
     pub engine_version: String,
+    /// The [`encode_version`] of `profile.subtype` when this output was written; absent in records written by 1.0.0 and older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encode_version: Option<String>,
     pub engine_commit: String,
     pub encoders: EncoderVersions,
     pub isa: String,
@@ -306,6 +309,8 @@ pub struct ManifestEntry {
     pub sources: Vec<SourceRef>,
     pub profile_sha256: String,
     pub engine_version: String,
+    /// `ManifestRecord::encode_version`; `None` when absent or not a string.
+    pub encode_version: Option<String>,
     pub encoders: Option<EncoderVersions>,
     pub preset: Option<PresetRef>,
     pub bc1_model: Option<String>,
@@ -343,6 +348,9 @@ impl ManifestEntry {
             sources: lenient(&raw, "sources").unwrap_or_default(),
             profile_sha256: text("profile_sha256"),
             engine_version: text("engine_version"),
+            encode_version: get("encode_version")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             encoders: lenient(&raw, "encoders"),
             preset: lenient(&raw, "preset"),
             bc1_model: lenient(&raw, "bc1_model"),

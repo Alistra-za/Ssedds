@@ -249,6 +249,32 @@ fn a_second_export_is_all_up_to_date() {
 }
 
 #[test]
+fn a_1_0_0_twin_without_encode_version_is_copied_and_the_copy_records_the_current_version() {
+    let (_d, m, loc) = project(cup);
+    let sp = spec(&loc, &[AlsoTarget::Vanilla]);
+    also(request(&m, &loc), &sp).0.unwrap();
+    let (pbr, van) = (loc.join("Mod PBR"), loc.join("Mod Vanilla"));
+    let f = "textures/clutter/cup.dds";
+    // Make the PBR record look like a 1.0.0 one: no encode_version.
+    let mut raw = record(&pbr, f).raw;
+    raw.as_object_mut().unwrap().remove("encode_version");
+    let rec: ManifestRecord = serde_json::from_value(raw).unwrap();
+    assert_eq!(rec.encode_version, None);
+    Manifest::at(&pbr).append(&rec).unwrap();
+    std::fs::remove_file(van.join(f)).unwrap();
+    let (s, ev) = also(request(&m, &loc), &sp);
+    let s = s.unwrap();
+    let failed = keys_of(&ev, |k| matches!(k, EventKind::FileFailed { .. }));
+    assert!(failed.is_empty(), "{failed:?} {s:#?}");
+    let copy = record(&van, f);
+    assert!(copy.raw.get("copied_from").is_some());
+    let r: ManifestRecord = serde_json::from_value(copy.raw.clone()).unwrap();
+    assert_eq!(
+        copy.raw["encode_version"],
+        engine::manifest::encode_version(r.profile.subtype)
+    );
+}
+#[test]
 fn a_changed_bc1_model_re_copies_the_plain_sets() {
     let (_d, m, loc) = project(cup);
     let mut req = request(&m, &loc);

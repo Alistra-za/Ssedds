@@ -3139,6 +3139,7 @@ mod tests {
             sources: vec![],
             profile_sha256: profile_sha256(&job.profile).unwrap(),
             engine_version: ENGINE_VERSION.into(),
+            encode_version: Some(crate::manifest::encode_version(job.profile.subtype).into()),
             encoders: Some(enc.clone()),
             preset: PresetRef::for_preset(&reg, "cs-quality", None),
             bc1_model: Some("ideal".into()),

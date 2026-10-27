@@ -801,6 +801,7 @@ fn do_copies(
         rec.ts = crate::manifest::now_rfc3339();
         rec.output_stamp = SourceStamp::of(&job.output);
         rec.copied_from = c.twin.output_stamp;
+        rec.encode_version = Some(crate::manifest::encode_version(rec.profile.subtype).into());
         if let Err(e) = manifest.append(&rec) {
             // As `run_one`: no output is left without its record.
             let _ = std::fs::remove_file(&job.output);
