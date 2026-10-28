@@ -214,6 +214,32 @@ fn fill_runs_before_alpha_policy() {
     assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove);
 }
 
+/// Final review I1: a raw map the user typed to convert alone (`[files] subtype`, no `helper.*`) fills nothing.
+#[test]
+fn raw_map_typed_to_convert_alone_fills_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    checker(d.path(), "x_opacity.png", 0, 255);
+    toml(
+        d.path(),
+        "[files.\"textures/a/x_opacity.png\"]\nsubtype = \"diffuse\"\n",
+    );
+    let (p, plan_ev) = plan_of(req(d.path(), Target::Cs, &[DIFFUSE, "alpha.policy=blend"]));
+    assert!(
+        job(&p, "x.png").fill.is_none(),
+        "{:#?}",
+        job(&p, "x.png").fill
+    );
+    assert_eq!(
+        job(&p, "x_opacity.png").profile.subtype,
+        Subtype::Diffuse,
+        "converted alone"
+    );
+    let (_, run_ev) = run(p);
+    let t = terminal(plan_ev.iter().chain(&run_ev), "x_opacity.png");
+    assert!(t.iter().all(|k| !filled_into(k, "/x.dds")), "{t:?}");
+}
+
 const OPACITY_ASSIGNED: &str = "[files.\"textures/a/x_opacity\"]\nhelper.fills = [\"diffuse.a\"]\n";
 const RGBA8: [&str; 3] = [DIFFUSE, "alpha.policy=blend", "format=rgba8"];
 

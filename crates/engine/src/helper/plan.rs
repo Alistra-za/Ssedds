@@ -136,15 +136,17 @@ pub fn plan_fills(
                     continue;
                 }
                 Some(HelperRole::Raw(r)) => r,
-                // Note DR: a skin `_f` has its role on its job only.
-                None => match raw_role(f).or_else(|| {
-                    jobs.iter().find_map(|j| match j.status {
-                        JobStatus::PackingInput { role } if j.input == f.path => Some(role),
-                        _ => None,
-                    })
-                }) {
-                    Some(r) => r,
-                    None => continue,
+                // The file's own job decides (Note DR: a skin `_f` has its role there only); any other job converts it
+                // alone (DX2, final review I1). Only a file with no job (failed or cancelled) falls back to its name.
+                None => match jobs.iter().find(|j| j.input == f.path && j.pack.is_none()) {
+                    Some(j) => match j.status {
+                        JobStatus::PackingInput { role } => role,
+                        _ => continue,
+                    },
+                    None => match raw_role(f) {
+                        Some(r) => r,
+                        None => continue,
+                    },
                 },
             };
             let targets: Vec<AlphaTarget> = match &sel.fills {
