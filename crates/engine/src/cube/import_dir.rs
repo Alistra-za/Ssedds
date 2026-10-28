@@ -1,4 +1,4 @@
-//! Direction-based importers: equirect panoramas (DECISIONS DN14), mirror balls and angular maps (DN15) to a cube.
+//! Direction-based importers: equirect panoramas (DECISIONS DS14), mirror balls and angular maps (DS15) to a cube.
 use super::latlong::dir_to_uv;
 use super::world::to_world;
 use super::{dir_at, sample, Cube};
@@ -36,7 +36,7 @@ pub fn equirect(img: &Rgba32F, size: u32) -> Cube {
     project(img, size, true, |d| dir_to_uv(d, 0.0))
 }
 
-/// The fake 2:1 panorama of a single photo (DN16): `W = 2 * img.w`, `H = W / 2`. The photo fills the front half
+/// The fake 2:1 panorama of a single photo (DS16): `W = 2 * img.w`, `H = W / 2`. The photo fills the front half
 /// (centred on `u = 0.5` and on the horizon row), the back half is it mirrored about `u = 0.25` and `u = 0.75` so the
 /// wrap seam is continuous, and above and below it each column fades linearly to the mean of the photo's top and
 /// bottom row (the poles).
@@ -85,13 +85,13 @@ pub fn photo_panorama(img: &Rgba32F) -> Rgba32F {
     }
     out
 }
-/// Camera-space `(east, up, south)` of a world direction (DN15): the camera stands at world south looking north.
+/// Camera-space `(east, up, south)` of a world direction (DS15): the camera stands at world south looking north.
 fn camera(d: [f32; 3]) -> [f32; 3] {
     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-12);
     [d[0] / l, d[2] / l, -d[1] / l]
 }
 
-/// A `size` cube from a mirror-ball photo (DN15): `n = normalize(c + (0,0,1))`, `(u, v) = (n.x, n.y)` in the unit
+/// A `size` cube from a mirror-ball photo (DS15): `n = normalize(c + (0,0,1))`, `(u, v) = (n.x, n.y)` in the unit
 /// disc, radius clamped to 0.98 so the back pole (north) reads from the outer ring.
 pub fn mirror_ball(img: &Rgba32F, size: u32) -> Cube {
     project(img, size, false, |d| {
@@ -111,7 +111,7 @@ pub fn mirror_ball(img: &Rgba32F, size: u32) -> Cube {
     })
 }
 
-/// A `size` cube from an angular map (DN15): `r = acos(-c.z) / pi` along `(c.x, c.y)`, centre north, rim south.
+/// A `size` cube from an angular map (DS15): `r = acos(-c.z) / pi` along `(c.x, c.y)`, centre north, rim south.
 pub fn angular(img: &Rgba32F, size: u32) -> Cube {
     project(img, size, false, |d| {
         let c = camera(d);

@@ -1,4 +1,4 @@
-//! A cube job's stages up to quantise (cubemap support v1, DECISIONS DN10, DN11): load, decode to linear light,
+//! A cube job's stages up to quantise (cubemap support v1, DECISIONS DS10, DS11): load, decode to linear light,
 //! cut the six faces, size them, colour filters, cone blur, then one mip chain built in direction space across faces.
 use super::{filter, import_dir, layout, sample, Cube, CubeJob};
 use crate::api::CancelToken;
@@ -42,7 +42,7 @@ pub(crate) fn prepare(
             cj.sources.len()
         )));
     }
-    // The cube is sized by `cubemap.face_size`, never by `resize`. DECISIONS DN11: `srgb` content on a cube is the
+    // The cube is sized by `cubemap.face_size`, never by `resize`. DECISIONS DS11: `srgb` content on a cube is the
     // game's 1.6 gamma, decoded and re-encoded here, so preprocess and quantise see stored values (`content linear`).
     let mut q = Profile {
         resize: ResizeMode::None,
@@ -81,7 +81,7 @@ pub(crate) fn prepare(
         _ => None,
     };
     let faces: [Rgba32F; 6] = if let Some(import) = direct {
-        // Any loaded size reads as a panorama (DN14, DN15), sampled straight at the face size, so the resize below
+        // Any loaded size reads as a panorama (DS14, DS15), sampled straight at the face size, so the resize below
         // is a no-op.
         let Cube { faces, .. } = import(&works[0].img, n);
         let mut k = 0;
@@ -125,7 +125,7 @@ pub(crate) fn prepare(
     } else if n > cell {
         cube = sample::resample(&cube, n, |d| d);
     }
-    // Run order (DECISIONS DN14): import, face rotate/flip, yaw, mirror, colour filters, ground fill, blur.
+    // Run order (DECISIONS DS14): import, face rotate/flip, yaw, mirror, colour filters, ground fill, blur.
     if p.cubemap.yaw != 0.0 {
         cube = filter::yaw(&cube, p.cubemap.yaw);
     }
@@ -139,7 +139,7 @@ pub(crate) fn prepare(
     stop()?;
 
     tracker.stage.set(Stage::Mipmaps);
-    // DN24: no copy at blur 0, and the pre-blur cube is freed before the mip chain.
+    // DS24: no copy at blur 0, and the pre-blur cube is freed before the mip chain.
     let blur = p.cubemap.blur.unwrap_or(0.0);
     let cube = if blur > 0.0 {
         let blurred = sample::blur(&cube, blur);

@@ -625,7 +625,7 @@
     },
     "CubemapSpec": {
       "additionalProperties": false,
-      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DN4).",
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DS4).",
       "properties": {
         "blur": {
           "description": "Cone blur amount, 0..=1; unset = none.",
@@ -1763,7 +1763,7 @@
               "type": "null"
             }
           ],
-          "description": "Cubemap v1 (DECISIONS DN8): how a cube is built from its source file or six face files\n(`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`."
+          "description": "Cubemap v1 (DECISIONS DS8): how a cube is built from its source file or six face files\n(`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`."
         },
         "derive": {
           "anyOf": [

@@ -241,7 +241,7 @@
     },
     "CubemapSpec": {
       "additionalProperties": false,
-      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DN4).",
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DS4).",
       "properties": {
         "blur": {
           "description": "Cone blur amount, 0..=1; unset = none.",
@@ -871,7 +871,7 @@
     },
     "PartialCubemapSpec": {
       "additionalProperties": false,
-      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DN4).",
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DS4).",
       "properties": {
         "blur": {
           "description": "Cone blur amount, 0..=1; unset = none.",

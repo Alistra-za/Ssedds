@@ -19,7 +19,7 @@
 //! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CL).
 //! and ENC-WEIGHTS-IGNORED (an `encoder.bc7_weights` that perceptual, the format or the backend overrides, DECISIONS Note CP).
 //! and the three `GEN-*` codes of generated maps: GEN-REPLACED, GEN-STALE (GUI only) and GEN-AO (v2 Generate from normal map, DECISIONS Note CO).
-//! and CUBE-FACES / CUBE-NO-MIPS of cubemaps (cubemap support v1, DECISIONS Note DN).
+//! and CUBE-FACES / CUBE-NO-MIPS of cubemaps (cubemap support v1, DECISIONS Note DS).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -185,7 +185,7 @@ codes! {
     GenStale = "GEN-STALE" => Info,
     // v2 Generate from normal map (Note CO): a packed _rmaos whose B channel is an AO generated from the normal map.
     GenAo = "GEN-AO" => Info,
-    // Cubemap (DECISIONS Note DN): a cube's faces are missing, not square or not the same size.
+    // Cubemap (DECISIONS Note DS): a cube's faces are missing, not square or not the same size.
     CubeFaces = "CUBE-FACES" => Error,
     // Cubemap: `mips.levels = none` on a cube; curved surfaces sparkle and CS reads the last mip.
     CubeNoMips = "CUBE-NO-MIPS" => Warning,

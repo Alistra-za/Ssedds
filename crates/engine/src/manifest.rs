@@ -194,7 +194,7 @@ pub struct SourceRef {
     /// The slots that source fills in a derived job (`albedo`, `rough+metal+ao`, ...), as `rnm` holds its role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derive_role: Option<String>,
-    /// The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DN8). Absent on every other source.
+    /// The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DS8). Absent on every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube_face: Option<String>,
 }
@@ -249,7 +249,7 @@ impl SourceRef {
         })
     }
 
-    /// One face file of a six-file cube, with its face name (`posx` .. `negz`, DECISIONS DN8).
+    /// One face file of a six-file cube, with its face name (`posx` .. `negz`, DECISIONS DS8).
     pub fn of_cube(path: &Path, face: usize) -> io::Result<SourceRef> {
         Ok(SourceRef {
             cube_face: Some(crate::cube::FACES[face].into()),

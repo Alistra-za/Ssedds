@@ -183,7 +183,7 @@ fn groups_sets_and_flags_duplicates() {
     assert_eq!(dups[0].len(), 2);
 }
 
-/// DECISIONS DN8: `x_e_posx` .. `x_e_negz` join set `x` as its `_e`; other face-tagged names are untouched.
+/// DECISIONS DS8: `x_e_posx` .. `x_e_negz` join set `x` as its `_e`; other face-tagged names are untouched.
 #[test]
 fn face_files_group_into_the_e_set() {
     let d = tempfile::tempdir().unwrap();

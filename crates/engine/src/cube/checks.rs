@@ -1,4 +1,4 @@
-//! Cube checks shared by `sdc inspect` and `sdc validate` (DECISIONS Note DN12). They read raw texels.
+//! Cube checks shared by `sdc inspect` and `sdc validate` (DECISIONS Note DS12). They read raw texels.
 use crate::dds::{DdsFile, DdsPixelFormat};
 use crate::decode::{decode_level, Decoded};
 use encoders_sys::Bc1Model;
@@ -14,7 +14,7 @@ fn expects_cube(game_path: &str) -> bool {
 }
 
 /// True when `path` has a `textures` component directly followed by `cubemaps` (ASCII case-insensitive, either
-/// separator): the folder the game reads as cubes, shared with `suggest` (DN23).
+/// separator): the folder the game reads as cubes, shared with `suggest` (DS23).
 pub(crate) fn under_textures_cubemaps(path: &str) -> bool {
     path.split(['/', '\\'])
         .filter(|c| !c.is_empty())

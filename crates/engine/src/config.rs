@@ -732,7 +732,7 @@ pub struct ValidationSpec {
     pub mips: ValidationMips,
 }
 
-// Cubemap styles (DECISIONS DN4): each fills `face_size`, `format`, `blur` (and `vanilla_metal` `saturation`) where
+// Cubemap styles (DECISIONS DS4): each fills `face_size`, `format`, `blur` (and `vanilla_metal` `saturation`) where
 // no explicit layer set them.
 cfg_enum!(CubeStyle, "snake_case" { VanillaMetal, Room, Eye, Hd });
 // How a cubemap source is laid out; unset = from the aspect ratio. `equirect` is a 2:1 360-degree panorama.
@@ -767,7 +767,7 @@ impl<'de> Deserialize<'de> for GroundFill {
             fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<GroundFill, A::Error> {
                 let mut rgb = [0u8; 3];
                 for (i, c) in rgb.iter_mut().enumerate() {
-                    // Read as f64 so a fractional element also gets the accepted forms (DN25).
+                    // Read as f64 so a fractional element also gets the accepted forms (DS25).
                     let v: f64 = a
                         .next_element()?
                         .ok_or_else(|| A::Error::invalid_length(i, &self))?;
@@ -802,7 +802,7 @@ fn no_flips(v: &[FaceFlip; 6]) -> bool {
 }
 
 /// The `cubemap` profile section (cubemap design 2026-10-26, "Settings"). Read only by `Subtype::Cubemap`; every key
-/// is skipped at its default, so 2D profile hashes hold (DECISIONS DN4).
+/// is skipped at its default, so 2D profile hashes hold (DECISIONS DS4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CubemapSpec {

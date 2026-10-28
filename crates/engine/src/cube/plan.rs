@@ -1,4 +1,4 @@
-//! Batch planning of cube jobs (cubemap support v1, DECISIONS DN8): six face files merge into one job, and a single
+//! Batch planning of cube jobs (cubemap support v1, DECISIONS DS8): six face files merge into one job, and a single
 //! cross, strip or cube DDS gets its layout or an unclear-layout verdict.
 use super::{CubeJob, CubeSource, FACES};
 use crate::api::SkippedFile;

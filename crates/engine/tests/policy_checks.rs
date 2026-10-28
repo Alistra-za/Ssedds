@@ -2870,7 +2870,7 @@ fn hdr_cube_source_without_clamp_warns() {
     assert!(!codes(&j).contains(&Code::LossClampHdr));
 }
 
-/// DECISIONS DN7: a cube DDS is a cubemap; an explicit other sub-type is CFG-INVALID.
+/// DECISIONS DS7: a cube DDS is a cubemap; an explicit other sub-type is CFG-INVALID.
 #[test]
 fn cube_dds_is_decided_as_a_cubemap() {
     let cube_dds = |a: &mut engine::analyse::Analysis| a.dds_cube = true;

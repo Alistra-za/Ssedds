@@ -1,4 +1,4 @@
-//! Raw cubemap source layouts: crosses and strips in one image (cubemap support v1, DECISIONS DN7).
+//! Raw cubemap source layouts: crosses and strips in one image (cubemap support v1, DECISIONS DS7).
 //! Face order is +X -X +Y -Y +Z -Z; the cross cell offsets are texassemble's.
 use crate::config::{CubeLayout, CubemapSpec, FaceFlip, Profile};
 use crate::image::Rgba32F;
@@ -177,7 +177,7 @@ pub fn source_cell(layout: CubeLayout, src: (u32, u32)) -> u32 {
     if layout == CubeLayout::Equirect {
         src.0 / 4
     } else if layout == CubeLayout::Photo {
-        // The fake panorama is twice the photo wide (DN16), so its quarter is half the photo.
+        // The fake panorama is twice the photo wide (DS16), so its quarter is half the photo.
         src.0 / 2
     } else if matches!(layout, CubeLayout::MirrorBall | CubeLayout::Angular) {
         src.0 / 2
@@ -187,7 +187,7 @@ pub fn source_cell(layout: CubeLayout, src: (u32, u32)) -> u32 {
 }
 
 /// The face edge written: `cubemap.face_size`, else the largest power of two within [`source_cell`], at most 4096
-/// (the top of the explicit key's range, DN21).
+/// (the top of the explicit key's range, DS21).
 pub fn face_size(p: &Profile, layout: CubeLayout, src: (u32, u32)) -> u32 {
     p.cubemap
         .face_size

@@ -444,7 +444,7 @@ mod tests {
                 "{path}"
             );
         }
-        // DN23 (final review M2): only `textures/cubemaps/`, the rule `sdc validate` uses.
+        // DS23 (final review M2): only `textures/cubemaps/`, the rule `sdc validate` uses.
         let v = suggest(&ctx(
             Target::Cs,
             None,

@@ -1,4 +1,4 @@
-//! Cube yaw and mirror (DECISIONS DN14), and colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DN11). Alpha is untouched.
+//! Cube yaw and mirror (DECISIONS DS14), and colour filters on linear-light faces (exposure, highlight clamp, display-space grading in the game's 1.6 gamma, DECISIONS DS11). Alpha is untouched.
 use super::world::{to_cube, to_world};
 use super::{cube_dir, Cube};
 use crate::config::{CubemapSpec, GroundFill};
@@ -31,7 +31,7 @@ fn fill_weight(e: f64, h: f64) -> f32 {
     ((h + 1.0 - e) / 2.0).clamp(0.0, 1.0) as f32
 }
 
-/// Fill the cube below `horizon_deg` (DECISIONS DN17); alpha untouched.
+/// Fill the cube below `horizon_deg` (DECISIONS DS17); alpha untouched.
 pub fn ground_fill(c: &mut Cube, fill: &GroundFill, horizon_deg: f64) {
     let size = c.size;
     let elev = |f: usize, i: usize| {

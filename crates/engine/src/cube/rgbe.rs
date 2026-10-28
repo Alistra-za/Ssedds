@@ -1,4 +1,4 @@
-//! Radiance RGBE (`.hdr`) reader, moved from render3d (Note DN1). The workspace `image` crate has no `hdr`
+//! Radiance RGBE (`.hdr`) reader, moved from render3d (Note DS1). The workspace `image` crate has no `hdr`
 //! feature, so the format is read here.
 
 /// Largest side and pixel count the reader accepts (the bundled image is 2048x1024).

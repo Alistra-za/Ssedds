@@ -113,7 +113,7 @@ pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
 /// Side of the environment cube (v2 D5): the captured Dynamic Cubemaps cube is 256², 9 mips.
 pub const ENV_SIZE: u32 = 256;
 
-/// CS's GetSamplingVector, see [`engine::cube::cube_dir`] (moved to the engine, Note DN1).
+/// CS's GetSamplingVector, see [`engine::cube::cube_dir`] (moved to the engine, Note DS1).
 pub use engine::cube::cube_dir;
 
 /// Per texel of a `size` cube (face-major): the yaw-free part of [`dir_to_uv`] of its [`cube_dir`], the azimuth term

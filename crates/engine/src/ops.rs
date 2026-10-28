@@ -73,7 +73,7 @@ pub fn linear_to_srgb(v: f32) -> f32 {
     }
 }
 
-/// The game's display gamma for static cubemaps (DECISIONS DN11).
+/// The game's display gamma for static cubemaps (DECISIONS DS11).
 pub const GAME_GAMMA: f32 = 1.6;
 
 /// Community Shaders' `TransferFunctions::GameGammaToLinear`, `pow(c, 1.6)` (`Common/TransferFunctions.hlsli:13-15`,

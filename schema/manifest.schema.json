@@ -272,7 +272,7 @@
     },
     "CubemapSpec": {
       "additionalProperties": false,
-      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DN4).",
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DS4).",
       "properties": {
         "blur": {
           "description": "Cone blur amount, 0..=1; unset = none.",
@@ -1055,7 +1055,7 @@
           ]
         },
         "cube_face": {
-          "description": "The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DN8). Absent on every other source.",
+          "description": "The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DS8). Absent on every other source.",
           "type": [
             "string",
             "null"

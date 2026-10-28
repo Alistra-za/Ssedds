@@ -182,7 +182,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         ));
     }
     let model = matches!(p.format, Format::Bc1).then_some(inp.bc1_model);
-    // A cube's surfaces are face-major (DECISIONS DN10); a 2D file has one face.
+    // A cube's surfaces are face-major (DECISIONS DS10); a 2D file has one face.
     let per_face = file.levels.len().max(1);
     let mip = |l: usize| {
         if file.is_cubemap {

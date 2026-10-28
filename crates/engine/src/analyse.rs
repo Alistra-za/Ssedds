@@ -61,7 +61,7 @@ pub struct Analysis {
     pub icc_profile: bool,
     /// DXGI format of a DDS input (DECISIONS S6, spec §5.1); `None` for images. Set by the caller from `SourceMeta`.
     pub dds_dxgi: Option<u32>,
-    /// The input is a single cube DDS, loaded as a 6:1 strip (DECISIONS DN7). Set by the caller from `SourceMeta`.
+    /// The input is a single cube DDS, loaded as a 6:1 strip (DECISIONS DS7). Set by the caller from `SourceMeta`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub dds_cube: bool,
     /// NaN and ±∞ samples per channel (R, G, B, A). They are left out of every statistic above; Preprocess replaces

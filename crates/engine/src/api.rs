@@ -516,7 +516,7 @@ fn input_dims(path: &Path) -> Option<(u32, u32)> {
         let ((w, h), cube) = crate::load::dds_header_facts(path)?;
         // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
         let dim = |v: u32| v.min(crate::load::MAX_DIM);
-        // A cube DDS loads as a 6w x h strip (DECISIONS DN7), so that is what it holds.
+        // A cube DDS loads as a 6w x h strip (DECISIONS DS7), so that is what it holds.
         return Some((dim(w) * if cube { 6 } else { 1 }, dim(h)));
     }
     crate::load::image_size(path).ok()
@@ -569,7 +569,7 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         });
         texels * (filter + resize) + grass + layers + derived
     });
-    // DECISIONS DN8: a cube holds every source plus three float cubes of its face size (base, blur copy, mip chain).
+    // DECISIONS DS8: a cube holds every source plus three float cubes of its face size (base, blur copy, mip chain).
     let cube = job.cube.as_ref().map_or(0, |c| {
         let others: u64 = c
             .sources
@@ -581,7 +581,7 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         let face = dims.map_or(0, |src| {
             u64::from(crate::cube::layout::face_size(p, c.layout, src))
         });
-        // DN19: a single photo also holds its fake 2w x w float panorama (`import_dir::photo_panorama`).
+        // DS19: a single photo also holds its fake 2w x w float panorama (`import_dir::photo_panorama`).
         let panorama = match (c.layout, dims) {
             (CubeLayout::Photo, Some((w, _))) => 2 * u64::from(w) * u64::from(w) * 16,
             _ => 0,
@@ -682,7 +682,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
             ));
         }
     }
-    // DECISIONS DN8: a six-file cube's faces in face order; a one-file cube is `source_sha256` alone.
+    // DECISIONS DS8: a six-file cube's faces in face order; a one-file cube is `source_sha256` alone.
     for s in job
         .cube
         .iter()
@@ -1510,7 +1510,7 @@ impl Engine {
             .filter(|(_, a, _)| !pack::b_has_content(&a.channels[2]))
             .map(|(wi, _, _)| work[*wi].1.path.clone())
             .collect();
-        // Read by `plan_cubes` (DECISIONS DN8): each input's loaded size and cube-DDS flag.
+        // Read by `plan_cubes` (DECISIONS DS8): each input's loaded size and cube-DDS flag.
         let cube_facts: crate::cube::plan::InputFacts = pass1
             .iter()
             .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.width, a.height, a.dds_cube)))
@@ -1589,7 +1589,7 @@ impl Engine {
                 _ => None,
             })
             .collect();
-        // DECISIONS DN8: six face files become one cube job, and one-file cubes get their layout.
+        // DECISIONS DS8: six face files become one cube job, and one-file cubes get their layout.
         crate::cube::plan::plan_cubes(&cube_facts, &mut jobs, &mut skipped);
         let mut packed = pack::plan::plan_packing(
             &ctx,
@@ -2189,7 +2189,7 @@ impl Engine {
                         .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
                         .filter(|(p, _)| derive_read.insert(p.as_path())),
                 )
-                // DECISIONS DN8: each face of a face-set cube (a broken set lists its lead file only), keyed by the
+                // DECISIONS DS8: each face of a face-set cube (a broken set lists its lead file only), keyed by the
                 // cube's output like a packed source.
                 .chain(
                     job.cube
@@ -2881,7 +2881,7 @@ mod tests {
     use super::*;
     use crate::manifest::ENGINE_VERSION;
 
-    /// DECISIONS DN7: admission counts a cube DDS as the 6w x h strip it loads as, in both header forms.
+    /// DECISIONS DS7: admission counts a cube DDS as the 6w x h strip it loads as, in both header forms.
     #[test]
     fn cube_dds_input_dims_are_the_loaded_strip() {
         use crate::dds::{dds_bytes_cube, DdsDesc, ResolvedHeader};

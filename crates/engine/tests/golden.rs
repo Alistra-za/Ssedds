@@ -3691,7 +3691,7 @@ fn compact_coat_keeps_its_strength_alpha_as_bc7() {
     );
 }
 
-// ---- Cubemap support v1, Task 8 (DECISIONS DN10): cube jobs end to end ----
+// ---- Cubemap support v1, Task 8 (DECISIONS DS10): cube jobs end to end ----
 
 /// Decoded RGBA8 texels of every surface, face-major (+X..-Z, each face's whole chain).
 fn surfaces(f: &DdsFile) -> Vec<Vec<[u8; 4]>> {
@@ -3817,7 +3817,7 @@ fn cube_vcross_rgba8() {
     }
 }
 
-/// Task 13 (DECISIONS DN14): a 2:1 HDR panorama, light sky over brown ground with a hot sun, as a `room` cube.
+/// Task 13 (DECISIONS DS14): a 2:1 HDR panorama, light sky over brown ground with a hot sun, as a `room` cube.
 #[test]
 fn cube_equirect_hdr() {
     // The sun sits on the horizon at u 0.5, which is world east (+X).
@@ -3894,7 +3894,7 @@ fn cube_equirect_hdr() {
     );
 }
 
-/// Task 14 (DECISIONS DN15): a square mirror-ball or angular photo needs `cubemap.layout`; one cube, 7 mips at 64.
+/// Task 14 (DECISIONS DS15): a square mirror-ball or angular photo needs `cubemap.layout`; one cube, 7 mips at 64.
 #[test]
 fn cube_mirror_ball_and_angular() {
     for layout in ["mirror_ball", "angular"] {
@@ -3920,7 +3920,7 @@ fn cube_mirror_ball_and_angular() {
     }
 }
 
-/// Task 15 (DECISIONS DN16): a 400x300 photo with `cubemap.layout = photo` is one valid cube.
+/// Task 15 (DECISIONS DS16): a 400x300 photo with `cubemap.layout = photo` is one valid cube.
 #[test]
 fn cube_single_photo() {
     let d = tempfile::tempdir().unwrap();
@@ -4068,7 +4068,7 @@ fn cube_vstrip_bc7() {
 
 /// The encode-versions guard (`encode_versions.rs`) re-pins every sub-type's encode input and fails a changed hash
 /// unless that sub-type's `encode_version` arm was bumped. Every 2D arm staying at the released version is what makes
-/// it fail on any 2D change; only the cube arm moved (DECISIONS DN6, DN10).
+/// it fail on any 2D change; only the cube arm moved (DECISIONS DS6, DS10).
 #[test]
 fn two_d_outputs_unchanged() {
     use engine::manifest::{encode_version, RELEASED_ENGINE_VERSION};

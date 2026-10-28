@@ -26,7 +26,7 @@ pub struct SourceMeta {
     pub icc_profile: bool,
     /// DXGI format of a DDS input (DECISIONS S6); `None` for images.
     pub dds_dxgi: Option<u32>,
-    /// A single cube DDS (DECISIONS DN7): the image is its six mip-0 faces side by side, a 6:1 strip.
+    /// A single cube DDS (DECISIONS DS7): the image is its six mip-0 faces side by side, a 6:1 strip.
     pub dds_cube: bool,
 }
 
@@ -199,7 +199,7 @@ pub(crate) fn dds_header_size(path: &Path) -> Option<(u32, u32)> {
 }
 
 /// [`dds_header_size`] and whether the header says cube (caps2 or the DX10 misc flag, as `dds::read_dds` decides).
-/// The size is the face size; a cube loads as a 6w x h strip (DECISIONS DN7).
+/// The size is the face size; a cube loads as a 6w x h strip (DECISIONS DS7).
 pub(crate) fn dds_header_facts(path: &Path) -> Option<((u32, u32), bool)> {
     use std::io::Read;
     let mut b = [0u8; 144];
@@ -286,7 +286,7 @@ fn load_dds(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError>
         crate::decode::decode_level_rgba(f.format, w, h, &f.data[r], None)
             .map_err(|e| bad(e.to_string()))
     };
-    // A single cube (DECISIONS DN7) loads as a 6:1 strip of its mip-0 faces, face k at x = k * w.
+    // A single cube (DECISIONS DS7) loads as a 6:1 strip of its mip-0 faces, face k at x = k * w.
     let (w, h, px) = if f.is_cubemap {
         if f.width != f.height {
             return Err(bad(format!(

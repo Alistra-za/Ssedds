@@ -195,7 +195,7 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
             .collect(),
         (None, None) => vec![(job.input.as_path(), job.source)],
     };
-    // DECISIONS DN8: a six-file cube checks every face (its first is `job.input`, already in the list).
+    // DECISIONS DS8: a six-file cube checks every face (its first is `job.input`, already in the list).
     let faces = job.cube.as_ref().filter(|c| c.sources.len() > 1);
     for s in faces.iter().flat_map(|c| c.sources.iter().skip(1)) {
         stamps.push((s.path.as_path(), s.stamp));
@@ -276,7 +276,7 @@ fn prepare_then<T>(
         check_stamps(job)?;
     }
     let extra = after_stamps()?;
-    // DECISIONS DN10: a cube job builds its faces and mips in direction space.
+    // DECISIONS DS10: a cube job builds its faces and mips in direction space.
     if let Some(cj) = &job.cube {
         return Ok((
             crate::cube::run::prepare(job, cj, keep, cancel, tracker)?,
@@ -574,7 +574,7 @@ pub fn process_file(
                     );
                 }
             }
-            // DECISIONS DN8: a six-file cube records every face, in face order (`source_sha256` covers a one-file cube).
+            // DECISIONS DS8: a six-file cube records every face, in face order (`source_sha256` covers a one-file cube).
             for s in job
                 .cube
                 .iter()

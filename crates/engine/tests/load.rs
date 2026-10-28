@@ -375,7 +375,7 @@ fn third_party_uncompressed_layouts_load_as_float_rgba() {
     }
 }
 
-/// DECISIONS DN7: a single cube DDS loads as a 6:1 strip of its mip-0 faces.
+/// DECISIONS DS7: a single cube DDS loads as a 6:1 strip of its mip-0 faces.
 #[test]
 fn single_cube_dds_loads_as_a_strip() {
     use engine::config::Format;

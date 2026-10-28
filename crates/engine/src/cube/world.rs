@@ -1,4 +1,4 @@
-//! World <-> cube basis, measured in game (Note DN13): Skyrim world X east, Y north, Z up.
+//! World <-> cube basis, measured in game (Note DS13): Skyrim world X east, Y north, Z up.
 
 /// Column `i` is the cube-space axis that world axis `i` samples.
 pub const WORLD_TO_CUBE: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]; // identity, determinant +1

@@ -1,4 +1,4 @@
-//! Cubemap sub-type and its `cubemap` profile section (cubemap support v1, DECISIONS Note DN).
+//! Cubemap sub-type and its `cubemap` profile section (cubemap support v1, DECISIONS Note DS).
 mod cube_support;
 use cube_support::*;
 use engine::api::*;
@@ -195,7 +195,7 @@ fn face_size_rule() {
         layout::face_size(&p, CubeLayout::Equirect, (1000, 500)),
         128
     );
-    // DN21 (final review M4): the auto size stops at 4096, the top of the documented range.
+    // DS21 (final review M4): the auto size stops at 4096, the top of the documented range.
     assert_eq!(
         layout::face_size(&p, CubeLayout::Hstrip, (6 * 16384, 16384)),
         4096
@@ -209,7 +209,7 @@ fn face_size_rule() {
     assert_eq!(layout::face_size(&p, CubeLayout::Hcross, (600, 450)), 64);
 }
 
-// ---- Task 13: equirect panoramas, yaw and mirror (DECISIONS DN14) ----
+// ---- Task 13: equirect panoramas, yaw and mirror (DECISIONS DS14) ----
 
 use engine::cube::latlong::{dir_to_uv, uv_to_dir};
 use engine::cube::sample::fetch;
@@ -277,7 +277,7 @@ fn equirect_of_a_cube_round_trips() {
     let q: Vec<f64> = (0..6)
         .map(|f| rgb_psnr(&got.faces[f], &arrow.faces[f]))
         .collect();
-    // DN14: the arrow cube's saturated hard edges (face borders, bands) soften by about a texel through the two
+    // DS14: the arrow cube's saturated hard edges (face borders, bands) soften by about a texel through the two
     // bilinear passes, which caps whole-face PSNR near 27-28 dB; away from those edges the round trip is exact.
     assert!(q.iter().all(|&q| q > 26.0), "{q:.2?}");
     let away = |v: u32| v > 2 && v < 61 && !(5..=10).contains(&v);
@@ -484,7 +484,7 @@ fn face_tags_parse_both_spellings() {
     assert_eq!(face_tag("_px"), None);
 }
 
-// ---- Task 7: batch planning of cube jobs (DECISIONS DN8) ----
+// ---- Task 7: batch planning of cube jobs (DECISIONS DS8) ----
 
 fn png(dir: &Path, rel: &str, w: u32, h: u32, rgb: [u8; 3]) {
     let p = dir.join("in").join(rel);
@@ -805,7 +805,7 @@ fn single_file_layout_from_aspect_or_key() {
                 reasons.iter().any(|r| r.contains("cubemap.layout")),
                 "{reasons:?}"
             );
-            // DN22 (final review M1): a square image's answers are listed too.
+            // DS22 (final review M1): a square image's answers are listed too.
             for l in ["hcross", "equirect", "mirror_ball", "angular", "photo"] {
                 assert!(reasons[0].contains(l), "{l}: {reasons:?}");
             }
@@ -864,7 +864,7 @@ fn cube_stamps_are_checked() {
     );
 }
 
-// ---- Task 8: encode a cube job end to end (DECISIONS DN10) ----
+// ---- Task 8: encode a cube job end to end (DECISIONS DS10) ----
 
 /// Review Focus 5: an `.hdr` cross with a highlight above 1.0 and no `cubemap.highlight_clamp` converts, and its
 /// events carry LOSS-CLAMP-HDR.
@@ -1026,7 +1026,7 @@ fn face_rotate_applies_to_six_face_files() {
     }
 }
 
-/// DN20 (final review I2): an auto face below 4 is CFG-INVALID as well as DIM-SMALL, so allowing DIM-SMALL batch-wide
+/// DS20 (final review I2): an auto face below 4 is CFG-INVALID as well as DIM-SMALL, so allowing DIM-SMALL batch-wide
 /// still writes no 2x2 picture cube (only `sdc cubemap-marker` writes a tiny cube).
 #[test]
 fn an_auto_face_below_4_is_refused_even_when_dim_small_is_allowed() {
@@ -1046,7 +1046,7 @@ fn an_auto_face_below_4_is_refused_even_when_dim_small_is_allowed() {
     assert!(!d.path().join("out/textures/a/chrome_e.dds").exists());
 }
 
-/// DECISIONS DN11: a cube's mips average linear light decoded with the game's 1.6 gamma, not sRGB: 0/255 halves give
+/// DECISIONS DS11: a cube's mips average linear light decoded with the game's 1.6 gamma, not sRGB: 0/255 halves give
 /// round(255 * 0.5^(1/1.6)) = 165 (sRGB would give 188).
 #[test]
 fn cube_mips_average_in_game_gamma() {
@@ -1087,7 +1087,7 @@ fn cube_mips_average_in_game_gamma() {
     }
 }
 
-/// DECISIONS DN11: a float source is linear already, so it is only re-encoded: linear 0.25 is
+/// DECISIONS DS11: a float source is linear already, so it is only re-encoded: linear 0.25 is
 /// round(255 * 0.25^(1/1.6)) = 107.
 #[test]
 fn cube_float_source_is_only_reencoded() {
@@ -1126,7 +1126,7 @@ fn cube_float_source_is_only_reencoded() {
     }
 }
 
-// ---- Task 10: cube checks (DECISIONS DN12) ----
+// ---- Task 10: cube checks (DECISIONS DS12) ----
 
 /// A RGBA8 cube of `size` with `mips` levels per face (all texels `px`), as written by Task 2's writer.
 fn cube_dds(
@@ -1262,7 +1262,7 @@ fn marker_reads_back_as_a_dynamic_marker() {
     }
 }
 
-// ---- Task 14: mirror ball and angular map (DECISIONS DN15) ----
+// ---- Task 14: mirror ball and angular map (DECISIONS DS15) ----
 
 /// A square image whose red is x/w and green is y/h, so a sample says where in the image it came from.
 fn coord_image(n: u32) -> Rgba32F {
@@ -1340,7 +1340,7 @@ fn square_images_are_never_auto_detected() {
     assert_eq!(layout::source_cell(CubeLayout::Angular, (700, 700)), 350);
 }
 
-// ---- Task 15: single photo (DECISIONS DN16) ----
+// ---- Task 15: single photo (DECISIONS DS16) ----
 
 #[test]
 fn photo_panorama_is_seamless_and_mirrored() {

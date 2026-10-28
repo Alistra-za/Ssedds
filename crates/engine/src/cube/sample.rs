@@ -343,7 +343,7 @@ mod tests {
                         let a = lvl.faces[f].at(bx as u32, by as u32);
                         let b = across(&lvl, f, ox, oy);
                         let jump = max_diff(a, b);
-                        // The brief's flat 0.02 only where texels are small enough to allow it (Note DN3).
+                        // The brief's flat 0.02 only where texels are small enough to allow it (Note DS3).
                         if n >= 32 {
                             assert!(
                                 jump < 0.02,
@@ -366,7 +366,7 @@ mod tests {
 
     /// Arrow-like cube: six distinct but muted face colours, a white band on rows 0..n/8 and a black band on columns
     /// 0..n/8. Not Task 5's saturated `arrow_faces`: a 45-degree cone mixes saturated neighbours into each face and
-    /// raises its std-dev, so swapping that helper in needs a new criterion (Note DN3).
+    /// raises its std-dev, so swapping that helper in needs a new criterion (Note DS3).
     fn arrow_cube(n: u32) -> Cube {
         cube_from(n, |f, x, y| {
             if y < n / 8 {
@@ -399,7 +399,7 @@ mod tests {
         for f in 0..6 {
             let (before, after) = (face_std(&c.faces[f]), face_std(&b.faces[f]));
             // 1/3, not the brief's 1/4: on -Z the +Y and -Z white bands meet at one edge and form a band twice as
-            // wide, which a 22.5-degree sigma flattens to 0.26; the other faces reach 0.15-0.19 (Note DN3).
+            // wide, which a 22.5-degree sigma flattens to 0.26; the other faces reach 0.15-0.19 (Note DS3).
             assert!(after < before / 3.0, "face {f}: {before} -> {after}");
         }
     }
