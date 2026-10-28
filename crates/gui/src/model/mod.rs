@@ -20,6 +20,7 @@ pub mod inspector;
 pub mod items;
 pub mod known_paths;
 pub mod labels;
+pub mod marker;
 pub mod meshes;
 pub mod messages;
 pub mod nav;
@@ -169,6 +170,8 @@ pub enum Dialog {
     GenerateFromNormal(String),
     /// Note CO: "Delete generated file…", asked once per file; texts and refusals read when it opened.
     ConfirmDeleteGenerated(Box<from_normal::DeleteGenerated>),
+    /// Export to ▾: Make marker cube… (cubemap GUI, Task 6); the draft is AppModel::marker.
+    MakeMarker,
     Error(String),
 }
 
@@ -425,6 +428,8 @@ pub struct AppModel {
     /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
     pub dropped_fills: std::collections::BTreeMap<String, String>,
     pub dialog: Option<Dialog>,
+    /// The Make marker cube dialog's colour and roughness.
+    pub marker: marker::MarkerDraft,
     /// F3b D4: the rename dialog's last applied recipe, offered again on the next open (this session only).
     pub last_recipe: rename::Recipe,
     pub expanded: Option<String>,
@@ -650,6 +655,7 @@ impl AppModel {
             banner: None,
             encoding_note: None,
             dialog: None,
+            marker: Default::default(),
             last_recipe: Default::default(),
             expanded: None,
             export: export::ExportModel::default(),

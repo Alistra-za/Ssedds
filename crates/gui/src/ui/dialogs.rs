@@ -19,6 +19,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
         Dialog::Rename(d) => super::rename_dialog::draw(ctx, model, d),
         Dialog::GenerateFromNormal(_) => super::from_normal::draw(ctx, model),
+        Dialog::MakeMarker => super::marker_dialog::draw(ctx, model),
         Dialog::ConfirmDeleteGenerated(r) => confirm_delete_generated(ctx, model, &r),
         Dialog::HalfSize(rows) => half_size(ctx, model, rows),
         Dialog::CopyHalfSize { from, to, .. } => copy_half_size(ctx, model, &from, to.len()),

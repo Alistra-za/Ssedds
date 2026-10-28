@@ -15,6 +15,7 @@ pub mod group;
 pub mod header;
 pub mod input_name;
 pub mod json_editor;
+pub mod marker_dialog;
 pub mod meshes;
 pub mod messages;
 pub mod motion;

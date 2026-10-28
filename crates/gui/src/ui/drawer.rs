@@ -153,6 +153,7 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         let kind = PickerKind::Save {
             file_name: "sdc-report.jsonl",
             filters: &[("JSON Lines", &["jsonl"]), ("Markdown", &["md"])],
+            dir: None,
         };
         model.pick(
             ui.ctx(),

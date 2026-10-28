@@ -8,6 +8,8 @@ use engine::presets::AlsoTarget;
 
 /// The Export to ▾ entry that opens the PGPatcher JSON editor (R14; was the header's PG JSON Editor, Note BH7).
 pub const JSON_EDITOR: &str = "PGPatcher JSON editor…";
+/// The Export to ▾ entry that opens the marker cube dialog (cubemap GUI, Task 6).
+pub const MAKE_MARKER: &str = "Make marker cube…";
 /// Export's width: twice what it was (Note BH3).
 const EXPORT_WIDTH: f32 = 240.0;
 /// CF12: the export bar's fraction as drawn: it glides linearly to `frac` over 0.3 s (at once under reduce motion). A
@@ -719,6 +721,7 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
     let mut choose = false;
     let mut open = false;
     let mut json = false;
+    let mut marker = false;
     let mut tick = None;
     // A click inside keeps it open (egui's default closes on any click), so the ticks can be set without reopening;
     // the three entries below close it themselves.
@@ -759,7 +762,13 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
                 )
                 .clicked();
         }
-        if choose || open || json {
+        // Always offered: the file is saved wherever the user says, so it needs no project.
+        marker = ui
+            .add_enabled(!model.picker.busy(), egui::Button::new(MAKE_MARKER))
+            .on_hover_text("Write a 1×1 marker cube (a solid F0 colour and roughness) that Community Shaders reads")
+            .on_disabled_hover_text(picker::BUSY_HOVER)
+            .clicked();
+        if choose || open || json || marker {
             ui.close();
         }
     });
@@ -777,6 +786,9 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
     }
     if json {
         model.json_editor_open = true;
+    }
+    if marker {
+        model.open_marker_dialog();
     }
     if let Some((t, on)) = tick {
         model.set_also_tick(t, on);

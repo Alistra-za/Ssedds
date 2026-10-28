@@ -585,3 +585,263 @@ fn a_cube_leaves_the_stored_tile_setting_alone() {
     h.run();
     assert!(h.state().view.tile, "drawing a cube never writes tile");
 }
+
+// ---- the marker cube tool (Task 6) ----
+
+mod marker {
+    use super::*;
+    use eframe::egui;
+    use engine::cube::marker::{alpha_of, marker_bytes};
+    use sdc_gui::model::marker::{make_marker, MarkerDraft, MarkerOutcome};
+    use sdc_gui::model::picker::{PickerBackend, PickerKind, PickerPurpose, PickerSpec};
+    use sdc_gui::model::Dialog;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    /// A Save dialog that answers `path` and records what it was asked. Never an OS dialog.
+    struct Fake {
+        path: Option<PathBuf>,
+        asked: Mutex<Vec<PickerSpec>>,
+    }
+
+    impl PickerBackend for Fake {
+        fn pick(&self, spec: &PickerSpec) -> Option<PathBuf> {
+            self.asked.lock().unwrap().push(spec.clone());
+            self.path.clone()
+        }
+    }
+
+    fn fake(path: Option<PathBuf>) -> Arc<Fake> {
+        Arc::new(Fake {
+            path,
+            asked: Mutex::default(),
+        })
+    }
+
+    #[test]
+    fn marker_matches_the_cli_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a_e.dds");
+        let draft = MarkerDraft {
+            rgb: [200, 100, 50],
+            roughness: Some(0.5),
+        };
+        assert_eq!(make_marker(&p, &draft), MarkerOutcome::Written);
+        let want = marker_bytes([200, 100, 50], alpha_of(Some(0.5)).unwrap());
+        assert_eq!(std::fs::read(&p).unwrap(), want);
+        // Its own file is replaced.
+        let again = MarkerDraft {
+            rgb: [1, 2, 3],
+            roughness: None,
+        };
+        assert_eq!(make_marker(&p, &again), MarkerOutcome::Written);
+        assert_eq!(std::fs::read(&p).unwrap(), marker_bytes([1, 2, 3], 255));
+    }
+
+    #[test]
+    fn marker_keeps_a_foreign_file() {
+        use engine::config::Format;
+        use engine::dds::{header_bytes_with, DdsDesc, ResolvedHeader};
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a_e.dds");
+        // A real DDS Tessalith did not write: a flat 1x1 texture, not a cube.
+        let desc = DdsDesc {
+            width: 1,
+            height: 1,
+            format: Format::Rgba8,
+            srgb: false,
+            header: ResolvedHeader::Legacy,
+        };
+        let mut foreign = header_bytes_with(&desc, 1, false).unwrap();
+        foreign.extend_from_slice(&[9, 8, 7, 6]);
+        std::fs::write(&p, &foreign).unwrap();
+        let out = make_marker(&p, &MarkerDraft::default());
+        assert!(
+            matches!(out, MarkerOutcome::Kept(ref n) if !n.is_empty()),
+            "{out:?}"
+        );
+        assert_eq!(std::fs::read(&p).unwrap(), foreign, "left untouched");
+    }
+
+    #[test]
+    fn marker_without_roughness_is_alpha_255() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a_e.dds");
+        let draft = MarkerDraft {
+            rgb: [10, 20, 30],
+            roughness: None,
+        };
+        assert_eq!(make_marker(&p, &draft), MarkerOutcome::Written);
+        let b = std::fs::read(&p).unwrap();
+        // The +X texel is the first after the 128-byte header, stored BGRA.
+        assert_eq!(&b[128..132], &[30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn marker_with_a_bad_roughness_fails_and_writes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a_e.dds");
+        let draft = MarkerDraft {
+            rgb: [0; 3],
+            roughness: Some(1.5),
+        };
+        assert!(matches!(make_marker(&p, &draft), MarkerOutcome::Failed(_)));
+        assert!(!p.exists());
+    }
+
+    fn dialog_harness(m: AppModel) -> Harness<'static, AppModel> {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(900.0, 700.0))
+            .build_ui_state(
+                |ui, m: &mut AppModel| sdc_gui::ui::marker_dialog::draw(ui.ctx(), m),
+                m,
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        // The modal's first frames size and fade it in; a click before they pass lands on the old layout.
+        h.run_steps(6);
+        h
+    }
+
+    fn wait_picker(m: &AppModel) {
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while m.picker.busy() {
+            assert!(std::time::Instant::now() < end, "the picker never finished");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_dialog_controls_have_names() {
+        let mut m = AppModel::placeholder(GuiSettings::default());
+        m.open_marker_dialog();
+        let mut h = dialog_harness(m);
+        for name in ["Marker colour", "Set roughness", "Save…", "Cancel"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        assert!(h.query_by_label("Roughness").is_none(), "off: no slider");
+        assert!(h.query_by_label("F0 = (code/255)^1.6").is_some());
+        h.get_by_label("Set roughness").click();
+        h.run();
+        assert_eq!(h.state().marker.roughness, Some(0.5));
+        assert!(
+            h.query_all_by_label_contains("Roughness").next().is_some(),
+            "the slider"
+        );
+        h.get_by_label("Set roughness").click();
+        h.run();
+        assert_eq!(h.state().marker.roughness, None, "off again is alpha 255");
+    }
+
+    #[test]
+    fn save_writes_the_picked_file_and_closes() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("out_e.dds");
+        let mut m = AppModel::placeholder(GuiSettings::default());
+        let f = fake(Some(target.clone()));
+        m.picker.set_backend(f.clone());
+        m.marker = MarkerDraft {
+            rgb: [200, 100, 50],
+            roughness: Some(0.5),
+        };
+        m.open_marker_dialog();
+        let mut h = dialog_harness(m);
+        h.get_by_label("Save…").click();
+        h.run();
+        wait_picker(h.state());
+        h.state_mut().poll();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            marker_bytes([200, 100, 50], alpha_of(Some(0.5)).unwrap())
+        );
+        assert_eq!(h.state().dialog, None);
+        let asked = f.asked.lock().unwrap();
+        let PickerKind::Save { file_name, .. } = &asked[0].kind else {
+            panic!("not a Save dialog")
+        };
+        assert_eq!(*file_name, "marker_e.dds");
+    }
+
+    #[test]
+    fn a_kept_file_leaves_the_dialog_open_with_the_note() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("out_e.dds");
+        std::fs::write(&target, b"not ours").unwrap();
+        let mut m = AppModel::placeholder(GuiSettings::default());
+        m.picker.set_backend(fake(Some(target.clone())));
+        m.open_marker_dialog();
+        assert!(m.pick_marker_file(&egui::Context::default()));
+        wait_picker(&m);
+        m.poll();
+        assert_eq!(std::fs::read(&target).unwrap(), b"not ours");
+        assert_eq!(m.dialog, Some(Dialog::MakeMarker), "pick another name");
+        assert!(m.status_line.contains("out_e.dds"), "{}", m.status_line);
+    }
+
+    #[test]
+    fn escape_and_cancel_close_without_asking_for_a_file() {
+        for esc in [true, false] {
+            let mut m = AppModel::placeholder(GuiSettings::default());
+            let f = fake(None);
+            m.picker.set_backend(f.clone());
+            m.open_marker_dialog();
+            let mut h = dialog_harness(m);
+            if esc {
+                h.key_press(egui::Key::Escape);
+            } else {
+                h.get_by_label("Cancel").click();
+            }
+            h.run();
+            assert_eq!(h.state().dialog, None, "esc={esc}");
+            assert!(f.asked.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn enter_asks_for_a_file_in_the_cubemaps_folder_and_writes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("textures/cubemaps")).unwrap();
+        let mut m = open(d.path());
+        let f = fake(None);
+        m.picker.set_backend(f.clone());
+        m.open_marker_dialog();
+        let mut h = dialog_harness(m);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        wait_picker(h.state());
+        let asked = f.asked.lock().unwrap();
+        assert_eq!(asked.len(), 1, "Enter is Save…");
+        let PickerKind::Save { dir, .. } = &asked[0].kind else {
+            panic!("not a Save dialog")
+        };
+        assert_eq!(
+            dir.as_deref(),
+            Some(d.path().join("textures/cubemaps").as_path())
+        );
+        drop(asked);
+        assert_eq!(
+            h.state().dialog,
+            Some(Dialog::MakeMarker),
+            "a cancel leaves it open"
+        );
+        assert!(!d.path().join("textures/cubemaps/marker_e.dds").exists());
+        let _ = PickerPurpose::MakeMarker;
+    }
+
+    #[test]
+    fn the_export_menu_offers_the_tool() {
+        let d = tempfile::tempdir().unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui_state(
+                |ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m),
+                cube_model(d.path(), FLAT),
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run();
+        h.get_by_label_contains("Export to").click();
+        h.run();
+        h.get_by_label("Make marker cube…").click();
+        h.run();
+        assert_eq!(h.state().dialog, Some(Dialog::MakeMarker));
+    }
+}
