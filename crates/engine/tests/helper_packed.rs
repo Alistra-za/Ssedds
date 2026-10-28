@@ -437,6 +437,110 @@ fn configured_rfaos_builds_for_hand_fill_alone() {
     }
 }
 
+/// Final review I2: `if-changed` sees a helper moved to another packed channel, added to a second one, or taken off
+/// one it shared; a default placement records nothing, so an unchanged project stays up to date. G, not A: a move
+/// into A changes the alpha analysis and so the profile, which re-encodes without the fix.
+#[test]
+fn if_changed_sees_a_packed_channel_move() {
+    let d = tempfile::tempdir().unwrap();
+    for f in ["x_roughness.png", "x_ao.png"] {
+        gray(d.path(), f);
+    }
+    let run = |fills: Option<&str>| {
+        let toml = fills.map_or(String::new(), |f| {
+            format!("[files.\"x_ao\"]\nhelper.fills = [{f}]\n")
+        });
+        std::fs::write(d.path().join("in/sdc.toml"), toml).unwrap();
+        let mut r = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+        r.recursive = true;
+        r.on_existing = OnExisting::IfChanged;
+        let rep = Reporter::new(Arc::new(NullSink), "helper-packed");
+        let e = Engine::new().unwrap();
+        let p = e.plan(r, &rep, &CancelToken::default()).unwrap();
+        let s = e.run(p, &rep, &CancelToken::default()).unwrap();
+        (s.converted, s.up_to_date)
+    };
+    assert_eq!(run(None), (1, 0));
+    assert_eq!(run(None), (0, 1), "nothing changed");
+    let m = engine::manifest::Manifest::at(&d.path().join("out"))
+        .load()
+        .unwrap();
+    let e = m.values().next().unwrap();
+    assert!(
+        e.sources.iter().all(|s| s.fill.is_none()),
+        "a default placement records nothing: {:?}",
+        e.sources
+    );
+    // A hand fill on the suggested channel builds the same output.
+    assert_eq!(run(Some("\"rmaos.b\"")), (0, 1), "hand-set, same channel");
+    assert_eq!(run(Some("\"rmaos.g\"")), (1, 0), "(a) B moved to G");
+    assert_eq!(run(Some("\"rmaos.g\"")), (0, 1));
+    assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "G moved back to B");
+    assert_eq!(
+        run(Some("\"rmaos.b\", \"rmaos.g\"")),
+        (1, 0),
+        "(b) a second channel"
+    );
+    assert_eq!(run(Some("\"rmaos.b\", \"rmaos.g\"")), (0, 1));
+    assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "(c) Value on G");
+    assert_eq!(run(None), (0, 1), "suggested again, same channel");
+}
+
+/// Final review I2: every recipe built without hand-set selectors records no placement, so existing manifests stay
+/// up to date.
+#[test]
+fn suggested_recipes_record_no_placement() {
+    let spec = PackingSpec {
+        enabled: true,
+        roughness_default: 0.5,
+        prefer: PackPrefer::Prepacked,
+        fill: FillSpec::default(),
+        recipe: Default::default(),
+    };
+    let roles: Vec<RawMap> = RawMap::INPUTS.into_iter().chain([Rmaos]).collect();
+    for mask in 0u32..(1 << roles.len()) {
+        let files: Vec<RawInput> = roles
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| mask & (1 << i) != 0)
+            .map(|(_, r)| RawInput {
+                path: PathBuf::from(format!("x_{}.png", r.id())),
+                role: *r,
+            })
+            .collect();
+        for target in [Target::Cs, Target::Vanilla] {
+            for recipe in [PackRecipe::Auto, PackRecipe::Rmaos, PackRecipe::Rfaos] {
+                for complex in [false, true] {
+                    for r in recipes_for_with(target, &files, recipe, complex).0 {
+                        let pk = PackJob {
+                            kind: r.kind,
+                            channels: resolve_channels(&r, &spec).0,
+                            gray: GraySource::R,
+                            sources: r
+                                .sources()
+                                .into_iter()
+                                .map(|(path, role)| PackSource {
+                                    path,
+                                    role,
+                                    stamp: None,
+                                    read: None,
+                                })
+                                .collect(),
+                        };
+                        for s in &pk.sources {
+                            assert_eq!(
+                                source_fill(&pk, s),
+                                None,
+                                "{target:?} {recipe:?} {complex} {s:?} in {pk:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn plan_honours_hand_set_fills() {
     let d = tempfile::tempdir().unwrap();

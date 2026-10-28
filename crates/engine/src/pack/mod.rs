@@ -807,3 +807,47 @@ pub fn invert_of(pk: &PackJob, path: &Path) -> bool {
 pub fn read_of(s: &PackSource) -> Option<String> {
     s.read.map(|r| format!("read:{}", r.id()))
 }
+
+/// Whether a source of `role` holds `slot` when nothing is hand-set (the recipe table above).
+fn fits(role: RawMap, slot: Slot) -> bool {
+    use Slot::*;
+    match role {
+        RawMap::Roughness | RawMap::Glossiness => matches!(slot, Roughness | Glossiness),
+        RawMap::Metallic => matches!(slot, Metallic | EnvMask),
+        RawMap::Specular => matches!(slot, Specular | EnvMask),
+        RawMap::Ao => slot == Ao,
+        RawMap::Height => slot == Height,
+        RawMap::Fuzz => slot == Fuzz,
+        RawMap::Orm => matches!(slot, Roughness | Glossiness | Metallic | Ao | EnvMask),
+        RawMap::Rmaos => matches!(slot, Roughness | Metallic | Fuzz | Specular),
+        _ => false,
+    }
+}
+
+/// What `SourceRef.fill` records for a packed source; the pipeline records it and `if-changed` compares it, so the
+/// two never drift. `read:<id>` as [`read_of`], then (final review I2) `ch:<rgba>` naming every channel the source
+/// feeds when that is not its role's default place: a channel its role does not hold, or a channel its role holds
+/// that no other source took. A default placement adds nothing, so existing manifests stay up to date.
+pub fn source_fill(pk: &PackJob, s: &PackSource) -> Option<String> {
+    let fed =
+        |i: usize| matches!(&pk.channels[i], ChannelSource::Source { path, .. } if *path == s.path);
+    let natural = |i: usize| slot_of(pk.kind, i).is_some_and(|slot| fits(s.role, slot));
+    let default = (0..4).all(|i| {
+        if fed(i) {
+            natural(i)
+        } else {
+            !natural(i) || matches!(pk.channels[i], ChannelSource::Source { .. })
+        }
+    });
+    let ch = (!default).then(|| {
+        let c: String = (0..4)
+            .filter(|&i| fed(i))
+            .map(|i| ['r', 'g', 'b', 'a'][i])
+            .collect();
+        format!("ch:{c}")
+    });
+    match (read_of(s), ch) {
+        (Some(r), Some(c)) => Some(format!("{r},{c}")),
+        (r, c) => r.or(c),
+    }
+}

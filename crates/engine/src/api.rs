@@ -689,7 +689,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                 None,
                 None,
                 None,
-                pack::read_of(s),
+                pack::source_fill(pk, s),
             ));
         }
     }
