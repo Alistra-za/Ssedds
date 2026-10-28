@@ -340,6 +340,9 @@ pub struct Plan {
     /// derived diffuse on its albedo's path, a kept landscape `_p`). That job's event ends them, so `run` emits no
     /// `packed_source` for them.
     pub derive_own: BTreeSet<PathBuf>,
+    /// Note DT (review 4 I1): helpers an alpha fill consumed whose target has no job left (failed or cancelled while
+    /// planning, or replaced): (helper, the output it filled, set key). `run` ends each with a `packed_source` skip.
+    pub fill_ends: Vec<(PathBuf, PathBuf, String)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -1779,6 +1782,17 @@ impl Engine {
                 Some((c, ji, set, f))
             })
             .collect();
+        // Review 4 I1: every consumed helper with the output it fills (a size-mismatch error job carries its `fill`),
+        // so one whose target job is later gone (failed, cancelled, derived away) still ends with that output.
+        let fill_owner: Vec<(PathBuf, PathBuf, String)> = fill_items
+            .iter()
+            .map(|&(c, ji, ..)| (&c.fill, &jobs[ji]))
+            .chain(
+                jobs.iter()
+                    .filter_map(|j| j.fill.as_ref().map(|fl| (fl, j))),
+            )
+            .map(|(fl, j)| (fl.source.path.clone(), j.output.clone(), j.set_key.clone()))
+            .collect();
         let fill_results = admit_all(
             &pool,
             &budget,
@@ -1788,33 +1802,46 @@ impl Engine {
             |(_, ji, ..)| jobs[*ji].output.as_path(),
             |&(c, ji, set, f), admitted, stage| {
                 let old = &jobs[ji];
-                let (mut img, mut info) =
-                    crate::load::load_image_as(&c.target, old.profile.alpha.exr_straight)
-                        .map_err(PlanFailure::Load)?;
-                crate::helper::apply_fill(&mut img, &mut info, &c.fill)
-                    .map_err(PlanFailure::Pack)?;
-                cache.count_loads(2);
-                stage.set(Stage::Analyse);
                 let split = split_for((set, f));
-                let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
-                let mut a = analyse_with(&img, &info, hints);
-                if let Some(&(icc, dxgi)) = load_meta.get(&c.target) {
-                    a.icc_profile = icc;
-                    a.dds_dxgi = dxgi;
-                }
-                drop(img);
-                drop(admitted);
-                stage.set(Stage::Resolve);
-                let facts = FileFacts {
-                    input: f,
-                    suffix: split.suffix.as_deref(),
-                    alias: split.alias.as_deref(),
-                    set,
-                    analysis: &a,
-                    info: &info,
-                };
                 let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
-                let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
+                // Review 4 I2: the resolved profile may change `alpha.exr_straight` (a rule on the filled alpha), so the
+                // image is loaded again under the final setting: the analysed image is the one the run writes.
+                // shortcut: a second change is not chased (the filled alpha, which rules match, is the same under both
+                // settings); loop until stable if a rule ever reads RGB.
+                let mut straight = old.profile.alpha.exr_straight;
+                let mut tries = 0;
+                let (mut job, a) = loop {
+                    stage.set(Stage::Load);
+                    let (mut img, mut info) = crate::load::load_image_as(&c.target, straight)
+                        .map_err(PlanFailure::Load)?;
+                    crate::helper::apply_fill(&mut img, &mut info, &c.fill)
+                        .map_err(PlanFailure::Pack)?;
+                    cache.count_loads(2);
+                    stage.set(Stage::Analyse);
+                    let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                    let mut a = analyse_with(&img, &info, hints);
+                    if let Some(&(icc, dxgi)) = load_meta.get(&c.target) {
+                        a.icc_profile = icc;
+                        a.dds_dxgi = dxgi;
+                    }
+                    drop(img);
+                    stage.set(Stage::Resolve);
+                    let facts = FileFacts {
+                        input: f,
+                        suffix: split.suffix.as_deref(),
+                        alias: split.alias.as_deref(),
+                        set,
+                        analysis: &a,
+                        info: &info,
+                    };
+                    let job = resolve_file_with(&ctx, &facts, gras_diffuse);
+                    if job.profile.alpha.exr_straight == straight || tries == 1 {
+                        break (job, a);
+                    }
+                    straight = job.profile.alpha.exr_straight;
+                    tries += 1;
+                };
+                drop(admitted);
                 job.source = old.source;
                 job.warnings.extend(picks.get(&job.set_key).and_then(|p| {
                     crate::shader::pbr_grass_albedo_note(p, job.profile.subtype, a.corner_err)
@@ -2183,6 +2210,35 @@ impl Engine {
                 );
             }
         }
+        // Review 4 I1: a consumed helper that no surviving job, skip, failure or cancellation ends.
+        let ended: BTreeSet<&Path> = jobs
+            .iter()
+            .flat_map(|j| {
+                let pack = j
+                    .pack
+                    .iter()
+                    .flat_map(|p| p.sources.iter().map(|s| &s.path));
+                let derive = j
+                    .derive
+                    .iter()
+                    .flat_map(|d| d.sources.iter().map(|s| &s.path));
+                let fill = j.fill.iter().map(|f| &f.source.path);
+                std::iter::once(&j.input)
+                    .chain(pack)
+                    .chain(derive)
+                    .chain(fill)
+            })
+            .chain(skipped.iter().map(|s| &s.path))
+            .chain(failed.iter().map(|f| &f.path))
+            .chain(&cancelled)
+            .chain(&derive_own)
+            .map(PathBuf::as_path)
+            .collect();
+        let mut seen = BTreeSet::new();
+        let fill_ends: Vec<(PathBuf, PathBuf, String)> = fill_owner
+            .into_iter()
+            .filter(|(h, ..)| !ended.contains(h.as_path()) && seen.insert(h.clone()))
+            .collect();
         Ok(Plan {
             request: req,
             registry,
@@ -2196,6 +2252,7 @@ impl Engine {
             shaders: picks,
             nvtt: nvtt.into_probed(),
             derive_own,
+            fill_ends,
         })
     }
 
@@ -2302,6 +2359,19 @@ impl Engine {
                 EventKind::FileFailed {
                     stage: f.stage,
                     error: f.error.clone(),
+                },
+            );
+        }
+        // Note DT (review 4 I1): a helper whose target has no job ends with the output it filled.
+        for (helper, output, set) in &plan.fill_ends {
+            rep.emit_job(
+                Some(&key(output)),
+                Some(set),
+                Some(helper),
+                EventKind::FileSkipped {
+                    kind: SkipKind::PackedSource,
+                    code: None,
+                    reason: format!("filled into {}", slash(output)),
                 },
             );
         }

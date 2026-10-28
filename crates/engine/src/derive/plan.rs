@@ -522,6 +522,12 @@ pub fn report_unread(
                     )
                 }),
         )
+        // Note DT: a helper whose filled job is kept ends with that job's `filled into`.
+        .chain(
+            jobs.iter()
+                .filter_map(|j| j.fill.as_ref())
+                .map(|f| f.source.path.as_path()),
+        )
         .collect();
     let had: BTreeSet<PathBuf> = skipped.iter().map(|s| s.path.clone()).collect();
     ended.extend(had.iter().map(PathBuf::as_path));

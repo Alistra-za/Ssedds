@@ -455,3 +455,177 @@ fn owner_skin_f_files_plan() {
     }
     assert!(seen > 0, "no PNG in SDC_HELPER_SKIN_DIR");
 }
+
+/// Every terminal event (skip, failure, done) for the input named `name`, from the plan and run events.
+fn terminal<'a>(ev: impl IntoIterator<Item = &'a EngineEvent>, name: &str) -> Vec<&'a EventKind> {
+    ev.into_iter()
+        .filter(|e| {
+            e.path
+                .as_deref()
+                .is_some_and(|p| p.ends_with(&format!("/{name}")))
+        })
+        .map(|e| &e.kind)
+        .filter(|k| {
+            matches!(
+                k,
+                EventKind::FileSkipped { .. }
+                    | EventKind::FileFailed { .. }
+                    | EventKind::FileDone { .. }
+            )
+        })
+        .collect()
+}
+
+fn filled_into(k: &EventKind, out: &str) -> bool {
+    matches!(k, EventKind::FileSkipped { kind: SkipKind::PackedSource, reason, .. }
+        if reason.starts_with("filled into ") && reason.ends_with(out))
+}
+
+/// Review 4 I1: an assigned helper of another size fails its target; the helper still ends with that output.
+#[test]
+fn size_mismatch_helper_ends_with_its_target() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    ImageBuffer::from_fn(32, 32, |_, _| Luma([9u8]))
+        .save(at(d.path(), "x_opacity.png"))
+        .unwrap();
+    toml(d.path(), OPACITY_ASSIGNED);
+    let (p, plan_ev) = plan_of(req(d.path(), Target::Cs, &RGBA8));
+    assert!(matches!(job(&p, "x.png").status, JobStatus::Error { .. }));
+    let (_, run_ev) = run(p);
+    let t = terminal(plan_ev.iter().chain(&run_ev), "x_opacity.png");
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(filled_into(t[0], "/x.dds"), "{t:?}");
+}
+
+struct HookVar(&'static str);
+
+impl Drop for HookVar {
+    fn drop(&mut self) {
+        std::env::remove_var(self.0);
+    }
+}
+
+/// Review 4 I1: a target that fails at the fill step has no job; its helper still ends with that output.
+#[test]
+fn fill_step_failure_still_ends_the_helper() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "fillboom.png");
+    checker(d.path(), "fillboom_opacity.png", 0, 255);
+    // The fill step is named by the output (pass 1 by the input), so only it panics.
+    std::env::set_var("SDC_TEST_PANIC_ON_PLAN", "fillboom.dds@load");
+    let _hook = HookVar("SDC_TEST_PANIC_ON_PLAN");
+    let (p, plan_ev) = plan_of(req(
+        d.path(),
+        Target::Cs,
+        &["file:**/fillboom.png.subtype=diffuse", "alpha.policy=blend"],
+    ));
+    assert!(p.jobs.iter().all(|j| !j.input.ends_with("fillboom.png")));
+    assert_eq!(p.failed.len(), 1, "{:?}", p.failed);
+    let (_, run_ev) = run(p);
+    let all: Vec<&EngineEvent> = plan_ev.iter().chain(&run_ev).collect();
+    let t = terminal(all.iter().copied(), "fillboom_opacity.png");
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(filled_into(t[0], "/fillboom.dds"), "{t:?}");
+    assert!(matches!(
+        terminal(all.iter().copied(), "fillboom.png")[..],
+        [EventKind::FileFailed { .. }]
+    ));
+}
+
+/// Review 4 I1: a derive (Also export) replaces the filled albedo; its helper is a member of the derived set and
+/// ends once, and no derived job takes a fill.
+#[test]
+fn derive_replacing_the_target_ends_the_helper() {
+    use engine::derive::recipe::LegacyParams;
+    use engine::derive::{DeriveMode, DeriveRequest};
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/pbr/arm");
+    std::fs::create_dir_all(&dir).unwrap();
+    let px = |name: &str, v: [u8; 4]| {
+        ImageBuffer::from_pixel(16, 16, Rgba(v))
+            .save(dir.join(name))
+            .unwrap()
+    };
+    px("steel.png", [200, 200, 200, 255]);
+    px("steel_n.png", [128, 128, 255, 255]);
+    px("steel_rmaos.png", [128, 0, 255, 255]);
+    ImageBuffer::from_fn(16, 16, |x, _| Luma([(x * 16) as u8]))
+        .save(dir.join("steel_opacity.png"))
+        .unwrap();
+    let mut r = BatchRequest::new(vec![d.path().join("in")], d.path().join("pbr"), Target::Cs);
+    r.recursive = true;
+    r.accept = AcceptSuggestions::High;
+    // The filled albedo's alpha needs a meaning, or the set is undecided and not derived.
+    r.overrides = vec![parse_set("alpha.policy=blend").unwrap()];
+    let (cs, _) = plan_of(r);
+    assert!(
+        job(&cs, "steel.png").fill.is_some(),
+        "the albedo takes the fill: {:#?}",
+        cs.jobs
+    );
+    let sets = engine::also::derive_sets(&cs, &Default::default()).0;
+    assert!(
+        sets.iter()
+            .any(|s| s.members.iter().any(|m| m.ends_with("steel_opacity.png"))),
+        "{sets:#?}"
+    );
+    let mut r = BatchRequest::new(
+        vec![d.path().join("in")],
+        d.path().join("vanilla"),
+        Target::Vanilla,
+    );
+    r.recursive = true;
+    r.accept = AcceptSuggestions::High;
+    // The filled albedo's alpha needs a meaning, or the set is undecided and not derived.
+    r.overrides = vec![parse_set("alpha.policy=blend").unwrap()];
+    r.derive = Some(DeriveRequest {
+        mode: DeriveMode::Vanilla,
+        params: LegacyParams::default(),
+        sets,
+        drop: vec![],
+        scanned: false,
+    });
+    let (p, plan_ev) = plan_of(r);
+    assert!(p.jobs.iter().any(|j| j.derive.is_some()), "{:#?}", p.jobs);
+    assert!(p
+        .jobs
+        .iter()
+        .all(|j| j.derive.is_none() || j.fill.is_none()));
+    let (_, run_ev) = run(p);
+    let t = terminal(plan_ev.iter().chain(&run_ev), "steel_opacity.png");
+    assert_eq!(t.len(), 1, "{t:?}");
+}
+
+/// Review 4 I2: a rule on the filled alpha turns `alpha.exr_straight` on; the plan analyses the image the run loads
+/// (straight RGB 0.6, not 1.2 un-premultiplied by the source's 0.5 alpha).
+#[test]
+fn exr_decode_setting_changed_by_the_fill_is_reloaded() {
+    let d = tempfile::tempdir().unwrap();
+    ImageBuffer::from_pixel(N, N, Rgba([0.6f32, 0.6, 0.6, 0.5]))
+        .save(at(d.path(), "x.exr"))
+        .unwrap();
+    ImageBuffer::from_pixel(N, N, Luma([255u8]))
+        .save(at(d.path(), "x_opacity.png"))
+        .unwrap();
+    toml(
+        d.path(),
+        &format!(
+            "{OPACITY_ASSIGNED}\n[[rules]]\nmatch = {{ alpha = \"constant255\" }}\noverrides = {{ alpha = {{ exr_straight = true }} }}\n"
+        ),
+    );
+    let p = plan(
+        d.path(),
+        Target::Cs,
+        &["file:**/x.exr.subtype=diffuse", "alpha.policy=blend"],
+    );
+    let j = job(&p, "x.exr");
+    assert!(j.fill.is_some());
+    assert!(j.profile.alpha.exr_straight);
+    let clamp: Vec<_> = j
+        .warnings
+        .iter()
+        .filter(|w| w.code == engine::codes::Code::LossClampHdr)
+        .collect();
+    assert!(clamp.is_empty(), "analysed un-premultiplied: {clamp:?}");
+}

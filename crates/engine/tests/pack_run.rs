@@ -87,6 +87,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         shaders: Default::default(),
         nvtt: None,
         derive_own: Default::default(),
+        fill_ends: Default::default(),
     }
 }
 

@@ -213,6 +213,20 @@ pub fn plan_fills(
                     }
                     continue;
                 };
+                let fill = FillJob {
+                    source: PackSource {
+                        // From the helper's planned job, never the file system (a pure planner).
+                        stamp: jobs
+                            .iter()
+                            .find(|j| j.input == h.f.path)
+                            .and_then(|j| j.source),
+                        path: h.f.path.clone(),
+                        role: h.role,
+                    },
+                    read: h.sel.read,
+                    invert: h.sel.invert,
+                    assigned,
+                };
                 if hf.size != tf.size {
                     let ((hw, hh), (tw, th)) = (hf.size, tf.size);
                     if !assigned {
@@ -230,6 +244,8 @@ pub fn plan_fills(
                         &[(h.f.path.clone(), hw, hh), (target.clone(), tw, th)],
                     );
                     j.warnings.push(w);
+                    // The error job keeps the helper, so the run ends the helper with this output (never run).
+                    j.fill = Some(fill);
                     winner.insert(id, h.f.path.clone());
                     landed = true;
                     continue;
@@ -241,20 +257,7 @@ pub fn plan_fills(
                 out.candidates.push(FillCandidate {
                     set_key: set.key.clone(),
                     target,
-                    fill: FillJob {
-                        source: PackSource {
-                            // From the helper's planned job, never the file system (a pure planner).
-                            stamp: jobs
-                                .iter()
-                                .find(|j| j.input == h.f.path)
-                                .and_then(|j| j.source),
-                            path: h.f.path.clone(),
-                            role: h.role,
-                        },
-                        read: h.sel.read,
-                        invert: h.sel.invert,
-                        assigned,
-                    },
+                    fill,
                 });
                 winner.insert(id, h.f.path.clone());
                 landed = true;

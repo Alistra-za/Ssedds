@@ -310,6 +310,11 @@ fn assigned_fill_of_other_size_fails_target() {
         "{}",
         w.message
     );
+    // Review 4 I1: the error job keeps the helper, so the run can end it.
+    assert_eq!(
+        x.fill.as_ref().map(|f| f.source.path.clone()),
+        Some(path("x_opacity.png"))
+    );
 }
 
 #[test]
