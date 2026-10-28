@@ -1129,6 +1129,8 @@ impl Engine {
         drop_typed_roles(&mut sets);
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
+        // shortcut: a set skin only by its chosen shader (Note DV7) is not seen here; move the explicit shaders up
+        // if such a project needs its `_wet` joined.
         if target == Target::Cs {
             join_skin_wet(&mut sets, &files, registry.alias_table(), |s| {
                 s.members
@@ -1530,9 +1532,11 @@ impl Engine {
                 &work[wi].1.game_path,
                 &work[wi].1.output,
             ));
+            // Note DV1: a chosen Advanced Skin makes the set skin (`chosen_recipe`), so its members are typed again.
             if !picks.get(&old.set_key).is_some_and(|p| {
                 p.shader.has_member_defaults()
-                    || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
+                    || (p.provenance == crate::shader::ShaderOrigin::Set
+                        && (is_gras || p.shader == Shader::AdvancedSkin))
             }) {
                 old.warnings.extend(grass_note(&old));
                 jobs.push(old);

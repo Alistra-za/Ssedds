@@ -243,14 +243,7 @@ fn skin_fixture(dir: &Path) -> AppModel {
         .unwrap();
     grey(&r, "rock01_roughness.png", 120);
     grey(&r, "rock01_sk.png", 0);
-    let settings = GuiSettings {
-        export_folder: Some(dir.join("export")),
-        ..GuiSettings::default()
-    };
-    let mut m = AppModel::new(settings, None, session());
-    m.accept = engine::policy::AcceptSuggestions::None;
-    m.open_folder(dir.to_path_buf());
-    idle(&mut m);
+    let m = skin_fixture_reopen(dir);
     assert!(m.item(RMAOS).is_some());
     m
 }
@@ -375,6 +368,54 @@ fn a_hand_set_plain_diffuse_is_switched_and_restored() {
     idle(&mut m);
     assert_eq!(subtype(&m), Some(json!(Subtype::Diffuse)));
     assert!(m.item(RMAOS).is_some());
+}
+
+/// Note DV: a project saved with Advanced Skin on the set (and nothing else) opens skin: the inferred diffuse is
+/// `skin_albedo` and the packed card shows RFAOS, with nothing written to either project file.
+#[test]
+fn an_existing_advanced_skin_set_opens_with_rfaos() {
+    let d = tempfile::tempdir().unwrap();
+    drop(skin_fixture(d.path()));
+    let project = format!("[[sets]]\nid = \"{SET}\"\nshader = \"advanced_skin\"\n");
+    std::fs::write(d.path().join("sdc-project.toml"), &project).unwrap();
+    let mut m = skin_fixture_reopen(d.path());
+    let before = texts(&m);
+    assert_eq!(resolved(&m), Subtype::SkinAlbedo);
+    assert_eq!(subtype(&m), None, "nothing written to [files]");
+    assert!(m.item(RFAOS).is_some(), "the packed output is _rfaos");
+    assert!(m.item(RMAOS).is_none());
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with(SET))
+        .expect("the set")
+        .key
+        .clone();
+    m.select_set(&key);
+    let mut h = harness(m);
+    settle(&mut h);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .any(|n| n.value().as_deref() == Some("RFAOS (skin) (auto)")),
+        "the packed card shows RFAOS"
+    );
+    // DU6 does not apply again: choosing Advanced Skin once more writes no sub-type.
+    h.state_mut().set_shader(SET, Some(Shader::AdvancedSkin));
+    settle(&mut h);
+    assert_eq!(texts(h.state()), before);
+}
+
+/// The skin fixture's folder opened again (its files already there).
+fn skin_fixture_reopen(dir: &Path) -> AppModel {
+    let settings = GuiSettings {
+        export_folder: Some(dir.join("export")),
+        ..GuiSettings::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.open_folder(dir.to_path_buf());
+    idle(&mut m);
+    m
 }
 
 /// Screenshots for the report (not a check): the chip menu and the Problems row at 1100 and 1280 wide.

@@ -424,6 +424,24 @@ fn chosen_recipe(
     };
     let (rfaos_key, on_rfaos) = read(RecipeKind::Rfaos);
     let (rmaos_key, on_rmaos) = read(RecipeKind::Rmaos);
+    // Note DV1: a set whose chosen shader is Advanced Skin packs `_rfaos` unless a recipe is written; the user wrote
+    // none, so a set that cannot build it keeps `auto` without a notice.
+    let skin = ctx.shaders.get(&set.key).is_some_and(|p| {
+        p.shader == crate::shader::Shader::AdvancedSkin
+            && p.provenance == crate::shader::ShaderOrigin::Set
+    });
+    if skin && on_rfaos == PackRecipe::Auto && on_rmaos == PackRecipe::Auto {
+        let built = recipes_for_with(ctx.target, raw, PackRecipe::Rfaos, false)
+            .0
+            .iter()
+            .any(|r| r.kind == RecipeKind::Rfaos);
+        let pick = if built {
+            PackRecipe::Rfaos
+        } else {
+            PackRecipe::Auto
+        };
+        return (pick, None);
+    }
     let mut note = None;
     let pick = if on_rfaos != PackRecipe::Auto {
         if on_rmaos != PackRecipe::Auto && on_rmaos != on_rfaos {

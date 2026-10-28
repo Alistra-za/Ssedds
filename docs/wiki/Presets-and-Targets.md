@@ -59,7 +59,7 @@ Raw maps (`_roughness`, `_metallic`, `_ao` and so on) are packed differently per
 | Target | Packed output | Channels |
 |---|---|---|
 | `cs` | `_rmaos` | R roughness (or 1 minus glossiness), G metallic, B AO, A specular |
-| `cs` | `_rfaos` (Advanced skin, when a fuzz source exists) | R roughness, G fuzz, B AO, A specular |
+| `cs` | `_rfaos` (Advanced skin, when a fuzz source exists or the set's shader is Advanced Skin) | R roughness, G fuzz, B AO, A specular |
 | `cs` | `_p` | height |
 | `vanilla`, set shader complex material | `_m` | R environment, G gloss, B metallic, A height; built from any roughness, glossiness, metallic, height or `_orm` source |
 | `vanilla`, any other set | `_m` (BC4) | environment mask, built only when a metallic or specular source exists |
