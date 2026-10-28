@@ -78,7 +78,7 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
         Subtype::SkinWet,
     ];
     let is_skin = |s: Subtype| skin.contains(&s);
-    let is_other = |s: Subtype| s == Subtype::UiSky;
+    let is_other = |s: Subtype| matches!(s, Subtype::UiSky | Subtype::Cubemap);
     let claimed = |s: Subtype| is_pbr(s) || is_skin(s) || is_other(s);
     let kept: Vec<Subtype> = Subtype::ALL.into_iter().filter(|s| keep(*s)).collect();
     let pick = |f: &dyn Fn(Subtype) -> bool| -> Vec<Subtype> {

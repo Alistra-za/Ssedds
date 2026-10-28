@@ -205,6 +205,11 @@ impl PlanView {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned()
+            } else if job.cube.as_ref().is_some_and(|c| c.sources.len() == 6) {
+                format!(
+                    "{} (6 faces)",
+                    job.output.file_stem().unwrap_or_default().to_string_lossy()
+                )
             } else {
                 file_name(&job.input)
             };
