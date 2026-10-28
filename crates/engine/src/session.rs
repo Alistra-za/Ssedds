@@ -1,7 +1,8 @@
 //! A GUI session over the engine (M3a spec §4.4, §4.5): an `Engine`, the encoders initialised once with the
 //! session's BC1 model, and an `AnalysisCache` so re-planning after an edit or a target change reloads only what
 //! changed.
-use crate::analyse::{code8, Analysis};
+use crate::analyse::{code8, AnalyseHints, Analysis};
+use crate::analysis_store::AnalysisStore;
 use crate::api::{lock, BatchRequest, BatchSummary, CancelToken, Engine, EngineError, Plan};
 use crate::codes::Warning;
 use crate::config::{Category, Format};
@@ -73,6 +74,7 @@ pub fn make_thumbnail(img: &Rgba32F, info: &SourceInfo) -> Thumbnail {
 #[derive(Clone)]
 struct FileEntry {
     stamp: SourceStamp,
+    hints: AnalyseHints,
     analysis: Analysis,
     info: SourceInfo,
     thumb: Option<Arc<Thumbnail>>,
@@ -85,6 +87,8 @@ pub(crate) struct PackEntry {
     pub info: SourceInfo,
     pub non_gray: Vec<PathBuf>,
     pub thumb: Option<Arc<Thumbnail>>,
+    /// The hints it was analysed with: another set is another entry (Note DU).
+    pub hints: AnalyseHints,
 }
 
 /// Each source's analysis (keyed by path, valid while its size and mtime match) and each packed image's analysis
@@ -97,6 +101,8 @@ pub struct AnalysisCache {
     /// Whether each analysis carries the artist check stats (DECISIONS Note CL). Off by default like `thumbnails`,
     /// so the CLI computes none; `Session::new` turns it on.
     pub checks: bool,
+    /// The on-disk store behind the maps below (Note DU); `None` unless [`Session::with_disk_cache`] turned it on.
+    pub disk: Option<AnalysisStore>,
     files: Mutex<HashMap<PathBuf, FileEntry>>,
     packs: Mutex<HashMap<String, PackEntry>>,
     loads: AtomicU64,
@@ -130,41 +136,88 @@ impl AnalysisCache {
     pub(crate) fn make_thumb(&self, img: &Rgba32F, info: &SourceInfo) -> Option<Arc<Thumbnail>> {
         self.thumbnails.then(|| Arc::new(make_thumbnail(img, info)))
     }
-    /// The pixel size of the source analysed at `path` while its size and mtime still match `stamp`; no file is read.
+    /// The pixel size of the source analysed at `path` (with any hints) while its size and mtime still match `stamp`;
+    /// no file is read. Memory only: a caller without the plan's hints, like the GUI's output sizes, asks here.
     pub fn dims(&self, path: &Path, stamp: SourceStamp) -> Option<(u32, u32)> {
         lock(&self.files)
             .get(path)
             .filter(|e| e.stamp == stamp)
             .map(|e| (e.analysis.width, e.analysis.height))
     }
-    pub(crate) fn file(&self, path: &Path, stamp: SourceStamp) -> Option<(Analysis, SourceInfo)> {
-        lock(&self.files)
+    /// Memory first; on a miss the disk, whose hit fills memory. A disk entry without the thumbnail this cache
+    /// wants is a miss.
+    pub(crate) fn file(
+        &self,
+        path: &Path,
+        stamp: SourceStamp,
+        hints: AnalyseHints,
+    ) -> Option<(Analysis, SourceInfo)> {
+        let hit = lock(&self.files)
             .get(path)
-            .filter(|e| e.stamp == stamp)
-            .map(|e| (e.analysis.clone(), e.info))
+            .filter(|e| e.stamp == stamp && e.hints == hints)
+            .map(|e| (e.analysis.clone(), e.info));
+        if hit.is_some() {
+            return hit;
+        }
+        let (analysis, info, thumb) = self.disk.as_ref()?.get_file(path, stamp, hints)?;
+        if self.thumbnails && thumb.is_none() {
+            return None;
+        }
+        let out = (analysis.clone(), info);
+        lock(&self.files).insert(
+            path.to_path_buf(),
+            FileEntry {
+                stamp,
+                hints,
+                analysis,
+                info,
+                thumb,
+            },
+        );
+        Some(out)
     }
     pub(crate) fn put_file(
         &self,
         path: &Path,
         stamp: SourceStamp,
+        hints: AnalyseHints,
         analysis: Analysis,
         info: SourceInfo,
         thumb: Option<Arc<Thumbnail>>,
     ) {
+        if let Some(d) = &self.disk {
+            d.put_file(path, stamp, hints, &analysis, info, thumb.as_deref());
+        }
         lock(&self.files).insert(
             path.to_path_buf(),
             FileEntry {
                 stamp,
+                hints,
                 analysis,
                 info,
                 thumb,
             },
         );
     }
-    pub(crate) fn pack(&self, key: &str) -> Option<PackEntry> {
-        lock(&self.packs).get(key).cloned()
+    pub(crate) fn pack(&self, key: &str, hints: AnalyseHints) -> Option<PackEntry> {
+        let hit = lock(&self.packs)
+            .get(key)
+            .filter(|e| e.hints == hints)
+            .cloned();
+        if hit.is_some() {
+            return hit;
+        }
+        let e = self.disk.as_ref()?.get_pack(key, hints)?;
+        if self.thumbnails && e.thumb.is_none() {
+            return None;
+        }
+        lock(&self.packs).insert(key.to_string(), e.clone());
+        Some(e)
     }
     pub(crate) fn put_pack(&self, key: String, e: PackEntry) {
+        if let Some(d) = &self.disk {
+            d.put_pack(&key, e.hints, &e);
+        }
         lock(&self.packs).insert(key, e);
     }
     /// Audit 8 (Note Y7): keep only what this plan can use. Files outside its inputs go; packs go only after an
@@ -232,6 +285,13 @@ impl Session {
             },
             bc1_model,
         })
+    }
+    /// Keep analyses in `dir` between sessions (Note DU), first pruning it to about 200 MB.
+    pub fn with_disk_cache(mut self, dir: PathBuf) -> Session {
+        let store = AnalysisStore::new(dir);
+        store.prune(200 * 1024 * 1024);
+        self.cache.disk = Some(store);
+        self
     }
     pub fn bc1_model(&self) -> Bc1Model {
         self.bc1_model

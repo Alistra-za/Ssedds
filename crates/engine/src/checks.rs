@@ -6,7 +6,7 @@ use crate::config::{Category, MipKeyword, MipLevels, Profile, ResizeMode, Subtyp
 use crate::from_normal::texel_slope;
 use crate::image::Rgba32F;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Codes at or below this are "low" (about 0.1).
 pub const BAND_LOW: u8 = 25;
@@ -23,7 +23,7 @@ pub const STEEP_CODES: u8 = 32;
 
 /// Texel counts of one channel by 8-bit code. `le4` / `ge251` bound the complex-material parallax window (parallax
 /// only strictly between 4/255 and 251/255).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BandCounts {
     pub eq0: u64,
     pub le4: u64,
@@ -54,13 +54,13 @@ pub(crate) type CodeHist = [[u64; 256]; 5];
 
 /// Mean squared curl of a normal map's slope field, read as stored and with green flipped. A real height field's
 /// slopes have no curl, so the smaller one names the green convention.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Curl {
     pub as_stored: f64,
     pub flipped: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CheckStats {
     pub texels: u64,
     /// The source had two channels (BC5 / RG8 DDS; also a grey+alpha PNG).

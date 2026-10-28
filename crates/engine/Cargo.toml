@@ -10,7 +10,8 @@ build = "build.rs"
 [dependencies]
 encoders-sys.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# float_roundtrip: a cached Analysis must read back bit for bit (Note DU).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 toml.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
