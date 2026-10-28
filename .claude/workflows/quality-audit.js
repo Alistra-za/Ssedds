@@ -1,7 +1,7 @@
 export const meta = {
   name: 'quality-audit',
   description: 'Whole-repo quality audit: dead code, inefficiency, duplication, architecture; each finding skeptically checked, then a ranked report with a delete list and refactor briefs',
-  whenToUse: 'Periodic quality pass over Tessalith (not a bug hunt: use trace-debug for bugs). Args (all optional): {date: "YYYY-MM-DD", repo: "<checkout path>", sections: ["E1",...], sweeps: ["arch",...], maxReviews: 100, briefs: 12, out: "<report dir>"}',
+  whenToUse: 'Periodic quality pass over Tessalith (not a bug hunt: use trace-debug for bugs). Defaults run about 140 agents (1 scout, 19 sections, 6 sweeps, up to 100 checks, up to 12 briefs, 1 report); try a small first run such as {sections: ["E1","G1"], sweeps: [], maxReviews: 20}. Args (all optional): {date: "YYYY-MM-DD", repo: "<checkout path>", sections: ["E1",...], sweeps: ["arch",...], maxReviews: 100, sweepShare: 30, briefs: 12, out: "<report dir>"}. The Scout reads the newest earlier report in `out` so its rejected findings are not raised again.',
   phases: [
     { title: 'Scout', detail: 'map every crates/*/src file to a section; gather mechanical signals' },
     { title: 'Assess', detail: 'one assessor per section plus whole-repo sweeps' },
@@ -172,19 +172,23 @@ const OUT = a.out || '.superpowers/sdd/quality-audit'
 const DATE = a.date || 'undated'
 const REPO = a.repo || 'the current working directory (the repo root)'
 const MAX_REVIEWS = a.maxReviews || 100
+// Sweeps and sections start together in pipeline(), so each gets its own share of the check cap.
+const SWEEP_CAP = sweeps.length ? Math.round(MAX_REVIEWS * (a.sweepShare === undefined ? 30 : a.sweepShare) / 100) : 0
+const cap = { sweep: SWEEP_CAP, section: MAX_REVIEWS - SWEEP_CAP }
 const BRIEFS = a.briefs === undefined ? 12 : a.briefs
-let reviewsStarted = 0
+const started = { sweep: 0, section: 0 }
 let reviewsSkipped = 0
 
-const TARGET = 'target/quality-shared'
 const BASE = `Read-only: do not edit, commit, push or spawn subagents. Never run \`python -\` heredocs. Never touch %LOCALAPPDATA%\\sdc, %APPDATA%\\sdc or the owner's game and mod folders. Download nothing. Work in ${REPO}.`
-const RULES = `${BASE} Prefer reading and grepping. If you must run cargo, use --offline, CARGO_BUILD_JOBS=4 and CARGO_TARGET_DIR=${TARGET} (shared; never delete it yourself); never run the render_ GPU tests. Capture output to a file; never pipe it through head.`
+// No builds: a target folder reaches 50-170 GB and every agent would queue on one cargo lock.
+const RULES = `${BASE} Read and grep. Never run cargo build, check, clippy, test or run; only \`cargo tree --offline\` and \`cargo metadata --offline\`, which build nothing. Capture output to a file; never pipe it through head.`
 const BAR = `Report only what a busy senior reviewer would act on: a finding must name a concrete change and what it buys. No style nits rustfmt or clippy would catch, no renames for taste, no "add comments". Behaviour recorded as a ruling in docs/DECISIONS.md is intended, and a \`shortcut:\` comment within its stated limit is a decision: cite them if you think they are wrong. Efficiency claims need a reason the code is hot (called per pixel, per frame, per file of a 10k batch) or a measurement; otherwise mark payoff low. Encoded output bytes are pinned by goldens: never propose a change that alters them as a quality fix.`
-log(`Planned: 1 scout + ${pick.length} assessors + ${sweeps.length} sweeps + up to ${MAX_REVIEWS} checks + up to ${BRIEFS} briefs + 1 report`)
+log(`Planned: 1 scout + ${pick.length} assessors + ${sweeps.length} sweeps + up to ${MAX_REVIEWS} checks (${cap.sweep} for sweeps) + up to ${BRIEFS} briefs + 1 report`)
 
 phase('Scout')
 const scout = await agent(
-  `List every .rs file under crates/*/src with \`git ls-files 'crates/*/src/*.rs' 'crates/*/src/**/*.rs'\`. Section table (a path ending in / is a whole folder; a bare file name is in the folder of the previous full path):\n${JSON.stringify(SECTIONS.map(s => ({ id: s.id, paths: s.paths })), null, 1)}\nReport files no section covers (ignore crates/bench) with the section each fits best, section paths that no longer exist, each section's line count today, and the 15 largest .rs files under crates/ by lines. ${RULES}`,
+  `List every .rs file under crates/*/src with \`git ls-files 'crates/*/src/*.rs' 'crates/*/src/**/*.rs'\`. Section table (a path ending in / is a whole folder; a bare file name is in the folder of the previous full path):\n${JSON.stringify(SECTIONS.map(s => ({ id: s.id, paths: s.paths })), null, 1)}\nReport files no section covers (ignore crates/bench) with the section each fits best, section paths that no longer exist, each section's line count today, and the 15 largest .rs files under crates/ by lines.
+Also: (a) compare the \`const SECTIONS = [...]\` literal in .claude/workflows/quality-audit.js and .claude/workflows/trace-debug.js and say whether they are identical; (b) find the newest earlier report \`${OUT}/*-report.md\` (if any) and return the one-line entries of its "Rejected" section verbatim (up to 150). ${RULES}`,
   { label: 'scout:coverage', phase: 'Scout', effort: 'low', schema: {
     type: 'object',
     properties: {
@@ -192,8 +196,11 @@ const scout = await agent(
       missing: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, section: { type: 'string' } }, required: ['path', 'section'] } },
       lines: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, lines: { type: 'integer' } }, required: ['id', 'lines'] } },
       largest: { type: 'array', items: { type: 'string' }, description: '"path: lines"' },
+      tables_identical: { type: 'boolean' },
+      prior_report: { type: 'string', description: 'path of the earlier report read, or "" if none' },
+      prior_rejected: { type: 'array', items: { type: 'string' } },
     },
-    required: ['unassigned', 'missing', 'lines', 'largest'],
+    required: ['unassigned', 'missing', 'lines', 'largest', 'tables_identical', 'prior_report', 'prior_rejected'],
   } })
 const extra = {}
 for (const u of (scout && scout.unassigned) || []) (extra[u.section] = extra[u.section] || []).push(u.file)
@@ -205,11 +212,17 @@ for (const l of (scout && scout.lines) || []) {
   if (l.lines > 9000) log(`Section ${l.id} is ${l.lines} lines: over one agent's comfortable budget; split it in SECTIONS`)
 }
 const largest = (scout && scout.largest || []).join(', ')
+if (scout && !scout.tables_identical) log('SECTIONS differs between quality-audit.js and trace-debug.js: make them identical')
+const priorRejected = (scout && scout.prior_rejected) || []
+if (priorRejected.length) log(`${priorRejected.length} findings rejected in ${scout.prior_report} are passed to the assessors`)
+const PRIOR = priorRejected.length
+  ? `\nRejected by the checker in the last audit (do not raise these again unless the code has changed since): ${JSON.stringify(priorRejected)}`
+  : ''
 
 // Dedup across all assessors (sweeps and sections overlap on purpose): same file within 10 lines and overlapping
 // titles, or the same kind within 2 lines. The checker's duplicate_of catches the rest.
 const words = t => new Set(t.toLowerCase().split(/[^a-z0-9_]+/).filter(w => w.length > 2))
-const similar = (x, y) => { const A = words(x), B = words(y); let n = 0; A.forEach(w => { if (B.has(w)) n++ }); return n >= Math.min(A.size, B.size) / 2 }
+const similar = (x, y) => { const A = words(x), B = words(y); let n = 0; A.forEach(w => { if (B.has(w)) n++ }); return A.size > 0 && B.size > 0 && n >= Math.min(A.size, B.size) / 2 }
 const seen = []
 const isSeen = f => seen.some(s => s.file === f.file &&
   ((Math.abs(s.line - f.line) <= 10 && similar(s.title, f.title)) || (s.kind === f.kind && Math.abs(s.line - f.line) <= 2)))
@@ -238,13 +251,13 @@ ${skillLine(['ponytail:ponytail'], skillsFor(s))}
 Your files: ${JSON.stringify(s.paths.concat(extra[s.id] || []))} (a bare file name is in the folder of the previous full path). About ${sizeOf[s.id] || 'unknown'} lines. Read the main files in full, skim the rest by signatures, grep tests instead of reading them.
 Largest files in the repo, for context: ${largest}.
 Look for: functions or types nothing calls (grep before you claim); code that recomputes, clones or allocates per call on a hot path${s.hot ? ' (this section is hot: per pixel, per frame or per batch file)' : ''}; rules computed twice; functions over ~120 lines or nesting over 4 that a split would make clearer; error handling that loses information; risky paths with no test; places that disagree with their neighbours or with docs/gui.md. Max 10 findings, best payoff first.
-${BAR}
+${BAR}${PRIOR}
 ${RULES}`
       : `You are a whole-repo quality sweeper for "${s.name}" in the Tessalith repo (Rust) in ${REPO}.
 ${skillLine(['ponytail:ponytail'], [RUST('design'), RUST('build')])}
 Task: ${s.task}
 Largest files in the repo, for context: ${largest}. Max 12 findings, best payoff first. The scorecard rates the repo as a whole on this theme.
-${BAR}
+${BAR}${PRIOR}
 ${RULES}`,
     { label: `assess:${s.id}`, phase: 'Assess', schema: FINDINGS }),
   (res, s) => {
@@ -253,13 +266,13 @@ ${RULES}`,
     log(`${s.id}: ${res.findings.length} findings`)
     let fresh = res.findings.filter(f => !isSeen(f))
     fresh.forEach(f => seen.push(f))
-    const room = Math.max(0, MAX_REVIEWS - reviewsStarted)
+    const room = Math.max(0, cap[s.kind] - started[s.kind])
     if (fresh.length > room) {
       reviewsSkipped += fresh.length - room
-      log(`${s.id}: check cap reached; ${fresh.length - room} findings not checked (raise args.maxReviews)`)
+      log(`${s.id}: ${s.kind} check cap (${cap[s.kind]}) reached; ${fresh.length - room} findings not checked (raise args.maxReviews or args.sweepShare)`)
       fresh = fresh.slice(0, room) // assessors list best payoff first
     }
-    reviewsStarted += fresh.length
+    started[s.kind] += fresh.length
     return parallel(fresh.map(f => () =>
       agent(
         `Skeptically check this code-quality finding from ${s.id}. Your job is to REJECT it unless the evidence holds and the change is worth making. Default to rejected=true when unsure.
@@ -272,7 +285,7 @@ Claimed payoff ${f.payoff}, effort ${f.effort}.
 How to check this kind: ${lenses[f.kind] || lenses.design}
 Run the check yourself and put it in "verified". Re-grade payoff and effort honestly.
 ${RULES}`,
-        { label: `check:${s.id}:${f.file.split('/').pop()}:${f.line}`, phase: 'Check', schema: VERDICT })
+        { label: `check:${s.id}:${f.file.split('/').pop()}:${f.line}`, phase: 'Check', schema: VERDICT, effort: 'medium' })
         .then(v => ({ f, s: s.id, v }))))
   },
   checks => {
@@ -301,6 +314,7 @@ Give ordered steps where each is one commit that builds, the tests that must sta
     { label: `brief:${k.section}:${k.finding.file.split('/').pop()}`, phase: 'Report', schema: BRIEF, effort: 'low' })
     .then(b => { k.brief = b })))
 
+const clip = t => (t && t.length > 300 ? t.slice(0, 300) + '…' : t) // keeps the report prompt bounded
 const report = await agent(
   `Write the quality-audit report to ${OUT}/${DATE}-report.md under ${REPO} (create the folder; this path is gitignored scratch). Plain English, short sentences, tables where they help.
 Sections:
@@ -310,10 +324,9 @@ Sections:
 4. Refactors and efficiency: one block per kept finding with a brief, best value first: title, file:line, kind, payoff/effort, claim, what the checker verified, then the brief (steps, safety net, goldens, risk, owner).
 5. Other kept findings: one line each (title, file:line, kind, payoff/effort).
 6. Architecture: a short narrative from the "arch" sweep's findings and scorecard; what to keep, what to move.
-7. Rejected: one line each with the checker's reason (so the next run does not re-raise them).
+7. Rejected: one line each with the checker's reason, under the exact heading "## Rejected" (the next run's Scout reads these lines so they are not raised again).
 8. Not covered, per scope.
-After writing, delete the shared build folder ${TARGET} under ${REPO} if it exists (this run's scratch).
-Data: ${JSON.stringify({ cards, kept, rejected: rejected.map(r => ({ s: r.s, title: r.f.title, at: `${r.f.file}:${r.f.line}`, why: r.v ? (r.v.duplicate_of ? 'duplicate of ' + r.v.duplicate_of : r.v.reason) : 'checker returned nothing' })) })}
+Data: ${JSON.stringify({ cards, kept: kept.map(k => ({ ...k, finding: { ...k.finding, evidence: clip(k.finding.evidence) }, verified: clip(k.verified) })), rejected: rejected.map(r => ({ s: r.s, title: r.f.title, at: `${r.f.file}:${r.f.line}`, why: r.v ? (r.v.duplicate_of ? 'duplicate of ' + r.v.duplicate_of : r.v.reason) : 'checker returned nothing' })) })}
 Do not edit anything else. Return the report path.`,
   { label: 'report', phase: 'Report' })
 
