@@ -263,7 +263,8 @@ fn a_missing_entry_is_a_question_mark_chip() {
     idle(&mut m);
     let mut h = harness(m);
     h.run();
-    let q = on_card(&h, "?");
+    // Note DU1: the chip is a button named by its entry.
+    let q = on_card(&h, "Missing: landscape/gone.png");
     assert_eq!(q.len(), 1, "one chip per missing entry");
     q[0].hover();
     h.run();

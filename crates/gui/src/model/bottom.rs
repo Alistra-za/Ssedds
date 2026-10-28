@@ -91,6 +91,8 @@ pub struct Problem {
     pub at: At,
     pub text: String,
     pub code: Option<engine::codes::Code>,
+    /// Note DU3: the set entry that matches no file, which the row's fix button removes.
+    pub missing: Option<sets::Missing>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +240,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         at,
         text,
         code,
+        missing: None,
     };
     let mut out = vec![];
     for b in pbr_export::export_blocks(m) {
@@ -294,6 +297,19 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         for w in v.set_warnings.iter().filter(|w| counts_toward_badge(w)) {
             let at = set_at(&v.key, &v.id);
             out.push(row(Level::Warning, at, w.message.clone(), Some(w.code)));
+        }
+    }
+    // Note DU3: a set entry that matches no file, with its removal as the fix.
+    for v in views.iter() {
+        for miss in &v.missing {
+            let text = match miss {
+                sets::Missing::NoFilesLeft => "No texture of this set is left in the folder".into(),
+                _ => format!("No file matches {}", miss.text()),
+            };
+            out.push(Problem {
+                missing: Some(miss.clone()),
+                ..row(Level::Warning, set_at(&v.key, &v.id), text, None)
+            });
         }
     }
     for (k, ws) in &m.rnm_notes {

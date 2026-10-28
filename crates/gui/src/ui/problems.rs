@@ -3,6 +3,7 @@
 use super::review::{apply, fix_buttons, RowPick};
 use super::status::{dot, Status};
 use crate::model::bottom::{filtered, flagged, problems, At, Level, Problem, ProblemsFilter};
+use crate::model::sets::Missing;
 use crate::model::AppModel;
 use eframe::egui;
 use engine::codes::Code;
@@ -50,6 +51,7 @@ enum Act {
     File(String),
     Fix(RowPick),
     RebuildZ(String),
+    RemoveMissing(String, Missing),
     Filter(Option<ProblemsFilter>),
 }
 
@@ -57,6 +59,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     // The count comes from the same cached build as the list (K6), not a count per frame.
     let (list, checks) = rows(ui, model);
     let off = model.fix_off();
+    let sets_off = model.sets_read_only_reason();
     let mut act = None;
     let label = |k: &String| {
         crate::model::sets::views(model)
@@ -159,6 +162,34 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                     a = Some(Act::Fix(r));
                                 }
                             }
+                            // Note DU3: a set entry that matches no file is removed in place.
+                            At::Set { id, .. } if p.missing.is_some() => {
+                                let miss = p.missing.as_ref().expect("guarded");
+                                let (label, name) = match miss {
+                                    Missing::NoFilesLeft => {
+                                        ("Delete set", format!("Delete set {id}"))
+                                    }
+                                    _ => (
+                                        "Remove from set",
+                                        format!("Remove {} from {id}", miss.text()),
+                                    ),
+                                };
+                                let b = ui.add_enabled(sets_off.is_none(), egui::Button::new(label));
+                                b.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Button,
+                                        sets_off.is_none(),
+                                        &name,
+                                    )
+                                });
+                                let b = match &sets_off {
+                                    Some(why) => b.on_disabled_hover_text(why.as_str()),
+                                    None => b.on_hover_text("Remove this line from sdc-project.toml"),
+                                };
+                                if b.clicked() {
+                                    a = Some(Act::RemoveMissing(id.clone(), miss.clone()));
+                                }
+                            }
                             At::Set { key, .. } if ui.button("Go to set").clicked() => {
                                 a = Some(Act::Set(key.clone()));
                             }
@@ -200,6 +231,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         },
         Some(Act::Fix(r)) => apply(model, r),
         Some(Act::RebuildZ(k)) => model.set_field(&k, "channels.reconstruct_z", json!(true)),
+        Some(Act::RemoveMissing(id, miss)) => {
+            if let Err(why) = model.remove_missing(&id, &miss) {
+                model.status_line = why;
+            }
+        }
         Some(Act::Filter(f)) => model.bottom.filter = f,
         None => {}
     }
