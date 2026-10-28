@@ -413,3 +413,41 @@ fn old_record_reexports_only_filled_outputs() {
     let s = run(d.path(), &[DIFFUSE, BLEND]);
     assert_eq!((s.converted, s.up_to_date), (0, 3), "{s:?}");
 }
+
+/// Review fix (Note DT17): a layer's report names the `rnm.target` in effect, including the `_cnr` fallback when the
+/// set has no `_n` (Note W4), and a hand-set value.
+#[test]
+fn layer_report_names_its_rnm_target() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    normal(d.path(), "x_cnr.png");
+    normal(d.path(), "x_detailnorm.png");
+    let p = plan(d.path(), &[DIFFUSE]);
+    assert_eq!(
+        report(&p, "x_detailnorm.png").rnm_target,
+        Some(RnmTarget::Cnr)
+    );
+    assert_eq!(
+        report(&p, "x_detailnorm.png").fills,
+        [FillTarget::Rnm(RnmTarget::Cnr)]
+    );
+    normal(d.path(), "x_n.png");
+    let p = plan(d.path(), &[DIFFUSE]);
+    assert_eq!(
+        report(&p, "x_detailnorm.png").rnm_target,
+        Some(RnmTarget::N)
+    );
+    toml(
+        d.path(),
+        "[files.\"textures/a/x_detailnorm\"]\nrnm.target = \"both\"\n",
+    );
+    let p = plan(d.path(), &[DIFFUSE]);
+    assert_eq!(
+        report(&p, "x_detailnorm.png").rnm_target,
+        Some(RnmTarget::Both)
+    );
+    // Greyscale roles have none.
+    checker(d.path(), "x_roughness.png", 40, 200);
+    let p = plan(d.path(), &[DIFFUSE]);
+    assert_eq!(report(&p, "x_roughness.png").rnm_target, None);
+}

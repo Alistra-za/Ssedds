@@ -27,6 +27,9 @@ pub struct HelperReport {
     pub not_used: Option<String>,
     pub read: Option<HelperRead>,
     pub invert: bool,
+    /// A normal-type role's `rnm.target` in effect: hand-set, else its name's prefix, else `_n` falling back to `_cnr`
+    /// (Note W4). `None` for other roles.
+    pub rnm_target: Option<crate::config::RnmTarget>,
     /// The outputs it fills.
     pub outputs: Vec<PathBuf>,
 }
@@ -216,6 +219,21 @@ pub fn reports(
                     .or(rnm_off)
                     .or_else(|| fills.not_used.get(&f.path).cloned())
             };
+            let rnm_target = role.is_normal().then(|| {
+                use crate::config::RnmTarget;
+                use crate::rnm::plan::{base_kind, effective_target};
+                let prefix = own.and_then(|j| match j.status {
+                    JobStatus::NormalLayer { term } => term.prefix,
+                    _ => None,
+                });
+                let has = |k: RnmTarget| in_set.iter().any(|j| base_kind(j) == Some(k));
+                effective_target(
+                    prefix,
+                    crate::policy::rnm_target_requested(ctx, f),
+                    has(RnmTarget::N),
+                    has(RnmTarget::Cnr),
+                )
+            });
             let mut outputs: Vec<PathBuf> = vec![];
             for (_, o) in &went {
                 if !outputs.contains(o) {
@@ -238,6 +256,7 @@ pub fn reports(
                 not_used,
                 read: sel.read,
                 invert: sel.invert,
+                rnm_target,
                 outputs,
             });
         }

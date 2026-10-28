@@ -385,3 +385,74 @@ fn shots() {
         }
     }
 }
+
+/// Review fix (DT17): a layer with no prefix in a set with `_cnr` and no `_n` blends into `_cnr` (Note W4); the panel
+/// shows the engine's target, and picking a value writes `rnm.target` even when it is the one shown.
+#[test]
+fn layer_target_follows_the_engine() {
+    let d = tempfile::tempdir().unwrap();
+    let files = ["x.png", "x_cnr.png", "x_detailnorm.png"];
+    let mut h = app(fixture(d.path(), &files, ""), "x_detailnorm.png");
+    let combo = h.get_by_role_and_label(Role::ComboBox, "Layer target");
+    assert_eq!(combo.accesskit_node().value().as_deref(), Some("CNR"));
+    pick(&mut h, "Layer target", "CNR");
+    assert_eq!(
+        value(&h, "x_detailnorm.png", "rnm.target"),
+        Some(json!("cnr"))
+    );
+    pick(&mut h, "Layer target", "Normal");
+    assert_eq!(
+        value(&h, "x_detailnorm.png", "rnm.target"),
+        Some(json!("n"))
+    );
+    let rep = h
+        .state()
+        .item("x_detailnorm.png")
+        .unwrap()
+        .helper
+        .clone()
+        .unwrap();
+    assert_eq!(rep.rnm_target, Some(engine::config::RnmTarget::N));
+    let combo = h.get_by_role_and_label(Role::ComboBox, "Layer target");
+    assert_eq!(combo.accesskit_node().value().as_deref(), Some("Normal"));
+}
+
+/// Review fix (DT17): picking the guessed role writes it, so it becomes assigned and replaces the diffuse's own
+/// varying alpha, which a suggestion never does.
+#[test]
+fn picking_the_guessed_role_hand_sets_it() {
+    let d = tempfile::tempdir().unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, y| {
+        image::Rgba([(x * 4) as u8, (y * 4) as u8, 90u8, (x * 4) as u8])
+    })
+    .save(d.path().join("x.png"))
+    .unwrap();
+    let mut h = app(fixture(d.path(), &["x_opacity.png"], ""), "x_opacity.png");
+    let rep = |h: &H| {
+        h.state()
+            .item("x_opacity.png")
+            .unwrap()
+            .helper
+            .clone()
+            .unwrap()
+    };
+    assert!(!rep(&h).role_hand_set);
+    assert!(
+        rep(&h).fills.is_empty(),
+        "a suggestion leaves real alpha: {:?}",
+        rep(&h)
+    );
+    pick(&mut h, "Helper role", "Opacity");
+    assert_eq!(
+        value(&h, "x_opacity.png", "helper.role"),
+        Some(json!("opacity"))
+    );
+    assert!(rep(&h).role_hand_set);
+    assert_eq!(
+        rep(&h).fills,
+        [engine::helper::FillTarget::Alpha(
+            engine::helper::AlphaTarget::Diffuse
+        )]
+    );
+    h.get_by_label("✎ Opacity");
+}

@@ -80,15 +80,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, h: &HelperReport
     ui.heading(&name);
     ui.weak(crate::model::items::helper_target_text(h));
     ui.add_space(4.0);
-    // The layer's base when `rnm.target` is unset comes from its name, as the RNM section shows it.
-    let layer_target = h.role.is_normal().then(|| {
-        model
-            .project
-            .as_ref()
-            .and_then(|p| p.file_value(key, "rnm.target"))
-            .and_then(|v| serde_json::from_value::<RnmTarget>(v).ok())
-            .unwrap_or_else(|| crate::model::rnm::default_target(&h.path))
-    });
+    // The engine's `rnm.target` in effect (Note W4's `_cnr` fallback included).
+    let layer_target = h.rnm_target.filter(|_| h.role.is_normal());
     ui.add_enabled_ui(ro.is_none(), |ui| {
         egui::Grid::new(("helper-panel", key))
             .num_columns(3)
@@ -106,16 +99,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, h: &HelperReport
             ui.weak(format!("Skipped {}: {reason}", t.label(&base)));
         }
     });
-    for o in &h.outputs {
-        let target = model
-            .items
-            .iter()
-            .find(|i| i.job.as_ref().is_some_and(|j| &j.output == o))
-            .map(|i| (i.key.clone(), i.name.clone()));
-        if let Some((k, shown)) = target {
-            if ui.button(format!("Show {shown}")).clicked() {
-                edits.push(Edit::Select(k));
-            }
+    for (k, shown) in output_items(ui.ctx(), model, key, h) {
+        if ui.button(format!("Show {shown}")).clicked() {
+            edits.push(Edit::Select(k));
         }
     }
     for e in edits {
@@ -128,6 +114,36 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, h: &HelperReport
             Edit::Select(k) => model.select_item(&k),
         }
     }
+}
+
+/// (item key, name) of each output the helper fills: one scan of the items per plan, cached by the items' revision.
+fn output_items(
+    ctx: &egui::Context,
+    model: &AppModel,
+    key: &str,
+    h: &HelperReport,
+) -> Vec<(String, String)> {
+    type Slot = (String, u64, Vec<(String, String)>);
+    let id = egui::Id::new("helper-panel-outputs");
+    let rev = model.items_rev();
+    if let Some((k, r, v)) = ctx.data(|d| d.get_temp::<Slot>(id)) {
+        if k == key && r == rev {
+            return v;
+        }
+    }
+    let v: Vec<(String, String)> = h
+        .outputs
+        .iter()
+        .filter_map(|o| {
+            model
+                .items
+                .iter()
+                .find(|i| i.job.as_ref().is_some_and(|j| &j.output == o))
+                .map(|i| (i.key.clone(), i.name.clone()))
+        })
+        .collect();
+    ctx.data_mut(|d| d.insert_temp(id, (key.to_string(), rev, v.clone())));
+    v
 }
 
 fn hint(ui: &mut egui::Ui, text: &str) {
@@ -153,7 +169,9 @@ fn role_row(
         let r = combo(ui, (key, "helper-role"), &shown, |ui| {
             // "Not a helper" first (`all()`'s order), so it is in view without scrolling the long list.
             for role in HelperRole::all() {
-                if ui.selectable_label(role == h.role, role.label()).clicked() && role != h.role {
+                // Picking the guessed role writes it: an assigned role beats a suggestion.
+                let new = role != h.role || !h.role_hand_set;
+                if ui.selectable_label(role == h.role, role.label()).clicked() && new {
                     edits.push(Edit::Role(Some(role)));
                 }
                 if role == HelperRole::NotHelper {
@@ -192,7 +210,6 @@ fn layer_row(
             if ui
                 .selectable_label(o == t, super::rnm_section::target_label(o))
                 .clicked()
-                && o != t
             {
                 edits.push(Edit::LayerTarget(o));
             }

@@ -21,8 +21,7 @@ pub struct RnmRow {
     pub target: RnmTarget,
 }
 
-/// The base a layer blends into when `rnm.target` is unset: its name's prefix, else `_n`.
-pub fn default_target(path: &std::path::Path) -> RnmTarget {
+fn default_target(path: &std::path::Path) -> RnmTarget {
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     match vocab_of(&stem).map(|v| v.role) {
         Some(VocabRole::NormalLayer(t)) => t.prefix.unwrap_or(RnmTarget::N),
