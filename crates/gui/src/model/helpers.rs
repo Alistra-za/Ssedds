@@ -26,6 +26,20 @@ pub fn written_fills(h: &HelperReport) -> Vec<FillTarget> {
 }
 
 impl AppModel {
+    /// Note DX18b: a helper's current list. A hand-set list is its `sdc.toml` `helper.fills`, so a target that did not
+    /// land is not lost; otherwise the engine's reported fills.
+    pub fn current_fills(&self, key: &str, h: &HelperReport) -> Vec<FillTarget> {
+        let hand = self
+            .project
+            .as_ref()
+            .and_then(|p| p.file_value(key, FILLS_FIELD))
+            .and_then(|v| engine::helper::fills_value(&v));
+        match hand {
+            Some(v) if h.fills_hand_set => v,
+            _ => written_fills(h),
+        }
+    }
+
     fn helper_edit(&mut self, label: &str, key: &str, field: &'static str, v: Option<Value>) {
         let k = key.to_string();
         self.edit(label, move |p| match v {

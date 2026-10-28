@@ -235,6 +235,25 @@ fn fills_add_and_remove_write_the_list() {
     h.get_by_label("not used: no targets chosen");
 }
 
+/// Final review M1: a hand-set list shows every target from `sdc.toml` (DX18b), so ✕ on one never drops a hand target
+/// that did not land (`n.a` under vanilla with no `_n`).
+#[test]
+fn hand_targets_that_did_not_land_stay_listed() {
+    let d = tempfile::tempdir().unwrap();
+    let toml = "[files.\"x_opacity.png\"]\nhelper.fills = [\"diffuse.a\", \"n.a\"]\n";
+    let mut m = fixture(d.path(), &["x.png", "x_opacity.png"], toml);
+    m.set_target(engine::config::Target::Vanilla);
+    idle(&mut m);
+    let mut h = app(m, "x_opacity.png");
+    h.get_by_role_and_label(Role::Button, "Stop filling x alpha");
+    h.get_by_role_and_label(Role::Button, "Stop filling x_n alpha");
+    click(&mut h, "Stop filling x alpha");
+    assert_eq!(
+        value(&h, "x_opacity.png", "helper.fills"),
+        Some(json!(["n.a"]))
+    );
+}
+
 #[test]
 fn fills_reset_returns_to_suggestion() {
     let d = tempfile::tempdir().unwrap();

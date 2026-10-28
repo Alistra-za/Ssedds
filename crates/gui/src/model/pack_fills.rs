@@ -8,12 +8,10 @@
 //! Picking `_rfaos` also moves the set to Advanced skin, but only through the engine: with the recipe resolved to
 //! `rfaos` it suggests `skin_albedo` and `skin_sk` for the members whose sub-type is inferred, so nothing else is
 //! written and a member the user set stays put.
-use super::helpers::written_fills;
 use super::AppModel;
 use crate::project::ProjectDoc;
 use engine::config::{PackRecipe, RawMap, Target};
-use engine::helper::report::HelperReport;
-use engine::helper::{fills_value, FillTarget, HelperRole, FILLS_FIELD};
+use engine::helper::{FillTarget, HelperRole, FILLS_FIELD};
 use engine::pack::{recipes_for_with, ChannelSource, RawInput, RecipeKind};
 use serde_json::json;
 
@@ -264,23 +262,12 @@ impl AppModel {
             suffix: kind.suffix(),
             channel,
         };
-        let current = |key: &str, h: &HelperReport| -> Vec<FillTarget> {
-            let hand = self
-                .project
-                .as_ref()
-                .and_then(|p| p.file_value(key, FILLS_FIELD))
-                .and_then(|v| fills_value(&v));
-            match hand {
-                Some(v) if h.fills_hand_set => v,
-                _ => written_fills(h),
-            }
-        };
         let mut writes: Vec<(String, Vec<FillTarget>)> = vec![];
         for (key, ..) in channel_helpers(self, packed_key) {
             let Some(h) = self.item(&key).and_then(|i| i.helper.clone()) else {
                 continue;
             };
-            let mut list = current(&key, &h);
+            let mut list = self.current_fills(&key, &h);
             let held = list.contains(&target);
             list.retain(|t| *t != target);
             if helper == Some(key.as_str()) {

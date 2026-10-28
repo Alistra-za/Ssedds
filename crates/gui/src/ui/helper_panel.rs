@@ -1,6 +1,6 @@
 //! Note DX17: a helper's panel (helper textures spec Goal 6): its role, the channels it fills, the channel it is read
 //! from and whether it is inverted. Every value shown is the engine's `HelperReport`; the GUI only writes the keys.
-use crate::model::helpers::{set_base, written_fills};
+use crate::model::helpers::set_base;
 use crate::model::AppModel;
 use eframe::egui;
 use engine::config::RnmTarget;
@@ -90,7 +90,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, h: &HelperReport
                 match layer_target {
                     Some(t) => layer_row(ui, key, t, &ro, &mut edits),
                     None => {
-                        fills_rows(ui, key, h, &base, &ro, &mut edits);
+                        let now = model.current_fills(key, h);
+                        fills_rows(ui, key, h, now, &base, &ro, &mut edits);
                         read_rows(ui, key, h, &ro, &mut edits);
                     }
                 }
@@ -240,11 +241,12 @@ fn fills_rows(
     ui: &mut egui::Ui,
     key: &str,
     h: &HelperReport,
+    // Final review M1: the `sdc.toml` list when hand-set (DX18b), so ✕ on one target never drops one that did not land.
+    now: Vec<FillTarget>,
     base: &str,
     ro: &Option<String>,
     edits: &mut Vec<Edit>,
 ) {
-    let now = written_fills(h);
     ui.label("Fills");
     ui.vertical(|ui| {
         for t in &now {
