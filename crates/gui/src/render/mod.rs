@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 const NO_BC: &str = "This GPU has no BC texture support: showing a CPU decode";
 const NOT_MULTIPLE_OF_4: &str = "Mip size not a multiple of 4: showing a CPU decode";
-const CUBE: &str = "a cube is drawn as a cross from the CPU decode";
+/// No notice for a cube: its cross always comes from the CPU decode, which is nothing the user can act on (Note DT26).
+const CUBE: &str = "";
 const UNCOMPRESSED: &str = "uncompressed format: shown from the CPU decode";
 const TOO_LARGE: &str = "This mip is larger than the GPU texture limit: no preview";
 const NOT_DECODED: &str = "The decoded mips are missing: no preview";

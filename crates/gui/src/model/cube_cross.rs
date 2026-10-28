@@ -12,6 +12,26 @@ pub const FACE_LABELS: [&str; 6] = [
     "\u{2212}Z down",
 ];
 
+/// The preview size limit for `job`: a cube's cross is 4 faces wide and 3 tall, so its face gets a quarter of the
+/// cap and the whole cross stays within what a 2D preview may hold (Note DT22). The engine picks the first mip whose
+/// face fits, so a larger cube previews from a lower mip.
+pub fn preview_cap(job: &engine::policy::ResolvedJob, max: u32) -> u32 {
+    if job.cube.is_some() {
+        (max / 4).max(1)
+    } else {
+        max
+    }
+}
+
+/// The size limit for the source side: a six-file cube shows its processed faces, so it keeps the same quarter cap as
+/// its encode (the two sides share mip numbers); a single-image cube shows the input image under the full cap.
+pub fn source_cap(job: &engine::policy::ResolvedJob, max: u32) -> u32 {
+    match &job.cube {
+        Some(c) if c.sources.len() == 6 => (max / 4).max(1),
+        _ => max,
+    }
+}
+
 /// The cross of six `size`-square faces: a `4*size` by `3*size` image, face `i` in cell `HCROSS[i]`, the empty cells
 /// transparent black.
 pub fn cross_image(faces: [&[[f32; 4]]; 6], size: u32) -> (u32, u32, Vec<[f32; 4]>) {
@@ -29,6 +49,24 @@ pub fn cross_image(faces: [&[[f32; 4]]; 6], size: u32) -> (u32, u32, Vec<[f32; 4
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_big_cubes_cross_stays_within_the_preview_cap() {
+        // A 4096-px face chain, previewed under every cap the settings offer: the cross of the mip the engine picks
+        // is never wider or taller than the cap, and the face is never decoded at 4096.
+        let chain: Vec<(u32, u32)> = (0..13).map(|i| (4096 >> i, 4096 >> i)).collect();
+        for cap in [1024u32, 2048, 4096, 8192, 16384] {
+            let face_cap = (cap / 4).max(1);
+            let (w, h) = chain[engine::session::first_level_within(&chain, face_cap)];
+            assert!(
+                4 * w <= cap && 3 * h <= cap,
+                "cap {cap}: cross {}x{}",
+                4 * w,
+                3 * h
+            );
+            assert!(w < 4096 || cap >= 16384, "cap {cap}");
+        }
+    }
 
     #[test]
     fn cross_puts_each_face_in_its_cell() {

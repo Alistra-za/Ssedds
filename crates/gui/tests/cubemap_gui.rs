@@ -469,3 +469,97 @@ fn broken_six_face_set_shows_the_error() {
     );
     assert!(h.query_by_label("Face labels").is_none());
 }
+
+// ---- the source pane beside the cross (Task 5 fix round 1) ----
+
+/// A six-file cube (face i a solid colour whose red is `30 + 40 i`), default format, planned and expanded.
+fn six_face_model(d: &std::path::Path) -> (AppModel, String) {
+    let r = d.join("textures/a");
+    std::fs::create_dir_all(&r).unwrap();
+    for (i, f) in ["px", "nx", "py", "ny", "pz", "nz"].iter().enumerate() {
+        image::RgbImage::from_pixel(16, 16, image::Rgb([30 + 40 * i as u8, 20, 10]))
+            .save(r.join(format!("chrome_e_{f}.png")))
+            .unwrap();
+    }
+    let mut m = open(d);
+    let key = m
+        .items
+        .iter()
+        .find(|i| i.job.is_some())
+        .expect("the six-face item")
+        .key
+        .clone();
+    m.expand(&key);
+    (m, key)
+}
+
+fn source_red(m: &mut AppModel) -> f32 {
+    use sdc_gui::model::preview::SourceState;
+    // The debounce counts from the first tick that sees something scheduled.
+    let t0 = std::time::Instant::now();
+    m.tick(t0);
+    m.tick(t0 + Duration::from_secs(5));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let SourceState::Ready(s) = &m.preview.source else {
+        panic!("source not ready: {:?}", m.preview.source)
+    };
+    s.levels[0].px[0][0]
+}
+
+#[test]
+fn the_source_face_selector_shows_the_processed_face_of_its_cell() {
+    use sdc_gui::model::preview::EncodedState;
+    use sdc_gui::ui::preview::{GpuStatus, PreviewUi};
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _) = six_face_model(d.path());
+    let face0 = source_red(&mut m);
+    m.encode_now();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    // The selector is a row of named buttons in the source pane (drawn once a renderer is there).
+    let gpu = GpuStatus {
+        renderer: true,
+        source: true,
+        encoded: Some(sdc_gui::render::UploadPath::CpuDecoded("")),
+        ..GpuStatus::default()
+    };
+    let mut ui_state = PreviewUi::default();
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1600.0, 900.0))
+        .build_ui_state(
+            move |ui, model: &mut AppModel| {
+                sdc_gui::ui::preview::draw(ui, model, &mut ui_state, &gpu)
+            },
+            m,
+        );
+    h.run();
+    h.get_by_label("Source face +Y north").click();
+    h.run();
+    assert_eq!(h.state().view.source_face, 2);
+    let face2 = source_red(h.state_mut());
+    assert!(
+        face2 > face0 + 0.1,
+        "face 2 is not face 0: {face2} vs {face0}"
+    );
+    // It is the image of that face's cell of the cross.
+    let EncodedState::Done(out) = &h.state().preview.encoded else {
+        panic!("not encoded")
+    };
+    let (col, row) = engine::cube::layout::HCROSS[2];
+    let cell = out.decoded[0][(row as usize * 16 + 8) * 64 + col as usize * 16 + 8][0];
+    assert!((cell - face2).abs() < 0.03, "cell {cell} vs source {face2}");
+}
+
+#[test]
+fn a_single_image_cube_shows_its_input_in_the_source_pane() {
+    use sdc_gui::model::preview::SourceState;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = cube_model(d.path(), CUBE);
+    m.expand(CUBE);
+    m.tick(std::time::Instant::now() + Duration::from_secs(5));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let SourceState::Ready(s) = &m.preview.source else {
+        panic!("source not ready")
+    };
+    // The 384x64 strip as the file is, not a 64-px face.
+    assert_eq!((s.levels[0].width, s.levels[0].height), (384, 64));
+}

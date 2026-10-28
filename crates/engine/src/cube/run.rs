@@ -187,7 +187,7 @@ pub(crate) fn prepare(
                     .collect();
             }
         }
-        Keep::Preview { max_size } | Keep::SourceOnly { max_size } => {
+        Keep::Preview { max_size } | Keep::SourceOnly { max_size, .. } => {
             // DECISIONS DT2: a preview encodes all six faces (face-major, each chain from first_level); the source side shows +X.
             prep.faces = if matches!(keep, Keep::Preview { .. }) {
                 6
@@ -209,7 +209,12 @@ pub(crate) fn prepare(
                     .map(|l| to_encoder_input(l, &meta, &q))
                     .collect();
             }
-            prep.chain = all.swap_remove(0);
+            // The source side: face 0 for a preview, the face the GUI's selector names for a source read.
+            let face = match keep {
+                Keep::SourceOnly { face, .. } => face.min(5),
+                _ => 0,
+            };
+            prep.chain = all.swap_remove(face);
         }
     }
     Ok(prep)

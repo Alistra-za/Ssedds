@@ -527,6 +527,10 @@ pub fn encode(
     mode: PreviewMode,
     cancel: &CancelToken,
 ) -> Result<Vec<u8>, String> {
+    // A cube is not a set member (Note DT24): it would write six faces as one 2D file.
+    if matches!(source, Source::Job(job) if job.cube.is_some()) {
+        return Err("A cube is not previewed in a set".to_string());
+    }
     match source {
         Source::Job(job) if mode == PreviewMode::Source => {
             let r = session
@@ -542,12 +546,9 @@ pub fn encode(
             )
         }
         Source::Job(job) => {
-            let mut r = session
+            let r = session
                 .preview(job, cap, cancel)
                 .map_err(|e| format!("{e:?}"))?;
-            // A set member is never a cube; if one were, write its +X face (the file is a plain 2D DDS).
-            r.levels
-                .truncate(r.levels.len() / usize::from(r.faces.max(1)));
             let (width, height) = r.source.dims[r.source.first_level];
             let desc = DdsDesc {
                 width,

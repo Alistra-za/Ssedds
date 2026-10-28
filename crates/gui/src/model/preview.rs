@@ -384,6 +384,7 @@ impl AppModel {
         self.preview.clear();
         self.preview.item = Some(key.to_string());
         self.view.exposure = 0.0;
+        self.view.source_face = 0;
         let Some(item) = self.item(key) else {
             return;
         };
@@ -418,6 +419,18 @@ impl AppModel {
                 }
             }
         }
+    }
+
+    /// The source pane of a six-file cube shows face `face` (+X..-Z): read the source again for it.
+    pub fn set_source_face(&mut self, face: usize) {
+        let face = face.min(5);
+        if self.view.source_face == face {
+            return;
+        }
+        self.view.source_face = face;
+        self.preview.cancel_source();
+        self.preview.source_pending = true;
+        self.preview.pending_since = None;
     }
 
     /// `collapse` calls this.
@@ -605,7 +618,16 @@ impl AppModel {
         self.preview.cancel_source();
         let (token, cancel) = self.preview.fresh_token();
         self.preview.inflight_source = Some((token, cancel.clone()));
-        spawn_source(self.tx.clone(), session, *job, max, cancel, token);
+        let max = cube_cross::source_cap(&job, max);
+        spawn_source(
+            self.tx.clone(),
+            session,
+            *job,
+            self.view.source_face,
+            max,
+            cancel,
+            token,
+        );
     }
 
     fn start_encode(&mut self) {

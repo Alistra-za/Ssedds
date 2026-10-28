@@ -72,6 +72,8 @@ struct Info {
     cross: bool,
     /// The item is a cube (settled before any encode): no tiling, no heatmap, face labels on offer.
     cube_item: bool,
+    /// The item is a six-file cube: the source pane has a face selector.
+    six_files: bool,
     /// The texture exports with NVTT; its preview uses the built-in encoder (DECISIONS Note NV9).
     nvtt: bool,
 }
@@ -92,6 +94,9 @@ impl Info {
             format: shown.as_ref().map(|o| o.result.format).or(job_format),
             cross: shown.as_ref().is_some_and(|o| o.result.faces == 6),
             cube_item: job.is_some_and(|j| j.cube.is_some()),
+            six_files: job
+                .and_then(|j| j.cube.as_ref())
+                .is_some_and(|c| c.sources.len() == 6),
             shown,
             has_source,
             nvtt,
@@ -136,14 +141,26 @@ struct Requests {
 }
 
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu: &GpuStatus) {
+    // A cross never tiles (Note DT23): drawn with tile off, the stored setting left alone for 2D items.
+    let tile = model.view.tile;
+    let cube = model
+        .expanded
+        .as_deref()
+        .and_then(|k| model.item(k))
+        .and_then(|i| i.job.as_ref())
+        .is_some_and(|j| j.cube.is_some());
+    if cube {
+        model.view.tile = false;
+    }
+    draw_preview(ui, model, state, gpu);
+    model.view.tile = tile;
+}
+
+fn draw_preview(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu: &GpuStatus) {
     let Some(key) = model.expanded.clone() else {
         return;
     };
     let info = Info::new(model, &key);
-    // A cross never tiles (Note DT16); the toggle is disabled, and a tile left on by the key is dropped here.
-    if info.cube_item {
-        model.view.tile = false;
-    }
     if info.known() {
         model.view.clamp_mip(info.first, info.end);
     }
@@ -520,7 +537,9 @@ fn notes(
         lines.push("Preview uses the built-in encoder; the export uses NVTT.".into());
     }
     if let Some(UploadPath::CpuDecoded(why) | UploadPath::Skipped(why)) = gpu.encoded {
-        lines.push(why.to_string());
+        if !why.is_empty() {
+            lines.push(why.to_string());
+        }
     }
     if let Some(notice) = &model.preview.notice {
         lines.extend(notice.lines().map(str::to_string));
@@ -668,13 +687,27 @@ fn viewports(
         (left, right)
     };
     let mut encode = false;
+    let mut face_pick = None;
     let left_draw = if model.comparing_pin() {
         draw_pinned_pane(ui, model, gpu, left, left_vis, size)
     } else {
         let overlay = overlay_texture(ui, model, state, key);
-        draw_source_pane(ui, model, info, gpu, left, left_vis, size, overlay)
+        draw_source_pane(
+            ui,
+            model,
+            info,
+            gpu,
+            left,
+            left_vis,
+            size,
+            overlay,
+            &mut face_pick,
+        )
     };
     let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
+    if let Some(face) = face_pick {
+        model.set_source_face(face);
+    }
     if let Some((pinned, current)) = model.pin_captions() {
         caption(ui, left_vis, &pinned, false);
         caption(ui, right_vis, &current, true);
@@ -946,6 +979,7 @@ fn draw_source_pane(
     visible: Rect,
     size: [f32; 2],
     overlay: Option<egui::TextureId>,
+    face_pick: &mut Option<usize>,
 ) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let text = match &model.preview.source {
@@ -962,24 +996,28 @@ fn draw_source_pane(
     if let (None, SourceState::Ready(s)) = (&text, &model.preview.source) {
         let mip = model.view.mip;
         let tonemap = info.format.is_some_and(Format::is_hdr);
-        // The source side is the face's own size, also beside a cross.
-        let params = params_for(
-            &model.view,
-            size,
-            info.face_of(mip),
-            mip.saturating_sub(s.first_level),
-            tonemap,
-        );
+        // Beside a cross the source side keeps its own size: the face, or for a single-image cube the input image,
+        // whose chain has its own mips (counted from the encoded result's first one).
+        let single = info.cube_item && !info.six_files;
+        let (own, in_texture) = match s.levels.get(mip.saturating_sub(info.first)) {
+            Some(l) if single => ((l.width, l.height), mip.saturating_sub(info.first)),
+            _ if single => (info.face_of(mip), s.levels.len().saturating_sub(1)),
+            _ => (info.face_of(mip), mip.saturating_sub(s.first_level)),
+        };
+        let params = params_for(&model.view, size, own, in_texture, tonemap);
         paint_clipped(ui, viewport, visible, Slot::Source, params);
         drawn = Some((Slot::Source, params));
         if let Some(id) = overlay {
-            let (pic, uv) = picture_rects(&model.view, viewport, size, info.face_of(mip));
+            let (pic, uv) = picture_rects(&model.view, viewport, size, own);
             ui.painter()
                 .with_clip_rect(visible.intersect(ui.clip_rect()))
                 .image(id, pic, uv, Color32::WHITE);
         }
     }
     pane_overlay(ui, visible, "Source", None, text.as_deref(), false);
+    if info.six_files && text.is_none() {
+        *face_pick = face_selector(ui, visible, model.view.source_face);
+    }
     drawn
 }
 
@@ -1045,6 +1083,44 @@ fn caption(ui: &egui::Ui, visible: Rect, text: &str, right: bool) {
         Color32::from_black_alpha(150),
     );
     painter.galley(pos, galley, colour);
+}
+
+/// The source pane's face selector for a six-file cube: six small buttons, +X to -Z, at the pane's top right.
+/// The face shown is the processed one, the image of that face's cell in the cross (Note DT20).
+fn face_selector(ui: &mut egui::Ui, visible: Rect, current: usize) -> Option<usize> {
+    let w = 26.0;
+    let x = (visible.max.x - 6.0 * (w + 2.0) - 6.0).max(visible.min.x + 80.0);
+    let rect = Rect::from_min_size(
+        egui::pos2(x, visible.min.y + 4.0),
+        egui::vec2(6.0 * (w + 2.0), 20.0),
+    );
+    let mut pick = None;
+    ui.scope_builder(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(UiLayout::left_to_right(Align::Center)),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, label) in FACE_LABELS.iter().enumerate() {
+                let short: String = label.chars().take(2).collect();
+                let r = ui
+                    .add_sized(
+                        [w, 18.0],
+                        egui::Button::selectable(current == i, RichText::new(short).small()),
+                    )
+                    .on_hover_text(format!("Show the {label} face of the source"));
+                let name = format!("Source face {label}");
+                let on = current == i;
+                r.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, &name)
+                });
+                if r.clicked() {
+                    pick = Some(i);
+                }
+            }
+        },
+    );
+    pick
 }
 
 /// The face names at each cell's top-left of the cross drawn in `pic`; left out once a cell is too small to hold one.

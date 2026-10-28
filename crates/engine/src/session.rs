@@ -283,7 +283,7 @@ impl Session {
             job,
             cancel,
             &FileTracker::default(),
-            Keep::SourceOnly { max_size },
+            Keep::SourceOnly { max_size, face: 0 },
         )?;
         Ok(SourcePreview {
             first_level: prep.first_level,
@@ -300,11 +300,35 @@ impl Session {
         max_size: u32,
         cancel: &CancelToken,
     ) -> Result<SourcePreview, FileError> {
+        self.preview_source_face(job, 0, max_size, cancel)
+    }
+
+    /// [`Self::preview_source_stored`] for the GUI's source pane. A six-file cube shows its processed face `face`
+    /// (+X -X +Y -Y +Z -Z), the image that fills that face's cell of the cross; a single-image cube shows its input
+    /// image as a 2D item's source pane would (Note DT21). `face` is ignored for everything else.
+    pub fn preview_source_face(
+        &self,
+        job: &ResolvedJob,
+        face: usize,
+        max_size: u32,
+        cancel: &CancelToken,
+    ) -> Result<SourcePreview, FileError> {
+        let plain;
+        let job = match &job.cube {
+            Some(cj) if cj.sources.len() == 1 => {
+                plain = ResolvedJob {
+                    cube: None,
+                    ..job.clone()
+                };
+                &plain
+            }
+            _ => job,
+        };
         let prep = prepare(
             job,
             cancel,
             &FileTracker::default(),
-            Keep::SourceOnly { max_size },
+            Keep::SourceOnly { max_size, face },
         )?;
         Ok(stored_source(
             prep.first_level,

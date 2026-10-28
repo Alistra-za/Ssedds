@@ -355,6 +355,7 @@ pub fn spawn_source(
     tx: Sender<WorkerMsg>,
     session: Arc<Session>,
     job: ResolvedJob,
+    face: usize,
     max: u32,
     cancel: CancelToken,
     token: u64,
@@ -364,7 +365,7 @@ pub fn spawn_source(
             tx,
             || {
                 session
-                    .preview_source_stored(&job, max, &cancel)
+                    .preview_source_face(&job, face, max, &cancel)
                     .map(Arc::new)
                     .map_err(|e| format!("{e:?}"))
             },
@@ -392,7 +393,11 @@ pub fn spawn_encode(
             tx,
             || {
                 session
-                    .preview(&job, max, &cancel)
+                    .preview(
+                        &job,
+                        crate::model::cube_cross::preview_cap(&job, max),
+                        &cancel,
+                    )
                     .map(|r| {
                         Arc::new(PreviewOut {
                             decoded: decode_levels(&r, bc1),

@@ -82,6 +82,8 @@ pub struct ViewState {
     pub overlay: Option<crate::model::overlay::OverlayKind>,
     /// Name each face on a cube's cross ("Face labels", cube items only; Note DT16).
     pub face_labels: bool,
+    /// Which face (0..6, +X..-Z) the source pane shows for a six-file cube; back to 0 on every texture change.
+    pub source_face: usize,
 }
 
 impl Default for ViewState {
@@ -101,6 +103,7 @@ impl Default for ViewState {
             tile: false,
             overlay: None,
             face_labels: true,
+            source_face: 0,
         }
     }
 }
