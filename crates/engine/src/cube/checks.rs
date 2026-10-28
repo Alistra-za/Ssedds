@@ -10,10 +10,17 @@ fn expects_cube(game_path: &str) -> bool {
         .next_back()
         .map(|f| f.rsplit_once('.').map_or(f, |s| s.0));
     stem.is_some_and(|s| s.to_ascii_lowercase().ends_with("_e"))
-        || parts
-            .collect::<Vec<_>>()
-            .windows(2)
-            .any(|w| w[0].eq_ignore_ascii_case("textures") && w[1].eq_ignore_ascii_case("cubemaps"))
+        || under_textures_cubemaps(&parts.collect::<Vec<_>>().join("/"))
+}
+
+/// True when `path` has a `textures` component directly followed by `cubemaps` (ASCII case-insensitive, either
+/// separator): the folder the game reads as cubes, shared with `suggest` (DN23).
+pub(crate) fn under_textures_cubemaps(path: &str) -> bool {
+    path.split(['/', '\\'])
+        .filter(|c| !c.is_empty())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|w| w[0].eq_ignore_ascii_case("textures") && w[1].eq_ignore_ascii_case("cubemaps"))
 }
 
 fn is_srgb(f: DdsPixelFormat) -> bool {

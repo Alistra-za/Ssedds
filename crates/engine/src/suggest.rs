@@ -118,8 +118,8 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
         Some("i") => vec![s(Diffuse, Medium, "_i multilayer inner layer (colour)")],
         Some("b") | Some("bl") => vec![s(BacklightTint, High, "_b/_bl backlight")],
         Some("e") => vec![s(Cubemap, High, "_e environment cubemap")],
-        None | Some("d") if has_component(c.game_path, "cubemaps") => {
-            vec![s(Cubemap, High, "under a cubemaps folder")]
+        None | Some("d") if crate::cube::checks::under_textures_cubemaps(c.game_path) => {
+            vec![s(Cubemap, High, "under textures/cubemaps")]
         }
         Some("sk") => vec![s(BacklightTint, Low, "_sk (unconfirmed meaning)")],
         Some("d") | None if landscape => {
@@ -444,6 +444,15 @@ mod tests {
                 "{path}"
             );
         }
+        // DN23 (final review M2): only `textures/cubemaps/`, the rule `sdc validate` uses.
+        let v = suggest(&ctx(
+            Target::Cs,
+            None,
+            "textures/mymod/cubemaps/x.png",
+            &none,
+            AlphaContent::None,
+        ));
+        assert!(v.iter().all(|s| s.subtype != Subtype::Cubemap), "{v:?}");
     }
 
     #[test]
