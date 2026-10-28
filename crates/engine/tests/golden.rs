@@ -3766,7 +3766,12 @@ fn cube_hcross_bc1_legacy() {
         &["file:**/room.png.cubemap.style=vanilla_metal"],
         &[],
     );
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let f = dds(d.path(), "textures/cubemaps/room.dds");
     assert_dds(
         &f,
@@ -3790,7 +3795,12 @@ fn cube_vcross_rgba8() {
         cube_support::png8(&cube_support::vcross(&faces, true)),
     );
     let o = convert(d.path(), Target::Cs, &["format=rgba8"], &[]);
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let f = dds(d.path(), "textures/cubemaps/v.dds");
     assert_dds(
         &f,
@@ -3828,7 +3838,12 @@ fn cube_equirect_hdr() {
             DynamicImage::ImageRgb32F(img),
         );
         let o = convert(d.path(), Target::Cs, sets, &[]);
-        assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+        assert_eq!(
+            (o.summary.converted, o.summary.exit_code()),
+            (1, 0),
+            "{:?}",
+            warnings(&o)
+        );
         dds(d.path(), "textures/cubemaps/sky.dds")
     };
     // Texels of +X mip 0 at full red, and where the brightest texel of all six faces is.
@@ -3893,7 +3908,12 @@ fn cube_mirror_ball_and_angular() {
         );
         let set = format!("file:**/ball.png.cubemap.layout={layout}");
         let o = convert(d.path(), Target::Cs, &[set.as_str()], &[]);
-        assert_eq!(o.summary.converted, 1, "{layout}: {:?}", warnings(&o));
+        assert_eq!(
+            (o.summary.converted, o.summary.exit_code()),
+            (1, 0),
+            "{layout}: {:?}",
+            warnings(&o)
+        );
         let f = dds(d.path(), "textures/cubemaps/ball.dds");
         assert!(f.is_cubemap, "{layout}");
         assert_eq!((f.width, f.height, f.mip_count), (64, 64, 7), "{layout}");
@@ -3916,7 +3936,12 @@ fn cube_single_photo() {
         &["file:**/view.png.cubemap.layout=photo"],
         &[],
     );
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let f = dds(d.path(), "textures/cubemaps/view.dds");
     assert!(f.is_cubemap);
     assert_eq!((f.width, f.height), (128, 128));
@@ -3944,7 +3969,12 @@ fn cube_hstrip_bc3_keeps_alpha() {
         &["format=bc3", "alpha.policy=data"],
         &[],
     );
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let f = dds(d.path(), "textures/cubemaps/s.dds");
     assert_dds(
         &f,
@@ -3971,7 +4001,12 @@ fn cube_dds_reencode() {
     let faces = cube_support::arrow_faces(64);
     put_faces(d.path(), "textures/a/chrome_e", &faces);
     let o = convert(d.path(), Target::Cs, &[], &[]);
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let cube = std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap();
 
     let d = tempfile::tempdir().unwrap();
@@ -3987,7 +4022,12 @@ fn cube_dds_reencode() {
         ],
         &[],
     );
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let f = dds(d.path(), "textures/cubemaps/sky.dds");
     assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 6);
     assert_eq!((f.width, f.height), (32, 32));
@@ -4014,7 +4054,12 @@ fn cube_vstrip_bc7() {
         cube_support::png8(&cube_support::vstrip(&faces)),
     );
     let o = convert(d.path(), Target::Cs, &[], &[]);
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
     let f = dds(d.path(), "textures/cubemaps/tall.dds");
     assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 7);
     assert_eq!((f.width, f.height), (64, 64));
