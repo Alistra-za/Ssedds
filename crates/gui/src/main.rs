@@ -16,6 +16,11 @@ fn user_presets_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("presets"))
 }
 
+/// `%LOCALAPPDATA%\sdc\analysis-cache`, the on-disk store of image analyses (Note DU).
+fn analysis_cache_path() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("sdc").join("analysis-cache"))
+}
+
 fn build_model() -> AppModel {
     let path = settings::settings_path();
     let (s, err) = path
@@ -25,6 +30,11 @@ fn build_model() -> AppModel {
     // The BC1 decoder model is read once at launch (spec §4.6).
     let mut model = match Session::new(s.bc1_decoder.model()) {
         Ok(session) => {
+            // Analyses are reused across runs (Note DU); no `LOCALAPPDATA`, no store.
+            let session = match analysis_cache_path() {
+                Some(dir) => session.with_disk_cache(dir),
+                None => session,
+            };
             let mut m = AppModel::new(s, path, Arc::new(session));
             m.user_config = user_config_path();
             m.user_presets = user_presets_path();

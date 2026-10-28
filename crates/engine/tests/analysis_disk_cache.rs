@@ -180,3 +180,31 @@ fn without_a_disk_dir_nothing_is_written() {
     top.sort();
     assert_eq!(top, ["in"]);
 }
+
+/// Load time of a real folder, cold then warm (Note DU10). Read-only on `SDC_LOADTIME_DIR`; the store is a tempdir.
+#[test]
+#[ignore]
+fn load_time_cold_then_warm() {
+    let Some(dir) = std::env::var_os("SDC_LOADTIME_DIR") else {
+        return;
+    };
+    let cache = tempfile::tempdir().unwrap();
+    let run = || {
+        // Session::new has thumbnails and checks on, as the GUI's session does.
+        let s = session(cache.path());
+        let mut r = BatchRequest::new(
+            vec![dir.clone().into()],
+            cache.path().join("out"),
+            Target::Cs,
+        );
+        r.recursive = true;
+        let rep = Reporter::new(Arc::new(VecSink::default()), "t");
+        let t = std::time::Instant::now();
+        s.plan(r, &rep, &CancelToken::default()).unwrap();
+        (t.elapsed(), s.cache().loads())
+    };
+    let (cold, cold_loads) = run();
+    let (warm, warm_loads) = run();
+    println!("cold {cold:?} ({cold_loads} loads), warm {warm:?} ({warm_loads} loads)");
+    assert_eq!(warm_loads, 0);
+}

@@ -7,6 +7,7 @@
 - New `sdc cubemap-marker` writes the 1×1 dynamic-cubemap marker.
 - New codes `CUBE-FACES` and `CUBE-NO-MIPS`. `sdc inspect` and `sdc validate` flag cubes wider than 1 pixel with one mip, a lit 1×1 marker, an sRGB cube, and 2D files named `_e` or under `textures\cubemaps\`. **`sdc validate` now fails those 2D files**, because the game reads them as cubes.
 - Cubemaps in the GUI: a Cubemap section in the settings panel (Source, Orientation, Colour grade, Ground, Look), a layout question for unclear images, a six-face cross preview with face labels and source face buttons, and Export to > Make marker cube... Settings are written to `sdc.toml`, so the GUI and CLI make the same bytes.
+- The GUI keeps its image analyses in `%LOCALAPPDATA%\sdc\analysis-cache` (capped at 200 MB, safe to delete), so reopening a folder is much faster.
 
 ## 1.0.0
 
