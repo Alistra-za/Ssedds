@@ -306,6 +306,61 @@ fn ten_thousand_helpers_build_once() {
     assert_eq!(h.state().visible_helpers_shared().len(), 10);
 }
 
+/// The keys of the helper rows shown, in display order.
+fn helper_keys(m: &AppModel) -> Vec<String> {
+    m.visible_helpers_shared()
+        .iter()
+        .map(|&i| m.items[i].key.clone())
+        .collect()
+}
+
+/// Review fix (DT16): mouse range selection runs over the tiles then the shown helper rows.
+#[test]
+fn shift_click_between_helpers_selects_the_range() {
+    let d = tempfile::tempdir().unwrap();
+    let mut files = XSET.to_vec();
+    files.push("y_opacity.png");
+    let mut m = fixture(d.path(), &files, "");
+    let rows = helper_keys(&m);
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    m.click_item(&rows[0], false, false);
+    m.click_item(&rows[2], false, true);
+    assert_eq!(m.selected_items(), rows, "A..C in display order");
+    // Keyboard row navigation stays on the tiles (shortcut: helper rows are mouse-only).
+    let tiles: Vec<String> = m
+        .visible_items()
+        .iter()
+        .map(|&i| m.items[i].key.clone())
+        .collect();
+    assert!(rows.iter().all(|r| !tiles.contains(r)));
+}
+
+#[test]
+fn ctrl_clicked_visible_helpers_are_not_hidden() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET, "");
+    let rows = helper_keys(&m);
+    m.click_item(&rows[0], false, false);
+    m.click_item(&rows[1], true, false);
+    assert_eq!(m.selection_summary(false).as_deref(), Some("2 selected"));
+}
+
+#[test]
+fn hiding_helpers_keeps_a_selected_helper_and_counts_it_hidden() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET, "");
+    let rows = helper_keys(&m);
+    m.click_item("x.png", false, false);
+    m.click_item(&rows[0], true, false);
+    assert_eq!(m.selection_summary(false).as_deref(), Some("2 selected"));
+    m.filter.hide_helpers = true;
+    assert!(m.selected_items().contains(&rows[0]), "still selected");
+    assert_eq!(
+        m.selection_summary(false).as_deref(),
+        Some("2 selected (1 hidden by filter)")
+    );
+}
+
 /// Review pictures of the Textures column at 1100, 1280 and 1600 px (egui-ui-rules step 5). Needs a GPU and
 /// `SDC_SHOTS_DIR`: `cargo test -p sdc-gui --test helpers_list -- --ignored shots`.
 #[test]

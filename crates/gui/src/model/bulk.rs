@@ -125,6 +125,18 @@ impl AppModel {
             .collect()
     }
 
+    /// Note DT16 review: what the column shows, tiles then helper rows, in display order (mouse ranges and the
+    /// summary's hidden count). Keyboard navigation and Ctrl+A stay on `visible_keys` (tiles only).
+    fn shown_keys(&self) -> Vec<String> {
+        let mut keys = self.visible_keys();
+        keys.extend(
+            self.visible_helpers_shared()
+                .iter()
+                .map(|&i| self.items[i].key.clone()),
+        );
+        keys
+    }
+
     /// The keys of the sets the column shows, in display order (R17: the Sets filter applied).
     fn set_order(&self) -> Vec<String> {
         let views = super::sets::views(self);
@@ -140,7 +152,7 @@ impl AppModel {
     /// active texture to it in the displayed order (search and filters applied). Shift with no active texture, or
     /// with the active one hidden, is a plain click.
     pub fn click_item(&mut self, key: &str, ctrl: bool, shift: bool) {
-        let order = self.visible_keys();
+        let order = self.shown_keys();
         self.click(key, ctrl, shift, false, &order);
     }
 
@@ -250,7 +262,7 @@ impl AppModel {
         let shown: std::collections::HashSet<String> = if sets {
             self.set_order()
         } else {
-            self.visible_keys()
+            self.shown_keys()
         }
         .into_iter()
         .collect();
