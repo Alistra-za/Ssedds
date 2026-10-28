@@ -325,6 +325,48 @@ pub fn member_split(
     s
 }
 
+/// Note DT: a file with a hand-set helper role (`is_helper`) whose name has no recognised suffix (`x_mask`) joins the
+/// set of its stem without the last `_segment` (`x`) when that set exists in its folder; otherwise it stays alone.
+/// A set left empty is removed.
+pub fn join_helpers(
+    sets: &mut Vec<TextureSet>,
+    files: &[InputFile],
+    aliases: &BTreeMap<String, String>,
+    is_helper: impl Fn(usize) -> bool,
+) {
+    let mut moves: Vec<(usize, usize, usize)> = vec![];
+    for (from, s) in sets.iter().enumerate() {
+        for &i in &s.members {
+            let stem = files[i]
+                .rel
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            if !is_helper(i) || split_suffix_with(&stem, aliases).suffix.is_some() {
+                continue;
+            }
+            // The key's base is the lower-cased stem; cut its last `_segment`, never into the folder.
+            let Some((dir, base)) = s.key.rsplit_once('/') else {
+                continue;
+            };
+            let Some((short, _)) = base.rsplit_once('_').filter(|(b, _)| !b.is_empty()) else {
+                continue;
+            };
+            let to_key = format!("{dir}/{short}");
+            if let Some(to) = sets.iter().position(|t| t.key == to_key) {
+                moves.push((from, to, i));
+            }
+        }
+    }
+    for (from, to, i) in moves {
+        sets[from].members.retain(|&m| m != i);
+        sets[to].members.push(i);
+        // Members stay in file order, as `group_sets_with` makes them.
+        sets[to].members.sort_unstable();
+    }
+    sets.retain(|s| !s.members.is_empty());
+}
+
 /// Final review I3 (DECISIONS Note R): `_wet` splits off as a suffix only on cs and only when the base is an
 /// Advanced skin set. Grouping cannot see the target or the recipe, so `group_sets_with` keeps `x_wet` as its own
 /// base (as before `_wet` existed) and this pass, run by the caller on cs before set edits, moves the colour member

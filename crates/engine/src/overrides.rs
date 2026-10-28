@@ -400,6 +400,12 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
         crate::policy::compile_glob(glob).map_err(|e| format!("--set '{s}': {e}"))?;
         (Scope::File(glob.to_string()), *field)
     } else if known(key) {
+        // Note DT: a helper is one file; an unscoped key would make every image one.
+        if crate::helper::FIELDS.contains(&key) {
+            return Err(format!(
+                "--set '{s}': {key} is set per file: use file:<glob>.{key}=<…>"
+            ));
+        }
         (Scope::All, key)
     } else {
         return Err(format!("--set '{s}': unknown field '{key}'"));

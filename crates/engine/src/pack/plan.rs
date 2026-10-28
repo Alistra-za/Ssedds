@@ -584,18 +584,30 @@ pub fn plan_packing(
             let f = &files[i];
             // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing). The job's role comes
             // first: a hand-set `helper.role` (Note DT) overrides the name's.
-            let Some(role) = (f.kind == InputKind::Image)
-                .then(|| waiting.get(&f.path).copied())
-                .flatten()
-                .or_else(|| raw_role(f))
-                .or_else(|| {
+            let image = f.kind == InputKind::Image;
+            let by_name = || {
+                raw_role(f).or_else(|| {
                     // A failed or cancelled file has no job, so a skin `_f` is recognised by the same test as policy.
                     // shortcut: a rule-named sub-type needs the analysis a failed file lacks, so it is not seen here.
                     ((failed.contains(&f.path) || cancelled.contains(&f.path))
                         && is_skin_f(ctx, set, f))
                     .then_some(RawMap::Fuzz)
                 })
-            else {
+            };
+            let role = match image.then(|| waiting.get(&f.path).copied()).flatten() {
+                Some(r) => Some(r),
+                // A failed or cancelled image has no job: its hand-set role decides as policy's would; `none` or a
+                // layer role leaves it out of packing.
+                None => match image
+                    .then(|| crate::policy::helper_requested(ctx, f).role)
+                    .flatten()
+                {
+                    Some(crate::helper::HelperRole::Raw(r)) => Some(r),
+                    Some(_) => None,
+                    None => by_name(),
+                },
+            };
+            let Some(role) = role else {
                 continue;
             };
             if waiting.contains_key(&f.path)

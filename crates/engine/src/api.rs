@@ -1108,10 +1108,23 @@ impl Engine {
         // `plan_packing` treats it, so its role leaves the set's suffixes (unless another raw member has it) and
         // Advanced skin detection and the `auto` prediction below follow the recipe actually built.
         // shortcut: rule-named sub-types are not seen here (rules need the analysis); revisit if a rule names one.
+        // Note DT: each image's hand-set `helper.role`. `none` makes a raw map an ordinary file, like a requested
+        // sub-type; any other hand role wins over a requested sub-type (ruling 13).
+        let hand: Vec<Option<crate::helper::HelperRole>> = files
+            .iter()
+            .map(|f| {
+                (f.kind == InputKind::Image)
+                    .then(|| crate::policy::helper_requested(&ctx, f).role)
+                    .flatten()
+            })
+            .collect();
         let typed: BTreeSet<usize> = (0..files.len())
             .filter(|&i| {
                 pack::plan::raw_role(&files[i]).is_some()
-                    && crate::policy::subtype_requested(&ctx, &files[i])
+                    && match hand[i] {
+                        Some(r) => r == crate::helper::HelperRole::NotHelper,
+                        None => crate::policy::subtype_requested(&ctx, &files[i]),
+                    }
             })
             .collect();
         let drop_typed_roles = |sets: &mut Vec<TextureSet>| {
@@ -1127,6 +1140,10 @@ impl Engine {
             }
         };
         drop_typed_roles(&mut sets);
+        // Note DT: a hand-set helper with no recognised suffix (`x_mask`) joins set `x` when it exists.
+        crate::group::join_helpers(&mut sets, &files, registry.alias_table(), |i| {
+            hand[i].is_some_and(|r| r != crate::helper::HelperRole::NotHelper)
+        });
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
         if target == Target::Cs {
@@ -1246,7 +1263,11 @@ impl Engine {
                 .members
                 .iter()
                 .filter(|i| !typed.contains(i))
-                .filter_map(|&i| pack::plan::raw_role(&files[i]))
+                .filter_map(|&i| match hand[i] {
+                    Some(crate::helper::HelperRole::Raw(r)) => Some(r),
+                    Some(_) => None,
+                    None => pack::plan::raw_role(&files[i]),
+                })
                 .collect();
             let complex = explicit.get(&set.key) == Some(&Shader::ComplexMaterial);
             for s in pack::predicted_suffixes(target, complex, &roles) {
@@ -2000,6 +2021,7 @@ impl Engine {
             if let Some(p) = &pick {
                 warnings = crate::shader::pick_notes(p, target);
                 let maps = map_members(
+                    &ctx,
                     set,
                     &files,
                     &index,
@@ -2645,8 +2667,10 @@ fn explicit_shaders(
 /// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a kept DDS
 /// input with the sub-type its suffix suggests, not the set's own earlier output), then each packed output of the
 /// set. Raw maps are left out by role, because
-/// `plan_packing` re-tags an unused one; duplicates and failed files are left out.
+/// `plan_packing` re-tags an unused one; duplicates and failed files are left out. A raw-named image set to
+/// `helper.role = "none"` (Note DT) is an ordinary member.
 fn map_members(
+    ctx: &ResolveCtx,
     set: &TextureSet,
     files: &[InputFile],
     jobs: &crate::shader::JobIndex,
@@ -2667,7 +2691,10 @@ fn map_members(
     let mut out = vec![];
     for &i in &set.members {
         let f = &files[i];
-        if pack::plan::raw_role(f).is_some() {
+        if pack::plan::raw_role(f).is_some()
+            && crate::policy::helper_requested(ctx, f).role
+                != Some(crate::helper::HelperRole::NotHelper)
+        {
             continue;
         }
         // Trace-debug #25 (Note BQ): an RNM layer or mask is never converted on its own, as the shader pick knows.

@@ -2311,13 +2311,27 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
 
 /// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
 /// placeholder and is never used. It is a raw map waiting for `pack::plan::plan_packing`, which consumes it into a
-/// recipe or re-tags it `PACK-UNUSED-INPUT`.
-fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) -> ResolvedJob {
+/// recipe or re-tags it `PACK-UNUSED-INPUT`. `hand`: the role was set by `helper.role` (Note DT), which a sub-type
+/// does not undo.
+fn packing_input_job(
+    ctx: &ResolveCtx,
+    f: &FileFacts,
+    term: &str,
+    role: RawMap,
+    hand: bool,
+) -> ResolvedJob {
     let profile = ctx.registry.base_profile(ctx.target, Subtype::GenericData);
-    let msg = format!(
-        "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
-        role.id()
-    );
+    let msg = if hand {
+        format!(
+            "helper.role = \"{}\": a channel-packing input (spec §6.4), not converted on its own; set helper.role = \"none\" to convert it alone",
+            role.id()
+        )
+    } else {
+        format!(
+            "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
+            role.id()
+        )
+    };
     ResolvedJob {
         input: f.input.path.clone(),
         output: f.input.output.clone(),
@@ -2380,7 +2394,9 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
         .then(|| helper_requested(ctx, f.input).role)
         .flatten();
     match role {
-        Some(crate::helper::HelperRole::Raw(r)) => return packing_input_job(ctx, f, &r.id(), r),
+        Some(crate::helper::HelperRole::Raw(r)) => {
+            return packing_input_job(ctx, f, &r.id(), r, true)
+        }
         Some(crate::helper::HelperRole::Layer(t)) => {
             let stem = f
                 .input
@@ -2418,7 +2434,7 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
             d.provenance,
             Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
         ) {
-            return packing_input_job(ctx, f, term, *role);
+            return packing_input_job(ctx, f, term, *role, false);
         }
     }
     // Note DR: in a set that is Advanced skin by other evidence, `_f` is the fuzz mask (a metal-like grey map), a
@@ -2428,7 +2444,7 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
         Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
     ) && crate::pack::plan::skin_f_candidate(ctx, f.set, f.input)
     {
-        return packing_input_job(ctx, f, "f", RawMap::Fuzz);
+        return packing_input_job(ctx, f, "f", RawMap::Fuzz, false);
     }
     // M6 Track F2 (DECISIONS Note W2): a layer file is hidden unless a rule or --set names its sub-type.
     if let Some(Vocab {

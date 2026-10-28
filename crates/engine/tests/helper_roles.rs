@@ -217,6 +217,152 @@ fn hand_role_on_dds_is_ignored() {
     );
 }
 
+/// The recipe reports of a fresh cs plan of `d/in`: (output file name, status, channel provenances).
+fn recipe_reports(d: &Path) -> Vec<(String, RecipeStatus, Vec<String>)> {
+    let sink = Arc::new(VecSink::default());
+    let mut r = BatchRequest::new(vec![d.join("in")], d.join("out"), Target::Cs);
+    r.recursive = true;
+    let rep = Reporter::new(sink.clone(), "helper-roles");
+    Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap();
+    sink.take()
+        .into_iter()
+        .flat_map(|e| match e.kind {
+            EventKind::SetResolved { recipes, .. } => recipes,
+            _ => vec![],
+        })
+        .map(|r| {
+            let name = Path::new(&r.output)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            (name, r.status, r.channels)
+        })
+        .collect()
+}
+
+/// Review fix 1: a failed image keeps its hand-set role, so its recipe fails instead of defaulting the channel.
+#[test]
+fn failed_helper_keeps_hand_role() {
+    let d = fixture(
+        &["x_ao.png"],
+        &files("x_opacity", "helper.role = \"roughness\""),
+    );
+    std::fs::write(d.path().join("in/x_opacity.png"), b"not a png").unwrap();
+    let p = plan(d.path(), Target::Cs, &[]);
+    assert!(p.failed.iter().any(|f| f.path.ends_with("x_opacity.png")));
+    let reports = recipe_reports(d.path());
+    let rmaos = reports
+        .iter()
+        .find(|(n, ..)| n == "x_rmaos.dds")
+        .unwrap_or_else(|| panic!("{reports:?}"));
+    assert_eq!(rmaos.1, RecipeStatus::Failed, "{reports:?}");
+    assert!(
+        rmaos.2.iter().any(|s| s.contains("x_opacity.png")),
+        "{reports:?}"
+    );
+    assert!(
+        !p.jobs.iter().any(|j| j.pack.is_some()
+            && j.output.ends_with("x_rmaos.dds")
+            && j.status == JobStatus::Ready),
+        "no _rmaos built with a default roughness"
+    );
+}
+
+/// Review fix 2: a hand-set raw role points to `helper.role = "none"`, which a sub-type does not override.
+#[test]
+fn hand_role_warning_points_to_none() {
+    // Resolved alone: in a plan, packing re-tags the job's warning (consumed, unused or disabled).
+    use engine::presets::PresetRegistry;
+    let reg = PresetRegistry::builtin().unwrap();
+    let overrides = vec![parse_set("file:**/x_mask.png.helper.role=opacity").unwrap()];
+    let allow = Default::default();
+    let ctx = ResolveCtx {
+        target: Target::Cs,
+        registry: &reg,
+        preset: "cs-quality",
+        user_config: None,
+        project_config: None,
+        overrides: &overrides,
+        accept: AcceptSuggestions::High,
+        allow: &allow,
+        files: &engine::overrides::NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
+    };
+    let f = engine::discover::InputFile {
+        path: "x_mask.png".into(),
+        rel: "x_mask.png".into(),
+        game_path: "textures/a/x_mask.png".into(),
+        output: "x_mask.dds".into(),
+        kind: engine::discover::InputKind::Image,
+        real_rel: None,
+    };
+    let set = engine::group::TextureSet {
+        key: "textures/a/x_mask".into(),
+        members: vec![0],
+        suffixes: Default::default(),
+    };
+    let img = engine::image::Rgba32F::new(64, 64, [0.5, 0.5, 0.5, 1.0]);
+    let info = engine::image::SourceInfo {
+        bit_depth: 8,
+        channels: 1,
+        has_alpha: false,
+        is_float: false,
+    };
+    let a = engine::analyse::analyse(&img, &info);
+    let j = resolve_file(
+        &ctx,
+        &FileFacts {
+            input: &f,
+            suffix: None,
+            alias: None,
+            set: &set,
+            analysis: &a,
+            info: &info,
+        },
+    );
+    assert_eq!(
+        j.status,
+        JobStatus::PackingInput {
+            role: RawMap::Opacity
+        }
+    );
+    let w = &j.warnings[0].message;
+    assert!(w.contains("helper.role = \"none\""), "{w}");
+    assert!(!w.contains("sub-type"), "{w}");
+}
+
+/// Controller ruling 4: a hand-set helper without a recognised suffix joins the set of its stem minus the last
+/// `_segment` when that set exists; alone it stays its own set.
+#[test]
+fn unnamed_helper_joins_its_base_set() {
+    let toml = files("x_mask", "helper.role = \"opacity\"");
+    let d = fixture(&["x.png", "x_mask.png"], &toml);
+    let p = plan(d.path(), Target::Cs, NO_PACK);
+    let m = job(&p, "x_mask.png");
+    assert_eq!(
+        m.status,
+        JobStatus::PackingInput {
+            role: RawMap::Opacity
+        }
+    );
+    assert_eq!(m.set_key, job(&p, "x.png").set_key);
+    assert!(m.set_key.ends_with("/x"), "{}", m.set_key);
+
+    let d = fixture(&["x_mask.png"], &toml);
+    let p = plan(d.path(), Target::Cs, NO_PACK);
+    assert!(
+        job(&p, "x_mask.png").set_key.ends_with("/x_mask"),
+        "{}",
+        job(&p, "x_mask.png").set_key
+    );
+}
+
 #[test]
 fn parse_set_helper_fields() {
     for ok in [
@@ -234,6 +380,8 @@ fn parse_set_helper_fields() {
         ("file:**/a.png.helper.read=q", "helper.read"),
         ("file:**/a.png.helper.invert=1", "helper.invert"),
         ("subtype:diffuse.helper.role=ao", "helper.role"),
+        ("helper.role=ao", "helper.role"),
+        ("helper.invert=true", "helper.invert"),
     ] {
         let e = parse_set(bad).expect_err(bad);
         assert!(e.contains(field), "{bad}: {e}");
