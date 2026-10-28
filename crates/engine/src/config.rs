@@ -767,11 +767,14 @@ impl<'de> Deserialize<'de> for GroundFill {
             fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<GroundFill, A::Error> {
                 let mut rgb = [0u8; 3];
                 for (i, c) in rgb.iter_mut().enumerate() {
-                    let v: i64 = a
+                    // Read as f64 so a fractional element also gets the accepted forms (DN25).
+                    let v: f64 = a
                         .next_element()?
                         .ok_or_else(|| A::Error::invalid_length(i, &self))?;
-                    *c = u8::try_from(v)
-                        .map_err(|_| A::Error::invalid_value(Unexpected::Signed(v), &self))?;
+                    if v.fract() != 0.0 || !(0.0..=255.0).contains(&v) {
+                        return Err(A::Error::invalid_value(Unexpected::Float(v), &self));
+                    }
+                    *c = v as u8;
                 }
                 match a.next_element::<serde::de::IgnoredAny>()? {
                     None => Ok(GroundFill::Color(rgb)),
@@ -1011,6 +1014,7 @@ mod tests {
             "[300, 0, 0]",
             "[1, 2, 3, 4]",
             "[-1, 0, 0]",
+            "[1.5, 0, 0]",
             "5",
         ] {
             let e = toml::from_str::<CubemapSpec>(&format!("ground_fill = {bad}"))
