@@ -403,6 +403,18 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     if let Some(v) = vocab_for(f) {
         apply_vocabulary(&mut suggestions, v);
     }
+    // Note DV: a set whose chosen shader is Advanced Skin (cs only: elsewhere the pick falls back) reads its diffuse
+    // member (no suffix, or `_d`) as `skin_albedo` when plain `diffuse`, written or inferred. A written choice keeps
+    // its provenance, so it stays protected from packing; other members and other written sub-types stay.
+    let skin_set = matches!(f.suffix, None | Some("d"))
+        && ctx.shaders.get(&f.set.key).is_some_and(|p| {
+            p.shader == crate::shader::Shader::AdvancedSkin
+                && p.provenance == crate::shader::ShaderOrigin::Set
+        });
+    let skin = |st: Subtype, provenance: Provenance| match st {
+        Subtype::Diffuse if skin_set => (Subtype::SkinAlbedo, provenance),
+        _ => (st, provenance),
+    };
     // --set subtype (unscoped or file-scoped): the highest-precedence one wins
     let forms = LazyForms::new();
     let set_subtype = ranked_overrides(ctx)
@@ -411,9 +423,10 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         .find(|o| o.field == "subtype" && override_applies(ctx, o, None, f, &forms));
     if let Some(o) = set_subtype {
         if let Ok(st) = serde_json::from_value::<Subtype>(o.value.clone()) {
+            let (subtype, provenance) = skin(st, override_provenance(o));
             return SubtypeDecision {
-                subtype: st,
-                provenance: override_provenance(o),
+                subtype,
+                provenance,
                 decided: true,
                 suggestions,
             };
@@ -424,9 +437,10 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
         if let Some((i, r)) = matching(rules, f, None, Some(f.analysis.alpha)).next() {
             if let Some(st) = r.subtype {
+                let (subtype, provenance) = skin(st, Provenance::Rule(format!("{src}#{i}")));
                 return SubtypeDecision {
-                    subtype: st,
-                    provenance: Provenance::Rule(format!("{src}#{i}")),
+                    subtype,
+                    provenance,
                     decided: true,
                     suggestions,
                 };
@@ -438,6 +452,19 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         return SubtypeDecision {
             subtype: Subtype::Cubemap,
             provenance: Provenance::AnalysisFact("cube-dds".into()),
+            decided: true,
+            suggestions,
+        };
+    }
+    // Note DV1: an inferred plain diffuse (`diffuse`, or `pbr_albedo` in a PBR set) of a chosen Advanced Skin set.
+    if skin_set
+        && suggestions
+            .first()
+            .is_some_and(|s| matches!(s.subtype, Subtype::Diffuse | Subtype::PbrAlbedo))
+    {
+        return SubtypeDecision {
+            subtype: Subtype::SkinAlbedo,
+            provenance: Provenance::Shader(crate::shader::Shader::AdvancedSkin.id().into()),
             decided: true,
             suggestions,
         };

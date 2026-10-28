@@ -355,6 +355,171 @@ fn a_forced_rmaos_with_a_fuzz_source_is_not_advanced_skin() {
     assert_eq!(top(&p, "x_sk.png").0, Subtype::BacklightTint);
 }
 
+fn outputs(p: &Plan) -> Vec<String> {
+    let mut o: Vec<String> = p
+        .jobs
+        .iter()
+        .filter_map(|j| Some(j.output.file_name()?.to_string_lossy().into_owned()))
+        .collect();
+    o.sort();
+    o
+}
+
+/// A PBR set (`x`, `_roughness`, `_ao`) that packs `_rmaos` on its own, with `toml` as its project `sdc.toml`.
+fn pbr_set(toml: &str) -> TempDir {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    put(d.path(), "x_sk.png", grey(64));
+    put(d.path(), "x_roughness.png", grey(64));
+    put(d.path(), "x_ao.png", grey(64));
+    std::fs::write(d.path().join("in/sdc.toml"), toml).unwrap();
+    d
+}
+
+const SKIN: &str = "set:x.shader=advanced_skin";
+
+/// Note DV1: a set whose chosen shader is Advanced Skin is Advanced skin: its inferred diffuse resolves to
+/// `skin_albedo` and its packed output is `_rfaos`, with nothing written to the project files.
+#[test]
+fn an_advanced_skin_shader_choice_makes_the_set_skin() {
+    let d = pbr_set("");
+    let before = plan(&d, Target::Cs, &[]);
+    assert!(outputs(&before).contains(&"x_rmaos.dds".to_string()));
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+    assert_eq!(job(&p, "x_sk.png").profile.subtype, Subtype::SkinSk);
+    let o = outputs(&p);
+    assert!(o.contains(&"x_rfaos.dds".to_string()), "{o:?}");
+    assert!(!o.contains(&"x_rmaos.dds".to_string()), "{o:?}");
+}
+
+/// Note DV2: the GUI's saved choice (`BatchRequest::set_shaders`) and the CLI's `--set set:x.shader=` plan alike.
+#[test]
+fn the_gui_choice_and_the_cli_set_plan_alike() {
+    let d = pbr_set("");
+    let cli = plan(&d, Target::Cs, &[SKIN]);
+    let mut r = req(&d, Target::Cs, &[]);
+    r.set_shaders = [("x".to_string(), engine::shader::Shader::AdvancedSkin)].into();
+    let rep = Reporter::new(Arc::new(VecSink::default()), "t");
+    let gui = Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap();
+    let view = |p: &Plan| {
+        let mut v: Vec<(String, Subtype)> = p
+            .jobs
+            .iter()
+            .map(|j| (j.output.to_string_lossy().into_owned(), j.profile.subtype))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    };
+    assert_eq!(view(&gui), view(&cli));
+    assert_eq!(job(&gui, "x.png").profile.subtype, Subtype::SkinAlbedo);
+}
+
+/// Note DV3: a sub-type the user named other than plain `diffuse` is kept; a written `diffuse` reads as
+/// `skin_albedo`, as DU6 rewrites it on a fresh pick. A written `packing.recipe` decides the packed output alone.
+#[test]
+fn an_advanced_skin_shader_keeps_explicit_choices() {
+    let d = pbr_set("[files.x]\nsubtype = \"pbr_albedo\"\n");
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::PbrAlbedo);
+    assert!(outputs(&p).contains(&"x_rfaos.dds".to_string()));
+
+    let d = pbr_set("[files.x]\nsubtype = \"diffuse\"\n");
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+    assert!(outputs(&p).contains(&"x_rfaos.dds".to_string()));
+    // The same written `diffuse` without the shader stays `diffuse`.
+    let p = plan(&d, Target::Cs, &[]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::Diffuse);
+
+    let d = pbr_set("[files.\"x_rmaos\".packing]\nrecipe = \"rmaos\"\n");
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    assert!(outputs(&p).contains(&"x_rmaos.dds".to_string()));
+    assert!(!outputs(&p).contains(&"x_rfaos.dds".to_string()));
+}
+
+/// Note DV1 (re-review): only the set's diffuse member (no suffix, or `_d`) is read as the albedo. An `_i` inner
+/// layer keeps its diffuse guess, and a raw-map-named file the user typed `diffuse` keeps that choice, stays a
+/// written choice (not a packing input) and converts on its own.
+#[test]
+fn only_the_diffuse_member_becomes_skin_albedo() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    put(d.path(), "x_i.png", colour(64));
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+    assert_eq!(job(&p, "x_i.png").profile.subtype, Subtype::Diffuse);
+
+    let d =
+        pbr_set("[files.x_roughness]\nsubtype = \"diffuse\"\n[files.x]\nsubtype = \"diffuse\"\n");
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    let r = job(&p, "x_roughness.png");
+    assert_eq!(r.profile.subtype, Subtype::Diffuse);
+    assert_eq!(r.output.file_name().unwrap(), "x_roughness.dds");
+    let x = job(&p, "x.png");
+    assert_eq!(x.profile.subtype, Subtype::SkinAlbedo);
+    assert!(
+        !matches!(
+            x.provenance.get("subtype"),
+            Some(engine::presets::Provenance::Shader(_) | engine::presets::Provenance::Suggestion)
+        ),
+        "a written diffuse keeps its written provenance: {:?}",
+        x.provenance.get("subtype")
+    );
+}
+
+/// Note DV1 (review issue 1): the shader alone types the diffuse, whatever the set can pack. A set with no packing
+/// input, one whose packed map is a pre-packed `_rmaos` (its layout kept), and a metallic-only set that keeps
+/// `_rmaos` (DQ2), with no PACK-RECIPE-UNBUILDABLE: nobody wrote a recipe.
+#[test]
+fn the_shader_alone_makes_the_diffuse_skin_albedo() {
+    let diffuse_only = tempfile::tempdir().unwrap();
+    put(diffuse_only.path(), "x.png", colour(64));
+    let prepacked = tempfile::tempdir().unwrap();
+    put(prepacked.path(), "x.png", colour(64));
+    std::fs::write(prepacked.path().join("in/x_rmaos.dds"), b"not read").unwrap();
+    let metallic = tempfile::tempdir().unwrap();
+    put(metallic.path(), "x.png", colour(64));
+    put(metallic.path(), "x_metallic.png", grey(64));
+    for d in [&diffuse_only, &prepacked, &metallic] {
+        let before = plan(d, Target::Cs, &[]);
+        assert_ne!(job(&before, "x.png").profile.subtype, Subtype::SkinAlbedo);
+        let p = plan(d, Target::Cs, &[SKIN]);
+        assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+        let o = outputs(&p);
+        assert!(!o.contains(&"x_rfaos.dds".to_string()), "{o:?}");
+        assert_eq!(
+            o.iter().filter(|n| n.contains("rmaos")).count(),
+            outputs(&before)
+                .iter()
+                .filter(|n| n.contains("rmaos"))
+                .count(),
+            "packing unchanged: {o:?}"
+        );
+        assert!(!p
+            .jobs
+            .iter()
+            .flat_map(|j| &j.warnings)
+            .any(|w| w.code == Code::PackRecipeUnbuildable));
+    }
+}
+
+/// Note DV3: off cs the choice changes nothing (Advanced Skin is a cs shader).
+#[test]
+fn an_advanced_skin_shader_off_cs_changes_nothing() {
+    let d = pbr_set("");
+    let a = plan(&d, Target::Vanilla, &[]);
+    let b = plan(&d, Target::Vanilla, &[SKIN]);
+    assert_eq!(outputs(&a), outputs(&b));
+    assert_eq!(
+        job(&a, "x.png").profile.subtype,
+        job(&b, "x.png").profile.subtype
+    );
+}
+
 fn set_of<'a>(p: &'a Plan, input: &str) -> &'a str {
     &job(p, input).set_key
 }

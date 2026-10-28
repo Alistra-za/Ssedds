@@ -464,7 +464,7 @@ fn under_grid(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         }
     }
     for m in &v.missing {
-        ui.colored_label(AMBER, format!("no file matches {m}"));
+        ui.colored_label(AMBER, format!("no file matches {}", m.text()));
     }
 }
 

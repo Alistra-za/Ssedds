@@ -1787,6 +1787,11 @@ impl AppModel {
     /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
     /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
     fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
+        // Note DU6: a batch inside a batch (a sub-type edit with its recipe follow) joins the outer step.
+        if self.batch {
+            f(self);
+            return true;
+        }
         let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
         let dirty = (
             self.project.as_ref().is_some_and(ProjectDoc::is_dirty),

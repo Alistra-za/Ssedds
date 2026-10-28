@@ -52,7 +52,7 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 | `_wet` | `skin_wet`, only in a `cs` Advanced skin set; elsewhere `_wet` is part of the base name | High |
 | `_e`, or a file under `textures\cubemaps\` | `cubemap`; the six-face suffixes `_posx` to `_negz` (or `_px` to `_nz`) after the name are cut off first | High |
 
-A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`. In an Advanced skin set a plain `_f` is the skin fuzz mask: a greyscale map packed into the `_rfaos` G channel and not converted on its own. A `_f` never makes a set Advanced skin by itself, and one you give a sub-type converts alone as fuzz.
+A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`; a set whose shader you set to Advanced Skin (GUI, or `--set set:<id>.shader=advanced_skin`) builds one unless `packing.recipe` says otherwise or it has only a metallic map, and its diffuse is `skin_albedo` either way (also when written as plain `diffuse`). In an Advanced skin set a plain `_f` is the skin fuzz mask: a greyscale map packed into the `_rfaos` G channel and not converted on its own. A `_f` never makes a set Advanced skin by itself, and one you give a sub-type converts alone as fuzz.
 
 Medium and Low suggestions always need your confirmation. High suggestions are applied automatically in the GUI, and on the command line with `--accept-suggestions high`.
 
@@ -166,7 +166,7 @@ An `_orm` file counts as three raw maps at once: AO from its R channel, roughnes
 | B | AO | 1 |
 | A | specular | 1 |
 
-`_rfaos` (Advanced skin) replaces it when a fuzz map exists (`packing.recipe = "auto"`), or always with `packing.recipe = "rfaos"`:
+`_rfaos` (Advanced skin) replaces it when a fuzz map exists or the set's shader is set to Advanced Skin (`packing.recipe = "auto"`), or always with `packing.recipe = "rfaos"`:
 
 | Channel | Source | Default when missing |
 |---|---|---|

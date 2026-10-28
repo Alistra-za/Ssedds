@@ -9,7 +9,7 @@ use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
 use crate::model::sets::{
     badge_text, fill_proposals, kind_text, shader_options, slot_row, DropChoice, DropOutcome,
-    FillProposal, SetView, SlotFill, SlotKind,
+    FillProposal, Missing, SetView, SlotFill, SlotKind,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -152,6 +152,8 @@ enum Act {
     /// Item 18: open Fill from names on a set.
     FillNames(String),
     RemoveMember(String, String),
+    /// Note DU1: the "?" chip's Remove from set.
+    RemoveMissing(String, Missing),
     /// The Shader dropdown: `None` is Auto.
     Shader(String, Option<Shader>),
     /// A pill click with its modifiers (F3a D1).
@@ -220,7 +222,11 @@ fn pill_hover(model: &AppModel, v: &SetView, blocked: bool) -> String {
         lines.push("blocked".to_string());
     }
     lines.extend(v.owns.iter().map(|s| format!("owns {}", s.label())));
-    lines.extend(v.missing.iter().map(|m| format!("no file matches {m}")));
+    lines.extend(
+        v.missing
+            .iter()
+            .map(|m| format!("no file matches {}", m.text())),
+    );
     for r in &v.recipes {
         let mut l = format!("{}: {}", r.subtype.id(), status_text(r.status).0);
         if let Some(reason) = &r.reason {
@@ -332,12 +338,27 @@ fn member_chip(
     let locked = kind.is_some_and(|k| v.locks.contains(&k.slot_number()));
     let pgp = kind.is_some_and(|k| crate::pgp::prefix::pgp_locked(&v.settings, k.slot_number()));
     let r = member(ui, item, sel_items.contains(mk), locked, pgp, thumbs, note);
-    if let Some(k) = kind {
+    // Note DU5: an own member (`drag`) can leave the set from its chip; a borrowed one has the slot's Clear.
+    if kind.is_some() || drag {
         *member_menu |= r.secondary_clicked();
         let open = r.context_menu(|ui| {
-            let title = format!("Slot {}: {}", k.slot_number(), k.label());
-            if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, k)) {
-                acts.push(Act::Slot(a));
+            if let Some(k) = kind {
+                let title = format!("Slot {}: {}", k.slot_number(), k.label());
+                if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, k)) {
+                    acts.push(Act::Slot(a));
+                }
+            }
+            if drag {
+                let off = model.sets_read_only_reason();
+                let b = ui.add_enabled(off.is_none(), egui::Button::new("Remove from set"));
+                let b = match &off {
+                    Some(why) => b.on_disabled_hover_text(why.as_str()),
+                    None => b,
+                };
+                if b.clicked() {
+                    acts.push(Act::RemoveMember(v.id.clone(), mk.to_string()));
+                    ui.close();
+                }
             }
         });
         *member_menu |= open.is_some();
@@ -716,6 +737,11 @@ pub fn draw(
                     st.pending = Some(Pending::Refused(why));
                 }
             }
+            Act::RemoveMissing(id, m) => {
+                if let Err(why) = model.remove_missing(&id, &m) {
+                    st.pending = Some(Pending::Refused(why));
+                }
+            }
             Act::Shader(id, shader) => model.set_shader(&id, shader),
         }
     }
@@ -1062,9 +1088,36 @@ fn pill(
                             });
                         }
                         // K12: an add/remove entry that matches no file.
+                        // Note DU1: its menu removes the entry (an entry with no files left: Delete set).
                         for m in &v.missing {
-                            letter_box(ui, "?", Some(RED))
-                                .on_hover_text(format!("no file matches {m}"));
+                            let r = letter_box(ui, "?", Some(RED)).interact(egui::Sense::click());
+                            let text = m.text();
+                            r.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    true,
+                                    format!("Missing: {text}"),
+                                )
+                            });
+                            let r = r.on_hover_text(format!("no file matches {text}"));
+                            member_menu |= r.secondary_clicked();
+                            let open = r.context_menu(|ui| {
+                                let (label, act) = match m {
+                                    Missing::NoFilesLeft => {
+                                        ("Delete set", Act::Delete(v.id.clone(), v.members.len()))
+                                    }
+                                    _ => (
+                                        "Remove from set",
+                                        Act::RemoveMissing(v.id.clone(), m.clone()),
+                                    ),
+                                };
+                                let b = ui.add_enabled(editing.on, egui::Button::new(label));
+                                if b.on_disabled_hover_text(editing.why).clicked() {
+                                    acts.push(act);
+                                    ui.close();
+                                }
+                            });
+                            member_menu |= open.is_some();
                         }
                         // Members in no chip (an env mask `_m`, a clashing second kind) follow as plain thumbnails.
                         for mk in &v.members {

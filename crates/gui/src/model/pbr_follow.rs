@@ -91,6 +91,11 @@ impl AppModel {
             if s.read_only() {
                 return;
             }
+            // Note DU8: a sub-type the user chose is theirs: leaving Advanced Skin no longer reverts it.
+            let mut skin = s.auto_skin();
+            if skin.remove(&k).is_some() {
+                s.set_auto_skin(&skin);
+            }
             let before = s.auto_pbr();
             // A sub-type the user just chose is no longer automatic.
             let mut auto: Vec<String> = before.iter().filter(|a| **a != k).cloned().collect();

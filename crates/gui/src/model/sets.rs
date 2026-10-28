@@ -13,6 +13,7 @@ use engine::codes::Warning;
 use engine::config::{Subtype, Target};
 use engine::group::{split_suffix, split_vocab, VocabRole};
 use engine::overrides::path_key_matches;
+use engine::presets::Provenance;
 use engine::sets::{fold_id, same_id, set_id, OutputKey, SetEdit};
 use engine::shader::{Shader, ShaderPick};
 use serde_json::Value;
@@ -202,6 +203,30 @@ pub enum SlotFill {
     },
 }
 
+/// A line of an `[[sets]]` entry that matches nothing: the card's red "?" chip and a Problems row (Note DU).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Missing {
+    /// The entry's files have all gone (its fix is Delete set).
+    NoFilesLeft,
+    /// An `add` or `remove` path that names no file.
+    File(String),
+    /// `borrow.slot<slot>` from set `from`, which is gone or (`empty`) has nothing in that slot.
+    Borrow { slot: u8, from: String, empty: bool },
+}
+
+impl Missing {
+    pub fn text(&self) -> String {
+        match self {
+            Missing::NoFilesLeft => NO_FILES_LEFT.into(),
+            Missing::File(f) => f.clone(),
+            Missing::Borrow { slot, from, empty } => {
+                let none = if *empty { " (it has none)" } else { "" };
+                format!("slot{slot} from {from}{none}")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetView {
     /// The engine key (`""` for a created set with no members yet).
@@ -218,7 +243,7 @@ pub struct SetView {
     pub skin: bool,
     pub created: bool,
     /// `add`/`remove` entries of `sdc-project.toml` that match no file (Review focus 1).
-    pub missing: Vec<String>,
+    pub missing: Vec<Missing>,
     /// Slots whose finished output this set owns while another set borrows it.
     pub owns: Vec<SlotKind>,
     pub derived_match: Option<String>,
@@ -567,16 +592,21 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
         v.shader_choice = e.shader;
         v.locks = e.lock.clone();
         if v.key.is_empty() && !e.created {
-            v.missing.push(NO_FILES_LEFT.into());
+            v.missing.push(Missing::NoFilesLeft);
         }
         for f in e.add.iter().chain(&e.remove) {
             if !m.items.iter().any(|i| path_key_matches(f, &i.key)) {
-                v.missing.push(f.clone());
+                v.missing.push(Missing::File(f.clone()));
             }
         }
         for (slot, from) in &e.borrow {
+            let borrow = |empty| Missing::Borrow {
+                slot: *slot,
+                from: from.clone(),
+                empty,
+            };
             let Some((_, src)) = own_slots.iter().find(|(id, _)| same_id(id, from)) else {
-                v.missing.push(format!("slot{slot} from {from}"));
+                v.missing.push(borrow(false));
                 continue;
             };
             let hit = src
@@ -591,8 +621,7 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
                     },
                 );
             } else {
-                v.missing
-                    .push(format!("slot{slot} from {from} (it has none)"));
+                v.missing.push(borrow(true));
             }
         }
     }
@@ -1613,13 +1642,114 @@ impl AppModel {
         Ok(())
     }
 
+    /// Note DU1-DU2: drop entry `m` of set `id` that matches no file, as one step: a path leaves `add`/`remove`, a
+    /// borrow is dropped, and an entry with no files left is deleted (`delete_set`).
+    pub fn remove_missing(&mut self, id: &str, m: &Missing) -> Result<(), String> {
+        if !self.sets_editable() {
+            return Err(self
+                .sets_read_only_reason()
+                .unwrap_or_else(|| READ_ONLY.into()));
+        }
+        let id = self.view_of(id).ok_or_else(|| format!("no set {id}"))?.id;
+        match m.clone() {
+            Missing::NoFilesLeft => {
+                self.delete_set(&id);
+            }
+            Missing::File(f) => self.edit_docs("Remove from set", None, true, move |_, s| {
+                s.drop_entry(&id, &f)
+            }),
+            // F3a Task 8: a locked slot keeps its borrow, dead or not.
+            Missing::Borrow { slot, .. } if self.slot_locked(&id, slot) => {
+                return Err(SLOT_LOCKED.into());
+            }
+            Missing::Borrow { slot, .. } => {
+                self.edit_docs("Remove from set", None, true, move |_, s| {
+                    s.set_borrow(&id, slot, None)
+                })
+            }
+        }
+        Ok(())
+    }
+
+    /// Why `sdc-project.toml` takes no edit, when it does not (the set edits' disabled reason).
+    pub fn sets_read_only_reason(&self) -> Option<String> {
+        self.sets_doc
+            .as_ref()
+            .and_then(|d| d.error())
+            .map(|e| format!("{READ_ONLY}: {e}"))
+    }
+
     /// Choose set `set`'s shader, or with `None` go back to Auto (M6 spec §7). Plans again.
     pub fn set_shader(&mut self, set: &str, shader: Option<Shader>) {
         if !self.sets_editable() {
             return;
         }
         let id = set.to_string();
-        self.edit_docs("Shader", None, true, move |_, d| d.set_shader(&id, shader));
+        let Some((item, was, on)) = self.skin_follow(set, shader) else {
+            self.edit_docs("Shader", None, true, move |_, d| d.set_shader(&id, shader));
+            return;
+        };
+        // Note DU6-DU7: the shader and the diffuse's sub-type (with Note DQ's recipe follow) are one step.
+        self.batch_edit("Shader", |m| {
+            m.edit_docs("Shader", None, true, |_, d| d.set_shader(&id, shader));
+            if on {
+                m.edit_subtype("Shader", &item, Some(Subtype::SkinAlbedo));
+            } else {
+                // The sub-type written before (DQ3 takes the packed output back to `_rmaos`); none was written: the
+                // explicit `diffuse` moves the recipe back, then goes, so the sub-type is inferred again.
+                let back =
+                    serde_json::from_value(serde_json::json!(was)).unwrap_or(Subtype::Diffuse);
+                m.edit_subtype("Shader", &item, Some(back));
+                if was.is_empty() {
+                    m.edit_docs("Shader", None, true, |p, _| {
+                        p.clear_file_value(&item, "subtype")
+                    });
+                }
+            }
+            m.edit_docs("Shader", None, true, |_, s| {
+                let mut skin = s.auto_skin();
+                if on {
+                    skin.insert(item.clone(), was.clone());
+                } else {
+                    skin.remove(&item);
+                }
+                s.set_auto_skin(&skin);
+            });
+        });
+    }
+
+    /// Note DU6-DU9: what choosing `shader` for set `set` does to its own diffuse: `(item, its own [files] sub-type
+    /// before, true)` to make it `skin_albedo` (Advanced Skin, on cs, a free diffuse whose sub-type is inferred or a
+    /// plain `diffuse`), or `(item, the recorded sub-type, false)` to revert one Tessalith made `skin_albedo` and the
+    /// user has not changed since. `None`: the shader alone.
+    fn skin_follow(&self, set: &str, shader: Option<Shader>) -> Option<(String, String, bool)> {
+        let views = views(self);
+        let v = views.iter().find(|v| same_id(&v.id, set))?;
+        let SlotFill::Own { item } = v.slots.get(&SlotKind::Diffuse)? else {
+            return None;
+        };
+        let p = self.project.as_ref().filter(|p| !p.read_only())?;
+        let s = self.sets_doc.as_ref()?;
+        // F3a Task 8: a pinned diffuse keeps its sub-type both ways (review issue 2).
+        if locked_items(self).contains_key(item) {
+            return None;
+        }
+        let own = p.file_value(item, "subtype");
+        if shader == Some(Shader::AdvancedSkin) {
+            if self.target != Target::Cs {
+                return None;
+            }
+            let job = self.item(item)?.job.as_ref()?;
+            let inferred = job.provenance.get("subtype") == Some(&Provenance::Suggestion);
+            let plain = job.profile.subtype == Subtype::Diffuse;
+            if job.profile.subtype == Subtype::SkinAlbedo || !(inferred || plain) {
+                return None;
+            }
+            let was = own.as_ref().and_then(|v| v.as_str()).unwrap_or("");
+            return Some((item.clone(), was.to_string(), true));
+        }
+        let was = s.auto_skin().get(item)?.clone();
+        (own == Some(serde_json::json!(Subtype::SkinAlbedo))).then(|| (item.clone(), was, false))
     }
 
     /// F3b D2/D3: rename set `set`'s outputs to base name `name` (`None` restores the names that mirror the sources).

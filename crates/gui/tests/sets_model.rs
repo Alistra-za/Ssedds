@@ -280,7 +280,7 @@ fn a_member_that_vanished_shows_as_missing_and_is_reported() {
     let v = set_views(&m);
     assert_eq!(
         view(&v, "landscape/rock01").missing,
-        vec!["landscape/gone.png".to_string()]
+        vec![Missing::File("landscape/gone.png".to_string())]
     );
     assert!(
         m.sets_doc
@@ -656,7 +656,7 @@ fn a_borrow_from_a_set_without_that_slot_is_reported() {
     assert!(
         leaf.missing
             .iter()
-            .any(|x| x.contains("slot6") && x.contains("landscape/odd")),
+            .any(|x| x.text().contains("slot6") && x.text().contains("landscape/odd")),
         "{:?}",
         leaf.missing
     );

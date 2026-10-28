@@ -506,6 +506,29 @@ impl SetsDoc {
         self.set_project("auto_pbr", (!keys.is_empty()).then_some(Value::Array(arr)));
     }
 
+    /// Note DU7: diffuses Tessalith made `skin_albedo` when their set's shader became Advanced Skin, each with its own
+    /// `[files]` sub-type from before ("" for none), so leaving the shader restores it. `[project] auto_skin`.
+    pub fn auto_skin(&self) -> BTreeMap<String, String> {
+        let t = self.f.doc.get("project").and_then(|p| p.get("auto_skin"));
+        t.and_then(Item::as_table_like)
+            .map(|t| {
+                t.iter()
+                    .map(|(k, v)| (k.to_string(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    pub fn set_auto_skin(&mut self, keys: &BTreeMap<String, String>) {
+        let mut t = toml_edit::InlineTable::new();
+        for (k, v) in keys {
+            t.insert(k.as_str(), Value::from(v.as_str()));
+        }
+        self.set_project(
+            "auto_skin",
+            (!keys.is_empty()).then_some(Value::InlineTable(t)),
+        );
+    }
+
     /// The `[[sets]]` entries, parsed once per revision (REPORT #9).
     pub fn entries(&self) -> Arc<Vec<SetEntry>> {
         let rev = self.f.rev;
@@ -842,6 +865,22 @@ impl SetsDoc {
             self.list_edit(id, "add", file, false);
         } else {
             self.list_edit(id, "remove", file, true);
+        }
+    }
+
+    /// Note DU1: drop `key` from set `id`'s `add` and `remove` lists, as written: an entry that names no file, so
+    /// there is nothing to move.
+    pub fn drop_entry(&mut self, id: &str, key: &str) {
+        if self.read_only() {
+            return;
+        }
+        for list in ["add", "remove"] {
+            let mut items = strings(self.table_mut(id).get(list));
+            let n = items.len();
+            items.retain(|f| !same_id(f, key));
+            if items.len() != n {
+                self.set_list(id, list, &items);
+            }
         }
     }
 
