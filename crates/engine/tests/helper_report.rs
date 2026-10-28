@@ -287,3 +287,91 @@ fn if_changed_reencodes_when_prepacked_rmaos_read_changes() {
     let s = run(d.path(), &[DIFFUSE]);
     assert_eq!((s.converted, s.up_to_date), (0, 2), "{s:?}");
 }
+
+/// Every fixture shape the pins use, minus any helper: nothing in them is filled (Note DT15).
+#[test]
+fn no_helper_fixture_plans_carry_no_fill() {
+    let d = tempfile::tempdir().unwrap();
+    let mut sets = vec![];
+    for st in Subtype::ALL {
+        let id = st.id();
+        ImageBuffer::from_fn(N, N, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 4) as u8, 90, 200])
+        })
+        .save(at(d.path(), &format!("{id}.png")))
+        .unwrap();
+        sets.push(format!("file:**/a/{id}.png.subtype={id}"));
+    }
+    // golden.rs `pbr_fixture` and the RNM bake set (its `_detailnorm` is an RNM layer: reported only when RNM is on).
+    for (rel, flat) in [
+        ("pbr/rock.png", false),
+        ("pbr/rock_n.png", true),
+        ("pbr/rock_rmaos.png", false),
+        ("rnm/iron.png", false),
+        ("rnm/iron_n.png", true),
+        ("rnm/iron_rmaos.png", false),
+        ("rnm/iron_detailnorm.png", true),
+    ] {
+        let p = d.path().join("in/textures").join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        ImageBuffer::from_fn(N, N, |x, y| {
+            if flat {
+                Rgb([128, 128, 255])
+            } else {
+                Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+            }
+        })
+        .save(p)
+        .unwrap();
+    }
+    for target in [Target::Cs, Target::Vanilla] {
+        let mut r = req(d.path(), &[]);
+        r.target = Some(target);
+        r.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+        let rep = Reporter::new(Arc::new(VecSink::default()), "helper-report");
+        let p = Engine::new()
+            .unwrap()
+            .plan(r, &rep, &CancelToken::default())
+            .unwrap();
+        assert!(p.jobs.len() > 30, "{} jobs", p.jobs.len());
+        // The RNM detail layer is reported as a helper, but it keeps its bake path: never an alpha or packed fill.
+        assert!(
+            p.helpers
+                .iter()
+                .all(|h| h.fills.iter().all(|f| matches!(f, FillTarget::Rnm(_)))),
+            "{target:?}: {:#?}",
+            p.helpers
+        );
+        assert!(
+            p.jobs.iter().all(|j| j.fill.is_none()),
+            "{target:?}: {:?}",
+            p.jobs
+                .iter()
+                .filter(|j| j.fill.is_some())
+                .map(|j| &j.input)
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A manifest written before fills existed has no fill source. Adding the helper re-encodes only the output it
+/// fills; the rest stay up to date (Note DT15).
+#[test]
+fn old_record_reexports_only_filled_outputs() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    normal(d.path(), "x_n.png");
+    rgb(d.path(), "y.png");
+    checker(d.path(), "x_opacity.png", 0, 255);
+    toml(
+        d.path(),
+        "[files.\"textures/a/x_opacity\"]\nhelper.fills = []\n",
+    );
+    let s = run(d.path(), &[DIFFUSE, BLEND]);
+    assert_eq!((s.converted, s.up_to_date), (3, 0), "{s:?}");
+    toml(d.path(), "");
+    let s = run(d.path(), &[DIFFUSE, BLEND]);
+    assert_eq!((s.converted, s.up_to_date), (1, 2), "{s:?}");
+    let s = run(d.path(), &[DIFFUSE, BLEND]);
+    assert_eq!((s.converted, s.up_to_date), (0, 3), "{s:?}");
+}
