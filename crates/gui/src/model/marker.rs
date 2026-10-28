@@ -72,6 +72,10 @@ impl AppModel {
     /// A finished Save dialog: write, report, and close the dialog only when the file was written (a kept or failed
     /// write leaves it open to pick another name).
     pub fn marker_picked(&mut self, path: &Path) {
+        // DT33: closing the dialog while the Save dialog was open is a cancel; this also never closes another dialog.
+        if self.dialog != Some(Dialog::MakeMarker) {
+            return;
+        }
         let (sev, text) = match make_marker(path, &self.marker) {
             MarkerOutcome::Written => {
                 self.dialog = None;

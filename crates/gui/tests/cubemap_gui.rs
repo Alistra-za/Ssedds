@@ -856,6 +856,29 @@ mod marker {
         assert!(m.status_line.contains("out_e.dds"), "{}", m.status_line);
     }
 
+    /// Final review M2 (DT33): a Save result that lands after the dialog was cancelled writes nothing, and closes
+    /// no other dialog.
+    #[test]
+    fn a_save_after_cancel_writes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("out_e.dds");
+        let mut m = AppModel::placeholder(GuiSettings::default());
+        m.picker.set_backend(fake(Some(target.clone())));
+        m.open_marker_dialog();
+        let mut h = dialog_harness(m);
+        h.get_by_label("Save…").click();
+        h.run();
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(h.state().dialog, None);
+        // Another dialog opened meanwhile stays open.
+        h.state_mut().dialog = Some(Dialog::Error("other".into()));
+        wait_picker(h.state());
+        h.state_mut().poll();
+        assert!(!target.exists(), "nothing is written after a cancel");
+        assert_eq!(h.state().dialog, Some(Dialog::Error("other".into())));
+    }
+
     #[test]
     fn escape_and_cancel_close_without_asking_for_a_file() {
         for esc in [true, false] {
