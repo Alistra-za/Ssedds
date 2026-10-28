@@ -387,6 +387,41 @@ fn joined_helper_packs_under_its_set_name() {
     }
 }
 
+/// Review fix round 3: a set base that itself ends in a term (`x_ao`) is not cut twice, and the packed output's own
+/// `[files]` key reaches it.
+#[test]
+fn joined_helper_keeps_a_base_ending_in_a_term() {
+    let toml = format!(
+        "{}{}",
+        files("x_ao_mask", "helper.role = \"roughness\""),
+        "[files.\"x_ao_rmaos\".packing.fill]\nmetallic = 77\n"
+    );
+    let d = fixture(&["x_ao_diffuse.png", "x_ao_ao.png", "x_ao_mask.png"], &toml);
+    let p = plan(d.path(), Target::Cs, &[]);
+    let outs: Vec<String> = p
+        .jobs
+        .iter()
+        .filter(|j| j.pack.is_some())
+        .map(|j| j.output.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(outs, ["x_ao_rmaos.dds"]);
+    let ch = &packed(&p, "x_ao_rmaos.dds").pack.as_ref().unwrap().channels;
+    match &ch[0] {
+        ChannelSource::Source { path, role, .. } => {
+            assert!(path.ends_with("x_ao_mask.png"), "{path:?}");
+            assert_eq!(*role, RawMap::Roughness);
+        }
+        other => panic!("R is {other:?}"),
+    }
+    assert_eq!(
+        ch[1],
+        ChannelSource::Fill {
+            role: RawMap::Metallic,
+            code: 77
+        }
+    );
+}
+
 #[test]
 fn parse_set_helper_fields() {
     for ok in [

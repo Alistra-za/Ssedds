@@ -134,8 +134,10 @@ fn source_base(p: &Path) -> String {
 }
 
 /// Note DT: a hand-role helper that `group::join_helpers` moved into set `x` (`x_mask`) names a packed output as the
-/// set's own members do (`x_rmaos`, with its `[files]` key): each such member with `rel` renamed to the base of a
-/// member whose base is the set's. Empty for every set without a joined helper, so other names never change.
+/// set's own members do (`x_rmaos`, with its `[files]` key): each such member with `rel` renamed to the stem of a
+/// member whose base is the set's. The whole stem, never the bare base: `virtual_stem_as` parses the name again, and
+/// a base that itself ends in a term (`x_ao`) would be cut twice. Empty for every set without a joined helper, so
+/// other names never change.
 fn joined_helper_names(
     ctx: &ResolveCtx,
     set: &TextureSet,
@@ -146,12 +148,12 @@ fn joined_helper_names(
         .rsplit_once('/')
         .map_or(set.key.as_str(), |(_, b)| b);
     let own = |f: &InputFile| source_base(&f.rel).to_lowercase() == key_base;
-    let Some(base) = set
+    let Some(stem) = set
         .members
         .iter()
         .map(|&i| &files[i])
         .find(|f| own(f))
-        .map(|f| source_base(&f.rel))
+        .map(|f| f.rel.file_stem().unwrap_or_default().to_string_lossy())
     else {
         return vec![];
     };
@@ -168,7 +170,7 @@ fn joined_helper_names(
         .map(|f| {
             let ext = f.rel.extension().unwrap_or_default().to_string_lossy();
             let mut g = f.clone();
-            g.rel = f.rel.with_file_name(format!("{base}.{ext}"));
+            g.rel = f.rel.with_file_name(format!("{stem}.{ext}"));
             (f.path.clone(), g)
         })
         .collect()
