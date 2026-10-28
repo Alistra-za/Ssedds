@@ -5,6 +5,8 @@ use crate::rnm::{LayerTerm, LayerTermId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod plan;
+
 pub const ROLE_FIELD: &str = "helper.role";
 pub const FILLS_FIELD: &str = "helper.fills";
 pub const READ_FIELD: &str = "helper.read";
@@ -242,6 +244,30 @@ impl HelperSel {
     /// A helper role (other than Not a helper) or fills was set by hand.
     pub fn assigned(&self) -> bool {
         self.role.is_some_and(|r| r != HelperRole::NotHelper) || self.fills.is_some()
+    }
+}
+
+/// How a helper fills its target's alpha (Note DT): the source, the channel read (`None` = R, Ruling 9), whether it
+/// is inverted, and whether it was hand-set (assigned replaces any alpha; suggested fills only an empty one).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FillJob {
+    pub source: crate::pack::PackSource,
+    pub read: Option<HelperRead>,
+    pub invert: bool,
+    pub assigned: bool,
+}
+
+impl FillJob {
+    /// `a:<read>` plus `:inv` when inverted: what the fill adds to its output's identity.
+    pub fn identity(&self) -> String {
+        let read = match self.read.unwrap_or(HelperRead::R) {
+            HelperRead::R => "r",
+            HelperRead::G => "g",
+            HelperRead::B => "b",
+            HelperRead::A => "a",
+            HelperRead::Luma => "luma",
+        };
+        format!("a:{read}{}", if self.invert { ":inv" } else { "" })
     }
 }
 
