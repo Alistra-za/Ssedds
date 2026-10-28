@@ -1274,6 +1274,8 @@ pub enum Need {
     Subtype,
     /// The alpha meaning (policy) depends on the mesh and nobody chose it.
     AlphaMeaning,
+    /// A single-image cube has no clear layout and nobody chose one (cubemap GUI, DECISIONS DT1).
+    CubeLayout,
 }
 
 /// What happens to a file (spec §5.2, §10). Serialises as `{"state": "ready"}`,

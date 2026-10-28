@@ -111,6 +111,7 @@ fn preview_out(
             },
             format: engine::config::Format::Bc3,
             srgb: true,
+            faces: 1,
             levels: vec![],
             validation: engine::validate::ValidationSummary {
                 alpha: vec![alpha(100, 255), alpha(75, 40)],

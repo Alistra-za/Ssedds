@@ -7,6 +7,7 @@
 - New `sdc cubemap-marker` writes the 1×1 dynamic-cubemap marker.
 - A set whose shader is Advanced Skin (saved in the GUI project, or `--set set:<id>.shader=advanced_skin`) is now an Advanced skin set: its diffuse (inferred, or written as plain `diffuse`) becomes `skin_albedo`, and it packs `_rfaos` instead of `_rmaos` when it can build one. Existing Advanced Skin projects switch `_rmaos` to `_rfaos` on the next export; the old `_rmaos.dds` stays in the export folder until you delete it.
 - New codes `CUBE-FACES` and `CUBE-NO-MIPS`. `sdc inspect` and `sdc validate` flag cubes wider than 1 pixel with one mip, a lit 1×1 marker, an sRGB cube, and 2D files named `_e` or under `textures\cubemaps\`. **`sdc validate` now fails those 2D files**, because the game reads them as cubes.
+- Cubemaps in the GUI: a Cubemap section in the settings panel (Source, Orientation, Colour grade, Ground, Look), a layout question for unclear images, a six-face cross preview with face labels and source face buttons, and Export to > Make marker cube... Settings are written to `sdc.toml`, so the GUI and CLI make the same bytes.
 
 ## 1.0.0
 

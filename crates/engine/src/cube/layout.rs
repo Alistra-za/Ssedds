@@ -4,7 +4,7 @@ use crate::config::{CubeLayout, CubemapSpec, FaceFlip, Profile};
 use crate::image::Rgba32F;
 
 /// (col, row) of each face's cell, +X..-Z. Hcross is 4x3 cells, Vcross 3x4.
-const HCROSS: [(u32, u32); 6] = [(2, 1), (0, 1), (1, 0), (1, 2), (1, 1), (3, 1)];
+pub const HCROSS: [(u32, u32); 6] = [(2, 1), (0, 1), (1, 0), (1, 2), (1, 1), (3, 1)];
 const VCROSS: [(u32, u32); 6] = [(2, 1), (0, 1), (1, 0), (1, 2), (1, 1), (1, 3)];
 
 /// The layout an image's exact aspect ratio says it has; square and anything else `None`.

@@ -34,8 +34,12 @@ pub enum ItemStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    Subtype { suggested: Option<Subtype> },
+    Subtype {
+        suggested: Option<Subtype>,
+    },
     AlphaMeaning,
+    /// A single image that could be several cube layouts (`Need::CubeLayout`).
+    CubeLayout,
     Acknowledge(Code),
 }
 
@@ -128,6 +132,7 @@ pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
                     suggested: job.suggestions.first().map(|s| s.subtype),
                 },
                 Need::AlphaMeaning => Decision::AlphaMeaning,
+                Need::CubeLayout => Decision::CubeLayout,
             });
         }
     }
@@ -203,6 +208,11 @@ impl PlanView {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned()
+            } else if job.cube.as_ref().is_some_and(|c| c.sources.len() == 6) {
+                format!(
+                    "{} (6 faces)",
+                    job.output.file_stem().unwrap_or_default().to_string_lossy()
+                )
             } else {
                 file_name(&job.input)
             };

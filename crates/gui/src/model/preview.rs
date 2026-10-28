@@ -1,5 +1,6 @@
 //! The preview state machine (M3a spec §6.3): what the centre column shows for the expanded texture, when work is
 //! requested, and which results are still wanted. All timing goes through [`AppModel::tick`], so tests drive time.
+use super::cube_cross;
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
 use crate::worker::{spawn_dds, spawn_encode, spawn_source};
@@ -186,7 +187,7 @@ impl PreviewModel {
 enum Previewable {
     Job(Box<ResolvedJob>),
     Dds,
-    Blocked(&'static str),
+    Blocked(String),
 }
 
 fn classify(item: &TextureItem) -> Previewable {
@@ -194,7 +195,21 @@ fn classify(item: &TextureItem) -> Previewable {
         return Previewable::Dds;
     }
     if matches!(item.status, ItemStatus::Error(_)) {
-        return Previewable::Blocked(ERRORED);
+        // The engine's reason comes with it (a cube with a missing or odd-sized face says which, Note DT16).
+        let ItemStatus::Error(codes) = &item.status else {
+            unreachable!()
+        };
+        let why = item
+            .warnings
+            .iter()
+            .filter(|w| codes.contains(&w.code))
+            .map(|w| format!("{}: {}", w.code.as_str(), w.message));
+        return Previewable::Blocked(
+            std::iter::once(ERRORED.to_string())
+                .chain(why)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
     match &item.job {
         Some(job)
@@ -205,7 +220,7 @@ fn classify(item: &TextureItem) -> Previewable {
         {
             Previewable::Job(Box::new(job.clone()))
         }
-        _ => Previewable::Blocked(NOTHING),
+        _ => Previewable::Blocked(NOTHING.to_string()),
     }
 }
 
@@ -247,16 +262,27 @@ fn decode_chain(
         .collect()
 }
 
-/// CPU decode of every encoded mip of `r` (a mip that fails to decode comes back black, never missing).
+/// CPU decode of every encoded mip of `r` (a mip that fails to decode comes back black, never missing). A cube
+/// (`faces == 6`, face-major levels) decodes to one horizontal cross per mip (Note DT16).
 pub fn decode_levels(r: &PreviewResult, bc1: Bc1Model) -> Vec<Vec<[f32; 4]>> {
     let s = &r.source;
-    decode_chain(
-        r.format.pixel_format(r.srgb),
-        &s.dims,
-        s.first_level,
-        &r.levels,
-        bc1,
-    )
+    let fmt = r.format.pixel_format(r.srgb);
+    if r.faces != 6 {
+        return decode_chain(fmt, &s.dims, s.first_level, &r.levels, bc1);
+    }
+    let per_face = r.levels.len() / 6;
+    let faces: Vec<_> = r
+        .levels
+        .chunks(per_face.max(1))
+        .map(|f| decode_chain(fmt, &s.dims, s.first_level, f, bc1))
+        .collect();
+    (0..per_face)
+        .map(|i| {
+            let size = s.dims[s.first_level + i].0;
+            let refs = std::array::from_fn(|f| faces[f][i].as_slice());
+            cube_cross::cross_image(refs, size).2
+        })
+        .collect()
 }
 
 /// A DDS input as stored: its mips within `max`, no source side (M3a spec §2.2).
@@ -306,6 +332,7 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
         },
         format,
         srgb,
+        faces: 1,
         levels,
         validation: Default::default(),
         warnings: vec![],
@@ -357,6 +384,7 @@ impl AppModel {
         self.preview.clear();
         self.preview.item = Some(key.to_string());
         self.view.exposure = 0.0;
+        self.view.source_face = 0;
         let Some(item) = self.item(key) else {
             return;
         };
@@ -391,6 +419,18 @@ impl AppModel {
                 }
             }
         }
+    }
+
+    /// The source pane of a six-file cube shows face `face` (+X..-Z): read the source again for it.
+    pub fn set_source_face(&mut self, face: usize) {
+        let face = face.min(5);
+        if self.view.source_face == face {
+            return;
+        }
+        self.view.source_face = face;
+        self.preview.cancel_source();
+        self.preview.source_pending = true;
+        self.preview.pending_since = None;
     }
 
     /// `collapse` calls this.
@@ -578,7 +618,16 @@ impl AppModel {
         self.preview.cancel_source();
         let (token, cancel) = self.preview.fresh_token();
         self.preview.inflight_source = Some((token, cancel.clone()));
-        spawn_source(self.tx.clone(), session, *job, max, cancel, token);
+        let max = cube_cross::source_cap(&job, max);
+        spawn_source(
+            self.tx.clone(),
+            session,
+            *job,
+            self.view.source_face,
+            max,
+            cancel,
+            token,
+        );
     }
 
     fn start_encode(&mut self) {

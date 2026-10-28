@@ -5,7 +5,7 @@ use engine::config::{RawMap, Target};
 use engine::policy::SourceStamp;
 use engine::presets::{ConfigFile, ExportConfig};
 use serde_json::Value as Json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
@@ -475,6 +475,47 @@ impl ProjectDoc {
         }
         if self.entry(key).is_some_and(|t| t.is_empty()) {
             self.remove_file_entry(key);
+        }
+    }
+
+    /// Every value in `key`'s entry by its dotted field name (`cubemap.yaw`), as `file_value` reads it.
+    pub fn entry_fields(&self, key: &str) -> BTreeMap<String, Json> {
+        fn walk(prefix: String, v: Json, out: &mut BTreeMap<String, Json>) {
+            match v {
+                Json::Object(o) => {
+                    for (k, v) in o {
+                        walk(format!("{prefix}.{k}"), v, out);
+                    }
+                }
+                v => {
+                    out.insert(prefix, v);
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        for (k, item) in self.entry(key).into_iter().flat_map(|t| t.iter()) {
+            if let Some(v) = item_json(item) {
+                walk(k.to_string(), v, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Repeat on each of `to` what changed in `from`'s entry since it read `before` (its `entry_fields` then).
+    pub fn copy_entry_changes(
+        &mut self,
+        from: &str,
+        before: &BTreeMap<String, Json>,
+        to: &[String],
+    ) {
+        let after = self.entry_fields(from);
+        for k in to {
+            for (f, v) in after.iter().filter(|(f, v)| before.get(*f) != Some(*v)) {
+                self.set_file_value(k, f, v);
+            }
+            for f in before.keys().filter(|f| !after.contains_key(*f)) {
+                self.clear_file_value(k, f);
+            }
         }
     }
 

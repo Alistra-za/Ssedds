@@ -414,7 +414,7 @@ fn the_dropdown_has_an_advanced_skin_group_after_pbr_and_other_last() {
     let last = groups.last().unwrap();
     assert_eq!(
         (last.0, last.1.clone()),
-        (OTHER_HEADING, vec![Subtype::UiSky])
+        (OTHER_HEADING, vec![Subtype::UiSky, Subtype::Cubemap])
     );
     assert!(groups
         .iter()

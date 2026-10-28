@@ -13,8 +13,8 @@ use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
 use engine::config::{
-    AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Profile, Subtype, Target,
-    ALPHA_THRESHOLD,
+    AlphaPolicy, Backend, ColorTag, CubeLayout, CubeStyle, FaceFlip, Format, GreenConvention,
+    MipFilter, Profile, Subtype, Target, ALPHA_THRESHOLD,
 };
 use engine::policy::{offered, Provenance, ResolvedJob};
 use serde_json::{json, Value};
@@ -78,7 +78,7 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
         Subtype::SkinWet,
     ];
     let is_skin = |s: Subtype| skin.contains(&s);
-    let is_other = |s: Subtype| s == Subtype::UiSky;
+    let is_other = |s: Subtype| matches!(s, Subtype::UiSky | Subtype::Cubemap);
     let claimed = |s: Subtype| is_pbr(s) || is_skin(s) || is_other(s);
     let kept: Vec<Subtype> = Subtype::ALL.into_iter().filter(|s| keep(*s)).collect();
     let pick = |f: &dyn Fn(Subtype) -> bool| -> Vec<Subtype> {
@@ -230,8 +230,62 @@ pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Opt
             opt(json!(engine::policy::default_backend(p.format)), "Built-in"),
             opt(json!(Backend::Nvtt), "NVTT Production"),
         ],
+        // Cubemap (Note DT7). Auto is the unset layout, "none" the unset style / ground fill.
+        "cubemap.layout" => std::iter::once(opt(json!("auto"), "Auto"))
+            // Faces is detected from a six-file set, never chosen.
+            .chain(pickable_layouts().map(|(l, label)| opt(json!(l), label)))
+            .collect(),
+        "cubemap.style" => vec![
+            opt(json!("none"), "None"),
+            opt(json!(CubeStyle::VanillaMetal), "Vanilla metal"),
+            opt(json!(CubeStyle::Room), "Room"),
+            opt(json!(CubeStyle::Eye), "Eye"),
+            opt(json!(CubeStyle::Hd), "HD"),
+        ],
+        "cubemap.face_size" => std::iter::once(opt(json!("auto"), "Auto"))
+            .chain((2..=12).map(|n| (json!(1u32 << n), format!("{} px", 1u32 << n))))
+            .collect(),
+        "cubemap.face_rotate" => [0, 90, 180, 270]
+            .map(|d| (json!(d), format!("{d}°")))
+            .to_vec(),
+        "cubemap.face_flip" => vec![
+            opt(json!(FaceFlip::None), "No flip"),
+            opt(json!(FaceFlip::H), "Flip H"),
+            opt(json!(FaceFlip::V), "Flip V"),
+        ],
+        "cubemap.ground_fill" => vec![
+            opt(json!("none"), "None"),
+            opt(json!("gradient"), "Gradient"),
+            opt(json!("colour"), "Colour"),
+        ],
         _ => return None,
     })
+}
+
+/// The cube layouts a picker offers, in display order. `Faces` (a six-file set) is not chosen but detected.
+pub const CUBE_LAYOUTS: [(CubeLayout, &str); 9] = [
+    (CubeLayout::Hcross, "Horizontal cross"),
+    (CubeLayout::Vcross, "Vertical cross"),
+    (CubeLayout::Hstrip, "Horizontal strip"),
+    (CubeLayout::Vstrip, "Vertical strip"),
+    (CubeLayout::Equirect, "360° panorama"),
+    (CubeLayout::MirrorBall, "Mirror ball"),
+    (CubeLayout::Angular, "Angular map"),
+    (CubeLayout::Photo, "Single photo"),
+    (CubeLayout::Faces, "Six face files"),
+];
+
+/// The layouts a user can pick: all but `Faces`, which is detected from a six-file set.
+fn pickable_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str)> {
+    CUBE_LAYOUTS.iter().filter(|(l, _)| *l != CubeLayout::Faces)
+}
+
+/// The layouts the unclear-layout decision offers (DT32): an image only asks when no cross or strip fits it.
+fn unclear_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str)> {
+    use CubeLayout::*;
+    CUBE_LAYOUTS
+        .iter()
+        .filter(|(l, _)| matches!(l, Equirect | MirrorBall | Angular | Photo))
 }
 
 fn display_value(v: &Value) -> String {
@@ -737,6 +791,26 @@ fn decision_box(
                             }
                         });
                     }
+                    Decision::CubeLayout => {
+                        ui.label("This image could be several cube layouts: pick one");
+                        let r = egui::ComboBox::from_id_salt(("pick-cube-layout", cx.key))
+                            .selected_text("Pick a layout…")
+                            .show_ui(ui, |ui| {
+                                for (l, label) in unclear_layouts() {
+                                    if ui.selectable_label(false, *label).clicked() {
+                                        actions.push(Action::Set("cubemap.layout", json!(l)));
+                                    }
+                                }
+                            })
+                            .response;
+                        r.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::ComboBox,
+                                r.enabled(),
+                                "Cube layout",
+                            )
+                        });
+                    }
                     Decision::Acknowledge(code) => {
                         ui.label(egui::RichText::new(code.as_str()).strong());
                         if let Some(m) = message_of(warnings, *code) {
@@ -1085,6 +1159,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             }
             if !compact {
                 super::rnm_section::rnm_section(ui, model, key);
+                for (k, f, v) in super::cube_section::cube_section(ui, model, key) {
+                    match v {
+                        Some(v) => model.set_field(&k, &f, v),
+                        None => model.clear_field(&k, &f),
+                    }
+                }
                 other_warnings(ui, &warnings);
             }
         }
