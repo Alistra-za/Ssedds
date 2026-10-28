@@ -238,6 +238,61 @@ fn two_assigned_helpers_first_by_path_wins() {
     assert_eq!(reason(&u, "b_ao.png"), "rmaos.b is filled by a_ao.png");
 }
 
+fn role(r: RawMap) -> HelperSel {
+    HelperSel {
+        role: Some(engine::helper::HelperRole::Raw(r)),
+        ..Default::default()
+    }
+}
+
+/// Fix round 1 (Ruling 8): a hand-set role is assigned and beats a name-guessed source of its role.
+#[test]
+fn hand_role_beats_name_guessed_source() {
+    let files = raw(&[("x_ao.png", Ao), ("x_mask.png", Ao)]);
+    let (r, u) = recipes_for_sel(
+        Target::Cs,
+        &files,
+        PackRecipe::Auto,
+        false,
+        &sel(vec![("x_mask.png", role(Ao))]),
+    );
+    assert_eq!(r[0].channels[2], src("x_mask.png", Ao));
+    assert!(reason(&u, "x_ao.png").contains("x_mask.png"), "{u:?}");
+}
+
+/// Fix round 1 (Ruling 8): a hand-set role and a hand-set fill on one channel are both assigned; first by path wins.
+#[test]
+fn hand_role_and_hand_fill_first_by_path_wins() {
+    // The role sorts first: it keeps `rmaos.b`.
+    let files = raw(&[("a_mask.png", Ao), ("b_mask.png", Height)]);
+    let (r, u) = recipes_for_sel(
+        Target::Cs,
+        &files,
+        PackRecipe::Auto,
+        false,
+        &sel(vec![
+            ("a_mask.png", role(Ao)),
+            ("b_mask.png", fills(&["rmaos.b"])),
+        ]),
+    );
+    assert_eq!(r[0].channels[2], src("a_mask.png", Ao));
+    assert_eq!(reason(&u, "b_mask.png"), "rmaos.b is filled by a_mask.png");
+    // The fill sorts first: it takes `rmaos.b`.
+    let files = raw(&[("a_mask.png", Height), ("b_mask.png", Ao)]);
+    let (r, u) = recipes_for_sel(
+        Target::Cs,
+        &files,
+        PackRecipe::Auto,
+        false,
+        &sel(vec![
+            ("a_mask.png", fills(&["rmaos.b"])),
+            ("b_mask.png", role(Ao)),
+        ]),
+    );
+    assert_eq!(r[0].channels[2], src("a_mask.png", Height));
+    assert_eq!(reason(&u, "b_mask.png"), "rmaos.b is filled by a_mask.png");
+}
+
 /// One in-memory pure-red 64x64 source assembled into R.
 fn assemble_red(channel: Option<u8>) -> engine::pack::assemble::Assembled {
     let p = PathBuf::from("x_red.png");
@@ -345,6 +400,40 @@ fn value_fill_applies_only_without_helper() {
             code: 200
         }
     );
+}
+
+/// Fix round 1: `packing.recipe = rfaos` holds for an `_rfaos` only a hand-set fill builds (no source starts one).
+#[test]
+fn configured_rfaos_builds_for_hand_fill_alone() {
+    for (file, key, ch) in [
+        ("x_specular.png", "x_specular", 3usize),
+        ("x_metallic.png", "x_metallic", 0),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        for f in ["x.png", file] {
+            gray(d.path(), f);
+        }
+        let target = ["rfaos.r", "rfaos.g", "rfaos.b", "rfaos.a"][ch];
+        std::fs::write(
+            d.path().join("in/sdc.toml"),
+            format!(
+                "[files.\"x_rfaos\".packing]\nrecipe = \"rfaos\"\n[files.\"{key}\"]\nhelper.fills = [\"{target}\"]\n"
+            ),
+        )
+        .unwrap();
+        let p = plan(d.path(), Target::Cs);
+        let ch_src = &packed(&p, "x_rfaos.dds").pack.as_ref().unwrap().channels[ch];
+        match ch_src {
+            ChannelSource::Source { path, .. } => assert!(path.ends_with(file), "{path:?}"),
+            other => panic!("{file}: {target} is {other:?}"),
+        }
+        assert!(
+            !p.jobs
+                .iter()
+                .any(|j| j.pack.is_some() && j.output.ends_with("x_rmaos.dds")),
+            "{file}: no _rmaos"
+        );
+    }
 }
 
 #[test]

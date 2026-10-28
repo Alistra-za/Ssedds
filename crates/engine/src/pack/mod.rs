@@ -302,8 +302,10 @@ pub fn recipes_for_sel(
     use crate::helper::FillTarget;
     use ChannelNeed::{MirrorR, Missing, Opaque};
     use RawMap::*;
+    let assigned = |p: &Path| sel.get(p).is_some_and(|s| s.assigned());
     let mut sorted: Vec<&RawInput> = raw.iter().collect();
-    sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    // Note DT (Ruling 8): an assigned source (hand-set role or fills) comes before a suggested one.
+    sorted.sort_by(|a, b| (!assigned(&a.path), &a.path).cmp(&(!assigned(&b.path), &b.path)));
     // DECISIONS Note M13: one source per role, the first by path.
     let mut by_role: BTreeMap<RawMap, &RawInput> = BTreeMap::new();
     let mut unused = vec![];
@@ -543,6 +545,13 @@ pub fn recipes_for_sel(
                 why.push(format!("{}: no _{} is planned", t.id(), kind.suffix()));
                 continue;
             };
+            // A hand-set role that took this slot is assigned too: the first by path keeps it (Ruling 8).
+            if let ChannelNeed::Source { path: held, .. } = &recipe.channels[ch] {
+                if assigned(held) && *held < r.path {
+                    why.push(format!("{} is filled by {}", t.id(), file_name(held)));
+                    continue;
+                }
+            }
             // Glossiness into a roughness slot (or back) is stored inverted, as a suggested source is.
             let invert = matches!(
                 (r.role, slot_of(kind, ch)),

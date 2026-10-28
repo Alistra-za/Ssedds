@@ -445,6 +445,7 @@ fn chosen_recipe(
     set: &TextureSet,
     member: &dyn Fn(&Path) -> InputFile,
     raw: &[RawInput],
+    sel: &BTreeMap<PathBuf, crate::helper::HelperSel>,
     pa: &Analysis,
     pinfo: &SourceInfo,
 ) -> (PackRecipe, Option<(Code, String)>) {
@@ -452,11 +453,16 @@ fn chosen_recipe(
     if ctx.target != Target::Cs || raw.iter().any(|r| r.role == RawMap::Rmaos) {
         return (PackRecipe::Auto, None);
     }
-    let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto, false);
-    let Some(base) = auto
-        .iter()
-        .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
-    else {
+    // Note DT: a hand-set fill may build the `_rfaos`/`_rmaos` only under its own recipe (a lone `_specular` filling
+    // `rfaos.a`), so those are probed after `auto`. Without hand-set fills they add nothing: their triggers are a
+    // subset of `auto`'s.
+    let probes = [PackRecipe::Auto, PackRecipe::Rfaos, PackRecipe::Rmaos].map(|p| {
+        recipes_for_sel(ctx.target, raw, p, false, sel)
+            .0
+            .into_iter()
+            .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
+    });
+    let Some(base) = probes.iter().flatten().next() else {
         return (PackRecipe::Auto, None);
     };
     let first = &base.sources()[0].0;
@@ -485,7 +491,7 @@ fn chosen_recipe(
         on_rmaos
     };
     if pick == PackRecipe::Rfaos
-        && !recipes_for_with(ctx.target, raw, pick, false)
+        && !recipes_for_sel(ctx.target, raw, pick, false, sel)
             .0
             .iter()
             .any(|r| r.kind == RecipeKind::Rfaos)
@@ -551,7 +557,15 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
         .map_or_else(|| "png".to_string(), |e| e.to_string_lossy().into_owned());
     let mut this = this.clone();
     this.rel = this.rel.with_file_name(format!("{base}_ao.{ext}"));
-    let (choice, _) = chosen_recipe(ctx, set, &|_| this.clone(), &raw, &pa, &pinfo);
+    let (choice, _) = chosen_recipe(
+        ctx,
+        set,
+        &|_| this.clone(),
+        &raw,
+        &BTreeMap::new(),
+        &pa,
+        &pinfo,
+    );
     recipes_for_with(ctx.target, &raw, choice, false)
         .0
         .iter()
@@ -695,7 +709,7 @@ pub fn plan_packing(
             continue;
         }
         let (choice, recipe_note) =
-            chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &pa, &pinfo);
+            chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &sel, &pa, &pinfo);
         // Note AZ: a vanilla set whose shader pick is complex material packs the complex `_m`.
         let complex = ctx
             .shaders
