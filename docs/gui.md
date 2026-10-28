@@ -41,7 +41,7 @@ The **Mode** menu picks the target (`cs` or `vanilla`). It is saved in `sdc.toml
 
 Esc with the rename dialog's Case list open closes the list first; a second Esc closes the dialog. Review's **Export** is a click only: Enter never exports (see [The bottom panel](#the-bottom-panel)).
 
-Cube files are listed like any other texture. The cubemap settings are not in the GUI yet; set them in `sdc.toml` (see [Cubemaps](wiki/Cubemaps.md)).
+Cube files are listed like any other texture; their settings and preview are in [Cubemaps](#cubemaps).
 
 ## The three columns
 
@@ -250,6 +250,26 @@ A set can also write Community Shaders' own runtime files: a **PBR texture set**
 - Every number is written with a decimal point. A file you edited outside Tessalith is never overwritten (the export report says so; delete it to let Tessalith write it again), and a file Tessalith wrote for an EDID no set binds any more is reported, not deleted. If `sdc-project.toml` changed on disk while the export ran, recording the written JSON files asks **Overwrite with my changes** or **Reload from disk**, as a save does (the same holds for the PGPatcher and complex material JSON).
 - In the 3D preview a set with a texture-set block is shown on the plane, with a **Tiling** slider (1× to 3×) that only changes the preview. The tiling is one value for the session and stays when you switch sets.
 
+## Cubemaps
+
+A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown) gets a **Cubemap** section in its settings panel and a cross in the preview. Everything the panel writes goes to `sdc.toml` as the matching `cubemap.*` key, so the GUI and the CLI make the same bytes (see [Cubemaps](wiki/Cubemaps.md) for what each setting does).
+
+- **In the Textures column.** A set of six face files is one item named `<output name> (6 faces)`. The size estimate counts all six faces and their mips.
+- **Settings panel.** The section is drawn only when every selected texture is a cube, and has five groups: **Source** (layout, face size, and for a face, cross or strip source the per-face rotation and flip, plus *Turn -Z upright* on a vertical cross), **Orientation** (yaw, mirror), **Colour grade** (exposure, brightness, contrast, midtones, saturation, tint, highlight clamp), **Ground** (ground fill and horizon) and **Look** (style and blur).
+  - The layout box never offers six face files. A six-file set shows "Six face files" as read-only text.
+  - **Horizon** is disabled with "needs a ground fill" until a ground fill is set.
+  - A photo's blur is 0.6 unless you set another; that default cannot be unticked, so set 0 for no blur.
+  - A value in `sdc.toml` outside the engine's range is shown as it is, with the engine's message in red under the row. Tessalith never changes it; fix it in the box or in the file.
+  - Colours are raw 0 to 255 codes, not gamma-converted. A drag or colour pick writes once, when you let go.
+- **Unclear layout.** A single image Tessalith cannot place (a square one with no `cubemap.layout`, say) shows "This image could be several cube layouts: pick one" in the settings panel's *Needs a decision* box, once the sub-type is confirmed. Pick a layout there; it is written for that file only.
+- **Cube preview.** The encoded side draws all six faces of the mip on show as one cross (4 by 3 faces), sized like a 2D preview, so a big cube previews at a lower mip. *Face labels* (on by default) names each face. *Heatmap*, *Tile 3×3* and *Pin* are off for a cube ("Not for cubes"), and there is no texel readout.
+  - A six-file set has six source buttons, +X to -Z, over the source side. Each shows the processed face (after turns, flips, sizing and mips), the same picture as its cell in the cross.
+  - A single-image cube's source side shows the input file itself (panorama, ball, cross, strip or photo).
+  - A set that cannot be built shows the engine's reason (for example `CUBE-FACES: faces differ in size`) in the encoded pane.
+- **Make marker cube…** in **Export to ▾** opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
+  - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional: ticked it starts at 0.5, unticked the alpha is 255. The alpha it will store is shown under the controls.
+  - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
+  - It never overwrites a file Tessalith did not write; it says it kept it and leaves the dialog open so you can pick another name. The bytes equal what `sdc cubemap-marker` writes.
 ## RNM normal layers
 
 A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and their masks) are not textures of their own: they blend into the set's `_n` (or `_cnr`) before the mips are made. Layer files are not listed in the Textures column or as tiles, so the only place to see and change them is the normal.

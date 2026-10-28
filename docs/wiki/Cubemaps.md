@@ -254,4 +254,13 @@ The messages read:
 
 `sdc validate` judges a cube file as a `cubemap` unless you pass `--subtype`. A marker passes: its colour sits on +X and +Y stays black.
 
-The GUI lists cube files for now. Its cubemap settings come in a later release; use `sdc.toml` or the CLI until then.
+## In the GUI
+
+Pick the **Cubemap** sub-type (under *Other*) and the settings panel gets a **Cubemap** section with the groups Source, Orientation, Colour grade, Ground and Look. Each control writes the `cubemap.*` key above to `sdc.toml`, so the GUI and the CLI make the same bytes. See [GUI guide](GUI-Guide.md#cubemaps).
+
+- A six-file set is one item, named with "(6 faces)" after its name, and its size estimate counts all six faces.
+- The layout box never offers six face files; a six-file set shows it as read-only text. Horizon is disabled ("needs a ground fill") until a ground fill is set.
+- A photo's blur starts at 0.6; set 0 for no blur. A value in `sdc.toml` outside its range is shown with the engine's message and is never changed for you.
+- An image that could be several layouts shows "This image could be several cube layouts: pick one" in its settings panel, after you confirm the sub-type.
+- The preview draws all six faces of the mip as a cross, with a *Face labels* toggle. Heatmap, Tile 3×3 and Pin are off for cubes. A six-file set has source buttons +X to -Z that show the processed face; a single image shows its input file. A broken set shows the engine's reason.
+- **Export to ▾, Make marker cube…** writes the dynamic marker: colour as raw codes (F0 = (code/255)^1.6), an optional roughness (0.5 when ticked; alpha 255 when off). **Save…** starts in `<textures>\cubemaps` when it exists, and it never overwrites a file Tessalith did not write. The bytes match `sdc cubemap-marker`.
