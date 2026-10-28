@@ -254,22 +254,23 @@ A set can also write Community Shaders' own runtime files: a **PBR texture set**
 
 A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown) gets a **Cubemap** section in its settings panel and a cross in the preview. Everything the panel writes goes to `sdc.toml` as the matching `cubemap.*` key, so the GUI and the CLI make the same bytes (see [Cubemaps](wiki/Cubemaps.md) for what each setting does).
 
-- **In the Textures column.** A set of six face files is one item named `<output name> (6 faces)`. The size estimate counts all six faces and their mips.
-- **Settings panel.** The section is drawn only when every selected texture is a cube, and has five groups: **Source** (layout, face size, and for a face, cross or strip source the per-face rotation and flip, plus *Turn -Z upright* on a vertical cross), **Orientation** (yaw, mirror), **Colour grade** (exposure, brightness, contrast, midtones, saturation, tint, highlight clamp), **Ground** (ground fill and horizon) and **Look** (style and blur).
+- **In the Textures column.** A set of six face files is one item named `<output name> (6 faces)`. The size estimate counts all six faces and their mips. A six-file set's settings are written to all six face entries in `sdc.toml`, so the faces keep matching.
+- **Settings panel.** The section is drawn only when every selected texture is a cube, and has five groups: **Source** (layout, face size, and for a face, cross or strip source the per-face rotation and flip, plus *Turn -Z upright* on a vertical cross), **Orientation** (yaw, *Mirror east and west*), **Colour grade** (exposure, brightness, contrast, midtones, saturation, tint, highlight clamp), **Ground** (*Ground fill* and *Horizon*) and **Look** (style and blur).
   - The layout box never offers six face files. A six-file set shows "Six face files" as read-only text.
   - **Horizon** is disabled with "needs a ground fill" until a ground fill is set.
-  - A photo's blur is 0.6 unless you set another; that default cannot be unticked, so set 0 for no blur.
+  - A blur the engine fills in (a photo's 0.6, or the blur of a style or preset) cannot be unticked, so set 0 for no blur.
   - A value in `sdc.toml` outside the engine's range is shown as it is, with the engine's message in red under the row. Tessalith never changes it; fix it in the box or in the file.
   - Colours are raw 0 to 255 codes, not gamma-converted. A drag or colour pick writes once, when you let go.
-- **Unclear layout.** A single image Tessalith cannot place (a square one with no `cubemap.layout`, say) shows "This image could be several cube layouts: pick one" in the settings panel's *Needs a decision* box, once the sub-type is confirmed. Pick a layout there; it is written for that file only.
+- **Unclear layout.** A single image Tessalith cannot place (a square one with no `cubemap.layout`, say) shows "This image could be several cube layouts: pick one" in the settings panel's *Needs a decision* box, once the sub-type is confirmed. Pick a layout there (360° panorama, mirror ball, angular map or single photo; a cross or strip would already have been recognised); it is written for that file only. In the Review tab its row says "Pick its cube layout in settings".
 - **Cube preview.** The encoded side draws all six faces of the mip on show as one cross (4 by 3 faces), sized like a 2D preview, so a big cube previews at a lower mip. *Face labels* (on by default) names each face. *Heatmap*, *Tile 3×3* and *Pin* are off for a cube ("Not for cubes"), and there is no texel readout.
   - A six-file set has six source buttons, +X to -Z, over the source side. Each shows the processed face (after turns, flips, sizing and mips), the same picture as its cell in the cross.
   - A single-image cube's source side shows the input file itself (panorama, ball, cross, strip or photo).
   - A set that cannot be built shows the engine's reason (for example `CUBE-FACES: faces differ in size`) in the encoded pane.
 - **Make marker cube…** in **Export to ▾** opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
-  - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional: ticked it starts at 0.5, unticked the alpha is 255. The alpha it will store is shown under the controls.
+  - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional (the *Set roughness* tick): ticked it starts at 0.5, unticked the alpha is 255. The alpha it will store is shown under the controls.
   - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
   - It never overwrites a file Tessalith did not write; it says it kept it and leaves the dialog open so you can pick another name. The bytes equal what `sdc cubemap-marker` writes.
+
 ## RNM normal layers
 
 A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and their masks) are not textures of their own: they blend into the set's `_n` (or `_cnr`) before the mips are made. Layer files are not listed in the Textures column or as tiles, so the only place to see and change them is the normal.
