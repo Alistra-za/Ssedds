@@ -92,6 +92,9 @@ pub struct BatchRequest {
     /// GUI (M6, DECISIONS Note S-shader-2): set id → explicit shader. Empty for the CLI; `--set set:<id>.shader`
     /// beats it.
     pub set_shaders: BTreeMap<String, Shader>,
+    /// GUI (Note DW): `[files]` keys of the files in a pinned slot of their own set. A set whose diffuse member is
+    /// listed gets no Advanced Skin reading from its chosen shader (Note DV1). Empty for the CLI.
+    pub pinned_files: BTreeSet<String>,
     /// GUI (M6, DECISIONS Note S-shader-10): `shader::mesh_key` → the shader each scanned lighting shape that uses
     /// `<key>.dds` as its diffuse reports. Empty for the CLI and when no scan exists: the suffix rules decide.
     pub mesh_shaders: BTreeMap<String, Vec<Shader>>,
@@ -178,6 +181,7 @@ impl BatchRequest {
             shared_roughness: BTreeSet::new(),
             borrowed_normal: BTreeMap::new(),
             set_shaders: BTreeMap::new(),
+            pinned_files: BTreeSet::new(),
             mesh_shaders: BTreeMap::new(),
             mesh_alpha: BTreeMap::new(),
             gras_diffuses: BTreeSet::new(),
@@ -1082,10 +1086,34 @@ impl Engine {
                 .or_default()
                 .extend(codes.iter().copied());
         }
+        // Note DW: the pinned files that are a set's diffuse member (no suffix, or `_d`).
+        let skin_pinned = match &scope_root {
+            Some(root) if !req.pinned_files.is_empty() => {
+                let index = crate::overrides::KeyIndex::new(root, &files);
+                req.pinned_files
+                    .iter()
+                    .flat_map(|k| index.hits(k).iter().copied())
+                    .filter(|&i| {
+                        let stem = files[i].rel.file_stem().unwrap_or_default();
+                        matches!(
+                            crate::group::split_suffix_with(
+                                &stem.to_string_lossy(),
+                                registry.alias_table()
+                            )
+                            .suffix
+                            .as_deref(),
+                            None | Some("d")
+                        )
+                    })
+                    .collect()
+            }
+            _ => BTreeSet::new(),
+        };
         let mut file_scopes = FileScopes {
             root: scope_root.clone(),
             overrides: file_overrides,
             allow: file_allow,
+            skin_pinned,
             ..FileScopes::default()
         };
         file_scopes.index(&files);
@@ -1532,17 +1560,18 @@ impl Engine {
                 &work[wi].1.game_path,
                 &work[wi].1.output,
             ));
-            // Note DV1: a chosen Advanced Skin makes the set skin (`chosen_recipe`), so its members are typed again.
+            let (set, f) = work[wi];
+            // Note DV1: a chosen Advanced Skin makes the set skin (`chosen_recipe`), so its members are typed again
+            // (not while its diffuse is pinned, Note DW1).
             if !picks.get(&old.set_key).is_some_and(|p| {
                 p.shader.has_member_defaults()
-                    || (p.provenance == crate::shader::ShaderOrigin::Set
-                        && (is_gras || p.shader == Shader::AdvancedSkin))
-            }) {
+                    || (p.provenance == crate::shader::ShaderOrigin::Set && is_gras)
+            }) && !pack::plan::chosen_skin(&ctx, set)
+            {
                 old.warnings.extend(grass_note(&old));
                 jobs.push(old);
                 continue;
             }
-            let (set, f) = work[wi];
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let split = split_for((set, f));
                 let facts = FileFacts {

@@ -426,11 +426,7 @@ fn chosen_recipe(
     let (rmaos_key, on_rmaos) = read(RecipeKind::Rmaos);
     // Note DV1: a set whose chosen shader is Advanced Skin packs `_rfaos` unless a recipe is written; the user wrote
     // none, so a set that cannot build it keeps `auto` without a notice.
-    let skin = ctx.shaders.get(&set.key).is_some_and(|p| {
-        p.shader == crate::shader::Shader::AdvancedSkin
-            && p.provenance == crate::shader::ShaderOrigin::Set
-    });
-    if skin && on_rfaos == PackRecipe::Auto && on_rmaos == PackRecipe::Auto {
+    if chosen_skin(ctx, set) && on_rfaos == PackRecipe::Auto && on_rmaos == PackRecipe::Auto {
         let built = recipes_for_with(ctx.target, raw, PackRecipe::Rfaos, false)
             .0
             .iter()
@@ -474,6 +470,18 @@ fn chosen_recipe(
         );
     }
     (pick, note)
+}
+
+/// Note DV1: the set's explicit shader (`ShaderOrigin::Set`) is Advanced Skin, so its diffuse reads `skin_albedo`
+/// and it packs `_rfaos`; Note DW1: not while its diffuse member is pinned in the GUI.
+pub fn chosen_skin(ctx: &ResolveCtx, set: &TextureSet) -> bool {
+    ctx.shaders.get(&set.key).is_some_and(|p| {
+        p.shader == crate::shader::Shader::AdvancedSkin
+            && p.provenance == crate::shader::ShaderOrigin::Set
+    }) && !set
+        .members
+        .iter()
+        .any(|i| ctx.files.skin_pinned.contains(i))
 }
 
 /// Whether the set holds or builds an `_rfaos` (Advanced skin, DECISIONS Note R-skin-1): an `_rfaos` member, or a

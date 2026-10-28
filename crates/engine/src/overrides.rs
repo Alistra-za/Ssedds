@@ -139,6 +139,9 @@ pub struct FileScopes {
     pub allow: BTreeMap<String, BTreeSet<Code>>,
     /// The planned files' match forms by path (`index`), with the file name they were worked out for.
     pub(crate) forms: BTreeMap<PathBuf, (Option<std::ffi::OsString>, Option<KeyForms>)>,
+    /// Note DW: indices (into the planned files, as `TextureSet::members`) of the GUI's pinned files named as a
+    /// set's diffuse member (no suffix, or `_d`): their set gets no Advanced Skin reading from its chosen shader.
+    pub(crate) skin_pinned: BTreeSet<usize>,
 }
 
 impl FileScopes {
@@ -147,6 +150,7 @@ impl FileScopes {
         overrides: Vec::new(),
         allow: BTreeMap::new(),
         forms: BTreeMap::new(),
+        skin_pinned: BTreeSet::new(),
     };
 
     /// Work out each of `files`' match forms once (audit 2026-10-15 item 5), so `forms_of` costs a lookup, not two

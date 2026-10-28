@@ -215,6 +215,7 @@ struct EngineInputs {
     shared_roughness: std::collections::BTreeSet<String>,
     borrowed_normal: std::collections::BTreeMap<String, String>,
     set_shaders: std::collections::BTreeMap<String, engine::shader::Shader>,
+    pinned_files: std::collections::BTreeSet<String>,
     mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     gras_diffuses: std::collections::BTreeSet<String>,
@@ -231,6 +232,7 @@ impl EngineInputs {
             shared_roughness: sets::shared_roughness(m),
             borrowed_normal: sets::borrowed_normal(m),
             set_shaders: sets::set_shaders(m),
+            pinned_files: sets::pinned_files(m),
             mesh_votes: m.mesh_votes.clone(),
             mesh_alpha: m.mesh_alpha.clone(),
             gras_diffuses: m.gras_diffuses.clone(),
@@ -912,6 +914,7 @@ impl AppModel {
         req.shared_roughness = sets::shared_roughness(self);
         req.borrowed_normal = sets::borrowed_normal(self);
         req.set_shaders = sets::set_shaders(self);
+        req.pinned_files = sets::pinned_files(self);
         req.mesh_shaders = self.mesh_votes.clone();
         req.mesh_alpha = self.mesh_alpha.clone();
         req.gras_diffuses = self.gras_diffuses.clone();
@@ -1100,6 +1103,7 @@ impl AppModel {
             shared_roughness: req.shared_roughness.clone(),
             borrowed_normal: req.borrowed_normal.clone(),
             set_shaders: req.set_shaders.clone(),
+            pinned_files: req.pinned_files.clone(),
             mesh_votes: req.mesh_shaders.clone(),
             mesh_alpha: req.mesh_alpha.clone(),
             gras_diffuses: req.gras_diffuses.clone(),

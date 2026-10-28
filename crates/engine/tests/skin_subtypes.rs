@@ -507,6 +507,67 @@ fn the_shader_alone_makes_the_diffuse_skin_albedo() {
     }
 }
 
+/// A GUI plan of `d` with `x` chosen Advanced Skin and `pinned` sent as the pinned files (Note DW3).
+fn plan_pinned(d: &TempDir, pinned: &[&str]) -> Plan {
+    let mut r = req(d, Target::Cs, &[]);
+    r.set_shaders = [("x".to_string(), engine::shader::Shader::AdvancedSkin)].into();
+    r.pinned_files = pinned.iter().map(|s| s.to_string()).collect();
+    let rep = Reporter::new(Arc::new(VecSink::default()), "t");
+    Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap()
+}
+
+/// Note DW1: a pinned diffuse blocks DV's reading: the set plans as before DV (the inferred guess, here
+/// `pbr_albedo` as without the shader, and `_rmaos`). Unpinned it still reads `skin_albedo` with `_rfaos`. A pin on
+/// another member changes nothing.
+#[test]
+fn a_pinned_diffuse_blocks_the_advanced_skin_reading() {
+    let d = pbr_set("");
+    let none = plan(&d, Target::Cs, &[]);
+    assert_eq!(job(&none, "x.png").profile.subtype, Subtype::PbrAlbedo);
+    let p = plan_pinned(&d, &["x.png"]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::PbrAlbedo);
+    assert_eq!(outputs(&p), outputs(&none));
+    let o = outputs(&p);
+    assert!(o.contains(&"x_rmaos.dds".to_string()), "{o:?}");
+    assert!(!o.contains(&"x_rfaos.dds".to_string()), "{o:?}");
+
+    for pinned in [&[][..], &["x_roughness.png"][..]] {
+        let p = plan_pinned(&d, pinned);
+        assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+        let o = outputs(&p);
+        assert!(o.contains(&"x_rfaos.dds".to_string()), "{o:?}");
+        assert!(!o.contains(&"x_rmaos.dds".to_string()), "{o:?}");
+    }
+
+    // DW1(a): an inferred plain `diffuse` stays `diffuse` while pinned.
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    let p = plan_pinned(&d, &["x.png"]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::Diffuse);
+
+    // DW1(a): a written plain `diffuse` stays `diffuse` while pinned.
+    let d = pbr_set("[files.x]\nsubtype = \"diffuse\"\n");
+    let p = plan_pinned(&d, &["x.png"]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::Diffuse);
+    assert!(outputs(&p).contains(&"x_rmaos.dds".to_string()));
+}
+
+/// Note DW2: a pinned diffuse DU wrote `skin_albedo` (with its `rfaos` recipe) keeps both.
+#[test]
+fn a_pinned_written_skin_albedo_keeps_it() {
+    let d = pbr_set(
+        "[files.x]\nsubtype = \"skin_albedo\"\n[files.\"x_rfaos\".packing]\nrecipe = \"rfaos\"\n",
+    );
+    let p = plan_pinned(&d, &["x.png"]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+    let o = outputs(&p);
+    assert!(o.contains(&"x_rfaos.dds".to_string()), "{o:?}");
+    assert!(!o.contains(&"x_rmaos.dds".to_string()), "{o:?}");
+}
+
 /// Note DV3: off cs the choice changes nothing (Advanced Skin is a cs shader).
 #[test]
 fn an_advanced_skin_shader_off_cs_changes_nothing() {

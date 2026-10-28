@@ -405,22 +405,56 @@ fn an_existing_advanced_skin_set_opens_with_rfaos() {
     assert_eq!(texts(h.state()), before);
 }
 
-/// Note DV4: a pin holds the file, not the reading: a pinned inferred diffuse gets no written sub-type when Advanced
-/// Skin is chosen, yet reads `skin_albedo`; leaving the shader reads it as before.
+/// Note DW (supersedes DV4): a pin blocks the Advanced Skin reading: a pinned inferred diffuse gets no written
+/// sub-type when Advanced Skin is chosen and reads as before, with `_rmaos`.
 #[test]
-fn a_pinned_diffuse_reads_skin_albedo_without_a_write() {
+fn a_pinned_diffuse_keeps_its_reading_under_advanced_skin() {
     let d = tempfile::tempdir().unwrap();
     let mut m = skin_fixture(d.path());
     let was = resolved(&m);
+    assert_ne!(was, Subtype::SkinAlbedo);
     m.set_slot_lock(SET, 1, true).unwrap();
     idle(&mut m);
     m.set_shader(SET, Some(Shader::AdvancedSkin));
     idle(&mut m);
     assert_eq!(subtype(&m), None, "nothing written into a pinned slot");
+    assert_eq!(resolved(&m), was);
+    assert!(m.item(RMAOS).is_some(), "the packed output stays _rmaos");
+    assert!(m.item(RFAOS).is_none());
+}
+
+/// Note DW4: on a loaded Advanced Skin set, pinning the Diffuse slot re-plans to the pre-DV reading (`_rmaos`), and
+/// unpinning flips it back to `skin_albedo` / `_rfaos`; neither writes a sub-type.
+#[test]
+fn pinning_the_diffuse_of_a_loaded_skin_set_flips_its_reading() {
+    let d = tempfile::tempdir().unwrap();
+    let was = {
+        let m = skin_fixture(d.path());
+        resolved(&m)
+    };
+    let project =
+        format!("[[sets]]\nid = \"{SET}\"\nshader = \"advanced_skin\"\nlock = [\"slot1\"]\n");
+    std::fs::write(d.path().join("sdc-project.toml"), &project).unwrap();
+    let mut m = skin_fixture_reopen(d.path());
+    assert!(m.slot_locked(SET, 1));
+    assert_eq!(resolved(&m), was, "a pinned diffuse reads as before DV");
+    assert!(m.item(RMAOS).is_some(), "the packed output is _rmaos");
+    assert!(m.item(RFAOS).is_none());
+
+    m.set_slot_lock(SET, 1, false).unwrap();
+    idle(&mut m);
     assert_eq!(resolved(&m), Subtype::SkinAlbedo);
-    m.set_shader(SET, Some(Shader::Pbr));
+    assert!(
+        m.item(RFAOS).is_some(),
+        "unpinned: the packed output is _rfaos"
+    );
+    assert!(m.item(RMAOS).is_none());
+    assert_eq!(subtype(&m), None, "nothing written to [files]");
+
+    m.set_slot_lock(SET, 1, true).unwrap();
     idle(&mut m);
     assert_eq!(resolved(&m), was);
+    assert!(m.item(RMAOS).is_some(), "pinned again: _rmaos");
 }
 
 /// The skin fixture's folder opened again (its files already there).
