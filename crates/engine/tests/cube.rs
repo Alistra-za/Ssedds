@@ -195,6 +195,16 @@ fn face_size_rule() {
         layout::face_size(&p, CubeLayout::Equirect, (1000, 500)),
         128
     );
+    // DN21 (final review M4): the auto size stops at 4096, the top of the documented range.
+    assert_eq!(
+        layout::face_size(&p, CubeLayout::Hstrip, (6 * 16384, 16384)),
+        4096
+    );
+    assert_eq!(
+        layout::face_size(&p, CubeLayout::Photo, (16384, 9216)),
+        4096
+    );
+    assert_eq!(layout::face_size(&p, CubeLayout::Faces, (4096, 4096)), 4096);
     p.cubemap.face_size = Some(64);
     assert_eq!(layout::face_size(&p, CubeLayout::Hcross, (600, 450)), 64);
 }
