@@ -69,7 +69,22 @@ The set has no source for that channel, for example no specular map for `_rmaos`
 
 ### The PBR set is not packed, or its raw maps are reported as unused
 
-Raw maps are packed only under the target that reads them. Under `vanilla`, only metallic or specular builds an `_m`; roughness, AO and the rest are `PACK-UNUSED-INPUT`. Opacity maps are never packed. Check the target.
+Raw maps are packed only under the target that reads them. Under `vanilla`, only metallic or specular builds an `_m`; roughness, AO and the rest are `PACK-UNUSED-INPUT`. An opacity map is not packed: it fills the colour texture's alpha (next entry). Check the target.
+
+### My opacity map is not used
+
+An `_opacity` file (or a mask you gave the role Opacity) fills the alpha of its set's colour texture. Its GUI row, in the Helpers group under the tiles, says "→ <texture> alpha" when it is used and "not used" with the reason when it is not; on the command line the reason is the `PACK-UNUSED-INPUT` message. The reasons, and what to do:
+
+| Reason | Why | Fix |
+|---|---|---|
+| `x.png already has alpha` | A suggested helper only fills an empty alpha (none, fully opaque, or flat). Your colour PNG has a real alpha. | Assign the helper: in its panel pick the Opacity role again (it then reads *set by you*) or add the target, or set `helper.role = "opacity"` on the file. An assigned helper replaces the alpha. |
+| `512x512, target 1024x1024: sizes differ` | The helper and the colour texture are not the same size. | Resize one of them. An assigned helper of another size fails the texture with `PACK-SIZE-MISMATCH` instead. |
+| `no colour texture planned` | The set has no plain colour texture to fill (only a PBR or skin output that is not a target, or none at all), or the file did not join the set. | Check the set in the Sets column; give the file the same base name as the colour texture. |
+| `diffuse.a is filled by <other file>` | Another helper fills that alpha. An assigned one beats a suggested one; otherwise the first by path wins. | Remove the target from the other helper, or assign this one. |
+| `no targets chosen` | Its `helper.fills` is `[]`. | Reset Fills in the panel, or remove the key. |
+| `<file> was not analysed` | The helper or the colour texture failed to load. | Fix the load error shown for that file. |
+
+If the file is not listed as a helper at all, its name has no term Tessalith knows: select it and set its role, or use `--set "file:**/<name>.helper.role=opacity"`. To convert an opacity map as its own texture instead, set its role to *Not a helper* (`helper.role = "none"`). See [Texture types](Texture-Types.md#helper-textures).
 
 ### sRGB or UNORM is blocked
 
