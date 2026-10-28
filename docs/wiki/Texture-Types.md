@@ -121,7 +121,7 @@ There are 30 sub-types in five categories.
 | `generic_data` | MixedPacked | BC7 | UNORM | data | Use for any data map Tessalith has no type for. |
 | `complex_grass` | MixedPacked | BC7 only | UNORM only | cutout (when the alpha varies) | Always BC7 UNORM at its own size. See [Complex grass](#complex-grass). |
 | `hdr_sky` | Hdr | BC6H | n/a | | `cs` only. |
-| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube: six faces, a cross or a strip in, one cube DDS with a full mip chain out. BC1, BC3, BC7 or RGBA8 only. Colour is the game's 1.6 curve, not sRGB. See [Cubemaps](Cubemaps.md). |
+| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube: six faces, a cross, a strip, a 360° panorama, a mirror ball, an angular map or a single photo in, one cube DDS with a full mip chain out. BC1, BC3, BC7 or RGBA8 only. Colour is the game's 1.6 curve, not sRGB. See [Cubemaps](Cubemaps.md). |
 
 Notes on the defaults:
 

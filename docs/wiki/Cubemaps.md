@@ -2,9 +2,7 @@
 
 > **Coming in 1.1.0.** This page describes cubemap support in the 1.1.0 release. In 1.0.0, Tessalith refuses cube DDS files.
 
-A cubemap is six square pictures, one for each direction around a point. Skyrim uses them for reflections: the `_e` texture on Environment Map and Eye shaders (NIF slot 4), plus room reflections in caves and temples. Tessalith takes six faces, a cross or a strip, and writes a correct cube DDS with a full mip chain.
-
-This release reads raw face layouts only. Panoramas, mirror balls, angular maps and single photos are not supported yet.
+A cubemap is six square pictures, one for each direction around a point. Skyrim uses them for reflections: the `_e` texture on Environment Map and Eye shaders (NIF slot 4), plus room reflections in caves and temples. Tessalith takes six faces, a cross, a strip, a 360° panorama, a mirror ball, an angular map or a single photo, and writes a correct cube DDS with a full mip chain.
 
 ## Which face is which
 
@@ -74,16 +72,19 @@ Community Shaders reads a static cube with the game's own curve, `pow(colour, 1.
 | [Six images](#six-images) | six squares | file names end in a face suffix |
 | [A cross](#crosses-and-strips) | a T-shaped net, 4:3 or 3:4 | from the shape |
 | [A strip](#crosses-and-strips) | six squares in a row, 6:1 or 1:6 | from the shape |
+| [A panorama](#panorama) | a 2:1 wide photo | from the shape, exactly 2:1 |
+| [A mirror ball or angular map](#mirror-ball-and-angular-map) | a circle in a picture | you set `cubemap.layout` |
+| [One ordinary photo](#single-photo) | any picture | you set `cubemap.layout = "photo"` |
 | [A cube DDS](#an-existing-cube-dds) | a `.dds` cube | the file says so |
 | [Nothing: a dynamic marker](#dynamic-marker) | no picture | `sdc cubemap-marker` |
 
 A file is treated as a cubemap when its name ends in `_e` (for example `chrome_e.png`) or it sits under a `cubemaps` folder. Tessalith suggests the `cubemap` type for these with High confidence.
 
-A square image with no layout set is skipped (`SUG-LOW-CONFIDENCE`), because it could be a mirror ball or a photo. If it is a cross or strip in a square file, set `cubemap.layout` for that file in `sdc.toml`:
+Only a crisp shape is detected: 4:3, 3:4, 6:1, 1:6 and exactly 2:1 (a 4096×2049 image is not). A square image with no layout set is skipped (`SUG-LOW-CONFIDENCE`), because it could be a mirror ball, an angular map or a photo. Mirror balls, angular maps and photos are never detected: set `cubemap.layout` for that file in `sdc.toml`. You can set any layout yourself, and an explicit `equirect`, `mirror_ball`, `angular` or `photo` takes an image of any non-zero size.
 
 ```toml
 [files."textures/cubemaps/studio_e.png"]
-cubemap.layout = "hcross"   # faces, hcross, vcross, hstrip, vstrip
+cubemap.layout = "mirror_ball"   # faces, hcross, vcross, hstrip, vstrip, equirect, mirror_ball, angular, photo
 ```
 
 ### Six images
@@ -117,14 +118,42 @@ The shape tells Tessalith the layout: 4:3 is a horizontal cross, 3:4 a vertical 
 
 Cells are read as stored faces: Tessalith never moves a face to another cell. In Skyrim, the sky goes in the **centre** cell of a cross (+Z), not the top one.
 
-- A cross made by a tool that puts the sky on top shows the sky to the north in game. Rearrange the cells first, or use six images.
+- A cross made by a tool that puts the sky on top shows the sky to the north in game. Rearrange the cells first, use six images, or export a panorama from that tool instead.
 - Tools disagree on the vertical cross's bottom cell. Tessalith turns it 180° by default. If the ground comes out upside down, set `cubemap.vcross_negz_rotate = false`.
 - A 4:3 photo named `_e` is not mistaken for a cross: a cross's empty cells must be flat, or the file is refused with a message pointing at `cubemap.layout`. A layout you set yourself is trusted.
 - A layout that does not fit the image (`hstrip` on a 512×512 file) is `CUBE-FACES`.
 
+### Panorama
+
+![A 2:1 panorama: sky on the top half, ground on the bottom half. The top row maps to straight up, the middle row to the horizon, the bottom row to straight down. The centre column is east at yaw 0. The left and right edges meet behind you.](../img/cube-panorama.svg)
+
+Also called equirectangular or lat-long. This is what 360° cameras, HDRI sites and skybox generators produce. `.hdr` and `.exr` panoramas work too. The centre column faces east, and the picture runs clockwise seen from above (north a quarter of the way in, south three quarters).
+
+An exact 2:1 image is read as a panorama without any setting. Any other size needs `cubemap.layout = "equirect"`.
+
+- **Checked in game:** a cube made from a panorama by Tessalith showed north, south, east and west where they belong, with no mirror and no swap.
+- **Turning:** `cubemap.yaw` turns the cube (in degrees, clockwise seen from above, so 90 moves east to south), and `cubemap.mirror` swaps east and west.
+- **HDR:** an HDR sky with a bright sun needs `cubemap.highlight_clamp`, or the sun blows out the whole reflection.
+
+### Mirror ball and angular map
+
+![Two circles. Mirror ball: the centre shows south, behind the camera; the outer ring shows north, straight ahead; up is at the top, east on the right. Angular map: the centre shows north, straight ahead; the dashed half-radius ring is 90° away; the outer ring is south.](../img/cube-ball-angular.svg)
+
+Both are pictures with the scene in a circle. Set the layout yourself, because a square image could be anything:
+- `mirror_ball` is a photo of a chrome ball;
+- `angular` is a light probe.
+
+Both assume the camera stood south of the ball looking north, with east on the right of the picture. Use `cubemap.yaw` to turn the result. The circle's radius is half the picture's width, which sets the default face size. The point directly behind the ball is stretched, as in any ball photo.
+
+### Single photo
+
+![A wide strip: your photo in the middle half, mirrored copies on both sides, the top fading to the photo's top-row colour and the bottom fading to its bottom-row colour.](../img/cube-photo.svg)
+
+One photo can't show what is behind you, so this mode makes a believable reflection rather than a true one. Set `cubemap.layout = "photo"`. Tessalith builds the fake panorama shown above (the photo in front, mirrored copies behind, and the top and bottom fading to the average colour of the photo's top and bottom rows), makes a cube from it and blurs it hard: `cubemap.blur = 0.6` unless you set another value, even when a style sets one. It works well for shiny metal and glass, where the reflection only needs the right colours and light. The default face size is half the photo's width.
+
 ### Face size
 
-The face size is `cubemap.face_size`, or the largest power of two that fits inside one cell of the source. A 1536×1152 cross has 384-pixel cells and becomes 256. Larger values scale up. Tessalith notes `DIM-RESIZED` when the face differs from the cell. A cube is never checked for `DIM-NPOT`.
+The face size is `cubemap.face_size`, or the largest power of two that fits inside one cell of the source. A 1536×1152 cross has 384-pixel cells and becomes 256. For a panorama the cell is a quarter of the width, for a mirror ball or angular map half the width, and for a photo half the photo's width. Larger values scale up. Tessalith notes `DIM-RESIZED` when the face differs from the cell. A cube is never checked for `DIM-NPOT`.
 
 ### An existing cube DDS
 
@@ -159,11 +188,13 @@ All are optional and set per file or in `sdc.toml`, under `[defaults]`, `[subtyp
 | `cubemap.style` | Starting point for size, format and blur (below) |
 | `cubemap.layout` | Source layout, when the shape doesn't settle it |
 | `cubemap.face_size` | Face size in pixels (a power of two, 4 to 4096) |
+| `cubemap.yaw`, `cubemap.mirror` | Turn the cube about the up axis (degrees, -360 to 360); swap east and west |
 | `cubemap.face_rotate`, `cubemap.face_flip` | Turn or flip single faces: six entries in face order (0, 90, 180, 270; `h`, `v`) |
 | `cubemap.vcross_negz_rotate` | Whether the vertical cross's bottom cell is turned 180° |
 | `cubemap.blur` | 0 (sharp) to 1 (very soft) |
 | `cubemap.exposure`, `brightness`, `contrast`, `midtones`, `saturation`, `tint` | Colour adjustments |
 | `cubemap.highlight_clamp` | Soft-compresses bright highlights so a chosen level becomes full white |
+| `cubemap.ground_fill`, `cubemap.horizon` | Replace everything below the horizon with a colour or a gradient |
 
 ### Styles
 
@@ -175,6 +206,24 @@ All are optional and set per file or in `sdc.toml`, under `[defaults]`, `[subtyp
 | `hd` | close-up shiny surfaces | 512 px, BC7, light blur |
 
 Every value a style sets can be overridden by its own key. `vanilla_metal` also lowers saturation to 0.8.
+
+### Ground fill and horizon
+
+A panorama or photo often shows the photographer's feet or a patchy floor. `cubemap.ground_fill` covers everything below the horizon line:
+- `"gradient"` takes the average colour at the horizon and darkens it towards straight down, to half at the bottom;
+- `[r, g, b]` is a flat colour. The three numbers (0 to 255) are code values on the game's 1.6 curve, like `cubemap.tint`, not sRGB.
+
+`cubemap.horizon` sets where the line sits, from -45 to 45 degrees (0 is level; positive is above it). It blends over about two degrees around the line. If `ground_fill` is not set, nothing is filled and `horizon` does nothing. A bad value is an error naming the two accepted forms.
+
+```toml
+[files."textures/cubemaps/studio_e.png"]
+cubemap.ground_fill = [30, 28, 26]
+cubemap.horizon = -10
+```
+
+### Order of work
+
+Tessalith applies the settings in this order: import, face rotate and flip, yaw, mirror, exposure, highlight clamp and colour, ground fill, blur, mips.
 
 ### Blur
 
