@@ -270,6 +270,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             .map(|d| match d {
                 Decision::Subtype { .. } => "sub-type".into(),
                 Decision::AlphaMeaning => "what its alpha means".into(),
+                Decision::CubeLayout => "cube layout".into(),
                 Decision::Acknowledge(c) => format!("acknowledge {}", c.as_str()),
             })
             .collect();

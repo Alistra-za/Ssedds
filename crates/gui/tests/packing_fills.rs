@@ -414,7 +414,7 @@ fn the_dropdown_has_an_advanced_skin_group_after_pbr_and_other_last() {
     let last = groups.last().unwrap();
     assert_eq!(
         (last.0, last.1.clone()),
-        (OTHER_HEADING, vec![Subtype::UiSky])
+        (OTHER_HEADING, vec![Subtype::UiSky, Subtype::Cubemap])
     );
     assert!(groups
         .iter()
@@ -872,5 +872,32 @@ fn dragging_a_fill_box_and_releasing_stores_the_final_dragged_value() {
             .file_value(RMAOS, "packing.fill.ao"),
         Some(json!(want)),
         "the released drag's final value is the fill"
+    );
+}
+
+/// Note DR: with a `_f` in the set, making the diffuse skin_albedo (Note DQ) fills the RFAOS card's fuzz row from it.
+#[test]
+fn a_skin_f_is_the_rfaos_cards_fuzz_file() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("m")).unwrap();
+    grey(&d.path().join("m"), "rock01_f.png", 200);
+    let mut m = fixture(d.path());
+    assert!(
+        fill_rows(&m, RMAOS).iter().all(|r| !matches!(
+            r,
+            FillRow::FromFile {
+                role: RawMap::Fuzz,
+                ..
+            }
+        )),
+        "_f is not a fuzz source before the set is skin"
+    );
+    m.set_field(DIFFUSE, "subtype", json!(Subtype::SkinAlbedo));
+    idle(&mut m);
+    assert!(m.item(RFAOS).is_some(), "the packed output is _rfaos");
+    let rows = fill_rows(&m, RFAOS);
+    assert!(
+        rows.iter().any(|r| matches!(r, FillRow::FromFile { role: RawMap::Fuzz, file, .. } if file == "rock01_f.png")),
+        "{rows:?}"
     );
 }

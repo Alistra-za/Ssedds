@@ -527,6 +527,10 @@ pub fn encode(
     mode: PreviewMode,
     cancel: &CancelToken,
 ) -> Result<Vec<u8>, String> {
+    // A cube is not a set member (Note DT24): it would write six faces as one 2D file.
+    if matches!(source, Source::Job(job) if job.cube.is_some()) {
+        return Err("A cube is not previewed in a set".to_string());
+    }
     match source {
         Source::Job(job) if mode == PreviewMode::Source => {
             let r = session

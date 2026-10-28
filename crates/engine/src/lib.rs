@@ -8,6 +8,7 @@ pub mod checks;
 pub mod codes;
 pub mod config;
 pub mod coverage;
+pub mod cube;
 pub mod dds;
 pub mod dds_patch;
 pub mod decode;

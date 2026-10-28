@@ -73,6 +73,20 @@ pub fn linear_to_srgb(v: f32) -> f32 {
     }
 }
 
+/// The game's display gamma for static cubemaps (DECISIONS DS11).
+pub const GAME_GAMMA: f32 = 1.6;
+
+/// Community Shaders' `TransferFunctions::GameGammaToLinear`, `pow(c, 1.6)` (`Common/TransferFunctions.hlsli:13-15`,
+/// used on cube samples at `Lighting.hlsl:2126-2131`, CS build 2026-10-03). Cubes only; 2D keeps sRGB.
+pub fn game_gamma_to_linear(v: f32) -> f32 {
+    v.max(0.0).powf(GAME_GAMMA)
+}
+
+/// The inverse of [`game_gamma_to_linear`] on 0..1 (input clamped).
+pub fn linear_to_game_gamma(v: f32) -> f32 {
+    v.clamp(0.0, 1.0).powf(1.0 / GAME_GAMMA)
+}
+
 /// Apply a swizzle of up to four characters from `r g b a 0 1`; missing positions are 0.
 /// The character set is checked at Resolve (`CFG-INVALID`), so anything else reads as 1.
 fn swizzle(px: [f32; 4], s: &str) -> [f32; 4] {
@@ -230,6 +244,25 @@ pub fn preprocess_with(mut img: Rgba32F, p: &Profile, transfer: SourceTransfer) 
 mod tests {
     use super::*;
     use crate::presets::PresetRegistry;
+
+    #[test]
+    fn game_gamma_round_trips_every_8bit_code() {
+        for k in 0..=255u32 {
+            let v = linear_to_game_gamma(game_gamma_to_linear(k as f32 / 255.0));
+            assert_eq!((v * 255.0 + 0.5).floor() as u32, k);
+        }
+    }
+
+    #[test]
+    fn game_gamma_is_a_1_6_power() {
+        let v = game_gamma_to_linear(0.5);
+        assert!(
+            (v - 0.5f32.powf(1.6)).abs() < 1e-6 && (v - 0.329877).abs() < 1e-6,
+            "{v}"
+        );
+        assert!((srgb_to_linear(0.5) - 0.214041).abs() < 1e-6);
+        assert!((v - srgb_to_linear(0.5)).abs() > 0.1);
+    }
 
     fn profile(st: Subtype) -> Profile {
         PresetRegistry::builtin()

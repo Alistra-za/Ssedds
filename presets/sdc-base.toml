@@ -1,6 +1,6 @@
 schema_version = 1
 id = "sdc-base"
-version = "1.1.0"
+version = "1.2.0"
 hidden = true
 description = "Per-sub-type defaults from spec §4.1/§4.2. Not selectable; every preset inherits it."
 
@@ -90,6 +90,9 @@ encoder = { backend = "rgbcx" }
 # _wet is a normal with a binary mask in alpha (BC7); Resolve switches grey content to a BC4 height map.
 [subtypes.skin_wet]
 alpha = { policy = "data" }
+# A cubemap is gamma-encoded colour written UNORM (CS decodes it from game gamma).
+[subtypes.cubemap]
+color = { content = "srgb", tag = "unorm" }
 
 [[rules]]
 match = { glob = "**/interface/**" }

@@ -283,7 +283,7 @@ impl Session {
             job,
             cancel,
             &FileTracker::default(),
-            Keep::SourceOnly { max_size },
+            Keep::SourceOnly { max_size, face: 0 },
         )?;
         Ok(SourcePreview {
             first_level: prep.first_level,
@@ -300,11 +300,35 @@ impl Session {
         max_size: u32,
         cancel: &CancelToken,
     ) -> Result<SourcePreview, FileError> {
+        self.preview_source_face(job, 0, max_size, cancel)
+    }
+
+    /// [`Self::preview_source_stored`] for the GUI's source pane. A six-file cube shows its processed face `face`
+    /// (+X -X +Y -Y +Z -Z), the image that fills that face's cell of the cross; a single-image cube shows its input
+    /// image as a 2D item's source pane would (Note DT21). `face` is ignored for everything else.
+    pub fn preview_source_face(
+        &self,
+        job: &ResolvedJob,
+        face: usize,
+        max_size: u32,
+        cancel: &CancelToken,
+    ) -> Result<SourcePreview, FileError> {
+        let plain;
+        let job = match &job.cube {
+            Some(cj) if cj.sources.len() == 1 => {
+                plain = ResolvedJob {
+                    cube: None,
+                    ..job.clone()
+                };
+                &plain
+            }
+            _ => job,
+        };
         let prep = prepare(
             job,
             cancel,
             &FileTracker::default(),
-            Keep::SourceOnly { max_size },
+            Keep::SourceOnly { max_size, face },
         )?;
         Ok(stored_source(
             prep.first_level,
@@ -352,8 +376,14 @@ impl Session {
             srgb,
             header: resolve_header(p.format, srgb, p.header),
         };
-        let bytes = dds_bytes(&desc, &levels)
-            .map_err(|e| FileError::Failed(Stage::Write, e.to_string()))?;
+        let faces = prep.faces as u8;
+        let bytes = if faces == 6 {
+            crate::dds::dds_bytes_cube(&desc, &levels)
+        } else {
+            dds_bytes(&desc, &levels)
+        }
+        .map_err(|e| FileError::Failed(Stage::Write, e.to_string()))?;
+        let per_face = levels.len() as u32 / u32::from(faces);
         let report = validate(&ValidationInput {
             bytes: &bytes,
             profile: p,
@@ -361,7 +391,7 @@ impl Session {
             base_coverage: prep.base_coverage,
             source_peak: prep.source_peak,
             bc1_model: self.bc1_model,
-            expected_levels: Some(levels.len() as u32),
+            expected_levels: Some(per_face),
         });
         let normal_len = if p.subtype.category() == Category::Normal {
             normal_lengths(&bytes, levels.len(), self.bc1_model)
@@ -373,6 +403,7 @@ impl Session {
             format: p.format,
             srgb,
             levels,
+            faces,
             validation: report.summary,
             warnings: report.warnings,
             normal_len,
@@ -430,6 +461,8 @@ pub struct PreviewResult {
     pub format: Format,
     pub srgb: bool,
     pub levels: Vec<Vec<u8>>,
+    /// 1 for a 2D texture, 6 for a cube: levels is then face-major, each face's chain the same length.
+    pub faces: u8,
     pub validation: ValidationSummary,
     pub warnings: Vec<Warning>,
     pub normal_len: Vec<NormalLenStats>,

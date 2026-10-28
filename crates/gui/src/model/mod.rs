@@ -7,6 +7,7 @@ pub mod checks;
 pub mod cm_json;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
+pub mod cube_cross;
 pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;
@@ -19,6 +20,7 @@ pub mod inspector;
 pub mod items;
 pub mod known_paths;
 pub mod labels;
+pub mod marker;
 pub mod meshes;
 pub mod messages;
 pub mod nav;
@@ -168,6 +170,8 @@ pub enum Dialog {
     GenerateFromNormal(String),
     /// Note CO: "Delete generated file…", asked once per file; texts and refusals read when it opened.
     ConfirmDeleteGenerated(Box<from_normal::DeleteGenerated>),
+    /// Export to ▾: Make marker cube… (cubemap GUI, Task 6); the draft is AppModel::marker.
+    MakeMarker,
     Error(String),
 }
 
@@ -424,6 +428,10 @@ pub struct AppModel {
     /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
     pub dropped_fills: std::collections::BTreeMap<String, String>,
     pub dialog: Option<Dialog>,
+    /// The Make marker cube dialog's colour and roughness.
+    pub marker: marker::MarkerDraft,
+    /// The last kept or failed marker write's note, shown inside the dialog (DT34); cleared when it opens.
+    pub marker_note: Option<(messages::Severity, String)>,
     /// F3b D4: the rename dialog's last applied recipe, offered again on the next open (this session only).
     pub last_recipe: rename::Recipe,
     pub expanded: Option<String>,
@@ -649,6 +657,8 @@ impl AppModel {
             banner: None,
             encoding_note: None,
             dialog: None,
+            marker: Default::default(),
+            marker_note: None,
             last_recipe: Default::default(),
             expanded: None,
             export: export::ExportModel::default(),
@@ -2621,6 +2631,23 @@ impl AppModel {
         }
     }
 
+    /// Each six-file cube item's key with the `[files]` keys of its other five faces, from the plan's cube sources.
+    fn cube_face_keys(&self) -> Vec<(String, Vec<String>)> {
+        let Some(root) = self.root.as_deref() else {
+            return vec![];
+        };
+        self.items
+            .iter()
+            .filter_map(|i| {
+                let c = i.job.as_ref()?.cube.as_ref()?;
+                (c.sources.len() == 6).then(|| {
+                    let others = c.sources.iter().map(|s| items::key_of(root, &s.path));
+                    (i.key.clone(), others.filter(|k| *k != i.key).collect())
+                })
+            })
+            .collect()
+    }
+
     /// Every edit goes through here (spec §7.2): run `f` on both documents, record one undo step when anything
     /// changed, and plan again when `replan` (DECISIONS P7: JSON-only edits do not). A read-only document ignores
     /// its own edits (its text does not change, so it adds nothing to the step); the other document is unaffected
@@ -2632,6 +2659,16 @@ impl AppModel {
         replan: bool,
         f: impl FnOnce(&mut ProjectDoc, &mut crate::sets_doc::SetsDoc),
     ) {
+        // DT31: a six-file cube's faces must resolve alike (CUBE-FACES), so whatever an edit does to the item's own
+        // entry (its +X face) is repeated on the other five face entries, inside the same step.
+        let cubes = self.cube_face_keys();
+        let f = move |p: &mut ProjectDoc, s: &mut crate::sets_doc::SetsDoc| {
+            let before: Vec<_> = cubes.iter().map(|(k, _)| p.entry_fields(k)).collect();
+            f(p, s);
+            for ((k, others), b) in cubes.iter().zip(&before) {
+                p.copy_entry_changes(k, b, others);
+            }
+        };
         let (Some(p), Some(s)) = (self.project.as_mut(), self.sets_doc.as_mut()) else {
             return;
         };

@@ -216,6 +216,164 @@
       ],
       "type": "string"
     },
+    "CubeLayout": {
+      "enum": [
+        "faces",
+        "hcross",
+        "vcross",
+        "hstrip",
+        "vstrip",
+        "equirect",
+        "mirror_ball",
+        "angular",
+        "photo"
+      ],
+      "type": "string"
+    },
+    "CubeStyle": {
+      "enum": [
+        "vanilla_metal",
+        "room",
+        "eye",
+        "hd"
+      ],
+      "type": "string"
+    },
+    "CubemapSpec": {
+      "additionalProperties": false,
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DS4).",
+      "properties": {
+        "blur": {
+          "description": "Cone blur amount, 0..=1; unset = none.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "brightness": {
+          "format": "double",
+          "type": "number"
+        },
+        "contrast": {
+          "format": "double",
+          "type": "number"
+        },
+        "exposure": {
+          "format": "double",
+          "type": "number"
+        },
+        "face_flip": {
+          "items": {
+            "$ref": "#/$defs/FaceFlip"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "face_rotate": {
+          "description": "Per-face rotation in degrees (0, 90, 180, 270), in +X, -X, +Y, -Y, +Z, -Z order.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "face_size": {
+          "description": "Face edge in pixels: a power of two in 4..=4096; unset = from the source.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ground_fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroundFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fill below the horizon line; unset = no fill (the horizon alone does nothing)."
+        },
+        "highlight_clamp": {
+          "description": "Highlights above this (linear) are clamped; at least 1.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "horizon": {
+          "description": "Horizon elevation in degrees, -45..=45; read only with ground_fill.",
+          "format": "double",
+          "type": "number"
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeLayout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "midtones": {
+          "format": "double",
+          "type": "number"
+        },
+        "mirror": {
+          "description": "Swap world east and west.",
+          "type": "boolean"
+        },
+        "saturation": {
+          "format": "double",
+          "type": "number"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tint": {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "vcross_negz_rotate": {
+          "description": "A vertical cross stores -Z upside down; rotate it back.",
+          "type": "boolean"
+        },
+        "yaw": {
+          "description": "Turn about world up in degrees, -360..=360; positive is clockwise seen from above (Skyrim's heading).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "Effort": {
       "enum": [
         "ultrafast",
@@ -272,6 +430,14 @@
         "bc45_search_radius"
       ],
       "type": "object"
+    },
+    "FaceFlip": {
+      "enum": [
+        "none",
+        "h",
+        "v"
+      ],
+      "type": "string"
     },
     "FillSpec": {
       "additionalProperties": false,
@@ -378,6 +544,31 @@
       "enum": [
         "directx",
         "opengl"
+      ],
+      "type": "string"
+    },
+    "GroundFill": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GroundMode"
+        },
+        {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ],
+      "description": "What fills the cube below `cubemap.horizon`: `\"gradient\"` or `[r, g, b]` code values (game gamma, like `tint`)."
+    },
+    "GroundMode": {
+      "enum": [
+        "gradient"
       ],
       "type": "string"
     },
@@ -678,6 +869,141 @@
       },
       "type": "object"
     },
+    "PartialCubemapSpec": {
+      "additionalProperties": false,
+      "description": "The `cubemap` profile section (cubemap design 2026-10-26, \"Settings\"). Read only by `Subtype::Cubemap`; every key\nis skipped at its default, so 2D profile hashes hold (DECISIONS DS4).",
+      "properties": {
+        "blur": {
+          "description": "Cone blur amount, 0..=1; unset = none.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "brightness": {
+          "format": "double",
+          "type": "number"
+        },
+        "contrast": {
+          "format": "double",
+          "type": "number"
+        },
+        "exposure": {
+          "format": "double",
+          "type": "number"
+        },
+        "face_flip": {
+          "items": {
+            "$ref": "#/$defs/FaceFlip"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "face_rotate": {
+          "description": "Per-face rotation in degrees (0, 90, 180, 270), in +X, -X, +Y, -Y, +Z, -Z order.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "face_size": {
+          "description": "Face edge in pixels: a power of two in 4..=4096; unset = from the source.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ground_fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroundFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fill below the horizon line; unset = no fill (the horizon alone does nothing)."
+        },
+        "highlight_clamp": {
+          "description": "Highlights above this (linear) are clamped; at least 1.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "horizon": {
+          "description": "Horizon elevation in degrees, -45..=45; read only with ground_fill.",
+          "format": "double",
+          "type": "number"
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeLayout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "midtones": {
+          "format": "double",
+          "type": "number"
+        },
+        "mirror": {
+          "description": "Swap world east and west.",
+          "type": "boolean"
+        },
+        "saturation": {
+          "format": "double",
+          "type": "number"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CubeStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tint": {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "vcross_negz_rotate": {
+          "description": "A vertical cross stores -Z upside down; rotate it back.",
+          "type": "boolean"
+        },
+        "yaw": {
+          "description": "Turn about world up in degrees, -360..=360; positive is clockwise seen from above (Skyrim's heading).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "PartialEncoderSpec": {
       "additionalProperties": false,
       "properties": {
@@ -894,6 +1220,10 @@
         "color": {
           "$ref": "#/$defs/PartialColorSpec"
         },
+        "cubemap": {
+          "$ref": "#/$defs/PartialCubemapSpec",
+          "description": "Cubemap settings; read only by `Subtype::Cubemap`, reset for every other sub-type."
+        },
         "drop_top_mip": {
           "description": "Write the texture at half size, from its mip 1; every lower level is unchanged.",
           "type": "boolean"
@@ -1014,6 +1344,10 @@
         },
         "color": {
           "$ref": "#/$defs/ColorSpec"
+        },
+        "cubemap": {
+          "$ref": "#/$defs/CubemapSpec",
+          "description": "Cubemap settings; read only by `Subtype::Cubemap`, reset for every other sub-type."
         },
         "drop_top_mip": {
           "description": "Write the texture at half size, from its mip 1; every lower level is unchanged.",
@@ -1227,6 +1561,7 @@
         "skin_sk",
         "skin_wet",
         "complex_grass",
+        "cubemap",
         "rfaos"
       ],
       "type": "string"
@@ -1336,6 +1671,9 @@
           "$ref": "#/$defs/PartialProfile"
         },
         "complex_material": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "cubemap": {
           "$ref": "#/$defs/PartialProfile"
         },
         "diffuse": {

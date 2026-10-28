@@ -32,6 +32,7 @@ fn model_with_result() -> AppModel {
             },
             format: Format::Bc7,
             srgb: true,
+            faces: 1,
             levels: vec![],
             validation: Default::default(),
             warnings: vec![],

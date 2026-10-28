@@ -101,6 +101,7 @@ fn run(cli: Cli) -> Result<i32, EngineError> {
         Command::Presets(c) => verbs::presets(c),
         Command::Encoders(a) => verbs::encoders(a),
         Command::PatchHeader(a) => verbs::patch_header(a),
+        Command::CubemapMarker(a) => verbs::cubemap_marker(a),
     }
 }
 

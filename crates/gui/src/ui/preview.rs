@@ -1,6 +1,7 @@
 //! The expanded preview (M3a spec §6): the toolbar, two linked viewports (source left, encoded right, or one
 //! viewport cut by a divider), the notes and readouts under them, and the compact settings strip beside them.
 //! All state lives in the model (`AppModel::view`, `AppModel::preview`); this file maps input to model calls.
+use crate::model::cube_cross::FACE_LABELS;
 use crate::model::items::ItemKind;
 use crate::model::overlay::OverlayKind;
 use crate::model::preview::NO_GPU;
@@ -12,11 +13,14 @@ use crate::ui::columns::{strip_button, STRIP_WIDTH};
 use crate::ui::settings_panel;
 use eframe::egui::{self, Align, Color32, Layout as UiLayout, Rect, RichText, Sense, UiBuilder};
 use engine::config::Format;
+use engine::cube::layout::HCROSS;
 use std::sync::Arc;
 
 const SETTINGS_WIDTH: f32 = 280.0;
 /// The narrowest the viewports get (A10): below it the settings collapse to a strip.
 pub const PREVIEW_MIN: f32 = 480.0;
+/// Why Heatmap and Tile 3×3 are off for a cube (the cross is 4×3 faces, with no source image of that shape).
+const NOT_FOR_CUBES: &str = "Not for cubes";
 const GAP: f32 = 6.0;
 const DIVIDER_GRAB: f32 = 10.0;
 const PANE_BG: Color32 = Color32::from_gray(38);
@@ -64,6 +68,12 @@ struct Info {
     /// The result on show, and the source chain (None for a DDS input).
     shown: Option<Arc<PreviewOut>>,
     has_source: bool,
+    /// The result on show is a cube: the encoded pane draws its cross (4×3 faces), and `size_of` is the cross's size.
+    cross: bool,
+    /// The item is a cube (settled before any encode): no tiling, no heatmap, face labels on offer.
+    cube_item: bool,
+    /// The item is a six-file cube: the source pane has a face selector.
+    six_files: bool,
     /// The texture exports with NVTT; its preview uses the built-in encoder (DECISIONS Note NV9).
     nvtt: bool,
 }
@@ -82,6 +92,11 @@ impl Info {
             first,
             end,
             format: shown.as_ref().map(|o| o.result.format).or(job_format),
+            cross: shown.as_ref().is_some_and(|o| o.result.faces == 6),
+            cube_item: job.is_some_and(|j| j.cube.is_some()),
+            six_files: job
+                .and_then(|j| j.cube.as_ref())
+                .is_some_and(|c| c.sources.len() == 6),
             shown,
             has_source,
             nvtt,
@@ -92,15 +107,36 @@ impl Info {
         self.end > self.first && self.end <= self.dims.len()
     }
 
+    /// The size of mip `mip` of what the viewports show: a cube's cross is 4×3 faces.
     fn size_of(&self, mip: usize) -> (u32, u32) {
+        let (w, h) = self.face_of(mip);
+        if self.cross {
+            (4 * w, 3 * h)
+        } else {
+            (w, h)
+        }
+    }
+
+    /// The size of mip `mip` as the source side has it (a cube's face).
+    fn face_of(&self, mip: usize) -> (u32, u32) {
         self.dims.get(mip).copied().unwrap_or((1, 1))
     }
 
-    /// The error heatmap needs the source the result was encoded from.
+    /// The error heatmap needs the source the result was encoded from, and a 2D result.
     fn heatmap_possible(&self) -> bool {
-        self.shown
-            .as_ref()
-            .is_some_and(|o| !o.result.source.levels.is_empty())
+        !self.cube_item
+            && self
+                .shown
+                .as_ref()
+                .is_some_and(|o| !o.result.source.levels.is_empty())
+    }
+}
+
+/// The view as drawn: a cube's cross never tiles (Note DT23), and the stored `tile` is never written for it.
+fn masked(view: &ViewState, info: &Info) -> ViewState {
+    ViewState {
+        tile: view.tile && !info.cube_item,
+        ..view.clone()
     }
 }
 
@@ -267,7 +303,11 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
     let heatmap = egui::Button::selectable(model.view.heatmap, "Heatmap");
     if ui
         .add_enabled(info.heatmap_possible(), heatmap)
-        .on_disabled_hover_text("Needs an encoded result with a source image")
+        .on_disabled_hover_text(if info.cube_item {
+            NOT_FOR_CUBES
+        } else {
+            "Needs an encoded result with a source image"
+        })
         .clicked()
     {
         model.view.heatmap = !model.view.heatmap;
@@ -277,11 +317,33 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
             "A magnifier circle at 8x that follows the cursor ({})",
             super::actions::keys_text("lens")
         ));
-    ui.toggle_value(&mut model.view.tile, "Tile 3×3")
+    let tile = egui::Button::selectable(model.view.tile, "Tile 3×3");
+    if ui
+        .add_enabled(!info.cube_item, tile)
         .on_hover_text(format!(
             "Repeat the picture 3×3 to check the seams ({})",
             super::actions::keys_text("tile")
-        ));
+        ))
+        .on_disabled_hover_text(NOT_FOR_CUBES)
+        .clicked()
+    {
+        model.view.tile = !model.view.tile;
+    }
+    // Not on a blocked cube (no cross to name).
+    if info.cube_item && !matches!(model.preview.source, SourceState::Failed(_)) {
+        let on = model.view.face_labels;
+        let r = ui
+            .add(egui::Button::selectable(on, "Face labels"))
+            .on_hover_text(
+                "Name each face on the cross: +X east, −X west, +Y north, −Y south, +Z up, −Z down",
+            );
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, "Face labels")
+        });
+        if r.clicked() {
+            model.view.face_labels = !on;
+        }
+    }
     // Only for a texture with a per-texel value-range warning (owner, spec "Value-range overlay").
     if model
         .expanded
@@ -386,8 +448,9 @@ fn mip_control(ui: &mut egui::Ui, view: &mut ViewState, info: &Info) {
         ui.weak("no mips yet");
         return;
     }
-    let (w, h) = info.size_of(view.mip);
-    ui.label(format!("mip {} ({w}×{h})", view.mip));
+    let (w, h) = info.face_of(view.mip);
+    let per_face = if info.cube_item { " per face" } else { "" };
+    ui.label(format!("mip {} ({w}×{h}{per_face})", view.mip));
     if info.end - info.first > 1 {
         let mut mip = view.mip;
         let r = ui.add(
@@ -466,7 +529,9 @@ fn notes(
         lines.push("Preview uses the built-in encoder; the export uses NVTT.".into());
     }
     if let Some(UploadPath::CpuDecoded(why) | UploadPath::Skipped(why)) = gpu.encoded {
-        lines.push(why.to_string());
+        if !why.is_empty() {
+            lines.push(why.to_string());
+        }
     }
     if let Some(notice) = &model.preview.notice {
         lines.extend(notice.lines().map(str::to_string));
@@ -587,7 +652,9 @@ fn viewports(
     if info.known() {
         let first_time = state.fitted_for.as_deref() != Some(key);
         if first_time || requests.fit {
-            model.view.fit(size, mip_size);
+            model
+                .view
+                .fit_tiled(size, mip_size, model.view.tile && !info.cube_item);
             state.fitted_for = Some(key.to_string());
         } else if requests.one_to_one {
             model.view.one_to_one();
@@ -614,13 +681,27 @@ fn viewports(
         (left, right)
     };
     let mut encode = false;
+    let mut face_pick = None;
     let left_draw = if model.comparing_pin() {
         draw_pinned_pane(ui, model, gpu, left, left_vis, size)
     } else {
         let overlay = overlay_texture(ui, model, state, key);
-        draw_source_pane(ui, model, info, gpu, left, left_vis, size, overlay)
+        draw_source_pane(
+            ui,
+            model,
+            info,
+            gpu,
+            left,
+            left_vis,
+            size,
+            overlay,
+            &mut face_pick,
+        )
     };
     let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
+    if let Some(face) = face_pick {
+        model.set_source_face(face);
+    }
     if let Some((pinned, current)) = model.pin_captions() {
         caption(ui, left_vis, &pinned, false);
         caption(ui, right_vis, &current, true);
@@ -636,10 +717,11 @@ fn viewports(
     let hover = responses
         .iter()
         .find_map(|r| r.hover_pos().map(|p| (r.rect.min, p)))
-        .filter(|_| info.known())
+        // No texel readout on a cube: the cross and the source side (a face, or the input image) do not share texels (Note DT17).
+        .filter(|_| info.known() && !info.cross)
         .map(|(min, p)| view::pane_fraction([p.x, p.y], [min.x, min.y], size));
     let readout = hover.and_then(|s| {
-        let t = model.view.texel_at(size, mip_size, s)?;
+        let t = masked(&model.view, info).texel_at(size, mip_size, s)?;
         Some(model.preview_texel(mip, t).lines())
     });
     if readout != state.readout {
@@ -647,7 +729,7 @@ fn viewports(
         ui.ctx().request_repaint();
     }
     if let (true, Some(s)) = (model.view.lens, hover) {
-        let (uv_offset, uv_scale) = model.view.lens_uv(size, mip_size, s);
+        let (uv_offset, uv_scale) = masked(&model.view, info).lens_uv(size, mip_size, s);
         for (pane, vis, drawn) in [(left, left_vis, left_draw), (right, right_vis, right_draw)] {
             let centre = pane.min + egui::vec2(s[0] * size[0], s[1] * size[1]);
             lens(ui, centre, vis, drawn, uv_offset, uv_scale);
@@ -891,6 +973,7 @@ fn draw_source_pane(
     visible: Rect,
     size: [f32; 2],
     overlay: Option<egui::TextureId>,
+    face_pick: &mut Option<usize>,
 ) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let text = match &model.preview.source {
@@ -907,23 +990,28 @@ fn draw_source_pane(
     if let (None, SourceState::Ready(s)) = (&text, &model.preview.source) {
         let mip = model.view.mip;
         let tonemap = info.format.is_some_and(Format::is_hdr);
-        let params = params_for(
-            &model.view,
-            size,
-            info.size_of(mip),
-            mip.saturating_sub(s.first_level),
-            tonemap,
-        );
+        // Beside a cross the source side keeps its own size: the face, or for a single-image cube the input image,
+        // whose chain has its own mips (counted from the encoded result's first one).
+        let single = info.cube_item && !info.six_files;
+        let (own, in_texture) = match s.levels.get(mip.saturating_sub(info.first)) {
+            Some(l) if single => ((l.width, l.height), mip.saturating_sub(info.first)),
+            _ if single => (info.face_of(mip), s.levels.len().saturating_sub(1)),
+            _ => (info.face_of(mip), mip.saturating_sub(s.first_level)),
+        };
+        let params = params_for(&masked(&model.view, info), size, own, in_texture, tonemap);
         paint_clipped(ui, viewport, visible, Slot::Source, params);
         drawn = Some((Slot::Source, params));
         if let Some(id) = overlay {
-            let (pic, uv) = picture_rects(&model.view, viewport, size, info.size_of(mip));
+            let (pic, uv) = picture_rects(&masked(&model.view, info), viewport, size, own);
             ui.painter()
                 .with_clip_rect(visible.intersect(ui.clip_rect()))
                 .image(id, pic, uv, Color32::WHITE);
         }
     }
     pane_overlay(ui, visible, "Source", None, text.as_deref(), false);
+    if info.six_files && text.is_none() {
+        *face_pick = face_selector(ui, visible, model.view.source_face);
+    }
     drawn
 }
 
@@ -991,6 +1079,72 @@ fn caption(ui: &egui::Ui, visible: Rect, text: &str, right: bool) {
     painter.galley(pos, galley, colour);
 }
 
+/// The source pane's face selector for a six-file cube: six small buttons, +X to -Z, at the pane's top right.
+/// The face shown is the processed one, the image of that face's cell in the cross (Note DT20).
+fn face_selector(ui: &mut egui::Ui, visible: Rect, current: usize) -> Option<usize> {
+    let w = 26.0;
+    let x = (visible.max.x - 6.0 * (w + 2.0) - 6.0).max(visible.min.x + 80.0);
+    // In a narrow pane the row wraps to more lines, within the pane.
+    let width = (visible.max.x - 6.0 - x).clamp(w + 2.0, 6.0 * (w + 2.0));
+    let rect = Rect::from_min_size(
+        egui::pos2(x, visible.min.y + 4.0),
+        egui::vec2(width, 20.0 * (6.0 * (w + 2.0) / width).ceil()),
+    );
+    let mut pick = None;
+    ui.scope_builder(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(UiLayout::left_to_right(Align::Center).with_main_wrap(true)),
+        |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+            for (i, label) in FACE_LABELS.iter().enumerate() {
+                let short: String = label.chars().take(2).collect();
+                let r = ui
+                    .add_sized(
+                        [w, 18.0],
+                        egui::Button::selectable(current == i, RichText::new(short).small()),
+                    )
+                    .on_hover_text(format!("Show the {label} face of the source"));
+                let name = format!("Source face {label}");
+                let on = current == i;
+                r.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, &name)
+                });
+                if r.clicked() {
+                    pick = Some(i);
+                }
+            }
+        },
+    );
+    pick
+}
+
+/// The face names at each cell's top-left of the cross drawn in `pic`; left out once a cell is too small to hold one.
+fn face_labels(ui: &egui::Ui, pic: Rect, visible: Rect) {
+    let cell = egui::vec2(pic.width() / 4.0, pic.height() / 3.0);
+    if cell.x < 48.0 {
+        return;
+    }
+    let painter = ui
+        .painter()
+        .with_clip_rect(visible.intersect(ui.clip_rect()));
+    for (text, &(col, row)) in FACE_LABELS.iter().zip(&HCROSS) {
+        let pos =
+            pic.min + egui::vec2(col as f32 * cell.x, row as f32 * cell.y) + egui::vec2(3.0, 3.0);
+        let galley = painter.layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(11.0),
+            Color32::from_gray(235),
+        );
+        painter.rect_filled(
+            Rect::from_min_size(pos, galley.size()).expand(2.0),
+            2.0,
+            Color32::from_black_alpha(150),
+        );
+        painter.galley(pos, galley, Color32::from_gray(235));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_encoded_pane(
     ui: &mut egui::Ui,
@@ -1003,9 +1157,13 @@ fn draw_encoded_pane(
     encode: &mut bool,
 ) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
-    let heat = model.view.heatmap && gpu.heatmap;
+    let heat = model.view.heatmap && gpu.heatmap && !info.cube_item;
     let (badge, text, offer_encode) = match &model.preview.encoded {
-        EncodedState::NotEncoded => (None, Some("Not encoded".to_string()), true),
+        // A blocked item has no encode to offer: its reason shows here too (an odd-sized cube face says so).
+        EncodedState::NotEncoded => match &model.preview.source {
+            SourceState::Failed(e) => (None, Some(e.clone()), false),
+            _ => (None, Some("Not encoded".to_string()), true),
+        },
         EncodedState::Encoding { previous } => match previous {
             Some(_) => (Some("encoding…"), None, false),
             None => (None, Some("encoding…".to_string()), false),
@@ -1035,7 +1193,13 @@ fn draw_encoded_pane(
     if gpu.renderer && info.shown.is_some() {
         let mip = model.view.mip;
         if heat {
-            let mut params = params_for(&model.view, size, info.size_of(mip), 0, false);
+            let mut params = params_for(
+                &masked(&model.view, info),
+                size,
+                info.size_of(mip),
+                0,
+                false,
+            );
             params.channel = 0;
             params.view_linear = 0;
             paint_clipped(ui, viewport, visible, Slot::Heatmap, params);
@@ -1044,7 +1208,7 @@ fn draw_encoded_pane(
             let tonemap = out.result.format.is_hdr();
             let first = out.result.source.first_level;
             let params = params_for(
-                &model.view,
+                &masked(&model.view, info),
                 size,
                 info.size_of(mip),
                 mip.saturating_sub(first),
@@ -1052,6 +1216,15 @@ fn draw_encoded_pane(
             );
             paint_clipped(ui, viewport, visible, Slot::Encoded, params);
             drawn = Some((Slot::Encoded, params));
+            if info.cross && model.view.face_labels {
+                let (pic, _) = picture_rects(
+                    &masked(&model.view, info),
+                    viewport,
+                    size,
+                    info.size_of(mip),
+                );
+                face_labels(ui, pic, visible);
+            }
         }
     }
     if drawn.is_some() && matches!(model.preview.encoded, EncodedState::Encoding { .. }) {

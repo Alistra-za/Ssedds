@@ -50,9 +50,9 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 | `_sk` | `skin_sk` in an Advanced skin set; otherwise `backlight_tint` | High, Low |
 | `_i` | `diffuse` (multilayer inner layer) | Medium |
 | `_wet` | `skin_wet`, only in a `cs` Advanced skin set; elsewhere `_wet` is part of the base name | High |
-| `_e` | no suggestion; set the sub-type yourself | |
+| `_e`, or a file under `textures\cubemaps\` | `cubemap`; the six-face suffixes `_posx` to `_negz` (or `_px` to `_nz`) after the name are cut off first | High |
 
-A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`.
+A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`. In an Advanced skin set a plain `_f` is the skin fuzz mask: a greyscale map packed into the `_rfaos` G channel and not converted on its own. A `_f` never makes a set Advanced skin by itself, and one you give a sub-type converts alone as fuzz.
 
 Medium and Low suggestions always need your confirmation. High suggestions are applied automatically in the GUI, and on the command line with `--accept-suggestions high`.
 
@@ -88,7 +88,7 @@ You can add your own suffixes through a preset's `suffix_aliases`. See [Presets 
 
 ## Sub-types
 
-There are 29 sub-types in five categories.
+There are 30 sub-types in five categories.
 
 | Sub-type | Category | Default format | Tag (`cs`) | Default alpha | Notes |
 |---|---|---|---|---|---|
@@ -121,9 +121,11 @@ There are 29 sub-types in five categories.
 | `generic_data` | MixedPacked | BC7 | UNORM | data | Use for any data map Tessalith has no type for. |
 | `complex_grass` | MixedPacked | BC7 only | UNORM only | cutout (when the alpha varies) | Always BC7 UNORM at its own size. See [Complex grass](#complex-grass). |
 | `hdr_sky` | Hdr | BC6H | n/a | | `cs` only. |
+| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube: six faces, a cross, a strip, a 360° panorama, a mirror ball, an angular map or a single photo in, one cube DDS with a full mip chain out. BC1, BC3, BC7 or RGBA8 only. Colour is the game's 1.6 curve, not sRGB. See [Cubemaps](Cubemaps.md). |
 
 Notes on the defaults:
 
+- A single photo as a cubemap (`cubemap.layout = "photo"`) is an approximation: the photo becomes the front half of a mirrored fake panorama, and the cube is blurred by default (0.6). It gives soft reflections, not an exact sky.
 - The "default alpha" is the starting point. Analysis changes it: a source with no alpha channel resolves to `remove`, and alpha whose minimum is 251 or more is treated as opaque (`ALPHA-NEAR-OPAQUE`). A colour map whose alpha really varies needs a decision unless scanned meshes supply one.
 - Exact opaque means opaque alpha decodes as exactly 255 in BC7 rather than 254. It is on for `_m` maps because PGPatcher and ENB read their alpha; turning it off for a BC7 `_m` is blocked (`ALPHA-EXACT-OFF-M`).
 - Normal maps are never BC4 or BC5: the game would decode Z as -1 and lose alpha (`FMT-BC5-NORMAL`, blocking).

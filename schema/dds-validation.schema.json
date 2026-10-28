@@ -166,7 +166,9 @@
         "ALSO-REPORT-FAILED",
         "GEN-REPLACED",
         "GEN-STALE",
-        "GEN-AO"
+        "GEN-AO",
+        "CUBE-FACES",
+        "CUBE-NO-MIPS"
       ],
       "type": "string"
     },
@@ -318,6 +320,7 @@
         "skin_sk",
         "skin_wet",
         "complex_grass",
+        "cubemap",
         "rfaos"
       ],
       "type": "string"

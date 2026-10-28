@@ -183,6 +183,54 @@ fn groups_sets_and_flags_duplicates() {
     assert_eq!(dups[0].len(), 2);
 }
 
+/// DECISIONS DS8: `x_e_posx` .. `x_e_negz` join set `x` as its `_e`; other face-tagged names are untouched.
+#[test]
+fn face_files_group_into_the_e_set() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    for f in ["chrome.png", "chrome_n.png", "rock_px.png"]
+        .into_iter()
+        .map(String::from)
+        .chain(engine::cube::FACES.map(|f| format!("chrome_e_{f}.png")))
+    {
+        touch(&src.join(f));
+    }
+    let files = discover(&[src], &d.path().join("out"), false).unwrap();
+    let (sets, dups) = group_sets(&files);
+    assert!(dups.is_empty());
+    let chrome: Vec<_> = sets.iter().filter(|s| s.key.ends_with("/chrome")).collect();
+    assert_eq!(chrome.len(), 1);
+    assert_eq!(chrome[0].members.len(), 8);
+    assert_eq!(
+        chrome[0]
+            .suffixes
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["e", "n"]
+    );
+    let rock = sets.iter().find(|s| s.key.ends_with("/rock_px")).unwrap();
+    assert_eq!(rock.members.len(), 1);
+}
+
+/// `canonicalise_outputs` renames only on an alias, a vocabulary term or a generated stem, so the six face outputs
+/// stay distinct and no IN-DUPLICATE is raised before `plan_cubes`.
+#[test]
+fn face_outputs_survive_canonicalise() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    for f in engine::cube::FACES {
+        touch(&src.join(format!("chrome_e_{f}.png")));
+    }
+    let mut files = discover(&[src], &d.path().join("out"), false).unwrap();
+    let before: Vec<_> = files.iter().map(|f| f.output.clone()).collect();
+    let reg = engine::presets::PresetRegistry::builtin().unwrap();
+    canonicalise_outputs(&mut files, reg.alias_table());
+    let after: Vec<_> = files.iter().map(|f| f.output.clone()).collect();
+    assert_eq!(before, after);
+    assert!(group_sets(&files).1.is_empty());
+}
+
 #[test]
 fn sets_do_not_cross_directories_and_duplicates_ignore_case() {
     let d = tempfile::tempdir().unwrap();

@@ -412,6 +412,15 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
             }
         }
     }
+    // DECISIONS DS7: a cube DDS can only be a cubemap (an explicit sub-type above gets CFG-INVALID in `check_profile`).
+    if f.analysis.dds_cube {
+        return SubtypeDecision {
+            subtype: Subtype::Cubemap,
+            provenance: Provenance::AnalysisFact("cube-dds".into()),
+            decided: true,
+            suggestions,
+        };
+    }
     // S-shader-4: the set's shader re-types a member (eye `_n` → msn, landscape colour → landscape_diffuse).
     if let Some(p) = ctx.shaders.get(&f.set.key) {
         let id = p.shader.id();
@@ -760,6 +769,9 @@ fn layered_profile_with(
             );
         }
     }
+    if st == Subtype::Cubemap {
+        cube_style_layer(ctx, &mut doc, &mut prov, &mut sources);
+    }
     let mut profile = finish_profile(doc, ctx.target, st)?;
     // The skin_wet height form is a grayscale map: R is taken and copied to RGB in Preprocess.
     profile.category = category_of(st, profile.format, f.analysis.grayscale);
@@ -801,6 +813,11 @@ fn layered_profile_with(
         profile.rnm = crate::config::RnmSpec::default();
         prov.retain(|k, _| !k.starts_with("rnm."));
     }
+    // DECISIONS DS4: only a cubemap reads `cubemap`, so another sub-type keeps the default (and its hash).
+    if st != Subtype::Cubemap && !profile.cubemap.is_default() {
+        profile.cubemap = CubemapSpec::default();
+        prov.retain(|k, _| !k.starts_with("cubemap."));
+    }
     // An order that resolves to the default order is the default (no re-encode); any other is stored normalised.
     if profile.rnm.order.is_some() {
         let eff = profile.rnm.effective_order();
@@ -809,6 +826,54 @@ fn layered_profile_with(
     // Last: `filter_allowed` reads the final format, content, category and alpha policy.
     let dropped = unscoped_filter_falls_back(&mut profile, &mut prov, &sources);
     Ok((profile, prov, dropped))
+}
+
+/// DECISIONS DS4: a cubemap's `cubemap.style` fills `face_size`, `format`, `blur` (and `saturation`) where no
+/// explicit layer set them, and the tag is UNORM unless set explicitly (an explicit sRGB is refused by
+/// `encoding_warnings`). At sub-type-table reach without a pin, so `backend_follows_format` moves the backend with
+/// the style's format.
+fn cube_style_layer(
+    ctx: &ResolveCtx,
+    doc: &mut Value,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
+) {
+    let style = doc
+        .pointer("/cubemap/style")
+        .and_then(|v| serde_json::from_value::<CubeStyle>(v.clone()).ok());
+    let photo = doc.pointer("/cubemap/layout").and_then(Value::as_str) == Some("photo");
+    let mut fill = |field: &str, value: Value| {
+        if !field_explicit(ctx, prov, field) {
+            let patch = to_patch(field, &value);
+            apply(
+                doc,
+                prov,
+                sources,
+                &patch,
+                Provenance::Builtin,
+                SUBTYPE_TABLE,
+            );
+        }
+    };
+    if let Some(style) = style {
+        let (size, format, blur, saturation) = match style {
+            CubeStyle::VanillaMetal => (32, Format::Bc1, 0.6, Some(0.8)),
+            CubeStyle::Room => (128, Format::Bc1, 0.35, None),
+            CubeStyle::Eye => (256, Format::Bc7, 0.35, None),
+            CubeStyle::Hd => (512, Format::Bc7, 0.1, None),
+        };
+        fill("cubemap.face_size", json!(size));
+        fill("format", json!(format));
+        fill("cubemap.blur", json!(blur));
+        if let Some(s) = saturation {
+            fill("cubemap.saturation", json!(s));
+        }
+    }
+    // DS16: a single photo is soft by nature, so it blurs heavily unless `cubemap.blur` is explicit.
+    if photo {
+        fill("cubemap.blur", json!(0.6));
+    }
+    fill("color.tag", json!(ColorTag::Unorm));
 }
 
 /// DECISIONS S-mips-13 (owner, 2026-10-11): a non-box `mips.filter` this profile may not use
@@ -1184,6 +1249,8 @@ pub enum Need {
     Subtype,
     /// The alpha meaning (policy) depends on the mesh and nobody chose it.
     AlphaMeaning,
+    /// A single-image cube has no clear layout and nobody chose one (cubemap GUI, DECISIONS DT1).
+    CubeLayout,
 }
 
 /// What happens to a file (spec §5.2, §10). Serialises as `{"state": "ready"}`,
@@ -1258,6 +1325,10 @@ pub struct ResolvedJob {
     /// job. For a derived job `input` is `derive.sources[0].path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derive: Option<crate::derive::DeriveJob>,
+    /// Cubemap v1 (DECISIONS DS8): how a cube is built from its source file or six face files
+    /// (`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cube: Option<crate::cube::CubeJob>,
 }
 
 impl ResolvedJob {
@@ -1473,7 +1544,92 @@ fn encoding_warnings(
                 .into(),
         );
     }
+    if st == Subtype::Cubemap
+        && !(matches!(
+            format,
+            Format::Bc1 | Format::Bc3 | Format::Bc7 | Format::Rgba8
+        ) && tag == ColorTag::Unorm)
+    {
+        add(
+            CfgInvalid,
+            "cubemaps are written as BC1, BC3, BC7 or RGBA8, UNORM".into(),
+        );
+    }
     w
+}
+
+/// How a cubemap source is laid out: `cubemap.layout`, else six face files for a face-tagged name, else a cube DDS
+/// (a 6:1 strip), else the aspect ratio; `None` when nothing says (DECISIONS DS7).
+fn cube_layout(p: &Profile, f: &FileFacts) -> Option<crate::config::CubeLayout> {
+    let a = f.analysis;
+    cube_layout_of(p, &f.input.path, a.dds_cube, (a.width, a.height))
+}
+
+/// `cube_layout` from the loaded size and the cube-DDS flag; `cube::plan::plan_cubes` reads the same order.
+pub(crate) fn cube_layout_of(
+    p: &Profile,
+    path: &std::path::Path,
+    dds_cube: bool,
+    (w, h): (u32, u32),
+) -> Option<crate::config::CubeLayout> {
+    use crate::config::CubeLayout;
+    let stem = path.file_stem().and_then(|s| s.to_str());
+    // A cube DDS has loaded as its six faces side by side, whatever its name or `cubemap.layout` say.
+    dds_cube
+        .then_some(CubeLayout::Hstrip)
+        .or(p.cubemap.layout)
+        .or_else(|| {
+            stem.and_then(crate::cube::plan::face_tag)
+                .map(|_| CubeLayout::Faces)
+        })
+        .or_else(|| crate::cube::layout::detect(w, h))
+}
+
+/// A cubemap's mips and `cubemap.*` ranges (DECISIONS DS4).
+fn cube_checks(p: &Profile, add: &mut impl FnMut(Code, String)) {
+    if matches!(
+        p.mips.levels,
+        MipLevels::Keyword(MipKeyword::None) | MipLevels::Count(0..=1)
+    ) {
+        add(
+            Code::CubeNoMips,
+            "a cubemap without mips sparkles on curved surfaces, and CS reads its last mip as the average colour"
+                .into(),
+        );
+    }
+    let c = &p.cubemap;
+    let mut bad = |what: String| add(Code::CfgInvalid, what);
+    if let Some(n) = c
+        .face_size
+        .filter(|n| !(n.is_power_of_two() && (4..=4096).contains(n)))
+    {
+        bad(format!(
+            "cubemap.face_size {n} is not a power of two in 4..=4096"
+        ));
+    }
+    if let Some(r) = c
+        .face_rotate
+        .iter()
+        .find(|r| ![0, 90, 180, 270].contains(*r))
+    {
+        bad(format!("cubemap.face_rotate {r} is not 0, 90, 180 or 270"));
+    }
+    let ranges = [
+        ("yaw", Some(c.yaw), -360.0..=360.0),
+        ("blur", c.blur, 0.0..=1.0),
+        ("exposure", Some(c.exposure), -10.0..=10.0),
+        ("brightness", Some(c.brightness), -1.0..=1.0),
+        ("contrast", Some(c.contrast), -1.0..=1.0),
+        ("midtones", Some(c.midtones), 0.1..=10.0),
+        ("saturation", Some(c.saturation), 0.0..=2.0),
+        ("highlight_clamp", c.highlight_clamp, 1.0..=f64::MAX),
+        ("horizon", Some(c.horizon), -45.0..=45.0),
+    ];
+    for (key, v, range) in ranges {
+        if let Some(v) = v.filter(|v| !range.contains(v)) {
+            bad(format!("cubemap.{key} {v} outside {range:?}"));
+        }
+    }
 }
 
 /// The category a profile of `st` written as `format` has: a `skin_wet` height form (grey, or BC4) is a grayscale
@@ -1559,6 +1715,23 @@ pub fn check_profile(
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     // An HDR format (BC6H, RGBA16F) outside cs cannot be acknowledged: an error, added after the other checks.
     let hdr_outside_cs = hdr_outside_cs(p.format, p.target);
+    if a.dds_cube && st != Subtype::Cubemap {
+        add(
+            CfgInvalid,
+            "a cube DDS can only be re-encoded as a cubemap".into(),
+        );
+    }
+    if a.dds_cube
+        && st == Subtype::Cubemap
+        && p.cubemap
+            .layout
+            .is_some_and(|l| l != crate::config::CubeLayout::Hstrip)
+    {
+        add(
+            CfgInvalid,
+            "a cube DDS loads as its six faces; remove cubemap.layout for this file".into(),
+        );
+    }
     if !ALPHA_THRESHOLD.contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
@@ -1774,7 +1947,16 @@ pub fn check_profile(
     }
     // DECISIONS S1: a float source is linear light; Quantise clamps it to [0, 1] and encodes it per color.content.
     // Values outside that range are lost: a warning, never a block. (IN-FLOAT-LDR is retired, DECISIONS S2.)
-    if f.info.is_float && !hdr {
+    if st == Subtype::Cubemap {
+        // A cube's own check (DECISIONS DS7): `cubemap.highlight_clamp` is the way to keep or tame highlights.
+        if f.info.is_float && a.peak_luminance > 1.0 && p.cubemap.highlight_clamp.is_none() {
+            add(
+                LossClampHdr,
+                "highlights above 1.0 will clip: set cubemap.highlight_clamp (for example 4)"
+                    .into(),
+            );
+        }
+    } else if f.info.is_float && !hdr {
         let channels = if f.info.has_alpha { 4 } else { 3 };
         let (lo, hi) = a.channels[..channels]
             .iter()
@@ -1901,7 +2083,7 @@ pub fn check_profile(
         (rw, rh)
     };
     let mode = serde_json::to_value(p.resize).unwrap_or_default();
-    let resized = ((rw, rh) != (a.width, a.height)).then(|| {
+    let mut resized = ((rw, rh) != (a.width, a.height)).then(|| {
         Warning::new(
             DimResized,
             format!(
@@ -1914,11 +2096,45 @@ pub fn check_profile(
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
     });
-    if !(ow.is_power_of_two() && oh.is_power_of_two()) {
+    // A cube's source size is not its face size: its checks read the face (DECISIONS DS7). With no layout the
+    // planner marks the file unclear, so no DIM-* here.
+    if st != Subtype::Cubemap && !(ow.is_power_of_two() && oh.is_power_of_two()) {
         add(DimNpot, format!("{ow}x{oh} is not a power of two"));
     }
-    if ow.min(oh) < 4 {
+    if st != Subtype::Cubemap && ow.min(oh) < 4 {
         add(DimSmall, "base dimension below 4 px".into());
+    }
+    if st == Subtype::Cubemap {
+        resized = None;
+        if let Some(layout) = cube_layout(p, f) {
+            use crate::cube::layout::{face_size, source_cell};
+            let src = (a.width, a.height);
+            let cell = source_cell(layout, src);
+            let face = face_size(p, layout, src);
+            let shown =
+                if p.drop_top_mip && crate::mips::level_count(face, face, &p.mips.levels) > 1 {
+                    face / 2
+                } else {
+                    face
+                };
+            if shown != cell {
+                resized = Some(
+                    Warning::new(DimResized, format!("face {cell} → {shown}"))
+                        .with_data(json!({ "from": [cell, cell], "to": [shown, shown] })),
+                );
+            }
+            if shown < 4 {
+                add(DimSmall, format!("cube face {shown} px is below 4"));
+                // DS20: `allow` cannot acknowledge this one, so no tiny picture cube is written.
+                add(
+                    CfgInvalid,
+                    format!(
+                        "cube face {shown} px is below 4; only `sdc cubemap-marker` writes a 1x1 cube"
+                    ),
+                );
+            }
+        }
+        cube_checks(p, &mut add);
     }
     if st == Subtype::Flow && ow.min(oh) <= 32 {
         add(
@@ -2101,6 +2317,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }
 
@@ -2124,6 +2341,7 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }
 
@@ -2149,6 +2367,15 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
         ) {
             return packing_input_job(ctx, f, term, *role);
         }
+    }
+    // Note DR: in a set that is Advanced skin by other evidence, `_f` is the fuzz mask (a metal-like grey map), a
+    // packing input of the `_rfaos` G; it never makes the set skin itself (`_f` is no `RawMap::INPUTS` member).
+    if !matches!(
+        d.provenance,
+        Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
+    ) && crate::pack::plan::skin_f_candidate(ctx, f.set, f.input)
+    {
+        return packing_input_job(ctx, f, "f", RawMap::Fuzz);
     }
     // M6 Track F2 (DECISIONS Note W2): a layer file is hidden unless a rule or --set names its sub-type.
     if let Some(Vocab {
@@ -2262,6 +2489,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     rnm: None,
                     derive: None,
                     shader: None,
+                    cube: None,
                 };
             }
         };
@@ -2382,5 +2610,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }

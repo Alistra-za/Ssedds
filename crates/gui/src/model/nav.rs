@@ -269,7 +269,7 @@ impl AppModel {
             return (
                 s.dims.clone(),
                 s.first_level,
-                s.first_level + o.result.levels.len(),
+                s.first_level + o.result.levels.len() / usize::from(o.result.faces.max(1)),
             );
         }
         match &self.preview.source {

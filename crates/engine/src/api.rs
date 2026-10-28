@@ -513,10 +513,11 @@ fn is_dds(path: &Path) -> bool {
 /// `None` when the size cannot be read.
 fn input_dims(path: &Path) -> Option<(u32, u32)> {
     if is_dds(path) {
-        let (w, h) = crate::load::dds_header_size(path)?;
+        let ((w, h), cube) = crate::load::dds_header_facts(path)?;
         // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
         let dim = |v: u32| v.min(crate::load::MAX_DIM);
-        return Some((dim(w), dim(h)));
+        // A cube DDS loads as a 6w x h strip (DECISIONS DS7), so that is what it holds.
+        return Some((dim(w) * if cube { 6 } else { 1 }, dim(h)));
     }
     crate::load::image_size(path).ok()
 }
@@ -568,8 +569,28 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         });
         texels * (filter + resize) + grass + layers + derived
     });
+    // DECISIONS DS8: a cube holds every source plus three float cubes of its face size (base, blur copy, mip chain).
+    let cube = job.cube.as_ref().map_or(0, |c| {
+        let others: u64 = c
+            .sources
+            .iter()
+            .skip(1)
+            .map(|s| estimated_bytes(&s.path))
+            .sum();
+        let dims = input_dims(&job.input);
+        let face = dims.map_or(0, |src| {
+            u64::from(crate::cube::layout::face_size(p, c.layout, src))
+        });
+        // DS19: a single photo also holds its fake 2w x w float panorama (`import_dir::photo_panorama`).
+        let panorama = match (c.layout, dims) {
+            (CubeLayout::Photo, Some((w, _))) => 2 * u64::from(w) * u64::from(w) * 16,
+            _ => 0,
+        };
+        others + 6 * face * face * 16 * 3 + panorama
+    });
     estimated_bytes(&job.input)
         + extra
+        + cube
         + job
             .bake
             .as_ref()
@@ -660,6 +681,15 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                 Some(identity.clone()),
             ));
         }
+    }
+    // DECISIONS DS8: a six-file cube's faces in face order; a one-file cube is `source_sha256` alone.
+    for s in job
+        .cube
+        .iter()
+        .filter(|c| c.sources.len() > 1)
+        .flat_map(|c| &c.sources)
+    {
+        v.push((sha256_file(&s.path).ok()?, None, None, None));
     }
     if let Some(b) = &job.bake {
         v.push((
@@ -1315,6 +1345,7 @@ impl Engine {
                     let mut a = analyse_with(&img, &info, hints);
                     a.icc_profile = meta.icc_profile;
                     a.dds_dxgi = meta.dds_dxgi;
+                    a.dds_cube = meta.dds_cube;
                     if let Some(s) = source {
                         cache.put_file(&f.path, s, a.clone(), info, cache.make_thumb(&img, &info));
                     }
@@ -1479,6 +1510,11 @@ impl Engine {
             .filter(|(_, a, _)| !pack::b_has_content(&a.channels[2]))
             .map(|(wi, _, _)| work[*wi].1.path.clone())
             .collect();
+        // Read by `plan_cubes` (DECISIONS DS8): each input's loaded size and cube-DDS flag.
+        let cube_facts: crate::cube::plan::InputFacts = pass1
+            .iter()
+            .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.width, a.height, a.dds_cube)))
+            .collect();
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
@@ -1553,6 +1589,8 @@ impl Engine {
                 _ => None,
             })
             .collect();
+        // DECISIONS DS8: six face files become one cube job, and one-file cubes get their layout.
+        crate::cube::plan::plan_cubes(&cube_facts, &mut jobs, &mut skipped);
         let mut packed = pack::plan::plan_packing(
             &ctx,
             &sets,
@@ -2150,6 +2188,14 @@ impl Engine {
                         .iter()
                         .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
                         .filter(|(p, _)| derive_read.insert(p.as_path())),
+                )
+                // DECISIONS DS8: each face of a face-set cube (a broken set lists its lead file only), keyed by the
+                // cube's output like a packed source.
+                .chain(
+                    job.cube
+                        .iter()
+                        .filter(|c| c.layout == crate::config::CubeLayout::Faces)
+                        .flat_map(|c| c.sources.iter().map(|s| (&s.path, "cubed"))),
                 );
             for (path, how) in consumed {
                 rep.emit_job(
@@ -2626,7 +2672,11 @@ fn map_members(
         }
         // Trace-debug #25 (Note BQ): an RNM layer or mask is never converted on its own, as the shader pick knows.
         if let Some(j) = jobs.by_input(&f.path).find(|j| j.pack.is_none()) {
-            if matches!(j.status, JobStatus::NormalLayer { .. }) {
+            // Note DR: a skin `_f` packing input has no file-name role, so its job status leaves it out.
+            if matches!(
+                j.status,
+                JobStatus::NormalLayer { .. } | JobStatus::PackingInput { .. }
+            ) {
                 continue;
             }
             out.push(crate::shader::MemberMap {
@@ -2835,6 +2885,56 @@ mod tests {
     use super::*;
     use crate::manifest::ENGINE_VERSION;
 
+    /// DECISIONS DS7: admission counts a cube DDS as the 6w x h strip it loads as, in both header forms.
+    #[test]
+    fn cube_dds_input_dims_are_the_loaded_strip() {
+        use crate::dds::{dds_bytes_cube, DdsDesc, ResolvedHeader};
+        let d = tempfile::tempdir().unwrap();
+        for header in [ResolvedHeader::Dx10, ResolvedHeader::Legacy] {
+            let desc = DdsDesc {
+                width: 8,
+                height: 8,
+                format: crate::config::Format::Rgba8,
+                srgb: false,
+                header,
+            };
+            let levels: Vec<Vec<u8>> = (0..6)
+                .flat_map(|_| [8usize, 4, 2, 1].map(|s| vec![0u8; s * s * 4]))
+                .collect();
+            let p = d.path().join(format!("c{header:?}.dds"));
+            std::fs::write(&p, dds_bytes_cube(&desc, &levels).unwrap()).unwrap();
+            let (img, ..) = crate::load::load_image_meta(&p).unwrap();
+            assert_eq!(input_dims(&p), Some((img.width, img.height)), "{header:?}");
+            assert_eq!(input_dims(&p), Some((48, 8)));
+        }
+    }
+
+    /// Final review I1: a single-photo cube also holds its fake 2w x w float panorama (`import_dir::photo_panorama`).
+    #[test]
+    fn a_photo_cube_is_admitted_for_its_panorama() {
+        let d = tempfile::tempdir().unwrap();
+        let mut j = png_job(d.path(), "sky_e.png", (64, 36), Subtype::Cubemap);
+        let base = job_bytes(&j);
+        let cube = |layout| crate::cube::CubeJob {
+            layout,
+            sources: vec![crate::cube::CubeSource {
+                path: j.input.clone(),
+                stamp: None,
+                face: None,
+            }],
+        };
+        let face = |layout| u64::from(crate::cube::layout::face_size(&j.profile, layout, (64, 36)));
+        let photo_face = face(CubeLayout::Photo);
+        j.cube = Some(cube(CubeLayout::Photo));
+        assert_eq!(
+            job_bytes(&j),
+            base + 6 * photo_face * photo_face * 16 * 3 + 2 * 64 * 64 * 16
+        );
+        let eq_face = face(CubeLayout::Equirect);
+        j.cube = Some(cube(CubeLayout::Equirect));
+        assert_eq!(job_bytes(&j), base + 6 * eq_face * eq_face * 16 * 3);
+    }
+
     #[test]
     fn exit_code_precedence() {
         let mut s = BatchSummary::default();
@@ -2944,6 +3044,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         }
     }
 
@@ -3087,6 +3188,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         };
         let texels = 48 * 40;
         assert_eq!(job_bytes(&job), input_bytes(48, 40));
@@ -3139,6 +3241,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         };
         std::fs::write(&job.output, b"dds").unwrap();
         let enc = EncoderVersions::current();
@@ -3222,6 +3325,7 @@ mod tests {
                         rnm: None,
                         derive: None,
                         derive_role: None,
+                        cube_face: None,
                     }]
                 }),
             ),
