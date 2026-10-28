@@ -42,6 +42,7 @@ impl AppModel {
     /// The menu entry: open the dialog.
     pub fn open_marker_dialog(&mut self) {
         self.dialog = Some(Dialog::MakeMarker);
+        self.marker_note = None;
     }
 
     /// The dialog's Save…: ask for the file, starting in `<project textures>\cubemaps` (else the textures folder).
@@ -91,6 +92,7 @@ impl AppModel {
             ),
         };
         self.status_line = text.clone();
+        self.marker_note = (sev != Severity::Info).then(|| (sev, text.clone()));
         self.messages.notify(sev, text);
     }
 }

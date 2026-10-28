@@ -430,6 +430,8 @@ pub struct AppModel {
     pub dialog: Option<Dialog>,
     /// The Make marker cube dialog's colour and roughness.
     pub marker: marker::MarkerDraft,
+    /// The last kept or failed marker write's note, shown inside the dialog (DT34); cleared when it opens.
+    pub marker_note: Option<(messages::Severity, String)>,
     /// F3b D4: the rename dialog's last applied recipe, offered again on the next open (this session only).
     pub last_recipe: rename::Recipe,
     pub expanded: Option<String>,
@@ -656,6 +658,7 @@ impl AppModel {
             encoding_note: None,
             dialog: None,
             marker: Default::default(),
+            marker_note: None,
             last_recipe: Default::default(),
             expanded: None,
             export: export::ExportModel::default(),

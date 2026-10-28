@@ -1,6 +1,7 @@
 //! "Make marker cube…" dialog (cubemap GUI step, Task 6). The draft is `model.marker`; Save… opens the file dialog and
 //! the model writes on its result (`model::marker`). Enter is Save…, which only opens a dialog; Esc and Cancel close.
 use super::dialogs::{dialog_hover, Role};
+use crate::model::messages::Severity;
 use crate::model::picker::BUSY_HOVER;
 use crate::model::AppModel;
 use eframe::egui;
@@ -19,6 +20,7 @@ fn code_field(ui: &mut egui::Ui, label: &str, v: &mut u8) {
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     let busy = model.picker.busy();
     let mut d = model.marker.clone();
+    let note = model.marker_note.clone();
     let buttons = [
         ("Cancel", Role::Plain, true),
         ("Save…", Role::Default, !busy),
@@ -64,6 +66,15 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
                 )),
                 Err(e) => ui.colored_label(super::status::RED, e),
             };
+            // DT34: a kept or failed write says so here too, not only in the toast behind the backdrop.
+            if let Some((sev, note)) = &note {
+                let c = if *sev == Severity::Error {
+                    super::status::RED
+                } else {
+                    super::status::AMBER
+                };
+                ui.colored_label(c, note);
+            }
         },
     );
     model.marker = d;

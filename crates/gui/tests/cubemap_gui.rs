@@ -856,6 +856,35 @@ mod marker {
         assert!(m.status_line.contains("out_e.dds"), "{}", m.status_line);
     }
 
+    /// T6 M5 (DT34): a kept write's note shows inside the dialog, not only behind its backdrop.
+    #[test]
+    fn a_kept_note_shows_in_the_dialog() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("out_e.dds");
+        std::fs::write(&target, b"not ours").unwrap();
+        let mut m = AppModel::placeholder(GuiSettings::default());
+        m.picker.set_backend(fake(Some(target.clone())));
+        m.open_marker_dialog();
+        let mut h = dialog_harness(m);
+        h.get_by_label("Save…").click();
+        h.run();
+        wait_picker(h.state());
+        h.state_mut().poll();
+        h.run();
+        let note = h.state().status_line.clone();
+        assert!(note.contains("out_e.dds"), "{note}");
+        assert_eq!(
+            h.query_all_by_label(&note).count(),
+            1,
+            "the note in the dialog"
+        );
+        // Opening the dialog again starts without it.
+        h.state_mut().dialog = None;
+        h.state_mut().open_marker_dialog();
+        h.run();
+        assert_eq!(h.query_all_by_label(&note).count(), 0);
+    }
+
     /// Final review M2 (DT33): a Save result that lands after the dialog was cancelled writes nothing, and closes
     /// no other dialog.
     #[test]
