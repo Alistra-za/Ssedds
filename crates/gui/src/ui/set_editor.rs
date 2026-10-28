@@ -1171,6 +1171,29 @@ fn packed_controls(
 /// the ~125 px of slot row the centre shows at 1100 (truncated, full name on hover).
 const SOURCE_W: f32 = COMBO_W;
 
+/// `channel_helpers` of `packed`, cached by the items' revision (review M1: an open popup draws every frame).
+fn cached_helpers(
+    ctx: &egui::Context,
+    model: &AppModel,
+    packed: &str,
+) -> Vec<(String, String, engine::helper::HelperRole)> {
+    type Slot = (
+        String,
+        u64,
+        Vec<(String, String, engine::helper::HelperRole)>,
+    );
+    let id = egui::Id::new("fill-source-helpers");
+    let rev = model.items_rev();
+    if let Some((k, r, v)) = ctx.data(|d| d.get_temp::<Slot>(id)) {
+        if k == packed && r == rev {
+            return v;
+        }
+    }
+    let v = channel_helpers(model, packed);
+    ctx.data_mut(|d| d.insert_temp(id, (packed.to_string(), rev, v.clone())));
+    v
+}
+
 /// The source picker of one channel: "Source: <file>" or "Source: value", listing the set's greyscale helpers and
 /// "Value". A pick other than the current source becomes `Act::ChannelHelper`.
 fn source_picker(
@@ -1195,7 +1218,11 @@ fn source_picker(
                 .selected_text(&shown)
                 .show_ui(ui, |ui| {
                     let now = current.map(|(k, _)| k);
-                    for (k, file, _) in channel_helpers(model, packed) {
+                    let helpers = cached_helpers(ui.ctx(), model, packed);
+                    // Review I1: only a helper's `helper.fills` can give the channel up; a file the engine does not
+                    // report as a helper keeps it whatever the picker writes.
+                    let stuck = current.filter(|(k, _)| !helpers.iter().any(|(h, ..)| h == k));
+                    for (k, file, _) in helpers {
                         if ui
                             .selectable_label(now == Some(k.as_str()), &file)
                             .clicked()
@@ -1206,7 +1233,16 @@ fn source_picker(
                             }
                         }
                     }
-                    if ui.selectable_label(now.is_none(), "Value").clicked() && now.is_some() {
+                    let why = stuck.map(|(_, f)| {
+                        format!("{f} is not a helper; it feeds this channel by its name")
+                    });
+                    let value = ui
+                        .add_enabled(
+                            why.is_none(),
+                            egui::Button::selectable(now.is_none(), "Value"),
+                        )
+                        .on_disabled_hover_text(why.clone().unwrap_or_default());
+                    if value.clicked() && now.is_some() {
                         if let Some(c) = channel {
                             acts.push(Act::ChannelHelper(packed.into(), c as u8, None));
                         }

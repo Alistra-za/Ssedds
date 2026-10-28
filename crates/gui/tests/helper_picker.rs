@@ -269,6 +269,74 @@ fn picker_is_one_undo_step() {
     assert!(!h.state().can_undo(), "one step");
 }
 
+/// The "Value" option of the open combo `name`: (enabled, its hover text after hovering it).
+fn value_option(h: &mut H, name: &str) -> (bool, Vec<String>) {
+    h.get_by_role_and_label(Role::ComboBox, name).scroll_to_me();
+    h.run();
+    let below = h.get_by_role_and_label(Role::ComboBox, name).rect().max.y;
+    h.get_by_role_and_label(Role::ComboBox, name).click();
+    h.run();
+    let opt = h
+        .query_all_by_label("Value")
+        .filter(|n| n.rect().min.y >= below - 1.0)
+        .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+        .expect("the Value option");
+    let enabled = !opt.accesskit_node().is_disabled();
+    opt.hover();
+    h.run();
+    let tips: Vec<String> = h
+        .query_all_by_label_contains("is not a helper")
+        .filter_map(|n| n.accesskit_node().label().or(n.accesskit_node().value()))
+        .collect();
+    (enabled, tips)
+}
+
+/// Review I1 (DT18): a channel fed by a file the engine does not report as a helper cannot be switched to a value
+/// through `helper.fills`, so "Value" is disabled and says why. Every source the current engine plans is reported
+/// (a pack source is a helper by `packed_role`; the skin `_f` and a pre-packed or `_p` file were tried and are either
+/// helpers or no channel source), so the report is taken off the item in place, as a plan without it would leave it.
+/// The picker is opened first, so a stale cached option list would also fail this (review M1: cached by items rev).
+#[test]
+fn value_is_disabled_for_a_non_helper_source() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = editor(
+        fixture(d.path(), &["x.png", "x_roughness.png", "x_ao.png"], ""),
+        egui::vec2(1600.0, 900.0),
+    );
+    let (enabled, _) = value_option(&mut h, AO_SOURCE);
+    assert!(enabled, "a helper source first");
+    h.key_press(egui::Key::Escape);
+    h.run();
+    {
+        let m = h.state_mut();
+        let i = m.items.iter().position(|i| i.key == "x_ao.png").unwrap();
+        m.items[i].helper = None;
+        m.invalidate_views();
+    }
+    h.run();
+    assert_eq!(source_of(h.state(), 2).as_deref(), Some("x_ao.png"));
+    let (enabled, tips) = value_option(&mut h, AO_SOURCE);
+    assert!(!enabled, "Value is disabled for x_ao.png");
+    assert!(
+        tips.iter()
+            .any(|t| t == "x_ao.png is not a helper; it feeds this channel by its name"),
+        "{tips:?}"
+    );
+}
+
+/// A helper's channel keeps "Value" enabled, with no such hover.
+#[test]
+fn value_is_enabled_for_a_helper_source() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = editor(
+        fixture(d.path(), &["x.png", "x_roughness.png", "x_ao.png"], ""),
+        egui::vec2(1600.0, 900.0),
+    );
+    let (enabled, tips) = value_option(&mut h, AO_SOURCE);
+    assert!(enabled, "Value stays enabled for a helper source");
+    assert!(tips.is_empty(), "{tips:?}");
+}
+
 /// Re-picking the channel's current source writes nothing.
 #[test]
 fn picking_the_current_source_writes_nothing() {
