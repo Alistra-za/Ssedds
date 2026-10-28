@@ -479,12 +479,16 @@ fn chosen_recipe(
     let (rfaos_key, on_rfaos) = read(RecipeKind::Rfaos);
     let (rmaos_key, on_rmaos) = read(RecipeKind::Rmaos);
     // Note DV1: a set whose chosen shader is Advanced Skin packs `_rfaos` unless a recipe is written; the user wrote
-    // none, so a set that cannot build it keeps `auto` without a notice.
+    // none, so a set that cannot build it keeps `auto` without a notice. Final review M2: a hand-set `rfaos.*` fill
+    // also builds it; the plain test runs first so a hand fill never takes an `_rfaos` away (DV1 unchanged).
     if chosen_skin(ctx, set) && on_rfaos == PackRecipe::Auto && on_rmaos == PackRecipe::Auto {
-        let built = recipes_for_with(ctx.target, raw, PackRecipe::Rfaos, false)
-            .0
-            .iter()
-            .any(|r| r.kind == RecipeKind::Rfaos);
+        let rfaos = |s: &BTreeMap<PathBuf, crate::helper::HelperSel>| {
+            recipes_for_sel(ctx.target, raw, PackRecipe::Rfaos, false, s)
+                .0
+                .iter()
+                .any(|r| r.kind == RecipeKind::Rfaos)
+        };
+        let built = rfaos(&BTreeMap::new()) || rfaos(sel);
         let pick = if built {
             PackRecipe::Rfaos
         } else {
