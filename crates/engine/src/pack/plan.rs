@@ -120,13 +120,58 @@ pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
 }
 
 pub(crate) fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
-    let stem = first_source
+    format!("{}_{suffix}", source_base(first_source))
+}
+
+/// The base a source names a packed output after: its stem without a recognised suffix.
+fn source_base(p: &Path) -> String {
+    let stem = p
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let base = split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b);
-    format!("{base}_{suffix}")
+    split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b)
+}
+
+/// Note DT: a hand-role helper that `group::join_helpers` moved into set `x` (`x_mask`) names a packed output as the
+/// set's own members do (`x_rmaos`, with its `[files]` key): each such member with `rel` renamed to the base of a
+/// member whose base is the set's. Empty for every set without a joined helper, so other names never change.
+fn joined_helper_names(
+    ctx: &ResolveCtx,
+    set: &TextureSet,
+    files: &[InputFile],
+) -> Vec<(PathBuf, InputFile)> {
+    let key_base = set
+        .key
+        .rsplit_once('/')
+        .map_or(set.key.as_str(), |(_, b)| b);
+    let own = |f: &InputFile| source_base(&f.rel).to_lowercase() == key_base;
+    let Some(base) = set
+        .members
+        .iter()
+        .map(|&i| &files[i])
+        .find(|f| own(f))
+        .map(|f| source_base(&f.rel))
+    else {
+        return vec![];
+    };
+    set.members
+        .iter()
+        .map(|&i| &files[i])
+        .filter(|f| {
+            f.kind == InputKind::Image
+                && !own(f)
+                && crate::policy::helper_requested(ctx, f)
+                    .role
+                    .is_some_and(|r| r != crate::helper::HelperRole::NotHelper)
+        })
+        .map(|f| {
+            let ext = f.rel.extension().unwrap_or_default().to_string_lossy();
+            let mut g = f.clone();
+            g.rel = f.rel.with_file_name(format!("{base}.{ext}"));
+            (f.path.clone(), g)
+        })
+        .collect()
 }
 
 /// A recipe that passed pass 1: assembled, analysed and resolved in pass 2.
@@ -574,6 +619,10 @@ pub fn plan_packing(
             _ => None,
         })
         .collect();
+    let renamed: BTreeMap<PathBuf, InputFile> = sets
+        .iter()
+        .flat_map(|set| joined_helper_names(ctx, set, files))
+        .collect();
     for set in sets {
         // Raw members still waiting for a recipe: a planned packing input, or one that failed to load or was
         // cancelled before its Load. A raw map whose sub-type a rule or `--set` named is an ordinary file
@@ -618,7 +667,7 @@ pub fn plan_packing(
                     path: f.path.clone(),
                     role,
                 });
-                members.insert(f.path.clone(), f);
+                members.insert(f.path.clone(), renamed.get(&f.path).unwrap_or(f));
             }
         }
         if ctx.target == Target::Cs {

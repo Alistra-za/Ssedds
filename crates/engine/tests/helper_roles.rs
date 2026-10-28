@@ -363,6 +363,30 @@ fn unnamed_helper_joins_its_base_set() {
     );
 }
 
+/// Review fix round 2: a joined helper that is a recipe's first source names the output after its set (`x_rmaos`).
+#[test]
+fn joined_helper_packs_under_its_set_name() {
+    let d = fixture(
+        &["x.png", "x_mask.png", "x_ao.png"],
+        &files("x_mask", "helper.role = \"roughness\""),
+    );
+    let p = plan(d.path(), Target::Cs, &[]);
+    let outs: Vec<String> = p
+        .jobs
+        .iter()
+        .filter(|j| j.pack.is_some())
+        .map(|j| j.output.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(outs, ["x_rmaos.dds"]);
+    match &packed(&p, "x_rmaos.dds").pack.as_ref().unwrap().channels[0] {
+        ChannelSource::Source { path, role, .. } => {
+            assert!(path.ends_with("x_mask.png"), "{path:?}");
+            assert_eq!(*role, RawMap::Roughness);
+        }
+        other => panic!("R is {other:?}"),
+    }
+}
+
 #[test]
 fn parse_set_helper_fields() {
     for ok in [
