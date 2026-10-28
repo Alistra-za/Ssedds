@@ -306,6 +306,7 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
         },
         format,
         srgb,
+        faces: 1,
         levels,
         validation: Default::default(),
         warnings: vec![],

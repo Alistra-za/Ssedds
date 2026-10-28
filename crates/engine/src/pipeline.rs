@@ -455,7 +455,8 @@ pub(crate) fn encode_levels(
     for (i, (inp, &(w, h))) in prep
         .inputs
         .iter()
-        .zip(&prep.dims[prep.first_level..])
+        // A six-face preview repeats one chain's dims per face.
+        .zip(prep.dims[prep.first_level..].iter().cycle())
         .enumerate()
     {
         let level = match &nvtt {

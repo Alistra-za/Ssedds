@@ -1426,6 +1426,11 @@
           "const": "alpha_meaning",
           "description": "The alpha meaning (policy) depends on the mesh and nobody chose it.",
           "type": "string"
+        },
+        {
+          "const": "cube_layout",
+          "description": "A single-image cube has no clear layout and nobody chose one (cubemap GUI, DECISIONS DT1).",
+          "type": "string"
         }
       ]
     },

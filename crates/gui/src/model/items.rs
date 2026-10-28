@@ -128,6 +128,8 @@ pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
                     suggested: job.suggestions.first().map(|s| s.subtype),
                 },
                 Need::AlphaMeaning => Decision::AlphaMeaning,
+                // shortcut: no layout decision row yet (as before DT1); the cube-layout picker task adds it.
+                Need::CubeLayout => continue,
             });
         }
     }

@@ -182,6 +182,7 @@ mod tests {
                 },
                 format: engine::config::Format::Rgba8,
                 srgb: false,
+                faces: 1,
                 levels: vec![],
                 validation: Default::default(),
                 warnings: vec![],

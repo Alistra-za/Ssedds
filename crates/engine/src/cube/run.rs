@@ -188,25 +188,28 @@ pub(crate) fn prepare(
             }
         }
         Keep::Preview { max_size } | Keep::SourceOnly { max_size } => {
-            // shortcut: preview shows +X only; the GUI step brings a cross preview.
-            prep.faces = 1;
+            // DECISIONS DT2: a preview encodes all six faces (face-major, each chain from first_level); the source side shows +X.
+            prep.faces = if matches!(keep, Keep::Preview { .. }) {
+                6
+            } else {
+                1
+            };
             prep.first_level = crate::session::first_level_within(&one, max_size);
             prep.dims = one;
-            let pos_x: Vec<Rgba32F> = chain
-                .into_iter()
-                .skip(prep.first_level)
-                .map(|c| {
-                    let [f, ..] = c.faces;
-                    f
-                })
-                .collect();
+            let mut all: Vec<Vec<Rgba32F>> = vec![vec![]; 6];
+            for c in chain.into_iter().skip(prep.first_level) {
+                for (f, face) in c.faces.into_iter().enumerate() {
+                    all[f].push(face);
+                }
+            }
             if matches!(keep, Keep::Preview { .. }) {
-                prep.inputs = pos_x
+                prep.inputs = all
                     .iter()
+                    .flatten()
                     .map(|l| to_encoder_input(l, &meta, &q))
                     .collect();
             }
-            prep.chain = pos_x;
+            prep.chain = all.swap_remove(0);
         }
     }
     Ok(prep)
