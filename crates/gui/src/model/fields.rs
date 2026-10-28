@@ -116,6 +116,36 @@ pub const ADVANCED_FIELDS: [(&str, &str); 7] = [
     ("drop_top_mip", "Half size (drop mip 0)"),
 ];
 
+/// The cubemap section's fields in display order (Note DT7), in the groups `ui::cube_section` draws them in.
+pub const CUBE_FIELDS: [(&str, &str); 18] = [
+    ("cubemap.layout", "Layout"),
+    ("cubemap.face_size", "Face size"),
+    ("cubemap.vcross_negz_rotate", "Turn -Z upright"),
+    ("cubemap.yaw", "Yaw"),
+    ("cubemap.mirror", "Mirror east and west"),
+    ("cubemap.face_rotate", "Face rotation"),
+    ("cubemap.face_flip", "Face flip"),
+    ("cubemap.exposure", "Exposure"),
+    ("cubemap.brightness", "Brightness"),
+    ("cubemap.contrast", "Contrast"),
+    ("cubemap.midtones", "Midtones"),
+    ("cubemap.saturation", "Saturation"),
+    ("cubemap.tint", "Tint"),
+    ("cubemap.highlight_clamp", "Highlight clamp"),
+    ("cubemap.ground_fill", "Ground fill"),
+    ("cubemap.horizon", "Horizon"),
+    ("cubemap.style", "Style"),
+    ("cubemap.blur", "Blur"),
+];
+
+/// Why the horizon row is disabled without a ground fill (the engine reads the horizon only with one).
+pub const NEEDS_GROUND_FILL: &str = "needs a ground fill";
+
+/// The cubemap section's field views (value, provenance, own entry, lock).
+pub fn cube_views(target: Target, job: &ResolvedJob) -> Vec<FieldView> {
+    views_of(&CUBE_FIELDS, target, job)
+}
+
 /// The mip level count: shown as the basic Mipmaps tick box, edited as a count in the Advanced drawer.
 pub const LEVELS_FIELD: (&str, &str) = ("mips.levels", "Levels");
 /// The mip filter: a live combo in the basic Mipmaps group, each option locked by `filter_option_lock`.
@@ -288,6 +318,7 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
         "mips.edge" if p.mips.filter == MipFilter::Box => {
             Some("only tent, Mitchell and Kaiser read the edge")
         }
+        "cubemap.horizon" if p.cubemap.ground_fill.is_none() => Some(NEEDS_GROUND_FILL),
         _ => None,
     }
 }

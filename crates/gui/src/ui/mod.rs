@@ -7,6 +7,7 @@ pub mod cm_card;
 pub mod color;
 pub mod columns;
 pub mod cs_pbr;
+pub mod cube_section;
 pub mod dialogs;
 pub mod drawer;
 pub mod from_normal;

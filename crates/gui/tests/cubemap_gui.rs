@@ -1,5 +1,7 @@
 //! Cubemap GUI debts: the sub-type dropdown offers Cubemap, the size estimate counts six faces, a six-face set is named so.
 mod support;
+use egui_kittest::kittest::{NodeT as _, Queryable};
+use egui_kittest::Harness;
 use engine::config::{Subtype, Target};
 use sdc_gui::model::{Answer, AppModel};
 use sdc_gui::settings::GuiSettings;
@@ -91,5 +93,150 @@ fn six_face_item_says_six_faces() {
         names.iter().filter(|n| n.ends_with("(6 faces)")).count(),
         1,
         "{names:?}"
+    );
+}
+
+// ---- the cubemap settings section (Task 3) ----
+
+const CUBE: &str = "a/chrome.png";
+const FLAT: &str = "a/flat.png";
+
+/// A cube (a 6:1 strip decided as Cubemap) and a plain 2D texture, planned, with the panel drawn over `selected`.
+fn section(d: &std::path::Path, selected: &str) -> Harness<'static, AppModel> {
+    let r = d.join("textures/a");
+    std::fs::create_dir_all(&r).unwrap();
+    image::RgbImage::from_fn(384, 64, |x, _| image::Rgb([(x % 256) as u8, 9, 9]))
+        .save(r.join("chrome.png"))
+        .unwrap();
+    image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 90]))
+        .save(r.join("flat.png"))
+        .unwrap();
+    let mut m = open(d);
+    m.decide(CUBE, Answer::Subtype(Subtype::Cubemap));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.select_item(selected);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 1600.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+fn file_value(h: &Harness<'static, AppModel>, field: &str) -> Option<serde_json::Value> {
+    h.state().project.as_ref().unwrap().file_value(CUBE, field)
+}
+
+fn settle(h: &mut Harness<'static, AppModel>) {
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run();
+}
+
+fn headers(h: &Harness<'static, AppModel>) -> usize {
+    h.query_all_by_label("Cubemap").count()
+}
+
+#[test]
+fn cube_section_shows_only_for_cubes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = section(d.path(), FLAT);
+    assert_eq!(headers(&h), 0, "a 2D item has no cube section");
+    h.state_mut().select_item(CUBE);
+    h.run();
+    assert_eq!(headers(&h), 1, "a cube has one");
+}
+
+#[test]
+fn mixed_selection_hides_the_cube_section() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = section(d.path(), CUBE);
+    assert_eq!(headers(&h), 1);
+    h.state_mut().click_item(FLAT, true, false);
+    h.run();
+    assert!(h.state().in_bulk(), "two textures are selected");
+    assert_eq!(headers(&h), 0, "a mixed selection has no cube section");
+    // A bulk edit reaches only the bulk panel's fields.
+    let keys = vec![CUBE.to_string(), FLAT.to_string()];
+    h.state_mut().apply_bulk_edit(
+        &keys,
+        "encoder.effort",
+        sdc_gui::model::bulk::BulkOp::Set(serde_json::json!("fast")),
+    );
+    settle(&mut h);
+    let text = h.state().project.as_ref().unwrap().text();
+    assert!(text.contains("encoder.effort"), "the bulk edit ran: {text}");
+    assert!(!text.contains("cubemap."), "{text}");
+}
+
+#[test]
+fn yaw_edit_writes_the_dotted_key() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = section(d.path(), CUBE);
+    assert_eq!(file_value(&h, "cubemap.yaw"), None);
+    let yaw = h.get_by_label("Cubemap yaw");
+    yaw.click();
+    h.run();
+    h.get_by_label("Cubemap yaw").type_text("90");
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    settle(&mut h);
+    assert_eq!(file_value(&h, "cubemap.yaw"), Some(serde_json::json!(90.0)));
+    h.state_mut().undo();
+    settle(&mut h);
+    assert_eq!(file_value(&h, "cubemap.yaw"), None, "undo removes the key");
+}
+
+#[test]
+fn ground_fill_colour_writes_codes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = section(d.path(), CUBE);
+    h.get_by_label("Cubemap ground fill").click();
+    h.run();
+    h.query_all_by_label("Colour").last().unwrap().click();
+    h.run();
+    settle(&mut h);
+    assert_eq!(
+        file_value(&h, "cubemap.ground_fill"),
+        Some(serde_json::json!([40, 30, 20]))
+    );
+    // With a fill the horizon row opens and the colour button shows.
+    assert!(!h
+        .get_by_label("Cubemap horizon")
+        .accesskit_node()
+        .is_disabled());
+    assert_eq!(h.query_all_by_label("Cubemap ground colour").count(), 1);
+}
+
+#[test]
+fn horizon_is_disabled_without_a_fill() {
+    let d = tempfile::tempdir().unwrap();
+    let h = section(d.path(), CUBE);
+    assert!(h
+        .get_by_label("Cubemap horizon")
+        .accesskit_node()
+        .is_disabled());
+    assert_eq!(h.query_all_by_label("needs a ground fill").count(), 1);
+}
+
+#[test]
+fn out_of_range_yaw_shows_the_engine_message() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = section(d.path(), CUBE);
+    h.state_mut()
+        .set_field(CUBE, "cubemap.yaw", serde_json::json!(400.0));
+    settle(&mut h);
+    settle(&mut h);
+    // The engine's text sits under the yaw row, in the section.
+    let yaw_y = h.get_by_label("Cubemap yaw").rect().max.y;
+    let under: Vec<_> = h
+        .query_all_by_label_contains("cubemap.yaw 400 outside")
+        // The panel's general warning list repeats it far below; the row's own copy is right under the row.
+        .filter(|n| (yaw_y..yaw_y + 40.0).contains(&n.rect().min.y))
+        .collect();
+    assert_eq!(under.len(), 1, "one message under the row");
+    // The GUI neither clamps nor rewrites the file value.
+    assert_eq!(
+        file_value(&h, "cubemap.yaw"),
+        Some(serde_json::json!(400.0))
     );
 }

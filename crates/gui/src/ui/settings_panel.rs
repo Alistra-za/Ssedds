@@ -13,8 +13,8 @@ use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
 use engine::config::{
-    AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Profile, Subtype, Target,
-    ALPHA_THRESHOLD,
+    AlphaPolicy, Backend, ColorTag, CubeLayout, CubeStyle, FaceFlip, Format, GreenConvention,
+    MipFilter, Profile, Subtype, Target, ALPHA_THRESHOLD,
 };
 use engine::policy::{offered, Provenance, ResolvedJob};
 use serde_json::{json, Value};
@@ -230,9 +230,49 @@ pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Opt
             opt(json!(engine::policy::default_backend(p.format)), "Built-in"),
             opt(json!(Backend::Nvtt), "NVTT Production"),
         ],
+        // Cubemap (Note DT7). Auto is the unset layout, "none" the unset style / ground fill.
+        "cubemap.layout" => std::iter::once(opt(json!("auto"), "Auto"))
+            .chain(CUBE_LAYOUTS.iter().map(|(l, label)| opt(json!(l), label)))
+            .collect(),
+        "cubemap.style" => vec![
+            opt(json!("none"), "None"),
+            opt(json!(CubeStyle::VanillaMetal), "Vanilla metal"),
+            opt(json!(CubeStyle::Room), "Room"),
+            opt(json!(CubeStyle::Eye), "Eye"),
+            opt(json!(CubeStyle::Hd), "HD"),
+        ],
+        "cubemap.face_size" => std::iter::once(opt(json!("auto"), "Auto"))
+            .chain((2..=12).map(|n| (json!(1u32 << n), format!("{} px", 1u32 << n))))
+            .collect(),
+        "cubemap.face_rotate" => [0, 90, 180, 270]
+            .map(|d| (json!(d), format!("{d}°")))
+            .to_vec(),
+        "cubemap.face_flip" => vec![
+            opt(json!(FaceFlip::None), "No flip"),
+            opt(json!(FaceFlip::H), "Flip H"),
+            opt(json!(FaceFlip::V), "Flip V"),
+        ],
+        "cubemap.ground_fill" => vec![
+            opt(json!("none"), "None"),
+            opt(json!("gradient"), "Gradient"),
+            opt(json!("colour"), "Colour"),
+        ],
         _ => return None,
     })
 }
+
+/// The cube layouts a picker offers, in display order. `Faces` (a six-file set) is not chosen but detected.
+pub const CUBE_LAYOUTS: [(CubeLayout, &str); 9] = [
+    (CubeLayout::Hcross, "Horizontal cross"),
+    (CubeLayout::Vcross, "Vertical cross"),
+    (CubeLayout::Hstrip, "Horizontal strip"),
+    (CubeLayout::Vstrip, "Vertical strip"),
+    (CubeLayout::Equirect, "360° panorama"),
+    (CubeLayout::MirrorBall, "Mirror ball"),
+    (CubeLayout::Angular, "Angular map"),
+    (CubeLayout::Photo, "Single photo"),
+    (CubeLayout::Faces, "Six face files"),
+];
 
 fn display_value(v: &Value) -> String {
     match v {
@@ -1085,6 +1125,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             }
             if !compact {
                 super::rnm_section::rnm_section(ui, model, key);
+                for (k, f, v) in super::cube_section::cube_section(ui, model, key) {
+                    match v {
+                        Some(v) => model.set_field(&k, &f, v),
+                        None => model.clear_field(&k, &f),
+                    }
+                }
                 other_warnings(ui, &warnings);
             }
         }
