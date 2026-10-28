@@ -12,6 +12,7 @@ pub mod drawer;
 pub mod from_normal;
 pub mod group;
 pub mod header;
+pub mod helper_panel;
 pub mod input_name;
 pub mod json_editor;
 pub mod meshes;

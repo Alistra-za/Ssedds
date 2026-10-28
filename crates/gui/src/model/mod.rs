@@ -13,6 +13,7 @@ pub mod export;
 pub mod fields;
 pub mod from_normal;
 pub mod heatmap;
+pub mod helpers;
 pub mod history;
 pub mod input_name;
 pub mod inspector;

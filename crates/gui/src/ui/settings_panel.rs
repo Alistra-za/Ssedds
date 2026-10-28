@@ -950,7 +950,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         return;
     };
     if let Some(h) = item.helper.clone() {
-        return helper_panel(ui, model, &item.name.clone(), &h);
+        return super::helper_panel::draw(ui, model, key, &h);
     }
     let (name, job_key, kind, status) = (
         item.name.clone(),
@@ -989,6 +989,32 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
+        // Note DT17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
+        let not_helper = model
+            .project
+            .as_ref()
+            .and_then(|p| p.file_value(key, engine::helper::ROLE_FIELD))
+            .is_some_and(|v| v == json!("none"));
+        if not_helper {
+            let mut reset = false;
+            ui.horizontal(|ui| {
+                ui.label("Not a helper (set by you)");
+                let r =
+                    ui.add_enabled(toml_read_only.is_none(), egui::Button::new("Reset").small());
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, r.enabled(), "Reset role")
+                });
+                let r = r.on_hover_text("Use the role guessed from the name");
+                let r = match &toml_read_only {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r,
+                };
+                reset = r.clicked();
+            });
+            if reset {
+                model.set_helper_role(key, None);
+            }
+        }
         ui.add_space(4.0);
     }
     ui.add_enabled_ui(!read_only, |ui| match &job {
@@ -1112,32 +1138,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             Action::PatchDo => {
                 // The result line lands in `dds_patch.last`, shown under the panel.
                 let _ = model.patch_dds_header(key);
-            }
-        }
-    }
-}
-
-/// Note DT16: a helper's panel: its role, where it went, and a button to each output it fills.
-/// shortcut: the minimal panel; Task 8 of the helper-textures plan replaces it with the full editor.
-fn helper_panel(
-    ui: &mut egui::Ui,
-    model: &mut AppModel,
-    name: &str,
-    h: &engine::helper::report::HelperReport,
-) {
-    ui.heading(name);
-    let by_you = if h.role_hand_set { " (set by you)" } else { "" };
-    ui.label(format!("Helper: {}{by_you}", h.role.label()));
-    ui.label(crate::model::items::helper_target_text(h));
-    for o in &h.outputs {
-        let target = model
-            .items
-            .iter()
-            .find(|i| i.job.as_ref().is_some_and(|j| &j.output == o))
-            .map(|i| (i.key.clone(), i.name.clone()));
-        if let Some((key, shown)) = target {
-            if ui.button(format!("Show {shown}")).clicked() {
-                model.select_item(&key);
             }
         }
     }

@@ -152,7 +152,7 @@ pub fn helper_target_text(h: &HelperReport) -> String {
             None => "not used".to_string(),
         };
     }
-    let base = file_name(Path::new(&h.set_key));
+    let base = super::helpers::set_base(h);
     let to: Vec<String> = h.fills.iter().map(|t| t.label(&base)).collect();
     format!("fills to {}", to.join(", "))
 }
