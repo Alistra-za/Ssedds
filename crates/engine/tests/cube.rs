@@ -1012,6 +1012,26 @@ fn face_rotate_applies_to_six_face_files() {
     }
 }
 
+/// DN20 (final review I2): an auto face below 4 is CFG-INVALID as well as DIM-SMALL, so allowing DIM-SMALL batch-wide
+/// still writes no 2x2 picture cube (only `sdc cubemap-marker` writes a tiny cube).
+#[test]
+fn an_auto_face_below_4_is_refused_even_when_dim_small_is_allowed() {
+    let d = tempfile::tempdir().unwrap();
+    faces(d.path(), "textures/a/chrome_e", 2);
+    let mut r = req(d.path(), &["format=rgba8"], true);
+    r.allow = [Code::DimSmall].into_iter().collect();
+    let (p, _) = plan_of(r);
+    let j = job(&p, "chrome_e.dds");
+    assert!(
+        matches!(&j.status, JobStatus::Error { codes } if codes.contains(&Code::CfgInvalid)),
+        "{:#?}",
+        j.status
+    );
+    let (s, ev) = run(p);
+    assert_eq!(s.converted, 0, "{ev:#?}");
+    assert!(!d.path().join("out/textures/a/chrome_e.dds").exists());
+}
+
 /// DECISIONS DN11: a cube's mips average linear light decoded with the game's 1.6 gamma, not sRGB: 0/255 halves give
 /// round(255 * 0.5^(1/1.6)) = 165 (sRGB would give 188).
 #[test]
@@ -1022,36 +1042,33 @@ fn cube_mips_average_in_game_gamma() {
     let dir = d.path().join("in/textures/a");
     std::fs::create_dir_all(&dir).unwrap();
     for f in FACES {
-        image::RgbImage::from_fn(2, 2, |x, y| {
+        image::RgbImage::from_fn(4, 4, |x, y| {
             let v = if (x + y) % 2 == 0 { 255 } else { 0 };
             image::Rgb([v, v, v])
         })
         .save(dir.join(format!("chrome_e_{f}.png")))
         .unwrap();
     }
-    let mut r = req(d.path(), &["format=rgba8"], true);
-    r.allow = [Code::DimSmall].into_iter().collect();
-    let (s, ev) = run(plan_of(r).0);
+    let (s, ev) = run(plan(d.path(), &["format=rgba8"]));
     assert_eq!(s.converted, 1, "{ev:#?}");
     let f =
         read_dds(&std::fs::read(d.path().join("out/textures/a/chrome_e.dds")).unwrap()).unwrap();
-    assert_eq!(f.mip_count, 2);
+    assert_eq!(f.mip_count, 3);
     for (k, (w, h, r)) in f
         .surfaces()
         .into_iter()
         .enumerate()
-        .filter(|(k, _)| k % 2 == 1)
+        .filter(|(k, _)| k % 3 == 1)
     {
         let Decoded::Ldr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
             unreachable!()
         };
-        for c in &px[0][..3] {
-            assert!(
-                (*c as i32 - 165).abs() <= 1,
-                "face {} mip 1: {:?}",
-                k / 2,
-                px[0]
-            );
+        // Mip 1 is 2x2: each texel averages a 2x2 block of the checkerboard. The solid-angle weights favour the
+        // texel nearer the face centre a little (167 measured), still far from sRGB's 188.
+        for p in &px {
+            for c in &p[..3] {
+                assert!((*c as i32 - 165).abs() <= 3, "face {} mip 1: {p:?}", k / 3);
+            }
         }
     }
 }

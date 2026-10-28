@@ -2131,6 +2131,13 @@ pub fn check_profile(
             }
             if shown < 4 {
                 add(DimSmall, format!("cube face {shown} px is below 4"));
+                // DN20: `allow` cannot acknowledge this one, so no tiny picture cube is written.
+                add(
+                    CfgInvalid,
+                    format!(
+                        "cube face {shown} px is below 4; only `sdc cubemap-marker` writes a 1x1 cube"
+                    ),
+                );
             }
         }
         cube_checks(p, &mut add);
