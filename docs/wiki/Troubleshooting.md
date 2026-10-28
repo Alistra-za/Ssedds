@@ -215,7 +215,7 @@ Every warning has a code and a severity:
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
 | `DIM-NPOT` | blocking | A side is not a power of two (checked after resizing). | `resize = "pot-down"`, or acknowledge. |
-| `DIM-SMALL` | blocking | A side is under 4 pixels. | Resize, or acknowledge. |
+| `DIM-SMALL` | blocking | A side is under 4 pixels. A cube face under 4 is also `CFG-INVALID`, which can't be acknowledged. | Resize, or acknowledge (not for a cube). |
 | `DIM-FLOW-SMALL` | warning | A `_flow` map is 32 px or smaller; Community Shaders ignores it. | Use 64 px or more. |
 | `DIM-RESIZED` | info | The input was resized, with the old and new size. | |
 | `DIM-TOO-LARGE` | error | A side is larger than 16384. | Downscale the source. |

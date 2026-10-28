@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Unreleased (1.1.0)
 
 - `--on-existing if-changed` now re-encodes only the texture types whose output changed in a new version. Upgrading from 1.0.0 re-encodes nothing.
 - Cubemaps: a new `cubemap` texture type for `_e` environment maps and files under `textures\cubemaps\`. It reads six face files (`_posx` to `_negz`), crosses and strips, and existing cube DDS files, and writes a cube DDS with a full mip chain. It also reads 360° panoramas (`equirect`, auto-detected only at exactly 2:1), mirror balls (`mirror_ball`), angular maps (`angular`) and a single photo as a blurred approximation (`photo`); the last three are chosen with `cubemap.layout`. `cubemap.*` settings in `sdc.toml` give four styles (`vanilla_metal`, `room`, `eye`, `hd`), face turns and flips, yaw and mirror, a ground fill below an adjustable horizon, blur and colour adjustments. Colour uses Community Shaders' game curve (`pow(c, 1.6)`), not sRGB. Files under `textures\cubemaps\` that 1.0.0 wrote as 2D are now cubemaps: one shaped like a cross, strip or exact 2:1 panorama is written as a cube, and any other shape (a square one, say) is skipped as unclear until you set `cubemap.layout`. Other texture types are unchanged. See docs/wiki/Cubemaps.md.

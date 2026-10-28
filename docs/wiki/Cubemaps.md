@@ -149,7 +149,7 @@ Both assume the camera stood south of the ball looking north, with east on the r
 
 ![A wide strip: your photo in the middle half, mirrored copies on both sides, the top fading to the photo's top-row colour and the bottom fading to its bottom-row colour.](../img/cube-photo.svg)
 
-One photo can't show what is behind you, so this mode makes a believable reflection rather than a true one. Set `cubemap.layout = "photo"`. Tessalith builds the fake panorama shown above (the photo in front, mirrored copies behind, and the top and bottom fading to the average colour of the photo's top and bottom rows), makes a cube from it and blurs it hard: `cubemap.blur = 0.6` unless you set another value, even when a style sets one. It works well for shiny metal and glass, where the reflection only needs the right colours and light. The default face size is half the photo's width.
+One photo can't show what is behind you, so this mode makes a believable reflection rather than a true one. Set `cubemap.layout = "photo"`. Tessalith builds the fake panorama shown above (the photo in front, mirrored copies behind, and the top and bottom fading to the average colour of the photo's top and bottom rows), makes a cube from it and blurs it hard: `cubemap.blur = 0.6` unless you set another value, even when a style sets one. It works well for shiny metal and glass, where the reflection only needs the right colours and light. The default face size is half the photo's width. The photo's centre faces east; `cubemap.yaw = -90` turns it to face north. A portrait photo (taller than wide) loses its top and bottom: only its middle rows, as many as it is wide, are used, so crop it yourself to choose which.
 
 ### Face size
 
@@ -227,7 +227,7 @@ Tessalith applies the settings in this order: import, face rotate and flip, yaw,
 
 ### Blur
 
-`cubemap.blur` blurs the cube evenly across the faces, so no seams show. It is a cone blur, not the GGX filter a game engine might use for rough metal. The default is no blur, unless a style sets one.
+`cubemap.blur` blurs the cube evenly across the faces, so no seams show. It is a cone blur, not the GGX filter a game engine might use for rough metal. The default is no blur, unless a style sets one or the layout is `photo` (0.6).
 
 ### HDR sources
 
