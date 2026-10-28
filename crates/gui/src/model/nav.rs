@@ -210,7 +210,8 @@ impl AppModel {
             },
         };
         let key = order[to].clone();
-        self.click_item(&key, false, extend);
+        // Note DT16 re-review: the range runs over the tiles only, not `click_item`'s tiles-then-helper-rows order.
+        self.click(&key, false, extend, false, &order);
         self.nav.cursor = Some(key.clone());
         self.nav.reveal_item = Some(key);
     }

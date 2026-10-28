@@ -326,13 +326,35 @@ fn shift_click_between_helpers_selects_the_range() {
     m.click_item(&rows[0], false, false);
     m.click_item(&rows[2], false, true);
     assert_eq!(m.selected_items(), rows, "A..C in display order");
-    // Keyboard row navigation stays on the tiles (shortcut: helper rows are mouse-only).
+}
+
+/// Re-review fix (DT16): keyboard ranges stay on the tiles (shortcut: helper rows are mouse-only), even from a
+/// helper anchor.
+#[test]
+fn shift_arrow_from_a_helper_selects_tiles_only() {
+    let d = tempfile::tempdir().unwrap();
+    let mut files = XSET.to_vec();
+    files.push("y_opacity.png");
+    let mut m = fixture(d.path(), &files, "");
+    let rows = helper_keys(&m);
     let tiles: Vec<String> = m
         .visible_items()
         .iter()
         .map(|&i| m.items[i].key.clone())
         .collect();
-    assert!(rows.iter().all(|r| !tiles.contains(r)));
+    assert!(tiles.len() >= 2, "{tiles:?}");
+    m.click_item(&rows[2], false, false);
+    m.grid_move(1, true);
+    let sel = m.selected_items();
+    assert!(!sel.is_empty());
+    assert!(
+        sel.iter().all(|k| tiles.contains(k)),
+        "Shift+Right from a helper selected {sel:?}"
+    );
+    // From a tile, Shift+Right still extends over tiles.
+    m.click_item(&tiles[0], false, false);
+    m.grid_move(1, true);
+    assert_eq!(m.selected_items(), tiles[..2].to_vec());
 }
 
 #[test]

@@ -162,7 +162,14 @@ impl AppModel {
         self.click(key, ctrl, shift, true, &order);
     }
 
-    fn click(&mut self, key: &str, ctrl: bool, shift: bool, sets: bool, order: &[String]) {
+    pub(super) fn click(
+        &mut self,
+        key: &str,
+        ctrl: bool,
+        shift: bool,
+        sets: bool,
+        order: &[String],
+    ) {
         let active = self.active_of(sets).map(str::to_string);
         let range = match (&active, shift) {
             (Some(a), true) => {
