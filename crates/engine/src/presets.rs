@@ -339,6 +339,9 @@ impl ConfigFile {
                 {
                     return Err(bad("rnm.target takes n, cnr or both".into()));
                 }
+                if let Some(e) = crate::helper::value_error(&field, &value) {
+                    return Err(bad(e));
+                }
                 overrides.push(SetOverride {
                     scope: Scope::Path(key.clone()),
                     field,

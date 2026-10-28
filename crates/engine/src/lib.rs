@@ -21,6 +21,7 @@ pub mod filter;
 pub mod from_normal;
 pub mod grass;
 pub mod group;
+pub mod helper;
 pub mod image;
 pub mod load;
 pub mod manifest;

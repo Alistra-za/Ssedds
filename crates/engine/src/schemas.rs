@@ -252,6 +252,41 @@ pub fn files_table_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Sche
         if let Some(Value::Object(r)) = props.get_mut("rnm") {
             r.insert("$ref".into(), format!("{prefix}FileRnmSpec").into());
         }
+        // Note DT: the helper-texture selectors.
+        let roles: Vec<String> = crate::helper::HelperRole::all()
+            .iter()
+            .map(|r| r.id())
+            .collect();
+        let targets: Vec<String> = crate::helper::FillTarget::all()
+            .iter()
+            .map(|t| t.id())
+            .collect();
+        let read = gen.subschema_for::<crate::helper::HelperRead>();
+        props.insert(
+            "helper".into(),
+            serde_json::json!({
+                "description": "Helper texture: a grey map that fills a channel of another output of its set (Note DT).",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "role": {
+                        "description": "What the file is as a helper; `none` converts it on its own.",
+                        "type": "string",
+                        "enum": roles
+                    },
+                    "fills": {
+                        "description": "The channels it fills; [] = not used.",
+                        "type": "array",
+                        "items": { "type": "string", "enum": targets }
+                    },
+                    "read": read.to_value(),
+                    "invert": {
+                        "description": "Store 1 - x.",
+                        "type": "boolean"
+                    }
+                }
+            }),
+        );
     }
     gen.definitions_mut().insert("FileEntry".into(), entry);
     schemars::json_schema!({

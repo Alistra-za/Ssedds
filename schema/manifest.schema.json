@@ -938,7 +938,9 @@
         "orm",
         "curves",
         "cavity",
-        "rmaos"
+        "rmaos",
+        "fuzzweight",
+        "subsurfaceweight"
       ],
       "type": "string"
     },

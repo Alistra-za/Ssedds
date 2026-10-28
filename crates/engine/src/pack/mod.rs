@@ -109,6 +109,9 @@ pub fn b_has_content(b: &crate::analyse::ChannelStats) -> bool {
     f64::from(b.max - b.min) * 255.0 >= 2.0 - 1e-3 || b.mean * 255.0 <= 250.0 + 1e-3
 }
 
+/// The `ChannelSource::Source.channel` that reads a source's luma (Note DT), past R, G, B and A.
+pub const LUMA_CHANNEL: u8 = 4;
+
 /// A raw map of one set waiting for a recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawInput {
@@ -195,7 +198,9 @@ fn unused_reason(
         (_, RawMap::Curves | RawMap::Cavity | RawMap::Rmaos) => {
             "read only by Also export as (Vanilla / Complex material)".into()
         }
-        (_, RawMap::Opacity) => "no recipe packs opacity yet (spec §14 #19)".into(),
+        (_, RawMap::Opacity) => "only fills a colour texture's alpha; no target in the set".into(),
+        (_, RawMap::FuzzWeight) => "only fills a PBR _f alpha; no _f planned".into(),
+        (_, RawMap::SubsurfaceWeight) => "only fills a PBR _s alpha; no _s planned".into(),
         (Target::Cs, RawMap::Glossiness) if has(RawMap::Roughness) => {
             "roughness is used: the _rmaos/_rfaos R channel is roughness".into()
         }

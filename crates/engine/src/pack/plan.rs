@@ -582,13 +582,12 @@ pub fn plan_packing(
         let mut members: BTreeMap<PathBuf, &InputFile> = BTreeMap::new();
         for &i in &set.members {
             let f = &files[i];
-            let Some(role) = raw_role(f)
-                .or_else(|| {
-                    // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing).
-                    (f.kind == InputKind::Image)
-                        .then(|| waiting.get(&f.path).copied())
-                        .flatten()
-                })
+            // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing). The job's role comes
+            // first: a hand-set `helper.role` (Note DT) overrides the name's.
+            let Some(role) = (f.kind == InputKind::Image)
+                .then(|| waiting.get(&f.path).copied())
+                .flatten()
+                .or_else(|| raw_role(f))
                 .or_else(|| {
                     // A failed or cancelled file has no job, so a skin `_f` is recognised by the same test as policy.
                     // shortcut: a rule-named sub-type needs the analysis a failed file lacks, so it is not seen here.

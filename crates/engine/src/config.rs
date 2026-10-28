@@ -343,7 +343,8 @@ impl RnmSpec {
         self.bent.ao_power.unwrap_or(1.5)
     }
 }
-cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm, Curves, Cavity, Rmaos });
+// `FuzzWeight` and `SubsurfaceWeight` (Note DT) come only from a hand-set `helper.role`: no name carries them.
+cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm, Curves, Cavity, Rmaos, FuzzWeight, SubsurfaceWeight });
 
 impl RawMap {
     /// The single-channel roles, each with a `packing.fill.<role>`. `Orm` is not one (DECISIONS Note AL), nor are
@@ -464,7 +465,12 @@ impl FillSpec {
             RawMap::Height => self.height,
             RawMap::Opacity => self.opacity,
             RawMap::Fuzz => self.fuzz,
-            RawMap::Orm | RawMap::Curves | RawMap::Cavity | RawMap::Rmaos => None,
+            RawMap::Orm
+            | RawMap::Curves
+            | RawMap::Cavity
+            | RawMap::Rmaos
+            | RawMap::FuzzWeight
+            | RawMap::SubsurfaceWeight => None,
         }
     }
 }
