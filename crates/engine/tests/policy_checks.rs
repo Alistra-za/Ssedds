@@ -2666,3 +2666,268 @@ fn builtin_backend_does_not_probe() {
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
     assert_eq!(cell.into_probed(), None);
 }
+
+/// An `_e` cubemap source (cubemap support v1), resolved with `sets_cli`.
+fn cube(sets_cli: &[&str]) -> ResolvedJob {
+    run(
+        Target::Cs,
+        "textures/a/x_e.png",
+        Some("e"),
+        &["e"],
+        Rgba32F::new(64, 64, [0.5, 0.4, 0.3, 1.0]),
+        sets_cli,
+        &[],
+    )
+}
+
+#[test]
+fn non_cube_subtypes_ignore_cubemap_keys() {
+    let diffuse = |sets: &[&str]| {
+        run(
+            Target::Cs,
+            "textures/a/x.png",
+            None,
+            &[],
+            Rgba32F::new(64, 64, [0.5, 0.4, 0.3, 1.0]),
+            sets,
+            &[],
+        )
+    };
+    let plain = diffuse(&[]);
+    let set = diffuse(&["cubemap.blur=0.5"]);
+    assert_eq!(set.profile.subtype, Subtype::Diffuse);
+    assert!(set.profile.cubemap.is_default());
+    assert!(!set.provenance.keys().any(|k| k.starts_with("cubemap.")));
+    assert_eq!(
+        engine::manifest::profile_sha256(&set.profile).unwrap(),
+        engine::manifest::profile_sha256(&plain.profile).unwrap()
+    );
+}
+
+#[test]
+fn styles_fill_unset_keys_only() {
+    let j = cube(&["cubemap.style=room"]);
+    assert_eq!(j.profile.subtype, Subtype::Cubemap);
+    assert_eq!(j.profile.cubemap.face_size, Some(128));
+    assert_eq!(j.profile.format, Format::Bc1);
+    assert_eq!(j.profile.encoder.backend, Backend::Rgbcx);
+    assert_eq!(j.profile.cubemap.blur, Some(0.35));
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+
+    let j = cube(&["cubemap.style=room", "format=bc7"]);
+    assert_eq!(j.profile.format, Format::Bc7);
+    assert_eq!(j.profile.encoder.backend, Backend::Bc7e);
+    assert_eq!(j.profile.cubemap.face_size, Some(128));
+
+    let j = cube(&["cubemap.style=vanilla_metal", "cubemap.face_size=64"]);
+    assert_eq!(j.profile.cubemap.face_size, Some(64));
+    assert_eq!(j.profile.cubemap.saturation, 0.8);
+}
+
+#[test]
+fn cubemap_srgb_tag_is_invalid() {
+    assert_eq!(cube(&[]).profile.color.tag, ColorTag::Unorm);
+    let j = cube(&["color.tag=srgb"]);
+    assert!(codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+}
+
+#[test]
+fn mips_none_on_a_cube_warns() {
+    assert!(!codes(&cube(&[])).contains(&Code::CubeNoMips));
+    let j = cube(&["mips.levels=none"]);
+    assert!(codes(&j).contains(&Code::CubeNoMips), "{:?}", j.warnings);
+}
+
+#[test]
+fn out_of_range_cube_keys_are_invalid() {
+    assert!(!codes(&cube(&[])).contains(&Code::CfgInvalid));
+    for set in [
+        "cubemap.face_size=100",
+        "cubemap.face_rotate=[45, 0, 0, 0, 0, 0]",
+        "cubemap.blur=1.5",
+        "cubemap.midtones=0",
+        "cubemap.exposure=11",
+        "cubemap.saturation=2.5",
+        "cubemap.highlight_clamp=0.5",
+        "cubemap.yaw=400",
+        "cubemap.horizon=50",
+    ] {
+        let j = cube(&[set]);
+        assert!(
+            codes(&j).contains(&Code::CfgInvalid),
+            "{set}: {:?}",
+            j.warnings
+        );
+    }
+    // A NaN never gets that far: --set refuses it (and the range check would too).
+    assert!(parse_set("cubemap.yaw=nan").is_err());
+    assert!(parse_set("cubemap.horizon=nan").is_err());
+    // A ground fill at a valid horizon is accepted.
+    let j = cube(&["cubemap.ground_fill=\"gradient\"", "cubemap.horizon=-10"]);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+}
+
+/// An `_e` source of `w` x `h` with the given source facts, resolved as a cubemap; `tweak` edits the analysis.
+fn cube_src(
+    size: (u32, u32),
+    info: SourceInfo,
+    tweak: impl FnOnce(&mut engine::analyse::Analysis),
+    sets_cli: &[&str],
+) -> ResolvedJob {
+    cube_src_named("x_e.png", size, info, tweak, sets_cli)
+}
+
+fn cube_src_named(
+    name: &str,
+    (w, h): (u32, u32),
+    info: SourceInfo,
+    tweak: impl FnOnce(&mut engine::analyse::Analysis),
+    sets_cli: &[&str],
+) -> ResolvedJob {
+    let reg = PresetRegistry::builtin().unwrap();
+    let overrides: Vec<_> = sets_cli.iter().map(|s| parse_set(s).unwrap()).collect();
+    let allow = BTreeSet::new();
+    let ctx = ResolveCtx {
+        target: Target::Cs,
+        registry: &reg,
+        preset: default_preset_for(Target::Cs),
+        user_config: None,
+        project_config: None,
+        overrides: &overrides,
+        accept: AcceptSuggestions::High,
+        allow: &allow,
+        files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
+    };
+    let f = InputFile {
+        path: name.into(),
+        rel: name.into(),
+        game_path: format!("textures/a/{name}"),
+        output: PathBuf::from(name).with_extension("dds"),
+        kind: InputKind::Image,
+        real_rel: None,
+    };
+    let set = TextureSet {
+        key: "k".into(),
+        members: vec![0],
+        suffixes: BTreeSet::from(["e".to_string()]),
+    };
+    let mut a = analyse(&Rgba32F::new(w, h, [0.5, 0.4, 0.3, 1.0]), &info);
+    tweak(&mut a);
+    resolve_file(
+        &ctx,
+        &FileFacts {
+            input: &f,
+            suffix: Some("e"),
+            alias: None,
+            set: &set,
+            analysis: &a,
+            info: &info,
+        },
+    )
+}
+
+fn cube_dims(size: (u32, u32), sets_cli: &[&str]) -> ResolvedJob {
+    cube_src(size, RGBA8, |_| {}, sets_cli)
+}
+
+#[test]
+fn tiny_cube_is_dim_small() {
+    let j = cube_dims((48, 8), &["cubemap.face_size=2"]);
+    assert!(codes(&j).contains(&Code::DimSmall), "{:?}", j.warnings);
+    assert!(codes(&j).contains(&Code::CfgInvalid));
+    let j = cube_dims((24, 4), &["drop_top_mip=true"]);
+    assert!(codes(&j).contains(&Code::DimSmall), "{:?}", j.warnings);
+    let j = cube_dims((24, 4), &[]);
+    assert!(!codes(&j).contains(&Code::DimSmall), "{:?}", j.warnings);
+}
+
+#[test]
+fn cube_source_dims_are_not_npot() {
+    let j = cube_dims((1024, 768), &[]);
+    assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
+    let j = cube_dims((600, 450), &[]);
+    let w = warning(&j, Code::DimResized);
+    assert!(w.message.contains("face 150 → 128"), "{}", w.message);
+    assert!(!codes(&j).contains(&Code::DimNpot));
+    let j = cube_dims((512, 512), &[]);
+    assert!(
+        !codes(&j)
+            .iter()
+            .any(|c| matches!(c, Code::DimNpot | Code::DimSmall | Code::DimResized)),
+        "{:?}",
+        j.warnings
+    );
+}
+
+#[test]
+fn hdr_cube_source_without_clamp_warns() {
+    let float = SourceInfo {
+        bit_depth: 32,
+        channels: 4,
+        has_alpha: true,
+        is_float: true,
+    };
+    let hot = |a: &mut engine::analyse::Analysis| a.peak_luminance = 40.0;
+    let j = cube_src((1024, 768), float, hot, &[]);
+    let w = warning(&j, Code::LossClampHdr);
+    assert!(
+        w.message.contains("cubemap.highlight_clamp"),
+        "{}",
+        w.message
+    );
+    let j = cube_src((1024, 768), float, hot, &["cubemap.highlight_clamp=4"]);
+    assert!(!codes(&j).contains(&Code::LossClampHdr), "{:?}", j.warnings);
+    let j = cube_dims((1024, 768), &[]);
+    assert!(!codes(&j).contains(&Code::LossClampHdr));
+}
+
+/// DECISIONS DS7: a cube DDS is a cubemap; an explicit other sub-type is CFG-INVALID.
+#[test]
+fn cube_dds_is_decided_as_a_cubemap() {
+    let cube_dds = |a: &mut engine::analyse::Analysis| a.dds_cube = true;
+    let j = cube_src((48, 8), RGBA8, cube_dds, &[]);
+    assert_eq!(j.profile.subtype, Subtype::Cubemap);
+    assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
+    // A cube DDS is always its six faces side by side: a face tag in the name does not make it six files, and an
+    // explicit other layout is refused.
+    let j = cube_src_named("foo_px.dds", (48, 8), RGBA8, cube_dds, &["subtype=cubemap"]);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+    assert!(!codes(&j).contains(&Code::DimSmall));
+    let j = cube_src((48, 8), RGBA8, cube_dds, &["cubemap.layout=hcross"]);
+    assert!(
+        j.warnings
+            .iter()
+            .any(|w| w.code == Code::CfgInvalid && w.message.contains("remove cubemap.layout")),
+        "{:?}",
+        j.warnings
+    );
+    let j = cube_src((48, 8), RGBA8, cube_dds, &["cubemap.layout=hstrip"]);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+    let j = cube_src((48, 8), RGBA8, cube_dds, &["subtype=diffuse"]);
+    assert_eq!(j.profile.subtype, Subtype::Diffuse);
+    assert!(
+        j.warnings
+            .iter()
+            .any(|w| w.code == Code::CfgInvalid && w.message.contains("cube DDS")),
+        "{:?}",
+        j.warnings
+    );
+}
+
+#[test]
+fn photo_defaults_to_heavy_blur() {
+    assert_eq!(
+        cube(&["cubemap.layout=photo"]).profile.cubemap.blur,
+        Some(0.6)
+    );
+    let j = cube(&["cubemap.layout=photo", "cubemap.blur=0.2"]);
+    assert_eq!(j.profile.cubemap.blur, Some(0.2));
+    assert_eq!(cube(&[]).profile.cubemap.blur, None);
+    assert_eq!(
+        cube(&["cubemap.layout=equirect"]).profile.cubemap.blur,
+        None
+    );
+}

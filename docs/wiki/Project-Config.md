@@ -241,7 +241,7 @@ Every field below can be set in `[defaults]`, `[subtypes.<id>]`, a rule's `overr
 | Field | Values | Default | Notes |
 |---|---|---|---|
 | `subtype` | a sub-type id | from the file name | Refused in a `subtype:` scoped `--set`. In `[defaults]` and `[subtypes]` it is accepted but has no effect. |
-| `color.content` | `srgb`, `linear` | `linear`; `srgb` for colour sub-types | What the pixels mean. Affects mip filtering. |
+| `color.content` | `srgb`, `linear` | `linear`; `srgb` for colour sub-types | What the pixels mean. Affects mip filtering. On a `cubemap` it stays `srgb` but means the game's `pow(c, 1.6)` curve, not the sRGB curve. |
 | `color.tag` | `srgb`, `unorm`, `n/a` | `unorm`; `srgb` for PBR colour under `cs`; `n/a` for HDR | The DDS format's `_SRGB` flag. `n/a` for BC6H and RGBA16F. See [Presets and targets](Presets-and-Targets.md#srgb-tagging). |
 
 ### Alpha
@@ -334,6 +334,35 @@ These apply to a base normal (`_n`, `pbr_normal`, `landscape_normal`, or `_cnr`)
 | `rnm.bent.ao_power` | 0.1 to 8 | 1.5 | Power on the occlusion (1 minus AO). |
 | `rnm.bent.ao` | `true`, `false` | `true` | Read the AO source (a raw `_ao` map, or the B channel of `_rmaos`/`_rfaos`); `false` uses a uniform weight. Supply normal AO (white = open); Tessalith inverts it. |
 | `rnm.target` | `n`, `cnr`, `both` | from the layer's name | Per layer file (`[files]` or `file:` `--set`), or an unscoped `--set` for every layer file; refused in a `subtype:` scope. Which base normal it feeds when a set has both `_n` and `_cnr`. |
+
+### Cubemap
+
+These apply to the `cubemap` sub-type (`_e` files and files under a `cubemaps` folder) and are ignored by every other. See [Cubemaps](Cubemaps.md).
+
+| Field | Values | Default | Notes |
+|---|---|---|---|
+| `cubemap.style` | `vanilla_metal`, `room`, `eye`, `hd` | unset | Fills the keys below that nothing else set: `vanilla_metal` 32 px, BC1, blur 0.6, saturation 0.8; `room` 128 px, BC1, blur 0.35; `eye` 256 px, BC7, blur 0.35; `hd` 512 px, BC7, blur 0.1. |
+| `cubemap.layout` | `faces`, `hcross`, `vcross`, `hstrip`, `vstrip`, `equirect`, `mirror_ball`, `angular`, `photo` | from the image shape | Only an exact shape is detected: 4:3 is `hcross`, 3:4 `vcross`, 6:1 `hstrip`, 1:6 `vstrip`, 2:1 `equirect`. `faces` is six separate files. `mirror_ball`, `angular` and `photo` are never detected: set them. An explicit `equirect`, `mirror_ball`, `angular` or `photo` takes any non-zero image size. A square image needs this set. A cube DDS must leave it unset. |
+| `cubemap.face_size` | a power of two, 4 to 4096 | the largest power of two inside one source cell, at most 4096 | Face edge in pixels. The source cell is a cross or strip cell; a quarter of the width for `equirect`; half the width for `mirror_ball` and `angular`; half the photo's width for `photo`. |
+| `cubemap.yaw` | −360 to 360 | 0 | Turns the cube about world up, in degrees. Positive is clockwise seen from above, the way Skyrim headings turn: 90 moves east to south. |
+| `cubemap.mirror` | `true`, `false` | `false` | Swaps world east and west. |
+| `cubemap.face_rotate` | six of 0, 90, 180, 270 | `[0, 0, 0, 0, 0, 0]` | Clockwise turn per face, in the order +X, −X, +Y, −Y, +Z, −Z. Applied before the flip. Works on every layout. |
+| `cubemap.face_flip` | six of `"none"`, `"h"`, `"v"` | all `"none"` | `h` mirrors left-right, `v` flips top-bottom. |
+| `cubemap.vcross_negz_rotate` | `true`, `false` | `true` | Turn a vertical cross's bottom cell (−Z) by 180°. Other layouts ignore it. |
+| `cubemap.blur` | 0 to 1 | none (0), the style's, or 0.6 for `photo` | Cone blur across the faces. A `photo` layout blurs at 0.6 unless you set this. |
+| `cubemap.exposure` | −10 to 10 | 0 | Stops, in linear light. 1 doubles the light. |
+| `cubemap.brightness` | −1 to 1 | 0 | Added to each channel, on the game curve. |
+| `cubemap.contrast` | −1 to 1 | 0 | Scales around mid-grey by (1 + contrast), on the game curve. |
+| `cubemap.midtones` | 0.1 to 10 | 1 | A power curve on the game curve: above 1 brightens the mid-tones, below 1 darkens them, 1 is off. |
+| `cubemap.saturation` | 0 to 2 | 1 | 0 is grey. |
+| `cubemap.tint` | `[R, G, B]`, each 0 to 255 | unset | Each channel is multiplied by its value / 255, on the game curve (255, 255, 255 changes nothing). |
+| `cubemap.highlight_clamp` | 1 or more | unset | Soft-compresses brightness so that this linear level becomes full white; lower values are also pulled down a little, and hue is kept. For HDR sources. Colour filters run in this order: exposure, highlight clamp, brightness and contrast, midtones, saturation, tint. |
+| `cubemap.ground_fill` | `"gradient"` or `[R, G, B]`, each 0 to 255 | unset (no fill) | Replaces everything below `cubemap.horizon`. `"gradient"` starts from the colour at the horizon and darkens it to half at straight down. A colour is read as code values on the game curve (`pow(c, 1.6)`), not sRGB. Unset means no fill, and `horizon` alone does nothing. |
+| `cubemap.horizon` | −45 to 45 | 0 | Horizon elevation in degrees: 0 is level, positive is above it. Read only with `ground_fill`. |
+
+The cube is built in this order: import, face rotate and flip, yaw, mirror, exposure, clamp and colour filters, ground fill, blur, mips.
+
+A cube is written as BC1, BC3, BC7 or RGBA8 with the UNORM tag; any other `format` or an sRGB tag is `CFG-INVALID`. `mips.levels = "none"` raises `CUBE-NO-MIPS`.
 
 ### Re-encoding DDS inputs
 

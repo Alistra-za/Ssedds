@@ -41,6 +41,8 @@ The **Mode** menu picks the target (`cs` or `vanilla`). It is saved in `sdc.toml
 
 Esc with the rename dialog's Case list open closes the list first; a second Esc closes the dialog. Review's **Export** is a click only: Enter never exports (see [The bottom panel](#the-bottom-panel)).
 
+Cube files are listed like any other texture. The cubemap settings are not in the GUI yet; set them in `sdc.toml` (see [Cubemaps](wiki/Cubemaps.md)).
+
 ## The three columns
 
 From left to right: Textures, Sets, then the centre. The **Advanced** drawer is at the right edge, except with a set selected in 2D, where Advanced is the last tab of the set's right-hand panel (see The set editor).

@@ -194,6 +194,12 @@ pub struct SuffixSplit {
 /// the §6.1 list. Aliases contain no '_' and are never a §6.1 suffix or a vocabulary term, so a match is
 /// exact and unambiguous. A vocabulary term splits to its canonical suffix (`Vocab::canonical`).
 pub fn split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> SuffixSplit {
+    // DECISIONS DS8: a cube face of an `_e` map (`chrome_e_posx`) is a member of set `chrome` with suffix `e`.
+    if let Some((rest, _)) = crate::cube::plan::face_tag(stem) {
+        if rest.len() > 2 && rest.to_ascii_lowercase().ends_with("_e") {
+            return split_suffix_with(rest, aliases);
+        }
+    }
     if let Some((base, tail)) = stem.rsplit_once('_') {
         let tail = tail.to_ascii_lowercase();
         if let Some(canonical) = aliases.get(&tail).filter(|_| !base.is_empty()) {

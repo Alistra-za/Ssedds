@@ -248,6 +248,13 @@ fn encode_inputs_are_pinned_or_their_type_was_bumped() {
             // These store no alpha: an alpha source is blocked by LOSS-ALPHA-DATA.
             PbrEmissive | Glow | SubsurfaceTint | BacklightTint | Msn | Envmask | Flow | Height
             | MsnSpecular | GenericTwoChannel | SkinSk => (format!("{id}.png"), rgb(64)),
+            // DECISIONS DS8: a one-file cube needs a layout, so a 6:1 h-strip of 64-px faces.
+            Cubemap => (
+                format!("{id}.png"),
+                DynamicImage::ImageRgb8(ImageBuffer::from_fn(384, 64, |x, y| {
+                    Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+                })),
+            ),
             _ => (format!("{id}.png"), rgba64()),
         };
         put(d.path(), &format!("textures/h/{file}"), img);

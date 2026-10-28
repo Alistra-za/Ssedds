@@ -36,6 +36,8 @@ pub enum Command {
     Encoders(EncodersArgs),
     /// Fix DDS header faults that need no pixel change (mip count, flags, caps, legacy/DX10, an explicit tag).
     PatchHeader(PatchHeaderArgs),
+    /// Write the 1x1 CS/ENB dynamic cubemap marker DDS (152 bytes).
+    CubemapMarker(MarkerArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -463,4 +465,29 @@ pub struct PatchHeaderArgs {
     /// Report what would change; write nothing.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Args)]
+pub struct MarkerArgs {
+    /// F0 colour as R,G,B code values 0..255, written as is. CS reads F0 as (code/255)^1.6 (GameGammaToLinear).
+    #[arg(long, value_parser = parse_rgb, default_value = "0,0,0")]
+    pub color: [u8; 3],
+    /// Roughness 0..1 (stored in alpha). Omitted: alpha 255, CS's defaults (F0 1, roughness 1/7).
+    #[arg(long)]
+    pub roughness: Option<f64>,
+    /// The DDS file to write.
+    #[arg(short = 'o', long)]
+    pub out: PathBuf,
+}
+
+fn parse_rgb(s: &str) -> Result<[u8; 3], String> {
+    let v: Vec<u8> = s
+        .split(',')
+        .map(|x| {
+            x.trim()
+                .parse::<u8>()
+                .map_err(|_| format!("{x:?} is not 0..255"))
+        })
+        .collect::<Result<_, _>>()?;
+    <[u8; 3]>::try_from(v).map_err(|_| "expected R,G,B".to_string())
 }

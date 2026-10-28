@@ -31,6 +31,8 @@ impl SizeEst {
 /// The DDS of a `src`-sized image under `p`. `drop_top_mip` removes level 0 from the chain the size would have
 /// (the engine's rule, Note CL23): half the size, and one level less, so `mips.levels = n` writes n − 1 levels while
 /// `full` stays a full chain of the half size.
+// shortcut: a cube job is estimated as one 2D image of its source size, not six faces at `cube::layout::face_size`;
+// upgrade when the GUI gets a cubemap step (v1 GUI scope is compile + list, final review M10).
 pub fn estimate(src: (u32, u32), p: &Profile) -> SizeEst {
     let (w, h) = engine::resize::target_dims(src, p.resize);
     let (w, h) = (w.max(1), h.max(1));

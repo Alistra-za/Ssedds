@@ -1732,6 +1732,7 @@ mod tests {
             rnm: None,
             derive: None,
             shader: None,
+            cube: None,
         }
     }
 

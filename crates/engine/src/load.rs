@@ -26,6 +26,8 @@ pub struct SourceMeta {
     pub icc_profile: bool,
     /// DXGI format of a DDS input (DECISIONS S6); `None` for images.
     pub dds_dxgi: Option<u32>,
+    /// A single cube DDS (DECISIONS DS7): the image is its six mip-0 faces side by side, a 6:1 strip.
+    pub dds_cube: bool,
 }
 
 /// Decode `path` to float RGBA. The dimension limit is checked from the header before the float pixel buffer is
@@ -153,7 +155,7 @@ fn decode<R: std::io::BufRead + std::io::Seek>(
         info,
         SourceMeta {
             icc_profile,
-            dds_dxgi: None,
+            ..Default::default()
         },
     ))
 }
@@ -193,11 +195,22 @@ pub fn image_size(path: &Path) -> Result<(u32, u32), LoadError> {
 /// Width and height of a DDS from its first 20 bytes (the offsets `dds::read_dds` uses; that reader needs the
 /// whole payload). `None` when the file cannot be read or is not a DDS. Unchecked against MAX_DIM.
 pub(crate) fn dds_header_size(path: &Path) -> Option<(u32, u32)> {
+    dds_header_facts(path).map(|(size, _)| size)
+}
+
+/// [`dds_header_size`] and whether the header says cube (caps2 or the DX10 misc flag, as `dds::read_dds` decides).
+/// The size is the face size; a cube loads as a 6w x h strip (DECISIONS DS7).
+pub(crate) fn dds_header_facts(path: &Path) -> Option<((u32, u32), bool)> {
     use std::io::Read;
-    let mut b = [0u8; 20];
-    std::fs::File::open(path).ok()?.read_exact(&mut b).ok()?;
+    let mut b = [0u8; 144];
+    let n = std::fs::File::open(path).ok()?.read(&mut b).ok()?;
+    if n < 20 || &b[..4] != b"DDS " {
+        return None;
+    }
     let u = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
-    (&b[..4] == b"DDS ").then(|| (u(16), u(12)))
+    let dx10 = n >= 144 && &b[84..88] == b"DX10";
+    let cube = (n >= 116 && u(112) & 0x200 != 0) || (dx10 && u(136) & 0x4 != 0);
+    Some(((u(16), u(12)), cube))
 }
 
 fn psd_error(path: &Path, e: crate::psd::PsdError) -> LoadError {
@@ -222,7 +235,7 @@ fn load_psd(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError>
         info,
         SourceMeta {
             icc_profile,
-            dds_dxgi: None,
+            ..Default::default()
         },
     ))
 }
@@ -258,9 +271,9 @@ fn load_dds(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError>
     let bytes = std::fs::read(path).map_err(|e| bad(e.to_string()))?;
     let f = crate::dds::read_dds(&bytes).map_err(|e| bad(e.to_string()))?;
     drop(bytes);
-    if f.is_cubemap || f.dx10.is_some_and(|d| d.array_size > 1) {
+    if f.dx10.is_some_and(|d| d.array_size > 1) {
         return Err(bad(
-            "a cubemap or array DDS cannot be re-encoded (2D only)".into()
+            "a cubemap or texture array DDS cannot be re-encoded (2D and single cubes only)".into(),
         ));
     }
     if f.width.max(f.height) > MAX_DIM {
@@ -269,9 +282,33 @@ fn load_dds(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError>
             dim: f.width.max(f.height),
         });
     }
-    let (w, h, r) = f.levels[0].clone();
-    let px = crate::decode::decode_level_rgba(f.format, w, h, &f.data[r], None)
-        .map_err(|e| bad(e.to_string()))?;
+    let decode = |w, h, r: std::ops::Range<usize>| {
+        crate::decode::decode_level_rgba(f.format, w, h, &f.data[r], None)
+            .map_err(|e| bad(e.to_string()))
+    };
+    // A single cube (DECISIONS DS7) loads as a 6:1 strip of its mip-0 faces, face k at x = k * w.
+    let (w, h, px) = if f.is_cubemap {
+        if f.width != f.height {
+            return Err(bad(format!(
+                "cube faces are {}x{}, not square",
+                f.width, f.height
+            )));
+        }
+        let (n, s) = (f.levels.len(), f.surfaces());
+        let (w, h) = (f.width, f.height);
+        let mut px = vec![[0.0; 4]; 6 * (w * h) as usize];
+        for k in 0..6 {
+            let (_, _, r) = s[k * n].clone();
+            for (i, p) in decode(w, h, r)?.into_iter().enumerate() {
+                let (x, y) = (i as u32 % w, i as u32 / w);
+                px[(y * 6 * w + k as u32 * w + x) as usize] = p;
+            }
+        }
+        (6 * w, h, px)
+    } else {
+        let (w, h, r) = f.levels[0].clone();
+        (w, h, decode(w, h, r)?)
+    };
     Ok((
         Rgba32F {
             width: w,
@@ -280,8 +317,9 @@ fn load_dds(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError>
         },
         dds_source_info(f.format),
         SourceMeta {
-            icc_profile: false,
             dds_dxgi: Some(f.format.dxgi()),
+            dds_cube: f.is_cubemap,
+            ..Default::default()
         },
     ))
 }

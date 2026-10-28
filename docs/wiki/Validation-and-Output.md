@@ -61,6 +61,19 @@ Every converted file is decoded again before it is written, and the decoded resu
 
 A file with an error from validation is still written. It is reported as `ok ... [VALIDATION FAILED]`, counted under "failed validation", and makes `sdc convert` exit with 4 if nothing worse happened. The next `if-changed` run re-encodes it instead of calling it up to date.
 
+### Cube checks
+
+`sdc inspect` lists these as header issues, and `sdc validate` reports them as `VAL-HEADER` warnings that fail the file:
+
+| Check | Rule |
+|---|---|
+| No mips | A cube wider than 1 pixel has more than one mip. |
+| Marker +Y | A 1×1 cube has a black +Y face. A lit +Y reads in Community Shaders as a near-black static reflection, not a dynamic marker. |
+| Format | A cube is UNORM, never an `_SRGB` format. |
+| Cube expected | A file named `_e`, or under `textures\cubemaps\` (a `textures` folder directly followed by `cubemaps`), is a cube DDS, not a 2D one. |
+
+The messages are quoted word for word under [Cubemaps](Cubemaps.md#checks). The last check changes the verdict for 2D files: a 2D `_e` or `cubemaps\` file now fails. Every other 2D file is judged as before. A cube is judged on all six faces, and each message names the face and mip. See [Cubemaps](Cubemaps.md).
+
 ### The BC1 decoder model
 
 Different GPUs decode BC1 colour slightly differently. `--bc1-decoder` (and *BC1 decoder* in the GUI's Advanced drawer) picks which decoder rgbcx encodes BC1 blocks against and validation decodes with:

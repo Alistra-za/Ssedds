@@ -375,15 +375,65 @@ fn third_party_uncompressed_layouts_load_as_float_rgba() {
     }
 }
 
+/// DECISIONS DS7: a single cube DDS loads as a 6:1 strip of its mip-0 faces.
 #[test]
-fn a_cubemap_dds_is_a_decode_error() {
+fn single_cube_dds_loads_as_a_strip() {
+    use engine::config::Format;
+    use engine::dds::{dds_bytes_cube, DdsDesc, ResolvedHeader};
     let d = tempfile::tempdir().unwrap();
-    let mut b = dx10(1, 1, 28, 4, &[0; 4 * 6]);
-    b[136..140].copy_from_slice(&4u32.to_le_bytes()); // DX10 misc: TEXTURECUBE
+    let desc = DdsDesc {
+        width: 8,
+        height: 8,
+        format: Format::Rgba8,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    let mut levels = vec![];
+    for k in 0..6u8 {
+        for s in [8usize, 4, 2, 1] {
+            // Mip 0 holds the face colour, the other mips a marker that must not be read.
+            let v = if s == 8 { k * 40 + 10 } else { 255 };
+            levels.push([7, v / 2, v, 255].repeat(s * s)); // the writer's Rgba8 is B8G8R8A8
+        }
+    }
     let p = d.path().join("cube.dds");
+    std::fs::write(&p, dds_bytes_cube(&desc, &levels).unwrap()).unwrap();
+    let (img, _, meta) = load_image_meta(&p).unwrap();
+    assert!(meta.dds_cube);
+    assert_eq!((img.width, img.height), (48, 8));
+    for k in 0..6u32 {
+        let v = (k * 40 + 10) as f32;
+        for (x, y) in [(0, 0), (7, 7), (3, 5)] {
+            let got = img.at(k * 8 + x, y);
+            assert!((got[0] - v / 255.0).abs() < 1e-3, "face {k}: {got:?}");
+            assert!((got[2] - 7.0 / 255.0).abs() < 1e-3);
+        }
+    }
+    // An image is not a cube.
+    assert!(
+        !load_image_meta(&{
+            let q = d.path().join("a.png");
+            ImageBuffer::from_fn(2, 2, |_, _| Rgba([1u8, 2, 3, 4]))
+                .save(&q)
+                .unwrap();
+            q
+        })
+        .unwrap()
+        .2
+        .dds_cube
+    );
+}
+
+#[test]
+fn cube_arrays_are_still_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut b = dx10(1, 1, 28, 4, &[0; 4 * 12]);
+    b[136..140].copy_from_slice(&4u32.to_le_bytes()); // DX10 misc: TEXTURECUBE
+    b[140..144].copy_from_slice(&2u32.to_le_bytes()); // arraySize 2
+    let p = d.path().join("cube-array.dds");
     std::fs::write(&p, b).unwrap();
     let e = load_image(&p).unwrap_err();
-    assert!(e.to_string().contains("cubemap or array"), "{e}");
+    assert!(e.to_string().contains("array"), "{e}");
 }
 
 /// Fix wave (final review I3): the dimension limit is read from the decoder chosen by the file's content, the one

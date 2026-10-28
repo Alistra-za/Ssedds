@@ -361,6 +361,7 @@ pub(crate) fn recipe_error_job(
         rnm: None,
         derive: None,
         shader: None,
+        cube: None,
     }
 }
 

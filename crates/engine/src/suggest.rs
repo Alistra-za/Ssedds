@@ -117,6 +117,10 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
         }
         Some("i") => vec![s(Diffuse, Medium, "_i multilayer inner layer (colour)")],
         Some("b") | Some("bl") => vec![s(BacklightTint, High, "_b/_bl backlight")],
+        Some("e") => vec![s(Cubemap, High, "_e environment cubemap")],
+        None | Some("d") if crate::cube::checks::under_textures_cubemaps(c.game_path) => {
+            vec![s(Cubemap, High, "under textures/cubemaps")]
+        }
         Some("sk") => vec![s(BacklightTint, Low, "_sk (unconfirmed meaning)")],
         Some("d") | None if landscape => {
             vec![s(LandscapeDiffuse, High, "colour under textures/landscape")]
@@ -423,14 +427,32 @@ mod tests {
             .subtype,
             Subtype::Glow
         );
-        assert!(suggest(&ctx(
+    }
+
+    #[test]
+    fn underscore_e_and_cubemaps_folder_suggest_cubemap() {
+        let none = BTreeSet::new();
+        for (suffix, path) in [
+            (Some("e"), "textures/a/x_e.png"),
+            (None, "textures/cubemaps/sky.png"),
+        ] {
+            let v = suggest(&ctx(Target::Cs, suffix, path, &none, AlphaContent::None));
+            assert_eq!(v.len(), 1, "{path}: {v:?}");
+            assert_eq!(
+                (v[0].subtype, v[0].confidence),
+                (Subtype::Cubemap, Confidence::High),
+                "{path}"
+            );
+        }
+        // DS23 (final review M2): only `textures/cubemaps/`, the rule `sdc validate` uses.
+        let v = suggest(&ctx(
             Target::Cs,
-            Some("e"),
-            "textures/a/x_e.png",
+            None,
+            "textures/mymod/cubemaps/x.png",
             &none,
-            AlphaContent::None
-        ))
-        .is_empty());
+            AlphaContent::None,
+        ));
+        assert!(v.iter().all(|s| s.subtype != Subtype::Cubemap), "{v:?}");
     }
 
     #[test]

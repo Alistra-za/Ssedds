@@ -558,3 +558,111 @@ fn may_replace_keeps_unreadable_and_foreign_files() {
         k.note(&dir)
     );
 }
+
+fn cube_levels(format: Format, side: u32, n: usize) -> Vec<Vec<u8>> {
+    let mut v = vec![];
+    for face in 0..6u8 {
+        let mut s = side;
+        for l in 0..n {
+            v.push(vec![face * 16 + l as u8; level_size(format, s, s)]);
+            s = (s / 2).max(1);
+        }
+    }
+    v
+}
+
+fn cube_desc(side: u32, format: Format, header: ResolvedHeader) -> DdsDesc {
+    desc(side, side, format, false, header)
+}
+
+#[test]
+fn vanilla_metal_cube_size_matches_the_game() {
+    let d = cube_desc(32, Format::Bc1, ResolvedHeader::Legacy);
+    let b = dds_bytes_cube(&d, &cube_levels(Format::Bc1, 32, 6)).unwrap();
+    assert_eq!(b.len(), 4304);
+}
+
+#[test]
+fn vanilla_room_cube_size_matches_the_game() {
+    let d = cube_desc(128, Format::Bc1, ResolvedHeader::Legacy);
+    let b = dds_bytes_cube(&d, &cube_levels(Format::Bc1, 128, 8)).unwrap();
+    assert_eq!(b.len(), 65744);
+}
+
+#[test]
+fn cube_header_fields() {
+    let d = cube_desc(32, Format::Bc1, ResolvedHeader::Legacy);
+    let b = dds_bytes_cube(&d, &cube_levels(Format::Bc1, 32, 6)).unwrap();
+    assert_eq!(u(&b, 8), 0xA1007);
+    assert_eq!(u(&b, 108), 0x401008);
+    assert_eq!(u(&b, 112), 0xFE00);
+    let d = cube_desc(16, Format::Bc7, ResolvedHeader::Dx10);
+    let ls = cube_levels(Format::Bc7, 16, 5);
+    let b = dds_bytes_cube(&d, &ls).unwrap();
+    assert_eq!(u(&b, 112), 0xFE00);
+    assert_eq!(
+        [u(&b, 128), u(&b, 132), u(&b, 136), u(&b, 140), u(&b, 144)],
+        [98, 3, 4, 1, 0]
+    );
+    assert_eq!(b.len(), 148 + ls.iter().map(Vec::len).sum::<usize>());
+}
+
+#[test]
+fn cube_with_one_mip_still_sets_complex() {
+    let d = cube_desc(4, Format::Rgba8, ResolvedHeader::Legacy);
+    let b = dds_bytes_cube(&d, &cube_levels(Format::Rgba8, 4, 1)).unwrap();
+    assert_eq!(u(&b, 108), 0x1008);
+}
+
+#[test]
+fn cube_bytes_refuse_bad_shapes() {
+    let sq = cube_desc(8, Format::Bc1, ResolvedHeader::Legacy);
+    let good = cube_levels(Format::Bc1, 8, 3);
+    let wide = desc(8, 4, Format::Bc1, false, ResolvedHeader::Legacy);
+    assert!(matches!(
+        dds_bytes_cube(&wide, &good),
+        Err(DdsError::CubeShape(_))
+    ));
+    assert!(matches!(
+        dds_bytes_cube(&sq, &good[..15]),
+        Err(DdsError::CubeShape(_))
+    ));
+    assert!(matches!(
+        dds_bytes_cube(&sq, &[]),
+        Err(DdsError::CubeShape(_))
+    ));
+    // Uneven chains: 17 entries is not 6n.
+    let mut uneven = good.clone();
+    uneven.push(vec![0; 8]);
+    assert!(matches!(
+        dds_bytes_cube(&sq, &uneven),
+        Err(DdsError::CubeShape(_))
+    ));
+    let mut bad = good.clone();
+    bad[4].push(0);
+    assert!(matches!(
+        dds_bytes_cube(&sq, &bad),
+        Err(DdsError::LevelSize { .. })
+    ));
+    // 8x8 has a full chain of 4; five per face is too many.
+    assert!(matches!(
+        dds_bytes_cube(&sq, &cube_levels(Format::Bc1, 8, 5)),
+        Err(DdsError::TooManyLevels { .. })
+    ));
+    assert!(matches!(
+        header_bytes_with(&wide, 1, true),
+        Err(DdsError::CubeShape(_))
+    ));
+}
+
+#[test]
+fn two_d_header_bytes_unchanged() {
+    for f in [Format::Bc1, Format::Bc3, Format::Bc7, Format::Rgba8] {
+        for h in [ResolvedHeader::Legacy, ResolvedHeader::Dx10] {
+            let d = desc(64, 32, f, false, h);
+            for m in [1, 3, 7] {
+                assert_eq!(header_bytes(&d, m), header_bytes_with(&d, m, false));
+            }
+        }
+    }
+}

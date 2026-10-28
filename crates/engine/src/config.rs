@@ -54,6 +54,8 @@ pub enum Subtype {
     // A `//` comment on purpose: a `///` doc on one variant makes schemars emit `oneOf` instead of the flat `enum`,
     // which rewrites every schema and drops the `rfaos` alias `subtype_schema` pushes into `enum`.
     ComplexGrass,
+    // A single cubemap (`_e`, cubemap design 2026-10-26): six square faces, BC1/BC3/BC7/RGBA8 UNORM, `cubemap.*` keys.
+    Cubemap,
 }
 
 /// The schema lists the deprecated id `rfaos` next to `skin_rfaos`, so an old file still validates.
@@ -503,7 +505,7 @@ impl Subtype {
         }
     }
 
-    pub const ALL: [Subtype; 29] = {
+    pub const ALL: [Subtype; 30] = {
         use Subtype::*;
         [
             Diffuse,
@@ -535,6 +537,7 @@ impl Subtype {
             SkinSk,
             SkinWet,
             ComplexGrass,
+            Cubemap,
         ]
     };
 
@@ -542,7 +545,9 @@ impl Subtype {
         use Subtype::*;
         match self {
             Diffuse | LandscapeDiffuse | PbrAlbedo | PbrEmissive | Glow | PbrSubsurface
-            | PbrFuzz | SubsurfaceTint | BacklightTint | UiSky | SkinAlbedo => Category::Color,
+            | PbrFuzz | SubsurfaceTint | BacklightTint | UiSky | SkinAlbedo | Cubemap => {
+                Category::Color
+            }
             Normal | LandscapeNormal | PbrNormal | Msn | CoatNormal | SkinWet => Category::Normal,
             Envmask | Height | MsnSpecular | SkinSk => Category::Grayscale,
             ComplexMaterial | Rmaos | SkinRfaos | Flow | GenericTwoChannel | GenericData
@@ -727,6 +732,158 @@ pub struct ValidationSpec {
     pub mips: ValidationMips,
 }
 
+// Cubemap styles (DECISIONS DS4): each fills `face_size`, `format`, `blur` (and `vanilla_metal` `saturation`) where
+// no explicit layer set them.
+cfg_enum!(CubeStyle, "snake_case" { VanillaMetal, Room, Eye, Hd });
+// How a cubemap source is laid out; unset = from the aspect ratio. `equirect` is a 2:1 360-degree panorama.
+cfg_enum!(CubeLayout, "snake_case" { Faces, Hcross, Vcross, Hstrip, Vstrip, Equirect, MirrorBall, Angular, Photo });
+cfg_enum!(#[derive(Default)] FaceFlip, "lowercase" { #[default] None, H, V });
+// The ground fill look: the horizon colour darkening towards the nadir.
+cfg_enum!(GroundMode, "lowercase" { Gradient });
+/// What fills the cube below `cubemap.horizon`: `"gradient"` or `[r, g, b]` code values (game gamma, like `tint`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum GroundFill {
+    Mode(GroundMode),
+    Color([u8; 3]),
+}
+
+// Hand-written so a bad value names the accepted forms (an untagged derive says only "did not match any variant").
+impl<'de> Deserialize<'de> for GroundFill {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, SeqAccess, Unexpected, Visitor};
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = GroundFill;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("\"gradient\" or [r, g, b] with each 0..=255")
+            }
+            fn visit_str<E: Error>(self, s: &str) -> Result<GroundFill, E> {
+                match s {
+                    "gradient" => Ok(GroundFill::Mode(GroundMode::Gradient)),
+                    _ => Err(E::invalid_value(Unexpected::Str(s), &self)),
+                }
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<GroundFill, A::Error> {
+                let mut rgb = [0u8; 3];
+                for (i, c) in rgb.iter_mut().enumerate() {
+                    // Read as f64 so a fractional element also gets the accepted forms (DS25).
+                    let v: f64 = a
+                        .next_element()?
+                        .ok_or_else(|| A::Error::invalid_length(i, &self))?;
+                    if v.fract() != 0.0 || !(0.0..=255.0).contains(&v) {
+                        return Err(A::Error::invalid_value(Unexpected::Float(v), &self));
+                    }
+                    *c = v as u8;
+                }
+                match a.next_element::<serde::de::IgnoredAny>()? {
+                    None => Ok(GroundFill::Color(rgb)),
+                    Some(_) => Err(A::Error::invalid_length(4, &self)),
+                }
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+fn one() -> f64 {
+    1.0
+}
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
+}
+fn is_zeros(v: &[u16; 6]) -> bool {
+    *v == [0; 6]
+}
+fn no_flips(v: &[FaceFlip; 6]) -> bool {
+    *v == [FaceFlip::None; 6]
+}
+
+/// The `cubemap` profile section (cubemap design 2026-10-26, "Settings"). Read only by `Subtype::Cubemap`; every key
+/// is skipped at its default, so 2D profile hashes hold (DECISIONS DS4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CubemapSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<CubeStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<CubeLayout>,
+    /// Face edge in pixels: a power of two in 4..=4096; unset = from the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_size: Option<u32>,
+    /// Turn about world up in degrees, -360..=360; positive is clockwise seen from above (Skyrim's heading).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub yaw: f64,
+    /// Swap world east and west.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mirror: bool,
+    /// Per-face rotation in degrees (0, 90, 180, 270), in +X, -X, +Y, -Y, +Z, -Z order.
+    #[serde(default, skip_serializing_if = "is_zeros")]
+    pub face_rotate: [u16; 6],
+    #[serde(default, skip_serializing_if = "no_flips")]
+    pub face_flip: [FaceFlip; 6],
+    /// A vertical cross stores -Z upside down; rotate it back.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub vcross_negz_rotate: bool,
+    /// Cone blur amount, 0..=1; unset = none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub exposure: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub brightness: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub contrast: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub midtones: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub saturation: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<[u8; 3]>,
+    /// Highlights above this (linear) are clamped; at least 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_clamp: Option<f64>,
+    /// Fill below the horizon line; unset = no fill (the horizon alone does nothing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ground_fill: Option<GroundFill>,
+    /// Horizon elevation in degrees, -45..=45; read only with ground_fill.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub horizon: f64,
+}
+
+impl Default for CubemapSpec {
+    fn default() -> Self {
+        CubemapSpec {
+            style: None,
+            layout: None,
+            face_size: None,
+            yaw: 0.0,
+            mirror: false,
+            face_rotate: [0; 6],
+            face_flip: [FaceFlip::None; 6],
+            vcross_negz_rotate: true,
+            blur: None,
+            exposure: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            midtones: 1.0,
+            saturation: 1.0,
+            tint: None,
+            highlight_clamp: None,
+            ground_fill: None,
+            horizon: 0.0,
+        }
+    }
+}
+
+impl CubemapSpec {
+    pub fn is_default(&self) -> bool {
+        *self == CubemapSpec::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -752,6 +909,9 @@ pub struct Profile {
     /// RNM normal layers (M6 Track F2); read only by base normals (`Subtype::rnm_base`).
     #[serde(default, skip_serializing_if = "RnmSpec::is_default")]
     pub rnm: RnmSpec,
+    /// Cubemap settings; read only by `Subtype::Cubemap`, reset for every other sub-type.
+    #[serde(default, skip_serializing_if = "CubemapSpec::is_default")]
+    pub cubemap: CubemapSpec,
 }
 
 impl Profile {
@@ -821,10 +981,8 @@ mod tests {
 
     #[test]
     fn subtypes_map_to_the_categories_of_section_4_1() {
-        assert_eq!(Subtype::ALL.len(), 29);
         assert_eq!(Subtype::ComplexGrass.id(), "complex_grass");
         assert_eq!(Subtype::ComplexGrass.category(), Category::MixedPacked);
-        assert_eq!(Subtype::ALL.last(), Some(&Subtype::ComplexGrass));
         assert_eq!(Subtype::PbrEmissive.category(), Category::Color);
         assert_eq!(Subtype::Msn.category(), Category::Normal);
         assert_eq!(Subtype::Envmask.category(), Category::Grayscale);
@@ -834,6 +992,46 @@ mod tests {
         assert!(Subtype::PbrFuzz.is_pbr_color());
         assert!(!Subtype::Glow.is_pbr_color());
         assert_eq!(Subtype::ComplexMaterial.id(), "complex_material");
+    }
+
+    #[test]
+    fn ground_fill_parses_both_forms() {
+        let p = |s: &str| toml::from_str::<CubemapSpec>(s).unwrap();
+        assert_eq!(
+            p("ground_fill = \"gradient\"").ground_fill,
+            Some(GroundFill::Mode(GroundMode::Gradient))
+        );
+        let s = p("ground_fill = [10, 20, 30]\nhorizon = -5.0");
+        assert_eq!(s.ground_fill, Some(GroundFill::Color([10, 20, 30])));
+        assert_eq!(s.horizon, -5.0);
+    }
+
+    #[test]
+    fn bad_ground_fill_names_the_accepted_forms() {
+        for bad in [
+            "\"gradiant\"",
+            "[1, 2]",
+            "[300, 0, 0]",
+            "[1, 2, 3, 4]",
+            "[-1, 0, 0]",
+            "[1.5, 0, 0]",
+            "5",
+        ] {
+            let e = toml::from_str::<CubemapSpec>(&format!("ground_fill = {bad}"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("\"gradient\" or [r, g, b] with each 0..=255"),
+                "{bad}: {e}"
+            );
+        }
+    }
+    #[test]
+    fn cubemap_is_the_last_subtype() {
+        assert_eq!(Subtype::ALL.len(), 30);
+        assert_eq!(Subtype::ALL.last(), Some(&Subtype::Cubemap));
+        assert_eq!(Subtype::Cubemap.id(), "cubemap");
+        assert_eq!(Subtype::Cubemap.category(), Category::Color);
     }
 
     #[test]
@@ -879,7 +1077,7 @@ mod tests {
         }
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 29);
+        assert_eq!(ids.len(), Subtype::ALL.len());
     }
 
     /// M6: coverage preservation only ever applies to alpha-tested policies; `on` cannot force it onto blended

@@ -19,6 +19,7 @@
 //! and the six `CHK-*` codes of the GUI's artist checks, and CHK-LOW-DETAIL of check 3 at convert time (v2 artist checks, DECISIONS Note CL).
 //! and ENC-WEIGHTS-IGNORED (an `encoder.bc7_weights` that perceptual, the format or the backend overrides, DECISIONS Note CP).
 //! and the three `GEN-*` codes of generated maps: GEN-REPLACED, GEN-STALE (GUI only) and GEN-AO (v2 Generate from normal map, DECISIONS Note CO).
+//! and CUBE-FACES / CUBE-NO-MIPS of cubemaps (cubemap support v1, DECISIONS Note DS).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -184,6 +185,10 @@ codes! {
     GenStale = "GEN-STALE" => Info,
     // v2 Generate from normal map (Note CO): a packed _rmaos whose B channel is an AO generated from the normal map.
     GenAo = "GEN-AO" => Info,
+    // Cubemap (DECISIONS Note DS): a cube's faces are missing, not square or not the same size.
+    CubeFaces = "CUBE-FACES" => Error,
+    // Cubemap: `mips.levels = none` on a cube; curved surfaces sparkle and CS reads the last mip.
+    CubeNoMips = "CUBE-NO-MIPS" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -250,7 +255,6 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 116);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::EncWeightsIgnored.severity(), Severity::Warning);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
@@ -259,7 +263,6 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::GenAo));
         assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::ChkGreenGuess.severity(), Severity::Info);
         assert_eq!(Code::parse("CHK-Z-SIGN"), Some(Code::ChkZSign));
@@ -272,5 +275,14 @@ mod tests {
         assert_eq!(Code::ShaderAuto.severity(), Severity::Info);
         assert_eq!(Code::ShaderMissingMap.severity(), Severity::Warning);
         assert_eq!(Code::parse("SHADER-EXTRA-MAP"), Some(Code::ShaderExtraMap));
+    }
+
+    #[test]
+    fn codes_count() {
+        assert_eq!(Code::ALL.len(), 118);
+        assert_eq!(Code::ALL.last(), Some(&Code::CubeNoMips));
+        assert_eq!(Code::CubeFaces.severity(), Severity::Error);
+        assert_eq!(Code::parse("CUBE-NO-MIPS"), Some(Code::CubeNoMips));
+        assert_eq!(Code::CubeNoMips.severity(), Severity::Warning);
     }
 }

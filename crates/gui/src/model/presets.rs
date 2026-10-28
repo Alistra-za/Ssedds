@@ -24,7 +24,7 @@ G = metallic from its B, B = AO from its R; specular (A) comes from a loose _spe
 pub const GROUPS: [&str; 4] = ["Colour", "Normal", "Data", "Special"];
 
 pub fn group_of(st: Subtype) -> &'static str {
-    if st == Subtype::ComplexGrass {
+    if matches!(st, Subtype::ComplexGrass | Subtype::Cubemap) {
         return "Special";
     }
     match st.category() {
