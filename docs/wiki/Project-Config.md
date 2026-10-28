@@ -175,7 +175,7 @@ An entry takes any field from the [field reference](#field-reference), including
 | `helper.role` | For an image: what it is as a [helper texture](Texture-Types.md#helper-textures). `"none"` (not a helper: convert it on its own); `"roughness"`, `"metallic"`, `"ao"`, `"specular"`, `"glossiness"`, `"height"`, `"opacity"`, `"fuzz"` (skin fuzz mask), `"orm"`, `"curves"`, `"cavity"`, `"fuzzweight"` (PBR `_f` weight), `"subsurfaceweight"` (PBR `_s` weight); or an RNM layer: `"bump"`, `"bump2"`, `"bumpmask"`, `"bumpmask2"`, `"detailnorm"`, `"detailnorm2"`, `"detailnormmask"`, `"detailnormmask2"`, `"bent"`, `"bentmask"`. Overrides the name and any `subtype`. Ignored on a DDS. |
 | `helper.fills` | The channels the helper fills, replacing the suggestion. Alpha: `"diffuse.a"`, `"n.a"`, `"f.a"`, `"s.a"`, `"cnr.a"`. Packed: `"rmaos.r"` to `"rmaos.a"`, `"rfaos.r"` to `"rfaos.a"`, `"m.r"` to `"m.a"`, `"p.r"`. `[]` = not used. Not for RNM layers (use `rnm.target`). |
 | `helper.read` | The helper's channel to read: `"r"`, `"g"`, `"b"`, `"a"` or `"luma"`. Unset reads R (or luminance where the recipe does). |
-| `helper.invert` | `true` to use one minus the value (a gloss map as roughness). |
+| `helper.invert` | `true` to flip what the helper feeds (one minus the value), for an inverted mask. It flips on top of the recipe's own reading, so leave it off for a gloss map in a roughness channel: `helper.role = "glossiness"` already inverts it there. |
 
 The `helper.*` keys go on the helper file's own entry, never on the output it fills:
 

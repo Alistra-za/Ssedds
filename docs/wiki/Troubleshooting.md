@@ -84,7 +84,7 @@ An `_opacity` file (or a mask you gave the role Opacity) fills the alpha of its 
 | `no targets chosen` | Its `helper.fills` is `[]`. | Reset Fills in the panel, or remove the key. |
 | `<file> was not analysed` | The helper or the colour texture failed to load. | Fix the load error shown for that file. |
 
-If the file is not listed as a helper at all, its name has no term Tessalith knows: select it and set its role, or use `--set "file:**/<name>.helper.role=opacity"`. To convert an opacity map as its own texture instead, set its role to *Not a helper* (`helper.role = "none"`). See [Texture types](Texture-Types.md#helper-textures).
+If the file is not listed as a helper at all, its name has no term Tessalith knows, so it is an ordinary tile: select the tile and pick *Opacity* in **Helper role** in its settings (or write `helper.role = "opacity"` on its `[files]` entry in `sdc.toml`, or use `--set "file:**/<name>.helper.role=opacity"`). It then becomes a row in the Helpers group. To convert an opacity map as its own texture instead, set its role to *Not a helper* (`helper.role = "none"`). See [Texture types](Texture-Types.md#helper-textures).
 
 ### sRGB or UNORM is blocked
 
