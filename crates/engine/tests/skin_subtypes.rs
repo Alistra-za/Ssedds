@@ -441,6 +441,36 @@ fn an_advanced_skin_shader_keeps_explicit_choices() {
     assert!(!outputs(&p).contains(&"x_rfaos.dds".to_string()));
 }
 
+/// Note DV1 (re-review): only the set's diffuse member (no suffix, or `_d`) is read as the albedo. An `_i` inner
+/// layer keeps its diffuse guess, and a raw-map-named file the user typed `diffuse` keeps that choice, stays a
+/// written choice (not a packing input) and converts on its own.
+#[test]
+fn only_the_diffuse_member_becomes_skin_albedo() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    put(d.path(), "x_i.png", colour(64));
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    assert_eq!(job(&p, "x.png").profile.subtype, Subtype::SkinAlbedo);
+    assert_eq!(job(&p, "x_i.png").profile.subtype, Subtype::Diffuse);
+
+    let d =
+        pbr_set("[files.x_roughness]\nsubtype = \"diffuse\"\n[files.x]\nsubtype = \"diffuse\"\n");
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    let r = job(&p, "x_roughness.png");
+    assert_eq!(r.profile.subtype, Subtype::Diffuse);
+    assert_eq!(r.output.file_name().unwrap(), "x_roughness.dds");
+    let x = job(&p, "x.png");
+    assert_eq!(x.profile.subtype, Subtype::SkinAlbedo);
+    assert!(
+        !matches!(
+            x.provenance.get("subtype"),
+            Some(engine::presets::Provenance::Shader(_) | engine::presets::Provenance::Suggestion)
+        ),
+        "a written diffuse keeps its written provenance: {:?}",
+        x.provenance.get("subtype")
+    );
+}
+
 /// Note DV1 (review issue 1): the shader alone types the diffuse, whatever the set can pack. A set with no packing
 /// input, one whose packed map is a pre-packed `_rmaos` (its layout kept), and a metallic-only set that keeps
 /// `_rmaos` (DQ2), with no PACK-RECIPE-UNBUILDABLE: nobody wrote a recipe.

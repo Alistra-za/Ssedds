@@ -382,17 +382,16 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     if let Some(v) = vocab_for(f) {
         apply_vocabulary(&mut suggestions, v);
     }
-    // Note DV: a set whose chosen shader is Advanced Skin (cs only: elsewhere the pick falls back) reads a plain
-    // diffuse as `skin_albedo`, written or inferred; any other written sub-type stays.
-    let skin_set = ctx.shaders.get(&f.set.key).is_some_and(|p| {
-        p.shader == crate::shader::Shader::AdvancedSkin
-            && p.provenance == crate::shader::ShaderOrigin::Set
-    });
+    // Note DV: a set whose chosen shader is Advanced Skin (cs only: elsewhere the pick falls back) reads its diffuse
+    // member (no suffix, or `_d`) as `skin_albedo` when plain `diffuse`, written or inferred. A written choice keeps
+    // its provenance, so it stays protected from packing; other members and other written sub-types stay.
+    let skin_set = matches!(f.suffix, None | Some("d"))
+        && ctx.shaders.get(&f.set.key).is_some_and(|p| {
+            p.shader == crate::shader::Shader::AdvancedSkin
+                && p.provenance == crate::shader::ShaderOrigin::Set
+        });
     let skin = |st: Subtype, provenance: Provenance| match st {
-        Subtype::Diffuse if skin_set => (
-            Subtype::SkinAlbedo,
-            Provenance::Shader(crate::shader::Shader::AdvancedSkin.id().into()),
-        ),
+        Subtype::Diffuse if skin_set => (Subtype::SkinAlbedo, provenance),
         _ => (st, provenance),
     };
     // --set subtype (unscoped or file-scoped): the highest-precedence one wins
@@ -442,10 +441,9 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
             .first()
             .is_some_and(|s| matches!(s.subtype, Subtype::Diffuse | Subtype::PbrAlbedo))
     {
-        let (subtype, provenance) = skin(Subtype::Diffuse, Provenance::Suggestion);
         return SubtypeDecision {
-            subtype,
-            provenance,
+            subtype: Subtype::SkinAlbedo,
+            provenance: Provenance::Shader(crate::shader::Shader::AdvancedSkin.id().into()),
             decided: true,
             suggestions,
         };
