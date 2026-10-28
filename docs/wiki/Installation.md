@@ -165,7 +165,7 @@ Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-
 | `%APPDATA%\sdc\presets\*.toml` | Your own presets. Loaded by the CLI and the GUI on every run. | You |
 | `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, the default export folder, preview limits, threads, NVTT path, window layout. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. | `tessalith.exe` |
-| `%LOCALAPPDATA%\sdc\analysis-cache\` | What the GUI learned about each image, so a folder opened before loads faster. Capped at 200 MB. Safe to delete. | `tessalith.exe` |
+| `%LOCALAPPDATA%\sdc\analysis-cache\` | What the GUI learned about each image, so a folder opened before reuses them instead of decoding again. Pruned to 200 MB when the GUI starts. Safe to delete. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\logs\` | GUI crash logs, `crash-<date>-<time>.log`. The CLI writes none. | `tessalith.exe` |
 | `<project>\sdc.toml` | Project config. | You or `tessalith.exe` |
 | `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `tessalith.exe` |
