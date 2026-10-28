@@ -126,7 +126,9 @@ pub(crate) fn prepare(
         cube = sample::resample(&cube, n, |d| d);
     }
     // Run order (DECISIONS DN14): import, face rotate/flip, yaw, mirror, colour filters, ground fill, blur.
-    cube = filter::yaw(&cube, p.cubemap.yaw);
+    if p.cubemap.yaw != 0.0 {
+        cube = filter::yaw(&cube, p.cubemap.yaw);
+    }
     if p.cubemap.mirror {
         cube = filter::mirror(&cube);
     }
@@ -137,7 +139,15 @@ pub(crate) fn prepare(
     stop()?;
 
     tracker.stage.set(Stage::Mipmaps);
-    let cube = sample::blur(&cube, p.cubemap.blur.unwrap_or(0.0));
+    // DN24: no copy at blur 0, and the pre-blur cube is freed before the mip chain.
+    let blur = p.cubemap.blur.unwrap_or(0.0);
+    let cube = if blur > 0.0 {
+        let blurred = sample::blur(&cube, blur);
+        drop(cube);
+        blurred
+    } else {
+        cube
+    };
     let levels = crate::mips::level_count(n, n, &p.mips.levels) as usize;
     let mut chain = sample::mip_chain(cube, levels);
     if p.drop_top_mip && chain.len() > 1 {
