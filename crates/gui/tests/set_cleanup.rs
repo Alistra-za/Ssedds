@@ -405,6 +405,24 @@ fn an_existing_advanced_skin_set_opens_with_rfaos() {
     assert_eq!(texts(h.state()), before);
 }
 
+/// Note DV4: a pin holds the file, not the reading: a pinned inferred diffuse gets no written sub-type when Advanced
+/// Skin is chosen, yet reads `skin_albedo`; leaving the shader reads it as before.
+#[test]
+fn a_pinned_diffuse_reads_skin_albedo_without_a_write() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = skin_fixture(d.path());
+    let was = resolved(&m);
+    m.set_slot_lock(SET, 1, true).unwrap();
+    idle(&mut m);
+    m.set_shader(SET, Some(Shader::AdvancedSkin));
+    idle(&mut m);
+    assert_eq!(subtype(&m), None, "nothing written into a pinned slot");
+    assert_eq!(resolved(&m), Subtype::SkinAlbedo);
+    m.set_shader(SET, Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(resolved(&m), was);
+}
+
 /// The skin fixture's folder opened again (its files already there).
 fn skin_fixture_reopen(dir: &Path) -> AppModel {
     let settings = GuiSettings {
