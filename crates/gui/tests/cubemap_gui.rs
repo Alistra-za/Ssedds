@@ -334,8 +334,25 @@ fn picking_a_layout_resolves_only_that_file() {
     );
     h.get_by_label("Cube layout").click();
     h.run();
-    assert_eq!(h.query_all_by_label("Six face files").count(), 0);
-    assert_eq!(h.query_all_by_label("Auto").count(), 0);
+    // DT32: only the layouts an unclear image can be; a cross or strip would never fit it.
+    for name in [
+        "360° panorama",
+        "Mirror ball",
+        "Angular map",
+        "Single photo",
+    ] {
+        assert_eq!(h.query_all_by_label(name).count(), 1, "{name}");
+    }
+    for name in [
+        "Six face files",
+        "Auto",
+        "Horizontal cross",
+        "Vertical cross",
+        "Horizontal strip",
+        "Vertical strip",
+    ] {
+        assert_eq!(h.query_all_by_label(name).count(), 0, "{name}");
+    }
     h.get_by_label("Mirror ball").click();
     h.run();
     settle(&mut h);

@@ -280,6 +280,14 @@ fn pickable_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str
     CUBE_LAYOUTS.iter().filter(|(l, _)| *l != CubeLayout::Faces)
 }
 
+/// The layouts the unclear-layout decision offers (DT32): an image only asks when no cross or strip fits it.
+fn unclear_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str)> {
+    use CubeLayout::*;
+    CUBE_LAYOUTS
+        .iter()
+        .filter(|(l, _)| matches!(l, Equirect | MirrorBall | Angular | Photo))
+}
+
 fn display_value(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -788,7 +796,7 @@ fn decision_box(
                         let r = egui::ComboBox::from_id_salt(("pick-cube-layout", cx.key))
                             .selected_text("Pick a layout…")
                             .show_ui(ui, |ui| {
-                                for (l, label) in pickable_layouts() {
+                                for (l, label) in unclear_layouts() {
                                     if ui.selectable_label(false, *label).clicked() {
                                         actions.push(Action::Set("cubemap.layout", json!(l)));
                                     }
