@@ -1540,6 +1540,17 @@
         "path": {
           "type": "string"
         },
+        "read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelperRead"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Note DT: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),\nso the record names it. Absent otherwise, so no other job's JSON changes."
+        },
         "role": {
           "$ref": "#/$defs/RawMap"
         },

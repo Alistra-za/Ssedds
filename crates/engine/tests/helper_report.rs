@@ -232,3 +232,36 @@ fn helper_files_entry_is_not_unmatched() {
         .collect();
     assert!(unmatched.is_empty(), "{unmatched:#?}");
 }
+
+#[test]
+fn if_changed_reencodes_when_orm_read_changes() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    // Grey, so only the recorded read tells the runs apart (the packed pixels are the same).
+    checker(d.path(), "x_orm.png", 40, 200);
+    let s = run(d.path(), &[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (2, 0), "{s:?}");
+    toml(
+        d.path(),
+        "[files.\"textures/a/x_orm\"]\nhelper.read = \"g\"\n",
+    );
+    let s = run(d.path(), &[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (1, 1), "{s:?}");
+    let s = run(d.path(), &[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (0, 2), "{s:?}");
+}
+
+#[test]
+fn report_says_rnm_is_off() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    normal(d.path(), "x_n.png");
+    normal(d.path(), "x_detailnorm.png");
+    let p = plan(d.path(), &[DIFFUSE, "file:**/x_n.png.rnm.enabled=false"]);
+    let dn = report(&p, "x_detailnorm.png");
+    assert!(dn.fills.is_empty(), "{dn:#?}");
+    assert_eq!(
+        dn.not_used.as_deref(),
+        Some("RNM is off for x_n.dds (rnm.enabled = false)")
+    );
+}

@@ -569,7 +569,7 @@ pub fn process_file(
                     .iter()
                     .map(|s| {
                         Ok(SourceRef {
-                            fill: crate::pack::read_of(pk, &s.path),
+                            fill: crate::pack::read_of(s),
                             ..SourceRef::of_pack(&s.path, s.role, invert_of(pk, &s.path))?
                         })
                     })

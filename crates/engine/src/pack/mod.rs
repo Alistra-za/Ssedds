@@ -776,6 +776,10 @@ pub struct PackSource {
     pub role: RawMap,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stamp: Option<SourceStamp>,
+    /// Note DT: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),
+    /// so the record names it. Absent otherwise, so no other job's JSON changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<crate::helper::HelperRead>,
 }
 
 /// How a packed output is built (`ResolvedJob::pack`). `sources[0].path` is the job's `input` (Note M8).
@@ -798,23 +802,8 @@ pub fn invert_of(pk: &PackJob, path: &Path) -> bool {
         .any(|c| matches!(c, ChannelSource::Source { path: p, invert: true, .. } if p == path))
 }
 
-/// Note DT: `read:<id>` when `path` is read through an explicit `helper.read` (recorded as `SourceRef.fill`), so a
-/// changed read re-encodes under `if-changed`. `_orm`/`_rmaos` sources carry a channel of their own and never do.
-/// shortcut: an explicit read on an `_orm`/`_rmaos` helper is not recorded; tell it apart if that case gets used.
-pub fn read_of(pk: &PackJob, path: &Path) -> Option<String> {
-    pk.channels.iter().find_map(|c| match c {
-        ChannelSource::Source {
-            path: p,
-            role,
-            channel: Some(k),
-            ..
-        } if p == path && !matches!(role, RawMap::Orm | RawMap::Rmaos) => {
-            let id = match *k {
-                LUMA_CHANNEL => "luma",
-                k => ["r", "g", "b", "a"][usize::from(k)],
-            };
-            Some(format!("read:{id}"))
-        }
-        _ => None,
-    })
+/// Note DT: `read:<id>` for a source with an explicit `helper.read` (recorded as `SourceRef.fill`), so a changed
+/// read re-encodes under `if-changed`; `None` without one.
+pub fn read_of(s: &PackSource) -> Option<String> {
+    s.read.map(|r| format!("read:{}", r.id()))
 }

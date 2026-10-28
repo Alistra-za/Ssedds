@@ -137,6 +137,17 @@ pub enum HelperRead {
 }
 
 impl HelperRead {
+    /// The `helper.read` value: `r`, `g`, `b`, `a` or `luma`.
+    pub fn id(self) -> &'static str {
+        match self {
+            HelperRead::R => "r",
+            HelperRead::G => "g",
+            HelperRead::B => "b",
+            HelperRead::A => "a",
+            HelperRead::Luma => "luma",
+        }
+    }
+
     /// The `ChannelSource::Source.channel` it maps to; luma is [`crate::pack::LUMA_CHANNEL`].
     pub fn channel(self) -> u8 {
         match self {
@@ -274,13 +285,7 @@ pub struct FillJob {
 impl FillJob {
     /// `a:<read>` plus `:inv` when inverted: what the fill adds to its output's identity.
     pub fn identity(&self) -> String {
-        let read = match self.read.unwrap_or(HelperRead::R) {
-            HelperRead::R => "r",
-            HelperRead::G => "g",
-            HelperRead::B => "b",
-            HelperRead::A => "a",
-            HelperRead::Luma => "luma",
-        };
+        let read = self.read.unwrap_or(HelperRead::R).id();
         format!("a:{read}{}", if self.invert { ":inv" } else { "" })
     }
 }

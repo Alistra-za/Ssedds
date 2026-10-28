@@ -215,6 +215,7 @@ pub fn plan_fills(
                 };
                 let fill = FillJob {
                     source: PackSource {
+                        read: None,
                         // From the helper's planned job, never the file system (a pure planner).
                         stamp: jobs
                             .iter()

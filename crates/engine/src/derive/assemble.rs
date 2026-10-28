@@ -21,6 +21,7 @@ fn channels_image(
         if let ChannelSource::Source { path, role, .. } = c {
             if !sources.iter().any(|s| s.path == *path) {
                 sources.push(PackSource {
+                    read: None,
                     path: path.clone(),
                     role: *role,
                     stamp: None,

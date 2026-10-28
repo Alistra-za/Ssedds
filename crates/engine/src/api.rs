@@ -685,7 +685,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                 None,
                 None,
                 None,
-                pack::read_of(pk, &s.path),
+                pack::read_of(s),
             ));
         }
     }
@@ -3409,6 +3409,7 @@ mod tests {
         image::GrayImage::new(16, 16).save(&helper).unwrap();
         j.fill = Some(crate::helper::FillJob {
             source: crate::pack::PackSource {
+                read: None,
                 path: helper.clone(),
                 role: crate::config::RawMap::Opacity,
                 stamp: None,

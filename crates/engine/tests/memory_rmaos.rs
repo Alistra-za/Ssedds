@@ -67,6 +67,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         .sources()
         .into_iter()
         .map(|(path, role)| PackSource {
+            read: None,
             stamp: SourceStamp::of(&path),
             path,
             role,

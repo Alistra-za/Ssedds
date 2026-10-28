@@ -308,6 +308,7 @@ fn assemble_red(channel: Option<u8>) -> engine::pack::assemble::Assembled {
         ChannelSource::Opaque,
     ];
     let sources = [PackSource {
+        read: None,
         path: p,
         role: Roughness,
         stamp: None,

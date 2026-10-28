@@ -134,6 +134,8 @@ pub fn reports(
                 },
             };
             let mut went: Vec<(FillTarget, PathBuf)> = vec![];
+            // A layer attached to a base whose RNM is switched off: the reason it fills nothing.
+            let mut rnm_off: Option<String> = None;
             for j in &in_set {
                 if let Some(pk) = &j.pack {
                     for (c, ch) in pk.channels.iter().enumerate() {
@@ -154,12 +156,21 @@ pub fn reports(
                         went.push((FillTarget::Alpha(a), j.output.clone()));
                     }
                 }
-                if let (Some(r), Some(base)) = (j.active_rnm(), j.profile.subtype.rnm_base()) {
-                    let layer = r.layers.iter().any(|l| {
+                let layer = j.rnm.as_ref().is_some_and(|r| {
+                    r.layers.iter().any(|l| {
                         l.file.path == f.path || l.mask.as_ref().is_some_and(|m| m.path == f.path)
-                    });
-                    if layer {
+                    })
+                });
+                if let (true, Some(base)) = (layer, j.profile.subtype.rnm_base()) {
+                    if j.active_rnm().is_some() {
                         went.push((FillTarget::Rnm(base), j.output.clone()));
+                    } else if !j.profile.rnm.enabled {
+                        rnm_off.get_or_insert_with(|| {
+                            format!(
+                                "RNM is off for {} (rnm.enabled = false)",
+                                file_name(&j.output)
+                            )
+                        });
                     }
                 }
             }
@@ -190,7 +201,8 @@ pub fn reports(
             } else if sel.fills.as_ref().is_some_and(|v| v.is_empty()) {
                 Some("no targets chosen".to_string())
             } else {
-                // Its own job's reason, else a shadowed layer's note on its base, else the alpha planner's.
+                // Its own job's reason, else a shadowed layer's note on its base, else RNM off on its base, else the alpha
+                // planner's.
                 let name = file_name(&f.path);
                 own.into_iter()
                     .flat_map(|j| &j.warnings)
@@ -201,6 +213,7 @@ pub fn reports(
                         })
                     })
                     .map(|w| w.message.clone())
+                    .or(rnm_off)
                     .or_else(|| fills.not_used.get(&f.path).cloned())
             };
             let mut outputs: Vec<PathBuf> = vec![];
