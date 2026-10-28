@@ -370,8 +370,46 @@ fn old_record_reexports_only_filled_outputs() {
     let s = run(d.path(), &[DIFFUSE, BLEND]);
     assert_eq!((s.converted, s.up_to_date), (3, 0), "{s:?}");
     toml(d.path(), "");
-    let s = run(d.path(), &[DIFFUSE, BLEND]);
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "helper-report");
+    let e = Engine::new().unwrap();
+    let p = e
+        .plan(
+            req(d.path(), &[DIFFUSE, BLEND]),
+            &rep,
+            &CancelToken::default(),
+        )
+        .unwrap();
+    let s = e.run(p, &rep, &CancelToken::default()).unwrap();
     assert_eq!((s.converted, s.up_to_date), (1, 2), "{s:?}");
+    // Which output re-encodes matters, not just how many.
+    let ev = sink.take();
+    let path = |e: &EngineEvent| e.path.clone().unwrap_or_default().replace('\\', "/");
+    let done: Vec<String> = ev
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::FileDone { .. }))
+        .map(path)
+        .collect();
+    let fresh: Vec<String> = ev
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EventKind::FileSkipped {
+                    kind: SkipKind::UpToDate,
+                    ..
+                }
+            )
+        })
+        .map(path)
+        .collect();
+    assert!(done.len() == 1 && done[0].ends_with("/x.png"), "{done:?}");
+    assert!(
+        fresh.len() == 2
+            && fresh.iter().any(|p| p.ends_with("/x_n.png"))
+            && fresh.iter().any(|p| p.ends_with("/y.png")),
+        "{fresh:?}"
+    );
     let s = run(d.path(), &[DIFFUSE, BLEND]);
     assert_eq!((s.converted, s.up_to_date), (0, 3), "{s:?}");
 }
