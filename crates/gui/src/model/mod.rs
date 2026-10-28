@@ -2628,6 +2628,23 @@ impl AppModel {
         }
     }
 
+    /// Each six-file cube item's key with the `[files]` keys of its other five faces, from the plan's cube sources.
+    fn cube_face_keys(&self) -> Vec<(String, Vec<String>)> {
+        let Some(root) = self.root.as_deref() else {
+            return vec![];
+        };
+        self.items
+            .iter()
+            .filter_map(|i| {
+                let c = i.job.as_ref()?.cube.as_ref()?;
+                (c.sources.len() == 6).then(|| {
+                    let others = c.sources.iter().map(|s| items::key_of(root, &s.path));
+                    (i.key.clone(), others.filter(|k| *k != i.key).collect())
+                })
+            })
+            .collect()
+    }
+
     /// Every edit goes through here (spec §7.2): run `f` on both documents, record one undo step when anything
     /// changed, and plan again when `replan` (DECISIONS P7: JSON-only edits do not). A read-only document ignores
     /// its own edits (its text does not change, so it adds nothing to the step); the other document is unaffected
@@ -2639,6 +2656,16 @@ impl AppModel {
         replan: bool,
         f: impl FnOnce(&mut ProjectDoc, &mut crate::sets_doc::SetsDoc),
     ) {
+        // DT31: a six-file cube's faces must resolve alike (CUBE-FACES), so whatever an edit does to the item's own
+        // entry (its +X face) is repeated on the other five face entries, inside the same step.
+        let cubes = self.cube_face_keys();
+        let f = move |p: &mut ProjectDoc, s: &mut crate::sets_doc::SetsDoc| {
+            let before: Vec<_> = cubes.iter().map(|(k, _)| p.entry_fields(k)).collect();
+            f(p, s);
+            for ((k, others), b) in cubes.iter().zip(&before) {
+                p.copy_entry_changes(k, b, others);
+            }
+        };
         let (Some(p), Some(s)) = (self.project.as_mut(), self.sets_doc.as_mut()) else {
             return;
         };

@@ -493,6 +493,68 @@ fn six_face_model(d: &std::path::Path) -> (AppModel, String) {
     (m, key)
 }
 
+/// Final review C1: an edit on a six-file cube goes to all six face entries, so the faces still resolve alike.
+#[test]
+fn a_six_face_edit_writes_all_six_entries_in_one_step() {
+    use sdc_gui::model::items::ItemStatus;
+    let faces = ["px", "nx", "py", "ny", "pz", "nz"].map(|f| format!("a/chrome_e_{f}.png"));
+    for (field, value) in [
+        ("cubemap.yaw", serde_json::json!(90.0)),
+        ("encoder.effort", serde_json::json!("fast")),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, key) = six_face_model(d.path());
+        // Deciding the merged item decides all six faces (`decide` goes through `edit_subtype`).
+        m.decide(&key, Answer::Subtype(Subtype::Cubemap));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let it = m.item(&key).expect("the decided item keeps its key");
+        assert_eq!(it.status, ItemStatus::Ready, "{:?}", it.decisions);
+        let p = m.project.as_ref().unwrap();
+        for f in &faces {
+            assert_eq!(
+                p.file_value(f, "subtype"),
+                Some(serde_json::json!("cubemap")),
+                "{f}"
+            );
+        }
+        m.set_field(&key, field, value.clone());
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let it = m
+            .item(&key)
+            .unwrap_or_else(|| panic!("{field}: the item is gone"));
+        assert_eq!(it.status, ItemStatus::Ready, "{field}: {:?}", it.status);
+        let p = m.project.as_ref().unwrap();
+        for f in &faces {
+            assert_eq!(p.file_value(f, field), Some(value.clone()), "{field} {f}");
+        }
+        // The reset clears all six, as one more step.
+        m.clear_field(&key, field);
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let p = m.project.as_ref().unwrap();
+        assert!(
+            faces.iter().all(|f| p.file_value(f, field).is_none()),
+            "{field}: reset"
+        );
+        assert_eq!(m.item(&key).unwrap().status, ItemStatus::Ready);
+        // Undo the reset, then undo the edit: one step each.
+        m.undo();
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let p = m.project.as_ref().unwrap();
+        assert!(
+            faces.iter().all(|f| p.file_value(f, field).is_some()),
+            "{field}: undo reset"
+        );
+        m.undo();
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let p = m.project.as_ref().unwrap();
+        assert!(
+            faces.iter().all(|f| p.file_value(f, field).is_none()),
+            "{field}: undo"
+        );
+        assert_eq!(m.item(&key).unwrap().status, ItemStatus::Ready);
+    }
+}
+
 fn source_red(m: &mut AppModel) -> f32 {
     use sdc_gui::model::preview::SourceState;
     // The debounce counts from the first tick that sees something scheduled.
