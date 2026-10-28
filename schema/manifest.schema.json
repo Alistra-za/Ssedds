@@ -1077,6 +1077,13 @@
             "null"
           ]
         },
+        "fill": {
+          "description": "Note DT: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed\nsource read through an explicit `helper.read` (`read:g`). Absent on every other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "invert": {
           "description": "The source is stored inverted (a gloss map in a roughness channel).",
           "type": "boolean"

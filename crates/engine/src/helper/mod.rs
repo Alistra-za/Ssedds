@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod plan;
+pub mod report;
 
 pub const ROLE_FIELD: &str = "helper.role";
 pub const FILLS_FIELD: &str = "helper.fills";
@@ -159,7 +160,7 @@ pub enum AlphaTarget {
 }
 
 impl AlphaTarget {
-    const ALL: [AlphaTarget; 5] = [
+    pub(crate) const ALL: [AlphaTarget; 5] = [
         AlphaTarget::Diffuse,
         AlphaTarget::N,
         AlphaTarget::F,
@@ -184,6 +185,9 @@ impl AlphaTarget {
 pub enum FillTarget {
     Alpha(AlphaTarget),
     Packed { suffix: &'static str, channel: u8 },
+    // A normal layer blended into its base `_n` or `_cnr` (reports only: never in `all()`, so never a `helper.fills`
+    // value; a layer's base is `rnm.target`).
+    Rnm(crate::config::RnmTarget),
 }
 
 /// The packed outputs and how many channels a helper may fill in each (`_p` has only R).
@@ -209,6 +213,7 @@ impl FillTarget {
             FillTarget::Packed { suffix, channel } => {
                 format!("{suffix}.{}", CHANNELS[usize::from(*channel)])
             }
+            FillTarget::Rnm(t) => format!("rnm.{}", rnm_suffix(*t)),
         }
     }
 
@@ -227,7 +232,16 @@ impl FillTarget {
                 "{set_base}_{suffix} {}",
                 CHANNELS[usize::from(*channel)].to_uppercase()
             ),
+            FillTarget::Rnm(t) => format!("{set_base}_{}", rnm_suffix(*t)),
         }
+    }
+}
+
+/// The base normal's suffix; `Both` never names one base (a report lists each).
+fn rnm_suffix(t: crate::config::RnmTarget) -> &'static str {
+    match t {
+        crate::config::RnmTarget::Cnr => "cnr",
+        _ => "n",
     }
 }
 

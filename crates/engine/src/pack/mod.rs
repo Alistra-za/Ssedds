@@ -271,7 +271,7 @@ pub fn recipes_for_with(
 }
 
 /// The slot channel `ch` of a `kind` recipe holds; `None` for a mirrored or opaque filler.
-fn slot_of(kind: RecipeKind, ch: usize) -> Option<Slot> {
+pub(crate) fn slot_of(kind: RecipeKind, ch: usize) -> Option<Slot> {
     use Slot::*;
     let slots = match kind {
         RecipeKind::Rmaos => [Some(Roughness), Some(Metallic), Some(Ao), Some(Specular)],
@@ -796,4 +796,25 @@ pub fn invert_of(pk: &PackJob, path: &Path) -> bool {
     pk.channels
         .iter()
         .any(|c| matches!(c, ChannelSource::Source { path: p, invert: true, .. } if p == path))
+}
+
+/// Note DT: `read:<id>` when `path` is read through an explicit `helper.read` (recorded as `SourceRef.fill`), so a
+/// changed read re-encodes under `if-changed`. `_orm`/`_rmaos` sources carry a channel of their own and never do.
+/// shortcut: an explicit read on an `_orm`/`_rmaos` helper is not recorded; tell it apart if that case gets used.
+pub fn read_of(pk: &PackJob, path: &Path) -> Option<String> {
+    pk.channels.iter().find_map(|c| match c {
+        ChannelSource::Source {
+            path: p,
+            role,
+            channel: Some(k),
+            ..
+        } if p == path && !matches!(role, RawMap::Orm | RawMap::Rmaos) => {
+            let id = match *k {
+                LUMA_CHANNEL => "luma",
+                k => ["r", "g", "b", "a"][usize::from(k)],
+            };
+            Some(format!("read:{id}"))
+        }
+        _ => None,
+    })
 }

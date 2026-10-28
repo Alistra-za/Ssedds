@@ -343,6 +343,8 @@ pub struct Plan {
     /// Note DT (review 4 I1): helpers an alpha fill consumed whose target has no job left (failed or cancelled while
     /// planning, or replaced): (helper, the output it filled, set key). `run` ends each with a `packed_source` skip.
     pub fill_ends: Vec<(PathBuf, PathBuf, String)>,
+    /// Note DT: every helper of the batch (`helper::report::reports`), by set key then file name.
+    pub helpers: Vec<crate::helper::report::HelperReport>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -594,6 +596,8 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
     estimated_bytes(&job.input)
         + extra
         + cube
+        // Note DT: `apply_fill` holds the helper's decoded image beside the target's.
+        + job.fill.as_ref().map_or(0, |f| estimated_bytes(&f.source.path))
         + job
             .bake
             .as_ref()
@@ -660,8 +664,14 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// (SHA-256, bake identity, RNM role, derive identity) of one recorded source.
-type SourceKey = (String, Option<String>, Option<String>, Option<String>);
+/// (SHA-256, bake identity, RNM role, derive identity, fill identity) of one recorded source.
+type SourceKey = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), then
 /// the RNM inputs (M6 Track F2), as `SourceKey`s. Empty for an ordinary file that does not bake; `None` when a
@@ -670,7 +680,13 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
     let mut v = vec![];
     if let Some(pk) = &job.pack {
         for s in &pk.sources {
-            v.push((sha256_file(&s.path).ok()?, None, None, None));
+            v.push((
+                sha256_file(&s.path).ok()?,
+                None,
+                None,
+                None,
+                pack::read_of(pk, &s.path),
+            ));
         }
     }
     // Note CN12: a derived job's sources, each with the job's identity, so a changed setting re-encodes.
@@ -682,6 +698,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                 None,
                 None,
                 Some(identity.clone()),
+                None,
             ));
         }
     }
@@ -692,12 +709,13 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
         .filter(|c| c.sources.len() > 1)
         .flat_map(|c| &c.sources)
     {
-        v.push((sha256_file(&s.path).ok()?, None, None, None));
+        v.push((sha256_file(&s.path).ok()?, None, None, None, None));
     }
     if let Some(b) = &job.bake {
         v.push((
             sha256_file(&b.normal).ok()?,
             Some(b.identity_sha256()),
+            None,
             None,
             None,
         ));
@@ -708,14 +726,25 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                     None,
                     Some(format!("bake.{role}")),
                     None,
+                    None,
                 ));
             }
         }
     }
     if let Some(r) = job.active_rnm() {
         for (f, role) in r.inputs(&job.profile.rnm) {
-            v.push((sha256_file(&f.path).ok()?, None, Some(role), None));
+            v.push((sha256_file(&f.path).ok()?, None, Some(role), None, None));
         }
+    }
+    // Note DT: the helper that fills the alpha, last, as `process_file` records it.
+    if let Some(f) = &job.fill {
+        v.push((
+            sha256_file(&f.source.path).ok()?,
+            None,
+            None,
+            None,
+            Some(f.identity()),
+        ));
     }
     Some(v)
 }
@@ -826,6 +855,7 @@ pub(crate) fn is_up_to_date(
                     r.bake.clone(),
                     r.rnm.clone(),
                     r.derive.clone(),
+                    r.fill.clone(),
                 )
             }))
         })
@@ -2035,6 +2065,7 @@ impl Engine {
         // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped),
         // before the bakes, so a baking roughness member copies its `_n`'s blend (Note W18).
         crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
+        let helpers = crate::helper::report::reports(&ctx, &sets, &files, &jobs, &fills);
         let bake_cx = crate::bake::plan::BakeCtx {
             target,
             sets: &sets,
@@ -2088,8 +2119,11 @@ impl Engine {
                 if let Some(pk) = &j.pack {
                     rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
                 }
+                rels.extend(j.fill.iter().filter_map(|f| rel_of_path(&f.source.path)));
             }
             rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
+            // Note DT: a helper consumed by a fill or a recipe, or one that fills nothing, is a planned file.
+            rels.extend(helpers.iter().filter_map(|h| rel_of_path(&h.path)));
             // The derive step removed the jobs of PBR set members (Note CN); their keys still name planned files.
             if let Some(d) = &req.derive {
                 let members = d.sets.iter().flat_map(|s| &s.members).chain(&d.drop);
@@ -2264,6 +2298,7 @@ impl Engine {
             nvtt: nvtt.into_probed(),
             derive_own,
             fill_ends,
+            helpers,
         })
     }
 
@@ -3364,6 +3399,28 @@ mod tests {
         assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
+    /// Note DT: a filled job also holds its helper's decoded image.
+    #[test]
+    fn job_bytes_counts_helper() {
+        let d = tempfile::tempdir().unwrap();
+        let mut j = png_job(d.path(), "x.png", (32, 32), Subtype::Diffuse);
+        let base = job_bytes(&j);
+        let helper = d.path().join("x_opacity.png");
+        image::GrayImage::new(16, 16).save(&helper).unwrap();
+        j.fill = Some(crate::helper::FillJob {
+            source: crate::pack::PackSource {
+                path: helper.clone(),
+                role: crate::config::RawMap::Opacity,
+                stamp: None,
+            },
+            read: None,
+            invert: false,
+            assigned: false,
+        });
+        assert!(estimated_bytes(&helper) > 0);
+        assert_eq!(job_bytes(&j), base + estimated_bytes(&helper));
+    }
+
     /// Note CN13: a derived job adds 16 B/texel per colour map, the scalars and the output (twice for the grass
     /// stack, which reads the albedo and the normal).
     #[test]
@@ -3560,6 +3617,7 @@ mod tests {
                         derive: None,
                         derive_role: None,
                         cube_face: None,
+                        fill: None,
                     }]
                 }),
             ),

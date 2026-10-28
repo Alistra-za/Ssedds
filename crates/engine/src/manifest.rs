@@ -197,6 +197,10 @@ pub struct SourceRef {
     /// The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DS8). Absent on every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube_face: Option<String>,
+    /// Note DT: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed
+    /// source read through an explicit `helper.read` (`read:g`). Absent on every other source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
 }
 
 impl SourceRef {
@@ -212,6 +216,15 @@ impl SourceRef {
             derive: None,
             derive_role: None,
             cube_face: None,
+            fill: None,
+        })
+    }
+
+    /// A helper that fills this output's alpha, with its `FillJob::identity` (Note DT).
+    pub fn of_fill(path: &Path, identity: String) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            fill: Some(identity),
+            ..SourceRef::of(path)?
         })
     }
 

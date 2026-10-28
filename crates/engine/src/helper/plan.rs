@@ -51,7 +51,7 @@ fn suggested(role: RawMap) -> Option<AlphaTarget> {
 }
 
 /// Ruling 4: the sub-types whose alpha `t` is.
-fn accepts(t: AlphaTarget, s: Subtype) -> bool {
+pub(super) fn accepts(t: AlphaTarget, s: Subtype) -> bool {
     match t {
         AlphaTarget::Diffuse => matches!(
             s,
@@ -82,7 +82,7 @@ fn name(p: &Path) -> String {
 }
 
 /// Ruling 4: a plain file job (no recipe, derive or cube) that converts.
-fn plain(j: &ResolvedJob) -> bool {
+pub(super) fn plain(j: &ResolvedJob) -> bool {
     j.pack.is_none()
         && j.derive.is_none()
         && j.cube.is_none()
@@ -152,7 +152,7 @@ pub fn plan_fills(
                     .iter()
                     .filter_map(|t| match t {
                         FillTarget::Alpha(a) => Some(*a),
-                        FillTarget::Packed { .. } => None,
+                        FillTarget::Packed { .. } | FillTarget::Rnm(_) => None,
                     })
                     .collect(),
                 None => suggested(role).into_iter().collect(),

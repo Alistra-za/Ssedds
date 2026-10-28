@@ -567,7 +567,12 @@ pub fn process_file(
                 Some(pk) => pk
                     .sources
                     .iter()
-                    .map(|s| SourceRef::of_pack(&s.path, s.role, invert_of(pk, &s.path)))
+                    .map(|s| {
+                        Ok(SourceRef {
+                            fill: crate::pack::read_of(pk, &s.path),
+                            ..SourceRef::of_pack(&s.path, s.role, invert_of(pk, &s.path))?
+                        })
+                    })
                     .collect::<std::io::Result<_>>()
                     .map_err(|e| fail(Stage::Load)(e.to_string()))?,
                 None => vec![],
@@ -622,6 +627,14 @@ pub fn process_file(
                             fail(Stage::Load)(format!("{}: {e}", f.path.display()))
                         })?);
                 }
+            }
+            // Note DT: the helper that fills the alpha, with its read and invert, so `if-changed` re-encodes on either.
+            if let Some(f) = &job.fill {
+                sources.push(
+                    SourceRef::of_fill(&f.source.path, f.identity()).map_err(|e| {
+                        fail(Stage::Load)(format!("{}: {e}", f.source.path.display()))
+                    })?,
+                );
             }
             Ok((source_sha256, sources))
         })?;
