@@ -1015,6 +1015,27 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 model.set_helper_role(key, None);
             }
         }
+        // Note DX17 (docs review): any image can be made a helper here, e.g. one whose name has no helper suffix.
+        if kind == ItemKind::Image {
+            let picked = ui
+                .add_enabled_ui(toml_read_only.is_none(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Helper role");
+                        super::helper_panel::role_combo(
+                            ui,
+                            key,
+                            engine::helper::HelperRole::NotHelper,
+                            not_helper,
+                            &toml_read_only,
+                        )
+                    })
+                    .inner
+                })
+                .inner;
+            if let Some(role) = picked {
+                model.set_helper_role(key, Some(role));
+            }
+        }
         ui.add_space(4.0);
     }
     ui.add_enabled_ui(!read_only, |ui| match &job {

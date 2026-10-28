@@ -456,3 +456,99 @@ fn picking_the_guessed_role_hand_sets_it() {
     );
     h.get_by_label("✎ Opacity");
 }
+
+/// A 4x4 uncompressed A8R8G8B8 DDS at `p`.
+fn tiny_dds(p: &Path) {
+    let mut b: Vec<u8> = b"DDS ".to_vec();
+    let mut u = |v: u32| b.extend_from_slice(&v.to_le_bytes());
+    for v in [124, 0x100F, 4, 4, 16, 0, 0] {
+        u(v);
+    }
+    for _ in 0..11 {
+        u(0);
+    }
+    for v in [
+        32,
+        0x41,
+        0,
+        32,
+        0x00ff_0000,
+        0x0000_ff00,
+        0x0000_00ff,
+        0xff00_0000,
+        0x1000,
+        0,
+        0,
+        0,
+        0,
+    ] {
+        u(v);
+    }
+    b.extend(std::iter::repeat_n(0x80u8, 64));
+    std::fs::write(p, b).unwrap();
+}
+
+/// Docs review (Note DX17): an image whose name has no helper suffix can be made a helper from its own panel.
+#[test]
+fn ordinary_image_can_become_a_helper() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = app(
+        fixture(d.path(), &["x.png", "x_mask.png"], ""),
+        "x_mask.png",
+    );
+    let item = |h: &H| h.state().item("x_mask.png").unwrap().clone();
+    assert_ne!(item(&h).kind, ItemKind::Helper, "a tile to start with");
+    let combo = h.get_by_role_and_label(Role::ComboBox, "Helper role");
+    assert_eq!(
+        combo.accesskit_node().value().as_deref(),
+        Some("Not a helper")
+    );
+    pick(&mut h, "Helper role", "Opacity");
+    assert_eq!(
+        value(&h, "x_mask.png", "helper.role"),
+        Some(json!("opacity"))
+    );
+    let it = item(&h);
+    assert_eq!(it.kind, ItemKind::Helper);
+    assert_eq!(
+        it.helper.unwrap().fills,
+        [engine::helper::FillTarget::Alpha(
+            engine::helper::AlphaTarget::Diffuse
+        )]
+    );
+    assert!(row_name(&h, "x_mask.png")
+        .unwrap()
+        .contains("fills to x alpha"));
+    // The selection stays on the file, now the helper panel.
+    h.get_by_role_and_label(Role::ComboBox, "Read from");
+    // One undo step, and the subtype key is never written.
+    assert_eq!(value(&h, "x_mask.png", "subtype"), None);
+    h.state_mut().undo();
+    settle(&mut h);
+    assert_eq!(value(&h, "x_mask.png", "helper.role"), None);
+    assert!(!h.state().can_undo());
+}
+
+#[test]
+fn dds_has_no_helper_role_row() {
+    let d = tempfile::tempdir().unwrap();
+    tiny_dds(&d.path().join("y_mask.dds"));
+    let h = app(fixture(d.path(), &["x.png"], ""), "y_mask.dds");
+    assert_eq!(h.state().item("y_mask.dds").unwrap().kind, ItemKind::Dds);
+    assert_eq!(h.query_all_by_label("Helper role").count(), 0);
+    h.get_by_label_contains("Already a DDS file");
+}
+
+#[test]
+fn read_only_disables_the_helper_role_row() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = app(
+        fixture(d.path(), &["x.png", "x_mask.png"], "target = [\n"),
+        "x_mask.png",
+    );
+    let n = h.get_by_role_and_label(Role::ComboBox, "Helper role");
+    assert!(n.accesskit_node().is_disabled());
+    n.hover();
+    h.run();
+    assert!(h.query_by_label_contains("sdc.toml is read-only").is_some());
+}

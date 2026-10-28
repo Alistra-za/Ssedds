@@ -165,22 +165,9 @@ fn role_row(
 ) {
     ui.label("Role");
     ui.horizontal(|ui| {
-        let shown = h.role.label();
-        let r = combo(ui, (key, "helper-role"), &shown, |ui| {
-            // "Not a helper" first (`all()`'s order), so it is in view without scrolling the long list.
-            for role in HelperRole::all() {
-                // Picking the guessed role writes it: an assigned role beats a suggestion.
-                let new = role != h.role || !h.role_hand_set;
-                if ui.selectable_label(role == h.role, role.label()).clicked() && new {
-                    edits.push(Edit::Role(Some(role)));
-                }
-                if role == HelperRole::NotHelper {
-                    ui.separator();
-                }
-            }
-        });
-        named(&r, egui::WidgetType::ComboBox, "Helper role", Some(&shown));
-        why(r, ro);
+        if let Some(role) = role_combo(ui, key, h.role, h.role_hand_set, ro) {
+            edits.push(Edit::Role(Some(role)));
+        }
         if h.role_hand_set && reset(ui, "Reset role", "Use the role guessed from the name", ro) {
             edits.push(Edit::Role(None));
         }
@@ -194,6 +181,34 @@ fn role_row(
         },
     );
     ui.end_row();
+}
+
+/// The "Helper role" combo (fixed width): "Not a helper" then every role. Returns the role picked, if it is to be
+/// written: a different role, or the current one while it is not hand-set (an assigned role beats a suggestion).
+pub(crate) fn role_combo(
+    ui: &mut egui::Ui,
+    key: &str,
+    current: HelperRole,
+    hand_set: bool,
+    ro: &Option<String>,
+) -> Option<HelperRole> {
+    let mut picked = None;
+    let shown = current.label();
+    let r = combo(ui, (key, "helper-role"), &shown, |ui| {
+        // "Not a helper" first (`all()`'s order), so it is in view without scrolling the long list.
+        for role in HelperRole::all() {
+            let new = role != current || !hand_set;
+            if ui.selectable_label(role == current, role.label()).clicked() && new {
+                picked = Some(role);
+            }
+            if role == HelperRole::NotHelper {
+                ui.separator();
+            }
+        }
+    });
+    named(&r, egui::WidgetType::ComboBox, "Helper role", Some(&shown));
+    why(r, ro);
+    picked
 }
 
 fn layer_row(
