@@ -1,5 +1,6 @@
 //! The preview state machine (M3a spec §6.3): what the centre column shows for the expanded texture, when work is
 //! requested, and which results are still wanted. All timing goes through [`AppModel::tick`], so tests drive time.
+use super::cube_cross;
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
 use crate::worker::{spawn_dds, spawn_encode, spawn_source};
@@ -24,14 +25,6 @@ const DDS_NO_SOURCE: &str = "DDS input: no source image";
 const WAITS_FOR_EXPORT: &str = "Preview encoding waits for the export to finish";
 /// What the viewports say when eframe found no usable GPU adapter (M3a spec §7).
 pub const NO_GPU: &str = "No usable GPU: the preview is off; everything else works";
-
-/// A cube result keeps face 0 (+X) only, as a one-face result. shortcut: shows +X only, Task 5 draws the cross.
-pub fn single_face(mut r: PreviewResult) -> PreviewResult {
-    r.levels
-        .truncate(r.levels.len() / usize::from(r.faces.max(1)));
-    r.faces = 1;
-    r
-}
 
 #[derive(Debug)]
 pub struct PreviewOut {
@@ -194,7 +187,7 @@ impl PreviewModel {
 enum Previewable {
     Job(Box<ResolvedJob>),
     Dds,
-    Blocked(&'static str),
+    Blocked(String),
 }
 
 fn classify(item: &TextureItem) -> Previewable {
@@ -202,7 +195,21 @@ fn classify(item: &TextureItem) -> Previewable {
         return Previewable::Dds;
     }
     if matches!(item.status, ItemStatus::Error(_)) {
-        return Previewable::Blocked(ERRORED);
+        // The engine's reason comes with it (a cube with a missing or odd-sized face says which, Note DT16).
+        let ItemStatus::Error(codes) = &item.status else {
+            unreachable!()
+        };
+        let why = item
+            .warnings
+            .iter()
+            .filter(|w| codes.contains(&w.code))
+            .map(|w| format!("{}: {}", w.code.as_str(), w.message));
+        return Previewable::Blocked(
+            std::iter::once(ERRORED.to_string())
+                .chain(why)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
     match &item.job {
         Some(job)
@@ -213,7 +220,7 @@ fn classify(item: &TextureItem) -> Previewable {
         {
             Previewable::Job(Box::new(job.clone()))
         }
-        _ => Previewable::Blocked(NOTHING),
+        _ => Previewable::Blocked(NOTHING.to_string()),
     }
 }
 
@@ -255,16 +262,27 @@ fn decode_chain(
         .collect()
 }
 
-/// CPU decode of every encoded mip of `r` (a mip that fails to decode comes back black, never missing).
+/// CPU decode of every encoded mip of `r` (a mip that fails to decode comes back black, never missing). A cube
+/// (`faces == 6`, face-major levels) decodes to one horizontal cross per mip (Note DT16).
 pub fn decode_levels(r: &PreviewResult, bc1: Bc1Model) -> Vec<Vec<[f32; 4]>> {
     let s = &r.source;
-    decode_chain(
-        r.format.pixel_format(r.srgb),
-        &s.dims,
-        s.first_level,
-        &r.levels,
-        bc1,
-    )
+    let fmt = r.format.pixel_format(r.srgb);
+    if r.faces != 6 {
+        return decode_chain(fmt, &s.dims, s.first_level, &r.levels, bc1);
+    }
+    let per_face = r.levels.len() / 6;
+    let faces: Vec<_> = r
+        .levels
+        .chunks(per_face.max(1))
+        .map(|f| decode_chain(fmt, &s.dims, s.first_level, f, bc1))
+        .collect();
+    (0..per_face)
+        .map(|i| {
+            let size = s.dims[s.first_level + i].0;
+            let refs = std::array::from_fn(|f| faces[f][i].as_slice());
+            cube_cross::cross_image(refs, size).2
+        })
+        .collect()
 }
 
 /// A DDS input as stored: its mips within `max`, no source side (M3a spec §2.2).

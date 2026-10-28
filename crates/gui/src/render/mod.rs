@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 const NO_BC: &str = "This GPU has no BC texture support: showing a CPU decode";
 const NOT_MULTIPLE_OF_4: &str = "Mip size not a multiple of 4: showing a CPU decode";
+const CUBE: &str = "a cube is drawn as a cross from the CPU decode";
 const UNCOMPRESSED: &str = "uncompressed format: shown from the CPU decode";
 const TOO_LARGE: &str = "This mip is larger than the GPU texture limit: no preview";
 const NOT_DECODED: &str = "The decoded mips are missing: no preview";
@@ -345,9 +346,18 @@ impl PreviewRenderer {
         self.clear(slot);
         let r = &out.result;
         let first = r.source.first_level;
-        let count = r.levels.len();
-        let Some(dims) = r.source.dims.get(first..first + count) else {
+        let cube = r.faces == 6;
+        let count = r.levels.len() / usize::from(r.faces.max(1));
+        let Some(face_dims) = r.source.dims.get(first..first + count) else {
             return UploadPath::Skipped(NOT_DECODED);
+        };
+        // A cube is one cross image per mip (`decoded`), never a BC texture: its cells are 4x3 faces.
+        let cross: Vec<(u32, u32)>;
+        let dims = if cube {
+            cross = face_dims.iter().map(|&(w, h)| (4 * w, 3 * h)).collect();
+            &cross[..]
+        } else {
+            face_dims
         };
         let Some(&base) = dims.first() else {
             return UploadPath::Skipped(NOT_DECODED);
@@ -356,7 +366,9 @@ impl PreviewRenderer {
             return UploadPath::Skipped(TOO_LARGE);
         }
         let kind = kind_of(r.format);
-        let reason = if r.format.is_block() && can_upload_bc(self.supports_bc, self.max_dim, base) {
+        let reason = if cube {
+            CUBE
+        } else if r.format.is_block() && can_upload_bc(self.supports_bc, self.max_dim, base) {
             if let Some((texture, _)) =
                 upload::bc_chain(&rs.device, &rs.queue, r.format, dims, &r.levels)
             {

@@ -1,4 +1,4 @@
-//! A cube job previewed through the worker: the GUI shows +X only until Task 5 draws the cross.
+//! A cube job previewed through the worker: all six faces come back, decoded as one cross per mip.
 use engine::api::{BatchRequest, CancelToken, Engine};
 use engine::config::Target;
 use engine::events::{Reporter, VecSink};
@@ -9,7 +9,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 #[test]
-fn a_cube_preview_shows_one_face_without_panicking() {
+fn a_cube_preview_decodes_a_cross_per_mip() {
     let d = tempfile::tempdir().unwrap();
     let dir = d.path().join("in/textures/a");
     std::fs::create_dir_all(&dir).unwrap();
@@ -45,10 +45,16 @@ fn a_cube_preview_shows_one_face_without_panicking() {
         panic!("not an Encoded message")
     };
     let out = result.expect("the preview must not fail");
-    // One face's 16 -> 1 chain: 5 mips.
+    // Six faces, each a 16 -> 1 chain of 5 mips, face-major; one cross (4x3 faces) decoded per mip.
     assert_eq!(
         (out.result.faces, out.result.levels.len(), out.decoded.len()),
-        (1, 5, 5)
+        (6, 30, 5)
     );
-    assert!(out.decoded[0][0][0] > 0.9, "face 0 is +X red");
+    assert_eq!(out.decoded[0].len(), 64 * 48);
+    assert_eq!(out.decoded[4].len(), 4 * 3);
+    // +X sits in cell (2, 1) of the cross, red; -X in cell (0, 1), grey.
+    let at = |col: usize, row: usize| out.decoded[0][(row * 16 + 8) * 64 + col * 16 + 8];
+    assert!(at(2, 1)[0] > 0.9 && at(2, 1)[1] < 0.1, "+X is red");
+    assert!(at(0, 1)[1] > 0.1, "-X is grey");
+    assert_eq!(at(0, 0), [0.0; 4], "a corner cell is empty");
 }

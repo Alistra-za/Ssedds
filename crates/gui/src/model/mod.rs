@@ -7,6 +7,7 @@ pub mod checks;
 pub mod cm_json;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
+pub mod cube_cross;
 pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;

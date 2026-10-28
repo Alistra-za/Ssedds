@@ -542,10 +542,12 @@ pub fn encode(
             )
         }
         Source::Job(job) => {
-            let r = session
+            let mut r = session
                 .preview(job, cap, cancel)
-                .map(crate::model::preview::single_face)
                 .map_err(|e| format!("{e:?}"))?;
+            // A set member is never a cube; if one were, write its +X face (the file is a plain 2D DDS).
+            r.levels
+                .truncate(r.levels.len() / usize::from(r.faces.max(1)));
             let (width, height) = r.source.dims[r.source.first_level];
             let desc = DdsDesc {
                 width,

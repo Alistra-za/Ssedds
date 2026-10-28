@@ -80,6 +80,8 @@ pub struct ViewState {
     pub tile: bool,
     /// The overlay painted over the source pane (Note CL); not saved in `gui.toml`, like the heatmap (AG59).
     pub overlay: Option<crate::model::overlay::OverlayKind>,
+    /// Name each face on a cube's cross ("Face labels", cube items only; Note DT16).
+    pub face_labels: bool,
 }
 
 impl Default for ViewState {
@@ -98,6 +100,7 @@ impl Default for ViewState {
             lens: false,
             tile: false,
             overlay: None,
+            face_labels: true,
         }
     }
 }

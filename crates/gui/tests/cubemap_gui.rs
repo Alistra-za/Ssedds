@@ -359,3 +359,113 @@ fn picking_a_layout_resolves_only_that_file() {
         it.decisions
     );
 }
+
+// ---- the cross preview (Task 5) ----
+
+/// The cube planned, expanded and drawn in the preview (no GPU, so the panes say so; the controls still draw).
+fn preview(d: &std::path::Path, key: &str) -> Harness<'static, AppModel> {
+    let mut m = cube_model(d, key);
+    m.expand(key);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1600.0, 900.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+#[test]
+fn cube_preview_draws_a_cross() {
+    use sdc_gui::model::preview::EncodedState;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = preview(d.path(), CUBE);
+    h.state_mut().encode_now();
+    settle(&mut h);
+    let EncodedState::Done(out) = &h.state().preview.encoded else {
+        panic!("not encoded")
+    };
+    // 64-px faces: six chains of 7 mips, one 4x3-face cross decoded per mip.
+    assert_eq!((out.result.faces, out.result.levels.len()), (6, 42));
+    assert_eq!(out.decoded.len(), 7);
+    for (i, d) in out.decoded.iter().enumerate() {
+        let face = 64usize >> i;
+        assert_eq!(d.len(), 4 * face * 3 * face, "mip {i}");
+    }
+    // The toolbar: face labels on offer, heatmap and tile off for a cube, the mip counted per face.
+    assert!(h.query_by_label("Face labels").is_some());
+    for name in ["Heatmap", "Tile 3×3"] {
+        assert!(
+            h.get_by_label(name).accesskit_node().is_disabled(),
+            "{name} is off for a cube"
+        );
+    }
+    assert!(h.query_by_label_contains("64×64 per face").is_some());
+}
+
+#[test]
+fn face_labels_toggle_is_a_named_button_and_cube_only() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = preview(d.path(), CUBE);
+    assert!(h.state().view.face_labels, "on by default");
+    h.get_by_label("Face labels").click();
+    h.run();
+    assert!(!h.state().view.face_labels);
+    h.state_mut().expand(FLAT);
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run();
+    assert!(
+        h.query_by_label("Face labels").is_none(),
+        "a 2D item has none"
+    );
+    assert!(!h.get_by_label("Tile 3×3").accesskit_node().is_disabled());
+}
+
+#[test]
+fn broken_six_face_set_shows_the_error() {
+    use sdc_gui::model::items::ItemStatus;
+    use sdc_gui::model::preview::EncodedState;
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/a");
+    std::fs::create_dir_all(&r).unwrap();
+    for f in ["px", "nx", "py", "ny", "pz", "nz"] {
+        let n = if f == "pz" { 32 } else { 16 };
+        image::RgbImage::from_pixel(n, n, image::Rgb([5, 6, 7]))
+            .save(r.join(format!("chrome_e_{f}.png")))
+            .unwrap();
+    }
+    let mut m = open(d.path());
+    let key = m
+        .items
+        .iter()
+        .find(|i| matches!(i.status, ItemStatus::Error(_)))
+        .expect("the broken set is an error item")
+        .key
+        .clone();
+    m.expand(&key);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1600.0, 900.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    assert!(matches!(
+        h.state().preview.encoded,
+        EncodedState::NotEncoded
+    ));
+    // The encoded pane says why instead of "Not encoded": the engine's reason, no Encode button, no cross.
+    assert!(h.query_by_label("Not encoded").is_none());
+    assert!(h
+        .query_by_label("Encode now")
+        .is_none_or(|n| n.accesskit_node().is_disabled()));
+    let xs: Vec<f32> = h
+        .query_all_by_label_contains("faces differ in size")
+        .map(|n| n.rect().min.x)
+        .collect();
+    let mid = h.get_by_label("Encoded").rect().min.x;
+    assert!(
+        xs.iter().any(|&x| x >= mid),
+        "the reason is in the encoded pane: {xs:?} vs {mid}"
+    );
+    assert!(h.query_by_label("Face labels").is_none());
+}
