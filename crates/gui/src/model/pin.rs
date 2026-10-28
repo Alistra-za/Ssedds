@@ -66,7 +66,9 @@ impl AppModel {
 
     /// A finished encode of a texture with a job: its settings match the result, so the pin's summary is true.
     pub fn can_pin(&self) -> bool {
-        matches!(self.preview.encoded, EncodedState::Done(_)) && self.expanded_profile().is_some()
+        // Not for a cube: its decoded mips are crosses the pin comparison and readout would read as faces (DT16).
+        matches!(&self.preview.encoded, EncodedState::Done(o) if o.result.faces == 1)
+            && self.expanded_profile().is_some()
     }
 
     /// Pin the encode on show; a pin already held is replaced (its images are released). Turns the comparison on.

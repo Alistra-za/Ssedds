@@ -213,6 +213,7 @@ fn encoded(format: Format, w: u32, h: u32, block: &[u8], decoded: [f32; 4]) -> P
             },
             format,
             srgb: false,
+            faces: 1,
             levels: vec![block.repeat(blocks)],
             validation: Default::default(),
             warnings: vec![],

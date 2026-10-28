@@ -24,6 +24,8 @@ pub enum PickerPurpose {
     ShaderFolder,
     /// Review's Also section: where the PBR, Vanilla and CM folders go (TA10).
     AlsoLocation,
+    /// Export to ▾: where the marker cube is saved.
+    MakeMarker,
 }
 
 /// The hover text of every picker button while one is open.
@@ -39,6 +41,8 @@ pub enum PickerKind {
     Save {
         file_name: &'static str,
         filters: &'static [(&'static str, &'static [&'static str])],
+        /// The folder the dialog starts in (None: the OS's choice).
+        dir: Option<PathBuf>,
     },
 }
 
@@ -73,8 +77,15 @@ impl PickerBackend for Native {
         match &spec.kind {
             PickerKind::Folder => d.pick_folder(),
             PickerKind::File { filter } => d.add_filter(filter.0, filter.1).pick_file(),
-            PickerKind::Save { file_name, filters } => {
+            PickerKind::Save {
+                file_name,
+                filters,
+                dir,
+            } => {
                 d = d.set_file_name(*file_name);
+                if let Some(dir) = dir {
+                    d = d.set_directory(dir);
+                }
                 for f in *filters {
                     d = d.add_filter(f.0, f.1);
                 }
@@ -295,6 +306,7 @@ impl AppModel {
             PickerPurpose::AlsoLocation => self.set_also_location(&path),
             PickerPurpose::NvttPath => self.set_nvtt_path(Some(path)),
             PickerPurpose::SaveReport => self.save_report(path),
+            PickerPurpose::MakeMarker => self.marker_picked(&path),
             // The meshes and 3D models handle their own.
             PickerPurpose::ChooseMo2 | PickerPurpose::ScanFolder | PickerPurpose::ShaderFolder => {}
         }

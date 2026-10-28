@@ -1020,6 +1020,16 @@ fn lock_refusal(v: &SetView, slot: Option<SlotKind>) -> Result<(), String> {
     }
 }
 
+/// Note DW3: the items in a locked slot of their own set (`BatchRequest::pinned_files`); a borrowing set's lock is
+/// left out, so it never changes the owner's reading.
+pub fn pinned_files(m: &AppModel) -> BTreeSet<String> {
+    locked_items(m)
+        .into_iter()
+        .filter(|(_, why)| why == SLOT_LOCKED)
+        .map(|(k, _)| k)
+        .collect()
+}
+
 /// The items filling a locked slot of any set (F3a Task 8), with the reason bulk edits skip them: "slot locked" in
 /// the set that owns the texture, else "slot locked in <set>" for a set borrowing it. The own lock wins.
 pub fn locked_items(m: &AppModel) -> BTreeMap<String, String> {
@@ -1146,7 +1156,8 @@ impl AppModel {
             .any(|v| same_id(&v.id, set) && v.locks.contains(&n))
     }
 
-    /// Lock (or unlock) slot `n` of set `set`, as one step (F3a Task 8). Nothing is planned: the engine never sees it.
+    /// Lock (or unlock) slot `n` of set `set`, as one step (F3a Task 8), re-planned: the engine reads the pinned
+    /// files (Note DW).
     pub fn set_slot_lock(&mut self, set: &str, n: u8, on: bool) -> Result<(), String> {
         if !self.sets_editable() {
             return Err(READ_ONLY.into());
@@ -1159,7 +1170,7 @@ impl AppModel {
         self.edit_docs(
             &format!("{label} slot {n} of {id}"),
             None,
-            false,
+            true,
             move |_, d| d.set_lock(&id, n, on),
         );
         Ok(())

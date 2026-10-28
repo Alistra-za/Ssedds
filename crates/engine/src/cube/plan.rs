@@ -109,7 +109,7 @@ pub fn plan_cubes(facts: &InputFacts, jobs: &mut Vec<ResolvedJob>, skipped: &mut
                 reasons: vec![format!(
                     "cube layout unclear for {w}x{h}: set cubemap.layout for this file in sdc.toml (hcross, vcross, hstrip, vstrip, equirect, mirror_ball, angular, photo)"
                 )],
-                needs: vec![],
+                needs: vec![crate::policy::Need::CubeLayout],
             },
             Some(l) if !super::layout::fits(l, w, h) => {
                 let msg = if l == CubeLayout::Faces {

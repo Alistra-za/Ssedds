@@ -157,8 +157,14 @@ fn encode_input_sha256(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Keep {
     Encode,
-    Preview { max_size: u32 },
-    SourceOnly { max_size: u32 },
+    Preview {
+        max_size: u32,
+    },
+    /// `face` picks which of a six-face cube's processed chains is kept (0 for everything else).
+    SourceOnly {
+        max_size: u32,
+        face: usize,
+    },
     Measure,
 }
 
@@ -389,7 +395,7 @@ fn prepare_then<T>(
     let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();
     let first_level = match keep {
         Keep::Encode | Keep::Measure => 0,
-        Keep::Preview { max_size } | Keep::SourceOnly { max_size } => {
+        Keep::Preview { max_size } | Keep::SourceOnly { max_size, .. } => {
             first_level_within(&dims, max_size)
         }
     };
@@ -463,7 +469,8 @@ pub(crate) fn encode_levels(
     for (i, (inp, &(w, h))) in prep
         .inputs
         .iter()
-        .zip(&prep.dims[prep.first_level..])
+        // A six-face preview repeats one chain's dims per face.
+        .zip(prep.dims[prep.first_level..].iter().cycle())
         .enumerate()
     {
         let level = match &nvtt {

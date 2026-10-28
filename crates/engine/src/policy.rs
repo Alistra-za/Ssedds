@@ -405,12 +405,10 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     }
     // Note DV: a set whose chosen shader is Advanced Skin (cs only: elsewhere the pick falls back) reads its diffuse
     // member (no suffix, or `_d`) as `skin_albedo` when plain `diffuse`, written or inferred. A written choice keeps
-    // its provenance, so it stays protected from packing; other members and other written sub-types stay.
-    let skin_set = matches!(f.suffix, None | Some("d"))
-        && ctx.shaders.get(&f.set.key).is_some_and(|p| {
-            p.shader == crate::shader::Shader::AdvancedSkin
-                && p.provenance == crate::shader::ShaderOrigin::Set
-        });
+    // its provenance, so it stays protected from packing; other members and other written sub-types stay. Not while
+    // that diffuse is pinned (Note DW1).
+    let skin_set =
+        matches!(f.suffix, None | Some("d")) && crate::pack::plan::chosen_skin(ctx, f.set);
     let skin = |st: Subtype, provenance: Provenance| match st {
         Subtype::Diffuse if skin_set => (Subtype::SkinAlbedo, provenance),
         _ => (st, provenance),
@@ -1297,6 +1295,8 @@ pub enum Need {
     Subtype,
     /// The alpha meaning (policy) depends on the mesh and nobody chose it.
     AlphaMeaning,
+    /// A single-image cube has no clear layout and nobody chose one (cubemap GUI, DECISIONS DT1).
+    CubeLayout,
 }
 
 /// What happens to a file (spec §5.2, §10). Serialises as `{"state": "ready"}`,

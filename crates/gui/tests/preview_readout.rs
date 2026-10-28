@@ -35,6 +35,7 @@ fn out(
             },
             format,
             srgb: true,
+            faces: 1,
             levels: vec![],
             validation: Default::default(),
             warnings: vec![],

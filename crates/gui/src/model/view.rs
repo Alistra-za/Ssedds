@@ -80,6 +80,10 @@ pub struct ViewState {
     pub tile: bool,
     /// The overlay painted over the source pane (Note CL); not saved in `gui.toml`, like the heatmap (AG59).
     pub overlay: Option<crate::model::overlay::OverlayKind>,
+    /// Name each face on a cube's cross ("Face labels", cube items only; Note DT16).
+    pub face_labels: bool,
+    /// Which face (0..6, +X..-Z) the source pane shows for a six-file cube; back to 0 on every texture change.
+    pub source_face: usize,
 }
 
 impl Default for ViewState {
@@ -98,6 +102,8 @@ impl Default for ViewState {
             lens: false,
             tile: false,
             overlay: None,
+            face_labels: true,
+            source_face: 0,
         }
     }
 }
@@ -208,7 +214,12 @@ impl ViewState {
 
     /// Show the whole mip (all nine copies when tiled), centred.
     pub fn fit(&mut self, viewport: [f32; 2], mip_size: (u32, u32)) {
-        let n = if self.tile { 3.0 } else { 1.0 };
+        self.fit_tiled(viewport, mip_size, self.tile);
+    }
+
+    /// `fit` with the tiling given (a cube fits its single cross whatever the stored tile setting is).
+    pub fn fit_tiled(&mut self, viewport: [f32; 2], mip_size: (u32, u32), tile: bool) {
+        let n = if tile { 3.0 } else { 1.0 };
         let z = (viewport[0] / (n * mip_size.0 as f32)).min(viewport[1] / (n * mip_size.1 as f32));
         if z.is_finite() && z > 0.0 {
             self.zoom = z.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);

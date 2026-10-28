@@ -10,7 +10,7 @@ use engine::cube::FACES;
 use engine::events::*;
 use engine::image::Rgba32F;
 use engine::overrides::parse_set;
-use engine::policy::{allowed_encodings, AcceptSuggestions, JobStatus, ResolvedJob};
+use engine::policy::{allowed_encodings, AcceptSuggestions, JobStatus, Need, ResolvedJob};
 use engine::presets::PresetRegistry;
 use engine::shader::Shader;
 use std::path::Path;
@@ -809,7 +809,7 @@ fn single_file_layout_from_aspect_or_key() {
             for l in ["hcross", "equirect", "mirror_ball", "angular", "photo"] {
                 assert!(reasons[0].contains(l), "{l}: {reasons:?}");
             }
-            assert!(needs.is_empty());
+            assert_eq!(needs, &vec![Need::CubeLayout]);
         }
         s => panic!("{s:?}"),
     }
@@ -960,7 +960,7 @@ fn cube_validation_reads_every_face() {
     );
 }
 
-/// The preview of a cube job is its +X face alone.
+/// The preview of a cube job: the source side is its +X face, the encoded side all six.
 #[test]
 fn cube_preview_is_the_pos_x_face() {
     let d = tempfile::tempdir().unwrap();
@@ -978,9 +978,12 @@ fn cube_preview_is_the_pos_x_face() {
     let pv = s.preview(j, 4096, &CancelToken::default()).unwrap();
     assert_eq!(pv.source.first_level, 0);
     assert_eq!(pv.source.dims[0], (16, 16));
-    // One face (faces = 1): one 16 -> 1 chain, not six.
+    // The source side is one face's 16 -> 1 chain; the encoded side is all six (DT2).
     assert_eq!(pv.source.dims.len(), 5, "one face's chain");
-    assert_eq!((pv.levels.len(), pv.source.levels.len()), (5, 5));
+    assert_eq!(
+        (pv.faces, pv.levels.len(), pv.source.levels.len()),
+        (6, 30, 5)
+    );
     // +X is red under its white and black bands.
     let c = pv.source.levels[0].at(10, 10);
     assert!(c[0] > 0.9 && c[1] < 0.1 && c[2] < 0.1, "{c:?}");
@@ -1410,4 +1413,67 @@ fn photo_fits_any_size_and_cell_matches_the_panorama() {
     assert_eq!(cells(CubeLayout::Photo, 400, 300), None);
     // Panorama width 800, so a quarter of that.
     assert_eq!(layout::source_cell(CubeLayout::Photo, (400, 300)), 200);
+}
+
+/// DT1: a square single image with no layout waits for a layout choice.
+#[test]
+fn unclear_cube_needs_a_layout() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    png8(&Rgba32F::new(512, 512, [0.5, 0.5, 0.5, 1.0]))
+        .save(dir.join("chrome_e.png"))
+        .unwrap();
+    let p = plan(d.path(), &[]);
+    assert_eq!(p.jobs.len(), 1, "{:#?}", p.jobs);
+    let JobStatus::Unresolved { needs, .. } = &p.jobs[0].status else {
+        panic!("{:#?}", p.jobs[0].status)
+    };
+    assert_eq!(needs, &vec![Need::CubeLayout]);
+    assert_eq!(
+        serde_json::to_string(&Need::CubeLayout).unwrap(),
+        "\"cube_layout\""
+    );
+}
+
+/// DT2: a cube's preview encodes all six faces, face-major, at the preview cap applied to the face edge.
+#[test]
+fn cube_preview_has_six_faces() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    let fs = arrow_faces(64);
+    png8(&hstrip(&fs)).save(dir.join("chrome_e.png")).unwrap();
+    let p = plan(d.path(), &["format=rgba8"]);
+    let s = engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap();
+    let pv = s
+        .preview(&p.jobs[0], 4096, &CancelToken::default())
+        .unwrap();
+    let mips = pv.source.dims.len() - pv.source.first_level;
+    assert_eq!((pv.faces, pv.levels.len(), mips), (6, 6 * 7, 7));
+    // +Y (face 2) mip 0 decodes to the strip's +Y colour: green under the white and black bands.
+    let (w, _) = pv.source.dims[pv.source.first_level];
+    // rgba8 levels are raw texels.
+    let i = ((40 * w + 40) * 4) as usize;
+    assert_eq!(pv.levels[2 * mips][i..i + 4], [0, 255, 0, 255]);
+    // The cap is the face edge: 16 keeps 16 -> 1.
+    let small = s.preview(&p.jobs[0], 16, &CancelToken::default()).unwrap();
+    assert_eq!((small.faces, small.levels.len()), (6, 6 * 5));
+}
+
+/// A 2D texture still previews as one face.
+#[test]
+fn two_d_preview_has_one_face() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    png8(&Rgba32F::new(32, 32, [0.3, 0.6, 0.9, 1.0]))
+        .save(dir.join("wall_d.png"))
+        .unwrap();
+    let p = plan(d.path(), &[]);
+    let s = engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap();
+    let pv = s
+        .preview(&p.jobs[0], 4096, &CancelToken::default())
+        .unwrap();
+    assert_eq!((pv.faces, pv.levels.len()), (1, 6));
 }

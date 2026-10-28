@@ -31,18 +31,30 @@ impl SizeEst {
 /// The DDS of a `src`-sized image under `p`. `drop_top_mip` removes level 0 from the chain the size would have
 /// (the engine's rule, Note CL23): half the size, and one level less, so `mips.levels = n` writes n − 1 levels while
 /// `full` stays a full chain of the half size.
-// shortcut: a cube job is estimated as one 2D image of its source size, not six faces at `cube::layout::face_size`;
-// upgrade when the GUI gets a cubemap step (v1 GUI scope is compile + list, final review M10).
 pub fn estimate(src: (u32, u32), p: &Profile) -> SizeEst {
-    let (w, h) = engine::resize::target_dims(src, p.resize);
+    estimate_job(src, p, None)
+}
+
+/// [`estimate`] for a job: a cube job is six faces of `cube::layout::face_size` (`src` is the source image, or one
+/// face's file for a six-file set), each with its own chain.
+pub fn estimate_job(src: (u32, u32), p: &Profile, cube: Option<&engine::cube::CubeJob>) -> SizeEst {
+    let (w, h) = match cube {
+        Some(c) => {
+            let f = engine::cube::layout::face_size(p, c.layout, src);
+            (f, f)
+        }
+        None => engine::resize::target_dims(src, p.resize),
+    };
     let (w, h) = (w.max(1), h.max(1));
     let mips = engine::mips::level_count(w, h, &p.mips.levels);
     let top = u32::from(p.drop_top_mip && mips > 1);
     let (w, h, mips) = ((w >> top).max(1), (h >> top).max(1), mips - top);
     let pf = p.format.pixel_format(p.srgb_tag());
-    let chain_bytes = (0..mips)
-        .map(|i| pf.level_size((w >> i).max(1), (h >> i).max(1)) as u64)
-        .sum();
+    let faces = if cube.is_some() { 6 } else { 1 };
+    let chain_bytes = faces
+        * (0..mips)
+            .map(|i| pf.level_size((w >> i).max(1), (h >> i).max(1)) as u64)
+            .sum::<u64>();
     let header_bytes = match resolve_header(p.format, p.srgb_tag(), p.header) {
         ResolvedHeader::Dx10 => HEADER_DX10,
         _ => HEADER_LEGACY,
@@ -179,7 +191,11 @@ impl SizeCache {
                 }
             }
         }
-        Some(estimate(self.dims[&k]?, &job.profile))
+        Some(estimate_job(
+            self.dims[&k]?,
+            &job.profile,
+            job.cube.as_ref(),
+        ))
     }
 
     /// Sum over `keys` (items without an estimate count as 0) and how many had none.
