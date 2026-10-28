@@ -629,3 +629,33 @@ fn exr_decode_setting_changed_by_the_fill_is_reloaded() {
         .collect();
     assert!(clamp.is_empty(), "analysed un-premultiplied: {clamp:?}");
 }
+
+/// Review 4 I1: a batch cancelled as the fill step starts lists the target as cancelled; its helper still ends once.
+#[test]
+fn fill_step_cancel_still_ends_the_helper() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "fillcancel.png");
+    checker(d.path(), "fillcancel_opacity.png", 0, 255);
+    // Named by the target's output, which only the fill step matches.
+    std::env::set_var("SDC_TEST_CANCEL_ON", "fillcancel.dds");
+    let _hook = HookVar("SDC_TEST_CANCEL_ON");
+    let (p, plan_ev) = plan_of(req(
+        d.path(),
+        Target::Cs,
+        &[
+            "file:**/fillcancel.png.subtype=diffuse",
+            "alpha.policy=blend",
+        ],
+    ));
+    assert!(p.jobs.iter().all(|j| !j.input.ends_with("fillcancel.png")));
+    assert!(
+        p.cancelled.iter().any(|c| c.ends_with("fillcancel.png")),
+        "{:?}",
+        p.cancelled
+    );
+    let (s, run_ev) = run(p);
+    assert!(s.cancelled.iter().any(|c| c.ends_with("fillcancel.png")));
+    let t = terminal(plan_ev.iter().chain(&run_ev), "fillcancel_opacity.png");
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(filled_into(t[0], "/fillcancel.dds"), "{t:?}");
+}

@@ -1793,6 +1793,12 @@ impl Engine {
             )
             .map(|(fl, j)| (fl.source.path.clone(), j.output.clone(), j.set_key.clone()))
             .collect();
+        // Test hook: `SDC_TEST_CANCEL_ON=<target output name>` cancels the batch as the fill step starts (pass 1 is
+        // named by inputs, so only this step matches an output name).
+        #[cfg(feature = "test-hooks")]
+        for &(_, ji, ..) in &fill_items {
+            cancel_on_load_for_test(&jobs[ji].output, cancel);
+        }
         let fill_results = admit_all(
             &pool,
             &budget,
@@ -2210,35 +2216,40 @@ impl Engine {
                 );
             }
         }
-        // Review 4 I1: a consumed helper that no surviving job, skip, failure or cancellation ends.
-        let ended: BTreeSet<&Path> = jobs
-            .iter()
-            .flat_map(|j| {
-                let pack = j
-                    .pack
-                    .iter()
-                    .flat_map(|p| p.sources.iter().map(|s| &s.path));
-                let derive = j
-                    .derive
-                    .iter()
-                    .flat_map(|d| d.sources.iter().map(|s| &s.path));
-                let fill = j.fill.iter().map(|f| &f.source.path);
-                std::iter::once(&j.input)
-                    .chain(pack)
-                    .chain(derive)
-                    .chain(fill)
-            })
-            .chain(skipped.iter().map(|s| &s.path))
-            .chain(failed.iter().map(|f| &f.path))
-            .chain(&cancelled)
-            .chain(&derive_own)
-            .map(PathBuf::as_path)
-            .collect();
-        let mut seen = BTreeSet::new();
-        let fill_ends: Vec<(PathBuf, PathBuf, String)> = fill_owner
-            .into_iter()
-            .filter(|(h, ..)| !ended.contains(h.as_path()) && seen.insert(h.clone()))
-            .collect();
+        // Review 4 I1: a consumed helper that no surviving job, skip, failure or cancellation ends (a helper-free plan
+        // skips the walk).
+        let fill_ends: Vec<(PathBuf, PathBuf, String)> = if fill_owner.is_empty() {
+            vec![]
+        } else {
+            let ended: BTreeSet<&Path> = jobs
+                .iter()
+                .flat_map(|j| {
+                    let pack = j
+                        .pack
+                        .iter()
+                        .flat_map(|p| p.sources.iter().map(|s| &s.path));
+                    let derive = j
+                        .derive
+                        .iter()
+                        .flat_map(|d| d.sources.iter().map(|s| &s.path));
+                    let fill = j.fill.iter().map(|f| &f.source.path);
+                    std::iter::once(&j.input)
+                        .chain(pack)
+                        .chain(derive)
+                        .chain(fill)
+                })
+                .chain(skipped.iter().map(|s| &s.path))
+                .chain(failed.iter().map(|f| &f.path))
+                .chain(&cancelled)
+                .chain(&derive_own)
+                .map(PathBuf::as_path)
+                .collect();
+            let mut seen = BTreeSet::new();
+            fill_owner
+                .into_iter()
+                .filter(|(h, ..)| !ended.contains(h.as_path()) && seen.insert(h.clone()))
+                .collect()
+        };
         Ok(Plan {
             request: req,
             registry,
