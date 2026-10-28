@@ -121,7 +121,16 @@ fn an_rmaos_card_without_an_ao_source_has_an_ao_row_and_a_set_value_becomes_the_
     let mut h = editor(fixture(d.path()));
     h.run();
     h.get_by_label("AO");
-    h.get_by_label_contains("roughness: from rock01_roughness.png");
+    // Note DT18: a channel with a file names it in its source picker.
+    assert_eq!(
+        h.get_by_role_and_label(
+            eframe::egui::accesskit::Role::ComboBox,
+            "roughness channel source"
+        )
+        .value()
+        .as_deref(),
+        Some("Source: rock01_roughness.png")
+    );
     assert_eq!(
         roles(h.state(), RMAOS),
         vec![
@@ -845,6 +854,16 @@ fn dragging_a_fill_box_and_releasing_stores_the_final_dragged_value() {
             _ => None,
         })
         .expect("an AO value row");
+    // Note DT18: the source picker widens the row, so the box may sit past the column's edge: scroll to it.
+    h.get_by_label("AO").scroll_to_me();
+    h.run();
+    let label = h.get_by_label("AO").accesskit_node().raw_bounds().unwrap();
+    let spin = h
+        .query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .find(|n| (n.accesskit_node().raw_bounds().unwrap().y0 - label.y0).abs() < 6.0)
+        .expect("the AO value box");
+    spin.scroll_to_me();
+    h.run();
     let label = h.get_by_label("AO").accesskit_node().raw_bounds().unwrap();
     let r#box = h
         .query_all_by_role(eframe::egui::accesskit::Role::SpinButton)

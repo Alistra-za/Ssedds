@@ -8,9 +8,12 @@
 //! Picking `_rfaos` also moves the set to Advanced skin, but only through the engine: with the recipe resolved to
 //! `rfaos` it suggests `skin_albedo` and `skin_sk` for the members whose sub-type is inferred, so nothing else is
 //! written and a member the user set stays put.
+use super::helpers::written_fills;
 use super::AppModel;
 use crate::project::ProjectDoc;
 use engine::config::{PackRecipe, RawMap, Target};
+use engine::helper::report::HelperReport;
+use engine::helper::{fills_value, FillTarget, HelperRole, FILLS_FIELD};
 use engine::pack::{recipes_for_with, ChannelSource, RawInput, RecipeKind};
 use serde_json::json;
 
@@ -229,14 +232,83 @@ impl AppModel {
     }
 }
 
+/// Note DT18: the greyscale helpers of the packed output's set, `(item key, file name, role)`, in the engine's order
+/// (by file name); normal layers are left out.
+pub fn channel_helpers(model: &AppModel, packed_key: &str) -> Vec<(String, String, HelperRole)> {
+    let Some(set) = model.item(packed_key).and_then(|i| i.set_key.clone()) else {
+        return vec![];
+    };
+    model
+        .items
+        .iter()
+        .filter_map(|i| Some((i, i.helper.as_ref()?)))
+        .filter(|(_, h)| h.set_key == set && !h.role.is_normal())
+        .map(|(i, h)| (i.key.clone(), i.name.clone(), h.role))
+        .collect()
+}
+
+impl AppModel {
+    /// Note DT18: make `helper` (an item key; `None` = a value) the source of channel `channel` of the packed output
+    /// `packed_key`, as one undo step. Every helper of the set whose current list (its hand-set `helper.fills`, else
+    /// the engine's reported fills) holds the channel gets that list without it; `helper` gets its list plus the
+    /// channel. A helper not touched keeps no key, so its suggestion stays live.
+    pub fn set_channel_helper(&mut self, packed_key: &str, channel: u8, helper: Option<&str>) {
+        let Some(kind) = self
+            .item(packed_key)
+            .and_then(|i| i.job.as_ref()?.pack.as_ref())
+            .map(|p| p.kind)
+        else {
+            return;
+        };
+        let target = FillTarget::Packed {
+            suffix: kind.suffix(),
+            channel,
+        };
+        let current = |key: &str, h: &HelperReport| -> Vec<FillTarget> {
+            let hand = self
+                .project
+                .as_ref()
+                .and_then(|p| p.file_value(key, FILLS_FIELD))
+                .and_then(|v| fills_value(&v));
+            match hand {
+                Some(v) if h.fills_hand_set => v,
+                _ => written_fills(h),
+            }
+        };
+        let mut writes: Vec<(String, Vec<FillTarget>)> = vec![];
+        for (key, ..) in channel_helpers(self, packed_key) {
+            let Some(h) = self.item(&key).and_then(|i| i.helper.clone()) else {
+                continue;
+            };
+            let mut list = current(&key, &h);
+            let held = list.contains(&target);
+            list.retain(|t| *t != target);
+            if helper == Some(key.as_str()) {
+                list.push(target);
+            } else if !held {
+                continue;
+            }
+            writes.push((key, list));
+        }
+        self.edit("Channel source", move |p| {
+            for (k, list) in writes {
+                let ids: Vec<String> = list.iter().map(FillTarget::id).collect();
+                p.set_file_value(&k, FILLS_FIELD, &json!(ids));
+            }
+        });
+    }
+}
+
 /// What the card shows for one channel of a packed output.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FillRow {
-    /// The channel has a source file: read-only text. `key` is the file's item key.
+    /// The channel has a source file. `key` is the file's item key; `hand_set` when that file is a helper whose
+    /// `helper.fills` was set by hand (the card's picker writes it).
     FromFile {
         role: RawMap,
         file: String,
         key: String,
+        hand_set: bool,
     },
     /// No source: a 0..=255 value (the fill, or the neutral default that stands in), with a reset when the
     /// output's own entry holds the key.
@@ -261,19 +333,26 @@ pub fn fill_rows(model: &AppModel, key: &str) -> Vec<FillRow> {
         .filter_map(|(role, ch)| {
             let role = role?;
             Some(match ch {
-                ChannelSource::Source { path, .. } => FillRow::FromFile {
-                    role,
-                    file: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    key: model
+                ChannelSource::Source { path, .. } => {
+                    let key = model
                         .root
                         .as_deref()
                         .map(|r| super::items::key_of(r, path))
-                        .unwrap_or_default(),
-                },
+                        .unwrap_or_default();
+                    FillRow::FromFile {
+                        role,
+                        file: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        hand_set: model
+                            .item(&key)
+                            .and_then(|i| i.helper.as_ref())
+                            .is_some_and(|h| h.fills_hand_set),
+                        key,
+                    }
+                }
                 ChannelSource::Fill { role: r, code } => FillRow::Value {
                     role,
                     // An inverted fill (glossiness for a roughness channel) is stored as 255 - fill.

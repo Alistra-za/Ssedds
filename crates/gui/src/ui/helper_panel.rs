@@ -30,7 +30,7 @@ enum Edit {
 }
 
 /// Names `r` (a combo or a button with a short visible text) for a screen reader and tests.
-fn named(r: &egui::Response, kind: egui::WidgetType, name: &str, value: Option<&str>) {
+pub(super) fn named(r: &egui::Response, kind: egui::WidgetType, name: &str, value: Option<&str>) {
     r.widget_info(|| {
         let mut i = egui::WidgetInfo::labeled(kind, r.enabled(), name);
         i.current_text_value = value.map(str::to_string);

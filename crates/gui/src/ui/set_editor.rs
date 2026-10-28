@@ -15,7 +15,7 @@ use crate::model::fields::{
 use crate::model::from_normal::GenMap;
 use crate::model::items::{ItemKind, ItemStatus, TextureItem};
 use crate::model::out_size::{human, SizeEst};
-use crate::model::pack_fills::{fill_rows, FillRow};
+use crate::model::pack_fills::{channel_helpers, channel_roles, fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
     card_title, is_json_set, set_views, shows_json_panel, slot_clash_text, slot_label, slot_of,
@@ -66,6 +66,8 @@ enum Act {
     ParallaxReset(String),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
+    /// Note DT18: a packed channel's source (packed key, channel, helper item key; `None` = a value).
+    ChannelHelper(String, u8, Option<String>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
     /// Note AN: read a locked slot's original textures (set id, slot) on a worker.
@@ -238,6 +240,7 @@ pub fn draw(
                 model.set_packing_recipe(&k, r);
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
+            Act::ChannelHelper(k, c, h) => model.set_channel_helper(&k, c, h.as_deref()),
             Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
             Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
@@ -1163,28 +1166,96 @@ fn packed_controls(
     .on_disabled_hover_text(why.unwrap_or_default());
 }
 
-/// One row per channel that a fill can stand in for: a value box with a reset while the channel has no source,
-/// read-only text naming the file when it has one.
+/// Note DT18: the width of a fill row's source picker (egui-ui-rules 3.5: `ComboBox::width` is only a minimum).
+/// The format combo's width: the rows still fit beside the set panel at 1400 px (`set_panel.rs`), and the combo fits
+/// the ~125 px of slot row the centre shows at 1100 (truncated, full name on hover).
+const SOURCE_W: f32 = COMBO_W;
+
+/// The source picker of one channel: "Source: <file>" or "Source: value", listing the set's greyscale helpers and
+/// "Value". A pick other than the current source becomes `Act::ChannelHelper`.
+fn source_picker(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    packed: &str,
+    role: RawMap,
+    current: Option<(&str, &str)>,
+    acts: &mut Vec<Act>,
+) -> egui::Response {
+    let channel = model
+        .item(packed)
+        .and_then(|i| i.job.as_ref()?.pack.as_ref())
+        .and_then(|p| channel_roles(p.kind).iter().position(|r| *r == Some(role)));
+    let shown = format!("Source: {}", current.map_or("value", |(_, f)| f));
+    let h = ui.spacing().interact_size.y;
+    let r = ui
+        .allocate_ui(egui::vec2(SOURCE_W, h), |ui| {
+            egui::ComboBox::from_id_salt(("fill-source", packed, role.id()))
+                .width(SOURCE_W)
+                .truncate()
+                .selected_text(&shown)
+                .show_ui(ui, |ui| {
+                    let now = current.map(|(k, _)| k);
+                    for (k, file, _) in channel_helpers(model, packed) {
+                        if ui
+                            .selectable_label(now == Some(k.as_str()), &file)
+                            .clicked()
+                            && now != Some(k.as_str())
+                        {
+                            if let Some(c) = channel {
+                                acts.push(Act::ChannelHelper(packed.into(), c as u8, Some(k)));
+                            }
+                        }
+                    }
+                    if ui.selectable_label(now.is_none(), "Value").clicked() && now.is_some() {
+                        if let Some(c) = channel {
+                            acts.push(Act::ChannelHelper(packed.into(), c as u8, None));
+                        }
+                    }
+                })
+                .response
+        })
+        .inner;
+    super::helper_panel::named(
+        &r,
+        egui::WidgetType::ComboBox,
+        &format!("{} channel source", role_label(role)),
+        Some(&shown),
+    );
+    r
+}
+
+/// One row per channel that a fill can stand in for: its role, the source picker (Note DT18), and while the channel
+/// has no source a value box with a reset.
 fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<Act>) {
     for row in fill_rows(model, key) {
         match row {
-            FillRow::FromFile { role, file, key } => {
-                let r = ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("{}: from {file}", role_label(role))).small(),
-                    )
-                    .truncate(),
-                );
+            FillRow::FromFile {
+                role,
+                file,
+                key: src,
+                ..
+            } => {
+                let r = ui
+                    .horizontal(|ui| {
+                        ui.label(egui::RichText::new(role_label(role)).small());
+                        source_picker(ui, model, key, role, Some((&src, &file)), acts)
+                    })
+                    .inner;
                 // Note CO (P20): a generated source (the `_m` alpha's height) says where it came from and if stale.
-                if let Some(g) = model.generated_info(&key) {
-                    r.on_hover_text(format!("{file}\nGenerated from {}", g.from));
-                    if let Some(s) = g.stale {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("stale: {s}")).small().weak(),
-                            )
-                            .truncate(),
-                        );
+                match model.generated_info(&src) {
+                    Some(g) => {
+                        r.on_hover_text(format!("{file}\nGenerated from {}", g.from));
+                        if let Some(s) = g.stale {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("stale: {s}")).small().weak(),
+                                )
+                                .truncate(),
+                            );
+                        }
+                    }
+                    None => {
+                        r.on_hover_text(file);
                     }
                 }
             }
@@ -1195,6 +1266,7 @@ fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<
             } => {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(role_label(role)).small());
+                    source_picker(ui, model, key, role, None, acts);
                     let mut v = shown;
                     if super::advanced::settled_drag(ui, &mut v, 1.0, 0..=255) {
                         acts.push(Act::Fill(key.to_string(), role, Some(v)));
