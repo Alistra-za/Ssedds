@@ -3,8 +3,8 @@
 //! raw jobs), then assembles, analyses and resolves each [`Candidate`] with [`finish_recipe`] (pass 2).
 use super::assemble::{check_sizes, sizes, PackError};
 use super::{
-    file_name as name, recipes_for_with, resolve_channels, ChannelSource, PackJob, PackSource,
-    RawInput, RecipeKind, Slot,
+    file_name as name, recipes_for_sel, recipes_for_with, resolve_channels, ChannelSource, PackJob,
+    PackSource, RawInput, RecipeKind, Slot,
 };
 use crate::analyse::{analyse, Analysis};
 use crate::api::SkippedFile;
@@ -631,6 +631,7 @@ pub fn plan_packing(
         // (spec §4.4) and takes no part.
         let mut raw = vec![];
         let mut members: BTreeMap<PathBuf, &InputFile> = BTreeMap::new();
+        let mut sel = BTreeMap::new();
         for &i in &set.members {
             let f = &files[i];
             // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing). The job's role comes
@@ -670,6 +671,11 @@ pub fn plan_packing(
                     role,
                 });
                 members.insert(f.path.clone(), renamed.get(&f.path).unwrap_or(f));
+                // Note DT: its hand-set fills, read and invert.
+                let s = crate::policy::helper_requested(ctx, f);
+                if s != crate::helper::HelperSel::default() {
+                    sel.insert(f.path.clone(), s);
+                }
             }
         }
         if ctx.target == Target::Cs {
@@ -695,7 +701,7 @@ pub fn plan_packing(
             .shaders
             .get(&set.key)
             .is_some_and(|p| p.shader == crate::shader::Shader::ComplexMaterial);
-        let (mut recipes, mut unused) = recipes_for_with(ctx.target, &raw, choice, complex);
+        let (mut recipes, mut unused) = recipes_for_sel(ctx.target, &raw, choice, complex, &sel);
         if let Some(i) = unused
             .iter()
             .position(|u| u.role == RawMap::Height && derive_heights.contains(&u.path))
