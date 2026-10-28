@@ -949,6 +949,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         ui.weak("This texture is no longer in the plan.");
         return;
     };
+    if let Some(h) = item.helper.clone() {
+        return helper_panel(ui, model, &item.name.clone(), &h);
+    }
     let (name, job_key, kind, status) = (
         item.name.clone(),
         item.job_key.clone(),
@@ -1109,6 +1112,32 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             Action::PatchDo => {
                 // The result line lands in `dds_patch.last`, shown under the panel.
                 let _ = model.patch_dds_header(key);
+            }
+        }
+    }
+}
+
+/// Note DT16: a helper's panel: its role, where it went, and a button to each output it fills.
+/// shortcut: the minimal panel; Task 8 of the helper-textures plan replaces it with the full editor.
+fn helper_panel(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    name: &str,
+    h: &engine::helper::report::HelperReport,
+) {
+    ui.heading(name);
+    let by_you = if h.role_hand_set { " (set by you)" } else { "" };
+    ui.label(format!("Helper: {}{by_you}", h.role.label()));
+    ui.label(crate::model::items::helper_target_text(h));
+    for o in &h.outputs {
+        let target = model
+            .items
+            .iter()
+            .find(|i| i.job.as_ref().is_some_and(|j| &j.output == o))
+            .map(|i| (i.key.clone(), i.name.clone()));
+        if let Some((key, shown)) = target {
+            if ui.button(format!("Show {shown}")).clicked() {
+                model.select_item(&key);
             }
         }
     }

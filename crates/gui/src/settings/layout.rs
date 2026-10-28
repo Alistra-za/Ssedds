@@ -14,7 +14,13 @@ pub const WIDTH_IDS: [&str; 5] = [
     "preview-settings",
 ];
 /// The Textures filter toggles, by their `gui.toml` names.
-pub const FILTER_NAMES: [&str; 4] = ["needs-decision", "warnings", "failed", "not-in-set"];
+pub const FILTER_NAMES: [&str; 5] = [
+    "needs-decision",
+    "warnings",
+    "failed",
+    "not-in-set",
+    "hide-helpers",
+];
 /// What `[layout] sets_filters` may name: the Sets column's pills.
 pub const SETS_FILTER_NAMES: [&str; 3] = ["attention", "ready", "no-json"];
 /// A saved panel width outside this range (points) is ignored.

@@ -285,6 +285,7 @@ pub fn capture(
         filter.warnings,
         filter.failed,
         filter.not_in_set,
+        filter.hide_helpers,
     ];
     l.filters = FILTER_NAMES
         .iter()
@@ -456,6 +457,7 @@ pub fn restore_model(
         format: l.filter_format.clone(),
         encoder: l.filter_encoder.clone(),
         set: SetFilter::from_name(&l.filter_set).unwrap_or_default(),
+        hide_helpers: has("hide-helpers"),
     };
     *prefs = ColumnPrefs {
         sort: SortKey::from_name(&l.sort).unwrap_or_default(),

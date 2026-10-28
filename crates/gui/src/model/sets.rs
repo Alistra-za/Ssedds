@@ -385,7 +385,7 @@ pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
 
 /// The slot a texture fills, by its resolved sub-type. Raw packing sources and items without a job have none.
 pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
-    if matches!(item.status, ItemStatus::PackedInto(_)) {
+    if matches!(item.status, ItemStatus::PackedInto(_)) || item.kind == ItemKind::Helper {
         return None;
     }
     slot_kind(item.job.as_ref()?.profile.subtype)

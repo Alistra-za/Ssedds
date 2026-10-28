@@ -178,7 +178,7 @@ fn map_of(role: &str) -> Option<GenMap> {
 
 /// A member with a file of its own (not a packed output, which `SetView.members` also lists).
 fn file_backed(i: &TextureItem) -> bool {
-    matches!(i.kind, ItemKind::Image | ItemKind::Dds)
+    matches!(i.kind, ItemKind::Image | ItemKind::Dds | ItemKind::Helper)
 }
 
 /// The rival named by the engine's GEN-REPLACED skip (P4): "generated … replaced by <name>[ (a DDS…)]".
@@ -634,14 +634,15 @@ impl AppModel {
         aliases: &'a BTreeMap<String, String>,
     ) -> Option<(&'a TextureItem, Option<String>)> {
         self.real_members(v, aliases).find(|(i, s)| {
-            i.kind == ItemKind::Image && matches!(s.as_deref(), Some("rmaos" | "rfaos"))
+            matches!(i.kind, ItemKind::Image | ItemKind::Helper)
+                && matches!(s.as_deref(), Some("rmaos" | "rfaos"))
         })
     }
 
     /// A loose roughness, glossiness, metallic, specular, fuzz or `_orm` image in the set (the engine's `lone` rule).
     fn loose_rmaos_source(&self, v: &SetView, aliases: &BTreeMap<String, String>) -> bool {
         self.real_members(v, aliases).any(|(i, _)| {
-            i.kind == ItemKind::Image
+            matches!(i.kind, ItemKind::Image | ItemKind::Helper)
                 && matches!(
                     vocab_of(&stem(&i.key)).map(|v| v.role),
                     Some(VocabRole::PackingInput(
