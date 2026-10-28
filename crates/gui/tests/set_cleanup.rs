@@ -206,7 +206,19 @@ fn a_member_chip_menu_offers_remove_from_set() {
         .expect("the N chip");
     n.click_secondary();
     h.run();
-    h.get_by_label("Remove from set");
+    let normal = "landscape/rock01_normal.png";
+    let in_rock = |m: &AppModel| {
+        set_views(m)
+            .iter()
+            .any(|v| v.id == ROCK && v.members.iter().any(|k| k == normal))
+    };
+    assert!(in_rock(h.state()));
+    h.get_by_label("Remove from set").click();
+    settle(&mut h);
+    assert!(!in_rock(h.state()), "the member left the set");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    settle(&mut h);
+    assert!(in_rock(h.state()), "Ctrl+Z brings it back");
 }
 
 // ---- Advanced Skin sets skin_albedo ----
@@ -320,6 +332,21 @@ fn a_sub_type_the_user_set_since_is_not_reverted() {
     m.set_shader(SET, Some(Shader::Pbr));
     idle(&mut m);
     assert_eq!(subtype(&m), Some(json!(Subtype::SkinAlbedo)));
+}
+
+/// DU9: a diffuse pinned after the switch keeps `skin_albedo` when the shader changes (review issue 2).
+#[test]
+fn a_pinned_diffuse_is_not_reverted() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = skin_fixture(d.path());
+    m.set_shader(SET, Some(Shader::AdvancedSkin));
+    idle(&mut m);
+    m.set_slot_lock(SET, 1, true).unwrap();
+    idle(&mut m);
+    m.set_shader(SET, Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(subtype(&m), Some(json!(Subtype::SkinAlbedo)));
+    assert!(m.item(RFAOS).is_some());
 }
 
 /// DU9: a hand-set sub-type other than plain diffuse is never overridden.

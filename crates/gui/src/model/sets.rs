@@ -1730,9 +1730,13 @@ impl AppModel {
         };
         let p = self.project.as_ref().filter(|p| !p.read_only())?;
         let s = self.sets_doc.as_ref()?;
+        // F3a Task 8: a pinned diffuse keeps its sub-type both ways (review issue 2).
+        if locked_items(self).contains_key(item) {
+            return None;
+        }
         let own = p.file_value(item, "subtype");
         if shader == Some(Shader::AdvancedSkin) {
-            if self.target != Target::Cs || locked_items(self).contains_key(item) {
+            if self.target != Target::Cs {
                 return None;
             }
             let job = self.item(item)?.job.as_ref()?;
