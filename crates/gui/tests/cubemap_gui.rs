@@ -591,6 +591,41 @@ fn a_six_face_edit_writes_all_six_entries_in_one_step() {
     }
 }
 
+/// DT31 on the multi-field paths: `set_format` (format and tag in one step) and a sub-type reset reach all six faces.
+#[test]
+fn a_six_face_format_and_subtype_reset_reach_all_six() {
+    use engine::config::{ColorTag, Format};
+    use sdc_gui::model::items::ItemStatus;
+    let faces = ["px", "nx", "py", "ny", "pz", "nz"].map(|f| format!("a/chrome_e_{f}.png"));
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, key) = six_face_model(d.path());
+    m.decide(&key, Answer::Subtype(Subtype::Cubemap));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    // Cubemaps are UNORM (the engine's CFG-INVALID otherwise).
+    m.set_format(&key, Format::Bc7, ColorTag::Unorm);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let it = m.item(&key).unwrap();
+    assert_eq!(
+        it.status,
+        ItemStatus::Ready,
+        "{:?}",
+        it.job.as_ref().map(|j| &j.warnings)
+    );
+    let p = m.project.as_ref().unwrap();
+    for f in &faces {
+        assert_eq!(
+            p.file_value(f, "format"),
+            Some(serde_json::json!("bc7")),
+            "{f}"
+        );
+        assert!(p.file_value(f, "color.tag").is_some(), "{f}");
+    }
+    m.clear_field(&key, "subtype");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let p = m.project.as_ref().unwrap();
+    assert!(faces.iter().all(|f| p.file_value(f, "subtype").is_none()));
+}
+
 fn source_red(m: &mut AppModel) -> f32 {
     use sdc_gui::model::preview::SourceState;
     // The debounce counts from the first tick that sees something scheduled.
