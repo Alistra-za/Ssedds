@@ -32,6 +32,11 @@ pub(crate) fn sizes(s: &[(PathBuf, u32, u32)]) -> String {
         .join(", ")
 }
 
+/// Rec. 709 luma of a texel ([`super::LUMA_CHANNEL`]); shared with `helper::apply_fill`.
+pub(crate) fn luma(q: &[f32; 4]) -> f32 {
+    0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2]
+}
+
 pub struct Assembled {
     pub image: Rgba32F,
     /// Largest bit depth, any float source, 4 channels; `has_alpha` unless the alpha channel is `Opaque`.
@@ -157,7 +162,7 @@ pub fn assemble_channels_with(
         let mut all_grey = true;
         for (o, q) in image.px.iter_mut().zip(&src.px) {
             all_grey &= grey(q);
-            let luma = 0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2];
+            let luma = luma(q);
             let v = match gray {
                 GraySource::R => q[0],
                 GraySource::Luma => luma,

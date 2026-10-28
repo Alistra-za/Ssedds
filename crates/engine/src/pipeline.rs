@@ -203,6 +203,9 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
     if let Some(b) = &job.bake {
         stamps.push((b.normal.as_path(), b.stamp));
     }
+    if let Some(f) = &job.fill {
+        stamps.push((f.source.path.as_path(), f.source.stamp));
+    }
     if let Some(r) = job
         .bake
         .as_ref()
@@ -221,6 +224,7 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
         || job.derive.is_some()
         || faces.is_some()
         || job.bake.is_some()
+        || job.fill.is_some()
         || job.active_rnm().is_some();
     for (src, planned) in stamps {
         if let Some(planned) = planned {
@@ -291,7 +295,7 @@ fn prepare_then<T>(
         None => None,
     };
     stop()?;
-    let (mut img, info) = match (&job.pack, &job.derive) {
+    let (mut img, mut info) = match (&job.pack, &job.derive) {
         (Some(pk), _) => {
             // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
             let asm = assemble(pk, pk.gray).map_err(|e| fail(Stage::Load)(e.to_string()))?;
@@ -306,6 +310,10 @@ fn prepare_then<T>(
         (None, None) => load_image_as(&job.input, p.alpha.exr_straight)
             .map_err(|e| fail(Stage::Load)(e.to_string()))?,
     };
+    // Note DT: the helper's channel becomes the alpha, as the plan analysed it (Ruling 11: a cube returned above).
+    if let Some(f) = &job.fill {
+        crate::helper::apply_fill(&mut img, &mut info, f).map_err(fail(Stage::Load))?;
+    }
     let transfer = SourceTransfer::of(&info);
     if crate::ops::complex_alpha_zero(p, info.has_alpha) {
         // Constant, so every mip stays 0.

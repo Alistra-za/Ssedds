@@ -1536,6 +1536,24 @@ impl Engine {
             .iter()
             .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.width, a.height, a.dds_cube)))
             .collect();
+        // Read by `plan_fills` (Note DT, Ruling 6): each input's alpha verdict on the original source, and its size.
+        let alpha_facts: BTreeMap<PathBuf, crate::helper::plan::AlphaFacts> = pass1
+            .iter()
+            .map(|(wi, a, _)| {
+                let empty = matches!(a.alpha, AlphaContent::None | AlphaContent::Constant255)
+                    || a.channels[3].min == a.channels[3].max;
+                let facts = crate::helper::plan::AlphaFacts {
+                    empty,
+                    size: (a.width, a.height),
+                };
+                (work[*wi].1.path.clone(), facts)
+            })
+            .collect();
+        // The load facts a filled target's re-analysis cannot see (it loads pixels only): ICC flag, DDS format.
+        let load_meta: BTreeMap<PathBuf, (bool, Option<u32>)> = pass1
+            .iter()
+            .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.icc_profile, a.dds_dxgi)))
+            .collect();
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
@@ -1612,6 +1630,8 @@ impl Engine {
             .collect();
         // DECISIONS DS8: six face files become one cube job, and one-file cubes get their layout.
         crate::cube::plan::plan_cubes(&cube_facts, &mut jobs, &mut skipped);
+        // Note DT: helper alpha fills, decided before packing so a helper an alpha fill uses is not reported unused.
+        let fills = crate::helper::plan::plan_fills(&ctx, &sets, &files, &mut jobs, &alpha_facts);
         let mut packed = pack::plan::plan_packing(
             &ctx,
             &sets,
@@ -1623,6 +1643,7 @@ impl Engine {
             &packed_outputs,
             &derive_heights,
             &flat_b,
+            &fills,
         );
         // As step 3b drops its losers, so later steps (the RNM bent AO) never read a replaced generated AO.
         for s in &mut sets {
@@ -1739,6 +1760,106 @@ impl Engine {
                 }
             }
         }
+        // Note DT: each filled target is loaded, filled and analysed again, then re-resolved as 6c does, so alpha
+        // policy, format, coverage and cutout all see the filled image. It runs before the derive step, so a target
+        // a derive replaces loses its fill with it (Ruling 15).
+        // shortcut: the filled analysis is not cached (as derive P25); key it on both stamps if re-plans get slow.
+        let fill_items: Vec<_> = fills
+            .candidates
+            .iter()
+            .filter_map(|c| {
+                let ji = jobs.iter().position(|j| {
+                    j.input == c.target
+                        && j.pack.is_none()
+                        && j.derive.is_none()
+                        && j.cube.is_none()
+                })?;
+                let set = sets.iter().find(|s| s.key == c.set_key)?;
+                let f = files.iter().find(|f| f.path == c.target)?;
+                Some((c, ji, set, f))
+            })
+            .collect();
+        let fill_results = admit_all(
+            &pool,
+            &budget,
+            cancel,
+            &fill_items,
+            |(c, ..)| estimated_bytes(&c.target) + estimated_bytes(&c.fill.source.path),
+            |(_, ji, ..)| jobs[*ji].output.as_path(),
+            |&(c, ji, set, f), admitted, stage| {
+                let old = &jobs[ji];
+                let (mut img, mut info) =
+                    crate::load::load_image_as(&c.target, old.profile.alpha.exr_straight)
+                        .map_err(PlanFailure::Load)?;
+                crate::helper::apply_fill(&mut img, &mut info, &c.fill)
+                    .map_err(PlanFailure::Pack)?;
+                cache.count_loads(2);
+                stage.set(Stage::Analyse);
+                let split = split_for((set, f));
+                let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                let mut a = analyse_with(&img, &info, hints);
+                if let Some(&(icc, dxgi)) = load_meta.get(&c.target) {
+                    a.icc_profile = icc;
+                    a.dds_dxgi = dxgi;
+                }
+                drop(img);
+                drop(admitted);
+                stage.set(Stage::Resolve);
+                let facts = FileFacts {
+                    input: f,
+                    suffix: split.suffix.as_deref(),
+                    alias: split.alias.as_deref(),
+                    set,
+                    analysis: &a,
+                    info: &info,
+                };
+                let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
+                let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
+                job.source = old.source;
+                job.warnings.extend(picks.get(&job.set_key).and_then(|p| {
+                    crate::shader::pbr_grass_albedo_note(p, job.profile.subtype, a.corner_err)
+                }));
+                job.provenance.insert("target".into(), target_src.clone());
+                let read = pack::ChannelSource::Source {
+                    path: c.fill.source.path.clone(),
+                    role: c.fill.source.role,
+                    invert: c.fill.invert,
+                    channel: c.fill.read.map(|r| r.channel()),
+                };
+                if let Some(p) = read.provenance(GraySource::R) {
+                    job.provenance.insert("fill.a".into(), p);
+                }
+                job.fill = Some(c.fill.clone());
+                Ok(job)
+            },
+        );
+        // A target that failed or was cancelled here has no job, as a pass-2 recipe.
+        let mut gone = BTreeSet::new();
+        for (&(c, ji, ..), r) in fill_items.iter().zip(fill_results) {
+            match r {
+                Some(Ok(job)) => jobs[ji] = job,
+                Some(Err(e)) => {
+                    let output = jobs[ji].output.clone();
+                    let (stage, error) = failure(&output, e);
+                    failed.push(FailedFile {
+                        path: c.target.clone(),
+                        output,
+                        stage,
+                        error,
+                    });
+                    gone.insert(ji);
+                }
+                None => {
+                    cancelled.push(c.target.clone());
+                    gone.insert(ji);
+                }
+            }
+        }
+        let mut i = 0;
+        jobs.retain(|_| {
+            i += 1;
+            !gone.contains(&(i - 1))
+        });
         // Track A (DECISIONS Note CN): the derive step replaces each PBR set's jobs with derived jobs, after packing
         // (a packed member's job goes too) and before the shader assignment, so a derived set carries its vanilla
         // shader (TA29). Without `derive` nothing below runs (C6).
@@ -2209,6 +2330,8 @@ impl Engine {
                     job.derive
                         .iter()
                         .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
+                        // Note DT: so does a helper, with the first output it fills, unless a recipe packs it too.
+                        .chain(job.fill.iter().map(|f| (&f.source.path, "filled")))
                         .filter(|(p, _)| derive_read.insert(p.as_path())),
                 )
                 // DECISIONS DS8: each face of a face-set cube (a broken set lists its lead file only), keyed by the
@@ -3072,6 +3195,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         }
     }
 
@@ -3216,6 +3340,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         };
         let texels = 48 * 40;
         assert_eq!(job_bytes(&job), input_bytes(48, 40));
@@ -3269,6 +3394,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         };
         std::fs::write(&job.output, b"dds").unwrap();
         let enc = EncoderVersions::current();

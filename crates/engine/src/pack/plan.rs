@@ -409,6 +409,7 @@ pub(crate) fn recipe_error_job(
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }
 
@@ -617,6 +618,7 @@ pub fn plan_packing(
     packed_outputs: &BTreeMap<(String, String), PathBuf>,
     derive_heights: &BTreeSet<PathBuf>,
     flat_b: &BTreeSet<PathBuf>,
+    fills: &crate::helper::plan::FillPlan,
 ) -> PackPlan {
     let (pa, pinfo) = placeholder();
     let mut out = PackPlan {
@@ -985,6 +987,11 @@ pub fn plan_packing(
             });
         }
         for (p, reason) in unused {
+            // Note DT: an alpha fill consumes it (below); otherwise its alpha reason says more than packing's.
+            if fills.used.contains(&p) {
+                continue;
+            }
+            let reason = fills.not_used.get(&p).cloned().unwrap_or(reason);
             if !failed.contains(&p) {
                 retag(
                     jobs,
@@ -996,6 +1003,8 @@ pub fn plan_packing(
         }
         out.reports.insert(set.key.clone(), reports);
     }
+    // Note DT: a helper an alpha fill uses is consumed too, whatever packing did with it.
+    consumed.extend(fills.used.iter().cloned());
     // DECISIONS Note M8: the recipe job stands for the raw jobs it consumed.
     jobs.retain(|j| {
         !(consumed.contains(&j.input) && matches!(j.status, JobStatus::PackingInput { .. }))

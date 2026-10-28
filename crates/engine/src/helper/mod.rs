@@ -271,6 +271,33 @@ impl FillJob {
     }
 }
 
+/// Writes the helper's channel into `img`'s alpha (Note DT): the plan analyses and the run encodes the same filled
+/// image (Note M6). `info` keeps the target's bit depth and float-ness (Ruling 10).
+pub fn apply_fill(
+    img: &mut crate::image::Rgba32F,
+    info: &mut crate::image::SourceInfo,
+    f: &FillJob,
+) -> Result<(), String> {
+    let (src, _) = crate::load::load_image(&f.source.path).map_err(|e| e.to_string())?;
+    if (src.width, src.height) != (img.width, img.height) {
+        return Err(format!(
+            "{}: size changed since planning; re-run",
+            f.source.path.display()
+        ));
+    }
+    let k = f.read.unwrap_or(HelperRead::R).channel();
+    for (o, q) in img.px.iter_mut().zip(&src.px) {
+        let v = match k {
+            crate::pack::LUMA_CHANNEL => crate::pack::assemble::luma(q),
+            k => q[usize::from(k)],
+        };
+        o[3] = (if f.invert { 1.0 - v } else { v }).clamp(0.0, 1.0);
+    }
+    info.has_alpha = true;
+    info.channels = 4;
+    Ok(())
+}
+
 /// `helper.fills`'s value: a list of target ids.
 pub fn fills_value(v: &Value) -> Option<Vec<FillTarget>> {
     v.as_array()?

@@ -148,6 +148,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 derive: None,
                 shader: None,
                 cube: None,
+                fill: None,
             }),
         },
         EventKind::Progress {

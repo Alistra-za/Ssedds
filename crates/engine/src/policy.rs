@@ -1348,6 +1348,10 @@ pub struct ResolvedJob {
     /// (`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube: Option<crate::cube::CubeJob>,
+    /// Helper textures (DECISIONS Note DT): the helper whose channel this plain file job's alpha is filled from,
+    /// before analysis and again at load (`helper::apply_fill`); `None` for every other job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<crate::helper::FillJob>,
 }
 
 impl ResolvedJob {
@@ -2351,6 +2355,7 @@ fn packing_input_job(
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }
 
@@ -2375,6 +2380,7 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }
 
@@ -2559,6 +2565,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     derive: None,
                     shader: None,
                     cube: None,
+                    fill: None,
                 };
             }
         };
@@ -2680,5 +2687,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }

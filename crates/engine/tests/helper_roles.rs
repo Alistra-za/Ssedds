@@ -344,15 +344,16 @@ fn unnamed_helper_joins_its_base_set() {
     let toml = files("x_mask", "helper.role = \"opacity\"");
     let d = fixture(&["x.png", "x_mask.png"], &toml);
     let p = plan(d.path(), Target::Cs, NO_PACK);
-    let m = job(&p, "x_mask.png");
-    assert_eq!(
-        m.status,
-        JobStatus::PackingInput {
-            role: RawMap::Opacity
-        }
+    // Task 4: joined, it fills x.png's empty alpha (an alpha fill is no packing, so `packing.enabled` keeps it).
+    let x = job(&p, "x.png");
+    assert!(
+        x.fill
+            .as_ref()
+            .is_some_and(|f| f.source.path.ends_with("x_mask.png")),
+        "{:#?}",
+        p.jobs
     );
-    assert_eq!(m.set_key, job(&p, "x.png").set_key);
-    assert!(m.set_key.ends_with("/x"), "{}", m.set_key);
+    assert!(x.set_key.ends_with("/x"), "{}", x.set_key);
 
     let d = fixture(&["x_mask.png"], &toml);
     let p = plan(d.path(), Target::Cs, NO_PACK);
