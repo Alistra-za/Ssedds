@@ -1,4 +1,4 @@
-//! Helper textures (DECISIONS Note DT): a grey map that fills a channel of another output of its set. This module
+//! Helper textures (DECISIONS Note DX): a grey map that fills a channel of another output of its set. This module
 //! holds the hand-set roles, the fill targets and the four per-file `helper.*` selectors.
 use crate::config::{LayerId, RawMap};
 use crate::rnm::{LayerTerm, LayerTermId};
@@ -272,7 +272,7 @@ impl HelperSel {
     }
 }
 
-/// How a helper fills its target's alpha (Note DT): the source, the channel read (`None` = R, Ruling 9), whether it
+/// How a helper fills its target's alpha (Note DX): the source, the channel read (`None` = R, Ruling 9), whether it
 /// is inverted, and whether it was hand-set (assigned replaces any alpha; suggested fills only an empty one).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FillJob {
@@ -290,7 +290,7 @@ impl FillJob {
     }
 }
 
-/// Writes the helper's channel into `img`'s alpha (Note DT): the plan analyses and the run encodes the same filled
+/// Writes the helper's channel into `img`'s alpha (Note DX): the plan analyses and the run encodes the same filled
 /// image (Note M6). `info` keeps the target's bit depth and float-ness (Ruling 10).
 pub fn apply_fill(
     img: &mut crate::image::Rgba32F,

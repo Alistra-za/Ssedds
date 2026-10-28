@@ -989,7 +989,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
-        // Note DT17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
+        // Note DX17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
         let not_helper = model
             .project
             .as_ref()

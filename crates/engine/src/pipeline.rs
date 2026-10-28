@@ -310,7 +310,7 @@ fn prepare_then<T>(
         (None, None) => load_image_as(&job.input, p.alpha.exr_straight)
             .map_err(|e| fail(Stage::Load)(e.to_string()))?,
     };
-    // Note DT: the helper's channel becomes the alpha, as the plan analysed it (Ruling 11: a cube returned above).
+    // Note DX: the helper's channel becomes the alpha, as the plan analysed it (Ruling 11: a cube returned above).
     if let Some(f) = &job.fill {
         crate::helper::apply_fill(&mut img, &mut info, f).map_err(fail(Stage::Load))?;
     }
@@ -628,7 +628,7 @@ pub fn process_file(
                         })?);
                 }
             }
-            // Note DT: the helper that fills the alpha, with its read and invert, so `if-changed` re-encodes on either.
+            // Note DX: the helper that fills the alpha, with its read and invert, so `if-changed` re-encodes on either.
             if let Some(f) = &job.fill {
                 sources.push(
                     SourceRef::of_fill(&f.source.path, f.identity()).map_err(|e| {

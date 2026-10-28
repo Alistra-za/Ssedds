@@ -269,7 +269,7 @@ pub fn derive_sets(
                 Some(pk) => members.extend(pk.sources.iter().map(|s| s.path.clone())),
                 None => members.push(j.input.clone()),
             }
-            // Note DT: a helper filling this job's alpha is a member too (derived jobs never take a fill).
+            // Note DX: a helper filling this job's alpha is a member too (derived jobs never take a fill).
             members.extend(j.fill.iter().map(|f| f.source.path.clone()));
         }
         members.extend(

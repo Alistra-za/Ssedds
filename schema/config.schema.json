@@ -534,7 +534,7 @@
         },
         "helper": {
           "additionalProperties": false,
-          "description": "Helper texture: a grey map that fills a channel of another output of its set (Note DT).",
+          "description": "Helper texture: a grey map that fills a channel of another output of its set (Note DX).",
           "properties": {
             "fills": {
               "description": "The channels it fills; [] = not used.",

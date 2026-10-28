@@ -1,4 +1,4 @@
-//! Helper textures Task 2 (Note DT): hand-set packed fill targets, `helper.read` and `helper.invert` on packed sources.
+//! Helper textures Task 2 (Note DX): hand-set packed fill targets, `helper.read` and `helper.invert` on packed sources.
 use engine::api::*;
 use engine::config::*;
 use engine::events::*;

@@ -1078,7 +1078,7 @@
           ]
         },
         "fill": {
-          "description": "Note DT: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed\nsource read through an explicit `helper.read` (`read:g`). Absent on every other source.",
+          "description": "Note DX: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed\nsource read through an explicit `helper.read` (`read:g`). Absent on every other source.",
           "type": [
             "string",
             "null"

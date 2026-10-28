@@ -360,7 +360,7 @@ fn selector_value<'a>(ctx: &ResolveCtx<'a>, input: &InputFile, field: &str) -> O
         .map(|o| &o.value)
 }
 
-/// Note DT: what the `helper.*` selectors hand-set for `input`, each field as [`rnm_target_requested`] reads its key.
+/// Note DX: what the `helper.*` selectors hand-set for `input`, each field as [`rnm_target_requested`] reads its key.
 pub fn helper_requested(ctx: &ResolveCtx, input: &InputFile) -> crate::helper::HelperSel {
     use crate::helper::*;
     let v = |field| selector_value(ctx, input, field);
@@ -1375,7 +1375,7 @@ pub struct ResolvedJob {
     /// (`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube: Option<crate::cube::CubeJob>,
-    /// Helper textures (DECISIONS Note DT): the helper whose channel this plain file job's alpha is filled from,
+    /// Helper textures (DECISIONS Note DX): the helper whose channel this plain file job's alpha is filled from,
     /// before analysis and again at load (`helper::apply_fill`); `None` for every other job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<crate::helper::FillJob>,
@@ -2342,7 +2342,7 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
 
 /// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
 /// placeholder and is never used. It is a raw map waiting for `pack::plan::plan_packing`, which consumes it into a
-/// recipe or re-tags it `PACK-UNUSED-INPUT`. `hand`: the role was set by `helper.role` (Note DT), which a sub-type
+/// recipe or re-tags it `PACK-UNUSED-INPUT`. `hand`: the role was set by `helper.role` (Note DX), which a sub-type
 /// does not undo.
 fn packing_input_job(
     ctx: &ResolveCtx,
@@ -2421,7 +2421,7 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
 /// top suggestion becomes a high-confidence `complex_grass`, on either target (Note AZ reverses ruling R1).
 pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) -> ResolvedJob {
     let mut d = decide_subtype(ctx, f);
-    // Note DT (rulings 12, 13): a hand-set helper role on an image wins over its name and a requested sub-type;
+    // Note DX (rulings 12, 13): a hand-set helper role on an image wins over its name and a requested sub-type;
     // `none` makes it an ordinary file.
     let role = (f.input.kind == crate::discover::InputKind::Image)
         .then(|| helper_requested(ctx, f.input).role)

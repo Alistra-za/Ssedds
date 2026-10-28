@@ -1,4 +1,4 @@
-//! Note DT17: the helper panel's edits. Each writes one `helper.*` selector of the helper file's own `[files]` entry in
+//! Note DX17: the helper panel's edits. Each writes one `helper.*` selector of the helper file's own `[files]` entry in
 //! `sdc.toml` as one undo step, then plans again; a read-only `sdc.toml` takes none (`AppModel::edit`).
 use super::AppModel;
 use engine::helper::report::HelperReport;

@@ -1,4 +1,4 @@
-//! Helper textures Task 7 (Note DT16): helper files are rows in a "Helpers (n)" group under the tiles, shown or hidden
+//! Helper textures Task 7 (Note DX16): helper files are rows in a "Helpers (n)" group under the tiles, shown or hidden
 //! by a "Helpers n" pill that is on by default. Settings go through `GuiSettings` values and temp dirs only.
 mod support;
 use eframe::egui;
@@ -314,7 +314,7 @@ fn helper_keys(m: &AppModel) -> Vec<String> {
         .collect()
 }
 
-/// Review fix (DT16): mouse range selection runs over the tiles then the shown helper rows.
+/// Review fix (DX16): mouse range selection runs over the tiles then the shown helper rows.
 #[test]
 fn shift_click_between_helpers_selects_the_range() {
     let d = tempfile::tempdir().unwrap();
@@ -328,7 +328,7 @@ fn shift_click_between_helpers_selects_the_range() {
     assert_eq!(m.selected_items(), rows, "A..C in display order");
 }
 
-/// Re-review fix (DT16): keyboard ranges stay on the tiles (shortcut: helper rows are mouse-only), even from a
+/// Re-review fix (DX16): keyboard ranges stay on the tiles (shortcut: helper rows are mouse-only), even from a
 /// helper anchor.
 #[test]
 fn shift_arrow_from_a_helper_selects_tiles_only() {

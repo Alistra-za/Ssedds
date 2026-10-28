@@ -1,4 +1,4 @@
-//! Helper textures Task 4 (Note DT10-DT12): a helper fills its target's alpha before the target is analysed, and the
+//! Helper textures Task 4 (Note DX10-DX12): a helper fills its target's alpha before the target is analysed, and the
 //! run writes that alpha.
 use engine::api::*;
 use engine::config::*;

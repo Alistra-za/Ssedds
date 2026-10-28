@@ -52,7 +52,7 @@ const FULL: [&str; 5] = [
 
 #[test]
 fn layers_are_helpers_not_tiles() {
-    // Note DT16 overturns Note W11 for listing: a layer file is a helper row, still never a tile.
+    // Note DX16 overturns Note W11 for listing: a layer file is a helper row, still never a tile.
     let d = tempfile::tempdir().unwrap();
     let m = fixture(d.path(), &FULL);
     let tiles = m.visible_items();

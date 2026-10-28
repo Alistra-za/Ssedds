@@ -751,7 +751,7 @@ fn a_record_without_encode_version_loads_with_none() {
     }
 }
 
-/// Note DT: a filled output records its helper with the fill identity; an output without a fill has no `fill` key.
+/// Note DX: a filled output records its helper with the fill identity; an output without a fill has no `fill` key.
 #[test]
 fn fill_source_is_recorded() {
     use image::{ImageBuffer, Luma, Rgb};

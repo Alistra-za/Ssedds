@@ -49,7 +49,7 @@ pub struct Filter {
     pub format: Option<String>,
     pub encoder: Option<String>,
     pub set: SetFilter,
-    /// Note DT16: the Helpers pill turned off (default false: the helper rows are shown).
+    /// Note DX16: the Helpers pill turned off (default false: the helper rows are shown).
     pub hide_helpers: bool,
 }
 
@@ -269,7 +269,7 @@ impl AppModel {
         self.visible_lists().0
     }
 
-    /// Note DT16: the helper rows the column shows under the tiles: the tiles' filters and search, plus the Helpers
+    /// Note DX16: the helper rows the column shows under the tiles: the tiles' filters and search, plus the Helpers
     /// pill, by set key then file name. Built with the tiles (same key, one build).
     pub fn visible_helpers_shared(&self) -> Arc<Vec<usize>> {
         self.visible_lists().1

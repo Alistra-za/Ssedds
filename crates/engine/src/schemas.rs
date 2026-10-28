@@ -252,7 +252,7 @@ pub fn files_table_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Sche
         if let Some(Value::Object(r)) = props.get_mut("rnm") {
             r.insert("$ref".into(), format!("{prefix}FileRnmSpec").into());
         }
-        // Note DT: the helper-texture selectors.
+        // Note DX: the helper-texture selectors.
         let roles: Vec<String> = crate::helper::HelperRole::all()
             .iter()
             .map(|r| r.id())
@@ -265,7 +265,7 @@ pub fn files_table_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Sche
         props.insert(
             "helper".into(),
             serde_json::json!({
-                "description": "Helper texture: a grey map that fills a channel of another output of its set (Note DT).",
+                "description": "Helper texture: a grey map that fills a channel of another output of its set (Note DX).",
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {

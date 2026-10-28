@@ -340,10 +340,10 @@ pub struct Plan {
     /// derived diffuse on its albedo's path, a kept landscape `_p`). That job's event ends them, so `run` emits no
     /// `packed_source` for them.
     pub derive_own: BTreeSet<PathBuf>,
-    /// Note DT (review 4 I1): helpers an alpha fill consumed whose target has no job left (failed or cancelled while
+    /// Note DX (review 4 I1): helpers an alpha fill consumed whose target has no job left (failed or cancelled while
     /// planning, or replaced): (helper, the output it filled, set key). `run` ends each with a `packed_source` skip.
     pub fill_ends: Vec<(PathBuf, PathBuf, String)>,
-    /// Note DT: every helper of the batch (`helper::report::reports`), by set key then file name.
+    /// Note DX: every helper of the batch (`helper::report::reports`), by set key then file name.
     pub helpers: Vec<crate::helper::report::HelperReport>,
 }
 
@@ -596,7 +596,7 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
     estimated_bytes(&job.input)
         + extra
         + cube
-        // Note DT: `apply_fill` holds the helper's decoded image beside the target's.
+        // Note DX: `apply_fill` holds the helper's decoded image beside the target's.
         + job.fill.as_ref().map_or(0, |f| estimated_bytes(&f.source.path))
         + job
             .bake
@@ -736,7 +736,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
             v.push((sha256_file(&f.path).ok()?, None, Some(role), None, None));
         }
     }
-    // Note DT: the helper that fills the alpha, last, as `process_file` records it.
+    // Note DX: the helper that fills the alpha, last, as `process_file` records it.
     if let Some(f) = &job.fill {
         v.push((
             sha256_file(&f.source.path).ok()?,
@@ -1141,7 +1141,7 @@ impl Engine {
         // `plan_packing` treats it, so its role leaves the set's suffixes (unless another raw member has it) and
         // Advanced skin detection and the `auto` prediction below follow the recipe actually built.
         // shortcut: rule-named sub-types are not seen here (rules need the analysis); revisit if a rule names one.
-        // Note DT: each image's hand-set `helper.role`. `none` makes a raw map an ordinary file, like a requested
+        // Note DX: each image's hand-set `helper.role`. `none` makes a raw map an ordinary file, like a requested
         // sub-type; any other hand role wins over a requested sub-type (ruling 13).
         let hand: Vec<Option<crate::helper::HelperRole>> = files
             .iter()
@@ -1173,7 +1173,7 @@ impl Engine {
             }
         };
         drop_typed_roles(&mut sets);
-        // Note DT: a hand-set helper with no recognised suffix (`x_mask`) joins set `x` when it exists.
+        // Note DX: a hand-set helper with no recognised suffix (`x_mask`) joins set `x` when it exists.
         crate::group::join_helpers(&mut sets, &files, registry.alias_table(), |i| {
             hand[i].is_some_and(|r| r != crate::helper::HelperRole::NotHelper)
         });
@@ -1571,7 +1571,7 @@ impl Engine {
             .iter()
             .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.width, a.height, a.dds_cube)))
             .collect();
-        // Read by `plan_fills` (Note DT, Ruling 6): each input's alpha verdict on the original source, and its size.
+        // Read by `plan_fills` (Note DX, Ruling 6): each input's alpha verdict on the original source, and its size.
         let alpha_facts: BTreeMap<PathBuf, crate::helper::plan::AlphaFacts> = pass1
             .iter()
             .map(|(wi, a, _)| {
@@ -1667,7 +1667,7 @@ impl Engine {
             .collect();
         // DECISIONS DS8: six face files become one cube job, and one-file cubes get their layout.
         crate::cube::plan::plan_cubes(&cube_facts, &mut jobs, &mut skipped);
-        // Note DT: helper alpha fills, decided before packing so a helper an alpha fill uses is not reported unused.
+        // Note DX: helper alpha fills, decided before packing so a helper an alpha fill uses is not reported unused.
         let fills = crate::helper::plan::plan_fills(&ctx, &sets, &files, &mut jobs, &alpha_facts);
         let mut packed = pack::plan::plan_packing(
             &ctx,
@@ -1797,7 +1797,7 @@ impl Engine {
                 }
             }
         }
-        // Note DT: each filled target is loaded, filled and analysed again, then re-resolved as 6c does, so alpha
+        // Note DX: each filled target is loaded, filled and analysed again, then re-resolved as 6c does, so alpha
         // policy, format, coverage and cutout all see the filled image. It runs before the derive step, so a target
         // a derive replaces loses its fill with it (Ruling 15).
         // shortcut: the filled analysis is not cached (as derive P25); key it on both stamps if re-plans get slow.
@@ -2126,7 +2126,7 @@ impl Engine {
                 rels.extend(j.fill.iter().filter_map(|f| rel_of_path(&f.source.path)));
             }
             rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
-            // Note DT: a helper consumed by a fill or a recipe, or one that fills nothing, is a planned file.
+            // Note DX: a helper consumed by a fill or a recipe, or one that fills nothing, is a planned file.
             rels.extend(helpers.iter().filter_map(|h| rel_of_path(&h.path)));
             // The derive step removed the jobs of PBR set members (Note CN); their keys still name planned files.
             if let Some(d) = &req.derive {
@@ -2412,7 +2412,7 @@ impl Engine {
                 },
             );
         }
-        // Note DT (review 4 I1): a helper whose target has no job ends with the output it filled.
+        // Note DX (review 4 I1): a helper whose target has no job ends with the output it filled.
         for (helper, output, set) in &plan.fill_ends {
             rep.emit_job(
                 Some(&key(output)),
@@ -2450,7 +2450,7 @@ impl Engine {
                     job.derive
                         .iter()
                         .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
-                        // Note DT: so does a helper, with the first output it fills, unless a recipe packs it too.
+                        // Note DX: so does a helper, with the first output it fills, unless a recipe packs it too.
                         .chain(job.fill.iter().map(|f| (&f.source.path, "filled")))
                         .filter(|(p, _)| derive_read.insert(p.as_path())),
                 )
@@ -2911,7 +2911,7 @@ fn explicit_shaders(
 /// input with the sub-type its suffix suggests, not the set's own earlier output), then each packed output of the
 /// set. Raw maps are left out by role, because
 /// `plan_packing` re-tags an unused one; duplicates and failed files are left out. A raw-named image set to
-/// `helper.role = "none"` (Note DT) is an ordinary member.
+/// `helper.role = "none"` (Note DX) is an ordinary member.
 fn map_members(
     ctx: &ResolveCtx,
     set: &TextureSet,
@@ -3403,7 +3403,7 @@ mod tests {
         assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
-    /// Note DT: a filled job also holds its helper's decoded image.
+    /// Note DX: a filled job also holds its helper's decoded image.
     #[test]
     fn job_bytes_counts_helper() {
         let d = tempfile::tempdir().unwrap();

@@ -1,4 +1,4 @@
-//! Note DT: which alpha channel each helper of a set fills (Rulings 4-8, 11, 12). Runs before `plan_packing` and
+//! Note DX: which alpha channel each helper of a set fills (Rulings 4-8, 11, 12). Runs before `plan_packing` and
 //! decides only from the plain file jobs, the [`AlphaFacts`] and the `helper.*` selectors; packed targets belong to
 //! packing (`pack::recipes_for_sel`).
 use super::{AlphaTarget, FillJob, FillTarget, HelperRole, HelperSel};

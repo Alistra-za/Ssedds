@@ -1,4 +1,4 @@
-//! Helper textures Task 9 (Note DT18): each packed channel row on the set card picks its source: a greyscale helper
+//! Helper textures Task 9 (Note DX18): each packed channel row on the set card picks its source: a greyscale helper
 //! of the set or a value. The pick writes `helper.fills` of every helper it moves the channel from or to, as one undo
 //! step. Temp dirs only.
 mod support;
@@ -291,7 +291,7 @@ fn value_option(h: &mut H, name: &str) -> (bool, Vec<String>) {
     (enabled, tips)
 }
 
-/// Review I1 (DT18): a channel fed by a file the engine does not report as a helper cannot be switched to a value
+/// Review I1 (DX18): a channel fed by a file the engine does not report as a helper cannot be switched to a value
 /// through `helper.fills`, so "Value" is disabled and says why. Every source the current engine plans is reported
 /// (a pack source is a helper by `packed_role`; the skin `_f` and a pre-packed or `_p` file were tried and are either
 /// helpers or no channel source), so the report is taken off the item in place, as a plan without it would leave it.

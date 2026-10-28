@@ -146,7 +146,7 @@ pub fn assemble_channels_with(
                 _ => None,
             })
             .collect();
-        // An `_orm` is colour by design (Note AL), and an explicit `helper.read` chose its channel (Note DT): never
+        // An `_orm` is colour by design (Note AL), and an explicit `helper.read` chose its channel (Note DX): never
         // `CHAN-NOT-GRAY`.
         let multi = targets.iter().any(|t| t.2.is_some());
         let (src, si) = load(&s.path)?;

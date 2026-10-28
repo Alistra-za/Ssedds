@@ -896,7 +896,7 @@ fn raw_maps_pack_and_unused_ones_are_not_a_failure() {
     assert!(!fx.dds("textures/a/tile_opacity.dds").exists());
 }
 
-/// Helper textures (spec Goal 8, Note DT): the `helper.*` keys in `sdc.toml` work in the CLI as in the GUI, and the
+/// Helper textures (spec Goal 8, Note DX): the `helper.*` keys in `sdc.toml` work in the CLI as in the GUI, and the
 /// CLI writes what the engine writes.
 #[test]
 fn helper_keys_in_sdc_toml_match_the_gui() {

@@ -19,7 +19,7 @@ pub enum ItemKind {
     Image,
     Packed,
     Dds,
-    /// Note DT16: a helper file (AO, masks, layers…): a row under the tiles, never a tile.
+    /// Note DX16: a helper file (AO, masks, layers…): a row under the tiles, never a tile.
     Helper,
 }
 
@@ -65,7 +65,7 @@ pub struct TextureItem {
     /// The file's stamp when it was listed. Only DDS inputs carry one: the engine plans no job for them, so
     /// nothing else records what they looked like; an item with a job is checked against the job's stamps.
     pub stamp: Option<SourceStamp>,
-    /// Note DT16: the engine's report for a `Helper` item.
+    /// Note DX16: the engine's report for a `Helper` item.
     pub helper: Option<std::sync::Arc<HelperReport>>,
 }
 
@@ -144,7 +144,7 @@ pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
     out
 }
 
-/// Note DT16: where a helper went, from the engine's report: "fills to x_rmaos R, x alpha" or "not used: <reason>".
+/// Note DX16: where a helper went, from the engine's report: "fills to x_rmaos R, x alpha" or "not used: <reason>".
 pub fn helper_target_text(h: &HelperReport) -> String {
     if h.fills.is_empty() {
         return match h.not_used.as_deref().filter(|r| !r.is_empty()) {
@@ -170,7 +170,7 @@ impl PlanView {
         let mut items = vec![];
         let mut rnm_notes: BTreeMap<String, Vec<Warning>> = BTreeMap::new();
         let mut rnm_keys = BTreeMap::new();
-        // Note DT16: a file with a helper report is one Helper item; its own raw job and its pack-source item are not.
+        // Note DX16: a file with a helper report is one Helper item; its own raw job and its pack-source item are not.
         let helper_paths: std::collections::HashSet<&Path> =
             plan.helpers.iter().map(|h| h.path.as_path()).collect();
         let mut helper_warnings: BTreeMap<&Path, Vec<Warning>> = BTreeMap::new();

@@ -1,4 +1,4 @@
-//! Note DT17: a helper's panel (helper textures spec Goal 6): its role, the channels it fills, the channel it is read
+//! Note DX17: a helper's panel (helper textures spec Goal 6): its role, the channels it fills, the channel it is read
 //! from and whether it is inverted. Every value shown is the engine's `HelperReport`; the GUI only writes the keys.
 use crate::model::helpers::{set_base, written_fills};
 use crate::model::AppModel;

@@ -141,7 +141,7 @@ fn sets_without_a_trigger_pack_nothing() {
         &raw(&[("iron_ao.png", Ao), ("iron_opacity.png", Opacity)]),
     );
     assert_eq!(unused_names(&u), ["iron_opacity.png"]);
-    // Note DT: opacity is a helper that fills a colour texture's alpha.
+    // Note DX: opacity is a helper that fills a colour texture's alpha.
     assert!(
         u[0].reason.contains("colour texture's alpha"),
         "{}",

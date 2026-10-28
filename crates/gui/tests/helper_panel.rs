@@ -1,4 +1,4 @@
-//! Helper textures Task 8 (Note DT17): the helper panel edits the helper file's `helper.*` keys in `sdc.toml` (role,
+//! Helper textures Task 8 (Note DX17): the helper panel edits the helper file's `helper.*` keys in `sdc.toml` (role,
 //! fills, read from, invert; `rnm.target` for normal-type roles), one undo step each. Temp dirs only.
 mod support;
 use eframe::egui;
@@ -386,7 +386,7 @@ fn shots() {
     }
 }
 
-/// Review fix (DT17): a layer with no prefix in a set with `_cnr` and no `_n` blends into `_cnr` (Note W4); the panel
+/// Review fix (DX17): a layer with no prefix in a set with `_cnr` and no `_n` blends into `_cnr` (Note W4); the panel
 /// shows the engine's target, and picking a value writes `rnm.target` even when it is the one shown.
 #[test]
 fn layer_target_follows_the_engine() {
@@ -417,7 +417,7 @@ fn layer_target_follows_the_engine() {
     assert_eq!(combo.accesskit_node().value().as_deref(), Some("Normal"));
 }
 
-/// Review fix (DT17): picking the guessed role writes it, so it becomes assigned and replaces the diffuse's own
+/// Review fix (DX17): picking the guessed role writes it, so it becomes assigned and replaces the diffuse's own
 /// varying alpha, which a suggestion never does.
 #[test]
 fn picking_the_guessed_role_hand_sets_it() {

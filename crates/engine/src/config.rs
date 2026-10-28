@@ -343,7 +343,7 @@ impl RnmSpec {
         self.bent.ao_power.unwrap_or(1.5)
     }
 }
-// `FuzzWeight` and `SubsurfaceWeight` (Note DT) come only from a hand-set `helper.role`: no name carries them.
+// `FuzzWeight` and `SubsurfaceWeight` (Note DX) come only from a hand-set `helper.role`: no name carries them.
 cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm, Curves, Cavity, Rmaos, FuzzWeight, SubsurfaceWeight });
 
 impl RawMap {

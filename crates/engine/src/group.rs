@@ -325,7 +325,7 @@ pub fn member_split(
     s
 }
 
-/// Note DT: a file with a hand-set helper role (`is_helper`) whose name has no recognised suffix (`x_mask`) joins the
+/// Note DX: a file with a hand-set helper role (`is_helper`) whose name has no recognised suffix (`x_mask`) joins the
 /// set of its stem without the last `_segment` (`x`) when that set exists in its folder; otherwise it stays alone.
 /// A set left empty is removed.
 pub fn join_helpers(
