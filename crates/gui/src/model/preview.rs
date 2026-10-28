@@ -25,6 +25,14 @@ const WAITS_FOR_EXPORT: &str = "Preview encoding waits for the export to finish"
 /// What the viewports say when eframe found no usable GPU adapter (M3a spec §7).
 pub const NO_GPU: &str = "No usable GPU: the preview is off; everything else works";
 
+/// A cube result keeps face 0 (+X) only, as a one-face result. shortcut: shows +X only, Task 5 draws the cross.
+pub fn single_face(mut r: PreviewResult) -> PreviewResult {
+    r.levels
+        .truncate(r.levels.len() / usize::from(r.faces.max(1)));
+    r.faces = 1;
+    r
+}
+
 #[derive(Debug)]
 pub struct PreviewOut {
     pub result: PreviewResult,

@@ -1,7 +1,7 @@
 //! Engine work off the UI thread (M3a spec §3): every call runs on its own thread with a fresh `CancelToken`,
 //! catches panics at the thread boundary (spec §7.6) and reports through one channel the UI drains each frame.
 use crate::model::items::PlanView;
-use crate::model::preview::{dds_preview, decode_levels, PreviewOut};
+use crate::model::preview::{dds_preview, decode_levels, single_face, PreviewOut};
 use encoders_sys::Bc1Model;
 use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError, PlanProgress};
 use engine::events::{EngineEvent, EventSink, Reporter, VecSink};
@@ -393,6 +393,7 @@ pub fn spawn_encode(
             || {
                 session
                     .preview(&job, max, &cancel)
+                    .map(single_face)
                     .map(|r| {
                         Arc::new(PreviewOut {
                             decoded: decode_levels(&r, bc1),

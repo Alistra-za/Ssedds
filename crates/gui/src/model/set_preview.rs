@@ -544,6 +544,7 @@ pub fn encode(
         Source::Job(job) => {
             let r = session
                 .preview(job, cap, cancel)
+                .map(crate::model::preview::single_face)
                 .map_err(|e| format!("{e:?}"))?;
             let (width, height) = r.source.dims[r.source.first_level];
             let desc = DdsDesc {
