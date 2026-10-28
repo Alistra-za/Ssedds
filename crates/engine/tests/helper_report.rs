@@ -265,3 +265,25 @@ fn report_says_rnm_is_off() {
         Some("RNM is off for x_n.dds (rnm.enabled = false)")
     );
 }
+
+/// Note CO103: a pre-packed `_rmaos` whose empty B takes a generated AO joins the recipe as a source; an explicit
+/// read on it is recorded too (its channels stay as the recipe sets them).
+#[test]
+fn if_changed_reencodes_when_prepacked_rmaos_read_changes() {
+    let d = tempfile::tempdir().unwrap();
+    rgb(d.path(), "x.png");
+    ImageBuffer::from_fn(N, N, |_, _| image::Rgba([120u8, 0, 255, 0]))
+        .save(at(d.path(), "x_rmaos.png"))
+        .unwrap();
+    checker(d.path(), "x_ao_generated.png", 60, 220);
+    let s = run(d.path(), &[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (2, 0), "{s:?}");
+    toml(
+        d.path(),
+        "[files.\"textures/a/x_rmaos\"]\nhelper.read = \"g\"\n",
+    );
+    let s = run(d.path(), &[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (1, 1), "{s:?}");
+    let s = run(d.path(), &[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (0, 2), "{s:?}");
+}

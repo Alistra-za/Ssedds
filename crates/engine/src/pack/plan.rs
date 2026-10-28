@@ -739,14 +739,14 @@ pub fn plan_packing(
                 notes: vec![],
             });
         }
-        heads.push((set, members, recipe_note, recipes, unused, sel));
+        heads.push((set, members, recipe_note, recipes, unused));
     }
     // Every recipe's output (explicit or default) before any is planned: an explicit packed path is compared with
     // recipes planned after it too (DECISIONS AF7). A recipe that writes nothing (a failed or cancelled source,
     // packing off, sources that differ in size) holds no path. The planning loop below walks `heads` in this same
     // order, so a recipe's index here is its `me` there.
     let mut outputs: Vec<(PathBuf, PathBuf, bool)> = vec![];
-    for (set, members, _, recipes, _, _) in &heads {
+    for (set, members, _, recipes, _) in &heads {
         for recipe in recipes {
             let sources: Vec<PathBuf> = recipe.sources().into_iter().map(|(p, _)| p).collect();
             let mut vin = virtual_input(members[&sources[0]], recipe.kind);
@@ -765,7 +765,7 @@ pub fn plan_packing(
         }
     }
     let mut next = 0;
-    for (set, members, recipe_note, recipes, unused, sel) in heads {
+    for (set, members, recipe_note, recipes, unused) in heads {
         let mut unused: Vec<(PathBuf, String)> =
             unused.into_iter().map(|u| (u.path, u.reason)).collect();
         let mut reports = vec![];
@@ -962,10 +962,12 @@ pub fn plan_packing(
                     .into_iter()
                     .map(|(path, role)| PackSource {
                         stamp: SourceStamp::of(&path),
-                        // Note DT: the explicit read, as `recipes_for_sel` applied it.
-                        read: sel
-                            .get(&path)
-                            .and_then(|s: &crate::helper::HelperSel| s.read),
+                        // Note DT: every source's explicit read, a pre-packed `_rmaos`/`_rfaos` image too
+                        // (`prepacked_b`), whose channels it does not change.
+                        read: files
+                            .iter()
+                            .find(|f| f.path == path && f.kind == InputKind::Image)
+                            .and_then(|f| crate::policy::helper_requested(ctx, f).read),
                         path,
                         role,
                     })
