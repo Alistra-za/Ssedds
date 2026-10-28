@@ -233,12 +233,7 @@ pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Opt
         // Cubemap (Note DT7). Auto is the unset layout, "none" the unset style / ground fill.
         "cubemap.layout" => std::iter::once(opt(json!("auto"), "Auto"))
             // Faces is detected from a six-file set, never chosen.
-            .chain(
-                CUBE_LAYOUTS
-                    .iter()
-                    .filter(|(l, _)| *l != CubeLayout::Faces)
-                    .map(|(l, label)| opt(json!(l), label)),
-            )
+            .chain(pickable_layouts().map(|(l, label)| opt(json!(l), label)))
             .collect(),
         "cubemap.style" => vec![
             opt(json!("none"), "None"),
@@ -279,6 +274,11 @@ pub const CUBE_LAYOUTS: [(CubeLayout, &str); 9] = [
     (CubeLayout::Photo, "Single photo"),
     (CubeLayout::Faces, "Six face files"),
 ];
+
+/// The layouts a user can pick: all but `Faces`, which is detected from a six-file set.
+fn pickable_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str)> {
+    CUBE_LAYOUTS.iter().filter(|(l, _)| *l != CubeLayout::Faces)
+}
 
 fn display_value(v: &Value) -> String {
     match v {
@@ -781,6 +781,26 @@ fn decision_box(
                                     actions.push(Action::Decide(Answer::Alpha(policy)));
                                 }
                             }
+                        });
+                    }
+                    Decision::CubeLayout => {
+                        ui.label("This image could be several cube layouts: pick one");
+                        let r = egui::ComboBox::from_id_salt(("pick-cube-layout", cx.key))
+                            .selected_text("Pick a layout…")
+                            .show_ui(ui, |ui| {
+                                for (l, label) in pickable_layouts() {
+                                    if ui.selectable_label(false, *label).clicked() {
+                                        actions.push(Action::Set("cubemap.layout", json!(l)));
+                                    }
+                                }
+                            })
+                            .response;
+                        r.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::ComboBox,
+                                r.enabled(),
+                                "Cube layout",
+                            )
                         });
                     }
                     Decision::Acknowledge(code) => {

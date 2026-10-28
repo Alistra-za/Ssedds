@@ -279,3 +279,83 @@ fn out_of_range_yaw_shows_the_engine_message() {
         Some(serde_json::json!(400.0))
     );
 }
+
+// ---- the unclear-layout decision (Task 4) ----
+
+const UNCLEAR: &str = "a/room_e.png";
+
+/// A square `_e.png` (could be a panorama, a mirror ball or a photo) next to a 2D diffuse, planned.
+fn unclear_model(d: &std::path::Path) -> AppModel {
+    let r = d.join("textures/a");
+    std::fs::create_dir_all(&r).unwrap();
+    image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 7]))
+        .save(r.join("room_e.png"))
+        .unwrap();
+    image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([y as u8, x as u8, 90]))
+        .save(r.join("flat.png"))
+        .unwrap();
+    let mut m = open(d);
+    m.decide(UNCLEAR, Answer::Subtype(Subtype::Cubemap));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.select_item(UNCLEAR);
+    m
+}
+
+#[test]
+fn unclear_cube_offers_a_layout_decision() {
+    let d = tempfile::tempdir().unwrap();
+    let m = unclear_model(d.path());
+    let it = m.item(UNCLEAR).expect("item");
+    assert_eq!(it.status, sdc_gui::model::items::ItemStatus::NeedsDecision);
+    assert!(
+        it.decisions
+            .contains(&sdc_gui::model::items::Decision::CubeLayout),
+        "{:?}",
+        it.decisions
+    );
+    assert_eq!(it.decisions, [sdc_gui::model::items::Decision::CubeLayout]);
+    let flat = &m.item("a/flat.png").unwrap().decisions;
+    assert!(!flat.contains(&sdc_gui::model::items::Decision::CubeLayout));
+}
+
+#[test]
+fn picking_a_layout_resolves_only_that_file() {
+    let d = tempfile::tempdir().unwrap();
+    let m = unclear_model(d.path());
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 1600.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    assert_eq!(
+        h.query_all_by_label_contains("could be several cube layouts")
+            .count(),
+        1
+    );
+    h.get_by_label("Cube layout").click();
+    h.run();
+    assert_eq!(h.query_all_by_label("Six face files").count(), 0);
+    assert_eq!(h.query_all_by_label("Auto").count(), 0);
+    h.get_by_label("Mirror ball").click();
+    h.run();
+    settle(&mut h);
+    let p = h.state().project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value(UNCLEAR, "cubemap.layout"),
+        Some(serde_json::json!("mirror_ball"))
+    );
+    assert_eq!(p.file_value("a/flat.png", "cubemap.layout"), None);
+    let it = h.state().item(UNCLEAR).unwrap();
+    assert!(
+        !it.decisions
+            .contains(&sdc_gui::model::items::Decision::CubeLayout),
+        "{:?}",
+        it.decisions
+    );
+    assert_eq!(
+        it.status,
+        sdc_gui::model::items::ItemStatus::Ready,
+        "{:?}",
+        it.decisions
+    );
+}

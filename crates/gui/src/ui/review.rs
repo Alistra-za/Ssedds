@@ -100,7 +100,8 @@ pub fn undecided_row(
                         pick = Some(RowPick::Answer(key.to_string(), Answer::Acknowledge(*code)));
                     }
                 }
-                Decision::Subtype { .. } => {}
+                // The layout is picked in the texture's settings panel (Note DT14).
+                Decision::Subtype { .. } | Decision::CubeLayout => {}
             });
         }
     });
@@ -167,6 +168,7 @@ pub fn fix_buttons(
                     .response
                     .on_disabled_hover_text(why);
                 }
+                Decision::CubeLayout => {}
                 Decision::Acknowledge(code) => {
                     if ui
                         .button("Acknowledge")

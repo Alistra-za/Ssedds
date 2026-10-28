@@ -34,8 +34,12 @@ pub enum ItemStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    Subtype { suggested: Option<Subtype> },
+    Subtype {
+        suggested: Option<Subtype>,
+    },
     AlphaMeaning,
+    /// A single image that could be several cube layouts (`Need::CubeLayout`).
+    CubeLayout,
     Acknowledge(Code),
 }
 
@@ -128,8 +132,7 @@ pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
                     suggested: job.suggestions.first().map(|s| s.subtype),
                 },
                 Need::AlphaMeaning => Decision::AlphaMeaning,
-                // shortcut: no layout decision row yet (as before DT1); the cube-layout picker task adds it.
-                Need::CubeLayout => continue,
+                Need::CubeLayout => Decision::CubeLayout,
             });
         }
     }
