@@ -377,6 +377,25 @@ fn picking_a_layout_resolves_only_that_file() {
     );
 }
 
+/// T4 minor 1 (DT35): a Review row whose only question is the layout says where to answer it; a 2D row does not.
+#[test]
+fn a_review_row_for_the_layout_points_to_settings() {
+    const HINT: &str = "Pick its cube layout in settings";
+    for (key, want) in [(UNCLEAR, 1), ("a/flat.png", 0)] {
+        let d = tempfile::tempdir().unwrap();
+        let mut h = Harness::builder()
+            .with_size(eframe::egui::vec2(800.0, 200.0))
+            .build_ui_state(
+                move |ui, m: &mut AppModel| {
+                    sdc_gui::ui::review::undecided_row(ui, m, key, None);
+                },
+                unclear_model(d.path()),
+            );
+        h.run();
+        assert_eq!(h.query_all_by_label(HINT).count(), want, "{key}");
+    }
+}
+
 // ---- the cross preview (Task 5) ----
 
 /// The cube planned, expanded and drawn in the preview (no GPU, so the panes say so; the controls still draw).

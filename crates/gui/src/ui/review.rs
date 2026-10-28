@@ -43,6 +43,10 @@ pub fn undecided_row(
         if ui.link(&item.name).clicked() {
             pick = Some(RowPick::Select(key.to_string()));
         }
+        // DT35: a row with no inline control says where its one question is answered (DT15).
+        if item.decisions == [Decision::CubeLayout] {
+            ui.weak("Pick its cube layout in settings");
+        }
         let Some(suggested) = question else {
             return;
         };
