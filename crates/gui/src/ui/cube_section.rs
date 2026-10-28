@@ -191,16 +191,21 @@ impl Cx<'_> {
     ) -> Edit {
         ui.label(f.label);
         let off = f.lock.is_some() || self.ro.is_some();
-        let (mut edit, r) = ui
-            .scope(|ui| {
-                if off {
-                    ui.disable();
-                }
-                body(ui)
-            })
-            .inner;
+        let scope = ui.scope(|ui| {
+            if off {
+                ui.disable();
+            }
+            body(ui)
+        });
+        let (mut edit, _) = scope.inner;
         if let Some(why) = f.lock.map(str::to_string).or(self.ro.clone()) {
-            r.on_disabled_hover_text(why);
+            // Over every widget of the row, not just the first (a disabled widget is still hoverable).
+            explain(
+                ui,
+                scope.response.rect,
+                ui.id().with(("cube-why", f.field)),
+                why,
+            );
         }
         match f.lock {
             Some(why) => ui.label(egui::RichText::new(why).small().weak()),
@@ -221,11 +226,19 @@ impl Cx<'_> {
         ui.end_row();
         for e in self.errors(f.field) {
             ui.label("");
-            ui.colored_label(RED, e);
+            // Truncated to the panel with the full engine text on hover, so a long line cannot widen the column.
+            ui.add(egui::Label::new(egui::RichText::new(e).color(RED)).truncate())
+                .on_hover_text(e);
             ui.end_row();
         }
         edit
     }
+}
+
+/// Hover text `why` over `rect`, on a widget that only senses hovering.
+fn explain(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, why: String) {
+    ui.interact(rect, id, egui::Sense::hover())
+        .on_hover_text(why);
 }
 
 fn find<'a>(views: &'a [FieldView], field: &str) -> &'a FieldView {
@@ -455,10 +468,25 @@ pub fn cube_section(ui: &mut egui::Ui, model: &AppModel, key: &str) -> Edits {
                 });
                 put(f.field, e);
                 let f = find(&views, "cubemap.blur");
-                let photo_auto = layout == Some(CubeLayout::Photo) && !f.edited;
+                // Blur the engine fills (a photo, a style, a preset) cannot be unticked: clearing the key changes
+                // nothing, so the tick is disabled with the reason (Note DT13).
+                let inherited = c.blur.is_some() && !f.edited;
+                let photo_auto = inherited && layout == Some(CubeLayout::Photo);
                 let e = cx.row(ui, f, |ui| {
                     ui.horizontal(|ui| {
-                        let (tick, r) = checkbox(ui, c.blur.is_some(), &name(f));
+                        let (tick, r) = ui
+                            .add_enabled_ui(!inherited, |ui| {
+                                checkbox(ui, c.blur.is_some(), &name(f))
+                            })
+                            .inner;
+                        if inherited {
+                            let why = if photo_auto {
+                                "photo default; set 0 for no blur".to_string()
+                            } else {
+                                format!("{}; set 0 for no blur", provenance_text(&f.provenance))
+                            };
+                            r.clone().on_disabled_hover_text(why);
+                        }
                         let Some(v) = c.blur else {
                             return (tick.map(|_| Some(json!(FIRST_BLUR))), r);
                         };
@@ -502,7 +530,7 @@ fn faces(
     let mut flip = c.face_flip;
     let (mut rot_edit, mut flip_edit) = (false, false);
     for (i, face) in FACE_NAMES.iter().enumerate() {
-        ui.horizontal(|ui| {
+        let row = ui.horizontal(|ui| {
             ui.label(*face);
             ui.add_enabled_ui(!off, |ui| {
                 let (p, _) = named_combo(
@@ -529,6 +557,14 @@ fn faces(
                 }
             });
         });
+        if let Some(why) = &cx.ro {
+            explain(
+                ui,
+                row.response.rect,
+                ui.id().with(("cube-why-face", i)),
+                why.clone(),
+            );
+        }
     }
     let own = |field: &str| find(views, field).edited;
     for (field, edited, is_default, value, reset) in [

@@ -103,6 +103,16 @@ const FLAT: &str = "a/flat.png";
 
 /// A cube (a 6:1 strip decided as Cubemap) and a plain 2D texture, planned, with the panel drawn over `selected`.
 fn section(d: &std::path::Path, selected: &str) -> Harness<'static, AppModel> {
+    let m = cube_model(d, selected);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 1600.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+fn cube_model(d: &std::path::Path, selected: &str) -> AppModel {
     let r = d.join("textures/a");
     std::fs::create_dir_all(&r).unwrap();
     image::RgbImage::from_fn(384, 64, |x, _| image::Rgb([(x % 256) as u8, 9, 9]))
@@ -115,12 +125,7 @@ fn section(d: &std::path::Path, selected: &str) -> Harness<'static, AppModel> {
     m.decide(CUBE, Answer::Subtype(Subtype::Cubemap));
     assert!(m.wait_idle(Duration::from_secs(60)));
     m.select_item(selected);
-    let mut h = Harness::builder()
-        .with_size(eframe::egui::vec2(1400.0, 1600.0))
-        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
-    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
-    h.run();
-    h
+    m
 }
 
 fn file_value(h: &Harness<'static, AppModel>, field: &str) -> Option<serde_json::Value> {
@@ -166,6 +171,40 @@ fn mixed_selection_hides_the_cube_section() {
     let text = h.state().project.as_ref().unwrap().text();
     assert!(text.contains("encoder.effort"), "the bulk edit ran: {text}");
     assert!(!text.contains("cubemap."), "{text}");
+}
+
+/// The section's own guard, drawn with no bulk panel in front of it: the active item is a cube but the selection is
+/// not all cubes, so nothing shows and nothing is written. Fails when `all_cubes` is removed.
+#[test]
+fn the_section_guard_hides_a_mixed_selection() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = cube_model(d.path(), CUBE);
+    m.click_item(FLAT, true, false);
+    assert!(m.in_bulk());
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(800.0, 800.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| {
+                let edits = sdc_gui::ui::cube_section::cube_section(ui, m, CUBE);
+                assert!(edits.is_empty());
+            },
+            m,
+        );
+    h.run();
+    assert_eq!(headers(&h), 0, "cube + 2D selected: no section");
+    h.state_mut().select_item(CUBE);
+    h.run();
+    assert_eq!(headers(&h), 1, "the cube alone: the section");
+}
+
+#[test]
+fn the_layout_combo_offers_no_six_face_option() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = section(d.path(), CUBE);
+    h.get_by_label("Cubemap layout").click();
+    h.run();
+    assert_eq!(h.query_all_by_label("Six face files").count(), 0);
+    assert!(h.query_all_by_label("Horizontal cross").count() >= 1);
 }
 
 #[test]

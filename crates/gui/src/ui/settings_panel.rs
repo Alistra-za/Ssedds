@@ -232,7 +232,13 @@ pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Opt
         ],
         // Cubemap (Note DT7). Auto is the unset layout, "none" the unset style / ground fill.
         "cubemap.layout" => std::iter::once(opt(json!("auto"), "Auto"))
-            .chain(CUBE_LAYOUTS.iter().map(|(l, label)| opt(json!(l), label)))
+            // Faces is detected from a six-file set, never chosen.
+            .chain(
+                CUBE_LAYOUTS
+                    .iter()
+                    .filter(|(l, _)| *l != CubeLayout::Faces)
+                    .map(|(l, label)| opt(json!(l), label)),
+            )
             .collect(),
         "cubemap.style" => vec![
             opt(json!("none"), "None"),
