@@ -438,8 +438,8 @@ fn configured_rfaos_builds_for_hand_fill_alone() {
 }
 
 /// Final review I2: `if-changed` sees a helper moved to another packed channel, added to a second one, or taken off
-/// one it shared; a default placement records nothing, so an unchanged project stays up to date. G, not A: a move
-/// into A changes the alpha analysis and so the profile, which re-encodes without the fix.
+/// one it shared; a default placement records nothing, so an unchanged project stays up to date. The steps use G:
+/// a move into A (the review's input) already re-encoded before this fix by another path, so it is checked last.
 #[test]
 fn if_changed_sees_a_packed_channel_move() {
     let d = tempfile::tempdir().unwrap();
@@ -484,6 +484,8 @@ fn if_changed_sees_a_packed_channel_move() {
     assert_eq!(run(Some("\"rmaos.b\", \"rmaos.g\"")), (0, 1));
     assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "(c) Value on G");
     assert_eq!(run(None), (0, 1), "suggested again, same channel");
+    assert_eq!(run(Some("\"rmaos.a\"")), (1, 0), "the review's B to A");
+    assert_eq!(run(Some("\"rmaos.a\"")), (0, 1));
 }
 
 /// Final review I2: every recipe built without hand-set selectors records no placement, so existing manifests stay
