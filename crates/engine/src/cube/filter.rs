@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn empty_band_uses_the_nearest_row_above() {
-        // A 2x2 cube has texels only at e = +-24.1 and +-41.8 degrees, so [0, 5] is empty.
+        // A 2x2 cube has texels only at e = +-24.1 and +-54.7 degrees, so [0, 5] is empty.
         let mut c = flat_size(2, 0.0);
         let mut rows = 0;
         for (f, i, e) in texels(2) {
