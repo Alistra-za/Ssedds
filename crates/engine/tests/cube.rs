@@ -805,6 +805,10 @@ fn single_file_layout_from_aspect_or_key() {
                 reasons.iter().any(|r| r.contains("cubemap.layout")),
                 "{reasons:?}"
             );
+            // DN22 (final review M1): a square image's answers are listed too.
+            for l in ["hcross", "equirect", "mirror_ball", "angular", "photo"] {
+                assert!(reasons[0].contains(l), "{l}: {reasons:?}");
+            }
             assert!(needs.is_empty());
         }
         s => panic!("{s:?}"),
