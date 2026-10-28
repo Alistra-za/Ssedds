@@ -14,9 +14,9 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Bump whenever `analyse_with`, `make_thumbnail`, pack assembly's analysed image or any `Analysis` field changes
-/// meaning: entries written under another value are ignored. The pin test (analysis_version.rs) catches the first,
-/// second and last; pack assembly is not covered (Note DU4).
+/// Bump whenever decoding (`load_image_meta`), `analyse_with`, `make_thumbnail`, pack assembly or any `Analysis` field
+/// changes what it produces: entries written under another value are ignored. The pin test (analysis_version.rs)
+/// fails when the results of the first four change without a bump (Note DU4).
 pub const ANALYSIS_VERSION: u32 = 1;
 
 const EXT: &str = "ent";
@@ -55,7 +55,9 @@ impl AnalysisStore {
         format!("{}|{hints:?}|{what}", self.version)
     }
     fn file_id(&self, path: &Path, stamp: SourceStamp, hints: AnalyseHints) -> String {
-        let what = format!("file|{}|{}|{}", path.display(), stamp.size, stamp.mtime_ns);
+        // Absolute, so a relative path never matches another folder's file after a cwd change (Note DU9).
+        let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let what = format!("file|{}|{}|{}", abs.display(), stamp.size, stamp.mtime_ns);
         self.id(hints, &what)
     }
     fn pack_id(&self, key: &str, hints: AnalyseHints) -> String {
@@ -153,7 +155,8 @@ impl AnalysisStore {
         self.put(head, e.thumb.as_deref());
     }
 
-    /// Delete the oldest entries (by modification time) until the folder holds at most `max_bytes`.
+    /// Delete the oldest entries (by modification time) until the folder holds at most `max_bytes`, and any temp file
+    /// a crashed write left behind more than a day ago.
     // shortcut: an entry's mtime is when it was written, not last used, so a busy old entry goes first; touch
     // entries on a hit if that ever costs reloads.
     pub fn prune(&self, max_bytes: u64) {
@@ -164,8 +167,15 @@ impl AnalysisStore {
             .filter_map(|e| {
                 let e = e.ok()?;
                 let path = e.path();
-                (path.extension()? == EXT).then_some(())?;
                 let m = e.metadata().ok()?;
+                if path.extension()? == "tmp" {
+                    let day = std::time::Duration::from_secs(24 * 3600);
+                    if m.modified().ok()?.elapsed().is_ok_and(|age| age > day) {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    return None;
+                }
+                (path.extension()? == EXT).then_some(())?;
                 Some((m.modified().ok()?, m.len(), path))
             })
             .collect();
@@ -248,5 +258,29 @@ mod tests {
         AnalysisStore::new(dir.path().into()).prune(250);
         assert!(!dir.path().join("a.ent").exists());
         assert!(dir.path().join("b.ent").exists() && dir.path().join("c.ent").exists());
+    }
+
+    #[test]
+    fn prune_removes_old_stray_temp_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = std::time::Duration::from_secs(24 * 3600);
+        for (name, age) in [(".sdc-1-2-3.tmp", 2 * day), (".sdc-1-2-4.tmp", day / 24)] {
+            let f = std::fs::File::create(dir.path().join(name)).unwrap();
+            f.set_modified(std::time::SystemTime::now() - age).unwrap();
+        }
+        AnalysisStore::new(dir.path().into()).prune(u64::MAX);
+        assert!(!dir.path().join(".sdc-1-2-3.tmp").exists());
+        assert!(dir.path().join(".sdc-1-2-4.tmp").exists());
+    }
+
+    #[test]
+    fn a_relative_path_keys_as_its_absolute_one() {
+        let s = AnalysisStore::new(PathBuf::new());
+        let h = AnalyseHints::default();
+        let abs = std::path::absolute("x/a.png").unwrap();
+        assert_eq!(
+            s.file_id(Path::new("x/a.png"), STAMP, h),
+            s.file_id(&abs, STAMP, h)
+        );
     }
 }

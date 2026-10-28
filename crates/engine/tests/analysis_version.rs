@@ -1,11 +1,15 @@
-//! The analysis disk cache's version guard (DECISIONS Note DU): fails when what `analyse_with` and `make_thumbnail`
-//! produce changes without `ANALYSIS_VERSION` being bumped. Same shape as encode_versions.rs: the pin is rewritten
+//! The analysis disk cache's version guard (DECISIONS Note DU): fails when what decoding, `analyse_with`, `make_thumbnail`
+//! and pack assembly produce changes without `ANALYSIS_VERSION` being bumped. Same shape as encode_versions.rs: the pin is rewritten
 //! when the version moved, and left alone (with a failure) when only the hash did.
 use engine::analyse::{analyse_with, AnalyseHints};
 use engine::analysis_store::ANALYSIS_VERSION;
+use engine::config::{GraySource, RawMap};
 use engine::dds::write_atomic;
 use engine::image::{Rgba32F, SourceInfo};
+use engine::load::load_image_meta;
+use engine::pack::{assemble::assemble, ChannelSource, PackJob, PackSource, RecipeKind};
 use engine::session::make_thumbnail;
+use image::{ImageBuffer, Luma, Rgb, Rgba};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -27,6 +31,76 @@ fn info(bit_depth: u8, has_alpha: bool, is_float: bool) -> SourceInfo {
         has_alpha,
         is_float,
     }
+}
+
+/// What a planned load of PNGs made here (8-bit RGBA, 16-bit RGB, gray) and of one packed image (two gray members)
+/// gives: the decoder and pack assembly are as much a part of a cached analysis as `analyse_with` is.
+fn hash_loaded(h: &mut Sha256, hints: &[AnalyseHints]) {
+    let d = tempfile::tempdir().unwrap();
+    let p = |n: &str| d.path().join(n);
+    ImageBuffer::from_fn(24, 20, |x, y| {
+        Rgba([(x * 10) as u8, (y * 12) as u8, 77, (x * y) as u8])
+    })
+    .save(p("rgba8.png"))
+    .unwrap();
+    ImageBuffer::from_fn(24, 20, |x, y| {
+        Rgb([(x * 2600) as u16, (y * 3000) as u16, 40000 + x as u16 * 7])
+    })
+    .save(p("rgb16.png"))
+    .unwrap();
+    ImageBuffer::from_fn(16, 16, |x, y| Luma([(x * 9 + y) as u8]))
+        .save(p("gray.png"))
+        .unwrap();
+    ImageBuffer::from_fn(16, 16, |x, _| Luma([255 - x as u8 * 11]))
+        .save(p("gray2.png"))
+        .unwrap();
+    for name in ["rgba8.png", "rgb16.png", "gray.png"] {
+        let (im, info, meta) = load_image_meta(&p(name)).unwrap();
+        h.update(format!("{info:?}{meta:?}"));
+        for &hi in hints {
+            h.update(serde_json::to_vec(&analyse_with(&im, &info, hi)).unwrap());
+        }
+        let t = make_thumbnail(&im, &info);
+        h.update(&t.rgba);
+    }
+    let src = |n: &str, role| PackSource {
+        path: p(n),
+        role,
+        stamp: None,
+    };
+    let job = PackJob {
+        kind: RecipeKind::Rmaos,
+        channels: [
+            ChannelSource::Source {
+                path: p("gray.png"),
+                role: RawMap::Roughness,
+                invert: false,
+                channel: None,
+            },
+            ChannelSource::Fill {
+                role: RawMap::Metallic,
+                code: 51,
+            },
+            ChannelSource::Source {
+                path: p("gray2.png"),
+                role: RawMap::Ao,
+                invert: true,
+                channel: None,
+            },
+            ChannelSource::Default { value: 1.0 },
+        ],
+        gray: GraySource::R,
+        sources: vec![
+            src("gray.png", RawMap::Roughness),
+            src("gray2.png", RawMap::Ao),
+        ],
+    };
+    let asm = assemble(&job, job.gray).unwrap();
+    h.update(format!("{:?}{:?}", asm.info, asm.non_gray));
+    for &hi in hints {
+        h.update(serde_json::to_vec(&analyse_with(&asm.image, &asm.info, hi)).unwrap());
+    }
+    h.update(&make_thumbnail(&asm.image, &asm.info).rgba);
 }
 
 /// Sha256 of every fixture's analysis under every hint set used in practice, and of its thumbnail.
@@ -97,6 +171,7 @@ fn observed() -> String {
         h.update(t.height.to_le_bytes());
         h.update(&t.rgba);
     }
+    hash_loaded(&mut h, &hint_sets);
     hex::encode(h.finalize())
 }
 
@@ -108,7 +183,7 @@ fn check_pin(file: &Path, version: u32, sha: &str) -> Result<(), String> {
         .map(|s| serde_json::from_str(&s).unwrap());
     let result = match &old {
         Some(p) if p["analysis_version"] == version && p["sha256"] != sha => Err(format!(
-            "what analyse_with / make_thumbnail produce changed: bump ANALYSIS_VERSION in \
+            "what decoding, analyse_with, make_thumbnail or pack assembly produce changed: bump ANALYSIS_VERSION in \
              crates/engine/src/analysis_store.rs and accept the new pin ({})",
             file.display()
         )),
