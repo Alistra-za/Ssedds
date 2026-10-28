@@ -7,7 +7,7 @@ use crate::discover::{InputFile, InputKind};
 use crate::group::TextureSet;
 use crate::pack::plan::{raw_role, size_mismatch_warning};
 use crate::pack::PackSource;
-use crate::policy::{helper_requested, JobStatus, ResolveCtx, ResolvedJob, SourceStamp};
+use crate::policy::{helper_requested, JobStatus, ResolveCtx, ResolvedJob};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -201,7 +201,16 @@ pub fn plan_fills(
                 let target = jobs[ji].input.clone();
                 // A file without facts failed to load; its own error reports it.
                 let (Some(hf), Some(tf)) = (facts.get(&h.f.path), facts.get(&target)) else {
-                    why.push(format!("{} was not analysed", name(&target)));
+                    let missing = if facts.contains_key(&h.f.path) {
+                        &target
+                    } else {
+                        &h.f.path
+                    };
+                    why.push(format!("{} was not analysed", name(missing)));
+                    // An assigned fill still holds its target: no suggested helper takes it instead.
+                    if assigned {
+                        winner.insert(id, h.f.path.clone());
+                    }
                     continue;
                 };
                 if hf.size != tf.size {
@@ -234,7 +243,11 @@ pub fn plan_fills(
                     target,
                     fill: FillJob {
                         source: PackSource {
-                            stamp: SourceStamp::of(&h.f.path),
+                            // From the helper's planned job, never the file system (a pure planner).
+                            stamp: jobs
+                                .iter()
+                                .find(|j| j.input == h.f.path)
+                                .and_then(|j| j.source),
                             path: h.f.path.clone(),
                             role: h.role,
                         },

@@ -341,23 +341,59 @@ fn assigned_beats_suggested() {
         Target::Cs,
         &[
             ("x.png", Kind::Plain(Subtype::Diffuse)),
-            ("x_m2.png", Kind::Raw(RawMap::Opacity)),
             ("x_opacity.png", Kind::Raw(RawMap::Opacity)),
+            ("x_zmask.png", Kind::Raw(RawMap::Opacity)),
         ],
     );
     // `x_opacity.png` sorts first by path; the hand-set role still wins.
-    f.files.swap(1, 2);
-    f.jobs.swap(1, 2);
     let p = run(
         Target::Cs,
-        &["file:**/x_m2.png.helper.role=opacity"],
+        &["file:**/x_zmask.png.helper.role=opacity"],
         &mut f,
     );
-    assert_eq!(landed(&p), own("x_m2.png", "x.png", true));
+    assert_eq!(landed(&p), own("x_zmask.png", "x.png", true));
     assert_eq!(
         reason(&p, "x_opacity.png"),
-        "diffuse.a is filled by x_m2.png"
+        "diffuse.a is filled by x_zmask.png"
     );
+}
+
+/// Review fix 2: an assigned fill without facts still holds its target; the suggested helper does not take it.
+#[test]
+fn assigned_without_facts_reserves_its_target() {
+    let mut f = fx(
+        Target::Cs,
+        &[
+            ("x.png", Kind::Plain(Subtype::Diffuse)),
+            ("x_opacity.png", Kind::Raw(RawMap::Opacity)),
+            ("x_zmask.png", Kind::Raw(RawMap::Opacity)),
+        ],
+    );
+    f.facts.remove(&path("x_zmask.png"));
+    let p = run(
+        Target::Cs,
+        &["file:**/x_zmask.png.helper.role=opacity"],
+        &mut f,
+    );
+    assert!(p.candidates.is_empty(), "{:?}", landed(&p));
+    assert_eq!(reason(&p, "x_zmask.png"), "x_zmask.png was not analysed");
+    assert_eq!(
+        reason(&p, "x_opacity.png"),
+        "diffuse.a is filled by x_zmask.png"
+    );
+}
+
+/// Review fix 1: the fill's stamp is the helper job's `source`, never read from disk (the paths here do not exist).
+#[test]
+fn fill_stamp_comes_from_the_helper_job() {
+    let mut f = opacity_pair();
+    let stamp = SourceStamp {
+        size: 123,
+        mtime_ns: 456,
+    };
+    f.jobs[1].source = Some(stamp);
+    let p = run(Target::Cs, &[], &mut f);
+    assert_eq!(p.candidates[0].fill.source.stamp, Some(stamp));
 }
 
 #[test]
