@@ -214,7 +214,12 @@ impl ViewState {
 
     /// Show the whole mip (all nine copies when tiled), centred.
     pub fn fit(&mut self, viewport: [f32; 2], mip_size: (u32, u32)) {
-        let n = if self.tile { 3.0 } else { 1.0 };
+        self.fit_tiled(viewport, mip_size, self.tile);
+    }
+
+    /// `fit` with the tiling given (a cube fits its single cross whatever the stored tile setting is).
+    pub fn fit_tiled(&mut self, viewport: [f32; 2], mip_size: (u32, u32), tile: bool) {
+        let n = if tile { 3.0 } else { 1.0 };
         let z = (viewport[0] / (n * mip_size.0 as f32)).min(viewport[1] / (n * mip_size.1 as f32));
         if z.is_finite() && z > 0.0 {
             self.zoom = z.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);

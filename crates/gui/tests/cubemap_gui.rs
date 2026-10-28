@@ -563,3 +563,25 @@ fn a_single_image_cube_shows_its_input_in_the_source_pane() {
     // The 384x64 strip as the file is, not a 64-px face.
     assert_eq!((s.levels[0].width, s.levels[0].height), (384, 64));
 }
+
+#[test]
+fn the_tile_button_toggles_on_a_2d_item() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = preview(d.path(), FLAT);
+    assert!(!h.state().view.tile);
+    h.get_by_label("Tile 3×3").click();
+    h.run();
+    assert!(h.state().view.tile, "the first click turns tiling on");
+    h.get_by_label("Tile 3×3").click();
+    h.run();
+    assert!(!h.state().view.tile, "the second click turns it off");
+}
+
+#[test]
+fn a_cube_leaves_the_stored_tile_setting_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = preview(d.path(), CUBE);
+    h.state_mut().view.tile = true;
+    h.run();
+    assert!(h.state().view.tile, "drawing a cube never writes tile");
+}

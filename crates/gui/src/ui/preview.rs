@@ -132,6 +132,14 @@ impl Info {
     }
 }
 
+/// The view as drawn: a cube's cross never tiles (Note DT23), and the stored `tile` is never written for it.
+fn masked(view: &ViewState, info: &Info) -> ViewState {
+    ViewState {
+        tile: view.tile && !info.cube_item,
+        ..view.clone()
+    }
+}
+
 /// What the toolbar asks the viewports to do (they know the viewport size).
 #[derive(Default)]
 struct Requests {
@@ -141,22 +149,6 @@ struct Requests {
 }
 
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu: &GpuStatus) {
-    // A cross never tiles (Note DT23): drawn with tile off, the stored setting left alone for 2D items.
-    let tile = model.view.tile;
-    let cube = model
-        .expanded
-        .as_deref()
-        .and_then(|k| model.item(k))
-        .and_then(|i| i.job.as_ref())
-        .is_some_and(|j| j.cube.is_some());
-    if cube {
-        model.view.tile = false;
-    }
-    draw_preview(ui, model, state, gpu);
-    model.view.tile = tile;
-}
-
-fn draw_preview(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu: &GpuStatus) {
     let Some(key) = model.expanded.clone() else {
         return;
     };
@@ -660,7 +652,9 @@ fn viewports(
     if info.known() {
         let first_time = state.fitted_for.as_deref() != Some(key);
         if first_time || requests.fit {
-            model.view.fit(size, mip_size);
+            model
+                .view
+                .fit_tiled(size, mip_size, model.view.tile && !info.cube_item);
             state.fitted_for = Some(key.to_string());
         } else if requests.one_to_one {
             model.view.one_to_one();
@@ -723,11 +717,11 @@ fn viewports(
     let hover = responses
         .iter()
         .find_map(|r| r.hover_pos().map(|p| (r.rect.min, p)))
-        // No texel readout on a cube: the cross and the +X source side do not share texels.
+        // No texel readout on a cube: the cross and the source side (a face, or the input image) do not share texels (Note DT17).
         .filter(|_| info.known() && !info.cross)
         .map(|(min, p)| view::pane_fraction([p.x, p.y], [min.x, min.y], size));
     let readout = hover.and_then(|s| {
-        let t = model.view.texel_at(size, mip_size, s)?;
+        let t = masked(&model.view, info).texel_at(size, mip_size, s)?;
         Some(model.preview_texel(mip, t).lines())
     });
     if readout != state.readout {
@@ -735,7 +729,7 @@ fn viewports(
         ui.ctx().request_repaint();
     }
     if let (true, Some(s)) = (model.view.lens, hover) {
-        let (uv_offset, uv_scale) = model.view.lens_uv(size, mip_size, s);
+        let (uv_offset, uv_scale) = masked(&model.view, info).lens_uv(size, mip_size, s);
         for (pane, vis, drawn) in [(left, left_vis, left_draw), (right, right_vis, right_draw)] {
             let centre = pane.min + egui::vec2(s[0] * size[0], s[1] * size[1]);
             lens(ui, centre, vis, drawn, uv_offset, uv_scale);
@@ -1004,11 +998,11 @@ fn draw_source_pane(
             _ if single => (info.face_of(mip), s.levels.len().saturating_sub(1)),
             _ => (info.face_of(mip), mip.saturating_sub(s.first_level)),
         };
-        let params = params_for(&model.view, size, own, in_texture, tonemap);
+        let params = params_for(&masked(&model.view, info), size, own, in_texture, tonemap);
         paint_clipped(ui, viewport, visible, Slot::Source, params);
         drawn = Some((Slot::Source, params));
         if let Some(id) = overlay {
-            let (pic, uv) = picture_rects(&model.view, viewport, size, own);
+            let (pic, uv) = picture_rects(&masked(&model.view, info), viewport, size, own);
             ui.painter()
                 .with_clip_rect(visible.intersect(ui.clip_rect()))
                 .image(id, pic, uv, Color32::WHITE);
@@ -1090,17 +1084,19 @@ fn caption(ui: &egui::Ui, visible: Rect, text: &str, right: bool) {
 fn face_selector(ui: &mut egui::Ui, visible: Rect, current: usize) -> Option<usize> {
     let w = 26.0;
     let x = (visible.max.x - 6.0 * (w + 2.0) - 6.0).max(visible.min.x + 80.0);
+    // In a narrow pane the row wraps to more lines, within the pane.
+    let width = (visible.max.x - 6.0 - x).clamp(w + 2.0, 6.0 * (w + 2.0));
     let rect = Rect::from_min_size(
         egui::pos2(x, visible.min.y + 4.0),
-        egui::vec2(6.0 * (w + 2.0), 20.0),
+        egui::vec2(width, 20.0 * (6.0 * (w + 2.0) / width).ceil()),
     );
     let mut pick = None;
     ui.scope_builder(
         UiBuilder::new()
             .max_rect(rect)
-            .layout(UiLayout::left_to_right(Align::Center)),
+            .layout(UiLayout::left_to_right(Align::Center).with_main_wrap(true)),
         |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
             for (i, label) in FACE_LABELS.iter().enumerate() {
                 let short: String = label.chars().take(2).collect();
                 let r = ui
@@ -1197,7 +1193,13 @@ fn draw_encoded_pane(
     if gpu.renderer && info.shown.is_some() {
         let mip = model.view.mip;
         if heat {
-            let mut params = params_for(&model.view, size, info.size_of(mip), 0, false);
+            let mut params = params_for(
+                &masked(&model.view, info),
+                size,
+                info.size_of(mip),
+                0,
+                false,
+            );
             params.channel = 0;
             params.view_linear = 0;
             paint_clipped(ui, viewport, visible, Slot::Heatmap, params);
@@ -1206,7 +1208,7 @@ fn draw_encoded_pane(
             let tonemap = out.result.format.is_hdr();
             let first = out.result.source.first_level;
             let params = params_for(
-                &model.view,
+                &masked(&model.view, info),
                 size,
                 info.size_of(mip),
                 mip.saturating_sub(first),
@@ -1215,7 +1217,12 @@ fn draw_encoded_pane(
             paint_clipped(ui, viewport, visible, Slot::Encoded, params);
             drawn = Some((Slot::Encoded, params));
             if info.cross && model.view.face_labels {
-                let (pic, _) = picture_rects(&model.view, viewport, size, info.size_of(mip));
+                let (pic, _) = picture_rects(
+                    &masked(&model.view, info),
+                    viewport,
+                    size,
+                    info.size_of(mip),
+                );
                 face_labels(ui, pic, visible);
             }
         }

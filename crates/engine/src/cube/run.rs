@@ -188,7 +188,7 @@ pub(crate) fn prepare(
             }
         }
         Keep::Preview { max_size } | Keep::SourceOnly { max_size, .. } => {
-            // DECISIONS DT2: a preview encodes all six faces (face-major, each chain from first_level); the source side shows +X.
+            // DECISIONS DT2: a preview encodes all six faces (face-major, each chain from first_level); the source side shows face 0 (+X), or the face a `SourceOnly` read names (GUI Note DT20).
             prep.faces = if matches!(keep, Keep::Preview { .. }) {
                 6
             } else {

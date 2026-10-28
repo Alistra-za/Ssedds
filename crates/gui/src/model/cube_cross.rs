@@ -12,12 +12,17 @@ pub const FACE_LABELS: [&str; 6] = [
     "\u{2212}Z down",
 ];
 
+/// The face-edge limit that keeps a cross (4 faces wide, 3 tall) within the preview cap `max`.
+pub fn face_cap(max: u32) -> u32 {
+    (max / 4).max(1)
+}
+
 /// The preview size limit for `job`: a cube's cross is 4 faces wide and 3 tall, so its face gets a quarter of the
 /// cap and the whole cross stays within what a 2D preview may hold (Note DT22). The engine picks the first mip whose
 /// face fits, so a larger cube previews from a lower mip.
 pub fn preview_cap(job: &engine::policy::ResolvedJob, max: u32) -> u32 {
     if job.cube.is_some() {
-        (max / 4).max(1)
+        face_cap(max)
     } else {
         max
     }
@@ -27,7 +32,7 @@ pub fn preview_cap(job: &engine::policy::ResolvedJob, max: u32) -> u32 {
 /// its encode (the two sides share mip numbers); a single-image cube shows the input image under the full cap.
 pub fn source_cap(job: &engine::policy::ResolvedJob, max: u32) -> u32 {
     match &job.cube {
-        Some(c) if c.sources.len() == 6 => (max / 4).max(1),
+        Some(c) if c.sources.len() == 6 => face_cap(max),
         _ => max,
     }
 }
@@ -56,7 +61,7 @@ mod tests {
         // is never wider or taller than the cap, and the face is never decoded at 4096.
         let chain: Vec<(u32, u32)> = (0..13).map(|i| (4096 >> i, 4096 >> i)).collect();
         for cap in [1024u32, 2048, 4096, 8192, 16384] {
-            let face_cap = (cap / 4).max(1);
+            let face_cap = face_cap(cap);
             let (w, h) = chain[engine::session::first_level_within(&chain, face_cap)];
             assert!(
                 4 * w <= cap && 3 * h <= cap,
