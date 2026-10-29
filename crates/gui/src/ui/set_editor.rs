@@ -66,7 +66,7 @@ enum Act {
     ParallaxReset(String),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
-    /// Note DX18: a packed channel's source (packed key, channel, helper item key; `None` = a value).
+    /// Note DY18: a packed channel's source (packed key, channel, helper item key; `None` = a value).
     ChannelHelper(String, u8, Option<String>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
@@ -1166,7 +1166,7 @@ fn packed_controls(
     .on_disabled_hover_text(why.unwrap_or_default());
 }
 
-/// Note DX18: the width of a fill row's source picker (egui-ui-rules 3.5: `ComboBox::width` is only a minimum).
+/// Note DY18: the width of a fill row's source picker (egui-ui-rules 3.5: `ComboBox::width` is only a minimum).
 /// The format combo's width: the rows still fit beside the set panel at 1400 px (`set_panel.rs`), and the combo fits
 /// the ~125 px of slot row the centre shows at 1100 (truncated, full name on hover).
 const SOURCE_W: f32 = COMBO_W;
@@ -1260,7 +1260,7 @@ fn source_picker(
     r
 }
 
-/// One row per channel that a fill can stand in for: its role, the source picker (Note DX18), and while the channel
+/// One row per channel that a fill can stand in for: its role, the source picker (Note DY18), and while the channel
 /// has no source a value box with a reset.
 fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<Act>) {
     for row in fill_rows(model, key) {

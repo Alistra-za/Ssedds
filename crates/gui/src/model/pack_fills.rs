@@ -230,7 +230,7 @@ impl AppModel {
     }
 }
 
-/// Note DX18: the greyscale helpers of the packed output's set, `(item key, file name, role)`, in the engine's order
+/// Note DY18: the greyscale helpers of the packed output's set, `(item key, file name, role)`, in the engine's order
 /// (by file name); normal layers are left out.
 pub fn channel_helpers(model: &AppModel, packed_key: &str) -> Vec<(String, String, HelperRole)> {
     let Some(set) = model.item(packed_key).and_then(|i| i.set_key.clone()) else {
@@ -246,7 +246,7 @@ pub fn channel_helpers(model: &AppModel, packed_key: &str) -> Vec<(String, Strin
 }
 
 impl AppModel {
-    /// Note DX18: make `helper` (an item key; `None` = a value) the source of channel `channel` of the packed output
+    /// Note DY18: make `helper` (an item key; `None` = a value) the source of channel `channel` of the packed output
     /// `packed_key`, as one undo step. Every helper of the set whose current list (its hand-set `helper.fills`, else
     /// the engine's reported fills) holds the channel gets that list without it; `helper` gets its list plus the
     /// channel. A helper not touched keeps no key, so its suggestion stays live.

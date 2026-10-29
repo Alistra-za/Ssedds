@@ -197,7 +197,7 @@ pub struct SourceRef {
     /// The face (`posx` .. `negz`) a six-file cube's source fills (DECISIONS DS8). Absent on every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube_face: Option<String>,
-    /// Note DX: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed
+    /// Note DY: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed
     /// source read through an explicit `helper.read` (`read:g`) or the channels each source of a hand-placed recipe
     /// feeds (`ch:ba`, `pack::source_fill`). Absent on every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,7 +221,7 @@ impl SourceRef {
         })
     }
 
-    /// A helper that fills this output's alpha, with its `FillJob::identity` (Note DX).
+    /// A helper that fills this output's alpha, with its `FillJob::identity` (Note DY).
     pub fn of_fill(path: &Path, identity: String) -> io::Result<SourceRef> {
         Ok(SourceRef {
             fill: Some(identity),

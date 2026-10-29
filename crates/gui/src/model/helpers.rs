@@ -1,4 +1,4 @@
-//! Note DX17: the helper panel's edits. Each writes one `helper.*` selector of the helper file's own `[files]` entry in
+//! Note DY17: the helper panel's edits. Each writes one `helper.*` selector of the helper file's own `[files]` entry in
 //! `sdc.toml` as one undo step, then plans again; a read-only `sdc.toml` takes none (`AppModel::edit`).
 use super::AppModel;
 use engine::helper::report::HelperReport;
@@ -26,7 +26,7 @@ pub fn written_fills(h: &HelperReport) -> Vec<FillTarget> {
 }
 
 impl AppModel {
-    /// Note DX18b: a helper's current list. A hand-set list is its `sdc.toml` `helper.fills`, so a target that did not
+    /// Note DY18b: a helper's current list. A hand-set list is its `sdc.toml` `helper.fills`, so a target that did not
     /// land is not lost; otherwise the engine's reported fills.
     pub fn current_fills(&self, key: &str, h: &HelperReport) -> Vec<FillTarget> {
         let hand = self

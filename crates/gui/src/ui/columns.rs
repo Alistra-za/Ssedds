@@ -361,7 +361,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         .and_then(|k| visible.iter().position(|&i| model.items[i].key == k))
         .map(|n| n / cols);
     let row_step = tile_h + ui.spacing().item_spacing.y;
-    // Note DX16: the helper group under the tiles: a header line, then fixed-height rows.
+    // Note DY16: the helper group under the tiles: a header line, then fixed-height rows.
     let helper_h = helper_row_height(ui);
     let header_h = if helpers.is_empty() {
         0.0
@@ -454,7 +454,7 @@ fn helper_row_height(ui: &egui::Ui) -> f32 {
 const HELPER_ROW_H: f32 = 24.0;
 const HELPER_THUMB: f32 = 20.0;
 
-/// Note DX16: one helper row in `rect`: a 20 px thumbnail and the file name on the left; where it goes ("→ targets"
+/// Note DY16: one helper row in `rect`: a 20 px thumbnail and the file name on the left; where it goes ("→ targets"
 /// or "not used") and the role chip on the right. A click selects it as a tile click does.
 fn helper_row(
     ui: &mut egui::Ui,
@@ -686,7 +686,7 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
                 *on = !*on;
             }
         }
-        // Note DX16: on (selected) shows the helper rows; the filter field is the inverse so the default stays "off".
+        // Note DY16: on (selected) shows the helper rows; the filter field is the inverse so the default stays "off".
         let shown = !f.hide_helpers;
         let text = format!("Helpers {}", c.helpers);
         let r = ui.add(

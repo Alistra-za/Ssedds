@@ -125,7 +125,7 @@ impl AppModel {
             .collect()
     }
 
-    /// Note DX16 review: what the column shows, tiles then helper rows, in display order (mouse ranges and the
+    /// Note DY16 review: what the column shows, tiles then helper rows, in display order (mouse ranges and the
     /// summary's hidden count). Keyboard navigation and Ctrl+A stay on `visible_keys` (tiles only).
     fn shown_keys(&self) -> Vec<String> {
         let mut keys = self.visible_keys();

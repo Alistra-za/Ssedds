@@ -1078,7 +1078,7 @@
           ]
         },
         "fill": {
-          "description": "Note DX: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed\nsource read through an explicit `helper.read` (`read:g`) or the channels each source of a hand-placed recipe\nfeeds (`ch:ba`, `pack::source_fill`). Absent on every other source.",
+          "description": "Note DY: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed\nsource read through an explicit `helper.read` (`read:g`) or the channels each source of a hand-placed recipe\nfeeds (`ch:ba`, `pack::source_fill`). Absent on every other source.",
           "type": [
             "string",
             "null"

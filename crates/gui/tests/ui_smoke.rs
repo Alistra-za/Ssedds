@@ -89,7 +89,7 @@ fn an_opened_folder_shows_items_filters_and_the_undecided_count() {
     ] {
         h.get_by_label_contains(label);
     }
-    // The packed output's tile, and the two raw maps' helper rows (Note DX16): each row's name and its "→" target.
+    // The packed output's tile, and the two raw maps' helper rows (Note DY16): each row's name and its "→" target.
     assert_eq!(h.query_all_by_label_contains("rock01_rmaos").count(), 5);
     assert_eq!(
         h.query_all_by_label_contains("fills to rock01_rmaos")
@@ -447,7 +447,7 @@ fn a_packed_item_lists_its_channels_and_a_raw_map_points_to_the_output() {
     h.get_by_label_contains("R: from ");
     h.get_by_label_contains("B: from rock01_ao.png");
     h.get_by_label("A: default value 1");
-    // A raw map (a helper since Note DX16) says where it goes and offers the way to its output.
+    // A raw map (a helper since Note DY16) says where it goes and offers the way to its output.
     h.state_mut().select_item("landscape/rock01_roughness.png");
     h.run();
     h.get_by_label("fills to rock01_rmaos R");

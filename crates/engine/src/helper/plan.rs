@@ -1,4 +1,4 @@
-//! Note DX: which alpha channel each helper of a set fills (Rulings 4-8, 11, 12). Runs before `plan_packing` and
+//! Note DY: which alpha channel each helper of a set fills (Rulings 4-8, 11, 12). Runs before `plan_packing` and
 //! decides only from the plain file jobs, the [`AlphaFacts`] and the `helper.*` selectors; packed targets belong to
 //! packing (`pack::recipes_for_sel`).
 use super::{AlphaTarget, FillJob, FillTarget, HelperRole, HelperSel};
@@ -137,7 +137,7 @@ pub fn plan_fills(
                 }
                 Some(HelperRole::Raw(r)) => r,
                 // The file's own job decides (Note DR: a skin `_f` has its role there only); any other job converts it
-                // alone (DX2, final review I1). Only a file with no job (failed or cancelled) falls back to its name.
+                // alone (DY2, final review I1). Only a file with no job (failed or cancelled) falls back to its name.
                 None => match jobs.iter().find(|j| j.input == f.path && j.pack.is_none()) {
                     Some(j) => match j.status {
                         JobStatus::PackingInput { role } => role,

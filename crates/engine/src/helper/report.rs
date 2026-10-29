@@ -1,4 +1,4 @@
-//! Note DX: one report per helper of a planned batch: what it is, where it really went, what else it could fill and,
+//! Note DY: one report per helper of a planned batch: what it is, where it really went, what else it could fill and,
 //! when it fills nothing, why. Built from the finished plan, so the GUI never decides any of it.
 use super::plan::{accepts, plain, FillPlan};
 use super::{AlphaTarget, FillTarget, HelperRead, HelperRole};

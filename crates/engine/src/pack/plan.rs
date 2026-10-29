@@ -133,7 +133,7 @@ fn source_base(p: &Path) -> String {
     split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b)
 }
 
-/// Note DX: a hand-role helper that `group::join_helpers` moved into set `x` (`x_mask`) names a packed output as the
+/// Note DY: a hand-role helper that `group::join_helpers` moved into set `x` (`x_mask`) names a packed output as the
 /// set's own members do (`x_rmaos`, with its `[files]` key): each such member with `rel` renamed to the stem of a
 /// member whose base is the set's. The whole stem, never the bare base: `virtual_stem_as` parses the name again, and
 /// a base that itself ends in a term (`x_ao`) would be cut twice. Empty for every set without a joined helper, so
@@ -454,7 +454,7 @@ fn chosen_recipe(
     if ctx.target != Target::Cs || raw.iter().any(|r| r.role == RawMap::Rmaos) {
         return (PackRecipe::Auto, None);
     }
-    // Note DX: a hand-set fill may build the `_rfaos`/`_rmaos` only under its own recipe (a lone `_specular` filling
+    // Note DY: a hand-set fill may build the `_rfaos`/`_rmaos` only under its own recipe (a lone `_specular` filling
     // `rfaos.a`), so those are probed after `auto`. Without hand-set fills they add nothing: their triggers are a
     // subset of `auto`'s.
     let probes = [PackRecipe::Auto, PackRecipe::Rfaos, PackRecipe::Rmaos].map(|p| {
@@ -681,7 +681,7 @@ pub fn plan_packing(
         for &i in &set.members {
             let f = &files[i];
             // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing). The job's role comes
-            // first: a hand-set `helper.role` (Note DX) overrides the name's.
+            // first: a hand-set `helper.role` (Note DY) overrides the name's.
             let image = f.kind == InputKind::Image;
             let by_name = || {
                 raw_role(f).or_else(|| {
@@ -717,7 +717,7 @@ pub fn plan_packing(
                     role,
                 });
                 members.insert(f.path.clone(), renamed.get(&f.path).unwrap_or(f));
-                // Note DX: its hand-set fills, read and invert.
+                // Note DY: its hand-set fills, read and invert.
                 let s = crate::policy::helper_requested(ctx, f);
                 if s != crate::helper::HelperSel::default() {
                     sel.insert(f.path.clone(), s);
@@ -984,7 +984,7 @@ pub fn plan_packing(
             }
             reports.push(report);
             let job = PackJob {
-                // Note DX21: a hand-set `helper.fills` on any source makes the record name every source's channels.
+                // Note DY21: a hand-set `helper.fills` on any source makes the record name every source's channels.
                 hand_placed: recipe.sources().iter().any(|(p, _)| {
                     files.iter().any(|f| {
                         f.path == *p
@@ -1000,7 +1000,7 @@ pub fn plan_packing(
                     .into_iter()
                     .map(|(path, role)| PackSource {
                         stamp: SourceStamp::of(&path),
-                        // Note DX: every source's explicit read, a pre-packed `_rmaos`/`_rfaos` image too
+                        // Note DY: every source's explicit read, a pre-packed `_rmaos`/`_rfaos` image too
                         // (`prepacked_b`), whose channels it does not change.
                         read: files
                             .iter()
@@ -1031,7 +1031,7 @@ pub fn plan_packing(
             });
         }
         for (p, reason) in unused {
-            // Note DX: an alpha fill consumes it (below); otherwise its alpha reason says more than packing's.
+            // Note DY: an alpha fill consumes it (below); otherwise its alpha reason says more than packing's.
             if fills.used.contains(&p) {
                 continue;
             }
@@ -1047,7 +1047,7 @@ pub fn plan_packing(
         }
         out.reports.insert(set.key.clone(), reports);
     }
-    // Note DX: a helper an alpha fill uses is consumed too, whatever packing did with it.
+    // Note DY: a helper an alpha fill uses is consumed too, whatever packing did with it.
     consumed.extend(fills.used.iter().cloned());
     // DECISIONS Note M8: the recipe job stands for the raw jobs it consumed.
     jobs.retain(|j| {

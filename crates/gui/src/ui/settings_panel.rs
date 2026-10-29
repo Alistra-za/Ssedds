@@ -1063,7 +1063,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
-        // Note DX17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
+        // Note DY17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
         let not_helper = model
             .project
             .as_ref()
@@ -1089,7 +1089,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 model.set_helper_role(key, None);
             }
         }
-        // Note DX17 (docs review): any image can be made a helper here, e.g. one whose name has no helper suffix.
+        // Note DY17 (docs review): any image can be made a helper here, e.g. one whose name has no helper suffix.
         if kind == ItemKind::Image {
             let picked = ui
                 .add_enabled_ui(toml_read_only.is_none(), |ui| {

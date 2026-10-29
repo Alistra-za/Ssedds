@@ -1,4 +1,4 @@
-//! Helper textures Task 2 (Note DX): hand-set packed fill targets, `helper.read` and `helper.invert` on packed sources.
+//! Helper textures Task 2 (Note DY): hand-set packed fill targets, `helper.read` and `helper.invert` on packed sources.
 use engine::api::*;
 use engine::config::*;
 use engine::events::*;
@@ -472,7 +472,7 @@ fn if_changed_sees_a_packed_channel_move() {
         e.sources
     );
     // A hand fill on the suggested channel builds the same output, but a hand-placed recipe records every channel
-    // (Note DX21): one extra re-export, then up to date.
+    // (Note DY21): one extra re-export, then up to date.
     assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "hand-set, same channel");
     assert_eq!(run(Some("\"rmaos.b\"")), (0, 1));
     assert_eq!(run(Some("\"rmaos.g\"")), (1, 0), "(a) B moved to G");

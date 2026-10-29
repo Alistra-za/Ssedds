@@ -121,7 +121,7 @@ fn an_rmaos_card_without_an_ao_source_has_an_ao_row_and_a_set_value_becomes_the_
     let mut h = editor(fixture(d.path()));
     h.run();
     h.get_by_label("AO");
-    // Note DX18: a channel with a file names it in its source picker.
+    // Note DY18: a channel with a file names it in its source picker.
     assert_eq!(
         h.get_by_role_and_label(
             eframe::egui::accesskit::Role::ComboBox,
@@ -854,7 +854,7 @@ fn dragging_a_fill_box_and_releasing_stores_the_final_dragged_value() {
             _ => None,
         })
         .expect("an AO value row");
-    // Note DX18: the source picker widens the row, so the box may sit past the column's edge: scroll to it.
+    // Note DY18: the source picker widens the row, so the box may sit past the column's edge: scroll to it.
     h.get_by_label("AO").scroll_to_me();
     h.run();
     let label = h.get_by_label("AO").accesskit_node().raw_bounds().unwrap();

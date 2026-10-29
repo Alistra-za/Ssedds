@@ -1,4 +1,4 @@
-//! Note DX17: a helper's panel (helper textures spec Goal 6): its role, the channels it fills, the channel it is read
+//! Note DY17: a helper's panel (helper textures spec Goal 6): its role, the channels it fills, the channel it is read
 //! from and whether it is inverted. Every value shown is the engine's `HelperReport`; the GUI only writes the keys.
 use crate::model::helpers::set_base;
 use crate::model::AppModel;
@@ -241,7 +241,7 @@ fn fills_rows(
     ui: &mut egui::Ui,
     key: &str,
     h: &HelperReport,
-    // Final review M1: the `sdc.toml` list when hand-set (DX18b), so ✕ on one target never drops one that did not land.
+    // Final review M1: the `sdc.toml` list when hand-set (DY18b), so ✕ on one target never drops one that did not land.
     now: Vec<FillTarget>,
     base: &str,
     ro: &Option<String>,

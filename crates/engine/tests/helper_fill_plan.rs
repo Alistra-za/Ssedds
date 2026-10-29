@@ -1,4 +1,4 @@
-//! Note DX (Task 3): which alpha channels the helpers of a set fill (`helper::plan::plan_fills`, Rulings 4-8, 11, 12).
+//! Note DY (Task 3): which alpha channels the helpers of a set fill (`helper::plan::plan_fills`, Rulings 4-8, 11, 12).
 use engine::codes::Code;
 use engine::config::*;
 use engine::discover::{InputFile, InputKind};

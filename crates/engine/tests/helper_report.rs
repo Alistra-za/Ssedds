@@ -1,4 +1,4 @@
-//! Helper textures Task 5 (Note DX13-DX14): one report per helper, and `if-changed` re-encodes the outputs a helper
+//! Helper textures Task 5 (Note DY13-DY14): one report per helper, and `if-changed` re-encodes the outputs a helper
 //! fills when the helper or its read changes.
 use engine::api::*;
 use engine::codes::Code;
@@ -288,7 +288,7 @@ fn if_changed_reencodes_when_prepacked_rmaos_read_changes() {
     assert_eq!((s.converted, s.up_to_date), (0, 2), "{s:?}");
 }
 
-/// Every fixture shape the pins use, minus any helper: nothing in them is filled (Note DX15).
+/// Every fixture shape the pins use, minus any helper: nothing in them is filled (Note DY15).
 #[test]
 fn no_helper_fixture_plans_carry_no_fill() {
     let d = tempfile::tempdir().unwrap();
@@ -355,7 +355,7 @@ fn no_helper_fixture_plans_carry_no_fill() {
 }
 
 /// A manifest written before fills existed has no fill source. Adding the helper re-encodes only the output it
-/// fills; the rest stay up to date (Note DX15).
+/// fills; the rest stay up to date (Note DY15).
 #[test]
 fn old_record_reexports_only_filled_outputs() {
     let d = tempfile::tempdir().unwrap();
@@ -414,7 +414,7 @@ fn old_record_reexports_only_filled_outputs() {
     assert_eq!((s.converted, s.up_to_date), (0, 3), "{s:?}");
 }
 
-/// Review fix (Note DX17): a layer's report names the `rnm.target` in effect, including the `_cnr` fallback when the
+/// Review fix (Note DY17): a layer's report names the `rnm.target` in effect, including the `_cnr` fallback when the
 /// set has no `_n` (Note W4), and a hand-set value.
 #[test]
 fn layer_report_names_its_rnm_target() {

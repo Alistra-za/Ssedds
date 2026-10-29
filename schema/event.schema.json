@@ -949,7 +949,7 @@
       "type": "string"
     },
     "FillJob": {
-      "description": "How a helper fills its target's alpha (Note DX): the source, the channel read (`None` = R, Ruling 9), whether it\nis inverted, and whether it was hand-set (assigned replaces any alpha; suggested fills only an empty one).",
+      "description": "How a helper fills its target's alpha (Note DY): the source, the channel read (`None` = R, Ruling 9), whether it\nis inverted, and whether it was hand-set (assigned replaces any alpha; suggested fills only an empty one).",
       "properties": {
         "assigned": {
           "type": "boolean"
@@ -1506,7 +1506,7 @@
           "description": "The `channels.grayscale_source` this recipe was planned with (provenance, analysis and report all use it).\nThe pipeline assembles with this value, not with the final profile's, so the written image is the one that\nwas analysed (DECISIONS Note M6). Serialised, so it shows in `file_planned` and the manifest."
         },
         "hand_placed": {
-          "description": "Note DX21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels\n(`source_fill`). Absent otherwise, so no other job's JSON changes.",
+          "description": "Note DY21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels\n(`source_fill`). Absent otherwise, so no other job's JSON changes.",
           "type": "boolean"
         },
         "kind": {
@@ -1558,7 +1558,7 @@
               "type": "null"
             }
           ],
-          "description": "Note DX: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),\nso the record names it. Absent otherwise, so no other job's JSON changes."
+          "description": "Note DY: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),\nso the record names it. Absent otherwise, so no other job's JSON changes."
         },
         "role": {
           "$ref": "#/$defs/RawMap"
@@ -1848,7 +1848,7 @@
               "type": "null"
             }
           ],
-          "description": "Helper textures (DECISIONS Note DX): the helper whose channel this plain file job's alpha is filled from,\nbefore analysis and again at load (`helper::apply_fill`); `None` for every other job."
+          "description": "Helper textures (DECISIONS Note DY): the helper whose channel this plain file job's alpha is filled from,\nbefore analysis and again at load (`helper::apply_fill`); `None` for every other job."
         },
         "game_path": {
           "type": "string"

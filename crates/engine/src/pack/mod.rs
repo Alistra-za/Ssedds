@@ -109,7 +109,7 @@ pub fn b_has_content(b: &crate::analyse::ChannelStats) -> bool {
     f64::from(b.max - b.min) * 255.0 >= 2.0 - 1e-3 || b.mean * 255.0 <= 250.0 + 1e-3
 }
 
-/// The `ChannelSource::Source.channel` that reads a source's luma (Note DX), past R, G, B and A.
+/// The `ChannelSource::Source.channel` that reads a source's luma (Note DY), past R, G, B and A.
 pub const LUMA_CHANNEL: u8 = 4;
 
 /// A raw map of one set waiting for a recipe.
@@ -288,7 +288,7 @@ pub(crate) fn slot_of(kind: RecipeKind, ch: usize) -> Option<Slot> {
     slots[ch]
 }
 
-/// [`recipes_for_with`] with each raw input's hand-set `helper.*` selectors (DECISIONS Note DX; empty = today).
+/// [`recipes_for_with`] with each raw input's hand-set `helper.*` selectors (DECISIONS Note DY; empty = today).
 /// An input with `helper.fills` takes no suggested slot (the next file of its role may, M13) and fills the packed
 /// channels it names, creating that recipe when the set would build none; among inputs naming one channel the first
 /// by path wins. `helper.read` and `helper.invert` apply wherever an input lands, suggested or hand-set.
@@ -304,7 +304,7 @@ pub fn recipes_for_sel(
     use RawMap::*;
     let assigned = |p: &Path| sel.get(p).is_some_and(|s| s.assigned());
     let mut sorted: Vec<&RawInput> = raw.iter().collect();
-    // Note DX (Ruling 8): an assigned source (hand-set role or fills) comes before a suggested one.
+    // Note DY (Ruling 8): an assigned source (hand-set role or fills) comes before a suggested one.
     sorted.sort_by(|a, b| (!assigned(&a.path), &a.path).cmp(&(!assigned(&b.path), &b.path)));
     // DECISIONS Note M13: one source per role, the first by path.
     let mut by_role: BTreeMap<RawMap, &RawInput> = BTreeMap::new();
@@ -522,7 +522,7 @@ pub fn recipes_for_sel(
             }
         }
     }
-    // Hand-set fills, in path order: an assigned source replaces what the channel holds (DECISIONS Note DX).
+    // Hand-set fills, in path order: an assigned source replaces what the channel holds (DECISIONS Note DY).
     let mut winner: BTreeMap<(RecipeKind, usize), &Path> = BTreeMap::new();
     let mut displaced: BTreeMap<PathBuf, String> = BTreeMap::new();
     for (r, fills) in &hand {
@@ -776,7 +776,7 @@ pub struct PackSource {
     pub role: RawMap,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stamp: Option<SourceStamp>,
-    /// Note DX: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),
+    /// Note DY: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),
     /// so the record names it. Absent otherwise, so no other job's JSON changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read: Option<crate::helper::HelperRead>,
@@ -793,7 +793,7 @@ pub struct PackJob {
     /// was analysed (DECISIONS Note M6). Serialised, so it shows in `file_planned` and the manifest.
     pub gray: GraySource,
     pub sources: Vec<PackSource>,
-    /// Note DX21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels
+    /// Note DY21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels
     /// (`source_fill`). Absent otherwise, so no other job's JSON changes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hand_placed: bool,
@@ -806,14 +806,14 @@ pub fn invert_of(pk: &PackJob, path: &Path) -> bool {
         .any(|c| matches!(c, ChannelSource::Source { path: p, invert: true, .. } if p == path))
 }
 
-/// Note DX: `read:<id>` for a source with an explicit `helper.read` (recorded as `SourceRef.fill`), so a changed
+/// Note DY: `read:<id>` for a source with an explicit `helper.read` (recorded as `SourceRef.fill`), so a changed
 /// read re-encodes under `if-changed`; `None` without one.
 pub fn read_of(s: &PackSource) -> Option<String> {
     s.read.map(|r| format!("read:{}", r.id()))
 }
 
 /// What `SourceRef.fill` records for a packed source; the pipeline records it and `if-changed` compares it, so the
-/// two never drift. `read:<id>` as [`read_of`], then (Note DX21) `ch:<rgba>`, every channel the source feeds, on
+/// two never drift. `read:<id>` as [`read_of`], then (Note DY21) `ch:<rgba>`, every channel the source feeds, on
 /// every source of a recipe a hand-set `helper.fills` placed (`PackJob::hand_placed`). A recipe built from
 /// suggestions alone adds nothing, so existing manifests stay up to date.
 pub fn source_fill(pk: &PackJob, s: &PackSource) -> Option<String> {

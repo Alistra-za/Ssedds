@@ -1,4 +1,4 @@
-//! Helper textures Task 8 (Note DX17): the helper panel edits the helper file's `helper.*` keys in `sdc.toml` (role,
+//! Helper textures Task 8 (Note DY17): the helper panel edits the helper file's `helper.*` keys in `sdc.toml` (role,
 //! fills, read from, invert; `rnm.target` for normal-type roles), one undo step each. Temp dirs only.
 mod support;
 use eframe::egui;
@@ -235,7 +235,7 @@ fn fills_add_and_remove_write_the_list() {
     h.get_by_label("not used: no targets chosen");
 }
 
-/// Final review M1: a hand-set list shows every target from `sdc.toml` (DX18b), so ✕ on one never drops a hand target
+/// Final review M1: a hand-set list shows every target from `sdc.toml` (DY18b), so ✕ on one never drops a hand target
 /// that did not land (`n.a` under vanilla with no `_n`).
 #[test]
 fn hand_targets_that_did_not_land_stay_listed() {
@@ -405,7 +405,7 @@ fn shots() {
     }
 }
 
-/// Review fix (DX17): a layer with no prefix in a set with `_cnr` and no `_n` blends into `_cnr` (Note W4); the panel
+/// Review fix (DY17): a layer with no prefix in a set with `_cnr` and no `_n` blends into `_cnr` (Note W4); the panel
 /// shows the engine's target, and picking a value writes `rnm.target` even when it is the one shown.
 #[test]
 fn layer_target_follows_the_engine() {
@@ -436,7 +436,7 @@ fn layer_target_follows_the_engine() {
     assert_eq!(combo.accesskit_node().value().as_deref(), Some("Normal"));
 }
 
-/// Review fix (DX17): picking the guessed role writes it, so it becomes assigned and replaces the diffuse's own
+/// Review fix (DY17): picking the guessed role writes it, so it becomes assigned and replaces the diffuse's own
 /// varying alpha, which a suggestion never does.
 #[test]
 fn picking_the_guessed_role_hand_sets_it() {
@@ -507,7 +507,7 @@ fn tiny_dds(p: &Path) {
     std::fs::write(p, b).unwrap();
 }
 
-/// Docs review (Note DX17): an image whose name has no helper suffix can be made a helper from its own panel.
+/// Docs review (Note DY17): an image whose name has no helper suffix can be made a helper from its own panel.
 #[test]
 fn ordinary_image_can_become_a_helper() {
     let d = tempfile::tempdir().unwrap();
