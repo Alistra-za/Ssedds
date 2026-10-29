@@ -177,7 +177,7 @@ fn sdc_toml_edits_undo_while_the_sets_doc_is_read_only() {
 #[test]
 fn undo_of_an_sdc_toml_edit_leaves_the_sets_doc_clean_and_save_writes_no_project_file() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
+    let mut m = opened_unchosen(d.path());
     let root = m.root.clone().unwrap();
     m.set_target(engine::config::Target::Vanilla);
     m.undo();

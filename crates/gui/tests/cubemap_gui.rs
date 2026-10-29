@@ -20,6 +20,7 @@ fn open(dir: &std::path::Path) -> AppModel {
         m.wait_idle(Duration::from_secs(60)),
         "planning did not finish"
     );
+    support::choose_export(&mut m, dir.join("export"));
     m
 }
 

@@ -62,6 +62,7 @@ fn pick_folder(ctx: &egui::Context, v: &Viewport3d) {
     let spec = PickerSpec {
         title: Some("Community Shaders folder (the mod folder or its Shaders folder)"),
         kind: PickerKind::Folder,
+        start: None,
     };
     v.picker
         .request(ctx, PickerPurpose::ShaderFolder, None, spec);

@@ -306,7 +306,11 @@ fn nvtt(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
                 let kind = PickerKind::File {
                     filter: ("nvcompress", &["exe"]),
                 };
-                let spec = PickerSpec { title: None, kind };
+                let spec = PickerSpec {
+                    title: None,
+                    kind,
+                    start: None,
+                };
                 model.pick(ui.ctx(), PickerPurpose::NvttPath, spec);
             }
             if model.settings.nvtt_path.is_some() && ui.button("Automatic").clicked() {

@@ -50,6 +50,8 @@ pub enum PickerKind {
 pub struct PickerSpec {
     pub title: Option<&'static str>,
     pub kind: PickerKind,
+    /// The folder the dialog starts in (None: the OS's choice). A `Save` picker has its own `dir`.
+    pub start: Option<PathBuf>,
 }
 
 impl PickerSpec {
@@ -57,7 +59,14 @@ impl PickerSpec {
         PickerSpec {
             title: None,
             kind: PickerKind::Folder,
+            start: None,
         }
+    }
+
+    /// Start the dialog in `p`.
+    pub fn start_in(mut self, p: PathBuf) -> Self {
+        self.start = Some(p);
+        self
     }
 }
 
@@ -73,6 +82,9 @@ impl PickerBackend for Native {
         let mut d = rfd::FileDialog::new();
         if let Some(t) = spec.title {
             d = d.set_title(t);
+        }
+        if let Some(dir) = &spec.start {
+            d = d.set_directory(dir);
         }
         match &spec.kind {
             PickerKind::Folder => d.pick_folder(),
@@ -251,6 +263,16 @@ impl AppModel {
     pub fn pick(&self, ctx: &egui::Context, purpose: PickerPurpose, spec: PickerSpec) -> bool {
         let scope = purpose.folder_scoped().then(|| self.root.clone()).flatten();
         self.picker.request(ctx, purpose, scope, spec)
+    }
+
+    /// Open the export folder picker, starting in the app-wide last pick (`gui.toml`) when there is one (Note FB1:
+    /// it is no longer the project's choice, only where the dialog opens).
+    pub fn pick_export_folder(&self, ctx: &egui::Context) -> bool {
+        let spec = match self.settings.export_folder.clone() {
+            Some(p) => PickerSpec::folder().start_in(p),
+            None => PickerSpec::folder(),
+        };
+        self.pick(ctx, PickerPurpose::ExportFolder, spec)
     }
 
     /// The export folder chosen in the picker, for this project (owner ruling, Note BV6): saved in

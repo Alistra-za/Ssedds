@@ -16,7 +16,7 @@ type H = Harness<'static, (AppModel, State, MeshesModel)>;
 const WIDTHS: [f32; 4] = [1440.0, 1024.0, 800.0, 640.0];
 
 /// The controls every Textures header must show (plus "Export to: …", matched by its start).
-const CONTROLS: [&str; 12] = [
+const CONTROLS: [&str; 11] = [
     "Open",
     "Undo",
     "Redo",
@@ -28,7 +28,6 @@ const CONTROLS: [&str; 12] = [
     "Textures column",
     "Sets column",
     "Save",
-    "Export",
 ];
 
 fn harness(m: AppModel, w: f32, meshes_view: bool) -> H {
@@ -101,6 +100,8 @@ fn the_textures_header_never_overlaps() {
         for c in CONTROLS {
             h.get_by_label(c);
         }
+        // Note FB1: Export reads "Review n files" until the project is clean.
+        header_export_label(&h);
         h.get_by_label_contains("Export to: ");
         // R14: Messages, Presets…, Recent and PG JSON Editor left the header.
         let header = outer(&h, "header");
@@ -153,7 +154,7 @@ fn assert_one_row_in_the_spec_order(h: &H) {
         ("Meshes view", h.get_by_label("Meshes view").rect()),
         ("Export to", h.get_by_label_contains("Export to: ").rect()),
         ("Save", h.get_by_label("Save").rect()),
-        ("Export", h.get_by_label("Export").rect()),
+        ("Export", h.get_by_label(&header_export_label(h)).rect()),
     ];
     let y = order[0].1.center().y;
     for (name, r) in order {
@@ -209,7 +210,7 @@ fn save_sits_next_to_export_at_its_height() {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, false);
         let (s, e) = (
             h.get_by_label("Save").rect(),
-            h.get_by_label("Export").rect(),
+            h.get_by_label(&header_export_label(&h)).rect(),
         );
         assert!((s.height() - e.height()).abs() < 1.0, "at {w}: {s:?} {e:?}");
         assert!(
@@ -241,7 +242,7 @@ fn the_export_folder_shows_its_tail_and_the_whole_path_on_hover() {
         deep = deep.join(format!("a rather long folder name number {i}"));
     }
     let deep = deep.join("mods").join("My Mod");
-    m.settings.export_folder = Some(deep.clone());
+    choose_export(&mut m, deep.clone());
     let full = deep.display().to_string();
     let mut h = harness(m, 1024.0, false);
     let b = h.get_by_label_contains(r"\mods\My Mod");
@@ -254,7 +255,7 @@ fn the_export_folder_shows_its_tail_and_the_whole_path_on_hover() {
     let r = b.rect();
     let (save, export) = (
         h.get_by_label("Save").rect(),
-        h.get_by_label("Export").rect(),
+        h.get_by_label(&header_export_label(&h)).rect(),
     );
     assert!(
         r.min.y <= export.center().y && export.center().y <= r.max.y,
@@ -320,8 +321,11 @@ fn a_running_export_shows_progress_in_the_header() {
     h.run_steps(2);
     assert!(bar(&h));
     h.get_by_label("0/0");
-    assert!(h.get_by_label("Export").accesskit_node().is_disabled());
-    let export = h.get_by_label("Export").rect();
+    assert!(h
+        .get_by_label(&header_export_label(&h))
+        .accesskit_node()
+        .is_disabled());
+    let export = h.get_by_label(&header_export_label(&h)).rect();
     let p = h.get_by_label("0/0").rect();
     assert!(p.top() >= export.bottom() - 0.5 && (p.left() - export.left()).abs() < 1.0);
 }
@@ -374,17 +378,10 @@ fn the_meshes_header_never_overlaps() {
     for w in WIDTHS {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, true);
         assert_no_overlap(&h, "header", w);
-        for c in [
-            "Open",
-            "Undo",
-            "MO2…",
-            "Mode",
-            "Meshes view",
-            "Save",
-            "Export",
-        ] {
+        for c in ["Open", "Undo", "MO2…", "Mode", "Meshes view", "Save"] {
             h.get_by_label(c);
         }
+        header_export_label(&h);
         assert!(h.query_by_label("Textures column").is_none());
         assert!(PanelState::load(&h.ctx, Id::new("meshes-header")).is_none());
         // Note AM: an idle bar with no status holds nothing.

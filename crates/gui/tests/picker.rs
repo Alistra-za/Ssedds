@@ -412,11 +412,9 @@ fn the_export_folder_is_per_project() {
     let root_b = mod_folder(&d.path().join("b"));
     m.open_folder(root_b);
     assert!(m.wait_idle(Duration::from_secs(60)));
-    assert_eq!(
-        Some(m.export_root()),
-        default,
-        "project b has none: the default"
-    );
+    // Note FB1: project b has none, and the gui.toml default is no longer inherited.
+    assert_eq!(m.export_folder_chosen(), None);
+    assert_eq!(m.export_root(), m.root.clone().unwrap().join("sdc-out"));
 
     m.open_folder(root_a);
     assert!(m.wait_idle(Duration::from_secs(60)));

@@ -66,6 +66,7 @@ impl AppModel {
             PickerSpec {
                 title: Some("Save marker cube"),
                 kind,
+                start: None,
             },
         )
     }

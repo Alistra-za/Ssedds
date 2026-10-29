@@ -20,6 +20,8 @@ pub fn shown_progress(ctx: &egui::Context, epoch: u64, frac: f32) -> f32 {
     ctx.animate_value_with_time(id, frac, super::motion::move_dur(ctx, 0.3))
 }
 
+/// What the export menu's button says while no export folder is chosen (Note FB1).
+const MORE_TEXT: &str = "More ▾";
 /// The fewest path characters Export to ▾ shows (K1).
 const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
@@ -105,24 +107,28 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
     let h = 2.0 * ui.spacing().interact_size.y;
     let save_w = button_width(ui, "Save");
     let glyph = button_width(ui, "0") - 2.0 * ui.spacing().button_padding.x;
+    // Note FB1: the Export to chip names the folder only once one is chosen for this project; until then the menu is
+    // a plain "More ▾" (it still holds the marker cube, the Also ticks and the JSON editor).
+    let full = model
+        .export_folder_chosen()
+        .map(|p| p.display().to_string());
     // K1: what Export to's path may take is the room left after the button's own text, Save and Export.
-    let fixed = button_width(ui, "Export to:  ▾") + gap + save_w + gap + EXPORT_WIDTH;
-    fit(ui, fixed + PATH_MIN_CHARS as f32 * glyph);
+    let (lead, min_path) = match full {
+        Some(_) => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph),
+        None => (MORE_TEXT, 0.0),
+    };
+    let fixed = button_width(ui, lead) + gap + save_w + gap + EXPORT_WIDTH;
+    fit(ui, fixed + min_path);
     let mut chars =
         (((room(ui) - fixed - gap) / glyph).floor().max(0.0) as usize).max(PATH_MIN_CHARS);
-    let full = export_folder_shown(model);
     let others = gap + save_w + gap + EXPORT_WIDTH;
     let text = loop {
-        let shown = match &full {
-            Some(p) => elide_middle(p, chars),
-            None => "not set".to_string(),
+        let Some(p) = &full else {
+            break MORE_TEXT.to_string();
         };
-        let text = format!("Export to: {shown} ▾");
+        let text = format!("Export to: {} ▾", elide_middle(p, chars));
         // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
-        if full.is_none()
-            || chars <= PATH_MIN_CHARS
-            || button_width(ui, &text) + others <= room(ui) - 0.5
-        {
+        if chars <= PATH_MIN_CHARS || button_width(ui, &text) + others <= room(ui) - 0.5 {
             break text;
         }
         chars -= 1;
@@ -176,12 +182,6 @@ pub fn elide_middle(path: &str, max_chars: usize) -> String {
     format!("{head}{tail}")
 }
 
-/// The folder an export would write to: the setting, else `<root>/sdc-out`; None with neither.
-fn export_folder_shown(model: &AppModel) -> Option<String> {
-    (model.settings.export_folder.is_some() || model.root.is_some())
-        .then(|| model.export_root().display().to_string())
-}
-
 /// What is left of this line of a wrapped row.
 fn room(ui: &egui::Ui) -> f32 {
     ui.max_rect().right() - ui.cursor().min.x
@@ -210,15 +210,9 @@ pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> 
     true
 }
 
-/// A12: the green dot on Export: a folder is open, something would be written and no problem that takes "ready"
-/// away is listed (artist checks never do, owner answer 1).
-pub fn export_dot(model: &AppModel) -> bool {
-    model.root.is_some()
-        && crate::model::bottom::flagged(model).ready_rows == 0
-        && model.export_files() > 0
-}
-
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
+/// Note FB1: it reads `Review {n} files` in the plain button colour until Review would write without skipping
+/// anything, then `Export {n} files`, accent-filled. A click opens Review either way (CA1); a clean project exports.
 fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     let can_export = model.can_export();
     let running = model.export.running.is_some();
@@ -228,25 +222,22 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     } else {
         size.y
     };
-    let mut export = egui::Button::new(egui::RichText::new("Export").strong())
+    let mut export = egui::Button::new(egui::RichText::new(model.header_export_text()).strong())
         .min_size(egui::vec2(size.x, button_h));
-    // CF11: the accent and the dot fade in (0.15 s) and snap out. Asked every frame, so losing readiness resets them.
+    // CF11: the accent fades in (0.15 s) and snaps out. Asked every frame, so losing readiness resets it.
     let ctx = ui.ctx().clone();
-    let fade = |id: &str, on: bool| {
-        let secs = if on {
-            super::motion::fade_dur(&ctx, 0.15)
-        } else {
-            0.0
-        };
-        ctx.animate_bool_with_time_and_easing(
-            egui::Id::new(id),
-            on,
-            secs,
-            egui::emath::easing::cubic_out,
-        )
+    let clean = model.export_is_clean();
+    let secs = if clean {
+        super::motion::fade_dur(&ctx, 0.15)
+    } else {
+        0.0
     };
-    let t = fade("header-export-ready", can_export);
-    let t_dot = fade("header-export-dot", export_dot(model));
+    let t = ctx.animate_bool_with_time_and_easing(
+        egui::Id::new("header-export-ready"),
+        clean,
+        secs,
+        egui::emath::easing::cubic_out,
+    );
     if t > 0.0 {
         let v = ui.visuals();
         export = export.fill(
@@ -258,7 +249,7 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     }
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
         // Export saves first: like Save, wait for a focused field to commit (Note BS14).
-        // A12: the hover counts the files and the problems; a green dot says there are none.
+        // A12: the hover counts the files and the problems. FB1: and, while it reads Review, what is still open.
         // Built lazily, only while hovered (ui-rules 9.3).
         let hover = |ui: &mut egui::Ui| {
             // Meshes UI T3 (owner OK 2026-10-22): the Meshes view has a second export, for NIF edits.
@@ -266,17 +257,17 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
                 ui.label("Exports textures. NIF edits export with Export NIF in the edit panel.");
             }
             ui.label(export_hover(model));
+            if !clean {
+                match model.review_gate() {
+                    Err(why) => ui.label(format!("Review first: {why}")),
+                    Ok(_) => ui.label(format!("Review first: {} undecided", model.undecided())),
+                };
+            }
         };
         let r = ui
             .add_enabled(can_export, export)
             .on_hover_ui(hover)
             .on_disabled_hover_ui(hover);
-        // No dot with nothing open or nothing to export: it would say "ready" about an empty project.
-        if t_dot > 0.0 {
-            let at = r.rect.left_center() + egui::vec2(10.0, 0.0);
-            ui.painter()
-                .circle_filled(at, 4.0, super::status::GREEN.gamma_multiply(t_dot));
-        }
         if r.clicked() && !field_focused(ui, model, "Export") {
             model.export_clicked();
         }
@@ -715,9 +706,9 @@ pub fn meshes_view_active(ctx: &egui::Context) -> bool {
 }
 
 /// Export to ▾ (A4): `text` shows the folder cut in the middle; the hover and the accessible name keep all of it (K8).
-/// Entries: Choose export folder…, Open export folder and, in cs mode, the PGPatcher JSON editor (R14).
+/// Without a chosen folder (`full` None, Note FB1) it is "More ▾". Entries: Choose export folder…, Open export folder
+/// and, in cs mode, the PGPatcher JSON editor (R14).
 fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: Option<String>) {
-    let full = full.unwrap_or_else(|| "not set".to_string());
     let mut choose = false;
     let mut open = false;
     let mut json = false;
@@ -772,13 +763,19 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
             ui.close();
         }
     });
-    let name = format!("Export to: {full}");
+    let name = match &full {
+        Some(f) => format!("Export to: {f}"),
+        None => "More export options".to_string(),
+    };
     let enabled = ui.is_enabled();
     r.response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
-    r.response.on_hover_text(full);
+    r.response.on_hover_text(match full {
+        Some(f) => f,
+        None => "No export folder chosen yet: choose one here or in Review".to_string(),
+    });
     if choose {
-        model.pick(ui.ctx(), PickerPurpose::ExportFolder, PickerSpec::folder());
+        model.pick_export_folder(ui.ctx());
     }
     if open {
         // As the Files tab's: the entry is enabled only when the folder is there.

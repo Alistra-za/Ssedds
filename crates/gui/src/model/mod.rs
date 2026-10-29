@@ -885,13 +885,21 @@ impl AppModel {
         self.sets_root.clone().unwrap_or_else(|| self.export_root())
     }
 
-    /// The project's export folder (`sdc-project.toml`, Note BV6), else the app-wide one from `gui.toml` (the
-    /// value from before per-project folders, now only a default), else `<root>/sdc-out`.
+    /// The export folder the user chose for this project (Note FB1): with a usable project document (loaded, not
+    /// read-only) its `[project] export_folder`, and nothing else, so a folder picked for another mod is never
+    /// inherited. Without one (no folder open, or an `sdc-project.toml` that does not parse) the pick lives in
+    /// `gui.toml` (Note BV6), so that is the choice.
+    pub fn export_folder_chosen(&self) -> Option<PathBuf> {
+        match self.sets_doc.as_ref().filter(|d| !d.read_only()) {
+            Some(d) => d.export_folder(),
+            None => self.settings.export_folder.clone(),
+        }
+    }
+
+    /// Where an export would write: the chosen folder, else `<root>/sdc-out` (only a place to name; Review blocks the
+    /// export until a folder is chosen, Note FB1).
     pub fn export_root(&self) -> PathBuf {
-        self.sets_doc
-            .as_ref()
-            .and_then(|d| d.export_folder())
-            .or_else(|| self.settings.export_folder.clone())
+        self.export_folder_chosen()
             .unwrap_or_else(|| self.root.clone().unwrap_or_default().join("sdc-out"))
     }
 
@@ -1686,7 +1694,13 @@ impl AppModel {
         let asks = !pbr_export::export_asks(self).is_empty();
         // R6: an edited PGPatcher JSON is asked about in Review, before the export (C4).
         // Note CN (C1, owner answer 5): a tick opens Review; its Export is the only way to an Also export.
-        if asks || self.undecided() > 0 || self.pgp_json_edited() || self.also_on() {
+        // Note FB1: no chosen folder is a Review blocker, so the click lists it there instead of writing to `sdc-out`.
+        if asks
+            || self.undecided() > 0
+            || self.pgp_json_edited()
+            || self.also_on()
+            || self.export_folder_chosen().is_none()
+        {
             self.open_review();
             return;
         }
@@ -3697,6 +3711,8 @@ mod tests {
         m.accept = AcceptSuggestions::None;
         m.open_folder(d.join("textures"));
         assert!(m.wait_idle(Duration::from_secs(60)));
+        m.set_export_folder(d.join("export"));
+        assert!(m.wait_idle(Duration::from_secs(60)));
         m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
         m.decide(
             "landscape/rock01_normal.png",
@@ -3893,6 +3909,8 @@ mod tests {
             Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
         let mut m = AppModel::new(settings, None, session);
         m.open_folder(r);
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        m.set_export_folder(d.join("export"));
         assert!(m.wait_idle(Duration::from_secs(60)));
         m
     }

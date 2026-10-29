@@ -6,6 +6,7 @@ use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use sdc_gui::app::SdcApp;
 use std::path::Path;
+use support::header_export_label;
 
 /// As ui_shots: `%LOCALAPPDATA%` and `%APPDATA%` point into `tmp`, so nothing reaches the real sdc folders.
 fn redirect_app_data(tmp: &Path) {
@@ -34,13 +35,14 @@ fn the_meshes_view_keeps_the_header() {
     sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
     h.run_steps(4);
     assert!(sdc_gui::ui::header::meshes_view_active(&h.ctx));
-    for l in ["Undo", "Save", "Export", "Meshes view", "MO2…"] {
+    for l in ["Undo", "Save", "Meshes view", "MO2…"] {
         h.get_by_label(l);
     }
     // K3: the bottom panel's strip is drawn too, under the header.
     h.get_by_label("Files");
+    header_export_label(&h);
     // Meshes UI T3 (owner decision 4): in the Meshes view the textures Export's hover says where NIF edits export.
-    h.get_by_label("Export").hover();
+    h.get_by_label(&header_export_label(&h)).hover();
     h.run();
     h.get_by_label_contains("NIF edits export with Export NIF in the edit panel.");
 }

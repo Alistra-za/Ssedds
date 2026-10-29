@@ -44,9 +44,10 @@ fn the_start_screen_offers_open_folder_recent_and_the_drop_hint() {
         h.query_all_by_label("Sets").next().is_none(),
         "no Sets column"
     );
-    for l in ["Mode", "Export", "Save"] {
+    for l in ["Mode", "Save"] {
         h.get_by_label(l);
     }
+    header_export_label(&h);
 }
 
 #[test]
@@ -472,7 +473,10 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    press(&mut h, "Export");
+    {
+        let l = header_export_label(&h);
+        press(&mut h, &l);
+    }
     // Export opens the Review tab, not a modal, and starts nothing.
     assert!(h.state().review.is_some() && h.state().dialog.is_none());
     h.get_by_label("Undecided");
@@ -482,7 +486,10 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     press(&mut h, "Close");
     assert!(h.state().review.is_none() && !h.state().bottom.open);
     assert!(h.state().export.running.is_none() && h.state().export.summary.is_none());
-    press(&mut h, "Export");
+    {
+        let l = header_export_label(&h);
+        press(&mut h, &l);
+    }
     let skip = h.state().review_button_text();
     assert!(skip.ends_with("undecided)"), "{skip}");
     press(&mut h, &skip);
@@ -1052,19 +1059,23 @@ fn closing_during_an_export_asks_and_keep_running_leaves_it_alone() {
 }
 
 #[test]
-fn the_header_shows_the_effective_export_folder() {
+fn the_header_shows_the_chosen_export_folder() {
     let d = tempfile::tempdir().unwrap();
     let root = mod_folder(d.path());
     let mut model = AppModel::new(GuiSettings::default(), None, session());
     model.accept = engine::policy::AcceptSuggestions::None;
-    model.open_folder(root.clone());
+    model.open_folder(root);
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    // Note FB1: nothing is shown (and no "not set") until a folder is chosen.
     let mut h = harness(model);
     h.run();
-    // K8: the accessible name keeps the whole path; the button text may cut it.
-    let want = format!("Export to: {}", root.join("sdc-out").display());
-    h.get_by_label(&want);
+    assert!(h.query_by_label_contains("Export to").is_none());
     assert!(h.query_by_label_contains("not set").is_none());
+    let out = d.path().join("out");
+    h.state_mut().set_export_folder(out.clone());
+    settle(&mut h);
+    // K8: the accessible name keeps the whole path; the button text may cut it.
+    h.get_by_label(&format!("Export to: {}", out.display()));
 }
 
 #[test]
@@ -1082,12 +1093,18 @@ fn export_is_disabled_while_sdc_toml_is_ignored() {
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
     h.run();
-    assert!(h.get_by_label("Export").accesskit_node().is_disabled());
+    assert!(h
+        .get_by_label(&header_export_label(&h))
+        .accesskit_node()
+        .is_disabled());
     // A healthy folder has it enabled.
     let d2 = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d2.path()));
     h.run();
-    assert!(!h.get_by_label("Export").accesskit_node().is_disabled());
+    assert!(!h
+        .get_by_label(&header_export_label(&h))
+        .accesskit_node()
+        .is_disabled());
 }
 
 #[test]
@@ -1273,7 +1290,7 @@ fn the_preview_has_a_close_button_that_collapses_it() {
 fn the_export_button_is_big_enough_to_find() {
     let mut h = harness(AppModel::placeholder(GuiSettings::default()));
     h.run();
-    let r = h.get_by_label("Export").rect();
+    let r = h.get_by_label(&header_export_label(&h)).rect();
     assert!(r.width() >= 110.0 && r.height() >= 28.0, "{r:?}");
 }
 

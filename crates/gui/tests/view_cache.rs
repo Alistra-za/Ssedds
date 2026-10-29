@@ -22,7 +22,7 @@ fn set_views_are_cached_until_an_input_changes() {
     assert!(!views(&m).iter().any(|v| v.id == "landscape/stone"));
     // The export folder.
     let before = views(&m);
-    m.settings.export_folder = Some(d.path().join("elsewhere"));
+    m.set_export_folder(d.path().join("elsewhere"));
     assert!(!Arc::ptr_eq(&before, &views(&m)));
     // An in-place write, announced.
     let before = views(&m);

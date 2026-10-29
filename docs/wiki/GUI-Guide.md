@@ -37,7 +37,7 @@ The line under the header is the status line: the file and set counts, a VRAM es
 | **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. Its last entry, **Presets…**, opens the preset creator (see [Presets](#presets)). |
 | **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
 | **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. Right after the view tabs, Textures view with a folder open only. |
-| **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. By default `sdc-out` inside the opened folder (or the export folder older versions saved for every project). A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor window; the JSON's file name is its top field). |
+| **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. It is not drawn until you choose a folder for the project (the folder you picked for another mod is not inherited); the menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor window; the JSON's file name is its top field). |
 | **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Left of Export. |
 | **Export** | Convert the folder. The big button at the right edge. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the Files tab). |
 
@@ -425,7 +425,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 
 ## Artist checks
 
-Six checks look at the numbers Tessalith measures while it plans and warn about maps that will probably look wrong in game. They only warn: no check blocks an export, asks a question or changes "ready" (no amber dot on a tile or set, and the header **Export** dot stays green). Each has a switch in **Advanced → Checks**, on by default; a switch hides its results at once.
+Six checks look at the numbers Tessalith measures while it plans and warn about maps that will probably look wrong in game. They only warn: no check blocks an export, asks a question or changes "ready" (no amber dot on a tile or set, and the header **Export** button does not change). Each has a switch in **Advanced → Checks**, on by default; a switch hides its results at once.
 
 | Check | Flags |
 |---|---|

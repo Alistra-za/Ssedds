@@ -657,7 +657,7 @@ fn header_export_click_with_focused_field_does_not_save_stale_value() {
     focus(&mut h);
     clear_and_type(&mut h, "rock02");
     let p = h
-        .query_all_by_label("Export")
+        .query_all_by_label(&header_export_label(&h))
         .next()
         .unwrap()
         .rect()

@@ -85,7 +85,8 @@ fn export_refuses_the_input_folder_or_an_ancestor() {
     assert!(export_folder_problem(root, Path::new("D:/out")).is_none());
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    m.settings.export_folder = m.root.clone();
+    let root = m.root.clone().unwrap();
+    choose_export(&mut m, root);
     m.export_clicked();
     assert!(matches!(m.dialog, Some(Dialog::Error(ref e)) if e.contains("export folder")));
     assert!(m.export.running.is_none());

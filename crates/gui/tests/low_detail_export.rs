@@ -65,6 +65,7 @@ fn opened(dir: &Path, hold: bool) -> AppModel {
     let mut m = AppModel::new(settings, None, support::session());
     m.open_folder(root);
     assert!(m.wait_idle(WAIT), "planning did not finish");
+    support::choose_export(&mut m, dir.join("export"));
     m
 }
 
@@ -597,6 +598,7 @@ fn pbr_held(dir: &Path) -> AppModel {
     m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(dir.join("textures"));
     assert!(m.wait_idle(WAIT));
+    support::choose_export(&mut m, dir.join("export"));
     m.decide(
         "landscape/rock01.png",
         Answer::Subtype(engine::config::Subtype::PbrAlbedo),

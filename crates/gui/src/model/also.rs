@@ -155,9 +155,9 @@ impl AppModel {
     }
 
     /// Note CI29 / P16: where NIF edits go, handed to the Meshes model every frame by `app.rs`: `output_root()` when
-    /// the Textures side has an export folder (a setting or an open project), else `None` (the CI3 fallback).
+    /// an export folder is chosen for the project, else `None` (the CI3 fallback; Note FB1: never `<root>\sdc-out`).
     pub fn nif_export_root(&self) -> Option<PathBuf> {
-        (self.settings.export_folder.is_some() || self.root.is_some()).then(|| self.output_root())
+        self.export_folder_chosen().map(|_| self.output_root())
     }
 
     /// What "Copy CLI command" passes as `-o` (P14): the location while a tick is on (the CLI reads `[export]`).
