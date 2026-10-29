@@ -655,9 +655,7 @@ fn known_row(
         set_name(&r, egui::WidgetType::Button, label, None, None);
         if r.clicked() {
             let value = match k.value {
-                KnownValue::Text(_) => {
-                    ExtraValue::Str(std::mem::take(&mut st.text).trim().into())
-                }
+                KnownValue::Text(_) => ExtraValue::Str(std::mem::take(&mut st.text).trim().into()),
                 KnownValue::Fixed(f) => f(),
                 // The heel entry has its own row (`heel_row`); nothing to add here (T5b review Minor 8).
                 KnownValue::Heel => return,

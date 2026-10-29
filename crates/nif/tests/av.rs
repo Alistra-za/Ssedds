@@ -8,7 +8,7 @@ use nif::header::Header;
 #[test]
 fn av_head_reads_transform_and_stops_before_the_subclass_fields() {
     let mut f = Nif::new(100);
-    let name = f.string("Root"); // named, but the head does not decode it
+    let name = f.string("Root");
     // name, 2 extra-data refs, controller, flags, t, R (row triples), scale, collision | then NiNode: 0 children
     let body = W::default()
         .i32(name)

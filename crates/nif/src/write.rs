@@ -179,7 +179,8 @@ pub fn block_diff(old: &[u8], new: &[u8]) -> Result<Vec<String>, NifError> {
     let (ho, hn) = (Header::parse(old)?, Header::parse(new)?);
     ho.check_file_length(old)?;
     hn.check_file_length(new)?;
-    let name = |h: &Header, i: usize| crate::text::label(&String::from_utf8_lossy(h.kind(i))).into_owned();
+    let name =
+        |h: &Header, i: usize| crate::text::label(&String::from_utf8_lossy(h.kind(i))).into_owned();
     let body = |h: &Header, i: usize| -> std::ops::Range<usize> {
         h.offsets[i]..h.offsets[i] + h.sizes[i] as usize
     };
