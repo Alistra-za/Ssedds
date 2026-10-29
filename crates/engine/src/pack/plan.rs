@@ -3,8 +3,8 @@
 //! raw jobs), then assembles, analyses and resolves each [`Candidate`] with [`finish_recipe`] (pass 2).
 use super::assemble::{check_sizes, sizes, PackError};
 use super::{
-    file_name as name, recipes_for_with, resolve_channels, ChannelSource, PackJob, PackSource,
-    RawInput, RecipeKind, Slot,
+    file_name as name, recipes_for_sel, recipes_for_with, resolve_channels, ChannelSource, PackJob,
+    PackSource, RawInput, RecipeKind, Slot,
 };
 use crate::analyse::{analyse, Analysis};
 use crate::api::SkippedFile;
@@ -120,13 +120,60 @@ pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
 }
 
 pub(crate) fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
-    let stem = first_source
+    format!("{}_{suffix}", source_base(first_source))
+}
+
+/// The base a source names a packed output after: its stem without a recognised suffix.
+fn source_base(p: &Path) -> String {
+    let stem = p
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let base = split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b);
-    format!("{base}_{suffix}")
+    split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b)
+}
+
+/// Note DY: a hand-role helper that `group::join_helpers` moved into set `x` (`x_mask`) names a packed output as the
+/// set's own members do (`x_rmaos`, with its `[files]` key): each such member with `rel` renamed to the stem of a
+/// member whose base is the set's. The whole stem, never the bare base: `virtual_stem_as` parses the name again, and
+/// a base that itself ends in a term (`x_ao`) would be cut twice. Empty for every set without a joined helper, so
+/// other names never change.
+fn joined_helper_names(
+    ctx: &ResolveCtx,
+    set: &TextureSet,
+    files: &[InputFile],
+) -> Vec<(PathBuf, InputFile)> {
+    let key_base = set
+        .key
+        .rsplit_once('/')
+        .map_or(set.key.as_str(), |(_, b)| b);
+    let own = |f: &InputFile| source_base(&f.rel).to_lowercase() == key_base;
+    let Some(stem) = set
+        .members
+        .iter()
+        .map(|&i| &files[i])
+        .find(|f| own(f))
+        .map(|f| f.rel.file_stem().unwrap_or_default().to_string_lossy())
+    else {
+        return vec![];
+    };
+    set.members
+        .iter()
+        .map(|&i| &files[i])
+        .filter(|f| {
+            f.kind == InputKind::Image
+                && !own(f)
+                && crate::policy::helper_requested(ctx, f)
+                    .role
+                    .is_some_and(|r| r != crate::helper::HelperRole::NotHelper)
+        })
+        .map(|f| {
+            let ext = f.rel.extension().unwrap_or_default().to_string_lossy();
+            let mut g = f.clone();
+            g.rel = f.rel.with_file_name(format!("{stem}.{ext}"));
+            (f.path.clone(), g)
+        })
+        .collect()
 }
 
 /// A recipe that passed pass 1: assembled, analysed and resolved in pass 2.
@@ -362,6 +409,7 @@ pub(crate) fn recipe_error_job(
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }
 
@@ -398,6 +446,7 @@ fn chosen_recipe(
     set: &TextureSet,
     member: &dyn Fn(&Path) -> InputFile,
     raw: &[RawInput],
+    sel: &BTreeMap<PathBuf, crate::helper::HelperSel>,
     pa: &Analysis,
     pinfo: &SourceInfo,
 ) -> (PackRecipe, Option<(Code, String)>) {
@@ -405,11 +454,16 @@ fn chosen_recipe(
     if ctx.target != Target::Cs || raw.iter().any(|r| r.role == RawMap::Rmaos) {
         return (PackRecipe::Auto, None);
     }
-    let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto, false);
-    let Some(base) = auto
-        .iter()
-        .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
-    else {
+    // Note DY: a hand-set fill may build the `_rfaos`/`_rmaos` only under its own recipe (a lone `_specular` filling
+    // `rfaos.a`), so those are probed after `auto`. Without hand-set fills they add nothing: their triggers are a
+    // subset of `auto`'s.
+    let probes = [PackRecipe::Auto, PackRecipe::Rfaos, PackRecipe::Rmaos].map(|p| {
+        recipes_for_sel(ctx.target, raw, p, false, sel)
+            .0
+            .into_iter()
+            .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
+    });
+    let Some(base) = probes.iter().flatten().next() else {
         return (PackRecipe::Auto, None);
     };
     let first = &base.sources()[0].0;
@@ -425,12 +479,16 @@ fn chosen_recipe(
     let (rfaos_key, on_rfaos) = read(RecipeKind::Rfaos);
     let (rmaos_key, on_rmaos) = read(RecipeKind::Rmaos);
     // Note DV1: a set whose chosen shader is Advanced Skin packs `_rfaos` unless a recipe is written; the user wrote
-    // none, so a set that cannot build it keeps `auto` without a notice.
+    // none, so a set that cannot build it keeps `auto` without a notice. Final review M2: a hand-set `rfaos.*` fill
+    // also builds it; the plain test runs first so a hand fill never takes an `_rfaos` away (DV1 unchanged).
     if chosen_skin(ctx, set) && on_rfaos == PackRecipe::Auto && on_rmaos == PackRecipe::Auto {
-        let built = recipes_for_with(ctx.target, raw, PackRecipe::Rfaos, false)
-            .0
-            .iter()
-            .any(|r| r.kind == RecipeKind::Rfaos);
+        let rfaos = |s: &BTreeMap<PathBuf, crate::helper::HelperSel>| {
+            recipes_for_sel(ctx.target, raw, PackRecipe::Rfaos, false, s)
+                .0
+                .iter()
+                .any(|r| r.kind == RecipeKind::Rfaos)
+        };
+        let built = rfaos(&BTreeMap::new()) || rfaos(sel);
         let pick = if built {
             PackRecipe::Rfaos
         } else {
@@ -452,7 +510,7 @@ fn chosen_recipe(
         on_rmaos
     };
     if pick == PackRecipe::Rfaos
-        && !recipes_for_with(ctx.target, raw, pick, false)
+        && !recipes_for_sel(ctx.target, raw, pick, false, sel)
             .0
             .iter()
             .any(|r| r.kind == RecipeKind::Rfaos)
@@ -530,7 +588,15 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
         .map_or_else(|| "png".to_string(), |e| e.to_string_lossy().into_owned());
     let mut this = this.clone();
     this.rel = this.rel.with_file_name(format!("{base}_ao.{ext}"));
-    let (choice, _) = chosen_recipe(ctx, set, &|_| this.clone(), &raw, &pa, &pinfo);
+    let (choice, _) = chosen_recipe(
+        ctx,
+        set,
+        &|_| this.clone(),
+        &raw,
+        &BTreeMap::new(),
+        &pa,
+        &pinfo,
+    );
     recipes_for_with(ctx.target, &raw, choice, false)
         .0
         .iter()
@@ -582,6 +648,7 @@ pub fn plan_packing(
     packed_outputs: &BTreeMap<(String, String), PathBuf>,
     derive_heights: &BTreeSet<PathBuf>,
     flat_b: &BTreeSet<PathBuf>,
+    fills: &crate::helper::plan::FillPlan,
 ) -> PackPlan {
     let (pa, pinfo) = placeholder();
     let mut out = PackPlan {
@@ -600,29 +667,45 @@ pub fn plan_packing(
             _ => None,
         })
         .collect();
+    let renamed: BTreeMap<PathBuf, InputFile> = sets
+        .iter()
+        .flat_map(|set| joined_helper_names(ctx, set, files))
+        .collect();
     for set in sets {
         // Raw members still waiting for a recipe: a planned packing input, or one that failed to load or was
         // cancelled before its Load. A raw map whose sub-type a rule or `--set` named is an ordinary file
         // (spec §4.4) and takes no part.
         let mut raw = vec![];
         let mut members: BTreeMap<PathBuf, &InputFile> = BTreeMap::new();
+        let mut sel = BTreeMap::new();
         for &i in &set.members {
             let f = &files[i];
-            let Some(role) = raw_role(f)
-                .or_else(|| {
-                    // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing).
-                    (f.kind == InputKind::Image)
-                        .then(|| waiting.get(&f.path).copied())
-                        .flatten()
-                })
-                .or_else(|| {
+            // Images only: a re-encoded raw-map DDS keeps its old behaviour (no part in packing). The job's role comes
+            // first: a hand-set `helper.role` (Note DY) overrides the name's.
+            let image = f.kind == InputKind::Image;
+            let by_name = || {
+                raw_role(f).or_else(|| {
                     // A failed or cancelled file has no job, so a skin `_f` is recognised by the same test as policy.
                     // shortcut: a rule-named sub-type needs the analysis a failed file lacks, so it is not seen here.
                     ((failed.contains(&f.path) || cancelled.contains(&f.path))
                         && is_skin_f(ctx, set, f))
                     .then_some(RawMap::Fuzz)
                 })
-            else {
+            };
+            let role = match image.then(|| waiting.get(&f.path).copied()).flatten() {
+                Some(r) => Some(r),
+                // A failed or cancelled image has no job: its hand-set role decides as policy's would; `none` or a
+                // layer role leaves it out of packing.
+                None => match image
+                    .then(|| crate::policy::helper_requested(ctx, f).role)
+                    .flatten()
+                {
+                    Some(crate::helper::HelperRole::Raw(r)) => Some(r),
+                    Some(_) => None,
+                    None => by_name(),
+                },
+            };
+            let Some(role) = role else {
                 continue;
             };
             if waiting.contains_key(&f.path)
@@ -633,7 +716,12 @@ pub fn plan_packing(
                     path: f.path.clone(),
                     role,
                 });
-                members.insert(f.path.clone(), f);
+                members.insert(f.path.clone(), renamed.get(&f.path).unwrap_or(f));
+                // Note DY: its hand-set fills, read and invert.
+                let s = crate::policy::helper_requested(ctx, f);
+                if s != crate::helper::HelperSel::default() {
+                    sel.insert(f.path.clone(), s);
+                }
             }
         }
         if ctx.target == Target::Cs {
@@ -653,13 +741,13 @@ pub fn plan_packing(
             continue;
         }
         let (choice, recipe_note) =
-            chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &pa, &pinfo);
+            chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &sel, &pa, &pinfo);
         // Note AZ: a vanilla set whose shader pick is complex material packs the complex `_m`.
         let complex = ctx
             .shaders
             .get(&set.key)
             .is_some_and(|p| p.shader == crate::shader::Shader::ComplexMaterial);
-        let (mut recipes, mut unused) = recipes_for_with(ctx.target, &raw, choice, complex);
+        let (mut recipes, mut unused) = recipes_for_sel(ctx.target, &raw, choice, complex, &sel);
         if let Some(i) = unused
             .iter()
             .position(|u| u.role == RawMap::Height && derive_heights.contains(&u.path))
@@ -896,6 +984,14 @@ pub fn plan_packing(
             }
             reports.push(report);
             let job = PackJob {
+                // Note DY21: a hand-set `helper.fills` on any source makes the record name every source's channels.
+                hand_placed: recipe.sources().iter().any(|(p, _)| {
+                    files.iter().any(|f| {
+                        f.path == *p
+                            && f.kind == InputKind::Image
+                            && crate::policy::helper_requested(ctx, f).fills.is_some()
+                    })
+                }),
                 kind: recipe.kind,
                 channels,
                 gray,
@@ -904,6 +1000,12 @@ pub fn plan_packing(
                     .into_iter()
                     .map(|(path, role)| PackSource {
                         stamp: SourceStamp::of(&path),
+                        // Note DY: every source's explicit read, a pre-packed `_rmaos`/`_rfaos` image too
+                        // (`prepacked_b`), whose channels it does not change.
+                        read: files
+                            .iter()
+                            .find(|f| f.path == path && f.kind == InputKind::Image)
+                            .and_then(|f| crate::policy::helper_requested(ctx, f).read),
                         path,
                         role,
                     })
@@ -929,6 +1031,11 @@ pub fn plan_packing(
             });
         }
         for (p, reason) in unused {
+            // Note DY: an alpha fill consumes it (below); otherwise its alpha reason says more than packing's.
+            if fills.used.contains(&p) {
+                continue;
+            }
+            let reason = fills.not_used.get(&p).cloned().unwrap_or(reason);
             if !failed.contains(&p) {
                 retag(
                     jobs,
@@ -940,6 +1047,8 @@ pub fn plan_packing(
         }
         out.reports.insert(set.key.clone(), reports);
     }
+    // Note DY: a helper an alpha fill uses is consumed too, whatever packing did with it.
+    consumed.extend(fills.used.iter().cloned());
     // DECISIONS Note M8: the recipe job stands for the raw jobs it consumed.
     jobs.retain(|j| {
         !(consumed.contains(&j.input) && matches!(j.status, JobStatus::PackingInput { .. }))

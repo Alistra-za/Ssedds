@@ -23,7 +23,7 @@ fn name(p: &Path) -> String {
 }
 
 /// A base job of the set: planned, not packed, a sub-type with an `rnm_base`.
-fn base_kind(j: &ResolvedJob) -> Option<RnmTarget> {
+pub(crate) fn base_kind(j: &ResolvedJob) -> Option<RnmTarget> {
     if j.pack.is_some()
         || matches!(
             j.status,
@@ -44,15 +44,24 @@ fn targets(
     has_n: bool,
     has_cnr: bool,
 ) -> Vec<RnmTarget> {
-    let t = requested.or(term.prefix).unwrap_or(if !has_n && has_cnr {
-        RnmTarget::Cnr
-    } else {
-        RnmTarget::N
-    });
-    match t {
+    match effective_target(term.prefix, requested, has_n, has_cnr) {
         RnmTarget::Both => vec![RnmTarget::N, RnmTarget::Cnr],
         one => vec![one],
     }
+}
+
+/// The `rnm.target` a layer has in effect: `requested`, else its name's `prefix`, else `n` falling back to `cnr`.
+pub(crate) fn effective_target(
+    prefix: Option<RnmTarget>,
+    requested: Option<RnmTarget>,
+    has_n: bool,
+    has_cnr: bool,
+) -> RnmTarget {
+    requested.or(prefix).unwrap_or(if !has_n && has_cnr {
+        RnmTarget::Cnr
+    } else {
+        RnmTarget::N
+    })
 }
 
 /// Rank of a candidate for one layer in a base `kind`'s stack, lowest first (Note W4).

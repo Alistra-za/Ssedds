@@ -32,6 +32,11 @@ pub(crate) fn sizes(s: &[(PathBuf, u32, u32)]) -> String {
         .join(", ")
 }
 
+/// Rec. 709 luma of a texel ([`super::LUMA_CHANNEL`]); shared with `helper::apply_fill`.
+pub(crate) fn luma(q: &[f32; 4]) -> f32 {
+    0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2]
+}
+
 pub struct Assembled {
     pub image: Rgba32F,
     /// Largest bit depth, any float source, 4 channels; `has_alpha` unless the alpha channel is `Opaque`.
@@ -141,7 +146,8 @@ pub fn assemble_channels_with(
                 _ => None,
             })
             .collect();
-        // An `_orm` is colour by design (Note AL): never `CHAN-NOT-GRAY`.
+        // An `_orm` is colour by design (Note AL), and an explicit `helper.read` chose its channel (Note DY): never
+        // `CHAN-NOT-GRAY`.
         let multi = targets.iter().any(|t| t.2.is_some());
         let (src, si) = load(&s.path)?;
         // `check_sizes` read the headers; a file replaced since then is caught here.
@@ -156,12 +162,17 @@ pub fn assemble_channels_with(
         let mut all_grey = true;
         for (o, q) in image.px.iter_mut().zip(&src.px) {
             all_grey &= grey(q);
+            let luma = luma(q);
             let v = match gray {
                 GraySource::R => q[0],
-                GraySource::Luma => 0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2],
+                GraySource::Luma => luma,
             };
             for &(c, invert, channel) in &targets {
-                let v = channel.map_or(v, |k| q[usize::from(k)]);
+                let v = match channel {
+                    None => v,
+                    Some(super::LUMA_CHANNEL) => luma,
+                    Some(k) => q[usize::from(k)],
+                };
                 o[c] = if invert { 1.0 - v } else { v };
             }
         }

@@ -274,6 +274,10 @@ pub const FIELD_PATHS: &[&str] = &[
     "rnm.bent.ao_power",
     "rnm.bent.ao",
     "rnm.target",
+    "helper.role",
+    "helper.fills",
+    "helper.read",
+    "helper.invert",
     "cubemap.style",
     "cubemap.layout",
     "cubemap.face_size",
@@ -299,9 +303,9 @@ pub const REENCODE_FIELD: &str = "reencode";
 /// M6 Track F2 (DECISIONS Note W3): which base normal a layer file feeds; a per-file selector, not a profile field.
 pub const RNM_TARGET_FIELD: &str = "rnm.target";
 
-/// A plan-time per-file selector (`reencode`, `rnm.target`): never merged into a profile.
+/// A plan-time per-file selector (`reencode`, `rnm.target`, `helper.*`): never merged into a profile.
 pub fn is_selector(field: &str) -> bool {
-    field == REENCODE_FIELD || field == RNM_TARGET_FIELD
+    field == REENCODE_FIELD || field == RNM_TARGET_FIELD || crate::helper::FIELDS.contains(&field)
 }
 
 /// `rnm.target`'s value, when it is one of `n`, `cnr`, `both`.
@@ -358,6 +362,11 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
                 "--set '{s}': rnm.target is decided per layer file: use rnm.target=<n|cnr|both> or file:<glob>.rnm.target=<…>"
             ));
         }
+        if crate::helper::FIELDS.contains(&field) {
+            return Err(format!(
+                "--set '{s}': {field} is decided per file, before the sub-type: use file:<glob>.{field}=<…>"
+            ));
+        }
         if !known(field) {
             return Err(format!("--set '{s}': unknown field '{field}'"));
         }
@@ -395,6 +404,12 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
         crate::policy::compile_glob(glob).map_err(|e| format!("--set '{s}': {e}"))?;
         (Scope::File(glob.to_string()), *field)
     } else if known(key) {
+        // Note DY: a helper is one file; an unscoped key would make every image one.
+        if crate::helper::FIELDS.contains(&key) {
+            return Err(format!(
+                "--set '{s}': {key} is set per file: use file:<glob>.{key}=<…>"
+            ));
+        }
         (Scope::All, key)
     } else {
         return Err(format!("--set '{s}': unknown field '{key}'"));
@@ -408,6 +423,9 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
     }
     if field == RNM_TARGET_FIELD && rnm_target_value(&value).is_none() {
         return Err(format!("--set '{s}': rnm.target takes n, cnr or both"));
+    }
+    if let Some(e) = crate::helper::value_error(field, &value) {
+        return Err(format!("--set '{s}': {e}"));
     }
     Ok(SetOverride {
         scope,

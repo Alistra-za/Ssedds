@@ -896,6 +896,54 @@ fn raw_maps_pack_and_unused_ones_are_not_a_failure() {
     assert!(!fx.dds("textures/a/tile_opacity.dds").exists());
 }
 
+/// Helper textures (spec Goal 8, Note DY): the `helper.*` keys in `sdc.toml` work in the CLI as in the GUI, and the
+/// CLI writes what the engine writes.
+#[test]
+fn helper_keys_in_sdc_toml_match_the_gui() {
+    use engine::api::{BatchRequest, CancelToken, Engine};
+    use engine::config::Target;
+    use engine::events::{Reporter, VecSink};
+    use engine::overrides::parse_set;
+    use image::Luma;
+    use std::sync::Arc;
+    let fx = Fx::new();
+    fx.rgb("x.png");
+    let mask = |x: u32, y: u32| {
+        if (x / 8 + y / 8).is_multiple_of(2) {
+            255u8
+        } else {
+            0
+        }
+    };
+    ImageBuffer::from_fn(32, 32, |x, y| Luma([mask(x, y)]))
+        .save(fx.p("in/textures/a/x_mask.png"))
+        .unwrap();
+    fx.project_config(
+        "[files.\"textures/a/x_mask\"]\nhelper.role = \"opacity\"\nhelper.fills = [\"diffuse.a\"]\n",
+    );
+    let sets = ["file:**/x.png.subtype=diffuse", "alpha.policy=blend"];
+    let o = fx.convert(&["--set", sets[0], "--set", sets[1]]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(!fx.dds("textures/a/x_mask.dds").exists());
+    let bytes = std::fs::read(fx.dds("textures/a/x.dds")).unwrap();
+    let f = read_dds(&bytes).unwrap();
+    let (w, h, r) = f.surfaces()[0].clone();
+    let px = engine::decode::decode_level_rgba(f.format, w, h, &f.data[r], None).unwrap();
+    for (i, p) in px.iter().enumerate() {
+        let (x, y) = (i as u32 % 32, i as u32 / 32);
+        let a = (p[3] * 255.0).round() as u8;
+        assert!(a.abs_diff(mask(x, y)) <= 1, "({x}, {y}): {a}");
+    }
+    let mut req = BatchRequest::new(vec![fx.p("in")], fx.p("out2"), Target::Cs);
+    req.recursive = true;
+    req.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+    let rep = Reporter::new(Arc::new(VecSink::default()), "cli-parity");
+    let e = Engine::new().unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
+    e.run(plan, &rep, &CancelToken::default()).unwrap();
+    assert_eq!(read_all(&fx.p("out")), read_all(&fx.p("out2")));
+}
+
 #[test]
 fn a_file_that_fails_to_resolve_exits_1_and_the_rest_are_converted() {
     let fx = Fx::new();

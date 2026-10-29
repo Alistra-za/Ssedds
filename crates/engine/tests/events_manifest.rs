@@ -148,6 +148,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 derive: None,
                 shader: None,
                 cube: None,
+                fill: None,
             }),
         },
         EventKind::Progress {
@@ -524,6 +525,7 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             derive: None,
             derive_role: None,
             cube_face: None,
+            fill: None,
         },
         SourceRef {
             path: "in/x_m.png".into(),
@@ -535,6 +537,7 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             derive: None,
             derive_role: None,
             cube_face: None,
+            fill: None,
         },
     ];
     m.append(&r).unwrap();
@@ -746,4 +749,61 @@ fn a_record_without_encode_version_loads_with_none() {
         let all = m.load().unwrap();
         assert_eq!(all["x_n.dds"].encode_version.as_deref(), want);
     }
+}
+
+/// Note DY: a filled output records its helper with the fill identity; an output without a fill has no `fill` key.
+#[test]
+fn fill_source_is_recorded() {
+    use image::{ImageBuffer, Luma, Rgb};
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    ImageBuffer::from_fn(32, 32, |x, y| Rgb([(x * 8) as u8, (y * 8) as u8, 90]))
+        .save(dir.join("x.png"))
+        .unwrap();
+    let grey = |name: &str| {
+        ImageBuffer::from_fn(32, 32, |x, _| Luma([(x * 8) as u8]))
+            .save(dir.join(name))
+            .unwrap()
+    };
+    grey("x_opacity.png");
+    grey("x_roughness.png");
+    let mut r =
+        engine::api::BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+    r.recursive = true;
+    r.accept = engine::policy::AcceptSuggestions::High;
+    r.overrides = ["file:**/x.png.subtype=diffuse", "alpha.policy=blend"]
+        .iter()
+        .map(|s| engine::overrides::parse_set(s).unwrap())
+        .collect();
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "fill-record");
+    let e = engine::api::Engine::new().unwrap();
+    let cancel = engine::api::CancelToken::default();
+    let s = e
+        .run(e.plan(r, &rep, &cancel).unwrap(), &rep, &cancel)
+        .unwrap();
+    assert_eq!(s.converted, 2, "{s:?} {:#?}", sink.take());
+    let m = Manifest::at(&d.path().join("out")).load().unwrap();
+    let rec = |name: &str| {
+        m.values()
+            .find(|e| e.raw["output"].as_str().is_some_and(|o| o.ends_with(name)))
+            .unwrap_or_else(|| panic!("no record of {name}"))
+    };
+    let x = rec("x.dds");
+    let fill: Vec<_> = x.sources.iter().filter(|s| s.fill.is_some()).collect();
+    assert_eq!(fill.len(), 1, "{:?}", x.sources);
+    assert!(fill[0].path.ends_with("x_opacity.png"), "{}", fill[0].path);
+    assert_eq!(fill[0].fill.as_deref(), Some("a:r"));
+    let rmaos = rec("x_rmaos.dds");
+    assert!(!rmaos.sources.is_empty());
+    assert!(
+        rmaos.raw["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s.get("fill").is_none()),
+        "{}",
+        rmaos.raw["sources"]
+    );
 }

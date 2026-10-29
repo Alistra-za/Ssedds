@@ -51,18 +51,24 @@ const FULL: [&str; 5] = [
 ];
 
 #[test]
-fn layers_are_not_items() {
+fn layers_are_helpers_not_tiles() {
+    // Note DY16 overturns Note W11 for listing: a layer file is a helper row, still never a tile.
     let d = tempfile::tempdir().unwrap();
     let m = fixture(d.path(), &FULL);
-    for i in &m.items {
-        let n = i.input.to_string_lossy().replace("\\", "/");
-        assert!(
-            !n.ends_with("_bump.png")
-                && !n.ends_with("_detailnorm.png")
-                && !n.ends_with("_detailnormmask.png"),
-            "layer file became an item: {n}"
-        );
+    let tiles = m.visible_items();
+    let mut layers = 0;
+    for (n, i) in m.items.iter().enumerate() {
+        let p = i.input.to_string_lossy().replace("\\", "/");
+        if p.ends_with("_bump.png")
+            || p.ends_with("_detailnorm.png")
+            || p.ends_with("_detailnormmask.png")
+        {
+            layers += 1;
+            assert_eq!(i.kind, sdc_gui::model::items::ItemKind::Helper, "{p}");
+            assert!(!tiles.contains(&n), "layer file became a tile: {p}");
+        }
     }
+    assert_eq!(layers, 3);
     let job = m.item("m/iron_n.png").unwrap().job.as_ref().unwrap();
     assert_eq!(job.rnm.as_ref().unwrap().layers.len(), 2);
 }

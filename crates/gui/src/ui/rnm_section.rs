@@ -46,7 +46,7 @@ fn thumb(ui: &mut egui::Ui, model: &AppModel, path: &Path, invert: Option<usize>
     ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(THUMB, THUMB)));
 }
 
-fn target_label(t: RnmTarget) -> &'static str {
+pub(crate) fn target_label(t: RnmTarget) -> &'static str {
     match t {
         RnmTarget::N => "Normal",
         RnmTarget::Cnr => "CNR",

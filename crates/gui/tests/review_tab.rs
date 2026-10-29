@@ -182,8 +182,15 @@ fn deciding_a_row_in_review_keeps_the_columns_usable() {
     settle(&mut h);
     assert!(!h.state().undecided_keys().contains(&ROCK.to_string()));
     assert_eq!(h.query_all_by_label("\u{2713}").count(), before - 1);
-    // A Textures tile still takes a click while Review is open.
-    h.get_by_label_contains("rock01_roughness.png").click();
+    // The Textures column still takes a click while Review is open (Note DY16: the raw roughness is a helper row now).
+    h.query_all_by_role(eframe::egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Helper rock01_roughness.png:"))
+        })
+        .expect("the roughness helper row")
+        .click();
     h.run();
     assert!(
         matches!(&h.state().selection, Selection::Item(k) if k.ends_with("rock01_roughness.png")),

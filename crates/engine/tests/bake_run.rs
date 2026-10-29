@@ -76,6 +76,7 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
         rnm: None,
         derive: None,
         cube: None,
+        fill: None,
     };
     Plan {
         request,
@@ -90,6 +91,8 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
         shaders: Default::default(),
         nvtt: None,
         derive_own: Default::default(),
+        fill_ends: Default::default(),
+        helpers: vec![],
     }
 }
 

@@ -18,9 +18,11 @@ fn job(kind: RecipeKind, channels: [ChannelSource; 4], sources: &[(&PathBuf, Raw
         kind,
         channels,
         gray: GraySource::R,
+        hand_placed: false,
         sources: sources
             .iter()
             .map(|(p, role)| PackSource {
+                read: None,
                 path: (*p).clone(),
                 role: *role,
                 stamp: None,
@@ -281,6 +283,7 @@ fn an_rmaos_source_is_read_by_channel_including_alpha() {
         channel: Some(c),
     };
     let sources = [PackSource {
+        read: None,
         path: p.clone(),
         role: RawMap::Rmaos,
         stamp: None,

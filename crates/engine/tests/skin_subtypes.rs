@@ -507,6 +507,37 @@ fn the_shader_alone_makes_the_diffuse_skin_albedo() {
     }
 }
 
+/// Final review M2: on a set that is Advanced Skin only by its shader, a hand-set `rfaos.*` fill builds the `_rfaos`
+/// when nothing else would.
+#[test]
+fn a_hand_rfaos_fill_builds_rfaos_on_a_shader_skin_set() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    put(d.path(), "x_specular.png", grey(64));
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[files.x_specular]\nhelper.fills = [\"rfaos.a\"]\n",
+    )
+    .unwrap();
+    let p = plan(&d, Target::Cs, &[SKIN]);
+    let o = outputs(&p);
+    assert!(o.contains(&"x_rfaos.dds".to_string()), "{o:?}");
+    let pk = p
+        .jobs
+        .iter()
+        .find_map(|j| {
+            j.pack
+                .as_ref()
+                .filter(|k| k.kind == engine::pack::RecipeKind::Rfaos)
+        })
+        .unwrap();
+    assert!(
+        matches!(&pk.channels[3], engine::pack::ChannelSource::Source { path, .. } if path.ends_with("x_specular.png")),
+        "{:?}",
+        pk.channels
+    );
+}
+
 /// A GUI plan of `d` with `x` chosen Advanced Skin and `pinned` sent as the pinned files (Note DW3).
 fn plan_pinned(d: &TempDir, pinned: &[&str]) -> Plan {
     let mut r = req(d, Target::Cs, &[]);

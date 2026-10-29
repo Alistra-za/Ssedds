@@ -54,8 +54,8 @@ Files decided by a rule, a `--set`, a `[files]` entry or a set shader are not af
 | Form | Applies to |
 |---|---|
 | `field=value` | Every file. |
-| `subtype:<id>.field=value` | Every file of that sub-type. Cannot set `subtype`, `reencode` or `rnm.target`. |
-| `file:<glob>.field=value` | Files matching the glob. |
+| `subtype:<id>.field=value` | Every file of that sub-type. Cannot set `subtype`, `reencode`, `rnm.target` or `helper.*`. |
+| `file:<glob>.field=value` | Files matching the glob. The only form for `helper.role`, `helper.fills`, `helper.read` and `helper.invert`: an unscoped `--set helper.role=ao` is refused ("helper.role is set per file: use file:<glob>.helper.role=<…>"), since it would make every image a helper. |
 | `set:<set id>.shader=<shader>` | Picks the shader of a texture set. Only `shader` can be set this way. The set id is what `inspect` prints after `set` (the output folder relative to the output root, plus the lower-case base name). An id with no `/` matches every set with that base name. An id that names no set gives `SET-EDIT-STALE`. |
 
 Values are parsed as TOML literals (`true`, `127`, `0.5`); anything that is not a valid literal is taken as a string, so you can write `format=bc1` without quotes. A misspelt field or sub-type is an error, never ignored.
@@ -83,6 +83,12 @@ sdc convert src --recursive --accept-suggestions high --set "file:**/fence01.png
 
 # A file name with no clue: tell Tessalith what it is
 sdc convert src --recursive --set "file:**/mask_a.png.subtype=generic_data"
+
+# Helper textures: a mask with no clue in its name is the diffuse's opacity, read from green;
+# a specular map is converted on its own; a roughness map also fills the _cnr alpha
+sdc convert src --recursive --accept-suggestions high --set "file:**/iron_mask.png.helper.role=opacity" --set "file:**/iron_mask.png.helper.read=g"
+sdc convert src --recursive --accept-suggestions high --set "file:**/iron_specular.png.helper.role=none"
+sdc convert src --recursive --accept-suggestions high --set 'file:**/iron_roughness.png.helper.fills=["rmaos.r", "cnr.a"]'
 
 # Re-encode existing DDS inputs instead of skipping them
 sdc convert src --recursive --set reencode=true

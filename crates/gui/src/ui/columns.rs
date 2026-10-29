@@ -318,6 +318,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
     );
     ui.separator();
     let visible = model.visible_shared();
+    let helpers = model.visible_helpers_shared();
     if visible.is_empty() {
         if model.root.is_some() && !model.busy() {
             if model.filters_active() && !model.items.is_empty() {
@@ -332,7 +333,9 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                 ui.weak("No textures to show.");
             }
         }
-        return;
+        if helpers.is_empty() {
+            return;
+        }
     }
     // One set per frame keeps the per-tile test O(1) however many are selected.
     let stats = column_stats(ui.ctx(), model);
@@ -358,30 +361,194 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         .and_then(|k| visible.iter().position(|&i| model.items[i].key == k))
         .map(|n| n / cols);
     let row_step = tile_h + ui.spacing().item_spacing.y;
+    // Note DY16: the helper group under the tiles: a header line, then fixed-height rows.
+    let helper_h = helper_row_height(ui);
+    let header_h = if helpers.is_empty() {
+        0.0
+    } else {
+        ui.text_style_height(&egui::TextStyle::Body) + 2.0 * ui.spacing().item_spacing.y
+    };
+    let tiles_h = rows as f32 * row_step;
+    let total = tiles_h + header_h + helpers.len() as f32 * helper_h;
+    let mut drawn = 0usize;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show_rows(ui, tile_h, rows, |ui, range| {
-            // The rows outside `range` are not drawn: the reveal's rectangle is worked out from the first drawn one.
+        .show_viewport(ui, |ui, viewport| {
+            ui.set_height(total);
+            let origin = ui.max_rect().min;
+            let width = ui.max_rect().width();
+            // Only what intersects the viewport is laid out (rule 9.2); the reveal's rectangle is computed.
             if let Some(r) = reveal {
-                let top = ui.max_rect().top() + (r as f32 - range.start as f32) * row_step;
                 let rect = egui::Rect::from_min_size(
-                    egui::pos2(ui.max_rect().left(), top),
-                    egui::vec2(ui.max_rect().width(), tile_h),
+                    origin + egui::vec2(0.0, r as f32 * row_step),
+                    egui::vec2(width, tile_h),
                 );
                 ui.scroll_to_rect(rect, None);
             }
-            for r in range {
+            let first = (viewport.min.y / row_step).floor().max(0.0) as usize;
+            let last = ((viewport.max.y / row_step).ceil().max(0.0) as usize).min(rows);
+            for r in first..last {
                 let row = &visible[r * cols..((r + 1) * cols).min(visible.len())];
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), tile_h),
-                    egui::Layout::left_to_right(egui::Align::Min),
-                    |ui| {
-                        for &idx in row {
-                            tile(ui, model, thumbs, idx, chosen, size);
-                        }
-                    },
+                let rect = egui::Rect::from_min_size(
+                    origin + egui::vec2(0.0, r as f32 * row_step),
+                    egui::vec2(width, tile_h),
                 );
+                ui.push_id(("tile-row", r), |ui| {
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Min)),
+                        |ui| {
+                            for &idx in row {
+                                tile(ui, model, thumbs, idx, chosen, size);
+                            }
+                        },
+                    );
+                });
             }
+            if helpers.is_empty() {
+                return;
+            }
+            let header = egui::Rect::from_min_size(
+                origin + egui::vec2(0.0, tiles_h),
+                egui::vec2(width, header_h),
+            );
+            if viewport.translate(origin.to_vec2()).intersects(header) {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(header), |ui| {
+                    ui.add_space(ui.spacing().item_spacing.y);
+                    ui.strong(format!("Helpers ({})", helpers.len()));
+                });
+            }
+            let top = tiles_h + header_h;
+            let first = ((viewport.min.y - top) / helper_h).floor().max(0.0) as usize;
+            let last =
+                (((viewport.max.y - top) / helper_h).ceil().max(0.0) as usize).min(helpers.len());
+            for n in first..last {
+                let idx = helpers[n];
+                let rect = egui::Rect::from_min_size(
+                    origin + egui::vec2(0.0, top + n as f32 * helper_h),
+                    egui::vec2(width, helper_h),
+                );
+                helper_row(ui, model, thumbs, idx, chosen, rect);
+                drawn += 1;
+            }
+        });
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::new(HELPER_ROWS_DRAWN), drawn));
+}
+
+/// Where the helper rows laid out in the last frame are counted (tests: only the rows in view).
+const HELPER_ROWS_DRAWN: &str = "helper-rows-drawn";
+
+#[doc(hidden)]
+pub fn helper_rows_drawn(ctx: &egui::Context) -> usize {
+    ctx.data(|d| d.get_temp(egui::Id::new(HELPER_ROWS_DRAWN)))
+        .unwrap_or(0)
+}
+
+/// A helper row's fixed height: 24 px, or one line of text plus 6, whichever is larger.
+fn helper_row_height(ui: &egui::Ui) -> f32 {
+    HELPER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Body) + 6.0)
+}
+
+const HELPER_ROW_H: f32 = 24.0;
+const HELPER_THUMB: f32 = 20.0;
+
+/// Note DY16: one helper row in `rect`: a 20 px thumbnail and the file name on the left; where it goes ("→ targets"
+/// or "not used") and the role chip on the right. A click selects it as a tile click does.
+fn helper_row(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    thumbs: &mut ThumbCache,
+    idx: usize,
+    chosen: &HashSet<String>,
+    rect: egui::Rect,
+) {
+    let item = &model.items[idx];
+    let Some(h) = item.helper.clone() else {
+        return;
+    };
+    let key = item.key.clone();
+    let target = crate::model::items::helper_target_text(&h);
+    let role = h.role.label();
+    // Registered before the cells, so the truncated labels keep their hover (the topmost widget wins the click).
+    let resp = ui.interact(
+        rect,
+        ui.id().with(("helper-row", &key)),
+        egui::Sense::click(),
+    );
+    let by_you = if h.role_hand_set { " (set by you)" } else { "" };
+    let name = format!("Helper {}: {role}{by_you}, {target}", item.name);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    if chosen.contains(&key) {
+        ui.painter().rect_filled(
+            rect,
+            2.0,
+            ui.visuals().selection.bg_fill.linear_multiply(0.4),
+        );
+    } else if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, 2.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    let width = rect.width();
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.style_mut().interaction.selectable_labels = false;
+        egui::Sides::new()
+            .height(rect.height())
+            .shrink_left()
+            .truncate()
+            .show(
+                ui,
+                |ui| {
+                    let (r, _) = ui
+                        .allocate_exact_size(egui::Vec2::splat(HELPER_THUMB), egui::Sense::hover());
+                    match thumbs.get(ui.ctx(), item) {
+                        Some(t) => egui::Image::new(&t)
+                            .fit_to_exact_size(r.size())
+                            .paint_at(ui, r),
+                        None => {
+                            ui.painter().rect_filled(
+                                r,
+                                2.0,
+                                ui.visuals().widgets.noninteractive.weak_bg_fill,
+                            );
+                        }
+                    }
+                    ui.add(egui::Label::new(&item.name).truncate());
+                },
+                |ui| {
+                    // The name keeps at least half the row; right to left: the chip, then the target.
+                    ui.set_max_width(width * 0.5);
+                    role_chip(ui, &role, h.role_hand_set);
+                    let shown = if h.fills.is_empty() {
+                        "not used".to_string()
+                    } else {
+                        format!("→ {}", target.trim_start_matches("fills to "))
+                    };
+                    ui.add(egui::Label::new(egui::RichText::new(shown).weak()).truncate())
+                        .on_hover_text(&target);
+                },
+            );
+    });
+    if resp.clicked() {
+        let m = ui.input(|i| i.modifiers);
+        model.click_item(&key, m.command, m.shift);
+    }
+}
+
+/// A helper's role as a small framed chip; a role the user set reads "✎ <role>" in amber.
+fn role_chip(ui: &mut egui::Ui, role: &str, hand_set: bool) {
+    let text = if hand_set {
+        egui::RichText::new(format!("✎ {role}")).color(AMBER)
+    } else {
+        egui::RichText::new(role)
+    };
+    egui::Frame::new()
+        .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(text.small()).truncate());
         });
 }
 
@@ -518,6 +685,25 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
             {
                 *on = !*on;
             }
+        }
+        // Note DY16: on (selected) shows the helper rows; the filter field is the inverse so the default stays "off".
+        let shown = !f.hide_helpers;
+        let text = format!("Helpers {}", c.helpers);
+        let r = ui.add(
+            egui::Button::selectable(shown, text.clone())
+                .corner_radius(10)
+                .frame_when_inactive(true),
+        );
+        r.widget_info(|| {
+            let mut i =
+                egui::WidgetInfo::selected(egui::WidgetType::Button, true, shown, "Helpers filter");
+            i.current_text_value = Some(text.clone());
+            i
+        });
+        if r.on_hover_text("Show helper files (AO, masks, layers…) at the bottom of the list")
+            .clicked()
+        {
+            f.hide_helpers = !f.hide_helpers;
         }
         // A7: Sort is not a filter, so it stays out of the count.
         let k = [

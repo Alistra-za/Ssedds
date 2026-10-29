@@ -77,7 +77,7 @@ Tessalith also understands the names that texturing tools commonly export:
 | `_specular`, `_spec` | Raw specular | packed |
 | `_glossiness`, `_gloss` | Raw glossiness | packed (inverted into roughness) |
 | `_height`, `_displacement`, `_disp` | Raw height | packed |
-| `_opacity` | Raw opacity | not packed by any recipe |
+| `_opacity` | Raw opacity | the colour texture's alpha ([helper](#helper-textures)) |
 | `_fuzz`, `_sheen` | Raw fuzz | packed |
 | `_curves`, `_curvature` | Raw curvature (0.5 is flat) | read only by Also export as (Vanilla / Complex material) |
 | `_cavity` | Raw cavity | read only by Also export as (Vanilla / Complex material) |
@@ -210,6 +210,39 @@ or for a whole run with `--fill metallic=255`. In the GUI, set it on the packed 
 
 If a set has both a ready-made packed file (`iron_rmaos.png`) and raw maps for it, the packed file wins and the raw maps are reported (`PACK-CONFLICT`). Set `packing.prefer = "raw"` to build from the raw maps instead. All sources of one recipe must be the same size (`PACK-SIZE-MISMATCH` otherwise). Set `packing.enabled = false` to leave the raw maps alone (`IN-PACKING-INPUT`).
 
+## Helper textures
+
+A **helper** is a source file that fills one channel of another output of its own set and is never written as its own DDS: the raw maps above, an opacity map, the RNM layers below, and fuzz or subsurface weight maps you mark by hand. The GUI lists every helper in a Helpers group under the tiles (see the [GUI guide](GUI-Guide.md#textures-left)); the CLI reads the same settings from `sdc.toml` ([Project config](Project-Config.md#files)), so both write the same bytes.
+
+| Role (`helper.role`) | Suggested target | Also offered |
+|---|---|---|
+| Opacity (`opacity`) | the colour texture's alpha (`diffuse.a`) | packed channels |
+| Specular (`specular`) | the `_n` alpha of a non-PBR set (`n.a`), plus its packed channel as above (`_rmaos` A, or `_m` R under vanilla) | other packed channels |
+| Fuzz weight, PBR (`fuzzweight`) | the PBR `_f` alpha (`f.a`) | packed channels |
+| Subsurface weight, PBR (`subsurfaceweight`) | the PBR `_s` alpha (`s.a`) | packed channels |
+| Roughness, glossiness, metallic, AO, height, fuzz mask (skin), `_orm`, curvature, cavity | the packed channels of the tables above, unchanged | any planned alpha target; the `_cnr` alpha (`cnr.a`, coat roughness) is offered but never suggested |
+| Bump, detail normal and the other RNM layers | the base normal, by `rnm.target` (below) | none (Read from and Invert do not apply) |
+
+Fuzz weight and subsurface weight have no file-name term: a file is one only when you set its role.
+
+**Alpha targets.** The colour texture's alpha is a `diffuse`, `pbr_albedo` or `skin_albedo` file of the set (never complex grass, a UI/sky texture or a landscape diffuse); `n.a` is a plain `normal` (so never a PBR `_n`); `f.a` is `pbr_fuzz`, `s.a` `pbr_subsurface`, `cnr.a` `coat_normal`. A target must be planned under the active target: under `vanilla` there is no `_f`, `_s`, `_cnr` or `_rmaos`, so a fuzz-weight helper reads "not used: no _f planned under vanilla". Cubemaps and the outputs of Also export never take a fill. A helper never creates an output, except the packed ones (`_rmaos`, `_rfaos`, `_m`, `_p`), as before.
+
+**Which data wins.**
+- A **suggested** helper (its role and targets come from its name) fills an alpha only when that alpha is empty in the source: no alpha, fully opaque, or one flat value. A colour PNG with a real alpha keeps it, and the helper reads "not used: x.png already has alpha".
+- An **assigned** helper (you set its role or its targets) always replaces what the channel holds, a PNG's own alpha included.
+- Two helpers on one channel: an assigned one beats a suggested one; otherwise the first by path wins, and the other reads "`<target>` is filled by `<winner>`".
+- A value fill (`packing.fill.*`) applies only when no helper fills the channel.
+
+**Sizes.** A suggested alpha fill whose helper is not the target's size is skipped ("512x512, target 1024x1024: sizes differ"). An assigned one fails the target with `PACK-SIZE-MISMATCH`, naming both sizes. Packed channels keep their rule: every source of a recipe must be the same size.
+
+**The fill comes first.** The helper's channel is written into the target before the target is analysed, so alpha policy, format choice, alpha-coverage mips and cutout handling all see the filled alpha, exactly as if the source had carried it. A diffuse that would be BC1 can therefore move to an alpha format. Only the alpha comes from the helper; the target keeps its own bit depth.
+
+**Read from and Invert.** `helper.read` picks the helper's channel: `r`, `g`, `b`, `a` or `luma` (Rec. 709 luminance). Unset reads R (or luminance where a recipe already does); A is never picked by itself. `helper.invert = true` flips whatever the channel would otherwise read (one minus the value), for an inverted mask. In a packed channel it flips on top of the recipe's own conversion: a glossiness source feeding roughness (or the reverse) is already inverted, so a gloss map needs `helper.role = "glossiness"` and no Invert; Invert there would write gloss into the roughness channel. An alpha fill has no automatic conversion, so Invert is its only flip. A helper with an explicit read is not reported for colour in a greyscale slot (`CHAN-NOT-GRAY`).
+
+**Not a helper.** `helper.role = "none"` makes the file an ordinary texture again, converted on its own. Any other `helper.role` makes a file a helper even when its name or sub-type says otherwise. Roles apply to image sources, not DDS files. A file you give a role that has no known suffix (`iron_mask.png`) joins the set of its name without the last `_part` (`iron`) when that set exists.
+
+A helper that fills nothing is reported, never a failure: `PACK-UNUSED-INPUT` (or `IN-PACKING-INPUT` with packing off), and "not used: <reason>" on its GUI row. `packing.enabled = false` stops packed outputs only: alpha fills still apply. `--on-existing if-changed` re-encodes an output when its helper, or the helper's read or invert, changes.
+
 ## Variance bake
 
 In a `cs` PBR set with an `_n` and an `_rmaos` or `_rfaos`, the detail that the normal map loses in each smaller mip is added to the roughness mips, so distant surfaces do not look too shiny. The amount is limited by `mips.bake_clamp`. A `_cnr` bakes its own detail into its coat roughness.
@@ -218,7 +251,7 @@ The bake needs both files in the batch, with power-of-two sizes of the same aspe
 
 ## RNM normal layers
 
-A set can add detail normal maps that are blended into its base normal (`_n`, or `_cnr`) with reoriented normal mapping before the mips are built. Layer files are never written on their own.
+A set can add detail normal maps that are blended into its base normal (`_n`, or `_cnr`) with reoriented normal mapping before the mips are built. Layer files are never written on their own; they are [helpers](#helper-textures), listed as helper rows in the GUI.
 
 | Layer | File suffixes | Mask suffixes | Default strength |
 |---|---|---|---|

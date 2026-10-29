@@ -26,6 +26,7 @@ fn gray(dir: &Path, name: &str, w: u32, f: impl Fn(u32, u32) -> u8) -> PathBuf {
 fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
     let registry = PresetRegistry::builtin().unwrap();
     let source = |path: &Path, role| PackSource {
+        read: None,
         path: path.to_path_buf(),
         role,
         stamp: SourceStamp::of(path),
@@ -65,6 +66,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
                 ChannelSource::Default { value: 1.0 },
             ],
             gray: GraySource::R,
+            hand_placed: false,
             sources: vec![source(rough, RawMap::Roughness), source(ao, RawMap::Ao)],
         }),
         bake: None,
@@ -72,6 +74,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     };
     Plan {
         request,
@@ -86,6 +89,8 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         shaders: Default::default(),
         nvtt: None,
         derive_own: Default::default(),
+        fill_ends: Default::default(),
+        helpers: vec![],
     }
 }
 

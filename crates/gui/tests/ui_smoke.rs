@@ -89,8 +89,13 @@ fn an_opened_folder_shows_items_filters_and_the_undecided_count() {
     ] {
         h.get_by_label_contains(label);
     }
-    // The packed output's tile, and the two raw maps that say they are packed into it.
-    assert_eq!(h.query_all_by_label_contains("rock01_rmaos").count(), 3);
+    // The packed output's tile, and the two raw maps' helper rows (Note DY16): each row's name and its "→" target.
+    assert_eq!(h.query_all_by_label_contains("rock01_rmaos").count(), 5);
+    assert_eq!(
+        h.query_all_by_label_contains("fills to rock01_rmaos")
+            .count(),
+        2
+    );
     h.get_by_label_contains("need a decision");
     // A set is named by its path under the export folder.
     h.get_by_label("landscape/rock01");
@@ -442,10 +447,11 @@ fn a_packed_item_lists_its_channels_and_a_raw_map_points_to_the_output() {
     h.get_by_label_contains("R: from ");
     h.get_by_label_contains("B: from rock01_ao.png");
     h.get_by_label("A: default value 1");
-    // A raw map says it is packed and offers the way to its output.
+    // A raw map (a helper since Note DY16) says where it goes and offers the way to its output.
     h.state_mut().select_item("landscape/rock01_roughness.png");
     h.run();
-    press(&mut h, "Show packed output");
+    h.get_by_label("fills to rock01_rmaos R");
+    press(&mut h, "Show rock01_rmaos");
     assert_eq!(h.state().selection, Selection::Item(packed));
 }
 

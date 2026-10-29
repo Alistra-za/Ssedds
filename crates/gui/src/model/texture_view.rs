@@ -1,6 +1,6 @@
 //! The Textures column's filters, sort order and tile size (item 8, DECISIONS AG4 and AG46-AG55), and the cached list
 //! of what it shows.
-use super::items::{ItemStatus, TextureItem};
+use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::{counts_toward_badge, AppModel};
 use engine::config::Backend;
 use std::collections::HashSet;
@@ -49,6 +49,8 @@ pub struct Filter {
     pub format: Option<String>,
     pub encoder: Option<String>,
     pub set: SetFilter,
+    /// Note DY16: the Helpers pill turned off (default false: the helper rows are shown).
+    pub hide_helpers: bool,
 }
 
 /// The sort order (AG4).
@@ -142,16 +144,21 @@ pub struct FilterCounts {
     pub warnings: usize,
     pub failed: usize,
     pub not_in_set: usize,
+    pub helpers: usize,
 }
 
 /// The cached option lists and index list, by what they were built from.
 #[derive(Default)]
 pub(crate) struct TextureViewCache {
     options: Option<(u64, Arc<FilterOptions>)>,
-    list: Option<(ListKey, Arc<Vec<usize>>)>,
+    /// The tiles and the helper rows, built together in one pass (one build per change).
+    list: Option<(ListKey, Lists)>,
     counts: Option<(u64, FilterCounts)>,
     builds: u64,
 }
+
+/// The tile indices and the helper-row indices.
+type Lists = (Arc<Vec<usize>>, Arc<Vec<usize>>);
 
 #[derive(PartialEq)]
 struct ListKey {
@@ -245,6 +252,7 @@ impl AppModel {
                 i.status,
                 ItemStatus::Failed(_) | ItemStatus::Error(_)
             ));
+            c.helpers += usize::from(i.kind == ItemKind::Helper);
         }
         self.texture_cache.borrow_mut().counts = Some((self.items_rev(), c));
         c
@@ -258,6 +266,16 @@ impl AppModel {
     /// The indices into `items` the column shows, sorted. Built again only when the filters, the search, the sort or
     /// the items changed.
     pub fn visible_shared(&self) -> Arc<Vec<usize>> {
+        self.visible_lists().0
+    }
+
+    /// Note DY16: the helper rows the column shows under the tiles: the tiles' filters and search, plus the Helpers
+    /// pill, by set key then file name. Built with the tiles (same key, one build).
+    pub fn visible_helpers_shared(&self) -> Arc<Vec<usize>> {
+        self.visible_lists().1
+    }
+
+    fn visible_lists(&self) -> Lists {
         let key = ListKey {
             items: self.items_rev(),
             filter: self.filter.clone(),
@@ -270,10 +288,21 @@ impl AppModel {
                 return l.clone();
             }
         }
-        let list = Arc::new(self.build_visible());
+        let (tiles, mut helpers): (Vec<usize>, Vec<usize>) = self
+            .build_visible()
+            .into_iter()
+            .partition(|&n| self.items[n].kind != ItemKind::Helper);
+        if self.filter.hide_helpers {
+            helpers.clear();
+        }
+        helpers.sort_by(|&a, &b| {
+            let (a, b) = (&self.items[a], &self.items[b]);
+            (&a.set_key, &a.name).cmp(&(&b.set_key, &b.name))
+        });
+        let (tiles, helpers) = (Arc::new(tiles), Arc::new(helpers));
         c.builds += 1;
-        c.list = Some((key, list.clone()));
-        list
+        c.list = Some((key, (tiles.clone(), helpers.clone())));
+        (tiles, helpers)
     }
 
     fn build_visible(&self) -> Vec<usize> {
@@ -323,9 +352,10 @@ impl AppModel {
         self.visible_shared().to_vec()
     }
 
-    /// How many textures the filters and the search hide.
+    /// How many textures and helpers the filters and the search hide.
     pub fn hidden_by_filters(&self) -> usize {
-        self.items.len() - self.visible_shared().len()
+        let (t, h) = self.visible_lists();
+        self.items.len() - t.len() - h.len()
     }
 
     /// Any toggle, combo or search text is on.

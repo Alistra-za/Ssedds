@@ -109,6 +109,9 @@ pub fn b_has_content(b: &crate::analyse::ChannelStats) -> bool {
     f64::from(b.max - b.min) * 255.0 >= 2.0 - 1e-3 || b.mean * 255.0 <= 250.0 + 1e-3
 }
 
+/// The `ChannelSource::Source.channel` that reads a source's luma (Note DY), past R, G, B and A.
+pub const LUMA_CHANNEL: u8 = 4;
+
 /// A raw map of one set waiting for a recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawInput {
@@ -195,7 +198,9 @@ fn unused_reason(
         (_, RawMap::Curves | RawMap::Cavity | RawMap::Rmaos) => {
             "read only by Also export as (Vanilla / Complex material)".into()
         }
-        (_, RawMap::Opacity) => "no recipe packs opacity yet (spec §14 #19)".into(),
+        (_, RawMap::Opacity) => "only fills a colour texture's alpha; no target in the set".into(),
+        (_, RawMap::FuzzWeight) => "only fills a PBR _f alpha; no _f planned".into(),
+        (_, RawMap::SubsurfaceWeight) => "only fills a PBR _s alpha; no _s planned".into(),
         (Target::Cs, RawMap::Glossiness) if has(RawMap::Roughness) => {
             "roughness is used: the _rmaos/_rfaos R channel is roughness".into()
         }
@@ -262,14 +267,54 @@ pub fn recipes_for_with(
     pack_recipe: PackRecipe,
     complex: bool,
 ) -> (Vec<Recipe>, Vec<Unused>) {
+    recipes_for_sel(target, raw, pack_recipe, complex, &BTreeMap::new())
+}
+
+/// The slot channel `ch` of a `kind` recipe holds; `None` for a mirrored or opaque filler.
+pub(crate) fn slot_of(kind: RecipeKind, ch: usize) -> Option<Slot> {
+    use Slot::*;
+    let slots = match kind {
+        RecipeKind::Rmaos => [Some(Roughness), Some(Metallic), Some(Ao), Some(Specular)],
+        RecipeKind::Rfaos => [Some(Roughness), Some(Fuzz), Some(Ao), Some(Specular)],
+        RecipeKind::Parallax => [Some(Height), None, None, None],
+        RecipeKind::CpmM => [
+            Some(EnvMask),
+            Some(Glossiness),
+            Some(Metallic),
+            Some(Height),
+        ],
+        RecipeKind::VanillaM => [Some(EnvMask), None, None, None],
+    };
+    slots[ch]
+}
+
+/// [`recipes_for_with`] with each raw input's hand-set `helper.*` selectors (DECISIONS Note DY; empty = today).
+/// An input with `helper.fills` takes no suggested slot (the next file of its role may, M13) and fills the packed
+/// channels it names, creating that recipe when the set would build none; among inputs naming one channel the first
+/// by path wins. `helper.read` and `helper.invert` apply wherever an input lands, suggested or hand-set.
+pub fn recipes_for_sel(
+    target: Target,
+    raw: &[RawInput],
+    pack_recipe: PackRecipe,
+    complex: bool,
+    sel: &BTreeMap<PathBuf, crate::helper::HelperSel>,
+) -> (Vec<Recipe>, Vec<Unused>) {
+    use crate::helper::FillTarget;
     use ChannelNeed::{MirrorR, Missing, Opaque};
     use RawMap::*;
+    let assigned = |p: &Path| sel.get(p).is_some_and(|s| s.assigned());
     let mut sorted: Vec<&RawInput> = raw.iter().collect();
-    sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    // Note DY (Ruling 8): an assigned source (hand-set role or fills) comes before a suggested one.
+    sorted.sort_by(|a, b| (!assigned(&a.path), &a.path).cmp(&(!assigned(&b.path), &b.path)));
     // DECISIONS Note M13: one source per role, the first by path.
     let mut by_role: BTreeMap<RawMap, &RawInput> = BTreeMap::new();
     let mut unused = vec![];
+    let mut hand: Vec<(&RawInput, &[FillTarget])> = vec![];
     for r in sorted {
+        if let Some(fills) = sel.get(&r.path).and_then(|s| s.fills.as_deref()) {
+            hand.push((r, fills));
+            continue;
+        }
         match by_role.get(&r.role) {
             Some(first) => unused.push(Unused {
                 path: r.path.clone(),
@@ -303,6 +348,46 @@ pub fn recipes_for_with(
         })
     };
     let has = |role: RawMap| by_role.contains_key(&role);
+    // The layout of a pre-packed `_rmaos`/`_rfaos` image, from its name.
+    let prepacked = by_role.get(&Rmaos).map(|img| {
+        let stem = img.path.file_stem().unwrap_or_default().to_string_lossy();
+        match crate::group::split_suffix(&stem).1.as_deref() {
+            Some("rfaos") => RecipeKind::Rfaos,
+            _ => RecipeKind::Rmaos,
+        }
+    });
+    // The cs `_rmaos`/`_rfaos` this set packs, as built below.
+    let cs_pack = prepacked.unwrap_or(
+        if pack_recipe == PackRecipe::Rfaos || (pack_recipe == PackRecipe::Auto && has(Fuzz)) {
+            RecipeKind::Rfaos
+        } else {
+            RecipeKind::Rmaos
+        },
+    );
+    // A hand-set target's recipe and channel; `Err(None)` for an alpha target (not packing's).
+    let packed_target = |t: &FillTarget| -> Result<(RecipeKind, usize), Option<String>> {
+        let FillTarget::Packed { suffix, channel } = *t else {
+            return Err(None);
+        };
+        let kind = match (target, suffix) {
+            (Target::Cs, "p") => Ok(RecipeKind::Parallax),
+            (Target::Cs, "rmaos" | "rfaos") if suffix == cs_pack.suffix() => Ok(cs_pack),
+            (Target::Cs, "rmaos" | "rfaos") => Err(format!("the set packs _{}", cs_pack.suffix())),
+            (Target::Vanilla, "m") if complex => Ok(RecipeKind::CpmM),
+            (Target::Vanilla, "m") if channel == 0 => Ok(RecipeKind::VanillaM),
+            (Target::Vanilla, "m") => Err("the env-mask _m has only R".into()),
+            (Target::Cs, _) => Err(format!("the cs target packs no _{suffix}")),
+            (Target::Vanilla, _) => Err(format!("the vanilla target packs no _{suffix}")),
+        };
+        kind.map(|k| (k, usize::from(channel)))
+            .map_err(|e| Some(format!("{}: {e}", t.id())))
+    };
+    // Recipes a hand-set fill builds even when the set's suggested sources start none.
+    let forced: BTreeSet<RecipeKind> = hand
+        .iter()
+        .flat_map(|(_, fills)| fills.iter())
+        .filter_map(|t| packed_target(t).ok().map(|(k, _)| k))
+        .collect();
     let mut recipes = vec![];
     match target {
         Target::Cs => {
@@ -315,17 +400,12 @@ pub fn recipes_for_with(
             // Note CO104 (Track A R1): `plan_packing` passes a pre-packed `_rmaos`/`_rfaos` image only beside a lone
             // generated AO, when the image's B is empty. R, G (metallic, or fuzz on `_rfaos`) and A come from the
             // image, B from the AO.
-            if let Some(img) = by_role.get(&Rmaos) {
+            if let (Some(img), Some(kind)) = (by_role.get(&Rmaos), prepacked) {
                 let ch = |slot: Slot| ChannelNeed::Source {
                     path: img.path.clone(),
                     role: Rmaos,
                     invert: false,
                     channel: rmaos_channel(slot),
-                };
-                let stem = img.path.file_stem().unwrap_or_default().to_string_lossy();
-                let kind = match crate::group::split_suffix(&stem).1.as_deref() {
-                    Some("rfaos") => RecipeKind::Rfaos,
-                    _ => RecipeKind::Rmaos,
                 };
                 recipes.push(Recipe {
                     kind,
@@ -337,7 +417,7 @@ pub fn recipes_for_with(
                     ],
                     notes: vec![],
                 });
-            } else if triggers.iter().copied().any(has) {
+            } else if triggers.iter().copied().any(has) || forced.contains(&cs_pack) {
                 let mut notes = vec![];
                 let rough = prefer(
                     src(Roughness, false).or_else(|| src(Glossiness, true)),
@@ -383,7 +463,11 @@ pub fn recipes_for_with(
                     }
                 }
             }
-            if let Some(h) = src(Height, false) {
+            if let Some(h) = src(Height, false).or_else(|| {
+                forced
+                    .contains(&RecipeKind::Parallax)
+                    .then_some(Missing(Slot::Height))
+            }) {
                 recipes.push(Recipe {
                     kind: RecipeKind::Parallax,
                     channels: [h, MirrorR, MirrorR, Opaque],
@@ -395,6 +479,7 @@ pub fn recipes_for_with(
             if [Roughness, Glossiness, Metallic, Height, Orm]
                 .into_iter()
                 .any(has)
+                || forced.contains(&RecipeKind::CpmM)
             {
                 let mut notes = vec![];
                 let metal = prefer(src(Metallic, false), orm(2, false), "metallic", &mut notes);
@@ -423,12 +508,103 @@ pub fn recipes_for_with(
             let mut notes = vec![];
             if let Some(env) = prefer(src(Metallic, false), orm(2, false), "metallic", &mut notes)
                 .or_else(|| src(Specular, false))
+                .or_else(|| {
+                    forced
+                        .contains(&RecipeKind::VanillaM)
+                        .then_some(Missing(Slot::EnvMask))
+                })
             {
                 recipes.push(Recipe {
                     kind: RecipeKind::VanillaM,
                     channels: [env, MirrorR, MirrorR, Opaque],
                     notes,
                 });
+            }
+        }
+    }
+    // Hand-set fills, in path order: an assigned source replaces what the channel holds (DECISIONS Note DY).
+    let mut winner: BTreeMap<(RecipeKind, usize), &Path> = BTreeMap::new();
+    let mut displaced: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for (r, fills) in &hand {
+        let mut landed = false;
+        let mut why = vec![];
+        for t in fills.iter() {
+            let (kind, ch) = match packed_target(t) {
+                Ok(k) => k,
+                Err(None) => continue,
+                Err(Some(e)) => {
+                    why.push(e);
+                    continue;
+                }
+            };
+            if let Some(w) = winner.get(&(kind, ch)) {
+                why.push(format!("{} is filled by {}", t.id(), file_name(w)));
+                continue;
+            }
+            let Some(recipe) = recipes.iter_mut().find(|x| x.kind == kind) else {
+                why.push(format!("{}: no _{} is planned", t.id(), kind.suffix()));
+                continue;
+            };
+            // A hand-set role that took this slot is assigned too: the first by path keeps it (Ruling 8).
+            if let ChannelNeed::Source { path: held, .. } = &recipe.channels[ch] {
+                if assigned(held) && *held < r.path {
+                    why.push(format!("{} is filled by {}", t.id(), file_name(held)));
+                    continue;
+                }
+            }
+            // Glossiness into a roughness slot (or back) is stored inverted, as a suggested source is.
+            let invert = matches!(
+                (r.role, slot_of(kind, ch)),
+                (Glossiness, Some(Slot::Roughness)) | (Roughness, Some(Slot::Glossiness))
+            );
+            let old = std::mem::replace(
+                &mut recipe.channels[ch],
+                ChannelNeed::Source {
+                    path: r.path.clone(),
+                    role: r.role,
+                    invert,
+                    channel: None,
+                },
+            );
+            if let ChannelNeed::Source { path, .. } = old {
+                displaced
+                    .entry(path)
+                    .or_insert_with(|| format!("{} is filled by {}", t.id(), file_name(&r.path)));
+            }
+            winner.insert((kind, ch), &r.path);
+            landed = true;
+        }
+        if !landed {
+            let reason = why.into_iter().next().unwrap_or_else(|| {
+                if fills.is_empty() {
+                    "helper.fills is empty: not used".into()
+                } else {
+                    "helper.fills names no packed channel".into()
+                }
+            });
+            unused.push(Unused {
+                path: r.path.clone(),
+                role: r.role,
+                reason,
+            });
+        }
+    }
+    // `helper.read` and `helper.invert` apply wherever a selected source landed.
+    for recipe in &mut recipes {
+        for c in &mut recipe.channels {
+            if let ChannelNeed::Source {
+                path,
+                invert,
+                channel,
+                ..
+            } = c
+            {
+                if let Some(s) = sel.get(path) {
+                    *invert ^= s.invert;
+                    if let Some(read) = s.read {
+                        *channel = Some(read.channel());
+                    }
+                }
             }
         }
     }
@@ -442,7 +618,9 @@ pub fn recipes_for_with(
             unused.push(Unused {
                 path: r.path.clone(),
                 role: r.role,
-                reason: unused_reason(target, complex, pack_recipe, r.role, &by_role),
+                reason: displaced.remove(&r.path).unwrap_or_else(|| {
+                    unused_reason(target, complex, pack_recipe, r.role, &by_role)
+                }),
             });
         }
     }
@@ -509,6 +687,7 @@ impl ChannelSource {
                 if *invert { "1-" } else { "" },
                 file_name(path),
                 match (channel, gray) {
+                    (Some(LUMA_CHANNEL), _) => "luma",
                     (Some(c), _) => ["R", "G", "B", "A"][usize::from(*c)],
                     (None, GraySource::R) => "R",
                     (None, GraySource::Luma) => "luma",
@@ -597,6 +776,10 @@ pub struct PackSource {
     pub role: RawMap,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stamp: Option<SourceStamp>,
+    /// Note DY: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),
+    /// so the record names it. Absent otherwise, so no other job's JSON changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<crate::helper::HelperRead>,
 }
 
 /// How a packed output is built (`ResolvedJob::pack`). `sources[0].path` is the job's `input` (Note M8).
@@ -610,6 +793,10 @@ pub struct PackJob {
     /// was analysed (DECISIONS Note M6). Serialised, so it shows in `file_planned` and the manifest.
     pub gray: GraySource,
     pub sources: Vec<PackSource>,
+    /// Note DY21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels
+    /// (`source_fill`). Absent otherwise, so no other job's JSON changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hand_placed: bool,
 }
 
 /// Whether the channel `path` feeds is stored inverted (DECISIONS N7).
@@ -617,4 +804,30 @@ pub fn invert_of(pk: &PackJob, path: &Path) -> bool {
     pk.channels
         .iter()
         .any(|c| matches!(c, ChannelSource::Source { path: p, invert: true, .. } if p == path))
+}
+
+/// Note DY: `read:<id>` for a source with an explicit `helper.read` (recorded as `SourceRef.fill`), so a changed
+/// read re-encodes under `if-changed`; `None` without one.
+pub fn read_of(s: &PackSource) -> Option<String> {
+    s.read.map(|r| format!("read:{}", r.id()))
+}
+
+/// What `SourceRef.fill` records for a packed source; the pipeline records it and `if-changed` compares it, so the
+/// two never drift. `read:<id>` as [`read_of`], then (Note DY21) `ch:<rgba>`, every channel the source feeds, on
+/// every source of a recipe a hand-set `helper.fills` placed (`PackJob::hand_placed`). A recipe built from
+/// suggestions alone adds nothing, so existing manifests stay up to date.
+pub fn source_fill(pk: &PackJob, s: &PackSource) -> Option<String> {
+    let fed =
+        |i: usize| matches!(&pk.channels[i], ChannelSource::Source { path, .. } if *path == s.path);
+    let ch = pk.hand_placed.then(|| {
+        let c: String = (0..4)
+            .filter(|&i| fed(i))
+            .map(|i| ['r', 'g', 'b', 'a'][i])
+            .collect();
+        format!("ch:{c}")
+    });
+    match (read_of(s), ch) {
+        (Some(r), Some(c)) => Some(format!("{r},{c}")),
+        (r, c) => r.or(c),
+    }
 }

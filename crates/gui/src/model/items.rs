@@ -4,6 +4,7 @@ use engine::codes::{Code, Severity, Warning};
 use engine::config::{Subtype, Target};
 use engine::discover::{InputFile, InputKind};
 use engine::events::{EngineEvent, EventKind, RecipeReport};
+use engine::helper::report::HelperReport;
 use engine::manifest::output_key;
 use engine::overrides::project_rel;
 use engine::pack::plan::virtual_stem;
@@ -18,6 +19,8 @@ pub enum ItemKind {
     Image,
     Packed,
     Dds,
+    /// Note DY16: a helper file (AO, masks, layers…): a row under the tiles, never a tile.
+    Helper,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +69,8 @@ pub struct TextureItem {
     /// The file's stamp when it was listed. Only DDS inputs carry one: the engine plans no job for them, so
     /// nothing else records what they looked like; an item with a job is checked against the job's stamps.
     pub stamp: Option<SourceStamp>,
+    /// Note DY16: the engine's report for a `Helper` item.
+    pub helper: Option<std::sync::Arc<HelperReport>>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +149,19 @@ pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
     out
 }
 
+/// Note DY16: where a helper went, from the engine's report: "fills to x_rmaos R, x alpha" or "not used: <reason>".
+pub fn helper_target_text(h: &HelperReport) -> String {
+    if h.fills.is_empty() {
+        return match h.not_used.as_deref().filter(|r| !r.is_empty()) {
+            Some(r) => format!("not used: {r}"),
+            None => "not used".to_string(),
+        };
+    }
+    let base = super::helpers::set_base(h);
+    let to: Vec<String> = h.fills.iter().map(|t| t.label(&base)).collect();
+    format!("fills to {}", to.join(", "))
+}
+
 fn file_name(p: &Path) -> String {
     p.file_name()
         .unwrap_or_default()
@@ -157,6 +175,10 @@ impl PlanView {
         let mut items = vec![];
         let mut rnm_notes: BTreeMap<String, Vec<Warning>> = BTreeMap::new();
         let mut rnm_keys = BTreeMap::new();
+        // Note DY16: a file with a helper report is one Helper item; its own raw job and its pack-source item are not.
+        let helper_paths: std::collections::HashSet<&Path> =
+            plan.helpers.iter().map(|h| h.path.as_path()).collect();
+        let mut helper_warnings: BTreeMap<&Path, Vec<Warning>> = BTreeMap::new();
         for job in &plan.jobs {
             // M6 Track F2 (Note W11): a layer file has no item; its RNM-* notes are kept for its set.
             if matches!(job.status, JobStatus::NormalLayer { .. }) {
@@ -172,6 +194,16 @@ impl PlanView {
                         .or_default()
                         .extend(notes);
                 }
+                continue;
+            }
+            if matches!(job.status, JobStatus::PackingInput { .. })
+                && helper_paths.contains(job.input.as_path())
+            {
+                // Kept on the helper's item, so PACK-UNUSED-INPUT still reaches Problems.
+                helper_warnings
+                    .entry(job.input.as_path())
+                    .or_default()
+                    .extend(job.warnings.iter().cloned());
                 continue;
             }
             if let Some(r) = &job.rnm {
@@ -235,9 +267,14 @@ impl PlanView {
                 status,
                 changed_on_disk: false,
                 stamp: None,
+                helper: None,
             });
             if let Some(pk) = &job.pack {
-                for s in &pk.sources {
+                for s in pk
+                    .sources
+                    .iter()
+                    .filter(|s| !helper_paths.contains(s.path.as_path()))
+                {
                     items.push(TextureItem {
                         key: key_of(root, &s.path),
                         job_key: String::new(),
@@ -253,10 +290,43 @@ impl PlanView {
                         analysis: None,
                         changed_on_disk: false,
                         stamp: None,
+                        helper: None,
                     });
                 }
             }
         }
+        // First, so the de-duplication below keeps the helper over any other item for its file.
+        let mut helpers: Vec<TextureItem> = plan
+            .helpers
+            .iter()
+            .map(|h| {
+                let failed = plan.failed.iter().find(|f| f.path == h.path);
+                let status = match (failed, h.outputs.first()) {
+                    (Some(f), _) => ItemStatus::Failed(f.error.clone()),
+                    (None, Some(o)) => ItemStatus::PackedInto(output_key(out_root, o)),
+                    (None, None) => ItemStatus::Skipped(h.not_used.clone().unwrap_or_default()),
+                };
+                TextureItem {
+                    key: key_of(root, &h.path),
+                    job_key: String::new(),
+                    input: h.path.clone(),
+                    name: file_name(&h.path),
+                    set_key: Some(h.set_key.clone()),
+                    kind: ItemKind::Helper,
+                    job: None,
+                    status,
+                    decisions: vec![],
+                    warnings: helper_warnings.remove(h.path.as_path()).unwrap_or_default(),
+                    thumb: session.cache().thumbnail_of(&h.path),
+                    analysis: None,
+                    changed_on_disk: false,
+                    stamp: None,
+                    helper: Some(std::sync::Arc::new(h.clone())),
+                }
+            })
+            .collect();
+        helpers.append(&mut items);
+        let mut items = helpers;
         for s in &plan.skipped {
             let dds = s.code == Some(Code::InDdsSkipped);
             items.push(TextureItem {
@@ -278,6 +348,7 @@ impl PlanView {
                 analysis: None,
                 changed_on_disk: false,
                 stamp: if dds { SourceStamp::of(&s.path) } else { None },
+                helper: None,
             });
         }
         for f in &plan.failed {
@@ -296,6 +367,7 @@ impl PlanView {
                 analysis: None,
                 changed_on_disk: false,
                 stamp: None,
+                helper: None,
             });
         }
         // De-duplicate by key (a raw source can feed two recipes): keep the first.

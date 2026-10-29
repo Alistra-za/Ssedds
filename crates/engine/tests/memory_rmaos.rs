@@ -67,6 +67,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         .sources()
         .into_iter()
         .map(|(path, role)| PackSource {
+            read: None,
             stamp: SourceStamp::of(&path),
             path,
             role,
@@ -90,6 +91,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
             kind: RecipeKind::Rmaos,
             channels,
             gray: GraySource::R,
+            hand_placed: false,
             sources,
         }),
         bake: None,
@@ -97,6 +99,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     };
     Plan {
         request,
@@ -111,6 +114,8 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         shaders: Default::default(),
         nvtt: None,
         derive_own: Default::default(),
+        fill_ends: Default::default(),
+        helpers: vec![],
     }
 }
 

@@ -344,6 +344,11 @@ pub struct Plan {
     /// derived diffuse on its albedo's path, a kept landscape `_p`). That job's event ends them, so `run` emits no
     /// `packed_source` for them.
     pub derive_own: BTreeSet<PathBuf>,
+    /// Note DY (review 4 I1): helpers an alpha fill consumed whose target has no job left (failed or cancelled while
+    /// planning, or replaced): (helper, the output it filled, set key). `run` ends each with a `packed_source` skip.
+    pub fill_ends: Vec<(PathBuf, PathBuf, String)>,
+    /// Note DY: every helper of the batch (`helper::report::reports`), by set key then file name.
+    pub helpers: Vec<crate::helper::report::HelperReport>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -595,6 +600,8 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
     estimated_bytes(&job.input)
         + extra
         + cube
+        // Note DY: `apply_fill` holds the helper's decoded image beside the target's.
+        + job.fill.as_ref().map_or(0, |f| estimated_bytes(&f.source.path))
         + job
             .bake
             .as_ref()
@@ -661,8 +668,14 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// (SHA-256, bake identity, RNM role, derive identity) of one recorded source.
-type SourceKey = (String, Option<String>, Option<String>, Option<String>);
+/// (SHA-256, bake identity, RNM role, derive identity, fill identity) of one recorded source.
+type SourceKey = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), then
 /// the RNM inputs (M6 Track F2), as `SourceKey`s. Empty for an ordinary file that does not bake; `None` when a
@@ -671,7 +684,13 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
     let mut v = vec![];
     if let Some(pk) = &job.pack {
         for s in &pk.sources {
-            v.push((sha256_file(&s.path).ok()?, None, None, None));
+            v.push((
+                sha256_file(&s.path).ok()?,
+                None,
+                None,
+                None,
+                pack::source_fill(pk, s),
+            ));
         }
     }
     // Note CN12: a derived job's sources, each with the job's identity, so a changed setting re-encodes.
@@ -683,6 +702,7 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                 None,
                 None,
                 Some(identity.clone()),
+                None,
             ));
         }
     }
@@ -693,12 +713,13 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
         .filter(|c| c.sources.len() > 1)
         .flat_map(|c| &c.sources)
     {
-        v.push((sha256_file(&s.path).ok()?, None, None, None));
+        v.push((sha256_file(&s.path).ok()?, None, None, None, None));
     }
     if let Some(b) = &job.bake {
         v.push((
             sha256_file(&b.normal).ok()?,
             Some(b.identity_sha256()),
+            None,
             None,
             None,
         ));
@@ -709,14 +730,25 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
                     None,
                     Some(format!("bake.{role}")),
                     None,
+                    None,
                 ));
             }
         }
     }
     if let Some(r) = job.active_rnm() {
         for (f, role) in r.inputs(&job.profile.rnm) {
-            v.push((sha256_file(&f.path).ok()?, None, Some(role), None));
+            v.push((sha256_file(&f.path).ok()?, None, Some(role), None, None));
         }
+    }
+    // Note DY: the helper that fills the alpha, last, as `process_file` records it.
+    if let Some(f) = &job.fill {
+        v.push((
+            sha256_file(&f.source.path).ok()?,
+            None,
+            None,
+            None,
+            Some(f.identity()),
+        ));
     }
     Some(v)
 }
@@ -827,6 +859,7 @@ pub(crate) fn is_up_to_date(
                     r.bake.clone(),
                     r.rnm.clone(),
                     r.derive.clone(),
+                    r.fill.clone(),
                 )
             }))
         })
@@ -1136,10 +1169,23 @@ impl Engine {
         // `plan_packing` treats it, so its role leaves the set's suffixes (unless another raw member has it) and
         // Advanced skin detection and the `auto` prediction below follow the recipe actually built.
         // shortcut: rule-named sub-types are not seen here (rules need the analysis); revisit if a rule names one.
+        // Note DY: each image's hand-set `helper.role`. `none` makes a raw map an ordinary file, like a requested
+        // sub-type; any other hand role wins over a requested sub-type (ruling 13).
+        let hand: Vec<Option<crate::helper::HelperRole>> = files
+            .iter()
+            .map(|f| {
+                (f.kind == InputKind::Image)
+                    .then(|| crate::policy::helper_requested(&ctx, f).role)
+                    .flatten()
+            })
+            .collect();
         let typed: BTreeSet<usize> = (0..files.len())
             .filter(|&i| {
                 pack::plan::raw_role(&files[i]).is_some()
-                    && crate::policy::subtype_requested(&ctx, &files[i])
+                    && match hand[i] {
+                        Some(r) => r == crate::helper::HelperRole::NotHelper,
+                        None => crate::policy::subtype_requested(&ctx, &files[i]),
+                    }
             })
             .collect();
         let drop_typed_roles = |sets: &mut Vec<TextureSet>| {
@@ -1155,6 +1201,10 @@ impl Engine {
             }
         };
         drop_typed_roles(&mut sets);
+        // Note DY: a hand-set helper with no recognised suffix (`x_mask`) joins set `x` when it exists.
+        crate::group::join_helpers(&mut sets, &files, registry.alias_table(), |i| {
+            hand[i].is_some_and(|r| r != crate::helper::HelperRole::NotHelper)
+        });
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
         // shortcut: a set skin only by its chosen shader (Note DV7) is not seen here; move the explicit shaders up
@@ -1276,7 +1326,11 @@ impl Engine {
                 .members
                 .iter()
                 .filter(|i| !typed.contains(i))
-                .filter_map(|&i| pack::plan::raw_role(&files[i]))
+                .filter_map(|&i| match hand[i] {
+                    Some(crate::helper::HelperRole::Raw(r)) => Some(r),
+                    Some(_) => None,
+                    None => pack::plan::raw_role(&files[i]),
+                })
                 .collect();
             let complex = explicit.get(&set.key) == Some(&Shader::ComplexMaterial);
             for s in pack::predicted_suffixes(target, complex, &roles) {
@@ -1545,6 +1599,24 @@ impl Engine {
             .iter()
             .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.width, a.height, a.dds_cube)))
             .collect();
+        // Read by `plan_fills` (Note DY, Ruling 6): each input's alpha verdict on the original source, and its size.
+        let alpha_facts: BTreeMap<PathBuf, crate::helper::plan::AlphaFacts> = pass1
+            .iter()
+            .map(|(wi, a, _)| {
+                let empty = matches!(a.alpha, AlphaContent::None | AlphaContent::Constant255)
+                    || a.channels[3].min == a.channels[3].max;
+                let facts = crate::helper::plan::AlphaFacts {
+                    empty,
+                    size: (a.width, a.height),
+                };
+                (work[*wi].1.path.clone(), facts)
+            })
+            .collect();
+        // The load facts a filled target's re-analysis cannot see (it loads pixels only): ICC flag, DDS format.
+        let load_meta: BTreeMap<PathBuf, (bool, Option<u32>)> = pass1
+            .iter()
+            .map(|(wi, a, _)| (work[*wi].1.path.clone(), (a.icc_profile, a.dds_dxgi)))
+            .collect();
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
@@ -1624,6 +1696,8 @@ impl Engine {
             .collect();
         // DECISIONS DS8: six face files become one cube job, and one-file cubes get their layout.
         crate::cube::plan::plan_cubes(&cube_facts, &mut jobs, &mut skipped);
+        // Note DY: helper alpha fills, decided before packing so a helper an alpha fill uses is not reported unused.
+        let fills = crate::helper::plan::plan_fills(&ctx, &sets, &files, &mut jobs, &alpha_facts);
         let mut packed = pack::plan::plan_packing(
             &ctx,
             &sets,
@@ -1635,6 +1709,7 @@ impl Engine {
             &packed_outputs,
             &derive_heights,
             &flat_b,
+            &fills,
         );
         // As step 3b drops its losers, so later steps (the RNM bent AO) never read a replaced generated AO.
         for s in &mut sets {
@@ -1751,6 +1826,136 @@ impl Engine {
                 }
             }
         }
+        // Note DY: each filled target is loaded, filled and analysed again, then re-resolved as 6c does, so alpha
+        // policy, format, coverage and cutout all see the filled image. It runs before the derive step, so a target
+        // a derive replaces loses its fill with it (Ruling 15).
+        // shortcut: the filled analysis is not cached (as derive P25); key it on both stamps if re-plans get slow.
+        let fill_items: Vec<_> = fills
+            .candidates
+            .iter()
+            .filter_map(|c| {
+                let ji = jobs.iter().position(|j| {
+                    j.input == c.target
+                        && j.pack.is_none()
+                        && j.derive.is_none()
+                        && j.cube.is_none()
+                })?;
+                let set = sets.iter().find(|s| s.key == c.set_key)?;
+                let f = files.iter().find(|f| f.path == c.target)?;
+                Some((c, ji, set, f))
+            })
+            .collect();
+        // Review 4 I1: every consumed helper with the output it fills (a size-mismatch error job carries its `fill`),
+        // so one whose target job is later gone (failed, cancelled, derived away) still ends with that output.
+        let fill_owner: Vec<(PathBuf, PathBuf, String)> = fill_items
+            .iter()
+            .map(|&(c, ji, ..)| (&c.fill, &jobs[ji]))
+            .chain(
+                jobs.iter()
+                    .filter_map(|j| j.fill.as_ref().map(|fl| (fl, j))),
+            )
+            .map(|(fl, j)| (fl.source.path.clone(), j.output.clone(), j.set_key.clone()))
+            .collect();
+        // Test hook: `SDC_TEST_CANCEL_ON=<target output name>` cancels the batch as the fill step starts (pass 1 is
+        // named by inputs, so only this step matches an output name).
+        #[cfg(feature = "test-hooks")]
+        for &(_, ji, ..) in &fill_items {
+            cancel_on_load_for_test(&jobs[ji].output, cancel);
+        }
+        let fill_results = admit_all(
+            &pool,
+            &budget,
+            cancel,
+            &fill_items,
+            |(c, ..)| estimated_bytes(&c.target) + estimated_bytes(&c.fill.source.path),
+            |(_, ji, ..)| jobs[*ji].output.as_path(),
+            |&(c, ji, set, f), admitted, stage| {
+                let old = &jobs[ji];
+                let split = split_for((set, f));
+                let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
+                // Review 4 I2: the resolved profile may change `alpha.exr_straight` (a rule on the filled alpha), so the
+                // image is loaded again under the final setting: the analysed image is the one the run writes.
+                // shortcut: a second change is not chased (the filled alpha, which rules match, is the same under both
+                // settings); loop until stable if a rule ever reads RGB.
+                let mut straight = old.profile.alpha.exr_straight;
+                let mut tries = 0;
+                let (mut job, a) = loop {
+                    stage.set(Stage::Load);
+                    let (mut img, mut info) = crate::load::load_image_as(&c.target, straight)
+                        .map_err(PlanFailure::Load)?;
+                    crate::helper::apply_fill(&mut img, &mut info, &c.fill)
+                        .map_err(PlanFailure::Pack)?;
+                    cache.count_loads(2);
+                    stage.set(Stage::Analyse);
+                    let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                    let mut a = analyse_with(&img, &info, hints);
+                    if let Some(&(icc, dxgi)) = load_meta.get(&c.target) {
+                        a.icc_profile = icc;
+                        a.dds_dxgi = dxgi;
+                    }
+                    drop(img);
+                    stage.set(Stage::Resolve);
+                    let facts = FileFacts {
+                        input: f,
+                        suffix: split.suffix.as_deref(),
+                        alias: split.alias.as_deref(),
+                        set,
+                        analysis: &a,
+                        info: &info,
+                    };
+                    let job = resolve_file_with(&ctx, &facts, gras_diffuse);
+                    if job.profile.alpha.exr_straight == straight || tries == 1 {
+                        break (job, a);
+                    }
+                    straight = job.profile.alpha.exr_straight;
+                    tries += 1;
+                };
+                drop(admitted);
+                job.source = old.source;
+                job.warnings.extend(picks.get(&job.set_key).and_then(|p| {
+                    crate::shader::pbr_grass_albedo_note(p, job.profile.subtype, a.corner_err)
+                }));
+                job.provenance.insert("target".into(), target_src.clone());
+                let read = pack::ChannelSource::Source {
+                    path: c.fill.source.path.clone(),
+                    role: c.fill.source.role,
+                    invert: c.fill.invert,
+                    channel: c.fill.read.map(|r| r.channel()),
+                };
+                if let Some(p) = read.provenance(GraySource::R) {
+                    job.provenance.insert("fill.a".into(), p);
+                }
+                job.fill = Some(c.fill.clone());
+                Ok(job)
+            },
+        );
+        // A target that failed or was cancelled here has no job, as a pass-2 recipe.
+        let mut gone = BTreeSet::new();
+        for (&(c, ji, ..), r) in fill_items.iter().zip(fill_results) {
+            match r {
+                Some(Ok(job)) => jobs[ji] = job,
+                Some(Err(e)) => {
+                    let output = jobs[ji].output.clone();
+                    let (stage, error) = failure(&output, e);
+                    failed.push(FailedFile {
+                        path: c.target.clone(),
+                        output,
+                        stage,
+                        error,
+                    });
+                    gone.insert(ji);
+                }
+                None => {
+                    cancelled.push(c.target.clone());
+                    gone.insert(ji);
+                }
+            }
+        }
+        let mut i = 0;
+        jobs.retain(|_| {
+            i += 1;
+            !gone.contains(&(i - 1))
+        });
         // Track A (DECISIONS Note CN): the derive step replaces each PBR set's jobs with derived jobs, after packing
         // (a packed member's job goes too) and before the shader assignment, so a derived set carries its vanilla
         // shader (TA29). Without `derive` nothing below runs (C6).
@@ -1893,6 +2098,7 @@ impl Engine {
         // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped),
         // before the bakes, so a baking roughness member copies its `_n`'s blend (Note W18).
         crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
+        let helpers = crate::helper::report::reports(&ctx, &sets, &files, &jobs, &fills);
         let bake_cx = crate::bake::plan::BakeCtx {
             target,
             sets: &sets,
@@ -1946,8 +2152,11 @@ impl Engine {
                 if let Some(pk) = &j.pack {
                     rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
                 }
+                rels.extend(j.fill.iter().filter_map(|f| rel_of_path(&f.source.path)));
             }
             rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
+            // Note DY: a helper consumed by a fill or a recipe, or one that fills nothing, is a planned file.
+            rels.extend(helpers.iter().filter_map(|h| rel_of_path(&h.path)));
             // The derive step removed the jobs of PBR set members (Note CN); their keys still name planned files.
             if let Some(d) = &req.derive {
                 let members = d.sets.iter().flat_map(|s| &s.members).chain(&d.drop);
@@ -2033,6 +2242,7 @@ impl Engine {
             if let Some(p) = &pick {
                 warnings = crate::shader::pick_notes(p, target);
                 let maps = map_members(
+                    &ctx,
                     set,
                     &files,
                     &index,
@@ -2073,6 +2283,40 @@ impl Engine {
                 );
             }
         }
+        // Review 4 I1: a consumed helper that no surviving job, skip, failure or cancellation ends (a helper-free plan
+        // skips the walk).
+        let fill_ends: Vec<(PathBuf, PathBuf, String)> = if fill_owner.is_empty() {
+            vec![]
+        } else {
+            let ended: BTreeSet<&Path> = jobs
+                .iter()
+                .flat_map(|j| {
+                    let pack = j
+                        .pack
+                        .iter()
+                        .flat_map(|p| p.sources.iter().map(|s| &s.path));
+                    let derive = j
+                        .derive
+                        .iter()
+                        .flat_map(|d| d.sources.iter().map(|s| &s.path));
+                    let fill = j.fill.iter().map(|f| &f.source.path);
+                    std::iter::once(&j.input)
+                        .chain(pack)
+                        .chain(derive)
+                        .chain(fill)
+                })
+                .chain(skipped.iter().map(|s| &s.path))
+                .chain(failed.iter().map(|f| &f.path))
+                .chain(&cancelled)
+                .chain(&derive_own)
+                .map(PathBuf::as_path)
+                .collect();
+            let mut seen = BTreeSet::new();
+            fill_owner
+                .into_iter()
+                .filter(|(h, ..)| !ended.contains(h.as_path()) && seen.insert(h.clone()))
+                .collect()
+        };
         Ok(Plan {
             request: req,
             registry,
@@ -2086,6 +2330,8 @@ impl Engine {
             shaders: picks,
             nvtt: nvtt.into_probed(),
             derive_own,
+            fill_ends,
+            helpers,
         })
     }
 
@@ -2195,6 +2441,19 @@ impl Engine {
                 },
             );
         }
+        // Note DY (review 4 I1): a helper whose target has no job ends with the output it filled.
+        for (helper, output, set) in &plan.fill_ends {
+            rep.emit_job(
+                Some(&key(output)),
+                Some(set),
+                Some(helper),
+                EventKind::FileSkipped {
+                    kind: SkipKind::PackedSource,
+                    code: None,
+                    reason: format!("filled into {}", slash(output)),
+                },
+            );
+        }
         let mut ready = vec![];
         // A file a recipe packs (the kept landscape `_p`'s raw height, Note CN26) already ends with that event.
         let mut derive_read: BTreeSet<&Path> = plan
@@ -2220,6 +2479,8 @@ impl Engine {
                     job.derive
                         .iter()
                         .flat_map(|d| d.sources.iter().map(|s| (&s.path, "derived")))
+                        // Note DY: so does a helper, with the first output it fills, unless a recipe packs it too.
+                        .chain(job.fill.iter().map(|f| (&f.source.path, "filled")))
                         .filter(|(p, _)| derive_read.insert(p.as_path())),
                 )
                 // DECISIONS DS8: each face of a face-set cube (a broken set lists its lead file only), keyed by the
@@ -2678,8 +2939,10 @@ fn explicit_shaders(
 /// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a kept DDS
 /// input with the sub-type its suffix suggests, not the set's own earlier output), then each packed output of the
 /// set. Raw maps are left out by role, because
-/// `plan_packing` re-tags an unused one; duplicates and failed files are left out.
+/// `plan_packing` re-tags an unused one; duplicates and failed files are left out. A raw-named image set to
+/// `helper.role = "none"` (Note DY) is an ordinary member.
 fn map_members(
+    ctx: &ResolveCtx,
     set: &TextureSet,
     files: &[InputFile],
     jobs: &crate::shader::JobIndex,
@@ -2700,7 +2963,10 @@ fn map_members(
     let mut out = vec![];
     for &i in &set.members {
         let f = &files[i];
-        if pack::plan::raw_role(f).is_some() {
+        if pack::plan::raw_role(f).is_some()
+            && crate::policy::helper_requested(ctx, f).role
+                != Some(crate::helper::HelperRole::NotHelper)
+        {
             continue;
         }
         // Trace-debug #25 (Note BQ): an RNM layer or mask is never converted on its own, as the shader pick knows.
@@ -3078,6 +3344,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         }
     }
 
@@ -3165,6 +3432,29 @@ mod tests {
         assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
+    /// Note DY: a filled job also holds its helper's decoded image.
+    #[test]
+    fn job_bytes_counts_helper() {
+        let d = tempfile::tempdir().unwrap();
+        let mut j = png_job(d.path(), "x.png", (32, 32), Subtype::Diffuse);
+        let base = job_bytes(&j);
+        let helper = d.path().join("x_opacity.png");
+        image::GrayImage::new(16, 16).save(&helper).unwrap();
+        j.fill = Some(crate::helper::FillJob {
+            source: crate::pack::PackSource {
+                read: None,
+                path: helper.clone(),
+                role: crate::config::RawMap::Opacity,
+                stamp: None,
+            },
+            read: None,
+            invert: false,
+            assigned: false,
+        });
+        assert!(estimated_bytes(&helper) > 0);
+        assert_eq!(job_bytes(&j), base + estimated_bytes(&helper));
+    }
+
     /// Note CN13: a derived job adds 16 B/texel per colour map, the scalars and the output (twice for the grass
     /// stack, which reads the albedo and the normal).
     #[test]
@@ -3222,6 +3512,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         };
         let texels = 48 * 40;
         assert_eq!(job_bytes(&job), input_bytes(48, 40));
@@ -3275,6 +3566,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         };
         std::fs::write(&job.output, b"dds").unwrap();
         let enc = EncoderVersions::current();
@@ -3359,6 +3651,7 @@ mod tests {
                         derive: None,
                         derive_role: None,
                         cube_face: None,
+                        fill: None,
                     }]
                 }),
             ),

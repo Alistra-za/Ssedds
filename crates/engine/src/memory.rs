@@ -118,6 +118,7 @@ fn pack_with_info(
         .sources()
         .into_iter()
         .map(|(path, role)| PackSource {
+            read: None,
             path,
             role,
             stamp: None,

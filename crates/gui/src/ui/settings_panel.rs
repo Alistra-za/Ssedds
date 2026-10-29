@@ -1023,6 +1023,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         ui.weak("This texture is no longer in the plan.");
         return;
     };
+    if let Some(h) = item.helper.clone() {
+        return super::helper_panel::draw(ui, model, key, &h);
+    }
     let (name, job_key, kind, status) = (
         item.name.clone(),
         item.job_key.clone(),
@@ -1060,6 +1063,53 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
+        // Note DY17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
+        let not_helper = model
+            .project
+            .as_ref()
+            .and_then(|p| p.file_value(key, engine::helper::ROLE_FIELD))
+            .is_some_and(|v| v == json!("none"));
+        if not_helper {
+            let mut reset = false;
+            ui.horizontal(|ui| {
+                ui.label("Not a helper (set by you)");
+                let r =
+                    ui.add_enabled(toml_read_only.is_none(), egui::Button::new("Reset").small());
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, r.enabled(), "Reset role")
+                });
+                let r = r.on_hover_text("Use the role guessed from the name");
+                let r = match &toml_read_only {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r,
+                };
+                reset = r.clicked();
+            });
+            if reset {
+                model.set_helper_role(key, None);
+            }
+        }
+        // Note DY17 (docs review): any image can be made a helper here, e.g. one whose name has no helper suffix.
+        if kind == ItemKind::Image {
+            let picked = ui
+                .add_enabled_ui(toml_read_only.is_none(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Helper role");
+                        super::helper_panel::role_combo(
+                            ui,
+                            key,
+                            engine::helper::HelperRole::NotHelper,
+                            not_helper,
+                            &toml_read_only,
+                        )
+                    })
+                    .inner
+                })
+                .inner;
+            if let Some(role) = picked {
+                model.set_helper_role(key, Some(role));
+            }
+        }
         ui.add_space(4.0);
     }
     ui.add_enabled_ui(!read_only, |ui| match &job {

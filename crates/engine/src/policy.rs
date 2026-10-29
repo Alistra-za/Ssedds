@@ -339,18 +339,39 @@ pub fn subtype_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
 /// M6 Track F2 (DECISIONS Note W3): the `rnm.target` a layer file asked for, by the highest-precedence override that
 /// reaches it (`[files]`, then unscoped, file-glob and path `--set`); `None` = the default from its name.
 pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTarget> {
+    selector_value(ctx, input, crate::overrides::RNM_TARGET_FIELD)
+        .and_then(crate::overrides::rnm_target_value)
+}
+
+/// The value of the per-file selector `field` from the highest-precedence override that reaches `input`
+/// (`[files]`, then unscoped, file-glob and path `--set`; a sub-type scope is refused at parse time).
+fn selector_value<'a>(ctx: &ResolveCtx<'a>, input: &InputFile, field: &str) -> Option<&'a Value> {
     let forms = LazyForms::new();
     ranked_overrides(ctx)
         .into_iter()
         .rev()
-        .filter(|o| o.field == crate::overrides::RNM_TARGET_FIELD)
+        .filter(|o| o.field == field)
         .find(|o| match &o.scope {
             Scope::All => true,
             Scope::File(g) => glob_match_input(g, input),
             Scope::Path(k) => path_matches(ctx, &forms, input, k),
             Scope::Subtype(_) | Scope::Set(_) => false,
         })
-        .and_then(|o| crate::overrides::rnm_target_value(&o.value))
+        .map(|o| &o.value)
+}
+
+/// Note DY: what the `helper.*` selectors hand-set for `input`, each field as [`rnm_target_requested`] reads its key.
+pub fn helper_requested(ctx: &ResolveCtx, input: &InputFile) -> crate::helper::HelperSel {
+    use crate::helper::*;
+    let v = |field| selector_value(ctx, input, field);
+    HelperSel {
+        role: v(ROLE_FIELD)
+            .and_then(Value::as_str)
+            .and_then(HelperRole::parse),
+        fills: v(FILLS_FIELD).and_then(fills_value),
+        read: v(READ_FIELD).and_then(|r| serde_json::from_value(r.clone()).ok()),
+        invert: v(INVERT_FIELD).and_then(Value::as_bool).unwrap_or(false),
+    }
 }
 
 pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
@@ -1354,6 +1375,10 @@ pub struct ResolvedJob {
     /// (`cube::plan::plan_cubes`); `None` for every other job. For a cube job `input` is `cube.sources[0].path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube: Option<crate::cube::CubeJob>,
+    /// Helper textures (DECISIONS Note DY): the helper whose channel this plain file job's alpha is filled from,
+    /// before analysis and again at load (`helper::apply_fill`); `None` for every other job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<crate::helper::FillJob>,
 }
 
 impl ResolvedJob {
@@ -2317,13 +2342,27 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
 
 /// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
 /// placeholder and is never used. It is a raw map waiting for `pack::plan::plan_packing`, which consumes it into a
-/// recipe or re-tags it `PACK-UNUSED-INPUT`.
-fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) -> ResolvedJob {
+/// recipe or re-tags it `PACK-UNUSED-INPUT`. `hand`: the role was set by `helper.role` (Note DY), which a sub-type
+/// does not undo.
+fn packing_input_job(
+    ctx: &ResolveCtx,
+    f: &FileFacts,
+    term: &str,
+    role: RawMap,
+    hand: bool,
+) -> ResolvedJob {
     let profile = ctx.registry.base_profile(ctx.target, Subtype::GenericData);
-    let msg = format!(
-        "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
-        role.id()
-    );
+    let msg = if hand {
+        format!(
+            "helper.role = \"{}\": a channel-packing input (spec §6.4), not converted on its own; set helper.role = \"none\" to convert it alone",
+            role.id()
+        )
+    } else {
+        format!(
+            "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
+            role.id()
+        )
+    };
     ResolvedJob {
         input: f.input.path.clone(),
         output: f.input.output.clone(),
@@ -2343,6 +2382,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }
 
@@ -2367,6 +2407,7 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }
 
@@ -2380,6 +2421,42 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
 /// top suggestion becomes a high-confidence `complex_grass`, on either target (Note AZ reverses ruling R1).
 pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) -> ResolvedJob {
     let mut d = decide_subtype(ctx, f);
+    // Note DY (rulings 12, 13): a hand-set helper role on an image wins over its name and a requested sub-type;
+    // `none` makes it an ordinary file.
+    let role = (f.input.kind == crate::discover::InputKind::Image)
+        .then(|| helper_requested(ctx, f.input).role)
+        .flatten();
+    match role {
+        Some(crate::helper::HelperRole::Raw(r)) => {
+            return packing_input_job(ctx, f, &r.id(), r, true)
+        }
+        Some(crate::helper::HelperRole::Layer(t)) => {
+            let stem = f
+                .input
+                .rel
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let prefix = match crate::rnm::split_layer(&stem) {
+                Some((
+                    _,
+                    Vocab {
+                        role: VocabRole::NormalLayer(n),
+                        ..
+                    },
+                )) => n.prefix,
+                _ => None,
+            };
+            return normal_layer_job(ctx, f, crate::rnm::LayerTerm { prefix, ..t.into() });
+        }
+        Some(crate::helper::HelperRole::NotHelper) => {
+            if gras_diffuse {
+                suggest_grass(ctx, f, &mut d);
+            }
+            return resolve_decided(ctx, f, d);
+        }
+        None => {}
+    }
     // Spec §4.4: a raw map is a packing input unless a rule or --set names its sub-type.
     if let Some(Vocab {
         term,
@@ -2390,7 +2467,7 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
             d.provenance,
             Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
         ) {
-            return packing_input_job(ctx, f, term, *role);
+            return packing_input_job(ctx, f, term, *role, false);
         }
     }
     // Note DR: in a set that is Advanced skin by other evidence, `_f` is the fuzz mask (a metal-like grey map), a
@@ -2400,7 +2477,7 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
         Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
     ) && crate::pack::plan::skin_f_candidate(ctx, f.set, f.input)
     {
-        return packing_input_job(ctx, f, "f", RawMap::Fuzz);
+        return packing_input_job(ctx, f, "f", RawMap::Fuzz, false);
     }
     // M6 Track F2 (DECISIONS Note W2): a layer file is hidden unless a rule or --set names its sub-type.
     if let Some(Vocab {
@@ -2515,6 +2592,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     derive: None,
                     shader: None,
                     cube: None,
+                    fill: None,
                 };
             }
         };
@@ -2636,5 +2714,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         derive: None,
         shader: None,
         cube: None,
+        fill: None,
     }
 }

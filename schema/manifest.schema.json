@@ -938,7 +938,9 @@
         "orm",
         "curves",
         "cavity",
-        "rmaos"
+        "rmaos",
+        "fuzzweight",
+        "subsurfaceweight"
       ],
       "type": "string"
     },
@@ -1070,6 +1072,13 @@
         },
         "derive_role": {
           "description": "The slots that source fills in a derived job (`albedo`, `rough+metal+ao`, ...), as `rnm` holds its role.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fill": {
+          "description": "Note DY: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed\nsource read through an explicit `helper.read` (`read:g`) or the channels each source of a hand-placed recipe\nfeeds (`ch:ba`, `pack::source_fill`). Absent on every other source.",
           "type": [
             "string",
             "null"

@@ -948,6 +948,36 @@
       ],
       "type": "string"
     },
+    "FillJob": {
+      "description": "How a helper fills its target's alpha (Note DY): the source, the channel read (`None` = R, Ruling 9), whether it\nis inverted, and whether it was hand-set (assigned replaces any alpha; suggested fills only an empty one).",
+      "properties": {
+        "assigned": {
+          "type": "boolean"
+        },
+        "invert": {
+          "type": "boolean"
+        },
+        "read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelperRead"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/PackSource"
+        }
+      },
+      "required": [
+        "source",
+        "invert",
+        "assigned"
+      ],
+      "type": "object"
+    },
     "FillSpec": {
       "additionalProperties": false,
       "description": "Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit\ncode per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.",
@@ -1086,6 +1116,17 @@
         "auto",
         "dx10",
         "legacy"
+      ],
+      "type": "string"
+    },
+    "HelperRead": {
+      "description": "Which channel of the helper is read (`helper.read`).",
+      "enum": [
+        "r",
+        "g",
+        "b",
+        "a",
+        "luma"
       ],
       "type": "string"
     },
@@ -1464,6 +1505,10 @@
           "$ref": "#/$defs/GraySource",
           "description": "The `channels.grayscale_source` this recipe was planned with (provenance, analysis and report all use it).\nThe pipeline assembles with this value, not with the final profile's, so the written image is the one that\nwas analysed (DECISIONS Note M6). Serialised, so it shows in `file_planned` and the manifest."
         },
+        "hand_placed": {
+          "description": "Note DY21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels\n(`source_fill`). Absent otherwise, so no other job's JSON changes.",
+          "type": "boolean"
+        },
         "kind": {
           "$ref": "#/$defs/RecipeKind"
         },
@@ -1503,6 +1548,17 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelperRead"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Note DY: the source's explicit `helper.read`, kept apart from the channel a recipe assigns (`_orm`, `_rmaos`),\nso the record names it. Absent otherwise, so no other job's JSON changes."
         },
         "role": {
           "$ref": "#/$defs/RawMap"
@@ -1646,7 +1702,9 @@
         "orm",
         "curves",
         "cavity",
-        "rmaos"
+        "rmaos",
+        "fuzzweight",
+        "subsurfaceweight"
       ],
       "type": "string"
     },
@@ -1780,6 +1838,17 @@
             }
           ],
           "description": "Track A (DECISIONS Note CN11): how a derived output is built from a PBR set's inputs; `None` for every other\njob. For a derived job `input` is `derive.sources[0].path`."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FillJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Helper textures (DECISIONS Note DY): the helper whose channel this plain file job's alpha is filled from,\nbefore analysis and again at load (`helper::apply_fill`); `None` for every other job."
         },
         "game_path": {
           "type": "string"

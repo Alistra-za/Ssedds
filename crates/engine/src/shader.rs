@@ -1733,6 +1733,7 @@ mod tests {
             derive: None,
             shader: None,
             cube: None,
+            fill: None,
         }
     }
 

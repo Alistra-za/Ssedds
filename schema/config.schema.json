@@ -532,6 +532,77 @@
         "header": {
           "$ref": "#/$defs/HeaderForm"
         },
+        "helper": {
+          "additionalProperties": false,
+          "description": "Helper texture: a grey map that fills a channel of another output of its set (Note DY).",
+          "properties": {
+            "fills": {
+              "description": "The channels it fills; [] = not used.",
+              "items": {
+                "enum": [
+                  "diffuse.a",
+                  "n.a",
+                  "f.a",
+                  "s.a",
+                  "cnr.a",
+                  "rmaos.r",
+                  "rmaos.g",
+                  "rmaos.b",
+                  "rmaos.a",
+                  "rfaos.r",
+                  "rfaos.g",
+                  "rfaos.b",
+                  "rfaos.a",
+                  "m.r",
+                  "m.g",
+                  "m.b",
+                  "m.a",
+                  "p.r"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "invert": {
+              "description": "Store 1 - x.",
+              "type": "boolean"
+            },
+            "read": {
+              "$ref": "#/$defs/HelperRead"
+            },
+            "role": {
+              "description": "What the file is as a helper; `none` converts it on its own.",
+              "enum": [
+                "none",
+                "roughness",
+                "metallic",
+                "ao",
+                "specular",
+                "glossiness",
+                "height",
+                "opacity",
+                "fuzz",
+                "orm",
+                "curves",
+                "cavity",
+                "fuzzweight",
+                "subsurfaceweight",
+                "bump",
+                "bumpmask",
+                "bump2",
+                "bumpmask2",
+                "detailnorm",
+                "detailnormmask",
+                "detailnorm2",
+                "detailnormmask2",
+                "bent",
+                "bentmask"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "mips": {
           "$ref": "#/$defs/PartialMipSpec"
         },
@@ -760,6 +831,17 @@
         "auto",
         "dx10",
         "legacy"
+      ],
+      "type": "string"
+    },
+    "HelperRead": {
+      "description": "Which channel of the helper is read (`helper.read`).",
+      "enum": [
+        "r",
+        "g",
+        "b",
+        "a",
+        "luma"
       ],
       "type": "string"
     },
