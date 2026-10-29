@@ -7,7 +7,7 @@
 use crate::model::items::{ItemKind, ItemStatus, TextureItem};
 use crate::model::meshes::ScanTarget;
 use crate::model::pbr_export::json_entries;
-use crate::model::preview::DEBOUNCE;
+use crate::model::preview::{extra_inputs_key, DEBOUNCE};
 use crate::model::sets::set_views;
 use crate::model::sets::{SetView, SlotFill, SlotKind};
 use crate::model::viewport3d::FileSource;
@@ -140,7 +140,7 @@ pub fn signature(item: &TextureItem) -> String {
     match &item.job {
         Some(job) if item.kind != ItemKind::Dds => {
             let p = sha256_json(&job.profile).unwrap_or_default();
-            match &job.pack {
+            let head = match &job.pack {
                 Some(pk) => format!("{p}:{}", pack_key(pk).unwrap_or_default()),
                 None => format!(
                     "{p}:{:?}:{:?}:{:?}",
@@ -148,7 +148,8 @@ pub fn signature(item: &TextureItem) -> String {
                     job.source,
                     job.active_rnm()
                 ),
-            }
+            };
+            format!("{head}:{}", extra_inputs_key(job))
         }
         _ => format!("{:?}:{:?}:{:?}", item.kind, item.input, item.stamp),
     }

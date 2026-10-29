@@ -353,6 +353,61 @@ fn another_source_with_the_same_stamp_is_another_signature_and_ids_are_process_w
     assert_ne!(id(&a), id(&b));
 }
 
+#[test]
+fn the_member_signature_follows_the_fill_and_cube_face_inputs() {
+    use engine::config::{CubeLayout, RawMap};
+    use engine::cube::{CubeJob, CubeSource};
+    use engine::helper::FillJob;
+    use engine::pack::PackSource;
+    let (_d, m, _enc, _slots) = started();
+    let item = m
+        .items
+        .iter()
+        .find(|i| i.job.is_some() && i.kind != ItemKind::Dds)
+        .unwrap();
+    let stamp = |n: u64| {
+        Some(engine::policy::SourceStamp {
+            size: n,
+            mtime_ns: n,
+        })
+    };
+    let mut base = item.clone();
+    let job = base.job.as_mut().unwrap();
+    job.fill = Some(FillJob {
+        source: PackSource {
+            path: "h.png".into(),
+            role: RawMap::Roughness,
+            stamp: stamp(1),
+            read: None,
+        },
+        read: None,
+        invert: false,
+        assigned: true,
+    });
+    job.cube = Some(CubeJob {
+        layout: CubeLayout::Faces,
+        sources: (0..6)
+            .map(|f| CubeSource {
+                path: format!("f{f}.png").into(),
+                stamp: stamp(10 + f as u64),
+                face: Some(f),
+            })
+            .collect(),
+    });
+    let a = signature(&base);
+    assert_eq!(
+        a,
+        signature(&base.clone()),
+        "a re-plan with nothing changed"
+    );
+    let mut inverted = base.clone();
+    inverted.job.as_mut().unwrap().fill.as_mut().unwrap().invert = true;
+    assert_ne!(a, signature(&inverted), "fill invert");
+    let mut face = base.clone();
+    face.job.as_mut().unwrap().cube.as_mut().unwrap().sources[1].stamp = stamp(99);
+    assert_ne!(a, signature(&face), "cube face 1 stamp");
+}
+
 // ---- Task 14: fingerprint, classification, query keys, simulation, orchestration ----
 
 use modscan::store::{MatchRow, TexKey};
