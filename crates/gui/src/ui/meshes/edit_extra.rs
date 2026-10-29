@@ -171,7 +171,7 @@ fn row(
             edit(a, n, false)
         }),
         ExtraValue::Str(s) => {
-            let mut buf = s.clone();
+            let mut buf = s.to_string();
             let r = ui.add(
                 egui::TextEdit::multiline(&mut buf)
                     .desired_rows(2)
@@ -184,8 +184,8 @@ fn row(
                 None,
                 Some(buf.clone()),
             );
-            if r.changed() && buf != *s {
-                edit(act, ExtraValue::Str(buf), true);
+            if r.changed() && buf != **s {
+                edit(act, ExtraValue::Str(buf.into()), true);
             }
             act.flush |= r.lost_focus();
         }
@@ -321,7 +321,7 @@ fn inv(
 fn default_value(kind: &str) -> ExtraValue {
     match kind {
         "BSXFlags" => ExtraValue::Bsx(0),
-        "NiStringExtraData" => ExtraValue::Str(String::new()),
+        "NiStringExtraData" => ExtraValue::Str("".into()),
         "NiIntegerExtraData" => ExtraValue::Int(0),
         "NiBooleanExtraData" => ExtraValue::Bool(0),
         "NiFloatExtraData" => ExtraValue::Float(0.0f32.to_bits()),
@@ -656,7 +656,7 @@ fn known_row(
         if r.clicked() {
             let value = match k.value {
                 KnownValue::Text(_) => {
-                    ExtraValue::Str(std::mem::take(&mut st.text).trim().to_string())
+                    ExtraValue::Str(std::mem::take(&mut st.text).trim().into())
                 }
                 KnownValue::Fixed(f) => f(),
                 // The heel entry has its own row (`heel_row`); nothing to add here (T5b review Minor 8).
@@ -827,7 +827,7 @@ fn heel_row(
                 if let Some(new) = sdta_with_npc_z(cur, z) {
                     ops.push(Op::EditExtra {
                         at: extra_anchor(have, i, at.shape.clone(), false),
-                        value: ExtraValue::Str(new),
+                        value: ExtraValue::Str(new.into()),
                         base: ExtraValue::Str(cur.clone()),
                     });
                 }
@@ -839,7 +839,7 @@ fn heel_row(
                     at,
                     kind: "NiStringExtraData".into(),
                     name: "SDTA".into(),
-                    value: ExtraValue::Str(new),
+                    value: ExtraValue::Str(new.into()),
                 });
             }
         }

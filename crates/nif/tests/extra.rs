@@ -111,7 +111,7 @@ fn string_extra_null_index_is_empty_but_dangling_is_an_error() {
     let h = Header::parse(&b).unwrap();
     assert_eq!(
         read_extra(&h, &b, 0).unwrap().value,
-        Some(ExtraValue::Str(String::new()))
+        Some(ExtraValue::Str("".into()))
     );
     for i in [0, 7, -2, i32::MIN] {
         let b = one_block_nif("NiStringExtraData", body(i));

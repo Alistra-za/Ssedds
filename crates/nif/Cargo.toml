@@ -10,7 +10,7 @@ rust-version.workspace = true
 thiserror.workspace = true
 encoding_rs.workspace = true
 half.workspace = true
-serde = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["rc"] }
 
 [dev-dependencies]
 walkdir.workspace = true

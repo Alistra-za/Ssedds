@@ -248,3 +248,24 @@ fn lighting_shares_one_string_across_many_properties() {
         .collect();
     assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
 }
+
+/// GB3: 800 NiStringExtraData blocks whose value is the large string; `read_model` keeps one copy of it.
+#[test]
+fn read_model_shares_one_string_across_many_string_values() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..800 {
+        n.block("NiStringExtraData", W::default().i32(-1).i32(big).0);
+    }
+    let m = nif::model::read_model(&bytes_0x80(&n)).unwrap();
+    assert_eq!(m.extras.len(), 800);
+    let ptrs: BTreeSet<_> = m
+        .extras
+        .values()
+        .map(|e| match &e.value {
+            Some(nif::extra::ExtraValue::Str(s)) => s.as_ptr(),
+            v => panic!("{v:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct value copies", ptrs.len());
+}

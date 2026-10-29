@@ -1010,7 +1010,7 @@ fn keep_mine_reads_the_current_texture_path_and_extra() {
         base: Str("other".into()),
     };
     let kept = keep_mine(&b, &[stale], 0).unwrap();
-    assert!(matches!(&kept[0], Op::EditExtra { base: Str(s), .. } if s == "a\r\nb"));
+    assert!(matches!(&kept[0], Op::EditExtra { base: Str(s), .. } if &**s == "a\r\nb"));
     assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
 }
 

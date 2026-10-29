@@ -2692,7 +2692,7 @@ fn known_picker_on_the_root_offers_hdt_with_a_path_and_marks_prn() {
             [Op::AddExtra { kind, name, value: ExtraValue::Str(p), .. }]
                 if kind == "NiStringExtraData"
                     && name == "HDT Skinned Mesh Physics Object"
-                    && p == r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml"
+                    && &**p == r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml"
         ),
         "{got:?}"
     );
@@ -2764,7 +2764,7 @@ fn known_values_are_required_trimmed_and_duplicates_ignore_case() {
     h.run_steps(4);
     let got = ops(h.state());
     assert!(
-        matches!(got.last(), Some(Op::AddExtra { name, value: ExtraValue::Str(v), .. }) if name == "Prn" && v == "WeaponBack"),
+        matches!(got.last(), Some(Op::AddExtra { name, value: ExtraValue::Str(v), .. }) if name == "Prn" && &**v == "WeaponBack"),
         "{got:?}"
     );
 }
@@ -8825,4 +8825,34 @@ fn closing_edit_restores_the_mods_and_meshes_column() {
     h.run_steps(4);
     assert!(h.state().edit.is_none());
     assert!(!h.state().shapes_col, "back on Mods and meshes");
+}
+
+/// Note GB3: `ExtraValue::Str` holds an `Arc<str>`, which is written to the edit document as the plain string it
+/// was when it held a `String`, and read back as one.
+#[test]
+fn string_extra_value_keeps_its_document_shape() {
+    use nif::extra::ExtraValue;
+    let mut d = doc();
+    d.ops.push(DocOp {
+        op: Op::EditExtra {
+            at: Anchor {
+                block: 4,
+                kind: "NiStringExtraData".into(),
+                shape: None,
+                role: Role::Extra {
+                    on_root: true,
+                    name: "SDTA".into(),
+                    kind: "NiStringExtraData".into(),
+                    nth: 0,
+                },
+            },
+            value: ExtraValue::Str("[1, 2]".into()),
+            base: ExtraValue::Str("".into()),
+        },
+        status: OpStatus::Applied,
+    });
+    let t = d.to_text();
+    assert!(t.contains("\nStr = \"[1, 2]\"\n"), "{t}");
+    assert!(t.contains("\nStr = \"\"\n"), "{t}");
+    assert_eq!(EditDoc::from_text(&t).unwrap(), d);
 }

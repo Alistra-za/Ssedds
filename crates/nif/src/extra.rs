@@ -5,7 +5,8 @@ use crate::{cursor::Cursor, header::Header, text, NifError};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ExtraValue {
     Bsx(u32),
-    Str(String),
+    /// Shared with every block that names the same entry ([Header::name_arc]).
+    Str(std::sync::Arc<str>),
     Int(u32),
     Bool(u8),
     /// f32 bits.
@@ -79,12 +80,12 @@ pub fn read_extra(h: &Header, b: &[u8], block: usize) -> Result<Extra, NifError>
             "NiStringExtraData" => {
                 let i = c.i32()?;
                 // -1 is the null string; any other unresolvable index is a damaged file, not an empty string.
-                let s = match (i, h.string(i)) {
-                    (-1, _) => &[][..],
+                let s = match (i, h.name_arc(i)) {
+                    (-1, _) => "".into(),
                     (_, Some(s)) => s,
                     _ => return Err(geo("string index outside the string table")),
                 };
-                ExtraValue::Str(text::lossy(s))
+                ExtraValue::Str(s)
             }
             "NiIntegerExtraData" => ExtraValue::Int(c.u32()?),
             "NiBooleanExtraData" => ExtraValue::Bool(c.u8()?),
