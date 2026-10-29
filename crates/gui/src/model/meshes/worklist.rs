@@ -1,10 +1,9 @@
 //! The open NIF edit's entries in the one worklist (Note GD1): every warning and blocker of the edit, one row each,
 //! with the tab and field where its fix lives. The app hands them to the Problems list; no egui types.
-use super::nif_edit::{op_label, NifEdit, NO_CLEANUP, NO_EDITS, NO_EXPORT_FOLDER, RERUN_PGPATCHER};
+use super::nif_edit::{NifEdit, NO_CLEANUP, NO_EDITS, NO_EXPORT_FOLDER, RERUN_PGPATCHER};
 use nif::edit::validate::{new_errors, Level, Target, Warning};
 use nif::edit::{Op, Outcome};
 use nif::fields::Field;
-use nif::model::NifModel;
 
 /// How a NIF row weighs: `Blocks` stops that NIF's export, `Info` is a note (hover and Messages only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,10 +101,9 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
                 });
             }
         };
-    let m: &NifModel = &e.model;
-    for (d, o) in e.doc.ops.iter().zip(&e.outcomes) {
+    for (i, (d, o)) in e.doc.ops.iter().zip(&e.outcomes).enumerate() {
         if let Outcome::Conflict(why) | Outcome::Refused(why) = o {
-            let text = format!("{}: {why}", op_label(&d.op, m));
+            let text = format!("{}: {why}", e.op_label_at(i));
             push(NifLevel::Blocks, text, op_tab(&d.op), None);
         }
     }

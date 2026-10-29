@@ -14,10 +14,11 @@ use nif::edit::validate::{
     demote_source, new_errors, validate, validate_ops, Level, Target, Warning,
 };
 use nif::edit::{Anchor, Op, Outcome};
-use nif::fields::Field;
+use nif::fields::{Field, Value};
 use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel, ShapeModel};
+use nif::props::LightingTrailer;
 use render3d::{ParsedNif, ShapeId};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -87,6 +88,9 @@ pub struct NifEdit {
     pub rev: u64,
     pub model: NifModel,
     pub outcomes: Vec<Outcome>,
+    /// Note GD16: per op, the shader type in effect when it applies, for a trailer op (`Field::Trailer`); made by
+    /// `reapply`, so its row keeps naming the field it changed after a later type change.
+    trailer_types: Vec<Option<u32>>,
     pub warnings: Vec<Warning>,
     /// validate_ops over the document's ops (B4/B5 key errors), recomputed with the ops in `reapply`.
     pub op_warnings: Vec<Warning>,
@@ -374,6 +378,72 @@ pub fn op_label(op: &Op, m: &NifModel) -> String {
     }
 }
 
+/// Note GD16: for each trailer op, the shader type of its block when it applies: the last type change before it on
+/// that block, else the type the first later change started from, else the block's type now.
+fn trailer_types(ops: &[Op], m: &NifModel) -> Vec<Option<u32>> {
+    let type_change = |block: u32, o: &Op| match o {
+        Op::SetField {
+            at,
+            field: Field::ShaderType,
+            value: Value::U32(v),
+            base: Value::U32(b),
+        } if at.block == block => Some((*v, *b)),
+        _ => None,
+    };
+    ops.iter()
+        .enumerate()
+        .map(|(i, op)| {
+            let Op::SetField {
+                at,
+                field: Field::Trailer(_),
+                ..
+            } = op
+            else {
+                return None;
+            };
+            let b = at.block;
+            ops[..i]
+                .iter()
+                .rev()
+                .find_map(|o| type_change(b, o).map(|(v, _)| v))
+                .or_else(|| {
+                    ops[i + 1..]
+                        .iter()
+                        .find_map(|o| type_change(b, o).map(|(_, base)| base))
+                })
+                .or_else(|| m.lighting.get(&b).map(|l| l.lighting.shader_type))
+        })
+        .collect()
+}
+
+impl NifEdit {
+    /// [`op_label`] of op `i`, a trailer field named by the shader type in effect when it applied (Note GD16).
+    pub fn op_label_at(&self, i: usize) -> String {
+        let Some(d) = self.doc.ops.get(i) else {
+            return String::new();
+        };
+        match (&d.op, self.trailer_types.get(i).copied().flatten()) {
+            (
+                Op::SetField {
+                    at,
+                    field: Field::Trailer(n),
+                    ..
+                },
+                Some(t),
+            ) => {
+                let name = LightingTrailer::names_of_type(t)
+                    .get(*n as usize)
+                    .map_or_else(|| field_label(Field::Trailer(*n)), |s| s.to_string());
+                match &at.shape {
+                    Some(s) => format!("{s}: {name}"),
+                    None => name,
+                }
+            }
+            (op, _) => op_label(op, &self.model),
+        }
+    }
+}
+
 /// The undo step's name for an op (Note GD4): "Set shader type", "Remove controller".
 pub fn op_name(op: &Op) -> String {
     match op {
@@ -558,6 +628,7 @@ impl NifEdit {
             source_warnings: validate(&model, None),
             model,
             outcomes: vec![],
+            trailer_types: vec![],
             warnings: vec![],
             op_warnings: vec![],
             pg_warnings: vec![],
@@ -833,6 +904,7 @@ impl NifEdit {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.trailer_types = trailer_types(&self.doc.ops(), &self.model);
         self.cards = shape_cards(&self.patched); // once per change, never per frame (rule 9.1)
         self.card_ctrls = card_ctrls(&self.model);
         self.warnings = validate(&self.model, None);

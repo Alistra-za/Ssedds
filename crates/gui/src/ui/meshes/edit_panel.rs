@@ -4,7 +4,7 @@ use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
 use crate::model::meshes::export::{GuardChoice, Placement};
-use crate::model::meshes::nif_edit::{op_label, NifEdit, Selection, NO_EDITS};
+use crate::model::meshes::nif_edit::{NifEdit, Selection, NO_EDITS};
 use crate::model::meshes::MeshesModel;
 use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
@@ -148,7 +148,7 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                     .show(ui, |ui| {
                         for (i, d) in e.doc.ops.iter().enumerate() {
                             let failed = d.status == OpStatus::Conflict;
-                            let mut label = op_label(&d.op, &e.model);
+                            let mut label = e.op_label_at(i);
                             // Note GD8: the row says that its Revert takes the clip's timing too
                             if !e.timing_dependents(i).is_empty() {
                                 label.push_str(" (Revert also removes its clip timing)");

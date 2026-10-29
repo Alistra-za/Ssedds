@@ -9281,6 +9281,40 @@ fn empty_rmaos_slot_is_a_row() {
     assert_eq!(rows, [(NifLevel::Warning, NifTab::Shader, None)]);
 }
 
+/// Note GD16: a trailer op's row names the field of the shader type in effect when it applied: edit Env map scale,
+/// then change the type to Skin Tint, and the earlier op still reads "Env map scale".
+#[test]
+fn a_trailer_op_keeps_its_type_name_after_a_type_change() {
+    let mut t = direct(scenes::lsp_shape(1, &[1.0]));
+    let sh = select(&mut t, "S");
+    let at =
+        nif::edit::anchor_role(&t.edit.as_ref().unwrap().model, Some(sh), Role::Shader).unwrap();
+    t.edit_push(
+        vec![Op::SetField {
+            at: at.clone(),
+            field: Field::Trailer(0),
+            value: Value::F32(2f32.to_bits()),
+            base: Value::F32(1f32.to_bits()),
+        }],
+        None,
+    );
+    t.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::ShaderType,
+            value: Value::U32(5),
+            base: Value::U32(1),
+        }],
+        None,
+    );
+    let mut h = view(t);
+    h.run_steps(3);
+    h.get_by_label("Pending edits (2)").click();
+    h.run_steps(3);
+    h.get(row("S: Env map scale"));
+    assert!(h.query(row("S: Skin tint R")).is_none());
+}
+
 /// Note GD15: two texture sets with an empty RMAOS are two worklist rows; only repeats of one target merge.
 #[test]
 fn two_sets_with_empty_rmaos_are_two_rows() {
