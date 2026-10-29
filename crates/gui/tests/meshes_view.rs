@@ -843,6 +843,20 @@ fn a_reload_that_drops_the_picked_mod_goes_back_to_any_mod_like_the_picker() {
     );
 }
 
+/// Note GC18 (review fix 5): a NIF selected under "Any mod" is selected again after a reload, once the rows land.
+#[test]
+fn a_nif_selected_under_any_mod_is_selected_again_after_a_reload() {
+    let (_d, mut m) = scanned();
+    assert_eq!(m.selected_mod, None);
+    let oak = m.nif_at(1).0.copy_id;
+    m.select_nif(oak);
+    m.reload();
+    assert_eq!(m.selected_nif, None, "cleared while the rows are read");
+    wait(&mut m);
+    assert_eq!(m.selected_nif, Some(oak));
+    assert!(!m.shapes.is_empty(), "its details are back");
+}
+
 /// Note GC test 8 (rules 3.1, 3.4, 3.6): at 1100 px a long path is cut in its own column, Path | Mod | chips keep
 /// their order, and nothing of the row reaches past the column's edge.
 #[test]
