@@ -667,6 +667,60 @@ fn rows_of(m: &mut MeshesModel) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Another scan's lock on `scan.lock` (a Windows sharing lock): a scan started now ends with Busy, not completed.
+#[cfg(windows)]
+fn hold_scan_lock(dir: &Path) -> std::fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .open(dir.join("scan.lock"))
+        .unwrap()
+}
+
+/// Starts a scan; the caller ends it (`wait`).
+fn start_scan(m: &mut MeshesModel) {
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    assert!(m.scanning());
+}
+
+/// Note GC14 (review fix 1): a row read still out when a scan starts is dropped, since it may read the origins the
+/// scan disabled; nothing is selected mid-scan; a scan that does not complete keeps the lists from before and selects
+/// again the NIF the reload was holding.
+#[cfg(windows)]
+#[test]
+fn a_row_read_held_across_a_scan_start_is_dropped_and_an_unfinished_scan_keeps_the_lists() {
+    let (d, mut m) = scanned();
+    let before = rows_of(&mut m);
+    let rock = m.nif_at(0).0.copy_id;
+    m.select_nif(rock);
+    m.reload();
+    let read = m.hold_rows_read();
+    let lock = hold_scan_lock(d.path());
+    start_scan(&mut m);
+    // The held read answers mid-scan with what a store with every origin disabled reads.
+    let _ = read.send(Ok((vec![], vec![])));
+    m.poll();
+    assert_eq!(
+        rows_of(&mut m),
+        before,
+        "a read of the disabled store is dropped"
+    );
+    wait(&mut m);
+    drop(lock);
+    assert!(!m.scan_completed && m.error.is_some(), "{:?}", m.error);
+    assert_eq!(rows_of(&mut m), before);
+    assert_eq!(
+        m.selected_nif,
+        Some(rock),
+        "the NIF the reload held is selected again"
+    );
+}
+
 /// Note GC test 8 (rules 3.1, 3.4, 3.6): at 1100 px a long path is cut in its own column, Path | Mod | chips keep
 /// their order, and nothing of the row reaches past the column's edge.
 #[test]

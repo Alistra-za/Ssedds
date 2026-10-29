@@ -850,6 +850,9 @@ impl MeshesModel {
         self.stale_list = None;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
+        // Note GC14: a row read still out may read the origins this scan disables; its answer is dropped, and the
+        // lists on screen stay until the scan ends.
+        self.rows_rx = None;
         // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
         self.file_refs = None;
         self.refs_cache = None;
@@ -977,6 +980,10 @@ impl MeshesModel {
                 self.error = Some(format!("Scan failed: {e}"));
             }
         }
+        // No new read (the scan did not complete): the NIF a reload held is looked for in the lists on screen.
+        if !self.rows_loading() {
+            self.apply_reselect();
+        }
     }
 
     /// Reads the mod list again and the list's rows (on a worker), and keeps the picked mod when it is still there,
@@ -1006,7 +1013,8 @@ impl MeshesModel {
                 .iter()
                 .any(|m| m.id == *id && !m.derived && m.nifs > 0)
         });
-        let nif = self.selected_nif;
+        // A NIF an earlier reload still holds (its rows never landed) counts as the selection.
+        let nif = self.selected_nif.or(self.reselect.take());
         let any = self.selected_mod.is_none();
         self.clear_nif();
         match keep {
@@ -1057,12 +1065,20 @@ impl MeshesModel {
             }
         }
         self.rows_rx = None;
+        self.apply_reselect();
+        false
+    }
+
+    /// Selects again the NIF a reload held, once it is listed; never while a scan runs (Note GC14).
+    fn apply_reselect(&mut self) {
+        if self.scanning() {
+            return;
+        }
         if let Some(c) = self.reselect.take() {
             if self.selected_nif.is_none() && self.find_row(c).is_some() {
                 self.select_nif(c);
             }
         }
-        false
     }
 
     /// The rows a reload asked for have not landed yet ("Reading the scan…").
