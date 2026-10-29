@@ -107,9 +107,7 @@ impl AppModel {
                 .filter(|(_, v)| {
                     // A created set with no key passes only an empty filter.
                     !v.key.is_empty()
-                        && (q.is_empty()
-                            || engine::sets::fold_id(&v.id).contains(&q)
-                            || engine::sets::fold_id(&v.label).contains(&q))
+                        && (q.is_empty() || engine::sets::fold_id(&v.id).contains(&q))
                         && (!f.attention || !bottom::set_ready_in(&flagged, v))
                         && (!f.ready || bottom::set_ready_in(&flagged, v))
                         && (!f.no_json || !writes_json_in(self, &entries, v))

@@ -108,9 +108,9 @@ impl AppModel {
                     .filter(|v| !v.key.is_empty())
                     .filter_map(|v| {
                         Some(Hit {
-                            rank: rank(query, &v.label)?,
+                            rank: rank(query, &v.id)?,
                             group: 2,
-                            label: v.label.clone(),
+                            label: v.id.clone(),
                             detail: "set".to_string(),
                             pick: Pick::Set(v.key.clone()),
                         })

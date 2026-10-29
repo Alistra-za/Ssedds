@@ -1174,8 +1174,9 @@ impl AppModel {
         let plural = |n: usize, one: &str, many: &str| if n == 1 { one } else { many }.to_string();
         // The key comes from the action list (item 5), which the shortcut sheet shows too.
         let f2 = format!("  {}", crate::ui::actions::keys_text("rename"));
+        let inputs_keys = self.rename_keys(RenameMode::Inputs);
         let (ni, no) = (
-            self.rename_keys(RenameMode::Inputs).len(),
+            inputs_keys.len(),
             self.rename_keys(RenameMode::Outputs).len(),
         );
         let inputs = MenuEntry {
@@ -1203,7 +1204,13 @@ impl AppModel {
         } else {
             vec![inputs, outputs]
         };
-        let aliased = self.aliased_selection().len();
+        // As `aliased_selection`, over the Inputs keys already built.
+        let aliased = self.project.as_ref().map_or(0, |p| {
+            inputs_keys
+                .iter()
+                .filter(|k| p.read_as(k).is_some())
+                .count()
+        });
         if aliased > 0 {
             v.push(MenuEntry {
                 action: MenuAction::ClearInputAlias,
@@ -1278,7 +1285,7 @@ impl AppModel {
                         n,
                         item: k.clone(),
                     },
-                    label: format!("{} — {}", o.label, it.name),
+                    label: format!("{} — {}", o.id, it.name),
                     // Listed but off when the game would find no file there.
                     disabled: game_path_in(self, &views, &paths, k).err(),
                 })

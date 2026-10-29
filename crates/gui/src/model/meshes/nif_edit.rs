@@ -647,13 +647,21 @@ impl NifEdit {
     /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
     /// drag) replaces the drag's ops instead, each keeping the `base` of the drag's op with its merge key: a drag
     /// is one op (or one op per colour channel), plus the controller's start / stop while they follow the keys
-    /// (B-P44), which come and go during the drag.
+    /// (B-P44), which come and go during the drag, and the SplitAlpha that started it (Note FA10).
     pub fn push(&mut self, ops: Vec<Op>, merge: Option<String>) {
         let merging = merge.is_some();
         let n = ops.len();
         let tail = self.drag_ops(merge.as_deref().unwrap_or_default()).len();
         let same_drag = merging && tail > 0;
-        self.drag = merge.clone().map(|k| (k, n));
+        // Note FA10: a drag that started with a SplitAlpha (a shared alpha) keeps it; later ticks no longer see the
+        // alpha as shared and push only the field op.
+        let lead = same_drag
+            && matches!(
+                self.doc.ops[self.doc.ops.len() - tail].op,
+                Op::SplitAlpha { .. }
+            )
+            && !matches!(ops.first(), Some(Op::SplitAlpha { .. }));
+        self.drag = merge.clone().map(|k| (k, n + usize::from(lead)));
         self.history.record(self.doc.to_text(), merge);
         // Note CU1: a rename of the picked clip keeps it picked (the block stays; its name follows)
         if let Playing::Clip(seq) = self.playing {
@@ -673,10 +681,13 @@ impl NifEdit {
                 }
             }
         }
-        let old: Vec<DocOp> = match same_drag {
+        let mut old: Vec<DocOp> = match same_drag {
             true => self.doc.ops.split_off(self.doc.ops.len() - tail),
             false => vec![],
         };
+        if lead {
+            self.doc.ops.push(old.remove(0));
+        }
         let key = |op: &Op| nif::edit::merge_key(op);
         for (i, mut op) in ops.into_iter().enumerate() {
             let same = old.get(i).filter(|d| key(&d.op) == key(&op));

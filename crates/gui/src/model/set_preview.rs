@@ -7,7 +7,7 @@
 use crate::model::items::{ItemKind, ItemStatus, TextureItem};
 use crate::model::meshes::ScanTarget;
 use crate::model::pbr_export::json_entries;
-use crate::model::preview::DEBOUNCE;
+use crate::model::preview::{extra_inputs_key, DEBOUNCE};
 use crate::model::sets::set_views;
 use crate::model::sets::{SetView, SlotFill, SlotKind};
 use crate::model::viewport3d::FileSource;
@@ -140,7 +140,7 @@ pub fn signature(item: &TextureItem) -> String {
     match &item.job {
         Some(job) if item.kind != ItemKind::Dds => {
             let p = sha256_json(&job.profile).unwrap_or_default();
-            match &job.pack {
+            let head = match &job.pack {
                 Some(pk) => format!("{p}:{}", pack_key(pk).unwrap_or_default()),
                 None => format!(
                     "{p}:{:?}:{:?}:{:?}",
@@ -148,7 +148,8 @@ pub fn signature(item: &TextureItem) -> String {
                     job.source,
                     job.active_rnm()
                 ),
-            }
+            };
+            format!("{head}:{}", extra_inputs_key(job))
         }
         _ => format!("{:?}:{:?}:{:?}", item.kind, item.input, item.stamp),
     }
@@ -585,16 +586,6 @@ impl Encoder {
         }
     }
 
-    /// A new size cap: every member that has something to encode goes stale (old bytes on show), in-flight work
-    /// is cancelled and its late result dropped.
-    pub fn set_cap(&mut self, cap: u32, now: Instant) {
-        if cap == self.cap {
-            return;
-        }
-        self.cap = cap;
-        self.restart(now, false);
-    }
-
     pub fn mode(&self) -> PreviewMode {
         self.mode
     }
@@ -632,26 +623,6 @@ impl Encoder {
     #[doc(hidden)]
     pub fn alt_token_of(&self, kind: SlotKind) -> u64 {
         self.members.get(&kind).map_or(0, |m| m.alt_token)
-    }
-
-    fn restart(&mut self, now: Instant, skip_dds: bool) {
-        for mem in self.members.values_mut() {
-            if skip_dds && matches!(mem.source, Source::Dds(_)) {
-                mem.mode = self.mode;
-                continue;
-            }
-            if let Some(c) = mem.cancel.take() {
-                c.cancel();
-            }
-            mem.clear_alt();
-            mem.token = 0;
-            if !matches!(mem.state, EncState::Blocked(_)) {
-                mem.state = EncState::Stale(mem.state.shown().cloned());
-                mem.cap = self.cap;
-                mem.mode = self.mode;
-                mem.due = Some(now);
-            }
-        }
     }
 
     /// Test seam: the generation of `kind`'s live encode (0 = none).
@@ -1098,7 +1069,7 @@ pub fn fingerprint(m: &AppModel, set_key: &str) -> Option<SetFingerprint> {
     let members = member_slots(m, &v, entry.as_ref());
     Some(SetFingerprint {
         set_key: set_key.into(),
-        label: v.label.clone(),
+        label: v.id.clone(),
         landscape: m
             .cs_block(&v.id, crate::model::cs_pbr::Kind::Txst)
             .is_some()

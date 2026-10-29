@@ -63,6 +63,13 @@ pub fn split_suffix(stem: &str) -> (String, Option<String>) {
     (stem.to_string(), None)
 }
 
+/// A source stem without its exporter or Skyrim suffix (`rock01_roughness` → `rock01`, `rock01_n` → `rock01`): the
+/// base the set rule names a set and its packed output after. Always a prefix of `stem`.
+/// shortcut: only the built-in §6.1 suffixes and the §4.4 vocabulary are cut, not preset aliases (the GUI calls this
+/// without a registry); pass the alias table when a recipe can take an aliased pre-packed source.
+pub fn base_of(stem: &str) -> String {
+    split_vocab(stem).map_or_else(|| split_suffix(stem).0, |(b, _)| b)
+}
 /// What an exporter suffix stands for (spec §4.4, DECISIONS Note H).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VocabRole {
@@ -524,5 +531,22 @@ mod tests {
     fn wet_split_folds_like_set_keys() {
         assert!(super::wet_split("Ärmel_wet", "textures/a/ärmel").is_some());
         assert!(super::wet_split("Ärmel_wet", "textures/a/other").is_none());
+    }
+
+    /// The set-base rule shared by the packer and the GUI: a vocabulary term, a §6.1 suffix, neither.
+    #[test]
+    fn base_of_rule() {
+        for (stem, base) in [
+            ("rock01_roughness", "rock01"),
+            ("rock01_n", "rock01"),
+            ("rock01_rmaos", "rock01"),
+            ("rock01", "rock01"),
+            ("", ""),
+            ("Rock01_Roughness", "Rock01"),
+            ("Rock01_N", "Rock01"),
+            ("_n", "_n"),
+        ] {
+            assert_eq!(super::base_of(stem), base, "{stem}");
+        }
     }
 }

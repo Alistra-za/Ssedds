@@ -1647,6 +1647,91 @@ fn shared_alpha_banner_and_split_on_edit() {
     assert!(ops(m).is_empty(), "split and edit are one undo step");
 }
 
+/// Note FA10: the Alpha threshold slider's second tick sees an unshared alpha and pushes only the SetField; the
+/// merged drag must keep the SplitAlpha that started it, or re-applying hits the still-shared alpha (Conflict).
+#[test]
+fn shared_alpha_threshold_drag_keeps_split() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let (a_name, on_shape, alpha_end, thr0) = {
+        let e = m.edit.as_ref().unwrap();
+        let alpha = e.model.shape(a).unwrap().alpha.unwrap();
+        (
+            e.model.shape(a).unwrap().name.clone(),
+            nif::edit::anchor_shape(&e.model, a),
+            nif::header::Header::parse(&e.patched).unwrap().sizes.len() as u32,
+            e.model.alphas[&alpha].alpha.threshold,
+        )
+    };
+    let set = |at: Anchor, v: u8, base: u8| Op::SetField {
+        at,
+        field: Field::AlphaThreshold,
+        value: Value::U8(v),
+        base: Value::U8(base),
+    };
+    // Tick 1 as the slider builds it for a shared alpha: the SplitAlpha, and the field on the block the split appends.
+    let appended = Anchor {
+        block: alpha_end,
+        kind: "NiAlphaProperty".into(),
+        shape: a_name.clone(),
+        role: Role::Alpha,
+    };
+    let key = nif::edit::merge_key(&set(appended.clone(), 0, 0));
+    let tick1 = vec![
+        Op::SplitAlpha {
+            at: on_shape.clone(),
+        },
+        set(appended, 100, thr0),
+    ];
+    m.edit_push(tick1, Some(key.clone()));
+    // Tick 2 and 3: the alpha is A's own now, so the slider pushes the SetField alone.
+    let push_alone = |m: &mut MeshesModel, v: u8| {
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(a), Role::Alpha).unwrap();
+        let cur = e.model.alphas[&at.block].alpha.threshold;
+        assert_eq!(nif::edit::merge_key(&set(at.clone(), 0, 0)), key);
+        m.edit_push(vec![set(at, v, cur)], Some(key.clone()));
+    };
+    for (i, v) in [150u8, 200].into_iter().enumerate() {
+        push_alone(&mut m, v);
+        let e = m.edit.as_ref().unwrap();
+        let got = ops(&m);
+        assert_eq!(got.len(), 2, "tick {}: {got:?}", i + 2);
+        // the carried split is A's, and the drag slice is both ops (Split + Set), not just the tail op
+        assert!(
+            matches!(&got[0], Op::SplitAlpha { at } if at.shape == a_name && at.block == on_shape.block),
+            "{got:?}"
+        );
+        assert!(
+            matches!(&got[1], Op::SetField { value: Value::U8(x), base: Value::U8(b), .. } if *x == v && *b == thr0),
+            "tick {} keeps the drag's base: {got:?}",
+            i + 2
+        );
+        assert_eq!(e.drag_ops(&key).len(), 2);
+        assert!(
+            !e.doc.ops.iter().any(|d| d.status == OpStatus::Conflict),
+            "tick {}: {:?}",
+            i + 2,
+            e.outcomes
+        );
+        assert!(e.doc.ops.iter().all(|d| d.status == OpStatus::Applied));
+    }
+    let e = m.edit.as_mut().unwrap();
+    e.flush();
+    let e = m.edit.as_ref().unwrap();
+    let b = shape_named(e, "B");
+    let (aa, ab) = (
+        e.model.shape(a).unwrap().alpha.unwrap(),
+        e.model.shape(b).unwrap().alpha.unwrap(),
+    );
+    assert_ne!(aa, ab, "A has its own alpha");
+    assert_eq!(e.model.alphas[&aa].alpha.threshold, 200, "the last tick");
+    assert_eq!(e.model.alphas[&ab].alpha.threshold, thr0, "B is untouched");
+    assert!(m.undo_edit());
+    assert!(ops(&m).is_empty(), "one undo step undoes the whole drag");
+    assert!(!m.edit.as_ref().unwrap().history.can_undo());
+}
+
 #[test]
 fn shared_set_banner_and_texture_edit_keeps_other_shape() {
     let mut m = direct(scenes::shared_alpha_and_set());

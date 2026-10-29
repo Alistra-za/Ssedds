@@ -449,7 +449,7 @@ pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
             if let Some(v) = &set {
                 if item.is_some() && (json || skin || cs || cm) {
                     ui.separator();
-                    ui.strong(format!("Set {}", v.label));
+                    ui.strong(format!("Set {}", v.id));
                 }
                 if json {
                     crate::ui::cs_pbr::pgp_panel(ui, m, v);

@@ -806,10 +806,7 @@ fn move_to_hits(views: &[SetView], query: &str) -> MoveHits {
     let q = engine::sets::fold_id(query.trim());
     if q.is_empty() || !q.chars().all(|c| c.is_ascii_digit()) {
         let rows = (0..views.len())
-            .filter(|&i| {
-                engine::sets::fold_id(&views[i].id).contains(&q)
-                    || engine::sets::fold_id(&views[i].label).contains(&q)
-            })
+            .filter(|&i| engine::sets::fold_id(&views[i].id).contains(&q))
             .collect();
         return MoveHits {
             rows,
@@ -969,7 +966,7 @@ fn pill(
                             v.set_warnings
                                 .iter()
                                 .filter(|w| super::counts_toward_badge(w))
-                                .map(|w| (v.label.as_str(), w)),
+                                .map(|w| (v.id.as_str(), w)),
                         )
                         .collect();
                     // Kept apart from `rows`: the "⚠ n" never counts check results. Undecided members are left out,
@@ -989,12 +986,12 @@ fn pill(
                             model
                                 .set_check_warnings(&v.key)
                                 .iter()
-                                .map(|w| (v.label.as_str(), w)),
+                                .map(|w| (v.id.as_str(), w)),
                         )
                         .collect();
                     let wide = ui.available_width() >= WIDE_CARD;
                     let name = |ui: &mut egui::Ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
+                        ui.add(egui::Label::new(egui::RichText::new(&v.id).strong()).truncate());
                     };
                     ui.horizontal(|ui| {
                         position_label(ui, index + 1, total);
@@ -1723,7 +1720,7 @@ fn move_to_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
                     for r in range {
                         let i = hits.rows[r];
                         ui.horizontal(|ui| {
-                            let text = format!("{}  {}", i + 1, views[i].label);
+                            let text = format!("{}  {}", i + 1, views[i].id);
                             let resp = ui.selectable_label(r == *sel, text);
                             if r == *sel && (up || down) {
                                 resp.scroll_to_me(None);

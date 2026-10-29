@@ -8,7 +8,7 @@ use crate::group::TextureSet;
 use crate::pack::plan::{raw_role, size_mismatch_warning};
 use crate::pack::PackSource;
 use crate::policy::{helper_requested, JobStatus, ResolveCtx, ResolvedJob};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// What pass 1 knows of a file's alpha and size.
@@ -111,6 +111,12 @@ pub fn plan_fills(
     facts: &BTreeMap<PathBuf, AlphaFacts>,
 ) -> FillPlan {
     let mut out = FillPlan::default();
+    // Owned keys: a map borrowed from jobs would block the &mut jobs[ji] below. Values keep plan order.
+    let mut by_input: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    for (i, j) in jobs.iter().enumerate() {
+        by_input.entry(j.input.clone()).or_default().push(i);
+    }
+    let jobs_of = |p: &Path| by_input.get(p).into_iter().flatten().copied();
     for set in sets {
         let members: Vec<&InputFile> = set.members.iter().map(|&i| &files[i]).collect();
         let mut helpers = vec![];
@@ -138,7 +144,10 @@ pub fn plan_fills(
                 Some(HelperRole::Raw(r)) => r,
                 // The file's own job decides (Note DR: a skin `_f` has its role there only); any other job converts it
                 // alone (DY2, final review I1). Only a file with no job (failed or cancelled) falls back to its name.
-                None => match jobs.iter().find(|j| j.input == f.path && j.pack.is_none()) {
+                None => match jobs_of(&f.path)
+                    .map(|i| &jobs[i])
+                    .find(|j| j.pack.is_none())
+                {
                     Some(j) => match j.status {
                         JobStatus::PackingInput { role } => role,
                         _ => continue,
@@ -219,10 +228,7 @@ pub fn plan_fills(
                     source: PackSource {
                         read: None,
                         // From the helper's planned job, never the file system (a pure planner).
-                        stamp: jobs
-                            .iter()
-                            .find(|j| j.input == h.f.path)
-                            .and_then(|j| j.source),
+                        stamp: jobs_of(&h.f.path).next().and_then(|i| jobs[i].source),
                         path: h.f.path.clone(),
                         role: h.role,
                     },

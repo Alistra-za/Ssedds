@@ -376,6 +376,8 @@ pub struct AppModel {
     pub(crate) views: std::cell::RefCell<ViewCache>,
     /// K3: `review_json` for a view key, and when it was read; cleared with `review`.
     review_json_cache: std::cell::RefCell<Option<(ViewKey, Instant, Vec<review::JsonLine>)>>,
+    /// The rename dialog's last plan, for drawing only (Note FA).
+    rename_cache: std::cell::RefCell<Option<rename::PlanCache>>,
     pub unmatched_keys: Vec<String>,
     /// Per-set RNM-* notes from layer jobs (they have no item).
     pub rnm_notes: std::collections::BTreeMap<String, Vec<engine::codes::Warning>>,
@@ -625,6 +627,7 @@ impl AppModel {
             item_index: Default::default(),
             views: Default::default(),
             review_json_cache: Default::default(),
+            rename_cache: Default::default(),
             sets: vec![],
             sets_root: None,
             unmatched_keys: vec![],
