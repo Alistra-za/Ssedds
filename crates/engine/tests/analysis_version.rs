@@ -1,10 +1,12 @@
 //! The analysis disk cache's version guard (DECISIONS Note DU): fails when what decoding, `analyse_with`, `make_thumbnail`
 //! and pack assembly produce changes without `ANALYSIS_VERSION` being bumped. Same shape as encode_versions.rs: the pin is rewritten
 //! when the version moved, and left alone (with a failure) when only the hash did.
+use engine::analyse::Analysis;
 use engine::analyse::{analyse_with, AnalyseHints};
 use engine::analysis_store::ANALYSIS_VERSION;
-use engine::config::{GraySource, RawMap};
-use engine::dds::write_atomic;
+use engine::config::HeaderForm;
+use engine::config::{Format, GraySource, RawMap};
+use engine::dds::{dds_bytes, dds_bytes_cube, level_size, resolve_header, write_atomic, DdsDesc};
 use engine::image::{Rgba32F, SourceInfo};
 use engine::load::load_image_meta;
 use engine::pack::{assemble::assemble, ChannelSource, PackJob, PackSource, RecipeKind};
@@ -95,12 +97,104 @@ fn hash_loaded(h: &mut Sha256, hints: &[AnalyseHints]) {
             src("gray2.png", RawMap::Ao),
         ],
     };
-    let asm = assemble(&job, job.gray).unwrap();
-    h.update(format!("{:?}{:?}", asm.info, asm.non_gray));
-    for &hi in hints {
-        h.update(serde_json::to_vec(&analyse_with(&asm.image, &asm.info, hi)).unwrap());
+    // Channel extraction, a non-gray member (read by luma) and a 16-bit member. Members of other sizes are refused by
+    // `assemble`, so none is pinned.
+    let mixed = PackJob {
+        kind: RecipeKind::Rmaos,
+        channels: [
+            ChannelSource::Source {
+                path: p("rgba8.png"),
+                role: RawMap::Rmaos,
+                invert: false,
+                channel: Some(0),
+            },
+            ChannelSource::Source {
+                path: p("rgba8.png"),
+                role: RawMap::Rmaos,
+                invert: true,
+                channel: Some(3),
+            },
+            ChannelSource::Source {
+                path: p("rgb16.png"),
+                role: RawMap::Ao,
+                invert: false,
+                channel: None,
+            },
+            ChannelSource::Opaque,
+        ],
+        gray: GraySource::Luma,
+        sources: vec![
+            src("rgba8.png", RawMap::Rmaos),
+            src("rgb16.png", RawMap::Ao),
+        ],
+    };
+    for job in [&job, &mixed] {
+        let asm = assemble(job, job.gray).unwrap();
+        // File names only: the folder is a fresh temp dir each run.
+        let non_gray: Vec<_> = asm
+            .non_gray
+            .iter()
+            .map(|p| p.file_name().unwrap())
+            .collect();
+        h.update(format!("{:?}{non_gray:?}", asm.info));
+        for &hi in hints {
+            h.update(serde_json::to_vec(&analyse_with(&asm.image, &asm.info, hi)).unwrap());
+        }
+        h.update(&make_thumbnail(&asm.image, &asm.info).rgba);
     }
-    h.update(&make_thumbnail(&asm.image, &asm.info).rgba);
+    hash_dds(h, hints, &p);
+}
+
+/// xorshift64 bytes: block data any BC decoder reads, so the DDS decode is pinned without an encoder (whose output
+/// can differ by CPU).
+fn noise(seed: u64, n: usize) -> Vec<u8> {
+    let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..n)
+        .map(|_| {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 24) as u8
+        })
+        .collect()
+}
+
+/// DDS sources written by the engine's own writer: 2D BC1, BC5 and BC7 (the last with a second mip, unread), and a
+/// single BC1 cube (loaded as a 6:1 strip, DECISIONS DS7).
+fn hash_dds(h: &mut Sha256, hints: &[AnalyseHints], p: &dyn Fn(&str) -> std::path::PathBuf) {
+    let desc = |format, w, hh| DdsDesc {
+        width: w,
+        height: hh,
+        format,
+        srgb: false,
+        header: resolve_header(format, false, HeaderForm::Auto),
+    };
+    let blocks = |f: Format, w: u32, hh: u32, seed| noise(seed, level_size(f, w, hh));
+    let mut files = vec![];
+    for (name, f, seed) in [
+        ("bc1", Format::Bc1, 1u64),
+        ("bc5", Format::Bc5, 2),
+        ("bc7", Format::Bc7, 3),
+    ] {
+        let d = desc(f, 20, 12);
+        let mut levels = vec![blocks(f, 20, 12, seed)];
+        if f == Format::Bc7 {
+            levels.push(blocks(f, 10, 6, seed + 9));
+        }
+        files.push((name, dds_bytes(&d, &levels).unwrap()));
+    }
+    let d = desc(Format::Bc1, 8, 8);
+    let faces: Vec<_> = (0..6).map(|k| blocks(Format::Bc1, 8, 8, 20 + k)).collect();
+    files.push(("cube", dds_bytes_cube(&d, &faces).unwrap()));
+    for (name, bytes) in files {
+        write_atomic(&p(&format!("{name}.dds")), &bytes).unwrap();
+        let (im, info, meta) = load_image_meta(&p(&format!("{name}.dds"))).unwrap();
+        h.update(format!("{name}{info:?}{meta:?}"));
+        for &hi in hints {
+            h.update(serde_json::to_vec(&analyse_with(&im, &info, hi)).unwrap());
+        }
+        h.update(&make_thumbnail(&im, &info).rgba);
+    }
 }
 
 /// Sha256 of every fixture's analysis under every hint set used in practice, and of its thumbnail.
@@ -172,6 +266,8 @@ fn observed() -> String {
         h.update(&t.rgba);
     }
     hash_loaded(&mut h, &hint_sets);
+    // The shape of `Analysis`: a field added with a default is still a change to what an entry holds.
+    h.update(serde_json::to_vec(&schemars::schema_for!(Analysis)).unwrap());
     hex::encode(h.finalize())
 }
 

@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 /// Bump whenever decoding (`load_image_meta`), `analyse_with`, `make_thumbnail`, pack assembly or any `Analysis` field
 /// changes what it produces: entries written under another value are ignored. The pin test (analysis_version.rs)
-/// fails when the results of the first four change without a bump (Note DU4).
+/// fails when those change for what it runs: PNG (8-bit, 16-bit, gray), 2D BC1/BC5/BC7 and single-cube DDS, two
+/// packs, and the `Analysis` schema. PSD and Krita/ORA decoding are not run by it: bump by hand (Note DU4).
 pub const ANALYSIS_VERSION: u32 = 1;
 
 const EXT: &str = "ent";
@@ -78,7 +79,12 @@ impl AnalysisStore {
         }
         let rgba = &bytes[nl + 1..];
         let thumb = match head.thumb {
-            Some((width, height)) if rgba.len() == width as usize * height as usize * 4 => {
+            Some((width, height))
+                if (width as usize)
+                    .checked_mul(height as usize)
+                    .and_then(|n| n.checked_mul(4))
+                    == Some(rgba.len()) =>
+            {
                 Some(Arc::new(Thumbnail {
                     width,
                     height,
@@ -271,6 +277,24 @@ mod tests {
         AnalysisStore::new(dir.path().into()).prune(u64::MAX);
         assert!(!dir.path().join(".sdc-1-2-3.tmp").exists());
         assert!(dir.path().join(".sdc-1-2-4.tmp").exists());
+    }
+
+    #[test]
+    fn an_overflowing_thumbnail_size_is_a_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, info) = sample();
+        let (p, h) = (Path::new("a.png"), AnalyseHints::default());
+        let s = AnalysisStore::new(dir.path().into());
+        let head = Head {
+            id: s.file_id(p, STAMP, h),
+            analysis: a,
+            info,
+            non_gray: Vec::new(),
+            thumb: Some((u32::MAX, u32::MAX)),
+        };
+        s.put(head, None);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(s.get_file(p, STAMP, h).is_none());
     }
 
     #[test]
