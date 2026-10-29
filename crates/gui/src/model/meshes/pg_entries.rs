@@ -12,9 +12,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
-/// The line under the toggle in In game (simulated).
-pub const IN_GAME_SCOPE: &str =
-    "Simulated from loose PGPatcher JSON, in MO2 mod order. JSON inside BSAs is not read.";
+/// The line under the toggle in In game (simulated): what pgpsim models, from its one const (Note GD7).
+pub const IN_GAME_SCOPE: &str = pgpsim::SIMULATED_AS;
 /// The same place for a folder scan (no MO2 instance).
 pub const NO_INSTANCE: &str = "In game needs an MO2 instance: no PGPatcher JSON was read.";
 pub const PG_IGNORED: &str = "In game: PGPatcher skips this shape (PG_IGNORE).";

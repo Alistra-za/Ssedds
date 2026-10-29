@@ -8857,3 +8857,28 @@ fn string_extra_value_keeps_its_document_shape() {
     assert!(t.contains("\nStr = \"\"\n"), "{t}");
     assert_eq!(EditDoc::from_text(&t).unwrap(), d);
 }
+
+// ---- Note GD (DECISIONS review fixes, NIF team) ----
+
+/// GD7: "In game (simulated)" says what it simulates, from the one const: on hover and as the first line under it.
+#[test]
+fn in_game_label_reads_simulated_as() {
+    assert!(pgpsim::SIMULATED_AS.starts_with("Simulated as PGPatcher 1.2.0"));
+    let (_d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("In game (simulated)").click();
+    h.run_steps(4);
+    wait_pg(h.state_mut());
+    h.run_steps(4);
+    h.get_by_label(pgpsim::SIMULATED_AS);
+    h.get_by_label("In game (simulated)").hover();
+    h.run_steps(30);
+    assert_eq!(
+        h.query_all_by_label(pgpsim::SIMULATED_AS).count(),
+        2,
+        "the line and the hover"
+    );
+}

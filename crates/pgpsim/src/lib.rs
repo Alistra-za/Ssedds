@@ -17,6 +17,9 @@ pub use nif::material::MaterialState;
 pub use prep::prepare;
 use serde_json::{Map, Value};
 
+/// What In game (simulated) models, said once (Note GD7): the edit panel's hover and first line read it.
+pub const SIMULATED_AS: &str = "Simulated as PGPatcher 1.2.0 with 2.2's alphaprop keys: loose JSON only, no modrules priority, read at the last scan";
+
 pub struct SimInput<'a> {
     /// One PGPatcher entry exactly as sdc writes it (`pgp::writer::entry_node(..).to_value()`).
     pub entry: &'a Value,

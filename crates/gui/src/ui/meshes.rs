@@ -702,7 +702,13 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         };
         // Wrapped: the two edit-mode labels are wider than the centre column at 1100 px.
         ui.horizontal_wrapped(|ui| {
-            if ui.selectable_label(!m.view_source, game).clicked() {
+            let r = ui.selectable_label(!m.view_source, game);
+            // Note GD7: the simulated side says what it simulates.
+            let r = match editing {
+                true => r.on_hover_text(pgpsim::SIMULATED_AS),
+                false => r,
+            };
+            if r.clicked() {
                 m.set_view_source(false);
             }
             if ui.selectable_label(m.view_source, source).clicked() {
