@@ -428,6 +428,23 @@ fn texture_path_fix_with_a_non_ascii_byte_applies() {
     assert!(warnings(&fixed.bytes).is_empty());
 }
 
+/// Fix round 1: validate, apply and rebase decode one way (`text::lossy`, no BOM sniffing). A slot starting with
+/// EF BB BF (the builder writes U+FEFF as those bytes) gets a fix whose base is those bytes as Windows-1252, and the
+/// fix applies without a Conflict (apply's BOM-sniffing decode dropped them before).
+#[test]
+fn texture_path_fix_with_leading_bom_bytes_applies() {
+    let b = scenes::one_shape_set(&["\u{feff}Data\\textures\\a.dds"]);
+    let x = only(&warnings(&b), REL, Level::Warn);
+    let Some(Op::SetTexturePath { base, .. }) = &x.fix else {
+        panic!("{x:#?}")
+    };
+    assert_eq!(base, "\u{ef}\u{bb}\u{bf}Data\\textures\\a.dds");
+    let fixed = apply(&b, &[x.fix.clone().unwrap()]).unwrap();
+    assert_eq!(fixed.outcomes, vec![nif::edit::Outcome::Applied], "{x:#?}");
+    let m = read_model(&fixed.bytes).unwrap();
+    assert_eq!(m.texsets[&1].raw.slots[0], b"textures\\a.dds");
+}
+
 /// trace 2026-10-28 #44: a BSXFlags whose name has a non-ASCII byte still gets its External_Emittance fix.
 #[test]
 fn external_emittance_fix_with_a_non_ascii_bsx_name() {
