@@ -252,6 +252,22 @@ pub struct Sequence {
     pub text_keys: Vec<(f32, Option<Arc<[u8]>>)>,
 }
 
+impl Sequence {
+    /// `value at time s, …` over the text keys, `(none)` for a null value; at most [`crate::text::DISPLAY_CAP`]
+    /// bytes, since many keys can share one large string.
+    pub fn text_keys_line(&self) -> String {
+        let pieces = self.text_keys.iter().enumerate().flat_map(|(i, (t, v))| {
+            let sep: &[u8] = if i == 0 { b"" } else { b", " };
+            [
+                std::borrow::Cow::Borrowed(sep),
+                std::borrow::Cow::Borrowed(v.as_deref().unwrap_or(b"(none)")),
+                std::borrow::Cow::Owned(format!(" at {t} s").into_bytes()),
+            ]
+        });
+        crate::text::lossy_capped(pieces, crate::text::DISPLAY_CAP)
+    }
+}
+
 /// NiTextKeyExtraData `r` (name i32, count u32, then time f32 + value string index i32 per key, nif.xml 5180).
 /// The strings are shared ([`Header::string_arc`]), so one large string named by many keys cannot amplify.
 fn text_keys(h: &Header, b: &[u8], r: i32) -> Vec<(f32, Option<Arc<[u8]>>)> {

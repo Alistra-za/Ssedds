@@ -112,6 +112,32 @@ fn two_sequences_share_one_string() {
     assert_eq!(names.len(), 1, "{} distinct name copies", names.len());
 }
 
+/// Fix round 1: 100k text keys naming one 100 KB string share one copy, and the line the controller panel shows
+/// decodes at most `DISPLAY_CAP` bytes (about 10 GB of text before), then "…".
+#[test]
+fn text_key_line_is_capped() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    let mut seq = sequence(-1, &[]);
+    let at = seq.len() - 30; // the text-keys ref, after the weight f32
+    seq[at..at + 4].copy_from_slice(&1i32.to_le_bytes());
+    n.block("NiControllerSequence", seq);
+    let mut tk = W::default().i32(-1).u32(100_000);
+    for k in 0..100_000 {
+        tk = tk.f(k as f32).i32(big);
+    }
+    n.block("NiTextKeyExtraData", tk.0);
+    let m = nif::model::read_model(&bytes_0x80(&n)).unwrap();
+    assert_eq!(m.sequences[0].text_keys.len(), 100_000);
+    let line = m.sequences[0].text_keys_line();
+    assert!(
+        line.len() <= nif::text::DISPLAY_CAP + "…".len(),
+        "{}",
+        line.len()
+    );
+    assert!(line.starts_with('€') && line.ends_with('…'));
+}
+
 /// Many controlled blocks of one sequence naming the large string read (the copies are shared, so no budget
 /// refuses them) and share one copy.
 #[test]

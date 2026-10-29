@@ -933,15 +933,7 @@ fn clips(
             s.stop
         ));
         if !s.text_keys.is_empty() {
-            let list: Vec<String> = s
-                .text_keys
-                .iter()
-                .map(|(t, n)| {
-                    let n = n.as_deref().map_or("(none)".into(), nif::text::lossy);
-                    format!("{n} at {t} s")
-                })
-                .collect();
-            let text = format!("Text keys: {}", list.join(", "));
+            let text = format!("Text keys: {}", s.text_keys_line());
             ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate())
                 .on_hover_text(&text);
         }
