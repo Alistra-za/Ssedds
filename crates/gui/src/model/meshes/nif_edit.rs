@@ -634,6 +634,15 @@ impl NifEdit {
 
     /// Why the current state cannot be exported, from memory alone (export steps 2-4): refused ops first (A16 keeps
     /// them as conflicts), then conflicts, new validation errors and bytes that do not read back.
+    /// Note GD13: the session holds live work: ops, an undo or redo step, or an export to put back (every edit undone
+    /// after an export). Only an untouched session may be replaced by a folder's saved document.
+    pub fn touched(&self) -> bool {
+        !self.doc.ops.is_empty()
+            || self.history.can_undo()
+            || self.history.can_redo()
+            || self.doc.pending()
+    }
+
     pub fn export_block(&self) -> Option<String> {
         if let Some(why) = &self.retarget_error {
             return Some(why.clone());
@@ -936,8 +945,8 @@ impl NifEdit {
         }
     }
 
-    /// Note GD5 (a), (b), (d): the export folder changed while this edit has ops. The document stays in memory and
-    /// moves to `root` (or to `autosave` with none) unsaved: the switch writes nothing, the next save writes there.
+    /// Note GD5 (a), (b), (d): the export folder changed while this edit is touched (GD13). The document stays in
+    /// memory and moves to `root` (or to `autosave` with none) unsaved: the switch writes nothing, the next save writes there.
     /// It takes the export record of `root`'s saved document (that record describes `root`'s file). Returns the
     /// lines for Messages; Err (nothing moved) when `root`'s saved document does not load, so it is never overwritten.
     pub fn retarget(&mut self, root: Option<&Path>) -> Result<Vec<String>, String> {
@@ -2176,8 +2185,9 @@ impl MeshesModel {
     }
 
     /// The app sets the Textures export folder each frame (Note CI29). A change re-reads the chips. An open session
-    /// with ops keeps them in memory and moves to the new folder unsaved (`NifEdit::retarget`, Note GD5); one with no
-    /// ops has nothing live, so the same NIF is reopened from the new folder: its edit document there, or a fresh one.
+    /// that is touched (GD13) keeps its document in memory and moves to the new folder unsaved
+    /// (`NifEdit::retarget`, Note GD5); an untouched one has nothing live, so the same NIF is reopened from the new
+    /// folder: its edit document there, or a fresh one.
     /// The selected shape is kept.
     pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
         if self.nif_export_root == root {
@@ -2192,7 +2202,7 @@ impl MeshesModel {
         // Note GD12: the root is taken only once the live edit has moved there; until then the edit is blocked.
         // shortcut: a failed move is tried again each frame (one small file read); cache on the file's time if it
         // ever shows in a profile.
-        if let Some(e) = self.edit.as_mut().filter(|e| !e.doc.ops.is_empty()) {
+        if let Some(e) = self.edit.as_mut().filter(|e| e.touched()) {
             match e.retarget(root.as_deref()) {
                 Ok(lines) => {
                     self.messages.extend(lines);

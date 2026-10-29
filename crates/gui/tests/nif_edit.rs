@@ -4199,6 +4199,40 @@ fn a_malformed_document_in_the_new_folder_blocks_the_row() {
     assert_eq!(std::fs::read(nif_doc(&old)).unwrap(), before);
 }
 
+/// Note GD13: a session undone back to the source after an export is not idle: on a folder change it keeps its live
+/// document and its redo, and the folder's saved edit is replaced (said in Messages).
+#[test]
+fn an_undone_session_keeps_its_live_document_on_a_folder_change() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    let old = d.path().join("mods").join(EDIT_MOD);
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(Some(old.clone()));
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert!(m.undo_edit());
+    assert!(m.edit.as_ref().unwrap().doc.ops.is_empty());
+    m.messages.clear();
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert!(e.doc.ops.is_empty(), "the live (undone) document stays");
+    assert!(e.history.can_redo(), "its redo stays");
+    assert_eq!(
+        m.messages.first(),
+        Some(&format!(
+            "Export folder changed: the open edit of meshes/x.nif replaced {}'s saved edits.",
+            nif_doc(&out).display()
+        ))
+    );
+    assert!(m.redo_edit());
+    assert_eq!(op_values(&m)[0].1, 12.5);
+}
+
 /// Note GD12: back to the folder the edit never left, the block clears and the edit saves there.
 #[test]
 fn going_back_from_a_failed_folder_change_clears_the_block() {
