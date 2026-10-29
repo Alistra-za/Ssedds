@@ -15,3 +15,15 @@ pub mod sets_doc;
 pub mod settings;
 pub mod ui;
 pub mod worker;
+
+/// Turns on the analysis disk cache (DECISIONS Note DX): `<local_app_data>\sdc\analysis-cache`. `None` (no
+/// `LOCALAPPDATA`) means no store. Only `main` reads the variable and passes it in.
+pub fn with_analysis_cache(
+    session: engine::session::Session,
+    local_app_data: Option<&std::path::Path>,
+) -> engine::session::Session {
+    match local_app_data {
+        Some(base) => session.with_disk_cache(base.join("sdc").join("analysis-cache")),
+        None => session,
+    }
+}

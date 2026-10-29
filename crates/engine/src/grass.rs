@@ -11,7 +11,7 @@ use crate::mips::build_chain;
 use crate::ops::{preprocess_with, Domain, SourceTransfer, Work};
 use crate::quantize::{to_encoder_input, EncoderInput};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The owner's `ComplexGrassThreshold` (CS `SettingsUser.json`, "Grass Lighting"), design §2.
 pub const CS_GRASS_THRESHOLD: f32 = 0.03;
@@ -23,7 +23,7 @@ pub const GRASS_UNIT_TOL: f32 = 0.1;
 pub const GRASS_UNIT_SHARE: f64 = 0.99;
 
 /// What `analyse` records of an image whose height is twice its width (design §4, §5).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GrassFacts {
     /// Every top-half alpha code is 251 or more (DECISIONS Note L: 251..=254 is BC encode noise).
     pub top_opaque: bool,
