@@ -171,6 +171,10 @@ impl SdcApp {
             crate::ui::header::set_meshes_view(ctx, false);
             model.palette_pick(&crate::model::nav::Pick::Texture(k));
         }
+        if let Some(t) = model.show_in_meshes.take() {
+            crate::ui::header::set_meshes_view(ctx, true);
+            m.show_texture(t);
+        }
     }
 
     /// Creates the preview renderer in egui_wgpu's callback resources. Without a render state (no usable adapter) the

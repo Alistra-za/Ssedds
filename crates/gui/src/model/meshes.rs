@@ -1115,6 +1115,17 @@ impl MeshesModel {
         self.tex_filter = Some((t, Arc::new(users)));
     }
 
+    /// "Show in Meshes" (texture settings panel): the list shows exactly the meshes that use `tex`. The picker goes back
+    /// to "Any mod", the search and the chips are cleared, and the list replaces the shapes unless Edit holds them.
+    /// The selection stays (rule 6.1).
+    pub fn show_texture(&mut self, tex: String) {
+        self.any_mod();
+        self.search.clear();
+        self.filter = NifFilter::All;
+        self.shapes_col &= self.edit.is_some();
+        self.set_tex_filter(Some(tex));
+    }
+
     /// The rows of "Any mod": the losing copies under Overridden, else every path's winner.
     fn any_rows(&self) -> &[NifEntry] {
         match self.filter {
