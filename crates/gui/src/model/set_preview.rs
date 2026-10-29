@@ -1427,7 +1427,8 @@ pub enum Outcome {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeRow {
     pub id: ShapeId,
-    pub name: String,
+    /// Shared with the parsed shape (Note GA1).
+    pub name: std::sync::Arc<str>,
     pub outcome: Outcome,
     /// What the renderer draws: the patched material, or the source one.
     pub material: MaterialState,
@@ -1449,7 +1450,7 @@ pub fn simulate_shapes(
     entry: &Value,
     default: &Value,
     nif_path: &str,
-    shapes: &[(ShapeId, String, MaterialState)],
+    shapes: &[(ShapeId, std::sync::Arc<str>, MaterialState)],
     exists: &dyn Fn(&str) -> bool,
 ) -> Vec<ShapeRow> {
     shapes
@@ -2106,7 +2107,7 @@ impl SetPreview {
 
     /// The built-in shape's material and row: the entry simulated on a matching stand-in, or the plain textures.
     fn builtin_scene(&mut self) -> (MaterialState, ShapeRow) {
-        let name = "Built-in shape".to_string();
+        let name: std::sync::Arc<str> = "Built-in shape".into();
         if let Some(entry) = self.entry.clone() {
             if let Some((src, nif)) = builtin_source(&entry, &self.default) {
                 let mut rows = simulate_shapes(
@@ -2142,7 +2143,7 @@ impl SetPreview {
     }
 
     fn nif_rows(&self, nif: &LoadedNif, entry: &Value) -> Vec<ShapeRow> {
-        let shapes: Vec<(ShapeId, String, MaterialState)> = nif
+        let shapes: Vec<(ShapeId, std::sync::Arc<str>, MaterialState)> = nif
             .parsed
             .shapes
             .iter()

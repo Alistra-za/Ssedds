@@ -125,7 +125,8 @@ pub enum ShapeStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeInfo {
     pub id: ShapeId,
-    pub name: String,
+    /// Shared with the parsed shape (Note GA1): `shapes()` hands out pointers, not copies of a long name.
+    pub name: Arc<str>,
     /// The material last loaded or set (even when it failed to build).
     pub material: MaterialState,
     pub status: ShapeStatus,
@@ -134,7 +135,7 @@ pub struct ShapeInfo {
 /// One loaded shape: the CPU mesh (kept so an edit rebuilds the draw without re-parsing), the material last
 /// loaded or set, and what is on screen (possibly built from an earlier material, see [`ShapeStatus`]).
 struct ShapeState {
-    name: String,
+    name: Arc<str>,
     mesh: Arc<nif::geom::Mesh>,
     world: [[f32; 4]; 3],
     material: MaterialState,
@@ -1116,7 +1117,7 @@ impl Renderer {
     /// against the VS inputs, zero cbuffers from the reflection, then the material.
     fn build_draw(
         &mut self,
-        name: &str,
+        name: &Arc<str>,
         mesh: &nif::geom::Mesh,
         world: &[[f32; 4]; 3],
         m: &MaterialState,
@@ -1146,7 +1147,7 @@ impl Renderer {
             write_skin_flags(&mut cb.writer, m, &bound);
         }
         Ok(ShapeDraw {
-            name: name.to_string(),
+            name: name.clone(),
             vs: program.vs_obj.clone(),
             ps: program.ps_obj.clone(),
             mesh: gpu_mesh,
@@ -1562,7 +1563,7 @@ impl Renderer {
         let parsed = ParsedNif {
             shapes: vec![ParsedShape {
                 id: ShapeId(0),
-                name: format!("{b:?}"),
+                name: format!("{b:?}").into(),
                 world: mesh.transform,
                 mesh: Arc::new(mesh),
                 material,

@@ -212,7 +212,8 @@ impl NifRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeView {
     pub block: u32,
-    pub name: Option<String>,
+    /// Shared with the NIF reader's string table, so many shapes naming one string hold one copy (Note GA1).
+    pub name: Option<std::sync::Arc<str>>,
     /// Shape block type, e.g. `BSTriShape`.
     pub kind: String,
     /// 0 none, 1 BSLightingShaderProperty, 2 BSEffectShaderProperty, 3 other shader block.
@@ -1468,7 +1469,7 @@ impl Store {
                 Ok((
                     ShapeView {
                         block: r.get::<_, i64>(0)? as u32,
-                        name: r.get(1)?,
+                        name: r.get::<_, Option<String>>(1)?.map(Into::into),
                         kind: r.get(2)?,
                         shader_kind: r.get(3)?,
                         shader_type: r.get::<_, Option<i64>>(4)?.map(|x| x as u32),

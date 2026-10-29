@@ -191,7 +191,7 @@ fn load_builtin_is_shape_zero() {
     assert_eq!(rep.shapes, 1);
     let s = r.shapes();
     assert_eq!(s.len(), 1);
-    assert_eq!((s[0].id, s[0].name.as_str()), (ShapeId(0), "Sphere"));
+    assert_eq!((s[0].id, &*s[0].name), (ShapeId(0), "Sphere"));
     assert_eq!(s[0].status, ShapeStatus::Drawing);
     assert!(!s[0].material.skinned && !s[0].material.has_vertex_colors);
     let (c, radius) = r.bounds().unwrap();
@@ -297,7 +297,7 @@ fn load_builtin_material_ball_draws() {
     );
     let s = r.shapes();
     assert_eq!(s.len(), 1);
-    assert_eq!((s[0].id, s[0].name.as_str()), (ShapeId(0), "MaterialBall"));
+    assert_eq!((s[0].id, &*s[0].name), (ShapeId(0), "MaterialBall"));
     assert_eq!(s[0].status, ShapeStatus::Drawing);
     let px = r.render(&Scene::neutral(), 64, 64).unwrap();
     let centre: Vec<u8> = (28..36)

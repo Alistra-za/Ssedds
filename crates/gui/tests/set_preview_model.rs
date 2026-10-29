@@ -533,8 +533,8 @@ fn shapes_are_patched_skipped_or_left_alone() {
     let mut other = MaterialState::builtin_default();
     other.set_slot_raw(0, r"textures\x\stone.dds");
     let shapes = vec![
-        (ShapeId(1), "Rock".to_string(), hit.clone()),
-        (ShapeId(2), "Stone".to_string(), other.clone()),
+        (ShapeId(1), "Rock".into(), hit.clone()),
+        (ShapeId(2), "Stone".into(), other.clone()),
     ];
     let rows = simulate_shapes(&e, &d, r"meshes\x\rock.nif", &shapes, &|_| true);
     assert!(
@@ -1140,7 +1140,7 @@ fn a_shape_keeping_a_bsa_only_slot_is_patched_not_skipped_with_the_panels_exists
     let mut src = MaterialState::builtin_default();
     src.set_slot_raw(0, r"textures\landscape\rock01.dds");
     src.set_slot_raw(5, r"textures\clutter\vanilla_m.dds");
-    let shapes = [(ShapeId(1), "Rock".to_string(), src)];
+    let shapes = [(ShapeId(1), "Rock".into(), src)];
     let rows = simulate_shapes(
         &e,
         &d,

@@ -2998,7 +2998,7 @@ fn the_3d_keys_reset_cycle_and_are_listed() {
 fn shape_info(id: u32, m: MaterialState) -> ShapeInfo {
     ShapeInfo {
         id: ShapeId(id),
-        name: format!("s{id}"),
+        name: format!("s{id}").into(),
         material: m,
         status: ShapeStatus::Drawing,
     }

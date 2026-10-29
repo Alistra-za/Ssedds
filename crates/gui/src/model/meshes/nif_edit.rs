@@ -1054,7 +1054,7 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
             let h = &s.head;
             ShapeView {
                 block: s.block,
-                name: h.name.as_deref().map(str::to_string),
+                name: h.name.clone(),
                 kind: format!("{:?}", h.kind),
                 shader_kind,
                 shader_type,

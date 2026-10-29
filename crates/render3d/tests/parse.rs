@@ -35,7 +35,11 @@ fn deep_graph_shapes_are_keyed_by_block() {
         lighting
     );
     assert_eq!(p.shapes.len() + p.skipped.len(), s.shapes.len());
-    let skull = p.shapes.iter().find(|x| x.name == "SkullPeg01:19").unwrap();
+    let skull = p
+        .shapes
+        .iter()
+        .find(|x| &*x.name == "SkullPeg01:19")
+        .unwrap();
     assert_eq!(skull.id, ShapeId(143));
     assert!(
         skull.material.alpha.is_none(),
@@ -52,7 +56,7 @@ fn deep_graph_shapes_are_keyed_by_block() {
 fn furniture_names_and_materials() {
     let b = fixture("TestNifFile_Furniture_Col_SE.nif");
     let p = parse(&b);
-    let names: Vec<(u32, &str)> = p.shapes.iter().map(|x| (x.id.0, x.name.as_str())).collect();
+    let names: Vec<(u32, &str)> = p.shapes.iter().map(|x| (x.id.0, &*x.name)).collect();
     assert_eq!(names, [(9, "cylinder_1"), (12, "cylinder_2")]);
     let s = scan(&b).unwrap();
     for x in &p.shapes {

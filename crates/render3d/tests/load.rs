@@ -17,7 +17,7 @@ fn load_lists_every_lighting_shape_by_block() {
     assert_eq!(shapes.len(), 27);
     assert!(shapes.windows(2).all(|w| w[0].id < w[1].id), "id order");
     let skull = shapes.iter().find(|s| s.id == ShapeId(143)).unwrap();
-    assert_eq!(skull.name, "SkullPeg01:19");
+    assert_eq!(&*skull.name, "SkullPeg01:19");
     assert!(
         matches!(&skull.status, ShapeStatus::Failed { error, .. } if error.starts_with("ps:")),
         "{:?}",
@@ -56,7 +56,7 @@ fn a_new_load_replaces_every_shape() {
     let mut r = renderer(cache.path(), &["STANDIN_OPAQUE_OK"]);
     r.load(&fixture("TestNifFile_DeepGraph_SE.nif"), &|_| None);
     r.load(&fixture("TestNifFile_Furniture_Col_SE.nif"), &|_| None);
-    let names: Vec<String> = r.shapes().into_iter().map(|s| s.name).collect();
+    let names: Vec<String> = r.shapes().into_iter().map(|s| s.name.to_string()).collect();
     assert_eq!(names, ["cylinder_1", "cylinder_2"]);
 }
 

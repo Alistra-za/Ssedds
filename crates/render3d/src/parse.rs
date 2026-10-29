@@ -13,8 +13,8 @@ pub struct ShapeId(pub u32);
 #[derive(Debug, Clone)]
 pub struct ParsedShape {
     pub id: ShapeId,
-    /// The NIF name, or `"block N"` when it has none (P0's label).
-    pub name: String,
+    /// The NIF name, or `"block N"` when it has none (P0's label). Shared with the NIF string table (Note GA1).
+    pub name: Arc<str>,
     pub mesh: Arc<nif::geom::Mesh>,
     /// Root … parent chain × `mesh.transform` (3×4 row-major, the `Mesh.transform` convention). The draw's model
     /// matrix and the bounds use it. Skinned shapes carry it too, but their VS ignores World.
@@ -66,11 +66,11 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
         .extend(graph.problems.iter().map(|p| format!("NIF: {p}")));
     for row in &scan.shapes {
         let id = ShapeId(row.block);
-        let label = row
+        let label: Arc<str> = row
             .head
             .name
-            .as_deref()
-            .map_or_else(|| format!("block {}", row.block), str::to_string);
+            .clone()
+            .unwrap_or_else(|| format!("block {}", row.block).into());
         let nif::scan::Shader::Lighting(lighting, slots) = &row.shader else {
             let why = format!("{label}: not a BSLightingShaderProperty shape, not drawn in P0");
             out.warnings.push(why.clone());

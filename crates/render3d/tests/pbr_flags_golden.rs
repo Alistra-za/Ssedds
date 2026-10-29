@@ -41,7 +41,7 @@ fn pgpatcher_output_class_bits() {
         let s = nif
             .shapes
             .iter()
-            .find(|s| s.name == shape)
+            .find(|s| &*s.name == shape)
             .unwrap_or_else(|| panic!("{rel}: no shape {shape}"));
         let m = &s.material;
         // Every register the non-empty slots would bind (the `load` rule, minus the PS-reads filter).

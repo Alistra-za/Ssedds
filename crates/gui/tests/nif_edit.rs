@@ -635,6 +635,42 @@ fn slot_labels_follow_shader_type_and_flags() {
     assert_eq!(edit_slot_label(0, 0, 1 << 23, 5), "RMAOS");
 }
 
+/// Trace 2026-10-28 #1 (fix round 1): 2000 zero-size BSTriShapes that all name one 100 000-byte string (0x80, which
+/// decodes to three bytes). The shape cards keep the one shared name, not a copy per card.
+#[test]
+fn shape_cards_share_one_name_across_many_shapes() {
+    let mut b = b"Gamebryo File Format, Version 20.2.0.7\n".to_vec();
+    b.extend(0x1402_0007u32.to_le_bytes());
+    b.push(1);
+    b.extend(12u32.to_le_bytes());
+    b.extend(2000u32.to_le_bytes());
+    b.extend(100u32.to_le_bytes());
+    b.extend([1u8, 0, 1, 0, 1, 0]); // author, process and export script
+    b.extend(1u16.to_le_bytes());
+    b.extend(10u32.to_le_bytes());
+    b.extend(b"BSTriShape");
+    b.extend([0u8; 2 * 2000]); // type indices
+    b.extend([0u8; 4 * 2000]); // sizes: every block starts at the footer
+    b.extend(31u32.to_le_bytes());
+    b.extend(100_000u32.to_le_bytes());
+    for k in 0..30 {
+        b.extend(1u32.to_le_bytes());
+        b.push(b'a' + k as u8);
+    }
+    b.extend(100_000u32.to_le_bytes());
+    b.extend(vec![0x80u8; 100_000]);
+    b.extend(0u32.to_le_bytes()); // groups
+    b.extend(30u32.to_le_bytes()); // footer: 30 roots, read as name index 30
+    b.extend([0u8; 4 * 30]);
+    let cards = sdc_gui::model::meshes::nif_edit::shape_cards(&b);
+    assert_eq!(cards.len(), 2000);
+    let ptrs: std::collections::BTreeSet<_> = cards
+        .iter()
+        .map(|c| c.name.as_deref().map(str::as_ptr))
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
+}
+
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!(
         "{}/../nif/tests/fixtures/{name}",
@@ -1239,7 +1275,10 @@ fn a_pick_inside_edit_carries_to_the_next_edit() {
 #[test]
 fn root_stays_selected_across_an_export_folder_switch() {
     let (d, mut m) = export_session();
-    m.card_sel = Some((m.shapes[0].block, m.shapes[0].name.clone()));
+    m.card_sel = Some((
+        m.shapes[0].block,
+        m.shapes[0].name.as_deref().map(str::to_string),
+    ));
     m.open_edit();
     assert!(matches!(
         m.edit.as_ref().unwrap().selection,
