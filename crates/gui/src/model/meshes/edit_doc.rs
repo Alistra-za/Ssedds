@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-/// Name of the mod that receives exported edits.
+/// The mod NIF edits went to without an export folder until Note GD5 (CI3's default); nothing uses it as a default now.
 pub const EDIT_MOD: &str = "sdc NIF Edits";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +115,15 @@ pub fn doc_path(edit_mod: &Path, data_path: &str) -> Result<PathBuf, String> {
         .join(".sdc")
         .join("nif-edits")
         .join(format!("{}.sdc-nifedit.toml", win(data_path)?)))
+}
+
+/// Where an edit without an export folder autosaves (Note GD5 (c)): `<dir>\nif-edits\<SHA-256 of the lowercase data
+/// path>.toml`; `dir` is the scan store's folder, `%LOCALAPPDATA%\sdc` in the app.
+pub fn autosave_path(dir: &Path, data_path: &str) -> Result<PathBuf, String> {
+    let key = win(data_path)?.to_ascii_lowercase();
+    Ok(dir
+        .join("nif-edits")
+        .join(format!("{}.toml", sha256_hex(key.as_bytes()))))
 }
 
 pub fn export_path(edit_mod: &Path, data_path: &str) -> Result<PathBuf, String> {

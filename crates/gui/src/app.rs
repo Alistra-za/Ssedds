@@ -343,6 +343,12 @@ impl eframe::App for SdcApp {
         self.sync_renderer();
         self.meshes
             .set_nif_export_root(self.model.nif_export_root());
+        // Note GD5: an export folder change's lines about the open NIF edit go to Messages.
+        for line in self.meshes.messages.drain(..) {
+            self.model
+                .messages
+                .log(crate::model::messages::Severity::Info, line);
+        }
         let scanning = self.meshes.scanning();
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).

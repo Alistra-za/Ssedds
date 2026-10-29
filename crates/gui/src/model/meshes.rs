@@ -554,8 +554,11 @@ pub struct MeshesModel {
     /// The NIF list's edit chips, by data path: read from the edit mod after a scan, then kept current by the session.
     pub doc_badges: HashMap<String, export::DocBadge>,
     /// The Textures export folder (`AppModel::export_root`) when the Textures side has one, set by the app each frame
-    /// through `set_nif_export_root`; the NIF export goes there, else to `<mods>\sdc NIF Edits` (Note CI29).
+    /// through `set_nif_export_root`; the NIF export goes there. None: an edit autosaves to the app's folder and its
+    /// export is blocked (Note GD5; CI29's `<mods>\sdc NIF Edits` default is gone).
     pub nif_export_root: Option<PathBuf>,
+    /// Note GD5: lines for the app's Messages (an export folder change); the app moves them there each frame.
+    pub messages: Vec<String>,
     /// Note GD1: a worklist fix's tab and field for the edit panel, taken when it draws.
     pub nif_tab: Option<(NifTab, Option<nif::fields::Field>)>,
     /// `nif_problems` without an edit: one `Arc`, so a cache keyed on it holds.
@@ -648,6 +651,7 @@ impl MeshesModel {
             edit: None,
             doc_badges: HashMap::new(),
             nif_export_root: None,
+            messages: vec![],
             nif_tab: None,
             no_problems: Arc::default(),
             procs: system_procs,

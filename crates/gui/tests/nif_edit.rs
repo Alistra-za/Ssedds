@@ -170,6 +170,7 @@ fn an_edit_on_an_escaping_path_does_not_open() {
             copy("A", 1, false),
             p,
             Some(&edit_mod),
+            None,
         );
         assert_eq!(
             r.err(),
@@ -775,6 +776,8 @@ fn scan_and_select(m: &mut MeshesModel, root: &Path) {
     m.select_mod(a);
     let c = m.nifs[0].copy_id;
     m.select_nif(c);
+    // Note GD5: NIF edits have no default mod; the tests choose `<mods>\sdc NIF Edits`, CI3's old default.
+    m.set_nif_export_root(Some(root.join("mods").join(EDIT_MOD)));
 }
 
 fn session(le: bool) -> (tempfile::TempDir, MeshesModel) {
@@ -943,6 +946,9 @@ fn an_edited_nif_keeps_its_failed_shader_message_in_the_app() {
         None,
         support::session(),
     );
+    let mut model = model;
+    // Note GD5: the app hands the chosen export folder to the meshes each frame
+    model.set_export_folder(d.path().join("mods").join(EDIT_MOD));
     let mut app = SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
@@ -1145,7 +1151,7 @@ fn view(m: MeshesModel) -> Harness<'static, MeshesModel> {
 /// A read-only edit session on `bytes` without a scan (no store, no preview).
 fn direct(bytes: Vec<u8>) -> MeshesModel {
     let mut m = MeshesModel::empty();
-    m.edit = Some(NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap());
+    m.edit = Some(NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None, None).unwrap());
     m
 }
 
@@ -2066,6 +2072,9 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         None,
         support::session(),
     );
+    let mut model = model;
+    // Note GD5: the app hands the chosen export folder to the meshes each frame
+    model.set_export_folder(d.path().join("mods").join(EDIT_MOD));
     let mut app = SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
@@ -2186,6 +2195,7 @@ fn authored_key_errors_block_export() {
             copy("A", 1, false),
             "meshes/x.nif",
             Some(&edit_mod),
+            None,
         )
         .unwrap();
         let role = Role::Ctrl {
@@ -2459,6 +2469,7 @@ fn managed_variable_change_rewrites_clip_ids() {
             scenes::managed_clip(),
             copy("A", 1, false),
             "meshes/x.nif",
+            None,
             None,
         )
         .unwrap(),
@@ -3294,6 +3305,8 @@ fn pending_list_and_chips() {
     );
     fresh.procs = sdc_gui::model::meshes::no_procs;
     fresh.activate_with(None);
+    // the app sets the chosen export folder on its first frame (Note GD5)
+    fresh.set_nif_export_root(Some(d.path().join("mods").join(EDIT_MOD)));
     let chips = |k: &str| {
         fresh
             .doc_badges
@@ -3929,11 +3942,50 @@ fn placement_names_the_export_folder_mod() {
     );
 }
 
+/// Where a session without an export folder autosaves (Note GD5 (c)): `<scan.db's folder>\nif-edits\<hash>.toml`.
+fn autosave(d: &tempfile::TempDir) -> std::path::PathBuf {
+    d.path()
+        .join("nif-edits")
+        .join(format!("{}.toml", sha256_hex(b"meshes\\x.nif")))
+}
+
+/// Note GD5: no export folder, no default mod. The edit opens and works, autosaves to the app's folder, and its
+/// export is blocked with FB1's reason; choosing a folder later carries the edit there.
 #[test]
-fn without_an_export_folder_the_fallback_mod_is_used() {
-    let (d, m) = export_session();
-    assert_eq!(m.nif_export_root, None);
-    assert_eq!(m.edit_mod(), Some(d.path().join("mods").join(EDIT_MOD)));
+fn no_export_folder_blocks_the_nif_row() {
+    let (d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    assert_eq!(m.edit_mod(), None);
+    m.open_edit();
+    assert_eq!(m.error, None, "the edit opens");
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    assert_eq!(NO_EXPORT_FOLDER, "No export folder chosen");
+    gloss(&mut m, 12.5);
+    assert_eq!(m.edit.as_ref().unwrap().doc_path, autosave(&d));
+    assert_eq!(load(&autosave(&d)).unwrap().unwrap().ops.len(), 1);
+    assert!(
+        !nif_doc(&d.path().join("mods").join(EDIT_MOD)).exists(),
+        "no default mod"
+    );
+    assert_eq!(
+        m.export_edit(None),
+        ExportOutcome::Blocked(NO_EXPORT_FOLDER.into())
+    );
+    // a crash: the next session finds the autosave
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(op_values(&m).len(), 1, "recovered from the autosave");
+    // a folder is chosen: the edit goes with it, and its first save there drops the autosave
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(m.edit.as_ref().unwrap().doc_path, nif_doc(&out));
+    assert!(autosave(&d).is_file(), "(a): the switch writes nothing");
+    gloss(&mut m, 13.5);
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+    assert!(!autosave(&d).exists());
+    assert_eq!(m.edit.as_ref().unwrap().blocked, None);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
 }
 
 #[test]
@@ -3954,8 +4006,10 @@ fn an_export_folder_outside_the_instance_is_not_checked_and_still_exports() {
     assert!(nif_doc(&out).is_file());
 }
 
+/// Note GD5 (a), (b), (d): a folder change keeps the live edit in memory and writes nothing; the new folder's saved
+/// edit of the NIF is replaced by it (said in Messages), and the old folder's stays there (named in Messages).
 #[test]
-fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
+fn changing_the_export_folder_keeps_the_edit_in_memory() {
     let (d, mut m) = export_session();
     let out = d.path().join(r"mods\MyOut");
     let old = d.path().join("mods").join(EDIT_MOD);
@@ -3965,20 +4019,21 @@ fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
     gloss(&mut m, 7.5);
     m.close_edit();
     let theirs = std::fs::read(nif_doc(&out)).unwrap();
-    // Back to the fallback: an edit there, a shape selected and a drag in progress (not saved yet).
-    m.set_nif_export_root(None);
+    // Back to the first folder: an edit there, a shape selected and a drag in progress (not saved yet).
+    m.set_nif_export_root(Some(old.clone()));
     m.open_edit();
     assert_eq!(m.edit.as_ref().unwrap().doc.ops.len(), 0);
     gloss(&mut m, 12.5);
     let shape = lit_shape(m.edit.as_ref().unwrap()).0;
     m.select_edit(Selection::Shape(shape));
     tick(&mut m, 40.5);
+    m.messages.clear();
     m.set_nif_export_root(Some(out.clone()));
     let e = m.edit.as_ref().unwrap();
     assert_eq!(e.doc_path, nif_doc(&out));
     assert_eq!(e.export_path, out.join(r"meshes\x.nif"));
-    assert_eq!(op_values(&m).len(), 1, "MyOut's edit is loaded");
-    assert_eq!(op_values(&m)[0].1, 7.5);
+    assert_eq!(op_values(&m).len(), 2, "(b): the live edit wins");
+    assert_eq!(op_values(&m)[0].1, 12.5);
     assert_eq!(
         e.selection,
         Selection::Shape(shape),
@@ -3987,15 +4042,47 @@ fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
     assert_eq!(
         std::fs::read(nif_doc(&out)).unwrap(),
         theirs,
-        "not overwritten"
+        "(a): the switch writes nothing"
     );
-    let saved = load(&nif_doc(&old)).unwrap().unwrap();
     assert_eq!(
-        saved.ops.len(),
-        2,
-        "the old folder keeps the session's edits and the drag"
+        load(&nif_doc(&old)).unwrap().unwrap().ops.len(),
+        1,
+        "(d): the old folder keeps what was saved there; the drag was not saved by the switch"
     );
-    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Pending));
+    assert_eq!(
+        m.messages,
+        vec![
+            format!(
+                "Export folder changed: the open edit of meshes/x.nif replaced {}'s saved edits.",
+                nif_doc(&out).display()
+            ),
+            format!(
+                "Export folder changed: the edits saved before stay in {}.",
+                nif_doc(&old).display()
+            ),
+        ]
+    );
+    // dirty: closing the edit saves it in the new folder
+    m.close_edit();
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+}
+
+/// Note GD5: a session with no edits takes the new folder's saved edit (nothing live to keep).
+#[test]
+fn an_idle_session_takes_the_new_folders_edit() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(Some(d.path().join("mods").join(EDIT_MOD)));
+    m.open_edit();
+    m.messages.clear();
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(op_values(&m).len(), 1, "MyOut's edit is loaded");
+    assert_eq!(op_values(&m)[0].1, 7.5);
+    assert!(m.messages.is_empty());
 }
 
 #[test]
@@ -4023,7 +4110,7 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
         h.state().meshes.nif_export_root.as_deref(),
         Some(first.as_path())
     );
-    // Export to ▾ changes: the open edit is saved where it was and reopened from the new folder.
+    // Export to ▾ changes (Note GD5): the open edit moves to the new folder in memory; what was saved stays.
     let want = t.path().join("other");
     h.state_mut().model.set_export_folder(want.clone());
     assert_eq!(h.state().model.export_root(), want);
@@ -4032,11 +4119,19 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
     assert_eq!(m.nif_export_root.as_deref(), Some(want.as_path()));
     let e = m.edit.as_ref().unwrap();
     assert!(e.doc_path.starts_with(&want));
-    assert!(e.doc.ops.is_empty(), "the new folder has no edit of x.nif");
+    assert_eq!(e.doc.ops.len(), 1, "the live edit goes with it");
     assert_eq!(
         load(&nif_doc(&first)).unwrap().unwrap().ops.len(),
         1,
         "saved where it was"
+    );
+    let line = format!(
+        "Export folder changed: the edits saved before stay in {}.",
+        nif_doc(&first).display()
+    );
+    assert!(
+        h.state().model.messages.entries().any(|m| m.text == line),
+        "the app logs the meshes' lines in Messages"
     );
 }
 
@@ -6253,6 +6348,7 @@ fn in_game_cost_on_the_owner_json() {
         copy("A", 1, false),
         "meshes/x.nif",
         None,
+        None,
     )
     .unwrap();
     let mut mat = e.materials()[0].1.clone();
@@ -6421,7 +6517,14 @@ const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
 fn exportable(b: Vec<u8>) -> (tempfile::TempDir, NifEdit) {
     let d = tempfile::tempdir().unwrap();
     let edit_mod = d.path().join("mods").join(EDIT_MOD);
-    let e = NifEdit::open(b, copy("A", 1, false), "meshes/x.nif", Some(&edit_mod)).unwrap();
+    let e = NifEdit::open(
+        b,
+        copy("A", 1, false),
+        "meshes/x.nif",
+        Some(&edit_mod),
+        None,
+    )
+    .unwrap();
     (d, e)
 }
 
@@ -6687,7 +6790,7 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
             b.read(e).ok()
         })
         .expect("the NIF in the vanilla mesh BSAs");
-    let mut e = NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap();
+    let mut e = NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None, None).unwrap();
     // The first controller (free or in a clip) with two float or colour keys or more, on a shape's shader or alpha.
     let (at, clip, keys) = e
         .keys
@@ -7460,6 +7563,7 @@ fn new_clip_ticks_clear_when_the_file_changes() {
             scenes::animated(Some(1), 2),
             copy("B", 2, false),
             "meshes/x.nif",
+            None,
             None,
         )
         .unwrap(),
@@ -8274,6 +8378,7 @@ fn heel_field_follows_undo_and_stays_in_its_session() {
             copy("A", 1, false),
             "meshes/y.nif",
             None,
+            None,
         )
         .unwrap(),
     );
@@ -8344,6 +8449,7 @@ fn heel_notes_for_no_geometry_and_a_negative_height() {
             scenes::heel_scene(),
             copy("A", 1, false),
             "meshes/y.nif",
+            None,
             None,
         )
         .unwrap(),
@@ -8492,6 +8598,9 @@ fn app_edit(w: f32, hgt: f32, gpu: bool) -> (tempfile::TempDir, AppH) {
         None,
         support::session(),
     );
+    let mut model = model;
+    // Note GD5: the app hands the chosen export folder to the meshes each frame
+    model.set_export_folder(d.path().join("mods").join(EDIT_MOD));
     let mut app = SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
@@ -8777,8 +8886,16 @@ fn a_flag_warning_opens_its_list_in_the_next_session() {
     h.run_steps(2);
     assert!(h.query_by_label("Specular").is_none(), "closed, no warning");
     let m = h.state_mut();
-    m.edit =
-        Some(NifEdit::open(typed(0, 1 << 21), copy("A", 1, false), "meshes/y.nif", None).unwrap());
+    m.edit = Some(
+        NifEdit::open(
+            typed(0, 1 << 21),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+            None,
+        )
+        .unwrap(),
+    );
     let s = shape_named(m.edit.as_ref().unwrap(), "S");
     m.select_edit(Selection::Shape(s));
     h.run_steps(3);

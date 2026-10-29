@@ -1,6 +1,6 @@
 //! The NIF edit session (spec §3.4, §7, §8.1; plan A16): the source copy an edit applies to, its edit document and
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
-use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
+use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
 use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED};
 use super::worklist::{NifProblem, NifTab};
@@ -57,10 +57,15 @@ pub const GENERATED_HINTS: [&str; 7] = [
 pub struct NifEdit {
     pub doc: EditDoc,
     pub history: NifHistory,
-    /// All three empty without an MO2 instance: the session is read-only and nothing is saved.
+    /// Where the document is saved: the export folder's, else `autosave` (Note GD5). Empty with neither (a test's
+    /// read-only session): nothing is saved.
     pub doc_path: PathBuf,
+    /// Both empty without an export folder: export is blocked with `NO_EXPORT_FOLDER`.
     pub export_path: PathBuf,
     pub edit_mod: PathBuf,
+    /// Note GD5 (c): the app-folder document of this NIF used while no export folder is chosen; removed by the first
+    /// save into a folder.
+    pub autosave: Option<PathBuf>,
     pub source: Arc<Vec<u8>>,
     pub source_copy: PathCopy,
     pub data_path: String,
@@ -180,9 +185,8 @@ pub struct GuardAsk {
 /// The idle reason Export NIF is off: drawn neutral, not as a block (review Minor 5).
 pub const NO_EDITS: &str = "No edits to export.";
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
-/// No Textures export folder and no MO2 instance: the session is read-only (Note CI29).
-pub const NO_EXPORT_FOLDER: &str =
-    "Export needs an export folder (Export to ▾) or an MO2 instance.";
+/// No export folder chosen: the edit works and autosaves, its export waits (Note GD5); FB1's reason, word for word.
+pub const NO_EXPORT_FOLDER: &str = crate::model::review::NO_EXPORT_FOLDER;
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
@@ -403,14 +407,16 @@ fn keep_base(op: &mut Op, old: &Op) {
 }
 
 impl NifEdit {
-    /// Opens `source`, the bytes of `source_copy`, at `data_path`. `edit_mod` None: read-only with an in-memory
-    /// document. A saved document is loaded (Err when it is malformed or newer: it is never overwritten); when its
-    /// source hash differs, its ops are re-anchored on the new source and `source_changed` counts the outcomes.
+    /// Opens `source`, the bytes of `source_copy`, at `data_path`. `edit_mod` None: the document lives at `autosave`
+    /// (Note GD5) and export is blocked; neither: read-only with an in-memory document. A saved document is loaded
+    /// (Err when it is malformed or newer: it is never overwritten); when its source hash differs, its ops are
+    /// re-anchored on the new source and `source_changed` counts the outcomes.
     pub fn open(
         source: Vec<u8>,
         source_copy: PathCopy,
         data_path: &str,
         edit_mod: Option<&Path>,
+        autosave: Option<&Path>,
     ) -> Result<NifEdit, String> {
         edit_doc::win(data_path)?; // read-only too: the session never opens on such a path
         let (scan, model) = read_source(&source)?;
@@ -421,9 +427,13 @@ impl NifEdit {
                 edit_doc::doc_path(m, data_path)?,
                 edit_doc::export_path(m, data_path)?,
             ),
-            None => Default::default(),
+            None => (
+                PathBuf::new(),
+                autosave.map(Path::to_path_buf).unwrap_or_default(),
+                PathBuf::new(),
+            ),
         };
-        let mut doc = match edit_mod.as_os_str().is_empty() {
+        let mut doc = match doc_path.as_os_str().is_empty() {
             true => None,
             false => edit_doc::load(&doc_path)?,
         }
@@ -438,6 +448,7 @@ impl NifEdit {
             doc_path,
             export_path,
             edit_mod,
+            autosave: autosave.map(Path::to_path_buf),
             source: Arc::new(source),
             data_path: data_path.into(),
             patched: Arc::new(vec![]),
@@ -761,12 +772,72 @@ impl NifEdit {
 
     fn save(&mut self) {
         self.unsaved = false;
-        if self.edit_mod.as_os_str().is_empty() {
+        if self.doc_path.as_os_str().is_empty() {
             return;
         }
         if let Err(e) = edit_doc::save(&self.doc_path, &self.doc) {
             self.error = Some(e);
+            return;
         }
+        // Note GD5 (c): saved in a folder, the app-folder autosave has done its job
+        if let Some(a) = self
+            .autosave
+            .as_ref()
+            .filter(|_| !self.edit_mod.as_os_str().is_empty())
+        {
+            if let Err(e) = std::fs::remove_file(a) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    self.error = Some(format!("{}: {e}", a.display()));
+                }
+            }
+        }
+    }
+
+    /// Note GD5 (a), (b), (d): the export folder changed while this edit has ops. The document stays in memory and
+    /// moves to `root` (or to `autosave` with none) unsaved: the switch writes nothing, the next save writes there.
+    /// It takes the export record of `root`'s saved document (that record describes `root`'s file). Returns the
+    /// lines for Messages; Err (nothing moved) when `root`'s saved document does not load, so it is never overwritten.
+    pub fn retarget(&mut self, root: Option<&Path>) -> Result<Vec<String>, String> {
+        let (edit_mod, doc_path, export_path) = match root {
+            Some(r) => (
+                r.to_path_buf(),
+                edit_doc::doc_path(r, &self.data_path)?,
+                edit_doc::export_path(r, &self.data_path)?,
+            ),
+            None => (
+                PathBuf::new(),
+                self.autosave.clone().unwrap_or_default(),
+                PathBuf::new(),
+            ),
+        };
+        let theirs = match root {
+            Some(_) => edit_doc::load(&doc_path)?,
+            None => None,
+        };
+        let mut lines = vec![];
+        if theirs.is_some() {
+            lines.push(format!(
+                "Export folder changed: the open edit of {} replaced {}'s saved edits.",
+                self.data_path,
+                doc_path.display()
+            ));
+        }
+        // (d): the old folder's document stays (FC11 lists it when its export hash is recorded); the autosave is ours
+        if !self.edit_mod.as_os_str().is_empty() && self.doc_path.is_file() {
+            lines.push(format!(
+                "Export folder changed: the edits saved before stay in {}.",
+                self.doc_path.display()
+            ));
+        }
+        self.doc.export = theirs.map(|t| t.export).unwrap_or_default();
+        (self.edit_mod, self.doc_path, self.export_path) = (edit_mod, doc_path, export_path);
+        self.drag = None;
+        self.history.break_merge();
+        self.unsaved = true;
+        self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
+        self.export_note = None;
+        self.refresh_blocked();
+        Ok(lines)
     }
 
     /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
@@ -1428,18 +1499,16 @@ fn next_key() -> u64 {
 }
 
 impl MeshesModel {
-    /// Where NIF edits go (Note CI29): the Textures export folder, else `<instance>\mods\sdc NIF Edits`; None for a
-    /// folder source without an export folder (or an instance that no longer loads).
+    /// Where NIF edits go: the chosen export folder, and nowhere without one (Note GD5 supersedes CI29's
+    /// `<instance>\mods\sdc NIF Edits` default).
     pub fn edit_mod(&self) -> Option<PathBuf> {
-        if self.nif_export_root.is_some() {
-            return self.nif_export_root.clone();
-        }
-        let Some(ScanTarget::Mo2 { root, profile }) = &self.target else {
-            return None;
-        };
-        Instance::load(root, Some(profile))
-            .ok()
-            .map(|i| i.mods.join(EDIT_MOD))
+        self.nif_export_root.clone()
+    }
+
+    /// Note GD5 (c): where an edit of `path` autosaves while no export folder is chosen (beside the scan store).
+    fn autosave_of(&self, path: &str) -> Option<PathBuf> {
+        let dir = self.store_path.as_ref()?.parent()?;
+        edit_doc::autosave_path(dir, path).ok()
     }
 
     /// Opens an edit session for the selected NIF and shows its patched bytes as `Content::Parsed` (an LE NIF
@@ -1452,9 +1521,6 @@ impl MeshesModel {
             return;
         };
         let edit_mod = self.edit_mod();
-        if edit_mod.is_none() {
-            self.error = Some(NO_EXPORT_FOLDER.into());
-        }
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((mut e, content)) => {
                 e.selection = first_selection(&e.model, self.card_sel.as_ref());
@@ -1491,7 +1557,8 @@ impl MeshesModel {
             .ok_or_else(|| format!("No source copy of {path} to edit."))?
             .clone();
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
-        let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
+        let autosave = self.autosave_of(path);
+        let mut e = NifEdit::open(bytes, src, path, edit_mod, autosave.as_deref())?;
         e.copies = copies;
         e.weight_sibling = weight_sibling_of(path)
             .filter(|s| store.copies_of_path(s).is_ok_and(|c| !c.is_empty()));
@@ -1822,8 +1889,9 @@ impl MeshesModel {
     }
 
     /// The app sets the Textures export folder each frame (Note CI29). A change re-reads the chips. An open session
-    /// is saved to the old folder (an unsaved drag too), then the same NIF is reopened from the new folder: its edit
-    /// document there, or a fresh one. No document is ever replaced by the switch. The selected shape is kept.
+    /// with ops keeps them in memory and moves to the new folder unsaved (`NifEdit::retarget`, Note GD5); one with no
+    /// ops has nothing live, so the same NIF is reopened from the new folder: its edit document there, or a fresh one.
+    /// The selected shape is kept.
     pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
         if self.nif_export_root == root {
             return;
@@ -1833,6 +1901,15 @@ impl MeshesModel {
         let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
             return;
         };
+        if let Some(e) = self.edit.as_mut().filter(|e| !e.doc.ops.is_empty()) {
+            match e.retarget(self.nif_export_root.as_deref()) {
+                Ok(lines) => self.messages.extend(lines),
+                Err(err) => self.error = Some(err),
+            }
+            self.refresh_placement();
+            self.edit_checks();
+            return;
+        }
         // Flushes to the old folder.
         self.drop_edit();
         // The selected NIF is the edited one: selecting another ends the session.
