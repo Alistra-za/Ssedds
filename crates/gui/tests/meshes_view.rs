@@ -721,6 +721,50 @@ fn a_row_read_held_across_a_scan_start_is_dropped_and_an_unfinished_scan_keeps_t
     );
 }
 
+/// Note GC15 (review fix 2): "Show in Meshes" during a scan, or after one that did not complete, reads no users from
+/// a store whose origins are disabled: the chip waits and cuts nothing, through the unfinished scan, until a scan
+/// completes.
+#[cfg(windows)]
+#[test]
+fn the_texture_chip_waits_for_a_completed_scan_before_it_cuts_the_list() {
+    let other = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nif/tests/fixtures/TestNifFile_DeepGraph_SE.nif"
+    ))
+    .unwrap();
+    let (d, mut m) = scanned_with(Some(&other));
+    let all = rows_of(&mut m);
+    let pending = |m: &MeshesModel| m.tex_filter.as_ref().is_some_and(|(_, u)| u.is_none());
+    // What `begin_scan` does to the store; the held lock ends the scan unfinished.
+    let s = modscan::store::Store::open(&d.path().join("scan.db")).unwrap();
+    s.conn()
+        .execute("UPDATE origin SET enabled = 0", [])
+        .unwrap();
+    let lock = hold_scan_lock(d.path());
+    start_scan(&mut m);
+    m.show_texture("textures/white.dds".into());
+    assert_eq!(rows_of(&mut m), all, "no false empty list mid-scan");
+    assert!(pending(&m));
+    wait(&mut m);
+    drop(lock);
+    assert!(!m.scan_completed);
+    assert_eq!(
+        rows_of(&mut m),
+        all,
+        "still waiting after the unfinished scan"
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Uses textures/white.dds ✕");
+    h.get_by_label_contains("after a completed scan");
+    let mut m = h.into_state();
+    start_scan(&mut m);
+    wait(&mut m);
+    assert!(m.scan_completed);
+    assert!(!pending(&m));
+    assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")]);
+}
+
 /// Note GC test 8 (rules 3.1, 3.4, 3.6): at 1100 px a long path is cut in its own column, Path | Mod | chips keep
 /// their order, and nothing of the row reaches past the column's edge.
 #[test]
@@ -808,7 +852,7 @@ fn the_visible_list_is_rebuilt_only_when_an_input_changes() {
     assert_eq!(builds(&h), before + 2, "a chip");
     h.state_mut().filter = NifFilter::All;
     let users = std::collections::HashSet::from(["meshes/m/00010.nif".to_string()]);
-    h.state_mut().tex_filter = Some(("textures/a.dds".into(), Arc::new(users)));
+    h.state_mut().tex_filter = Some(("textures/a.dds".into(), Some(Arc::new(users))));
     h.run_steps(3);
     assert_eq!(
         builds(&h),

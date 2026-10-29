@@ -464,8 +464,13 @@ pub struct MeshesModel {
     rows_rx: Option<Receiver<RowsRead>>,
     /// A NIF to select again once the rows a reload asked for land (it was selected in "Any mod").
     reselect: Option<i64>,
-    /// The texture chip: a texture path and the NIF paths whose shapes use it (`Store::users_of_texture`).
-    pub tex_filter: Option<(String, Arc<HashSet<String>>)>,
+    /// The texture chip: a texture path and the NIF paths whose shapes use it (`Store::users_of_texture`). The users
+    /// are `None` while the store is unsettled (Note GC15): the chip waits for a completed scan and cuts nothing.
+    pub tex_filter: Option<(String, Option<Arc<HashSet<String>>>)>,
+    /// A scan runs, or the last one ended without completing: the store's origins may be disabled, so it reads empty
+    /// (as `AppModel::scan_store_unsettled`; Note GC15). `unsettled_before` is the value before the running scan.
+    store_unsettled: bool,
+    unsettled_before: bool,
     /// How often the visible list was built (tests pin the cache with it, rule 9.2).
     #[doc(hidden)]
     pub row_builds: u64,
@@ -593,6 +598,8 @@ impl MeshesModel {
             rows_rx: None,
             reselect: None,
             tex_filter: None,
+            store_unsettled: false,
+            unsettled_before: false,
             row_builds: 0,
             rows_cache: None,
             selected_nif: None,
@@ -850,6 +857,7 @@ impl MeshesModel {
         self.stale_list = None;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
+        (self.unsettled_before, self.store_unsettled) = (self.store_unsettled, true);
         // Note GC14: a row read still out may read the origins this scan disables; its answer is dropped, and the
         // lists on screen stay until the scan ends.
         self.rows_rx = None;
@@ -914,6 +922,7 @@ impl MeshesModel {
                 }
                 WorkerMsg::Scanned(r) => self.finished(r),
                 WorkerMsg::Panicked { message, .. } => {
+                    self.store_unsettled = true;
                     self.scan_completed = false;
                     self.store_untouched = false;
                     self.cancel = None;
@@ -928,6 +937,12 @@ impl MeshesModel {
     }
 
     fn finished(&mut self, r: Result<Report, ScanError>) {
+        // PGPatcher running stops the scan before `begin_scan`: the store is as it was (Note CW2).
+        self.store_unsettled = match &r {
+            Ok(_) => false,
+            Err(ScanError::PgpRunning) => self.unsettled_before,
+            Err(_) => true,
+        };
         self.cancel = None;
         self.progress = None;
         self.scan_completed = r.is_ok();
@@ -1139,12 +1154,18 @@ impl MeshesModel {
     }
 
     /// The texture chip: `Some(texture path)` cuts the list to the meshes whose shapes use it (one store read, on the
-    /// path index); `None` (its ✕) clears it. Hides rows only: the selection stays (rule 6.1).
+    /// path index); `None` (its ✕) clears it. Hides rows only: the selection stays (rule 6.1). While the store is
+    /// unsettled the users are not read (they would read empty): the chip waits, and the reload of the next completed
+    /// scan reads them (Note GC15).
     pub fn set_tex_filter(&mut self, tex: Option<String>) {
         let Some(t) = tex else {
             self.tex_filter = None;
             return;
         };
+        if self.store_unsettled {
+            self.tex_filter = Some((t, None));
+            return;
+        }
         let users = match self.store.as_ref().map(|s| s.users_of_texture(&t)) {
             Some(Ok(u)) => u.into_iter().map(|(nif, ..)| nif).collect(),
             Some(Err(e)) => {
@@ -1153,7 +1174,7 @@ impl MeshesModel {
             }
             None => HashSet::new(),
         };
-        self.tex_filter = Some((t, Arc::new(users)));
+        self.tex_filter = Some((t, Some(Arc::new(users))));
     }
 
     /// "Show in Meshes" (texture settings panel): the list shows exactly the meshes that use `tex`. The picker goes back
@@ -1239,7 +1260,7 @@ impl MeshesModel {
     /// Built again only when an input changes (rule 9.1): the row lists (by `Arc::ptr_eq`), the texture's users, the
     /// picked mod and its name, the chip and the search.
     pub fn visible_nifs(&mut self) -> Arc<Vec<usize>> {
-        let tex = self.tex_filter.as_ref().map(|(_, u)| u.clone());
+        let tex = self.tex_filter.as_ref().and_then(|(_, u)| u.clone());
         let lists = (
             self.nifs.clone(),
             self.winners.clone(),
@@ -1303,7 +1324,10 @@ impl MeshesModel {
                     .windows(n.len())
                     .any(|w| w.eq_ignore_ascii_case(n))
         };
-        let tex = self.tex_filter.as_ref().map(|(_, users)| users);
+        let tex = self
+            .tex_filter
+            .as_ref()
+            .and_then(|(_, users)| users.as_ref());
         let keep = |row: &NifRow, origin: &str| {
             self.filter.matches(row)
                 && tex.is_none_or(|u| u.contains(&row.path))

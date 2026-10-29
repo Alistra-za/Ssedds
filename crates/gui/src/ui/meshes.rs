@@ -441,11 +441,16 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         }
         // The texture chip (Note GC): set by "Show in Meshes"; its ✕ clears it.
-        if let Some((tex, _)) = &m.tex_filter {
+        if let Some((tex, users)) = &m.tex_filter {
+            let waiting = users.is_none();
             let chip = egui::Button::selectable(true, format!("Uses {tex} ✕")).truncate();
             let r = ui
                 .add(chip)
                 .on_hover_text("Show every mesh again, not only those that use this texture");
+            // Note GC15: an unsettled store reads no users, so the chip waits instead of emptying the list.
+            if waiting {
+                ui.weak("cuts the list after a completed scan");
+            }
             if r.clicked() {
                 m.set_tex_filter(None);
             }
