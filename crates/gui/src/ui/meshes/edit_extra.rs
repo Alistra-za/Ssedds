@@ -98,12 +98,12 @@ fn extra_anchor(extras: &[&Extra], i: usize, shape: Option<String>, root: bool) 
         .count() as u32;
     Anchor {
         block: x.block,
-        kind: x.kind.clone(),
+        kind: x.kind.to_string(),
         shape,
         role: Role::Extra {
             on_root: root,
             name: nif::text::lossy(x.name.as_deref().unwrap_or(&[])),
-            kind: x.kind.clone(),
+            kind: x.kind.to_string(),
             nth,
         },
     }
@@ -134,7 +134,7 @@ fn row(
             if let Some(tip) = known_tip(x) {
                 r.on_hover_text(tip);
             }
-            ui.weak(&x.kind);
+            ui.weak(&*x.kind);
         },
         |ui| {
             if editable {
@@ -171,7 +171,7 @@ fn row(
             edit(a, n, false)
         }),
         ExtraValue::Str(s) => {
-            let mut buf = s.clone();
+            let mut buf = s.to_string();
             let r = ui.add(
                 egui::TextEdit::multiline(&mut buf)
                     .desired_rows(2)
@@ -184,8 +184,8 @@ fn row(
                 None,
                 Some(buf.clone()),
             );
-            if r.changed() && buf != *s {
-                edit(act, ExtraValue::Str(buf), true);
+            if r.changed() && buf != **s {
+                edit(act, ExtraValue::Str(buf.into()), true);
             }
             act.flush |= r.lost_focus();
         }
@@ -321,7 +321,7 @@ fn inv(
 fn default_value(kind: &str) -> ExtraValue {
     match kind {
         "BSXFlags" => ExtraValue::Bsx(0),
-        "NiStringExtraData" => ExtraValue::Str(String::new()),
+        "NiStringExtraData" => ExtraValue::Str("".into()),
         "NiIntegerExtraData" => ExtraValue::Int(0),
         "NiBooleanExtraData" => ExtraValue::Bool(0),
         "NiFloatExtraData" => ExtraValue::Float(0.0f32.to_bits()),
@@ -442,7 +442,7 @@ fn known_off(k: &Known, root: bool, have: &[&Extra]) -> Option<&'static str> {
         });
     }
     let present = have.iter().any(|x| {
-        x.kind == k.kind
+        &*x.kind == k.kind
             && x.name
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(k.name.as_bytes()))
@@ -459,7 +459,7 @@ fn known_tip(x: &Extra) -> Option<&'static str> {
     KNOWN
         .iter()
         .find(|k| {
-            x.kind == k.kind
+            &*x.kind == k.kind
                 && x.name
                     .as_deref()
                     .is_some_and(|n| n.eq_ignore_ascii_case(k.name.as_bytes()))
@@ -655,9 +655,7 @@ fn known_row(
         set_name(&r, egui::WidgetType::Button, label, None, None);
         if r.clicked() {
             let value = match k.value {
-                KnownValue::Text(_) => {
-                    ExtraValue::Str(std::mem::take(&mut st.text).trim().to_string())
-                }
+                KnownValue::Text(_) => ExtraValue::Str(std::mem::take(&mut st.text).trim().into()),
                 KnownValue::Fixed(f) => f(),
                 // The heel entry has its own row (`heel_row`); nothing to add here (T5b review Minor 8).
                 KnownValue::Heel => return,
@@ -687,7 +685,7 @@ fn is_heel(x: &Extra) -> bool {
 /// The first extra of `kind` named `name` (any case) and its index in `have`.
 fn first_named<'a>(have: &[&'a Extra], kind: &str, name: &[u8]) -> Option<(usize, &'a Extra)> {
     have.iter().enumerate().find_map(|(i, x)| {
-        (x.kind == kind
+        (&*x.kind == kind
             && x.name
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(name)))
@@ -715,7 +713,7 @@ fn heel_row(
             .is_some_and(|n| n.eq_ignore_ascii_case(b"HH_OFFSET"))
     });
     let hh = hh_any.map(|i| (i, have[i])).filter(|(_, x)| {
-        x.kind == "NiFloatExtraData" && matches!(x.value, Some(ExtraValue::Float(_)))
+        &*x.kind == "NiFloatExtraData" && matches!(x.value, Some(ExtraValue::Float(_)))
     });
     let blocked = hh_any.is_some() && hh.is_none();
     let sdta = first_named(have, "NiStringExtraData", b"SDTA");
@@ -827,7 +825,7 @@ fn heel_row(
                 if let Some(new) = sdta_with_npc_z(cur, z) {
                     ops.push(Op::EditExtra {
                         at: extra_anchor(have, i, at.shape.clone(), false),
-                        value: ExtraValue::Str(new),
+                        value: ExtraValue::Str(new.into()),
                         base: ExtraValue::Str(cur.clone()),
                     });
                 }
@@ -839,7 +837,7 @@ fn heel_row(
                     at,
                     kind: "NiStringExtraData".into(),
                     name: "SDTA".into(),
-                    value: ExtraValue::Str(new),
+                    value: ExtraValue::Str(new.into()),
                 });
             }
         }

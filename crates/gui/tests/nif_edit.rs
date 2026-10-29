@@ -2511,7 +2511,7 @@ fn bsx_bits_toggle_and_inv_marker_round_trips() {
     );
     edit_number(&mut h, "Rotation X", "90");
     let e = h.state().edit.as_ref().unwrap();
-    let inv = e.model.extras.values().find(|x| x.kind == "BSInvMarker");
+    let inv = e.model.extras.values().find(|x| &*x.kind == "BSInvMarker");
     let Some(ExtraValue::Inv { rot, zoom }) = inv.and_then(|x| x.value.clone()) else {
         panic!("{inv:?}")
     };
@@ -2562,7 +2562,7 @@ fn add_and_remove_string_extra_on_a_shape() {
     let net = &e.model.shape(s).unwrap().net;
     let added = e.model.extras_of(net);
     assert_eq!(added.len(), 1, "{:?}", e.outcomes);
-    assert_eq!(added[0].kind, "NiStringExtraData");
+    assert_eq!(&*added[0].kind, "NiStringExtraData");
     assert_eq!(added[0].name.as_deref(), Some(&b"Note"[..]));
     assert!(matches!(ops(h.state())[0], Op::AddExtra { .. }));
     h.get_by_label("Remove Note (shape)").click();
@@ -2692,7 +2692,7 @@ fn known_picker_on_the_root_offers_hdt_with_a_path_and_marks_prn() {
             [Op::AddExtra { kind, name, value: ExtraValue::Str(p), .. }]
                 if kind == "NiStringExtraData"
                     && name == "HDT Skinned Mesh Physics Object"
-                    && p == r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml"
+                    && &**p == r"SKSE\Plugins\hdtSkinnedMeshConfigs\x.xml"
         ),
         "{got:?}"
     );
@@ -2764,7 +2764,7 @@ fn known_values_are_required_trimmed_and_duplicates_ignore_case() {
     h.run_steps(4);
     let got = ops(h.state());
     assert!(
-        matches!(got.last(), Some(Op::AddExtra { name, value: ExtraValue::Str(v), .. }) if name == "Prn" && v == "WeaponBack"),
+        matches!(got.last(), Some(Op::AddExtra { name, value: ExtraValue::Str(v), .. }) if name == "Prn" && &**v == "WeaponBack"),
         "{got:?}"
     );
 }
@@ -3018,7 +3018,7 @@ fn add_then_remove_ctrl(m: &mut MeshesModel, remove: bool) {
             .prop
             .ctrls
             .iter()
-            .filter(|c| e.model.ctrls[c].class == LSCF && e.model.ctrls[c].var == Some(11))
+            .filter(|c| &*e.model.ctrls[c].class == LSCF && e.model.ctrls[c].var == Some(11))
             .count() as u32
             - 1;
         let role = Role::Ctrl {
@@ -4560,7 +4560,7 @@ fn add_controller_ticks_and_locks_bsx_animated() {
         .model
         .extras
         .values()
-        .find(|x| x.kind == "BSXFlags")
+        .find(|x| &*x.kind == "BSXFlags")
         .and_then(|x| x.value.clone());
     assert_eq!(bsx, Some(ExtraValue::Bsx(0x83)));
     tab(&mut h, "Extra data");
@@ -4663,14 +4663,14 @@ fn a_removed_controller_restores_the_file_material() {
     let c = &e.model.ctrls[&ctrl];
     let at = Anchor {
         block: ctrl,
-        kind: c.class.clone(),
+        kind: c.class.to_string(),
         shape: e
             .model
             .shape(shape)
             .and_then(|s| s.name.as_deref().map(str::to_string)),
         role: Role::Ctrl {
             owner: nif::edit::Owner::Shader,
-            class: c.class.clone(),
+            class: c.class.to_string(),
             var: c.var,
             nth: 0,
         },
@@ -6702,11 +6702,11 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
                 .count() as u32;
             let at = Anchor {
                 block: c,
-                kind: cm.class.clone(),
+                kind: cm.class.to_string(),
                 shape: s.name.as_deref().map(str::to_string),
                 role: Role::Ctrl {
                     owner,
-                    class: cm.class.clone(),
+                    class: cm.class.to_string(),
                     var: cm.var,
                     nth,
                 },
@@ -8825,4 +8825,34 @@ fn closing_edit_restores_the_mods_and_meshes_column() {
     h.run_steps(4);
     assert!(h.state().edit.is_none());
     assert!(!h.state().shapes_col, "back on Mods and meshes");
+}
+
+/// Note GB3: `ExtraValue::Str` holds an `Arc<str>`, which is written to the edit document as the plain string it
+/// was when it held a `String`, and read back as one.
+#[test]
+fn string_extra_value_keeps_its_document_shape() {
+    use nif::extra::ExtraValue;
+    let mut d = doc();
+    d.ops.push(DocOp {
+        op: Op::EditExtra {
+            at: Anchor {
+                block: 4,
+                kind: "NiStringExtraData".into(),
+                shape: None,
+                role: Role::Extra {
+                    on_root: true,
+                    name: "SDTA".into(),
+                    kind: "NiStringExtraData".into(),
+                    nth: 0,
+                },
+            },
+            value: ExtraValue::Str("[1, 2]".into()),
+            base: ExtraValue::Str("".into()),
+        },
+        status: OpStatus::Applied,
+    });
+    let t = d.to_text();
+    assert!(t.contains("\nStr = \"[1, 2]\"\n"), "{t}");
+    assert!(t.contains("\nStr = \"\"\n"), "{t}");
+    assert_eq!(EditDoc::from_text(&t).unwrap(), d);
 }

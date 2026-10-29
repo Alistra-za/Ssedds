@@ -178,7 +178,7 @@ pub fn var_label(class: &str, v: u32, slsf2: u32) -> String {
 /// A controller's title: its variable's label, "Alpha test threshold" for TestRef, the class when unknown.
 pub fn ctrl_title(c: &TimeCtrl, slsf2: u32) -> String {
     match (c.known, c.var) {
-        (false, _) => c.class.clone(),
+        (false, _) => c.class.to_string(),
         (true, Some(v)) => var_label(&c.class, v, slsf2),
         (true, None) => "Alpha test threshold".to_string(),
     }
@@ -359,7 +359,7 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
         let chain: Vec<_> = l.prop.ctrls.iter().filter_map(|c| m.ctrls.get(c)).collect();
         for (i, c) in chain.iter().enumerate() {
             let tgt = Target::Block { block: c.block };
-            match (c.class.as_str(), c.var) {
+            match (&*c.class, c.var) {
                 (LSCF, Some(8)) if pbr => push(Level::Error, tgt.clone(), ENV_SCALE_PBR, None),
                 // B-P41: glossiness (9) too, per B9 I6-R10Z (CM22).
                 (LSCF, Some(9 | 10)) | (LSCC, Some(0)) if !specular => {
@@ -388,7 +388,7 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
 
     for (&block, a) in &m.alphas {
         for &c in &a.prop.ctrls {
-            if m.ctrls.get(&c).is_some_and(|c| c.class == TESTREF) && !a.alpha.test() {
+            if m.ctrls.get(&c).is_some_and(|c| &*c.class == TESTREF) && !a.alpha.test() {
                 push(
                     Level::Warn,
                     Target::Block { block: c },
@@ -426,7 +426,10 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
                 None,
             );
         }
-        if let (true, Some(v)) = (c.class == "BSLightingShaderPropertyFloatController", c.var) {
+        if let (true, Some(v)) = (
+            &*c.class == "BSLightingShaderPropertyFloatController",
+            c.var,
+        ) {
             if !LSCF_VARS.contains(&v) {
                 let t = format!("Variable {v} is not a known Skyrim value (kept)");
                 push(Level::Warn, fld(block, Field::Variable), &t, None);
@@ -448,7 +451,7 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
     }
 
     for (&block, e) in &m.extras {
-        if e.kind == "BSXFlags" && e.name.as_deref() != Some(b"BSX") {
+        if &*e.kind == "BSXFlags" && e.name.as_deref() != Some(b"BSX") {
             push(
                 Level::Error,
                 Target::Extra { block },
@@ -631,13 +634,13 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
 fn root_bsx(m: &NifModel) -> Option<(Anchor, u32)> {
     let net = m.root_net.as_ref()?;
     let (e, v) = m.extras_of(net).into_iter().find_map(|e| match e.value {
-        Some(ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some((e, v)),
+        Some(ExtraValue::Bsx(v)) if &*e.kind == "BSXFlags" => Some((e, v)),
         _ => None,
     })?;
     let role = Role::Extra {
         on_root: true,
         name: crate::text::lossy(e.name.as_deref().unwrap_or(&[])),
-        kind: e.kind.clone(),
+        kind: e.kind.to_string(),
         nth: 0,
     };
     Some((anchor_role(m, None, role)?, v))

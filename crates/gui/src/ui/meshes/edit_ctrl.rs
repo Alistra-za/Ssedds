@@ -61,7 +61,7 @@ fn short_class(class: &str) -> &str {
 }
 
 fn editable(c: &TimeCtrl) -> bool {
-    c.known && matches!(c.class.as_str(), LSCF | LSCC | TEST_REF)
+    c.known && matches!(&*c.class, LSCF | LSCC | TEST_REF)
 }
 
 pub(super) fn controllers_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &mut Act) {
@@ -703,11 +703,11 @@ fn ctrl_anchor<'a>(
         .count() as u32;
     let at = Anchor {
         block: c.block,
-        kind: c.class.clone(),
+        kind: c.class.to_string(),
         shape: shape.name.as_deref().map(str::to_string),
         role: Role::Ctrl {
             owner,
-            class: c.class.clone(),
+            class: c.class.to_string(),
             var: c.var,
             nth,
         },
@@ -837,7 +837,7 @@ fn row(
         .and_then(|i| e.model.interps.get(&i))
         .filter(|i| i.known);
     if let Some(i) = interp {
-        let axes = if c.class == LSCC {
+        let axes = if &*c.class == LSCC {
             ["R", "G", "B"]
         } else {
             ["X", "Y", "Z"]
@@ -1597,7 +1597,7 @@ fn variable(
 ) {
     ui.horizontal(|ui| {
         row_label(ui, "Variable");
-        let offered: &[u32] = if c.class == LSCC {
+        let offered: &[u32] = if &*c.class == LSCC {
             &COLOR_VARS
         } else {
             &FLOAT_VARS
@@ -1615,7 +1615,7 @@ fn variable(
                 for &o in extra.iter().chain(offered) {
                     let text = format!("{} ({o})", var_label(&c.class, o, slsf2));
                     // B-P40: as in the Add picker. A current 8 stays shown (selected text) with its Error.
-                    if c.class == LSCF && o == 8 && slsf2 & SLSF2_TRUE_PBR != 0 {
+                    if &*c.class == LSCF && o == 8 && slsf2 & SLSF2_TRUE_PBR != 0 {
                         ui.add_enabled(false, egui::Button::selectable(pick == o, text))
                             .on_disabled_hover_text(ENV_SCALE_PBR);
                     } else {

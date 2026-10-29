@@ -154,3 +154,267 @@ fn one_sequence_shares_one_string_across_its_blocks() {
         .collect();
     assert_eq!(nodes.len(), 1, "{} distinct node copies", nodes.len());
 }
+
+// ---- Note GB: bytes allocated on the calling thread, so a test can see a per-block decode without timing it.
+thread_local! { static ALLOCATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+struct Counting;
+// SAFETY: forwards every call to the system allocator; only adds a thread-local counter.
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        let _ = ALLOCATED.try_with(|a| a.set(a.get() + l.size()));
+        unsafe { std::alloc::System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        let _ = ALLOCATED.try_with(|a| a.set(a.get() + n));
+        unsafe { std::alloc::System.realloc(p, l, n) }
+    }
+}
+#[global_allocator]
+static COUNTING: Counting = Counting;
+
+/// Bytes `f` allocated on this thread (freed bytes still count: it is the total that was made).
+fn allocated<R>(f: impl FnOnce() -> R) -> (R, usize) {
+    let before = ALLOCATED.with(|a| a.get());
+    let r = f();
+    (r, ALLOCATED.with(|a| a.get()) - before)
+}
+
+/// GB1: 2000 nodes naming the large string. `read_av_head` used to decode it for each (600 MB of copies) and
+/// every caller dropped the name; it now reads no name at all.
+#[test]
+fn av_head_does_not_decode_the_name_per_node() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..2000 {
+        let body = W::default()
+            .i32(big)
+            .u32(0)
+            .i32(-1)
+            .u32(0)
+            .fs(&[0.0; 3])
+            .fs(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+            .f(1.0)
+            .i32(-1)
+            .0;
+        n.block("NiNode", body);
+    }
+    let bytes = bytes_0x80(&n);
+    let h = nif::header::Header::parse(&bytes).unwrap();
+    let (_, made) = allocated(|| {
+        for &at in h.offsets() {
+            let mut c = nif::cursor::Cursor::new(&bytes, at);
+            nif::geom::read_av_head(&mut c).unwrap();
+        }
+    });
+    assert!(made < 1 << 20, "{made} bytes allocated reading 2000 heads");
+}
+
+/// GB2: 500 BSLightingShaderProperty blocks naming the large string; `decode_lighting` of each shares one copy.
+#[test]
+fn lighting_shares_one_string_across_many_properties() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..500 {
+        let body = W::default()
+            .u32(0)
+            .i32(big)
+            .u32(0)
+            .i32(-1)
+            .u32(0)
+            .u32(0)
+            .fs(&[0.0; 4])
+            .i32(-1)
+            .fs(&[0.0; 3])
+            .f(1.0)
+            .u32(0)
+            .fs(&[1.0, 0.0, 80.0])
+            .fs(&[1.0; 3])
+            .fs(&[1.0; 3])
+            .0;
+        n.block("BSLightingShaderProperty", body);
+    }
+    let bytes = bytes_0x80(&n);
+    let h = nif::header::Header::parse(&bytes).unwrap();
+    // all kept alive at once: a dropped copy's address is reused by the next
+    let all: Vec<_> = (0..500)
+        .map(|i| nif::props::decode_lighting(&h, &bytes, i).unwrap())
+        .collect();
+    let ptrs: BTreeSet<_> = all
+        .iter()
+        .map(|l| l.name.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
+}
+
+/// GB3: 800 NiStringExtraData blocks whose value is the large string; `read_model` keeps one copy of it.
+#[test]
+fn read_model_shares_one_string_across_many_string_values() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..800 {
+        n.block("NiStringExtraData", W::default().i32(-1).i32(big).0);
+    }
+    let m = nif::model::read_model(&bytes_0x80(&n)).unwrap();
+    assert_eq!(m.extras.len(), 800);
+    let ptrs: BTreeSet<_> = m
+        .extras
+        .values()
+        .map(|e| match &e.value {
+            Some(nif::extra::ExtraValue::Str(s)) => s.as_ptr(),
+            v => panic!("{v:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct value copies", ptrs.len());
+}
+
+/// GB4: 2000 shapes on one BSLightingShaderProperty whose texture set holds a 50 KB slot path (about 200 MB when
+/// each row copies it): the rows share one slot array.
+#[test]
+fn scan_shares_the_slots_of_one_shader_across_many_shapes() {
+    use builder::scenes::{bstri, lsp, texset};
+    let mut n = Nif::new(100);
+    n.block("BSLightingShaderProperty", lsp(0, 1));
+    n.block("BSShaderTextureSet", texset(&[&"a".repeat(50_000)]));
+    for _ in 0..2000 {
+        n.block("BSTriShape", bstri(0, -1));
+    }
+    n.roots = vec![];
+    let s = nif::scan::scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 2000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| match &r.shader {
+            nif::scan::Shader::Lighting(_, slots) => slots.as_ptr(),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct slot arrays", ptrs.len());
+}
+
+/// GB5: 1000 blocks of one non-editable extra-data type with a 100 KB name; `read_model` keeps one copy of it.
+#[test]
+fn read_model_shares_one_type_name_across_many_extras() {
+    let mut n = Nif::new(100);
+    let kind = format!("{}ExtraData", "k".repeat(BIG));
+    for _ in 0..1000 {
+        n.block(&kind, W::default().i32(-1).0);
+    }
+    let m = nif::model::read_model(&n.bytes()).unwrap();
+    assert_eq!(m.extras.len(), 1000);
+    let ptrs: BTreeSet<_> = m.extras.values().map(|e| e.kind.as_ptr()).collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct type-name copies", ptrs.len());
+}
+
+/// GB5: 1000 shapes on one shader property of an unknown type with a 100 KB name: the rows share the type name.
+#[test]
+fn scan_shares_the_type_name_of_an_unknown_shader() {
+    use builder::scenes::bstri;
+    let mut n = Nif::new(100);
+    let kind = format!("{}ShaderProperty", "k".repeat(BIG));
+    n.block(&kind, vec![]);
+    for _ in 0..1000 {
+        n.block("BSTriShape", bstri(0, -1));
+    }
+    n.roots = vec![];
+    let s = nif::scan::scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 1000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| match &r.shader {
+            nif::scan::Shader::Other { kind } => kind.as_ptr(),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct type-name copies", ptrs.len());
+}
+
+/// Fix round 1 (GB4): 1000 shader properties, each on its own shape, all naming one texture set with a 50 KB slot
+/// path: the rows share one slot array, not one per property.
+#[test]
+fn scan_shares_the_slots_of_one_texture_set_across_many_properties() {
+    use builder::scenes::{bstri, lsp, texset};
+    let mut n = Nif::new(100);
+    n.block("BSShaderTextureSet", texset(&[&"a".repeat(50_000)]));
+    for _ in 0..1000 {
+        n.block("BSLightingShaderProperty", lsp(0, 0));
+    }
+    for k in 0..1000 {
+        n.block("BSTriShape", bstri(1 + k, -1));
+    }
+    n.roots = vec![];
+    let s = nif::scan::scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 1000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| match &r.shader {
+            nif::scan::Shader::Lighting(_, slots) => slots.as_ptr(),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct slot arrays", ptrs.len());
+}
+
+/// A BSTriShape whose controller chain starts at block `ctrl`.
+fn shape_with_ctrl(ctrl: i32) -> Vec<u8> {
+    builder::scenes::avobj(W::default().i32(-1).u32(0).i32(ctrl))
+        .fs(&[0.0; 4])
+        .i32(-1)
+        .i32(-1)
+        .i32(-1)
+        .u64(0)
+        .u16(0)
+        .u16(0)
+        .u32(0)
+        .0
+}
+
+/// Fix round 1 (GB5): 1000 shapes, each with a controller of one type that has a 100 KB name; `read_model` keeps
+/// one copy of the class.
+#[test]
+fn read_model_shares_one_class_name_across_many_controllers() {
+    use builder::scenes::ctrl_body;
+    let mut n = Nif::new(100);
+    let kind = format!("{}Controller", "k".repeat(BIG));
+    for _ in 0..1000 {
+        n.block(&kind, ctrl_body(-1, 0, -1, W::default()));
+    }
+    for k in 0..1000 {
+        n.block("BSTriShape", shape_with_ctrl(k));
+    }
+    n.roots = vec![];
+    let m = nif::model::read_model(&n.bytes()).unwrap();
+    assert_eq!(m.ctrls.len(), 1000, "{:?}", m.problems.first());
+    let ptrs: BTreeSet<_> = m.ctrls.values().map(|c| c.class.as_ptr()).collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct class copies", ptrs.len());
+}
+
+/// Fix round 1 (GB5): 1000 controllers naming 1000 interpolators of one type with a 100 KB name: one class copy.
+#[test]
+fn read_model_shares_one_class_name_across_many_interpolators() {
+    use builder::scenes::ctrl_body;
+    let mut n = Nif::new(100);
+    let kind = format!("{}Interpolator", "k".repeat(BIG));
+    for _ in 0..1000 {
+        n.block(&kind, vec![]);
+    }
+    for k in 0..1000 {
+        n.block(
+            "NiAlphaController",
+            ctrl_body(-1, 0, -1, W::default().i32(k)),
+        );
+    }
+    for k in 0..1000 {
+        n.block("BSTriShape", shape_with_ctrl(1000 + k));
+    }
+    n.roots = vec![];
+    let m = nif::model::read_model(&n.bytes()).unwrap();
+    assert_eq!(m.interps.len(), 1000, "{:?}", m.problems.first());
+    let ptrs: BTreeSet<_> = m.interps.values().map(|i| i.class.as_ptr()).collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct class copies", ptrs.len());
+}

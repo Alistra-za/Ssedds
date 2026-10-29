@@ -125,7 +125,7 @@ pub fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
         .chain(shader)
         .flat_map(|net| m.extras_of(net))
         .any(|x| {
-            x.kind == "NiBooleanExtraData"
+            &*x.kind == "NiBooleanExtraData"
                 && x.name.as_deref() == Some(b"PG_IGNORE")
                 && matches!(x.value, Some(ExtraValue::Bool(v)) if v != 0)
         })

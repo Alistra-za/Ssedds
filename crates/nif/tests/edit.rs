@@ -504,7 +504,7 @@ fn add_bsx_to_root_reemits_only_the_root_prefix() {
     assert_eq!(block_bytes_of(&r.bytes, root as usize), want);
     let m1 = read_model(&r.bytes).unwrap();
     let x = &m1.extras[&(new as u32)];
-    assert_eq!(x.kind, "BSXFlags");
+    assert_eq!(&*x.kind, "BSXFlags");
     assert_eq!(x.value, Some(ExtraValue::Bsx(0x83)));
     assert_eq!(x.name.as_deref(), Some(&b"BSXFlags"[..]));
 }
@@ -1010,7 +1010,7 @@ fn keep_mine_reads_the_current_texture_path_and_extra() {
         base: Str("other".into()),
     };
     let kept = keep_mine(&b, &[stale], 0).unwrap();
-    assert!(matches!(&kept[0], Op::EditExtra { base: Str(s), .. } if s == "a\r\nb"));
+    assert!(matches!(&kept[0], Op::EditExtra { base: Str(s), .. } if &**s == "a\r\nb"));
     assert_eq!(apply(&b, &kept).unwrap().outcomes, vec![Outcome::Applied]);
 }
 
@@ -1650,7 +1650,7 @@ fn bsx_of(b: &[u8]) -> u32 {
     m.extras_of(m.root_net.as_ref().unwrap())
         .into_iter()
         .find_map(|e| match e.value {
-            Some(nif::extra::ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some(v),
+            Some(nif::extra::ExtraValue::Bsx(v)) if &*e.kind == "BSXFlags" => Some(v),
             _ => None,
         })
         .unwrap()
@@ -1824,7 +1824,7 @@ fn add_creates_bsx_when_missing() {
     let x: Vec<_> = m
         .extras_of(m.root_net.as_ref().unwrap())
         .into_iter()
-        .filter(|e| e.kind == "BSXFlags")
+        .filter(|e| &*e.kind == "BSXFlags")
         .collect();
     assert_eq!(x.len(), 1);
     assert_eq!(x[0].name.as_deref(), Some(&b"BSX"[..]));
@@ -2600,7 +2600,7 @@ fn add_first_sequence_creates_manager_palette_and_mttc() {
         let c = &m.ctrls[&(ctrl as u32)];
         assert_eq!(c.flags, 0x48 | 0x20);
         let bl = nif::ctrl::read_blend_interp(&h, o, c.interp.unwrap() as usize).unwrap();
-        assert_eq!(bl.class, "NiBlendFloatInterpolator");
+        assert_eq!(&*bl.class, "NiBlendFloatInterpolator");
         assert_eq!((bl.flags, bl.array_size), (1, 2));
         assert_eq!(bl.value[0].to_bits(), 0xFF7F_FFFF);
     }
@@ -2767,7 +2767,7 @@ fn testref_track_writes_a_null_controller_id() {
     assert_eq!(h.string(cb.node), Some(&b"A"[..]));
     let m2 = read_model(o).unwrap();
     let c = &m2.ctrls[&(cb.controller as u32)];
-    assert!(c.block != 5 && c.class == TESTREF, "the split copy");
+    assert!(c.block != 5 && &*c.class == TESTREF, "the split copy");
     assert_eq!(
         h.kind(c.interp.unwrap() as usize),
         b"NiBlendFloatInterpolator"
@@ -3132,7 +3132,7 @@ fn colour_track_round_trip() {
     assert_eq!(h.kind(ip.data as usize), b"NiPosData");
     assert_eq!(data_of(o, ip.data as usize), keys);
     let bl = nif::ctrl::read_blend_interp(&h, o, m.ctrls[&c].interp.unwrap() as usize).unwrap();
-    assert_eq!(bl.class, "NiBlendPoint3Interpolator");
+    assert_eq!(&*bl.class, "NiBlendPoint3Interpolator");
     assert!(bl.value.iter().all(|v| v.to_bits() == 0xFF7F_FFFF) && bl.value.len() == 3);
     assert_eq!(m.ctrls[&c].flags, 0x68);
 

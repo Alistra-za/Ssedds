@@ -33,7 +33,7 @@ pub fn read_shape(h: &Header, b: &[u8], block: usize) -> Result<Mesh, NifError> 
     };
     let mut c = block_cursor(h, b, block)?;
     // NiObjectNET + NiAVObject (nif.xml 3440-3460)
-    let av = read_av_head(h, &mut c)?;
+    let av = read_av_head(&mut c)?;
     let mut m = Mesh {
         transform: av.transform,
         ..Mesh::default()
@@ -112,7 +112,7 @@ pub fn skin_to_root(h: &Header, b: &[u8], block: usize) -> Result<Option<[[f32; 
         msg,
     };
     let mut c = block_cursor(h, b, block)?;
-    read_av_head(h, &mut c)?;
+    read_av_head(&mut c)?;
     c.skip(16)?; // bounding sphere
     let skin = c.i32()?;
     if skin == -1 {
@@ -129,7 +129,7 @@ pub fn skin_to_root(h: &Header, b: &[u8], block: usize) -> Result<Option<[[f32; 
     if h.kind(di) != b"NiSkinData" {
         return Err(bad(format!(
             "skin data ref points at {}",
-            lossy(h.kind(di))
+            crate::text::label(&lossy(h.kind(di)))
         )));
     }
     let mut d = block_cursor(h, b, di)?;

@@ -5,16 +5,18 @@ use crate::props::{
     decode_alpha, decode_effect, decode_lighting, decode_texture_set, Alpha, Effect, Lighting,
 };
 use crate::shape_head::{decode_head, ShapeHead, ShapeKind};
-use crate::text::lossy;
+use crate::text::{label, lossy};
 use crate::NifError;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
+/// The slots and the effect paths are shared by every shape that names the same property (Note GB4).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shader {
     None,
-    Lighting(Lighting, Vec<TexPath>),
-    Effect(Effect),
-    Other { kind: String },
+    Lighting(Lighting, Arc<[TexPath]>),
+    Effect(Arc<Effect>),
+    Other { kind: Arc<str> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,13 +62,69 @@ fn typed_ref(
         Some(t) if h.kind(t) != want => {
             problems.push(format!(
                 "block {from}: {what} ref {r} points at {}, not {}",
-                lossy(h.kind(t)),
+                label(&lossy(h.kind(t))),
                 lossy(want)
             ));
             None
         }
         Some(t) => Some(t),
     }
+}
+
+/// A block's error as a problem line; a long kind name inside it is cut, so a line stays short.
+fn problem(block: usize, e: &NifError) -> String {
+    label(&format!("block {block}: {e}")).into_owned()
+}
+
+/// A texture set's slots, and the problem line its decode raised (if any), kept per set.
+type TexSets = HashMap<usize, (Arc<[TexPath]>, Option<String>)>;
+
+/// The shader property at block `s`, its texture set followed, and the problems that raised. A set several
+/// properties name is decoded once (`sets`).
+fn shader_of(h: &Header, b: &[u8], s: usize, sets: &mut TexSets) -> (Shader, Vec<String>) {
+    let mut problems = vec![];
+    let shader = match h.kind(s) {
+        b"BSLightingShaderProperty" => match decode_lighting(h, b, s) {
+            Ok(l) => {
+                let slots = match typed_ref(
+                    h,
+                    l.texture_set,
+                    b"BSShaderTextureSet",
+                    "texture set",
+                    s,
+                    &mut problems,
+                ) {
+                    Some(t) => {
+                        let (slots, bad) =
+                            sets.entry(t)
+                                .or_insert_with(|| match decode_texture_set(h, b, t) {
+                                    Ok(ts) => (ts.slots.into(), None),
+                                    Err(e) => (Arc::from([]), Some(problem(t, &e))),
+                                });
+                        problems.extend(bad.iter().cloned());
+                        slots.clone()
+                    }
+                    None => Arc::from([]),
+                };
+                Shader::Lighting(l, slots)
+            }
+            Err(e) => {
+                problems.push(problem(s, &e));
+                Shader::None
+            }
+        },
+        b"BSEffectShaderProperty" => match decode_effect(h, b, s) {
+            Ok(e) => Shader::Effect(Arc::new(e)),
+            Err(e) => {
+                problems.push(problem(s, &e));
+                Shader::None
+            }
+        },
+        _ => Shader::Other {
+            kind: h.kind_arc(s),
+        },
+    };
+    (shader, problems)
 }
 
 pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
@@ -79,6 +137,8 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
         problems: vec![],
         index3d: crate::graph::index3d(&h, b),
     };
+    let mut shaders: HashMap<usize, (Shader, Vec<String>)> = HashMap::new();
+    let mut sets = TexSets::new();
     for i in 0..h.sizes.len() {
         let Some(kind) = ShapeKind::from_name(h.kind(i)) else {
             continue;
@@ -97,42 +157,15 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
                     .push(format!("block {i}: shader ref {r} out of range"));
                 Shader::None
             }
-            (_, Some(s)) => match h.kind(s) {
-                b"BSLightingShaderProperty" => match decode_lighting(&h, b, s) {
-                    Ok(l) => {
-                        let slots = match typed_ref(
-                            &h,
-                            l.texture_set,
-                            b"BSShaderTextureSet",
-                            "texture set",
-                            s,
-                            &mut out.problems,
-                        ) {
-                            Some(t) => match decode_texture_set(&h, b, t) {
-                                Ok(ts) => ts.slots,
-                                Err(e) => {
-                                    out.problems.push(format!("block {t}: {e}"));
-                                    vec![]
-                                }
-                            },
-                            None => vec![],
-                        };
-                        Shader::Lighting(l, slots)
-                    }
-                    Err(e) => {
-                        out.problems.push(format!("block {s}: {e}"));
-                        Shader::None
-                    }
-                },
-                b"BSEffectShaderProperty" => match decode_effect(&h, b, s) {
-                    Ok(e) => Shader::Effect(e),
-                    Err(e) => {
-                        out.problems.push(format!("block {s}: {e}"));
-                        Shader::None
-                    }
-                },
-                other => Shader::Other { kind: lossy(other) },
-            },
+            (_, Some(s)) => {
+                // Decoded once per property however many shapes name it; the problems it raised are repeated per
+                // shape (as before), each already short (Note GB4).
+                let (shader, problems) = shaders
+                    .entry(s)
+                    .or_insert_with(|| shader_of(&h, b, s, &mut sets));
+                out.problems.extend(problems.iter().cloned());
+                shader.clone()
+            }
         };
         let alpha = typed_ref(
             &h,

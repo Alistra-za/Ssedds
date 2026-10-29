@@ -412,7 +412,7 @@ pub(crate) fn interp_keys(
         ip => {
             let class = ip.map_or_else(
                 || String::from_utf8_lossy(h.kind(i)).into_owned(),
-                |ip| ip.class.clone(),
+                |ip| ip.class.to_string(),
             );
             return Err(format!("A {class} has no keys to edit."));
         }
@@ -794,7 +794,7 @@ fn root_manager(h: &Header, cur: &[u8], m: &NifModel) -> Result<Option<u32>, Str
             return broken(); // a loop
         }
         seen.push(t.block);
-        if t.class == "NiControllerManager" {
+        if &*t.class == "NiControllerManager" {
             if read_manager(h, cur, t.block as usize).is_err() {
                 return broken();
             }
@@ -891,7 +891,7 @@ pub(crate) fn track_shape(
     t: &super::ClipTrack,
 ) -> Result<u32, String> {
     let ctrl = m.ctrls.get(&c).ok_or("not a readable controller")?;
-    let float = match ctrl.class.as_str() {
+    let float = match &*ctrl.class {
         LSCF | TESTREF if ctrl.known => true,
         LSCC if ctrl.known => false,
         _ => return Err(format!("A {} cannot be in a clip.", ctrl.class)),
@@ -1046,7 +1046,7 @@ fn unlink_manager(
         .ok_or("The root is not a node: a clip needs a node root.")?;
     let mut after = man.ctrl.next;
     if let Some(t) = u32::try_from(after).ok().and_then(|b| m.ctrls.get(&b)) {
-        if t.class == "NiMultiTargetTransformController" {
+        if &*t.class == "NiMultiTargetTransformController" {
             after = t.next;
         }
     }
@@ -1107,7 +1107,7 @@ pub fn convert_check(m: &NifModel, prop: u32, shape: Option<&str>) -> Result<Vec
         .iter()
         .filter_map(|c| m.ctrls.get(c))
         .filter(|c| c.known && c.flags & 0x08 != 0 && !m.managed(c.block))
-        .filter(|c| [LSCF, LSCC, TESTREF].contains(&c.class.as_str()))
+        .filter(|c| [LSCF, LSCC, TESTREF].contains(&&*c.class))
         .filter(|c| {
             c.interp
                 .and_then(|i| u32::try_from(i).ok())
@@ -1182,11 +1182,11 @@ pub(crate) fn convert_op(
             .count() as u32;
         let at = Anchor {
             block: c,
-            kind: t.class.clone(),
+            kind: t.class.to_string(),
             shape: at.shape.clone(),
             role: Role::Ctrl {
                 owner,
-                class: t.class.clone(),
+                class: t.class.to_string(),
                 var: t.var,
                 nth,
             },
@@ -1243,7 +1243,7 @@ fn release(
             }
             let k = ks[0];
             let ip = rs.blocks[k].interp;
-            let want: &[u8] = if ctrl.class == LSCC {
+            let want: &[u8] = if &*ctrl.class == LSCC {
                 b"NiPoint3Interpolator"
             } else {
                 b"NiFloatInterpolator"
@@ -1330,7 +1330,7 @@ pub(crate) fn add_sequence(
             let mgr = enc(doc.append(b"NiControllerManager", vec![]))?;
             let base = |next: i32, flags: u16| TimeCtrl {
                 block: 0,
-                class: String::new(),
+                class: "".into(),
                 next,
                 flags,
                 // C-P29 census: all 1051 vanilla managers and their MTTCs run freq 1, phase 0 over the
@@ -1362,7 +1362,7 @@ pub(crate) fn add_sequence(
     let mut blocks = Vec::with_capacity(tracks.len());
     for ((c, _, keys), (_, _, node)) in tracks.iter().zip(&shapes) {
         let ctrl = &m.ctrls[c];
-        let point3 = ctrl.class == LSCC;
+        let point3 = &*ctrl.class == LSCC;
         let interp = append_keyed(doc, keys)?;
         let blend = if point3 {
             "NiBlendPoint3Interpolator"
@@ -1381,7 +1381,7 @@ pub(crate) fn add_sequence(
         }
         doc.patch(*c, 4, &(ctrl.flags | 0x20).to_le_bytes())
             .map_err(|e| e.to_string())?;
-        let testref = ctrl.class == TESTREF;
+        let testref = &*ctrl.class == TESTREF;
         let ptype: &[u8] = if testref {
             b"NiAlphaProperty"
         } else {
@@ -1448,7 +1448,7 @@ fn set_bsx_animated(doc: &mut NifDoc, m: &NifModel) -> Result<(), String> {
         .ok_or("The root is not a node: the BSX Animated bit cannot be set.")?;
     // the first BSXFlags whatever its name, as validate::root_bsx picks it
     let found = m.extras_of(net).into_iter().find_map(|e| match e.value {
-        Some(ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some((e.block, v)),
+        Some(ExtraValue::Bsx(v)) if &*e.kind == "BSXFlags" => Some((e.block, v)),
         _ => None,
     });
     match found {
@@ -1546,7 +1546,7 @@ pub(crate) fn extra_op(
                 _ => -1,
             };
             let (k, body) = encode_extra(-1, value, si);
-            if k != x.kind {
+            if k != &*x.kind {
                 return Err(format!("a {k} value cannot replace a {}", x.kind));
             }
             doc.patch(block, 4, &body[4..]).map_err(|e| e.to_string())?;

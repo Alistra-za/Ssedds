@@ -12,7 +12,7 @@ fn every_editable_extra_round_trips_through_its_encoder() {
     for i in 0..h.sizes.len() {
         let e = read_extra(&h, &b, i).unwrap();
         let Some(v) = &e.value else {
-            assert_eq!(e.kind, "NiStringsExtraData");
+            assert_eq!(&*e.kind, "NiStringsExtraData");
             continue;
         };
         let at = h.offsets()[i];
@@ -23,7 +23,7 @@ fn every_editable_extra_round_trips_through_its_encoder() {
             -1
         };
         let (kind, body) = encode_extra(name, v, str_index);
-        assert_eq!(kind, e.kind);
+        assert_eq!(kind, &*e.kind);
         assert_eq!(body.as_slice(), &b[at..at + h.sizes[i] as usize]);
     }
 }
@@ -47,7 +47,7 @@ fn extra_values_and_read_only_row() {
         })
     );
     let ro = v(6);
-    assert_eq!((ro.value, ro.kind.as_str()), (None, "NiStringsExtraData"));
+    assert_eq!((ro.value, &*ro.kind), (None, "NiStringsExtraData"));
     assert_eq!(ro.size, h.sizes[6]);
 }
 
@@ -111,7 +111,7 @@ fn string_extra_null_index_is_empty_but_dangling_is_an_error() {
     let h = Header::parse(&b).unwrap();
     assert_eq!(
         read_extra(&h, &b, 0).unwrap().value,
-        Some(ExtraValue::Str(String::new()))
+        Some(ExtraValue::Str("".into()))
     );
     for i in [0, 7, -2, i32::MIN] {
         let b = one_block_nif("NiStringExtraData", body(i));

@@ -107,7 +107,7 @@ fn shapes_of_shares_one_name_across_rows() {
                 name: Some(big.clone()),
                 ..head(false)
             },
-            shader: Shader::Effect(effect(b"fx\\glow.dds")),
+            shader: Shader::Effect(effect(b"fx\\glow.dds").into()),
             alpha: None,
         })
         .collect();
@@ -146,13 +146,13 @@ fn raw_strings_and_flags_are_kept_for_odd_slots() {
         ShapeRow {
             block: 0,
             head: head(true),
-            shader: Shader::Lighting(lighting(), slots),
+            shader: Shader::Lighting(lighting(), slots.into()),
             alpha: None,
         },
         ShapeRow {
             block: 5,
             head: head(false),
-            shader: Shader::Effect(effect(b"fx\\glow.dds")),
+            shader: Shader::Effect(effect(b"fx\\glow.dds").into()),
             alpha: None,
         },
     ]);
@@ -217,7 +217,7 @@ fn more_than_nine_slots_is_recorded_as_a_problem() {
     let scan = scan_of(vec![ShapeRow {
         block: 3,
         head: head(false),
-        shader: Shader::Lighting(lighting(), slots),
+        shader: Shader::Lighting(lighting(), slots.into()),
         alpha: None,
     }]);
     let id = s
@@ -395,7 +395,7 @@ fn query_store() -> (tempfile::TempDir, Store, HashMap<&'static str, i64>) {
             "meshes/x/f.nif",
             a,
             0,
-            Shader::Effect(effect(vanilla[0].as_bytes())),
+            Shader::Effect(effect(vanilla[0].as_bytes()).into()),
             false,
         ),
     );
