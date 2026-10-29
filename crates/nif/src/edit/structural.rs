@@ -1448,7 +1448,7 @@ fn set_bsx_animated(doc: &mut NifDoc, m: &NifModel) -> Result<(), String> {
         .ok_or("The root is not a node: the BSX Animated bit cannot be set.")?;
     // the first BSXFlags whatever its name, as validate::root_bsx picks it
     let found = m.extras_of(net).into_iter().find_map(|e| match e.value {
-        Some(ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some((e.block, v)),
+        Some(ExtraValue::Bsx(v)) if &*e.kind == "BSXFlags" => Some((e.block, v)),
         _ => None,
     });
     match found {
@@ -1546,7 +1546,7 @@ pub(crate) fn extra_op(
                 _ => -1,
             };
             let (k, body) = encode_extra(-1, value, si);
-            if k != x.kind {
+            if k != &*x.kind {
                 return Err(format!("a {k} value cannot replace a {}", x.kind));
             }
             doc.patch(block, 4, &body[4..]).map_err(|e| e.to_string())?;

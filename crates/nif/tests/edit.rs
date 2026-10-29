@@ -504,7 +504,7 @@ fn add_bsx_to_root_reemits_only_the_root_prefix() {
     assert_eq!(block_bytes_of(&r.bytes, root as usize), want);
     let m1 = read_model(&r.bytes).unwrap();
     let x = &m1.extras[&(new as u32)];
-    assert_eq!(x.kind, "BSXFlags");
+    assert_eq!(&*x.kind, "BSXFlags");
     assert_eq!(x.value, Some(ExtraValue::Bsx(0x83)));
     assert_eq!(x.name.as_deref(), Some(&b"BSXFlags"[..]));
 }
@@ -1650,7 +1650,7 @@ fn bsx_of(b: &[u8]) -> u32 {
     m.extras_of(m.root_net.as_ref().unwrap())
         .into_iter()
         .find_map(|e| match e.value {
-            Some(nif::extra::ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some(v),
+            Some(nif::extra::ExtraValue::Bsx(v)) if &*e.kind == "BSXFlags" => Some(v),
             _ => None,
         })
         .unwrap()
@@ -1824,7 +1824,7 @@ fn add_creates_bsx_when_missing() {
     let x: Vec<_> = m
         .extras_of(m.root_net.as_ref().unwrap())
         .into_iter()
-        .filter(|e| e.kind == "BSXFlags")
+        .filter(|e| &*e.kind == "BSXFlags")
         .collect();
     assert_eq!(x.len(), 1);
     assert_eq!(x[0].name.as_deref(), Some(&b"BSX"[..]));

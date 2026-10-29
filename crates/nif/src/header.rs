@@ -28,6 +28,8 @@ pub struct Header {
     /// One shared copy per string-table entry, made on first use ([`Header::name_arc`], [`Header::string_arc`]).
     names: Vec<OnceLock<Arc<str>>>,
     raws: Vec<OnceLock<Arc<[u8]>>>,
+    /// One shared name per block type ([`Header::kind_arc`]).
+    kinds: Vec<OnceLock<Arc<str>>>,
 }
 
 pub(crate) const MAX_BLOCKS: u32 = 1 << 20; // nifly NIF_BLOCK_INDEX_LIMIT
@@ -123,6 +125,7 @@ impl Header {
             footer_at: p,
             names: (0..nstrings).map(|_| OnceLock::new()).collect(),
             raws: (0..nstrings).map(|_| OnceLock::new()).collect(),
+            kinds: (0..ntypes).map(|_| OnceLock::new()).collect(),
         })
     }
 
@@ -132,6 +135,15 @@ impl Header {
 
     pub fn kind(&self, block: usize) -> &[u8] {
         &self.block_types[self.type_index[block] as usize]
+    }
+
+    /// The block's type name decoded, one copy per type however many blocks have it (Note GB5). Panics on a
+    /// block past the end, as [`Header::kind`] does.
+    pub fn kind_arc(&self, block: usize) -> Arc<str> {
+        let t = self.type_index[block] as usize;
+        self.kinds[t]
+            .get_or_init(|| crate::text::lossy(&self.block_types[t]).into())
+            .clone()
     }
 
     pub fn string(&self, idx: i32) -> Option<&[u8]> {

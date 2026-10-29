@@ -33,7 +33,7 @@ pub(crate) fn exact(h: &Header, block: usize, want: usize, got: usize) -> Result
     }
     Err(NifError::BlockSize {
         block: block as u32,
-        kind: String::from_utf8_lossy(h.kind(block)).into(),
+        kind: crate::text::label(&String::from_utf8_lossy(h.kind(block))).into_owned(),
         declared: got as u32,
         consumed: want as u32,
     })

@@ -254,11 +254,11 @@ fn role_cands(m: &NifModel, sel: &[&ShapeModel], role: &Role) -> Vec<Cand> {
                     .extras_of(net)
                     .into_iter()
                     .filter(|e| {
-                        e.kind == *kind
+                        *e.kind == **kind
                             && crate::text::lossy(e.name.as_deref().unwrap_or(&[])) == *name
                     })
                     .nth(*nth as usize);
-                v.extend(hit.map(|e| (e.block, e.kind.clone())));
+                v.extend(hit.map(|e| (e.block, e.kind.to_string())));
             }
         }
     }

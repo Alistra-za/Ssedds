@@ -129,7 +129,7 @@ pub fn skin_to_root(h: &Header, b: &[u8], block: usize) -> Result<Option<[[f32; 
     if h.kind(di) != b"NiSkinData" {
         return Err(bad(format!(
             "skin data ref points at {}",
-            lossy(h.kind(di))
+            crate::text::label(&lossy(h.kind(di)))
         )));
     }
     let mut d = block_cursor(h, b, di)?;

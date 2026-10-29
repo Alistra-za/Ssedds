@@ -70,7 +70,7 @@ pub fn read_skin_partition(h: &Header, b: &[u8], block: usize) -> Result<SkinPar
     if h.kind(block) != b"NiSkinPartition" {
         return Err(geo(format!(
             "expected NiSkinPartition, found {}",
-            crate::text::lossy(h.kind(block))
+            crate::text::label(&crate::text::lossy(h.kind(block)))
         )));
     }
     let mut c = block_cursor(h, b, block)?;

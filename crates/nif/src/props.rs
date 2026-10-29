@@ -120,7 +120,7 @@ fn finish(h: &Header, block: usize, c: &Cursor, start: usize, end: usize) -> Res
     if c.pos() != end {
         return Err(NifError::BlockSize {
             block: block as u32,
-            kind: lossy(h.kind(block)),
+            kind: crate::text::label(&lossy(h.kind(block))).into_owned(),
             declared: h.sizes[block],
             consumed: (c.pos() - start) as u32,
         });

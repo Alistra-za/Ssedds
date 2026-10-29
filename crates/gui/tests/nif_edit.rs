@@ -2511,7 +2511,7 @@ fn bsx_bits_toggle_and_inv_marker_round_trips() {
     );
     edit_number(&mut h, "Rotation X", "90");
     let e = h.state().edit.as_ref().unwrap();
-    let inv = e.model.extras.values().find(|x| x.kind == "BSInvMarker");
+    let inv = e.model.extras.values().find(|x| &*x.kind == "BSInvMarker");
     let Some(ExtraValue::Inv { rot, zoom }) = inv.and_then(|x| x.value.clone()) else {
         panic!("{inv:?}")
     };
@@ -2562,7 +2562,7 @@ fn add_and_remove_string_extra_on_a_shape() {
     let net = &e.model.shape(s).unwrap().net;
     let added = e.model.extras_of(net);
     assert_eq!(added.len(), 1, "{:?}", e.outcomes);
-    assert_eq!(added[0].kind, "NiStringExtraData");
+    assert_eq!(&*added[0].kind, "NiStringExtraData");
     assert_eq!(added[0].name.as_deref(), Some(&b"Note"[..]));
     assert!(matches!(ops(h.state())[0], Op::AddExtra { .. }));
     h.get_by_label("Remove Note (shape)").click();
@@ -4560,7 +4560,7 @@ fn add_controller_ticks_and_locks_bsx_animated() {
         .model
         .extras
         .values()
-        .find(|x| x.kind == "BSXFlags")
+        .find(|x| &*x.kind == "BSXFlags")
         .and_then(|x| x.value.clone());
     assert_eq!(bsx, Some(ExtraValue::Bsx(0x83)));
     tab(&mut h, "Extra data");

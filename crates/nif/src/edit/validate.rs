@@ -448,7 +448,7 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
     }
 
     for (&block, e) in &m.extras {
-        if e.kind == "BSXFlags" && e.name.as_deref() != Some(b"BSX") {
+        if &*e.kind == "BSXFlags" && e.name.as_deref() != Some(b"BSX") {
             push(
                 Level::Error,
                 Target::Extra { block },
@@ -631,13 +631,13 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
 fn root_bsx(m: &NifModel) -> Option<(Anchor, u32)> {
     let net = m.root_net.as_ref()?;
     let (e, v) = m.extras_of(net).into_iter().find_map(|e| match e.value {
-        Some(ExtraValue::Bsx(v)) if e.kind == "BSXFlags" => Some((e, v)),
+        Some(ExtraValue::Bsx(v)) if &*e.kind == "BSXFlags" => Some((e, v)),
         _ => None,
     })?;
     let role = Role::Extra {
         on_root: true,
         name: crate::text::lossy(e.name.as_deref().unwrap_or(&[])),
-        kind: e.kind.clone(),
+        kind: e.kind.to_string(),
         nth: 0,
     };
     Some((anchor_role(m, None, role)?, v))

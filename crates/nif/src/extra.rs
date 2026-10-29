@@ -49,7 +49,8 @@ pub const INV_DEFAULT: ([u16; 3], f32) = ([4712, 6283, 0], 1.0);
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extra {
     pub block: u32,
-    pub kind: String,
+    /// Shared with every block of the same type ([`Header::kind_arc`]).
+    pub kind: std::sync::Arc<str>,
     /// Raw bytes, shared with every block that names the same entry ([`Header::string_arc`]).
     pub name: Option<std::sync::Arc<[u8]>>,
     /// `None` for every type outside [`EDITABLE`].
@@ -65,7 +66,7 @@ pub fn read_extra(h: &Header, b: &[u8], block: usize) -> Result<Extra, NifError>
     if block >= h.sizes.len() {
         return Err(geo("no such block"));
     }
-    let kind = text::lossy(h.kind(block));
+    let kind = h.kind_arc(block);
     let start = h.offsets()[block];
     let size = h.sizes[block];
     let end = start + size as usize;
@@ -73,9 +74,9 @@ pub fn read_extra(h: &Header, b: &[u8], block: usize) -> Result<Extra, NifError>
         return Err(geo("block runs past the file"));
     }
     let mut c = Cursor::new(&b[..end], start);
-    let (name, value) = if EDITABLE.contains(&kind.as_str()) {
+    let (name, value) = if EDITABLE.contains(&&*kind) {
         let name = c.i32()?;
-        let v = match kind.as_str() {
+        let v = match &*kind {
             "BSXFlags" => ExtraValue::Bsx(c.u32()?),
             "NiStringExtraData" => {
                 let i = c.i32()?;
@@ -98,7 +99,7 @@ pub fn read_extra(h: &Header, b: &[u8], block: usize) -> Result<Extra, NifError>
         if c.pos() != end {
             return Err(NifError::BlockSize {
                 block: block as u32,
-                kind,
+                kind: text::label(&kind).into_owned(),
                 declared: size,
                 consumed: (c.pos() - start) as u32,
             });

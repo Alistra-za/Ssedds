@@ -294,3 +294,41 @@ fn scan_shares_the_slots_of_one_shader_across_many_shapes() {
         .collect();
     assert_eq!(ptrs.len(), 1, "{} distinct slot arrays", ptrs.len());
 }
+
+/// GB5: 1000 blocks of one non-editable extra-data type with a 100 KB name; `read_model` keeps one copy of it.
+#[test]
+fn read_model_shares_one_type_name_across_many_extras() {
+    let mut n = Nif::new(100);
+    let kind = format!("{}ExtraData", "k".repeat(BIG));
+    for _ in 0..1000 {
+        n.block(&kind, W::default().i32(-1).0);
+    }
+    let m = nif::model::read_model(&n.bytes()).unwrap();
+    assert_eq!(m.extras.len(), 1000);
+    let ptrs: BTreeSet<_> = m.extras.values().map(|e| e.kind.as_ptr()).collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct type-name copies", ptrs.len());
+}
+
+/// GB5: 1000 shapes on one shader property of an unknown type with a 100 KB name: the rows share the type name.
+#[test]
+fn scan_shares_the_type_name_of_an_unknown_shader() {
+    use builder::scenes::bstri;
+    let mut n = Nif::new(100);
+    let kind = format!("{}ShaderProperty", "k".repeat(BIG));
+    n.block(&kind, vec![]);
+    for _ in 0..1000 {
+        n.block("BSTriShape", bstri(0, -1));
+    }
+    n.roots = vec![];
+    let s = nif::scan::scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 1000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| match &r.shader {
+            nif::scan::Shader::Other { kind } => kind.as_ptr(),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct type-name copies", ptrs.len());
+}

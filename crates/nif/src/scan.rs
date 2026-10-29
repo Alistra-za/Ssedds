@@ -16,7 +16,7 @@ pub enum Shader {
     None,
     Lighting(Lighting, Arc<[TexPath]>),
     Effect(Arc<Effect>),
-    Other { kind: String },
+    Other { kind: Arc<str> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -113,7 +113,9 @@ fn shader_of(h: &Header, b: &[u8], s: usize) -> (Shader, Vec<String>) {
                 Shader::None
             }
         },
-        other => Shader::Other { kind: lossy(other) },
+        _ => Shader::Other {
+            kind: h.kind_arc(s),
+        },
     };
     (shader, problems)
 }
