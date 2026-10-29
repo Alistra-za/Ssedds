@@ -198,8 +198,8 @@ pub struct SourceRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cube_face: Option<String>,
     /// Note DX: a helper that fills this output's alpha (`FillJob::identity`, `a:r`, `a:luma:inv`), or a packed
-    /// source read through an explicit `helper.read` (`read:g`) or placed off its role's default channels (`ch:ba`,
-    /// `pack::source_fill`). Absent on every other source.
+    /// source read through an explicit `helper.read` (`read:g`) or the channels each source of a hand-placed recipe
+    /// feeds (`ch:ba`, `pack::source_fill`). Absent on every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
 }

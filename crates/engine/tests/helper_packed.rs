@@ -438,7 +438,7 @@ fn configured_rfaos_builds_for_hand_fill_alone() {
 }
 
 /// Final review I2: `if-changed` sees a helper moved to another packed channel, added to a second one, or taken off
-/// one it shared; a default placement records nothing, so an unchanged project stays up to date. The steps use G:
+/// one it shared; a suggested recipe records nothing, so an unchanged project stays up to date. The steps use G:
 /// a move into A (the review's input) already re-encoded before this fix by another path, so it is checked last.
 #[test]
 fn if_changed_sees_a_packed_channel_move() {
@@ -471,8 +471,10 @@ fn if_changed_sees_a_packed_channel_move() {
         "a default placement records nothing: {:?}",
         e.sources
     );
-    // A hand fill on the suggested channel builds the same output.
-    assert_eq!(run(Some("\"rmaos.b\"")), (0, 1), "hand-set, same channel");
+    // A hand fill on the suggested channel builds the same output, but a hand-placed recipe records every channel
+    // (Note DX21): one extra re-export, then up to date.
+    assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "hand-set, same channel");
+    assert_eq!(run(Some("\"rmaos.b\"")), (0, 1));
     assert_eq!(run(Some("\"rmaos.g\"")), (1, 0), "(a) B moved to G");
     assert_eq!(run(Some("\"rmaos.g\"")), (0, 1));
     assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "G moved back to B");
@@ -483,9 +485,52 @@ fn if_changed_sees_a_packed_channel_move() {
     );
     assert_eq!(run(Some("\"rmaos.b\", \"rmaos.g\"")), (0, 1));
     assert_eq!(run(Some("\"rmaos.b\"")), (1, 0), "(c) Value on G");
-    assert_eq!(run(None), (0, 1), "suggested again, same channel");
+    assert_eq!(
+        run(None),
+        (1, 0),
+        "suggested again: the record drops its channels"
+    );
+    assert_eq!(run(None), (0, 1));
     assert_eq!(run(Some("\"rmaos.a\"")), (1, 0), "the review's B to A");
     assert_eq!(run(Some("\"rmaos.a\"")), (0, 1));
+}
+
+/// Final re-review I2: two hand-set sources of one role (both `orm`) swap a channel; every slot either way holds a
+/// source its role could fill, so only the exact channel list tells the layouts apart.
+#[test]
+fn if_changed_sees_a_channel_move_between_same_role_helpers() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in")).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, _| Luma([(x * 3) as u8]))
+        .save(d.path().join("in/x_ao.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |_, y| Luma([255 - (y * 3) as u8]))
+        .save(d.path().join("in/x_metallic.png"))
+        .unwrap();
+    let run = |a: &str, b: &str| {
+        std::fs::write(
+            d.path().join("in/sdc.toml"),
+            format!(
+                "[files.\"x_ao\"]\nhelper.role = \"orm\"\nhelper.fills = [{a}]\n\
+                 [files.\"x_metallic\"]\nhelper.role = \"orm\"\nhelper.fills = [{b}]\n"
+            ),
+        )
+        .unwrap();
+        let mut r = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+        r.recursive = true;
+        r.on_existing = OnExisting::IfChanged;
+        let rep = Reporter::new(Arc::new(NullSink), "helper-packed");
+        let e = Engine::new().unwrap();
+        let p = e.plan(r, &rep, &CancelToken::default()).unwrap();
+        let s = e.run(p, &rep, &CancelToken::default()).unwrap();
+        (s.converted, s.up_to_date)
+    };
+    let (a1, b1) = ("\"rmaos.r\"", "\"rmaos.g\", \"rmaos.b\"");
+    let (a2, b2) = ("\"rmaos.r\", \"rmaos.b\"", "\"rmaos.g\"");
+    assert_eq!(run(a1, b1), (1, 0));
+    assert_eq!(run(a1, b1), (0, 1), "nothing changed");
+    assert_eq!(run(a2, b2), (1, 0), "B moved from x_metallic to x_ao");
+    assert_eq!(run(a2, b2), (0, 1));
 }
 
 /// Final review I2: every recipe built without hand-set selectors records no placement, so existing manifests stay
@@ -528,6 +573,7 @@ fn suggested_recipes_record_no_placement() {
                                     read: None,
                                 })
                                 .collect(),
+                            hand_placed: false,
                         };
                         for s in &pk.sources {
                             assert_eq!(

@@ -1505,6 +1505,10 @@
           "$ref": "#/$defs/GraySource",
           "description": "The `channels.grayscale_source` this recipe was planned with (provenance, analysis and report all use it).\nThe pipeline assembles with this value, not with the final profile's, so the written image is the one that\nwas analysed (DECISIONS Note M6). Serialised, so it shows in `file_planned` and the manifest."
         },
+        "hand_placed": {
+          "description": "Note DX21: a source of this recipe has a hand-set `helper.fills`, so the record names every source's channels\n(`source_fill`). Absent otherwise, so no other job's JSON changes.",
+          "type": "boolean"
+        },
         "kind": {
           "$ref": "#/$defs/RecipeKind"
         },

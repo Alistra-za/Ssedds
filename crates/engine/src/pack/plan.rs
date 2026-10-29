@@ -984,6 +984,14 @@ pub fn plan_packing(
             }
             reports.push(report);
             let job = PackJob {
+                // Note DX21: a hand-set `helper.fills` on any source makes the record name every source's channels.
+                hand_placed: recipe.sources().iter().any(|(p, _)| {
+                    files.iter().any(|f| {
+                        f.path == *p
+                            && f.kind == InputKind::Image
+                            && crate::policy::helper_requested(ctx, f).fills.is_some()
+                    })
+                }),
                 kind: recipe.kind,
                 channels,
                 gray,

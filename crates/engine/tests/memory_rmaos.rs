@@ -91,6 +91,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
             kind: RecipeKind::Rmaos,
             channels,
             gray: GraySource::R,
+            hand_placed: false,
             sources,
         }),
         bake: None,
