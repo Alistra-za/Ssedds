@@ -80,28 +80,33 @@ fn op_tab(op: &Op) -> (NifTab, Option<Field>) {
 }
 
 /// The rows of `e`, in the order `export_block` checks them: what blocks first, then the warnings. Not the idle or
-/// no-folder reasons (the edit's own state, said elsewhere). Each warning once, at its highest level.
+/// no-folder reasons (the edit's own state, said elsewhere). Each warning once per target, at its highest level
+/// (Note GD15: the same text on two targets, two texture sets say, is two rows).
 pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
     let mut out: Vec<NifProblem> = vec![];
-    let mut push = |level, text: String, (tab, field): (NifTab, Option<Field>)| {
-        if !out
-            .iter()
-            .any(|p| p.text == text && p.tab == tab && p.field == field)
-        {
-            out.push(NifProblem {
-                level,
-                path: e.data_path.clone(),
-                text,
-                tab,
-                field,
-            });
-        }
-    };
+    // shortcut: the rows of one text on two targets read the same (NifProblem has no target); add the shape's name
+    // to the text if users cannot tell them apart.
+    let mut seen: Vec<(String, NifTab, Option<Field>, Option<Target>)> = vec![];
+    let mut push =
+        |level, text: String, (tab, field): (NifTab, Option<Field>), target: Option<&Target>| {
+            let key = (text, tab, field, target.cloned());
+            if !seen.contains(&key) {
+                let text = key.0.clone();
+                seen.push(key);
+                out.push(NifProblem {
+                    level,
+                    path: e.data_path.clone(),
+                    text,
+                    tab,
+                    field,
+                });
+            }
+        };
     let m: &NifModel = &e.model;
     for (d, o) in e.doc.ops.iter().zip(&e.outcomes) {
         if let Outcome::Conflict(why) | Outcome::Refused(why) = o {
             let text = format!("{}: {why}", op_label(&d.op, m));
-            push(NifLevel::Blocks, text, op_tab(&d.op));
+            push(NifLevel::Blocks, text, op_tab(&d.op), None);
         }
     }
     let blocking = new_errors(&e.source_warnings, &e.warnings);
@@ -111,7 +116,12 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
         } else {
             NifLevel::Warning
         };
-        push(level, w.text.clone(), target_tab(&w.target));
+        push(
+            level,
+            w.text.clone(),
+            target_tab(&w.target),
+            Some(&w.target),
+        );
     };
     for w in &blocking {
         warn(w, true);
@@ -128,6 +138,7 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
             NifLevel::Warning,
             RERUN_PGPATCHER.into(),
             (NifTab::Shader, None),
+            None,
         );
     }
     if e.cleanup_skip.is_some() {
@@ -135,6 +146,7 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
             NifLevel::Info,
             NO_CLEANUP.into(),
             (NifTab::Controllers, None),
+            None,
         );
     }
     // A reason `export_block` found that no row above covers (bytes that do not read back).

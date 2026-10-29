@@ -9281,6 +9281,55 @@ fn empty_rmaos_slot_is_a_row() {
     assert_eq!(rows, [(NifLevel::Warning, NifTab::Shader, None)]);
 }
 
+/// Note GD15: two texture sets with an empty RMAOS are two worklist rows; only repeats of one target merge.
+#[test]
+fn two_sets_with_empty_rmaos_are_two_rows() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let (a, b) = (select(&mut m, "A"), select(&mut m, "B"));
+    let set_of = |m: &MeshesModel, s: u32| {
+        let e = m.edit.as_ref().unwrap();
+        e.model.lighting[&e.model.shape(s).unwrap().shader.unwrap()]
+            .texture_set
+            .unwrap()
+    };
+    for s in [a, b] {
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(s), Role::Shader).unwrap();
+        let shader = e.model.shape(s).unwrap().shader.unwrap();
+        let base = e.model.lighting[&shader].lighting.slsf2;
+        let op = Op::SetBits {
+            at,
+            field: Field::Slsf2,
+            mask: 1 << 23,
+            value: 1 << 23,
+            base,
+        };
+        m.edit_push(vec![op], None);
+    }
+    let rows = |m: &MeshesModel| {
+        m.nif_problems()
+            .iter()
+            .filter(|p| p.text == nif::edit::validate::EMPTY_RMAOS)
+            .count()
+    };
+    assert_eq!(rows(&m), 1, "one shared set: one row");
+    // A path edit on B copies the shared set for B: two sets, each with its own empty slot 5.
+    let e = m.edit.as_ref().unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set_of(&m, b)].raw.slots[0]).into_owned();
+    let at = nif::edit::anchor_shape(&e.model, b);
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at,
+            slot: 0,
+            path: "textures\\b.dds".into(),
+            base,
+        }],
+        None,
+    );
+    assert_ne!(set_of(&m, a), set_of(&m, b), "B has its own set");
+    assert_eq!(rows(&m), 2);
+}
+
 /// GD1: every warning and blocker of the open NIF edit is one worklist entry; the idle and no-folder reasons are not.
 #[test]
 fn nif_warnings_are_problems() {
