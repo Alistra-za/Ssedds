@@ -6,6 +6,7 @@ use crate::header::Header;
 use crate::path::{canon_texture, TexPath};
 use crate::text::lossy;
 use crate::NifError;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -54,7 +55,7 @@ pub struct LightingParams {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lighting {
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
     pub shader_type: u32,
     pub slsf1: u32,
     pub slsf2: u32,
@@ -79,7 +80,7 @@ pub struct EffectParams {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Effect {
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
     pub slsf1: u32,
     pub slsf2: u32,
     pub source: TexPath,
@@ -133,10 +134,10 @@ fn object_net(
     b: &[u8],
     block: usize,
     c: &mut Cursor,
-) -> Result<Option<String>, NifError> {
+) -> Result<Option<Arc<str>>, NifError> {
     let net = crate::net::read_net(h, b, block)?;
     c.skip(net.end - c.pos())?;
-    Ok(h.string(net.name).map(lossy).filter(|s| !s.is_empty()))
+    Ok(h.name_arc(net.name).filter(|s| !s.is_empty()))
 }
 
 pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, NifError> {

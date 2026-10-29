@@ -211,3 +211,40 @@ fn av_head_does_not_decode_the_name_per_node() {
     });
     assert!(made < 1 << 20, "{made} bytes allocated reading 2000 heads");
 }
+
+/// GB2: 500 BSLightingShaderProperty blocks naming the large string; `decode_lighting` of each shares one copy.
+#[test]
+fn lighting_shares_one_string_across_many_properties() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..500 {
+        let body = W::default()
+            .u32(0)
+            .i32(big)
+            .u32(0)
+            .i32(-1)
+            .u32(0)
+            .u32(0)
+            .fs(&[0.0; 4])
+            .i32(-1)
+            .fs(&[0.0; 3])
+            .f(1.0)
+            .u32(0)
+            .fs(&[1.0, 0.0, 80.0])
+            .fs(&[1.0; 3])
+            .fs(&[1.0; 3])
+            .0;
+        n.block("BSLightingShaderProperty", body);
+    }
+    let bytes = bytes_0x80(&n);
+    let h = nif::header::Header::parse(&bytes).unwrap();
+    // all kept alive at once: a dropped copy's address is reused by the next
+    let all: Vec<_> = (0..500)
+        .map(|i| nif::props::decode_lighting(&h, &bytes, i).unwrap())
+        .collect();
+    let ptrs: BTreeSet<_> = all
+        .iter()
+        .map(|l| l.name.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
+}
