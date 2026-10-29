@@ -443,6 +443,18 @@ fn texture_path_fix_with_leading_bom_bytes_applies() {
     assert_eq!(fixed.outcomes, vec![nif::edit::Outcome::Applied], "{x:#?}");
     let m = read_model(&fixed.bytes).unwrap();
     assert_eq!(m.texsets[&1].raw.slots[0], b"textures\\a.dds");
+    // Fix round 3: keep_mine re-reads a stale base the same way, so the kept op applies too.
+    let mut stale = x.fix.clone().unwrap();
+    if let Op::SetTexturePath { base, .. } = &mut stale {
+        *base = "old".into();
+    }
+    let kept = nif::edit::keep_mine(&b, &[stale], 0).unwrap();
+    let Op::SetTexturePath { base, .. } = &kept[0] else {
+        panic!("{kept:#?}")
+    };
+    assert_eq!(base, "\u{ef}\u{bb}\u{bf}Data\\textures\\a.dds");
+    let again = apply(&b, &kept).unwrap();
+    assert_eq!(again.outcomes, vec![nif::edit::Outcome::Applied]);
 }
 
 /// trace 2026-10-28 #44: a BSXFlags whose name has a non-ASCII byte still gets its External_Emittance fix.
