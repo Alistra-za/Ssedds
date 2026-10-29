@@ -1657,7 +1657,7 @@ fn shared_alpha_threshold_drag_keeps_split() {
         let e = m.edit.as_ref().unwrap();
         let alpha = e.model.shape(a).unwrap().alpha.unwrap();
         (
-            e.model.shape(a).unwrap().name.clone(),
+            e.model.shape(a).unwrap().name.as_deref().map(String::from),
             nif::edit::anchor_shape(&e.model, a),
             nif::header::Header::parse(&e.patched).unwrap().sizes.len() as u32,
             e.model.alphas[&alpha].alpha.threshold,
