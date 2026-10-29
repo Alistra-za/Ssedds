@@ -49,7 +49,7 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 
 ## How work is recorded
 - **Every judgement call becomes a ruling in `docs/DECISIONS.md`.** Append a new `## Note XX — <topic> (<who>, <date>)` at the end with the next free letters. Number the items XX1, XX2, and so on.
-- **Note letters collide on parallel branches.** Pick the next free letter as it stands on `main` at merge time, and rename the note if it's taken. A merge must leave no duplicate headings. Check with `grep -oE '^## Note [A-Z]+' docs/DECISIONS.md | sort | uniq -d`, which must print nothing.
+- **Note letters are split by team (owner, 2026-10-28).** The main team uses the F block (FA, FB, ... FZ), then H, J and so on; the NIF team uses G, then I, K and so on. Each team takes the next free letter in its own block, so the two never collide. Parallel branches of one team can still collide: pick the next free letter in your block as it stands on `main` at merge time, and rename the note if it's taken. A merge must leave no duplicate headings. Check with `grep -oE '^## Note [A-Z]+' docs/DECISIONS.md | sort | uniq -d`, which must print nothing.
 - **Older notes are history:** don't rewrite them. Add a pointer when a new note supersedes one.
 - **Behaviour recorded as a ruling is intended.** Don't "fix" it without a new ruling.
 - **A comment starting `shortcut:`** marks a known limit, and says when to upgrade it.

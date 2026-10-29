@@ -69,6 +69,7 @@ fn hash_loaded(h: &mut Sha256, hints: &[AnalyseHints]) {
         path: p(n),
         role,
         stamp: None,
+        read: None,
     };
     let job = PackJob {
         kind: RecipeKind::Rmaos,
@@ -96,6 +97,7 @@ fn hash_loaded(h: &mut Sha256, hints: &[AnalyseHints]) {
             src("gray.png", RawMap::Roughness),
             src("gray2.png", RawMap::Ao),
         ],
+        hand_placed: false,
     };
     // Channel extraction, a non-gray member (read by luma) and a 16-bit member. Members of other sizes are refused by
     // `assemble`, so none is pinned.
@@ -127,6 +129,7 @@ fn hash_loaded(h: &mut Sha256, hints: &[AnalyseHints]) {
             src("rgba8.png", RawMap::Rmaos),
             src("rgb16.png", RawMap::Ao),
         ],
+        hand_placed: false,
     };
     for job in [&job, &mixed] {
         let asm = assemble(job, job.gray).unwrap();
