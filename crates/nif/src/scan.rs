@@ -76,8 +76,12 @@ fn problem(block: usize, e: &NifError) -> String {
     label(&format!("block {block}: {e}")).into_owned()
 }
 
-/// The shader property at block `s`, its texture set followed, and the problems that raised.
-fn shader_of(h: &Header, b: &[u8], s: usize) -> (Shader, Vec<String>) {
+/// A texture set's slots, and the problem line its decode raised (if any), kept per set.
+type TexSets = HashMap<usize, (Arc<[TexPath]>, Option<String>)>;
+
+/// The shader property at block `s`, its texture set followed, and the problems that raised. A set several
+/// properties name is decoded once (`sets`).
+fn shader_of(h: &Header, b: &[u8], s: usize, sets: &mut TexSets) -> (Shader, Vec<String>) {
     let mut problems = vec![];
     let shader = match h.kind(s) {
         b"BSLightingShaderProperty" => match decode_lighting(h, b, s) {
@@ -90,16 +94,19 @@ fn shader_of(h: &Header, b: &[u8], s: usize) -> (Shader, Vec<String>) {
                     s,
                     &mut problems,
                 ) {
-                    Some(t) => match decode_texture_set(h, b, t) {
-                        Ok(ts) => ts.slots,
-                        Err(e) => {
-                            problems.push(problem(t, &e));
-                            vec![]
-                        }
-                    },
-                    None => vec![],
+                    Some(t) => {
+                        let (slots, bad) =
+                            sets.entry(t)
+                                .or_insert_with(|| match decode_texture_set(h, b, t) {
+                                    Ok(ts) => (ts.slots.into(), None),
+                                    Err(e) => (Arc::from([]), Some(problem(t, &e))),
+                                });
+                        problems.extend(bad.iter().cloned());
+                        slots.clone()
+                    }
+                    None => Arc::from([]),
                 };
-                Shader::Lighting(l, slots.into())
+                Shader::Lighting(l, slots)
             }
             Err(e) => {
                 problems.push(problem(s, &e));
@@ -131,6 +138,7 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
         index3d: crate::graph::index3d(&h, b),
     };
     let mut shaders: HashMap<usize, (Shader, Vec<String>)> = HashMap::new();
+    let mut sets = TexSets::new();
     for i in 0..h.sizes.len() {
         let Some(kind) = ShapeKind::from_name(h.kind(i)) else {
             continue;
@@ -152,7 +160,9 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
             (_, Some(s)) => {
                 // Decoded once per property however many shapes name it; the problems it raised are repeated per
                 // shape (as before), each already short (Note GB4).
-                let (shader, problems) = shaders.entry(s).or_insert_with(|| shader_of(&h, b, s));
+                let (shader, problems) = shaders
+                    .entry(s)
+                    .or_insert_with(|| shader_of(&h, b, s, &mut sets));
                 out.problems.extend(problems.iter().cloned());
                 shader.clone()
             }

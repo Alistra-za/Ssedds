@@ -332,3 +332,30 @@ fn scan_shares_the_type_name_of_an_unknown_shader() {
         .collect();
     assert_eq!(ptrs.len(), 1, "{} distinct type-name copies", ptrs.len());
 }
+
+/// Fix round 1 (GB4): 1000 shader properties, each on its own shape, all naming one texture set with a 50 KB slot
+/// path: the rows share one slot array, not one per property.
+#[test]
+fn scan_shares_the_slots_of_one_texture_set_across_many_properties() {
+    use builder::scenes::{bstri, lsp, texset};
+    let mut n = Nif::new(100);
+    n.block("BSShaderTextureSet", texset(&[&"a".repeat(50_000)]));
+    for _ in 0..1000 {
+        n.block("BSLightingShaderProperty", lsp(0, 0));
+    }
+    for k in 0..1000 {
+        n.block("BSTriShape", bstri(1 + k, -1));
+    }
+    n.roots = vec![];
+    let s = nif::scan::scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 1000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| match &r.shader {
+            nif::scan::Shader::Lighting(_, slots) => slots.as_ptr(),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct slot arrays", ptrs.len());
+}
