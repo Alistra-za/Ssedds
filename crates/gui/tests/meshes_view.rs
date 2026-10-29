@@ -126,7 +126,10 @@ fn a_patched_stale_row_keeps_its_warning_in_sight_and_its_hover_lists_every_chip
     };
     for (name, shown) in [(STALE_CHIP, "Stale patch"), ("LE", "LE")] {
         let r = h.get_by_role_and_label(Role::Label, name).rect();
-        assert!(r.width() + 0.5 >= width(shown), "{name} is cut by its cell: {r:?}");
+        assert!(
+            r.width() + 0.5 >= width(shown),
+            "{name} is cut by its cell: {r:?}"
+        );
     }
     h.get_by_role_and_label(Role::Label, "LE").hover();
     h.run();
@@ -810,6 +813,34 @@ fn the_texture_chip_waits_for_a_completed_scan_before_it_cuts_the_list() {
     assert!(m.scan_completed);
     assert!(!pending(&m));
     assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")]);
+}
+
+/// Note GC17 (review fix 4): a reload that drops the picked mod goes back to "Any mod" the way the picker does (a
+/// Wins chip, hidden there, turns into All) and selects the NIF again once the rows land.
+#[test]
+fn a_reload_that_drops_the_picked_mod_goes_back_to_any_mod_like_the_picker() {
+    let (_d, mut m) = scanned();
+    let a = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+    m.select_mod(a);
+    m.filter = NifFilter::Wins;
+    let oak = m
+        .nifs
+        .iter()
+        .find(|n| n.path == "meshes/tree/oak.nif")
+        .unwrap()
+        .copy_id;
+    m.select_nif(oak);
+    // The picked mod is gone from the new scan.
+    m.selected_mod = Some(-1);
+    m.reload();
+    wait(&mut m);
+    assert_eq!(m.selected_mod, None);
+    assert_eq!(m.filter, NifFilter::All, "Wins is hidden under Any mod");
+    assert_eq!(
+        m.selected_nif,
+        Some(oak),
+        "selected again once the rows land"
+    );
 }
 
 /// Note GC test 8 (rules 3.1, 3.4, 3.6): at 1100 px a long path is cut in its own column, Path | Mod | chips keep
@@ -1937,7 +1968,8 @@ fn a_running_pgpatcher_pauses_the_scan() {
     assert_eq!(m.banner, Some(Banner::PgpRunning));
 }
 
-/// Trace-debug #40: a mod that turned PGPatcher-derived since the last scan is closed by the reload.
+/// Trace-debug #40: a mod that turned PGPatcher-derived since the last scan is closed by the reload. Note GC17: its
+/// NIF stays selected, as "Any mod" lists it.
 #[test]
 fn reload_closes_a_mod_that_became_derived() {
     let (d, mut m) = scanned();
@@ -1954,7 +1986,7 @@ fn reload_closes_a_mod_that_became_derived() {
     assert!(m.mods.iter().any(|r| r.id == b && r.derived));
     assert_eq!(m.selected_mod, None);
     assert!(m.nifs.is_empty());
-    assert_eq!(m.selected_nif, None);
+    assert_eq!(m.selected_nif, Some(copy));
 }
 
 /// Trace-debug #41: only a scan that returned a result counts as completed (the app re-reads the Textures view's

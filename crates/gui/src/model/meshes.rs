@@ -1030,7 +1030,6 @@ impl MeshesModel {
         });
         // A NIF an earlier reload still holds (its rows never landed) counts as the selection.
         let nif = self.selected_nif.or(self.reselect.take());
-        let any = self.selected_mod.is_none();
         self.clear_nif();
         match keep {
             Some(id) => {
@@ -1039,10 +1038,10 @@ impl MeshesModel {
                     self.select_nif(c);
                 }
             }
-            None if any => self.reselect = nif,
+            // Any mod, or a picked mod that is gone: the picker's own path back, then the NIF waits for the rows.
             None => {
-                self.selected_mod = None;
-                self.nifs = Arc::default();
+                self.any_mod();
+                self.reselect = nif;
             }
         }
     }
