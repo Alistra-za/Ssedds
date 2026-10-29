@@ -296,6 +296,13 @@ pub struct AppModel {
     settings_error: Option<String>,
     /// What the last recovery snapshot was taken at (audit item 11).
     recovery_key: Option<RecoveryKey>,
+    /// Note FB5: the restore step on the undo stack (its depth) and the files it restored, for the toast's Undo.
+    crash_restore: Option<(usize, Vec<PathBuf>)>,
+    /// Documents that were read-only while a recovery file waited: once fixed and reloaded, the file's age no longer
+    /// counts (fixing the document made it newer than the file).
+    // shortcut: kept in memory only. Quit, fix the file by hand and relaunch, and the older `.recovery` file is
+    // neither restored nor named; persist the marker beside the file if users report orphaned `.recovery` files.
+    held_recovery: std::collections::BTreeSet<PathBuf>,
     /// Bumped by `open_folder` and a new export: the drawer then forgets its cached file checks.
     pub drawer_epoch: u64,
     /// Bumped by `open_folder`: the UI then drops its Sets column modal and Slot commands (trace-debug #52).
@@ -590,6 +597,8 @@ impl AppModel {
             settings_base: None,
             settings_error: None,
             recovery_key: None,
+            crash_restore: None,
+            held_recovery: Default::default(),
             drawer_epoch: 0,
             folder_epoch: 0,
             user_config: None,
@@ -852,6 +861,8 @@ impl AppModel {
         if !same_folder && self.export.running.is_none() {
             self.export = export::ExportModel::default();
         }
+        self.apply_recovery();
+        self.refresh_banner(); // a read-only document's held recovery file
         self.replan();
     }
 
@@ -2832,6 +2843,91 @@ impl AppModel {
         self.undo_noted("Undid", &c.label);
     }
 
+    /// Note FB5: after the documents load, each one's crash `.recovery` file is loaded into it as one Undo step
+    /// (`Restore crash edits`) and a toast says so. An empty or equal file is deleted; a read-only document is left
+    /// alone (the banner names its file). The file itself goes only when the user saves.
+    pub fn apply_recovery(&mut self) {
+        use crate::crash_log::{discard_recovery, recovery_text, recovery_text_held, Recovery};
+        const LABEL: &str = "Restore crash edits";
+        self.crash_restore = None;
+        let docs = [
+            self.project
+                .as_ref()
+                .map(|p| (p.path().to_path_buf(), p.text(), p.read_only())),
+            self.sets_doc
+                .as_ref()
+                .map(|s| (s.path().to_path_buf(), s.text(), s.read_only())),
+        ];
+        let mut found: [Option<String>; 2] = [None, None];
+        let mut files = vec![];
+        for (slot, doc) in found.iter_mut().zip(docs) {
+            let Some((path, doc_text, read_only)) = doc else {
+                continue;
+            };
+            if read_only {
+                if matches!(recovery_text(&path, Some(&doc_text)), Recovery::Pending(_)) {
+                    self.held_recovery.insert(path);
+                }
+                continue;
+            }
+            let held = self.held_recovery.remove(&path);
+            match recovery_text_held(&path, Some(&doc_text), held) {
+                Recovery::Pending(t) => {
+                    *slot = Some(t);
+                    files.push(path);
+                }
+                Recovery::Empty => discard_recovery(&path),
+                Recovery::None => {}
+            }
+        }
+        if files.is_empty() {
+            return;
+        }
+        let [project, sets] = found;
+        let before = self.history.undo.len();
+        self.edit_docs(LABEL, None, false, move |p, s| {
+            if let Some(t) = project {
+                p.restore(&t);
+            }
+            if let Some(t) = sets {
+                s.restore(&t);
+            }
+        });
+        // shortcut: a file that does not parse as TOML changes nothing, so it gets no step and no toast and stays on
+        // disk; give it a notice if one is ever seen.
+        if self.history.undo.len() > before {
+            self.crash_restore = Some((self.history.undo.len(), files));
+            self.messages.notify_with(
+                messages::Severity::Info,
+                "Restored unsaved edits from the crash",
+                Some(messages::ToastAction::UndoCrashRestore),
+            );
+        }
+    }
+
+    /// The restore toast's Undo (Note FB5): takes back the restore step and deletes the `.recovery` files, since the
+    /// user rejected them. Does nothing once another edit sits on top of the step. (A plain Ctrl+Z keeps the files.)
+    pub fn undo_crash_restore(&mut self) {
+        let Some((depth, files)) = self.crash_restore.as_ref() else {
+            return;
+        };
+        if self.history.undo.len() != *depth
+            || self
+                .history
+                .undo
+                .last()
+                .is_none_or(|c| c.label != "Restore crash edits")
+        {
+            return;
+        }
+        let files = files.clone();
+        self.crash_restore = None;
+        self.undo();
+        for f in files {
+            crate::crash_log::discard_recovery(&f);
+        }
+    }
+
     /// Redo one step. A step that created a file copies it again from its source.
     pub fn redo(&mut self) {
         let Some(c) = self.history.redo_step() else {
@@ -3288,23 +3384,23 @@ impl AppModel {
                 self.fallback_preset()
             ));
         }
-        // Note AR: a crash's recovery file newer than its document.
-        let docs = [
-            self.project.as_ref().map(ProjectDoc::path),
-            self.sets_doc.as_ref().map(crate::sets_doc::SetsDoc::path),
-        ];
-        lines.extend(
-            docs.into_iter()
-                .flatten()
-                .filter_map(crate::crash_log::recovery_note),
-        );
-        if let Some(e) = self.project.as_ref().and_then(ProjectDoc::error) {
-            lines.push(read_only_banner(e));
+        // Note FB5: a crash's recovery file is restored on open and needs no banner, except beside a document that
+        // is read-only (it cannot take the edits, so the file stays and the banner names it).
+        if let Some(p) = self.project.as_ref().filter(|p| p.read_only()) {
+            if let Some(e) = p.error() {
+                lines.push(read_only_banner(e));
+            }
+            let held = self.held_recovery.contains(p.path());
+            lines.extend(crate::crash_log::recovery_note(p.path(), &p.text(), held));
         }
-        if let Some(e) = self.sets_doc.as_ref().and_then(|s| s.error()) {
-            lines.push(format!(
-                "{e} — sets and PBR JSON settings are read-only until it is fixed and reloaded"
-            ));
+        if let Some(s) = self.sets_doc.as_ref().filter(|s| s.read_only()) {
+            if let Some(e) = s.error() {
+                lines.push(format!(
+                    "{e} — sets and PBR JSON settings are read-only until it is fixed and reloaded"
+                ));
+            }
+            let held = self.held_recovery.contains(s.path());
+            lines.extend(crate::crash_log::recovery_note(s.path(), &s.text(), held));
         }
         self.banner = if lines.is_empty() {
             None
@@ -3353,6 +3449,7 @@ impl AppModel {
         self.ignored_by_plan = false;
         self.drop_undo_note();
         self.history.clear();
+        self.apply_recovery();
         self.refresh_banner();
         self.replan();
     }
