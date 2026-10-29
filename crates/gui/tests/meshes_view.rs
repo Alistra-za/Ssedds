@@ -686,6 +686,34 @@ fn the_list_has_one_row_per_path_with_the_winning_mod() {
     assert!(!h.state().shapes.is_empty());
 }
 
+/// Note GC test 2: the search matches a path fragment or a mod name; with no match the list is empty and the
+/// selection and its details stay (rule 6.1).
+#[test]
+fn the_search_matches_a_path_or_a_mod_and_never_deselects() {
+    let (_d, mut m) = scanned();
+    m.search = "TREE\\".into();
+    assert_eq!(rows_of(&mut m), [row("meshes/tree/oak.nif", "A")]);
+    let oak = m.nif_at(m.visible_nifs()[0]).0.copy_id;
+    m.select_nif(oak);
+    m.search = " b ".into();
+    assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")], "a mod name");
+    m.search = "meshes/rock".into();
+    assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")]);
+    m.search = "nothing".into();
+    assert!(rows_of(&mut m).is_empty());
+    assert_eq!(m.selected_nif, Some(oak));
+    assert_eq!(
+        m.selected_row().map(|r| r.path.as_str()),
+        Some("meshes/tree/oak.nif")
+    );
+    assert!(!m.shapes.is_empty());
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("0 of 2 NIFs");
+    // The detail pane still shows the hidden NIF.
+    h.get_by_label("tree/oak.nif");
+}
+
 /// Note GC rule 1.7: "Reading the scan…" until the rows a reload asked for land.
 #[test]
 fn the_list_says_it_is_reading_until_the_rows_land() {

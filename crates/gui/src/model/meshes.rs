@@ -434,7 +434,7 @@ pub struct MeshesModel {
     /// The picked mod's NIF copies, winning or not.
     pub nifs: Arc<Vec<NifRow>>,
     pub filter: NifFilter,
-    /// The search box: ASCII case-insensitive substring of the shown path (`\` or `/`).
+    /// The search box: ASCII case-insensitive substring of the shown path (`\` or `/`) or of the mod name.
     pub search: String,
     /// Every path's game-winning copy with its mod, read off the UI thread after each scan or reload (Note GC).
     pub winners: Arc<Vec<NifEntry>>,
@@ -1138,7 +1138,7 @@ impl MeshesModel {
         }
     }
 
-    /// Indices into the list (`nif_at`) that pass the chips and the search.
+    /// Indices into the list (`nif_at`) that pass the chips and the search: the path or the mod name holds the text.
     pub fn visible_nifs(&self) -> Vec<usize> {
         let needle = self.needle();
         let n = needle.as_bytes();
@@ -1149,14 +1149,19 @@ impl MeshesModel {
                     .windows(n.len())
                     .any(|w| w.eq_ignore_ascii_case(n))
         };
-        let keep = |row: &NifRow| self.filter.matches(row) && has(display_path(&row.path));
+        let keep = |row: &NifRow, origin: &str| {
+            self.filter.matches(row) && (has(display_path(&row.path)) || has(origin))
+        };
         match self.selected_mod {
-            Some(_) => (self.nifs.iter().enumerate())
-                .filter(|(_, row)| keep(row))
-                .map(|(i, _)| i)
-                .collect(),
+            Some(id) => {
+                let origin = self.mod_name(id);
+                (self.nifs.iter().enumerate())
+                    .filter(|(_, row)| keep(row, origin))
+                    .map(|(i, _)| i)
+                    .collect()
+            }
             None => (self.winners.iter().enumerate())
-                .filter(|(_, (row, _))| keep(row))
+                .filter(|(_, (row, origin))| keep(row, origin))
                 .map(|(i, _)| i)
                 .collect(),
         }

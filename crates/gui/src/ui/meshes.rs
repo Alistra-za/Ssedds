@@ -426,7 +426,7 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     ui.add(
         egui::TextEdit::singleline(&mut m.search)
-            .hint_text("Search paths")
+            .hint_text("Search paths and mods")
             .desired_width(f32::INFINITY),
     );
     ui.horizontal_wrapped(|ui| {
