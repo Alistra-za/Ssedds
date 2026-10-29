@@ -995,6 +995,14 @@ impl MeshesModel {
                 self.error = Some(format!("Scan failed: {e}"));
             }
         }
+        // A settled store again without a completed scan (a PGPatcher pause): a chip that went pending reads its
+        // users now (Note GC20). After a completed scan the reload has read them.
+        if !self.store_unsettled {
+            if let Some((t, None)) = &self.tex_filter {
+                let t = t.clone();
+                self.set_tex_filter(Some(t));
+            }
+        }
         // No new read (the scan did not complete): the NIF a reload held is looked for in the lists on screen, if the
         // store is settled again (a PGPatcher pause); else it stays held.
         if !self.rows_loading() {

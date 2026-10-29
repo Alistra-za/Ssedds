@@ -811,6 +811,32 @@ fn a_held_nif_waits_for_a_completed_scan_after_an_unfinished_one() {
     assert!(!m.shapes.is_empty());
 }
 
+/// Note GC20 (review round 2, B): a scan that PGPatcher pauses leaves the store as it was, so a chip that went
+/// pending during it reads its users then and cuts the list.
+#[test]
+fn a_pgpatcher_pause_resolves_a_texture_chip_set_during_the_scan() {
+    let other = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nif/tests/fixtures/TestNifFile_DeepGraph_SE.nif"
+    ))
+    .unwrap();
+    let (_d, mut m) = scanned_with(Some(&other));
+    m.procs = || vec!["pgpatcher.exe".to_string()];
+    start_scan(&mut m);
+    m.show_texture("textures/white.dds".into());
+    assert!(
+        m.tex_filter.as_ref().is_some_and(|(_, u)| u.is_none()),
+        "pending mid-scan"
+    );
+    wait(&mut m);
+    assert_eq!(m.banner, Some(Banner::PgpRunning));
+    assert!(
+        m.tex_filter.as_ref().is_some_and(|(_, u)| u.is_some()),
+        "resolved"
+    );
+    assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")]);
+}
+
 /// Note GC15 (review fix 2): "Show in Meshes" during a scan, or after one that did not complete, reads no users from
 /// a store whose origins are disabled: the chip waits and cuts nothing, through the unfinished scan, until a scan
 /// completes.
