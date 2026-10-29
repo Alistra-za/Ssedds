@@ -2354,7 +2354,7 @@ impl Renderer {
                             reflection: black,
                         },
                     ));
-                    return Err(format!("environment cube: {e}"));
+                    return Err(with_context("environment cube", e));
                 }
             }
         }
@@ -2683,8 +2683,9 @@ fn blend_state<'a>(
         };
         let mut b = None;
         // SAFETY: descriptor and out-pointer are locals.
+        // gpu.fail keeps the DEVICE_REMOVED prefix the GUI rebuilds on (trace 2026-10-28 #37)
         unsafe { gpu.device.CreateBlendState(&bd, Some(&mut b)) }
-            .map_err(|e| format!("CreateBlendState: {e}"))?;
+            .map_err(|e| gpu.fail("CreateBlendState", e))?;
         v.insert(b.ok_or("no blend state")?);
     }
     Ok(&cache[&pair])

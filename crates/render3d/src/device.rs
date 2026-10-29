@@ -191,10 +191,30 @@ impl Gpu {
     /// Error text for a failed `what`. It starts with [`DEVICE_REMOVED`]
     /// when the device is gone, so callers know to rebuild.
     pub(crate) fn fail(&self, what: &str, e: impl std::fmt::Display) -> String {
-        match self.removed_reason() {
-            Some(reason) => format!("{DEVICE_REMOVED}: {reason} ({what}: {e})"),
-            None => format!("{what}: {e}"),
-        }
+        fail_text(self.removed_reason(), what, e)
+    }
+}
+
+/// [`Gpu::fail`]'s text for a device removed for `reason` (None: still live).
+fn fail_text(reason: Option<String>, what: &str, e: impl std::fmt::Display) -> String {
+    match reason {
+        Some(reason) => format!("{DEVICE_REMOVED}: {reason} ({what}: {e})"),
+        None => format!("{what}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod fail_tests {
+    /// trace 2026-10-28 #37: a lost device's error starts with the prefix the GUI rebuilds on.
+    #[test]
+    fn a_removed_device_error_starts_with_the_prefix() {
+        let lost = super::fail_text(Some("hung".into()), "CreateBlendState", "x");
+        assert_eq!(lost, "device removed: hung (CreateBlendState: x)");
+        assert!(lost.starts_with(super::DEVICE_REMOVED));
+        assert_eq!(
+            super::fail_text(None, "CreateBlendState", "x"),
+            "CreateBlendState: x"
+        );
     }
 }
 
