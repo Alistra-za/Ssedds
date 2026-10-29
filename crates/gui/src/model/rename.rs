@@ -7,7 +7,7 @@ use super::{AppModel, Dialog};
 use crate::pgp::prefix::check_file_name;
 use engine::config::Target;
 use engine::discover::{canonicalise_outputs, InputFile, InputKind};
-use engine::group::{split_suffix, split_vocab};
+use engine::group::base_of;
 use engine::sets::fold_id;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -160,13 +160,6 @@ pub(crate) struct PlanCache {
 const PACKED: &str = "skipped (a packed output has no file of its own)";
 const LOCKED: &str = "skipped (locked)";
 
-/// The part of a file stem before its map suffix or exporter term (`wall_normal` → `wall`).
-pub(crate) fn base_of(stem: &str) -> &str {
-    let base = split_vocab(stem).map_or_else(|| split_suffix(stem).0, |(b, _)| b);
-    // Both splits cut a tail off `stem`, so the base is a prefix of it.
-    &stem[..base.len().min(stem.len())]
-}
-
 /// The tail a name ends in, as the kind column shows it: `_n`, `_normal`, or "colour".
 fn role_of(stem: &str) -> String {
     match &stem[base_of(stem).len()..] {
@@ -189,7 +182,7 @@ pub(crate) fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
-fn lower(p: &str) -> String {
+pub(super) fn lower(p: &str) -> String {
     p.replace('\\', "/").to_lowercase()
 }
 
@@ -311,8 +304,8 @@ fn input_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<RenameR
         let real_ext = split_ext(split_path(key).1).1.to_string();
         let (dir, name) = split_path(&current);
         let stem = split_ext(name).0;
-        let base = base_of(stem);
-        let tail = &stem[base.len()..];
+        // Both splits cut a tail off `stem`, so the base is a prefix of it.
+        let (base, tail) = stem.split_at(base_of(stem).len().min(stem.len()));
         let new = match d.typed.get(key) {
             Some(t) => {
                 let t = t.trim().replace('\\', "/");
@@ -437,7 +430,7 @@ fn output_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<Rename
             continue;
         };
         let stem = split_ext(split_path(&first).1).0.to_string();
-        let old = base_of(&stem).to_string();
+        let old = base_of(&stem);
         let mut r = row(&v.id, old.clone());
         let new = match d.typed.get(&v.id) {
             Some(t) => {

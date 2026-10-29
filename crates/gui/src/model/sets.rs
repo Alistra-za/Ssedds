@@ -11,7 +11,7 @@ use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
 use engine::codes::Warning;
 use engine::config::{Subtype, Target};
-use engine::group::{split_suffix, split_vocab, VocabRole};
+use engine::group::{base_of, split_vocab, VocabRole};
 use engine::overrides::path_key_matches;
 use engine::presets::Provenance;
 use engine::sets::{fold_id, same_id, set_id, OutputKey, SetEdit};
@@ -477,11 +477,6 @@ fn entry_of<'a>(entries: &'a [SetEntry], id: &str) -> Option<&'a SetEntry> {
 
 fn dir_of(key: &str) -> &str {
     key.rsplit_once('/').map_or("", |(d, _)| d)
-}
-
-/// A source stem without its exporter or Skyrim suffix (`rock01_roughness` → `rock01`, `rock01_n` → `rock01`).
-pub(crate) fn base_of(stem: &str) -> String {
-    split_vocab(stem).map_or_else(|| split_suffix(stem).0, |(b, _)| b)
 }
 
 /// The stem the diffuse's output has when it mirrors its source (DECISIONS N2): the source stem, without a colour

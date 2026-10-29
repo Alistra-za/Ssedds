@@ -4,10 +4,11 @@
 //! settings, locks and borrows stay with it. One undo step and one plan.
 use super::items::ItemKind;
 use super::rename::{
-    base_of, input_output, plan_rename, split_ext, split_path, RenameDialog, RenameMode, RenameRow,
+    input_output, lower, plan_rename, split_ext, split_path, RenameDialog, RenameMode, RenameRow,
 };
 use super::sets::{set_views, SlotFill, SlotKind};
 use super::AppModel;
+use engine::group::base_of;
 use engine::sets::{fold_id, same_id};
 
 /// What picking a name does: the rows that change, and the set entry's (old, new) automatic id when it moves.
@@ -15,10 +16,6 @@ use engine::sets::{fold_id, same_id};
 pub struct InputNamePlan {
     pub rows: Vec<RenameRow>,
     pub retarget: Option<(String, String)>,
-}
-
-fn lower(p: &str) -> String {
-    p.replace('\\', "/").to_lowercase()
 }
 
 /// `p` without the extension of its last component.
