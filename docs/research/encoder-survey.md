@@ -115,6 +115,19 @@ From Aras's 2020 DXTC data (same images and metric as his BC7 test):
 - BC1's 3-colour mode decodes the fourth palette entry as transparent black. bc7enc_rdo turns this on by default.
 - BC1 decoding is not bit-identical across GPU vendors. rgbcx can encode for an NVIDIA, AMD or "ideal" decoder.
 
+**Measured here (2026-10-29).** Skyrim SE does no software decode: its DDS loader hands blocks to Direct3D 11 and the texture unit decodes on sample. A throwaway wgpu test (not kept) read 4096 random BC1 blocks back through a compute shader on the owner's NVIDIA GeForce RTX 4090 and compares with rgbcx's four models: the card matches the **NVIDIA** model on every texel (0 of 65536), on DX12 and on Vulkan. Ideal differs on 14930 texels (up to 6/255 in green), AMD on 16677. AMD and Intel cards were not measured.
+
+The batch BC1-decoder setting changes the encoded bytes, because rgbcx picks endpoints and selectors against that decoder's interpolation (a throwaway bench example, not kept: a 512x256 four-band gradient at level 18, one process per model):
+
+| encoded for | blocks differing from Ideal (of 8192) | PSNR on NVIDIA | on AMD | on Ideal |
+|---|---|---|---|---|
+| Ideal | 0 | 48.47 | 48.97 | 51.02 |
+| IdealRound4 | 6048 | 48.31 | 49.96 | 49.71 |
+| NVIDIA | 7280 | **50.29** | 45.93 | 44.09 |
+| AMD | 7776 | 44.45 | **52.45** | 48.78 |
+
+To the eye all four decode to the same gradient; the difference is per-block texture of a few code values. Encoding for the card that decodes gains about 1.8 dB on NVIDIA and 3.5 dB on AMD over Ideal; encoding for the other vendor loses 2.5 to 4 dB against Ideal. So: **Ideal for textures other people will install (balanced for both cards, never worst), the vendor model for personal use** (Note F keeps Ideal as the default; the setting is batch-wide and a changed model re-encodes every BC1/BC3 output).
+
 ## BC4 and BC5
 
 - No cross-encoder BC4/BC5 benchmark existed. The review expected competent encoders to converge, because BC4 is a one-dimensional fit. The local benchmark showed that this is not true (see [the benchmark](encoder-benchmark.md#bc4-single-channel-masks)).
