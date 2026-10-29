@@ -966,12 +966,14 @@ fn a_limited_query_returns_the_best_rows_in_order() {
     );
 }
 
+/// Note GC: the Meshes list reads every winner once, one row per path, with the winning copy's mod.
 #[test]
-fn winning_nifs_finds_one_winner_per_path_by_substring() {
+fn winners_lists_one_winning_copy_per_path_with_its_mod() {
     let (_d, s, ids) = query_store();
-    let rows = s.winning_nifs("X\\", 100).unwrap();
+    let rows = s.winners().unwrap();
     let paths: Vec<_> = rows.iter().map(|(n, _)| n.path.as_str()).collect();
     assert_eq!(paths.len(), 7, "one row per path: {paths:?}");
+    assert!(paths.windows(2).all(|w| w[0] < w[1]), "by path: {paths:?}");
     assert!(rows.iter().all(|(n, _)| n.wins));
     let by_copy = |id: i64| rows.iter().find(|(n, _)| n.copy_id == id);
     assert_eq!(by_copy(ids["e_win"]).map(|r| r.1.as_str()), Some("B"));
@@ -984,26 +986,25 @@ fn winning_nifs_finds_one_winner_per_path_by_substring() {
         Some("PGPatcher output")
     );
     assert!(by_copy(ids["d_src"]).is_none());
-    // Case-insensitive, either slash, narrower text narrows.
-    assert_eq!(s.winning_nifs("X/D.NIF", 100).unwrap().len(), 1);
-    assert!(s.winning_nifs("nothing", 100).unwrap().is_empty());
 }
 
+/// Note GC: Overridden in "Any mod" lists each losing copy with its own mod.
 #[test]
-fn winning_nifs_wildcards_are_literal_and_limit_plus_one_marks_truncation() {
-    let (_d, s, _) = query_store();
-    assert!(s.winning_nifs("%", 100).unwrap().is_empty());
-    assert!(s.winning_nifs("x/_.nif", 100).unwrap().is_empty());
-    assert_eq!(s.winning_nifs("x/", 3).unwrap().len(), 4, "limit + 1 rows");
-    assert_eq!(s.winning_nifs("x/", 7).unwrap().len(), 7, "not truncated");
-}
-
-#[test]
-fn winning_nifs_matches_the_path_after_the_meshes_folder() {
-    let (_d, s, _) = query_store();
-    assert!(s.winning_nifs("mes", 100).unwrap().is_empty());
-    assert!(s.winning_nifs("meshes", 100).unwrap().is_empty());
-    assert_eq!(s.winning_nifs("x/d", 100).unwrap().len(), 1);
+fn losers_lists_every_losing_copy_with_its_own_mod() {
+    let (_d, s, ids) = query_store();
+    let rows = s.losers().unwrap();
+    let got: Vec<_> = rows
+        .iter()
+        .map(|(n, o)| (n.copy_id, n.path.as_str(), o.as_str(), n.wins))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (ids["d_src"], "meshes/x/d.nif", "A", false),
+            (ids["e_lose"], "meshes/x/e.nif", "A", false),
+        ]
+    );
+    assert!(rows[0].0.patched_in_game, "the source of a derived winner");
 }
 
 /// Spec §2 step 5 + review focus 2: one id per path with and without the scan's in-memory map, also for a path
@@ -1247,16 +1248,46 @@ fn delete_unseen_drops_texsets_no_shape_uses() {
     s.end_scan().unwrap();
 }
 
+/// Note GC (brief §8): the Meshes list's winner read on 100k paths. Prints the time; the ruling records it.
+/// `cargo test -p modscan --test store winners_read_time -- --ignored --nocapture`
 #[test]
-fn winning_nifs_folds_ascii_only_like_the_stored_keys() {
+#[ignore]
+fn winners_read_time_on_100k_paths() {
     let (_d, mut s, a) = store();
-    let id = put(&mut s, "meshes/Ärger/X.nif", a, 0, lit(&[]), false);
-    let pid = s.path_ids(&["meshes/Ärger/X.nif"]).unwrap()[0];
-    s.set_winners(&[(pid, (id, 1))].into_iter().collect(), &HashMap::new())
+    let b = origin(&mut s, "B", 1);
+    let n = 100_000;
+    let paths: Vec<String> = (0..n)
+        .map(|i| format!("meshes/dir{:03}/mesh{i:06}.nif", i % 500))
+        .collect();
+    let mut game = HashMap::new();
+    let pid = s
+        .path_ids(&paths.iter().map(String::as_str).collect::<Vec<_>>())
         .unwrap();
-    assert_eq!(s.winning_nifs("Ärger", 10).unwrap().len(), 1);
-    assert_eq!(s.winning_nifs("ärGER/x", 10).unwrap().len(), 0);
-    assert_eq!(s.winning_nifs("ÄrGER/x", 10).unwrap().len(), 1);
+    for (i, p) in paths.iter().enumerate() {
+        let o = if i % 10 == 0 { b } else { a };
+        let id = s
+            .upsert_copy(p, o, 1, 1, CopyResult::Scanned(scan_of(vec![])), None)
+            .unwrap();
+        game.insert(pid[i], (id, 1));
+    }
+    s.set_winners(&game, &HashMap::new()).unwrap();
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        let rows = s.winners().unwrap();
+        println!(
+            "winners: {} rows in {} ms",
+            rows.len(),
+            t.elapsed().as_millis()
+        );
+        assert_eq!(rows.len(), n);
+    }
+    let t = std::time::Instant::now();
+    let rows = s.losers().unwrap();
+    println!(
+        "losers: {} rows in {} ms",
+        rows.len(),
+        t.elapsed().as_millis()
+    );
 }
 
 // ---- v2 A16: source copies of a path and the texture browse list ----

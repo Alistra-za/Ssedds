@@ -1435,23 +1435,19 @@ impl Store {
         Ok(v)
     }
 
-    /// The game-winning copy of each mesh path that contains `path_contains` (the part after a leading `meshes/`; ASCII case-insensitive like the stored keys, `\` read as `/`,
-    /// no wildcards), by path, with its origin's name. Returns up to `limit + 1` rows: one extra means "truncated".
-    pub fn winning_nifs(
-        &self,
-        path_contains: &str,
-        limit: usize,
-    ) -> Result<Vec<(NifRow, String)>, ScanError> {
-        let pattern = format!(
-            "%{}%",
-            like_escape(&path_contains.replace('\\', "/").to_ascii_lowercase())
-        );
-        let mut st = self.conn.prepare(&format!(
-            "{NIF_ROWS} WHERE w.copy_id = c.id AND CASE WHEN p.p LIKE 'meshes/%' THEN substr(p.p, 8) ELSE p.p END LIKE ?1 ESCAPE '\\' ORDER BY p.p LIMIT ?2"
-        ))?;
-        let v = st
-            .query_map(rusqlite::params![pattern, limit as i64 + 1], nif_row)?
-            .collect::<Result<_, _>>()?;
+    /// The game-winning copy of every mesh path of the latest run, by path, with its origin's name (Note GC).
+    pub fn winners(&self) -> Result<Vec<(NifRow, String)>, ScanError> {
+        self.nif_rows("w.copy_id = c.id ORDER BY p.p")
+    }
+
+    /// Every copy that does not win its path, by path then origin name, each with its own origin's name (Note GC).
+    pub fn losers(&self) -> Result<Vec<(NifRow, String)>, ScanError> {
+        self.nif_rows("w.copy_id <> c.id ORDER BY p.p, co.name")
+    }
+
+    fn nif_rows(&self, tail: &str) -> Result<Vec<(NifRow, String)>, ScanError> {
+        let mut st = self.conn.prepare(&format!("{NIF_ROWS} WHERE {tail}"))?;
+        let v = st.query_map([], nif_row)?.collect::<Result<_, _>>()?;
         Ok(v)
     }
 
@@ -1694,7 +1690,7 @@ fn match_sql(cond: &str) -> String {
     )
 }
 
-/// Columns and joins shared by `nifs_of` and `winning_nifs`; each adds its own WHERE and ORDER BY.
+/// Columns and joins shared by `nifs_of`, `winners` and `losers`; each adds its own WHERE and ORDER BY.
 const NIF_ROWS: &str = "SELECT c.id, p.p, c.is_derived, c.derive_check, c.le_mesh, c.problem,
         w.copy_id, w.n_copies, wc.is_derived, wc.source_copy_id, wc.derive_check, wo.name,
         ws.copy_id, so.name, co.name

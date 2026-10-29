@@ -34,7 +34,7 @@ fn shape() -> ShapeView {
 
 fn meshes() -> MeshesModel {
     let mut m = MeshesModel::empty();
-    m.nifs = vec![NifRow {
+    m.nifs = std::sync::Arc::new(vec![NifRow {
         copy_id: 7,
         path: "meshes/x.nif".into(),
         wins: true,
@@ -45,7 +45,7 @@ fn meshes() -> MeshesModel {
         le_mesh: false,
         problem: None,
         patched_in_game: false,
-    }];
+    }]);
     m.selected_nif = Some(7);
     m.shapes = vec![shape()];
     m.shapes_col = true;
