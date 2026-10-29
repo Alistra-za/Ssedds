@@ -743,12 +743,15 @@ impl AppModel {
         self.dds_patch.set_tag(key, srgb);
     }
 
-    /// Write the patched copy of DDS item `key` to `<export root>/<job key>`. Every outcome lands in
+    /// Write the patched copy of DDS item `key` to `<export root>/<job key>` (Note FB1: only into a chosen folder). Every outcome lands in
     /// `dds_patch.last` (the panel shows it) and ends the confirmation.
     pub fn patch_dds_header(&mut self, key: &str) -> Result<PathBuf, String> {
         self.dds_patch.confirming = None;
         let r = match self.item(key).filter(|i| i.kind == ItemKind::Dds) {
             None => Err("not a DDS item".to_string()),
+            Some(_) if self.export_folder_chosen().is_none() => {
+                Err(review::NO_EXPORT_FOLDER.to_string())
+            }
             Some(item) => {
                 let (src, dest) = (item.input.clone(), self.export_root().join(&item.job_key));
                 // Amended S7: never write over another item's output; the DDS's own copy may be re-patched.

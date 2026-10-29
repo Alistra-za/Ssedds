@@ -230,3 +230,19 @@ fn nif_edits_need_a_chosen_folder() {
     idle(&mut m);
     assert_eq!(m.nif_export_root(), Some(x));
 }
+
+/// An empty project has nothing to write, so its Export is never accent "ready" (A12 withheld it too).
+#[test]
+fn an_empty_project_is_not_clean() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(root);
+    idle(&mut m);
+    m.set_export_folder(d.path().join("out"));
+    idle(&mut m);
+    assert_eq!(m.export_files(), 0);
+    assert!(!m.export_is_clean());
+    assert_eq!(m.header_export_text(), "Review 0 files");
+}

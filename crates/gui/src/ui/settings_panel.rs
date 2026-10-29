@@ -19,6 +19,8 @@ use engine::config::{
 use engine::policy::{offered, Provenance, ResolvedJob};
 use serde_json::{json, Value};
 
+use crate::model::review::NO_EXPORT_FOLDER;
+
 /// What a control asks of the model; applied once the drawing is over.
 enum Action {
     Set(&'static str, Value),
@@ -920,6 +922,7 @@ fn dds_header_panel(
     v: &crate::model::dds_patch::DdsHeaderView,
     confirming: bool,
     last: Option<&str>,
+    export_folder_chosen: bool,
     actions: &mut Vec<Action>,
 ) {
     ui.add_space(6.0);
@@ -946,14 +949,22 @@ fn dds_header_panel(
             if confirming {
                 ui.label("Writes a copy with a fixed header to the export folder; the pixel data is copied byte for byte.");
                 ui.horizontal(|ui| {
-                    if ui.button("Patch").clicked() {
+                    if ui
+                        .add_enabled(export_folder_chosen, egui::Button::new("Patch"))
+                        .on_disabled_hover_text(NO_EXPORT_FOLDER)
+                        .clicked()
+                    {
                         actions.push(Action::PatchDo);
                     }
                     if ui.button("Cancel").clicked() {
                         actions.push(Action::PatchCancel);
                     }
                 });
-            } else if ui.button("Patch header…").clicked() {
+            } else if ui
+                .add_enabled(export_folder_chosen, egui::Button::new("Patch header…"))
+                .on_disabled_hover_text(NO_EXPORT_FOLDER)
+                .clicked()
+            {
                 actions.push(Action::PatchAsk);
             }
         }
@@ -1052,6 +1063,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let header = model.dds_header(key);
     let confirming = model.dds_patch.confirming.as_deref() == Some(key);
     let last = model.dds_patch.last_for(key).map(str::to_string);
+    let export_folder_chosen = model.export_folder_chosen().is_some();
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());
@@ -1126,7 +1138,14 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     "Already a DDS file; it is not converted (opt in with reencode in sdc.toml).",
                 );
                 if let Some(v) = &header {
-                    dds_header_panel(ui, v, confirming, last.as_deref(), &mut actions);
+                    dds_header_panel(
+                        ui,
+                        v,
+                        confirming,
+                        last.as_deref(),
+                        export_folder_chosen,
+                        &mut actions,
+                    );
                 }
             }
             if let Some(out) = packed_output {

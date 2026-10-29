@@ -279,19 +279,25 @@ impl AppModel {
         Ok((self.export_files(), self.undecided()))
     }
 
-    /// Note FB1: Review would write without skipping anything: the gate is open and nothing is undecided.
+    /// Note FB1: Review would write without skipping anything: a finished plan with files to write, the gate open and
+    /// nothing undecided (A12 withheld "ready" from an empty or still-planning project too).
     pub fn export_is_clean(&self) -> bool {
-        self.review_gate().is_ok() && self.undecided() == 0
+        self.planning.is_none()
+            && self.votes_pending.is_none()
+            && self.export_files() > 0
+            && self.review_gate().is_ok()
+            && self.undecided() == 0
     }
 
     /// Note FB1: the header's Export button: `Export {n} files` once the project is clean, else `Review {n} files`.
     pub fn header_export_text(&self) -> String {
+        self.export_text(self.export_is_clean())
+    }
+
+    /// [`Self::header_export_text`] for a `clean` the caller already has (the header asks once per frame).
+    pub fn export_text(&self, clean: bool) -> String {
         let n = self.export_files();
-        let verb = if self.export_is_clean() {
-            "Export"
-        } else {
-            "Review"
-        };
+        let verb = if clean { "Export" } else { "Review" };
         format!("{verb} {n} file{}", plural(n))
     }
 

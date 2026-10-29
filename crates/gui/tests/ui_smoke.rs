@@ -1503,10 +1503,10 @@ fn broken_dds(root: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {
     (src, b)
 }
 
-/// Fix round 1: with no export folder set, Patch writes to `<root>/sdc-out` (what the header shows) and ends the
-/// confirmation; the outcome is in `dds_patch.last`.
+/// Fix round 1 (Note FB1: into the chosen folder): Patch writes to the export folder and ends the confirmation; the
+/// outcome is in `dds_patch.last`.
 #[test]
-fn patch_without_an_export_folder_writes_to_sdc_out() {
+fn patch_writes_to_the_chosen_export_folder() {
     let d = tempfile::tempdir().unwrap();
     let root = mod_folder(d.path());
     let (src, b) = broken_dds(&root);
@@ -1514,9 +1514,10 @@ fn patch_without_an_export_folder_writes_to_sdc_out() {
     m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    choose_export(&mut m, d.path().join("out"));
     m.dds_patch.confirming = Some("landscape/broken.dds".into());
     let out = m.patch_dds_header("landscape/broken.dds").unwrap();
-    assert_eq!(out, root.join("sdc-out/landscape/broken.dds"));
+    assert_eq!(out, d.path().join("out/landscape/broken.dds"));
     assert_eq!(&std::fs::read(&out).unwrap()[148..], &b[148..]);
     assert_eq!(std::fs::read(&src).unwrap(), b);
     assert!(m.dds_patch.confirming.is_none());
@@ -1548,6 +1549,7 @@ fn patch_refuses_an_output_key_another_item_exports_to() {
     m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    choose_export(&mut m, d.path().join("out"));
     let (dds, png) = ("landscape/rock01.dds", "landscape/rock01.png");
     let job_key = m.item(dds).unwrap().job_key.clone();
     assert_eq!(m.item(png).unwrap().job_key, job_key);
@@ -1584,6 +1586,7 @@ fn patch_refuses_an_output_key_that_differs_only_in_case() {
     m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    choose_export(&mut m, d.path().join("out"));
     let (dds, png) = ("landscape/Rock01.dds", "landscape/rock01.png");
     let (kd, kp) = (
         m.item(dds).unwrap().job_key.clone(),
@@ -1744,4 +1747,34 @@ fn reduce_motion_shortens_the_folder_fade_in() {
         !a.is_empty() && a.iter().all(|&x| x == 1.0),
         "full by 0.15 s: {a:?}"
     );
+}
+
+/// Note FB1: with no export folder chosen the patch is refused (not written into `<root>\sdc-out`), the reason lands
+/// in `dds_patch.last`, and the panel's Patch button is off with that reason.
+#[test]
+fn patch_without_a_chosen_folder_is_refused_and_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    broken_dds(&root);
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.dds_patch.confirming = Some("landscape/broken.dds".into());
+    let e = m.patch_dds_header("landscape/broken.dds").unwrap_err();
+    assert_eq!(e, "No export folder chosen");
+    assert!(!root.join("sdc-out").exists());
+    assert_eq!(
+        m.dds_patch.last_for("landscape/broken.dds"),
+        Some("No export folder chosen")
+    );
+    assert!(m.dds_patch.confirming.is_none());
+    // The panel offers it but off.
+    m.select_item("landscape/broken.dds");
+    let mut h = harness(m);
+    h.run();
+    assert!(h
+        .get_by_label("Patch header…")
+        .accesskit_node()
+        .is_disabled());
 }

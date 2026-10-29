@@ -222,11 +222,12 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     } else {
         size.y
     };
-    let mut export = egui::Button::new(egui::RichText::new(model.header_export_text()).strong())
+    // Once per frame: the text, the accent and the hover all read the same answer.
+    let clean = model.export_is_clean();
+    let mut export = egui::Button::new(egui::RichText::new(model.export_text(clean)).strong())
         .min_size(egui::vec2(size.x, button_h));
     // CF11: the accent fades in (0.15 s) and snaps out. Asked every frame, so losing readiness resets it.
     let ctx = ui.ctx().clone();
-    let clean = model.export_is_clean();
     let secs = if clean {
         super::motion::fade_dur(&ctx, 0.15)
     } else {

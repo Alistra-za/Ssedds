@@ -491,6 +491,11 @@ fn the_header_export_is_clean_only_with_a_folder_and_nothing_undecided() {
         assert!(sdc_gui::model::bottom::problems(&m).is_empty());
         assert!(m.export_is_clean());
     }
+    // Nothing to export (an empty project, or items cleared while the plan runs) is never "ready".
+    m.items.clear();
+    m.invalidate_views();
+    assert!(!m.export_is_clean(), "nothing to export");
+    assert!(!m.header_export_text().starts_with("Export "));
 }
 
 #[test]
@@ -627,7 +632,14 @@ fn export_files_follows_a_decision_without_a_frame_of_lag() {
         "cached across frames"
     );
     let before = h.state().export_files();
+    assert!(h.state().header_export_text().starts_with("Review "));
     decide_all(h.state_mut());
+    // The text follows the last decision with no frame in between.
+    assert!(
+        h.state().header_export_text().starts_with("Export "),
+        "{}",
+        h.state().header_export_text()
+    );
     h.run();
     assert_eq!(export_files_builds(h.state()), builds + 1);
     let m = h.state();
