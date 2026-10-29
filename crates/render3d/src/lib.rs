@@ -2355,7 +2355,8 @@ impl Renderer {
                             reflection: black,
                         },
                     ));
-                    return Err(with_context("environment cube", e));
+                    // gpu_error with the device query: prefixed even when the inner error was not (Note GA4)
+                    return Err(self.gpu.fail("environment cube", e));
                 }
             }
         }
@@ -2670,6 +2671,22 @@ fn blend_state<'a>(
     cache: &'a mut HashMap<(u8, u8), ID3D11BlendState>,
     pair: (u8, u8),
 ) -> Result<&'a ID3D11BlendState, String> {
+    blend_state_with(
+        cache,
+        pair,
+        // SAFETY: descriptor and out-pointer are the caller's locals.
+        |bd, b| unsafe { gpu.device.CreateBlendState(bd, Some(b)) },
+        || gpu.removed(),
+    )
+}
+
+/// [`blend_state`] with the device calls passed in, so a test can fake a removed device.
+fn blend_state_with(
+    cache: &mut HashMap<(u8, u8), ID3D11BlendState>,
+    pair: (u8, u8),
+    create: impl FnOnce(&D3D11_BLEND_DESC, &mut Option<ID3D11BlendState>) -> windows::core::Result<()>,
+    removed: impl FnOnce() -> windows::core::Result<()>,
+) -> Result<&ID3D11BlendState, String> {
     if let std::collections::hash_map::Entry::Vacant(v) = cache.entry(pair) {
         let mut bd = D3D11_BLEND_DESC::default();
         bd.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
@@ -2683,10 +2700,8 @@ fn blend_state<'a>(
             RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
         };
         let mut b = None;
-        // SAFETY: descriptor and out-pointer are locals.
-        // gpu.fail keeps the DEVICE_REMOVED prefix the GUI rebuilds on (trace 2026-10-28 #37)
-        unsafe { gpu.device.CreateBlendState(&bd, Some(&mut b)) }
-            .map_err(|e| gpu.fail("CreateBlendState", e))?;
+        // gpu_error keeps the DEVICE_REMOVED prefix the GUI rebuilds on (trace 2026-10-28 #37)
+        create(&bd, &mut b).map_err(|e| device::gpu_error(removed(), "CreateBlendState", e))?;
         v.insert(b.ok_or("no blend state")?);
     }
     Ok(&cache[&pair])
@@ -2695,10 +2710,7 @@ fn blend_state<'a>(
 /// `what: e` for an error a swap or override returns. An error from a lost device keeps [`device::DEVICE_REMOVED`]
 /// in front, since the GUI tests that prefix to replay the swap after the rebuild (Note BS1, trace 2026-10-22 #2).
 fn with_context(what: &str, e: String) -> String {
-    match e.strip_prefix(device::DEVICE_REMOVED) {
-        Some(rest) => format!("{}{rest} [{what}]", device::DEVICE_REMOVED),
-        None => format!("{what}: {e}"),
-    }
+    device::gpu_error(Ok(()), what, e)
 }
 
 #[cfg(test)]
@@ -2710,6 +2722,24 @@ mod context_tests {
         let lost = format!("{}: hung (CreateTexture2D: x)", device::DEVICE_REMOVED);
         assert!(with_context("a.dds", lost).starts_with(device::DEVICE_REMOVED));
         assert_eq!(with_context("a.dds", "bad dds".into()), "a.dds: bad dds");
+    }
+
+    /// trace 2026-10-28 #37 (fix round 1): the blend-state call site maps a removed device's error through
+    /// `device::gpu_error`, so it keeps the prefix the GUI rebuilds on. The device is faked by the two closures.
+    #[test]
+    fn a_blend_state_on_a_removed_device_keeps_the_prefix() {
+        use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_REMOVED};
+        let mut cache = HashMap::new();
+        let e = blend_state_with(
+            &mut cache,
+            (1, 2),
+            |_, _| Err(windows::core::Error::from(DXGI_ERROR_DEVICE_REMOVED)),
+            || Err(windows::core::Error::from(DXGI_ERROR_DEVICE_HUNG)),
+        )
+        .unwrap_err();
+        assert!(e.starts_with(device::DEVICE_REMOVED), "{e}");
+        assert!(e.contains("CreateBlendState"), "{e}");
+        assert!(cache.is_empty());
     }
 }
 

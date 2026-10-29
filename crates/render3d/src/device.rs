@@ -178,42 +178,79 @@ impl Gpu {
 
     /// `Some(reason)` once the device has been removed; rebuild the `Gpu`.
     pub fn removed_reason(&self) -> Option<String> {
+        self.removed().err().map(|e| e.to_string())
+    }
+
+    /// `GetDeviceRemovedReason`: `Err(reason)` once the device has been removed.
+    pub(crate) fn removed(&self) -> windows::core::Result<()> {
         // SAFETY: plain COM getter on a live interface.
         unsafe { self.device.GetDeviceRemovedReason() }
-            .err()
-            .map(|e| e.to_string())
     }
 
     pub fn is_removed(&self) -> bool {
         self.removed_reason().is_some()
     }
 
-    /// Error text for a failed `what`. It starts with [`DEVICE_REMOVED`]
-    /// when the device is gone, so callers know to rebuild.
+    /// Error text for a failed `what` ([`gpu_error`] with this device's removal state).
     pub(crate) fn fail(&self, what: &str, e: impl std::fmt::Display) -> String {
-        fail_text(self.removed_reason(), what, e)
+        gpu_error(self.removed(), what, e)
     }
 }
 
-/// [`Gpu::fail`]'s text for a device removed for `reason` (None: still live).
-fn fail_text(reason: Option<String>, what: &str, e: impl std::fmt::Display) -> String {
-    match reason {
-        Some(reason) => format!("{DEVICE_REMOVED}: {reason} ({what}: {e})"),
-        None => format!("{what}: {e}"),
+/// The one error text for a failed GPU step `what` (trace 2026-10-28 #37). It starts with [`DEVICE_REMOVED`], so
+/// callers know to rebuild, when `e` already does (an inner step's error, `what` appended) or when `removed` (the
+/// `GetDeviceRemovedReason` result) is an error; otherwise it is `what: e`.
+pub(crate) fn gpu_error(
+    removed: windows::core::Result<()>,
+    what: &str,
+    e: impl std::fmt::Display,
+) -> String {
+    let e = e.to_string();
+    if let Some(rest) = e.strip_prefix(DEVICE_REMOVED) {
+        return format!("{DEVICE_REMOVED}{rest} [{what}]");
+    }
+    match removed {
+        Err(reason) => format!("{DEVICE_REMOVED}: {reason} ({what}: {e})"),
+        Ok(()) => format!("{what}: {e}"),
     }
 }
 
 #[cfg(test)]
 mod fail_tests {
-    /// trace 2026-10-28 #37: a lost device's error starts with the prefix the GUI rebuilds on.
+    use super::{gpu_error, DEVICE_REMOVED};
+    use windows::core::Error;
+    use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_REMOVED};
+
+    /// trace 2026-10-28 #37 (fix round 1): a lost device's error starts with the prefix the GUI rebuilds on. The
+    /// errors are synthetic HRESULTs; the message text is the system's, so only the prefix and `what` are checked.
     #[test]
     fn a_removed_device_error_starts_with_the_prefix() {
-        let lost = super::fail_text(Some("hung".into()), "CreateBlendState", "x");
-        assert_eq!(lost, "device removed: hung (CreateBlendState: x)");
-        assert!(lost.starts_with(super::DEVICE_REMOVED));
+        let e = Error::from(DXGI_ERROR_DEVICE_REMOVED);
+        let lost = gpu_error(
+            Err(Error::from(DXGI_ERROR_DEVICE_HUNG)),
+            "CreateBlendState",
+            &e,
+        );
+        assert!(lost.starts_with(DEVICE_REMOVED), "{lost}");
+        assert!(lost.contains("(CreateBlendState: "), "{lost}");
         assert_eq!(
-            super::fail_text(None, "CreateBlendState", "x"),
+            gpu_error(Ok(()), "CreateBlendState", "x"),
             "CreateBlendState: x"
+        );
+    }
+
+    /// An inner step's removed-device error keeps its prefix, with `what` after it.
+    #[test]
+    fn an_inner_removed_error_keeps_its_prefix() {
+        let inner = format!("{DEVICE_REMOVED}: hung (CreateTexture2D: x)");
+        assert_eq!(
+            gpu_error(Ok(()), "environment cube", &inner),
+            format!("{inner} [environment cube]")
+        );
+        let hung = Err(Error::from(DXGI_ERROR_DEVICE_HUNG));
+        assert_eq!(
+            gpu_error(hung, "environment cube", &inner),
+            format!("{inner} [environment cube]")
         );
     }
 }
