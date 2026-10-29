@@ -154,3 +154,60 @@ fn one_sequence_shares_one_string_across_its_blocks() {
         .collect();
     assert_eq!(nodes.len(), 1, "{} distinct node copies", nodes.len());
 }
+
+// ---- Note GB: bytes allocated on the calling thread, so a test can see a per-block decode without timing it.
+thread_local! { static ALLOCATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+struct Counting;
+// SAFETY: forwards every call to the system allocator; only adds a thread-local counter.
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        let _ = ALLOCATED.try_with(|a| a.set(a.get() + l.size()));
+        unsafe { std::alloc::System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        let _ = ALLOCATED.try_with(|a| a.set(a.get() + n));
+        unsafe { std::alloc::System.realloc(p, l, n) }
+    }
+}
+#[global_allocator]
+static COUNTING: Counting = Counting;
+
+/// Bytes `f` allocated on this thread (freed bytes still count: it is the total that was made).
+fn allocated<R>(f: impl FnOnce() -> R) -> (R, usize) {
+    let before = ALLOCATED.with(|a| a.get());
+    let r = f();
+    (r, ALLOCATED.with(|a| a.get()) - before)
+}
+
+/// GB1: 2000 nodes naming the large string. `read_av_head` used to decode it for each (600 MB of copies) and
+/// every caller dropped the name; it now reads no name at all.
+#[test]
+fn av_head_does_not_decode_the_name_per_node() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..2000 {
+        let body = W::default()
+            .i32(big)
+            .u32(0)
+            .i32(-1)
+            .u32(0)
+            .fs(&[0.0; 3])
+            .fs(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+            .f(1.0)
+            .i32(-1)
+            .0;
+        n.block("NiNode", body);
+    }
+    let bytes = bytes_0x80(&n);
+    let h = nif::header::Header::parse(&bytes).unwrap();
+    let (_, made) = allocated(|| {
+        for &at in h.offsets() {
+            let mut c = nif::cursor::Cursor::new(&bytes, at);
+            nif::geom::read_av_head(&mut c).unwrap();
+        }
+    });
+    assert!(made < 1 << 20, "{made} bytes allocated reading 2000 heads");
+}

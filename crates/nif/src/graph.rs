@@ -79,7 +79,7 @@ fn mul(a: &Mat3x4, b: &Mat3x4) -> Mat3x4 {
 
 fn children(h: &Header, b: &[u8], block: usize) -> Result<(Mat3x4, Vec<i32>), NifError> {
     let mut c = block_cursor(h, b, block)?;
-    let av = read_av_head(h, &mut c)?;
+    let av = read_av_head(&mut c)?;
     let n = c.u32()? as usize;
     if n.saturating_mul(4) > c.remaining() {
         return Err(NifError::Truncated {
@@ -239,7 +239,7 @@ fn av_refs_into(h: &Header, b: &[u8], block: usize, out: &mut Vec<i32>) -> Resul
     let is = |names: &[&str]| names.iter().any(|t| t.as_bytes() == kind);
     let mut c = block_cursor(h, b, block)?;
     if is(NODE_TYPES) {
-        read_av_head(h, &mut c)?;
+        read_av_head(&mut c)?;
         for _ in 0..2 {
             // children, then effects (both present below FO4)
             let n = c.u32()? as usize;
@@ -257,7 +257,7 @@ fn av_refs_into(h: &Header, b: &[u8], block: usize, out: &mut Vec<i32>) -> Resul
         }
     } else if takes_index(kind) && kind.ends_with(b"ParticleSystem") {
         // nifly NiParticleSystem::Sync; dataRef and psysDataRef are one ref in Skyrim, listed first.
-        read_av_head(h, &mut c)?;
+        read_av_head(&mut c)?;
         let data;
         if h.bsver >= 100 {
             c.skip(16)?; // bounds
@@ -297,7 +297,7 @@ fn av_refs_into(h: &Header, b: &[u8], block: usize, out: &mut Vec<i32>) -> Resul
             out.push(c.i32()?);
         }
     } else if kind == b"NiCamera" {
-        read_av_head(h, &mut c)?;
+        read_av_head(&mut c)?;
         c.skip(2 + 24 + 1 + 16 + 4)?; // flags, frustum, ortho, viewport, LOD adjust
         out.push(c.i32()?);
     }
