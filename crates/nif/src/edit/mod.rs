@@ -160,6 +160,20 @@ pub enum Op {
         nth: u32,
         new_name: String,
     },
+    /// Sets the cycle, frequency, start and stop of the `nth` clip named `name` (Note GD8). Values that fail
+    /// [`validate::timing_problem`] leave the clip as it is; `validate_ops` says so in a Warn.
+    SetSequenceTiming {
+        at: Anchor, // Role::Root
+        name: String,
+        nth: u32,
+        cycle: u32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        freq: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        start: f32,
+        #[cfg_attr(feature = "serde", serde(with = "crate::keys::f32_bits"))]
+        stop: f32,
+    },
     /// Turns the free controllers of a shader or alpha property into one clip on the root's manager: C2's AddSequence
     /// with one track per free controller, their keys as they are (v2 C3, D11). One op, so one undo step.
     ConvertChainToClips {
@@ -383,6 +397,9 @@ pub fn merge_key(op: &Op) -> String {
         Op::AddSequence { at, name, .. } => ("AddSequence", at, name.clone()),
         Op::RemoveSequence { at, name, nth } => ("RemoveSequence", at, format!("{name}/{nth}")),
         Op::RenameSequence { at, name, nth, .. } => ("RenameSequence", at, format!("{name}/{nth}")),
+        Op::SetSequenceTiming { at, name, nth, .. } => {
+            ("SetSequenceTiming", at, format!("{name}/{nth}"))
+        }
         Op::ConvertChainToClips { at, name } => ("ConvertChainToClips", at, name.clone()),
     };
     format!("{v}|{}|{what}", at.block)
@@ -438,6 +455,7 @@ fn anchor_of(op: &Op) -> &Anchor {
         | Op::AddSequence { at, .. }
         | Op::RemoveSequence { at, .. }
         | Op::RenameSequence { at, .. }
+        | Op::SetSequenceTiming { at, .. }
         | Op::ConvertChainToClips { at, .. }
         | Op::SetTexturePath { at, .. } => at,
     }
@@ -464,6 +482,7 @@ pub fn rebase(new_src: &[u8], ops: &[Op]) -> Result<(Vec<Op>, Vec<Outcome>), Nif
                 | Op::AddSequence { at, .. }
                 | Op::RemoveSequence { at, .. }
                 | Op::RenameSequence { at, .. }
+                | Op::SetSequenceTiming { at, .. }
                 | Op::ConvertChainToClips { at, .. }
                 | Op::SetTexturePath { at, .. } => at.block = *block,
             }
@@ -605,7 +624,10 @@ fn step(cur: &[u8], op: &Op) -> (Option<Vec<u8>>, Outcome) {
     }
     if matches!(
         op,
-        Op::AddSequence { .. } | Op::RemoveSequence { .. } | Op::RenameSequence { .. }
+        Op::AddSequence { .. }
+            | Op::RemoveSequence { .. }
+            | Op::RenameSequence { .. }
+            | Op::SetSequenceTiming { .. }
     ) {
         return match structural::clip_op(&mut doc, cur, &m, block, op) {
             Ok(Outcome::Applied) => (Some(doc.bytes()), outcome),

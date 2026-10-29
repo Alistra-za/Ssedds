@@ -332,6 +332,15 @@ fn clip_ops_survive_the_edit_document() {
             name: "Idle".into(),
             nth: 1,
         },
+        Op::SetSequenceTiming {
+            at: root.clone(),
+            name: "Idle".into(),
+            nth: 0,
+            cycle: 1,
+            freq: 2.5,
+            start: -0.0,
+            stop: 3.0,
+        },
         Op::RenameSequence {
             at: root,
             name: "Open".into(),
@@ -9107,5 +9116,209 @@ fn nif_tab_request_switches_to_the_meshes_view() {
     assert!(h.state().meshes.nif_tab.is_none(), "the panel took it");
     assert!(
         h.query_by_label("Texture slots").is_none() && h.query_by_label("Shader type").is_none()
+    );
+}
+
+// ---- Note GD8: clip timing ----
+
+/// An exportable session on `scenes::animated` (S's shader chain free), its edit open.
+fn timing_session() -> (tempfile::TempDir, MeshesModel) {
+    let d = instance("+sdc NIF Edits\n+A\n");
+    std::fs::create_dir_all(d.path().join("mods").join(EDIT_MOD)).unwrap();
+    put(
+        d.path(),
+        "mods/A/meshes/x.nif",
+        Some(&scenes::animated(Some(1), 2)),
+    );
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    (d, m)
+}
+
+/// A SetSequenceTiming on the converted clip SpecialIdle.
+fn timing(m: &MeshesModel, cycle: u32, freq: f32, start: f32, stop: f32) -> Op {
+    let e = m.edit.as_ref().unwrap();
+    Op::SetSequenceTiming {
+        at: nif::edit::anchor_role(&e.model, None, Role::Root).unwrap(),
+        name: nif::edit::CONVERT_NAME.into(),
+        nth: 0,
+        cycle,
+        freq,
+        start,
+        stop,
+    }
+}
+
+/// (cycle, frequency, start, stop) of the first clip in `b`, as a reload reads them.
+fn clip_timing(b: &[u8]) -> (u32, f32, f32, f32) {
+    let s = &nif::model::read_model(b).unwrap().sequences[0];
+    (s.cycle, s.frequency, s.start, s.stop)
+}
+
+#[test]
+fn set_sequence_timing_round_trips() {
+    let (d, mut m) = timing_session();
+    let seq = convert(&mut m);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let before = m.edit.as_ref().unwrap().patched.to_vec();
+    let op = timing(&m, 1, 2.0, 0.25, 0.75);
+    m.edit_push(vec![op.clone()], None);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes.last(), Some(&nif::edit::Outcome::Applied));
+    assert_eq!(e.history.undo_label(), Some("Set clip timing"));
+    assert_eq!(clip_timing(&e.patched), (1, 2.0, 0.25, 0.75));
+    assert_eq!(
+        e.playing,
+        Playing::Clip(seq),
+        "the Preview stays on the clip"
+    );
+    assert_eq!(e.blocked, None);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let file = std::fs::read(exported(&d)).unwrap();
+    assert_eq!(clip_timing(&file), (1, 2.0, 0.25, 0.75));
+    let saved = load(&m.edit.as_ref().unwrap().doc_path).unwrap().unwrap();
+    assert_eq!(saved.ops.last().map(|d| &d.op), Some(&op));
+    m.edit_with(|e| {
+        e.undo();
+    });
+    assert_eq!(
+        *m.edit.as_ref().unwrap().patched,
+        before,
+        "Undo restores the bytes"
+    );
+}
+
+#[test]
+fn invalid_timing_is_a_warning_entry() {
+    use sdc_gui::model::meshes::{NifLevel, NifTab};
+    let (_d, mut m) = timing_session();
+    convert(&mut m);
+    let good = m.edit.as_ref().unwrap().patched.to_vec();
+    for (op, why) in [
+        (timing(&m, 0, 1.0, 0.75, 0.25), "start is after stop"),
+        (timing(&m, 0, 0.0, 0.0, 1.0), "frequency 0 freezes the clip"),
+        (
+            timing(&m, 0, f32::NAN, 0.0, 1.0),
+            "times must be finite numbers",
+        ),
+        (
+            timing(&m, 3, 1.0, 0.0, 1.0),
+            "the cycle must be Loop, Reverse or Clamp",
+        ),
+    ] {
+        m.edit_push(vec![op], None);
+        let e = m.edit.as_ref().unwrap();
+        let text = format!("Clip SpecialIdle timing: {why}; the clip keeps the timing it had");
+        let rows: Vec<_> = e
+            .problems
+            .iter()
+            .filter(|p| p.text == text)
+            .map(|p| (p.level, p.tab))
+            .collect();
+        assert_eq!(rows, [(NifLevel::Warning, NifTab::Controllers)], "{why}");
+        assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+        assert_eq!(*e.patched, good, "{why}: the clip keeps its timing");
+        assert_eq!(e.blocked, None, "{why}: the rest still exports");
+        m.edit_with(|e| {
+            e.undo();
+        });
+    }
+}
+
+/// CR6 as GD8 rules it: reverting the Convert takes the clip's later timing with it, and its row says so.
+#[test]
+fn reverting_a_convert_drops_its_clip_timing() {
+    let (_d, mut m) = timing_session();
+    convert(&mut m);
+    let op = timing(&m, 2, 1.0, 0.0, 0.5);
+    m.edit_push(vec![op], None);
+    assert_eq!(m.edit.as_ref().unwrap().timing_dependents(0), vec![1]);
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Pending edits (2)").click();
+    h.run_steps(3);
+    h.get_by_label("S: Convert to clip SpecialIdle (Revert also removes its clip timing)");
+    h.get_by_label_contains("Revert 1: ").click();
+    h.run_steps(3);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(e.doc.ops.is_empty(), "{:?}", e.doc.ops());
+    assert!(e.outcomes.is_empty());
+}
+
+/// The Clips section's timing fields: a typed frequency is one SetSequenceTiming with the clip's other values.
+#[test]
+fn clip_timing_fields_push_one_op() {
+    let mut m = direct(scenes::managed_clip());
+    let e = m.edit.as_ref().unwrap();
+    let b = e.model.shapes[0].block;
+    let s = e.model.sequences[0].clone();
+    let (name, nth) = nif::edit::clip_key(&e.patched, &e.model, s.block).unwrap();
+    let at = nif::edit::anchor_role(&e.model, None, Role::Root).unwrap();
+    m.select_edit(Selection::Shape(b));
+    m.edit_with(|e| e.set_playing(Playing::Clip(s.block)));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Controllers tab").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Clips (2 · showing").click();
+    h.run_steps(3);
+    let id = h.get_by_label("Clip frequency").accesskit_node().id();
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .type_text("2.5");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        ops(h.state()),
+        vec![Op::SetSequenceTiming {
+            at,
+            name,
+            nth,
+            cycle: s.cycle,
+            freq: 2.5,
+            start: s.start,
+            stop: s.stop,
+        }]
+    );
+    h.get_by_role_and_label(AkRole::ComboBox, "Clip cycle");
+}
+
+/// The Time slider's span follows a clip's new timing (`anim_end`'s math: a Reverse cycle counts both legs).
+#[test]
+fn clip_timing_moves_the_time_slider() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (_d, mut m, _cmds) = session_on(&plain);
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::ConvertChainToClips {
+            at,
+            name: nif::edit::CONVERT_NAME.into(),
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    let s = e.model.sequences[0].clone();
+    m.edit_with(|e| e.set_playing(Playing::Clip(s.block)));
+    m.tick_anim(0.0);
+    let span = (s.stop - s.start) / s.frequency;
+    assert!(span > 0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, span));
+    let op = timing(&m, 1, 4.0, s.start, s.stop);
+    m.edit_push(vec![op], None);
+    m.tick_anim(0.0);
+    assert_eq!(
+        m.v3.clock.unwrap().range,
+        (0.0, (s.stop - s.start) * 2.0 / 4.0)
     );
 }

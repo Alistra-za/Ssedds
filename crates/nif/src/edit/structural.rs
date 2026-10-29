@@ -956,7 +956,8 @@ fn shape_raw_name<'h>(
     Ok(raw)
 }
 
-/// AddSequence, RemoveSequence and RenameSequence, anchored on the root (v2 C2). A missing clip is a Conflict.
+/// AddSequence, RemoveSequence, RenameSequence and SetSequenceTiming, anchored on the root (v2 C2). A missing clip is
+/// a Conflict.
 pub(crate) fn clip_op(
     doc: &mut NifDoc,
     cur: &[u8],
@@ -1024,6 +1025,26 @@ pub(crate) fn clip_op(
             let b = clip_name_bytes(doc.header(), cur, Some(&man), new_name, Some(k))?;
             let s = enc(doc.string(&b))?;
             patch(doc, man.sequences[k] as u32, 0, s)?;
+        }
+        Op::SetSequenceTiming {
+            name,
+            nth,
+            cycle,
+            freq,
+            start,
+            stop,
+            ..
+        } => {
+            let Some((_, man, k)) = find_clip(doc.header(), cur, m, name, *nth)? else {
+                return missing(name);
+            };
+            // Note GD8: values validate_ops warns about leave the clip's file timing
+            if super::validate::timing_problem(*cycle, *freq, *start, *stop).is_none() {
+                let seq = man.sequences[k] as u32;
+                let mut s = enc(read_sequence_out(doc.header(), cur, seq as usize))?;
+                (s.cycle, s.freq, s.start, s.stop) = (*cycle, *freq, *start, *stop);
+                doc.set_block(seq, enc(encode_sequence(&s))?);
+            }
         }
         _ => return Err("not a clip op".into()),
     }

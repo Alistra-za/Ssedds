@@ -317,6 +317,7 @@ pub fn op_label(op: &Op, m: &NifModel) -> String {
         Op::RenameSequence {
             at, name, new_name, ..
         } => (format!("Rename clip {name} to {new_name}"), at),
+        Op::SetSequenceTiming { at, name, .. } => (format!("Set clip timing {name}"), at),
         Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
     };
     match &at.shape {
@@ -352,6 +353,7 @@ pub fn op_name(op: &Op) -> String {
         Op::AddSequence { .. } => "Add clip".into(),
         Op::RemoveSequence { .. } => "Remove clip".into(),
         Op::RenameSequence { .. } => "Rename clip".into(),
+        Op::SetSequenceTiming { .. } => "Set clip timing".into(),
         Op::ConvertChainToClips { .. } => "Convert to clip".into(),
     }
 }
@@ -382,6 +384,7 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::AddSequence { at, .. }
         | Op::RemoveSequence { at, .. }
         | Op::RenameSequence { at, .. }
+        | Op::SetSequenceTiming { at, .. }
         | Op::ConvertChainToClips { at, .. }
         | Op::SetKeys { at, .. } => at,
     }
@@ -545,7 +548,8 @@ impl NifEdit {
         if let Some(w) = new_errors(&self.source_warnings, &self.warnings).first() {
             return Some(w.text.clone());
         }
-        if let Some(w) = self.op_warnings.first() {
+        // Note GD8: a Warn (bad clip timing) holds back only what it names
+        if let Some(w) = self.op_warnings.iter().find(|w| w.level == Level::Error) {
             return Some(w.text.clone());
         }
         read_back(&self.patched).err()
@@ -879,7 +883,24 @@ impl NifEdit {
         self.restore(t)
     }
 
-    /// Drops op `i` (one undo step).
+    /// The later SetSequenceTiming ops on the clip op `i` adds (AddSequence, Convert): reverting `i` drops them too
+    /// (Note GD8, CR6). Clip names are unique on a manager ignoring ASCII case, so the name finds the clip.
+    // shortcut: a Rename between the two leaves the timing op to conflict after the revert; follow renames if users
+    // rename and retime a new clip and then revert it.
+    pub fn timing_dependents(&self, i: usize) -> Vec<usize> {
+        let added = match self.doc.ops.get(i).map(|d| &d.op) {
+            Some(Op::AddSequence { name, .. } | Op::ConvertChainToClips { name, .. }) => name,
+            _ => return vec![],
+        };
+        (i + 1..self.doc.ops.len())
+            .filter(|&k| {
+                matches!(&self.doc.ops[k].op, Op::SetSequenceTiming { name, .. }
+                    if name.eq_ignore_ascii_case(added))
+            })
+            .collect()
+    }
+
+    /// Drops op `i`, and the clip timing that goes with it (one undo step).
     pub fn revert(&mut self, i: usize) {
         if i >= self.doc.ops.len() {
             return;
@@ -887,6 +908,9 @@ impl NifEdit {
         self.drag = None;
         let label = format!("Revert: {}", op_name(&self.doc.ops[i].op));
         self.history.record(self.doc.to_text(), &label, None);
+        for k in self.timing_dependents(i).into_iter().rev() {
+            self.doc.ops.remove(k);
+        }
         self.doc.ops.remove(i);
         self.reapply();
         self.save();

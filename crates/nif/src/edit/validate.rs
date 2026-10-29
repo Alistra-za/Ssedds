@@ -575,6 +575,21 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
     out
 }
 
+/// Why a clip timing cannot be written (Note GD8), the file loader's checks plus the cycle's range: None when it can.
+pub fn timing_problem(cycle: u32, freq: f32, start: f32, stop: f32) -> Option<&'static str> {
+    if ![freq, start, stop].iter().all(|v| v.is_finite()) {
+        Some("times must be finite numbers")
+    } else if cycle > 2 {
+        Some("the cycle must be Loop, Reverse or Clamp")
+    } else if freq == 0.0 {
+        Some("frequency 0 freezes the clip")
+    } else if start > stop {
+        Some("start is after stop")
+    } else {
+        None
+    }
+}
+
 /// Errors in the keys the ops author (spec §3.3): times, values and tangents must be finite (B-P29); times must not
 /// decrease; only LINEAR (1) and QUADRATIC (2) keys are authored. A source curve that is not edited is never checked (R14).
 /// Only the keys that are exported are checked: a SetKeys that a later SetKeys on the same (controller, clip)
@@ -599,6 +614,30 @@ pub fn validate_ops(ops: &[Op]) -> Vec<Warning> {
         _ => None,
     };
     for (i, op) in ops.iter().enumerate() {
+        // Note GD8: bad clip timing holds back that clip's timing only (a Warn); a later timing of the clip replaces it
+        if let Op::SetSequenceTiming {
+            at,
+            name,
+            nth,
+            cycle,
+            freq,
+            start,
+            stop,
+        } = op
+        {
+            let later = ops[i + 1..].iter().any(|o| {
+                matches!(o, Op::SetSequenceTiming { name: n, nth: k, .. } if n == name && k == nth)
+            });
+            if let Some(p) = timing_problem(*cycle, *freq, *start, *stop).filter(|_| !later) {
+                out.push(Warning {
+                    level: Level::Warn,
+                    target: Target::Block { block: at.block },
+                    text: format!("Clip {name} timing: {p}; the clip keeps the timing it had"),
+                    fix: None,
+                });
+            }
+            continue;
+        }
         // (anchor, keys) pairs: one per SetKeys / AddController, one per AddSequence track (F10)
         let pairs: Vec<(&Anchor, &KeyData)> = match op {
             Op::SetKeys { at, keys, .. } | Op::AddController { at, keys, .. } => vec![(at, keys)],
