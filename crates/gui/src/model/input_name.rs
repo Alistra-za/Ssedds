@@ -6,7 +6,7 @@ use super::items::ItemKind;
 use super::rename::{
     input_output, lower, plan_rename, split_ext, split_path, RenameDialog, RenameMode, RenameRow,
 };
-use super::sets::{set_views, SlotFill, SlotKind};
+use super::sets::{set_views, views, SlotFill, SlotKind};
 use super::AppModel;
 use engine::group::base_of;
 use engine::sets::{fold_id, same_id};
@@ -83,9 +83,8 @@ impl AppModel {
 
     /// The current input name of set `set_id`: its own diffuse's game path without extension.
     pub fn input_name_of(&self, set_id: &str) -> Option<String> {
-        let v = set_views(self)
-            .into_iter()
-            .find(|v| same_id(&v.id, set_id))?;
+        let views = views(self);
+        let v = views.iter().find(|v| same_id(&v.id, set_id))?;
         let Some(SlotFill::Own { item }) = v.slots.get(&SlotKind::Diffuse) else {
             return None;
         };

@@ -18,8 +18,8 @@ use crate::model::out_size::{human, SizeEst};
 use crate::model::pack_fills::{channel_helpers, channel_roles, fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    card_title, is_json_set, set_views, shows_json_panel, slot_clash_text, slot_label, slot_of,
-    slot_row, SetView, SlotCell, SlotFill, SlotKind,
+    card_title, is_json_set, shows_json_panel, slot_clash_text, slot_label, slot_of, slot_row,
+    views, SetView, SlotCell, SlotFill, SlotKind,
 };
 use crate::model::AppModel;
 use crate::pgp::prefix::{
@@ -100,23 +100,24 @@ pub fn draw(
     view: View,
     advanced: &mut super::advanced::AdvancedState,
 ) {
-    let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
+    let all = views(model);
+    let Some(v) = all.iter().find(|v| v.key == key) else {
         ui.weak("This set is no longer in the plan.");
         drops.slot_seen = None;
         return;
     };
-    slot_changes(ui.ctx(), drops, &v);
+    slot_changes(ui.ctx(), drops, v);
     ui.horizontal_wrapped(|ui| {
         if view.switch {
             super::set_preview::view_switch(ui, model);
         }
         // The set's path and its input name box share the row where the width allows (AO5).
-        super::input_name::picker(ui, model, &v, !view.three_d);
+        super::input_name::picker(ui, model, v, !view.three_d);
         if view.three_d {
             super::set_preview::settings_toggle(ui, model);
         }
         // The output prefix and its error are PGPatcher JSON facts: only a JSON set shows them.
-        if shows_json_panel(&v, model.target) {
+        if shows_json_panel(v, model.target) {
             match (&v.prefix, &v.prefix_error) {
                 (Some(p), _) => ui.weak(format!("→ {p}")),
                 (_, Some(e)) => ui.colored_label(RED, e),
@@ -185,7 +186,7 @@ pub fn draw(
         .resizable(true)
         .default_size(SET_PANEL_WIDTH)
         .size_range(300.0..=max)
-        .show(ui, |ui| set_panel(ui, model, &v, advanced));
+        .show(ui, |ui| set_panel(ui, model, v, advanced));
     let flash = drops
         .slot_flash
         .as_ref()
@@ -197,7 +198,7 @@ pub fn draw(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            rows(ui, model, &v, thumbs, &mut acts, drop_at, &sizes);
+            rows(ui, model, v, thumbs, &mut acts, drop_at, &sizes);
             // R9: the changed slot's row (its rect as `row` stored it this frame), outlined in the accent.
             if let Some((n, a)) = flash {
                 let id = egui::Id::new(("slot-row", &v.id, n));
@@ -213,7 +214,7 @@ pub fn draw(
                 }
             }
             slot_note(ui, drops, &v.id);
-            unslotted_packed(ui, model, &v, &mut acts);
+            unslotted_packed(ui, model, v, &mut acts);
             ui.add_space(6.0);
             // A2: a normal button, not stretched across the justified column.
             ui.horizontal(|ui| {
@@ -225,7 +226,7 @@ pub fn draw(
                 .response
                 .on_disabled_hover_text(&why);
             });
-            under_grid(ui, model, &v);
+            under_grid(ui, model, v);
         });
     let (mut select, mut expand) = (None, None);
     for a in acts {
@@ -1431,5 +1432,54 @@ fn clash_rows(
                 acts.push(Act::Select(i.key.clone()));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::sets::{views, SET_VIEWS_CLONES};
+    use crate::model::{AppModel, Selection};
+    use eframe::egui;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Trace fix 10: a set-editor frame (`set_editor_shown`, `set_editor::draw`, the input-name picker) reads the cached
+    /// views and deep-clones none of them.
+    #[test]
+    fn a_set_editor_frame_does_not_clone_the_set_views() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().join("textures/landscape");
+        std::fs::create_dir_all(&r).unwrap();
+        for n in ["rock01.png", "rock01_normal.png"] {
+            image::RgbImage::from_pixel(16, 16, image::Rgb([90, 90, 90]))
+                .save(r.join(n))
+                .unwrap();
+        }
+        let session = Arc::new(
+            engine::session::Session::new(encoders_sys::Bc1Model::Ideal).expect("a session"),
+        );
+        let mut m = AppModel::new(crate::settings::GuiSettings::default(), None, session);
+        m.open_folder(d.path().join("textures"));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let key = views(&m).first().expect("a set").key.clone();
+        m.selection = Selection::Set(key);
+        let ctx = egui::Context::default();
+        let mut state = crate::ui::State::default();
+        let mut frame = |m: &mut AppModel| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| crate::ui::draw_with(ui, m, &mut state))
+                .drop_without_applying_deltas();
+        };
+        frame(&mut m);
+        SET_VIEWS_CLONES.with(|c| c.set(0));
+        frame(&mut m);
+        frame(&mut m);
+        assert_eq!(SET_VIEWS_CLONES.with(|c| c.get()), 0);
     }
 }
