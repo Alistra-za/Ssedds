@@ -159,9 +159,15 @@ pub(super) fn focus_id() -> egui::Id {
     egui::Id::new("meshes-edit-focus")
 }
 
+/// A worklist fix asked for `field`, and no widget has taken the request yet.
+pub(super) fn wants_focus(ui: &egui::Ui, field: Field) -> bool {
+    ui.data(|d| d.get_temp::<Field>(focus_id())) == Some(field)
+}
+
 /// Focuses `r` and scrolls to it when it is the field a worklist fix asked for; the first match takes the request.
+/// Note GD14: every widget kind a worklist row can name calls it (drag values, slider, combos, flag toggles).
 pub(super) fn take_focus(ui: &egui::Ui, r: &egui::Response, field: Field) {
-    if ui.data(|d| d.get_temp::<Field>(focus_id())) == Some(field) {
+    if wants_focus(ui, field) {
         ui.data_mut(|d| d.remove::<Field>(focus_id()));
         r.request_focus();
         r.scroll_to_me(None);
@@ -233,6 +239,7 @@ fn color(
             let r = ui.add(egui::DragValue::new(&mut f).speed(0.005));
             let n = format!("{name} {c}");
             set_name(&r, egui::WidgetType::DragValue, &n, Some(f as f64), None);
+            take_focus(ui, &r, field(i as u8));
             if r.changed() {
                 x[i] = f;
                 changed = true;
@@ -358,6 +365,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             .response;
         let typ = egui::WidgetType::ComboBox;
         set_name(&r, typ, "Shader type", None, Some(shown));
+        take_focus(ui, &r, Field::ShaderType);
         r.on_hover_text(TYPE_HOVER);
         if t != lt.shader_type {
             let mut ops = vec![Op::SetField {
@@ -447,6 +455,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             Some(c as f64),
             None,
         );
+        take_focus(ui, &r, Field::ClampMode);
         if c != p.texture_clamp_mode {
             let op = Op::SetField {
                 at: at.clone(),
@@ -529,6 +538,8 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             // that appears later on a closed list stays inside it (the Export footer still names a blocking one); open
             // it with `CollapsingState` on a new warning if users miss one.
             .default_open(has_warning(e, at.block, field))
+            // Note GD14: a worklist fix for this list opens it; its first editable flag takes the focus
+            .open(wants_focus(ui, field).then_some(true))
             .show(ui, |ui| {
                 warnings(
                     ui,
@@ -577,6 +588,9 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                         r = r.on_hover_ui(|ui| {
                             ui.label(format!("With the PBR flag CS reads this bit as: {m}."));
                         });
+                    }
+                    if locked.is_none() {
+                        take_focus(ui, &r, field);
                     }
                     if let Some(h) = locked {
                         r.on_disabled_hover_text(h);
@@ -912,7 +926,9 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     };
     let check = |ui: &mut egui::Ui, act: &mut Act, name: &str, bit: u32| {
         let mut on = flags as u32 & (1 << bit) != 0;
-        if ui.checkbox(&mut on, name).changed() {
+        let r = ui.checkbox(&mut on, name);
+        take_focus(ui, &r, Field::AlphaFlags);
+        if r.changed() {
             edit(act, bits(1 << bit, if on { 1 << bit } else { 0 }), None);
         }
     };
@@ -937,6 +953,7 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                 })
                 .response;
             set_name(&r, egui::WidgetType::ComboBox, name, None, Some(label(cur)));
+            take_focus(ui, &r, Field::AlphaFlags);
             if v != cur {
                 let mask = ((1u32 << width) - 1) << shift;
                 edit(act, bits(mask, (v as u32) << shift), None);
@@ -972,6 +989,7 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             Some(t as f64),
             None,
         );
+        take_focus(ui, &r, Field::AlphaThreshold);
         if t != a.alpha.threshold {
             let op = Op::SetField {
                 at: at(),

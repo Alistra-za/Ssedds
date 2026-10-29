@@ -9403,6 +9403,47 @@ fn nif_warnings_are_problems() {
     );
 }
 
+/// Note GD14: a worklist fix focuses its field whatever widget draws it: the Alpha threshold slider, the shader type
+/// combo, a flag list (opened for it) and a colour's first channel.
+#[test]
+fn show_nif_tab_focuses_each_field_kind() {
+    use sdc_gui::model::meshes::NifTab;
+    let mut s = direct(scenes::shared_alpha_and_set());
+    let (shape, _) = lit_shape(s.edit.as_ref().unwrap());
+    s.select_edit(Selection::Shape(shape));
+    let mut h = view(s);
+    h.run_steps(3);
+    for (tab, field, role, label) in [
+        (
+            NifTab::Alpha,
+            Field::AlphaThreshold,
+            AkRole::Slider,
+            "Threshold",
+        ),
+        (
+            NifTab::Shader,
+            Field::ShaderType,
+            AkRole::ComboBox,
+            "Shader type",
+        ),
+        (NifTab::Shader, Field::Slsf1, AkRole::CheckBox, "Specular"),
+        (
+            NifTab::Shader,
+            Field::EmissiveColor(0),
+            AkRole::SpinButton,
+            "Emissive colour R",
+        ),
+    ] {
+        h.state_mut().show_nif_tab("meshes/x.nif", tab, Some(field));
+        h.run_steps(4);
+        let n = h.get_by_role_and_label(role, label);
+        assert!(
+            n.accesskit_node().is_focused(),
+            "{field:?}: {label} has the focus"
+        );
+    }
+}
+
 /// GD1: the Problems list's fix sets `AppModel::nif_tab_request`; the app switches to the Meshes view and opens the tab.
 #[test]
 fn nif_tab_request_switches_to_the_meshes_view() {

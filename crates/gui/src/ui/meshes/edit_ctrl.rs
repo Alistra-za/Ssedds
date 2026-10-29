@@ -3,7 +3,8 @@
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
 use super::edit_fields::{
-    fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act, OUT_OF_RANGE,
+    fit_width, float_named, from_picker, row_label, selected, set_name, take_focus, warnings, Act,
+    OUT_OF_RANGE,
 };
 use crate::model::meshes::edit_doc::SourceId;
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
@@ -858,6 +859,7 @@ fn row(
             None,
             Some(shown),
         );
+        take_focus(ui, &r, Field::CtrlFlags);
         if pick != cycle {
             act.push = Some((vec![bits(at, c.flags, 0x6, (pick as u32) << 1)], None));
         }
@@ -1699,6 +1701,7 @@ fn variable(
             None,
             Some(shown),
         );
+        take_focus(ui, &r, Field::Variable);
         if managed {
             r.on_hover_text("Its clips follow the new variable.");
         }
