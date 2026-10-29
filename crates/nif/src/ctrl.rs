@@ -67,7 +67,8 @@ pub(crate) fn is_ctrl(kind: &[u8]) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeCtrl {
     pub block: u32,
-    pub class: String,
+    /// Shared with every block of the same type ([`Header::kind_arc`]).
+    pub class: std::sync::Arc<str>,
     pub next: i32,
     pub flags: u16,
     pub frequency: f32,
@@ -96,7 +97,7 @@ pub fn read_ctrl(h: &Header, b: &[u8], block: usize) -> Result<TimeCtrl, NifErro
     let has_var = known == Some(BASE_LEN + 8);
     Ok(TimeCtrl {
         block: block as u32,
-        class: String::from_utf8_lossy(kind).into(),
+        class: h.kind_arc(block),
         next: u32_at(d, 0) as i32,
         flags: u16::from_le_bytes([d[4], d[5]]),
         frequency: f32_at(d, 6),
@@ -140,7 +141,8 @@ pub fn chain(h: &Header, b: &[u8], first: i32, problems: &mut Vec<String>) -> Ve
 #[derive(Debug, Clone, PartialEq)]
 pub struct Interp {
     pub block: u32,
-    pub class: String,
+    /// Shared with every block of the same type ([`Header::kind_arc`]).
+    pub class: std::sync::Arc<str>,
     pub value: Vec<f32>,
     pub data: i32,
     pub known: bool,
@@ -156,7 +158,7 @@ pub fn read_interp(h: &Header, b: &[u8], block: usize) -> Result<Interp, NifErro
     }
     Ok(Interp {
         block: block as u32,
-        class: String::from_utf8_lossy(kind).into(),
+        class: h.kind_arc(block),
         value: (0..n).map(|i| f32_at(d, 4 * i)).collect(),
         data: if known { u32_at(d, 4 * n) as i32 } else { -1 },
         known,
@@ -175,7 +177,8 @@ pub(crate) fn interp_floats(kind: &[u8]) -> usize {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlendInterp {
     pub block: u32,
-    pub class: String,
+    /// Shared with every block of the same type ([`Header::kind_arc`]).
+    pub class: std::sync::Arc<str>,
     pub flags: u8,
     pub array_size: u8,
     pub weight_threshold: f32,
@@ -214,7 +217,7 @@ pub fn read_blend_interp(h: &Header, b: &[u8], block: usize) -> Result<BlendInte
     exact(h, block, value_at + 4 * n, d.len())?;
     Ok(BlendInterp {
         block: block as u32,
-        class: String::from_utf8_lossy(kind).into(),
+        class: h.kind_arc(block),
         flags,
         array_size,
         weight_threshold: f32_at(d, 2),

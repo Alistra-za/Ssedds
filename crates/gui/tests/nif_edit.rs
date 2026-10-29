@@ -3018,7 +3018,7 @@ fn add_then_remove_ctrl(m: &mut MeshesModel, remove: bool) {
             .prop
             .ctrls
             .iter()
-            .filter(|c| e.model.ctrls[c].class == LSCF && e.model.ctrls[c].var == Some(11))
+            .filter(|c| &*e.model.ctrls[c].class == LSCF && e.model.ctrls[c].var == Some(11))
             .count() as u32
             - 1;
         let role = Role::Ctrl {
@@ -4663,14 +4663,14 @@ fn a_removed_controller_restores_the_file_material() {
     let c = &e.model.ctrls[&ctrl];
     let at = Anchor {
         block: ctrl,
-        kind: c.class.clone(),
+        kind: c.class.to_string(),
         shape: e
             .model
             .shape(shape)
             .and_then(|s| s.name.as_deref().map(str::to_string)),
         role: Role::Ctrl {
             owner: nif::edit::Owner::Shader,
-            class: c.class.clone(),
+            class: c.class.to_string(),
             var: c.var,
             nth: 0,
         },
@@ -6702,11 +6702,11 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
                 .count() as u32;
             let at = Anchor {
                 block: c,
-                kind: cm.class.clone(),
+                kind: cm.class.to_string(),
                 shape: s.name.as_deref().map(str::to_string),
                 role: Role::Ctrl {
                     owner,
-                    class: cm.class.clone(),
+                    class: cm.class.to_string(),
                     var: cm.var,
                     nth,
                 },

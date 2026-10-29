@@ -27,10 +27,7 @@ fn free_chain_reads_two_controllers_on_one_bslsp() {
         .iter()
         .all(|c| c.known && c.target == lsp as i32 && c.flags == 0x48));
     let i = read_interp(&h, &b, c[0].interp.unwrap() as usize).unwrap();
-    assert_eq!(
-        (i.class.as_str(), i.value.len()),
-        ("NiFloatInterpolator", 1)
-    );
+    assert_eq!((&*i.class, i.value.len()), ("NiFloatInterpolator", 1));
     assert_eq!((i.value[0], i.data), (0.5, 5));
 }
 
@@ -111,7 +108,7 @@ fn managed_clip_sequences_name_their_controllers() {
     assert!(!m.ctrl.known);
     let mttc = read_ctrl(&h, &b, ids[1] as usize).unwrap();
     assert_eq!(
-        (mttc.class.as_str(), mttc.known),
+        (&*mttc.class, mttc.known),
         ("NiMultiTargetTransformController", false)
     );
 
@@ -141,7 +138,7 @@ fn managed_clip_sequences_name_their_controllers() {
     assert_eq!((fcc.flags, fcc.var), (0x68, Some(11)));
     let bi = read_interp(&h, &b, fcc.interp.unwrap() as usize).unwrap();
     assert_eq!(
-        (bi.class.as_str(), bi.known, bi.data),
+        (&*bi.class, bi.known, bi.data),
         ("NiBlendFloatInterpolator", false, -1)
     );
     assert!(bi.value.is_empty());

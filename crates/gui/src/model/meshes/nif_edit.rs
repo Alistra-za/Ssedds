@@ -250,7 +250,7 @@ fn env_scale_ctrl(m: &NifModel, sm: &ShapeModel) -> Option<u32> {
     let l = m.lighting.get(&sm.shader?)?;
     l.prop.ctrls.iter().copied().find(|c| {
         m.ctrls.get(c).is_some_and(|c| {
-            c.class == "BSLightingShaderPropertyFloatController" && c.var == Some(8)
+            &*c.class == "BSLightingShaderPropertyFloatController" && c.var == Some(8)
         })
     })
 }

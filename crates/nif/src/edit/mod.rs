@@ -289,7 +289,7 @@ fn twins<'a>(
         .into_iter()
         .flatten()
         .filter_map(|c| m.ctrls.get(c))
-        .filter(move |c| c.class == class && c.var == var)
+        .filter(move |c| &*c.class == class && c.var == var)
         .map(|c| c.block)
 }
 

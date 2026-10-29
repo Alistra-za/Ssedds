@@ -2600,7 +2600,7 @@ fn add_first_sequence_creates_manager_palette_and_mttc() {
         let c = &m.ctrls[&(ctrl as u32)];
         assert_eq!(c.flags, 0x48 | 0x20);
         let bl = nif::ctrl::read_blend_interp(&h, o, c.interp.unwrap() as usize).unwrap();
-        assert_eq!(bl.class, "NiBlendFloatInterpolator");
+        assert_eq!(&*bl.class, "NiBlendFloatInterpolator");
         assert_eq!((bl.flags, bl.array_size), (1, 2));
         assert_eq!(bl.value[0].to_bits(), 0xFF7F_FFFF);
     }
@@ -2767,7 +2767,7 @@ fn testref_track_writes_a_null_controller_id() {
     assert_eq!(h.string(cb.node), Some(&b"A"[..]));
     let m2 = read_model(o).unwrap();
     let c = &m2.ctrls[&(cb.controller as u32)];
-    assert!(c.block != 5 && c.class == TESTREF, "the split copy");
+    assert!(c.block != 5 && &*c.class == TESTREF, "the split copy");
     assert_eq!(
         h.kind(c.interp.unwrap() as usize),
         b"NiBlendFloatInterpolator"
@@ -3132,7 +3132,7 @@ fn colour_track_round_trip() {
     assert_eq!(h.kind(ip.data as usize), b"NiPosData");
     assert_eq!(data_of(o, ip.data as usize), keys);
     let bl = nif::ctrl::read_blend_interp(&h, o, m.ctrls[&c].interp.unwrap() as usize).unwrap();
-    assert_eq!(bl.class, "NiBlendPoint3Interpolator");
+    assert_eq!(&*bl.class, "NiBlendPoint3Interpolator");
     assert!(bl.value.iter().all(|v| v.to_bits() == 0xFF7F_FFFF) && bl.value.len() == 3);
     assert_eq!(m.ctrls[&c].flags, 0x68);
 

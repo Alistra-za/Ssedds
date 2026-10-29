@@ -359,3 +359,62 @@ fn scan_shares_the_slots_of_one_texture_set_across_many_properties() {
         .collect();
     assert_eq!(ptrs.len(), 1, "{} distinct slot arrays", ptrs.len());
 }
+
+/// A BSTriShape whose controller chain starts at block `ctrl`.
+fn shape_with_ctrl(ctrl: i32) -> Vec<u8> {
+    builder::scenes::avobj(W::default().i32(-1).u32(0).i32(ctrl))
+        .fs(&[0.0; 4])
+        .i32(-1)
+        .i32(-1)
+        .i32(-1)
+        .u64(0)
+        .u16(0)
+        .u16(0)
+        .u32(0)
+        .0
+}
+
+/// Fix round 1 (GB5): 1000 shapes, each with a controller of one type that has a 100 KB name; `read_model` keeps
+/// one copy of the class.
+#[test]
+fn read_model_shares_one_class_name_across_many_controllers() {
+    use builder::scenes::ctrl_body;
+    let mut n = Nif::new(100);
+    let kind = format!("{}Controller", "k".repeat(BIG));
+    for _ in 0..1000 {
+        n.block(&kind, ctrl_body(-1, 0, -1, W::default()));
+    }
+    for k in 0..1000 {
+        n.block("BSTriShape", shape_with_ctrl(k));
+    }
+    n.roots = vec![];
+    let m = nif::model::read_model(&n.bytes()).unwrap();
+    assert_eq!(m.ctrls.len(), 1000, "{:?}", m.problems.first());
+    let ptrs: BTreeSet<_> = m.ctrls.values().map(|c| c.class.as_ptr()).collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct class copies", ptrs.len());
+}
+
+/// Fix round 1 (GB5): 1000 controllers naming 1000 interpolators of one type with a 100 KB name: one class copy.
+#[test]
+fn read_model_shares_one_class_name_across_many_interpolators() {
+    use builder::scenes::ctrl_body;
+    let mut n = Nif::new(100);
+    let kind = format!("{}Interpolator", "k".repeat(BIG));
+    for _ in 0..1000 {
+        n.block(&kind, vec![]);
+    }
+    for k in 0..1000 {
+        n.block(
+            "NiAlphaController",
+            ctrl_body(-1, 0, -1, W::default().i32(k)),
+        );
+    }
+    for k in 0..1000 {
+        n.block("BSTriShape", shape_with_ctrl(1000 + k));
+    }
+    n.roots = vec![];
+    let m = nif::model::read_model(&n.bytes()).unwrap();
+    assert_eq!(m.interps.len(), 1000, "{:?}", m.problems.first());
+    let ptrs: BTreeSet<_> = m.interps.values().map(|i| i.class.as_ptr()).collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct class copies", ptrs.len());
+}

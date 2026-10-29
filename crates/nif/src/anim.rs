@@ -173,7 +173,7 @@ pub struct Track {
 const INV: u32 = 0xFF7F_FFFF;
 
 fn target_of(c: &TimeCtrl) -> Option<Target> {
-    match (c.class.as_str(), c.var) {
+    match (&*c.class, c.var) {
         ("BSLightingShaderPropertyFloatController", Some(v)) => Some(Target::Lscf(v)),
         ("BSLightingShaderPropertyColorController", Some(v)) => Some(Target::Lscc(v)),
         ("BSNiAlphaPropertyTestRefController", _) => Some(Target::AlphaRef),
@@ -185,7 +185,7 @@ fn interp_track(m: &NifModel, h: &Header, b: &[u8], r: i32) -> (AnimValue, Optio
     let Some(i) = u32::try_from(r).ok().and_then(|r| m.interps.get(&r)) else {
         return (AnimValue::None, None);
     };
-    let value = match (i.class.as_str(), i.value.as_slice()) {
+    let value = match (&*i.class, i.value.as_slice()) {
         ("NiFloatInterpolator", &[v]) if v.to_bits() != INV => AnimValue::F32(v),
         ("NiPoint3Interpolator", &[x, y, z]) if x.to_bits() != INV => AnimValue::Vec3([x, y, z]),
         _ => AnimValue::None,
