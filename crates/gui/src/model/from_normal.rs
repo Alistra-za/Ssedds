@@ -584,10 +584,8 @@ impl AppModel {
         shader: Shader,
         aliases: &BTreeMap<String, String>,
     ) -> Result<(), String> {
-        let pbr = matches!(
-            shader,
-            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
-        );
+        // Same set as `is_pbr_family` today; split if the `_rmaos` readers diverge.
+        let pbr = shader.is_pbr_family();
         if self.target != engine::config::Target::Cs || !pbr {
             return Err(NOT_PBR.into());
         }
@@ -611,10 +609,7 @@ impl AppModel {
         shader: Shader,
         aliases: &BTreeMap<String, String>,
     ) -> Result<(), String> {
-        let pbr = matches!(
-            shader,
-            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
-        );
+        let pbr = shader.is_pbr_family();
         if self.target != engine::config::Target::Cs || !pbr {
             return Err(NOT_PBR_CURVES.into());
         }
