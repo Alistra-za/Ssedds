@@ -168,6 +168,22 @@ pub type NifEntry = (NifRow, String);
 /// What the worker reads for the list (Note GC): every winner, and every losing copy.
 pub type RowsRead = Result<(Vec<NifEntry>, Vec<NifEntry>), String>;
 
+/// The visible list and every input it was built from (rule 9.1). The row lists are held, so a dropped list's address
+/// is never reused under the cache's nose.
+struct RowsCache {
+    lists: (
+        Arc<Vec<NifRow>>,
+        Arc<Vec<NifEntry>>,
+        Arc<Vec<NifEntry>>,
+        Option<Arc<HashSet<String>>>,
+    ),
+    /// The picked mod's name (rows show it), the chip and the search needle.
+    key: (Option<String>, NifFilter, String),
+    list: Arc<Vec<usize>>,
+    /// `selection_hidden` for this list: the selected copy and whether the filters hide it.
+    hidden: Option<(i64, bool)>,
+}
+
 /// The MO2 first-run question.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeshesDialog {
@@ -447,6 +463,10 @@ pub struct MeshesModel {
     reselect: Option<i64>,
     /// The texture chip: a texture path and the NIF paths whose shapes use it (`Store::users_of_texture`).
     pub tex_filter: Option<(String, Arc<HashSet<String>>)>,
+    /// How often the visible list was built (tests pin the cache with it, rule 9.2).
+    #[doc(hidden)]
+    pub row_builds: u64,
+    rows_cache: Option<RowsCache>,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
     /// The selected row itself, kept apart from the lists (a new search replaces them).
@@ -570,6 +590,8 @@ impl MeshesModel {
             rows_rx: None,
             reselect: None,
             tex_filter: None,
+            row_builds: 0,
+            rows_cache: None,
             selected_nif: None,
             selected_info: None,
             shapes: vec![],
@@ -1195,7 +1217,64 @@ impl MeshesModel {
     }
 
     /// Indices into the list (`nif_at`) that pass the chips and the search: the path or the mod name holds the text.
-    pub fn visible_nifs(&self) -> Vec<usize> {
+    /// Built again only when an input changes (rule 9.1): the row lists (by `Arc::ptr_eq`), the texture's users, the
+    /// picked mod and its name, the chip and the search.
+    pub fn visible_nifs(&mut self) -> Arc<Vec<usize>> {
+        let tex = self.tex_filter.as_ref().map(|(_, u)| u.clone());
+        let lists = (
+            self.nifs.clone(),
+            self.winners.clone(),
+            self.losers.clone(),
+            tex,
+        );
+        let picked = self.selected_mod.map(|id| self.mod_name(id).to_string());
+        let key = (picked, self.filter, self.needle());
+        if let Some(c) = &self.rows_cache {
+            let (a, b) = (&c.lists, &lists);
+            let same = Arc::ptr_eq(&a.0, &b.0)
+                && Arc::ptr_eq(&a.1, &b.1)
+                && Arc::ptr_eq(&a.2, &b.2)
+                && match (&a.3, &b.3) {
+                    (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+                    (x, y) => x.is_none() && y.is_none(),
+                };
+            if same && c.key == key {
+                return c.list.clone();
+            }
+        }
+        let list = Arc::new(self.build_visible());
+        self.rows_cache = Some(RowsCache {
+            lists,
+            key,
+            list: list.clone(),
+            hidden: None,
+        });
+        list
+    }
+
+    /// Whether the selected NIF is one the filters hide (rule 6.2), from the cached list; call after `visible_nifs`.
+    pub fn selection_hidden(&mut self) -> bool {
+        let Some(sel) = self.selected_nif else {
+            return false;
+        };
+        let Some(c) = &self.rows_cache else {
+            return false;
+        };
+        if let Some((s, h)) = c.hidden {
+            if s == sel {
+                return h;
+            }
+        }
+        let list = c.list.clone();
+        let h = !list.iter().any(|&i| self.nif_at(i).0.copy_id == sel);
+        if let Some(c) = &mut self.rows_cache {
+            c.hidden = Some((sel, h));
+        }
+        h
+    }
+
+    fn build_visible(&mut self) -> Vec<usize> {
+        self.row_builds += 1;
         let needle = self.needle();
         let n = needle.as_bytes();
         let has = |hay: &str| {

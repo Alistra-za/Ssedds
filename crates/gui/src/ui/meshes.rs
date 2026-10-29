@@ -457,10 +457,7 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     let visible = m.visible_nifs();
     // Rule 6.2: the filters hide rows and never deselect, so say when the selected NIF is one of the hidden.
-    let hidden = m
-        .selected_nif
-        .is_some_and(|s| !visible.iter().any(|&i| m.nif_at(i).0.copy_id == s));
-    ui.weak(if hidden {
+    ui.weak(if m.selection_hidden() {
         format!(
             "{} of {} NIFs (the selected NIF is hidden by the filters)",
             visible.len(),

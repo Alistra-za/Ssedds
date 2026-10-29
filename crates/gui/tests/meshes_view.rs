@@ -616,14 +616,14 @@ fn the_path_filter_and_the_chips_combine() {
         },
         nif(3, "meshes/rock/big.nif"),
     ]);
-    assert_eq!(m.visible_nifs(), [0, 1, 2]);
+    assert_eq!(*m.visible_nifs(), [0, 1, 2]);
     m.search = "ARMOR\\".into();
-    assert_eq!(m.visible_nifs(), [0, 1]);
+    assert_eq!(*m.visible_nifs(), [0, 1]);
     m.search = "meshes/armor/s".into();
-    assert_eq!(m.visible_nifs(), [1]);
+    assert_eq!(*m.visible_nifs(), [1]);
     m.search = "armor".into();
     m.filter = NifFilter::Wins;
-    assert_eq!(m.visible_nifs(), [0]);
+    assert_eq!(*m.visible_nifs(), [0]);
     m.filter = NifFilter::All;
     let mut h = harness(m);
     h.run();
@@ -667,6 +667,48 @@ fn rows_of(m: &mut MeshesModel) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Note GC test 7 (rules 9.1, 9.2): with 10k rows the visible list is built again only when one of its inputs changes,
+/// not every frame.
+#[test]
+fn the_visible_list_is_rebuilt_only_when_an_input_changes() {
+    let mut m = model_with(None);
+    m.selected_mod = None;
+    let rows = (0..10_000).map(|i| (nif(i, &format!("meshes/m/{i:05}.nif")), "A".to_string()));
+    m.winners = Arc::new(rows.collect());
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("10000 of 10000 NIFs");
+    let builds = |h: &Harness<'static, MeshesModel>| h.state().row_builds;
+    let before = builds(&h);
+    h.run_steps(3);
+    assert_eq!(builds(&h), before, "idle frames build nothing");
+    // Each input builds once more: the search, a chip, the texture chip, a reload's rows, the selection is not one.
+    h.state_mut().search = "m/0001".into();
+    h.run_steps(3);
+    assert_eq!(builds(&h), before + 1, "the search");
+    h.get_by_label_contains("10 of 10000 NIFs");
+    h.state_mut().filter = NifFilter::Problems;
+    h.run_steps(3);
+    assert_eq!(builds(&h), before + 2, "a chip");
+    h.state_mut().filter = NifFilter::All;
+    let users = std::collections::HashSet::from(["meshes/m/00010.nif".to_string()]);
+    h.state_mut().tex_filter = Some(("textures/a.dds".into(), Arc::new(users)));
+    h.run_steps(3);
+    assert_eq!(
+        builds(&h),
+        before + 3,
+        "the chip back and the texture chip: one frame"
+    );
+    h.get_by_label("1 of 10000 NIFs");
+    let rows = (*h.state().winners).clone();
+    h.state_mut().winners = Arc::new(rows);
+    h.run_steps(3);
+    assert_eq!(builds(&h), before + 4, "new rows");
+    h.state_mut().selected_nif = Some(3);
+    h.run_steps(3);
+    assert_eq!(builds(&h), before + 4, "the selection");
+}
+
 fn row(path: &str, origin: &str) -> (String, String) {
     (path.into(), origin.into())
 }
@@ -705,7 +747,8 @@ fn the_search_matches_a_path_or_a_mod_and_never_deselects() {
     let (_d, mut m) = scanned();
     m.search = "TREE\\".into();
     assert_eq!(rows_of(&mut m), [row("meshes/tree/oak.nif", "A")]);
-    let oak = m.nif_at(m.visible_nifs()[0]).0.copy_id;
+    let first = m.visible_nifs()[0];
+    let oak = m.nif_at(first).0.copy_id;
     m.select_nif(oak);
     m.search = " b ".into();
     assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")], "a mod name");
@@ -780,7 +823,8 @@ fn overridden_in_any_mod_lists_the_losing_copies_and_wins_is_hidden() {
     let (_d, mut m) = scanned();
     m.filter = NifFilter::Overridden;
     assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "A")]);
-    assert!(!m.nif_at(m.visible_nifs()[0]).0.wins);
+    let first = m.visible_nifs()[0];
+    assert!(!m.nif_at(first).0.wins);
     let mut h = harness(m);
     h.run();
     assert!(h.query_by_role_and_label(Role::Button, "Wins").is_none());
@@ -1785,7 +1829,7 @@ fn the_path_filter_folds_ascii_only_like_stored_paths() {
         nif(2, "meshes/eclair/b.nif"),
     ]);
     m.search = "Éclair".into();
-    assert_eq!(m.visible_nifs(), [0]);
+    assert_eq!(*m.visible_nifs(), [0]);
     m.search = "éclair".into();
     assert!(m.visible_nifs().is_empty(), "É and é are different paths");
 }
