@@ -297,6 +297,18 @@ fn read_api_reports_database_errors() {
     assert!(s.mods().is_err());
 }
 
+/// Review C17: the Meshes tree hides a mod with no NIFs, so `mods()` counts each origin's NIF copies.
+#[test]
+fn mods_count_their_nif_copies() {
+    let (_d, mut s, a) = store();
+    let b = origin(&mut s, "B", 1);
+    put(&mut s, "meshes/x/one.nif", a, 0, lit(&[]), false);
+    put(&mut s, "meshes/x/two.nif", a, 0, lit(&[]), false);
+    let mods = s.mods().unwrap();
+    let n = |id: i64| mods.iter().find(|m| m.id == id).unwrap().nifs;
+    assert_eq!((n(a), n(b)), (2, 0));
+}
+
 // ---- P1-A Task 11: the set preview's mesh query and the read-only open ----
 
 use modscan::store::{DeriveRow, OriginSpec, TexKey, KIND_MOD};

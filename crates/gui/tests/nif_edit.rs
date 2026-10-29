@@ -2867,6 +2867,7 @@ fn mod_row(name: &str, prio: i32, derived: bool) -> modscan::store::ModRow {
         kind: modscan::store::KIND_MOD,
         priority: prio,
         derived,
+        nifs: 1,
     }
 }
 

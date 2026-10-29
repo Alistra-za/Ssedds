@@ -30,6 +30,7 @@ fn mod_row(id: i64, name: &str, kind: i32, derived: bool) -> ModRow {
         kind,
         priority: 0,
         derived,
+        nifs: 1,
     }
 }
 

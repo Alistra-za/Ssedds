@@ -179,6 +179,8 @@ pub struct ModRow {
     pub kind: i32,
     pub priority: i32,
     pub derived: bool,
+    /// NIF copies this origin holds in the latest run.
+    pub nifs: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1402,7 +1404,9 @@ impl Store {
     /// Adjacent separators share a priority and keep modlist.txt order (stored in `parent_origin` for kind 3).
     pub fn mods(&self) -> Result<Vec<ModRow>, ScanError> {
         let mut st = self.conn.prepare(
-            "SELECT id, name, kind, priority, derived_by IS NOT NULL FROM origin WHERE enabled = 1
+            "SELECT id, name, kind, priority, derived_by IS NOT NULL,
+                    (SELECT count(*) FROM nif_copy c WHERE c.origin_id = origin.id)
+             FROM origin WHERE enabled = 1
              ORDER BY kind = 4, priority DESC, kind = 3 DESC, CASE WHEN kind = 3 THEN parent_origin END, id",
         )?;
         let v = st
@@ -1413,6 +1417,7 @@ impl Store {
                     kind: r.get(2)?,
                     priority: r.get(3)?,
                     derived: r.get(4)?,
+                    nifs: r.get(5)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
