@@ -339,6 +339,11 @@ impl Shader {
         }
     }
 
+    /// True for the three PBR shaders: the sets Also export, AO and Curvature read (CN40/TA11).
+    pub fn is_pbr_family(self) -> bool {
+        matches!(self, Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass)
+    }
+
     /// True for the shaders that change their members' default settings.
     pub fn has_member_defaults(self) -> bool {
         matches!(
@@ -1116,6 +1121,18 @@ mod tests {
         assert_eq!(mesh_key("textures/a/wall_n.png", "wall"), "textures/a/wall");
         assert_eq!(mesh_key("textures/a/Wall.png", "Wall"), "textures/a/wall");
         assert_eq!(mesh_key("wall.png", "wall"), "wall");
+    }
+
+    #[test]
+    fn pbr_family_is_the_three_pbr_shaders() {
+        let mut fam: Vec<Shader> = Shader::ALL
+            .into_iter()
+            .filter(|s| s.is_pbr_family())
+            .collect();
+        fam.sort_by_key(|s| s.label());
+        let mut want = vec![Shader::Pbr, Shader::PbrLandscape, Shader::PbrGrass];
+        want.sort_by_key(|s| s.label());
+        assert_eq!(fam, want);
     }
 
     #[test]
