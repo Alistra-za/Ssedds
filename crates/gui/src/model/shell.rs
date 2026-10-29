@@ -66,6 +66,9 @@ impl AppModel {
 
     /// [`Self::export_folder_state`] with the stat result given (the drawer passes a cached one).
     pub fn export_folder_check(&self, exists: bool) -> Result<PathBuf, String> {
+        if self.export_folder_chosen().is_none() {
+            return Err("No export folder chosen yet".into());
+        }
         let p = self.export_root();
         if exists {
             Ok(p)

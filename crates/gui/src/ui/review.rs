@@ -5,7 +5,7 @@ use super::status::{AMBER, RED};
 use crate::model::bottom::{problems, Level};
 use crate::model::items::Decision;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
-use crate::model::review::{DiskState, JsonKind, JsonLine};
+use crate::model::review::{DiskState, JsonKind, JsonLine, NO_EXPORT_FOLDER};
 use crate::model::{also, pbr_export, sets, Answer, AppModel};
 use eframe::egui;
 use engine::config::{AlphaPolicy, Subtype, Target};
@@ -192,6 +192,7 @@ enum Act {
     AlsoTick(AlsoTarget, bool),
     AlsoSet(Box<dyn FnOnce(&mut ExportConfig)>),
     AlsoLocation,
+    ChooseExport,
     Skip(String, bool),
     Recipe,
     GoTo(String),
@@ -492,6 +493,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .iter()
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
     let gate = m.review_gate();
+    let folder_chosen = m.export_folder_chosen().is_some();
     let json = m.review_json();
     // Note CN85: a fourth column in the cs mode or while a tick is on; the Also reason only with a tick, as the gate.
     let also_on = m.also_on() || m.target == Target::Cs;
@@ -575,8 +577,28 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.allocate_ui(ui.available_size(), |ui| {
         ui.columns(if also_on { 4 } else { 3 }, |cols| {
             column(&mut cols[0], "Blockers", |ui| {
-                if blocks.is_empty() {
+                if blocks.is_empty() && folder_chosen {
                     ui.weak("None");
+                }
+                // Note FB1: the export folder is a blocker until one is chosen for this project.
+                if !folder_chosen {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(RED, NO_EXPORT_FOLDER);
+                        let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                        r.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                r.enabled(),
+                                "Choose the export folder…",
+                            )
+                        });
+                        let r = r
+                            .on_hover_text("Choose where converted textures are written")
+                            .on_disabled_hover_text(picker::BUSY_HOVER);
+                        if r.clicked() {
+                            act = Some(Act::ChooseExport);
+                        }
+                    });
                 }
                 for b in &blocks {
                     ui.horizontal_wrapped(|ui| {
@@ -655,6 +677,9 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::AlsoSet(f)) => model.set_also_settings(f),
         Some(Act::AlsoLocation) => {
             model.pick(ui.ctx(), PickerPurpose::AlsoLocation, PickerSpec::folder());
+        }
+        Some(Act::ChooseExport) => {
+            model.pick_export_folder(ui.ctx());
         }
         Some(Act::Skip(id, on)) => model.set_skip_also(&id, on),
         Some(Act::Recipe) => {

@@ -728,7 +728,7 @@ fn soft_check_rows_are_listed_but_leave_ready_alone() {
         .iter()
         .all(|w| !w.code.as_str().starts_with("CHK-")));
     assert_eq!(m.set_counts().attention, 0);
-    assert!(sdc_gui::ui::header::export_dot(&m));
+    assert!(m.export_is_clean());
 }
 
 #[test]

@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// Note FB1: the gate's reason, and the Blockers row's text, while no export folder is chosen.
+pub const NO_EXPORT_FOLDER: &str = "No export folder chosen";
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Review {
     /// R4: `export_asks` texts acknowledged for this export.
@@ -250,6 +253,10 @@ impl AppModel {
         if let Some(why) = self.toml_read_only_reason() {
             return Err(why);
         }
+        // Note FB1: never write to a folder nobody chose (the `sdc-out` fallback is only a name).
+        if self.export_folder_chosen().is_none() {
+            return Err(NO_EXPORT_FOLDER.into());
+        }
         if self.export.running.is_some() {
             return Err("An export is running".into());
         }
@@ -270,6 +277,28 @@ impl AppModel {
             return Err(format!("Acknowledge {k} warning{} first", plural(k)));
         }
         Ok((self.export_files(), self.undecided()))
+    }
+
+    /// Note FB1: Review would write without skipping anything: a finished plan with files to write, the gate open and
+    /// nothing undecided (A12 withheld "ready" from an empty or still-planning project too).
+    pub fn export_is_clean(&self) -> bool {
+        self.planning.is_none()
+            && self.votes_pending.is_none()
+            && self.export_files() > 0
+            && self.review_gate().is_ok()
+            && self.undecided() == 0
+    }
+
+    /// Note FB1: the header's Export button: `Export {n} files` once the project is clean, else `Review {n} files`.
+    pub fn header_export_text(&self) -> String {
+        self.export_text(self.export_is_clean())
+    }
+
+    /// [`Self::header_export_text`] for a `clean` the caller already has (the header asks once per frame).
+    pub fn export_text(&self, clean: bool) -> String {
+        let n = self.export_files();
+        let verb = if clean { "Export" } else { "Review" };
+        format!("{verb} {n} file{}", plural(n))
     }
 
     /// "Export 20 files (skip 2 undecided)".

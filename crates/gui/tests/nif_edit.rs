@@ -2071,9 +2071,10 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
     sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
     h.run_steps(6);
     // The shared header and the open bottom panel are still there.
-    for l in ["Save", "Export", "MO2…", "Files"] {
+    for l in ["Save", "MO2…", "Files"] {
         h.get_by_label(l);
     }
+    support::header_export_label(&h);
     let panel = |id: &str| {
         PanelState::load(&h.ctx, egui::Id::new(id))
             .unwrap()
@@ -3592,8 +3593,7 @@ fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile:
     app.meshes.store_path = Some(d.path().join("scan.db"));
     scan_and_select(&mut app.meshes, d.path());
     // As the app's first frame sets it: the edit opens in the Textures export folder (Note CI29).
-    let root = (app.model.settings.export_folder.is_some() || app.model.root.is_some())
-        .then(|| app.model.export_root());
+    let root = app.model.nif_export_root();
     app.meshes.set_nif_export_root(root);
     app.meshes.open_edit();
     assert_eq!(app.meshes.error, None);
@@ -4010,7 +4010,7 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
     );
     // Export to ▾ changes: the open edit is saved where it was and reopened from the new folder.
     let want = t.path().join("other");
-    h.state_mut().model.settings.export_folder = Some(want.clone());
+    h.state_mut().model.set_export_folder(want.clone());
     assert_eq!(h.state().model.export_root(), want);
     h.run_steps(2);
     let m = &h.state().meshes;

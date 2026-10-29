@@ -188,6 +188,7 @@ fn open(dir: &Path, target: Target) -> AppModel {
     m.accept = engine::policy::AcceptSuggestions::High;
     m.open_folder(dir.join("src"));
     idle(&mut m);
+    support::choose_export(&mut m, dir.join("export"));
     if target != Target::Cs {
         m.set_target(target);
         idle(&mut m);
@@ -755,9 +756,11 @@ fn prepare_follows_the_first_entry_of_a_duplicated_id() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path(), Target::Cs);
     let iron = set_id(&m, "m/iron");
+    // Note FB1: the replacement document must carry the export folder the jobs were planned under.
+    let export = d.path().join("export").to_string_lossy().replace('\\', "/");
     let mut run = |a: &str, b: &str| {
         let toml = format!(
-            "[[sets]]\nid = \"{iron}\"\n\n[sets.cm]\n{a}\n\n[[sets]]\nid = \"{iron}\"\n\n[sets.cm]\n{b}\n"
+            "[project]\nexport_folder = \"{export}\"\n\n[[sets]]\nid = \"{iron}\"\n\n[sets.cm]\n{a}\n\n[[sets]]\nid = \"{iron}\"\n\n[sets.cm]\n{b}\n"
         );
         let (_t, s) = doc(&toml);
         m.sets_doc = Some(s);

@@ -1707,7 +1707,7 @@ fn a_stale_generated_map_turns_only_its_row_dot_amber() {
         (
             bottom::set_ready(m, &rock_view(m)),
             bottom::tile_ready(m.item(P_KEY).unwrap()),
-            sdc_gui::ui::header::export_dot(m),
+            m.export_is_clean(),
         )
     };
     let before = dots(&m);

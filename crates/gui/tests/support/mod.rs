@@ -44,6 +44,14 @@ pub fn session() -> Arc<engine::session::Session> {
 }
 
 pub fn opened(dir: &Path) -> AppModel {
+    let mut m = opened_unchosen(dir);
+    choose_export(&mut m, dir.join("export"));
+    m
+}
+
+/// `opened` before the export folder is chosen: `gui.toml` names one, the project has none (Note FB1), and nothing
+/// is written to the project folder.
+pub fn opened_unchosen(dir: &Path) -> AppModel {
     let root = mod_folder(dir);
     let settings = GuiSettings {
         export_folder: Some(dir.join("export")),
@@ -58,6 +66,16 @@ pub fn opened(dir: &Path) -> AppModel {
         "planning did not finish"
     );
     m
+}
+
+/// Note FB1: a project's export folder is the one chosen for it (the `gui.toml` value is no longer inherited), so a
+/// fixture that exports picks its folder as the user does and waits for the re-plan.
+pub fn choose_export(m: &mut AppModel, folder: PathBuf) {
+    m.set_export_folder(folder);
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
 }
 
 /// Task 5: `opened` with `m.sets` replaced by `n` clones of the first set, each under its own key, members unchanged.
@@ -116,7 +134,7 @@ pub fn pbr_opened_plain(dir: &Path) -> AppModel {
 /// A model built as the app builds it (no test overrides), opened on `root` with exports under `export`.
 pub fn opened_as_the_app(root: PathBuf, export: PathBuf) -> AppModel {
     let settings = GuiSettings {
-        export_folder: Some(export),
+        export_folder: Some(export.clone()),
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
@@ -125,6 +143,7 @@ pub fn opened_as_the_app(root: PathBuf, export: PathBuf) -> AppModel {
         m.wait_idle(Duration::from_secs(60)),
         "planning did not finish"
     );
+    choose_export(&mut m, export);
     m
 }
 
@@ -164,6 +183,22 @@ pub fn pbr_ready(dir: &Path) -> AppModel {
     let mut m = pbr_opened(dir);
     assert!(m.wait_idle(Duration::from_secs(60)));
     m
+}
+
+/// Note FB1: the header's Export button reads `Export {n} files` or `Review {n} files`; its label as drawn now (the
+/// Review panel's own `Export {n} files` button is below the header, so the header's rect picks the right one).
+pub fn header_export_label<S>(h: &egui_kittest::Harness<'_, S>) -> String {
+    use eframe::egui::{accesskit::Role, containers::panel::PanelState, Id};
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let header = PanelState::load(&h.ctx, Id::new("header")).expect("the header was drawn");
+    h.query_all_by_role(Role::Button)
+        .filter(|n| header.outer_rect.contains_rect(n.rect()))
+        .filter_map(|n| n.accesskit_node().label())
+        .find(|l| {
+            (l.starts_with("Export ") || l.starts_with("Review "))
+                && (l.ends_with(" file") || l.ends_with(" files"))
+        })
+        .expect("the header Export button")
 }
 
 /// Export as a user would: Export, then, if Review opened, acknowledge its pitfalls and press its Export.

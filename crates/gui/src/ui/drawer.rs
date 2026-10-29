@@ -158,7 +158,11 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         model.pick(
             ui.ctx(),
             PickerPurpose::SaveReport,
-            PickerSpec { title: None, kind },
+            PickerSpec {
+                title: None,
+                kind,
+                start: None,
+            },
         );
     }
 }

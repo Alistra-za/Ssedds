@@ -21,7 +21,7 @@ C:\Work\IronPlate\                          C:\Work\IronPlate-out\
 | Output root | Default |
 |---|---|
 | `sdc convert` | `.\sdc-out` in the current directory, or `-o <dir>`. |
-| `tessalith.exe` (GUI) | `sdc-out` inside the opened folder, or the folder you set under **Export to ▾**. The GUI refuses to write into the folder it reads. |
+| `tessalith.exe` (GUI) | the folder you choose for the project (Review asks for one before it exports). The GUI refuses to write into the folder it reads. |
 
 The output root and any `_sdc` folder are never read as input, so an output folder inside the source folder is safe.
 

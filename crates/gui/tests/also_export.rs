@@ -450,6 +450,8 @@ fn drop_top_mip_on_still_writes_every_texture_in_all_three_folders() {
     let mut m = AppModel::new(settings, None, support::session());
     m.open_folder(r);
     idle(&mut m);
+    m.set_export_folder(d.path().join("out"));
+    idle(&mut m);
     assert!(m.settings.checks.low_detail && m.settings.checks.drop_top_mip);
     tick(&mut m, AlsoTarget::Cm);
     export(&mut m);
@@ -1189,7 +1191,8 @@ fn the_menu_items_need_an_open_folder() {
         support::session(),
     );
     let mut h = ui_harness(m, 1600.0);
-    h.get_by_label_contains("Export to: ").click();
+    // Note FB1: with no folder chosen the menu is a plain "More".
+    h.get_by_label("More export options").click();
     h.run();
     for l in ["Also export as Vanilla", "Also export as Complex material"] {
         assert!(checkbox(&h, l).accesskit_node().is_disabled(), "{l}");

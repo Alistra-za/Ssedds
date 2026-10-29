@@ -138,11 +138,15 @@ fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
         .and_then(|d| d.error())
         .unwrap_or("sdc-project.toml is read-only")
         .to_string();
-    let path = format!(
-        "{}\\PBRNIFPatcher\\{}.json",
-        model.export_root().display(),
-        json_name(model)
-    );
+    // Note FB1: no path to show until a folder is chosen (`sdc-out` is only a name).
+    let path = match model.export_folder_chosen() {
+        Some(root) => format!(
+            "{}\\PBRNIFPatcher\\{}.json",
+            root.display(),
+            json_name(model)
+        ),
+        None => crate::model::review::NO_EXPORT_FOLDER.to_string(),
+    };
     ui.horizontal_wrapped(|ui| {
         ui.label(NAME_LABEL);
         let r = ui
@@ -152,7 +156,11 @@ fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
                     .hint_text(json_name(model))
                     .desired_width(NAME_FIELD_WIDTH),
             )
-            .on_hover_text(format!("The PGPatcher JSON is written to {path}"))
+            .on_hover_text(if model.export_folder_chosen().is_some() {
+                format!("The PGPatcher JSON is written to {path}")
+            } else {
+                path.clone()
+            })
             .on_disabled_hover_text(why);
         ui.weak(&path);
         if r.changed() {

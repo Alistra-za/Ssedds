@@ -173,7 +173,7 @@ fn the_model_opens_saves_and_reports_both_files() {
 #[test]
 fn a_clean_sets_doc_is_never_written_or_checked() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = support::opened(d.path());
+    let mut m = support::opened_unchosen(d.path());
     let root = m.root.clone().unwrap();
     m.project
         .as_mut()

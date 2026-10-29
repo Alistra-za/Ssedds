@@ -34,6 +34,12 @@ fn settle(h: &mut Harness<'static, AppModel>) {
     h.run();
 }
 
+/// Note FB1: press the header's Export button, which reads "Review n files" or "Export n files".
+fn press_export(h: &mut Harness<'static, AppModel>) {
+    let label = header_export_label(h);
+    press(h, &label);
+}
+
 /// Click `label` the way a pointer does: scroll it into view and settle on it first, because egui hit-tests against
 /// the previous frame and a column scrolls inside the space above the footer.
 fn press(h: &mut Harness<'static, AppModel>, label: &str) {
@@ -69,7 +75,7 @@ fn reviewing_dt(
     assert!(m.wait_idle(Duration::from_secs(60)));
     let mut h = harness_dt(m, dt);
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     assert!(h.state().review.is_some());
     h
 }
@@ -79,7 +85,7 @@ fn export_opens_the_review_tab_and_no_modal() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     h.get_by_label("Blockers");
     h.get_by_label("Undecided");
     h.get_by_label("Warnings");
@@ -163,7 +169,7 @@ fn deciding_a_row_in_review_keeps_the_columns_usable() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     // One ✓ per row that asks its sub-type, in list order.
     let with_check: Vec<String> = h
         .state()
@@ -206,7 +212,7 @@ fn accept_all_suggestions_is_off_when_no_texture_has_one() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     assert!(!disabled(&h, "Accept all suggestions"));
     press(&mut h, "Accept all suggestions");
     settle(&mut h);
@@ -250,7 +256,7 @@ fn close_collapses_the_panel_and_drops_the_tab() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     h.get_by_label("Review");
     press(&mut h, "Close");
     assert!(h.state().review.is_none() && !h.state().bottom.open);
@@ -267,7 +273,7 @@ fn ctrl_k_opens_the_palette_while_review_is_open() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     let fields = |h: &Harness<'static, AppModel>| h.query_all_by_role(Role::TextInput).count();
     let before = fields(&h);
     h.key_press_modifiers(Modifiers::COMMAND, Key::K);
@@ -295,7 +301,7 @@ fn the_edited_json_offers_keep_and_overwrite() {
     std::fs::write(pgp_json_path(&m), "{ \"edited\": true }\n").unwrap();
     let mut h = harness(m);
     h.run();
-    press(&mut h, "Export");
+    press_export(&mut h);
     assert!(h.state().review.is_some());
     h.get_by_label_contains(": edited outside Tessalith");
     h.get_by_label("Keep the edited file");

@@ -283,6 +283,7 @@ fn short_normal_model(dir: &std::path::Path, toml: Option<&str>) -> AppModel {
     m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(m.wait_idle(Duration::from_secs(60)));
+    choose_export(&mut m, dir.join("export"));
     m.open_problems(None);
     m
 }
@@ -465,12 +466,13 @@ fn the_other_warnings_link_in_review_opens_the_problems_tab() {
 }
 
 #[test]
-fn the_export_dot_needs_an_open_folder_with_something_to_export() {
+/// Note FB1 (was the A12 dot): the header Export is clean only with a folder open and chosen and nothing undecided.
+fn the_header_export_is_clean_only_with_a_folder_and_nothing_undecided() {
     let m = AppModel::new(Default::default(), None, session());
-    assert!(!sdc_gui::ui::header::export_dot(&m), "no folder");
+    assert!(!m.export_is_clean(), "no folder");
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    assert!(!sdc_gui::ui::header::export_dot(&m), "problems exist");
+    assert!(!m.export_is_clean(), "textures are undecided");
     decide_all(&mut m);
     // K3: the fixture's flat, alpha-less rock01_normal raises CHK-PLASTIC; this test is about the other rows.
     m.set_checks(sdc_gui::settings::ChecksSettings {
@@ -487,11 +489,13 @@ fn the_export_dot_needs_an_open_folder_with_something_to_export() {
     m.invalidate_views();
     {
         assert!(sdc_gui::model::bottom::problems(&m).is_empty());
-        assert!(sdc_gui::ui::header::export_dot(&m));
+        assert!(m.export_is_clean());
     }
+    // Nothing to export (an empty project, or items cleared while the plan runs) is never "ready".
     m.items.clear();
     m.invalidate_views();
-    assert!(!sdc_gui::ui::header::export_dot(&m), "nothing to export");
+    assert!(!m.export_is_clean(), "nothing to export");
+    assert!(!m.header_export_text().starts_with("Export "));
 }
 
 #[test]
@@ -611,7 +615,7 @@ fn uncached_export_files(m: &AppModel) -> usize {
 
 #[test]
 fn export_files_follows_a_decision_without_a_frame_of_lag() {
-    use sdc_gui::model::bottom::{export_files_builds, problems};
+    use sdc_gui::model::bottom::export_files_builds;
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     assert!(m.undecided() > 0);
@@ -628,7 +632,14 @@ fn export_files_follows_a_decision_without_a_frame_of_lag() {
         "cached across frames"
     );
     let before = h.state().export_files();
+    assert!(h.state().header_export_text().starts_with("Review "));
     decide_all(h.state_mut());
+    // The text follows the last decision with no frame in between.
+    assert!(
+        h.state().header_export_text().starts_with("Export "),
+        "{}",
+        h.state().header_export_text()
+    );
     h.run();
     assert_eq!(export_files_builds(h.state()), builds + 1);
     let m = h.state();
@@ -638,12 +649,10 @@ fn export_files_follows_a_decision_without_a_frame_of_lag() {
         "the decisions add files ({before} -> {files})"
     );
     assert_eq!(m.export_files(), files);
-    assert_eq!(
-        sdc_gui::ui::header::export_dot(m),
-        problems(m)
-            .iter()
-            .all(|p| !sdc_gui::model::bottom::counts_as_ready_problem(p))
-            && files > 0
+    assert!(
+        m.header_export_text().ends_with(&format!("{files} files")),
+        "{}",
+        m.header_export_text()
     );
     // Undo until a texture is undecided again: the count drops on the next frame too.
     for _ in 0..7 {
