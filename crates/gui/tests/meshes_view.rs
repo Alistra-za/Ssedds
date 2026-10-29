@@ -634,10 +634,15 @@ fn the_path_filter_and_the_chips_combine() {
 
 /// B (highest) and A both have rock.nif; A also has tree/oak.nif; the separator owns B.
 fn scanned() -> (tempfile::TempDir, MeshesModel) {
+    scanned_with(None)
+}
+
+/// `scanned`, with `oak` as tree/oak.nif's bytes (else the same fixture as rock.nif).
+fn scanned_with(oak: Option<&[u8]>) -> (tempfile::TempDir, MeshesModel) {
     let d = instance("+B\n-Sep_separator\n+A\n");
     std::fs::create_dir_all(d.path().join("mods/B")).unwrap();
     put(d.path(), "mods/A/meshes/rock.nif", None);
-    put(d.path(), "mods/A/meshes/tree/oak.nif", None);
+    put(d.path(), "mods/A/meshes/tree/oak.nif", oak);
     put(d.path(), "mods/B/meshes/rock.nif", None);
     let mut m = scan_model(d.path().join("scan.db"));
     m.procs = || vec![];
@@ -791,6 +796,54 @@ fn overridden_in_any_mod_lists_the_losing_copies_and_wins_is_hidden() {
     // Back in "Any mod" the hidden Wins chip is not left on.
     h.state_mut().any_mod();
     assert_eq!(h.state().filter, NifFilter::All);
+}
+
+/// Note GC test 5: the texture chip cuts the list to the meshes that use the texture, with the search, the mod and the
+/// chips; ✕ brings the list back. Neither deselects (rule 6.1).
+#[test]
+fn the_texture_chip_cuts_the_list_to_its_users_and_never_deselects() {
+    let other = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nif/tests/fixtures/TestNifFile_DeepGraph_SE.nif"
+    ))
+    .unwrap();
+    let (_d, mut m) = scanned_with(Some(&other));
+    let all = [row("meshes/rock.nif", "B"), row("meshes/tree/oak.nif", "A")];
+    assert_eq!(rows_of(&mut m), all);
+    let (rock, oak) = (m.nif_at(0).0.copy_id, m.nif_at(1).0.copy_id);
+    let texs = |m: &MeshesModel| -> Vec<String> {
+        let t = m.shapes.iter().flat_map(|s| s.textures.iter().flatten());
+        t.cloned().collect()
+    };
+    m.select_nif(oak);
+    let oak_texs = texs(&m);
+    m.select_nif(rock);
+    let rock_texs = texs(&m);
+    let tex = rock_texs.iter().find(|t| !oak_texs.contains(t));
+    let tex = tex.expect("the fixtures use different textures").clone();
+    m.select_nif(oak);
+    m.set_tex_filter(Some(tex.clone()));
+    assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "B")]);
+    assert_eq!(m.selected_nif, Some(oak), "the hidden NIF stays selected");
+    assert!(!m.shapes.is_empty());
+    // It combines with the search and the chips.
+    m.search = "oak".into();
+    assert!(rows_of(&mut m).is_empty());
+    m.search.clear();
+    m.filter = NifFilter::Problems;
+    assert!(rows_of(&mut m).is_empty());
+    m.filter = NifFilter::All;
+    let mut h = harness(m);
+    h.run();
+    // Rule 6.2: the hidden selection is said, not dropped.
+    h.get_by_label("1 of 2 NIFs (the selected NIF is hidden by the filters)");
+    let chip = format!("Uses {tex} ✕");
+    h.get_by_label(&chip).click();
+    h.run();
+    assert!(h.state().tex_filter.is_none());
+    assert!(h.query_by_label(&chip).is_none());
+    assert_eq!(rows_of(h.state_mut()), all);
+    assert_eq!(h.state().selected_nif, Some(oak));
 }
 
 /// Note GC design 5: Problems means a problem or an LE mesh.

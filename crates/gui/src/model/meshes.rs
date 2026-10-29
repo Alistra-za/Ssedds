@@ -18,7 +18,7 @@ use modscan::ScanError;
 use render3d::perf_log;
 use rusqlite::OptionalExtension;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -445,6 +445,8 @@ pub struct MeshesModel {
     rows_rx: Option<Receiver<RowsRead>>,
     /// A NIF to select again once the rows a reload asked for land (it was selected in "Any mod").
     reselect: Option<i64>,
+    /// The texture chip: a texture path and the NIF paths whose shapes use it (`Store::users_of_texture`).
+    pub tex_filter: Option<(String, Arc<HashSet<String>>)>,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
     /// The selected row itself, kept apart from the lists (a new search replaces them).
@@ -567,6 +569,7 @@ impl MeshesModel {
             losers: Arc::default(),
             rows_rx: None,
             reselect: None,
+            tex_filter: None,
             selected_nif: None,
             selected_info: None,
             shapes: vec![],
@@ -968,6 +971,11 @@ impl MeshesModel {
         self.refresh_placement();
         self.scan_ctrls.clear(); // the files may have changed too (T8)
         self.read_rows();
+        // The texture's users may have changed too.
+        let tex = self.tex_filter.as_ref().map(|(t, _)| t.clone());
+        if tex.is_some() {
+            self.set_tex_filter(tex);
+        }
         let keep = self.selected_mod.filter(|id| {
             self.mods
                 .iter()
@@ -1089,6 +1097,24 @@ impl MeshesModel {
         }
     }
 
+    /// The texture chip: `Some(texture path)` cuts the list to the meshes whose shapes use it (one store read, on the
+    /// path index); `None` (its ✕) clears it. Hides rows only: the selection stays (rule 6.1).
+    pub fn set_tex_filter(&mut self, tex: Option<String>) {
+        let Some(t) = tex else {
+            self.tex_filter = None;
+            return;
+        };
+        let users = match self.store.as_ref().map(|s| s.users_of_texture(&t)) {
+            Some(Ok(u)) => u.into_iter().map(|(nif, ..)| nif).collect(),
+            Some(Err(e)) => {
+                self.error = Some(db_err(e));
+                HashSet::new()
+            }
+            None => HashSet::new(),
+        };
+        self.tex_filter = Some((t, Arc::new(users)));
+    }
+
     /// The rows of "Any mod": the losing copies under Overridden, else every path's winner.
     fn any_rows(&self) -> &[NifEntry] {
         match self.filter {
@@ -1168,8 +1194,11 @@ impl MeshesModel {
                     .windows(n.len())
                     .any(|w| w.eq_ignore_ascii_case(n))
         };
+        let tex = self.tex_filter.as_ref().map(|(_, users)| users);
         let keep = |row: &NifRow, origin: &str| {
-            self.filter.matches(row) && (has(display_path(&row.path)) || has(origin))
+            self.filter.matches(row)
+                && tex.is_none_or(|u| u.contains(&row.path))
+                && (has(display_path(&row.path)) || has(origin))
         };
         match self.selected_mod {
             Some(id) => {

@@ -440,13 +440,35 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 m.filter = f;
             }
         }
+        // The texture chip (Note GC): set by "Show in Meshes"; its ✕ clears it.
+        if let Some((tex, _)) = &m.tex_filter {
+            let chip = egui::Button::selectable(true, format!("Uses {tex} ✕")).truncate();
+            let r = ui
+                .add(chip)
+                .on_hover_text("Show every mesh again, not only those that use this texture");
+            if r.clicked() {
+                m.set_tex_filter(None);
+            }
+        }
     });
     if m.selected_mod.is_none() && m.rows_loading() {
         ui.weak("Reading the scan…");
         return;
     }
     let visible = m.visible_nifs();
-    ui.weak(format!("{} of {} NIFs", visible.len(), m.listed()));
+    // Rule 6.2: the filters hide rows and never deselect, so say when the selected NIF is one of the hidden.
+    let hidden = m
+        .selected_nif
+        .is_some_and(|s| !visible.iter().any(|&i| m.nif_at(i).0.copy_id == s));
+    ui.weak(if hidden {
+        format!(
+            "{} of {} NIFs (the selected NIF is hidden by the filters)",
+            visible.len(),
+            m.listed()
+        )
+    } else {
+        format!("{} of {} NIFs", visible.len(), m.listed())
+    });
     let row_h = ui.spacing().interact_size.y;
     // Rule 3.7: a few pixels short of the column, so a full row never flips the scroll bar.
     let gap = ui.spacing().item_spacing.x;
