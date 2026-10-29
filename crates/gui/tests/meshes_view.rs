@@ -97,6 +97,53 @@ fn mod_list_and_badges() {
     h.get_by_label("PGPatcher patch out of date");
 }
 
+/// Note GC16 (review fix 3): in a row too narrow for every chip, the warnings come first and stay in sight, and
+/// hovering the chips lists every one in full (rule 3.4), the mod's own chip too.
+#[test]
+fn a_patched_stale_row_keeps_its_warning_in_sight_and_its_hover_lists_every_chip() {
+    use sdc_gui::model::meshes::{DERIVED_CHIP, STALE_CHIP};
+    let mut m = MeshesModel::empty();
+    m.mods = vec![mod_row(1, "PGPatcher output", 1, true)];
+    let row = NifRow {
+        wins: false,
+        patched_in_game: true,
+        le_mesh: true,
+        derive_check: Some("stale_changed".into()),
+        ..nif(1, "meshes/x.nif")
+    };
+    m.winners = Arc::new(vec![(row, "PGPatcher output".to_string())]);
+    let mut h = harness(m);
+    h.run();
+    // A label cut by its cell is elided ("…"), so each warning's rect must hold its whole shown text: the short
+    // "Stale patch" at least (its full name is the AccessKit name).
+    let font = eframe::egui::TextStyle::Small.resolve(&h.ctx.global_style());
+    let width = |text: &str| {
+        h.ctx.fonts_mut(|f| {
+            f.layout_no_wrap(text.into(), font.clone(), eframe::egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    for (name, shown) in [(STALE_CHIP, "Stale patch"), ("LE", "LE")] {
+        let r = h.get_by_role_and_label(Role::Label, name).rect();
+        assert!(r.width() + 0.5 >= width(shown), "{name} is cut by its cell: {r:?}");
+    }
+    h.get_by_role_and_label(Role::Label, "LE").hover();
+    h.run();
+    for text in [
+        "Patched by PGPatcher (in game)",
+        STALE_CHIP,
+        "LE",
+        DERIVED_CHIP,
+    ] {
+        assert_eq!(
+            h.query_all_by_label(text).count(),
+            2,
+            "{text}: the chip and its line on hover"
+        );
+    }
+}
+
 #[test]
 fn filters_narrow_the_nif_list_and_le_and_problem_chips_show() {
     let mut m = model_with(None);
