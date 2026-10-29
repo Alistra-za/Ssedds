@@ -245,8 +245,8 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
         m.sequences.retain(|s| l.contains(&(s.block as i32)));
     }
 
-    // Shape refs and users.
-    for (block, shader, alpha) in shape_refs {
+    // Shape refs and users. `shape_refs` is pushed with `m.shapes`, so they pair by index (trace 2026-10-28 #43).
+    for (s, (block, shader, alpha)) in m.shapes.iter_mut().zip(shape_refs) {
         let mut r = |v: i32, what: &str| match u32::try_from(v) {
             Ok(x) if (x as usize) < n => Some(x),
             Ok(_) => {
@@ -262,9 +262,7 @@ pub fn read_model(b: &[u8]) -> Result<NifModel, NifError> {
         if let Some(a) = alpha.and_then(|a| m.alphas.get_mut(&a)) {
             a.prop.users.push(block);
         }
-        if let Some(s) = m.shapes.iter_mut().find(|s| s.block == block) {
-            (s.shader, s.alpha) = (shader, alpha);
-        }
+        (s.shader, s.alpha) = (shader, alpha);
     }
     for (&lb, l) in &m.lighting {
         if let Some(t) = l.texture_set.and_then(|t| m.texsets.get_mut(&t)) {
