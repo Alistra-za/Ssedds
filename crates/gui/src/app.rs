@@ -175,6 +175,11 @@ impl SdcApp {
             crate::ui::header::set_meshes_view(ctx, true);
             m.show_texture(t);
         }
+        // Note GD1 (NIF team): a NIF worklist row's fix.
+        if let Some((path, tab, field)) = model.nif_tab_request.take() {
+            crate::ui::header::set_meshes_view(ctx, true);
+            m.show_nif_tab(&path, tab, field);
+        }
     }
 
     /// Creates the preview renderer in egui_wgpu's callback resources. Without a render state (no usable adapter) the

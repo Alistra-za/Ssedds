@@ -128,6 +128,7 @@ pub(super) fn float_named(
         let speed = (v.abs() as f64 * 0.01).max(0.01);
         let r = ui.add(egui::DragValue::new(&mut x).speed(speed));
         set_name(&r, egui::WidgetType::DragValue, name, Some(x as f64), None);
+        take_focus(ui, &r, field);
         if r.changed() && x.to_bits() != v.to_bits() {
             let op = Op::SetField {
                 at: at.clone(),
@@ -151,6 +152,20 @@ pub(super) fn float_named(
         },
         act,
     );
+}
+
+/// Where a worklist fix's field waits for its widget (Note GD1).
+pub(super) fn focus_id() -> egui::Id {
+    egui::Id::new("meshes-edit-focus")
+}
+
+/// Focuses `r` and scrolls to it when it is the field a worklist fix asked for; the first match takes the request.
+pub(super) fn take_focus(ui: &egui::Ui, r: &egui::Response, field: Field) {
+    if ui.data(|d| d.get_temp::<Field>(focus_id())) == Some(field) {
+        ui.data_mut(|d| d.remove::<Field>(focus_id()));
+        r.request_focus();
+        r.scroll_to_me(None);
+    }
 }
 
 /// Gives `r` (after `ui.add`) the role `typ` and the accessible name `name`, with its numeric or text value.
@@ -250,70 +265,32 @@ fn color(
 
 /// The trailer floats of a shader type, named, in file order (`Field::Trailer(n)`).
 fn trailer_fields(t: &LightingTrailer) -> Vec<(String, f32)> {
-    let named = |names: &[&str], v: &[f32]| -> Vec<(String, f32)> {
-        names
-            .iter()
-            .map(|n| n.to_string())
-            .zip(v.iter().copied())
-            .collect()
-    };
-    match t {
+    let v: Vec<f32> = match t {
         LightingTrailer::None => vec![],
-        LightingTrailer::EnvMap { scale } => named(&["Env map scale"], &[*scale]),
-        LightingTrailer::SkinTint(c) => named(&["Skin tint R", "Skin tint G", "Skin tint B"], c),
-        LightingTrailer::HairTint(c) => named(&["Hair tint R", "Hair tint G", "Hair tint B"], c),
-        LightingTrailer::ParallaxOcc { max_passes, scale } => {
-            named(&["POM max passes", "POM scale"], &[*max_passes, *scale])
-        }
+        LightingTrailer::EnvMap { scale } => vec![*scale],
+        LightingTrailer::SkinTint(c) | LightingTrailer::HairTint(c) => c.to_vec(),
+        LightingTrailer::ParallaxOcc { max_passes, scale } => vec![*max_passes, *scale],
         LightingTrailer::MultiLayer {
             inner_thickness,
             refraction_scale,
             inner_texture_scale,
             envmap_strength,
-        } => named(
-            &[
-                "MLP inner thickness",
-                "MLP refraction scale",
-                "MLP inner scale U",
-                "MLP inner scale V",
-                "MLP env map strength",
-            ],
-            &[
-                *inner_thickness,
-                *refraction_scale,
-                inner_texture_scale[0],
-                inner_texture_scale[1],
-                *envmap_strength,
-            ],
-        ),
-        LightingTrailer::SparkleSnow(s) => {
-            named(&["Sparkle R", "Sparkle G", "Sparkle B", "Sparkle A"], s)
-        }
+        } => vec![
+            *inner_thickness,
+            *refraction_scale,
+            inner_texture_scale[0],
+            inner_texture_scale[1],
+            *envmap_strength,
+        ],
+        LightingTrailer::SparkleSnow(s) => s.to_vec(),
         LightingTrailer::Eye {
             cubemap_scale,
             left_center,
             right_center,
-        } => named(
-            &[
-                "Eye cubemap scale",
-                "Left eye X",
-                "Left eye Y",
-                "Left eye Z",
-                "Right eye X",
-                "Right eye Y",
-                "Right eye Z",
-            ],
-            &[
-                *cubemap_scale,
-                left_center[0],
-                left_center[1],
-                left_center[2],
-                right_center[0],
-                right_center[1],
-                right_center[2],
-            ],
-        ),
-    }
+        } => [[*cubemap_scale].as_slice(), left_center, right_center].concat(),
+    };
+    // Note GD1: the names live in `nif`, so the worklist's rows name a trailer field the same way.
+    t.names().iter().map(|n| n.to_string()).zip(v).collect()
 }
 
 /// The selected shape, or a line saying why there is none.

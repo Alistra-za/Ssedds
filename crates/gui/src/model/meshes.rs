@@ -29,6 +29,8 @@ pub mod edit_doc;
 pub mod export;
 pub mod nif_edit;
 pub mod pg_entries;
+pub mod worklist;
+pub use worklist::{NifLevel, NifProblem, NifTab};
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
@@ -554,6 +556,10 @@ pub struct MeshesModel {
     /// The Textures export folder (`AppModel::export_root`) when the Textures side has one, set by the app each frame
     /// through `set_nif_export_root`; the NIF export goes there, else to `<mods>\sdc NIF Edits` (Note CI29).
     pub nif_export_root: Option<PathBuf>,
+    /// Note GD1: a worklist fix's tab and field for the edit panel, taken when it draws.
+    pub nif_tab: Option<(NifTab, Option<nif::fields::Field>)>,
+    /// `nif_problems` without an edit: one `Arc`, so a cache keyed on it holds.
+    no_problems: Arc<Vec<NifProblem>>,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
     settings: MeshesSettings,
@@ -642,6 +648,8 @@ impl MeshesModel {
             edit: None,
             doc_badges: HashMap::new(),
             nif_export_root: None,
+            nif_tab: None,
+            no_problems: Arc::default(),
             procs: system_procs,
             settings,
             settings_changed: false,

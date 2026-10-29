@@ -8959,4 +8959,153 @@ fn empty_rmaos_slot_is_a_row() {
         nif::edit::validate::EMPTY_RMAOS,
         "Slot 5 (RMAOS) is empty: in game the mesh renders fully metallic"
     );
+    // GD1: the worklist row; the slot is not a `Field`, so the row names it and has no field.
+    use sdc_gui::model::meshes::{NifLevel, NifTab};
+    let rows: Vec<_> = h
+        .state()
+        .nif_problems()
+        .iter()
+        .filter(|p| p.text == nif::edit::validate::EMPTY_RMAOS)
+        .map(|p| (p.level, p.tab, p.field))
+        .collect();
+    assert_eq!(rows, [(NifLevel::Warning, NifTab::Shader, None)]);
+}
+
+/// GD1: every warning and blocker of the open NIF edit is one worklist entry; the idle and no-folder reasons are not.
+#[test]
+fn nif_warnings_are_problems() {
+    use nif::edit::Owner;
+    use sdc_gui::model::meshes::{NifLevel, NifProblem, NifTab};
+    // A read-only session (NO_EXPORT_FOLDER) and an untouched one (NO_EDITS) list nothing.
+    let mut m = direct(scenes::shader_ctrl(false));
+    assert!(m.nif_problems().is_empty(), "{:?}", m.nif_problems());
+    let (_d, mut s) = session(false);
+    s.open_edit();
+    assert_eq!(s.edit.as_ref().unwrap().blocked.as_deref(), Some(NO_EDITS));
+    assert!(s.nif_problems().iter().all(|p| p.level != NifLevel::Blocks));
+    let idle = s.nif_problems();
+    assert!(
+        std::sync::Arc::ptr_eq(&idle, &s.nif_problems()),
+        "cached on the edit's state (rule 9.1)"
+    );
+
+    // One controller warning (Warn) and one validation error that is also a blocker (Error, ALWAYS_BLOCK).
+    let sh = select(&mut m, "S");
+    let e = m.edit.as_ref().unwrap();
+    let shader = e.model.shape(sh).unwrap().shader.unwrap();
+    let lt = e.model.lighting[&shader].lighting.clone();
+    let ctrl_at = nif::edit::anchor_role(
+        &e.model,
+        Some(sh),
+        Role::Ctrl {
+            owner: Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(11),
+            nth: 0,
+        },
+    )
+    .unwrap();
+    let freq = e.model.ctrls[&ctrl_at.block].frequency;
+    let shader_at = nif::edit::anchor_role(&e.model, Some(sh), Role::Shader).unwrap();
+    m.edit_push(
+        vec![
+            Op::SetField {
+                at: ctrl_at,
+                field: Field::Frequency,
+                value: Value::F32(0f32.to_bits()),
+                base: Value::F32(freq.to_bits()),
+            },
+            Op::SetBits {
+                at: shader_at,
+                field: Field::Slsf1,
+                mask: 1 << 21,
+                value: 1 << 21,
+                base: lt.slsf1,
+            },
+        ],
+        None,
+    );
+    let p = m.nif_problems();
+    let path = "meshes/x.nif".to_string();
+    assert_eq!(
+        *p,
+        [
+            NifProblem {
+                level: NifLevel::Blocks,
+                path: path.clone(),
+                text: nif::edit::validate::SKIN_TINT_TYPE.into(),
+                tab: NifTab::Shader,
+                field: Some(Field::Slsf1),
+            },
+            NifProblem {
+                level: NifLevel::Warning,
+                path,
+                text: "Frequency ≤ 0 freezes the controller".into(),
+                tab: NifTab::Controllers,
+                field: Some(Field::Frequency),
+            },
+        ],
+        "one row each, the blocker once"
+    );
+
+    // A trailer op's row names the field from the shader type it applies to.
+    let mut t = direct(scenes::lsp_shape(1, &[1.0]));
+    let sh = select(&mut t, "S");
+    let at =
+        nif::edit::anchor_role(&t.edit.as_ref().unwrap().model, Some(sh), Role::Shader).unwrap();
+    t.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::Trailer(0),
+            value: Value::F32(2f32.to_bits()),
+            base: Value::F32(5f32.to_bits()), // not the file's 1.0: a conflict
+        }],
+        None,
+    );
+    let p = t.nif_problems();
+    assert_eq!(p.len(), 1, "{p:?}");
+    assert_eq!(p[0].level, NifLevel::Blocks);
+    assert!(
+        p[0].text
+            .starts_with("S: Env map scale: changed in the source"),
+        "{}",
+        p[0].text
+    );
+    assert_eq!(
+        (p[0].tab, p[0].field),
+        (NifTab::Shader, Some(Field::Trailer(0)))
+    );
+
+    // The worklist's fix: the row's tab and field. A lit shape is selected, so the Shader tab would show "Shader type".
+    let (shape, _) = lit_shape(s.edit.as_ref().unwrap());
+    s.select_edit(Selection::Shape(shape));
+    s.show_nif_tab("meshes/x.nif", NifTab::Alpha, Some(Field::AlphaThreshold));
+    assert_eq!(
+        s.nif_tab,
+        Some((NifTab::Alpha, Some(Field::AlphaThreshold)))
+    );
+    let mut h = view(s);
+    h.run_steps(4);
+    assert!(h.state().nif_tab.is_none(), "the panel took the request");
+    assert!(
+        h.query_by_label("Texture slots").is_none() && h.query_by_label("Shader type").is_none(),
+        "the Alpha tab shows, not the Shader tab"
+    );
+}
+
+/// GD1: the Problems list's fix sets `AppModel::nif_tab_request`; the app switches to the Meshes view and opens the tab.
+#[test]
+fn nif_tab_request_switches_to_the_meshes_view() {
+    use sdc_gui::model::meshes::NifTab;
+    let (_d, mut h) = app_edit(1400.0, 900.0, false);
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    h.state_mut().model.nif_tab_request = Some(("meshes/x.nif".into(), NifTab::Alpha, None));
+    h.run_steps(6);
+    assert!(sdc_gui::ui::header::meshes_view_active(&h.ctx));
+    assert!(h.state().model.nif_tab_request.is_none());
+    assert!(h.state().meshes.nif_tab.is_none(), "the panel took it");
+    assert!(
+        h.query_by_label("Texture slots").is_none() && h.query_by_label("Shader type").is_none()
+    );
 }

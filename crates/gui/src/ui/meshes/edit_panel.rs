@@ -11,12 +11,23 @@ use crate::ui::header::elide_middle;
 use crate::ui::status::{self, Status, AMBER, GREEN, RED};
 use eframe::egui;
 use nif::edit::Outcome;
+use nif::fields::Field;
 
 const TABS: [&str; 4] = ["Shader", "Alpha", "Controllers", "Extra data"];
 
 pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
     let mut act = Act::default();
+    // Note GD1: a worklist fix opens its tab; its field takes focus when its widget is drawn.
+    if let Some((tab, field)) = m.nif_tab.take() {
+        ui.data_mut(|d| {
+            d.insert_temp(egui::Id::new("meshes-edit-tab"), tab.index());
+            d.remove::<Field>(edit_fields::focus_id());
+            if let Some(f) = field {
+                d.insert_temp(edit_fields::focus_id(), f);
+            }
+        });
+    }
     if let Some(e) = &m.edit {
         top(ui, e, &mut act);
         // Meshes UI T3: a footer drawn before the tabs (rule 2.1), so a long tab never pushes Export NIF away.
@@ -137,7 +148,7 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                     .show(ui, |ui| {
                         for (i, d) in e.doc.ops.iter().enumerate() {
                             let failed = d.status == OpStatus::Conflict;
-                            op_row(ui, e, i, &op_label(&d.op), failed, act);
+                            op_row(ui, e, i, &op_label(&d.op, &e.model), failed, act);
                         }
                     });
             });

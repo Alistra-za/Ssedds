@@ -3,6 +3,7 @@
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
 use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED};
+use super::worklist::{NifProblem, NifTab};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
@@ -100,6 +101,8 @@ pub struct NifEdit {
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
     pub blocked: Option<String>,
+    /// Note GD1: this edit's worklist rows, rebuilt with `blocked` (a new `Arc` only when they change, rule 9.1).
+    pub problems: Arc<Vec<NifProblem>>,
     /// Note CS: what a shader type change also did to the flags, until the next change.
     pub notice: Option<String>,
     /// The guard dialog's question, while it is open.
@@ -266,8 +269,7 @@ pub fn field_label(f: Field) -> String {
         Field::SpecularStrength => "Specular strength".into(),
         Field::LightingEffect1 => "Lighting effect 1".into(),
         Field::LightingEffect2 => "Lighting effect 2".into(),
-        // shortcut: the trailer's names depend on the shader type, which an op does not carry; name them from the
-        // model if users ask.
+        // `field_name` names it from the shader type (Note GD1); this is the fallback for a type without names.
         Field::Trailer(n) => format!("Shader type value {}", n + 1),
         Field::AlphaFlags => "Alpha flags".into(),
         Field::AlphaThreshold => "Alpha threshold".into(),
@@ -281,10 +283,25 @@ pub fn field_label(f: Field) -> String {
     }
 }
 
-/// A short name of what an op changes, for the pending list's rows.
-pub fn op_label(op: &Op) -> String {
+/// Field `f` of block `block` in words: a trailer value by its name for the block's shader type (Note GD1).
+pub fn field_name(m: &NifModel, block: u32, f: Field) -> String {
+    let trailer = |n: u8| {
+        let l = m.lighting.get(&block)?;
+        l.lighting.params.trailer.names().get(n as usize).copied()
+    };
+    match f {
+        Field::Trailer(n) => trailer(n).map_or_else(|| field_label(f), str::to_string),
+        _ => field_label(f),
+    }
+}
+
+/// A short name of what an op changes, for the pending list's and the worklist's rows. `m` is the model the op
+/// applied to (its anchor's block is current after `reapply`).
+pub fn op_label(op: &Op, m: &NifModel) -> String {
     let (what, at) = match op {
-        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => (field_label(*field), at),
+        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => {
+            (field_name(m, at.block, *field), at)
+        }
         Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
         Op::SplitAlpha { at } => ("Split alpha".into(), at),
         Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
@@ -442,6 +459,7 @@ impl NifEdit {
             card_ctrls: HashMap::new(),
             placement: None,
             blocked: None,
+            problems: Arc::default(),
             notice: None,
             guard: None,
             export_note: None,
@@ -536,6 +554,15 @@ impl NifEdit {
     /// Recomputes `blocked` after the ops or the warnings changed.
     pub fn refresh_blocked(&mut self) {
         self.blocked = self.export_block();
+        self.refresh_problems();
+    }
+
+    /// The worklist rows (Note GD1), replaced only when they differ, so a cache keyed on the `Arc` holds.
+    fn refresh_problems(&mut self) {
+        let p = super::worklist::problems(self);
+        if *self.problems != p {
+            self.problems = Arc::new(p);
+        }
     }
 
     /// Export steps 1-6 (spec §8.3). Nothing is written when a check fails; a file sdc did not write is replaced
@@ -971,6 +998,7 @@ impl NifEdit {
             rows.push((s.id, m, notes));
         }
         self.refresh_pg_warnings();
+        self.refresh_problems();
         rows
     }
 
@@ -1685,6 +1713,40 @@ impl MeshesModel {
         // A changed source re-applied the ops: the preview follows.
         self.edit_changed(before);
         out
+    }
+
+    /// Note GD1: the open edit's worklist rows; the same `Arc` until they change (an empty one without an edit).
+    pub fn nif_problems(&self) -> Arc<Vec<NifProblem>> {
+        match &self.edit {
+            Some(e) => e.problems.clone(),
+            None => self.no_problems.clone(),
+        }
+    }
+
+    /// A worklist row's fix (Note GD1): opens the NIF at `path` when another one (or none) is open, then asks the edit
+    /// panel for `tab` and, when it draws it, focus on `field`.
+    pub fn show_nif_tab(&mut self, path: &str, tab: NifTab, field: Option<Field>) {
+        let open = self
+            .edit
+            .as_ref()
+            .is_some_and(|e| e.data_path.eq_ignore_ascii_case(path));
+        if !open {
+            let row = self
+                .winners
+                .iter()
+                .map(|(n, _)| n)
+                .find(|n| n.path.eq_ignore_ascii_case(path))
+                .map(|n| n.copy_id);
+            let Some(id) = row else {
+                self.error = Some(format!("{path} is not in the scanned meshes."));
+                return;
+            };
+            self.select_nif(id);
+            self.open_edit();
+        }
+        if self.edit.is_some() {
+            self.nif_tab = Some((tab, field));
+        }
     }
 
     /// The badge of every edit document in the edit mod, keyed by data path (walks `.sdc\nif-edits`).
