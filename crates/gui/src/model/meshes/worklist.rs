@@ -1,6 +1,6 @@
 //! The open NIF edit's entries in the one worklist (Note GD1): every warning and blocker of the edit, one row each,
 //! with the tab and field where its fix lives. The app hands them to the Problems list; no egui types.
-use super::nif_edit::{op_label, NifEdit, NO_EDITS, NO_EXPORT_FOLDER};
+use super::nif_edit::{op_label, NifEdit, NO_CLEANUP, NO_EDITS, NO_EXPORT_FOLDER, RERUN_PGPATCHER};
 use nif::edit::validate::{new_errors, Level, Target, Warning};
 use nif::edit::{Op, Outcome};
 use nif::fields::Field;
@@ -121,6 +121,21 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
     }
     for w in e.warnings.iter().chain(&e.pg_warnings) {
         warn(w, false);
+    }
+    // Note GD2: after a write PGPatcher's output is stale (was the footer's note); the cleanup's skip in plain words
+    if matches!(&e.export_note, Some((t, false)) if t == RERUN_PGPATCHER) {
+        push(
+            NifLevel::Warning,
+            RERUN_PGPATCHER.into(),
+            (NifTab::Shader, None),
+        );
+    }
+    if e.cleanup_skip.is_some() {
+        push(
+            NifLevel::Info,
+            NO_CLEANUP.into(),
+            (NifTab::Controllers, None),
+        );
     }
     // A reason `export_block` found that no row above covers (bytes that do not read back).
     if let Some(why) = e

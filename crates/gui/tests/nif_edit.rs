@@ -3122,6 +3122,16 @@ fn export_without_cleanup_writes_the_patch_and_says_why() {
     m.open_edit();
     assert_eq!(m.error, None);
     add_then_remove_ctrl(&mut m, true);
+    // Note GD2: known before the export, an Info row in plain words; the Review row has no count
+    use sdc_gui::model::meshes::{NifLevel, NifTab};
+    let info: Vec<_> = m
+        .nif_problems()
+        .iter()
+        .filter(|p| p.level == NifLevel::Info)
+        .map(|p| (p.text.clone(), p.tab))
+        .collect();
+    assert_eq!(info, [(NO_CLEANUP.to_string(), NifTab::Controllers)]);
+    assert_eq!(review_row(&m).compaction, None);
     assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
     let e = m.edit.as_ref().unwrap();
     let why = nif::edit::compact(&e.patched, 5).unwrap_err();
@@ -9437,5 +9447,111 @@ fn clip_timing_moves_the_time_slider() {
     assert_eq!(
         m.v3.clock.unwrap().range,
         (0.0, (s.stop - s.start) * 2.0 / 4.0)
+    );
+}
+
+// ---- Note GD2: Export NIF is a Review row ----
+
+/// The one Review row (today only the open edit has one).
+fn review_row(m: &MeshesModel) -> sdc_gui::model::meshes::NifReviewRow {
+    let rows = m.nif_review_rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows.into_iter().next().unwrap()
+}
+
+fn sha(b: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(b).into()
+}
+
+#[test]
+fn nif_review_rows_list_the_pending_edit() {
+    use sdc_gui::model::meshes::NifReviewRow;
+    let (d, mut m) = export_session();
+    m.open_edit();
+    assert!(m.nif_review_rows().is_empty(), "no edits, no row");
+    add_then_remove_ctrl(&mut m, true);
+    let e = m.edit.as_ref().unwrap();
+    let n = nif::header::Header::parse(&e.source).unwrap().sizes.len() as u32;
+    let blocks = |b: &[u8]| nif::header::Header::parse(b).unwrap().sizes.len();
+    let out = nif::edit::compact(&e.patched, n).unwrap();
+    let dropped = blocks(&e.patched) - blocks(&out);
+    assert!(dropped >= 2, "{dropped}");
+    assert_eq!(
+        review_row(&m),
+        NifReviewRow {
+            path: "meshes/x.nif".into(),
+            mod_name: EDIT_MOD.into(),
+            blocked: None,
+            foreign: None,
+            answer: None,
+            compaction: Some(dropped),
+        }
+    );
+    assert_eq!(m.export_nif_edits(), Ok(1));
+    assert_eq!(
+        std::fs::read(exported(&d)).unwrap(),
+        out,
+        "the bytes the footer's export writes"
+    );
+    assert!(m.nif_review_rows().is_empty(), "exported: nothing pending");
+    // after the write: Re-run PGPatcher is a worklist row
+    use sdc_gui::model::meshes::NifLevel;
+    assert!(m
+        .nif_problems()
+        .iter()
+        .any(|p| p.level == NifLevel::Warning && p.text == RERUN_PGPATCHER));
+}
+
+#[test]
+fn a_foreign_nif_waits_for_an_answer_on_its_row() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"junk").unwrap();
+    let r = review_row(&m);
+    assert_eq!(
+        (r.foreign, r.answer, r.blocked),
+        (Some(sha(b"junk")), None, None)
+    );
+    let skipped = |why: &str| Err(format!("NIF edits skipped: meshes/x.nif: {why}"));
+    assert_eq!(m.export_nif_edits(), skipped(NIF_UNANSWERED));
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::KeepTheirs, sha(b"junk"));
+    assert_eq!(review_row(&m).answer, Some(GuardChoice::KeepTheirs));
+    assert_eq!(m.export_nif_edits(), skipped(NIF_KEPT));
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk");
+    assert_eq!(review_row(&m).answer, None, "an answer is used once");
+    // an Overwrite given for bytes that changed since is not applied
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    std::fs::write(&p, b"junk2").unwrap();
+    let r = review_row(&m);
+    assert_eq!(r.blocked.as_deref(), Some(NIF_CHANGED_SINCE));
+    assert_eq!(r.answer, None);
+    assert_eq!(m.export_nif_edits(), skipped(NIF_CHANGED_SINCE));
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk2");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk2"));
+    assert_eq!(m.export_nif_edits(), Ok(1));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), *e.patched);
+    assert_eq!(e.guard, None, "the Review path never opens the dialog");
+}
+
+#[test]
+fn a_blocked_nif_row_is_skipped_by_the_export() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let r = review_row(&m);
+    assert_eq!(r.blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    assert_eq!(r.mod_name, "");
+    assert_eq!(
+        m.export_nif_edits(),
+        Err(format!(
+            "NIF edits skipped: meshes/x.nif: {NO_EXPORT_FOLDER}"
+        ))
     );
 }

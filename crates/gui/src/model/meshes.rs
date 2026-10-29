@@ -30,6 +30,7 @@ pub mod export;
 pub mod nif_edit;
 pub mod pg_entries;
 pub mod worklist;
+pub use nif_edit::NifReviewRow;
 pub use worklist::{NifLevel, NifProblem, NifTab};
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
@@ -559,6 +560,10 @@ pub struct MeshesModel {
     pub nif_export_root: Option<PathBuf>,
     /// Note GD5: lines for the app's Messages (an export folder change); the app moves them there each frame.
     pub messages: Vec<String>,
+    /// Note GD2: Review's Keep / Overwrite answers by lowercase data path, with the hash each was given for.
+    nif_answers: HashMap<String, (export::GuardChoice, [u8; 32])>,
+    /// Note GD2: the export path's state for the Review row (it reads the disk), keyed on `nif_edit::ForeignKey`.
+    foreign_cache: std::cell::RefCell<nif_edit::ForeignCache>,
     /// Note GD1: a worklist fix's tab and field for the edit panel, taken when it draws.
     pub nif_tab: Option<(NifTab, Option<nif::fields::Field>)>,
     /// `nif_problems` without an edit: one `Arc`, so a cache keyed on it holds.
@@ -652,6 +657,8 @@ impl MeshesModel {
             doc_badges: HashMap::new(),
             nif_export_root: None,
             messages: vec![],
+            nif_answers: HashMap::new(),
+            foreign_cache: Default::default(),
             nif_tab: None,
             no_problems: Arc::default(),
             procs: system_procs,

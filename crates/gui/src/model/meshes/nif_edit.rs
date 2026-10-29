@@ -19,6 +19,7 @@ use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel, ShapeModel};
 use render3d::{ParsedNif, ShapeId};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -70,6 +71,13 @@ pub struct NifEdit {
     pub source_copy: PathCopy,
     pub data_path: String,
     pub patched: Arc<Vec<u8>>,
+    /// Note GD2 (CQ1-CQ4): what the export writes, `patched` without its orphan blocks; rebuilt by `reapply`.
+    pub out: Arc<Vec<u8>>,
+    /// How many blocks `out` dropped; None when the cleanup could not run (`cleanup_skip` says why).
+    pub compaction: Option<usize>,
+    pub cleanup_skip: Option<String>,
+    /// The source's block count: blocks past it are ones the edits appended.
+    source_blocks: u32,
     /// A process-unique id of the current edit state, new on every apply, undo, redo, revert and reload (Note CU2):
     /// the refusal lines key on it, not on the `Arc` address, which an allocation can reuse.
     pub rev: u64,
@@ -187,6 +195,35 @@ pub const NO_EDITS: &str = "No edits to export.";
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
 /// No export folder chosen: the edit works and autosaves, its export waits (Note GD5); FB1's reason, word for word.
 pub const NO_EXPORT_FOLDER: &str = crate::model::review::NO_EXPORT_FOLDER;
+/// Note GD2: why `export_nif_edits` skips a row with a file Tessalith did not write.
+pub const NIF_UNANSWERED: &str =
+    "the file on disk was not written by Tessalith: answer Keep or Overwrite on its row";
+pub const NIF_KEPT: &str = "you kept the file on disk";
+pub const NIF_CHANGED_SINCE: &str = "changed on disk since you answered";
+/// Note GD2 (was CQ5's under-button line): the export will write the patch without dropping orphan blocks.
+pub const NO_CLEANUP: &str =
+    "Exports without cleanup: the file has a block Tessalith does not understand";
+
+/// Note GD2: one NIF with pending edits, as the Review lists it. `foreign`: SHA-256 of the file at the export path
+/// when Tessalith did not write it (the row waits for an answer); `answer`: the user's, while that file still has
+/// the hash it was given for; `compaction`: the orphan blocks the export drops (None when it cannot clean up).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NifReviewRow {
+    pub path: String,
+    pub mod_name: String,
+    pub blocked: Option<String>,
+    pub foreign: Option<[u8; 32]>,
+    pub answer: Option<GuardChoice>,
+    pub compaction: Option<usize>,
+}
+
+/// `foreign_cache`'s key: the export path, the last export's hash and the file's (length, modified time).
+pub(super) type ForeignKey = (
+    PathBuf,
+    Option<String>,
+    Option<(u64, Option<std::time::SystemTime>)>,
+);
+pub(super) type ForeignCache = Option<(ForeignKey, Result<Option<[u8; 32]>, String>)>;
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
@@ -449,9 +486,13 @@ impl NifEdit {
             export_path,
             edit_mod,
             autosave: autosave.map(Path::to_path_buf),
+            source_blocks: block_count(&source),
             source: Arc::new(source),
             data_path: data_path.into(),
             patched: Arc::new(vec![]),
+            out: Arc::new(vec![]),
+            compaction: None,
+            cleanup_skip: None,
             rev: 0,
             source_warnings: validate(&model, None),
             model,
@@ -520,6 +561,7 @@ impl NifEdit {
         self.doc.source = source_id(&self.source_copy, &self.data_path, &source);
         self.source_warnings = validate(&model, None);
         self.le_mesh = scan.le_mesh;
+        self.source_blocks = block_count(&source);
         self.source = Arc::new(source);
         self.reapply();
         self.count_changed();
@@ -587,6 +629,16 @@ impl NifEdit {
         if choice == Some(GuardChoice::KeepTheirs) {
             return ExportOutcome::KeptTheirs; // whatever is on disk now stays
         }
+        let overwrite = match choice {
+            Some(GuardChoice::Overwrite) => asked.map(|a| a.sha256),
+            _ => None,
+        };
+        self.write_out(overwrite)
+    }
+
+    /// [`Self::export`]'s steps with the answer already given (Note GD2's Review path too): `overwrite` is the hash
+    /// (hex) of the file on disk the user answered Overwrite for; a foreign file with another hash is not written.
+    pub(super) fn write_out(&mut self, overwrite: Option<String>) -> ExportOutcome {
         if self.edit_mod.as_os_str().is_empty() {
             return ExportOutcome::Blocked(NO_EXPORT_FOLDER.into());
         }
@@ -605,11 +657,8 @@ impl NifEdit {
             return ExportOutcome::Blocked(why);
         }
         // Note CQ: the file drops the blocks our edits appended that nothing reaches; on any doubt it is the patch
-        let n = nif::header::Header::parse(&self.source).map_or(0, |h| h.sizes.len() as u32);
-        let (out, skipped) = match nif::edit::compact(&self.patched, n) {
-            Ok(out) => (out, None),
-            Err(why) => (self.patched.to_vec(), Some(why)),
-        };
+        // (`reapply` made both, Note GD2)
+        let (out, skipped) = (self.out.to_vec(), self.cleanup_skip.clone());
         let path = self.export_path.clone();
         let cannot_read = |e: std::io::Error| {
             ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
@@ -625,8 +674,8 @@ impl NifEdit {
                     Err(e) => return cannot_read(e),
                 };
                 let sha256 = edit_doc::sha256_hex(&on_disk);
-                match choice {
-                    Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
+                match overwrite {
+                    Some(h) if h == sha256 => {}
                     _ => {
                         let diff = nif::write::block_diff(&on_disk, &out).unwrap_or_else(|e| {
                             vec![format!("The file on disk does not read as a NIF: {e}")]
@@ -689,6 +738,20 @@ impl NifEdit {
             };
         }
         self.patched = Arc::new(a.bytes);
+        // Note GD2: the export's bytes once per change, so the Review row can count what the cleanup drops
+        match nif::edit::compact(&self.patched, self.source_blocks) {
+            Ok(out) => {
+                let n = block_count(&self.patched).saturating_sub(block_count(&out));
+                self.compaction = Some(n as usize);
+                self.out = Arc::new(out);
+                self.cleanup_skip = None;
+            }
+            Err(why) => {
+                self.out = self.patched.clone();
+                self.compaction = None;
+                self.cleanup_skip = Some(why);
+            }
+        }
         self.outcomes = a.outcomes;
         self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
         match read_model(&self.patched) {
@@ -1492,6 +1555,16 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+/// Lowercase hex of a SHA-256, as `edit_doc::sha256_hex` writes it.
+fn hex(h: [u8; 32]) -> String {
+    h.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The header's block count; 0 when it does not parse.
+fn block_count(b: &[u8]) -> u32 {
+    nif::header::Header::parse(b).map_or(0, |h| h.sizes.len() as u32)
+}
+
 /// A new `Content::Parsed` key: every load of edited bytes is a new load (R10).
 fn next_key() -> u64 {
     static KEY: AtomicU64 = AtomicU64::new(1);
@@ -1787,7 +1860,15 @@ impl MeshesModel {
         };
         let before = e.materials();
         let out = e.export(choice);
-        e.export_note = match &out {
+        self.after_export(before, &out);
+        out
+    }
+
+    /// The open session's result line after an export, and the preview (a changed source re-applied the ops).
+    fn after_export(&mut self, before: Vec<(ShapeId, MaterialState)>, out: &ExportOutcome) {
+        self.foreign_cache.take();
+        let Some(e) = &mut self.edit else { return };
+        e.export_note = match out {
             ExportOutcome::Written { rerun_pgpatcher } => Some((
                 match rerun_pgpatcher {
                     true => RERUN_PGPATCHER.into(),
@@ -1803,7 +1884,130 @@ impl MeshesModel {
         };
         // A changed source re-applied the ops: the preview follows.
         self.edit_changed(before);
-        out
+    }
+
+    /// Note GD2: one row per NIF with pending edits (today the open edit only), for the Review. Reads the export
+    /// path's state from the disk only when its length, time or the last export's hash changed.
+    pub fn nif_review_rows(&self) -> Vec<NifReviewRow> {
+        let Some(e) = self.edit.as_ref().filter(|e| e.doc.pending()) else {
+            return vec![];
+        };
+        let mut blocked = e.blocked.clone();
+        let foreign = match e.export_path.as_os_str().is_empty() {
+            true => None,
+            false => self.disk_state(e).unwrap_or_else(|why| {
+                blocked.get_or_insert(why);
+                None
+            }),
+        };
+        let mut answer = None;
+        if let (Some(f), Some((c, h))) = (
+            foreign,
+            self.nif_answers.get(&e.data_path.to_ascii_lowercase()),
+        ) {
+            match *h == f {
+                true => answer = Some(*c),
+                false => {
+                    blocked.get_or_insert(NIF_CHANGED_SINCE.into());
+                }
+            }
+        }
+        vec![NifReviewRow {
+            path: e.data_path.clone(),
+            mod_name: e
+                .edit_mod
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            blocked,
+            foreign,
+            answer,
+            compaction: e.compaction,
+        }]
+    }
+
+    /// The export path of `e` as the export would find it: None when absent or Tessalith's own, Some(SHA-256) when
+    /// Tessalith did not write it, Err when it cannot be read.
+    // shortcut: the key leaves out the edit's bytes, so a file that equals them reads as foreign until it changes;
+    // add `e.rev` if that case shows up (it would re-read the file on every drag tick).
+    fn disk_state(&self, e: &NifEdit) -> Result<Option<[u8; 32]>, String> {
+        let meta = std::fs::metadata(&e.export_path)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()));
+        let key = (e.export_path.clone(), e.doc.export.sha256.clone(), meta);
+        if let Some((k, v)) = &*self.foreign_cache.borrow() {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let cannot =
+            |err: std::io::Error| format!("Cannot read {}: {err}", e.export_path.display());
+        let last = e.doc.export.sha256.clone();
+        let ours = |b: &[u8]| last.as_deref() == Some(edit_doc::sha256_hex(b).as_str());
+        let v = match engine::dds::may_replace(&e.export_path, &e.out, ours) {
+            Ok(()) => Ok(None),
+            Err(Kept::Unreadable(err)) => Err(cannot(err)),
+            Err(Kept::Foreign) => std::fs::read(&e.export_path)
+                .map(|b| Some(Sha256::digest(&b).into()))
+                .map_err(cannot),
+        };
+        *self.foreign_cache.borrow_mut() = Some((key, v.clone()));
+        v
+    }
+
+    /// Note GD2: Review's answer for the file at `path`'s export path, given for the file with hash `sha256`. It
+    /// counts only while the file still has that hash, and for one export.
+    pub fn set_nif_answer(&mut self, path: &str, choice: GuardChoice, sha256: [u8; 32]) {
+        self.nif_answers
+            .insert(path.to_ascii_lowercase(), (choice, sha256));
+    }
+
+    /// Note GD2: writes every Review row that is not blocked and, when Tessalith did not write its file, is answered
+    /// Overwrite for the bytes on disk now (read again here). The answers are used up. Ok(written) when nothing was
+    /// skipped, else Err listing each skipped NIF and why. Each write is a line in Messages, with its placement.
+    pub fn export_nif_edits(&mut self) -> Result<usize, String> {
+        self.foreign_cache.take(); // check again at write time
+        let rows = self.nif_review_rows();
+        self.nif_answers.clear();
+        let (mut written, mut skipped) = (0, vec![]);
+        for r in rows {
+            let why = match (&r.blocked, r.foreign, r.answer) {
+                (Some(b), _, _) => Some(b.clone()),
+                (None, Some(_), None) => Some(NIF_UNANSWERED.to_string()),
+                (None, Some(_), Some(GuardChoice::KeepTheirs)) => Some(NIF_KEPT.to_string()),
+                _ => None,
+            };
+            if let Some(why) = why {
+                skipped.push(format!("{}: {why}", r.path));
+                continue;
+            }
+            let Some(e) = self.edit.as_mut().filter(|e| e.data_path == r.path) else {
+                continue;
+            };
+            let before = e.materials();
+            let out = e.write_out(r.foreign.map(hex));
+            e.guard = None; // the Review answers on its row: no dialog
+            let placement = e.placement.clone();
+            self.after_export(before, &out);
+            match out {
+                ExportOutcome::Written { .. } => {
+                    written += 1;
+                    self.messages
+                        .push(format!("Exported {} to {}.", r.path, r.mod_name));
+                    if let Some(p) = placement.filter(|p| *p != Placement::Ok) {
+                        self.messages.push(p.text(&r.mod_name));
+                    }
+                }
+                ExportOutcome::Blocked(why) => skipped.push(format!("{}: {why}", r.path)),
+                ExportOutcome::Guard { .. } | ExportOutcome::KeptTheirs => {
+                    skipped.push(format!("{}: {NIF_CHANGED_SINCE}", r.path))
+                }
+            }
+        }
+        match skipped.is_empty() {
+            true => Ok(written),
+            false => Err(format!("NIF edits skipped: {}", skipped.join("; "))),
+        }
     }
 
     /// Note GD1: the open edit's worklist rows; the same `Arc` until they change (an empty one without an edit).
