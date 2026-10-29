@@ -55,7 +55,6 @@ pub enum Processed {
 pub struct FileOutcome {
     pub output: PathBuf,
     pub report: ValidationReport,
-    pub record: ManifestRecord,
 }
 
 /// What the caller needs when `process_file` fails or panics: the last stage the file entered (the stage a panic
@@ -796,6 +795,5 @@ pub fn process_file(
     Ok(Processed::Written(FileOutcome {
         output: job.output.clone(),
         report,
-        record,
     }))
 }
