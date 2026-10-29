@@ -2741,6 +2741,8 @@ impl AppModel {
 
     fn apply_snapshot(&mut self, s: &history::Snapshot) {
         self.dropped_fills.clear();
+        // Note FB3: the bulk result line describes the edit that is now taken back (or redone).
+        self.bulk.report = None;
         // Task 9 (Z11): restoring a state as it was is no sub-type change to clean up after.
         self.reset_type_follow();
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean

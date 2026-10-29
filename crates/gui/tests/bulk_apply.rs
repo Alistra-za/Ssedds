@@ -557,3 +557,101 @@ fn a_bulk_write_of_an_equal_value_leaves_the_documents_clean() {
     m.apply_bulk_edit(&strings(&[LEAF]), "format", BulkOp::Set(json!("bc3")));
     assert!(m.is_dirty(), "a change still dirties");
 }
+
+/// Review C8 (Note FB3, Review Focus 4): the document is clean when its text is the saved text, whichever way it got
+/// there. Undo back to the saved state clears the dot; Redo sets it again; an edit after an Undo stays dirty.
+#[test]
+fn undo_back_to_the_saved_state_is_not_dirty() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(LEAF, "format", json!("bc1"));
+    idle(&mut m);
+    m.save().unwrap();
+    assert!(!m.is_dirty(), "fixture: saved");
+    let ks = strings(&[ROCK, ODD]);
+    m.apply_bulk_edit(&ks, "format", BulkOp::Set(json!("bc1")));
+    assert!(m.is_dirty());
+    idle(&mut m);
+    m.undo();
+    assert!(!m.is_dirty(), "Undo to the saved text is clean");
+    idle(&mut m);
+    m.redo();
+    assert!(m.is_dirty(), "Redo sets it again");
+    idle(&mut m);
+    m.undo();
+    assert!(!m.is_dirty());
+    idle(&mut m);
+    // An edit, an Undo, then a different edit.
+    m.set_field(LEAF, "format", json!("bc3"));
+    assert!(m.is_dirty());
+    idle(&mut m);
+    m.undo();
+    assert!(!m.is_dirty());
+    idle(&mut m);
+    m.apply_bulk_edit(&ks, "format", BulkOp::Set(json!("bc3")));
+    assert!(m.is_dirty(), "a different edit after an Undo is dirty");
+    idle(&mut m);
+    // Saved, then Undo: the text now differs from the file.
+    m.save().unwrap();
+    assert!(!m.is_dirty());
+    m.undo();
+    assert!(
+        m.is_dirty(),
+        "Undo past the saved text is an unsaved change"
+    );
+}
+
+/// Review C8: the result line belongs to the edit that made it, so Undo and Redo clear it, and so does a new
+/// selection.
+#[test]
+fn the_bulk_notice_clears_on_undo_and_on_selection_change() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let ks = strings(&[ROCK, ODD]);
+    m.apply_bulk_edit(&ks, "format", BulkOp::Set(json!("bc1")));
+    assert!(m.bulk.report.is_some(), "fixture: a notice");
+    idle(&mut m);
+    m.undo();
+    assert_eq!(m.bulk.report, None, "Undo clears the notice");
+    idle(&mut m);
+    m.bulk.report = Some("stale".into());
+    m.redo();
+    assert_eq!(m.bulk.report, None, "Redo clears it too");
+    idle(&mut m);
+    m.apply_bulk_edit(&ks, "format", BulkOp::Set(json!("bc3")));
+    assert!(m.bulk.report.is_some());
+    m.click_item(LEAF, false, false);
+    m.click_item(ROCK, true, false);
+    assert_eq!(m.bulk.report, None, "a new selection starts clean");
+}
+
+/// Review C8: a write that reaches some textures and not others leaves the row mixed, at once (the plan is still
+/// running and the jobs are the old ones) and after the plan lands.
+#[test]
+fn a_partial_bulk_write_shows_mixed() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.click_item(ROCK, false, false);
+    m.click_item(NORMAL, true, false);
+    let ks = m.selected_items();
+    assert_eq!(ks.len(), 2);
+    let filter = |m: &mut AppModel| {
+        let v = m.bulk_view();
+        v.rows
+            .iter()
+            .find(|r| r.field == "mips.filter")
+            .cloned()
+            .unwrap()
+    };
+    let before = filter(&mut m);
+    assert!(before.value.is_some(), "fixture: both start alike");
+    // Kaiser is for sRGB colour: it reaches the albedo and is barred on the normal map.
+    m.apply_bulk_edit(&ks, "mips.filter", BulkOp::Set(json!("kaiser")));
+    assert_eq!(file(&m, ROCK, "mips.filter"), Some(json!("kaiser")));
+    assert_eq!(file(&m, NORMAL, "mips.filter"), None);
+    assert_eq!(filter(&mut m).value, None, "mixed while the plan runs");
+    idle(&mut m);
+    let after = filter(&mut m);
+    assert_eq!(after.value, None, "mixed once it lands");
+    assert_eq!(after.edited, 1);
+}
