@@ -1,5 +1,5 @@
-//! The set editor, layout A (M3b spec §4): slot rows (layout v2 A2) on the left, PGPatcher settings on the right (Task 15).
-//! Drawing only: every change is a model call, made after drawing.
+//! The set editor (M3b spec §4): one scrolling column (Note FB2), the name box, the slot rows (layout v2 A2) at full
+//! width, then the Material / Advanced tabs and groups. Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
 use super::sets_column::{DropState, Pending, SlotNote};
@@ -36,9 +36,11 @@ use std::collections::HashMap;
 /// Review M2: a lock key on a set that writes no JSON.
 pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
-/// The right-hand panel's default width (layout v2 A3); resizable, at least 300. Not the plan's 420: at 1400 the
-/// centre's content is 728 px and the slot rows need about 424 (Task 2.2), so only the minimum leaves them room.
-pub const SET_PANEL_WIDTH: f32 = 300.0;
+/// Note FB2: the centre's floor while the 2D set editor is shown, so its slot rows fit without clipping. Measured at
+/// 1280 px on the fixture's PBR set (system fonts): Slot 151 ("Coat normal / Fuzz (slot 7)"), thumbnail 56, Format 185
+/// (an RMAOS row's fill rows), Flags 21, Status 8, File at `FILE_MIN`, five gaps and the scroll bar reserve make 511;
+/// plus the centre panel's 16 px of margin and a little slack.
+pub const ROWS_MIN: f32 = 540.0;
 
 /// The Height and RMAOS rows' Generate button (R1): its text; its accessible name is the entry's full label.
 pub const GEN_BUTTON: &str = "Generate…";
@@ -46,10 +48,9 @@ pub const REGEN_BUTTON: &str = "Regenerate…";
 const THUMB: f32 = 56.0;
 /// The format and recipe combos (A5).
 const COMBO_W: f32 = 96.0;
-/// The File cell is the stretchy one (it truncates); a Grid column sizes itself from its content, so it gets a width
-/// between these: what the row's other cells leave of the column.
+/// The File cell is the stretchy one (it truncates); a Grid column sizes itself from its content, so it gets what the
+/// row's other cells leave of the column, and at least this.
 const FILE_MIN: f32 = 60.0;
-const FILE_MAX: f32 = 240.0;
 /// Between the row cells.
 const SPACING: f32 = 4.0;
 /// Seconds a single click waits for its second click (a little over egui's double-click delay).
@@ -107,6 +108,105 @@ pub fn draw(
         return;
     };
     slot_changes(ui.ctx(), drops, v);
+    if view.three_d {
+        // 3D (AG132): the set's 3D view takes the rest of this pane (`ui::centre`); the TruePBR settings and the skin
+        // card are in the TruePBR settings… window, as are the CS PBR section and the complex material card, so an edit
+        // still shows live in 3D.
+        head(ui, model, v, view);
+        return;
+    }
+    // `size_of` needs the model mutably, which the drawing below does not have.
+    let sizes: HashMap<String, SizeEst> = v
+        .members
+        .iter()
+        .filter_map(|k| model.size_of(k).map(|e| (k.clone(), e)))
+        .collect();
+    let mut acts = vec![];
+    // Item 17: where a file from Explorer was dropped this frame, if one waits for a slot card.
+    let drop_at = drops.file.as_ref().and_then(|f| f.pos);
+    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+    let why = model.banner.clone().unwrap_or_default();
+    let flash = drops
+        .slot_flash
+        .as_ref()
+        .filter(|(id, ..)| *id == v.id)
+        .and_then(|&(_, n, began)| Some((n, super::sets_column::flash_now(ui.ctx(), began)?)));
+    if flash.is_none() {
+        drops.slot_flash = None;
+    }
+    // Note FB2 (amendment C): one column, as the texture settings panel: the name box, the slot rows at full width,
+    // then the tabs and groups. Nothing sits beside the rows, so nothing can cover them.
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            head(ui, model, v, view);
+            rows(ui, model, v, thumbs, &mut acts, drop_at, &sizes);
+            // R9: the changed slot's row (its rect as `row` stored it this frame), outlined in the accent.
+            if let Some((n, a)) = flash {
+                let id = egui::Id::new(("slot-row", &v.id, n));
+                if let Some(r) = ui.data(|d| d.get_temp::<egui::Rect>(id)) {
+                    let c = ui.visuals().selection.stroke.color.gamma_multiply(a);
+                    ui.painter().rect_stroke(
+                        r,
+                        2.0,
+                        egui::Stroke::new(2.0, c),
+                        // Inside: the first row's top can be the scroll area's clip edge (final review M1).
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+            slot_note(ui, drops, &v.id);
+            unslotted_packed(ui, model, v, &mut acts);
+            ui.add_space(6.0);
+            // A2: a normal button, not stretched across the justified column.
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(editable, |ui| {
+                    if ui.button("Slot commands…").clicked() {
+                        cmds.open = Some(v.id.clone());
+                    }
+                })
+                .response
+                .on_disabled_hover_text(&why);
+            });
+            under_grid(ui, model, v);
+            ui.add_space(6.0);
+            tabs(ui, model, v, advanced);
+        });
+    let (mut select, mut expand) = (None, None);
+    for a in acts {
+        match a {
+            Act::Select(k) => select = Some(k),
+            Act::Expand(k) => expand = Some(k),
+            Act::Format(k, f, t) => model.set_format(&k, f, t),
+            Act::Opaque(k, on) => model.set_opaque(&k, on),
+            Act::Parallax(k, on) => model.set_field(&k, "alpha.parallax", serde_json::json!(on)),
+            Act::ParallaxReset(k) => model.clear_field(&k, "alpha.parallax"),
+            Act::Recipe(k, r) => {
+                model.set_packing_recipe(&k, r);
+            }
+            Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
+            Act::ChannelHelper(k, c, h) => model.set_channel_helper(&k, c, h.as_deref()),
+            Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
+            Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
+            Act::Slot(a) => super::slot_commands::run(model, cmds, a),
+            Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
+            Act::RemoveMember(set, item) => {
+                if let Err(why) = model.remove_member(&set, &item) {
+                    drops.slot_note = Some(SlotNote {
+                        set,
+                        text: why,
+                        error: true,
+                    });
+                }
+            }
+        }
+    }
+    select_or_expand(ui, model, &v.id, select, expand);
+}
+
+/// The 2D | 3D switch, the input name box (the set's one name, C14), the output prefix, the output name and the
+/// delete-section warnings, then a separator.
+fn head(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, view: View) {
     ui.horizontal_wrapped(|ui| {
         if view.switch {
             super::set_preview::view_switch(ui, model);
@@ -163,101 +263,6 @@ pub fn draw(
         });
     }
     ui.separator();
-    let mut acts = vec![];
-    // Item 17: where a file from Explorer was dropped this frame, if one waits for a slot card.
-    let drop_at = drops.file.as_ref().and_then(|f| f.pos);
-    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
-    let why = model.banner.clone().unwrap_or_default();
-    if view.three_d {
-        // 3D (AG132): the set's 3D view takes the rest of this pane (`ui::centre`); the TruePBR settings and the skin
-        // card are in the TruePBR settings… window, as are the CS PBR section and the complex material card, so an edit
-        // still shows live in 3D.
-        return;
-    }
-    // `size_of` needs the model mutably, which the drawing below does not have.
-    let sizes: HashMap<String, SizeEst> = v
-        .members
-        .iter()
-        .filter_map(|k| model.size_of(k).map(|e| (k.clone(), e)))
-        .collect();
-    // A3: the panel first, so the rows get what it leaves; each side scrolls on its own. K20: the minimum wins.
-    let max = (ui.available_width() - super::set_preview::CENTRE_MIN / 2.0).max(300.0);
-    egui::Panel::right(egui::Id::new("set-panel"))
-        .resizable(true)
-        .default_size(SET_PANEL_WIDTH)
-        .size_range(300.0..=max)
-        .show(ui, |ui| set_panel(ui, model, v, advanced));
-    let flash = drops
-        .slot_flash
-        .as_ref()
-        .filter(|(id, ..)| *id == v.id)
-        .and_then(|&(_, n, began)| Some((n, super::sets_column::flash_now(ui.ctx(), began)?)));
-    if flash.is_none() {
-        drops.slot_flash = None;
-    }
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            rows(ui, model, v, thumbs, &mut acts, drop_at, &sizes);
-            // R9: the changed slot's row (its rect as `row` stored it this frame), outlined in the accent.
-            if let Some((n, a)) = flash {
-                let id = egui::Id::new(("slot-row", &v.id, n));
-                if let Some(r) = ui.data(|d| d.get_temp::<egui::Rect>(id)) {
-                    let c = ui.visuals().selection.stroke.color.gamma_multiply(a);
-                    ui.painter().rect_stroke(
-                        r,
-                        2.0,
-                        egui::Stroke::new(2.0, c),
-                        // Inside: the first row's top is the scroll area's clip edge (final review M1).
-                        egui::StrokeKind::Inside,
-                    );
-                }
-            }
-            slot_note(ui, drops, &v.id);
-            unslotted_packed(ui, model, v, &mut acts);
-            ui.add_space(6.0);
-            // A2: a normal button, not stretched across the justified column.
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(editable, |ui| {
-                    if ui.button("Slot commands…").clicked() {
-                        cmds.open = Some(v.id.clone());
-                    }
-                })
-                .response
-                .on_disabled_hover_text(&why);
-            });
-            under_grid(ui, model, v);
-        });
-    let (mut select, mut expand) = (None, None);
-    for a in acts {
-        match a {
-            Act::Select(k) => select = Some(k),
-            Act::Expand(k) => expand = Some(k),
-            Act::Format(k, f, t) => model.set_format(&k, f, t),
-            Act::Opaque(k, on) => model.set_opaque(&k, on),
-            Act::Parallax(k, on) => model.set_field(&k, "alpha.parallax", serde_json::json!(on)),
-            Act::ParallaxReset(k) => model.clear_field(&k, "alpha.parallax"),
-            Act::Recipe(k, r) => {
-                model.set_packing_recipe(&k, r);
-            }
-            Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
-            Act::ChannelHelper(k, c, h) => model.set_channel_helper(&k, c, h.as_deref()),
-            Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
-            Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
-            Act::Slot(a) => super::slot_commands::run(model, cmds, a),
-            Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
-            Act::RemoveMember(set, item) => {
-                if let Err(why) = model.remove_member(&set, &item) {
-                    drops.slot_note = Some(SlotNote {
-                        set,
-                        text: why,
-                        error: true,
-                    });
-                }
-            }
-        }
-    }
-    select_or_expand(ui, model, &v.id, select, expand);
 }
 
 /// R9 (CF14): a slot that got a new member since last frame, in the same set, flashes; drop, Replace, Assign…, an
@@ -288,8 +293,9 @@ fn slot_changes(ctx: &egui::Context, drops: &mut DropState, v: &SetView) {
     drops.slot_seen = Some((v.id.clone(), slots));
 }
 
-/// The set panel (C6, R12): Material on a JSON set or Set on any other, then Advanced; `advanced_open` picks the tab.
-fn set_panel(
+/// The tabs under the slot rows (C6, R12; Note FB2): Material on a JSON set or Set on any other, then Advanced;
+/// `advanced_open` picks the tab.
+fn tabs(
     ui: &mut egui::Ui,
     model: &mut AppModel,
     v: &SetView,
@@ -300,71 +306,50 @@ fn set_panel(
     ui.horizontal(|ui| {
         ui.selectable_value(&mut open, false, if json { "Material" } else { "Set" });
         ui.selectable_value(&mut open, true, "Advanced");
+        // C14 (Note FB2): the name box above names the set, so the Material tab has no name line; its JSON editor
+        // button sits on the tab row. G3: the whole file, every set and the delete sections, in its own window.
+        if json && !open {
+            ui.add_space(8.0);
+            if ui
+                .small_button("TruePBR JSON editor…")
+                .on_hover_text(
+                    "Every set's entry and the delete sections of the PGPatcher JSON, in one window",
+                )
+                .clicked()
+            {
+                model.json_editor_open = true;
+            }
+        }
     });
     if open != model.settings.advanced_open {
         model.settings.advanced_open = open;
         model.save_settings();
     }
     ui.separator();
-    // A3: the tab scrolls on its own, so the slot rows stay in view. Sideways too: a card wider than the panel (the
-    // PBR Landscape card is ~390) would otherwise widen it past its size range and under the rows' minimum.
-    // I2: the default floating bar is invisible until hovered (dormant opacity 0); thin is always drawn.
-    ui.scope(|ui| {
-        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
-        egui::ScrollArea::both()
-            .id_salt(("set-panel-tab", open))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if open {
-                    super::advanced::body(ui, model, advanced);
-                    return;
-                }
-                if json {
-                    // Note DO: the button first, the name truncated in what is left (rule 3.3), both kept inside the
-                    // visible edge when a wider card below widens the scroll content (rule 3.8).
-                    ui.scope(|ui| {
-                        let w = ui.available_width().min(ui.clip_rect().right() - ui.cursor().left() - 8.0);
-                        ui.set_max_width(w);
-                        egui::Sides::new().shrink_left().truncate().show(
-                            ui,
-                            |ui| {
-                                ui.add(egui::Label::new(egui::RichText::new(&v.id).strong()).truncate());
-                            },
-                            |ui| {
-                                // G3: the whole file, every set and the delete sections, in its own window.
-                                if ui
-                                    .small_button("TruePBR JSON editor…")
-                                    .on_hover_text("Every set's entry and the delete sections of the PGPatcher JSON, in one window")
-                                    .clicked()
-                                {
-                                    model.json_editor_open = true;
-                                }
-                            },
-                        );
-                    });
-                }
-                super::cs_pbr::card(ui, model, v);
-                // K12: on a JSON set that is not PBR Landscape the CS PBR records sit between Matching and Advanced
-                // TruePBR settings; `pgp_panel` (a PBR Landscape set's) draws both halves itself.
-                let split = json && !(model.target == Target::Cs && crate::model::sets::is_pbr_landscape(v));
-                if split {
-                    super::pgp_fields::panel_main(ui, model, &v.id);
-                    super::cs_pbr::section(ui, model, v);
-                    super::pgp_fields::panel_advanced(ui, model, &v.id);
-                } else if json {
-                    super::cs_pbr::pgp_panel(ui, model, v);
-                }
-                if v.skin {
-                    super::skin_card::card(ui, model, v);
-                }
-                super::cm_card::section(ui, model, v);
-                also_skip(ui, model, v);
-                if !split {
-                    super::cs_pbr::section(ui, model, v);
-                }
-                super::plugin_refs::set_section(ui, model, v);
-            });
-    });
+    if open {
+        super::advanced::body(ui, model, advanced);
+        return;
+    }
+    super::cs_pbr::card(ui, model, v);
+    // K12: on a JSON set that is not PBR Landscape the CS PBR records sit between Matching and Advanced TruePBR
+    // settings; `pgp_panel` (a PBR Landscape set's) draws both halves itself.
+    let split = json && !(model.target == Target::Cs && crate::model::sets::is_pbr_landscape(v));
+    if split {
+        super::pgp_fields::panel_main(ui, model, &v.id);
+        super::cs_pbr::section(ui, model, v);
+        super::pgp_fields::panel_advanced(ui, model, &v.id);
+    } else if json {
+        super::cs_pbr::pgp_panel(ui, model, v);
+    }
+    if v.skin {
+        super::skin_card::card(ui, model, v);
+    }
+    super::cm_card::section(ui, model, v);
+    also_skip(ui, model, v);
+    if !split {
+        super::cs_pbr::section(ui, model, v);
+    }
+    super::plugin_refs::set_section(ui, model, v);
 }
 
 /// C2 (owner answer 6): the "Also export" group of a PBR set while a tick is on: "converted" or "skipped", and the
@@ -503,65 +488,33 @@ fn rows(
     // The File cell takes what the other columns leave: their widest content last frame, plus the spacing.
     let others_id = egui::Id::new(("slot-rows-others", &v.id));
     let others = ui.data(|d| d.get_temp::<[f32; 5]>(others_id));
-    // A few pixels short of the column: rows exactly as wide as it would flip the sideways scroll bar on and off.
+    // The column's floating scroll bar senses its full width over the content's right edge: the Status dot keeps
+    // clear of it, or its hover would go to the bar.
+    let bar = ui.spacing().scroll.bar_width + ui.spacing().scroll.bar_outer_margin;
     let file_w = others.map_or(FILE_MIN, |w| {
-        (ui.available_width() - w.iter().sum::<f32>() - 5.0 * SPACING - 8.0)
-            .clamp(FILE_MIN, FILE_MAX)
+        (ui.available_width() - w.iter().sum::<f32>() - 5.0 * SPACING - bar).max(FILE_MIN)
     });
     let mut widths = [0.0f32; 5];
-    // A ScrollArea takes every scroll target set inside it, the vertical one too, so a row widget asked to scroll into
-    // view (ScrollIntoView) would not move the set editor's vertical scroll: its row is asked again after.
-    let asks = |ui: &egui::Ui| {
-        ui.input(|i| {
-            i.events
-                .iter()
-                .filter(|e| {
-                    matches!(e, egui::Event::AccessKitActionRequest(r)
-                        if r.action == egui::accesskit::Action::ScrollIntoView)
-                })
-                .count()
-        })
-    };
-    let mut reveal = None;
-    // Never drawn under the panel beside it: a column narrower than the rows scrolls them sideways.
-    // I2: the default floating bar is invisible until hovered (dormant opacity 0); thin is always drawn.
-    ui.scope(|ui| {
-        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
-        egui::ScrollArea::horizontal()
-            .id_salt(("slot-rows-scroll", &v.id))
-            .show(ui, |ui| {
-                egui::Grid::new(("slot-rows", &v.id))
-                    .num_columns(6)
-                    .striped(true)
-                    .spacing([SPACING, 4.0])
-                    .min_col_width(0.0)
-                    .show(ui, |ui| {
-                        // The row takes the right-click; its labels are not selectable, so they do not take it.
-                        ui.style_mut().interaction.selectable_labels = false;
-                        for cell in slot_row(v.shader.as_ref(), &v.slots) {
-                            let size = match &cell.fill {
-                                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
-                                    sizes.get(item)
-                                }
-                                SlotFill::Empty => None,
-                            };
-                            let before = asks(ui);
-                            let (w, rect) =
-                                row(ui, model, v, &cell, thumbs, acts, drop_at, size, file_w);
-                            if asks(ui) < before {
-                                reveal = Some(rect);
-                            }
-                            for (a, b) in widths.iter_mut().zip(w) {
-                                *a = a.max(b);
-                            }
-                        }
-                    });
-            });
-    });
+    egui::Grid::new(("slot-rows", &v.id))
+        .num_columns(6)
+        .striped(true)
+        .spacing([SPACING, 4.0])
+        .min_col_width(0.0)
+        .show(ui, |ui| {
+            // The row takes the right-click; its labels are not selectable, so they do not take it.
+            ui.style_mut().interaction.selectable_labels = false;
+            for cell in slot_row(v.shader.as_ref(), &v.slots) {
+                let size = match &cell.fill {
+                    SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => sizes.get(item),
+                    SlotFill::Empty => None,
+                };
+                let w = row(ui, model, v, &cell, thumbs, acts, drop_at, size, file_w);
+                for (a, b) in widths.iter_mut().zip(w) {
+                    *a = a.max(b);
+                }
+            }
+        });
     ui.data_mut(|d| d.insert_temp(others_id, widths));
-    if let Some(r) = reveal {
-        ui.scroll_to_rect(r, Some(egui::Align::Center));
-    }
 }
 
 /// A Flags icon toggle: its accessible name is the full `label`, which also leads its hover. True when clicked.
@@ -594,7 +547,7 @@ fn row(
     drop_at: Option<egui::Pos2>,
     size: Option<&SizeEst>,
     file_w: f32,
-) -> ([f32; 5], egui::Rect) {
+) -> [f32; 5] {
     let slot = cell.kind;
     let fill = &cell.fill;
     // K1: a Grid cell cannot hold the whole row, so last frame's row rect takes the right-click (F3a Task 8) and the
@@ -793,8 +746,8 @@ fn row(
         .vertical(|ui| {
             if item.is_none() {
                 let menu = ui.menu_button("Assign…", |ui| {
-                    let title = format!("Slot {}: {}", slot.slot_number(), slot_label(slot, ""));
-                    bulk_menu(ui, &title, &model.slot_menu(&v.id, slot))
+                    // C14: the slot label once ("Emissive / Skin (slot 3)").
+                    bulk_menu(ui, slot_label(slot, ""), &model.slot_menu(&v.id, slot))
                 });
                 if let Some(Some(a)) = menu.inner {
                     acts.push(Act::Slot(a));
@@ -992,7 +945,7 @@ fn row(
             egui::StrokeKind::Outside,
         );
     }
-    ([slot_w, THUMB, format_w, flags_w, status_w], rect)
+    [slot_w, THUMB, format_w, flags_w, status_w]
 }
 
 /// Note AN: a PGPatcher-locked slot: a big red ✕ over the thumbnail.
@@ -1048,8 +1001,7 @@ fn slot_menu(
     acts: &mut Vec<Act>,
 ) {
     resp.context_menu(|ui| {
-        let title = format!("Slot {}: {}", slot.slot_number(), slot_label(slot, ""));
-        if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, slot)) {
+        if let Some(a) = bulk_menu(ui, slot_label(slot, ""), &model.slot_menu(&v.id, slot)) {
             acts.push(Act::Slot(a));
         }
     });
@@ -1168,8 +1120,8 @@ fn packed_controls(
 }
 
 /// Note DY18: the width of a fill row's source picker (egui-ui-rules 3.5: `ComboBox::width` is only a minimum).
-/// The format combo's width: the rows still fit beside the set panel at 1400 px (`set_panel.rs`), and the combo fits
-/// the ~125 px of slot row the centre shows at 1100 (truncated, full name on hover).
+/// The format combo's width, so the rows fit the centre column at 1024 px (`set_editor_width.rs`; truncated, full name
+/// on hover).
 const SOURCE_W: f32 = COMBO_W;
 
 /// `channel_helpers` of `packed`, cached by the items' revision (review M1: an open popup draws every frame).

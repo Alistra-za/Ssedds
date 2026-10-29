@@ -480,10 +480,8 @@ fn the_set_panel_stays_while_its_set_is_hidden() {
     h.run();
     let v = views(h.state());
     assert!(!h.state().visible_sets().iter().any(|&i| v[i].key == rock));
-    assert!(
-        PanelState::load(&h.ctx, Id::new("set-panel")).is_some(),
-        "the set panel is drawn"
-    );
+    // Note FB2: the set editor (one column) is drawn, its Slot commands… with it.
+    h.get_by_role_and_label(Role::Button, "Slot commands…");
     assert_eq!(h.state().selection, Selection::Set(rock));
 }
 

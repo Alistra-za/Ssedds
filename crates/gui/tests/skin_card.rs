@@ -155,7 +155,7 @@ fn the_set_button_stores_the_default_and_the_reset_clears_it() {
     m.select_set(&k);
     let mut h = harness(m);
     h.run();
-    // Layout v2 A3: the card scrolls sideways in the set panel at its default width; bring the button into view.
+    // Note FB2: the card is below the slot rows in the scrolling set editor; bring the button into view.
     h.query_all_by_label("set").next().unwrap().scroll_to_me();
     h.run();
     h.query_all_by_label("set").next().unwrap().click();

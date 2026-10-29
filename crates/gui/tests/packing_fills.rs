@@ -153,7 +153,7 @@ fn an_rmaos_card_without_an_ao_source_has_an_ao_row_and_a_set_value_becomes_the_
     );
     assert_eq!(m.project.as_ref().unwrap().fill(RawMap::Ao), None);
     assert_eq!(channel(m, RMAOS, "pack.b"), "fill:200");
-    // The reset removes the key again (the slot rows scroll sideways in a narrow column: bring it into view).
+    // The reset removes the key again (bring it into view: the set editor scrolls).
     h.get_by_label("Reset").scroll_to_me();
     h.run();
     h.get_by_label("Reset").click();

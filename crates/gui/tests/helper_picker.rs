@@ -352,15 +352,15 @@ fn picking_the_current_source_writes_nothing() {
 
 #[test]
 fn picker_combo_inside_card_at_1100() {
-    use egui::containers::panel::PanelState;
     let d = tempfile::tempdir().unwrap();
     let mut h = editor(
         fixture(d.path(), &TWO_AO, TWO_AO_TOML),
         egui::vec2(1100.0, 800.0),
     );
-    let panel = PanelState::load(&h.ctx, egui::Id::new("set-panel"))
-        .expect("the set panel")
-        .outer_rect;
+    // Note FB2: the set editor is one column; the rows end at the centre's right edge.
+    let centre = sdc_gui::ui::centre_rect(&h.ctx)
+        .expect("the centre is drawn")
+        .intersect(h.ctx.content_rect());
     let names: Vec<String> = h
         .query_all_by_role(Role::ComboBox)
         .filter_map(|n| n.accesskit_node().label())
@@ -368,15 +368,15 @@ fn picker_combo_inside_card_at_1100() {
         .collect();
     assert_eq!(names.len(), 4, "R, G, B, A: {names:?}");
     for name in names {
-        // The slot rows scroll sideways in a narrow centre column (Task 2.2): scroll to it as a user would.
+        // Scroll to it as a user would (the column scrolls down).
         h.get_by_role_and_label(Role::ComboBox, &name)
             .scroll_to_me();
         h.run();
         let r = h.get_by_role_and_label(Role::ComboBox, &name).rect();
         assert!(
-            r.max.x <= panel.min.x,
-            "combo {r:?} runs under the set panel at {}",
-            panel.min.x
+            r.max.x <= centre.max.x,
+            "combo {r:?} runs past the centre at {}",
+            centre.max.x
         );
         // Not clipped by the card's scroll area: the clickable rect is the whole combo.
         let clickable = h.ctx.viewport(|v| {

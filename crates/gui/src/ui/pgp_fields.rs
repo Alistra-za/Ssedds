@@ -201,19 +201,9 @@ pub fn panel_main(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         }
         // Material and Features are always "open"; a feature group is open while on and not blocked.
         let on = group_open(g, &c.eff);
+        // C14 (Note FB2): a feature's state shows once, in its own group's header; the Features ticks carry no count.
         let head = match g {
-            Group::Material => None,
-            Group::Features => {
-                let n = FEATURE_KEYS
-                    .iter()
-                    .filter(|(f, _)| feature_on(&c.eff, *f))
-                    .count();
-                value(if n == 0 {
-                    "none".to_string()
-                } else {
-                    format!("{n} on")
-                })
-            }
+            Group::Material | Group::Features => None,
             Group::Subsurface => value(sub_text(sub_mode(&c.eff))),
             _ => value(if on { "on" } else { "off" }),
         };

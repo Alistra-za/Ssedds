@@ -53,7 +53,7 @@ While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" wi
 
 ## The three columns
 
-From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab of the set editor's own right-hand panel. Under all of them runs the bottom panel ([Main window](#main-window), item 13).
+From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab under the set editor's slot rows. Under all of them runs the bottom panel ([Main window](#main-window), item 13).
 
 ### Textures (left)
 
@@ -239,7 +239,7 @@ In the cs mode one export can also write a vanilla and a complex-material (CM) v
 - **Review's column** also holds the **Export location** (per project, `[project] also_location` in `sdc-project.toml`; by default the export folder), the three folder names, **Keep metal brightness** and its strength (CM), **Also write a zip of each folder** and **Skip these sets**.
 - **Install** the PBR folder or the Vanilla folder. For CM, install the CM folder on top of the Vanilla folder. With Keep metal brightness off, the CM folder holds only `_m` files (plus the complex-grass stack of each PBR grass set). Files an earlier export left in the folders are kept and listed in the report as "not written by this export"; delete them yourself.
 - **Vanilla** gets a converted diffuse, a `_n` with the specular mask in alpha and, where the meshes use the environment-map shader, an env `_m`. That needs a Meshes scan; without one no env `_m` is written. A PBR Landscape set's `_p` goes into Vanilla too (Terrain Helper). Textures that are not PBR are copied from the PBR folder when they would be the same. **CM** gets one `_m` per PBR set.
-- **Skip a set** with Review's **Skip these sets**, or, in 2D, **Skip vanilla/CM for this set** in the set panel's Material tab.
+- **Skip a set** with Review's **Skip these sets**, or, in 2D, **Skip vanilla/CM for this set** in the set editor's Material tab.
 - **NIF edits** go into the PBR folder while a tick is on.
 - **The recipe** is the **Also export recipe** section in Advanced (closed at first; Review's **Recipe settings are in Advanced** opens it). See [Project Config](Project-Config.md#export) for each value.
 - **After the export** `<project> conversion-report.md` sits next to the folders: counts per folder, the recipe, a row per PBR set with a suggested NIF Glossiness and Specular Strength and whether it needs the Environment Map shader, the sets not converted, and how to install. With the zip on, `<folder>.zip` per folder and `<project> SHA256SUMS.txt`; the PBR zip includes the PGPatcher JSON.
@@ -266,11 +266,11 @@ Select a set to edit it. The heading has the input name box and a **2D | 3D** sw
 
 A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR groups in the Material tab: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
 
-In 2D the editor has slot rows in the middle and a **right-hand panel** (default and minimum width 300 px; drag its edge to widen it; it scrolls both ways). The panel has a **Material** tab (**Set** on a vanilla set) with the set's material settings and a last **Advanced** tab with the same sections as the Advanced drawer. While the panel is shown the drawer is not; in 3D, with a texture selected, or with several sets selected, the drawer is back.
+In 2D the editor is one column that scrolls as a whole: the input name box, the slot rows at full width, then a **Material** tab (**Set** on a vanilla set) with the set's material settings and a last **Advanced** tab with the same sections as the Advanced drawer. Nothing sits beside the slot rows, so nothing covers them at any window width. While the tabs are shown the drawer is not; in 3D, with a texture selected, or with several sets selected, the drawer is back.
 
 Each PGPatcher slot is one row (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that row, with both files listed and a ✕ beside each to take one out of the set, and export warns about it. The cubemap slot has no row; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
 
-A row has these columns: Slot (title; weak when empty; a lock when pinned), the thumbnail (click selects, double-click expands), File (the name cut to fit; full name and size on hover; the dimensions and file size under it), Format (the dropdown; an empty slot shows **Assign...**, which opens the slot menu), Flags (Match on this and Opaque, each with a hover) and Status (a dot: green ready, amber a warning or decision, red blocks; the reason is on hover). The columns are compact so the rows fit beside the panel at the default width. In a narrower centre the rows scroll sideways; they are never drawn under the panel.
+A row has these columns: Slot (title; weak when empty; a lock when pinned), the thumbnail (click selects, double-click expands), File (the name cut to fit; full name and size on hover; the dimensions and file size under it), Format (the dropdown; an empty slot shows **Assign...**, which opens the slot menu, headed by the slot's name), Flags (Match on this and Opaque, each with a hover) and Status (a dot: green ready, amber a warning or decision, red blocks; the reason is on hover). The File column takes the width the other columns leave, so the rows fill the centre.
 
 | Row control | What it does |
 |---|---|
@@ -292,7 +292,7 @@ A `_coat` map fills the Subsurface card, which then reads "Coat colour + strengt
 
 ## TruePBR settings
 
-A PBR set under `cs` has the settings PGPatcher reads in the Material tab of the set panel, as framed groups in the order below. Each header shows the title and, on the right, its value (for example Features "3 on", Subsurface "Standard", Coat "off", Matching "2 matches", CS PBR records "1 record"). Click a title to open or close the group. The feature groups are always listed; they read "off" and stay closed while the feature is off, and open when it turns on. A small **TruePBR JSON editor…** button at the top right of the tab opens the editor window. Skin and complex-material keys show readable names ("SSS width"); hover one for its exact key.
+A PBR set under `cs` has the settings PGPatcher reads in the set editor's Material tab, as framed groups in the order below. Each header shows the title and, on the right, its value (for example Subsurface "Standard", Coat "off", Matching "2 matches", CS PBR records "1 record"). Click a title to open or close the group. The feature groups are always listed; they read "off" and stay closed while the feature is off, and open when it turns on. A feature's state shows only there: the Features group, which holds the ticks, has no value. A small **TruePBR JSON editor…** button beside the Material tab opens the editor window. Skin and complex-material keys show readable names ("SSS width"); hover one for its exact key.
 
 | Group | Settings |
 |---|---|
@@ -408,7 +408,7 @@ Right-click the Height row (or open the set card's menu) and pick **Generate fro
 
 ## Advanced drawer
 
-The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the **Advanced** tab of the set panel instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.
+The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the set editor's **Advanced** tab instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.
 
 | Section | Contents |
 |---|---|
