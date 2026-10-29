@@ -81,7 +81,16 @@ impl AppModel {
             return;
         }
         let follow = self.follow_of(key, new);
-        let live: Vec<String> = self.items.iter().map(|i| i.key.clone()).collect();
+        // Recorded members whose file is gone, found once here (O(auto_pbr) lookups) rather than by scanning a copy
+        // of every item key per entry. Anything the edit adds below is a live set member.
+        let gone: std::collections::HashSet<String> = self
+            .sets_doc
+            .as_ref()
+            .map(|s| s.auto_pbr())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| self.item(a).is_none())
+            .collect();
         let k = key.to_string();
         self.edit_docs(label, None, true, move |p, s| {
             match new {
@@ -122,7 +131,7 @@ impl AppModel {
                 }
             }
             // Files that no longer exist drop off the list whenever it is written.
-            auto.retain(|a| live.contains(a));
+            auto.retain(|a| !gone.contains(a));
             if auto != before {
                 s.set_auto_pbr(&auto);
             }

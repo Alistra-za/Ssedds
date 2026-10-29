@@ -113,8 +113,7 @@ pub(crate) fn virtual_input_as(first: &InputFile, suffix: &str) -> InputFile {
 /// The packed output's stem, from its first source's name: `<base>_<suffix>` (`rock01_roughness` → `rock01_rmaos`,
 /// and `rock01_rmaos` → `rock01_rmaos` for a source that already carries a §6.1 suffix, audit 08a-4). Its `[files]`
 /// key is this stem in the first source's folder, wherever an output path puts the file.
-/// shortcut: only the built-in §6.1 suffixes are cut, not preset aliases (the GUI calls this without a registry);
-/// pass the alias table when a recipe can take an aliased pre-packed source.
+/// The base is `group::base_of`, which carries the alias `shortcut:`.
 pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
     virtual_stem_as(first_source, kind.suffix())
 }
@@ -123,14 +122,14 @@ pub(crate) fn virtual_stem_as(first_source: &Path, suffix: &str) -> String {
     format!("{}_{suffix}", source_base(first_source))
 }
 
-/// The base a source names a packed output after: its stem without a recognised suffix.
+/// The base a source names a packed output after: its stem without a recognised suffix (`group::base_of`).
 fn source_base(p: &Path) -> String {
     let stem = p
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    split_vocab(&stem).map_or_else(|| crate::group::split_suffix(&stem).0, |(b, _)| b)
+    crate::group::base_of(&stem)
 }
 
 /// Note DY: a hand-role helper that `group::join_helpers` moved into set `x` (`x_mask`) names a packed output as the

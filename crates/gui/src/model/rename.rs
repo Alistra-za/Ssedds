@@ -7,11 +7,12 @@ use super::{AppModel, Dialog};
 use crate::pgp::prefix::check_file_name;
 use engine::config::Target;
 use engine::discover::{canonicalise_outputs, InputFile, InputKind};
-use engine::group::{split_suffix, split_vocab};
-use engine::sets::same_id;
+use engine::group::base_of;
+use engine::sets::fold_id;
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenameMode {
@@ -149,15 +150,15 @@ impl RenamePlan {
     }
 }
 
+/// The plan the dialog last drew, with what it was made from (`AppModel::rename_plan_cached`).
+pub(crate) struct PlanCache {
+    key: (super::ViewKey, u64),
+    dialog: RenameDialog,
+    plan: Arc<RenamePlan>,
+}
+
 const PACKED: &str = "skipped (a packed output has no file of its own)";
 const LOCKED: &str = "skipped (locked)";
-
-/// The part of a file stem before its map suffix or exporter term (`wall_normal` → `wall`).
-pub(crate) fn base_of(stem: &str) -> &str {
-    let base = split_vocab(stem).map_or_else(|| split_suffix(stem).0, |(b, _)| b);
-    // Both splits cut a tail off `stem`, so the base is a prefix of it.
-    &stem[..base.len().min(stem.len())]
-}
 
 /// The tail a name ends in, as the kind column shows it: `_n`, `_normal`, or "colour".
 fn role_of(stem: &str) -> String {
@@ -181,7 +182,7 @@ pub(crate) fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
-fn lower(p: &str) -> String {
+pub(super) fn lower(p: &str) -> String {
     p.replace('\\', "/").to_lowercase()
 }
 
@@ -199,8 +200,19 @@ pub(crate) fn input_output(rel: &str) -> String {
     f[0].output.to_string_lossy().replace('\\', "/")
 }
 
+thread_local! {
+    // Per thread: tests run side by side, each drawing on its own thread.
+    static PLANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How often this thread ran `plan_rename` (tests: the dialog plans once per change, not once per frame).
+pub fn plan_calls() -> usize {
+    PLANS.get()
+}
+
 /// F3b spec §4: every row of the dialog for `d`, with its checks. Pure: reads the model, writes nothing.
 pub fn plan_rename(m: &AppModel, d: &RenameDialog) -> RenamePlan {
+    PLANS.set(PLANS.get() + 1);
     let re = match d.recipe.compile() {
         Ok(re) => re,
         Err(e) => {
@@ -239,19 +251,40 @@ fn row(key: &str, old: String) -> RenameRow {
     }
 }
 
+/// Per member, the slots some set holding it has locked; built once per plan (Note FA).
+fn locked_slots(views: &[SetView]) -> HashMap<&str, BTreeSet<u8>> {
+    let mut out: HashMap<&str, BTreeSet<u8>> = HashMap::new();
+    for v in views.iter().filter(|v| !v.locks.is_empty()) {
+        for k in &v.members {
+            out.entry(k).or_default().extend(&v.locks);
+        }
+    }
+    out
+}
+
 /// The slot `item` fills in its set is locked (F3a Task 8).
-fn fills_locked_slot(views: &[SetView], m: &AppModel, key: &str) -> bool {
+fn fills_locked_slot(locked: &HashMap<&str, BTreeSet<u8>>, m: &AppModel, key: &str) -> bool {
     let Some(it) = m.item(key) else { return false };
     let Some(slot) = slot_of(it) else {
         return false;
     };
-    views
-        .iter()
-        .any(|v| v.members.iter().any(|k| k == key) && v.locks.contains(&slot.slot_number()))
+    locked
+        .get(key)
+        .is_some_and(|l| l.contains(&slot.slot_number()))
+}
+
+/// The index of the first set per folded id (`same_id`'s fold); the first one wins, as a front-to-back search did.
+fn first_by_id(views: &[SetView]) -> HashMap<String, usize> {
+    let mut out = HashMap::with_capacity(views.len());
+    for (i, v) in views.iter().enumerate() {
+        out.entry(fold_id(&v.id)).or_insert(i);
+    }
+    out
 }
 
 fn input_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<RenameRow> {
     let views = views(m);
+    let locked = locked_slots(&views);
     let project = m.project.as_ref();
     let mut out = vec![];
     for key in &d.keys {
@@ -265,14 +298,14 @@ fn input_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<RenameR
             out.push(r);
             continue;
         }
-        if fills_locked_slot(&views, m, key) {
+        if fills_locked_slot(&locked, m, key) {
             r.skipped = Some(LOCKED.into());
         }
         let real_ext = split_ext(split_path(key).1).1.to_string();
         let (dir, name) = split_path(&current);
         let stem = split_ext(name).0;
-        let base = base_of(stem);
-        let tail = &stem[base.len()..];
+        // Both splits cut a tail off `stem`, so the base is a prefix of it.
+        let (base, tail) = stem.split_at(base_of(stem).len().min(stem.len()));
         let new = match d.typed.get(key) {
             Some(t) => {
                 let t = t.trim().replace('\\', "/");
@@ -382,9 +415,10 @@ fn input_collisions(m: &AppModel, rows: &mut [RenameRow]) {
 
 fn output_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<RenameRow> {
     let views = views(m);
+    let index = first_by_id(&views);
     let mut out = vec![];
     for id in &d.keys {
-        let Some(v) = views.iter().find(|v| same_id(&v.id, id)) else {
+        let Some(v) = index.get(&fold_id(id)).map(|&i| &views[i]) else {
             continue;
         };
         let outputs = set_outputs(m, v);
@@ -396,7 +430,7 @@ fn output_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<Rename
             continue;
         };
         let stem = split_ext(split_path(&first).1).0.to_string();
-        let old = base_of(&stem).to_string();
+        let old = base_of(&stem);
         let mut r = row(&v.id, old.clone());
         let new = match d.typed.get(&v.id) {
             Some(t) => {
@@ -456,27 +490,30 @@ fn set_outputs(m: &AppModel, v: &SetView) -> Vec<(String, String)> {
 /// An output another texture writes, or two sets renamed onto one output, block.
 fn output_collisions(m: &AppModel, rows: &mut [RenameRow]) {
     let views = views(m);
-    let changing: BTreeSet<String> = rows
+    let index = first_by_id(&views);
+    // Each set's outputs, once (the two loops below both read them).
+    let outs: Vec<Vec<(String, String)>> = views.iter().map(|v| set_outputs(m, v)).collect();
+    let changing: HashSet<String> = rows
         .iter()
         .filter(|r| r.writes())
-        .map(|r| r.key.clone())
+        .map(|r| fold_id(&r.key))
         .collect();
     let mut taken: BTreeMap<String, String> = BTreeMap::new();
-    for v in views.iter() {
-        if changing.iter().any(|c| same_id(c, &v.id)) {
+    for (v, outs) in views.iter().zip(&outs) {
+        if changing.contains(&fold_id(&v.id)) {
             continue;
         }
-        for (_, jk) in set_outputs(m, v) {
-            taken.insert(lower(&jk), v.id.clone());
+        for (_, jk) in outs {
+            taken.insert(lower(jk), v.id.clone());
         }
     }
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for r in rows.iter_mut().filter(|r| r.writes()) {
-        let Some(v) = views.iter().find(|v| same_id(&v.id, &r.key)) else {
+        let Some(&at) = index.get(&fold_id(&r.key)) else {
             continue;
         };
-        for (_, jk) in set_outputs(m, v) {
-            let Some(p) = renamed_output(&jk, &r.new) else {
+        for (_, jk) in &outs[at] {
+            let Some(p) = renamed_output(jk, &r.new) else {
                 continue;
             };
             let l = lower(&p.to_string_lossy());
@@ -513,15 +550,24 @@ impl AppModel {
     /// textures.
     pub fn rename_keys(&self, mode: RenameMode) -> Vec<String> {
         let views = views(self);
-        let sets: Vec<&SetView> = self
-            .selected_sets()
+        // First match wins, as a front-to-back search over `views` did.
+        let mut by_key: HashMap<&str, &SetView> = HashMap::new();
+        let selected = self.selected_sets();
+        if !selected.is_empty() {
+            for v in views.iter() {
+                by_key.entry(&v.key).or_insert(v);
+            }
+        }
+        let sets: Vec<&SetView> = selected
             .iter()
-            .filter_map(|k| views.iter().find(|v| &v.key == k))
+            .filter_map(|k| by_key.get(k.as_str()).copied())
             .collect();
         let items = self.selected_items();
+        // `out` is the answer and keeps the order; `seen` only answers "already in `out`?".
         let mut out: Vec<String> = vec![];
+        let mut seen: HashSet<String> = HashSet::new();
         let mut push = |k: &str| {
-            if !out.iter().any(|o| o == k) {
+            if seen.insert(k.to_string()) {
                 out.push(k.to_string());
             }
         };
@@ -529,9 +575,15 @@ impl AppModel {
             RenameMode::Inputs if sets.is_empty() => items.iter().for_each(|k| push(k)),
             RenameMode::Inputs => sets.iter().flat_map(|v| &v.members).for_each(|k| push(k)),
             RenameMode::Outputs if sets.is_empty() => {
+                let mut set_of: HashMap<&str, &str> = HashMap::new();
+                for v in views.iter() {
+                    for k in &v.members {
+                        set_of.entry(k).or_insert(&v.id);
+                    }
+                }
                 for k in &items {
-                    if let Some(v) = views.iter().find(|v| v.members.iter().any(|m| m == k)) {
-                        push(&v.id);
+                    if let Some(id) = set_of.get(k.as_str()) {
+                        push(id);
                     }
                 }
             }
@@ -554,6 +606,32 @@ impl AppModel {
         }));
     }
 
+    /// `plan_rename(self, d)` for drawing: the last plan again while the dialog and everything the plan reads are as
+    /// they were (the key `views()` uses, which covers the items, the sets, the target and the scan, and the project
+    /// document's revision for the `[inputs]` aliases). Apply never uses it: `apply_rename` plans for itself.
+    pub fn rename_plan_cached(&self, d: &RenameDialog) -> Arc<RenamePlan> {
+        let key = (
+            self.view_key(),
+            self.project.as_ref().map_or(0, |p| p.rev()),
+        );
+        if let Some(c) = self.rename_cache.borrow().as_ref() {
+            if c.key == key && c.dialog == *d {
+                return c.plan.clone();
+            }
+        }
+        let plan = Arc::new(plan_rename(self, d));
+        *self.rename_cache.borrow_mut() = Some(PlanCache {
+            key,
+            dialog: d.clone(),
+            plan: plan.clone(),
+        });
+        plan
+    }
+
+    /// Drop the cached plan (the dialog closed); nothing reads a stale one, the key is checked on every use.
+    pub fn clear_rename_cache(&self) {
+        self.rename_cache.take();
+    }
     /// The open rename dialog's plan.
     pub fn rename_plan(&self) -> Option<RenamePlan> {
         match &self.dialog {
@@ -618,6 +696,7 @@ impl AppModel {
             RenameMode::Outputs => vec![],
         };
         self.dialog = None;
+        self.clear_rename_cache();
         self.note_kept_entries(&retargets);
         self.batch_edit(&label, |m| {
             for (from, to) in &retargets {

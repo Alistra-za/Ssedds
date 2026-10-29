@@ -252,7 +252,7 @@ fn set_editor_shown(model: &AppModel, three_d: bool) -> bool {
         && !model.in_bulk()
         && (three_d
             || matches!(&model.selection, Selection::Set(key)
-                if crate::model::sets::set_views(model).iter().any(|v| v.key == *key)))
+                if crate::model::sets::views(model).iter().any(|v| v.key == *key)))
 }
 
 /// A11: with no folder, one big Open folder…, the recent folders and the drop hint.

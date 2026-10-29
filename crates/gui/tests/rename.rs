@@ -552,3 +552,328 @@ fn whole_path_renames_folders_in_bulk() {
         "prefix before the folders, suffix before the extension"
     );
 }
+
+// ---- Task 2 (Note FA): pins of what the plan and the menu keys give today, before they were made linear.
+
+/// Every field of every row, one line per row (paths with `/`).
+fn project(p: &RenamePlan) -> Vec<String> {
+    p.rows
+        .iter()
+        .map(|r| {
+            format!(
+                "{}|{}|{}|{:?}|{}|{}|{}|{:?}|{:?}|{:?}",
+                r.key,
+                r.old,
+                r.new,
+                r.kind,
+                r.output,
+                r.included,
+                r.matched,
+                r.problem,
+                r.warning,
+                r.skipped
+            )
+            .replace("\\\\", "/")
+        })
+        .collect()
+}
+
+fn strs(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn rename_keys_on_the_fixture_follow_the_selection() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.select_all_visible();
+    assert_eq!(
+        m.rename_keys(RenameMode::Inputs),
+        strs(&[
+            "landscape/leaf.png",
+            "landscape/odd.png",
+            "landscape/rock01.png",
+            "landscape/rock01_normal.png",
+            "landscape/rock01_rmaos"
+        ])
+    );
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/leaf", "landscape/odd", "landscape/rock01"])
+    );
+    // Two textures of one set give that set once; the order is the selection's.
+    m.click_item("landscape/rock01_normal.png", false, false);
+    m.click_item(ROCK, true, false);
+    m.click_item(LEAF, true, false);
+    assert_eq!(
+        m.rename_keys(RenameMode::Inputs),
+        strs(&["landscape/rock01_normal.png", ROCK, LEAF])
+    );
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/rock01", "landscape/leaf"])
+    );
+    // Selected sets: Inputs takes their members (a set's own order), Outputs the set ids.
+    let (rock_set, leaf_set) = (set_key_of(&m, ROCK), set_key_of(&m, LEAF));
+    m.click_set(&leaf_set, false, false);
+    m.click_set(&rock_set, true, false);
+    assert_eq!(
+        m.rename_keys(RenameMode::Inputs),
+        strs(&[
+            "landscape/leaf.png",
+            "landscape/rock01.png",
+            "landscape/rock01_ao.png",
+            "landscape/rock01_normal.png",
+            "landscape/rock01_rmaos",
+            "landscape/rock01_roughness.png"
+        ])
+    );
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/leaf", "landscape/rock01"])
+    );
+}
+
+#[test]
+fn rename_keys_skip_textures_that_are_in_no_set_in_outputs_mode() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let leaf_set = set_key_of(&m, LEAF);
+    m.sets.retain(|s| s.key != leaf_set);
+    m.invalidate_views();
+    m.click_item(LEAF, false, false);
+    m.click_item(ROCK, true, false);
+    assert_eq!(m.rename_keys(RenameMode::Inputs), strs(&[LEAF, ROCK]));
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/rock01"])
+    );
+    m.click_item(LEAF, false, false);
+    assert_eq!(m.rename_keys(RenameMode::Outputs), Vec::<String>::new());
+}
+
+#[test]
+fn rename_keys_over_sets_that_share_members_and_a_texture_in_two_sets() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = many_sets(d.path(), 3);
+    let keys: Vec<String> = sdc_gui::model::sets::views(&m)
+        .iter()
+        .map(|v| v.key.clone())
+        .collect();
+    // Two sets with the same member: Inputs names it once.
+    m.click_set(&keys[2], false, false);
+    m.click_set(&keys[0], true, false);
+    assert_eq!(m.rename_keys(RenameMode::Inputs), strs(&[LEAF]));
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/leaf0002", "landscape/leaf0000"])
+    );
+    // A texture in all three sets: the first set in display order is its set (Outputs); two of them give it once.
+    m.click_item(LEAF, false, false);
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/leaf0000"])
+    );
+    m.click_item(ROCK, true, false);
+    assert_eq!(m.rename_keys(RenameMode::Inputs), strs(&[LEAF, ROCK]));
+    assert_eq!(
+        m.rename_keys(RenameMode::Outputs),
+        strs(&["landscape/leaf0000"])
+    );
+}
+
+#[test]
+fn aliased_selection_keeps_the_selection_order() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item(LEAF, false, false);
+    m.click_item(ROCK, true, false);
+    m.open_rename(RenameMode::Inputs);
+    let d2 = dialog(&mut m);
+    d2.typed.insert(LEAF.into(), "landscape/maple.png".into());
+    d2.typed.insert(ROCK.into(), "landscape/stone.png".into());
+    assert!(m.apply_rename());
+    idle(&mut m);
+    m.click_item("landscape/odd.png", false, false);
+    m.click_item(ROCK, true, false);
+    m.click_item(LEAF, true, false);
+    assert_eq!(m.aliased_selection(), strs(&[ROCK, LEAF]));
+    m.click_item(LEAF, false, false);
+    m.click_item("landscape/odd.png", true, false);
+    assert_eq!(m.aliased_selection(), strs(&[LEAF]));
+    m.click_item("landscape/odd.png", false, false);
+    assert_eq!(m.aliased_selection(), Vec::<String>::new());
+}
+
+#[test]
+fn the_plan_rows_and_collision_messages_are_pinned() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.select_all_visible();
+    m.open_rename(RenameMode::Inputs);
+    dialog(&mut m).recipe.prefix = "x_".into();
+    assert_eq!(
+        project(&plan(&m)),
+        strs(&[
+            "landscape/leaf.png|landscape/leaf.png|landscape/x_leaf.png|Some((\"colour\", \"colour\"))|landscape/x_leaf.dds|true|true|None|None|None",
+            "landscape/odd.png|landscape/odd.png|landscape/x_odd.png|Some((\"colour\", \"colour\"))|landscape/x_odd.dds|true|true|None|None|None",
+            "landscape/rock01.png|landscape/rock01.png|landscape/x_rock01.png|Some((\"colour\", \"colour\"))|landscape/x_rock01.dds|true|true|None|None|None",
+            "landscape/rock01_normal.png|landscape/rock01_normal.png|landscape/x_rock01_normal.png|Some((\"_normal\", \"_normal\"))|landscape/x_rock01_n.dds|true|true|None|None|None",
+            "landscape/rock01_rmaos|landscape/rock01_rmaos|landscape/rock01_rmaos|None||true|false|None|None|Some(\"skipped (a packed output has no file of its own)\")",
+        ])
+    );
+    m.open_rename(RenameMode::Outputs);
+    dialog(&mut m).recipe.prefix = "x_".into();
+    assert_eq!(
+        project(&plan(&m)),
+        strs(&[
+            "landscape/leaf|leaf|x_leaf|None|landscape/x_leaf.dds|true|true|None|None|None",
+            "landscape/odd|odd|x_odd|None|landscape/x_odd.dds|true|true|None|None|None",
+            "landscape/rock01|rock01|x_rock01|None|landscape/x_rock01.dds (+2 more)|true|true|None|None|None",
+        ])
+    );
+    // Outputs: two sets onto one name (the second is refused), and a set onto a name a selected set gives up.
+    let (leaf, odd) = (set_id_of(&m, LEAF), set_id_of(&m, "landscape/odd.png"));
+    let rock = set_id_of(&m, ROCK);
+    dialog(&mut m).recipe.prefix.clear();
+    let d2 = dialog(&mut m);
+    d2.typed.insert(leaf.clone(), "same".into());
+    d2.typed.insert(odd.clone(), "same".into());
+    d2.typed.insert(rock.clone(), "leaf".into());
+    assert_eq!(
+        project(&plan(&m)),
+        strs(&[
+            "landscape/leaf|leaf|same|None|landscape/same.dds|true|true|None|None|None",
+            "landscape/odd|odd|same|None|landscape/same.dds|true|true|Some(\"landscape/leaf is renamed onto landscape/same.dds too\")|None|None",
+            "landscape/rock01|rock01|leaf|None|landscape/leaf.dds (+2 more)|true|true|None|None|None",
+        ])
+    );
+    // Outputs: a set onto the output of a set that is not renamed.
+    m.click_item(ROCK, false, false);
+    m.open_rename(RenameMode::Outputs);
+    dialog(&mut m).typed.insert(rock.clone(), "LEAF".into());
+    assert_eq!(
+        project(&plan(&m)),
+        strs(&[
+            "landscape/rock01|rock01|LEAF|None|landscape/LEAF.dds (+2 more)|true|true|Some(\"landscape/leaf already writes landscape/LEAF.dds\")|None|None",
+        ])
+    );
+    // Inputs: onto a name another file has, two files onto one name, one onto a name another file gives up.
+    m.select_all_visible();
+    m.open_rename(RenameMode::Inputs);
+    let d2 = dialog(&mut m);
+    d2.typed.insert(LEAF.into(), "landscape/odd.png".into());
+    d2.typed.insert(ROCK.into(), "landscape/same.png".into());
+    d2.typed
+        .insert("landscape/odd.png".into(), "landscape/same.png".into());
+    d2.typed.insert(
+        "landscape/rock01_normal.png".into(),
+        "landscape/leaf.png".into(),
+    );
+    assert_eq!(
+        project(&plan(&m)),
+        strs(&[
+            "landscape/leaf.png|landscape/leaf.png|landscape/odd.png|Some((\"colour\", \"colour\"))|landscape/odd.dds|true|true|Some(\"landscape/odd.png already has this name\")|None|None",
+            "landscape/odd.png|landscape/odd.png|landscape/same.png|Some((\"colour\", \"colour\"))|landscape/same.dds|true|true|None|None|None",
+            "landscape/rock01.png|landscape/rock01.png|landscape/same.png|Some((\"colour\", \"colour\"))|landscape/same.dds|true|true|Some(\"landscape/odd.png is renamed to this name too\")|None|None",
+            "landscape/rock01_normal.png|landscape/rock01_normal.png|landscape/leaf.png|Some((\"_normal\", \"colour\"))|landscape/leaf.dds|true|true|Some(\"landscape/leaf.png already has this name\")|Some(\"read as colour now (was _normal)\")|None",
+            "landscape/rock01_rmaos|landscape/rock01_rmaos|landscape/rock01_rmaos|None||true|false|None|None|Some(\"skipped (a packed output has no file of its own)\")",
+        ])
+    );
+    // A locked slot skips its texture.
+    let rock_diffuse = sdc_gui::model::sets::SlotKind::Diffuse.slot_number();
+    m.set_slot_lock(&rock, rock_diffuse, true).unwrap();
+    dialog(&mut m).typed.clear();
+    dialog(&mut m).recipe.prefix = "y_".into();
+    let p = project(&plan(&m));
+    assert_eq!(
+        p[2],
+        "landscape/rock01.png|landscape/rock01.png|landscape/y_rock01.png|Some((\"colour\", \"colour\"))|landscape/y_rock01.dds|true|true|None|None|Some(\"skipped (locked)\")"
+    );
+    assert_eq!(p[0].matches("skipped").count(), 0);
+}
+
+fn rename_menu(
+    entries: Vec<sdc_gui::model::bulk::MenuEntry>,
+) -> Vec<(MenuAction, String, Option<String>)> {
+    entries
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                e.action,
+                MenuAction::RenameInputs | MenuAction::RenameOutputs | MenuAction::ClearInputAlias
+            )
+        })
+        .map(|e| (e.action, e.label, e.disabled))
+        .collect()
+}
+
+#[test]
+fn the_item_and_set_menus_keep_their_rename_entries_in_order() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    let f2 = format!("  {}", sdc_gui::ui::actions::keys_text("rename"));
+    assert_eq!(
+        rename_menu(m.item_menu()),
+        vec![
+            (
+                MenuAction::RenameInputs,
+                format!("Rename inputs…{f2}"),
+                None
+            ),
+            (
+                MenuAction::RenameOutputs,
+                "Rename outputs…".to_string(),
+                None
+            ),
+        ]
+    );
+    m.open_rename(RenameMode::Inputs);
+    let d2 = dialog(&mut m);
+    d2.typed.insert(LEAF.into(), "landscape/maple.png".into());
+    assert!(m.apply_rename());
+    idle(&mut m);
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    assert_eq!(
+        rename_menu(m.item_menu()),
+        vec![
+            (
+                MenuAction::RenameInputs,
+                format!("Rename inputs…{f2}"),
+                None
+            ),
+            (
+                MenuAction::RenameOutputs,
+                "Rename outputs…".to_string(),
+                None
+            ),
+            (
+                MenuAction::ClearInputAlias,
+                "Clear input alias (1)".to_string(),
+                None
+            ),
+        ]
+    );
+    let (a, b) = (set_key_of(&m, ROCK), set_key_of(&m, LEAF));
+    m.click_set(&a, false, false);
+    m.click_set(&b, true, false);
+    assert_eq!(
+        rename_menu(m.set_menu()),
+        vec![
+            (
+                MenuAction::RenameOutputs,
+                format!("Rename outputs…{f2}"),
+                None
+            ),
+            (MenuAction::RenameInputs, "Rename inputs…".to_string(), None),
+            (
+                MenuAction::ClearInputAlias,
+                "Clear input alias (1)".to_string(),
+                None
+            ),
+        ]
+    );
+}

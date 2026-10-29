@@ -228,13 +228,25 @@ fn status_notice(item: &TextureItem) -> Option<String> {
     (item.status == ItemStatus::NeedsDecision).then(|| SUGGESTED.to_string())
 }
 
-/// Profile plus, for a packed output, its recipe and sources (with their stamps).
+/// Profile plus, for a packed output, its recipe and sources (with their stamps), plus the job's bake, derive,
+/// cube and fill inputs ([`extra_inputs_key`]).
 fn signature(job: &ResolvedJob) -> String {
     let p = sha256_json(&job.profile).unwrap_or_default();
-    match &job.pack {
+    let head = match &job.pack {
         Some(pk) => format!("{p}:{}", pack_key(pk).unwrap_or_default()),
         None => format!("{p}:{:?}:{:?}", job.source, job.active_rnm()),
-    }
+    };
+    format!("{head}:{}", extra_inputs_key(job))
+}
+
+/// What a job reads besides its profile, `source` and RNM layers: the bake's `_n`, the derive's and cube's files
+/// and the fill's helper, each with its settings and stamp (Debug: plain structs, no maps, so equal jobs match).
+/// Shared with the set preview's signature (Note FA1).
+pub fn extra_inputs_key(job: &ResolvedJob) -> String {
+    format!(
+        "{:?}:{:?}:{:?}:{:?}",
+        job.bake, job.derive, job.cube, job.fill
+    )
 }
 
 /// CPU decode of `levels` (mips `first_level..` of the chain `dims`) as `fmt`; a mip that fails comes back black.
@@ -729,5 +741,122 @@ mod tests {
             matches!(&m.preview.encoded, preview::EncodedState::Failed(e) if e.contains("boom"))
         );
         assert!(matches!(m.dialog, Some(Dialog::Error(_))));
+    }
+
+    fn stamped(n: u64) -> Option<SourceStamp> {
+        Some(SourceStamp {
+            size: n,
+            mtime_ns: n,
+        })
+    }
+
+    /// A plain job carrying every extra input the change signature must cover: a fill, a bake, a derive, a cube.
+    fn job_with_inputs() -> ResolvedJob {
+        use engine::config::{CubeLayout, GraySource, RawMap, Subtype, Target};
+        use engine::cube::{CubeJob, CubeSource};
+        use engine::derive::{DeriveJob, DeriveKind, DeriveSource};
+        use engine::helper::FillJob;
+        use engine::pack::{ChannelSource, PackSource};
+        let profile = engine::presets::PresetRegistry::builtin()
+            .unwrap()
+            .base_profile(Target::Cs, Subtype::Diffuse);
+        let d = |value| ChannelSource::Default { value };
+        ResolvedJob {
+            input: "a.png".into(),
+            output: "a.dds".into(),
+            game_path: "a".into(),
+            set_key: "x/a".into(),
+            profile: profile.clone(),
+            provenance: Default::default(),
+            suggestions: vec![],
+            warnings: vec![],
+            status: engine::policy::JobStatus::Ready,
+            suffix_alias: None,
+            source: stamped(1),
+            pack: None,
+            bake: Some(engine::bake::BakeJob {
+                normal: "a_n.png".into(),
+                normal_profile: profile,
+                shift: 1,
+                stamp: stamped(2),
+                rnm: None,
+            }),
+            shader: None,
+            rnm: None,
+            derive: Some(DeriveJob {
+                kind: DeriveKind::LegacyN,
+                landscape: false,
+                albedo: None,
+                normal: Some("a_n.png".into()),
+                rough: d(0.5),
+                metal: d(0.0),
+                ao: d(1.0),
+                height: None,
+                curves: None,
+                cavity: None,
+                gray: GraySource::R,
+                params: Default::default(),
+                sources: vec![DeriveSource {
+                    path: "a_n.png".into(),
+                    role: "normal".into(),
+                    stamp: stamped(3),
+                }],
+            }),
+            cube: Some(CubeJob {
+                layout: CubeLayout::Faces,
+                sources: (0..6)
+                    .map(|f| CubeSource {
+                        path: format!("f{f}.png").into(),
+                        stamp: stamped(10 + f as u64),
+                        face: Some(f),
+                    })
+                    .collect(),
+            }),
+            fill: Some(FillJob {
+                source: PackSource {
+                    path: "h.png".into(),
+                    role: RawMap::Roughness,
+                    stamp: stamped(4),
+                    read: None,
+                },
+                read: None,
+                invert: false,
+                assigned: true,
+            }),
+        }
+    }
+
+    /// Trace-debug G4: the change signature covers the fill, bake, derive and cube inputs, not only the profile and
+    /// `source` (toggling Invert on a helper must re-encode); two identical jobs, or a clone, stay equal.
+    #[test]
+    fn signature_changes_with_fill_bake_derive_cube() {
+        let job = job_with_inputs();
+        let a = signature(&job);
+        assert_eq!(a, signature(&job_with_inputs()), "an identical job");
+        assert_eq!(a, signature(&job.clone()), "a re-plan with nothing changed");
+        type Edit = fn(&mut ResolvedJob);
+        let edits: [(&str, Edit); 6] = [
+            ("fill invert", |j| j.fill.as_mut().unwrap().invert = true),
+            ("fill read", |j| {
+                j.fill.as_mut().unwrap().read = Some(engine::helper::HelperRead::G)
+            }),
+            ("fill source stamp", |j| {
+                j.fill.as_mut().unwrap().source.stamp = stamped(99)
+            }),
+            ("bake stamp", |j| {
+                j.bake.as_mut().unwrap().stamp = stamped(99)
+            }),
+            ("cube face 1 stamp", |j| {
+                j.cube.as_mut().unwrap().sources[1].stamp = stamped(99)
+            }),
+            ("derive source stamp", |j| {
+                j.derive.as_mut().unwrap().sources[0].stamp = stamped(99)
+            }),
+        ];
+        for (what, edit) in edits {
+            let mut j = job.clone();
+            edit(&mut j);
+            assert_ne!(a, signature(&j), "{what}");
+        }
     }
 }

@@ -256,10 +256,7 @@ pub fn derive_sets(
         .collect();
     let (mut out, mut drop, mut notes) = (vec![], vec![], vec![]);
     for (key, pick) in &pbr.shaders {
-        if !matches!(
-            pick.shader,
-            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
-        ) {
+        if !pick.shader.is_pbr_family() {
             continue;
         }
         let jobs: Vec<&ResolvedJob> = pbr.jobs.iter().filter(|j| &j.set_key == key).collect();

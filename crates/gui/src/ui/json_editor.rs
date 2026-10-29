@@ -649,7 +649,7 @@ fn set_entry(
     let framed = entry_frame(ui, stroke).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
-            let mut title = egui::RichText::new(&v.label).strong();
+            let mut title = egui::RichText::new(&v.id).strong();
             if !mine.is_empty() {
                 title = title.strikethrough().color(AMBER);
             }
@@ -1133,8 +1133,7 @@ fn matches(v: &SetView, e: &EntryInput, query: &str) -> bool {
                 .filter(|(k, _)| is_match_key(k) || k.starts_with("slot"))
                 .filter_map(|(_, val)| val.as_str().map(str::to_string)),
         );
-    [v.id.clone(), v.label.clone()]
-        .into_iter()
+    std::iter::once(v.id.clone())
         .chain(paths)
         .any(|s| s.to_lowercase().contains(&q))
 }

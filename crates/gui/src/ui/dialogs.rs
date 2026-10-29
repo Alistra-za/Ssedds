@@ -4,7 +4,11 @@ use eframe::egui;
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     super::actions::draw(ctx, model);
-    let Some(dialog) = model.dialog.clone() else {
+    let dialog = model.dialog.clone();
+    if !matches!(dialog, Some(Dialog::Rename(_))) {
+        model.clear_rename_cache();
+    }
+    let Some(dialog) = dialog else {
         return;
     };
     match dialog {

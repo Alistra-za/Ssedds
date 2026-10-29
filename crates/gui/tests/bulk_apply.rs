@@ -118,6 +118,39 @@ fn a_bulk_sub_type_runs_the_pbr_follow_per_set_and_one_undo_restores_both_files(
     );
 }
 
+/// Perf task 4 pin: a bulk Sub-type apply prunes `auto_pbr` entries whose file is gone and keeps live ones, with the
+/// members it switches appended in order; a bulk reset reverts them and prunes again.
+#[test]
+fn a_bulk_sub_type_prunes_gone_auto_pbr_entries_and_keeps_live_ones() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("m")).unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([10u8, 20, 30]))
+        .save(d.path().join("m/keep.png"))
+        .unwrap();
+    let mut m = two_sets(d.path());
+    let (keep, n1, n2) = ("m/keep.png", "m/rock01_n.png", "m/rock02_n.png");
+    let set_auto =
+        |m: &mut AppModel, a: &[&str]| m.sets_doc.as_mut().unwrap().set_auto_pbr(&strings(a));
+    let auto = |m: &AppModel| m.sets_doc.as_ref().unwrap().auto_pbr();
+    set_auto(&mut m, &["m/gone_a.png", keep, "m/gone_b.png"]);
+    let diffuses = strings(&["m/rock01.png", "m/rock02.png"]);
+    m.apply_bulk_edit(&diffuses, "subtype", BulkOp::Set(json!("pbr_albedo")));
+    assert_eq!(auto(&m), strings(&[keep, n1, n2]));
+    assert_eq!(file(&m, n1, "subtype"), Some(json!("pbr_normal")));
+    assert_eq!(file(&m, n2, "subtype"), Some(json!("pbr_normal")));
+    assert_eq!(file(&m, keep, "subtype"), None);
+    for k in &diffuses {
+        assert_eq!(file(&m, k, "subtype"), Some(json!("pbr_albedo")), "{k}");
+    }
+    idle(&mut m);
+    set_auto(&mut m, &[keep, n1, n2, "m/gone_c.png"]);
+    m.apply_bulk_edit(&diffuses, "subtype", BulkOp::Clear);
+    assert_eq!(auto(&m), strings(&[keep]));
+    for k in diffuses.iter().map(String::as_str).chain([n1, n2, keep]) {
+        assert_eq!(file(&m, k, "subtype"), None, "{k}");
+    }
+}
+
 #[test]
 fn a_read_only_sdc_toml_makes_every_bulk_write_a_no_op() {
     let d = tempfile::tempdir().unwrap();

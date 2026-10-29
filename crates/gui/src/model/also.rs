@@ -18,12 +18,7 @@ pub const EXPORT_RUNNING: &str = "Wait for the export to finish";
 
 /// TA11: a set Vanilla and CM derive from, by its PBR-phase shader pick (as `engine::also::derive_sets` reads it).
 pub fn is_pbr_set(v: &sets::SetView) -> bool {
-    v.shader.as_ref().is_some_and(|p| {
-        matches!(
-            p.shader,
-            Shader::Pbr | Shader::PbrLandscape | Shader::PbrGrass
-        )
-    })
+    v.shader.as_ref().is_some_and(|p| p.shader.is_pbr_family())
 }
 
 fn phase_name(p: Phase) -> &'static str {
