@@ -276,7 +276,7 @@ fn a_cap_change_while_encoding_rejects_that_completion_and_schedules_again() {
     enc.pump(m.session.as_ref(), t, false);
     let t1 = enc.token_of(SlotKind::Diffuse);
     assert_ne!(t1, 0);
-    enc.set_cap(32, t);
+    recap(&mut enc, &m, 32, t);
     assert!(enc
         .members
         .values()
@@ -1143,13 +1143,12 @@ fn dds_inputs_ignore_the_mode() {
 // ---- Task 14 fix round 1 ----
 
 #[test]
-fn a_no_op_cap_or_mode_change_keeps_members_fresh() {
+fn a_no_op_mode_change_keeps_members_fresh() {
     let (_d, m, mut enc, slots) = started();
     enc.hold_workers(false);
     enc.sync(&m, slots, Instant::now(), true);
     settle(&mut enc, &m);
     let t = enc.token_of(SlotKind::Diffuse);
-    enc.set_cap(DEFAULT_CAP, Instant::now());
     enc.set_mode(PreviewMode::Encoded, Instant::now());
     assert!(matches!(
         enc.members[&SlotKind::Diffuse].state,
@@ -1526,7 +1525,7 @@ fn a_cap_change_drops_both_variants_and_the_other_one_encodes_after_the_shown_on
     let (_d, m, mut enc) = started_ab();
     let t = Instant::now();
     enc.set_mode(PreviewMode::Source, t); // A/B in use; Encoded kept as the other copy
-    enc.set_cap(1024, t);
+    recap(&mut enc, &m, 1024, t);
     for k in kinds_of(&enc) {
         assert!(!enc.has_alt(k), "the other copy was made at the old cap");
         assert_eq!(enc.alt_token_of(k), 0);
@@ -1637,6 +1636,14 @@ fn kinds(s: &SetPreview) -> Vec<SlotKind> {
     s.enc.members.keys().copied().collect()
 }
 
+/// A new size cap as the encoder sees it: every member goes stale (old bytes on show), in-flight work is cancelled and
+/// its late result dropped. The encoder takes the cap at construction only; this assigns it and syncs, as sync does.
+fn recap(enc: &mut Encoder, m: &AppModel, cap: u32, now: Instant) {
+    enc.cap = cap;
+    let slots = enc.members.values().map(|x| x.slot.clone()).collect();
+    enc.sync(m, slots, now, true);
+}
+
 /// The workers are held: the test finishes every member's pending encode with a fake DDS.
 fn finish(s: &mut SetPreview, cap: u32) {
     for k in kinds(s) {
@@ -1745,7 +1752,7 @@ fn an_encode_completion_on_loaded_content_swaps_the_texture_and_pushes_no_scene(
     drain(&t);
     let key0 = builtin_key(&t.s);
     // A new size cap re-encodes every member; the old bytes stay on show meanwhile.
-    t.s.enc.set_cap(1024, Instant::now());
+    recap(&mut t.s.enc, &t.m, 1024, Instant::now());
     poll_once(&mut t.s, &t.m);
     assert!(
         drain(&t).is_empty(),
@@ -1768,7 +1775,7 @@ fn a_failed_encode_still_pushes_the_scene_so_the_games_texture_comes_back() {
     let mut t = live();
     drain(&t);
     let key0 = builtin_key(&t.s);
-    t.s.enc.set_cap(1024, Instant::now());
+    recap(&mut t.s.enc, &t.m, 1024, Instant::now());
     poll_once(&mut t.s, &t.m);
     for k in kinds(&t.s) {
         let tok = t.s.enc.token_of(k);
@@ -1822,7 +1829,7 @@ fn a_source_change_voids_both_variants_and_the_inactive_one_follows_the_active()
     poll_once(&mut t.s, &t.m);
     drain(&t);
     let n = n_paths(&t.s);
-    t.s.enc.set_cap(1024, Instant::now()); // a settings change as the encoder sees it
+    recap(&mut t.s.enc, &t.m, 1024, Instant::now()); // a settings change as the encoder sees it
     for k in kinds(&t.s) {
         assert!(!t.s.enc.has_alt(k));
     }
@@ -1855,7 +1862,7 @@ fn a_source_change_voids_both_variants_and_the_inactive_one_follows_the_active()
 fn a_flip_before_the_other_variant_exists_falls_back_to_the_re_encode() {
     let mut t = live();
     drain(&t);
-    t.s.enc.set_cap(1024, Instant::now()); // everything stale: no Fresh bytes to keep
+    recap(&mut t.s.enc, &t.m, 1024, Instant::now()); // everything stale: no Fresh bytes to keep
     t.s.set_mode(PreviewMode::Source);
     poll_once(&mut t.s, &t.m);
     for k in kinds(&t.s) {
@@ -1873,7 +1880,7 @@ fn members_sharing_a_path_with_one_other_copy_do_not_swap_and_drop_every_frame()
     let ks = kinds(&t.s);
     let shared = t.s.enc.members[&ks[0]].slot.paths.clone();
     t.s.enc.members.get_mut(&ks[1]).unwrap().slot.paths = shared;
-    t.s.enc.set_cap(1024, Instant::now()); // no other copies anywhere
+    recap(&mut t.s.enc, &t.m, 1024, Instant::now()); // no other copies anywhere
     t.s.set_mode(PreviewMode::Source);
     poll_once(&mut t.s, &t.m);
     finish(&mut t.s, 1024);

@@ -586,16 +586,6 @@ impl Encoder {
         }
     }
 
-    /// A new size cap: every member that has something to encode goes stale (old bytes on show), in-flight work
-    /// is cancelled and its late result dropped.
-    pub fn set_cap(&mut self, cap: u32, now: Instant) {
-        if cap == self.cap {
-            return;
-        }
-        self.cap = cap;
-        self.restart(now, false);
-    }
-
     pub fn mode(&self) -> PreviewMode {
         self.mode
     }
@@ -633,26 +623,6 @@ impl Encoder {
     #[doc(hidden)]
     pub fn alt_token_of(&self, kind: SlotKind) -> u64 {
         self.members.get(&kind).map_or(0, |m| m.alt_token)
-    }
-
-    fn restart(&mut self, now: Instant, skip_dds: bool) {
-        for mem in self.members.values_mut() {
-            if skip_dds && matches!(mem.source, Source::Dds(_)) {
-                mem.mode = self.mode;
-                continue;
-            }
-            if let Some(c) = mem.cancel.take() {
-                c.cancel();
-            }
-            mem.clear_alt();
-            mem.token = 0;
-            if !matches!(mem.state, EncState::Blocked(_)) {
-                mem.state = EncState::Stale(mem.state.shown().cloned());
-                mem.cap = self.cap;
-                mem.mode = self.mode;
-                mem.due = Some(now);
-            }
-        }
     }
 
     /// Test seam: the generation of `kind`'s live encode (0 = none).
