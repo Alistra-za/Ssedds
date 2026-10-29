@@ -88,7 +88,9 @@ fn mod_list_and_badges() {
     }]);
     let mut h = harness(m);
     h.run();
-    h.get_by_label("A");
+    // Note GC: the picked mod in the picker, and in the row's Mod column.
+    picker(&h, "A");
+    h.get_by_role_and_label(Role::Label, "A");
     // Review C17: the row says the path is under meshes\ (a dimmed prefix), so !ube/… reads as a path.
     h.get_by_label("meshes/x.nif");
     h.get_by_label("Patched by PGPatcher (in game)");
@@ -664,6 +666,11 @@ fn row(path: &str, origin: &str) -> (String, String) {
     (path.into(), origin.into())
 }
 
+/// The mod picker showing `value` (rule 10.8: a combo's accessible text is its value).
+fn picker<'h>(h: &'h Harness<'static, MeshesModel>, value: &'h str) -> egui_kittest::Node<'h> {
+    h.get_by(move |n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == value))
+}
+
 /// Note GC test 1: by default the list has one row per path, the game-winning copy, with that copy's mod.
 #[test]
 fn the_list_has_one_row_per_path_with_the_winning_mod() {
@@ -712,6 +719,66 @@ fn the_search_matches_a_path_or_a_mod_and_never_deselects() {
     h.get_by_label_contains("0 of 2 NIFs");
     // The detail pane still shows the hidden NIF.
     h.get_by_label("tree/oak.nif");
+}
+
+/// Note GC test 3: the mod picker offers "Any mod" and the mods that hold NIFs (no PGPatcher-derived mod); picking
+/// A lists both of A's copies, the losing rock.nif too.
+#[test]
+fn the_mod_picker_lists_mods_with_nifs_and_picking_one_lists_its_copies() {
+    let (_d, mut m) = scanned();
+    let pgp = mod_row(99, "PGPatcher output", 1, true);
+    m.mods.push(pgp);
+    let names: Vec<&str> = m.picker_mods().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["B", "A"],
+        "no Overwrite, separator, Data or derived mod"
+    );
+    let mut h = harness(m);
+    h.run();
+    picker(&h, "Any mod").click();
+    h.run();
+    for name in ["B", "A"] {
+        h.get_by_role_and_label(Role::Button, name);
+    }
+    for gone in ["overwrite", "Sep_separator", "PGPatcher output"] {
+        assert!(h.query_by_label(gone).is_none(), "{gone} is offered");
+    }
+    h.get_by_role_and_label(Role::Button, "A").click();
+    h.run();
+    let a = h.state().mods.iter().find(|r| r.name == "A").unwrap().id;
+    assert_eq!(h.state().selected_mod, Some(a));
+    let rows = rows_of(h.state_mut());
+    assert_eq!(
+        rows,
+        [row("meshes/rock.nif", "A"), row("meshes/tree/oak.nif", "A")]
+    );
+    let rock = h.state().nif_at(0).0.clone();
+    assert!(!rock.wins, "A's rock.nif loses to B's");
+    h.get_by_role_and_label(Role::Label, "Overridden"); // its status chip, not the filter chip
+                                                        // "Any mod" brings the winners back.
+    picker(&h, "A").click();
+    h.run();
+    h.get_by_role_and_label(Role::Button, "Any mod").click();
+    h.run();
+    assert_eq!(h.state().selected_mod, None);
+    assert_eq!(
+        rows_of(h.state_mut()),
+        [row("meshes/rock.nif", "B"), row("meshes/tree/oak.nif", "A")]
+    );
+}
+
+/// Note GC rule 6.1: picking a mod hides rows and never deselects.
+#[test]
+fn picking_a_mod_keeps_the_selected_nif() {
+    let (_d, mut m) = scanned();
+    let rock = m.nif_at(0).0.copy_id; // B's winning copy
+    m.select_nif(rock);
+    let a = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+    m.select_mod(a);
+    assert_eq!(m.selected_nif, Some(rock));
+    assert_eq!(m.selected_row().map(|r| r.copy_id), Some(rock));
+    assert!(!m.shapes.is_empty());
 }
 
 /// Note GC rule 1.7: "Reading the scan…" until the rows a reload asked for land.
@@ -1048,7 +1115,9 @@ fn long_file_ref_rows_do_not_widen_the_layout() {
     m.nifs = Arc::new(vec![nif(1, "meshes/x.nif")]);
     let mut h = harness(m);
     h.run();
-    let (mods_x, nifs_x) = (x_of(&h, "A"), x_of(&h, "meshes/x.nif"));
+    let mod_x =
+        |h: &Harness<'static, MeshesModel>| h.get_by_role_and_label(Role::Label, "A").rect().min.x;
+    let (mods_x, nifs_x) = (mod_x(&h), x_of(&h, "meshes/x.nif"));
     let long = long_line();
     h.state_mut().file_refs = Some(FileRefs {
         missing: vec![MissingRef {
@@ -1062,7 +1131,7 @@ fn long_file_ref_rows_do_not_widen_the_layout() {
     h.get_by_label("Plugin file references…").click();
     h.run();
     h.run();
-    assert_eq!((x_of(&h, "A"), x_of(&h, "meshes/x.nif")), (mods_x, nifs_x));
+    assert_eq!((mod_x(&h), x_of(&h, "meshes/x.nif")), (mods_x, nifs_x));
     let row = h.get_by_label_contains(&long);
     assert!(
         row.rect().max.x <= 1400.0,
@@ -1138,7 +1207,7 @@ fn opening_plugin_file_references_does_not_move_the_panels() {
     let mut h = harness(refs_model());
     h.run();
     let before = (
-        h.get_by_label("A").rect(),
+        h.get_by_role_and_label(Role::Label, "A").rect(),
         h.get_by_label("meshes/x.nif").rect(),
     );
     h.get_by_label("Plugin file references…").click();
@@ -1146,7 +1215,7 @@ fn opening_plugin_file_references_does_not_move_the_panels() {
     h.run();
     assert_eq!(
         (
-            h.get_by_label("A").rect(),
+            h.get_by_role_and_label(Role::Label, "A").rect(),
             h.get_by_label("meshes/x.nif").rect()
         ),
         before

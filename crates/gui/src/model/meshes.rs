@@ -1105,6 +1105,12 @@ impl MeshesModel {
             .or_else(|| self.find_row(id))
     }
 
+    /// The mod picker's entries after "Any mod": the mods that hold NIFs, in `Store::mods` order. PGPatcher-derived
+    /// mods are left out (their meshes show through their source mods).
+    pub fn picker_mods(&self) -> impl Iterator<Item = &ModRow> {
+        self.mods.iter().filter(|r| r.nifs > 0 && !r.derived)
+    }
+
     /// A mod's name, or "" for an id not in `mods`.
     pub fn mod_name(&self, id: i64) -> &str {
         self.mods

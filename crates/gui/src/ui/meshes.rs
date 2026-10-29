@@ -429,6 +429,7 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
             .hint_text("Search paths and mods")
             .desired_width(f32::INFINITY),
     );
+    mod_picker(ui, m);
     ui.horizontal_wrapped(|ui| {
         for f in crate::model::meshes::NifFilter::ALL {
             if ui.selectable_label(m.filter == f, f.label()).clicked() {
@@ -484,6 +485,49 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     // While a scan runs the store's winner tables are being rewritten: the selection waits for the result.
     if let Some(c) = picked.filter(|_| !m.scanning()) {
         m.select_nif(c);
+    }
+}
+
+/// The mod picker (Note GC): "Any mod" lists every path's winner; a mod lists its own copies. Greyed while a scan
+/// runs, as the list's selection is.
+fn mod_picker(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let text = match m.selected_mod {
+        Some(id) => m.mod_name(id).to_string(),
+        None => "Any mod".to_string(),
+    };
+    let mut pick = None;
+    // Rule 3.5: the combo's width is a minimum, so it gets an exact slot.
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui(size, |ui| {
+        ui.add_enabled_ui(!m.scanning(), |ui| {
+            egui::ComboBox::from_id_salt("meshes-mod-picker")
+                .selected_text(text)
+                .width(size.x)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(m.selected_mod.is_none(), "Any mod")
+                        .clicked()
+                    {
+                        pick = Some(None);
+                    }
+                    for r in m.picker_mods() {
+                        if ui
+                            .selectable_label(m.selected_mod == Some(r.id), &r.name)
+                            .clicked()
+                        {
+                            pick = Some(Some(r.id));
+                        }
+                    }
+                })
+                .response
+                .on_disabled_hover_text("Available after the scan finishes");
+        });
+    });
+    match pick {
+        Some(Some(id)) if m.selected_mod != Some(id) => m.select_mod(id),
+        Some(None) if m.selected_mod.is_some() => m.any_mod(),
+        _ => {}
     }
 }
 
