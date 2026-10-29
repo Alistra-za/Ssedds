@@ -521,7 +521,8 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
         {
             let slot = i as u32;
             let tgt = Target::Slot { set, slot };
-            let text = String::from_utf8_lossy(raw).into_owned();
+            // Windows-1252, as apply compares and writes it (trace 2026-10-28 #44)
+            let text = crate::text::lossy(raw);
             let mut warn = |t: &str, fix| push(Level::Warn, tgt.clone(), t, fix);
             if text.contains('/') {
                 warn("Uses / instead of \\", None);
@@ -635,7 +636,7 @@ fn root_bsx(m: &NifModel) -> Option<(Anchor, u32)> {
     })?;
     let role = Role::Extra {
         on_root: true,
-        name: String::from_utf8_lossy(e.name.as_deref().unwrap_or(&[])).into_owned(),
+        name: crate::text::lossy(e.name.as_deref().unwrap_or(&[])),
         kind: e.kind.clone(),
         nth: 0,
     };
