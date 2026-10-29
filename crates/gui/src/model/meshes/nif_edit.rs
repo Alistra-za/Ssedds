@@ -65,8 +65,12 @@ pub struct NifEdit {
     pub export_path: PathBuf,
     pub edit_mod: PathBuf,
     /// Note GD5 (c): the app-folder document of this NIF used while no export folder is chosen; removed by the first
-    /// save into a folder.
+    /// save into a folder, but only when this session's document holds it (`owns_autosave`, Note GD11).
     pub autosave: Option<PathBuf>,
+    /// Note GD11: the autosave's content is part of this live document (saved there, or recovered from it).
+    owns_autosave: bool,
+    /// Note GD11: lines for Messages from `open` (an autosave recovered, or left because the folder's is newer).
+    pub open_lines: Vec<String>,
     pub source: Arc<Vec<u8>>,
     pub source_copy: PathCopy,
     pub data_path: String,
@@ -443,6 +447,56 @@ fn keep_base(op: &mut Op, old: &Op) {
     }
 }
 
+/// Note GD11: with a folder chosen, an autosave of the NIF that is newer than the folder's document (or the folder has
+/// none) is offered the GD5 (b) way: it is the document, keeping the folder document's export record, and the session
+/// owns it (its first save in the folder removes it). An older one stays, named in Messages. Without a folder the
+/// document is the autosave. Returns (document, owns the autosave, Messages lines, recovered).
+fn recover_autosave(
+    saved: Option<EditDoc>,
+    doc_path: &Path,
+    edit_mod: &Path,
+    autosave: Option<&Path>,
+    data_path: &str,
+) -> (Option<EditDoc>, bool, Vec<String>, bool) {
+    if edit_mod.as_os_str().is_empty() {
+        return (saved, autosave.is_some(), vec![], false);
+    }
+    let Some(a) = autosave.filter(|a| a.is_file()) else {
+        return (saved, false, vec![], false);
+    };
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if saved.is_some() && mtime(a) <= mtime(doc_path) {
+        let line = format!(
+            "Older edits of {data_path} stay autosaved in {}.",
+            a.display()
+        );
+        return (saved, false, vec![line], false);
+    }
+    match edit_doc::load(a) {
+        Ok(Some(mut mine)) => {
+            let line = match &saved {
+                None => format!(
+                    "Recovered the edits of {data_path} autosaved in {}.",
+                    a.display()
+                ),
+                Some(_) => format!(
+                    "The newer edits of {data_path} autosaved in {} replaced {}'s saved edits.",
+                    a.display(),
+                    doc_path.display()
+                ),
+            };
+            mine.export = saved.map(|s| s.export).unwrap_or_default();
+            (Some(mine), true, vec![line], true)
+        }
+        Ok(None) => (saved, false, vec![], false),
+        // never deleted or overwritten: it stays for the user, and the folder's document opens
+        Err(e) => {
+            let line = format!("The autosave {} does not load and stays: {e}", a.display());
+            (saved, false, vec![line], false)
+        }
+    }
+}
+
 impl NifEdit {
     /// Opens `source`, the bytes of `source_copy`, at `data_path`. `edit_mod` None: the document lives at `autosave`
     /// (Note GD5) and export is blocked; neither: read-only with an in-memory document. A saved document is loaded
@@ -470,11 +524,13 @@ impl NifEdit {
                 PathBuf::new(),
             ),
         };
-        let mut doc = match doc_path.as_os_str().is_empty() {
+        let saved = match doc_path.as_os_str().is_empty() {
             true => None,
             false => edit_doc::load(&doc_path)?,
-        }
-        .unwrap_or_else(|| EditDoc::new(id.clone()));
+        };
+        let (saved, owns_autosave, open_lines, recovered) =
+            recover_autosave(saved, &doc_path, &edit_mod, autosave, data_path);
+        let mut doc = saved.unwrap_or_else(|| EditDoc::new(id.clone()));
         let changed = doc.source.sha256 != id.sha256;
         if changed {
             doc.source = id; // saved with the next change; the statuses carry the conflicts
@@ -486,6 +542,8 @@ impl NifEdit {
             export_path,
             edit_mod,
             autosave: autosave.map(Path::to_path_buf),
+            owns_autosave,
+            open_lines,
             source_blocks: block_count(&source),
             source: Arc::new(source),
             data_path: data_path.into(),
@@ -533,7 +591,8 @@ impl NifEdit {
             sim_runs: 0,
             match_tests: 0,
             in_game: None,
-            unsaved: false,
+            // a recovered autosave is saved into the folder with the next save or close
+            unsaved: recovered,
             drag: None,
         };
         // Applying re-anchors each op on the current source: `nif::edit::rebase` and the patched bytes in one pass.
@@ -842,13 +901,15 @@ impl NifEdit {
             self.error = Some(e);
             return;
         }
-        // Note GD5 (c): saved in a folder, the app-folder autosave has done its job
+        // Note GD5 (c), GD11: saved in a folder, an autosave this document holds has done its job; one it never
+        // loaded is not ours to delete
         if let Some(a) = self
             .autosave
-            .as_ref()
-            .filter(|_| !self.edit_mod.as_os_str().is_empty())
+            .clone()
+            .filter(|_| self.owns_autosave && !self.edit_mod.as_os_str().is_empty())
         {
-            if let Err(e) = std::fs::remove_file(a) {
+            self.owns_autosave = false;
+            if let Err(e) = std::fs::remove_file(&a) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     self.error = Some(format!("{}: {e}", a.display()));
                 }
@@ -893,6 +954,8 @@ impl NifEdit {
             ));
         }
         self.doc.export = theirs.map(|t| t.export).unwrap_or_default();
+        // without a folder the document is the autosave (Note GD11)
+        self.owns_autosave |= root.is_none();
         (self.edit_mod, self.doc_path, self.export_path) = (edit_mod, doc_path, export_path);
         self.drag = None;
         self.history.break_merge();
@@ -1597,6 +1660,7 @@ impl MeshesModel {
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((mut e, content)) => {
                 e.selection = first_selection(&e.model, self.card_sel.as_ref());
+                self.messages.append(&mut e.open_lines);
                 self.edit = Some(e);
                 self.shapes_col_before = Some(column);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).

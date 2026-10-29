@@ -3998,6 +3998,80 @@ fn no_export_folder_blocks_the_nif_row() {
     assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
 }
 
+/// Note GD11: an autosave this session never loaded is never deleted. Edit without a folder, close, choose a
+/// folder, reopen: the autosave (newer than the folder's none) is offered, and its first save there migrates it.
+#[test]
+fn an_autosave_is_recovered_when_a_folder_is_chosen_before_reopening() {
+    let (d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.close_edit();
+    assert!(autosave(&d).is_file());
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(m.error, None);
+    assert_eq!(op_values(&m).len(), 1, "the autosaved edit is offered");
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "Recovered the edits of meshes/x.nif autosaved in {}.",
+            autosave(&d).display()
+        )]
+    );
+    gloss(&mut m, 13.5);
+    assert_eq!(
+        load(&nif_doc(&out)).unwrap().unwrap().ops.len(),
+        2,
+        "the autosave is not lost"
+    );
+    assert!(
+        !autosave(&d).exists(),
+        "migrated into the folder, then removed"
+    );
+}
+
+/// Note GD11: a folder document newer than the autosave wins; the autosave stays, named in Messages, and a save in
+/// the folder leaves it alone.
+#[test]
+fn an_older_autosave_stays_when_the_folders_edit_is_newer() {
+    let (d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.close_edit();
+    let aside = d.path().join("autosave.aside");
+    std::fs::rename(autosave(&d), &aside).unwrap();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    std::fs::rename(&aside, autosave(&d)).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(&d))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(op_values(&m).len(), 1);
+    assert_eq!(op_values(&m)[0].1, 7.5, "the newer folder edit wins");
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "Older edits of meshes/x.nif stay autosaved in {}.",
+            autosave(&d).display()
+        )]
+    );
+    gloss(&mut m, 13.5);
+    assert!(autosave(&d).is_file(), "an autosave never loaded stays");
+}
+
 #[test]
 fn an_export_folder_outside_the_instance_is_not_checked_and_still_exports() {
     let o = tempfile::tempdir().unwrap();
@@ -9494,7 +9568,10 @@ fn nif_review_rows_list_the_pending_edit() {
     let (d2, mut m2) = export_session();
     m2.open_edit();
     add_then_remove_ctrl(&mut m2, true);
-    assert!(matches!(m2.export_edit(None), ExportOutcome::Written { .. }));
+    assert!(matches!(
+        m2.export_edit(None),
+        ExportOutcome::Written { .. }
+    ));
     assert_eq!(
         std::fs::read(exported(&d2)).unwrap(),
         out,
