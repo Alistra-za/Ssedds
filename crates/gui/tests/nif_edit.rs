@@ -9489,10 +9489,16 @@ fn nif_review_rows_list_the_pending_edit() {
         }
     );
     assert_eq!(m.export_nif_edits(), Ok(1));
+    assert_eq!(std::fs::read(exported(&d)).unwrap(), out);
+    // the NIF-side golden: the footer's path (export_edit) writes the same bytes for the same edits
+    let (d2, mut m2) = export_session();
+    m2.open_edit();
+    add_then_remove_ctrl(&mut m2, true);
+    assert!(matches!(m2.export_edit(None), ExportOutcome::Written { .. }));
     assert_eq!(
-        std::fs::read(exported(&d)).unwrap(),
+        std::fs::read(exported(&d2)).unwrap(),
         out,
-        "the bytes the footer's export writes"
+        "the bytes the footer's export wrote"
     );
     assert!(m.nif_review_rows().is_empty(), "exported: nothing pending");
     // after the write: Re-run PGPatcher is a worklist row
