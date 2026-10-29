@@ -168,15 +168,18 @@ pub type NifEntry = (NifRow, String);
 /// What the worker reads for the list (Note GC): every winner, and every losing copy.
 pub type RowsRead = Result<(Vec<NifEntry>, Vec<NifEntry>), String>;
 
+/// The row lists the visible list reads: the picked mod's copies, the winners, the losers, the texture's users.
+type RowLists = (
+    Arc<Vec<NifRow>>,
+    Arc<Vec<NifEntry>>,
+    Arc<Vec<NifEntry>>,
+    Option<Arc<HashSet<String>>>,
+);
+
 /// The visible list and every input it was built from (rule 9.1). The row lists are held, so a dropped list's address
 /// is never reused under the cache's nose.
 struct RowsCache {
-    lists: (
-        Arc<Vec<NifRow>>,
-        Arc<Vec<NifEntry>>,
-        Arc<Vec<NifEntry>>,
-        Option<Arc<HashSet<String>>>,
-    ),
+    lists: RowLists,
     /// The picked mod's name (rows show it), the chip and the search needle.
     key: (Option<String>, NifFilter, String),
     list: Arc<Vec<usize>>,
