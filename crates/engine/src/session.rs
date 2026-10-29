@@ -87,7 +87,7 @@ pub(crate) struct PackEntry {
     pub info: SourceInfo,
     pub non_gray: Vec<PathBuf>,
     pub thumb: Option<Arc<Thumbnail>>,
-    /// The hints it was analysed with: another set is another entry (Note DX).
+    /// The hints it was analysed with: another set is another entry (Note DZ).
     pub hints: AnalyseHints,
 }
 
@@ -101,7 +101,7 @@ pub struct AnalysisCache {
     /// Whether each analysis carries the artist check stats (DECISIONS Note CL). Off by default like `thumbnails`,
     /// so the CLI computes none; `Session::new` turns it on.
     pub checks: bool,
-    /// The on-disk store behind the maps below (Note DX); `None` unless [`Session::with_disk_cache`] turned it on.
+    /// The on-disk store behind the maps below (Note DZ); `None` unless [`Session::with_disk_cache`] turned it on.
     pub disk: Option<AnalysisStore>,
     files: Mutex<HashMap<PathBuf, FileEntry>>,
     packs: Mutex<HashMap<String, PackEntry>>,
@@ -286,7 +286,7 @@ impl Session {
             bc1_model,
         })
     }
-    /// Keep analyses in `dir` between sessions (Note DX), first pruning it to about 200 MB.
+    /// Keep analyses in `dir` between sessions (Note DZ), first pruning it to about 200 MB.
     pub fn with_disk_cache(mut self, dir: PathBuf) -> Session {
         let store = AnalysisStore::new(dir);
         store.prune(200 * 1024 * 1024);

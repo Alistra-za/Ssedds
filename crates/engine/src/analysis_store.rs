@@ -1,4 +1,4 @@
-//! The on-disk side of [`crate::session::AnalysisCache`] (DECISIONS Note DX): each source's (or packed image's)
+//! The on-disk side of [`crate::session::AnalysisCache`] (DECISIONS Note DZ): each source's (or packed image's)
 //! analysis, source info and thumbnail, kept between sessions so an unchanged image is not decoded again.
 //!
 //! One file per entry, named by the sha256 of its key: a JSON header line, then the thumbnail's RGBA8 bytes. The
@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// Bump whenever decoding (`load_image_meta`), `analyse_with`, `make_thumbnail`, pack assembly or any `Analysis` field
 /// changes what it produces: entries written under another value are ignored. The pin test (analysis_version.rs)
 /// fails when those change for what it runs: PNG (8-bit, 16-bit, gray), 2D BC1/BC5/BC7 and single-cube DDS, two
-/// packs, and the `Analysis` schema. PSD and Krita/ORA decoding are not run by it: bump by hand (Note DX4).
+/// packs, and the `Analysis` schema. PSD and Krita/ORA decoding are not run by it: bump by hand (Note DZ4).
 pub const ANALYSIS_VERSION: u32 = 1;
 
 const EXT: &str = "ent";
@@ -56,7 +56,7 @@ impl AnalysisStore {
         format!("{}|{hints:?}|{what}", self.version)
     }
     fn file_id(&self, path: &Path, stamp: SourceStamp, hints: AnalyseHints) -> String {
-        // Absolute, so a relative path never matches another folder's file after a cwd change (Note DX9).
+        // Absolute, so a relative path never matches another folder's file after a cwd change (Note DZ9).
         let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         let what = format!("file|{}|{}|{}", abs.display(), stamp.size, stamp.mtime_ns);
         self.id(hints, &what)

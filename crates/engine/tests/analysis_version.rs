@@ -1,4 +1,4 @@
-//! The analysis disk cache's version guard (DECISIONS Note DX): fails when what decoding, `analyse_with`, `make_thumbnail`
+//! The analysis disk cache's version guard (DECISIONS Note DZ): fails when what decoding, `analyse_with`, `make_thumbnail`
 //! and pack assembly produce changes without `ANALYSIS_VERSION` being bumped. Same shape as encode_versions.rs: the pin is rewritten
 //! when the version moved, and left alone (with a failure) when only the hash did.
 use engine::analyse::Analysis;
