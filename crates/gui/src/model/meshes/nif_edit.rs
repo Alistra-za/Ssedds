@@ -13,6 +13,7 @@ use nif::edit::validate::{
     demote_source, new_errors, validate, validate_ops, Level, Target, Warning,
 };
 use nif::edit::{Anchor, Op, Outcome};
+use nif::fields::Field;
 use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel, ShapeModel};
@@ -242,6 +243,99 @@ pub fn edit_slot_label(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) ->
         (7, _) if slsf1 & SLSF1_MODEL_SPACE_NORMALS != 0 => "Model-space specular",
         (7, _) => "Back-light / specular",
         _ => "Unused",
+    }
+}
+
+/// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
+pub fn field_label(f: Field) -> String {
+    let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
+    let rgb = |n: u8| ["R", "G", "B"].get(n as usize).copied().unwrap_or("?");
+    match f {
+        Field::ShaderType => "Shader type".into(),
+        Field::Slsf1 => "SLSF1 flags".into(),
+        Field::Slsf2 => "SLSF2 flags".into(),
+        Field::UvOffset(n) => format!("UV offset {}", axis(n)),
+        Field::UvScale(n) => format!("UV scale {}", axis(n)),
+        Field::EmissiveColor(n) => format!("Emissive colour {}", rgb(n)),
+        Field::EmissiveMultiple => "Emissive multiple".into(),
+        Field::ClampMode => "Clamp mode".into(),
+        Field::Alpha => "Shader alpha".into(),
+        Field::Refraction => "Refraction strength".into(),
+        Field::Glossiness => "Glossiness".into(),
+        Field::SpecularColor(n) => format!("Specular colour {}", rgb(n)),
+        Field::SpecularStrength => "Specular strength".into(),
+        Field::LightingEffect1 => "Lighting effect 1".into(),
+        Field::LightingEffect2 => "Lighting effect 2".into(),
+        // shortcut: the trailer's names depend on the shader type, which an op does not carry; name them from the
+        // model if users ask.
+        Field::Trailer(n) => format!("Shader type value {}", n + 1),
+        Field::AlphaFlags => "Alpha flags".into(),
+        Field::AlphaThreshold => "Alpha threshold".into(),
+        Field::CtrlFlags => "Controller flags".into(),
+        Field::Frequency => "Frequency".into(),
+        Field::Phase => "Phase".into(),
+        Field::StartTime => "Start".into(),
+        Field::StopTime => "Stop".into(),
+        Field::Variable => "Controlled variable".into(),
+        Field::InterpValue(n) => format!("Interpolator value {}", n + 1),
+    }
+}
+
+/// A short name of what an op changes, for the pending list's rows.
+pub fn op_label(op: &Op) -> String {
+    let (what, at) = match op {
+        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => (field_label(*field), at),
+        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
+        Op::SplitAlpha { at } => ("Split alpha".into(), at),
+        Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
+        Op::RemoveAlpha { at } => ("Remove alpha".into(), at),
+        Op::AddExtra { at, name, .. } => (format!("Add extra data {name}"), at),
+        Op::EditExtra { at, .. } => ("Edit extra data".into(), at),
+        Op::RemoveExtra { at } => ("Remove extra data".into(), at),
+        Op::SetKeys { at, .. } => ("Edit keys".into(), at),
+        Op::AddController { at, .. } => ("Add controller".into(), at),
+        Op::RemoveController { at } => ("Remove controller".into(), at),
+        Op::AddSequence { at, name, .. } => (format!("Add clip {name}"), at),
+        Op::RemoveSequence { at, name, .. } => (format!("Remove clip {name}"), at),
+        Op::RenameSequence {
+            at, name, new_name, ..
+        } => (format!("Rename clip {name} to {new_name}"), at),
+        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
+    };
+    match &at.shape {
+        Some(s) => format!("{s}: {what}"),
+        None => what,
+    }
+}
+
+/// The undo step's name for an op (Note GD4): "Set shader type", "Remove controller".
+pub fn op_name(op: &Op) -> String {
+    match op {
+        Op::SetField { field, .. } | Op::SetBits { field, .. } => {
+            let f = field_label(*field);
+            // "Shader type" reads "Set shader type"; an initialism ("SLSF1 flags", "UV offset U") keeps its case.
+            let mut c = f.chars();
+            match (c.next(), c.next()) {
+                (Some(a), Some(b)) if b.is_lowercase() => {
+                    format!("Set {}{}", a.to_lowercase(), &f[a.len_utf8()..])
+                }
+                _ => format!("Set {f}"),
+            }
+        }
+        Op::SetTexturePath { .. } => "Set texture path".into(),
+        Op::SplitAlpha { .. } => "Split alpha".into(),
+        Op::AddAlpha { .. } => "Add alpha".into(),
+        Op::RemoveAlpha { .. } => "Remove alpha".into(),
+        Op::AddExtra { .. } => "Add extra data".into(),
+        Op::EditExtra { .. } => "Edit extra data".into(),
+        Op::RemoveExtra { .. } => "Remove extra data".into(),
+        Op::SetKeys { .. } => "Edit keys".into(),
+        Op::AddController { .. } => "Add controller".into(),
+        Op::RemoveController { .. } => "Remove controller".into(),
+        Op::AddSequence { .. } => "Add clip".into(),
+        Op::RemoveSequence { .. } => "Remove clip".into(),
+        Op::RenameSequence { .. } => "Rename clip".into(),
+        Op::ConvertChainToClips { .. } => "Convert to clip".into(),
     }
 }
 
@@ -662,7 +756,8 @@ impl NifEdit {
             )
             && !matches!(ops.first(), Some(Op::SplitAlpha { .. }));
         self.drag = merge.clone().map(|k| (k, n + usize::from(lead)));
-        self.history.record(self.doc.to_text(), merge);
+        let label = ops.first().map(op_name).unwrap_or_default();
+        self.history.record(self.doc.to_text(), &label, merge);
         // Note CU1: a rename of the picked clip keeps it picked (the block stays; its name follows)
         if let Playing::Clip(seq) = self.playing {
             for op in &ops {
@@ -763,7 +858,8 @@ impl NifEdit {
             return;
         }
         self.drag = None;
-        self.history.record(self.doc.to_text(), None);
+        let label = format!("Revert: {}", op_name(&self.doc.ops[i].op));
+        self.history.record(self.doc.to_text(), &label, None);
         self.doc.ops.remove(i);
         self.reapply();
         self.save();
@@ -779,7 +875,7 @@ impl NifEdit {
             }
         };
         self.drag = None;
-        self.history.record(self.doc.to_text(), None);
+        self.history.record(self.doc.to_text(), "Keep mine", None);
         for (d, op) in self.doc.ops.iter_mut().zip(ops) {
             d.op = op;
         }

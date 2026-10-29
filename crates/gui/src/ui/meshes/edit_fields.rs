@@ -623,7 +623,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
 /// What a warning applies to, in words, for a fix button's accessible name.
 fn target_name(t: &Target) -> String {
     match t {
-        Target::Field { field, .. } => super::edit_panel::field_label(*field),
+        Target::Field { field, .. } => crate::model::meshes::nif_edit::field_label(*field),
         Target::Slot { slot, .. } => format!("slot {slot}"),
         Target::Extra { block } => format!("extra data block {block}"),
         Target::Block { block } => format!("block {block}"),

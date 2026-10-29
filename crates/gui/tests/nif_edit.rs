@@ -203,26 +203,32 @@ fn save_and_load_use_a_temp_dir() {
 fn history_merges_drags_caps_at_200_and_redoes() {
     let mut h = NifHistory::default();
     assert!(!h.can_undo() && !h.can_redo());
-    h.record("a".into(), Some("drag".into()));
-    h.record("b".into(), Some("drag".into()));
+    h.record("a".into(), "Drag", Some("drag".into()));
+    h.record("b".into(), "Drag", Some("drag".into()));
+    assert_eq!(
+        h.undo_label(),
+        Some("Drag"),
+        "a merged drag is one named step"
+    );
     assert_eq!(h.undo("now".into()), Some("a".into()));
     assert!(!h.can_undo() && h.can_redo());
+    assert_eq!((h.undo_label(), h.redo_label()), (None, Some("Drag")));
     assert_eq!(h.redo("a".into()), Some("now".into()));
 
     let mut h = NifHistory::default();
-    h.record("a".into(), Some("drag".into()));
+    h.record("a".into(), "Drag", Some("drag".into()));
     h.break_merge();
-    h.record("b".into(), Some("drag".into()));
+    h.record("b".into(), "Drag", Some("drag".into()));
     assert_eq!(h.undo("c".into()), Some("b".into()));
     assert_eq!(h.undo("b".into()), Some("a".into()));
     assert_eq!(h.undo("a".into()), None);
 
-    h.record("x".into(), None);
+    h.record("x".into(), "X", None);
     assert!(!h.can_redo());
 
     let mut h = NifHistory::default();
     for i in 0..NifHistory::LIMIT + 5 {
-        h.record(i.to_string(), None);
+        h.record(i.to_string(), "Step", None);
     }
     let mut n = 0;
     let mut last = String::new();
@@ -8881,4 +8887,37 @@ fn in_game_label_reads_simulated_as() {
         2,
         "the line and the hover"
     );
+}
+
+/// GD4: the shared Undo / Redo name the NIF step they act on (CI23's target, now visible).
+#[test]
+fn undo_target_carries_the_label() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let t = e.model.lighting[&shader].lighting.shader_type;
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::ShaderType,
+            value: Value::U32(if t == 1 { 0 } else { 1 }),
+            base: Value::U32(t),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(4);
+    let u = sdc_gui::ui::meshes::undo_target(&h.ctx).expect("the NIF history");
+    assert!(u.can_undo && !u.can_redo);
+    assert_eq!(u.undo_label.as_deref(), Some("Set shader type"));
+    assert_eq!(u.redo_label, None);
+    h.state_mut().undo_edit();
+    h.run_steps(4);
+    let u = sdc_gui::ui::meshes::undo_target(&h.ctx).unwrap();
+    assert!(!u.can_undo && u.can_redo);
+    assert_eq!(u.undo_label, None);
+    assert_eq!(u.redo_label.as_deref(), Some("Set shader type"));
 }

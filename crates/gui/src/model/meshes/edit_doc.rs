@@ -141,25 +141,26 @@ pub fn sha256_hex(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
 
-/// Undo/redo over whole-document snapshots (TOML text). A record with the same merge key as the previous one
-/// (one drag) keeps only the first snapshot.
+/// Undo/redo over whole-document snapshots (TOML text), each with the short name of the step it undoes (Note GD4).
+/// A record with the same merge key as the previous one (one drag) keeps only the first snapshot and its name.
 #[derive(Debug, Default)]
 pub struct NifHistory {
-    undo: Vec<String>,
-    redo: Vec<String>,
+    undo: Vec<(String, String)>,
+    redo: Vec<(String, String)>,
     merge: Option<String>,
 }
 
 impl NifHistory {
     pub const LIMIT: usize = 200;
 
-    pub fn record(&mut self, before: String, merge: Option<String>) {
+    /// `before` is the document before the step named `label` ("Set shader type").
+    pub fn record(&mut self, before: String, label: &str, merge: Option<String>) {
         self.redo.clear();
         if merge.is_some() && merge == self.merge {
             return;
         }
         self.merge = merge;
-        self.undo.push(before);
+        self.undo.push((before, label.to_string()));
         if self.undo.len() > Self::LIMIT {
             self.undo.remove(0);
         }
@@ -170,17 +171,27 @@ impl NifHistory {
     }
 
     pub fn undo(&mut self, current: String) -> Option<String> {
-        let s = self.undo.pop()?;
-        self.redo.push(current);
+        let (s, label) = self.undo.pop()?;
+        self.redo.push((current, label));
         self.merge = None;
         Some(s)
     }
 
     pub fn redo(&mut self, current: String) -> Option<String> {
-        let s = self.redo.pop()?;
-        self.undo.push(current);
+        let (s, label) = self.redo.pop()?;
+        self.undo.push((current, label));
         self.merge = None;
         Some(s)
+    }
+
+    /// The name of the step Undo would undo.
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.last().map(|(_, l)| l.as_str())
+    }
+
+    /// The name of the step Redo would redo.
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo.last().map(|(_, l)| l.as_str())
     }
 
     pub fn can_undo(&self) -> bool {

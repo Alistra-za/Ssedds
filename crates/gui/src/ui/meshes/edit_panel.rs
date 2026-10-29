@@ -4,14 +4,13 @@ use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
 use crate::model::meshes::export::{GuardChoice, Placement};
-use crate::model::meshes::nif_edit::{NifEdit, Selection, NO_EDITS};
+use crate::model::meshes::nif_edit::{op_label, NifEdit, Selection, NO_EDITS};
 use crate::model::meshes::MeshesModel;
 use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
 use crate::ui::status::{self, Status, AMBER, GREEN, RED};
 use eframe::egui;
-use nif::edit::{Op, Outcome};
-use nif::fields::Field;
+use nif::edit::Outcome;
 
 const TABS: [&str; 4] = ["Shader", "Alpha", "Controllers", "Extra data"];
 
@@ -361,68 +360,6 @@ fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
         None if k.enter => act.export = Some(Some(GuardChoice::KeepTheirs)),
         None if k.cancel => act.guard_close = true,
         None => {}
-    }
-}
-
-/// A short name of what an op changes, for the rows of ops that did not apply.
-fn op_label(op: &Op) -> String {
-    let (what, at) = match op {
-        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => (field_label(*field), at),
-        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
-        Op::SplitAlpha { at } => ("Split alpha".into(), at),
-        Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
-        Op::RemoveAlpha { at } => ("Remove alpha".into(), at),
-        Op::AddExtra { at, name, .. } => (format!("Add extra data {name}"), at),
-        Op::EditExtra { at, .. } => ("Edit extra data".into(), at),
-        Op::RemoveExtra { at } => ("Remove extra data".into(), at),
-        Op::SetKeys { at, .. } => ("Edit keys".into(), at),
-        Op::AddController { at, .. } => ("Add controller".into(), at),
-        Op::RemoveController { at } => ("Remove controller".into(), at),
-        Op::AddSequence { at, name, .. } => (format!("Add clip {name}"), at),
-        Op::RemoveSequence { at, name, .. } => (format!("Remove clip {name}"), at),
-        Op::RenameSequence {
-            at, name, new_name, ..
-        } => (format!("Rename clip {name} to {new_name}"), at),
-        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
-    };
-    match &at.shape {
-        Some(s) => format!("{s}: {what}"),
-        None => what,
-    }
-}
-
-/// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
-pub(super) fn field_label(f: Field) -> String {
-    let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
-    let rgb = |n: u8| ["R", "G", "B"].get(n as usize).copied().unwrap_or("?");
-    match f {
-        Field::ShaderType => "Shader type".into(),
-        Field::Slsf1 => "SLSF1 flags".into(),
-        Field::Slsf2 => "SLSF2 flags".into(),
-        Field::UvOffset(n) => format!("UV offset {}", axis(n)),
-        Field::UvScale(n) => format!("UV scale {}", axis(n)),
-        Field::EmissiveColor(n) => format!("Emissive colour {}", rgb(n)),
-        Field::EmissiveMultiple => "Emissive multiple".into(),
-        Field::ClampMode => "Clamp mode".into(),
-        Field::Alpha => "Shader alpha".into(),
-        Field::Refraction => "Refraction strength".into(),
-        Field::Glossiness => "Glossiness".into(),
-        Field::SpecularColor(n) => format!("Specular colour {}", rgb(n)),
-        Field::SpecularStrength => "Specular strength".into(),
-        Field::LightingEffect1 => "Lighting effect 1".into(),
-        Field::LightingEffect2 => "Lighting effect 2".into(),
-        // shortcut: the trailer's names depend on the shader type, which an op does not carry; name them from the
-        // model if users ask.
-        Field::Trailer(n) => format!("Shader type value {}", n + 1),
-        Field::AlphaFlags => "Alpha flags".into(),
-        Field::AlphaThreshold => "Alpha threshold".into(),
-        Field::CtrlFlags => "Controller flags".into(),
-        Field::Frequency => "Frequency".into(),
-        Field::Phase => "Phase".into(),
-        Field::StartTime => "Start".into(),
-        Field::StopTime => "Stop".into(),
-        Field::Variable => "Controlled variable".into(),
-        Field::InterpValue(n) => format!("Interpolator value {}", n + 1),
     }
 }
 

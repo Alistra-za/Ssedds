@@ -45,13 +45,23 @@ fn undo_ids() -> (egui::Id, egui::Id) {
     )
 }
 
+/// The NIF history the shared Undo / Redo act on (Note GD4): what each can do, and the name of the step it would
+/// undo or redo ("Set shader type").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoTarget {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub undo_label: Option<String>,
+    pub redo_label: Option<String>,
+}
+
 /// A20 (owner option 1): which history the shared Undo / Redo (header, palette, Ctrl+Z / Ctrl+Y) act on now.
-/// `Some((can_undo, can_redo))` of the NIF history while a NIF edit is open in the Meshes view, `None` for Textures.
-pub fn undo_target(ctx: &egui::Context) -> Option<(bool, bool)> {
+/// `Some` with the NIF history's state while a NIF edit is open in the Meshes view, `None` for Textures.
+pub fn undo_target(ctx: &egui::Context) -> Option<UndoTarget> {
     if !super::header::meshes_view_active(ctx) {
         return None;
     }
-    ctx.data(|d| d.get_temp::<Option<(bool, bool)>>(undo_ids().0))
+    ctx.data(|d| d.get_temp::<Option<UndoTarget>>(undo_ids().0))
         .flatten()
 }
 
@@ -79,10 +89,12 @@ pub fn show(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     draw(ui, m);
     // After the draw: the panel may have opened or closed the edit.
-    let state = m
-        .edit
-        .as_ref()
-        .map(|e| (e.history.can_undo(), e.history.can_redo()));
+    let state = m.edit.as_ref().map(|e| UndoTarget {
+        can_undo: e.history.can_undo(),
+        can_redo: e.history.can_redo(),
+        undo_label: e.history.undo_label().map(str::to_string),
+        redo_label: e.history.redo_label().map(str::to_string),
+    });
     ui.ctx().data_mut(|d| d.insert_temp(target, state));
 }
 

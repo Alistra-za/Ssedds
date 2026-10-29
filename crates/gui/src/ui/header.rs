@@ -520,7 +520,9 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     let nif = super::meshes::undo_target(ui.ctx());
     for (undo, name) in [(true, "Undo"), (false, "Redo")] {
         let label = match nif {
-            Some((u, r)) => (if undo { u } else { r }).then_some("the last NIF edit"),
+            Some(ref t) => {
+                (if undo { t.can_undo } else { t.can_redo }).then_some("the last NIF edit")
+            }
             None if undo => model.undo_label(),
             None => model.redo_label(),
         };
