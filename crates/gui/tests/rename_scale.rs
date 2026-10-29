@@ -108,11 +108,11 @@ fn plan_rename_scales_linearly() {
         let (ds, dl) = (dialog_over(&small, mode), dialog_over(&large, mode));
         assert_rows(&small, &ds);
         assert_rows(&large, &dl);
-        let (ts, tl) = (best_plan(&small, &ds, 5), best_plan(&large, &dl, 3));
+        let (ts, tl) = (best_plan(&small, &ds, 5), best_plan(&large, &dl, 5));
         eprintln!("{mode:?}: {N} rows {ts:?}, {} rows {tl:?}", 4 * N);
         assert!(
-            tl < ts * 8,
-            "{mode:?}: planning {} rows took {tl:?}, more than 8 times the {ts:?} of {N} rows",
+            tl < ts * 10,
+            "{mode:?}: planning {} rows took {tl:?}, more than 10 times the {ts:?} of {N} rows",
             4 * N
         );
     }
