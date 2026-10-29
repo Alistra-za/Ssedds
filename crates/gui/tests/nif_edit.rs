@@ -1211,7 +1211,7 @@ fn a_pick_inside_edit_carries_to_the_next_edit() {
     m.open_edit();
     let e = m.edit.as_ref().unwrap();
     let last = e.model.shapes.last().unwrap();
-    let (block, name) = (last.block, last.name.clone());
+    let (block, name) = (last.block, last.name.as_deref().map(str::to_string));
     let mut h = view(m);
     h.run_steps(4);
     let tail = format!(" {}", name.as_deref().unwrap());
@@ -2351,7 +2351,10 @@ fn managed_variable_change_rewrites_clip_ids() {
     );
     let e = h.state().edit.as_ref().unwrap();
     assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
-    assert_eq!(e.model.sequences[0].blocks[0].ctrl_id, Some(b"20".to_vec()));
+    assert_eq!(
+        e.model.sequences[0].blocks[0].ctrl_id.as_deref(),
+        Some(&b"20"[..])
+    );
     assert_eq!(e.model.sequences[0].blocks[1].ctrl_id, None);
 }
 
@@ -4537,7 +4540,10 @@ fn a_removed_controller_restores_the_file_material() {
     let at = Anchor {
         block: ctrl,
         kind: c.class.clone(),
-        shape: e.model.shape(shape).and_then(|s| s.name.clone()),
+        shape: e
+            .model
+            .shape(shape)
+            .and_then(|s| s.name.as_deref().map(str::to_string)),
         role: Role::Ctrl {
             owner: nif::edit::Owner::Shader,
             class: c.class.clone(),
@@ -6573,7 +6579,7 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
             let at = Anchor {
                 block: c,
                 kind: cm.class.clone(),
-                shape: s.name.clone(),
+                shape: s.name.as_deref().map(str::to_string),
                 role: Role::Ctrl {
                     owner,
                     class: cm.class.clone(),
@@ -7006,7 +7012,11 @@ fn enabled(h: &Harness<'static, MeshesModel>, label: &str) -> bool {
 
 fn clip_names(m: &MeshesModel) -> Vec<Option<String>> {
     let e = m.edit.as_ref().unwrap();
-    e.model.sequences.iter().map(|s| s.name.clone()).collect()
+    e.model
+        .sequences
+        .iter()
+        .map(|s| s.name.as_deref().map(str::to_string))
+        .collect()
 }
 
 fn managed(m: &MeshesModel, c: u32) -> bool {
@@ -7528,7 +7538,7 @@ fn shown_clip(m: &MeshesModel) -> Option<Option<String>> {
                 .sequences
                 .iter()
                 .find(|s| s.block == b)
-                .and_then(|s| s.name.clone()),
+                .and_then(|s| s.name.as_deref().map(str::to_string)),
         ),
     }
 }

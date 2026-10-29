@@ -133,9 +133,9 @@ fn managed_clip_sequences_name_their_controllers() {
             Some(&b"BSLightingShaderPropertyFloatController"[..])
         );
     }
-    assert_eq!(seqs[0].blocks[0].ctrl_id, Some(b"11".to_vec()));
+    assert_eq!(seqs[0].blocks[0].ctrl_id.as_deref(), Some(&b"11"[..]));
     assert_eq!(seqs[0].blocks[1].ctrl_id, None);
-    assert_eq!(seqs[1].blocks[0].ctrl_id, Some(vec![]));
+    assert_eq!(seqs[1].blocks[0].ctrl_id.as_deref(), Some(&[][..]));
 
     let fcc = read_ctrl(&h, &b, fc as usize).unwrap();
     assert_eq!((fcc.flags, fcc.var), (0x68, Some(11)));
@@ -260,9 +260,10 @@ fn chain_reports_negative_refs_other_than_minus_one() {
     }
 }
 
+/// Note GA1 (supersedes the per-sequence byte budget): 200 CBs x 4 refs to one 4 KB string, 3.2 MB of copies from a
+/// ~30 KB file before, now read as one shared copy.
 #[test]
-fn sequence_strings_past_file_length_are_an_error() {
-    // 200 CBs x 4 refs to one 4 KB string: 3.2 MB of copies from a ~30 KB file
+fn sequence_strings_past_file_length_share_one_copy() {
     let mut n = Nif::new(100);
     let s = n.string(&"x".repeat(4096));
     let mut w = W::default().i32(-1).u32(200).u32(0);
@@ -281,10 +282,14 @@ fn sequence_strings_past_file_length_are_an_error() {
     n.block("NiControllerSequence", body);
     let b = n.bytes();
     let h = Header::parse(&b).unwrap();
-    assert!(matches!(
-        read_sequence(&h, &b, 0),
-        Err(NifError::Geometry { .. })
-    ));
+    let seq = read_sequence(&h, &b, 0).unwrap();
+    let ptrs: std::collections::BTreeSet<_> = seq
+        .blocks
+        .iter()
+        .flat_map(|cb| [&cb.node, &cb.property, &cb.ctrl_type, &cb.ctrl_id])
+        .map(|x| x.as_deref().map(<[u8]>::as_ptr))
+        .collect();
+    assert_eq!(ptrs.len(), 1);
 }
 
 /// v2 B7: a sequence's text keys come from the NiTextKeyExtraData it names; a -1 ref gives none.
@@ -301,14 +306,17 @@ fn sequence_text_keys_are_read() {
     let a = m.sequences.iter().find(|s| s.block == 1).unwrap();
     assert_eq!(
         a.text_keys,
-        vec![(0.0, Some(b"start".to_vec())), (1.0, Some(b"end".to_vec()))]
+        vec![
+            (0.0, Some(b"start"[..].into())),
+            (1.0, Some(b"end"[..].into()))
+        ]
     );
     let b_ = m.sequences.iter().find(|s| s.block == 2).unwrap();
     assert!(b_.text_keys.is_empty());
 }
 
-/// B7 fix round 1 (B-P36): text keys share the sequence's byte budget. One 64 KiB string named by 256 keys would copy
-/// 16 MiB from a ~70 KiB file: the copied bytes stay within the file length (the keys read as none).
+/// B7 fix round 1 (B-P36), Note GA1: one 64 KiB string named by 256 keys would copy 16 MiB from a ~70 KiB file. The
+/// keys now share one copy (they used to read as none past a byte budget).
 #[test]
 fn text_keys_cannot_amplify_one_large_string() {
     let mut n = Nif::new(100);
@@ -334,14 +342,11 @@ fn text_keys_cannot_amplify_one_large_string() {
     let b = n.bytes();
     let h = Header::parse(&b).unwrap();
     let s = read_sequence(&h, &b, 0).expect("the sequence itself still reads");
-    let copied: usize = s
+    assert_eq!(s.text_keys.len(), 256);
+    let ptrs: std::collections::BTreeSet<_> = s
         .text_keys
         .iter()
-        .map(|(_, v)| v.as_ref().map_or(0, Vec::len))
-        .sum();
-    assert!(
-        copied <= b.len(),
-        "{copied} bytes copied from a {}-byte file",
-        b.len()
-    );
+        .map(|(_, v)| v.as_deref().map(<[u8]>::as_ptr))
+        .collect();
+    assert_eq!(ptrs.len(), 1);
 }

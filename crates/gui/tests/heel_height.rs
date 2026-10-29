@@ -126,7 +126,7 @@ fn heel_height_calculation_against_the_corpus() {
         for s in &m.shapes {
             if let Some((v, from)) = stored(&m, s) {
                 let rel = p.strip_prefix(&mods).unwrap_or(p).display().to_string();
-                let name = s.name.clone().unwrap_or_default();
+                let name = s.name.as_deref().unwrap_or_default().to_string();
                 rows.push((rel, name, from, v, heel_z_of(&b, s.block)));
             }
         }

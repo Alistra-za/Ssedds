@@ -160,8 +160,8 @@ fn clips_section(
 /// A clip's name, or "Clip {block}" for a null name.
 fn clip_name(s: &Sequence) -> String {
     s.name
-        .clone()
-        .unwrap_or_else(|| format!("Clip {}", s.block))
+        .as_deref()
+        .map_or_else(|| format!("Clip {}", s.block), str::to_string)
 }
 
 fn cycle_name(c: u32) -> String {
@@ -704,7 +704,7 @@ fn ctrl_anchor<'a>(
     let at = Anchor {
         block: c.block,
         kind: c.class.clone(),
-        shape: shape.name.clone(),
+        shape: shape.name.as_deref().map(str::to_string),
         role: Role::Ctrl {
             owner,
             class: c.class.clone(),
@@ -1330,7 +1330,7 @@ fn push_keys(
         clip,
         clip_name: clip
             .and_then(|s| e.model.sequences.iter().find(|q| q.block == s))
-            .and_then(|s| s.name.clone()),
+            .and_then(|s| s.name.as_deref().map(str::to_string)),
         keys,
         base: base.clone(),
     };

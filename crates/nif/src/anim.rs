@@ -328,7 +328,7 @@ fn bound<'a>(
                 cb.ctrl_type.as_deref() == Some(c.class.as_bytes())
                     && cb.property.as_deref() == Some(ptype)
                     && cb.node.as_deref().is_some_and(|n| names.contains(&n))
-                    && cb.ctrl_id == id
+                    && cb.ctrl_id.as_deref() == id.as_deref()
             })
             .copied()
     } else {

@@ -598,7 +598,7 @@ impl NifEdit {
                 .model
                 .sequences
                 .iter()
-                .any(|s| s.block == seq && s.name == *name)
+                .any(|s| s.block == seq && s.name.as_deref() == name.as_deref())
             {
                 self.playing = Playing::Free;
             }
@@ -893,7 +893,7 @@ impl NifEdit {
                 .sequences
                 .iter()
                 .find(|s| s.block == b)
-                .and_then(|s| s.name.clone()),
+                .and_then(|s| s.name.as_deref().map(str::to_string)),
             Playing::Free => None,
         };
         self.anim = anim_tracks(&self.model, &self.patched, &self.parsed, p);
@@ -1054,7 +1054,7 @@ pub fn shape_cards(bytes: &[u8]) -> Vec<ShapeView> {
             let h = &s.head;
             ShapeView {
                 block: s.block,
-                name: h.name.clone(),
+                name: h.name.as_deref().map(str::to_string),
                 kind: format!("{:?}", h.kind),
                 shader_kind,
                 shader_type,
@@ -1204,11 +1204,11 @@ pub fn first_selection(m: &NifModel, picked: Option<&(u32, Option<String>)>) -> 
         let same = m
             .shapes
             .iter()
-            .find(|s| s.block == *block && s.name == *name);
+            .find(|s| s.block == *block && s.name.as_deref() == name.as_deref());
         let mut named = m
             .shapes
             .iter()
-            .filter(|s| name.is_some() && s.name == *name);
+            .filter(|s| name.is_some() && s.name.as_deref() == name.as_deref());
         let by_name = match (named.next(), named.next()) {
             (Some(s), None) => Some(s),
             _ => None,

@@ -69,8 +69,8 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
         let label = row
             .head
             .name
-            .clone()
-            .unwrap_or_else(|| format!("block {}", row.block));
+            .as_deref()
+            .map_or_else(|| format!("block {}", row.block), str::to_string);
         let nif::scan::Shader::Lighting(lighting, slots) = &row.shader else {
             let why = format!("{label}: not a BSLightingShaderProperty shape, not drawn in P0");
             out.warnings.push(why.clone());

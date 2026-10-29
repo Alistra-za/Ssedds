@@ -1,0 +1,130 @@
+//! trace 2026-10-28 #1: every block that names one string-table entry shares one decoded copy of it, so a small NIF
+//! cannot multiply a large string into gigabytes. Each test compares the name pointers of many rows.
+mod builder;
+use builder::{Nif, W};
+use std::collections::BTreeSet;
+
+const BIG: usize = 100_000;
+
+/// The file with its `BIG`-byte run of `x` (the large string-table entry) turned into 0x80 bytes, which
+/// Windows-1252 decodes to three-byte `€`.
+fn bytes_0x80(n: &Nif) -> Vec<u8> {
+    let mut b = n.bytes();
+    let at = b
+        .windows(BIG)
+        .position(|w| w.iter().all(|&c| c == b'x'))
+        .unwrap();
+    b[at..at + BIG].fill(0x80);
+    b
+}
+
+/// 2000 zero-size BSTriShape blocks all start at the footer, whose root count 30 reads as the name index:
+/// entry 30 is the large string. Footer: 30 zero roots.
+#[test]
+fn scan_shares_one_string_across_many_shape_names() {
+    let mut n = Nif::new(100);
+    for k in 0..30 {
+        n.string(&format!("s{k}"));
+    }
+    assert_eq!(n.string(&"x".repeat(BIG)), 30);
+    for _ in 0..2000 {
+        n.block("BSTriShape", vec![]);
+    }
+    n.roots = vec![0; 30];
+    let s = nif::scan::scan(&bytes_0x80(&n)).unwrap();
+    assert_eq!(s.shapes.len(), 2000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| r.head.name.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
+    assert_eq!(
+        s.shapes[0].head.name.as_deref().map(str::len),
+        Some(3 * BIG)
+    );
+}
+
+/// 1000 BSXFlags blocks named by the large string: `read_model` keeps one copy.
+#[test]
+fn read_model_shares_one_string_across_many_extra_names() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    for _ in 0..1000 {
+        n.block("BSXFlags", W::default().i32(big).u32(0).0);
+    }
+    let m = nif::model::read_model(&bytes_0x80(&n)).unwrap();
+    assert_eq!(m.extras.len(), 1000);
+    let ptrs: BTreeSet<_> = m
+        .extras
+        .values()
+        .map(|e| e.name.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
+}
+
+/// A NiControllerSequence named `name` with one controlled block per entry of `nodes`, no text keys.
+fn sequence(name: i32, nodes: &[i32]) -> Vec<u8> {
+    let mut w = W::default().i32(name).u32(nodes.len() as u32).u32(0);
+    for &node in nodes {
+        w = w
+            .i32(-1)
+            .i32(-1)
+            .u8(0)
+            .i32(node)
+            .i32(-1)
+            .i32(-1)
+            .i32(-1)
+            .i32(-1);
+    }
+    w.f(1.0)
+        .i32(-1)
+        .u32(0)
+        .fs(&[1.0, 0.0, 1.0])
+        .i32(-1)
+        .i32(-1)
+        .u16(0)
+        .0
+}
+
+/// Sequences naming the large string share one copy: two by their controlled block's node (raw bytes), two by
+/// their name (decoded). Each names it once, which the old per-sequence budget allowed.
+#[test]
+fn two_sequences_share_one_string() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    n.block("NiControllerSequence", sequence(-1, &[big]));
+    n.block("NiControllerSequence", sequence(-1, &[big]));
+    n.block("NiControllerSequence", sequence(big, &[]));
+    n.block("NiControllerSequence", sequence(big, &[]));
+    let m = nif::model::read_model(&bytes_0x80(&n)).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.sequences.len(), 4);
+    let nodes: BTreeSet<_> = m.sequences[..2]
+        .iter()
+        .map(|s| s.blocks[0].node.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(nodes.len(), 1, "{} distinct node copies", nodes.len());
+    let names: BTreeSet<_> = m.sequences[2..]
+        .iter()
+        .map(|s| s.name.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(names.len(), 1, "{} distinct name copies", names.len());
+}
+
+/// Many controlled blocks of one sequence naming the large string read (the copies are shared, so no budget
+/// refuses them) and share one copy.
+#[test]
+fn one_sequence_shares_one_string_across_its_blocks() {
+    let mut n = Nif::new(100);
+    let big = n.string(&"x".repeat(BIG));
+    n.block("NiControllerSequence", sequence(big, &[big; 50]));
+    let m = nif::model::read_model(&bytes_0x80(&n)).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    let nodes: BTreeSet<_> = m.sequences[0]
+        .blocks
+        .iter()
+        .map(|cb| cb.node.as_deref().map(|x| x.as_ptr()))
+        .collect();
+    assert_eq!(nodes.len(), 1, "{} distinct node copies", nodes.len());
+}

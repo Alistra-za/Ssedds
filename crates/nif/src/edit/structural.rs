@@ -1558,7 +1558,7 @@ pub(crate) fn extra_op(
                 _ => m
                     .shapes
                     .iter()
-                    .filter(|s| s.name == at.shape)
+                    .filter(|s| s.name.as_deref() == at.shape.as_deref())
                     .find(|s| owned(&s.net))
                     .map(|s| (s.block, &s.net)),
             }

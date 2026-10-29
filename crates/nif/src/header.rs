@@ -1,6 +1,7 @@
 //! NIF 20.2.0.7 header (nif.xml Header 1963-1983; plan 01 Q1). Only Skyrim LE (BSVER 83) and SE (100) pass.
 use crate::cursor::Cursor;
 use crate::NifError;
+use std::sync::{Arc, OnceLock};
 
 pub struct Header {
     pub bsver: u32,
@@ -24,6 +25,9 @@ pub struct Header {
     pub groups_at: usize,
     /// data_start + sum of sizes: offset of the footer.
     pub footer_at: usize,
+    /// One shared copy per string-table entry, made on first use ([`Header::name_arc`], [`Header::string_arc`]).
+    names: Vec<OnceLock<Arc<str>>>,
+    raws: Vec<OnceLock<Arc<[u8]>>>,
 }
 
 pub(crate) const MAX_BLOCKS: u32 = 1 << 20; // nifly NIF_BLOCK_INDEX_LIMIT
@@ -117,6 +121,8 @@ impl Header {
             max_string_len,
             groups_at,
             footer_at: p,
+            names: (0..nstrings).map(|_| OnceLock::new()).collect(),
+            raws: (0..nstrings).map(|_| OnceLock::new()).collect(),
         })
     }
 
@@ -133,6 +139,30 @@ impl Header {
             .ok()
             .and_then(|i| self.strings.get(i))
             .map(Vec::as_slice)
+    }
+
+    /// The entry decoded as Windows-1252, one copy per file however many blocks name it (trace 2026-10-28 #1).
+    pub fn name_arc(&self, idx: i32) -> Option<Arc<str>> {
+        let i = usize::try_from(idx).ok()?;
+        let s = self.strings.get(i)?;
+        Some(
+            self.names
+                .get(i)?
+                .get_or_init(|| crate::text::lossy(s).into())
+                .clone(),
+        )
+    }
+
+    /// The entry's raw bytes, one copy per file (as [`Header::name_arc`]).
+    pub fn string_arc(&self, idx: i32) -> Option<Arc<[u8]>> {
+        let i = usize::try_from(idx).ok()?;
+        let s = self.strings.get(i)?;
+        Some(
+            self.raws
+                .get(i)?
+                .get_or_init(|| s.as_slice().into())
+                .clone(),
+        )
     }
 
     /// Footer root refs.

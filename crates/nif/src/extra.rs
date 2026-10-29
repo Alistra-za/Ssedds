@@ -49,7 +49,8 @@ pub const INV_DEFAULT: ([u16; 3], f32) = ([4712, 6283, 0], 1.0);
 pub struct Extra {
     pub block: u32,
     pub kind: String,
-    pub name: Option<Vec<u8>>,
+    /// Raw bytes, shared with every block that names the same entry ([`Header::string_arc`]).
+    pub name: Option<std::sync::Arc<[u8]>>,
     /// `None` for every type outside [`EDITABLE`].
     pub value: Option<ExtraValue>,
     pub size: u32,
@@ -109,7 +110,7 @@ pub fn read_extra(h: &Header, b: &[u8], block: usize) -> Result<Extra, NifError>
     Ok(Extra {
         block: block as u32,
         kind,
-        name: h.string(name).map(<[u8]>::to_vec),
+        name: h.string_arc(name),
         value,
         size,
     })

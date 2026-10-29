@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeModel {
     pub block: u32,
-    pub name: Option<String>,
+    pub name: Option<std::sync::Arc<str>>,
     pub kind: ShapeKind,
     pub net: ObjectNet,
     pub shader: Option<u32>,

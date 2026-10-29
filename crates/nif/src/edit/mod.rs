@@ -346,7 +346,7 @@ pub fn anchor_role(m: &NifModel, shape: Option<u32>, role: Role) -> Option<Ancho
     Some(Anchor {
         block,
         kind,
-        shape: s.and_then(|s| s.name.clone()),
+        shape: s.and_then(|s| s.name.as_deref().map(str::to_string)),
         role,
     })
 }
