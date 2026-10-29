@@ -667,6 +667,68 @@ fn rows_of(m: &mut MeshesModel) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Note GC test 8 (rules 3.1, 3.4, 3.6): at 1100 px a long path is cut in its own column, Path | Mod | chips keep
+/// their order, and nothing of the row reaches past the column's edge.
+#[test]
+fn at_1100_px_a_long_row_truncates_and_stays_in_its_columns() {
+    use eframe::egui::{self, containers::panel::PanelState};
+    let long = format!("meshes/{}rock.nif", "a_very_long_folder_name/".repeat(12));
+    let name = "A mod with a long name that keeps going past its column";
+    let mut m = MeshesModel::empty();
+    m.mods = vec![mod_row(1, name, modscan::store::KIND_BSA, false)];
+    let row = NifRow {
+        le_mesh: true,
+        n_copies: 3,
+        problem: Some("bad block".into()),
+        ..nif(1, &long)
+    };
+    let rows = Arc::new(vec![(row, name.to_string())]);
+    m.winners = Arc::new(vec![(nif(1, "meshes/rock.nif"), "A".to_string())]);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1100.0, 800.0))
+        .build_ui_state(
+            |ui, m: &mut MeshesModel| sdc_gui::ui::meshes::show(ui, m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let rect = |h: &Harness<'static, MeshesModel>| {
+        PanelState::load(&h.ctx, egui::Id::new("meshes-tree"))
+            .unwrap()
+            .outer_rect
+    };
+    // A short row first: the long one must not widen the column (a panel grows to fit what it holds).
+    let panel = rect(&h);
+    h.state_mut().winners = rows;
+    h.run();
+    assert_eq!(rect(&h), panel, "the long row widened the column");
+    // The full path stays the AccessKit name (rule 3.4).
+    let path = h.get_by_label(&long).rect();
+    let origin = h.get_by_role_and_label(Role::Label, name).rect();
+    let le = h.get_by_role_and_label(Role::Label, "LE").rect();
+    assert!(
+        path.max.x <= origin.min.x,
+        "path {path:?} under the mod {origin:?}"
+    );
+    assert!(
+        origin.max.x <= le.min.x,
+        "mod {origin:?} under the chips {le:?}"
+    );
+    // Unclipped rects: a chip pushed past the edge would be cut by the scroll area and look fine to a clipped check.
+    let band = path.y_range();
+    let past = h.ctx.viewport(|v| {
+        (v.this_pass.widgets.layers().flat_map(|(_, ws)| ws))
+            .filter(|w| band.contains(w.rect.center().y) && w.rect.max.x > panel.max.x)
+            .map(|w| w.rect)
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        past.is_empty(),
+        "past the column edge {}: {past:?}",
+        panel.max.x
+    );
+}
+
 /// Note GC test 7 (rules 9.1, 9.2): with 10k rows the visible list is built again only when one of its inputs changes,
 /// not every frame.
 #[test]
