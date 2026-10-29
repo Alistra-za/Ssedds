@@ -89,11 +89,12 @@ pub fn reports(
     jobs: &[ResolvedJob],
     fills: &FillPlan,
 ) -> Vec<HelperReport> {
+    let index = crate::shader::JobIndex::new(jobs);
     let mut out = vec![];
     let mut sets: Vec<&TextureSet> = sets.iter().collect();
     sets.sort_by(|a, b| a.key.cmp(&b.key));
     for set in sets {
-        let in_set: Vec<&ResolvedJob> = jobs.iter().filter(|j| j.set_key == set.key).collect();
+        let in_set: Vec<&ResolvedJob> = index.in_set(&set.key).collect();
         let mut members: Vec<&InputFile> = set
             .members
             .iter()
@@ -104,9 +105,9 @@ pub fn reports(
         for f in members {
             let sel = helper_requested(ctx, f);
             // A recipe's job has its first source as `input` (Note M8); it is not that source's own job.
-            let own = jobs
-                .iter()
-                .find(|j| j.input == f.path && j.pack.is_none() && j.derive.is_none());
+            let own = index
+                .by_input(&f.path)
+                .find(|j| j.pack.is_none() && j.derive.is_none());
             let packed_role = in_set.iter().find_map(|j| {
                 let pack = j
                     .pack
