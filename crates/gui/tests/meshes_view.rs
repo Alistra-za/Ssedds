@@ -739,8 +739,8 @@ fn start_scan(m: &mut MeshesModel) {
 }
 
 /// Note GC14 (review fix 1): a row read still out when a scan starts is dropped, since it may read the origins the
-/// scan disabled; nothing is selected mid-scan; a scan that does not complete keeps the lists from before and selects
-/// again the NIF the reload was holding.
+/// scan disabled; nothing is selected mid-scan; a scan that does not complete keeps the lists from before, and the NIF
+/// the reload was holding is selected again after the next completed scan (GC19).
 #[cfg(windows)]
 #[test]
 fn a_row_read_held_across_a_scan_start_is_dropped_and_an_unfinished_scan_keeps_the_lists() {
@@ -764,11 +764,51 @@ fn a_row_read_held_across_a_scan_start_is_dropped_and_an_unfinished_scan_keeps_t
     drop(lock);
     assert!(!m.scan_completed && m.error.is_some(), "{:?}", m.error);
     assert_eq!(rows_of(&mut m), before);
+    // GC19: the store counts as unsettled after an unfinished scan, so the held NIF waits for a completed one.
+    assert_eq!(m.selected_nif, None);
+    start_scan(&mut m);
+    wait(&mut m);
     assert_eq!(
         m.selected_nif,
         Some(rock),
         "the NIF the reload held is selected again"
     );
+}
+
+/// Note GC19 (review round 2, A): after a scan that disabled the origins and did not complete, the NIF a reload held
+/// stays deferred, since its details would read the disabled store (missing textures, no preview sources); the next
+/// completed scan selects it again.
+#[cfg(windows)]
+#[test]
+fn a_held_nif_waits_for_a_completed_scan_after_an_unfinished_one() {
+    let (d, mut m) = scanned();
+    let rock = m.nif_at(0).0.copy_id;
+    m.select_nif(rock);
+    m.reload();
+    // What `begin_scan` does to the store; the held lock ends the scan unfinished.
+    let s = modscan::store::Store::open(&d.path().join("scan.db")).unwrap();
+    s.conn()
+        .execute("UPDATE origin SET enabled = 0", [])
+        .unwrap();
+    let lock = hold_scan_lock(d.path());
+    start_scan(&mut m);
+    wait(&mut m);
+    drop(lock);
+    assert!(!m.scan_completed);
+    assert_eq!(
+        m.selected_nif, None,
+        "no details read from the disabled store"
+    );
+    assert!(m.shapes.is_empty());
+    start_scan(&mut m);
+    wait(&mut m);
+    assert!(m.scan_completed);
+    assert_eq!(
+        m.selected_nif,
+        Some(rock),
+        "selected again after the completed scan"
+    );
+    assert!(!m.shapes.is_empty());
 }
 
 /// Note GC15 (review fix 2): "Show in Meshes" during a scan, or after one that did not complete, reads no users from

@@ -995,7 +995,8 @@ impl MeshesModel {
                 self.error = Some(format!("Scan failed: {e}"));
             }
         }
-        // No new read (the scan did not complete): the NIF a reload held is looked for in the lists on screen.
+        // No new read (the scan did not complete): the NIF a reload held is looked for in the lists on screen, if the
+        // store is settled again (a PGPatcher pause); else it stays held.
         if !self.rows_loading() {
             self.apply_reselect();
         }
@@ -1083,9 +1084,10 @@ impl MeshesModel {
         false
     }
 
-    /// Selects again the NIF a reload held, once it is listed; never while a scan runs (Note GC14).
+    /// Selects again the NIF a reload held, once it is listed; never while a scan runs or the store is unsettled,
+    /// where its details would read disabled origins (Note GC14, GC19). The next completed scan's reload takes it.
     fn apply_reselect(&mut self) {
-        if self.scanning() {
+        if self.scanning() || self.store_unsettled {
             return;
         }
         if let Some(c) = self.reselect.take() {
