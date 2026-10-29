@@ -696,15 +696,27 @@ fn texture_slots(
         let text = nif::text::lossy(raw);
         let norm = nif::path::canon_texture(raw).norm;
         let mut commit = None;
-        ui.horizontal(|ui| {
-            ui.strong(name);
-            for w in e.warnings.iter().filter(|w| {
+        let slot_warnings = || {
+            e.warnings.iter().filter(move |w| {
                 w.target
                     == Target::Slot {
                         set,
                         slot: i as u32,
                     }
-            }) {
+            })
+        };
+        ui.horizontal(|ui| {
+            // Note GD6: a slot with a warning is named in the warning's colour.
+            let t = egui::RichText::new(name).strong();
+            match slot_warnings()
+                .map(|w| w.level)
+                .max_by_key(|l| *l == Level::Error)
+            {
+                Some(Level::Error) => ui.label(t.color(RED)),
+                Some(Level::Warn) => ui.label(t.color(AMBER)),
+                None => ui.label(t),
+            };
+            for w in slot_warnings() {
                 let color = if w.level == Level::Error { RED } else { AMBER };
                 ui.label(egui::RichText::new(&w.text).small().color(color))
                     .on_hover_text(&w.text);
@@ -757,6 +769,13 @@ fn texture_slots(
                 None,
             ));
         }
+    }
+    // Note GD6: a warning on a slot the set does not have (an empty RMAOS slot 5 past a short set) has no row above.
+    for w in e.warnings.iter().filter(|w| {
+        matches!(w.target, Target::Slot { set: s, slot } if s == set && slot as usize >= ts.raw.slots.len())
+    }) {
+        let color = if w.level == Level::Error { RED } else { AMBER };
+        ui.add(egui::Label::new(egui::RichText::new(&w.text).color(color)).wrap());
     }
 }
 

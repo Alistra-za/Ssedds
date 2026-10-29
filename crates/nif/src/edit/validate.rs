@@ -87,6 +87,8 @@ pub const GLOW_ON_EYE: &str = "Glow map has no effect on an Eye shader.";
 /// Note DK (owner): SLSF1 bit 17 Eye_Environment_Mapping belongs to the Eye shader; often set by mistake on type 1.
 pub const EYE_ENV_TYPE: &str =
     "Eye environment mapping is for the Eye shader type. Use Environment_Mapping here.";
+/// CM27 / Note GD6: on a PBR material CS's default white RMAOS sets metallic to 1, so an empty slot 5 is fully metallic.
+pub const EMPTY_RMAOS: &str = "Slot 5 (RMAOS) is empty: in game the mesh renders fully metallic";
 /// Errors that block export even when the source already has them: each one crashes or blacks out in game.
 const ALWAYS_BLOCK: [&str; 6] = [
     ENV_SCALE_PBR,
@@ -510,6 +512,20 @@ pub fn validate(m: &NifModel, exists: Option<&dyn Fn(&str) -> bool>) -> Vec<Warn
     }
 
     for (&set, s) in m.texsets.iter().filter(|(_, s)| !s.users.is_empty()) {
+        // Note GD6: a slot the set does not have reads as empty too.
+        let pbr = s.users.iter().any(|u| {
+            m.lighting
+                .get(u)
+                .is_some_and(|l| l.lighting.slsf2 & SLSF2_TRUE_PBR != 0)
+        });
+        if pbr && s.raw.slots.get(5).is_none_or(|r| r.is_empty()) {
+            push(
+                Level::Warn,
+                Target::Slot { set, slot: 5 },
+                EMPTY_RMAOS,
+                None,
+            );
+        }
         let shape = s
             .users
             .iter()

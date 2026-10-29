@@ -8921,3 +8921,42 @@ fn undo_target_carries_the_label() {
     assert_eq!(u.undo_label, None);
     assert_eq!(u.redo_label.as_deref(), Some("Set shader type"));
 }
+
+/// GD6 (CM27): a PBR material whose slot 5 (RMAOS) is empty renders fully metallic in game: an amber slot warning
+/// (an item-1 row), never blocking.
+#[test]
+fn empty_rmaos_slot_is_a_row() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let rmaos = |m: &MeshesModel| {
+        m.edit
+            .as_ref()
+            .unwrap()
+            .warnings
+            .iter()
+            .filter(|w| w.text == nif::edit::validate::EMPTY_RMAOS)
+            .map(|w| (w.level, w.target.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert!(rmaos(&m).is_empty(), "not PBR: no warning");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, a, 1 << 23);
+    // The set has one slot: the warning shows under the Shader tab's slot rows.
+    h.get_by_label(nif::edit::validate::EMPTY_RMAOS);
+    let e = h.state().edit.as_ref().unwrap();
+    let set = e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    assert_eq!(
+        rmaos(h.state()),
+        [(
+            nif::edit::validate::Level::Warn,
+            Target::Slot { set, slot: 5 }
+        )]
+    );
+    assert_eq!(
+        nif::edit::validate::EMPTY_RMAOS,
+        "Slot 5 (RMAOS) is empty: in game the mesh renders fully metallic"
+    );
+}
