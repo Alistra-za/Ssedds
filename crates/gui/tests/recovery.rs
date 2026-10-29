@@ -105,6 +105,86 @@ fn toast_undo_reverts_and_deletes_the_file() {
     assert!(!rec.exists(), "the user rejected the recovered edits");
 }
 
+const SETS_SAVED: &str = "# saved\n";
+const SETS_CRASHED: &str = "# crashed\n";
+
+/// Both documents saved (older) and each with a `.recovery` file (newer); then the folder is opened.
+fn crashed_both(dir: &Path, doc: &str, rec: &str, sets_rec: &str) -> (AppModel, PathBuf, PathBuf) {
+    let root = mod_folder(dir);
+    let sets = root.join("sdc-project.toml");
+    std::fs::write(&sets, SETS_SAVED).unwrap();
+    age(&sets, 86_400);
+    let sets_rec_file = recovery_path(&sets);
+    std::fs::write(&sets_rec_file, sets_rec).unwrap();
+    let file = root.join("sdc.toml");
+    std::fs::write(&file, doc).unwrap();
+    age(&file, 86_400);
+    let rec_file = recovery_path(&file);
+    std::fs::write(&rec_file, rec).unwrap();
+    (open(root), rec_file, sets_rec_file)
+}
+
+fn sets_text(m: &AppModel) -> String {
+    m.sets_doc.as_ref().unwrap().text()
+}
+
+/// Both documents restore in one Undo step, and the toast's Undo takes both back and deletes both files.
+#[test]
+fn both_documents_restore_as_one_step_and_the_toast_undo_deletes_both_files() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, rec, sets_rec) = crashed_both(d.path(), ORIGINAL, CRASHED, SETS_CRASHED);
+    assert_eq!(
+        (text(&m).as_str(), sets_text(&m).as_str()),
+        (CRASHED, SETS_CRASHED)
+    );
+    assert_eq!(m.undo_label(), Some("Restore crash edits"));
+    m.undo_crash_restore();
+    assert_eq!(
+        (text(&m).as_str(), sets_text(&m).as_str()),
+        (ORIGINAL, SETS_SAVED)
+    );
+    assert!(!m.is_dirty());
+    assert!(!m.can_undo(), "it was the only step");
+    assert!(!rec.exists() && !sets_rec.exists());
+}
+
+/// A recovery file that does not parse restores nothing: the toast's Undo must not delete a file whose edits were
+/// never applied.
+#[test]
+fn an_unparseable_recovery_file_survives_the_toast_undo() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, rec, sets_rec) = crashed_both(d.path(), ORIGINAL, CRASHED, "target = = cut off");
+    assert_eq!(text(&m), CRASHED, "the valid one is restored");
+    assert_eq!(sets_text(&m), SETS_SAVED);
+    assert!(restore_toast(&m));
+    m.undo_crash_restore();
+    assert_eq!(text(&m), ORIGINAL);
+    assert!(!rec.exists(), "the restored file goes");
+    assert_eq!(
+        std::fs::read_to_string(&sets_rec).unwrap(),
+        "target = = cut off"
+    );
+}
+
+/// A read-only `sdc.toml` keeps its file; the sets document still restores.
+#[test]
+fn a_read_only_project_does_not_stop_the_sets_restore() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, rec, sets_rec) =
+        crashed_both(d.path(), "target = = broken\n", CRASHED, SETS_CRASHED);
+    assert!(m.project.as_ref().unwrap().read_only());
+    assert_eq!(sets_text(&m), SETS_CRASHED);
+    assert!(restore_toast(&m));
+    assert_eq!(std::fs::read_to_string(&rec).unwrap(), CRASHED, "untouched");
+    m.undo_crash_restore();
+    assert_eq!(sets_text(&m), SETS_SAVED);
+    assert!(!sets_rec.exists());
+    assert_eq!(
+        std::fs::read_to_string(&rec).unwrap(),
+        CRASHED,
+        "still untouched"
+    );
+}
 /// The toast's own `Undo` button does the same through the drawn toast, and the toast goes.
 #[test]
 fn the_drawn_toast_has_an_undo_button_that_rejects_the_recovery() {
@@ -143,6 +223,13 @@ fn toast_undo_after_another_edit_leaves_everything() {
     m.undo_crash_restore();
     assert_eq!(text(&m), after, "the step on top is not the restore");
     assert!(rec.exists());
+    assert!(
+        m.messages
+            .toasts()
+            .iter()
+            .any(|t| t.text.contains("you have edited since")),
+        "it says why nothing happened"
+    );
 }
 
 #[test]

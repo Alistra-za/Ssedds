@@ -2858,8 +2858,7 @@ impl AppModel {
                 .as_ref()
                 .map(|s| (s.path().to_path_buf(), s.text(), s.read_only())),
         ];
-        let mut found: [Option<String>; 2] = [None, None];
-        let mut files = vec![];
+        let mut found: [Option<(std::path::PathBuf, String)>; 2] = [None, None];
         for (slot, doc) in found.iter_mut().zip(docs) {
             let Some((path, doc_text, read_only)) = doc else {
                 continue;
@@ -2872,31 +2871,39 @@ impl AppModel {
             }
             let held = self.held_recovery.remove(&path);
             match recovery_text_held(&path, Some(&doc_text), held) {
-                Recovery::Pending(t) => {
-                    *slot = Some(t);
-                    files.push(path);
-                }
+                Recovery::Pending(t) => *slot = Some((path, t)),
                 Recovery::Empty => discard_recovery(&path),
                 Recovery::None => {}
             }
         }
-        if files.is_empty() {
+        if found.iter().all(Option::is_none) {
             return;
         }
         let [project, sets] = found;
         let before = self.history.undo.len();
-        self.edit_docs(LABEL, None, false, move |p, s| {
-            if let Some(t) = project {
+        // Only a document whose text really changed counts as restored: `restore` ignores text that does not parse.
+        let mut restored = vec![];
+        self.edit_docs(LABEL, None, false, |p, s| {
+            if let Some((path, t)) = project {
+                let old = p.text();
                 p.restore(&t);
+                if p.text() != old {
+                    restored.push(path);
+                }
             }
-            if let Some(t) = sets {
+            if let Some((path, t)) = sets {
+                let old = s.text();
                 s.restore(&t);
+                if s.text() != old {
+                    restored.push(path);
+                }
             }
         });
-        // shortcut: a file that does not parse as TOML changes nothing, so it gets no step and no toast and stays on
-        // disk; give it a notice if one is ever seen.
+        // shortcut: a file that does not parse as TOML restores nothing, shows no notice and stays on disk (the
+        // other document's file, if it restored, is the only one the toast's Undo deletes); give it a notice if one
+        // is ever seen.
         if self.history.undo.len() > before {
-            self.crash_restore = Some((self.history.undo.len(), files));
+            self.crash_restore = Some((self.history.undo.len(), restored));
             self.messages.notify_with(
                 messages::Severity::Info,
                 "Restored unsaved edits from the crash",
@@ -2904,7 +2911,6 @@ impl AppModel {
             );
         }
     }
-
     /// The restore toast's Undo (Note FB5): takes back the restore step and deletes the `.recovery` files, since the
     /// user rejected them. Does nothing once another edit sits on top of the step. (A plain Ctrl+Z keeps the files.)
     pub fn undo_crash_restore(&mut self) {
@@ -2918,6 +2924,10 @@ impl AppModel {
                 .last()
                 .is_none_or(|c| c.label != "Restore crash edits")
         {
+            self.messages.notify(
+                messages::Severity::Info,
+                "The restored edits were not undone: you have edited since. Use Undo to step back.",
+            );
             return;
         }
         let files = files.clone();
