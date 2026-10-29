@@ -94,6 +94,42 @@ fn store() -> (tempfile::TempDir, Store, i64) {
     (d, s, o)
 }
 
+/// Trace 2026-10-28 #1 fix round 3: 2000 shape rows of one NIF named by one 100 KB string read back as one shared
+/// name (the store keeps a copy per row on disk, parked).
+#[test]
+fn shapes_of_shares_one_name_across_rows() {
+    let (_d, mut s, o) = store();
+    let big: std::sync::Arc<str> = "x".repeat(100_000).into();
+    let rows = (0..2000)
+        .map(|block| ShapeRow {
+            block,
+            head: ShapeHead {
+                name: Some(big.clone()),
+                ..head(false)
+            },
+            shader: Shader::Effect(effect(b"fx\\glow.dds")),
+            alpha: None,
+        })
+        .collect();
+    let id = s
+        .upsert_copy(
+            "meshes/x.nif",
+            o,
+            1,
+            1,
+            CopyResult::Scanned(scan_of(rows)),
+            None,
+        )
+        .unwrap();
+    let v = s.shapes_of(id).unwrap();
+    assert_eq!(v.len(), 2000);
+    let ptrs: std::collections::BTreeSet<_> = v
+        .iter()
+        .map(|x| x.name.as_deref().map(str::as_ptr))
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct name copies", ptrs.len());
+}
+
 #[test]
 fn raw_strings_and_flags_are_kept_for_odd_slots() {
     let (_d, mut s, o) = store();

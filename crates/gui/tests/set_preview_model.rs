@@ -601,7 +601,7 @@ fn row(copy: i64, load: i64, path: &str, block: u32, derived: bool) -> MatchRow 
         nif_path: path.into(),
         origin: "Mod".into(),
         shape_block: block,
-        shape_name: Some(format!("S{block}")),
+        shape_name: Some(format!("S{block}").into()),
         le_mesh: false,
         skinned: false,
         derived,
@@ -624,7 +624,7 @@ fn rows_group_by_nif_and_keep_only_shapes_pgpatcher_matches() {
     let c = group_rows(&rows, None, &check);
     assert_eq!(c.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [1, 9]);
     assert_eq!(c[0].nif_path, r"meshes\a\rock.nif");
-    assert_eq!(c[0].shapes, vec![(3, Some("S3".to_string()))]);
+    assert_eq!(c[0].shapes, vec![(3, Some("S3".into()))]);
     assert!(c[1].derived && c[1].copy_id == 2);
     let f = group_rows(&rows, Some(r"ARMOR\"), &check);
     assert_eq!(f.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [9]);
@@ -845,7 +845,7 @@ fn a_scanned_mesh_is_listed_and_an_unreadable_one_falls_back_to_the_sphere() {
     };
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].nif_path, r"meshes\landscape\rocks\rock01.nif");
-    assert_eq!(list[0].shapes, vec![(3, Some("Rock".to_string()))]);
+    assert_eq!(list[0].shapes, vec![(3, Some("Rock".into()))]);
     assert!(s.timings.query_ms.is_some());
     // The NIF is not on disk: the sphere stands in and the reason is shown.
     assert!(matches!(

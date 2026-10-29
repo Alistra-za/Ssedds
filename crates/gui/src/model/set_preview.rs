@@ -1225,7 +1225,7 @@ pub struct Candidate {
     pub le_mesh: bool,
     pub derived: bool,
     /// (block, name) of the matching shapes, re-checked with `pgpsim::shape_matches`.
-    pub shapes: Vec<(u32, Option<String>)>,
+    pub shapes: Vec<(u32, Option<std::sync::Arc<str>>)>,
 }
 
 impl Candidate {
