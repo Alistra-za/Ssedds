@@ -16,7 +16,7 @@ pub mod settings;
 pub mod ui;
 pub mod worker;
 
-/// Turns on the analysis disk cache (DECISIONS Note DU): `<local_app_data>\sdc\analysis-cache`. `None` (no
+/// Turns on the analysis disk cache (DECISIONS Note DX): `<local_app_data>\sdc\analysis-cache`. `None` (no
 /// `LOCALAPPDATA`) means no store. Only `main` reads the variable and passes it in.
 pub fn with_analysis_cache(
     session: engine::session::Session,

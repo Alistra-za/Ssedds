@@ -1,4 +1,4 @@
-//! The analysis disk cache (DECISIONS Note DU): a later session decodes nothing it already analysed.
+//! The analysis disk cache (DECISIONS Note DX): a later session decodes nothing it already analysed.
 use encoders_sys::Bc1Model;
 use engine::analysis_store::AnalysisStore;
 use engine::api::*;
@@ -181,7 +181,7 @@ fn without_a_disk_dir_nothing_is_written() {
     assert_eq!(top, ["in"]);
 }
 
-/// Load time of a real folder, cold then warm (Note DU11). Read-only on `SDC_LOADTIME_DIR`; the store is a tempdir.
+/// Load time of a real folder, cold then warm (Note DX11). Read-only on `SDC_LOADTIME_DIR`; the store is a tempdir.
 #[test]
 #[ignore]
 fn load_time_cold_then_warm() {
