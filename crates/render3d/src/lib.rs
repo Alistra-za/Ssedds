@@ -1021,7 +1021,8 @@ impl Renderer {
                     real.insert(reg, srv);
                 }
                 Some(_) => rep.warnings.push(format!(
-                    "{name}: {} is not a {kind:?} texture (t{reg}); default bound",
+                    "{}: {} is not a {kind:?} texture (t{reg}); default bound",
+                    nif::text::label(name),
                     path.norm
                 )),
                 None => {
@@ -1054,7 +1055,8 @@ impl Renderer {
                 draw::srv_kind_at(&program.ps.reflection, reg).filter(|k| *k != t.kind)
             {
                 rep.warnings.push(format!(
-                    "{name}: the slot {slot} override is kind {:?} but t{reg} reads {kind:?}; not shown",
+                    "{}: the slot {slot} override is kind {:?} but t{reg} reads {kind:?}; not shown",
+                    nif::text::label(name),
                     t.kind
                 ));
             }
@@ -1523,7 +1525,7 @@ impl Renderer {
         }
         for s in self.shapes.values() {
             if let ShapeStatus::Failed { error, .. } = &s.status {
-                let line = format!("{}: {error}", s.name);
+                let line = format!("{}: {error}", nif::text::label(&s.name));
                 if s.compile_failed {
                     rep.compile_errors.push(line);
                 } else {
@@ -1969,8 +1971,9 @@ impl Renderer {
             let real = match entry.current() {
                 Some(t) if t.kind != kind => {
                     return Err(format!(
-                        "{path} is a {:?} texture but {name} reads t{reg} as {kind:?}",
-                        t.kind
+                        "{path} is a {:?} texture but {} reads t{reg} as {kind:?}",
+                        t.kind,
+                        nif::text::label(&name)
                     ))
                 }
                 Some(t) => Some(t.srv.clone()),

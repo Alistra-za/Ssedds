@@ -1436,11 +1436,12 @@ pub struct ShapeRow {
 
 impl ShapeRow {
     pub fn text(&self) -> String {
+        let name = nif::text::label(&self.name); // Note GA7
         match &self.outcome {
-            Outcome::Patched { .. } => format!("{}: patched as PGPatcher would", self.name),
-            Outcome::Skip(r) => format!("{}: {}", self.name, skip_text(r)),
-            Outcome::NoMatch => format!("{}: not matched, original textures", self.name),
-            Outcome::Plain => format!("{}: plain textures, no PGPatcher simulation", self.name),
+            Outcome::Patched { .. } => format!("{name}: patched as PGPatcher would"),
+            Outcome::Skip(r) => format!("{name}: {}", skip_text(r)),
+            Outcome::NoMatch => format!("{name}: not matched, original textures"),
+            Outcome::Plain => format!("{name}: plain textures, no PGPatcher simulation"),
         }
     }
 }

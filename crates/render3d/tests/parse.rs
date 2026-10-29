@@ -10,6 +10,55 @@ fn fixture(name: &str) -> Vec<u8> {
     .unwrap()
 }
 
+/// Trace 2026-10-28 #1 fix round 2: 2000 zero-size BSTriShapes (not Lighting shapes, so each gets a warning and a
+/// skipped entry) all named by one 100 000-byte string of 0x80 (`€` decoded). The messages carry a short label, so
+/// the text stays small (about 1.2 GB with the full name).
+#[test]
+fn skipped_shape_messages_use_a_short_label() {
+    let mut b = b"Gamebryo File Format, Version 20.2.0.7\n".to_vec();
+    b.extend(0x1402_0007u32.to_le_bytes());
+    b.push(1);
+    b.extend(12u32.to_le_bytes());
+    b.extend(2000u32.to_le_bytes());
+    b.extend(100u32.to_le_bytes());
+    b.extend([1u8, 0, 1, 0, 1, 0]); // author, process and export script
+    b.extend(1u16.to_le_bytes());
+    b.extend(10u32.to_le_bytes());
+    b.extend(b"BSTriShape");
+    b.extend([0u8; 2 * 2000]); // type indices
+    b.extend([0u8; 4 * 2000]); // sizes: every block starts at the footer
+    b.extend(31u32.to_le_bytes());
+    b.extend(100_000u32.to_le_bytes());
+    for k in 0..30 {
+        b.extend(1u32.to_le_bytes());
+        b.push(b'a' + k as u8);
+    }
+    b.extend(100_000u32.to_le_bytes());
+    b.extend(vec![0x80u8; 100_000]);
+    b.extend(0u32.to_le_bytes()); // groups
+    b.extend(30u32.to_le_bytes()); // footer: 30 roots, read as name index 30
+    b.extend([0u8; 4 * 30]);
+    let p = parse(&b);
+    assert_eq!(p.skipped.len(), 2000);
+    let texts = || {
+        p.warnings
+            .iter()
+            .chain(&p.errors)
+            .chain(p.skipped.iter().map(|s| &s.1))
+    };
+    let total: usize = texts().map(String::len).sum();
+    assert!(total < 4 << 20, "{total} bytes of message text");
+    for t in texts().filter(|t| t.starts_with('€')) {
+        let label = t.split(": ").next().unwrap();
+        assert!(
+            label.chars().count() <= nif::text::LABEL_CAP + 1,
+            "{}",
+            label.len()
+        );
+        assert!(label.ends_with('…'));
+    }
+}
+
 #[test]
 fn parsed_nif_is_send_and_sync() {
     fn check<T: Send + Sync + 'static>() {}

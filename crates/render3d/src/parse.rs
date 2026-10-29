@@ -71,8 +71,10 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
             .name
             .clone()
             .unwrap_or_else(|| format!("block {}", row.block).into());
+        // messages are kept per shape: a short label, not the whole name (Note GA7)
+        let short = nif::text::label(&label);
         let nif::scan::Shader::Lighting(lighting, slots) = &row.shader else {
-            let why = format!("{label}: not a BSLightingShaderProperty shape, not drawn in P0");
+            let why = format!("{short}: not a BSLightingShaderProperty shape, not drawn in P0");
             out.warnings.push(why.clone());
             out.skipped.push((id, why));
             continue;
@@ -80,21 +82,21 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
         let mesh = match nif::geom::read_shape(&header, nif_bytes, row.block as usize) {
             Ok(m) => m,
             Err(e) => {
-                let why = format!("{label}: {e}");
+                let why = format!("{short}: {e}");
                 out.errors.push(why.clone());
                 out.skipped.push((id, why));
                 continue;
             }
         };
         if let Err(e) = crate::mesh::validate(&mesh) {
-            let why = format!("{label}: {e}");
+            let why = format!("{short}: {e}");
             out.errors.push(why.clone());
             out.skipped.push((id, why));
             continue;
         }
         if row.block != 0 && !graph.parent.contains_key(&row.block) {
             out.warnings.push(format!(
-                "{label}: not under any known node; placed by its own transform"
+                "{short}: not under any known node; placed by its own transform"
             ));
         }
         let world = nif::graph::world(&graph, row.block, &mesh.transform);

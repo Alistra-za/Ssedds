@@ -11,6 +11,17 @@ pub fn lossy(b: &[u8]) -> String {
 /// hostile file can name one large string many times (trace 2026-10-28, Note GA1).
 pub const DISPLAY_CAP: usize = 64 * 1024;
 
+/// Most chars of a name embedded in a message kept per shape or block (Note GA7): 2000 messages stay small.
+pub const LABEL_CAP: usize = 256;
+
+/// `s` for a message: its first [`LABEL_CAP`] chars, then "…" when it is longer.
+pub fn label(s: &str) -> std::borrow::Cow<'_, str> {
+    match s.char_indices().nth(LABEL_CAP) {
+        Some((end, _)) => format!("{}…", &s[..end]).into(),
+        None => s.into(),
+    }
+}
+
 /// `pieces` decoded and joined, stopping at `cap` bytes with "…" appended. Pieces past the cap are never decoded.
 pub fn lossy_capped<I>(pieces: I, cap: usize) -> String
 where
@@ -48,6 +59,14 @@ mod tests {
         // 0x80 decodes to three bytes: a char that would cross the cap is left out
         assert_eq!(lossy_capped([&b"a"[..], &[0x80, 0x80]], 5), "a€…");
         assert_eq!(lossy_capped(["abcd", ""], 4), "abcd");
+    }
+
+    #[test]
+    fn label_keeps_256_chars() {
+        use super::{label, LABEL_CAP};
+        let s = "€".repeat(LABEL_CAP);
+        assert_eq!(label(&s), s);
+        assert_eq!(label(&format!("{s}x")), format!("{s}…"));
     }
 
     #[test]
