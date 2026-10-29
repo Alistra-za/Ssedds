@@ -732,6 +732,10 @@ pub fn load_fixture(dir: &Path) -> Result<Replay, String> {
         .ok_or_else(|| format!("{}: bad size", mp.display()))?;
     let crop = golden::read_mrt_info(dir)?.crop;
     let inside = |o: u32, l: u32, s: u32| o.checked_add(l).is_some_and(|e| e <= s);
+    // an empty crop would reach chunks_exact(0) in seeded_depth (trace 2026-10-28 #28)
+    if crop[2] == 0 || crop[3] == 0 {
+        return Err(format!("{}: empty crop {crop:?}", mp.display()));
+    }
     if !inside(crop[0], crop[2], size.0) || !inside(crop[1], crop[3], size.1) {
         return Err(format!(
             "{}: crop {crop:?} outside size {size:?}",

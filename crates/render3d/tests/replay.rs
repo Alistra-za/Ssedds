@@ -209,6 +209,23 @@ fn load_fixture_refuses_malformed_fixtures() {
 
 /// D-P15: a logged list without DEFERRED on a draw the capture shows with 8 PS outputs gets DEFERRED, with a warning.
 #[test]
+fn load_fixture_refuses_a_zero_crop() {
+    // trace 2026-10-28 #28: an empty crop with empty data files used to load, then panic in seeded_depth
+    for crop in [[2, 2, 0, 4], [2, 2, 4, 0]] {
+        let d = tempfile::tempdir().unwrap();
+        write_fixture(d.path(), STANDIN);
+        edit_json(d.path(), "mrt.json", &|v| v["crop"] = json!(crop));
+        for f in ["mrt0_before.f32", "mrt0.f32"] {
+            fs::write(d.path().join(f), []).unwrap();
+        }
+        match load_fixture(d.path()) {
+            Ok(_) => panic!("{crop:?}: load_fixture should fail"),
+            Err(e) => assert!(e.contains("mrt.json") && e.contains("crop"), "{e}"),
+        }
+    }
+}
+
+#[test]
 fn load_fixture_adds_deferred_from_eight_outputs() {
     let load = |outputs: u64, defines: &[&str]| {
         let d = tempfile::tempdir().unwrap();
