@@ -768,6 +768,42 @@ fn the_mod_picker_lists_mods_with_nifs_and_picking_one_lists_its_copies() {
     );
 }
 
+/// Note GC test 4: in "Any mod", Overridden lists the losing copies, each with its own mod; Wins is hidden there
+/// (every row wins) and comes back with a picked mod.
+#[test]
+fn overridden_in_any_mod_lists_the_losing_copies_and_wins_is_hidden() {
+    let (_d, mut m) = scanned();
+    m.filter = NifFilter::Overridden;
+    assert_eq!(rows_of(&mut m), [row("meshes/rock.nif", "A")]);
+    assert!(!m.nif_at(m.visible_nifs()[0]).0.wins);
+    let mut h = harness(m);
+    h.run();
+    assert!(h.query_by_role_and_label(Role::Button, "Wins").is_none());
+    h.get_by_role_and_label(Role::Button, "Overridden");
+    h.get_by_label("meshes/rock.nif");
+    h.get_by_role_and_label(Role::Label, "A");
+    let a = h.state().mods.iter().find(|r| r.name == "A").unwrap().id;
+    h.state_mut().select_mod(a);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "Wins").click();
+    h.run();
+    assert_eq!(rows_of(h.state_mut()), [row("meshes/tree/oak.nif", "A")]);
+    // Back in "Any mod" the hidden Wins chip is not left on.
+    h.state_mut().any_mod();
+    assert_eq!(h.state().filter, NifFilter::All);
+}
+
+/// Note GC design 5: Problems means a problem or an LE mesh.
+#[test]
+fn problems_lists_le_meshes_too() {
+    let le = NifRow {
+        le_mesh: true,
+        ..nif(1, "meshes/le.nif")
+    };
+    assert!(NifFilter::Problems.matches(&le));
+    assert!(!NifFilter::Problems.matches(&nif(2, "meshes/ok.nif")));
+}
+
 /// Note GC rule 6.1: picking a mod hides rows and never deselects.
 #[test]
 fn picking_a_mod_keeps_the_selected_nif() {

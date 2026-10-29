@@ -147,7 +147,8 @@ impl NifFilter {
             NifFilter::Wins => n.wins,
             NifFilter::Overridden => !n.wins,
             NifFilter::Conflicted => n.n_copies > 1,
-            NifFilter::Problems => n.problem.is_some(),
+            // Note GC: an LE mesh is a problem too (it needs optimising for SSE).
+            NifFilter::Problems => n.problem.is_some() || n.le_mesh,
         }
     }
 }
@@ -1082,6 +1083,18 @@ impl MeshesModel {
     pub fn any_mod(&mut self) {
         self.selected_mod = None;
         self.nifs = Arc::default();
+        // Every row wins here, so the Wins chip is hidden: a hidden chip left on would only confuse.
+        if self.filter == NifFilter::Wins {
+            self.filter = NifFilter::All;
+        }
+    }
+
+    /// The rows of "Any mod": the losing copies under Overridden, else every path's winner.
+    fn any_rows(&self) -> &[NifEntry] {
+        match self.filter {
+            NifFilter::Overridden => &self.losers,
+            _ => &self.winners,
+        }
     }
 
     fn find_row(&self, id: i64) -> Option<&NifRow> {
@@ -1125,11 +1138,11 @@ impl MeshesModel {
         display_path(&t).to_string()
     }
 
-    /// Rows the list draws from, before the search and the chips: the picked mod's copies, else the winners.
+    /// Rows the list draws from, before the search and the chips: the picked mod's copies, else `any_rows`.
     pub fn listed(&self) -> usize {
         match self.selected_mod {
             Some(_) => self.nifs.len(),
-            None => self.winners.len(),
+            None => self.any_rows().len(),
         }
     }
 
@@ -1138,7 +1151,7 @@ impl MeshesModel {
         match self.selected_mod {
             Some(id) => (&self.nifs[i], self.mod_name(id)),
             None => {
-                let (n, o) = &self.winners[i];
+                let (n, o) = &self.any_rows()[i];
                 (n, o.as_str())
             }
         }
@@ -1166,7 +1179,7 @@ impl MeshesModel {
                     .map(|(i, _)| i)
                     .collect()
             }
-            None => (self.winners.iter().enumerate())
+            None => (self.any_rows().iter().enumerate())
                 .filter(|(_, (row, origin))| keep(row, origin))
                 .map(|(i, _)| i)
                 .collect(),

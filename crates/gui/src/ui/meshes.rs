@@ -432,6 +432,10 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     mod_picker(ui, m);
     ui.horizontal_wrapped(|ui| {
         for f in crate::model::meshes::NifFilter::ALL {
+            // Note GC: every row of "Any mod" wins, so Wins is offered only with a picked mod.
+            if f == crate::model::meshes::NifFilter::Wins && m.selected_mod.is_none() {
+                continue;
+            }
             if ui.selectable_label(m.filter == f, f.label()).clicked() {
                 m.filter = f;
             }
