@@ -9762,6 +9762,10 @@ fn sha(b: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(b).into()
 }
 
+/// Note GD17: SHA-256 of `meshes\x.nif` as the footer's Export NIF (`export_edit`) wrote it at c42c2454, for
+/// `export_session` plus `add_then_remove_ctrl(.., true)` (log: `r1-golden-capture-c42c2454.txt` in the ledger).
+const EXPORT_GOLDEN_SHA256: &str = "30da078ae7184525c8427204a3e0bd133f86409533e1645329680a91032b89ac";
+
 #[test]
 fn nif_review_rows_list_the_pending_edit() {
     use sdc_gui::model::meshes::NifReviewRow;
@@ -9788,7 +9792,14 @@ fn nif_review_rows_list_the_pending_edit() {
     );
     assert_eq!(m.export_nif_edits(), Ok(1));
     assert_eq!(std::fs::read(exported(&d)).unwrap(), out);
-    // the NIF-side golden: the footer's path (export_edit) writes the same bytes for the same edits
+    // Note GD17: the fixed baseline, captured from the footer's export (`export_edit`) at c42c2454; a change in the
+    // shared writer or the compaction changes it, which the twin check below cannot see
+    assert_eq!(
+        sha256_hex(&std::fs::read(exported(&d)).unwrap()),
+        EXPORT_GOLDEN_SHA256,
+        "the Review export writes the footer's bytes"
+    );
+    // the NIF-side twin: the footer's path (export_edit) writes the same bytes for the same edits
     let (d2, mut m2) = export_session();
     m2.open_edit();
     add_then_remove_ctrl(&mut m2, true);
