@@ -305,13 +305,17 @@ pub(super) fn combo(
     options: &Options,
     mixed: bool,
 ) -> (Option<Value>, egui::Response) {
+    // Note FB4: "— mixed" and "— not set" (no value, nothing to mix) are drawn weak, never the word `null`.
     let shown = if mixed {
-        "— mixed".to_string()
+        egui::RichText::new("— mixed").weak()
+    } else if current.is_null() {
+        // A null option is a group heading, so a null value never matches one.
+        egui::RichText::new("— not set").weak()
     } else {
-        options
-            .iter()
-            .find(|(v, _)| v == current)
-            .map_or_else(|| display_value(current), |(_, l)| l.clone())
+        match options.iter().find(|(v, _)| v == current) {
+            Some((_, l)) => egui::RichText::new(l),
+            None => egui::RichText::new(display_value(current)),
+        }
     };
     let mut picked = None;
     let r = egui::ComboBox::from_id_salt(id)

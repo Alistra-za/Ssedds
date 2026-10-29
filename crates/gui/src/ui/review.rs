@@ -206,7 +206,7 @@ enum Act {
     Close,
 }
 
-fn plural(n: usize) -> &'static str {
+pub(super) fn plural(n: usize) -> &'static str {
     if n == 1 {
         ""
     } else {
@@ -227,12 +227,13 @@ fn json_line_text(l: &JsonLine) -> String {
 }
 
 /// A column: its heading, then `body` in a scroll area of its own.
-fn column(ui: &mut egui::Ui, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
+/// `key` names the scroll area, so a heading that carries a count keeps the column's scroll position.
+fn column(ui: &mut egui::Ui, key: &str, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
     ui.strong(heading);
     // ui-rules 3.2: a bar drawn without hover, so a column that overflows says so.
     ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
     egui::ScrollArea::vertical()
-        .id_salt(("review", heading))
+        .id_salt(("review", key))
         .auto_shrink([false, true])
         .show(ui, body);
 }
@@ -576,41 +577,49 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
     ui.allocate_ui(ui.available_size(), |ui| {
         ui.columns(if also_on { 4 } else { 3 }, |cols| {
-            column(&mut cols[0], "Blockers", |ui| {
-                if blocks.is_empty() && folder_chosen {
-                    ui.weak("None");
-                }
-                // Note FB1: the export folder is a blocker until one is chosen for this project.
-                if !folder_chosen {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(RED, NO_EXPORT_FOLDER);
-                        let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
-                        r.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
-                                r.enabled(),
-                                "Choose the export folder…",
-                            )
+            // Note FB4: the missing export folder counts, because the gate enforces it.
+            let blockers = blocks.len() + usize::from(!folder_chosen);
+            column(
+                &mut cols[0],
+                "Blockers",
+                &format!("Blockers ({blockers})"),
+                |ui| {
+                    if blockers == 0 {
+                        ui.weak("None");
+                    }
+                    // Note FB1: the export folder is a blocker until one is chosen for this project.
+                    if !folder_chosen {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(RED, NO_EXPORT_FOLDER);
+                            let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                            r.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    r.enabled(),
+                                    "Choose the export folder…",
+                                )
+                            });
+                            let r = r
+                                .on_hover_text("Choose where converted textures are written")
+                                .on_disabled_hover_text(picker::BUSY_HOVER);
+                            if r.clicked() {
+                                act = Some(Act::ChooseExport);
+                            }
                         });
-                        let r = r
-                            .on_hover_text("Choose where converted textures are written")
-                            .on_disabled_hover_text(picker::BUSY_HOVER);
-                        if r.clicked() {
-                            act = Some(Act::ChooseExport);
-                        }
-                    });
-                }
-                for b in &blocks {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(RED, &b.text);
-                        // A project-wide issue has no set to go to.
-                        if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
-                            act = Some(Act::GoTo(b.set_key.clone()));
-                        }
-                    });
-                }
-            });
-            column(&mut cols[1], "Undecided", |ui| {
+                    }
+                    for b in &blocks {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(RED, &b.text);
+                            // A project-wide issue has no set to go to.
+                            if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
+                                act = Some(Act::GoTo(b.set_key.clone()));
+                            }
+                        });
+                    }
+                },
+            );
+            let heading = format!("Undecided ({})", undecided.len());
+            column(&mut cols[1], "Undecided", &heading, |ui| {
                 if undecided.is_empty() {
                     ui.weak("None");
                 }
@@ -635,9 +644,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     act = Some(Act::AcceptAll);
                 }
             });
-            column(&mut cols[2], "Warnings", |ui| {
+            let heading = format!("Warnings ({})", asks.len());
+            column(&mut cols[2], "Warnings", &heading, |ui| {
                 if asks.is_empty() {
-                    ui.weak("None");
+                    ui.weak("None that block the export");
                 }
                 let mut set = None;
                 for a in &asks {
@@ -657,7 +667,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 if others > 0
                     && ui
                         .link(format!(
-                            "{others} other warning{} — see Problems",
+                            "{others} warning{} in Problems (do not block)",
                             plural(others)
                         ))
                         .clicked()
@@ -666,7 +676,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
             });
             if also_on {
-                column(&mut cols[3], "Also export as", |ui| {
+                column(&mut cols[3], "Also export as", "Also export as", |ui| {
                     also_section(ui, m, also_err.as_deref(), &mut act)
                 });
             }

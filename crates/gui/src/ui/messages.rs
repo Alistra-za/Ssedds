@@ -117,7 +117,8 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
 /// The Messages tab: time, severity and text of the last entries, newest first, and a Clear button.
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.horizontal(|ui| {
-        ui.label(format!("{} messages", model.messages.len()));
+        let n = model.messages.len();
+        ui.label(format!("{n} message{}", super::review::plural(n)));
         if ui
             .add_enabled(!model.messages.is_empty(), egui::Button::new("Clear"))
             .clicked()

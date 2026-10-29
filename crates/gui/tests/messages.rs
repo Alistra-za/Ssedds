@@ -173,6 +173,24 @@ fn the_panel_lists_newest_first_and_clear_empties_it() {
     assert!(h.state().messages.is_empty());
 }
 
+/// Review C16 (Note FB4): one message is "1 message".
+#[test]
+fn the_panel_counts_one_message_in_the_singular() {
+    let mut m = AppModel::new(
+        sdc_gui::settings::GuiSettings::default(),
+        None,
+        support::session(),
+    );
+    m.messages.log(Severity::Info, "only note");
+    m.messages.set_open(true);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(700.0, 500.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::messages::tab(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label("1 message");
+}
+
 /// R14 (K9): the unread count is on the bottom panel's Messages tab (the header button is gone).
 #[test]
 fn the_messages_tab_shows_the_unread_count_and_opens_the_panel() {
