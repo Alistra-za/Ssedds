@@ -77,7 +77,7 @@ The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, C
 
 Options a texture cannot use are greyed out, with the reason on hover. For example, Tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting; HDR textures may use Box or Tent; Edge is locked while the filter is Box; Effort is locked for uncompressed formats; BC7 weighting shows only for BC7 with the built-in encoder, and its Perceptual option only for colour without data alpha; the Encoder row is locked for BC1 to BC5 and hidden for uncompressed formats.
 
-A texture's settings start with its output size ("Output: BC7 · 2048x2048 · 12 mips · 5.3 MiB"), and the status line adds a folder total (a VRAM estimate). After a mod scan, **Used by meshes (N)** lists the meshes that use the texture, with their mod and priority. A complex `_m` has an **Enable parallax** box: ticked keeps its alpha as the height, unticked writes alpha 0.
+A texture's settings start with its output size ("Output: BC7 · 2048x2048 · 12 mips · 5.3 MiB"), and the status line adds a folder total (a VRAM estimate). After a mod scan, **Used by meshes (N)** lists the meshes that use the texture, with their mod and priority; **Show in Meshes** opens the Meshes view listing just those meshes. A complex `_m` has an **Enable parallax** box: ticked keeps its alpha as the height, unticked writes alpha 0.
 
 For an emissive, the Compression group shows the `FMT-HDR-SOURCE` reason (why it is BC6H or BC7 sRGB).
 
