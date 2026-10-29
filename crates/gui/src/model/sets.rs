@@ -232,7 +232,6 @@ pub struct SetView {
     /// The engine key (`""` for a created set with no members yet).
     pub key: String,
     pub id: String,
-    pub label: String,
     /// Item keys of every member, packed outputs and raw sources included.
     pub members: Vec<String>,
     pub slots: BTreeMap<SlotKind, SlotFill>,
@@ -267,7 +266,6 @@ impl SetView {
     pub(crate) fn new(key: String, id: String, members: Vec<String>) -> SetView {
         SetView {
             key,
-            label: id.clone(),
             id,
             members,
             slots: BTreeMap::new(),

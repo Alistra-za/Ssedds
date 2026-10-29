@@ -327,7 +327,7 @@ fn set_panel(
                         egui::Sides::new().shrink_left().truncate().show(
                             ui,
                             |ui| {
-                                ui.add(egui::Label::new(egui::RichText::new(&v.label).strong()).truncate());
+                                ui.add(egui::Label::new(egui::RichText::new(&v.id).strong()).truncate());
                             },
                             |ui| {
                                 // G3: the whole file, every set and the delete sections, in its own window.

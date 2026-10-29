@@ -65,7 +65,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         crate::model::sets::views(model)
             .iter()
             .find(|v| v.key == *k)
-            .map_or(k.clone(), |v| v.label.clone())
+            .map_or(k.clone(), |v| v.id.clone())
     };
     if model.bottom.filter.is_some() || checks > 0 {
         ui.horizontal(|ui| {

@@ -1285,7 +1285,7 @@ impl AppModel {
                         n,
                         item: k.clone(),
                     },
-                    label: format!("{} — {}", o.label, it.name),
+                    label: format!("{} — {}", o.id, it.name),
                     // Listed but off when the game would find no file there.
                     disabled: game_path_in(self, &views, &paths, k).err(),
                 })

@@ -1099,7 +1099,7 @@ pub fn fingerprint(m: &AppModel, set_key: &str) -> Option<SetFingerprint> {
     let members = member_slots(m, &v, entry.as_ref());
     Some(SetFingerprint {
         set_key: set_key.into(),
-        label: v.label.clone(),
+        label: v.id.clone(),
         landscape: m
             .cs_block(&v.id, crate::model::cs_pbr::Kind::Txst)
             .is_some()

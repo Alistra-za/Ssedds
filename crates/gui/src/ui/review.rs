@@ -446,9 +446,9 @@ fn skip_list(ui: &mut egui::Ui, m: &AppModel, cfg: &ExportConfig, act: &mut Opti
         for v in &pbr[range] {
             let on = cfg.skip.iter().any(|s| engine::sets::same_id(s, &v.id));
             let mut now = on;
-            let r = ui.checkbox(&mut now, super::dialogs::short_name(&v.label));
+            let r = ui.checkbox(&mut now, super::dialogs::short_name(&v.id));
             r.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, r.enabled(), now, &v.label)
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, r.enabled(), now, &v.id)
             });
             if r.on_hover_text(&v.id).changed() {
                 *act = Some(Act::Skip(v.id.clone(), now));

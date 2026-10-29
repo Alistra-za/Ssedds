@@ -110,7 +110,7 @@ fn plan_error(
 /// `matching`: draw the Note DO match selector (a JSON set's 2D view; the 3D view's header row has no room).
 pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bool) {
     let Some(current) = model.input_name_of(&v.id) else {
-        ui.heading(&v.label);
+        ui.heading(&v.id);
         return;
     };
     let why = model
