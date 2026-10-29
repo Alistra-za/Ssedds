@@ -1400,59 +1400,64 @@ impl Engine {
             member_split(&stem, set, registry.alias_table())
         };
         let gras = &req.gras_diffuses;
-        let resolve_one = |&(set, f): &(&TextureSet, &InputFile),
-                           admitted: Admitted<'_>,
-                           stage: &Cell<Stage>|
-         -> Result<
-            (ResolvedJob, crate::analyse::Analysis, SourceInfo),
-            LoadError,
-        > {
-            let enter = |st: Stage| {
-                stage.set(st);
-                #[cfg(feature = "test-hooks")]
-                panic_while_planning_for_test(&f.path, st);
-            };
-            enter(Stage::Load);
-            let split = split_for((set, f));
-            // Taken before the read, so a change made while it is loaded is seen as a change too.
-            let source = SourceStamp::of(&f.path);
-            let (a, info) = match source.and_then(|s| cache.file(&f.path, s)) {
-                Some(hit) => {
-                    drop(admitted);
-                    hit
-                }
-                None => {
-                    let (img, info, meta) = load_image_meta(&f.path)?;
-                    cache.count_loads(1);
-                    enter(Stage::Analyse);
-                    let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
-                    let mut a = analyse_with(&img, &info, hints);
-                    a.icc_profile = meta.icc_profile;
-                    a.dds_dxgi = meta.dds_dxgi;
-                    a.dds_cube = meta.dds_cube;
-                    if let Some(s) = source {
-                        cache.put_file(&f.path, s, a.clone(), info, cache.make_thumb(&img, &info));
+        let resolve_one =
+            |&(set, f): &(&TextureSet, &InputFile),
+             admitted: Admitted<'_>,
+             stage: &Cell<Stage>|
+             -> Result<(ResolvedJob, crate::analyse::Analysis, SourceInfo), LoadError> {
+                let enter = |st: Stage| {
+                    stage.set(st);
+                    #[cfg(feature = "test-hooks")]
+                    panic_while_planning_for_test(&f.path, st);
+                };
+                enter(Stage::Load);
+                let split = split_for((set, f));
+                // Taken before the read, so a change made while it is loaded is seen as a change too.
+                let source = SourceStamp::of(&f.path);
+                let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                let (a, info) = match source.and_then(|s| cache.file(&f.path, s, hints)) {
+                    Some(hit) => {
+                        drop(admitted);
+                        hit
                     }
-                    drop(img);
-                    drop(admitted);
-                    (a, info)
-                }
+                    None => {
+                        let (img, info, meta) = load_image_meta(&f.path)?;
+                        cache.count_loads(1);
+                        enter(Stage::Analyse);
+                        let mut a = analyse_with(&img, &info, hints);
+                        a.icc_profile = meta.icc_profile;
+                        a.dds_dxgi = meta.dds_dxgi;
+                        a.dds_cube = meta.dds_cube;
+                        if let Some(s) = source {
+                            cache.put_file(
+                                &f.path,
+                                s,
+                                hints,
+                                a.clone(),
+                                info,
+                                cache.make_thumb(&img, &info),
+                            );
+                        }
+                        drop(img);
+                        drop(admitted);
+                        (a, info)
+                    }
+                };
+                enter(Stage::Resolve);
+                let facts = FileFacts {
+                    input: f,
+                    suffix: split.suffix.as_deref(),
+                    alias: split.alias.as_deref(),
+                    set,
+                    analysis: &a,
+                    info: &info,
+                };
+                let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
+                let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
+                job.provenance.insert("target".into(), target_src.clone());
+                job.source = source;
+                Ok((job, a, info))
             };
-            enter(Stage::Resolve);
-            let facts = FileFacts {
-                input: f,
-                suffix: split.suffix.as_deref(),
-                alias: split.alias.as_deref(),
-                set,
-                analysis: &a,
-                info: &info,
-            };
-            let gras_diffuse = gras.contains(&crate::shader::gras_key(&f.game_path, &f.output));
-            let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
-            job.provenance.insert("target".into(), target_src.clone());
-            job.source = source;
-            Ok((job, a, info))
-        };
         let pool = thread_pool(req.jobs)?;
         let budget = Budget::new(budget_limit(&req), pool.current_num_threads());
         // One slot per work item, so results keep the input order. A slot left empty is a file that was cancelled
@@ -1472,7 +1477,10 @@ impl Engine {
                 // DECISIONS AV4: a cache hit loads nothing, so it is admitted at 0 without reading its header.
                 // shortcut: a file changed between this check and its Load loads unadmitted; the next plan admits it.
                 let path = &item.1.path;
-                let cached = SourceStamp::of(path).is_some_and(|s| cache.dims(path, s).is_some());
+                let hints =
+                    crate::checks::hints_for(split_for(*item).suffix.as_deref(), cache.checks);
+                let cached =
+                    SourceStamp::of(path).is_some_and(|s| cache.file(path, s, hints).is_some());
                 let est = if cached { 0 } else { estimated_bytes(path) };
                 budget.acquire(est);
                 let admitted = Admitted(&budget, est);
@@ -1736,7 +1744,8 @@ impl Engine {
                 // The key includes every source's stamp, so an edited source misses the cache. A recipe
                 // without a key (a source with no stamp) is assembled every time and never stored.
                 let key = pack_cache_key(&c.job);
-                let entry = match key.as_deref().and_then(|k| cache.pack(k)) {
+                let hints = crate::checks::hints_for(Some(c.job.kind.suffix()), cache.checks);
+                let entry = match key.as_deref().and_then(|k| cache.pack(k, hints)) {
                     Some(e) => {
                         drop(admitted);
                         e
@@ -1749,14 +1758,11 @@ impl Engine {
                         cache.count_loads(c.job.sources.len() as u64);
                         stage.set(Stage::Analyse);
                         let e = PackEntry {
-                            analysis: analyse_with(
-                                &asm.image,
-                                &asm.info,
-                                crate::checks::hints_for(Some(c.job.kind.suffix()), cache.checks),
-                            ),
+                            analysis: analyse_with(&asm.image, &asm.info, hints),
                             info: asm.info,
                             non_gray: asm.non_gray,
                             thumb: cache.make_thumb(&asm.image, &asm.info),
+                            hints,
                         };
                         drop(asm.image);
                         drop(admitted);

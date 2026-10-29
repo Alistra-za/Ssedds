@@ -7,10 +7,10 @@ use crate::checks::CheckStats;
 use crate::image::{Rgba32F, SourceInfo};
 use crate::presets::AlphaContent;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Minimum, maximum and mean of one channel, in the source's own value domain.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelStats {
     pub min: f32,
     pub max: f32,
@@ -19,7 +19,7 @@ pub struct ChannelStats {
 
 /// Pixel counts by 8-bit alpha code. `le5` and `ge250` are cumulative bands
 /// (they include the 0 and 255/254 codes respectively).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AlphaHistogram {
     pub eq255: u64,
     pub eq254: u64,
@@ -28,7 +28,7 @@ pub struct AlphaHistogram {
     pub ge250: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Analysis {
     pub width: u32,
     pub height: u32,
@@ -62,7 +62,7 @@ pub struct Analysis {
     /// DXGI format of a DDS input (DECISIONS S6, spec §5.1); `None` for images. Set by the caller from `SourceMeta`.
     pub dds_dxgi: Option<u32>,
     /// The input is a single cube DDS, loaded as a 6:1 strip (DECISIONS DS7). Set by the caller from `SourceMeta`.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dds_cube: bool,
     /// NaN and ±∞ samples per channel (R, G, B, A). They are left out of every statistic above; Preprocess replaces
     /// them (DECISIONS S9).
@@ -73,7 +73,7 @@ pub struct Analysis {
     /// (PBR grass design R1); infinite for an empty image.
     pub corner_err: f32,
     /// Artist check stats (DECISIONS Note CL); `None` unless [`AnalyseHints::bands`] asked for them.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks: Option<CheckStats>,
 }
 
