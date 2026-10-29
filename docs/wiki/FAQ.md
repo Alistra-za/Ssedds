@@ -18,7 +18,7 @@ Yes, with the optional plugins. They use Tessalith's encoders and rules, so a fi
 
 ### Can I edit a mesh (NIF)?
 
-Yes, in the GUI's Meshes view: shader fields and flags, alpha, extra data, controllers and animation clips. **Export NIF** writes an edited copy; the source file never changes. See [NIF editing](NIF-Editing.md).
+Yes, in the GUI's Meshes view: shader fields and flags, alpha, extra data, controllers and animation clips. Review exports an edited copy, with your textures; the source file never changes. See [NIF editing](NIF-Editing.md).
 
 ### Which target should I pick?
 

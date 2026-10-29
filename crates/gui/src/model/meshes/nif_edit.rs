@@ -2287,6 +2287,23 @@ impl MeshesModel {
         self.nif_answers.clear();
     }
 
+    /// Note GD2: the block diff the guard dialog showed, for the Review row's Diff…: the file on disk against what the
+    /// export writes. None unless `path`'s row has a foreign file. Reads the disk: call it on a click, not per frame.
+    pub fn nif_diff(&self, path: &str) -> Option<Vec<String>> {
+        let row = self
+            .nif_review_rows()
+            .into_iter()
+            .find(|r| r.path.eq_ignore_ascii_case(path))?;
+        row.foreign?;
+        let e = self.edit.as_ref()?;
+        let on_disk = std::fs::read(&e.export_path).ok()?;
+        Some(
+            nif::write::block_diff(&on_disk, &e.out).unwrap_or_else(|err| {
+                vec![format!("The file on disk does not read as a NIF: {err}")]
+            }),
+        )
+    }
+
     /// Note GD2: writes every Review row that is not blocked and, when Tessalith did not write its file, is answered
     /// Overwrite for the bytes on disk now (read again here). The answers are used up. Ok(written) when nothing was
     /// skipped, else Err listing each skipped NIF and why. Each write is a line in Messages, with its placement.

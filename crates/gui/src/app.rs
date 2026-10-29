@@ -353,6 +353,10 @@ impl eframe::App for SdcApp {
                 .messages
                 .log(crate::model::messages::Severity::Info, line);
         }
+        // Note GD2: the edit panel's Review… opens Review, where NIF edits export.
+        if std::mem::take(&mut self.meshes.open_review_request) {
+            self.model.open_review();
+        }
         let scanning = self.meshes.scanning();
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).

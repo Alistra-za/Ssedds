@@ -2165,9 +2165,14 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
     // Note FC12 (fix round 1): the header names whose history it acts on.
     h.get_by_label("Undo (NIF edit history)");
     h.get_by_label("Redo (NIF edit history)");
-    // Meshes UI T3: Export NIF sits in a footer under the tabs, inside the panel, with its blocked reason.
+    // Meshes UI T3: the footer sits under the tabs, inside the panel, with its blocked reason; Note GD2: its button
+    // is Review…, not Export NIF.
     let footer = panel("meshes-edit-export");
-    let export = h.get(export_nif()).rect();
+    assert!(
+        h.query(export_nif()).is_none(),
+        "the footer has no Export NIF"
+    );
+    let export = h.get(review_button()).rect();
     let tabs = h.get_by_label("Extra data tab").rect();
     assert!(
         edit.contains(footer.min) && edit.contains(footer.max - egui::vec2(0.5, 0.5)),
@@ -2179,7 +2184,7 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
     );
     assert!(
         export.min.y > tabs.max.y,
-        "Export NIF {export:?} above the tabs {tabs:?}"
+        "Review… {export:?} above the tabs {tabs:?}"
     );
     // Minor 5: an untouched session is idle, not blocked: weak text, no red.
     h.get_by_label("No edits to export.");
@@ -3159,9 +3164,10 @@ fn export_without_cleanup_writes_the_patch_and_says_why() {
     );
     let line = format!("Exported without cleanup: {why}.");
     assert_eq!(e.cleanup_note.as_deref(), Some(line.as_str()));
+    // Note GD2: CQ5's under-button line is gone; the Info row above says it
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label(&line);
+    assert!(h.query_by_label(&line).is_none());
 }
 
 #[test]
@@ -3373,8 +3379,10 @@ fn undo_after_export_makes_it_pending_again() {
     assert_eq!(std::fs::read(exported(&d)).unwrap(), *e.source);
 }
 
+/// Note GD2: the footer keeps its status and destination lines; its button opens Review (the NIF edits export there,
+/// with the textures) and writes nothing. The placement and Re-run lines are Review's and the worklist's now.
 #[test]
-fn export_button_and_guard_dialog_enter_keeps_theirs() {
+fn the_footer_opens_review_and_writes_nothing() {
     let (d, mut m) = export_session();
     m.open_edit();
     gloss(&mut m, 12.5);
@@ -3385,84 +3393,44 @@ fn export_button_and_guard_dialog_enter_keeps_theirs() {
     let mut h = view(m);
     h.run_steps(3);
     h.get_by_label(&writes_line(&d));
-    h.get_by_label("Placement OK.");
+    h.get_by_label("Ready");
+    assert!(h.query(export_nif()).is_none(), "no Export NIF button");
+    assert!(
+        h.query_by_label("Placement OK.").is_none(),
+        "placement is on the Review row"
+    );
     // Meshes UI T3: the pending list is closed while no row is red.
     assert!(h.query_by_label(&revert).is_none());
     h.get_by_label("Pending edits (1)").click();
     h.run_steps(3);
     h.get_by_role_and_label(AkRole::Button, &revert);
-    h.get_by_label("Ready");
-    h.get_by_label("Export NIF · 1 edit");
-    h.get(export_nif()).click();
+    assert!(!h.state().open_review_request);
+    h.get(review_button()).click();
     h.run_steps(3);
-    let p = exported(&d);
-    assert!(p.is_file(), "the click exported");
-    h.get_by_label("Re-run PGPatcher so its output includes this edit.");
-    h.get_by_label("Export NIF again");
-    std::fs::write(&p, b"junk").unwrap();
-    h.get(export_nif()).click();
-    h.run_steps(3);
-    h.get_by_label("This file changed since sdc exported it.");
-    h.get_by_role_and_label(AkRole::Button, "Diff").click();
-    h.run_steps(3);
-    h.get_by_role_and_label(AkRole::Button, "Overwrite");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert!(h
-        .query_by_label("This file changed since sdc exported it.")
-        .is_none());
-    assert_eq!(std::fs::read(&p).unwrap(), b"junk", "Enter keeps theirs");
-    assert!(h.state().edit.as_ref().unwrap().guard.is_none());
+    assert!(
+        h.state().open_review_request,
+        "Review… asks the app to open Review"
+    );
+    assert!(!exported(&d).exists(), "the click writes nothing");
 }
 
-/// Meshes UI T3: the Export NIF button; its name is its text ("Export NIF · 1 edit", "Export NIF again").
+/// Meshes UI T3: the retired Export NIF button (its name was its text); Note GD2 checks it is gone.
 fn export_nif() -> egui_kittest::kittest::By<'static> {
     egui_kittest::kittest::By::new()
         .role(AkRole::Button)
         .label_contains("Export NIF")
 }
 
+/// Note GD2: the footer's Review… button.
+fn review_button() -> egui_kittest::kittest::By<'static> {
+    egui_kittest::kittest::By::new()
+        .role(AkRole::Button)
+        .label("Review…")
+}
+
 /// Meshes UI T3: the export block's destination line ("Writes … to …"), whole in its accessible name.
 fn writes_line(d: &tempfile::TempDir) -> String {
     format!("Writes meshes\\x.nif to {}", exported(d).display())
-}
-
-/// Meshes UI T3 (bug 2): Enter or Space on a focused Export NIF or Overwrite writes nothing; a click still does.
-#[test]
-fn enter_or_space_on_focused_export_or_overwrite_writes_nothing() {
-    let (d, mut m) = export_session();
-    m.open_edit();
-    gloss(&mut m, 12.5);
-    let mut h = view(m);
-    h.run_steps(3);
-    let p = exported(&d);
-    for key in [egui::Key::Enter, egui::Key::Space] {
-        h.get(export_nif()).focus();
-        h.run_steps(2);
-        h.key_press(key);
-        h.run_steps(3);
-        assert!(!p.exists(), "{key:?} on a focused Export NIF exported");
-    }
-    h.get(export_nif()).click();
-    h.run_steps(3);
-    assert!(p.is_file(), "the click exported");
-    std::fs::write(&p, b"junk").unwrap();
-    h.get(export_nif()).click();
-    h.run_steps(3);
-    for key in [egui::Key::Enter, egui::Key::Space] {
-        h.get_by_role_and_label(AkRole::Button, "Overwrite").focus();
-        h.run_steps(2);
-        h.key_press(key);
-        h.run_steps(3);
-        assert_eq!(std::fs::read(&p).unwrap(), b"junk", "{key:?} overwrote");
-        assert!(
-            h.state().edit.as_ref().unwrap().guard.is_some(),
-            "{key:?} closed the guard"
-        );
-    }
-    h.get_by_role_and_label(AkRole::Button, "Overwrite").click();
-    h.run_steps(3);
-    assert_ne!(std::fs::read(&p).unwrap(), b"junk", "the click overwrote");
 }
 
 /// A pending-list row (a label; its Revert button carries the same words).
@@ -3529,13 +3497,16 @@ fn a_read_only_session_shows_the_no_export_folder_reason() {
     let mut h = view(m);
     h.run_steps(3);
     h.get_by_label(&format!("Blocked: {NO_EXPORT_FOLDER}"));
-    assert!(h.get(export_nif()).accesskit_node().is_disabled());
+    // Note GD2: Review… stays on, so Review can show the reason on the NIF's row.
+    assert!(!h.get(review_button()).accesskit_node().is_disabled());
 }
 
 // ---- v2 A19 review ----
 
+/// Note GD2: the guard dialog is gone; a foreign file is answered on its Review row. Even with the model's `guard`
+/// set (the direct `export_edit` path), the panel draws no dialog, and Enter writes nothing.
 #[test]
-fn a_foreign_file_sdc_never_exported_has_its_own_guard_title() {
+fn a_foreign_file_opens_no_guard_dialog() {
     let (d, mut m) = export_session();
     m.open_edit();
     gloss(&mut m, 12.5);
@@ -3545,12 +3516,15 @@ fn a_foreign_file_sdc_never_exported_has_its_own_guard_title() {
     assert!(matches!(m.export_edit(None), ExportOutcome::Guard { .. }));
     let mut h = view(m);
     h.run_steps(3);
-    h.get_by_label("A file sdc did not write is already at this path.");
     assert!(h
-        .query_by_label("This file changed since sdc exported it.")
+        .query_by_label("A file sdc did not write is already at this path.")
         .is_none());
-    h.get_by_role_and_label(AkRole::Button, "Overwrite");
-    h.get_by_role_and_label(AkRole::Button, "Keep theirs");
+    assert!(h
+        .query_by_role_and_label(AkRole::Button, "Overwrite")
+        .is_none());
+    assert!(h
+        .query_by_role_and_label(AkRole::Button, "Keep theirs")
+        .is_none());
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(std::fs::read(&p).unwrap(), b"theirs");
@@ -3585,7 +3559,7 @@ fn pending_walk_does_not_follow_directory_links() {
 }
 
 #[test]
-fn a_path_typed_without_enter_is_exported_by_the_export_click() {
+fn a_path_typed_without_enter_is_committed_by_the_review_click() {
     let (d, mut m) = export_session();
     m.open_edit();
     let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
@@ -3601,8 +3575,11 @@ fn a_path_typed_without_enter_is_exported_by_the_export_click() {
     h.get_by_role_and_label(AkRole::TextInput, field)
         .type_text("textures\\typed.dds");
     h.run_steps(1);
-    h.get(export_nif()).click();
+    // Note GD2: the click that leaves the field is Review…'s; the export is Review's (here, the model call it makes).
+    h.get(review_button()).click();
     h.run_steps(4);
+    assert!(h.state().open_review_request);
+    assert_eq!(h.state_mut().export_nif_edits(), Ok(1));
     let bytes = std::fs::read(exported(&d)).expect("exported");
     let needle = b"textures\\typed.dds";
     assert!(
@@ -10579,6 +10556,29 @@ fn a_foreign_nif_waits_for_an_answer_on_its_row() {
     let e = m.edit.as_ref().unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), *e.patched);
     assert_eq!(e.guard, None, "the Review path never opens the dialog");
+}
+
+/// Note GD2: the block diff the guard dialog showed is the model's `nif_diff`, for the Review row's Diff…; only a row
+/// with a foreign file has one.
+#[test]
+fn a_foreign_nif_row_has_the_block_diff() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert_eq!(m.nif_diff("meshes/x.nif"), None, "nothing on disk");
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let source = m.edit.as_ref().unwrap().source.to_vec();
+    std::fs::write(&p, &source).unwrap();
+    let diff = m
+        .nif_diff("meshes/x.nif")
+        .expect("a foreign file has a diff");
+    assert!(!diff.is_empty(), "the unedited file differs in the edit");
+    assert!(!diff[0].contains("does not read as a NIF"), "{diff:?}");
+    std::fs::write(&p, b"junk").unwrap();
+    let diff = m.nif_diff("meshes/x.nif").unwrap();
+    assert!(diff[0].contains("does not read as a NIF"), "{diff:?}");
+    assert_eq!(m.nif_diff("meshes/other.nif"), None);
 }
 
 #[test]

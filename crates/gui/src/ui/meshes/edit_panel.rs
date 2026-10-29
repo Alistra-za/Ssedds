@@ -1,12 +1,11 @@
 //! The NIF edit panel (spec §7, plan A17/A19): what is edited and from where, Solo, Undo / Redo, the pending edits,
-//! Export NIF with its guard dialog, then the Shader, Alpha, Controllers and Extra data tabs.
+//! the export status with Review… (Note GD2: NIF edits export from Review), then the Shader, Alpha, Controllers and
+//! Extra data tabs.
 use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
-use crate::model::meshes::export::{GuardChoice, Placement};
 use crate::model::meshes::nif_edit::{NifEdit, Selection, NO_EDITS};
 use crate::model::meshes::MeshesModel;
-use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
 use crate::ui::status::{self, Status, AMBER, GREEN, RED};
 use eframe::egui;
@@ -30,7 +29,7 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     if let Some(e) = &m.edit {
         top(ui, e, &mut act);
-        // Meshes UI T3: a footer drawn before the tabs (rule 2.1), so a long tab never pushes Export NIF away.
+        // Meshes UI T3: a footer drawn before the tabs (rule 2.1), so a long tab never pushes it away.
         egui::Panel::bottom("meshes-edit-export")
             .resizable(false)
             .show(ui, |ui| export_block(ui, e, &mut act));
@@ -158,7 +157,6 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                     });
             });
     });
-    guard_dialog(ui.ctx(), e, act);
     ui.separator();
 }
 
@@ -167,12 +165,6 @@ const OPS_MAX_H: f32 = 120.0;
 /// The footer's Show asks the pending list to open (it is drawn before the footer, so on the next frame).
 fn show_pending_id() -> egui::Id {
     egui::Id::new("meshes-edit-show-pending")
-}
-
-/// Bug 2: egui turns Enter or Space on a focused button into a click. A write takes a pointer or AccessKit click.
-fn key_click(ui: &egui::Ui, r: &egui::Response) -> bool {
-    r.has_focus()
-        && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
 }
 
 fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, act: &mut Act) {
@@ -222,8 +214,8 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
     );
 }
 
-/// The Export NIF footer (spec §8, Meshes UI T3): a status line (Ready, or Blocked and why), what is written where,
-/// the button, then the last result and the placement line. A read-only session shows its reason here too.
+/// The export footer (spec §8, Meshes UI T3): a status line (Ready, or Blocked and why), what is written where, then
+/// Review… (Note GD2). A read-only session shows its reason here too.
 fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     ui.add_space(4.0);
     let red = e.doc.has_conflicts();
@@ -290,92 +282,13 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             .wrap(),
         );
     }
-    let ready = e.blocked.is_none();
-    let n = e.doc.ops.len();
-    let text = match (e.up_to_date, n) {
-        (true, _) => "Export NIF again".to_string(),
-        // Every edit undone after an export: writing the source back needs no count.
-        (false, 0) => "Export NIF".to_string(),
-        (false, 1) => "Export NIF · 1 edit".to_string(),
-        (false, n) => format!("Export NIF · {n} edits"),
-    };
-    // The page's primary action: strong, two rows tall, the accent fill when it can run (as the header's Export).
-    let mut b = egui::Button::new(egui::RichText::new(text).strong()).min_size(egui::vec2(
-        ui.available_width(),
-        2.0 * ui.spacing().interact_size.y,
-    ));
-    if ready {
-        b = b.fill(ui.visuals().selection.bg_fill);
-    }
-    let r = ui.add_enabled(ready, b);
-    if r.clicked() && !key_click(ui, &r) {
-        act.export = Some(None);
-    }
-    if let Some(why) = &e.blocked {
-        r.on_disabled_hover_text(why);
-    }
-    if let Some((note, err)) = e
-        .export_note
-        .as_ref()
-        .filter(|n| Some(&n.0) != e.blocked.as_ref())
-    {
-        let t = egui::RichText::new(note);
-        ui.add(egui::Label::new(if *err { t.color(RED) } else { t }).wrap());
-    }
-    if let Some(note) = &e.cleanup_note {
-        ui.add(egui::Label::new(note).wrap());
-    }
-    if let Some(p) = &e.placement {
-        let color = if *p == Placement::Ok { GREEN } else { AMBER };
-        let mod_name = e.edit_mod.file_name().unwrap_or_default().to_string_lossy();
-        ui.add(egui::Label::new(egui::RichText::new(p.text(&mod_name)).color(color)).wrap());
-    }
-}
-
-/// The hand-edit guard (spec §8.3): Enter keeps the file on disk; Esc closes without writing.
-fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
-    let Some(g) = &e.guard else { return };
-    let buttons = [
-        ("Overwrite", Role::Destructive, true),
-        ("Diff", Role::Plain, true),
-        ("Keep theirs", Role::Default, true),
-    ];
-    let title = match g.never_exported {
-        true => "A file sdc did not write is already at this path.",
-        false => "This file changed since sdc exported it.",
-    };
-    let (k, clicked) = dialog(
-        ctx,
-        "nif-export-guard",
-        true,
-        420.0,
-        title,
-        &buttons,
-        |ui| {
-            ui.add(egui::Label::new(e.export_path.display().to_string()).truncate());
-            if g.show_diff {
-                egui::ScrollArea::vertical()
-                    .id_salt("nif-export-guard-diff")
-                    .max_height(240.0)
-                    .show(ui, |ui| {
-                        for l in &g.diff {
-                            ui.add(egui::Label::new(l).wrap());
-                        }
-                    });
-            }
-        },
-    );
-    // Bug 2: Enter or Space on a focused Overwrite is egui's click; only a pointer or AccessKit click overwrites.
-    // NIF-side: the shared `dialogs.rs` (main team) still clicks on keys for its other Destructive buttons.
-    let key = ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
-    match clicked {
-        Some(0) if key => {}
-        Some(0) => act.export = Some(Some(GuardChoice::Overwrite)),
-        Some(1) => act.guard_diff = true,
-        Some(_) => act.export = Some(Some(GuardChoice::KeepTheirs)),
-        None if k.enter => act.export = Some(Some(GuardChoice::KeepTheirs)),
-        None if k.cancel => act.guard_close = true,
-        None => {}
+    // Note GD2: NIF edits export from Review, with the textures; its NIF row carries the result, the placement, the
+    // Keep / Overwrite answer and the cleanup count. The button only opens Review, so it never writes.
+    let r = ui
+        .button("Review…")
+        .on_hover_text("NIF edits export from Review, with the textures.");
+    if r.clicked() {
+        act.review = true;
     }
 }
 
@@ -421,17 +334,6 @@ fn apply(m: &mut MeshesModel, act: Act) {
     if act.open.is_some() {
         m.open_in_textures = act.open;
     }
-    // Last: a field that lost its focus to the Export click committed its push (and flush) above this frame (rule 7.5).
-    if let Some(choice) = act.export {
-        m.export_edit(choice);
-    }
-    if let (true, Some(e)) = (act.guard_close, &mut m.edit) {
-        e.guard = None;
-    }
-    if let (true, Some(g)) = (
-        act.guard_diff,
-        m.edit.as_mut().and_then(|e| e.guard.as_mut()),
-    ) {
-        g.show_diff = !g.show_diff;
-    }
+    // A field that lost its focus to the Review… click committed its push (and flush) above this frame (rule 7.5).
+    m.open_review_request |= act.review;
 }

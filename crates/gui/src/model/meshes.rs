@@ -560,6 +560,8 @@ pub struct MeshesModel {
     pub nif_export_root: Option<PathBuf>,
     /// Note GD5: lines for the app's Messages (an export folder change); the app moves them there each frame.
     pub messages: Vec<String>,
+    /// Note GD2: the edit panel's Review… was clicked; the app opens Review (`SdcApp::update`).
+    pub open_review_request: bool,
     /// Note GD2: Review's Keep / Overwrite answers by lowercase data path, with the hash each was given for.
     nif_answers: HashMap<String, (export::GuardChoice, [u8; 32])>,
     /// Note GD2: the export path's state for the Review row (it reads the disk), keyed on `nif_edit::ForeignKey`.
@@ -657,6 +659,7 @@ impl MeshesModel {
             doc_badges: HashMap::new(),
             nif_export_root: None,
             messages: vec![],
+            open_review_request: false,
             nif_answers: HashMap::new(),
             foreign_cache: Default::default(),
             nif_tab: None,

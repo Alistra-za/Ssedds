@@ -35,7 +35,7 @@ Several shapes can share one alpha, texture set or shader. The panel tells you:
 
 ## Warnings
 
-Values are never clamped. A value or flag that looks wrong shows an amber warning under the field, sometimes with a **Fix** button. A red error stops **Export NIF** when your edit caused it. Some errors always stop the export, because the game would crash or draw black: for example the skin tint or FaceGen detail flag on the wrong shader type, or an Env map scale controller on a PBR shape.
+Values are never clamped. A value or flag that looks wrong shows an amber warning under the field, sometimes with a **Fix** button. A red error stops the NIF's export when your edit caused it. Some errors always stop the export, because the game would crash or draw black: for example the skin tint or FaceGen detail flag on the wrong shader type, or an Env map scale controller on a PBR shape.
 
 ## Pending edits, undo and source changes
 
@@ -44,18 +44,18 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 - Edits are kept in a small file under `.sdc\nif-edits` in the export folder, so they survive a restart. If you change the export folder while editing, the open edit moves with you to the new folder; the edits saved in the old one stay there. If the new folder already has saved edits for that NIF, the first save there moves them aside to `<name>.<seconds>.toml` beside them, and Messages names the kept file.
 - If a mod update changes the source NIF, your edits are applied again by name. Any that clash offer **Take source** or **Keep mine**.
 
-## Export NIF
+## Export
 
-**Export NIF** sits at the bottom of the edit panel. It says **Ready**, "No edits to export.", or **Blocked:** with the reason. The button names its work, for example **Export NIF · 3 edits**. Only a mouse click exports; Enter and Space do nothing.
+The bottom of the edit panel says **Ready**, "No edits to export.", or **Blocked:** with the reason. **Review…** opens Review: NIF edits export from there, together with your textures, when you press Review's **Export**.
 
-- It writes `meshes\...\<name>.nif` under the export folder. Blocks that your edits left unused are left out.
-- If a file Tessalith did not write is already there, or the file changed since Tessalith wrote it, a dialog asks first: **Overwrite**, **Diff** or **Keep theirs**.
-- When the export folder is an MO2 mod, a line checks the mod order and says if the mod must be enabled or moved.
-- The header's **Export** button exports textures, not NIFs.
+- Review lists each NIF with edits as a row. The export writes `meshes\...\<name>.nif` under the export folder. Blocks that your edits left unused are left out, and the row says how many.
+- A blocked NIF row is skipped; it never stops the texture export.
+- If a file Tessalith did not write is already there, or the file changed since Tessalith wrote it, its row asks first: keep the file on disk, or overwrite it. Until you answer, that NIF is skipped.
+- When the export folder is an MO2 mod, Messages says if the mod must be enabled or moved.
 
 ## PGPatcher
 
-If PGPatcher has patched this mesh, the game loads PGPatcher's copy, which was made from the unedited file. After you export, **re-run PGPatcher** so its output includes your edit. The panel reminds you.
+If PGPatcher has patched this mesh, the game loads PGPatcher's copy, which was made from the unedited file. After you export, **re-run PGPatcher** so its output includes your edit. A warning row reminds you.
 
 The **In game (simulated)** view runs Tessalith's own PGPatcher simulation on your edited mesh, so you can see the patched look before you re-run PGPatcher. It reads loose PGPatcher JSON in MO2 mod order and does not read JSON inside BSAs.
 

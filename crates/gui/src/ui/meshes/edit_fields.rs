@@ -30,12 +30,8 @@ pub(super) struct Act {
     pub take_source: Option<usize>,
     pub revert: Option<usize>,
     pub open: Option<String>,
-    /// "Export NIF", or a guard answer.
-    pub export: Option<Option<crate::model::meshes::export::GuardChoice>>,
-    /// The guard dialog closed without an answer (Esc).
-    pub guard_close: bool,
-    /// Diff pressed in the guard dialog.
-    pub guard_diff: bool,
+    /// Note GD2: the footer's Review… (the app opens Review).
+    pub review: bool,
     /// A click or drag on a curve: the scene time the clock jumps to (it pauses, B3's `Clock::scrub`).
     pub scrub: Option<f32>,
     /// The Preview selector picked free chains or a clip (v2 B7).
