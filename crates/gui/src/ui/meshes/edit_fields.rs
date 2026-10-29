@@ -882,7 +882,7 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
         let own = Anchor {
             block: a.prop.block,
             kind: "NiAlphaProperty".into(),
-            shape: shape.name.clone(),
+            shape: shape.name.as_deref().map(str::to_string),
             role: Role::Alpha,
         };
         match shared {

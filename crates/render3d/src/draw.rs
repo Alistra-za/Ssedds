@@ -57,7 +57,7 @@ pub fn cbuffers(gpu: &Gpu, r: &Reflection) -> Result<Vec<Cb>, String> {
 
 /// Everything needed to draw one shape.
 pub struct ShapeDraw {
-    pub name: String,
+    pub name: std::sync::Arc<str>,
     pub vs: ID3D11VertexShader,
     pub ps: ID3D11PixelShader,
     pub mesh: GpuMesh,

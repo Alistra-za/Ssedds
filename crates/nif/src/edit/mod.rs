@@ -346,7 +346,7 @@ pub fn anchor_role(m: &NifModel, shape: Option<u32>, role: Role) -> Option<Ancho
     Some(Anchor {
         block,
         kind,
-        shape: s.and_then(|s| s.name.clone()),
+        shape: s.and_then(|s| s.name.as_deref().map(str::to_string)),
         role,
     })
 }
@@ -510,7 +510,7 @@ pub fn keep_mine(new_src: &[u8], ops: &[Op], i: usize) -> Result<Vec<Op>, NifErr
                 .and_then(|t| m.texsets.get(&t))
                 .map(|t| &t.raw.slots);
             if let Some(s) = slots.and_then(|s| s.get(*slot as usize)) {
-                *base = encoding_rs::WINDOWS_1252.decode(s).0.into_owned();
+                *base = crate::text::lossy(s);
             }
         }
         Op::EditExtra { base, .. } => {

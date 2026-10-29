@@ -2331,7 +2331,12 @@ fn variable_change_rewrites_cb_ids_by_ref_and_by_string() {
     assert_eq!(r.outcomes, vec![Outcome::Applied]);
     let m = read_model(&r.bytes).unwrap();
     assert_eq!(m.ctrls[&5].var, Some(12));
-    let id = |s: usize, k: usize| m.sequences[s].blocks[k].ctrl_id.clone();
+    let id = |s: usize, k: usize| {
+        m.sequences[s].blocks[k]
+            .ctrl_id
+            .as_deref()
+            .map(<[u8]>::to_vec)
+    };
     assert_eq!(id(0, 0), Some(b"12".to_vec()), "A, by ref");
     assert_eq!(id(1, 0), Some(b"12".to_vec()), "B, by strings");
     assert_eq!(
@@ -2396,12 +2401,15 @@ fn null_and_empty_cb_ids_stay_distinct() {
     let r = apply(&b, &[set(&at, 20, 11)]).unwrap();
     assert_eq!(r.outcomes, vec![Outcome::Applied]);
     let m = read_model(&r.bytes).unwrap();
-    assert_eq!(m.sequences[0].blocks[0].ctrl_id, Some(b"20".to_vec()));
+    assert_eq!(
+        m.sequences[0].blocks[0].ctrl_id.as_deref(),
+        Some(&b"20"[..])
+    );
     assert_eq!(m.sequences[0].blocks[1].ctrl_id, None, "null stays null");
     assert_eq!(raw_id(&r.bytes, 2, 1), -1);
     assert_eq!(
-        m.sequences[1].blocks[0].ctrl_id,
-        Some(vec![]),
+        m.sequences[1].blocks[0].ctrl_id.as_deref(),
+        Some(&[][..]),
         "empty stays empty"
     );
     assert_eq!(raw_id(&r.bytes, 3, 0), empty_idx, "with its own index");

@@ -51,7 +51,7 @@ pub fn plane_shape(
     m.params.emissive_multiple = 1.0;
     render3d::ParsedShape {
         id: render3d::ShapeId(id),
-        name: format!("plane{id}"),
+        name: format!("plane{id}").into(),
         mesh: std::sync::Arc::new(render3d::builtin_mesh(render3d::Builtin::Plane)),
         world,
         material: m,

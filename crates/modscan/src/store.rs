@@ -6,6 +6,7 @@ use nif::NifError;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 /// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
 /// 8: shape.index3d (PGPatcher 3D index, GUI suggestions item 6).
@@ -212,7 +213,8 @@ impl NifRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeView {
     pub block: u32,
-    pub name: Option<String>,
+    /// Shared with the NIF reader's string table, so many shapes naming one string hold one copy (Note GA1).
+    pub name: Option<std::sync::Arc<str>>,
     /// Shape block type, e.g. `BSTriShape`.
     pub kind: String,
     /// 0 none, 1 BSLightingShaderProperty, 2 BSEffectShaderProperty, 3 other shader block.
@@ -275,7 +277,8 @@ pub struct MatchRow {
     pub origin: String,
     /// Block, name, skinning and LE flag in the copy to load.
     pub shape_block: u32,
-    pub shape_name: Option<String>,
+    /// Shared across the rows of one query (Note GA1).
+    pub shape_name: Option<Arc<str>>,
     pub le_mesh: bool,
     pub skinned: bool,
     /// The game winner is a PGPatcher output copy.
@@ -1458,6 +1461,7 @@ impl Store {
              WHERE s.copy_id = ?1 ORDER BY s.block",
         )?;
         const T: usize = 15;
+        let mut names = HashSet::new();
         let rows: Vec<(ShapeView, Vec<Option<i64>>)> = st
             .query_map([copy_id], |r| {
                 let n: Option<i64> = r.get(T)?;
@@ -1468,7 +1472,7 @@ impl Store {
                 Ok((
                     ShapeView {
                         block: r.get::<_, i64>(0)? as u32,
-                        name: r.get(1)?,
+                        name: interned(r, 1, &mut names)?,
                         kind: r.get(2)?,
                         shader_kind: r.get(3)?,
                         shader_type: r.get::<_, Option<i64>>(4)?.map(|x| x as u32),
@@ -1605,6 +1609,7 @@ impl Store {
         let mut st = self.conn.prepare(&sql)?;
         let mut rows = st.query(params![slot as i64, arg])?;
         let mut out = vec![];
+        let mut names = HashSet::new();
         while let Some(r) = rows.next()? {
             let tex: String = r.get(9)?;
             if !check(&tex) {
@@ -1615,7 +1620,7 @@ impl Store {
                 nif_path: r.get(1)?,
                 origin: r.get(2)?,
                 shape_block: r.get::<_, i64>(3)? as u32,
-                shape_name: r.get(4)?,
+                shape_name: interned(r, 4, &mut names)?,
                 le_mesh: r.get(5)?,
                 skinned: r.get(6)?,
                 derived: r.get(7)?,
@@ -1632,6 +1637,26 @@ impl Store {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+/// Text column `i` as a name shared with every equal name in `names`, which lives for one reader call: a NIF
+/// that names one long string on many shapes reads back as one copy (Note GA1).
+fn interned(
+    r: &rusqlite::Row,
+    i: usize,
+    names: &mut HashSet<Arc<str>>,
+) -> rusqlite::Result<Option<Arc<str>>> {
+    let s = r.get_ref(i)?.as_str_or_null().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    Ok(s.map(|s| match names.get(s) {
+        Some(a) => a.clone(),
+        None => {
+            let a: Arc<str> = s.into();
+            names.insert(a.clone());
+            a
+        }
+    }))
 }
 
 /// The slot string PGPatcher sees: the raw one when `tex_raw` keeps it, else the canonical path; lower case, `/`.

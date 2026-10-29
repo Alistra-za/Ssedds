@@ -30,7 +30,8 @@ pub(super) fn extra_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             Some(s) => {
                 let net = e.model.extras_of(&s.net);
                 let at = anchor_shape(&e.model, b);
-                list(ui, e, act, false, (net, Some(at)), s.name.clone(), animated);
+                let name = s.name.as_deref().map(str::to_string);
+                list(ui, e, act, false, (net, Some(at)), name, animated);
             }
             None => {
                 ui.label("The selected shape is not in this NIF.");

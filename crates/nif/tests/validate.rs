@@ -412,6 +412,66 @@ fn texture_path_fix_removes_leading_data() {
     assert_eq!(path, "textures\\a.dds");
 }
 
+/// trace 2026-10-28 #44: validate decodes like apply (Windows-1252). The builder writes "é" as UTF-8, so the slot holds
+/// the non-ASCII bytes C3 A9; the fix applies without a Conflict and keeps those bytes.
+#[test]
+fn texture_path_fix_with_a_non_ascii_byte_applies() {
+    let b = scenes::one_shape_set(&["Data\\textures\\caf\u{e9}.dds"]);
+    let x = only(&warnings(&b), REL, Level::Warn);
+    let fixed = apply(&b, &[x.fix.clone().expect("a fix")]).unwrap();
+    assert_eq!(fixed.outcomes, vec![nif::edit::Outcome::Applied], "{x:#?}");
+    let m = read_model(&fixed.bytes).unwrap();
+    assert_eq!(
+        m.texsets[&1].raw.slots[0],
+        "textures\\caf\u{e9}.dds".as_bytes()
+    );
+    assert!(warnings(&fixed.bytes).is_empty());
+}
+
+/// Fix round 1: validate, apply and rebase decode one way (`text::lossy`, no BOM sniffing). A slot starting with
+/// EF BB BF (the builder writes U+FEFF as those bytes) gets a fix whose base is those bytes as Windows-1252, and the
+/// fix applies without a Conflict (apply's BOM-sniffing decode dropped them before).
+#[test]
+fn texture_path_fix_with_leading_bom_bytes_applies() {
+    let b = scenes::one_shape_set(&["\u{feff}Data\\textures\\a.dds"]);
+    let x = only(&warnings(&b), REL, Level::Warn);
+    let Some(Op::SetTexturePath { base, .. }) = &x.fix else {
+        panic!("{x:#?}")
+    };
+    assert_eq!(base, "\u{ef}\u{bb}\u{bf}Data\\textures\\a.dds");
+    let fixed = apply(&b, &[x.fix.clone().unwrap()]).unwrap();
+    assert_eq!(fixed.outcomes, vec![nif::edit::Outcome::Applied], "{x:#?}");
+    let m = read_model(&fixed.bytes).unwrap();
+    assert_eq!(m.texsets[&1].raw.slots[0], b"textures\\a.dds");
+    // Fix round 3: keep_mine re-reads a stale base the same way, so the kept op applies too.
+    let mut stale = x.fix.clone().unwrap();
+    if let Op::SetTexturePath { base, .. } = &mut stale {
+        *base = "old".into();
+    }
+    let kept = nif::edit::keep_mine(&b, &[stale], 0).unwrap();
+    let Op::SetTexturePath { base, .. } = &kept[0] else {
+        panic!("{kept:#?}")
+    };
+    assert_eq!(base, "\u{ef}\u{bb}\u{bf}Data\\textures\\a.dds");
+    let again = apply(&b, &kept).unwrap();
+    assert_eq!(again.outcomes, vec![nif::edit::Outcome::Applied]);
+}
+
+/// trace 2026-10-28 #44: a BSXFlags whose name has a non-ASCII byte still gets its External_Emittance fix.
+#[test]
+fn external_emittance_fix_with_a_non_ascii_bsx_name() {
+    let b = put(
+        scenes::emit_scene("BSX\u{e9}", 0x83, true),
+        2,
+        Field::Slsf1,
+        Value::U32(1 << 29),
+    );
+    let x = only(&warnings(&b), EXT, Level::Warn);
+    let fixed = apply(&b, &[x.fix.clone().expect("a BSX fix")]).unwrap();
+    assert_eq!(fixed.outcomes, vec![nif::edit::Outcome::Applied]);
+    none(&warnings(&fixed.bytes), EXT);
+}
+
 #[test]
 fn texture_path_without_a_textures_component_has_no_fix() {
     let x = only(&path_warnings("a.dds"), REL, Level::Warn);

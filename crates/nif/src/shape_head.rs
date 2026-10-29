@@ -1,8 +1,8 @@
 //! Shape heads up to the shader/alpha refs (plan 01 Q3; nif.xml 3840-3870, 8228-8246).
 use crate::cursor::Cursor;
 use crate::header::Header;
-use crate::text::lossy;
 use crate::NifError;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShapeKind {
@@ -55,7 +55,8 @@ impl ShapeKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeHead {
     pub kind: ShapeKind,
-    pub name: Option<String>,
+    /// Shared with every block that names the same string-table entry ([`Header::name_arc`]).
+    pub name: Option<Arc<str>>,
     pub skinned: bool,
     pub shader: i32,
     pub alpha: i32,
@@ -87,7 +88,7 @@ pub fn decode_head_at(
     kind: ShapeKind,
 ) -> Result<(ShapeHead, RefAt), NifError> {
     let mut c = Cursor::new(b, h.offsets()[block]);
-    let name = h.string(c.i32()?).map(lossy).filter(|s| !s.is_empty());
+    let name = h.name_arc(c.i32()?).filter(|s| !s.is_empty());
     let n = c.u32()? as usize;
     c.skip(4 * n)?;
     c.i32()?; // controller

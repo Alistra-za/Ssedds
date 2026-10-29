@@ -13,8 +13,8 @@ pub struct ShapeId(pub u32);
 #[derive(Debug, Clone)]
 pub struct ParsedShape {
     pub id: ShapeId,
-    /// The NIF name, or `"block N"` when it has none (P0's label).
-    pub name: String,
+    /// The NIF name, or `"block N"` when it has none (P0's label). Shared with the NIF string table (Note GA1).
+    pub name: Arc<str>,
     pub mesh: Arc<nif::geom::Mesh>,
     /// Root … parent chain × `mesh.transform` (3×4 row-major, the `Mesh.transform` convention). The draw's model
     /// matrix and the bounds use it. Skinned shapes carry it too, but their VS ignores World.
@@ -66,13 +66,15 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
         .extend(graph.problems.iter().map(|p| format!("NIF: {p}")));
     for row in &scan.shapes {
         let id = ShapeId(row.block);
-        let label = row
+        let label: Arc<str> = row
             .head
             .name
             .clone()
-            .unwrap_or_else(|| format!("block {}", row.block));
+            .unwrap_or_else(|| format!("block {}", row.block).into());
+        // messages are kept per shape: a short label, not the whole name (Note GA7)
+        let short = nif::text::label(&label);
         let nif::scan::Shader::Lighting(lighting, slots) = &row.shader else {
-            let why = format!("{label}: not a BSLightingShaderProperty shape, not drawn in P0");
+            let why = format!("{short}: not a BSLightingShaderProperty shape, not drawn in P0");
             out.warnings.push(why.clone());
             out.skipped.push((id, why));
             continue;
@@ -80,21 +82,21 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
         let mesh = match nif::geom::read_shape(&header, nif_bytes, row.block as usize) {
             Ok(m) => m,
             Err(e) => {
-                let why = format!("{label}: {e}");
+                let why = format!("{short}: {e}");
                 out.errors.push(why.clone());
                 out.skipped.push((id, why));
                 continue;
             }
         };
         if let Err(e) = crate::mesh::validate(&mesh) {
-            let why = format!("{label}: {e}");
+            let why = format!("{short}: {e}");
             out.errors.push(why.clone());
             out.skipped.push((id, why));
             continue;
         }
         if row.block != 0 && !graph.parent.contains_key(&row.block) {
             out.warnings.push(format!(
-                "{label}: not under any known node; placed by its own transform"
+                "{short}: not under any known node; placed by its own transform"
             ));
         }
         let world = nif::graph::world(&graph, row.block, &mesh.transform);

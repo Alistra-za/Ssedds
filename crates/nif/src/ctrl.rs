@@ -2,6 +2,7 @@
 //! (layouts: nif-edit-v2 01-format sections 3-4). Every entry point validates the block index and sizes first;
 //! hostile input is an error, never a panic or an unbounded allocation.
 use crate::{header::Header, NifError};
+use std::sync::Arc;
 
 /// next i32, flags u16, frequency, phase, start, stop f32, target i32.
 pub const BASE_LEN: usize = 26;
@@ -223,21 +224,22 @@ pub fn read_blend_interp(h: &Header, b: &[u8], block: usize) -> Result<BlendInte
     })
 }
 
-/// String fields are raw string-table entries: None = index -1, Some(empty) = the empty string.
+/// String fields are raw string-table entries: None = index -1, Some(empty) = the empty string. Each is shared with
+/// every other reference to the same entry ([`Header::string_arc`]), so many references cannot amplify one string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CtrlBlock {
     pub interp: i32,
     pub controller: i32,
-    pub node: Option<Vec<u8>>,
-    pub property: Option<Vec<u8>>,
-    pub ctrl_type: Option<Vec<u8>>,
-    pub ctrl_id: Option<Vec<u8>>,
+    pub node: Option<Arc<[u8]>>,
+    pub property: Option<Arc<[u8]>>,
+    pub ctrl_type: Option<Arc<[u8]>>,
+    pub ctrl_id: Option<Arc<[u8]>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sequence {
     pub block: u32,
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
     pub blocks: Vec<CtrlBlock>,
     pub manager: i32,
     /// CycleType: 0 loop, 1 reverse, 2 clamp (nif.xml 1022-1027), as stored.
@@ -247,12 +249,28 @@ pub struct Sequence {
     pub stop: f32,
     /// The NiTextKeyExtraData the sequence names: (time, raw string or None for -1); empty when there is none or it
     /// does not read.
-    pub text_keys: Vec<(f32, Option<Vec<u8>>)>,
+    pub text_keys: Vec<(f32, Option<Arc<[u8]>>)>,
+}
+
+impl Sequence {
+    /// `value at time s, …` over the text keys, `(none)` for a null value; at most [`crate::text::DISPLAY_CAP`]
+    /// bytes, since many keys can share one large string.
+    pub fn text_keys_line(&self) -> String {
+        let pieces = self.text_keys.iter().enumerate().flat_map(|(i, (t, v))| {
+            let sep: &[u8] = if i == 0 { b"" } else { b", " };
+            [
+                std::borrow::Cow::Borrowed(sep),
+                std::borrow::Cow::Borrowed(v.as_deref().unwrap_or(b"(none)")),
+                std::borrow::Cow::Owned(format!(" at {t} s").into_bytes()),
+            ]
+        });
+        crate::text::lossy_capped(pieces, crate::text::DISPLAY_CAP)
+    }
 }
 
 /// NiTextKeyExtraData `r` (name i32, count u32, then time f32 + value string index i32 per key, nif.xml 5180).
-/// The copied strings draw on the sequence's `budget`, so one large string named by many keys cannot amplify.
-fn text_keys(h: &Header, b: &[u8], r: i32, budget: &mut usize) -> Vec<(f32, Option<Vec<u8>>)> {
+/// The strings are shared ([`Header::string_arc`]), so one large string named by many keys cannot amplify.
+fn text_keys(h: &Header, b: &[u8], r: i32) -> Vec<(f32, Option<Arc<[u8]>>)> {
     // shortcut: a malformed text-key block reads as none; the sequence itself still reads.
     let Ok(r) = usize::try_from(r) else {
         return vec![];
@@ -269,46 +287,25 @@ fn text_keys(h: &Header, b: &[u8], r: i32, budget: &mut usize) -> Vec<(f32, Opti
     if n.checked_mul(8).and_then(|x| x.checked_add(8)) != Some(t.len()) {
         return vec![];
     }
-    let s = |k: usize| h.string(u32_at(t, 12 + 8 * k) as i32);
-    // Check the total before cloning anything; past the budget the keys read as none.
-    let mut left = *budget;
-    for k in 0..n {
-        match left.checked_sub(s(k).map_or(0, <[u8]>::len)) {
-            Some(l) => left = l,
-            None => return vec![],
-        }
-    }
-    *budget = left;
     (0..n)
-        .map(|k| (f32_at(t, 8 + 8 * k), s(k).map(<[u8]>::to_vec)))
+        .map(|k| {
+            let s = h.string_arc(u32_at(t, 12 + 8 * k) as i32);
+            (f32_at(t, 8 + 8 * k), s)
+        })
         .collect()
 }
 
-/// Copies one string-table entry. `budget` is the bytes still allowed to be copied for this sequence.
-fn string(
-    h: &Header,
-    block: usize,
-    idx: i32,
-    what: &str,
-    budget: &mut usize,
-) -> Result<Option<Vec<u8>>, NifError> {
+/// One string-table entry, shared ([`Header::string_arc`]); -1 is None, any other index outside the table an error.
+fn string(h: &Header, block: usize, idx: i32, what: &str) -> Result<Option<Arc<[u8]>>, NifError> {
     if idx == -1 {
         return Ok(None);
     }
-    let s = h.string(idx).ok_or_else(|| {
+    h.string_arc(idx).map(Some).ok_or_else(|| {
         geo(
             block,
             &format!("{what}: string index outside the string table"),
         )
-    })?;
-    // shortcut: bounded by the file length, not by a tighter per-field limit
-    *budget = budget.checked_sub(s.len()).ok_or_else(|| {
-        geo(
-            block,
-            "strings referenced by the sequence exceed the file length",
-        )
-    })?;
-    Ok(Some(s.to_vec()))
+    })
 }
 
 pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, NifError> {
@@ -329,13 +326,12 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         .ok_or_else(|| geo(block, "controlled-block count runs past the block"))?;
     let notes = u16::from_le_bytes([d[tail + 32], d[tail + 33]]) as usize;
     exact(h, block, tail + 34 + 4 * notes, d.len())?;
-    let mut budget = b.len();
     let mut blocks = Vec::with_capacity(n);
     for i in 0..n {
         let c = &d[12 + i * CB_LEN..];
-        let mut s = |k: usize| {
+        let s = |k: usize| {
             let what = format!("controlled block {i}");
-            string(h, block, u32_at(c, 9 + 4 * k) as i32, &what, &mut budget)
+            string(h, block, u32_at(c, 9 + 4 * k) as i32, &what)
         };
         blocks.push(CtrlBlock {
             interp: u32_at(c, 0) as i32,
@@ -346,9 +342,14 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
             ctrl_id: s(3)?,
         });
     }
-    let name = string(h, block, u32_at(d, 0) as i32, "name", &mut budget)?
-        // fix round 1 (Note CU): Windows-1252, as the editor shows and writes it; one byte, one char, so it is an identity
-        .map(|s| crate::text::lossy(&s));
+    // fix round 1 (Note CU): Windows-1252, as the editor shows and writes it; one byte, one char, so it is an identity
+    let name = match u32_at(d, 0) as i32 {
+        -1 => None,
+        i => Some(
+            h.name_arc(i)
+                .ok_or_else(|| geo(block, "name: string index outside the string table"))?,
+        ),
+    };
     Ok(Sequence {
         block: block as u32,
         name,
@@ -358,7 +359,7 @@ pub fn read_sequence(h: &Header, b: &[u8], block: usize) -> Result<Sequence, Nif
         frequency: f32_at(d, tail + 12),
         start: f32_at(d, tail + 16),
         stop: f32_at(d, tail + 20),
-        text_keys: text_keys(h, b, u32_at(d, tail + 4) as i32, &mut budget),
+        text_keys: text_keys(h, b, u32_at(d, tail + 4) as i32),
     })
 }
 

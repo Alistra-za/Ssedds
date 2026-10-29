@@ -1558,7 +1558,7 @@ pub(crate) fn extra_op(
                 _ => m
                     .shapes
                     .iter()
-                    .filter(|s| s.name == at.shape)
+                    .filter(|s| s.name.as_deref() == at.shape.as_deref())
                     .find(|s| owned(&s.net))
                     .map(|s| (s.block, &s.net)),
             }
@@ -1608,7 +1608,8 @@ pub(crate) fn texture_path_op(
         .slots
         .get(*slot as usize)
         .ok_or(format!("slot {slot} is past the set's {n} slots"))?;
-    let now = encoding_rs::WINDOWS_1252.decode(old).0;
+    // validate's decode: no BOM sniffing (Note GA3)
+    let now = crate::text::lossy(old);
     if now != *base {
         return Ok(Outcome::Conflict(format!(
             "changed in the source: was {base:?}, now {now:?}"

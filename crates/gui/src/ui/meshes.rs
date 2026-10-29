@@ -902,8 +902,14 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
             m.select_edit(Selection::Shape(block));
             // T2 review Minor 2: the outline and the next Edit follow this pick. T4 review Minor 5: kept in the shown
             // copy's numbering (it may be PGPatcher's): the same block and name, else the only card with that name.
-            let same = m.shapes.iter().any(|s| s.block == block && s.name == name);
-            let mut named = m.shapes.iter().filter(|s| name.is_some() && s.name == name);
+            let same = m
+                .shapes
+                .iter()
+                .any(|s| s.block == block && s.name.as_deref() == name.as_deref());
+            let mut named = m
+                .shapes
+                .iter()
+                .filter(|s| name.is_some() && s.name.as_deref() == name.as_deref());
             let shown = match (same, named.next(), named.next()) {
                 (false, Some(s), None) => s.block,
                 _ => block,

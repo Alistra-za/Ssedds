@@ -460,10 +460,18 @@ pub fn coverage(
 }
 
 /// Linear Lighting's `diffuseCurve` (C4, no settings key): the inverse of CS's DiffuseToWorking curve at mid
-/// grey. `x = 0.5^gamma; mid·(1−x) / (x·(white−mid))`.
+/// grey. `x = 0.5^gamma; mid·(1−x) / (x·(white−mid))`. Without a white-mid gap, or with a non-finite result, the
+/// [`FEATURE_FLOATS`] default (trace 2026-10-28 #27).
 pub fn diffuse_curve(gamma: f64, mid: f64, white: f64) -> f64 {
     let x = 0.5f64.powf(gamma);
-    mid * (1.0 - x) / (x * (white - mid))
+    let c = mid * (1.0 - x) / (x * (white - mid));
+    if white - mid > 1e-6 && c.is_finite() {
+        return c;
+    }
+    FEATURE_FLOATS
+        .iter()
+        .find(|(n, _)| *n == "linearLightingSettings.diffuseCurve")
+        .map_or(1.0, |(_, v)| f64::from(v[0]))
 }
 
 /// Every cbuffer variable name of `layouts` without its namespace (`SharedData::linearLightingSettings.diffuseCurve`

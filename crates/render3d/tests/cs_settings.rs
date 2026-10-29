@@ -326,6 +326,21 @@ fn diffuse_curve_derivation() {
     assert!((c - 1.448_227_7).abs() < 1e-6, "{c}");
 }
 
+/// trace 2026-10-28 #27: `diffuseMidReflectance: 1.0` with no white reflectance (1.0) divides by zero; a mid above
+/// white gives a negative curve. Both keep the CS default curve.
+#[test]
+fn diffuse_curve_without_a_white_mid_gap_keeps_the_default() {
+    let default = FEATURE_FLOATS
+        .iter()
+        .find(|(n, _)| *n == "linearLightingSettings.diffuseCurve")
+        .map(|(_, v)| f64::from(v[0]))
+        .unwrap();
+    for (mid, white) in [(1.0, 1.0), (1.5, 1.0), (f64::NAN, 1.0)] {
+        let c = diffuse_curve(2.2, mid, white);
+        assert_eq!(c, default, "mid {mid}, white {white}");
+    }
+}
+
 /// T-S3: the owner-shaped files reproduce every capture-11178 value; pointLightMult stays π although the file says 1.
 #[test]
 fn owner_settings_reproduce_capture_values() {

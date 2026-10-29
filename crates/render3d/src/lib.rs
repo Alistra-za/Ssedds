@@ -125,7 +125,8 @@ pub enum ShapeStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeInfo {
     pub id: ShapeId,
-    pub name: String,
+    /// Shared with the parsed shape (Note GA1): `shapes()` hands out pointers, not copies of a long name.
+    pub name: Arc<str>,
     /// The material last loaded or set (even when it failed to build).
     pub material: MaterialState,
     pub status: ShapeStatus,
@@ -134,7 +135,7 @@ pub struct ShapeInfo {
 /// One loaded shape: the CPU mesh (kept so an edit rebuilds the draw without re-parsing), the material last
 /// loaded or set, and what is on screen (possibly built from an earlier material, see [`ShapeStatus`]).
 struct ShapeState {
-    name: String,
+    name: Arc<str>,
     mesh: Arc<nif::geom::Mesh>,
     world: [[f32; 4]; 3],
     material: MaterialState,
@@ -1020,7 +1021,8 @@ impl Renderer {
                     real.insert(reg, srv);
                 }
                 Some(_) => rep.warnings.push(format!(
-                    "{name}: {} is not a {kind:?} texture (t{reg}); default bound",
+                    "{}: {} is not a {kind:?} texture (t{reg}); default bound",
+                    nif::text::label(name),
                     path.norm
                 )),
                 None => {
@@ -1053,7 +1055,8 @@ impl Renderer {
                 draw::srv_kind_at(&program.ps.reflection, reg).filter(|k| *k != t.kind)
             {
                 rep.warnings.push(format!(
-                    "{name}: the slot {slot} override is kind {:?} but t{reg} reads {kind:?}; not shown",
+                    "{}: the slot {slot} override is kind {:?} but t{reg} reads {kind:?}; not shown",
+                    nif::text::label(name),
                     t.kind
                 ));
             }
@@ -1116,7 +1119,7 @@ impl Renderer {
     /// against the VS inputs, zero cbuffers from the reflection, then the material.
     fn build_draw(
         &mut self,
-        name: &str,
+        name: &Arc<str>,
         mesh: &nif::geom::Mesh,
         world: &[[f32; 4]; 3],
         m: &MaterialState,
@@ -1146,7 +1149,7 @@ impl Renderer {
             write_skin_flags(&mut cb.writer, m, &bound);
         }
         Ok(ShapeDraw {
-            name: name.to_string(),
+            name: name.clone(),
             vs: program.vs_obj.clone(),
             ps: program.ps_obj.clone(),
             mesh: gpu_mesh,
@@ -1522,7 +1525,7 @@ impl Renderer {
         }
         for s in self.shapes.values() {
             if let ShapeStatus::Failed { error, .. } = &s.status {
-                let line = format!("{}: {error}", s.name);
+                let line = format!("{}: {error}", nif::text::label(&s.name));
                 if s.compile_failed {
                     rep.compile_errors.push(line);
                 } else {
@@ -1562,7 +1565,7 @@ impl Renderer {
         let parsed = ParsedNif {
             shapes: vec![ParsedShape {
                 id: ShapeId(0),
-                name: format!("{b:?}"),
+                name: format!("{b:?}").into(),
                 world: mesh.transform,
                 mesh: Arc::new(mesh),
                 material,
@@ -1968,8 +1971,9 @@ impl Renderer {
             let real = match entry.current() {
                 Some(t) if t.kind != kind => {
                     return Err(format!(
-                        "{path} is a {:?} texture but {name} reads t{reg} as {kind:?}",
-                        t.kind
+                        "{path} is a {:?} texture but {} reads t{reg} as {kind:?}",
+                        t.kind,
+                        nif::text::label(&name)
                     ))
                 }
                 Some(t) => Some(t.srv.clone()),
@@ -2354,7 +2358,8 @@ impl Renderer {
                             reflection: black,
                         },
                     ));
-                    return Err(format!("environment cube: {e}"));
+                    // gpu_error with the device query: prefixed even when the inner error was not (Note GA4)
+                    return Err(self.gpu.fail("environment cube", e));
                 }
             }
         }
@@ -2669,6 +2674,22 @@ fn blend_state<'a>(
     cache: &'a mut HashMap<(u8, u8), ID3D11BlendState>,
     pair: (u8, u8),
 ) -> Result<&'a ID3D11BlendState, String> {
+    blend_state_with(
+        cache,
+        pair,
+        // SAFETY: descriptor and out-pointer are the caller's locals.
+        |bd, b| unsafe { gpu.device.CreateBlendState(bd, Some(b)) },
+        || gpu.removed(),
+    )
+}
+
+/// [`blend_state`] with the device calls passed in, so a test can fake a removed device.
+fn blend_state_with(
+    cache: &mut HashMap<(u8, u8), ID3D11BlendState>,
+    pair: (u8, u8),
+    create: impl FnOnce(&D3D11_BLEND_DESC, &mut Option<ID3D11BlendState>) -> windows::core::Result<()>,
+    removed: impl FnOnce() -> windows::core::Result<()>,
+) -> Result<&ID3D11BlendState, String> {
     if let std::collections::hash_map::Entry::Vacant(v) = cache.entry(pair) {
         let mut bd = D3D11_BLEND_DESC::default();
         bd.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
@@ -2682,9 +2703,8 @@ fn blend_state<'a>(
             RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
         };
         let mut b = None;
-        // SAFETY: descriptor and out-pointer are locals.
-        unsafe { gpu.device.CreateBlendState(&bd, Some(&mut b)) }
-            .map_err(|e| format!("CreateBlendState: {e}"))?;
+        // gpu_error keeps the DEVICE_REMOVED prefix the GUI rebuilds on (trace 2026-10-28 #37)
+        create(&bd, &mut b).map_err(|e| device::gpu_error(removed(), "CreateBlendState", e))?;
         v.insert(b.ok_or("no blend state")?);
     }
     Ok(&cache[&pair])
@@ -2693,10 +2713,7 @@ fn blend_state<'a>(
 /// `what: e` for an error a swap or override returns. An error from a lost device keeps [`device::DEVICE_REMOVED`]
 /// in front, since the GUI tests that prefix to replay the swap after the rebuild (Note BS1, trace 2026-10-22 #2).
 fn with_context(what: &str, e: String) -> String {
-    match e.strip_prefix(device::DEVICE_REMOVED) {
-        Some(rest) => format!("{}{rest} [{what}]", device::DEVICE_REMOVED),
-        None => format!("{what}: {e}"),
-    }
+    device::gpu_error(Ok(()), what, e)
 }
 
 #[cfg(test)]
@@ -2708,6 +2725,24 @@ mod context_tests {
         let lost = format!("{}: hung (CreateTexture2D: x)", device::DEVICE_REMOVED);
         assert!(with_context("a.dds", lost).starts_with(device::DEVICE_REMOVED));
         assert_eq!(with_context("a.dds", "bad dds".into()), "a.dds: bad dds");
+    }
+
+    /// trace 2026-10-28 #37 (fix round 1): the blend-state call site maps a removed device's error through
+    /// `device::gpu_error`, so it keeps the prefix the GUI rebuilds on. The device is faked by the two closures.
+    #[test]
+    fn a_blend_state_on_a_removed_device_keeps_the_prefix() {
+        use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_REMOVED};
+        let mut cache = HashMap::new();
+        let e = blend_state_with(
+            &mut cache,
+            (1, 2),
+            |_, _| Err(windows::core::Error::from(DXGI_ERROR_DEVICE_REMOVED)),
+            || Err(windows::core::Error::from(DXGI_ERROR_DEVICE_HUNG)),
+        )
+        .unwrap_err();
+        assert!(e.starts_with(device::DEVICE_REMOVED), "{e}");
+        assert!(e.contains("CreateBlendState"), "{e}");
+        assert!(cache.is_empty());
     }
 }
 

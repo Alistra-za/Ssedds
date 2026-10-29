@@ -91,3 +91,48 @@ fn unlisted_sequence_is_not_live() {
         [1, 2]
     );
 }
+
+/// `n` BSTriShapes (0..n) on one BSLSP (block n).
+fn many_shapes(n: i32) -> Vec<u8> {
+    let mut b = builder::Nif::new(100);
+    for _ in 0..n {
+        b.block("BSTriShape", scenes::bstri(n, -1));
+    }
+    b.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    b.bytes()
+}
+
+/// trace 2026-10-28 #43: shape refs are matched to their shapes in one pass, not by a search per shape.
+#[test]
+fn read_model_is_linear_in_the_shape_count() {
+    let m = read_model(&many_shapes(3)).unwrap();
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    let refs: Vec<_> = m
+        .shapes
+        .iter()
+        .map(|s| (s.block, s.shader, s.alpha))
+        .collect();
+    assert_eq!(
+        refs,
+        [(0, Some(3), None), (1, Some(3), None), (2, Some(3), None)]
+    );
+    assert_eq!(m.lighting[&3].prop.users, [0, 1, 2]);
+
+    // 8x the shapes: about 8x the time when linear, far more when quadratic. Best of five each.
+    let time = |n: i32| {
+        let b = many_shapes(n);
+        (0..5)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                assert_eq!(read_model(&b).unwrap().shapes.len(), n as usize);
+                t.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (small, big) = (time(10_000), time(80_000));
+    let ratio = big / small;
+    assert!(
+        ratio < 24.0,
+        "80k shapes took {ratio:.1}x 10k ({big:.3} s vs {small:.3} s)"
+    );
+}
