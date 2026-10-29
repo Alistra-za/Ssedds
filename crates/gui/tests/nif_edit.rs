@@ -4151,6 +4151,72 @@ fn changing_the_export_folder_keeps_the_edit_in_memory() {
     assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
 }
 
+/// Note GD12: a root change whose folder holds an edit document that does not load is not taken: the row is
+/// blocked with the reason, nothing is written to the old folder, and a later root that works clears it.
+#[test]
+fn a_malformed_document_in_the_new_folder_blocks_the_row() {
+    let (d, mut m) = export_session();
+    let old = d.path().join("mods").join(EDIT_MOD);
+    assert_eq!(m.nif_export_root.as_deref(), Some(old.as_path()));
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let before = std::fs::read(nif_doc(&old)).unwrap();
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad.clone()));
+    assert_eq!(
+        m.nif_export_root.as_deref(),
+        Some(old.as_path()),
+        "the new root is not taken"
+    );
+    let why = review_row(&m).blocked.expect("the row is blocked");
+    let head = format!("could not open the edit document in {}: ", bad.display());
+    assert!(why.starts_with(&head), "{why}");
+    gloss(&mut m, 13.5);
+    assert_eq!(
+        std::fs::read(nif_doc(&old)).unwrap(),
+        before,
+        "no write to the old folder"
+    );
+    assert!(matches!(m.export_edit(None), ExportOutcome::Blocked(_)));
+    assert!(!old.join(r"meshes\x.nif").exists());
+    assert_eq!(
+        load(&autosave(&d)).unwrap().unwrap().ops.len(),
+        2,
+        "the work is kept in the autosave meanwhile"
+    );
+    // asked again (the next frame): still blocked; a root that works clears it
+    m.set_nif_export_root(Some(bad.clone()));
+    assert!(review_row(&m).blocked.is_some());
+    let good = d.path().join(r"mods\Good");
+    m.set_nif_export_root(Some(good.clone()));
+    assert_eq!(m.nif_export_root.as_deref(), Some(good.as_path()));
+    assert_eq!(review_row(&m).blocked, None);
+    m.close_edit();
+    assert_eq!(load(&nif_doc(&good)).unwrap().unwrap().ops.len(), 2);
+    assert!(!autosave(&d).exists(), "moved into the folder that worked");
+    assert_eq!(std::fs::read(nif_doc(&old)).unwrap(), before);
+}
+
+/// Note GD12: back to the folder the edit never left, the block clears and the edit saves there.
+#[test]
+fn going_back_from_a_failed_folder_change_clears_the_block() {
+    let (d, mut m) = export_session();
+    let old = d.path().join("mods").join(EDIT_MOD);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad));
+    gloss(&mut m, 13.5);
+    assert!(review_row(&m).blocked.is_some());
+    m.set_nif_export_root(Some(old.clone()));
+    assert_eq!(review_row(&m).blocked, None);
+    assert_eq!(load(&nif_doc(&old)).unwrap().unwrap().ops.len(), 2);
+}
+
 /// Note GD5: a session with no edits takes the new folder's saved edit (nothing live to keep).
 #[test]
 fn an_idle_session_takes_the_new_folders_edit() {

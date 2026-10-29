@@ -128,6 +128,9 @@ pub struct NifEdit {
     pub export_note: Option<(String, bool)>,
     /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
     pub cleanup_note: Option<String>,
+    /// Note GD12: the export folder changed but its edit document did not load: the session stays on its old paths,
+    /// writes nothing (no save, no export) and is blocked with this reason until a root change succeeds.
+    pub retarget_error: Option<String>,
     /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
     /// the ops per frame.
     pub up_to_date: bool,
@@ -577,6 +580,7 @@ impl NifEdit {
             guard: None,
             export_note: None,
             cleanup_note: None,
+            retarget_error: None,
             up_to_date: false,
             weight_sibling: None,
             session: next_key(),
@@ -631,6 +635,9 @@ impl NifEdit {
     /// Why the current state cannot be exported, from memory alone (export steps 2-4): refused ops first (A16 keeps
     /// them as conflicts), then conflicts, new validation errors and bytes that do not read back.
     pub fn export_block(&self) -> Option<String> {
+        if let Some(why) = &self.retarget_error {
+            return Some(why.clone());
+        }
         if self.edit_mod.as_os_str().is_empty() {
             return Some(NO_EXPORT_FOLDER.into());
         }
@@ -893,6 +900,18 @@ impl NifEdit {
     }
 
     fn save(&mut self) {
+        // Note GD12: the old folder is no longer the destination; the autosave keeps the work until a root change
+        // succeeds (that one saves in the new folder and removes it)
+        if self.retarget_error.is_some() {
+            self.unsaved = true;
+            if let Some(a) = self.autosave.clone() {
+                match edit_doc::save(&a, &self.doc) {
+                    Ok(()) => self.owns_autosave = true,
+                    Err(e) => self.error = Some(e),
+                }
+            }
+            return;
+        }
         self.unsaved = false;
         if self.doc_path.as_os_str().is_empty() {
             return;
@@ -2162,6 +2181,38 @@ impl MeshesModel {
     /// The selected shape is kept.
     pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
         if self.nif_export_root == root {
+            // Note GD12: back to the folder the edit never left: it is its destination again
+            if let Some(e) = self.edit.as_mut().filter(|e| e.retarget_error.is_some()) {
+                e.retarget_error = None;
+                e.refresh_blocked();
+                e.flush();
+            }
+            return;
+        }
+        // Note GD12: the root is taken only once the live edit has moved there; until then the edit is blocked.
+        // shortcut: a failed move is tried again each frame (one small file read); cache on the file's time if it
+        // ever shows in a profile.
+        if let Some(e) = self.edit.as_mut().filter(|e| !e.doc.ops.is_empty()) {
+            match e.retarget(root.as_deref()) {
+                Ok(lines) => {
+                    self.messages.extend(lines);
+                    e.retarget_error = None;
+                    e.refresh_blocked();
+                }
+                Err(err) => {
+                    let folder = root.as_deref().unwrap_or(Path::new("")).display();
+                    let why = format!("could not open the edit document in {folder}: {err}");
+                    if e.retarget_error.as_ref() != Some(&why) {
+                        e.retarget_error = Some(why);
+                        e.refresh_blocked();
+                    }
+                    return;
+                }
+            }
+            self.nif_export_root = root;
+            self.refresh_doc_badges();
+            self.refresh_placement();
+            self.edit_checks();
             return;
         }
         self.nif_export_root = root;
@@ -2169,15 +2220,6 @@ impl MeshesModel {
         let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
             return;
         };
-        if let Some(e) = self.edit.as_mut().filter(|e| !e.doc.ops.is_empty()) {
-            match e.retarget(self.nif_export_root.as_deref()) {
-                Ok(lines) => self.messages.extend(lines),
-                Err(err) => self.error = Some(err),
-            }
-            self.refresh_placement();
-            self.edit_checks();
-            return;
-        }
         // Flushes to the old folder.
         self.drop_edit();
         // The selected NIF is the edited one: selecting another ends the session.
