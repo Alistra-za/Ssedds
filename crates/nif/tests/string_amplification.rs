@@ -269,3 +269,28 @@ fn read_model_shares_one_string_across_many_string_values() {
         .collect();
     assert_eq!(ptrs.len(), 1, "{} distinct value copies", ptrs.len());
 }
+
+/// GB4: 2000 shapes on one BSLightingShaderProperty whose texture set holds a 50 KB slot path (about 200 MB when
+/// each row copies it): the rows share one slot array.
+#[test]
+fn scan_shares_the_slots_of_one_shader_across_many_shapes() {
+    use builder::scenes::{bstri, lsp, texset};
+    let mut n = Nif::new(100);
+    n.block("BSLightingShaderProperty", lsp(0, 1));
+    n.block("BSShaderTextureSet", texset(&[&"a".repeat(50_000)]));
+    for _ in 0..2000 {
+        n.block("BSTriShape", bstri(0, -1));
+    }
+    n.roots = vec![];
+    let s = nif::scan::scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 2000);
+    let ptrs: BTreeSet<_> = s
+        .shapes
+        .iter()
+        .map(|r| match &r.shader {
+            nif::scan::Shader::Lighting(_, slots) => slots.as_ptr(),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(ptrs.len(), 1, "{} distinct slot arrays", ptrs.len());
+}

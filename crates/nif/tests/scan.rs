@@ -197,3 +197,20 @@ fn bad_alpha_ref_is_a_problem() {
     assert_eq!(s.problems.len(), 1, "{:?}", s.problems);
     assert!(s.problems[0].contains("alpha"), "{:?}", s.problems);
 }
+
+/// Note GB4: the shader is decoded once per property, but a bad ref in it is still reported once per shape.
+#[test]
+fn a_bad_texture_set_ref_is_reported_once_per_shape() {
+    let mut n = Nif::new(100);
+    n.block("BSLightingShaderProperty", builder::scenes::lsp(0, 99));
+    for _ in 0..3 {
+        n.block("BSTriShape", builder::scenes::bstri(0, -1));
+    }
+    n.roots = vec![];
+    let s = scan(&n.bytes()).unwrap();
+    assert_eq!(s.shapes.len(), 3);
+    assert_eq!(
+        s.problems,
+        vec!["block 0: texture set ref 99 out of range"; 3]
+    );
+}
