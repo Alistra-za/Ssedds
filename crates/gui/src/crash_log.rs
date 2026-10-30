@@ -101,31 +101,33 @@ pub fn device_lost() -> bool {
 static AFTER_LOSS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
-/// Called once from `main` with the folder named by `--after-device-loss`, if any.
+/// Called once from `main`: `after_loss` is true when this process is a restart (`--after-device-loss` was given),
+/// and the start time is recorded for the 60 s loop guard.
 pub fn mark_started(after_loss: bool) {
     AFTER_LOSS.store(after_loss, std::sync::atomic::Ordering::Release);
     let _ = STARTED.set(std::time::Instant::now());
 }
 
-/// The folder after `--after-device-loss` in the process arguments (the program name is skipped by the caller).
+/// `None`: not a restart. `Some(folder)`: a restart after a device loss, with the folder to reopen if one was open
+/// (the program name is skipped by the caller).
 pub fn after_device_loss_folder(
     args: impl IntoIterator<Item = std::ffi::OsString>,
-) -> Option<PathBuf> {
+) -> Option<Option<PathBuf>> {
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         if a == "--after-device-loss" {
-            return it.next().map(PathBuf::from);
+            return Some(it.next().map(PathBuf::from));
         }
     }
     None
 }
 
 /// Note FC4 (DN3): the arguments the restarted process gets, so it reopens the folder and FB5's restore runs.
+/// The bare flag (no folder open) still marks the restart, so the loop guard holds.
 pub fn relaunch_args(folder: Option<&Path>) -> Vec<std::ffi::OsString> {
-    match folder {
-        Some(f) => vec!["--after-device-loss".into(), f.as_os_str().to_owned()],
-        None => Vec::new(),
-    }
+    let mut args = vec![std::ffi::OsString::from("--after-device-loss")];
+    args.extend(folder.map(|f| f.as_os_str().to_owned()));
+    args
 }
 
 /// Loop guard: a restarted process that loses the device again within 60 s of its start does not restart again.
@@ -134,11 +136,12 @@ pub fn should_relaunch(started_with_flag: bool, uptime: std::time::Duration) -> 
 }
 
 /// Note FC4 (supersedes DN1's exit): called from the frame after a device loss, before egui-wgpu's paint would
-/// panic. eframe cannot recreate the device, so the app writes the unsaved documents to their recovery files (the
-/// caller has run `on_exit`), starts itself again on the same folder, and exits.
-pub fn close_after_device_loss(folder: Option<&Path>) -> ! {
+/// panic. eframe cannot recreate the device, so the app writes the unsaved documents to their recovery files, runs
+/// `on_exit` (the layout save, DN3), starts itself again on the same folder, and exits.
+pub fn close_after_device_loss(folder: Option<&Path>, on_exit: impl FnOnce()) -> ! {
     let files = RECOVERY.lock().map(|r| r.clone()).unwrap_or_default();
     write_recovery(&files);
+    on_exit();
     let kept: Vec<String> = files
         .iter()
         .map(|(p, _)| recovery_path(p).display().to_string())
@@ -160,9 +163,11 @@ pub fn close_after_device_loss(folder: Option<&Path>) -> ! {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title(crate::PRODUCT_NAME)
-            .set_description(
-                "The graphics device was lost. Tessalith restarts and brings your unsaved edits back.",
-            )
+            .set_description(if kept.is_empty() || folder.is_none() {
+                "The graphics device was lost. Tessalith restarts."
+            } else {
+                "The graphics device was lost. Tessalith restarts and brings your unsaved edits back."
+            })
             .set_buttons(rfd::MessageButtons::OkCustom("Restart".into()))
             .show();
         let spawned = std::env::current_exe().and_then(|exe| {
@@ -454,8 +459,30 @@ mod tests {
     }
 
     #[test]
-    fn relaunch_args_is_empty_without_a_folder() {
-        assert!(relaunch_args(None).is_empty());
+    fn relaunch_args_without_a_folder_still_marks_a_restart() {
+        let args = relaunch_args(None);
+        assert_eq!(args, vec![std::ffi::OsString::from("--after-device-loss")]);
+        // The restarted process knows it is one, so the loop guard holds with no folder open.
+        let restarted = after_device_loss_folder(args).is_some();
+        assert!(restarted);
+        assert!(!should_relaunch(
+            restarted,
+            std::time::Duration::from_secs(5)
+        ));
+    }
+
+    #[test]
+    fn after_device_loss_folder_round_trips() {
+        let p = Path::new("C:\\mods\\x");
+        assert_eq!(
+            after_device_loss_folder(relaunch_args(Some(p))),
+            Some(Some(p.to_path_buf()))
+        );
+        assert_eq!(after_device_loss_folder(relaunch_args(None)), Some(None));
+        assert_eq!(
+            after_device_loss_folder(Vec::<std::ffi::OsString>::new()),
+            None
+        );
     }
 
     /// Note FC4: a restarted process that loses the device again within 60 s does not restart again.

@@ -99,7 +99,7 @@ fn main() -> eframe::Result {
             }
             // No render state means no usable adapter: the app still starts, without a preview.
             let mut model = build_model();
-            if let Some(folder) = reopen {
+            if let Some(Some(folder)) = reopen {
                 model.open_folder(folder);
             }
             let app = SdcApp::new(model).with_render_state(cc.wgpu_render_state.as_ref());

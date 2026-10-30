@@ -303,9 +303,11 @@ impl eframe::App for SdcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Note DN: the last frame lost the device; this frame's paint would panic.
         if crate::crash_log::device_lost() {
-            // DN3: eframe's own on_exit will not run, so save the layout before the restart.
-            eframe::App::on_exit(self);
-            crate::crash_log::close_after_device_loss(self.model.root.as_deref());
+            // DN3: eframe's own on_exit will not run, so the layout is saved (after the recovery files) here.
+            let folder = self.model.root.clone();
+            crate::crash_log::close_after_device_loss(folder.as_deref(), || {
+                eframe::App::on_exit(self)
+            });
         }
         let ctx = ui.ctx().clone();
         self.model.poll();
