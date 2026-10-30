@@ -4572,6 +4572,39 @@ fn a_recovered_empty_autosave_stays_on_a_folder_change() {
     );
 }
 
+/// Note GD27: a save that fails leaves the session unsaved: a recovered empty autosave whose save into the folder
+/// fails is still touched, and a folder change keeps it.
+#[test]
+fn a_failed_save_keeps_a_recovered_empty_autosave_touched() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(m.undo_edit());
+    m.close_edit();
+    let good = d.path().join(r"mods\Good");
+    m.set_nif_export_root(Some(good.clone()));
+    m.open_edit();
+    assert!(
+        m.edit.as_ref().unwrap().doc.ops.is_empty(),
+        "the empty autosave is recovered"
+    );
+    std::fs::create_dir_all(nif_doc(&good)).unwrap(); // the save cannot write a directory
+    m.edit_with(|e| e.flush());
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.error.is_some() || m.error.is_some(), "the save failed");
+    assert!(e.touched(), "still unsaved");
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert!(e.doc.ops.is_empty(), "the recovered state stays");
+}
+
 /// Note GD12: back to the folder the edit never left, the block clears and the edit saves there.
 #[test]
 fn going_back_from_a_failed_folder_change_clears_the_block() {

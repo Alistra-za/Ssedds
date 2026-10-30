@@ -1052,11 +1052,12 @@ impl NifEdit {
         if !self.free_unseen(&path) {
             return;
         }
-        self.unsaved = false;
+        // Note GD27: unsaved until the write succeeds, so a failed save keeps the session touched
         if let Err(e) = edit_doc::save(&path, &self.doc) {
             self.error = Some(e);
             return;
         }
+        self.unsaved = false;
         if self.autosave.as_ref() == Some(&path) {
             self.owns_autosave = true;
         }
