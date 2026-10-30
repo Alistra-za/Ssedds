@@ -697,6 +697,22 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     egui::Panel::bottom("review-footer")
         .resizable(false)
         .show(ui, |ui| {
+            // Note FC5: the NIF edits sit between Warnings (above, in the columns) and the files rows; a blocked
+            // one is listed under Warnings instead.
+            let nif_written: Vec<_> = nif_rows.iter().filter(|r| r.blocked.is_none()).collect();
+            if !nif_written.is_empty() {
+                ui.strong(format!("NIF edits ({})", nif_written.len()));
+                egui::ScrollArea::vertical()
+                    .id_salt("review-nif")
+                    .max_height(96.0)
+                    .show(ui, |ui| {
+                        for r in &nif_written {
+                            let t = nif_row_text(r, nif_folder.as_deref());
+                            ui.add(egui::Label::new(&t).truncate())
+                                .on_hover_text(format!("{}: {t}", r.path));
+                        }
+                    });
+            }
             ui.horizontal(|ui| {
                 ui.strong("What will be written");
                 let files = m.export_files();
@@ -706,22 +722,6 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 .id_salt("review-json")
                 .max_height(96.0)
                 .show(ui, |ui| {
-                    // Note FC5: the NIF edits, before the files; a blocked one is a warning, skipped.
-                    if !nif_rows.is_empty() {
-                        ui.strong(format!("NIF edits ({})", nif_rows.len()));
-                        for r in nif_rows {
-                            let (t, color) = match &r.blocked {
-                                Some(why) => (format!("NIF edit skipped: {why}"), Some(AMBER)),
-                                None => (nif_row_text(r, nif_folder.as_deref()), None),
-                            };
-                            let mut text = egui::RichText::new(&t);
-                            if let Some(c) = color {
-                                text = text.color(c);
-                            }
-                            ui.add(egui::Label::new(text).truncate())
-                                .on_hover_text(format!("{}: {t}", r.path));
-                        }
-                    }
                     // Note FC5: the Keep/Overwrite question moved to Blockers.
                     for l in &json {
                         ui.label(json_line_text(l));
@@ -775,6 +775,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         || nif_rows
             .iter()
             .any(|r| r.blocked.is_none() && r.foreign.is_some());
+    let nif_skipped: Vec<_> = nif_rows.iter().filter(|r| r.blocked.is_some()).collect();
     let n_cols = if also_on { 4 } else { 3 };
     let heading = |i: usize| match i {
         0 => ("Blockers", format!("Blockers ({blockers})")),
@@ -783,7 +784,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             "Undecided",
             format!("Undecided ({})", undecided.len() + half_open),
         ),
-        2 => ("Warnings", format!("Warnings ({})", asks.len())),
+        // Note FC5: a blocked NIF edit is a warning; it is skipped and does not block the export.
+        2 => (
+            "Warnings",
+            format!("Warnings ({})", asks.len() + nif_skipped.len()),
+        ),
         _ => ("Also export as", "Also export as".to_string()),
     };
     // One body per column, drawn side by side or stacked (Note FB10).
@@ -826,9 +831,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 .iter()
                 .filter(|l| l.kind == JsonKind::PgPatcher && l.state == DiskState::Edited)
             {
-                let answer = json_answer
-                    .filter(|a| a.path == l.path)
-                    .map(|a| a.overwrite);
+                let answer = json_answer.filter(|a| a.answers(l)).map(|a| a.overwrite);
                 let name = l.path.file_name().unwrap_or_default().to_string_lossy();
                 let text = format!("{name} was edited outside Tessalith");
                 if let Some(o) = overwrite_row(ui, &text, answer) {
@@ -877,8 +880,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             );
         }
         2 => {
-            if asks.is_empty() {
+            if asks.is_empty() && nif_skipped.is_empty() {
                 ui.weak("None that block the export");
+            }
+            for r in &nif_skipped {
+                let why = r.blocked.as_deref().unwrap_or_default();
+                let t = format!("NIF edit skipped: {why}");
+                ui.add(egui::Label::new(egui::RichText::new(&t).color(AMBER)).truncate())
+                    .on_hover_text(format!("{}: {t}", r.path));
             }
             let mut set = None;
             for a in &asks {

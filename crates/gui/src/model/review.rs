@@ -69,6 +69,8 @@ pub struct JsonLine {
     pub kind: JsonKind,
     pub path: PathBuf,
     pub state: DiskState,
+    /// Note FC5: the file's hash now, for an edited PGPatcher JSON only (what an answer is tied to).
+    pub sha: Option<String>,
 }
 
 /// Keep or overwrite the edited PGPatcher JSON at `path`, for the file whose hash was `sha` when answered: a file
@@ -78,6 +80,13 @@ pub struct JsonAnswer {
     pub path: PathBuf,
     pub sha: Option<String>,
     pub overwrite: bool,
+}
+
+impl JsonAnswer {
+    /// Note FC5: this answer is for `l` as it is on disk now; a file changed since the answer is asked again.
+    pub fn answers(&self, l: &JsonLine) -> bool {
+        self.path == l.path && self.sha == l.sha
+    }
 }
 
 /// What is at `path` against the hash recorded for Tessalith's last write there.
@@ -139,10 +148,14 @@ impl AppModel {
         // K13: vanilla (and a project without a PBR set) writes no PGPatcher JSON.
         if let Some(p) = pbr_export::prepare(self).filter(|p| !p.entries.is_empty()) {
             let state = disk_state(&p.path, self.pgp_record(&p.root, &p.path).as_deref());
+            let sha = (state == DiskState::Edited)
+                .then(|| sha256_of(&p.path))
+                .flatten();
             lines.push(JsonLine {
                 kind: JsonKind::PgPatcher,
                 path: p.path,
                 state,
+                sha,
             });
         }
         let doc = self.sets_doc.as_ref();
@@ -152,7 +165,12 @@ impl AppModel {
             for rel in rels {
                 let path = root.join(rel);
                 let state = disk_state(&path, shas.get(&record_key(&path)).map(String::as_str));
-                lines.push(JsonLine { kind, path, state });
+                lines.push(JsonLine {
+                    kind,
+                    path,
+                    state,
+                    sha: None,
+                });
             }
         };
         if let (Some(p), Some(d)) = (cs_pbr_export::prepare(self), doc) {
@@ -177,6 +195,8 @@ impl AppModel {
             return;
         };
         let sha = sha256_of(&p.path);
+        // The next frame's lines hash the file again, so the answer matches the line it was given for.
+        self.review_json_cache.take();
         if let Some(r) = self.review.as_mut() {
             r.json_answer = Some(JsonAnswer {
                 path: p.path,
@@ -371,10 +391,13 @@ impl AppModel {
                 |n| n.to_string_lossy().into_owned(),
             )
         };
+        // shortcut: the header asks this every frame (export_is_clean), so `review_json` rereads the JSON files once a
+        // second through its 1 s cache, even with no PGPatcher JSON edited (knowing that needs the same read); add a
+        // cheap "any PBR set" check or an mtime key if a large CS PBR or CM set list makes that read show in a profile.
         let json = self.review_json().into_iter().filter(|l| {
             l.kind == JsonKind::PgPatcher
                 && l.state == DiskState::Edited
-                && !answered.is_some_and(|a| a.path == l.path)
+                && !answered.is_some_and(|a| a.answers(l))
         });
         let nifs = self
             .nif_rows

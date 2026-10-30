@@ -131,11 +131,15 @@ fn review_lists_nif_edits_and_a_blocked_one_is_a_warning() {
         },
     ];
     let m = reviewing(d.path(), rows);
+    let asks = sdc_gui::model::pbr_export::export_asks(&m).len();
     let mut h = harness(m);
     h.run();
-    h.get_by_label("NIF edits (3)");
+    // The blocked one is a warning: listed and counted under Warnings, not in the NIF edits group.
+    h.get_by_label("NIF edits (2)");
     h.get_by_label_contains(r"meshes\a.nif · My Mod · 3 unused blocks removed · written to ");
     h.get_by_label("NIF edit skipped: conflicts are open");
+    h.get_by_label(&format!("Warnings ({})", asks + 1));
+    // A warning never blocks: answering the foreign one is all the gate waits for.
     // The foreign one is a Blockers question with Review's two radios, neither picked.
     h.get_by_label(r"meshes\c.nif was not written by Tessalith");
     h.get_by_label_contains("Blockers (1)");
@@ -145,4 +149,31 @@ fn review_lists_nif_edits_and_a_blocked_one_is_a_warning() {
         h.state().nif_answer_request,
         Some((r"meshes\c.nif".to_string(), GuardChoice::Overwrite, [1; 32]))
     );
+    let rows = h.state().nif_review_rows().to_vec();
+    let answered = rows
+        .into_iter()
+        .map(|r| NifReviewRow {
+            answer: r.foreign.map(|_| GuardChoice::Overwrite),
+            ..r
+        })
+        .collect();
+    h.state_mut().set_nif_review_rows(answered);
+    assert!(
+        h.state().review_gate().is_ok(),
+        "{:?}",
+        h.state().review_gate()
+    );
+}
+
+#[test]
+fn a_review_request_opens_review_on_the_next_poll() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert!(m.wait_idle(WAIT));
+    m.set_nif_review_rows(vec![row(r"meshes\x.nif")]);
+    assert!(m.review.is_none());
+    m.open_review_request = true;
+    m.poll();
+    assert!(m.review.is_some(), "the NIF footer's Review… opens Review");
+    assert!(!m.open_review_request, "consumed");
 }

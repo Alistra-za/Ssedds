@@ -511,27 +511,26 @@ fn a_pre_answer_keep_keeps_the_file_with_a_note() {
     );
 }
 
-/// C4 safety net: the answer was for the file as it was; a later edit is kept with a note (Note FC5: nothing asks
-/// after the export).
+/// C4: the answer was for the file as it was; an edit before Export is asked again and nothing is written (Note FC5;
+/// an edit during the export is kept with a note: `model::tests::a_json_edited_during_the_export_is_kept_…`).
 #[test]
-fn a_json_changed_after_the_answer_is_kept_with_a_note() {
+fn a_json_changed_after_the_answer_is_not_overwritten() {
     let d = tempfile::tempdir().unwrap();
     let (mut m, p) = reviewing_an_edited_json(d.path());
     m.answer_review_json(true);
     std::fs::write(&p, "{ \"edited\": 2 }\n").unwrap();
-    exported_from_review(&mut m);
+    m.export_from_review();
+    idle(&mut m);
+    assert!(
+        m.status_line
+            .starts_with("Export not started: Answer Keep or Overwrite"),
+        "{}",
+        m.status_line
+    );
     assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&p)
         .unwrap()
         .contains("\"edited\": 2"));
-    assert!(
-        m.export
-            .notes
-            .iter()
-            .any(|n| n.starts_with("PGPatcher JSON not written")),
-        "{:?}",
-        m.export.notes
-    );
 }
 
 /// Review Focus 2.
@@ -585,6 +584,26 @@ fn export_waits_for_the_json_answer() {
     exported_from_review(&mut m);
     assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+}
+
+/// Note FC5: the answer is for the bytes it was given on; a file changed after it is asked again before the export.
+#[test]
+fn a_json_changed_after_the_answer_is_asked_again() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, p) = clean_pbr_with_edited_json(d.path());
+    m.export_clicked();
+    m.answer_review_json(true);
+    assert!(m.review_gate().is_ok(), "{:?}", m.review_gate());
+    std::fs::write(&p, "{\"edited\": \"again\"}").unwrap();
+    // Past `review_json`'s 1 s cache, as the next refresh while Review is open.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let name = p.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(
+        m.review_gate(),
+        Err(format!("Answer Keep or Overwrite for {name}"))
+    );
+    m.answer_review_json(true);
+    assert!(m.review_gate().is_ok(), "answered again for the new bytes");
 }
 
 /// C2 with a PBR set: Tessalith's own JSON reads as Ours, so the second export starts without Review or a question.

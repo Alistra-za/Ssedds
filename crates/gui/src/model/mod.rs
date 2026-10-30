@@ -1293,6 +1293,11 @@ impl AppModel {
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        // Note FC5 (GD2): the NIF footer's `Review…` only sets the flag; the next poll opens Review.
+        if std::mem::take(&mut self.open_review_request) {
+            self.open_review();
+            changed = true;
+        }
         self.scan_stamp = cs_pbr::stamp(self.scan_db.as_deref());
         self.uv_poll();
         self.cs_pbr.new_frame();

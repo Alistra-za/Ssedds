@@ -405,7 +405,6 @@ fn has_set(m: &AppModel, id: &str) -> bool {
 /// the set back.
 #[test]
 fn delete_set_has_no_dialog_and_undoes() {
-    use sdc_gui::model::messages::ToastAction;
     let d = tempfile::tempdir().unwrap();
     let (m, id) = with_a_created_set(d.path());
     let before = m.history.undo.len();
@@ -415,14 +414,26 @@ fn delete_set_has_no_dialog_and_undoes() {
         .unwrap()
         .members
         .len();
-    let mut h = harness(m);
+    // The toasts are drawn by `app.rs` after `ui::draw`; this harness draws both, as a frame does.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1500.0, 900.0))
+        .with_step_dt(0.05)
+        .build_ui_state(
+            |ui, m: &mut AppModel| {
+                sdc_gui::ui::draw(ui, m);
+                sdc_gui::ui::messages::draw(ui.ctx(), m);
+            },
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
     pill(&h, &id).click_secondary();
     h.run();
     h.get_by_label("Delete set").click();
-    h.run();
+    // `step`, not `run`: the toast keeps asking for frames while it shows.
+    h.step();
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
-    h.run();
+    h.step();
     assert!(h.state().dialog.is_none());
     assert!(
         h.query_by_label_contains("Its textures stay").is_none(),
@@ -431,19 +442,14 @@ fn delete_set_has_no_dialog_and_undoes() {
     assert!(!has_set(h.state(), &id));
     assert_eq!(h.state().history.undo.len(), before + 1);
     let s = if members == 1 { "" } else { "s" };
-    // The toast (drawn by `app.rs`, so read off the model) carries the Undo.
-    let toast = h
-        .state()
-        .messages
-        .toasts()
-        .iter()
-        .find(|t| t.text == format!("Deleted set {id} ({members} member{s})"))
-        .cloned()
-        .expect("the toast");
-    let Some(ToastAction::UndoDeleteSet(depth, pushes)) = toast.action else {
-        panic!("{:?}", toast.action)
-    };
-    h.state_mut().undo_delete_set(depth, pushes);
+    for _ in 0..6 {
+        h.step();
+    }
+    h.get_by_label(&format!("Deleted set {id} ({members} member{s})"));
+    h.get_by_label("Undo the deleted set").click();
+    for _ in 0..3 {
+        h.step();
+    }
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
     assert!(has_set(h.state(), &id), "the toast's Undo brings it back");
     assert_eq!(h.state().history.undo.len(), before);
@@ -570,7 +576,7 @@ fn painted_rects(h: &Harness<'static, AppModel>) -> Vec<egui::epaint::RectShape>
 }
 
 /// The dialog's button `label`: the lowest match on screen (the header has a Save of its own).
-fn dialog_button(h: &Harness<'static, AppModel>, label: &str) -> egui::Rect {
+fn dialog_button<S>(h: &Harness<'static, S>, label: &str) -> egui::Rect {
     h.query_all_by_label(label)
         .map(|n| n.rect())
         .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
@@ -864,12 +870,18 @@ fn enter_right_after_typing_in_find_applies_the_rename() {
 }
 
 /// Note FC5 (supersedes CZ4's "other Destructive buttons unchanged"): Enter or Space on a focused Destructive button
-/// in any `dialogs::dialog` does nothing; a click still does. One row per dialog with a Destructive button.
+/// in any `dialogs::dialog` does nothing; a click still does. One row per dialog with a Destructive button (the
+/// `Role::Destructive` uses in `ui/`): Reload, Changed on disk, Reset all, Delete generated file, Export running,
+/// Close / Open unsaved, the sets column's Replace and the presets Discard. The Meshes view's NIF guard dialog
+/// (Overwrite) is pinned in `nif_edit::enter_or_space_on_focused_export_or_overwrite_writes_nothing`.
 #[test]
 fn focused_destructive_buttons_ignore_enter_and_space() {
+    use sdc_gui::model::sets::DropChoice;
     use sdc_gui::model::AfterExport;
+    use sdc_gui::ui::sets_column::Pending;
+    use sdc_gui::ui::State;
     // Focus the dialog's `label` button, press `key`, and give it two frames.
-    fn press_on(h: &mut Harness<'static, AppModel>, label: &str, key: Key) {
+    fn press_on<S>(h: &mut Harness<'static, S>, label: &str, key: Key) {
         h.run();
         h.run();
         let r = dialog_button(h, label);
@@ -955,6 +967,58 @@ fn focused_destructive_buttons_ignore_enter_and_space() {
         press_on(&mut h, "Don't save", key);
         assert_eq!(h.state().root, root, "OpenUnsaved {key:?}: nothing opened");
         assert!(h.state().is_dirty(), "OpenUnsaved {key:?}: edits kept");
+        // Sets column Replace: the slot keeps its texture and the question stays.
+        let d = tempfile::tempdir().unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1500.0, 900.0))
+            .build_ui_state(
+                |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+                (opened(d.path()), State::default()),
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        let steps = h.state().0.history.undo.len();
+        let replace = Pending::Replace {
+            item: "landscape/leaf.png".into(),
+            set: "s".into(),
+            existing: "landscape/rock01".into(),
+            choice: DropChoice::Move,
+        };
+        h.state_mut().1.drops.pending = Some(replace.clone());
+        h.run();
+        h.run();
+        let label = h
+            .query_all_by_label_contains("Replace ")
+            .filter_map(|n| n.accesskit_node().label())
+            .next_back()
+            .expect("the Replace button");
+        press_on(&mut h, &label, key);
+        assert_eq!(h.state().0.history.undo.len(), steps, "Replace {key:?}");
+        assert_eq!(h.state().1.drops.pending, Some(replace), "Replace {key:?}");
+        // Presets Discard: the edits stay.
+        let p = tempfile::tempdir().unwrap();
+        let mut m =
+            sdc_gui::model::AppModel::placeholder(sdc_gui::settings::GuiSettings::default());
+        m.user_presets = Some(p.path().to_path_buf());
+        m.open_presets();
+        m.presets_model().select("cs-quality");
+        m.presets_model().duplicate();
+        m.presets_model().set_id("edited");
+        m.presets_model().set_field(
+            engine::config::Subtype::Diffuse,
+            "resize",
+            serde_json::json!("half"),
+        );
+        let mut h = harness(m);
+        h.run();
+        h.get_by_label("New").click();
+        h.run();
+        h.get_by_label("Discard unsaved changes to edited?");
+        press_on(&mut h, "Discard", key);
+        assert_eq!(
+            h.state_mut().presets_model().id(),
+            "edited",
+            "presets Discard {key:?}: edits kept"
+        );
     }
     // A pointer click still works.
     let d = tempfile::tempdir().unwrap();
