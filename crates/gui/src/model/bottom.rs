@@ -419,6 +419,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             let at = At::Texture(i.key.clone());
             // FC7 (CN3): a `_curves`/cavity map no recipe reads is Also export's input, not a mistake: an Info row
             // with no button (the generic PACK-UNUSED-INPUT sentence says to remove it).
+            // shortcut: matched on the shared `ALSO_ONLY` text; give the warning a reason flag if a second row needs one.
             if w.code == Code::PackUnusedInput && w.message.contains(engine::pack::ALSO_ONLY) {
                 let text = "Read only by Also export; not written on its own".to_string();
                 out.push(row(Level::Info, at, text, None));

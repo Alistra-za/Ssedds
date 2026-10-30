@@ -63,7 +63,7 @@ A file with an error from validation is still written. It is reported as `ok ...
 
 ### Cube checks
 
-`sdc inspect` lists these as header issues, and `sdc validate` reports them as `VAL-HEADER` warnings that fail the file:
+`sdc inspect` lists these as header issues, and `sdc validate` reports them as `VAL-HEADER` warnings. The first three fail the file; *Cube expected* is a warning that passes in 1.x unless you give `--strict-cubemaps`:
 
 | Check | Rule |
 |---|---|
@@ -72,7 +72,7 @@ A file with an error from validation is still written. It is reported as `ok ...
 | Format | A cube is UNORM, never an `_SRGB` format. |
 | Cube expected | A file named `_e`, or under `textures\cubemaps\` (a `textures` folder directly followed by `cubemaps`), is a cube DDS, not a 2D one. |
 
-The messages are quoted word for word under [Cubemaps](Cubemaps.md#checks). The last check changes the verdict for 2D files: a 2D `_e` or `cubemaps\` file now fails. Every other 2D file is judged as before. A cube is judged on all six faces, and each message names the face and mip. See [Cubemaps](Cubemaps.md).
+The messages are quoted word for word under [Cubemaps](Cubemaps.md#checks). The last check keeps the verdict for 2D files: a 2D `_e` or `cubemaps\` file gets the warning and still passes, and `--strict-cubemaps` makes it fail (the default flips only in 2.0). Every other 2D file is judged as before. A cube is judged on all six faces, and each message names the face and mip. See [Cubemaps](Cubemaps.md).
 
 ### The BC1 decoder model
 

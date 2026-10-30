@@ -258,7 +258,7 @@ Every warning has a code and a severity:
 
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
-| `VAL-HEADER` | error | The written header fails the header rules. On `sdc validate`, also a cube with no mips, a 1×1 cube with a non-black +Y, a cube in an sRGB format, or a 2D file named `_e` or under `textures\cubemaps\` (warnings that fail the file; see [Validation and output](Validation-and-Output.md#cube-checks)). | Report it as a bug, or fix the cube. |
+| `VAL-HEADER` | error | The written header fails the header rules. On `sdc validate`, also a cube with no mips, a 1×1 cube with a non-black +Y, a cube in an sRGB format, or a 2D file named `_e` or under `textures\cubemaps\` (the cube ones fail the file; the 2D one is a warning that passes unless `--strict-cubemaps` is given; see [Validation and output](Validation-and-Output.md#cube-checks)). | Report it as a bug, or fix the cube. |
 | `VAL-MIP-ERROR` | warning | A mip's PSNR is below `validation.min_mip_psnr_db`. | Check the source, raise the effort, or accept. |
 | `VAL-ALPHA-GUARANTEE` | error | Decoded opaque alpha is below the encoder's guarantee. | Report it as a bug. |
 | `VAL-COVERAGE` | warning | Cutout coverage drifted more than 2 points on a mip. | Adjust the threshold. |

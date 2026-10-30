@@ -598,8 +598,11 @@ impl RecodeCause {
 /// version that moved, a changed profile hash in a record an older engine wrote, and outputs with no record in a
 /// manifest this engine has not written to yet. A source edit is not a cause. No manifest gives `FirstExport`.
 pub fn recode_causes(recorded: &Manifest, plan: &crate::api::Plan) -> Vec<RecodeCause> {
-    // A reader: `read`, never `load`'s compaction. An unreadable manifest is `run`'s error to report.
-    let records = recorded.read().unwrap_or_default();
+    // A reader: `read`, never `load`'s compaction. An unreadable manifest says nothing (not "first export"): it is
+    // `run`'s error to report.
+    let Ok(records) = recorded.read() else {
+        return vec![];
+    };
     let root = &plan.request.output_root;
     let ours = records.values().any(|e| e.engine_version == ENGINE_VERSION);
     let mut out: Vec<RecodeCause> = vec![];
@@ -637,7 +640,19 @@ pub fn recode_causes(recorded: &Manifest, plan: &crate::api::Plan) -> Vec<Recode
             }
             Some(_) => continue,
         };
-        match out.iter_mut().find(|c| c.why == why) {
+        // One row per line: encode-version causes group by (sub-type, to), keeping the first `from`.
+        let same = |a: &RecodeWhy| match (a, &why) {
+            (
+                RecodeWhy::EncodeVersion { subtype, to, .. },
+                RecodeWhy::EncodeVersion {
+                    subtype: s2,
+                    to: t2,
+                    ..
+                },
+            ) => subtype == s2 && to == t2,
+            (a, b) => a == b,
+        };
+        match out.iter_mut().find(|c| same(&c.why)) {
             Some(c) => c.count += 1,
             None => out.push(RecodeCause { why, count: 1 }),
         }

@@ -264,7 +264,7 @@ Runs the post-encode checks on DDS files that already exist, including files mad
 | `--json` | off | One JSON object per file on stdout; the human report moves to stderr. |
 | `--bc1-decoder <model>` | `ideal` | Decoder model for BC1/BC3. |
 
-The format and `_SRGB` tag are taken from the file, so third-party files are judged on header and alpha rules rather than on Tessalith's preferred format. A cube DDS is judged as a `cubemap`, and a 2D file whose name ends in `_e` or that sits under `textures\cubemaps\` fails (the game reads it as a cube). See [Validation and output](Validation-and-Output.md#cube-checks). A format Tessalith never writes has only its header checked and is reported as not judged.
+The format and `_SRGB` tag are taken from the file, so third-party files are judged on header and alpha rules rather than on Tessalith's preferred format. A cube DDS is judged as a `cubemap`, and a 2D file whose name ends in `_e` or that sits under `textures\cubemaps\` gets a warning and still passes; `--strict-cubemaps` fails it (the game reads it as a cube). See [Validation and output](Validation-and-Output.md#cube-checks). A format Tessalith never writes has only its header checked and is reported as not judged.
 
 ```text
 ok    C:/out/rock.dds (diffuse, alpha remove)

@@ -138,43 +138,73 @@ fn profile_changed_cause() {
         true
     });
     assert_eq!(causes(d.path(), &p), []);
-    // Written by 1.0.0 (no encode_version, so 1.0.0's): the normals' settings changed.
-    rewrite(d.path(), |_, v| {
+    // Written by an older engine, with each type's current encode version: the normals' settings changed.
+    rewrite(d.path(), |k, v| {
+        let st = if is_normal(k) {
+            Subtype::Normal
+        } else {
+            Subtype::Diffuse
+        };
         v["engine_version"] = "1.0.0".into();
-        v.as_object_mut().unwrap().remove("encode_version");
+        v["encode_version"] = encode_version(st).into();
         true
     });
     let c = causes(d.path(), &p);
-    let want = |st| RecodeCause {
-        why: RecodeWhy::ProfileChanged { subtype: st },
-        count: 2,
+    let want = |count| RecodeCause {
+        why: RecodeWhy::ProfileChanged {
+            subtype: Subtype::Normal,
+        },
+        count,
     };
-    if encode_version(Subtype::Normal) == LEGACY_ENCODE_VERSION {
-        assert_eq!(c, [want(Subtype::Normal)]);
-        assert_eq!(c[0].line(), "2 files re-encode: their settings changed");
-    } else {
-        assert!(
-            c.iter().all(|c| c.why != want(Subtype::Normal).why),
-            "{c:?}"
-        );
-    }
+    assert_eq!(c, [want(2)]);
+    assert_eq!(c[0].line(), "2 files re-encode: their settings changed");
     // Per record: one normal rewritten by this engine (its edit is not listed), the other still 1.0.0's (listed).
     rewrite(d.path(), |k, v| {
         if k.ends_with("a_n.dds") {
             v["engine_version"] = ENGINE_VERSION.into();
-            v["encode_version"] = encode_version(Subtype::Normal).into();
         }
         true
     });
-    if encode_version(Subtype::Normal) == LEGACY_ENCODE_VERSION {
-        assert_eq!(
-            causes(d.path(), &p),
-            [RecodeCause {
-                count: 1,
-                ..want(Subtype::Normal)
-            }]
-        );
-    }
+    assert_eq!(causes(d.path(), &p), [want(1)]);
+}
+
+/// Two records of one type from different older versions are one row (the line names only the new version).
+#[test]
+fn encode_version_causes_group_by_type_and_new_version() {
+    let d = tempfile::tempdir().unwrap();
+    let p = exported(d.path());
+    rewrite(d.path(), |k, v| {
+        v["engine_version"] = "1.0.0".into();
+        v["encode_version"] = if k.ends_with("a_n.dds") {
+            "0.8.0".into()
+        } else if is_normal(k) {
+            "0.9.0".into()
+        } else {
+            encode_version(Subtype::Diffuse).into()
+        };
+        true
+    });
+    let c = causes(d.path(), &p);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].count, 2);
+    assert_eq!(
+        c[0].line(),
+        format!(
+            "2 files re-encode: the normal encoder changed in {}",
+            encode_version(Subtype::Normal)
+        )
+    );
+}
+
+/// A manifest that exists but cannot be read says nothing (not "First export"): the run reports the error.
+#[test]
+fn an_unreadable_manifest_gives_no_cause() {
+    let d = tempfile::tempdir().unwrap();
+    fixture(d.path());
+    let p = plan(d.path());
+    // A folder where the manifest file should be: `read` fails with an I/O error.
+    std::fs::create_dir_all(Manifest::at(&d.path().join("out")).path()).unwrap();
+    assert_eq!(causes(d.path(), &p), []);
 }
 
 #[test]

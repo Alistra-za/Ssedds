@@ -216,6 +216,50 @@ fn convert_says_what_re_encodes_before_the_run() {
         .unwrap();
     assert!(!text(&o).contains("re-encode"), "{}", text(&o));
     assert!(!text(&o).contains("First export"), "{}", text(&o));
+    // A record an older version wrote with another encode version: the line names the type and the new version.
+    let m = out.join("_sdc").join("manifest.jsonl");
+    let mut subtype = None;
+    let lines: Vec<String> = std::fs::read_to_string(&m)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            subtype = Some(
+                serde_json::from_value::<engine::config::Subtype>(v["profile"]["subtype"].clone())
+                    .unwrap(),
+            );
+            v["engine_version"] = "1.0.0".into();
+            v["encode_version"] = "0.9.0".into();
+            v.to_string()
+        })
+        .collect();
+    std::fs::write(&m, lines.join("\n") + "\n").unwrap();
+    let run = |extra: &[&str]| {
+        sdc()
+            .args(["convert", "--accept-suggestions", "high"])
+            .args(extra)
+            .arg(&input)
+            .arg("-o")
+            .arg(&out)
+            .output()
+            .unwrap()
+    };
+    // `skip` ignores the record, so it says nothing (and leaves the record as it is).
+    let o = run(&["--on-existing", "skip"]);
+    assert!(!text(&o).contains("re-encode"), "{}", text(&o));
+    let o = run(&["--on-existing", "if-changed"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let t = text(&o);
+    let line = t
+        .lines()
+        .find(|l| l.starts_with("1 file re-encodes: the "))
+        .unwrap_or_else(|| panic!("{t}"));
+    let to = engine::manifest::encode_version(subtype.unwrap());
+    assert!(
+        line.ends_with(&format!("encoder changed in {to}")),
+        "{line}"
+    );
 }
 
 #[test]
