@@ -413,11 +413,7 @@ fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
         let boxes: [(&mut bool, &str, &str); 6] = [
             (&mut c.range, "Value range", "Value range check"),
             (&mut c.plastic, "Plastic look", "Plastic look check"),
-            (
-                &mut c.low_detail,
-                "Fake resolution",
-                "Fake resolution check",
-            ),
+            (&mut c.low_detail, "Low detail", "Low detail check"),
             (&mut c.green, "Green direction", "Green direction check"),
             (&mut c.parallax, "Parallax", "Parallax check"),
             (&mut c.uv, "UV coverage", "UV coverage check"),
@@ -427,7 +423,7 @@ fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             let v = *on;
             r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, v, name));
         }
-        // K22: without Fake resolution there is nothing to measure. Note FC2: the switch measures; it never holds.
+        // K22: without Low detail (Note FC9: was "Fake resolution") there is nothing to measure. Note FC2: the switch measures; it never holds.
         ui.add_enabled(
             c.low_detail,
             egui::Checkbox::new(
@@ -436,10 +432,10 @@ fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             ),
         )
         .on_hover_text(
-            "Measure mip 0 against mip 1 on every export, up-to-date files too; Review then asks half or full size \
-             for each texture whose mip 0 adds almost nothing (CHK-LOW-DETAIL)",
+            "Measure the full-size level against the next one on every export, up-to-date files too; Review then \
+             asks half or full size for each texture whose full size adds almost nothing (CHK-LOW-DETAIL)",
         )
-        .on_disabled_hover_text("Turn on Fake resolution first");
+        .on_disabled_hover_text("Turn on Low detail first");
         if c != now {
             actions.push(Action::Checks(c));
         }

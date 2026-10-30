@@ -1,5 +1,15 @@
 //! A8: schema keys as readable labels. The key itself stays on hover.
 
+/// Note FC9: a sub-type as the UI names it, from one table; the id stays on hover. The id with spaces unless the
+/// table says otherwise (`skin_rfaos` is `Skin RFAOS`).
+pub fn subtype_name(st: engine::config::Subtype) -> String {
+    use engine::config::Subtype;
+    match st {
+        Subtype::SkinRfaos => "Skin RFAOS".to_string(),
+        _ => st.id().replace('_', " "),
+    }
+}
+
 /// Words kept upper case (compared lower case).
 const INITIALISMS: [&str; 5] = ["ao", "uv", "rgb", "sss", "f0"];
 

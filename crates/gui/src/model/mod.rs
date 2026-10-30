@@ -1693,7 +1693,7 @@ impl AppModel {
         true
     }
 
-    /// Keys of the textures that still need a decision, in list order.
+    /// Keys of the undecided textures, in list order.
     pub fn undecided_keys(&self) -> Vec<String> {
         self.items
             .iter()
@@ -2297,7 +2297,7 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         self.unreadable = view.unreadable;
         self.recode = view.recode;
-        // The count of textures that need a decision is shown (amber) in the Textures column header.
+        // The count of undecided textures is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // The undo note stays through the plan the undo started, and goes with the next one.
         if matches!(self.undo_note_at, Some((_, true))) {

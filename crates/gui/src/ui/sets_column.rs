@@ -406,7 +406,7 @@ fn filter_rows(ui: &mut egui::Ui, model: &mut AppModel) {
         for (on, text, hover) in [
             (
                 &mut f.attention,
-                format!("Needs attention {}", c.attention),
+                format!("Not ready {}", c.attention),
                 "Only sets that are not ready: a problem in the set or one of its textures",
             ),
             (

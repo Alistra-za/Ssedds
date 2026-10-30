@@ -82,12 +82,7 @@ fn an_opened_folder_shows_items_filters_and_the_undecided_count() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    for label in [
-        "leaf.png",
-        "rock01_normal.png",
-        "Needs decision",
-        "Not in a set",
-    ] {
+    for label in ["leaf.png", "rock01_normal.png", "Undecided", "Not in a set"] {
         h.get_by_label_contains(label);
     }
     // The packed output's tile, and the two raw maps' helper rows (Note DY16): each row's name and its "→" target.
@@ -97,7 +92,7 @@ fn an_opened_folder_shows_items_filters_and_the_undecided_count() {
             .count(),
         2
     );
-    h.get_by_label_contains("need a decision");
+    h.get_by_label_contains(" undecided");
     // A set is named by its path under the export folder.
     h.get_by_label("landscape/rock01");
 }
@@ -125,7 +120,8 @@ fn clicking_a_tile_selects_it_and_the_needs_decision_filter_narrows_the_grid() {
         "selection was {:?}",
         h.state().selection
     );
-    h.get_by_label_contains("Needs decision").click();
+    let pill = format!("Undecided {}", h.state().filter_counts().needs_decision);
+    h.get_by_label(&pill).click();
     h.run();
     assert!(h.state().filter.needs_decision);
     h.get_by_label_contains("leaf.png");
@@ -193,8 +189,8 @@ fn selecting_a_texture_shows_its_decisions_and_groups() {
         h.query_all_by_label_contains("IN-GREEN-UNSTATED").count(),
         0
     );
+    h.get_by_label("Undecided");
     for label in [
-        "Needs a decision",
         unstated.as_str(),
         "Colour",
         "Content",
@@ -272,7 +268,7 @@ fn the_opengl_button_on_the_unstated_green_line_writes_an_explicit_value() {
     assert!(h.state().is_dirty());
     // The assumption line and its button are gone; the sub-type question is still open, so the box stays.
     assert!(h.query_by_label("Treat as OpenGL (flip green)").is_none());
-    h.get_by_label_contains("Needs a decision");
+    h.get_by_label("Undecided");
 }
 
 fn green_of(h: &Harness<'static, AppModel>) -> Option<engine::config::GreenConvention> {
@@ -326,7 +322,7 @@ fn an_alpha_button_writes_the_policy_and_the_reset_button_takes_it_back() {
     model.select_item("landscape/leaf.png");
     let mut h = harness(model);
     h.run();
-    h.get_by_label_contains("Needs a decision");
+    h.get_by_label("Undecided");
     // The decision box offers the five meanings as buttons.
     for label in ["Remove", "Blend", "Cutout + Blend", "Data"] {
         assert!(h.query_all_by_label(label).count() >= 1, "{label}");
@@ -352,7 +348,7 @@ fn an_alpha_button_writes_the_policy_and_the_reset_button_takes_it_back() {
         engine::config::AlphaPolicy::Cutout
     );
     assert_eq!(job.provenance["alpha.policy"].to_string(), "project_file");
-    assert!(h.query_by_label_contains("Needs a decision").is_none());
+    assert!(h.query_by_label("Undecided").is_none());
     // The edited field offers a reset.
     // Two fields are edited now (sub-type, then alpha): the second reset is the alpha one.
     assert_eq!(h.query_all_by_label("↺").count(), 2);
@@ -513,11 +509,7 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
         h.get_by_label(label);
     }
     h.get_by_label_contains("converted, ");
-    assert!(
-        h.query_all_by_label_contains("skipped: needs decision")
-            .count()
-            >= 1
-    );
+    assert!(h.query_all_by_label_contains("skipped: undecided").count() >= 1);
     press(&mut h, "Close");
     assert!(!h.state().bottom.open);
     assert!(h.query_by_label("Copy CLI command").is_none());

@@ -87,7 +87,8 @@ pub fn undecided_row(
                     for (heading, members) in offered_groups(model.target) {
                         ui.label(egui::RichText::new(heading).weak());
                         for st in members {
-                            ui.selectable_value(&mut chosen, st, subtype_label(st));
+                            ui.selectable_value(&mut chosen, st, subtype_label(st))
+                                .on_hover_text(st.id());
                         }
                     }
                 })

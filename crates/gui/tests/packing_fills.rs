@@ -463,8 +463,8 @@ fn the_open_dropdown_draws_the_skin_group_after_pbr_and_other_last() {
             .y0
     };
     assert!(y("PBR (Community Shaders)") < y("Advanced skin (Community Shaders)"));
-    assert!(y("Advanced skin (Community Shaders)") < y("skin rfaos"));
-    assert!(y("skin rfaos") < y("Colour maps"));
+    assert!(y("Advanced skin (Community Shaders)") < y("Skin RFAOS"));
+    assert!(y("Skin RFAOS") < y("Colour maps"));
     assert!(y("Other") > y("Grayscale maps"));
     assert!(y("ui sky") > y("Other"));
 }

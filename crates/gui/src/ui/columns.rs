@@ -132,7 +132,7 @@ fn tile_tooltip(item: &TextureItem) -> String {
                 .join(", ")
         )),
         ItemStatus::Skipped(r) => lines.push(r.clone()),
-        ItemStatus::NeedsDecision => lines.push("Needs a decision".to_string()),
+        ItemStatus::NeedsDecision => lines.push("Undecided".to_string()),
         ItemStatus::PackedInto(j) => lines.push(format!("Packed into {j}")),
         ItemStatus::Ready => {}
     }
@@ -265,7 +265,7 @@ struct StatsKey {
     selection_rev: u64,
 }
 
-/// `changed on disk` and `need a decision` stay uncounted here: they are one cheap pass and move without the items revision.
+/// `changed on disk` and `undecided` stay uncounted here: they are one cheap pass and move without the items revision.
 pub fn column_stats(ctx: &egui::Context, model: &AppModel) -> Arc<ColumnStats> {
     let key = StatsKey {
         items: model.items_rev(),
@@ -290,7 +290,7 @@ pub fn column_stats(ctx: &egui::Context, model: &AppModel) -> Arc<ColumnStats> {
 }
 
 pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
-    // Note FB13 (C23): one line however many are selected. The "need a decision" link keeps its place on the right;
+    // Note FB13 (C23): one line however many are selected. The "undecided" link keeps its place on the right;
     // the selection count truncates, with the full text on hover.
     let stats = column_stats(ui.ctx(), model);
     let n = model.undecided();
@@ -306,7 +306,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                 }
             },
             |ui| {
-                let link = egui::RichText::new(format!("{n} need a decision")).color(AMBER);
+                let link = egui::RichText::new(format!("{n} undecided")).color(AMBER);
                 open_undecided = n > 0 && ui.link(link).clicked();
             },
         );
@@ -706,8 +706,8 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
         for (on, text, hover) in [
             (
                 &mut f.needs_decision,
-                format!("Needs decision {}", c.needs_decision),
-                "Only textures that still need a decision from you",
+                format!("Undecided {}", c.needs_decision),
+                "Only undecided textures: the ones that still wait for your answer",
             ),
             (
                 &mut f.warnings,
@@ -952,14 +952,14 @@ pub(super) fn member(
                 ui.visuals().strong_text_color(),
             );
         }
-        // Note AN: PGPatcher keeps the mesh's own texture in this member's slot.
+        // Note AN, FC9 (AN6): PGPatcher keeps the mesh's own texture in this member's slot: a grey padlock, not a status.
         if pgp_locked {
             ui.painter().text(
-                rect.left_top() + egui::vec2(1.0, 0.0),
+                rect.left_top() + egui::vec2(1.0, 1.0),
                 egui::Align2::LEFT_TOP,
-                "✕",
-                egui::FontId::proportional(13.0),
-                RED,
+                "🔒",
+                egui::FontId::proportional(10.0),
+                ui.visuals().weak_text_color(),
             );
         }
     }
@@ -968,7 +968,7 @@ pub(super) fn member(
         hover.push_str(" (slot pinned)");
     }
     if pgp_locked {
-        hover.push_str(" (PGPatcher lock: the mesh's original texture is used)");
+        hover.push_str(" (kept by PGPatcher: the mesh's original texture is used)");
     }
     if let Some(n) = note {
         hover.push('\n');

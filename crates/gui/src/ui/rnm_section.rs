@@ -12,8 +12,6 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// The outline of a normal card whose RNM layers are blended in; blue, so it never reads as the amber warning.
-pub const RNM_OUTLINE: egui::Color32 = egui::Color32::from_rgb(90, 150, 230);
 const THUMB: f32 = 32.0;
 
 /// (item key, field, value); `None` clears the field. Applied after the drawing, as the settings panel does.

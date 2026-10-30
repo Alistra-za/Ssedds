@@ -34,12 +34,9 @@ const LOCK_W: f32 = 12.0;
 const LOCK_H: f32 = 14.0;
 /// BH13: the box's bottom padding, the track the rail and padlock sit on (below the text).
 const LOCK_TRACK: f32 = 4.0;
-const LOCK_BLUE: egui::Color32 = egui::Color32::from_rgb(70, 140, 235);
-const LOCK_HOVER: egui::Color32 = egui::Color32::from_rgb(110, 170, 255);
-const LOCK_ACTIVE: egui::Color32 = egui::Color32::from_rgb(40, 105, 200);
 
 /// A padlock centred on `c`: a filled body under a shackle.
-fn paint_lock(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
+pub(super) fn paint_lock(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
     let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 1.5), egui::vec2(9.0, 6.0));
     let (l, r, top) = (body.left() + 2.0, body.right() - 2.0, body.top() - 3.0);
     let stroke = egui::Stroke::new(1.6, color);
@@ -441,12 +438,14 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             for x in &xs {
                 painter.vline(*x, rail.y_range(), egui::Stroke::new(1.0, weak));
             }
+            // Note FC9: the path lock is a control, not a status, so it takes the one accent (teal), not a blue.
+            let accent = ui.visuals().selection.stroke.color;
             let blue = if hr.dragged() || hr.is_pointer_button_down_on() {
-                LOCK_ACTIVE
+                accent.lerp_to_gamma(egui::Color32::BLACK, 0.3)
             } else if hr.hovered() || rr.hovered() {
-                LOCK_HOVER
+                accent.lerp_to_gamma(egui::Color32::WHITE, 0.3)
             } else {
-                LOCK_BLUE
+                accent
             };
             let hx = xs[lock.min(xs.len() - 1)];
             painter.line_segment(

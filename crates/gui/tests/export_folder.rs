@@ -99,7 +99,7 @@ fn header_export_reads_review_until_clean() {
     let mut m = fresh(d.path());
     m.set_export_folder(d.path().join("out"));
     idle(&mut m);
-    // The fixture has textures that need a decision.
+    // The fixture has textures that are undecided.
     assert!(m.undecided() > 0);
     assert!(
         m.header_export_text().starts_with("Review "),

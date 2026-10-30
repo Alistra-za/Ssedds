@@ -448,7 +448,7 @@ fn the_pills_show_their_counts_and_the_shader_popup_filters() {
         let n = h.get_by_label(t);
         assert!(r.contains_rect(n.rect()), "{t} in the Sets column");
     };
-    pill(&h, &format!("Needs attention {}", c.attention));
+    pill(&h, &format!("Not ready {}", c.attention));
     pill(&h, &format!("Ready {}", c.ready));
     pill(&h, &format!("No JSON {}", c.no_json));
     // rock01's card also says "PBR Landscape": the popup adds one more.

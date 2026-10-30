@@ -172,7 +172,7 @@ fn the_need_a_decision_count_opens_problems_filtered_to_undecided() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    h.get_by_label_contains("need a decision").click();
+    h.get_by_label_contains("undecided").click();
     h.run();
     assert_eq!(h.state().bottom.tab, BottomTab::Problems);
     assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Undecided));

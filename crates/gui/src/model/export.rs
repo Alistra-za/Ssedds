@@ -29,7 +29,7 @@ impl RowState {
             RowState::Done { passed: false } => "validation failed".into(),
             RowState::UpToDate => "up to date".into(),
             RowState::Skipped(SkipKind::Unresolved | SkipKind::Blocked, _) => {
-                "skipped: needs decision".into()
+                "skipped: undecided".into()
             }
             RowState::Skipped(_, reason) => format!("skipped: {reason}"),
             RowState::Failed(e) => format!("failed: {e}"),

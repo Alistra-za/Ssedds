@@ -358,12 +358,7 @@ fn the_filter_pills_show_their_counts() {
     let mut h = app_harness(m);
     h.run();
     h.run();
-    for l in [
-        "Needs decision 2",
-        "Warnings 1",
-        "Failed 1",
-        "Not in a set 6",
-    ] {
+    for l in ["Undecided 2", "Warnings 1", "Failed 1", "Not in a set 6"] {
         h.get_by_label(l);
     }
     // A pill toggles its filter and hides, never deselects.
@@ -469,7 +464,7 @@ fn the_filter_rows_take_at_most_two_lines_at_the_default_width() {
         "default column width {}",
         r.width()
     );
-    let pill = h.get_by_label_contains("Needs decision").rect();
+    let pill = h.get_by_label_contains("Undecided").rect();
     let search = h
         .query_all_by_role(egui::accesskit::Role::TextInput)
         .find(|n| r.contains_rect(n.rect()))

@@ -55,15 +55,28 @@ fn group_open(g: Group, own: &Settings) -> bool {
     if g == Group::Subsurface {
         return subsurface_group_open(own);
     }
-    let f = match g {
+    let Some(f) = group_feature(g) else {
+        return true;
+    };
+    feature_on(own, f) && blocked_by(own, f).is_none()
+}
+
+fn group_feature(g: Group) -> Option<Feature> {
+    Some(match g {
         Group::Emissive => Feature::Emissive,
         Group::Parallax => Feature::Parallax,
         Group::Multilayer => Feature::Multilayer,
         Group::Glint => Feature::Glint,
         Group::Fuzz => Feature::Fuzz,
-        _ => return true,
-    };
-    feature_on(own, f) && blocked_by(own, f).is_none()
+        _ => return None,
+    })
+}
+
+/// Note FC9 (CC9/CC10): a feature that is on but blocked reads `{state}, blocked by {x}` in amber in its header, not
+/// "off". The group stays closed (`group_open`).
+fn blocked_head(f: Feature, s: &Settings, state: &str) -> Option<egui::RichText> {
+    let by = blocked_by(s, f)?;
+    Some(egui::RichText::new(format!("{state}, blocked by {}", feature_name(by))).color(AMBER))
 }
 
 fn group_title(g: Group) -> &'static str {
@@ -204,8 +217,22 @@ pub fn panel_main(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         // C14 (Note FB2): a feature's state shows once, in its own group's header; the Features ticks carry no count.
         let head = match g {
             Group::Material | Group::Features => None,
-            Group::Subsurface => value(sub_text(sub_mode(&c.eff))),
-            _ => value(if on { "on" } else { "off" }),
+            Group::Subsurface => {
+                let mode = sub_mode(&c.eff);
+                if mode == SubMode::Off {
+                    value(sub_text(mode))
+                } else {
+                    blocked_head(Feature::Subsurface, &c.eff, sub_text(mode))
+                        .or_else(|| value(sub_text(mode)))
+                }
+            }
+            _ => match group_feature(g)
+                .filter(|f| feature_on(&c.eff, *f))
+                .and_then(|f| blocked_head(f, &c.eff, "on"))
+            {
+                Some(blocked) => Some(blocked),
+                None => value(if on { "on" } else { "off" }),
+            },
         };
         // K16: the id carries the state, so a group opens when its feature turns on and closes when it turns off.
         super::group::group(

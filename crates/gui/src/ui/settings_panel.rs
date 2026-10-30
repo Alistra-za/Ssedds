@@ -57,7 +57,7 @@ fn opt(v: Value, label: &str) -> (Value, String) {
 }
 
 pub fn subtype_label(st: Subtype) -> String {
-    st.id().replace('_', " ")
+    crate::model::labels::subtype_name(st)
 }
 
 /// The heading of the PBR group in every sub-type dropdown.
@@ -206,7 +206,7 @@ pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Opt
         "resize" => vec![
             opt(json!("none"), "None"),
             opt(json!("pot-down"), "Down to a power of two"),
-            opt(json!("half"), "Half size (larger side above 512)"),
+            opt(json!("half"), "Halve if larger than 512"),
         ],
         "mips.coverage" => vec![
             opt(json!("auto"), "Auto"),
@@ -828,7 +828,7 @@ fn message_of(warnings: &[Warning], code: Code) -> Option<&str> {
         .map(|w| w.message.as_str())
 }
 
-/// The amber "Needs a decision" box: one control per decision, each writing an explicit answer.
+/// The amber "Undecided" box: one control per decision, each writing an explicit answer.
 fn decision_box(
     ui: &mut egui::Ui,
     cx: &Ctx,
@@ -842,7 +842,7 @@ fn decision_box(
         .inner_margin(8.0)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.colored_label(AMBER, egui::RichText::new("Needs a decision").strong());
+            ui.colored_label(AMBER, egui::RichText::new("Undecided").strong());
             for d in decisions {
                 match d {
                     Decision::Subtype { suggested } => {
@@ -933,7 +933,8 @@ fn subtype_decision(
                 for (heading, members) in offered_groups(cx.target) {
                     ui.label(egui::RichText::new(heading).weak());
                     for st in members {
-                        ui.selectable_value(&mut chosen, st, subtype_label(st));
+                        ui.selectable_value(&mut chosen, st, subtype_label(st))
+                            .on_hover_text(st.id());
                     }
                 }
             });

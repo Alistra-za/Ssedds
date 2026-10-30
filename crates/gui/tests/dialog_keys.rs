@@ -481,9 +481,9 @@ fn the_unlabelled_controls_have_hover_text() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
-    h.get_by_label_contains("Needs decision").hover();
+    h.get_by_label_contains("Undecided").hover();
     h.run();
-    h.get_by_label_contains("still need a decision");
+    h.get_by_label_contains("wait for your answer");
 }
 
 /// Trace-debug #10 (review M6): Enter on the Reload question cancels and keeps the edits; only the button reloads.

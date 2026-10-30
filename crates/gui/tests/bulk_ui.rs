@@ -176,7 +176,7 @@ fn two_selected_textures_show_the_bulk_panel_with_mixed_values() {
     h.get_by_label("2 textures selected");
     assert!(h.query_all_by_label("— mixed").count() >= 1);
     // The single panel's heading for the active texture is gone.
-    assert!(h.query_by_label("Needs a decision").is_none());
+    assert!(h.query_by_label("Undecided").is_none());
 }
 
 #[test]

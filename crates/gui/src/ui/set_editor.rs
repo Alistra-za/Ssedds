@@ -1,7 +1,6 @@
 //! The set editor (M3b spec §4): one scrolling column (Note FB2), the name box, the slot rows (layout v2 A2) at full
 //! width, then the Material / Advanced tabs and groups. Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
-use super::rnm_section::RNM_OUTLINE;
 use super::sets_column::{DropState, Pending, SlotNote};
 use super::slot_commands::SlotCmdState;
 use super::status::{code_hover, dot, Status};
@@ -685,7 +684,7 @@ fn row(
             );
         }
         if lock_cross {
-            pgp_lock_cross(ui, shown);
+            pgp_lock_mark(ui, shown, resp.id.with("pgp-lock"));
         }
     }
     if let Some(i) = item.filter(|_| borrowed.is_none()) {
@@ -931,11 +930,12 @@ fn row(
     ui.end_row();
     ui.data_mut(|d| d.insert_temp(row_id, rect));
     // A filled slot the shader cannot use stays at its place, outlined, and says why (F1 spec §5); a normal blending RNM
-    // layers is outlined blue.
+    // layers is outlined in the accent.
     let outline = if !cell.usable {
         Some(AMBER)
     } else if !rnm_layers.is_empty() {
-        Some(RNM_OUTLINE)
+        // Note FC9: the one accent, not a blue of its own.
+        Some(ui.visuals().selection.stroke.color)
     } else {
         None
     };
@@ -950,14 +950,32 @@ fn row(
     [slot_w, THUMB, format_w, flags_w, status_w]
 }
 
-/// Note AN: a PGPatcher-locked slot: a big red ✕ over the thumbnail.
-fn pgp_lock_cross(ui: &egui::Ui, rect: egui::Rect) {
-    let stroke = egui::Stroke::new(6.0, RED);
-    let r = rect.shrink(6.0);
-    ui.painter()
-        .line_segment([r.left_top(), r.right_bottom()], stroke);
-    ui.painter()
-        .line_segment([r.right_top(), r.left_bottom()], stroke);
+/// What the PGPatcher lock reads and is named: the caption under the padlock and its AccessKit name.
+const PGP_LOCK_CAPTION: &str = "kept by PGPatcher";
+
+/// Note FC9 (AN6, supersedes the red ✕): a PGPatcher-locked slot is a grey padlock over a dimmed thumbnail with the
+/// caption `kept by PGPatcher`. It is not an error, so it takes no status colour. The caption is painted (it must not
+/// move the row), so a node of its own carries the name.
+fn pgp_lock_mark(ui: &egui::Ui, rect: egui::Rect, id: egui::Id) {
+    let grey = ui.visuals().weak_text_color();
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color.gamma_multiply(0.7));
+    super::input_name::paint_lock(p, rect.center() - egui::vec2(0.0, 9.0), grey);
+    let font = egui::FontId::proportional(9.0);
+    for (i, line) in ["kept by", "PGPatcher"].into_iter().enumerate() {
+        p.text(
+            rect.center() + egui::vec2(0.0, 1.0 + 10.0 * i as f32),
+            egui::Align2::CENTER_TOP,
+            line,
+            font.clone(),
+            grey,
+        );
+    }
+    ui.ctx().accesskit_node_builder(id, |b| {
+        b.set_role(egui::accesskit::Role::Label);
+        b.set_label(PGP_LOCK_CAPTION);
+        b.set_value(PGP_LOCK_CAPTION);
+    });
 }
 
 /// Note AN: the locked card's one hover: the lock, then (with a scan) the textures the matched meshes have in that slot,

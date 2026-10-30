@@ -90,7 +90,7 @@ fn a_failed_row_and_a_decide_row_say_it_in_words() {
     h.run();
     let words = code_line(Code::DimNpot);
     let failed = format!("Failed: {words}");
-    let decide = format!("Needs a decision: {words}");
+    let decide = format!("Undecided: {words}");
     h.get_by_label(&failed);
     assert!(h.query_all_by_label(&decide).count() >= 1, "{decide}");
     assert_eq!(h.query_all_by_label_contains("DIM-NPOT").count(), 0);

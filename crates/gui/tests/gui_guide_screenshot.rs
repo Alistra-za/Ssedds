@@ -209,9 +209,9 @@ fn gui_guide_screenshot() {
         (4, tl(rect_starting(&h, Role::Button, "Export to"))),
         (5, tl(rect_of(&h, "Save"))),
         (6, tl(rect_of(&h, "Export"))),
-        (7, tl(rect_starting(&h, Role::Button, "Needs decision"))),
+        (7, tl(rect_starting(&h, Role::Button, "Undecided"))),
         (8, tl(tile)),
-        (9, tl(rect_starting(&h, Role::Button, "Needs attention"))),
+        (9, tl(rect_starting(&h, Role::Button, "Not ready"))),
         // The first slot chip of the first set card (a "D" button; the Textures column has none).
         (10, tl(rect_of(&h, "D")) + egui::vec2(-4.0, 0.0)),
         (11, tl(rect_of(&h, "Type"))),

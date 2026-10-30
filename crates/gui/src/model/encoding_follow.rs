@@ -46,7 +46,7 @@ pub fn verdict(
 }
 
 fn type_name(st: Subtype) -> String {
-    st.id().replace('_', " ")
+    super::labels::subtype_name(st)
 }
 
 impl AppModel {

@@ -1,4 +1,4 @@
-//! Status colours (layout v2 A12), one source: red blocks export, amber warns or needs a decision, green is ready.
+//! Status colours (layout v2 A12), one source: red blocks export, amber warns or is undecided, green is ready.
 //! Teal (`visuals.selection`) is the only non-status colour. Checks and Info rows are not a status (Note FC3): their
 //! dot is the weak text colour.
 use eframe::egui;

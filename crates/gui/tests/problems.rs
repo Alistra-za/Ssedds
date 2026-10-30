@@ -77,8 +77,8 @@ fn a_decide_row_has_one_prefix() {
     let d = tempfile::tempdir().unwrap();
     let m = opened(d.path());
     for p in problems(&m).iter().filter(|p| p.level == Level::Decide) {
-        assert!(p.text.starts_with("Needs a decision: "), "{}", p.text);
-        assert_eq!(p.text.matches("Needs a decision").count(), 1, "{}", p.text);
+        assert!(p.text.starts_with("Undecided: "), "{}", p.text);
+        assert_eq!(p.text.matches("Undecided").count(), 1, "{}", p.text);
     }
 }
 

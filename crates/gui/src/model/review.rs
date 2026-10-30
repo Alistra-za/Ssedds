@@ -458,7 +458,7 @@ impl AppModel {
 
     /// Note FC2: the half-size question's rows: each texture the last export flagged (`CHK-LOW-DETAIL`) that the plan
     /// still writes in full. One no longer eligible (resized, already halved, gone) drops out (Review Focus 2). Only
-    /// while Fake resolution and its "Measure whether full size adds anything" switch are on. Cached like
+    /// while Low detail and its "Measure whether full size adds anything" switch are on. Cached like
     /// `export_files`: Review and the header ask every frame.
     pub fn half_size_rows(&self) -> Arc<Vec<HalfSizeRow>> {
         let c = self.settings.checks;

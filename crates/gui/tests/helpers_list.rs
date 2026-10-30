@@ -565,8 +565,8 @@ fn textures_heading_stays_one_line_with_ten_thousand_selected() {
         count.max.x <= panel.max.x,
         "count {count:?} inside {panel:?}"
     );
-    // The "need a decision" link is on that line too.
-    let links: Vec<_> = h.query_all_by_label_contains("need a decision").collect();
+    // The "undecided" link is on that line too.
+    let links: Vec<_> = h.query_all_by_label_contains(" undecided").collect();
     assert!(!links.is_empty(), "the link is drawn");
     for l in links {
         let r = l.rect();
