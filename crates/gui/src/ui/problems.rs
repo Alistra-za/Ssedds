@@ -136,8 +136,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                 ui.label("Project");
                             }
                         }
-                        ui.add(egui::Label::new(&p.text).truncate())
-                            .on_hover_text(&p.text);
+                        // Note FB8: a sentence that names the action; the engine's text and the code are the hover.
+                        ui.add(egui::Label::new(&*p.shown()).truncate())
+                            .on_hover_ui(|ui| {
+                                ui.label(&p.text);
+                                if let Some(c) = p.codes_text() {
+                                    ui.weak(c);
+                                }
+                            });
                         a
                     },
                     |ui| {
@@ -194,9 +200,6 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                 a = Some(Act::Set(key.clone()));
                             }
                             _ => {}
-                        }
-                        if let Some(c) = p.code {
-                            ui.label(egui::RichText::new(c.as_str()).small().weak());
                         }
                         a
                     },

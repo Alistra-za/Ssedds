@@ -745,17 +745,19 @@ fn the_checks_filter_shows_only_check_rows() {
         "{:?}",
         problems(&m)
     );
-    let check = problems(&m)[1].text.clone();
+    // Note FB8: a row shows its code's sentence.
+    let check = problems(&m)[1].shown().to_string();
+    let plain = sdc_gui::model::code_text::code_sentence(Code::ChanNotGray);
     m.open_problems(None);
     let mut h = harness(m);
     h.run();
     let shown = |h: &Harness<'static, AppModel>, t: &str| h.query_all_by_label(t).count();
-    assert_eq!(shown(&h, "a plain warning row"), 1);
+    assert_eq!(shown(&h, plain), 1);
     assert_eq!(shown(&h, &check), 1);
     h.get_by_label("Checks 1").click();
     h.run();
     assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Checks));
-    assert_eq!(shown(&h, "a plain warning row"), 0);
+    assert_eq!(shown(&h, plain), 0);
     assert_eq!(shown(&h, &check), 1);
     assert!(
         h.query_by_label("Checks 1").is_none(),
@@ -764,7 +766,7 @@ fn the_checks_filter_shows_only_check_rows() {
     h.get_by_label("Checks only ×").click();
     h.run();
     assert_eq!(h.state().bottom.filter, None);
-    assert_eq!(shown(&h, "a plain warning row"), 1);
+    assert_eq!(shown(&h, plain), 1);
     assert_eq!(shown(&h, &check), 1);
     // With no check rows there is no Checks button.
     h.state_mut().set_checks(sdc_gui::settings::ChecksSettings {

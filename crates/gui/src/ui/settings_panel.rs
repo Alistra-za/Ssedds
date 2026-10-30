@@ -1,6 +1,7 @@
 //! The centre panel for a selected texture (M3a spec §2.4): the decisions it still needs, then its settings by group,
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
+use crate::model::code_text::code_line;
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
     field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
@@ -121,6 +122,22 @@ pub fn alpha_options() -> Options {
         (json!(AlphaPolicy::CutoutBlend), "Cutout + Blend".into()),
         (json!(AlphaPolicy::Data), "Data".into()),
     ]
+}
+
+/// One line on what an alpha meaning does (Note FB8, review C12): the hover of every place that offers one. Problems'
+/// Decide… menu and Review's buttons use it, and the question box in a texture's settings.
+pub fn alpha_hint(policy: AlphaPolicy) -> &'static str {
+    match policy {
+        AlphaPolicy::Remove => "Drops the alpha channel: the texture is fully solid",
+        AlphaPolicy::Cutout => {
+            "Alpha cuts holes: pixels over the threshold stay solid, the rest vanish (leaves, fences)"
+        }
+        AlphaPolicy::Blend => "Alpha fades smoothly: soft see-through edges (glass, hair)",
+        AlphaPolicy::CutoutBlend => "Alpha cuts holes and also fades the edges",
+        AlphaPolicy::Data => {
+            "The alpha is kept as data (a mask or a height): it is written as it is, not as see-through"
+        }
+    }
 }
 
 fn capitalised(s: &str) -> String {
@@ -791,7 +808,7 @@ fn decision_box(
                                 .into_iter()
                                 .filter_map(|(v, l)| Some((serde_json::from_value(v).ok()?, l)))
                             {
-                                if ui.button(label).clicked() {
+                                if ui.button(label).on_hover_text(alpha_hint(policy)).clicked() {
                                     actions.push(Action::Decide(Answer::Alpha(policy)));
                                 }
                             }
@@ -818,7 +835,9 @@ fn decision_box(
                         });
                     }
                     Decision::Acknowledge(code) => {
-                        ui.label(egui::RichText::new(code.as_str()).strong());
+                        // Note FB8: the sentence, with the code on its hover.
+                        ui.label(egui::RichText::new(code_line(*code)).strong())
+                            .on_hover_text(code.as_str());
                         if let Some(m) = message_of(warnings, *code) {
                             ui.label(m);
                         }
@@ -886,15 +905,24 @@ fn channels(ui: &mut egui::Ui, job: &ResolvedJob) {
     ui.add_space(6.0);
 }
 
+/// A failed texture's line (Note FB8: the sentences, not the codes; the codes are the label's hover).
 fn error_text(codes: &[Code]) -> String {
     format!(
         "Error: {}",
         codes
             .iter()
-            .map(|c| c.as_str())
+            .map(|c| code_line(*c))
             .collect::<Vec<_>>()
-            .join(", ")
+            .join("; ")
     )
+}
+
+fn error_codes(codes: &[Code]) -> String {
+    codes
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Warnings the decision box does not already show.
@@ -1134,7 +1162,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 ItemStatus::Skipped(r) => ui.label(format!("Skipped: {r}")),
                 ItemStatus::Failed(e) => ui.label(format!("Failed: {e}")),
                 ItemStatus::PackedInto(j) => ui.label(format!("This map is packed into {j}.")),
-                ItemStatus::Error(c) => ui.label(error_text(c)),
+                ItemStatus::Error(c) => ui.label(error_text(c)).on_hover_text(error_codes(c)),
                 ItemStatus::NeedsDecision | ItemStatus::Ready => ui.label(""),
             };
             if kind == ItemKind::Dds {
@@ -1174,7 +1202,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     ui.label(format!("Skipped: {r}"));
                 }
                 ItemStatus::Error(c) => {
-                    ui.colored_label(RED, error_text(c));
+                    ui.colored_label(RED, error_text(c))
+                        .on_hover_text(error_codes(c));
                 }
                 _ => {}
             }

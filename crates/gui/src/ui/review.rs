@@ -1,8 +1,9 @@
 //! The Review tab (layout v2 B2, C2, C5; R1–R4, R11): blockers, undecided textures and pitfalls side by side, what
 //! the export writes, and one Export button. Not a dialog: Enter does nothing here (N3).
-use super::settings_panel::{alpha_options, offered_groups, subtype_label};
+use super::settings_panel::{alpha_hint, alpha_options, offered_groups, subtype_label};
 use super::status::{AMBER, RED};
 use crate::model::bottom::{problems, Level};
+use crate::model::code_text::code_line;
 use crate::model::items::Decision;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::review::{DiskState, JsonKind, JsonLine, NO_EXPORT_FOLDER};
@@ -89,13 +90,15 @@ pub fn undecided_row(
                         let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
                             continue;
                         };
-                        if ui.button(label).on_disabled_hover_text(why).clicked() {
+                        let b = ui.button(label).on_hover_text(alpha_hint(policy));
+                        if b.on_disabled_hover_text(why).clicked() {
                             pick = Some(RowPick::Answer(key.to_string(), Answer::Alpha(policy)));
                         }
                     }
                 }
                 Decision::Acknowledge(code) => {
-                    ui.label(code.as_str());
+                    // Note FB8: the sentence, with the code on its hover.
+                    ui.label(code_line(*code)).on_hover_text(code.as_str());
                     if ui
                         .button("Acknowledge for this texture")
                         .on_disabled_hover_text(why)
@@ -162,7 +165,7 @@ pub fn fix_buttons(
                             let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
                                 continue;
                             };
-                            if ui.button(label).clicked() {
+                            if ui.button(label).on_hover_text(alpha_hint(policy)).clicked() {
                                 let a = Answer::Alpha(policy);
                                 pick = Some(RowPick::Answer(key.to_string(), a));
                                 ui.close();

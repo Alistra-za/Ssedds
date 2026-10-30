@@ -5,6 +5,7 @@ pub mod bottom;
 pub mod bulk;
 pub mod checks;
 pub mod cm_json;
+pub mod code_text;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
 pub mod cube_cross;
@@ -453,6 +454,8 @@ pub struct AppModel {
     /// until dismissed.
     pub kept_banner: Option<String>,
     pub banner: Option<String>,
+    /// The lines of the last banner, so a rebuild logs only a line that is new (Note FB8).
+    banner_logged: Vec<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
     /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
@@ -692,6 +695,7 @@ impl AppModel {
             dropped_fills: Default::default(),
             kept_banner: None,
             banner: None,
+            banner_logged: vec![],
             encoding_note: None,
             dialog: None,
             marker: Default::default(),
@@ -3460,11 +3464,19 @@ impl AppModel {
             let held = self.held_recovery.contains(s.path());
             lines.extend(crate::crash_log::recovery_note(s.path(), &s.text(), held));
         }
+        // Note FB8: a line that names a code goes to the log as the engine wrote it, once per appearance; the banner
+        // itself carries the words only.
+        for l in lines.iter().filter(|l| !self.banner_logged.contains(l)) {
+            if code_text::without_codes(l) != *l {
+                self.messages.log(messages::Severity::Warning, l.clone());
+            }
+        }
         self.banner = if lines.is_empty() {
             None
         } else {
-            Some(lines.join("\n"))
+            Some(code_text::without_codes(&lines.join("\n")))
         };
+        self.banner_logged = lines;
     }
 
     /// Reload both documents from disk (the banner's Reload), then plan once.
