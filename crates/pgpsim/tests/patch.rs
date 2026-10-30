@@ -421,6 +421,54 @@ fn wrong_typed_patch_key_is_ignored() {
     assert_eq!(m.slots[6].raw, "");
 }
 
+/// GE5: a non-string match key still throws in 2.x and stops the whole run (R4; measured T1a, T1b), before the
+/// texture check; `coat_color` as an object of 3+ keys throws while a multilayer entry is applied (measured T6).
+#[test]
+fn wrong_typed_match_key_is_an_error() {
+    let err = |k: &str, t: &str| {
+        SimResult::Error(format!(
+            "PGPatcher 2.3 crashes on this JSON: {k} is not a {t}"
+        ))
+    };
+    let none = |_: &str| false;
+    for (e, k) in [
+        (with(json!({"nif_filter": 5})), "nif_filter"),
+        (with(json!({"path_contains": 5})), "path_contains"),
+        (with(json!({"rename": ["x"]})), "rename"),
+        (with(json!({"match3": 1})), "match3"),
+        (
+            json!({"texture": 5, "path_contains": "landscape"}),
+            "texture",
+        ),
+        (
+            json!({"match_normal": true, "match_diffuse": "rock01_d"}),
+            "match_normal",
+        ),
+    ] {
+        assert_eq!(
+            sim_with(&e, &sdc_default(), &rock(), &none),
+            err(k, "string"),
+            "{e}"
+        );
+    }
+    let coat = with(json!({"multilayer": true, "coat_color": {"r": 1, "g": 1, "b": 1}}));
+    assert_eq!(
+        sim(&coat, &sdc_default(), &rock()),
+        err("coat_color", "array")
+    );
+    // An apply-time throw: a file rejected by the texture check never reaches it.
+    assert!(matches!(
+        sim_with(&coat, &sdc_default(), &rock(), &none),
+        SimResult::Skip(_)
+    ));
+    for e in [
+        with(json!({"multilayer": true, "coat_color": {"r": 1, "g": 1}})),
+        with(json!({"coat_color": {"r": 1, "g": 1, "b": 1}})),
+    ] {
+        patched(sim(&e, &sdc_default(), &rock()));
+    }
+}
+
 /// GE4: `fuzz.color` must be exactly three numbers, else (0, 0, 0) [Src 2.2.0 TP:1201-1206; measured T10].
 #[test]
 fn fuzz_color_with_four_numbers_is_black() {

@@ -51,7 +51,13 @@ pub enum SimResult {
     },
     /// PGPatcher would skip this shape for this file; the shape keeps `source`.
     Skip(String),
+    /// PGPatcher 2.3 throws on this file and stops the whole run (`CRASHES: <key> is not a <type>`); the shape
+    /// keeps `source` (Note GE5).
+    Error(String),
 }
+
+/// The start of every `SimResult::Error` text (owner ruling R4, Note GE5).
+pub const CRASHES: &str = "PGPatcher 2.3 crashes on this JSON";
 
 /// One entry (sdc's case): prepare, match (with `nif_filter`), then patch.
 pub fn simulate(i: &SimInput) -> SimResult {

@@ -1449,7 +1449,9 @@ pub fn simulate_shapes(
                     },
                     material,
                 ),
-                SimResult::Skip(why) => (Outcome::Skip(why), source.clone()),
+                SimResult::Skip(why) | SimResult::Error(why) => {
+                    (Outcome::Skip(why), source.clone())
+                }
                 SimResult::NoMatch => (Outcome::NoMatch, source.clone()),
             };
             ShapeRow {

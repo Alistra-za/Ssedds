@@ -1,6 +1,6 @@
 //! The patch itself, `applyOnePatch` + `enableTruePBROnShape` [Src 1.2.0 TP:662-1142; 01 §2.1-§2.3], on a
 //! `MaterialState`, plus the per-file checks of 01 §1.4.
-use crate::check::{check_types, uint_in};
+use crate::check::{coat_error, match_key_error, uint_in};
 use crate::json::{flag, get_bool, get_num, rgb, GLINT_KEYS};
 use crate::matching::pg_slots;
 use crate::slots::{apply_slots, first_missing};
@@ -296,10 +296,9 @@ pub(crate) fn run(
         return SimResult::NoMatch;
     }
     // 2.x canApply is always true [Src 2.2.0 TP:302-307]: SLSF1.21 shapes are patched (and the bit cleared).
-    for (e, _) in matches {
-        if let Err(msg) = check_types(e) {
-            return SimResult::Skip(msg);
-        }
+    // A non-string match key throws at load or in `shouldApply`, before any texture check (Note GE5).
+    if let Some(msg) = matches.iter().find_map(|(e, _)| match_key_error(e)) {
+        return SimResult::Error(msg);
     }
     let mut sim = Sim::new(source);
     // 01 §1.4: the slot pass of all entries, then every non-empty slot must exist; `delete` skips the check.
@@ -315,6 +314,10 @@ pub(crate) fn run(
     let mut matched_path = String::new();
     for (e, mp) in matches {
         matched_path.clone_from(mp);
+        // An apply-time throw; a `delete` entry returns before `coat_color` is read.
+        if let Some(msg) = coat_error(e).filter(|_| !flag(e, "delete")) {
+            return SimResult::Error(msg);
+        }
         if sim.apply_one(e, mp) {
             break;
         }

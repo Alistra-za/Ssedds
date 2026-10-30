@@ -1,7 +1,7 @@
 //! PGPatcher 2.x reads a patch key only when it has its JSON type and ignores it otherwise [Src 2.2.0 TP:52-57,
 //! 744-1235]; the accessors in `json.rs` do that. The match keys are still read with nlohmann `get<std::string>()`,
 //! which throws [Src 2.2.0 TP:242, 256, 265, 280, 534, 594, 608-609, 618]: those are the only type failures left.
-use crate::json::GLINT_KEYS;
+use crate::json::{flag, GLINT_KEYS};
 use serde_json::{Map, Value};
 
 /// The number keys, for `range_warnings` only.
@@ -40,19 +40,26 @@ const MATCH_KEYS: &[&str] = &[
     "match8",
 ];
 
-fn bad(k: &str, want: &str) -> Result<(), String> {
-    Err(format!(
-        "PGPatcher 1.2.0 would fail on \"{k}\": expected {want}"
-    ))
+fn crashes(k: &str, t: &str) -> String {
+    format!("{}: {k} is not a {t}", crate::CRASHES)
 }
 
-pub(crate) fn check_types(e: &Map<String, Value>) -> Result<(), String> {
-    for k in MATCH_KEYS {
-        if e.get(*k).is_some_and(|v| !v.is_string()) {
-            return bad(k, "a string");
-        }
-    }
-    Ok(())
+/// The first match key that is not a string (a load or `shouldApply` throw).
+pub(crate) fn match_key_error(e: &Map<String, Value>) -> Option<String> {
+    MATCH_KEYS
+        .iter()
+        .find(|k| e.get(**k).is_some_and(|v| !v.is_string()))
+        .map(|k| crashes(k, "string"))
+}
+
+/// A multilayer entry's `coat_color` that is an object of 3+ keys: `size() >= 3` passes, then `[0]` throws
+/// [Src 2.2.0 TP:1108-1110; measured T6].
+pub(crate) fn coat_error(e: &Map<String, Value>) -> Option<String> {
+    let throws = flag(e, "multilayer")
+        && e.get("coat_color")
+            .and_then(Value::as_object)
+            .is_some_and(|o| o.len() >= 3);
+    throws.then(|| crashes("coat_color", "array"))
 }
 
 /// PGPatcher 2.2 `alphaprop_*` whole-number keys and their maxima. Never in `NUM_KEYS`: 2.2 ignores a bad value

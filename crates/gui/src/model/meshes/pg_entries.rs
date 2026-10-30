@@ -135,6 +135,11 @@ pub fn is_warning(note: &str) -> bool {
     note == PG_IGNORED || note.contains(NOT_APPLIED)
 }
 
+/// Lines drawn red (Note GE5): a file PGPatcher 2.3 crashes on.
+pub fn is_error(note: &str) -> bool {
+    note.contains(pgpsim::CRASHES)
+}
+
 /// The JSON for `target`, as the worker reads it: an MO2 instance's files, nothing for a folder scan.
 pub fn read_pg(target: Option<&ScanTarget>) -> Result<Vec<PgFile>, String> {
     match target {
@@ -173,8 +178,9 @@ pub fn candidates(
 }
 
 /// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order, the `candidates`) that
-/// patches it wins; a file that would skip it (a missing texture, a wrong-typed key) is rejected for this shape and
-/// the next may win. Returns the material and its lines.
+/// patches it wins; a file that would skip it (a missing texture) is rejected for this shape and the next may win; a
+/// file PGPatcher crashes on (a wrong-typed match key, Note GE5) leaves the shape unpatched. Returns the material and
+/// its lines.
 pub fn simulate_shape(
     files: &[PgFile],
     cands: &[(usize, Vec<usize>)],
@@ -204,6 +210,14 @@ pub fn simulate_shape(
             }
             SimResult::Skip(why) => {
                 skip.get_or_insert_with(|| format!("In game: {}{NOT_APPLIED}{why}).", f.file));
+            }
+            // GE5: the throw stops PGPatcher's whole run, so no later file can win.
+            // shortcut: a crashing file below the one that patches is not seen; scan every candidate if that matters.
+            SimResult::Error(why) => {
+                return (
+                    source.clone(),
+                    vec![format!("In game: {why} ({}).", f.file)],
+                );
             }
             SimResult::NoMatch => {}
         }

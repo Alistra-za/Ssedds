@@ -6693,6 +6693,30 @@ fn a_skipped_file_lets_the_next_one_win() {
     }
 }
 
+/// GE5: a wrong-typed match key stops PGPatcher 2.3's whole run, so no lower file wins: the shape stays as edited and
+/// the line is red (`is_error`), not amber.
+#[test]
+fn wrong_typed_match_key_is_a_red_line() {
+    let d = pg_files();
+    put(
+        d.path(),
+        "mods/PGP/PBRNifPatcher/z.json",
+        Some(br#"[{"match_diffuse": "white", "nif_filter": 5}]"#),
+    );
+    let mut m = pg_session_in(d.path());
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    in_game(&mut m);
+    let line = r"In game: PGPatcher 2.3 crashes on this JSON: nif_filter is not a string (PBRNifPatcher\z.json).";
+    assert_eq!(notes(&m, shape), [line]);
+    assert!(is_error(line));
+    assert!(!is_warning(line));
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\white.dds");
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(line);
+}
+
 /// PG_IGNORE (value true) on the shape or its shader: In game keeps the edited material and says why; value 0
 /// does not count.
 #[test]
