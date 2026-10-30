@@ -427,13 +427,17 @@ fn checks(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             let v = *on;
             r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, v, name));
         }
-        // K22: without Fake resolution there is nothing to drop.
+        // K22: without Fake resolution there is nothing to measure. Note FC2: the switch measures; it never holds.
         ui.add_enabled(
             c.low_detail,
-            egui::Checkbox::new(&mut c.drop_top_mip, "Drop mip 0 when it adds nothing"),
+            egui::Checkbox::new(
+                &mut c.drop_top_mip,
+                "Measure whether full size adds anything",
+            ),
         )
         .on_hover_text(
-            "Hold textures whose top mip adds almost nothing; choose at the end of the export which to write at half size",
+            "Measure mip 0 against mip 1 on every export, up-to-date files too; Review then asks half or full size \
+             for each texture whose mip 0 adds almost nothing (CHK-LOW-DETAIL)",
         )
         .on_disabled_hover_text("Turn on Fake resolution first");
         if c != now {

@@ -170,15 +170,6 @@ pub enum Dialog {
     ConfirmResetAll(Vec<String>),
     /// F3b: the rename dialog (input aliases or output names).
     Rename(rename::RenameDialog),
-    /// Owner ruling 2026-10-20 (Note CL26): Copy settings from a texture with a saved half size asks whether the
-    /// targets get it too; `fields` are the ticked fields, copied either way.
-    CopyHalfSize {
-        from: String,
-        to: Vec<String>,
-        fields: Vec<String>,
-    },
-    /// Check 3, Hold mode (Note CL24): the textures held at the end of the export, ticked to write at half size.
-    HalfSize(Vec<HalfRow>),
     /// v2 Track B: "Generate from normal map…" for this set id; its state is `AppModel::gen` (floats are not `Eq`).
     GenerateFromNormal(String),
     /// Note CO: "Delete generated file…", asked once per file; texts and refusals read when it opened.
@@ -188,24 +179,11 @@ pub enum Dialog {
     Error(String),
 }
 
-/// One held texture in the half-size box.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HalfRow {
-    pub item: String,
-    pub job_key: String,
-    pub full: out_size::SizeEst,
-    pub half: out_size::SizeEst,
-    pub tick: bool,
-}
-
 /// How the export continues once the plan in flight has landed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Continue {
     /// R3: Review's Export: the guards and the Review gate again, then the export (undecided textures skipped).
     Review,
-    /// Note CL24: the second pass of a held export (half size where chosen, the rest at full size). `save`: save
-    /// first; false after a failed half-size save that was undone.
-    HalfSize { save: bool },
 }
 
 /// What was asked while an export ran: it happens when the export has ended.
@@ -279,6 +257,8 @@ pub(crate) struct ViewCache {
     pub asks: Option<(u64, Arc<Vec<pbr_export::ExportIssue>>)>,
     /// `AppModel::export_files`, under the same key and `inner` tuple as `problems` (Task 6; ui-rules §9.1, §7.7).
     pub export_files: Option<(ProblemsKey, usize)>,
+    /// `AppModel::half_size_rows`, under the same key and `inner` tuple (Note FC2).
+    pub half_size: Option<(ProblemsKey, Arc<Vec<review::HalfSizeRow>>)>,
     /// The keys `bottom::set_ready` looks up; reset with every `problems` build.
     pub flagged: Option<Arc<bottom::Flagged>>,
 }
@@ -558,10 +538,6 @@ pub struct AppModel {
     pending_cm: Option<cm_json::PendingCm>,
     /// C4: Review's answer for the edited PGPatcher JSON, for the running export only (K12).
     pending_json_answer: Option<review::JsonAnswer>,
-    /// Why `sdc.toml` cannot take the half-size choice, stat'd once when the half-size box opens (`None`: it can).
-    pub half_size_unwritable: Option<String>,
-    /// The running (or last) export pass is a held export's second pass (Note CL24).
-    half_pass: bool,
     /// Note CN: the running (or last) export is an Also export (`run_also`).
     also_pass: bool,
     /// Note CN: the last Also export's phase error (CN56), so its end is logged as an error, not a success.
@@ -576,8 +552,6 @@ pub struct AppModel {
     also_cancel: Option<CancelToken>,
     /// Final review I2: `Some` while the walk, zips and report run: the export's failure, shown when they end.
     also_tail: Option<Option<String>>,
-    /// The Review asks (texts) when the last fresh export started: a held pass stops on any new one (M1).
-    export_asked: Vec<String>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -747,8 +721,6 @@ impl AppModel {
             pending_cs: None,
             pending_cm: None,
             pending_json_answer: None,
-            half_size_unwritable: None,
-            half_pass: false,
             also_pass: false,
             also_error: None,
             also_written: None,
@@ -756,7 +728,6 @@ impl AppModel {
             also_json: Vec::new(),
             also_cancel: None,
             also_tail: None,
-            export_asked: Vec::new(),
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -1172,8 +1143,6 @@ impl AppModel {
                 self.continue_after_plan.take(),
             );
             match continued {
-                // Note CL24: a held export's second pass asks nothing, so no open dialog drops it (08f-1).
-                Some(how @ Continue::HalfSize { .. }) => self.run_continue(how),
                 _ if (clicked || continued.is_some()) && self.dialog.is_some() => {
                     self.queued_export_dropped()
                 }
@@ -1385,19 +1354,6 @@ impl AppModel {
     /// out-of-range value), ignore `sdc.toml` as for a parse error (spec §7.4): read-only, banner, and plan the
     /// folder again without it. Any other failure (or a config error with `sdc.toml` already ignored) is a dialog.
     fn plan_failed(&mut self, f: PlanFailure) {
-        let half = self
-            .continue_after_plan
-            .filter(|c| matches!(c, Continue::HalfSize { .. }));
-        let why = format!("planning failed: {}", f.message);
-        self.plan_failed_now(f);
-        // I1: after the failure is handled, so a deferred Open does not run in the middle of it.
-        if half.is_some() {
-            self.continue_after_plan = half;
-            self.drop_half_size(&why);
-        }
-    }
-
-    fn plan_failed_now(&mut self, f: PlanFailure) {
         self.export_after_plan = false;
         self.continue_after_plan = None;
         // An error naming the user config is not the project's fault; ignoring `sdc.toml` would not help.
@@ -1503,8 +1459,6 @@ impl AppModel {
             p.stop(Instant::now());
         }
         let mut failure = None;
-        // K14: a held export logs two reports; the second says which it is.
-        let second = std::mem::take(&mut self.half_pass);
         let mut completed = false;
         match result {
             Ok(summary) => {
@@ -1516,13 +1470,7 @@ impl AppModel {
                 } else {
                     messages::Severity::Info
                 };
-                let text = export_finished_text(&summary);
-                let text = if second {
-                    format!("Held textures: {text}")
-                } else {
-                    text
-                };
-                self.messages.notify(sev, text);
+                self.messages.notify(sev, export_finished_text(&summary));
                 completed = summary.cancelled.is_empty();
                 self.export.summary = Some(summary);
             }
@@ -1533,34 +1481,11 @@ impl AppModel {
                 failure = Some(e);
             }
         }
-        let held = self.export.held();
-        if !held.is_empty() {
-            let n = held.len();
-            if second || !completed {
-                // A cancel or a whole-export error: no box and no second pass (owner answer 4).
-                self.held_note(n, "not exported");
-            } else if self.dialog.is_none() && self.after_export.is_none() {
-                self.half_size_unwritable = self.sdc_toml_writable().err();
-                let rows = self.half_rows(&held);
-                self.dialog = Some(Dialog::HalfSize(rows));
-                return;
-            } else {
-                // It cannot ask (owner answer 4): full size, with a note; a waiting close or open runs after it.
-                let why = match &self.after_export {
-                    Some(AfterExport::Close) => "before closing",
-                    Some(AfterExport::Open(_)) => "before opening the folder",
-                    None => "(another dialog was open)",
-                };
-                self.held_note(n, &format!("exported at full size {why}"));
-                self.run_continue(Continue::HalfSize { save: true });
-                return;
-            }
-        }
         self.finish_export(completed, failure);
     }
 
-    /// After the final pass (Note CL24): the JSON/CS/CM files, the checks summary once, then what was asked while the
-    /// export ran (close, or open another folder), else its error as a dialog.
+    /// After the export: the JSON/CS/CM files, the checks summary once, then what was asked while the export ran
+    /// (close, or open another folder), else its error as a dialog.
     fn finish_export(&mut self, completed: bool, failure: Option<String>) {
         // CL19: only a completed export gets the checks line; a cancel logs just "Export finished".
         if let Some(t) = checks::checks_summary(self).filter(|_| completed) {
@@ -1595,39 +1520,8 @@ impl AppModel {
         }
     }
 
-    /// "N textures held for half size were {rest}", in the status line and the messages.
-    fn held_note(&mut self, n: usize, rest: &str) {
-        let (t, v) = if n == 1 {
-            ("texture", "was")
-        } else {
-            ("textures", "were")
-        };
-        self.status_line = format!("{n} {t} held for half size {v} {rest}");
-        self.messages
-            .notify(messages::Severity::Warning, self.status_line.clone());
-    }
-
-    /// The half-size box's rows: each held job's texture, its size now and at half size, ticked.
-    fn half_rows(&self, held: &[(String, (u32, u32))]) -> Vec<HalfRow> {
-        held.iter()
-            .filter_map(|(job_key, dims)| {
-                let item = self.items.iter().find(|i| &i.job_key == job_key)?;
-                let mut p = item.job.as_ref()?.profile.clone();
-                let full = out_size::estimate(*dims, &p);
-                p.drop_top_mip = true;
-                Some(HalfRow {
-                    item: item.key.clone(),
-                    job_key: job_key.clone(),
-                    full,
-                    half: out_size::estimate(*dims, &p),
-                    tick: true,
-                })
-            })
-            .collect()
-    }
-
-    /// Whether `sdc.toml` can take the half-size choice: `Err(reason)` with no project, a load error, or the
-    /// read-only flag (Review Focus 1). A missing file is fine: the save creates it. Stats the file: call it once.
+    /// Whether `sdc.toml` can be saved: `Err(reason)` with no project, a load error, or the read-only flag. A missing
+    /// file is fine: the save creates it. Stats the file: call it once.
     pub fn sdc_toml_writable(&self) -> Result<(), String> {
         let Some(p) = self.project.as_ref() else {
             return Err("No project is open.".into());
@@ -1637,46 +1531,11 @@ impl AppModel {
         }
         match std::fs::metadata(p.path()) {
             Ok(m) if m.permissions().readonly() => Err(format!(
-                "{} is marked read-only, so the half-size choice cannot be saved.",
+                "{} is marked read-only, so it cannot be saved.",
                 p.path().display()
             )),
             _ => Ok(()),
         }
-    }
-
-    /// The half-size box's "Export selected at half size": `drop_top_mip = true` for each ticked texture in one undo
-    /// step, saved, then the second pass on the new plan. A failed save is undone and everything goes at full size,
-    /// never at half size without a saved field (Review Focus 1).
-    pub fn export_half_size(&mut self, ticked: &[String]) {
-        self.dialog = None;
-        let keys = ticked.to_vec();
-        let text = |m: &Self| m.project.as_ref().map(ProjectDoc::text);
-        let before = text(self);
-        self.edit("Half size", move |p| {
-            for k in &keys {
-                p.set_file_value(k, "drop_top_mip", &json!(true));
-            }
-        });
-        if self.save().is_ok() {
-            // The edit's re-plan is in flight: the pass waits for it (K13).
-            return self.run_continue(Continue::HalfSize { save: true });
-        }
-        if text(self) != before {
-            self.undo();
-        }
-        self.run_continue(Continue::HalfSize { save: false });
-    }
-
-    /// The half-size box's "Export all at full size" (and Esc): the second pass with no edit.
-    pub fn export_full_size(&mut self) {
-        self.dialog = None;
-        self.run_continue(Continue::HalfSize { save: true });
-    }
-
-    /// The half-size box is open, or its second pass waits for a plan (K12).
-    fn half_size_waiting(&self) -> bool {
-        matches!(self.dialog, Some(Dialog::HalfSize(_)))
-            || matches!(self.continue_after_plan, Some(Continue::HalfSize { .. }))
     }
 
     /// I1: a close or open asked while a Generate writes: done when it has landed and recorded its files, so a file
@@ -1688,21 +1547,6 @@ impl AppModel {
         }
         .into();
         self.after_export = Some(action);
-    }
-
-    /// K12: a close or open asked while the box is open or its pass waits: done after that pass; an open box is
-    /// answered as full size (owner answer 4).
-    fn defer_until_half_size(&mut self, action: AfterExport) {
-        let why = match action {
-            AfterExport::Close => "before closing",
-            AfterExport::Open(_) => "before opening the folder",
-        };
-        self.after_export = Some(action);
-        if let Some(Dialog::HalfSize(rows)) = &self.dialog {
-            let n = rows.len();
-            self.held_note(n, &format!("exported at full size {why}"));
-            self.export_full_size();
-        }
     }
 
     /// Tests: end the export with a made-up result (`WorkerMsg` is private), as the worker's `ExportDone` would.
@@ -1721,13 +1565,6 @@ impl AppModel {
     pub fn export_clicked(&mut self) {
         self.status_note = None;
         if self.root.is_none() {
-            return;
-        }
-        // M1: the held textures' pass is the export in progress; a click is not queued behind it silently.
-        if matches!(self.continue_after_plan, Some(Continue::HalfSize { .. })) {
-            let note = "Export waits for the half-size pass";
-            self.status_line = note.into();
-            self.messages.notify(messages::Severity::Info, note);
             return;
         }
         // A plan is in flight (just opened, or an edit): the items on screen are the previous plan's, so the checks
@@ -1781,7 +1618,9 @@ impl AppModel {
         // R6: an edited PGPatcher JSON is asked about in Review, before the export (C4).
         // Note CN (C1, owner answer 5): a tick opens Review; its Export is the only way to an Also export.
         // Note FB1: no chosen folder is a Review blocker, so the click lists it there instead of writing to `sdc-out`.
+        // Note FC2: the half-size question is asked in Review, before the export.
         if asks
+            || !self.half_size_rows().is_empty()
             || self.undecided() > 0
             || self.pgp_json_edited()
             || self.also_on()
@@ -1790,7 +1629,7 @@ impl AppModel {
             self.open_review();
             return;
         }
-        self.start_export_pass(true, true);
+        self.start_export_pass();
     }
 
     /// True (with an error dialog) when the plan on screen is not the one for these sets.
@@ -1969,7 +1808,7 @@ impl AppModel {
                 }
                 match self.review_gate() {
                     Ok(_) => {
-                        self.start_export_pass(true, true);
+                        self.start_export_pass();
                     }
                     Err(why) => {
                         self.status_line = format!("Export not started: {why}");
@@ -1978,51 +1817,7 @@ impl AppModel {
                     }
                 }
             }
-            Continue::HalfSize { save } => {
-                // K13: never on a stale plan; `finish_plan` runs it even with a dialog open.
-                if self.planning.is_some() || self.votes_pending.is_some() {
-                    self.continue_after_plan = Some(how);
-                    return;
-                }
-                let why = if self.export_stopped() {
-                    match &self.dialog {
-                        Some(Dialog::Error(e)) => e.clone(),
-                        _ => "the export is blocked; see Review".into(),
-                    }
-                } else if pbr_export::export_asks(self)
-                    .iter()
-                    .any(|a| !self.export_asked.contains(&a.text))
-                {
-                    // M1: never written past a warning that appeared after the first pass (ui-rules 7.3).
-                    self.open_review();
-                    "a new warning needs a look in Review".into()
-                } else if self.start_export_pass(false, save) {
-                    return;
-                } else {
-                    "the export did not start".into()
-                };
-                self.half_size_dropped(&why);
-            }
         }
-    }
-
-    /// I1: a queued held pass that can no longer run: say why, then finish the export.
-    fn drop_half_size(&mut self, why: &str) {
-        if matches!(self.continue_after_plan, Some(Continue::HalfSize { .. })) {
-            self.continue_after_plan = None;
-            self.half_size_dropped(why);
-        }
-    }
-
-    /// The held textures stay unwritten: the note, then the first pass's finishers and a deferred close or open.
-    fn half_size_dropped(&mut self, why: &str) {
-        self.held_note(self.export.held().len(), &format!("not exported: {why}"));
-        let completed = self
-            .export
-            .summary
-            .as_ref()
-            .is_some_and(|s| s.cancelled.is_empty());
-        self.finish_export(completed, None);
     }
 
     /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
@@ -2096,70 +1891,46 @@ impl AppModel {
         self.replan();
     }
 
-    /// Save first when `save` (the CLI command and the next session read `sdc.toml`), then run the export on a worker.
-    /// `fresh`: a new export. Otherwise a held export's second pass (Note CL24): the JSON/CS/CM work, Review's JSON
-    /// answer, the rows, `drawer_epoch` and the Files tab stay as the first pass left them. True when it started.
-    fn start_export_pass(&mut self, fresh: bool, save: bool) -> bool {
-        if self.export.running.is_some() || (save && self.save().is_err()) {
-            return false;
+    /// Save first (the CLI command and the next session read `sdc.toml`), then run the export on a worker. One pass:
+    /// the half-size answers were written before it (Note FC2).
+    fn start_export_pass(&mut self) {
+        if self.export.running.is_some() || self.save().is_err() {
+            return;
         }
         let (Some(session), Some(mut req)) = (self.session.clone(), self.request()) else {
-            return false;
+            return;
         };
         req.on_existing = engine::api::OnExisting::IfChanged;
         let c = self.settings.checks;
-        req.low_detail = match (fresh, c.low_detail, c.drop_top_mip) {
-            (_, false, _) => engine::api::LowDetailMode::Off,
-            (true, true, true) => engine::api::LowDetailMode::Hold,
-            // A second pass never holds again.
-            _ => engine::api::LowDetailMode::Warn,
+        // Note FC2: Hold measures (an up-to-date output too) and writes the full chain, like Warn; nothing is held.
+        req.low_detail = match (c.low_detail, c.drop_top_mip) {
+            (false, _) => engine::api::LowDetailMode::Off,
+            (true, true) => engine::api::LowDetailMode::Hold,
+            (true, false) => engine::api::LowDetailMode::Warn,
         };
-        // P10 (TA24): an Also export holds nothing (a held texture would be missing from all three folders); a held
-        // export's second pass is never an Also export.
-        let also = fresh && self.also_on();
-        if also && req.low_detail == engine::api::LowDetailMode::Hold {
-            req.low_detail = engine::api::LowDetailMode::Warn;
-        }
-        if fresh {
-            self.also_pass = also;
-            self.also_error = None;
-            self.also_written = None;
-            self.also_report = None;
-            // Final review I2: dropping an earlier export's sender releases its worker (no extra file).
-            self.also_reply = None;
-            self.also_json.clear();
-            self.also_cancel = None;
-            self.also_tail = None;
-            self.pending_json = pbr_export::prepare(self);
-            self.pending_cs = cs_pbr_export::prepare(self);
-            self.pending_cm = cm_json::prepare(self);
-            self.pending_text = None;
-            // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
-            self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
-            self.review_json_cache.take();
-            self.export = export::ExportModel {
-                pace: Some(export::Pace::new(Instant::now())),
-                ..Default::default()
-            };
-            self.show_tab(bottom::BottomTab::Files);
-            self.drawer_epoch += 1;
-            self.export_asked = pbr_export::export_asks(self)
-                .into_iter()
-                .map(|a| a.text)
-                .collect();
-        } else {
-            // K14: the first pass's `BatchDone` stopped the clock.
-            self.export.pace = Some(export::Pace::new(Instant::now()));
-            // M7: a texture now written at half size no longer carries its first-pass CHK-LOW-DETAIL.
-            let halved: std::collections::HashSet<String> = self
-                .items
-                .iter()
-                .filter(|i| i.job.as_ref().is_some_and(|j| j.profile.drop_top_mip))
-                .map(|i| i.job_key.clone())
-                .collect();
-            self.export.drop_low_detail(&halved);
-        }
-        self.half_pass = !fresh;
+        let also = self.also_on();
+        self.also_pass = also;
+        self.also_error = None;
+        self.also_written = None;
+        self.also_report = None;
+        // Final review I2: dropping an earlier export's sender releases its worker (no extra file).
+        self.also_reply = None;
+        self.also_json.clear();
+        self.also_cancel = None;
+        self.also_tail = None;
+        self.pending_json = pbr_export::prepare(self);
+        self.pending_cs = cs_pbr_export::prepare(self);
+        self.pending_cm = cm_json::prepare(self);
+        self.pending_text = None;
+        // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
+        self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
+        self.review_json_cache.take();
+        self.export = export::ExportModel {
+            pace: Some(export::Pace::new(Instant::now())),
+            ..Default::default()
+        };
+        self.show_tab(bottom::BottomTab::Files);
+        self.drawer_epoch += 1;
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
         if also {
@@ -2171,7 +1942,6 @@ impl AppModel {
         } else {
             spawn_export(self.tx.clone(), session, req, cancel);
         }
-        true
     }
 
     /// The export ended: write the copies and the JSON of the sets that exported (spec §6.1). Nothing is written
@@ -2455,11 +2225,7 @@ impl AppModel {
         }
         // A newer answer replaces an older one; it never stacks.
         self.after_export = Some(action);
-        // M2 (owner answer 4): close or open during the held full-size pass means full size, then close or open.
-        // CL43: or while the held pass waits for its plan (the cannot-ask branch re-queued it).
-        if (self.export.running.is_some() && self.half_pass) || self.half_size_waiting() {
-            return;
-        }
+        // Note FC2 (supersedes CL27 M2): there is no held pass to wait for; Stop cancels at the next file.
         if self.export.running.is_some() {
             self.cancel_export();
         } else {
@@ -2587,9 +2353,6 @@ impl AppModel {
             self.continue_after_plan.take(),
         );
         match continued {
-            // Note CL24: a held export's second pass asks nothing, so no open dialog drops it; it also wins over a
-            // click (the export it finishes is the one clicked).
-            Some(how @ Continue::HalfSize { .. }) => self.run_continue(how),
             // Audit 08f-1 holds for Review's queued Export too: never over an open question.
             _ if (clicked || continued.is_some()) && self.dialog.is_some() => {
                 self.queued_export_dropped()
@@ -3549,18 +3312,6 @@ impl AppModel {
     }
 
     pub fn reload_documents(&mut self) {
-        let half = self
-            .continue_after_plan
-            .filter(|c| matches!(c, Continue::HalfSize { .. }));
-        self.reload_documents_now();
-        // I1: the held pass belonged to the dropped documents; finish the export after the reload.
-        if half.is_some() {
-            self.continue_after_plan = half;
-            self.drop_half_size("the documents were reloaded");
-        }
-    }
-
-    fn reload_documents_now(&mut self) {
         self.dialog = None;
         // K4, K5: Review and an export queued behind a plan belong to the documents being dropped.
         self.close_review();
@@ -3666,9 +3417,6 @@ impl AppModel {
             self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             false
-        } else if self.half_size_waiting() {
-            self.defer_until_half_size(AfterExport::Open(root));
-            false
         } else if self.gen_writing() {
             self.defer_until_generated(AfterExport::Open(root));
             false
@@ -3713,11 +3461,6 @@ impl AppModel {
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             return;
         }
-        // CL43: opening now would drop a held pass waiting for its plan, and the first pass's JSON; open after it
-        // (the question comes back then if the edits are still unsaved).
-        if self.half_size_waiting() {
-            return self.defer_until_half_size(AfterExport::Open(root));
-        }
         if save {
             if self.save().is_err() {
                 return;
@@ -3741,9 +3484,6 @@ impl AppModel {
         if self.export.running.is_some() {
             self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Close));
-            false
-        } else if self.half_size_waiting() {
-            self.defer_until_half_size(AfterExport::Close);
             false
         } else if self.gen_writing() {
             self.defer_until_generated(AfterExport::Close);
@@ -4109,340 +3849,5 @@ mod tests {
         });
         assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
         assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
-    }
-
-    /// Note CL24: `textures/up.png`, 512² noise upscaled to 1024² (flagged), opened in Hold mode.
-    fn held_fixture(d: &std::path::Path) -> AppModel {
-        let r = d.join("textures");
-        std::fs::create_dir_all(&r).unwrap();
-        let mut s = 7u64;
-        let small = image::RgbImage::from_fn(512, 512, |_, _| {
-            let mut b = || {
-                s = s
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                (s >> 56) as u8
-            };
-            image::Rgb([b(), b(), b()])
-        });
-        image::RgbImage::from_fn(1024, 1024, |x, y| *small.get_pixel(x / 2, y / 2))
-            .save(r.join("up.png"))
-            .unwrap();
-        std::fs::write(
-            r.join("sdc.toml"),
-            "[defaults.encoder]\neffort = \"ultrafast\"\n\n[files.\"up.png\"]\nsubtype = \"diffuse\"\n",
-        )
-        .unwrap();
-        let mut settings = GuiSettings {
-            export_folder: Some(d.join("export")),
-            ..GuiSettings::default()
-        };
-        settings.checks.drop_top_mip = true;
-        let session =
-            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
-        let mut m = AppModel::new(settings, None, session);
-        m.open_folder(r);
-        assert!(m.wait_idle(Duration::from_secs(60)));
-        m.set_export_folder(d.join("export"));
-        assert!(m.wait_idle(Duration::from_secs(60)));
-        m
-    }
-
-    /// Handle worker messages until the first `ExportDone` is handled; `before_done` runs just before it.
-    fn first_pass(m: &mut AppModel, before_done: impl FnOnce(&mut AppModel)) {
-        let end = Instant::now() + Duration::from_secs(120);
-        loop {
-            assert!(Instant::now() < end, "the export never ended");
-            let Ok(msg) = m.rx.recv_timeout(Duration::from_millis(50)) else {
-                continue;
-            };
-            if matches!(msg, WorkerMsg::ExportDone(_)) {
-                before_done(m);
-                return m.handle(msg);
-            }
-            m.handle(msg);
-        }
-    }
-
-    fn up_width(m: &AppModel) -> u32 {
-        let b = std::fs::read(m.export_root().join("up.dds")).unwrap();
-        u32::from_le_bytes(b[16..20].try_into().unwrap())
-    }
-
-    /// Owner answer 4: a Close or Open answer that came too late to cancel anything: the held textures are exported
-    /// at full size first, with a note, and the close or open happens after that pass.
-    #[test]
-    fn closing_during_the_export_writes_held_at_full_size_then_closes() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        m.export_clicked();
-        first_pass(&mut m, |m| m.after_export = Some(AfterExport::Close));
-        assert!(!matches!(m.dialog, Some(Dialog::HalfSize(_))));
-        assert!(m.export.running.is_some(), "the full-size pass runs");
-        assert!(!m.take_close_ready(), "not between the passes");
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(up_width(&m), 1024);
-        assert!(m
-            .messages
-            .entries()
-            .any(|e| e.text.contains("exported at full size before closing")));
-        assert!(m.take_close_ready());
-
-        let other = d.path().join("other");
-        std::fs::create_dir_all(&other).unwrap();
-        let d2 = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d2.path());
-        m.export_clicked();
-        first_pass(&mut m, |m| {
-            m.after_export = Some(AfterExport::Open(other.clone()))
-        });
-        assert_ne!(m.root.as_ref(), Some(&other), "not between the passes");
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(m.root.as_ref(), Some(&other));
-        assert!(m.messages.entries().any(|e| e
-            .text
-            .contains("exported at full size before opening the folder")));
-    }
-
-    /// I1: a PBR set written whole by the first pass (its JSON is due) and `landscape/up.png` held.
-    fn held_pbr_fixture(d: &std::path::Path) -> AppModel {
-        let r = d.join("textures/landscape");
-        std::fs::create_dir_all(&r).unwrap();
-        image::RgbImage::from_fn(64, 64, |x, y| {
-            image::Rgb([(x * 4) as u8, (y * 4) as u8, 90])
-        })
-        .save(r.join("rock01.png"))
-        .unwrap();
-        image::RgbImage::from_pixel(64, 64, image::Rgb([128, 128, 255]))
-            .save(r.join("rock01_normal.png"))
-            .unwrap();
-        let mut m = held_fixture(d);
-        std::fs::rename(d.join("textures/up.png"), r.join("up.png")).unwrap();
-        std::fs::write(
-            d.join("textures/sdc.toml"),
-            "[defaults.encoder]\neffort = \"ultrafast\"\n\n[files.\"landscape/up.png\"]\nsubtype = \"diffuse\"\n",
-        )
-        .unwrap();
-        m.accept = AcceptSuggestions::None;
-        m.open_folder(d.join("textures"));
-        assert!(m.wait_idle(Duration::from_secs(60)));
-        m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
-        m.decide(
-            "landscape/rock01_normal.png",
-            Answer::Subtype(Subtype::PbrNormal),
-        );
-        m.decide(
-            "landscape/rock01_normal.png",
-            Answer::Green(GreenConvention::Directx),
-        );
-        assert!(m.wait_idle(Duration::from_secs(60)));
-        m.export_clicked();
-        if m.review.is_some() {
-            m.acknowledge_all_asks();
-            m.export_from_review();
-        }
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert!(
-            matches!(m.dialog, Some(Dialog::HalfSize(_))),
-            "{:?}",
-            m.dialog
-        );
-        m
-    }
-
-    fn pgp_json(m: &AppModel) -> PathBuf {
-        m.export_root()
-            .join("PBRNIFPatcher")
-            .join(format!("{}.json", pbr_export::json_name(m)))
-    }
-
-    fn logged(m: &AppModel, s: &str) -> bool {
-        m.messages.entries().any(|e| e.text.contains(s))
-    }
-
-    /// I1: a failed re-plan drops the queued held pass with a note; the first pass's JSON is still written and a
-    /// deferred close still happens.
-    #[test]
-    fn a_failed_replan_while_the_half_size_pass_waits_finishes_the_export() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_pbr_fixture(d.path());
-        assert!(!pgp_json(&m).exists(), "the finishers wait for the box");
-        m.export_half_size(&["landscape/up.png".to_string()]);
-        assert!(!m.request_close());
-        m.plan_failed(PlanFailure {
-            message: "plan broke".into(),
-            config: false,
-        });
-        assert!(logged(
-            &m,
-            "1 texture held for half size was not exported: planning failed: plan broke"
-        ));
-        assert!(pgp_json(&m).exists(), "{:?}", m.export.notes);
-        assert!(m.take_close_ready());
-        assert!(m.wait_idle(Duration::from_secs(120)));
-    }
-
-    /// I1: a Reload while the held pass waits, the same.
-    #[test]
-    fn a_reload_while_the_half_size_pass_waits_finishes_the_export() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_pbr_fixture(d.path());
-        m.export_half_size(&["landscape/up.png".to_string()]);
-        assert!(!m.request_close());
-        m.reload_documents();
-        assert!(logged(
-            &m,
-            "1 texture held for half size was not exported: the documents were reloaded"
-        ));
-        assert!(pgp_json(&m).exists(), "{:?}", m.export.notes);
-        assert!(m.take_close_ready());
-        assert!(m.wait_idle(Duration::from_secs(120)));
-    }
-
-    /// M2 (owner answer 4): "Stop the export and close" asked in the first pass and answered during the held
-    /// full-size pass does not cancel it: full size first, then the close.
-    #[test]
-    fn stop_and_close_during_the_held_pass_waits_for_it() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        m.export_clicked();
-        assert!(!m.request_close());
-        assert!(matches!(m.dialog, Some(Dialog::ExportRunning(_))));
-        first_pass(&mut m, |_| {});
-        assert!(m.export.running.is_some(), "the full-size pass runs");
-        m.resolve_export_running(AfterExport::Close, true);
-        assert!(m.export.running.is_some(), "not cancelled");
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(up_width(&m), 1024);
-        assert!(m.take_close_ready());
-    }
-
-    /// K12 while the pass is queued, and the Open variants (M5).
-    #[test]
-    fn close_or_open_while_the_half_size_pass_waits_happen_after_it() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        m.export_clicked();
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        m.export_half_size(&["up.png".to_string()]);
-        assert!(!m.request_close());
-        assert!(!m.take_close_ready());
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(up_width(&m), 512);
-        assert!(m.take_close_ready());
-
-        let other = d.path().join("other");
-        std::fs::create_dir_all(&other).unwrap();
-        for queued in [false, true] {
-            let d = tempfile::tempdir().unwrap();
-            let mut m = held_fixture(d.path());
-            let up = m.export_root().join("up.dds");
-            m.export_clicked();
-            assert!(m.wait_idle(Duration::from_secs(120)));
-            if queued {
-                m.export_half_size(&["up.png".to_string()]);
-            }
-            assert!(!m.request_open(other.clone()));
-            assert_ne!(m.root.as_ref(), Some(&other));
-            assert!(m.wait_idle(Duration::from_secs(120)));
-            assert_eq!(m.root.as_ref(), Some(&other), "queued: {queued}");
-            let b = std::fs::read(&up).unwrap();
-            let w = u32::from_le_bytes(b[16..20].try_into().unwrap());
-            assert_eq!(w, if queued { 512 } else { 1024 });
-            assert_eq!(
-                logged(&m, "exported at full size before opening the folder"),
-                !queued
-            );
-        }
-    }
-
-    /// K12: a close asked while the box is open answers it as full size; the window closes after that pass.
-    #[test]
-    fn closing_with_the_half_size_box_open_exports_full_size_then_closes() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        m.export_clicked();
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert!(matches!(m.dialog, Some(Dialog::HalfSize(_))));
-        assert!(!m.request_close());
-        assert!(!m.take_close_ready());
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(up_width(&m), 1024);
-        assert!(m
-            .messages
-            .entries()
-            .any(|e| e.text.contains("exported at full size before closing")));
-        assert!(m.take_close_ready());
-    }
-
-    /// CL43 (final review I1): "Stop the export and close" answered while the held pass waits for its plan: the
-    /// close waits for that pass.
-    #[test]
-    fn stop_and_close_while_the_half_size_pass_waits_keeps_it() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        m.export_clicked();
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        m.export_half_size(&["up.png".to_string()]);
-        assert!(m.half_size_waiting());
-        m.dialog = Some(Dialog::ExportRunning(AfterExport::Close));
-        m.resolve_export_running(AfterExport::Close, true);
-        assert!(
-            !m.take_close_ready(),
-            "close_ready with the held pass queued"
-        );
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(up_width(&m), 512);
-        assert!(m.take_close_ready());
-    }
-
-    /// CL43: the OpenUnsaved answer while the held pass waits: the folder opens after that pass (the question comes
-    /// back then if edits are still unsaved).
-    #[test]
-    fn open_unsaved_while_the_half_size_pass_waits_opens_after_it() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        let up = m.export_root().join("up.dds");
-        let other = d.path().join("other");
-        std::fs::create_dir_all(&other).unwrap();
-        m.export_clicked();
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        m.export_half_size(&["up.png".to_string()]);
-        m.dialog = Some(Dialog::OpenUnsaved(other.clone()));
-        m.resolve_open_unsaved(other.clone(), false);
-        assert_ne!(
-            m.root.as_ref(),
-            Some(&other),
-            "opened with the held pass queued"
-        );
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        let b = std::fs::read(&up).unwrap();
-        assert_eq!(u32::from_le_bytes(b[16..20].try_into().unwrap()), 512);
-        assert_eq!(m.root.as_ref(), Some(&other));
-    }
-
-    /// CL43: CloseUnsaved's Save and Discard send `ViewportCommand::Close`; the app answers the close event with
-    /// `request_close` (app.rs), which defers the close until the held pass has run. Discard's reload is done here
-    /// as `ui::dialogs::close_unsaved` does it.
-    #[test]
-    fn close_unsaved_while_the_half_size_pass_waits_closes_after_it() {
-        let d = tempfile::tempdir().unwrap();
-        let mut m = held_fixture(d.path());
-        m.export_clicked();
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        m.export_half_size(&["up.png".to_string()]);
-        m.dialog = None;
-        if let Some(p) = m.project.as_mut() {
-            p.reload();
-        }
-        if let Some(s) = m.sets_doc.as_mut() {
-            s.reload();
-        }
-        m.history.clear();
-        assert!(!m.request_close(), "closed with the held pass queued");
-        assert_eq!(m.after_export, Some(AfterExport::Close));
-        assert!(m.wait_idle(Duration::from_secs(120)));
-        assert_eq!(up_width(&m), 512);
-        assert!(m.take_close_ready());
     }
 }

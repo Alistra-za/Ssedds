@@ -217,8 +217,8 @@ impl ExportModel {
                     k => RowState::Skipped(*k, reason.clone()),
                 };
                 // A skip is not work: it counts in done/total but not in the files/s rate or the ETA.
-                // Hold mode (Note CL24): a held or measured-only file was started, so its skip ends the run.
-                let ends_run = matches!(kind, SkipKind::LowDetail | SkipKind::UpToDate);
+                // Hold mode (Note CL20): a measured-only up-to-date file was started, so its skip ends the run.
+                let ends_run = *kind == SkipKind::UpToDate;
                 if let Some(r) = self.row(&ev) {
                     if r.state.accepts_skip() || (ends_run && r.state == RowState::Running) {
                         r.state = state;
@@ -287,31 +287,6 @@ impl ExportModel {
         if any {
             self.revision = REV.fetch_add(1, Ordering::Relaxed);
         }
-    }
-
-    /// The rows held for half size (Hold mode): job key and the source size their `CHK-LOW-DETAIL` warning names.
-    pub fn held(&self) -> Vec<(String, (u32, u32))> {
-        self.rows
-            .iter()
-            .filter(|r| matches!(r.state, RowState::Skipped(SkipKind::LowDetail, _)))
-            .filter_map(|r| {
-                let d = &r
-                    .warnings
-                    .iter()
-                    .find(|w| w.code == Code::ChkLowDetail)?
-                    .data;
-                let n = |k: &str| d.get(k)?.as_u64().map(|v| v as u32);
-                Some((r.job_key.clone(), (n("width")?, n("height")?)))
-            })
-            .collect()
-    }
-
-    /// M7 (Note CL24): drop the `CHK-LOW-DETAIL` warnings of these jobs, written at half size by the held pass.
-    pub fn drop_low_detail(&mut self, jobs: &HashSet<String>) {
-        for r in self.rows.iter_mut().filter(|r| jobs.contains(&r.job_key)) {
-            r.warnings.retain(|w| w.code != Code::ChkLowDetail);
-        }
-        self.revision = REV.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Warnings grouped by code: code → job keys (M3a spec §2.5).

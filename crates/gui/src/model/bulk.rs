@@ -738,58 +738,16 @@ impl AppModel {
         let Some(p) = self.project.as_ref() else {
             return;
         };
-        // Owner ruling 2026-10-20 (Note CL26): a saved half size is not a tick here; the half-size question decides it.
+        // Note FC2 (supersedes CL26's dialog): a saved half size is a tick like any other field.
         let fields: Vec<(String, bool)> = all_fields()
             .into_iter()
-            .filter(|(f, _)| *f != "drop_top_mip" && own_value(p, &from, f).is_some())
+            .filter(|(f, _)| own_value(p, &from, f).is_some())
             .map(|(f, _)| (f.to_string(), true))
             .collect();
-        let half = p.file_value(&from, "drop_top_mip").is_some();
-        if to.is_empty() || (fields.is_empty() && !half) {
+        if to.is_empty() || fields.is_empty() {
             return;
         }
-        self.dialog = Some(if fields.is_empty() {
-            Dialog::CopyHalfSize {
-                from,
-                to,
-                fields: vec![],
-            }
-        } else {
-            Dialog::CopySettings { from, to, fields }
-        });
-    }
-
-    /// Copy settings' Apply: the ticked fields, then the half-size question when `from` has a saved half size.
-    pub fn copy_settings_chosen(&mut self, from: &str, to: &[String], fields: &[String]) {
-        let half = self
-            .project
-            .as_ref()
-            .is_some_and(|p| p.file_value(from, "drop_top_mip").is_some());
-        if half {
-            self.dialog = Some(Dialog::CopyHalfSize {
-                from: from.into(),
-                to: to.to_vec(),
-                fields: fields.to_vec(),
-            });
-        } else {
-            self.apply_copy_settings(from, to, fields);
-        }
-    }
-
-    /// The half-size question's answer: copy `fields`, with `drop_top_mip` too when `also`, as one step.
-    pub fn resolve_copy_half_size(&mut self, also: bool) {
-        let Some(Dialog::CopyHalfSize {
-            from,
-            to,
-            mut fields,
-        }) = self.dialog.take()
-        else {
-            return;
-        };
-        if also {
-            fields.push("drop_top_mip".into());
-        }
-        self.apply_copy_settings(&from, &to, &fields);
+        self.dialog = Some(Dialog::CopySettings { from, to, fields });
     }
 
     /// F3a D4: write each of `fields`, valued as in `from`'s `[files]` entry, to every texture of `to` it applies

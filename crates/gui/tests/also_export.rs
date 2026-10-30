@@ -455,11 +455,8 @@ fn drop_top_mip_on_still_writes_every_texture_in_all_three_folders() {
     assert!(m.settings.checks.low_detail && m.settings.checks.drop_top_mip);
     tick(&mut m, AlsoTarget::Cm);
     export(&mut m);
-    assert!(
-        !matches!(m.dialog, Some(Dialog::HalfSize(_))),
-        "{:?}",
-        m.dialog
-    );
+    // Note FC2: nothing is held, and there is no box after the export.
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
     assert!(m.export.rows.iter().all(|r| !matches!(
         r.state,
         RowState::Skipped(engine::events::SkipKind::LowDetail, _)

@@ -113,7 +113,8 @@ pub const ADVANCED_FIELDS: [(&str, &str); 7] = [
     ("encoder.rgbcx_level", "rgbcx level"),
     ("header", "DDS header"),
     ("resize", "Resize"),
-    ("drop_top_mip", "Half size (drop mip 0)"),
+    // Note FC2 (CL15): "Half size" is the one name; "mip 0" is hover text.
+    ("drop_top_mip", "Half size"),
 ];
 
 /// The cubemap section's fields in display order (Note DT7), in the groups `ui::cube_section` draws them in.

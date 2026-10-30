@@ -1682,9 +1682,9 @@ impl AppModel {
     }
 
     /// Close or open the folder once the Generate in its way has landed (`request_close` / `request_open` deferred
-    /// them). An export or a held pass runs them itself when it ends.
+    /// them). An export runs them itself when it ends.
     fn gen_after_job(&mut self) {
-        if self.export.running.is_some() || self.half_size_waiting() {
+        if self.export.running.is_some() {
             return;
         }
         match self.after_export.take() {

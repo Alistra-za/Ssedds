@@ -146,8 +146,8 @@ pub enum LowDetailMode {
     Off,
     /// The warning is emitted and the file is written as usual.
     Warn,
-    /// The warning is emitted and the file is not written (`SkipKind::LowDetail`, an intentional skip). An eligible
-    /// up-to-date output is loaded and measured again without encoding, so it is flagged again.
+    /// `Warn`, and an eligible up-to-date output is loaded and measured again without encoding, so it is flagged
+    /// again. The full chain is always written: Hold measures, it never withholds a file (Note FC2, amends CL20).
     Hold,
 }
 
@@ -359,8 +359,8 @@ pub struct BatchSummary {
     /// Every `file_skipped` except up-to-date files and raw packing inputs.
     pub skipped: u32,
     /// Of `skipped`, those skipped on purpose: `IN-DDS-SKIPPED` inputs, `PACK-CONFLICT` pre-packed files replaced
-    /// under `packing.prefer = raw`, outputs kept by an explicit `--on-existing skip` and textures held as low detail
-    /// (`LowDetailMode::Hold`). They do not make the batch partial (DECISIONS Notes I, M9 and CL20).
+    /// under `packing.prefer = raw` and outputs kept by an explicit `--on-existing skip` (low-detail textures are no
+    /// longer held, Note FC2). They do not make the batch partial (DECISIONS Notes I, M9 and CL20).
     pub skipped_intentional: u32,
     pub failed: u32,
     /// Written outputs whose validation reported an error (`passed = false`); also counted in `converted`.
@@ -372,7 +372,7 @@ pub struct BatchSummary {
 impl BatchSummary {
     /// Spec §8 precedence for a batch that ran: 1 partial (unintentionally skipped, failed or cancelled
     /// files) > 4 validation failed > 0. Up-to-date files, raw packing inputs and intentional skips
-    /// (DECISIONS Note I; held low-detail textures, Note CL20) do not make a batch partial. (2 and 3 come from
+    /// (DECISIONS Note I) do not make a batch partial. (2 and 3 come from
     /// `EngineError`.)
     pub fn exit_code(&self) -> i32 {
         let unintended = self.skipped.saturating_sub(self.skipped_intentional);
@@ -2838,27 +2838,11 @@ fn run_one(
         )
     }));
     let (stage, error) = match r {
-        Ok(Ok(Processed::Held(w))) => {
-            emit(EventKind::Warning(w));
-            {
-                let mut s = lock(state);
-                s.skipped += 1;
-                s.skipped_intentional += 1;
+        Ok(Ok(Processed::UpToDate(w))) => {
+            // Note FC2: a flagged up-to-date output keeps its full chain; the warning is the record.
+            if let Some(w) = w {
+                emit(EventKind::Warning(w));
             }
-            // Audit 08d-7: say when an earlier output stays on disk.
-            let kept = if job.output.exists() {
-                "; previous output kept"
-            } else {
-                ""
-            };
-            emit(EventKind::FileSkipped {
-                kind: SkipKind::LowDetail,
-                code: Some(Code::ChkLowDetail),
-                reason: format!("held (low detail){kept}"),
-            });
-            return;
-        }
-        Ok(Ok(Processed::UpToDate)) => {
             lock(state).up_to_date += 1;
             emit(EventKind::FileSkipped {
                 kind: SkipKind::UpToDate,

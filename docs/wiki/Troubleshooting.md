@@ -43,9 +43,9 @@ Look for `CHK-UV-GUTTER`. UV islands that sit closer than 8 texels let a smaller
 
 The overlay and the check read your Meshes scan, so scan first: scan your MO2 instance in the Meshes view. The toggle's hover gives the reason: a scan that is running or was stopped (let it finish, or scan again), no scan database, or a scan with no rows (an empty scan counts as none). Only colour textures (diffuse, PBR albedo, skin albedo) have UV coverage, and landscape diffuses are left out. The toggle is also off while a pin is compared ("Hidden while comparing") and after a failed read (its hover lists the errors), and **Check all UV coverage** stays off until the **UV coverage** check is turned on ("Turn on UV coverage check first").
 
-### A texture was held for half size
+### Review asks "half or full size"
 
-With **Drop mip 0 when it adds nothing** on, Export holds back a texture whose top mip carries little detail (`CHK-LOW-DETAIL`) and asks **Export at half size?** at the end. Tick the ones to write at half size, or choose **Export all at full size**. An unticked texture is asked about again on the next export. If the box could not open (another dialog was open), the texture was written at full size and a note says so.
+With **Measure whether full size adds anything** on, every export measures each texture's top mip and writes the full texture. A texture whose top mip carries little detail (`CHK-LOW-DETAIL`) is then asked about in Review before the next export: pick **Half size** or **Full size** on its row. Export waits until each row is answered. Half size is saved in `sdc.toml` when you press Export; Full size saves nothing, so the texture is asked about again on the next export. Close writes nothing.
 
 ### A normal map came out as a diffuse
 
@@ -325,7 +325,7 @@ These come from the GUI's artist checks, plus `CHK-LOW-DETAIL`, which convert me
 | `CHK-Z-SIGN` | warning | A normal map's blue channel points the wrong way. | Check the source. |
 | `CHK-PARALLAX` | warning | A height map, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), uses little range, clips, is mostly white or is too steep. | Check the height map. |
 | `CHK-PARALLAX-SCALE` | warning | A landscape set's displacement scale is more than 2x from the others. | Make the scales match. |
-| `CHK-LOW-DETAIL` | warning | Mip 0 adds little detail over mip 1. | Export at half size, or ignore. |
+| `CHK-LOW-DETAIL` | warning | Mip 0 adds little detail over mip 1. | Answer **Half size** in Review, or ignore. |
 | `CHK-UV-GUTTER` | warning | UV islands closer than 8 texels for more than 2 % of used texels. | Space the islands out. |
 
 ### Generated maps

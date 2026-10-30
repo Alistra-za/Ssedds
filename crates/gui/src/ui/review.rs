@@ -9,7 +9,9 @@ use crate::model::bottom::{problems, Level};
 use crate::model::code_text::code_line;
 use crate::model::items::Decision;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
-use crate::model::review::{DiskState, JsonKind, JsonLine, NO_EXPORT_FOLDER};
+use crate::model::review::{
+    DiskState, HalfAnswer, HalfSizeRow, JsonKind, JsonLine, NO_EXPORT_FOLDER,
+};
 use crate::model::{also, pbr_export, sets, Answer, AppModel};
 use eframe::egui;
 use engine::config::{AlphaPolicy, CubeLayout, Subtype, Target};
@@ -259,6 +261,7 @@ enum Act {
     Recipe,
     GoTo(String),
     Row(RowPick),
+    Half(String, HalfAnswer),
     AcceptAll,
     Tick(String, bool),
     AckAll,
@@ -285,6 +288,74 @@ fn json_line_text(l: &JsonLine) -> String {
         (DiskState::Edited, JsonKind::PgPatcher) => format!("{path}: edited outside Tessalith"),
         (DiskState::Edited, _) => format!("{path}: edited outside Tessalith — kept, with a note"),
         (DiskState::Unreadable, _) => format!("{path}: cannot be read; kept"),
+    }
+}
+
+/// Note FC2: the half-size question, one row per texture the last export flagged: `rock_d.png · Half size ▾`, the
+/// menu `Half size` / `Full size`. "Half size" is the one name; the code and "mip 0" are hover text (CL15). Nothing
+/// is written until Review's Export.
+fn half_size_group(
+    ui: &mut egui::Ui,
+    answers: &std::collections::BTreeMap<String, Option<HalfAnswer>>,
+    rows: &[HalfSizeRow],
+    off: Option<&str>,
+    act: &mut Option<Act>,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let n = rows.len();
+    ui.colored_label(
+        AMBER,
+        format!(
+            "{n} texture{} added nothing at full size last export",
+            plural(n)
+        ),
+    )
+    .on_hover_text(
+        "Mip 0 adds little detail over mip 1 (CHK-LOW-DETAIL). Half size drops mip 0 and is saved in sdc.toml \
+         when you export; Full size writes the texture as it is.",
+    );
+    for r in rows {
+        let text = match answers.get(&r.key).copied().flatten() {
+            None => "Half or full size? \u{25BE}",
+            Some(HalfAnswer::Half) => "Half size \u{25BE}",
+            Some(HalfAnswer::Full) => "Full size \u{25BE}",
+        };
+        // ui-rules 3.3: the menu lays out first, the name takes what is left.
+        let (select, pick) = egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| ui.link(&r.name).on_hover_text(&r.detail).clicked(),
+            |ui| {
+                let mut pick = None;
+                ui.add_enabled_ui(off.is_none(), |ui| {
+                    ui.menu_button(text, |ui| {
+                        for (a, label, hover) in [
+                            (
+                                HalfAnswer::Half,
+                                "Half size",
+                                "Drop mip 0: half the width and height",
+                            ),
+                            (HalfAnswer::Full, "Full size", "Write it as it is"),
+                        ] {
+                            if ui.button(label).on_hover_text(hover).clicked() {
+                                pick = Some(a);
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_disabled_hover_text(off.unwrap_or_default());
+                });
+                pick
+            },
+        );
+        if select {
+            *act = Some(Act::Row(RowPick::Select(r.key.clone())));
+        }
+        if let Some(a) = pick {
+            *act = Some(Act::Half(r.key.clone(), a));
+        }
     }
 }
 
@@ -554,6 +625,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .count()
         .saturating_sub(asks.len());
     let undecided = m.undecided_keys();
+    let half_rows = m.half_size_rows();
+    let half_open = m.unanswered_half_size();
     let off = m.fix_off();
     let any_suggestion = undecided
         .iter()
@@ -644,7 +717,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     let n_cols = if also_on { 4 } else { 3 };
     let heading = |i: usize| match i {
         0 => ("Blockers", format!("Blockers ({blockers})")),
-        1 => ("Undecided", format!("Undecided ({})", undecided.len())),
+        // Note FC2: an unanswered half-size row counts, because the gate waits for it.
+        1 => (
+            "Undecided",
+            format!("Undecided ({})", undecided.len() + half_open),
+        ),
         2 => ("Warnings", format!("Warnings ({})", asks.len())),
         _ => ("Also export as", "Also export as".to_string()),
     };
@@ -685,7 +762,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             }
         }
         1 => {
-            if undecided.is_empty() {
+            if undecided.is_empty() && half_rows.is_empty() {
                 ui.weak("None");
             }
             for k in &undecided {
@@ -706,6 +783,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             if accept.clicked() {
                 act = Some(Act::AcceptAll);
             }
+            half_size_group(ui, &review.half_size, &half_rows, off.as_deref(), &mut act);
         }
         2 => {
             if asks.is_empty() {
@@ -783,6 +861,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             super::header::set_meshes_view(ui.ctx(), false);
         }
         Some(Act::Row(p)) => apply(model, p),
+        Some(Act::Half(k, a)) => model.answer_half_size(&k, a),
         Some(Act::AcceptAll) => model.accept_all_suggestions(),
         Some(Act::Tick(t, on)) => model.acknowledge_ask(&t, on),
         Some(Act::AckAll) => model.acknowledge_all_asks(),

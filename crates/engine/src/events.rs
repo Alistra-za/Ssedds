@@ -79,7 +79,7 @@ pub enum SkipKind {
     PackConflict,
     /// A raw map consumed by a recipe; the event's `job_key` names the packed output.
     PackedSource,
-    /// `CHK-LOW-DETAIL`: held by `BatchRequest::low_detail = hold`, not written (v2 artist checks, check 3).
+    /// `CHK-LOW-DETAIL`: no longer emitted (Note FC2: Hold writes the full chain); kept so older event logs parse.
     LowDetail,
     /// A generated member that a real source for its slot replaced (`GEN-REPLACED`, Note CO).
     GeneratedReplaced,

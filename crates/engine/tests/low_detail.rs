@@ -101,11 +101,14 @@ fn mtime(p: &Path) -> std::time::SystemTime {
     std::fs::metadata(p).unwrap().modified().unwrap()
 }
 
+/// Note FC2 (amends CL20): Hold measures and records `CHK-LOW-DETAIL`, but writes the full chain, byte for byte
+/// what an Off run writes; no file is withheld.
 #[test]
-fn hold_skips_a_flagged_texture_intentionally_and_writes_the_rest() {
+fn hold_measures_but_writes_the_full_chain() {
     let d = tempfile::tempdir().unwrap();
     fixtures(d.path(), 2);
     let (s, ev) = run(req(d.path(), "out", LowDetailMode::Hold));
+    run(req(d.path(), "off", LowDetailMode::Off));
     let w = low_detail(&ev, "up.dds");
     assert_eq!(w.len(), 1, "{ev:?}");
     assert_eq!(w[0].data["width"], 1024);
@@ -117,44 +120,24 @@ fn hold_skips_a_flagged_texture_intentionally_and_writes_the_rest() {
         "{}",
         w[0].message
     );
-    assert_eq!(
-        skips(&ev, "up.dds"),
-        vec![(
-            SkipKind::LowDetail,
-            Some(Code::ChkLowDetail),
-            "held (low detail)".to_string()
-        )]
-    );
-    assert!(!d.path().join("out/up.dds").exists());
-    assert!(d.path().join("out/noise.dds").exists());
+    assert!(skips(&ev, "up.dds").is_empty(), "{ev:?}");
+    let (out, off) = (d.path().join("out"), d.path().join("off"));
+    assert_eq!(dds_files(&out).len(), 2);
+    for p in dds_files(&off) {
+        let q = out.join(p.file_name().unwrap());
+        assert!(
+            std::fs::read(&p).unwrap() == std::fs::read(&q).unwrap(),
+            "{p:?}"
+        );
+    }
+    assert_eq!(records(&off), records(&out));
     assert!(low_detail(&ev, "noise.dds").is_empty());
-    assert_eq!((s.converted, s.skipped, s.skipped_intentional), (1, 1, 1));
+    assert_eq!((s.converted, s.skipped, s.skipped_intentional), (2, 0, 0));
     assert_eq!(s.exit_code(), 0);
 }
 
-#[test]
-fn a_held_texture_with_an_earlier_output_says_previous_output_kept() {
-    let d = tempfile::tempdir().unwrap();
-    fixtures(d.path(), 2);
-    run(req(d.path(), "out", LowDetailMode::Off));
-    let up = d.path().join("out/up.dds");
-    let before = std::fs::read(&up).unwrap();
-    // A different upscale: the source changed, so this is the stale (encode) path, not the measure-only one.
-    upscaled(3).save(d.path().join("in/up.png")).unwrap();
-    let (s, ev) = run(req(d.path(), "out", LowDetailMode::Hold));
-    assert_eq!(low_detail(&ev, "up.dds").len(), 1);
-    assert_eq!(
-        skips(&ev, "up.dds"),
-        vec![(
-            SkipKind::LowDetail,
-            Some(Code::ChkLowDetail),
-            "held (low detail); previous output kept".to_string()
-        )]
-    );
-    assert_eq!(std::fs::read(&up).unwrap(), before);
-    assert_eq!(s.exit_code(), 0);
-}
-
+/// CL20 (owner answer 2), kept by FC2: an up-to-date output is measured again under Hold and flagged again, and
+/// stays up to date (never re-encoded).
 #[test]
 fn hold_flags_an_up_to_date_texture_again() {
     let d = tempfile::tempdir().unwrap();
@@ -164,21 +147,15 @@ fn hold_flags_an_up_to_date_texture_again() {
     let (t_up, t_noise) = (mtime(&up), mtime(&noise));
     let (s, ev) = run(req(d.path(), "out", LowDetailMode::Hold));
     assert_eq!(low_detail(&ev, "up.dds").len(), 1);
-    assert_eq!(
-        skips(&ev, "up.dds"),
-        vec![(
-            SkipKind::LowDetail,
-            Some(Code::ChkLowDetail),
-            "held (low detail); previous output kept".to_string()
-        )]
-    );
-    assert_eq!(
-        skips(&ev, "noise.dds"),
-        vec![(SkipKind::UpToDate, None, "up to date".to_string())]
-    );
+    for n in ["up.dds", "noise.dds"] {
+        assert_eq!(
+            skips(&ev, n),
+            vec![(SkipKind::UpToDate, None, "up to date".to_string())]
+        );
+    }
     assert!(low_detail(&ev, "noise.dds").is_empty());
     assert_eq!((mtime(&up), mtime(&noise)), (t_up, t_noise));
-    assert_eq!((s.converted, s.up_to_date, s.skipped), (0, 1, 1));
+    assert_eq!((s.converted, s.up_to_date, s.skipped), (0, 2, 0));
     assert_eq!(s.exit_code(), 0);
 }
 
@@ -486,6 +463,7 @@ fn hold_measures_a_touched_but_identical_source() {
     let s = e.run(plan, &rep, &CancelToken::default()).unwrap();
     let ev = sink.take();
     assert_eq!(s.failed, 0, "{ev:?}");
-    assert_eq!(skips(&ev, "up.dds")[0].0, SkipKind::LowDetail);
+    assert_eq!(low_detail(&ev, "up.dds").len(), 1);
+    assert_eq!(skips(&ev, "up.dds")[0].0, SkipKind::UpToDate);
     assert_eq!(s.exit_code(), 0);
 }

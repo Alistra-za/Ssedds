@@ -2219,7 +2219,7 @@
         },
         {
           "const": "low_detail",
-          "description": "`CHK-LOW-DETAIL`: held by `BatchRequest::low_detail = hold`, not written (v2 artist checks, check 3).",
+          "description": "`CHK-LOW-DETAIL`: no longer emitted (Note FC2: Hold writes the full chain); kept so older event logs parse.",
           "type": "string"
         },
         {

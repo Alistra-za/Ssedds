@@ -4,8 +4,9 @@ use super::history::{record_key, records_at, sha256_of};
 use super::{
     bottom::BottomTab, cm_json, cs_pbr_export, pbr_export, AppModel, Continue, ItemStatus,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Note FB1: the gate's reason, and the Blockers row's text, while no export folder is chosen.
@@ -20,6 +21,25 @@ pub struct Review {
     /// Note CN (Review Focus 5, P9): with a tick on, why `sdc.toml` cannot be saved; taken when Review opens and
     /// again on its Export, never per frame. `None`: writable (or no tick).
     pub toml_unwritable: Option<String>,
+    /// Note FC2: the half-size answers by texture key, for this export only; a row with no entry is unanswered.
+    pub half_size: BTreeMap<String, Option<HalfAnswer>>,
+}
+
+/// Note FC2: write a texture at half size (`drop_top_mip = true`) or as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HalfAnswer {
+    Half,
+    Full,
+}
+
+/// Note FC2: a texture the last export flagged (`CHK-LOW-DETAIL`) that the plan would still write at full size.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HalfSizeRow {
+    pub key: String,
+    /// The texture's name, as the row shows it.
+    pub name: String,
+    /// The engine's sentence, for the hover (CL15: the code and "mip 0" are hover text).
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +301,119 @@ impl AppModel {
         if k > 0 {
             return Err(format!("Acknowledge {k} warning{} first", plural(k)));
         }
+        // Note FC2: last, as the questions only Review asks.
+        let n = self.unanswered_half_size();
+        if n > 0 {
+            return Err(format!(
+                "Answer half or full size for {n} texture{}",
+                plural(n)
+            ));
+        }
         Ok((self.export_files(), self.undecided()))
+    }
+
+    /// Note FC2: the half-size question's rows: each texture the last export flagged (`CHK-LOW-DETAIL`) that the plan
+    /// still writes in full. One no longer eligible (resized, already halved, gone) drops out (Review Focus 2). Only
+    /// while Fake resolution and its "Measure whether full size adds anything" switch are on. Cached like
+    /// `export_files`: Review and the header ask every frame.
+    pub fn half_size_rows(&self) -> Arc<Vec<HalfSizeRow>> {
+        let c = self.settings.checks;
+        if !(c.low_detail && c.drop_top_mip) {
+            return Arc::default();
+        }
+        let key = self.view_key();
+        let inner = super::bottom::problems_inner(self);
+        {
+            let c = self.views.borrow();
+            if let Some((k, rows)) = c
+                .half_size
+                .as_ref()
+                .filter(|_| c.key.as_ref() == Some(&key))
+            {
+                if *k == inner {
+                    return rows.clone();
+                }
+            }
+        }
+        let flagged: Vec<(&str, &str)> = self
+            .export
+            .rows
+            .iter()
+            .filter_map(|r| {
+                let w = r
+                    .warnings
+                    .iter()
+                    .find(|w| w.code == engine::codes::Code::ChkLowDetail)?;
+                Some((r.job_key.as_str(), w.message.as_str()))
+            })
+            .collect();
+        let mut rows = vec![];
+        if !flagged.is_empty() {
+            let by_job: std::collections::HashMap<&str, &super::TextureItem> =
+                self.items.iter().map(|i| (i.job_key.as_str(), i)).collect();
+            for (job, detail) in flagged {
+                let Some(i) = by_job.get(job) else { continue };
+                if i.job
+                    .as_ref()
+                    .is_some_and(|j| engine::checks::low_detail_profile_eligible(&j.profile))
+                {
+                    rows.push(HalfSizeRow {
+                        key: i.key.clone(),
+                        name: i.name.clone(),
+                        detail: detail.to_string(),
+                    });
+                }
+            }
+            rows.sort_by(|a, b| a.key.cmp(&b.key));
+        }
+        let rows = Arc::new(rows);
+        let mut c = self.views.borrow_mut();
+        if c.key.as_ref() != Some(&key) {
+            *c = super::ViewCache {
+                key: Some(key),
+                ..Default::default()
+            };
+        }
+        c.half_size = Some((inner, rows.clone()));
+        rows
+    }
+
+    /// Note FC2: the half-size rows Review has no answer for (all of them while Review is closed).
+    pub fn unanswered_half_size(&self) -> usize {
+        let answers = self.review.as_ref().map(|r| &r.half_size);
+        self.half_size_rows()
+            .iter()
+            .filter(|r| !answers.is_some_and(|a| a.get(&r.key).is_some_and(Option::is_some)))
+            .count()
+    }
+
+    /// Note FC2: answer one half-size row. No-op while Review is closed.
+    pub fn answer_half_size(&mut self, key: &str, answer: HalfAnswer) {
+        if let Some(r) = self.review.as_mut() {
+            r.half_size.insert(key.to_string(), Some(answer));
+        }
+    }
+
+    /// Note FC2: Review's Export writes each `Half` answer whose row is still asked as `drop_top_mip = true`, one
+    /// undo step; the export then waits for the plan that edit starts. A `Full` answer writes nothing.
+    fn write_half_answers(&mut self) {
+        let Some(r) = self.review.as_ref() else {
+            return;
+        };
+        let keys: Vec<String> = self
+            .half_size_rows()
+            .iter()
+            .filter(|row| r.half_size.get(&row.key) == Some(&Some(HalfAnswer::Half)))
+            .map(|row| row.key.clone())
+            .collect();
+        if keys.is_empty() {
+            return;
+        }
+        self.edit("Half size", move |p| {
+            for k in &keys {
+                p.set_file_value(k, "drop_top_mip", &serde_json::json!(true));
+            }
+        });
     }
 
     /// Note FB1: Review would write without skipping anything: a finished plan with files to write, the gate open and
@@ -332,6 +464,10 @@ impl AppModel {
             return;
         }
         self.status_note = None;
+        // Only a click the gate lets through writes the answers; a refused one leaves the document as it was.
+        if self.review_gate().is_ok() {
+            self.write_half_answers();
+        }
         self.continue_review();
     }
 

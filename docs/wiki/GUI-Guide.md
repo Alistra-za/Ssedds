@@ -170,7 +170,7 @@ With two or more sets selected, a row of chips picks which of their maps to edit
 Right-clicking a selected tile or set keeps the selection; right-clicking another one selects it alone. The menu offers:
 
 - *Edit settings for N selected*.
-- *Copy settings from <texture> to N selected…*: a checklist of the active texture's own settings. Untick what you want to keep. A saved half size is asked about on Apply instead.
+- *Copy settings from <texture> to N selected…*: a checklist of the active texture's own settings. Untick what you want to keep. A saved half size is one of the ticks.
 - *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept.
 - For sets, *Select members of kind*, which turns the selection into those textures.
 
@@ -418,8 +418,8 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | Project-wide fills (legacy) | One line, shown only while `sdc.toml` holds fills in `defaults.packing.fill.*`. **Clear** removes them; set fills on each packed output's card instead. |
 | Preview | Largest previewed side, Allow 16384 previews, Live encode. |
 | Mipmaps | Levels for the selected texture. |
-| Advanced texture fields | BC7 weighting, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size (drop mip 0). |
-| Checks | The switches for the artist checks, **Drop mip 0 when it adds nothing** and **Check all UV coverage**. See *Artist checks* below. |
+| Advanced texture fields | BC7 weighting, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size. |
+| Checks | The switches for the artist checks, **Measure whether full size adds anything** and **Check all UV coverage**. See *Artist checks* below. |
 | Also export recipe | One box per `[export.legacy]` value of [Also export as Vanilla and CM](#also-export-as-vanilla-and-cm). Starts closed; Review's link opens it. |
 | Unmatched [files] entries | `[files]` entries that name no file under the current target, with **Remove**. |
 
@@ -442,7 +442,7 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 - **End of export.** One Info line counts them, for example "Checks: 3 warnings on 1 texture and 1 set; see Problems".
 - **Range overlay.** The preview's **Range** toggle paints the texels that break the value-range rule magenta on the Source side. It appears only when the texture has a per-texel range warning, and is greyed out while a pin is compared.
 - **UV coverage overlay.** The **UV coverage** toggle darkens the texels no mesh uses. It reads the Meshes scan, so scan first: it is greyed out with the reason until a scan has finished (an empty scan counts as none). **Check all UV coverage** in Advanced → Checks reads every colour texture of the folder, with a progress bar and a **Stop** button.
-- **Half size.** With **Drop mip 0 when it adds nothing** on, Export holds back low-detail textures and then asks **Export at half size?**: **Export selected at half size** saves `drop_top_mip = true` for the ticked ones and writes them from mip 1, **Export all at full size** (or Esc) writes them as they are. There is no Enter default. An unticked texture is asked about again next time. **Advanced → Half size (drop mip 0)** sets the same field by hand, and *Copy settings* asks **Copy the half size too?**.
+- **Half size.** With **Measure whether full size adds anything** on, Export measures every texture and always writes it in full. Review then asks, before the next export, about each texture whose top mip added almost nothing: **Half size** saves `drop_top_mip = true` when you press Export and writes it from mip 1; **Full size** writes it as it is and saves nothing, so it is asked again next time. Export waits until every row is answered; Close and Esc write nothing. **Advanced → Half size** sets the same field by hand, and *Copy settings* lists it as a tick.
 - **Toksvig gloss bake (opt-in).** Setting a `_n`'s *Normal handling* to **Renormalise and bake**, in a set with a complex-material `_m`, also bakes the normal's variance into that `_m`'s gloss. Off by default.
 
 ## Presets

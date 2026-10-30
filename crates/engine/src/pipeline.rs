@@ -45,10 +45,9 @@ pub enum FileError {
 #[derive(Debug)]
 pub enum Processed {
     Written(FileOutcome),
-    /// Held as low detail (`LowDetailMode::Hold`): nothing written; carries the `CHK-LOW-DETAIL` warning.
-    Held(crate::codes::Warning),
-    /// A measure-only run of an up-to-date output that was not flagged.
-    UpToDate,
+    /// A measure-only run of an up-to-date output (`LowDetailMode::Hold`): nothing written; the `CHK-LOW-DETAIL`
+    /// warning when it was flagged again (Note FC2).
+    UpToDate(Option<crate::codes::Warning>),
 }
 
 #[derive(Debug)]
@@ -503,9 +502,9 @@ pub(crate) fn encode_levels(
 /// record, except after a second Ctrl-C: that aborts the process (exit 3) and can leave `.sdc-*.tmp` files, or an
 /// output without a record (`OUT-UNKNOWN-EXISTING` on the next run). A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
 ///
-/// Check 3 (`req.low_detail`, Note CL20): a flagged texture is `Held` under `Hold` (nothing written) and carries the
-/// warning in its report under `Warn`. A `measure_only` job (an up-to-date output under `Hold`) is loaded and
-/// measured, never encoded, and is `Held` or `UpToDate`.
+/// Check 3 (`req.low_detail`, Note CL20, amended by FC2): a flagged texture is written in full and carries the
+/// warning in its report under `Warn` and `Hold` alike. A `measure_only` job (an up-to-date output under `Hold`) is
+/// loaded and measured, never encoded, and is `UpToDate` with the warning when flagged.
 #[allow(clippy::too_many_arguments)]
 pub fn process_file(
     job: &ResolvedJob,
@@ -559,7 +558,7 @@ pub fn process_file(
     };
     if measure_only {
         let (prep, ()) = prepare_then(job, cancel, tracker, Keep::Measure, true, || Ok(()))?;
-        return Ok(flagged(&prep).map_or(Processed::UpToDate, Processed::Held));
+        return Ok(Processed::UpToDate(flagged(&prep)));
     }
     let detail = req.low_detail != LowDetailMode::Off;
     // The hashes sit between the stamp check and the load, as they always have: a source that cannot be hashed
@@ -645,11 +644,6 @@ pub fn process_file(
             Ok((source_sha256, sources))
         })?;
     let low_detail = flagged(&prep);
-    if req.low_detail == LowDetailMode::Hold {
-        if let Some(w) = low_detail {
-            return Ok(Processed::Held(w));
-        }
-    }
     let (width, height) = prep.dims[0];
 
     enter(Stage::Compress);
