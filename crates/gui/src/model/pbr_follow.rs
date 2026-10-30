@@ -80,11 +80,6 @@ impl AppModel {
         if self.project.as_ref().is_none_or(|p| p.read_only()) {
             return;
         }
-        // Note FC1: a sub-type the user sets is theirs, not the plan's automatic one. A reset stays marked, so the
-        // next plan does not record it again over the reset.
-        if new.is_some() {
-            self.unmark_auto(key, "subtype");
-        }
         let follow = self.follow_of(key, new);
         // Recorded members whose file is gone, found once here (O(auto_pbr) lookups) rather than by scanning a copy
         // of every item key per entry. Anything the edit adds below is a live set member.
@@ -200,11 +195,7 @@ impl AppModel {
             .members
             .iter()
             .filter(free)
-            // Note FC1: a sub-type the plan recorded on its own is still inferred.
-            .filter(|m| {
-                *m != key
-                    && (p.file_value(m, "subtype").is_none() || self.is_auto_value(m, "subtype"))
-            })
+            .filter(|m| *m != key && p.file_value(m, "subtype").is_none())
             .filter_map(|m| {
                 let it = self.item(m)?;
                 let job = it.job.as_ref()?;

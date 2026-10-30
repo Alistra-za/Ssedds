@@ -228,6 +228,8 @@ fn a_saved_remap_reaches_the_plan_without_a_restart() {
         std::sync::Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap()),
     );
     m.user_presets = Some(presets.clone());
+    // An accepted type would be recorded on open (Note FC1, R1), and a new alias does not re-type a recorded file.
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     let swizzle = |m: &sdc_gui::model::AppModel| {

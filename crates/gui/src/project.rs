@@ -207,21 +207,6 @@ pub(crate) fn dotted_table() -> Item {
 
 /// `t[name]` as a table or inline table, created with `make()` when missing. `None` when it exists but is a
 /// plain value. (`insert` rather than `entry`: inserting a `Table` item into an inline table converts it.)
-/// Remove the dotted field `parts` from `t`, and the sub-tables it leaves empty; true when the field existed.
-fn remove_path(t: &mut dyn TableLike, parts: &[&str]) -> bool {
-    if parts.len() == 1 {
-        return t.remove(parts[0]).is_some();
-    }
-    let Some(sub) = t.get_mut(parts[0]).and_then(Item::as_table_like_mut) else {
-        return false;
-    };
-    let hit = remove_path(sub, &parts[1..]);
-    if sub.is_empty() {
-        t.remove(parts[0]);
-    }
-    hit
-}
-
 pub(crate) fn sub_table<'a>(
     t: &'a mut dyn TableLike,
     name: &str,
@@ -366,30 +351,6 @@ impl ProjectDoc {
     /// The document as the engine parses it (migration hook included, spec §5).
     pub fn config(&self) -> Result<ConfigFile, String> {
         ConfigFile::parse(&self.f.doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
-    }
-
-    /// [`Self::config`] without the `[files]` fields `skip` names (Note FC1: the decisions the GUI recorded on its own
-    /// stay automatic in its own plans). The document itself is not changed.
-    pub fn config_without(&self, skip: &[(String, &str)]) -> Result<ConfigFile, String> {
-        if skip.is_empty() {
-            return self.config();
-        }
-        let mut doc = self.f.doc.clone();
-        if let Some(files) = doc.get_mut("files").and_then(Item::as_table_like_mut) {
-            for (key, field) in skip {
-                let Some(name) = find_key(files, key) else {
-                    continue;
-                };
-                if let Some(entry) = files.get_mut(&name).and_then(Item::as_table_like_mut) {
-                    let parts: Vec<&str> = field.split('.').collect();
-                    remove_path(entry, &parts);
-                    if entry.is_empty() {
-                        files.remove(&name);
-                    }
-                }
-            }
-        }
-        ConfigFile::parse(&doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
     }
 
     pub fn target(&self) -> Option<Target> {
@@ -541,10 +502,23 @@ impl ProjectDoc {
         if self.read_only() || self.entry(key).is_none() {
             return;
         }
+        fn remove(t: &mut dyn TableLike, parts: &[&str]) -> bool {
+            if parts.len() == 1 {
+                return t.remove(parts[0]).is_some();
+            }
+            let Some(sub) = t.get_mut(parts[0]).and_then(Item::as_table_like_mut) else {
+                return false;
+            };
+            let hit = remove(sub, &parts[1..]);
+            if sub.is_empty() {
+                t.remove(parts[0]);
+            }
+            hit
+        }
         let parts: Vec<&str> = field.split('.').collect();
         if self
             .entry_mut(key)
-            .is_some_and(|entry| remove_path(entry, &parts))
+            .is_some_and(|entry| remove(entry, &parts))
         {
             self.touch();
         }

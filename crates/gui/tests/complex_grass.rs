@@ -295,10 +295,12 @@ fn a_scan_vote_retype_cleans_up_in_its_own_step() {
     let d = tempfile::tempdir().unwrap();
     grass_png(&d.path().join("textures/plants/g.png"), 32);
     let mut m = support::opened(d.path());
-    m.accept = engine::policy::AcceptSuggestions::High;
     m.set_format("plants/g.png", Format::Bc7, ColorTag::Srgb);
     assert!(m.wait_idle(Duration::from_secs(60)));
     let last = m.history.undo.last().cloned().expect("a step");
+    // Accepted from the scan's plan on: a High type accepted before it would be recorded, and a recorded type is the
+    // project's, which the scan does not re-type (Note FC1, R1).
+    m.accept = engine::policy::AcceptSuggestions::High;
     let dbdir = tempfile::tempdir().unwrap();
     m.scan_db = Some(gras_db(dbdir.path(), r"textures\plants\g.dds"));
     m.replan();
@@ -307,7 +309,12 @@ fn a_scan_vote_retype_cleans_up_in_its_own_step() {
     assert_eq!(p.file_value("plants/g.png", "format"), None);
     let n = m.history.undo.len();
     // Note FC1: the re-type is then recorded in the project as its own automatic step.
-    assert_eq!(m.history.undo[n - 1].label, "Set 1 type automatically");
+    // (Every file of the folder: this is the first plan that accepts High suggestions.)
+    let label = &m.history.undo[n - 1].label;
+    assert!(
+        label.starts_with("Set ") && label.ends_with(" types automatically"),
+        "{label}"
+    );
     assert_eq!(
         p.file_value("plants/g.png", "subtype"),
         Some(serde_json::json!("complex_grass"))

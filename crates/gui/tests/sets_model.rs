@@ -1305,12 +1305,20 @@ fn a_scan_database_decides_a_diffuse_alpha() {
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
     let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
+    // Note FC1 (R1): the meshes' verdict is then recorded in `sdc.toml`, so it plans as the project's.
     assert_eq!(
         (
             j.profile.alpha.policy,
             j.provenance["alpha.policy"].to_string()
         ),
-        (AlphaPolicy::Blend, "mesh:alpha".to_string())
+        (AlphaPolicy::Blend, "project_file".to_string())
+    );
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value("a/glass.png", "alpha.policy"),
+        Some(serde_json::json!("blend"))
     );
     assert!(!asked(&m));
 }

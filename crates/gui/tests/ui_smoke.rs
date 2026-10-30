@@ -1657,6 +1657,13 @@ fn the_dim_npot_box_offers_a_power_of_two_resize() {
 fn an_accepted_suggestion_reads_auto_with_its_reason_on_hover() {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened_as_the_app(mod_folder(d.path()), d.path().join("export"));
+    // Note FC1 (R1): the opening recorded the accepted types as project values; with that step undone (and not
+    // recorded again) the type is the accepted suggestion once more.
+    assert!(model
+        .undo_label()
+        .is_some_and(|l| l.ends_with("automatically")));
+    model.undo();
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     model.select_item("landscape/rock01.png");
     let mut h = harness(model);
     h.ctx.global_style_mut(|s| {

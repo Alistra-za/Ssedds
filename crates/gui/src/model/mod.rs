@@ -1,6 +1,7 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod also;
 pub mod auto_flags;
+mod auto_record;
 pub mod bottom;
 pub mod bulk;
 pub mod checks;
@@ -73,11 +74,6 @@ type NvttKey = (PathBuf, u64, Option<std::time::SystemTime>);
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// A recorded value as the automatic row lists it: `normal`, `cutout`, `100`.
-fn show(v: &serde_json::Value) -> String {
-    v.as_str().map_or_else(|| v.to_string(), str::to_string)
-}
 
 /// How long the "Undid/Redid" note stays in the status line (AG15).
 const UNDO_NOTE_FOR: Duration = Duration::from_secs(5);
@@ -312,8 +308,9 @@ pub struct AppModel {
     settings_error: Option<String>,
     /// What the last recovery snapshot was taken at (audit item 11).
     recovery_key: Option<RecoveryKey>,
-    /// Note FB5: the restore step on the undo stack (its depth) and the files it restored, for the toast's Undo.
-    crash_restore: Option<(usize, Vec<PathBuf>)>,
+    /// Note FB5: the restore step on the undo stack (its depth and the `history.pushes` it left, which identify it)
+    /// and the files it restored, for the toast's Undo.
+    crash_restore: Option<(usize, u64, Vec<PathBuf>)>,
     /// Documents that were read-only while a recovery file waited: once fixed and reloaded, the file's age no longer
     /// counts (fixing the document made it newer than the file).
     // shortcut: kept in memory only. Quit, fix the file by hand and relaunch, and the older `.recovery` file is
@@ -537,18 +534,14 @@ pub struct AppModel {
     pub show_in_meshes: Option<String>,
     /// A NIF worklist row's fix: (NIF path, tab, field); app.rs switches to the Meshes view (NIF team, Note GD1).
     pub nif_tab_request: Option<(String, meshes::NifTab, Option<nif::fields::Field>)>,
-    /// Note FC1 (AM14): `Choose preset…` was clicked; the header opens its Preset menu on the next frame.
-    pub choose_preset: bool,
-    /// Note FC1: the last automatic recording's lines (its row's hover) and the `history.pushes` it left.
-    pub(crate) auto_note: Option<(Vec<String>, u64)>,
+    /// Note FC1 (AM14): `Choose preset…` was clicked on this pass (`ctx.cumulative_pass_nr`); the header opens its
+    /// Preset menu if it draws within two passes, and drops a stale request.
+    pub choose_preset: Option<u64>,
+    /// Note FC1: the last automatic recording: its row text, its lines (the row's hover) and the `history.pushes`
+    /// it left.
+    pub(crate) auto_note: Option<auto_record::AutoNote>,
     /// Note FC1 (AM14): `preset` names no installed preset; computed once per plan request.
     missing_preset_id: Option<String>,
-    /// Note FC1: the plan's own decisions are being written (they stay automatic, `unmark_auto` leaves them).
-    recording: bool,
-    /// Note FC1: re-recordings since the last user step; capped so alternating evidence cannot loop.
-    auto_rerecords: u8,
-    /// Note FC1: a user step started the plan chain in flight; its recording folds into that step.
-    auto_cause: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// Review's Export was clicked while a plan or scan read was in flight: the export continues when it lands.
@@ -786,12 +779,9 @@ impl AppModel {
             report_saving: false,
             show_in_meshes: None,
             nif_tab_request: None,
-            choose_preset: false,
+            choose_preset: None,
             auto_note: None,
             missing_preset_id: None,
-            recording: false,
-            auto_rerecords: 0,
-            auto_cause: false,
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -914,8 +904,6 @@ impl AppModel {
         self.drop_undo_note();
         self.history.clear();
         self.auto_note = None;
-        self.auto_rerecords = 0;
-        self.auto_cause = false;
         self.refresh_banner();
         let recent = self.settings.recent.clone();
         self.settings.push_recent(root.clone());
@@ -1013,10 +1001,7 @@ impl AppModel {
         req.project_config_inline = Some(if project.read_only() {
             ConfigFile::default()
         } else {
-            // Note FC1: what the plan recorded on its own stays automatic here, so new scan evidence can change it.
-            let mut c = project
-                .config_without(&self.auto_fields())
-                .unwrap_or_default();
+            let mut c = project.config().unwrap_or_default();
             // AM14: a preset that no longer exists is left out, so the plan runs on the fallback; Note FC1: the
             // export is blocked by a row until another preset is chosen.
             if self.missing_preset_id.is_some() {
@@ -1892,192 +1877,9 @@ impl AppModel {
         });
     }
 
-    /// Note FC1: the `(key, field)` values the plan recorded on its own that the document still holds unchanged: they
-    /// stay automatic, so the GUI's plan leaves them out of `sdc.toml` (`request`).
-    fn auto_fields(&self) -> Vec<(String, &'static str)> {
-        let Some(doc) = self.project.as_ref() else {
-            return vec![];
-        };
-        self.history
-            .auto_recorded
-            .iter()
-            .filter(|((k, f), v)| doc.file_value(k, f).as_ref() == Some(*v))
-            .map(|(k, _)| k.clone())
-            .collect()
-    }
-
-    /// Note FC1: `key`'s `field` is a value the plan recorded on its own and nobody changed since.
-    pub(crate) fn is_auto_value(&self, key: &str, field: &'static str) -> bool {
-        let rec = self.history.auto_recorded.get(&(key.to_string(), field));
-        rec.is_some_and(|v| {
-            self.project
-                .as_ref()
-                .and_then(|d| d.file_value(key, field))
-                .as_ref()
-                == Some(v)
-        })
-    }
-
-    /// Note FC1: the user set `key`'s `field` themselves: it is no longer automatic.
-    fn unmark_auto(&mut self, key: &str, field: &str) {
-        if !self.recording {
-            // The alpha policy and its threshold go together.
-            let alpha = field.starts_with("alpha.");
-            let before = self.history.auto_recorded.len();
-            self.history.auto_recorded.retain(|(k, f), _| {
-                !(k == key && (*f == field || (alpha && f.starts_with("alpha."))))
-            });
-            // The same value as recorded is no text change, so no edit re-plans: the plan must see it as explicit.
-            if self.history.auto_recorded.len() != before && !self.batch {
-                self.replan();
-            }
-        }
-    }
-
-    /// Note FC1 (amends U3/U5): what the settled plan decided on its own is written into `sdc.toml`, so Save keeps it
-    /// and `sdc convert` plans the same: an accepted High suggestion (mesh-vote and GRAS sub-types are High
-    /// suggestions too) writes `subtype`, a mesh-alpha verdict writes `alpha.policy` and its threshold. One undo step,
-    /// one Problems row. A recorded value stays automatic in the GUI (`auto_fields`): when new evidence changes it,
-    /// it is written again (`key: old → new`). A field the user wrote, or one whose recorded entry is gone (an Undo,
-    /// a reset), is left alone. True when it recorded (and re-planned).
-    fn record_auto_decisions(&mut self) -> bool {
-        use engine::policy::Provenance;
-        // Never over a running export, nor over the crash restore its toast can still undo (Note FB5).
-        let restore_open =
-            self.crash_restore.is_some() && self.undo_label() == Some("Restore crash edits");
-        // Alternating evidence would re-record forever: two rounds, then wait for a user step.
-        if self.export.running.is_some() || restore_open || self.auto_rerecords >= 2 {
-            return false;
-        }
-        let Some(doc) = self.project.as_ref().filter(|p| !p.read_only()) else {
-            return false;
-        };
-        // (key, field, new value: `None` clears a recorded value the plan no longer decides on its own).
-        type Write = (String, &'static str, Option<serde_json::Value>);
-        let mut writes: Vec<Write> = vec![];
-        let mut lines = vec![];
-        for i in &self.items {
-            // What the plan decided on its own for each field; `None`: nothing (any more), as for a file that became
-            // a helper, so its recorded type is cleared. An image whose plan failed (no job) is left alone.
-            let image = matches!(i.kind, ItemKind::Image | ItemKind::Dds);
-            if image && i.job.is_none() {
-                continue;
-            }
-            let j = i.job.as_ref().filter(|_| {
-                image && !matches!(i.status, ItemStatus::PackedInto(_) | ItemStatus::Skipped(_))
-            });
-            let st = j
-                .filter(|j| fields::auto_subtype_reason(j).is_some())
-                .map(|j| json!(j.profile.subtype));
-            // shortcut: a mesh `remove` stays GUI-only. Written as an explicit policy it would stop cs-compact's
-            // opaque-colour rules (owner O1) and change the format; record it once the engine treats both alike.
-            let mesh = |j: &engine::policy::ResolvedJob, f: &str| {
-                j.provenance.get(f) == Some(&Provenance::MeshAlpha)
-            };
-            let mesh_j = j.filter(|j| {
-                mesh(j, "alpha.policy") && j.profile.alpha.policy != AlphaPolicy::Remove
-            });
-            let alpha = mesh_j.map(|j| json!(j.profile.alpha.policy));
-            let threshold = mesh_j
-                .filter(|j| mesh(j, "alpha.threshold"))
-                .map(|j| json!(j.profile.alpha.threshold));
-            for (f, auto) in [
-                ("subtype", st),
-                ("alpha.policy", alpha),
-                ("alpha.threshold", threshold),
-            ] {
-                let rec = self.history.auto_recorded.get(&(i.key.clone(), f));
-                let now = doc.file_value(&i.key, f);
-                let line = match (rec, now, &auto) {
-                    // New: nothing written by anyone yet.
-                    (None, None, Some(v)) => format!("{}: {}", i.key, show(v)),
-                    // Recorded and unchanged since: the plan saw it as automatic again, so a change is new evidence.
-                    (Some(r), Some(n), Some(v)) if *r == n && n != *v => {
-                        format!("{}: {} → {}", i.key, show(&n), show(v))
-                    }
-                    (Some(r), Some(n), None) if *r == n => {
-                        format!("{}: {} → not set", i.key, show(&n))
-                    }
-                    _ => continue,
-                };
-                if f != "alpha.threshold" {
-                    lines.push(line);
-                }
-                writes.push((i.key.clone(), f, auto));
-            }
-        }
-        if writes.is_empty() {
-            return false;
-        }
-        let rerecord = writes
-            .iter()
-            .any(|(k, f, _)| self.history.auto_recorded.contains_key(&(k.clone(), *f)));
-        let n = lines.len().max(1);
-        let label = format!(
-            "Set {n} type{} automatically",
-            if n == 1 { "" } else { "s" }
-        );
-        // Marked before the edit: the plan it starts already leaves them out (`auto_fields`). A cleared one is
-        // forgotten, so a file that stops being a helper is recorded again; shortcut: undoing the clear brings the
-        // value back as the user's (saved and CLI-agreeing, but no longer re-typed), snapshot the map per step if that matters.
-        for (k, f, v) in &writes {
-            match v {
-                Some(v) => self.history.auto_recorded.insert((k.clone(), f), v.clone()),
-                None => self.history.auto_recorded.remove(&(k.clone(), *f)),
-            };
-        }
-        // Caused by a user step (its plan chain): one undo takes both back, as the encoding cleanup does (Z11).
-        let cause = std::mem::take(&mut self.auto_cause);
-        let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
-        self.recording = true;
-        let fold = cause && self.history.undo.last().is_some_and(|c| c.after == before);
-        let write = |p: &mut ProjectDoc| {
-            for (k, f, v) in &writes {
-                match v {
-                    Some(v) => p.set_file_value(k, f, v),
-                    None => p.clear_file_value(k, f),
-                }
-            }
-        };
-        let recorded = if fold {
-            self.batch = true;
-            if let Some(p) = self.project.as_mut() {
-                write(p);
-            }
-            self.batch = false;
-            let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
-            if let Some(last) = self.history.undo.last_mut() {
-                last.after = after.clone();
-            }
-            let changed = after != before;
-            if changed {
-                self.replan();
-            }
-            changed
-        } else {
-            self.batch_edit(&label, |m| m.edit("Set automatically", write))
-        };
-        self.recording = false;
-        if recorded {
-            self.auto_rerecords += u8::from(rerecord);
-            self.auto_note = Some((lines, self.history.pushes));
-            self.invalidate_views();
-        }
-        recorded
-    }
-
-    /// Note FC1 (X10/X11): `Tag as grass` writes the sub-type the CLI reads (the user's decision, one step).
-    pub fn tag_as_grass(&mut self, key: &str) {
-        self.edit_subtype("Tag as grass", key, Some(Subtype::ComplexGrass));
-    }
-
     /// A user edit recorded a step: re-plan as a change (`replan_changed`).
     fn replan_after_edit(&mut self) {
         self.type_edit_recorded();
-        if !self.recording {
-            self.auto_rerecords = 0;
-            self.auto_cause = true;
-        }
         self.replan_changed();
     }
 
@@ -2778,8 +2580,6 @@ impl AppModel {
         if self.record_auto_decisions() {
             return;
         }
-        // The chain has settled: a later recording (a scan landing) is no part of that step.
-        self.auto_cause = false;
         // Both flags are taken together so a leftover one cannot fire on a later, unrelated plan; the export the
         // user clicked wins.
         let (clicked, continued) = (
@@ -3037,8 +2837,6 @@ impl AppModel {
         self.dropped_fills.clear();
         // Note FC1: the row's Undo is for its own step; `pushes` does not move on an undo.
         self.auto_note = None;
-        self.auto_rerecords = 0;
-        self.auto_cause = false;
         // Note FB3: the bulk result line describes the edit that is now taken back (or redone).
         self.bulk.report = None;
         // Task 9 (Z11): restoring a state as it was is no sub-type change to clean up after.
@@ -3190,7 +2988,7 @@ impl AppModel {
         // other document's file, if it restored, is the only one the toast's Undo deletes); give it a notice if one
         // is ever seen.
         if self.history.undo.len() > before {
-            self.crash_restore = Some((self.history.undo.len(), restored));
+            self.crash_restore = Some((self.history.undo.len(), self.history.pushes, restored));
             self.messages.notify_with(
                 messages::Severity::Info,
                 "Restored unsaved edits from the crash",
@@ -3199,27 +2997,31 @@ impl AppModel {
         }
     }
 
+    /// Note FB5: the crash-restore step is the top of the undo stack: at its depth, with nothing pushed since (an
+    /// undo and redo of it push nothing).
+    pub(crate) fn crash_restore_on_top(&self) -> bool {
+        self.crash_restore
+            .as_ref()
+            .is_some_and(|(depth, pushes, _)| {
+                self.history.undo.len() == *depth && self.history.pushes == *pushes
+            })
+    }
+
     /// The restore toast's Undo (Note FB5): takes back the restore step and deletes the `.recovery` files, since the
     /// user rejected them. Once another edit sits on top of the step it only says so and changes nothing. (A plain
     /// Ctrl+Z keeps the files.)
     pub fn undo_crash_restore(&mut self) {
-        let Some((depth, files)) = self.crash_restore.as_ref() else {
+        let Some((_, _, files)) = self.crash_restore.as_ref() else {
             return;
         };
-        if self.history.undo.len() != *depth
-            || self
-                .history
-                .undo
-                .last()
-                .is_none_or(|c| c.label != "Restore crash edits")
-        {
+        let files = files.clone();
+        if !self.crash_restore_on_top() {
             self.messages.notify(
                 messages::Severity::Info,
                 "The restored edits were already undone or edited since: use Undo or Redo",
             );
             return;
         }
-        let files = files.clone();
         self.crash_restore = None;
         self.undo();
         for f in files {
@@ -3298,8 +3100,6 @@ impl AppModel {
     }
 
     pub fn set_field(&mut self, item_key: &str, field: &str, value: serde_json::Value) {
-        // Note FC1: a value the user sets is theirs, not the plan's automatic one.
-        self.unmark_auto(item_key, field);
         if field == "subtype" {
             if let Ok(st) = serde_json::from_value::<Subtype>(value.clone()) {
                 return self.edit_subtype("Change subtype", item_key, Some(st));
@@ -3393,9 +3193,6 @@ impl AppModel {
     pub fn decide(&mut self, item_key: &str, answer: Answer) {
         if let Answer::Subtype(st) = answer {
             return self.edit_subtype("Decide", item_key, Some(st));
-        }
-        if matches!(answer, Answer::Alpha(_)) {
-            self.unmark_auto(item_key, "alpha.policy");
         }
         let k = item_key.to_string();
         self.edit("Decide", move |p| match answer {

@@ -543,22 +543,13 @@ fn ordinary_image_can_become_a_helper() {
         .contains("fills to x alpha"));
     // The selection stays on the file, now the helper panel.
     h.get_by_role_and_label(Role::ComboBox, "Read from");
-    // One undo step, and no subtype key is left: the type the opening recorded (Note FC1) goes with the role.
-    assert_eq!(value(&h, "x_mask.png", "subtype"), None);
+    // One undo step, and the subtype key is not written by it (the type the opening recorded, Note FC1, stays).
+    assert_eq!(value(&h, "x_mask.png", "subtype"), opened_type);
     h.state_mut().undo();
     settle(&mut h);
     assert_eq!(value(&h, "x_mask.png", "helper.role"), None);
     assert_eq!(value(&h, "x_mask.png", "subtype"), opened_type);
     assert_eq!(h.state().history.undo.len(), steps);
-    // Note FC1: a file that stops being a helper by a new edit (not an Undo) gets its automatic type written again,
-    // so `sdc convert` agrees.
-    h.state_mut().redo();
-    settle(&mut h);
-    assert_eq!(value(&h, "x_mask.png", "subtype"), None);
-    pick(&mut h, "Helper role", "Not a helper");
-    assert_ne!(item(&h).kind, ItemKind::Helper);
-    assert!(opened_type.is_some(), "the opening recorded a type");
-    assert_eq!(value(&h, "x_mask.png", "subtype"), opened_type);
 }
 
 #[test]

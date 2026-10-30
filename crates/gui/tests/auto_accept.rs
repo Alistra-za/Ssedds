@@ -1,12 +1,14 @@
-//! Note FC1: the GUI's automatic decisions (High suggestions, mesh-vote sub-types, mesh-alpha verdicts) are recorded
-//! in the project as one undo step with one Problems row; the grass remedy writes `subtype = "complex_grass"`; a
-//! missing preset blocks the export with a row.
+//! Note FC1: the GUI's automatic decisions (High suggestions, mesh-vote sub-types, mesh-alpha verdicts) are written
+//! into the project as plain values, each recording its own undo step with one Problems row; a missing preset blocks
+//! the export with a row.
 mod support;
+use eframe::egui;
+use egui_kittest::kittest::Queryable;
 use engine::config::{AlphaPolicy, Subtype, Target};
 use engine::presets::ConfigFile;
 use engine::shader::{MeshAlpha, Shader};
 use image::{ImageBuffer, Rgb, Rgba};
-use sdc_gui::model::bottom::{problems, At, Fix, Level, Problem};
+use sdc_gui::model::bottom::{problems, At, BottomTab, Fix, Level, Problem};
 use sdc_gui::model::AppModel;
 use serde_json::json;
 use std::path::Path;
@@ -50,8 +52,12 @@ fn text(m: &AppModel) -> String {
     m.project.as_ref().unwrap().text()
 }
 
+fn value(m: &AppModel, key: &str, field: &str) -> Option<serde_json::Value> {
+    m.project.as_ref().unwrap().file_value(key, field)
+}
+
 fn subtype(m: &AppModel, key: &str) -> Option<serde_json::Value> {
-    m.project.as_ref().unwrap().file_value(key, "subtype")
+    value(m, key, "subtype")
 }
 
 /// What `sdc convert` (CLI default `--accept-suggestions none`, no scan evidence) plans from the document's text.
@@ -84,6 +90,11 @@ fn auto_accepted_types_are_recorded_and_undoable() {
     let mut m = support::opened_as_the_app(root.clone(), d.path().join("export"));
     let job = m.item("a/rock_n.png").unwrap().job.clone().unwrap();
     assert_eq!(job.profile.subtype, Subtype::Normal);
+    assert_eq!(
+        job.provenance["subtype"].to_string(),
+        "project_file",
+        "a recorded value is a plain project value"
+    );
     assert!(m.is_dirty(), "the recording is an unsaved change");
     assert_eq!(subtype(&m, "a/rock_n.png"), Some(json!("normal")));
     let t = text(&m);
@@ -102,6 +113,12 @@ fn auto_accepted_types_are_recorded_and_undoable() {
         row.detail.as_deref().unwrap_or("").contains("a/rock_n.png"),
         "{row:?}"
     );
+    // The GUI and `sdc convert` plan the same value with the same provenance (the manifests match).
+    let p = cli_plan(&root, &text(&m));
+    assert_eq!(
+        cli_job(&p, "rock_n.png").provenance["subtype"],
+        job.provenance["subtype"]
+    );
     // Undo takes the entry out, and the next plan does not record it again.
     m.undo();
     assert!(m.wait_idle(WAIT));
@@ -118,25 +135,41 @@ fn auto_accepted_types_are_recorded_and_undoable() {
     assert!(!m.can_redo());
 }
 
-/// A user's own choice of the value the plan recorded is theirs: the plan does not change it again.
+/// R2: a recording a user's edit leads to is its own undo step; Undo takes back only the recording.
 #[test]
-fn choosing_the_recorded_type_makes_it_the_users() {
+fn a_recording_after_a_user_edit_is_its_own_step() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path().join("textures");
-    rgb(&root, "a/rock_n.png", [128, 128, 255]);
+    rgb(&root, "a/x.png", [90, 60, 30]);
+    rgb(&root, "a/x_mask.png", [200, 200, 200]);
+    let toml = "[files.\"a/x_mask.png\"]\nhelper.role = \"opacity\"\n";
+    std::fs::write(root.join("sdc.toml"), toml).unwrap();
     let mut m = support::opened_as_the_app(root, d.path().join("export"));
-    let job = |m: &AppModel| m.item("a/rock_n.png").unwrap().job.clone().unwrap();
-    assert!(
-        sdc_gui::model::fields::auto_subtype_reason(&job(&m)).is_some(),
-        "still (auto)"
-    );
-    m.set_field("a/rock_n.png", "subtype", json!("normal"));
+    assert_eq!(subtype(&m, "a/x_mask.png"), None, "a helper has no type");
+    let steps = m.history.undo.len();
+    m.set_field("a/x_mask.png", "helper.role", json!("none"));
     assert!(m.wait_idle(WAIT));
-    assert_eq!(
-        job(&m).provenance["subtype"].to_string(),
-        "project_file",
-        "the user's own value"
+    let st = subtype(&m, "a/x_mask.png").expect("its type is recorded");
+    assert_eq!(m.history.undo.len(), steps + 2, "{:?}", m.history.undo);
+    assert_eq!(m.undo_label(), Some("Set 1 type automatically"));
+    let row = auto_row(&m).expect("the row");
+    assert_eq!(row.fix, Some(Fix::UndoLast));
+    assert!(
+        row.detail
+            .as_deref()
+            .unwrap_or("")
+            .contains(&format!("a/x_mask.png: {}", st.as_str().unwrap())),
+        "{row:?}"
     );
+    m.undo();
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(subtype(&m, "a/x_mask.png"), None);
+    assert_eq!(
+        value(&m, "a/x_mask.png", "helper.role"),
+        Some(json!("none"))
+    );
+    assert_eq!(m.history.undo.len(), steps + 1, "the user's edit stays");
+    assert!(auto_row(&m).is_none(), "its Undo was for the undone step");
 }
 
 /// Note FB5: a crash restore's toast can undo it while it is the top step, so nothing is recorded over it.
@@ -212,40 +245,22 @@ fn an_explicit_subtype_is_never_touched() {
     );
 }
 
-/// X10/X11: the grass remedy writes the sub-type the CLI reads, with no GRAS evidence.
+/// U5, CN59, R1: a mesh-alpha verdict is recorded like the High types; later evidence never rewrites a recorded
+/// value; the CLI plans the same from the text with no evidence.
 #[test]
-fn grass_remedy_writes_the_subtype() {
-    let d = tempfile::tempdir().unwrap();
-    let root = d.path().join("textures");
-    rgb(&root, "plants/g.png", [60, 120, 40]);
-    let mut m = support::opened_as_the_app(root.clone(), d.path().join("export"));
-    m.tag_as_grass("plants/g.png");
-    assert!(m.wait_idle(WAIT));
-    assert_eq!(subtype(&m, "plants/g.png"), Some(json!("complex_grass")));
-    assert_eq!(m.undo_label(), Some("Tag as grass"));
-    let p = cli_plan(&root, &text(&m));
-    assert_eq!(cli_job(&p, "g.png").profile.subtype, Subtype::ComplexGrass);
-    // The arm Task 10's row carries.
-    assert_eq!(
-        Fix::TagAsGrass("plants/g.png".into()),
-        Fix::TagAsGrass("plants/g.png".into())
-    );
-}
-
-/// U5, CN59: a mesh-vote sub-type and a mesh-alpha verdict are recorded with the High types, in the one row; the CLI
-/// then plans the same sub-type and alpha from the text with no evidence.
-#[test]
-fn evidence_decisions_are_recorded() {
+fn evidence_decisions_are_recorded_and_recorded_values_stay() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path().join("textures");
     rgb(&root, "landscape/grass/g.png", [60, 120, 40]);
     varying(&root, "a/wall.png");
     let mut m = support::opened_as_the_app(root.clone(), d.path().join("export"));
-    // Before the scan: the colour map is recorded as what its name says.
+    // Before the scan: the colour maps are recorded as what their names say; the wall's alpha is still asked.
     assert_eq!(
         subtype(&m, "landscape/grass/g.png"),
         Some(json!("landscape_diffuse"))
     );
+    assert_eq!(value(&m, "a/wall.png", "alpha.policy"), None);
+    let steps = m.history.undo.len();
     // Stub evidence, as a scan that finishes later gives it: kept by the read while the store is unsettled.
     m.mesh_votes = [(
         "textures/landscape/grass/g".to_string(),
@@ -261,44 +276,32 @@ fn evidence_decisions_are_recorded() {
     m.scan_store_unsettled = true;
     m.replan();
     assert!(m.wait_idle(WAIT));
-    let g = m
-        .item("landscape/grass/g.png")
-        .unwrap()
-        .job
-        .clone()
-        .unwrap();
-    assert_eq!(g.profile.subtype, Subtype::PbrAlbedo, "the vote decides");
+    // R1: the recorded sub-type is the project's; the vote does not rewrite it.
+    assert_eq!(
+        subtype(&m, "landscape/grass/g.png"),
+        Some(json!("landscape_diffuse"))
+    );
     let w = m.item("a/wall.png").unwrap().job.clone().unwrap();
     assert_eq!(
         (w.profile.alpha.policy, w.profile.alpha.threshold),
         (AlphaPolicy::Cutout, 100)
     );
-    let doc = m.project.as_ref().unwrap();
     assert_eq!(
-        doc.file_value("landscape/grass/g.png", "subtype"),
-        Some(json!("pbr_albedo"))
-    );
-    assert_eq!(
-        doc.file_value("a/wall.png", "alpha.policy"),
+        value(&m, "a/wall.png", "alpha.policy"),
         Some(json!("cutout"))
     );
-    assert_eq!(
-        doc.file_value("a/wall.png", "alpha.threshold"),
-        Some(json!(100))
-    );
-    // The recorded type stays automatic in the GUI ("(auto)", with its reason), so the scan could re-type it.
-    assert!(sdc_gui::model::fields::auto_subtype_reason(&g).is_some());
-    let detail = auto_row(&m)
-        .expect("the combined row")
-        .detail
-        .unwrap_or_default();
-    assert!(
-        detail.contains("landscape/grass/g.png: landscape_diffuse → pbr_albedo")
-            && detail.contains("a/wall.png: cutout"),
-        "{detail}"
-    );
+    assert_eq!(value(&m, "a/wall.png", "alpha.threshold"), Some(json!(100)));
+    // Its own step and row; the count is of values, not only types.
+    assert_eq!(m.history.undo.len(), steps + 1);
+    assert_eq!(m.undo_label(), Some("Set 1 value automatically"));
+    let row = auto_row(&m).expect("the row");
+    assert_eq!(row.text, "1 value set automatically (High confidence)");
+    assert_eq!(row.detail.as_deref(), Some("a/wall.png: cutout"));
     let p = cli_plan(&root, &text(&m));
-    assert_eq!(cli_job(&p, "g.png").profile.subtype, Subtype::PbrAlbedo);
+    assert_eq!(
+        cli_job(&p, "g.png").profile.subtype,
+        Subtype::LandscapeDiffuse
+    );
     let cw = cli_job(&p, "wall.png");
     assert_eq!(
         (cw.profile.alpha.policy, cw.profile.alpha.threshold),
@@ -337,4 +340,25 @@ fn a_missing_preset_blocks_export_with_a_row() {
         "{:?}",
         m.banner
     );
+}
+
+/// AM14: the row's `Choose preset…` opens the header's Preset menu.
+#[test]
+fn choose_preset_opens_the_preset_menu() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    rgb(&root, "a/rock_n.png", [128, 128, 255]);
+    std::fs::write(root.join("sdc.toml"), "preset = \"ghost\"\n").unwrap();
+    let mut m = support::opened_as_the_app(root, d.path().join("export"));
+    m.toggle_tab(BottomTab::Problems);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    assert!(h.query_by_label("Presets…").is_none(), "the menu is closed");
+    h.get_by_label("Choose preset…").click();
+    h.run();
+    h.get_by_label("Presets…");
+    assert!(h.state().choose_preset.is_none(), "the request was taken");
 }

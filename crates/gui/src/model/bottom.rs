@@ -119,8 +119,6 @@ pub enum Fix {
     UndoLast,
     /// Note GD1: open the NIF on this tab and field.
     ShowNifTab(String, NifTab, Option<Field>),
-    /// Note FC1 (X10/X11): write `subtype = "complex_grass"` for this item.
-    TagAsGrass(String),
     /// Note FC1 (AM14): open the header's Preset menu.
     ChoosePreset,
 }
@@ -575,18 +573,11 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         });
     }
     // Note FC1: what the plan decided on its own and the project now records, one row with every texture on hover.
-    if let Some((lines, step)) = &m.auto_note {
-        let n = lines.len();
-        let s = if n == 1 { "" } else { "s" };
+    if let Some(a) = &m.auto_note {
         out.push(Problem {
-            fix: undo(*step),
-            detail: Some(lines.join("\n")),
-            ..row(
-                Level::Info,
-                At::Project,
-                format!("{n} type{s} set automatically (High confidence)"),
-                None,
-            )
+            fix: undo(a.step),
+            detail: Some(a.lines.join("\n")),
+            ..row(Level::Info, At::Project, a.text.clone(), None)
         });
     }
     out.extend(nif_rows(NifLevel::Info, Level::Info));

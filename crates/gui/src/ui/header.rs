@@ -617,41 +617,46 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut picked = None;
     let mut presets = false;
     let has_project = model.project.is_some();
+    let choices = model.preset_choices();
     // K5: the popup always opens, so Presets… is reachable with no folder; only the presets need a project.
+    let mut body = |ui: &mut egui::Ui| {
+        ui.add_enabled_ui(has_project, |ui| {
+            let entry = |ui: &mut egui::Ui, on: bool, text: &str| {
+                ui.selectable_label(on, text)
+                    .on_disabled_hover_text("Open a folder first")
+                    .clicked()
+            };
+            if entry(ui, cur.is_none(), &default) {
+                picked = Some(None);
+            }
+            for id in &choices {
+                if entry(ui, cur.as_deref() == Some(id.as_str()), id) {
+                    picked = Some(Some(id.clone()));
+                }
+            }
+        });
+        ui.separator();
+        if ui
+            .button("Presets…")
+            .on_hover_text("Make and edit your own presets (saved in %APPDATA%\\sdc\\presets)")
+            .clicked()
+        {
+            presets = true;
+        }
+    };
     let combo = egui::ComboBox::from_id_salt("preset")
         .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
-        .show_ui(ui, |ui| {
-            ui.add_enabled_ui(has_project, |ui| {
-                let entry = |ui: &mut egui::Ui, on: bool, text: &str| {
-                    ui.selectable_label(on, text)
-                        .on_disabled_hover_text("Open a folder first")
-                        .clicked()
-                };
-                if entry(ui, cur.is_none(), &default) {
-                    picked = Some(None);
-                }
-                for id in model.preset_choices() {
-                    if entry(ui, cur.as_deref() == Some(id.as_str()), &id) {
-                        picked = Some(Some(id));
-                    }
-                }
-            });
-            ui.separator();
-            if ui
-                .button("Presets…")
-                .on_hover_text("Make and edit your own presets (saved in %APPDATA%\\sdc\\presets)")
-                .clicked()
-            {
-                presets = true;
-            }
-        })
+        .show_ui(ui, |ui| body(ui))
         .response
         .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
-    // Note FC1 (AM14): a Problems row's `Choose preset…` opens this menu. egui 0.36 keeps a combo's popup state
-    // under its button id `.with("popup")` (`ComboBox::widget_to_popup_id`, private).
-    if std::mem::take(&mut model.choose_preset) {
-        egui::Popup::open_id(ui.ctx(), combo.id.with("popup"));
-    }
+    // Note FC1 (AM14): a Problems row's `Choose preset…` opens the same menu under the combo, as a popup the header
+    // owns (egui 0.36 has no public way to open a combo). A request older than two passes is dropped.
+    let now = ui.ctx().cumulative_pass_nr();
+    let request = model.choose_preset.take().is_some_and(|at| now <= at + 2);
+    egui::Popup::menu(&combo)
+        .id(egui::Id::new("preset_choose_menu"))
+        .open_memory(request.then_some(egui::SetOpenCommand::Bool(true)))
+        .show(|ui| body(ui));
     if presets {
         model.open_presets();
     }

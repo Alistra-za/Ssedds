@@ -403,6 +403,7 @@ fn the_gui_accepts_high_suggestions_and_still_asks_for_medium_ones() {
             .iter()
             .any(|x| matches!(x, Decision::Subtype { .. }))
     };
+    // Note FC1 (R1): the accepted types are then recorded in `sdc.toml`, so they plan as the project's.
     for (key, want) in [
         ("a/iron.png", Subtype::PbrAlbedo),
         ("a/iron_n.png", Subtype::PbrNormal),
@@ -411,15 +412,11 @@ fn the_gui_accepts_high_suggestions_and_still_asks_for_medium_ones() {
         let job = m.item(key).unwrap().job.clone().unwrap();
         assert_eq!(
             (job.profile.subtype, job.provenance["subtype"].clone()),
-            (want, Provenance::Suggestion),
+            (want, Provenance::ProjectFile),
             "{key}"
         );
         assert!(!asks_subtype(key), "{key}");
-        assert_eq!(
-            auto_subtype_reason(&job),
-            Some(job.suggestions[0].reason.as_str()),
-            "{key}"
-        );
+        assert_eq!(auto_subtype_reason(&job), None, "{key}");
     }
     assert!(asks_subtype("a/wall_i.png"));
     let wall = m.item("a/wall_i.png").unwrap().job.clone().unwrap();
@@ -433,8 +430,14 @@ fn an_explicit_subtype_beats_an_accepted_suggestion() {
     use sdc_gui::model::fields::auto_subtype_reason;
     let d = tempfile::tempdir().unwrap();
     let mut m = opened_as_the_app(mod_folder(d.path()), d.path().join("export"));
-    let job = m.item("landscape/rock01.png").unwrap().job.clone().unwrap();
-    assert!(auto_subtype_reason(&job).is_some(), "{:?}", job.status);
+    // Note FC1 (R1): the accepted type was recorded on open; the user's choice replaces it.
+    let recorded = m
+        .project
+        .as_ref()
+        .unwrap()
+        .file_value("landscape/rock01.png", "subtype");
+    assert!(recorded.is_some());
+    assert_ne!(recorded, Some(serde_json::json!("diffuse")));
     m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
     assert!(m.wait_idle(Duration::from_secs(60)));
     let job = m.item("landscape/rock01.png").unwrap().job.clone().unwrap();

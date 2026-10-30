@@ -33,11 +33,9 @@ pub struct History {
     /// Note FC3: every `push` counts here, merges included: a row that offers `Undo` remembers the count its step
     /// left, and offers it only while nothing was pushed since.
     pub pushes: u64,
-    /// Note FC1: `(item key, field)` → the value the plan's own decision recorded under this history. While the
-    /// document still holds that value it stays automatic (left out of the plan's config, re-recorded when the
-    /// evidence changes); once the entry is gone (an Undo) it is not recorded again. A new history (open, reload)
-    /// starts over.
-    pub auto_recorded: std::collections::HashMap<(String, &'static str), serde_json::Value>,
+    /// Note FC1: the `(item key, field)` pairs the plan already wrote on its own under this history. Each is written
+    /// once: an Undo of that step stays undone. A new history (open, reload) starts over.
+    pub auto_written: std::collections::HashSet<(String, &'static str)>,
 }
 
 impl History {
@@ -97,7 +95,7 @@ impl History {
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
-        self.auto_recorded.clear();
+        self.auto_written.clear();
     }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()

@@ -97,7 +97,7 @@ Textures grouped into material sets, with the status of each packed output (run,
 
 ## Deciding
 
-A texture whose name follows the conventions decides itself: High-confidence suggestions are accepted. When the plan settles, those sub-types (and any alpha meaning taken from scanned meshes) are written to `sdc.toml` as one undo step, shown as one Problems row, "{n} types set automatically (High confidence)", with **Undo this change** and the list on hover. Save keeps them, so the command line reads the same types. A file you already set is never touched. See [Texture types](Texture-Types.md) for the naming rules.
+A texture whose name follows the conventions decides itself: High-confidence suggestions are accepted. When the plan settles, those sub-types (and any alpha meaning taken from scanned meshes) are written to `sdc.toml` as one undo step, shown as one Problems row, "{n} types set automatically (High confidence)", with **Undo this change** and the list on hover. Save keeps them, so the command line reads the same types. A file you already set is never touched, and a written type is a project value like one you chose: a later scan or a set shader does not change it. See [Texture types](Texture-Types.md) for the naming rules.
 
 A texture that still needs an answer has an amber border. The centre column then shows a *Needs a decision* box with the question:
 

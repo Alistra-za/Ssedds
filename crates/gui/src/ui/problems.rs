@@ -206,12 +206,6 @@ fn fix_button(
                 None,
             )
         }
-        Fix::TagAsGrass(_) => button(
-            ui,
-            "Tag as grass",
-            "Set this texture's type to complex grass (subtype = \"complex_grass\" in sdc.toml)",
-            off,
-        ),
         Fix::ChoosePreset => button(
             ui,
             "Choose preset…",
@@ -514,10 +508,9 @@ fn apply_fix(ui: &egui::Ui, model: &mut AppModel, fix: Fix, at: At) {
         }
         Fix::UndoLast => model.undo(),
         Fix::ShowNifTab(p, t, f) => model.nif_tab_request = Some((p, t, f)),
-        Fix::TagAsGrass(k) => model.tag_as_grass(&k),
         Fix::ChoosePreset => {
             to_textures(ui);
-            model.choose_preset = true;
+            model.choose_preset = Some(ui.ctx().cumulative_pass_nr());
         }
     }
 }

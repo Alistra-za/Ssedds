@@ -40,11 +40,9 @@ fn grass_with(dir: &std::path::Path, e: Option<(Format, ColorTag)>) -> (AppModel
     image::ImageBuffer::from_fn(32, 32, |_, _| image::Rgb([100u8, 0, 255]))
         .save(t.join("g_rmaos.png"))
         .unwrap();
+    // Suggestions are not accepted here: an accepted High type is recorded in `[files]` (Note FC1, R1) and a set
+    // shader then no longer re-types it, which is not what these tests are about.
     let mut m = support::opened(dir);
-    m.accept = engine::policy::AcceptSuggestions::High;
-    m.replan();
-    idle(&mut m);
-    assert_eq!(job_of(&m).profile.subtype, Subtype::PbrAlbedo);
     let set = set_views(&m)
         .into_iter()
         .find(|v| v.members.iter().any(|k| k == KEY))
