@@ -1,5 +1,5 @@
-//! The preset creator window (Note AM, owner design §2). Drawing only: every edit is collected and applied to the
-//! `PresetsModel` after the window is drawn.
+//! The preset creator (Note AM, owner design §2): a centre-column tab, or its own window when popped out (Note FB7).
+//! Drawing only: every edit is collected and applied to the `PresetsModel` after the view is drawn.
 use super::columns::RED;
 use super::settings_panel::{combo, options_of, subtype_label, Options};
 use crate::model::fields::{
@@ -13,10 +13,8 @@ use eframe::egui;
 use engine::config::{Backend, MipFilter, Profile, Subtype, Target};
 use serde_json::{json, Value};
 
-/// The window's id (its rectangle is kept in `gui.toml`, AM11).
-pub fn window_id() -> egui::Id {
-    egui::Id::new("presets-window")
-}
+/// The view's heading and tab name.
+pub const TITLE: &str = "Presets";
 
 #[derive(Clone)]
 enum Act {
@@ -44,55 +42,30 @@ enum Act {
     ResetAll,
 }
 
-/// A9: the saved rect moved (then shrunk) to fit inside `area`, the window below the header; with none saved,
-/// a rect centred on `centre` at 90 % of its size, at least 640x480, shrunk to `area`.
-pub fn place(saved: Option<egui::Rect>, area: egui::Rect, centre: egui::Rect) -> egui::Rect {
-    let (size, want) = match saved {
-        Some(r) => (r.size(), r.min),
-        None => {
-            let s = (centre.size() * 0.9).max(egui::vec2(640.0, 480.0));
-            (s, centre.center() - s / 2.0)
-        }
-    };
-    let size = size.min(area.size());
-    let min = want.max(area.min).min(area.max - size);
-    egui::Rect::from_min_size(min, size)
-}
-
-pub fn window(ctx: &egui::Context, model: &mut AppModel) {
-    if !model.presets_open {
-        return;
-    }
+/// The creator, in the centre column or in its popped-out window (Note FB7).
+pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
+    let ctx = ui.ctx().clone();
+    let ctx = &ctx;
+    ui.horizontal(|ui| {
+        ui.heading(TITLE);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            super::centre_tabs::controls(ui, model, crate::model::CentreTab::Presets)
+        });
+    });
     let target = model.target;
-    let area = super::below_header(ctx).unwrap_or_else(|| ctx.content_rect());
-    let saved = model
-        .settings
-        .layout
-        .presets_window
-        .map(|[x, y, w, h]| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)));
-    let rect = place(saved, area, super::centre_rect(ctx).unwrap_or(area));
     let pm = model.presets_model();
     let mut acts = vec![];
-    let mut open = true;
-    egui::Window::new("Presets")
-        .id(window_id())
-        .open(&mut open)
-        .resizable(true)
-        .default_rect(rect)
-        .constrain_to(area)
-        // K6: constrain_to alone lets a window taller than `area` rise over the header.
-        .max_size(area.size())
-        .show(ctx, |ui| {
-            top_bar(ui, pm, &mut acts);
-            ui.separator();
-            if pm.draft.is_none() {
-                ui.weak("Pick a preset, or New.");
-                return;
-            }
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| body(ui, pm, &mut acts));
-        });
+    top_bar(ui, pm, &mut acts);
+    ui.separator();
+    if pm.draft.is_none() {
+        ui.weak("Pick a preset, or New.");
+    } else {
+        // Both ways: the grids can be wider than a narrow centre (rule 2.5).
+        egui::ScrollArea::both()
+            .id_salt("presets-scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| body(ui, pm, &mut acts));
+    }
     discard_prompt(ctx, model, &mut acts);
     let mut saved = false;
     for a in acts {
@@ -211,9 +184,6 @@ pub fn window(ctx: &egui::Context, model: &mut AppModel) {
     if saved {
         // The presets folder changed: the next plan loads it (and the header's preset list already shows it).
         model.replan();
-    }
-    if !open {
-        model.presets_open = false;
     }
 }
 

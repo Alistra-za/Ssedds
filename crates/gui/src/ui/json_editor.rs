@@ -1,6 +1,7 @@
-//! GUI tweaks G3–G6: the TruePBR JSON editor, a window of its own over the whole PGPatcher JSON: every PBR set's
-//! entry and the delete sections, each in its own pill, each key a small pill of its own. It edits the same settings
-//! as the set editor's TruePBR box (`AppModel::set_json_value`), so the two always agree. Drawing only.
+//! GUI tweaks G3–G6: the TruePBR JSON editor, a centre-column tab (or its own window when popped out, Note FB7) over
+//! the whole PGPatcher JSON: every PBR set's entry and the delete sections, each in its own pill, each key a small
+//! pill of its own. It edits the same settings as the set editor's TruePBR box (`AppModel::set_json_value`), so the
+//! two always agree. Drawing only.
 use super::columns::{AMBER, RED};
 use super::path_picker;
 use super::pgp_fields::{alpha_default, context, control, disabled_reason, edit_key, Ctx};
@@ -92,29 +93,6 @@ enum Act {
     Pend(Owner, String),
 }
 
-/// The window, while `AppModel::json_editor_open`: a native window of its own where the platform has them, an
-/// embedded one otherwise (and in tests).
-pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
-    if !model.json_editor_open {
-        return;
-    }
-    let id = egui::ViewportId::from_hash_of("sdc-pgp-json-editor");
-    let builder = egui::ViewportBuilder::default()
-        .with_title(format!("{WINDOW_TITLE} — {}", crate::PRODUCT_NAME))
-        .with_inner_size([980.0, 760.0]);
-    ctx.show_viewport_immediate(id, builder, |ui, class| {
-        if ui.ctx().input(|i| i.viewport().close_requested()) {
-            model.json_editor_open = false;
-        }
-        match class {
-            egui::ViewportClass::EmbeddedWindow => body(ui, model),
-            _ => {
-                egui::CentralPanel::default().show(ui, |ui| body(ui, model));
-            }
-        }
-    });
-}
-
 /// The JSON name field's width; it is never squeezed (AG126).
 const NAME_FIELD_WIDTH: f32 = 160.0;
 /// The JSON name field's label (and how tests find the row).
@@ -176,7 +154,8 @@ fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
     });
 }
 
-fn body(ui: &mut egui::Ui, model: &mut AppModel) {
+/// The editor, in the centre column or in its popped-out window (Note FB7).
+pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut acts: Vec<Act> = vec![];
     let read_only = model.sets_doc.as_ref().and_then(|d| {
         d.read_only().then(|| {
@@ -188,9 +167,7 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.horizontal_wrapped(|ui| {
         ui.heading(WINDOW_TITLE);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Close").clicked() {
-                model.json_editor_open = false;
-            }
+            super::centre_tabs::controls(ui, model, crate::model::CentreTab::Json);
             let r = ui
                 .add_enabled(read_only.is_none(), egui::Button::new("+ Delete section"))
                 .on_hover_text("An entry of its own that deletes the shapes it matches");
@@ -286,7 +263,11 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
                 model.remove_section(i);
             }
-            Act::Select(key) => model.select_set(&key),
+            Act::Select(key) => {
+                model.select_set(&key);
+                // Note FB7: the set's editor comes to the front of the centre.
+                model.centre_tab = crate::model::CentreTab::Selection;
+            }
             Act::Fold(id) => {
                 if !nav.closed.remove(&id) {
                     nav.closed.insert(id);

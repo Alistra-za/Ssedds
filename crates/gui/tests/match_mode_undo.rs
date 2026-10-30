@@ -59,7 +59,7 @@ fn section_mode_switch_is_one_undo_step() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     m.add_section("aaa_one");
-    m.json_editor_open = true;
+    m.open_json_editor();
     let steps = m.history.undo.len();
     let mut h = editor(m);
     h.run();
@@ -78,7 +78,7 @@ fn section_mode_switch_is_one_undo_step() {
 fn set_mode_switch_is_one_undo_step() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
-    m.json_editor_open = true;
+    m.open_json_editor();
     let (steps, before) = (m.history.undo.len(), rock(&m));
     let mut h = editor(m);
     h.run();

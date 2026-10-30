@@ -413,7 +413,7 @@ fn the_json_editor_reads_integers_as_floats_too() {
     let mut h = Harness::builder()
         .with_size(eframe::egui::vec2(1000.0, 900.0))
         .build_ui_state(
-            |ui, m: &mut AppModel| sdc_gui::ui::json_editor::draw(ui.ctx(), m),
+            |ui, m: &mut AppModel| sdc_gui::ui::json_editor::view(ui, m),
             m,
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
@@ -515,7 +515,7 @@ fn esc_cancels_truepbr_rename_and_match_edits() {
     let mut h = Harness::builder()
         .with_size(eframe::egui::vec2(1000.0, 900.0))
         .build_ui_state(
-            |ui, m: &mut AppModel| sdc_gui::ui::json_editor::draw(ui.ctx(), m),
+            |ui, m: &mut AppModel| sdc_gui::ui::json_editor::view(ui, m),
             m,
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");

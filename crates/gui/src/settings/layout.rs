@@ -203,9 +203,6 @@ pub struct LayoutSettings {
     /// The 3D view settings window: x, y, width, height in points (AG132).
     #[serde(deserialize_with = "lenient")]
     pub settings_window: Option<[f32; 4]>,
-    /// The preset creator window: x, y, width, height in points (AM11).
-    #[serde(deserialize_with = "lenient")]
-    pub presets_window: Option<[f32; 4]>,
     /// The 3D panels whose Details footer is open, by [`DETAILS_NAMES`] name.
     #[serde(deserialize_with = "lenient_strings")]
     pub details: Vec<String>,
@@ -234,7 +231,6 @@ impl Default for LayoutSettings {
             look: None,
             set_look: None,
             settings_window: None,
-            presets_window: None,
             details: vec![],
         }
     }
@@ -290,14 +286,12 @@ impl LayoutSettings {
         for l in [&mut self.look, &mut self.set_look].into_iter().flatten() {
             l.clamp();
         }
-        for r in [&mut self.settings_window, &mut self.presets_window] {
-            *r = r.filter(|[x, y, w, h]| {
-                sane(*x, -32000.0, 32000.0)
-                    && sane(*y, -32000.0, 32000.0)
-                    && sane(*w, 100.0, 16000.0)
-                    && sane(*h, 60.0, 16000.0)
-            });
-        }
+        self.settings_window = self.settings_window.filter(|[x, y, w, h]| {
+            sane(*x, -32000.0, 32000.0)
+                && sane(*y, -32000.0, 32000.0)
+                && sane(*w, 100.0, 16000.0)
+                && sane(*h, 60.0, 16000.0)
+        });
         let mut seen: Vec<String> = vec![];
         self.details.retain(|d| {
             let keep = DETAILS_NAMES.contains(&d.as_str()) && !seen.contains(d);

@@ -306,7 +306,7 @@ fn the_2d_3d_switch_swaps_the_slot_cards_for_the_preview_and_keeps_the_truepbr_s
 fn the_json_editor_shows_each_set_and_adds_a_delete_section_that_crosses_out_the_set() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = harness(m, false);
     h.run();
     h.get_by_label(sdc_gui::ui::json_editor::WINDOW_TITLE);
@@ -340,7 +340,7 @@ fn the_json_editor_add_menu_hides_grass_ignored_keys_on_a_pbr_grass_set() {
             m.set_shader(ROCK_SET, Some(engine::shader::Shader::PbrGrass));
             idle(&mut m);
         }
-        m.json_editor_open = true;
+        m.open_json_editor();
         let mut h = harness(m, false);
         h.run();
         let before = h.query_all_by_label("Emissive").count();
@@ -361,7 +361,7 @@ fn remove_while_typing(typed: usize, removed: usize) -> Vec<String> {
     for p in ["aaa_one", "bbb_two", "ccc_three"] {
         m.add_section(p);
     }
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = harness(m, false);
     h.run();
     let was = ["aaa_one", "bbb_two", "ccc_three"][typed];

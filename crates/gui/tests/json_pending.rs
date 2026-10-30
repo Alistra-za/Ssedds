@@ -70,7 +70,7 @@ fn rock_has_match2(m: &AppModel) -> bool {
 fn exact_slot_without_a_path_shows_a_pill_and_writes_nothing() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = editor(m);
     let before = modes(&h).len();
     add_key(&mut h, 0, true, "exact · slot 2 normal");
@@ -83,7 +83,7 @@ fn a_mode_change_moves_a_pending_pill() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     m.add_section("aaa_one");
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = editor(m);
     // Section 0 is the second "+ key" (the set's is first).
     add_key(&mut h, 1, false, "path contains");
@@ -103,7 +103,7 @@ fn remove_clears_a_sections_pending_pill_and_shifts_the_next() {
     let mut m = pbr_opened(d.path());
     m.add_section("aaa_one");
     m.add_section("bbb_two");
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = editor(m);
     add_key(&mut h, 1, false, "path contains"); // pending on section 0
     assert!(modes(&h).iter().any(|v| v == "path contains"));
@@ -119,7 +119,7 @@ fn remove_clears_a_sections_pending_pill_and_shifts_the_next() {
     let mut m = pbr_opened(d2.path());
     m.add_section("aaa_one");
     m.add_section("bbb_two");
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = editor(m);
     add_key(&mut h, 2, false, "path contains"); // pending on section 1
     h.query_all_by_label("Remove").next().unwrap().click();
@@ -144,7 +144,7 @@ fn a_pending_pill_switched_to_slot_1_stays_visible() {
         Some(serde_json::json!("a\\b")),
     );
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
-    m.json_editor_open = true;
+    m.open_json_editor();
     let mut h = editor(m);
     add_key(&mut h, 0, true, "exact · slot 2 normal");
     pick_mode(&mut h, "exact · slot 2 normal", "exact · slot 1 diffuse");

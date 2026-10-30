@@ -300,7 +300,7 @@ pub static ACTIONS: &[Action] = &[
             "Open the PGPatcher JSON editor",
             Global,
             &[],
-            |m, _| m.json_editor_open = true,
+            |m, _| m.open_json_editor(),
         ),
         |m| m.target == engine::config::Target::Cs && m.root.is_some() && m.sets_doc.is_some(),
     ),

@@ -28,7 +28,7 @@ fn the_json_editor_leaves_out_a_set_the_statics_rule_drops() {
     let d = tempfile::tempdir().unwrap();
     let mut model = pbr_opened_plain(d.path());
     model.add_cs_block("landscape/rock01", Kind::Txst); // no scan: the entry is dropped
-    model.json_editor_open = true;
+    model.open_json_editor();
     let mut h = tall(model);
     h.run();
     assert!(has(&h, "0 set entries"));

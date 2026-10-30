@@ -258,7 +258,7 @@ fn head(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, view: View) {
                 ),
             );
             if ui.small_button("Open the JSON editor").clicked() {
-                model.json_editor_open = true;
+                model.open_json_editor();
             }
         });
     }
@@ -317,7 +317,7 @@ fn tabs(
                 )
                 .clicked()
             {
-                model.json_editor_open = true;
+                model.open_json_editor();
             }
         }
     });

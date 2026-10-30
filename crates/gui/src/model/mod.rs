@@ -108,6 +108,16 @@ fn thousands(n: usize) -> String {
     out
 }
 
+/// Note FB7: what the centre column shows: the selection (a texture, a set, the preview, the start screen), or the
+/// docked Presets or TruePBR JSON view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CentreTab {
+    #[default]
+    Selection,
+    Presets,
+    Json,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selection {
     None,
@@ -351,10 +361,18 @@ pub struct AppModel {
     pub used_by: used_by::UsedByState,
     /// Note AN: the hover lists of PGPatcher-locked slots.
     pub original: used_by::OriginalState,
-    /// G3: the TruePBR JSON editor window is open.
+    /// G3: the TruePBR JSON editor is open (Note FB7: a centre tab, or its own window when popped out).
     pub json_editor_open: bool,
-    /// Note AM: the preset creator window is open.
+    /// Note AM: the preset creator is open (Note FB7: a centre tab, or its own window when popped out).
     pub presets_open: bool,
+    /// Note FB7: the view the centre column shows in front (`centre_front` checks it is open and docked).
+    pub centre_tab: CentreTab,
+    /// Note FB7: Pop out shows the view in an OS window of its own; Dock brings it back to the centre.
+    pub presets_popped: bool,
+    pub json_editor_popped: bool,
+    /// Note FB7: a view was opened docked this frame; the Meshes view, which has no centre column, switches to
+    /// Textures to show it.
+    pub reveal_centre: bool,
     /// Note AM: the presets folder as last scanned, and the creator's draft; made on first use (`presets_model`).
     pub presets: Option<presets::PresetsModel>,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
@@ -621,6 +639,10 @@ impl AppModel {
             original: Default::default(),
             json_editor_open: false,
             presets_open: false,
+            centre_tab: CentreTab::Selection,
+            presets_popped: false,
+            json_editor_popped: false,
+            reveal_centre: false,
             presets: None,
             accept: AcceptSuggestions::High,
             session: None,
@@ -3138,6 +3160,28 @@ impl AppModel {
     pub fn open_presets(&mut self) {
         self.presets_model().rescan();
         self.presets_open = true;
+        if !self.presets_popped {
+            self.centre_tab = CentreTab::Presets;
+            self.reveal_centre = true;
+        }
+    }
+
+    /// Open the TruePBR JSON editor: in front of the centre, or in its own window when popped out (Note FB7).
+    pub fn open_json_editor(&mut self) {
+        self.json_editor_open = true;
+        if !self.json_editor_popped {
+            self.centre_tab = CentreTab::Json;
+            self.reveal_centre = true;
+        }
+    }
+
+    /// The view in front of the centre column: `centre_tab` while that view is open and docked, else the selection.
+    pub fn centre_front(&self) -> CentreTab {
+        match self.centre_tab {
+            CentreTab::Presets if self.presets_open && !self.presets_popped => CentreTab::Presets,
+            CentreTab::Json if self.json_editor_open && !self.json_editor_popped => CentreTab::Json,
+            _ => CentreTab::Selection,
+        }
     }
 
     /// The header's Preset menu (AM12): every selectable preset whose chain targets this target, or none.

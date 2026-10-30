@@ -3,6 +3,7 @@ pub mod actions;
 pub mod advanced;
 pub mod bottom;
 pub mod bulk_panel;
+pub mod centre_tabs;
 pub mod cm_card;
 pub mod color;
 pub mod columns;
@@ -40,7 +41,7 @@ pub mod thumbs;
 pub mod viewport3d;
 
 use crate::model::picker::{PickerPurpose, PickerSpec};
-use crate::model::{AppModel, Selection};
+use crate::model::{AppModel, CentreTab, Selection};
 use eframe::egui;
 use std::cell::RefCell;
 
@@ -151,12 +152,23 @@ pub fn draw_with_scan(
     record_below_header(ui);
     // Under the header and the scan row, before the columns (R7).
     bottom::draw(ui, model, &mut state.drawer);
+    // Note FB7: a new selection (or preview) brings the selection back to the front of the centre.
+    let seen = (model.selection.clone(), model.expanded.clone());
+    let seen_id = egui::Id::new("centre-tab-seen");
+    if ui
+        .data(|d| d.get_temp::<(Selection, Option<String>)>(seen_id))
+        .is_some_and(|s| s != seen)
+    {
+        model.centre_tab = CentreTab::Selection;
+    }
+    ui.data_mut(|d| d.insert_temp(seen_id, seen));
+    let tab_in_front = model.centre_front() != CentreTab::Selection;
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
     let three_d = state.set3d.enabled && set_preview::wanted(model);
     // C6: a set editor in 2D has Advanced as its panel's last tab; everything else keeps the window-edge drawer.
-    // A11: the start screen (no folder) has no drawer.
+    // A11: the start screen (no folder) has no drawer. Note FB7: nor does a Presets or JSON tab in front.
     let folder = model.root.is_some();
-    if folder && !three_d && set_editor_shown(model, three_d) {
+    if folder && (tab_in_front || (!three_d && set_editor_shown(model, three_d))) {
         // The drawer is one panel: keep the columns' widget ids (a set pill's open menu) as if it were drawn, as egui
         // does for a collapsed panel.
         ui.skip_ahead_auto_ids(1);
@@ -213,7 +225,8 @@ pub fn draw_with_scan(
     ui.set_opacity(opacity);
     // Review M2: with the set editor not drawn, its next frame only records the slots, so a change made meanwhile
     // does not flash (CF14).
-    if !set_editor_shown(model, three_d) {
+    let selection_in_front = model.centre_front() == CentreTab::Selection;
+    if !selection_in_front || !set_editor_shown(model, three_d) {
         state.drops.slot_seen = None;
     }
     ui.ctx()
@@ -228,12 +241,17 @@ pub fn draw_with_scan(
     // Here, not in the set editor: a pill member's slot menu opens it while a texture is selected (F3a Task 8).
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
-    json_editor::draw(ui.ctx(), model);
-    presets::window(ui.ctx(), model);
-    // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
-    set_preview::settings_window(ui.ctx(), model, three_d && set_editor_shown(model, three_d));
+    centre_tabs::popped(ui.ctx(), model);
+    // AG132: only while the centre shows the 3D view (not over an expanded preview, the bulk panel or a tab).
+    set_preview::settings_window(
+        ui.ctx(),
+        model,
+        three_d && selection_in_front && set_editor_shown(model, three_d),
+    );
     // T7 K10: last, so it is over everything and survives a virtualised source.
     columns::drag_ghost(ui.ctx(), model, &mut state.thumbs);
+    // Note FB7: this view has the centre, so a view opened this frame is already shown.
+    model.reveal_centre = false;
 }
 
 /// The narrowest the centre gets: `CENTRE_MIN`, and while a texture is expanded enough for `PREVIEW_MIN` beside the
@@ -291,8 +309,16 @@ fn start_screen(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
+/// The centre: a docked Presets or JSON editor tab in front (Note FB7), else the preview of an expanded texture, else
+/// the settings of the selected texture or set, else a hint.
 fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: bool) {
+    // Before the start screen: Presets… opens with no folder too (K5).
+    centre_tabs::strip(ui, model);
+    match model.centre_front() {
+        CentreTab::Presets => return presets::view(ui, model),
+        CentreTab::Json => return json_editor::view(ui, model),
+        CentreTab::Selection => {}
+    }
     if model.root.is_none() {
         start_screen(ui, model);
         return;
