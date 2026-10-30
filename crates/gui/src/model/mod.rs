@@ -2017,12 +2017,14 @@ impl AppModel {
             "Set {n} type{} automatically",
             if n == 1 { "" } else { "s" }
         );
-        // Marked before the edit: the plan it starts already leaves them out (`auto_fields`). A cleared one keeps
-        // its entry, so undoing the clear brings the value back as automatic, not as the user's.
+        // Marked before the edit: the plan it starts already leaves them out (`auto_fields`). A cleared one is
+        // forgotten, so a file that stops being a helper is recorded again; shortcut: undoing the clear brings the
+        // value back as the user's (saved and CLI-agreeing, but no longer re-typed), snapshot the map per step if that matters.
         for (k, f, v) in &writes {
-            if let Some(v) = v {
-                self.history.auto_recorded.insert((k.clone(), f), v.clone());
-            }
+            match v {
+                Some(v) => self.history.auto_recorded.insert((k.clone(), f), v.clone()),
+                None => self.history.auto_recorded.remove(&(k.clone(), *f)),
+            };
         }
         // Caused by a user step (its plan chain): one undo takes both back, as the encoding cleanup does (Z11).
         let cause = std::mem::take(&mut self.auto_cause);

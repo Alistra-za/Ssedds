@@ -550,6 +550,15 @@ fn ordinary_image_can_become_a_helper() {
     assert_eq!(value(&h, "x_mask.png", "helper.role"), None);
     assert_eq!(value(&h, "x_mask.png", "subtype"), opened_type);
     assert_eq!(h.state().history.undo.len(), steps);
+    // Note FC1: a file that stops being a helper by a new edit (not an Undo) gets its automatic type written again,
+    // so `sdc convert` agrees.
+    h.state_mut().redo();
+    settle(&mut h);
+    assert_eq!(value(&h, "x_mask.png", "subtype"), None);
+    pick(&mut h, "Helper role", "Not a helper");
+    assert_ne!(item(&h).kind, ItemKind::Helper);
+    assert!(opened_type.is_some(), "the opening recorded a type");
+    assert_eq!(value(&h, "x_mask.png", "subtype"), opened_type);
 }
 
 #[test]
