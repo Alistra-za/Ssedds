@@ -324,7 +324,7 @@ fn the_json_editor_shows_each_set_and_adds_a_delete_section_that_crosses_out_the
         .set_section_value(0, "match1", Some(json!("landscape\\rock01")));
     h.run();
     h.get_by_label_contains("Delete section 1 deletes the shapes this set is for");
-    h.get_by_label("Close").click();
+    h.get_by_label("Close TruePBR JSON").click();
     h.run();
     assert!(!h.state().0.json_editor_open);
 }

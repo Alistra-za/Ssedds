@@ -21,7 +21,7 @@ pub enum Area {
     /// The 3D panel (Meshes view, set preview). `ui::viewport3d` handles its keys (the viewports are not in
     /// `AppModel`); they are only listed here.
     View3d,
-    /// The PGPatcher JSON editor window (`ui::json_editor` handles its keys; it is a window of its own).
+    /// The PGPatcher JSON editor (`ui::json_editor` handles its keys, docked or popped out).
     JsonEditor,
 }
 
@@ -533,7 +533,7 @@ pub static ACTIONS: &[Action] = &[
         View3d,
         &[ctrl_shift(Key::C)],
     ),
-    // The JSON editor (its window handles them)
+    // The JSON editor (its view handles them)
     listed(
         "json-next-error",
         "Next error in the PGPatcher JSON editor",

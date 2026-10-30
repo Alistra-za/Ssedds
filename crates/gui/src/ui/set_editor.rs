@@ -307,13 +307,13 @@ fn tabs(
         ui.selectable_value(&mut open, false, if json { "Material" } else { "Set" });
         ui.selectable_value(&mut open, true, "Advanced");
         // C14 (Note FB2): the name box above names the set, so the Material tab has no name line; its JSON editor
-        // button sits on the tab row. G3: the whole file, every set and the delete sections, in its own window.
+        // button sits on the tab row. G3: the whole file, every set and the delete sections, in a centre tab (Note FB7).
         if json && !open {
             ui.add_space(8.0);
             if ui
                 .small_button("TruePBR JSON editor…")
                 .on_hover_text(
-                    "Every set's entry and the delete sections of the PGPatcher JSON, in one window",
+                    "Every set's entry and the delete sections of the PGPatcher JSON, in one view",
                 )
                 .clicked()
             {

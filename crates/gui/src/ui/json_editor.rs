@@ -263,11 +263,8 @@ pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
                 model.remove_section(i);
             }
-            Act::Select(key) => {
-                model.select_set(&key);
-                // Note FB7: the set's editor comes to the front of the centre.
-                model.centre_tab = crate::model::CentreTab::Selection;
-            }
+            // Note FB7: `select_set` brings the set's editor to the front of the centre.
+            Act::Select(key) => model.select_set(&key),
             Act::Fold(id) => {
                 if !nav.closed.remove(&id) {
                     nav.closed.insert(id);

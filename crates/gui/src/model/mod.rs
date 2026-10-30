@@ -2662,6 +2662,8 @@ impl AppModel {
         self.selection = Selection::Item(key.to_string());
         self.reset_multi();
         self.bulk = Default::default();
+        // Note FB7: also a click on the texture already selected brings it to the front of the centre.
+        self.centre_tab = CentreTab::Selection;
     }
 
     /// Select one set; any multi-selection ends (F3a D1).
@@ -2669,6 +2671,8 @@ impl AppModel {
         self.selection = Selection::Set(key.to_string());
         self.reset_multi();
         self.bulk = Default::default();
+        // Note FB7: also a click on the set already selected brings it to the front of the centre.
+        self.centre_tab = CentreTab::Selection;
     }
 
     pub fn expand(&mut self, key: &str) {

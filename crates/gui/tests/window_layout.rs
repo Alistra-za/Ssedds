@@ -716,3 +716,14 @@ fn the_advanced_width_comes_back_after_a_preview_and_is_saved_unchanged() {
     assert_eq!(drawn_advanced(&h), 600.0);
     assert_eq!(saved_advanced(&h), Some(600.0));
 }
+
+/// Note FB7: `[layout] presets_window` is gone; a gui.toml that still has it loads with no notice and keeps the rest.
+#[test]
+fn an_old_presets_window_key_loads_quietly() {
+    let (s, err) = load_text(
+        "[layout]\nsort = \"size\"\npresets_window = [80.0, 60.0, 900.0, 700.0]\nsettings_window = [300.0, 140.0, 460.0, 600.0]\n",
+    );
+    assert_eq!(err, None);
+    assert_eq!(s.layout.sort, "size");
+    assert_eq!(s.layout.settings_window, Some([300.0, 140.0, 460.0, 600.0]));
+}

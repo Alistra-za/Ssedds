@@ -32,6 +32,7 @@ fn flags(model: &mut AppModel, tab: CentreTab) -> Option<(&mut bool, &mut bool)>
 
 /// The tab strip over the centre while a view is docked there: Selection, then each docked view. A click brings
 /// that tab to the front. Accessible names end in "tab" so they never collide with the views' headings (rule 8.1).
+/// It takes one auto id whether drawn or not, so the centre's widgets keep theirs when a view opens or closes.
 pub fn strip(ui: &mut egui::Ui, model: &mut AppModel) {
     let docked: Vec<(CentreTab, &str)> = VIEWS
         .iter()
@@ -39,9 +40,20 @@ pub fn strip(ui: &mut egui::Ui, model: &mut AppModel) {
         .map(|(t, title, ..)| (*t, *title))
         .collect();
     if docked.is_empty() {
+        ui.skip_ahead_auto_ids(1);
         return;
     }
     let front = model.centre_front();
+    // One child scope: it advances the parent's auto ids by exactly one, as the skip above does.
+    ui.push_id("centre-tabs", |ui| strip_row(ui, model, front, docked));
+}
+
+fn strip_row(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    front: CentreTab,
+    docked: Vec<(CentreTab, &str)>,
+) {
     ui.horizontal_wrapped(|ui| {
         for (tab, title) in std::iter::once((CentreTab::Selection, "Selection")).chain(docked) {
             let on = front == tab;
@@ -69,27 +81,39 @@ pub fn strip(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.separator();
 }
 
-/// Close, then Pop out (docked) or Dock (popped out): for the right-to-left end of a view's heading row.
+/// Close, then Pop out (docked) or Dock (popped out): for the right-to-left end of a view's heading row. The visible
+/// text is short; the accessible name adds the view ("Close Presets"), since one view can be docked while the other
+/// is popped out (rule 8.4).
 pub fn controls(ui: &mut egui::Ui, model: &mut AppModel, tab: CentreTab) {
+    let title = VIEWS.iter().find(|v| v.0 == tab).map_or("", |v| v.1);
     let Some((open, popped)) = flags(model, tab) else {
         return;
     };
-    if ui.button("Close").clicked() {
+    let button = |ui: &mut egui::Ui, text: &str, hover: &str| {
+        let (r, enabled) = (ui.button(text), ui.is_enabled());
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{text} {title}"))
+        });
+        if hover.is_empty() {
+            r
+        } else {
+            r.on_hover_text(hover)
+        }
+    };
+    if button(ui, "Close", "").clicked() {
         *open = false;
     }
     if *popped {
-        if ui
-            .button("Dock")
-            .on_hover_text("Back into the centre column")
-            .clicked()
-        {
+        if button(ui, "Dock", "Back into the centre column").clicked() {
             *popped = false;
             model.centre_tab = tab;
         }
-    } else if ui
-        .button("Pop out")
-        .on_hover_text("Show it in a window of its own, for a second monitor")
-        .clicked()
+    } else if button(
+        ui,
+        "Pop out",
+        "Show it in a window of its own, for a second monitor",
+    )
+    .clicked()
     {
         *popped = true;
     }
