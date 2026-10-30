@@ -777,6 +777,10 @@ impl PresetsModel {
         let d = self.draft.as_ref().ok_or("no preset")?;
         check_id(&self.id())?;
         let text = output(d)?;
+        // A built-in is already in the registry and never saved: adding it again would clash with itself (Note FB6).
+        if d.read_only {
+            return Ok(text);
+        }
         let mut r = self.registry.clone();
         if let Some(o) = &d.orig {
             r.remove(o);

@@ -320,25 +320,28 @@ fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
         });
     });
     ui.horizontal_wrapped(|ui| {
-        let ok = pm.status().is_ok();
-        if ui
-            .add_enabled(!ro && ok && pm.dirty(), egui::Button::new("Save preset"))
-            .clicked()
-        {
-            acts.push(Act::Save);
-        }
-        if ui
-            .add_enabled(!ro && pm.dirty(), egui::Button::new("Revert"))
-            .clicked()
-        {
-            acts.push(Act::Revert);
-        }
-        if ui
-            .add_enabled(!ro, egui::Button::new("Reset preset"))
-            .on_hover_text("Drop every sub-type override, so the base shows through")
-            .clicked()
-        {
-            acts.push(Act::ResetAll);
+        // A built-in offers only Duplicate (above), not three buttons that can never act (Note FB6).
+        if !ro {
+            let ok = pm.status().is_ok();
+            if ui
+                .add_enabled(ok && pm.dirty(), egui::Button::new("Save preset"))
+                .clicked()
+            {
+                acts.push(Act::Save);
+            }
+            if ui
+                .add_enabled(pm.dirty(), egui::Button::new("Revert"))
+                .clicked()
+            {
+                acts.push(Act::Revert);
+            }
+            if ui
+                .button("Reset preset")
+                .on_hover_text("Drop every sub-type override, so the base shows through")
+                .clicked()
+            {
+                acts.push(Act::ResetAll);
+            }
         }
         if pm.deletable() {
             // Trace #22: per preset, so picking another one never shows the question already asked.
@@ -984,5 +987,46 @@ fn discard_prompt(ctx: &egui::Context, model: &mut AppModel, acts: &mut Vec<Act>
     }
     if clicked.is_some() || keys.cancel {
         ctx.data_mut(|d| d.remove::<Act>(discard_id()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    fn top_bar_of(pm: PresetsModel) -> egui_kittest::Harness<'static, PresetsModel> {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 400.0))
+            .build_ui_state(|ui, pm: &mut PresetsModel| top_bar(ui, pm, &mut vec![]), pm);
+        h.run();
+        h
+    }
+
+    #[test]
+    fn a_built_in_preset_offers_only_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut pm = PresetsModel::new(Some(dir.path().to_path_buf()), Target::Cs);
+        pm.select("cs-quality");
+        let h = top_bar_of(pm);
+        for gone in ["Save preset", "Revert", "Reset preset"] {
+            assert!(
+                h.query_by_label(gone).is_none(),
+                "{gone} is hidden on a built-in"
+            );
+        }
+        assert!(!h.get_by_label("Duplicate").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn a_user_preset_keeps_save_revert_and_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut pm = PresetsModel::new(Some(dir.path().to_path_buf()), Target::Cs);
+        pm.select("cs-quality");
+        pm.duplicate();
+        let h = top_bar_of(pm);
+        for shown in ["Save preset", "Revert", "Reset preset"] {
+            h.get_by_label(shown);
+        }
     }
 }

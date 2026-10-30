@@ -572,3 +572,16 @@ fn renaming_a_preset_others_build_on_is_refused() {
     names.sort();
     assert_eq!(names, ["a.toml", "b.toml"]);
 }
+
+#[test]
+fn viewing_a_built_in_preset_shows_no_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pm = PresetsModel::new(Some(dir.path().to_path_buf()), Target::Cs);
+    pm.select("cs-quality");
+    assert!(pm.draft.as_ref().unwrap().read_only);
+    assert_eq!(
+        pm.status(),
+        &Ok(()),
+        "a built-in is not checked as a new preset"
+    );
+}

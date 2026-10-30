@@ -36,7 +36,10 @@ fn presets_opens_the_creator_and_a_builtin_is_read_only() {
     h.state_mut().presets_model().select("cs-quality");
     h.run();
     h.get_by_label_contains("Built-in presets are read-only");
-    assert!(h.get_by_label("Save preset").accesskit_node().is_disabled());
+    assert!(
+        h.query_by_label("Save preset").is_none(),
+        "a built-in offers only Duplicate"
+    );
     h.get_by_label("Duplicate").click();
     h.run();
     assert_eq!(h.state_mut().presets_model().id(), "cs-quality-copy");
