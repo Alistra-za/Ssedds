@@ -70,7 +70,8 @@ pub struct NifEdit {
     pub autosave: Option<PathBuf>,
     /// Note GD11: the autosave's content is part of this live document (saved there, or recovered from it).
     owns_autosave: bool,
-    /// Note GD11: lines for Messages from `open` (an autosave recovered, or left because the folder's is newer).
+    /// Note GD11: lines for Messages from `open` (an autosave recovered, or left because the folder's is newer) and,
+    /// Note GD19, from a save that moved an autosave aside; `MeshesModel` moves them to its `messages`.
     pub open_lines: Vec<String>,
     pub source: Arc<Vec<u8>>,
     pub source_copy: PathCopy,
@@ -986,20 +987,30 @@ impl NifEdit {
         if self.retarget_error.is_some() {
             self.unsaved = true;
             if let Some(a) = self.autosave.clone() {
-                match edit_doc::save(&a, &self.doc) {
-                    Ok(()) => self.owns_autosave = true,
-                    Err(e) => self.error = Some(e),
+                if self.free_autosave(&a) {
+                    match edit_doc::save(&a, &self.doc) {
+                        Ok(()) => self.owns_autosave = true,
+                        Err(e) => self.error = Some(e),
+                    }
                 }
             }
             return;
         }
-        self.unsaved = false;
         if self.doc_path.as_os_str().is_empty() {
+            self.unsaved = false;
             return;
         }
-        if let Err(e) = edit_doc::save(&self.doc_path, &self.doc) {
+        let path = self.doc_path.clone();
+        if !self.free_autosave(&path) {
+            return;
+        }
+        self.unsaved = false;
+        if let Err(e) = edit_doc::save(&path, &self.doc) {
             self.error = Some(e);
             return;
+        }
+        if self.autosave.as_ref() == Some(&path) {
+            self.owns_autosave = true;
         }
         // Note GD5 (c), GD11: saved in a folder, an autosave this document holds has done its job; one it never
         // loaded is not ours to delete
@@ -1013,6 +1024,39 @@ impl NifEdit {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     self.error = Some(format!("{}: {e}", a.display()));
                 }
+            }
+        }
+    }
+
+    /// Note GD19: before this session writes `path`, an autosave there that it never loaded is moved aside to
+    /// `<stem>.<unix seconds>.toml` (named in Messages), never overwritten. False (write nothing) when the move fails.
+    fn free_autosave(&mut self, path: &Path) -> bool {
+        if self.owns_autosave || self.autosave.as_deref() != Some(path) || !path.is_file() {
+            return true;
+        }
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let Some(to) = (secs..)
+            .map(|s| path.with_file_name(format!("{stem}.{s}.toml")))
+            .find(|p| !p.exists())
+        else {
+            return false;
+        };
+        match std::fs::rename(path, &to) {
+            Ok(()) => {
+                self.open_lines.push(format!(
+                    "The autosave {} held edits of {} that this session did not open: kept as {}.",
+                    path.display(),
+                    self.data_path,
+                    to.display()
+                ));
+                true
+            }
+            Err(e) => {
+                self.error = Some(format!("{}: {e}", path.display()));
+                false
             }
         }
     }
@@ -1054,8 +1098,8 @@ impl NifEdit {
             ));
         }
         self.doc.export = theirs.map(|t| t.export).unwrap_or_default();
-        // without a folder the document is the autosave (Note GD11)
-        self.owns_autosave |= root.is_none();
+        // without a folder the document is the autosave; an autosave this session never loaded is moved aside by the
+        // first save there (Note GD19), not claimed here
         (self.edit_mod, self.doc_path, self.export_path) = (edit_mod, doc_path, export_path);
         self.drag = None;
         self.history.break_merge();
@@ -1863,6 +1907,7 @@ impl MeshesModel {
         }
         if let Some(mut e) = self.edit.take() {
             e.flush();
+            self.messages.append(&mut e.open_lines);
             if let Some(err) = e.error {
                 self.error = Some(err);
             }
@@ -2262,6 +2307,10 @@ impl MeshesModel {
     /// folder: its edit document there, or a fresh one.
     /// The selected shape is kept.
     pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
+        // Note GD19: the session's lines (an autosave moved aside by a save) reach Messages on the next frame
+        if let Some(e) = &mut self.edit {
+            self.messages.append(&mut e.open_lines);
+        }
         if self.nif_export_root == root {
             // Note GD12: back to the folder the edit never left: it is its destination again
             if let Some(e) = self.edit.as_mut().filter(|e| e.retarget_error.is_some()) {

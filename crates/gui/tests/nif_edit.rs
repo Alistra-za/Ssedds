@@ -4072,6 +4072,104 @@ fn an_older_autosave_stays_when_the_folders_edit_is_newer() {
     assert!(autosave(&d).is_file(), "an autosave never loaded stays");
 }
 
+/// An autosave of one op (12.5) older than MyOut's document (one op, 7.5), and the session open on MyOut's: the
+/// autosave is not loaded (GD11). Returns the autosave's bytes.
+fn older_autosave_open_on_newer_folder(d: &tempfile::TempDir, m: &mut MeshesModel) -> Vec<u8> {
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(m, 12.5);
+    m.close_edit();
+    let mine = std::fs::read(autosave(d)).unwrap();
+    let aside = d.path().join("autosave.aside");
+    std::fs::rename(autosave(d), &aside).unwrap();
+    m.set_nif_export_root(Some(d.path().join(r"mods\MyOut")));
+    m.open_edit();
+    gloss(m, 7.5);
+    m.close_edit();
+    std::fs::rename(&aside, autosave(d)).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(d))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    m.open_edit();
+    assert_eq!(op_values(m)[0].1, 7.5, "the folder's document opens");
+    m.messages.clear();
+    mine
+}
+
+/// The files beside the autosave that a save moved aside (`<stem>.<seconds>.toml`).
+fn kept_aside(d: &tempfile::TempDir) -> Vec<std::path::PathBuf> {
+    let a = autosave(d);
+    let stem = a.file_stem().unwrap().to_string_lossy().into_owned();
+    std::fs::read_dir(a.parent().unwrap())
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| p != &a && p.file_name().unwrap().to_string_lossy().starts_with(&stem))
+        .collect()
+}
+
+/// Note GD19: the failed folder change's fallback never overwrites an autosave this session did not open: it is moved
+/// aside first, and Messages names both files.
+#[test]
+fn a_failed_folder_change_moves_an_unloaded_autosave_aside() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad.clone()));
+    gloss(&mut m, 13.5);
+    m.set_nif_export_root(Some(bad.clone())); // the next frame moves the session's lines to Messages
+    let kept = kept_aside(&d);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        mine,
+        "the unloaded autosave survives"
+    );
+    assert_eq!(
+        load(&autosave(&d)).unwrap().unwrap().ops.len(),
+        2,
+        "the live work"
+    );
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "The autosave {} held edits of meshes/x.nif that this session did not open: kept as {}.",
+            autosave(&d).display(),
+            kept[0].display()
+        )]
+    );
+}
+
+/// Note GD19: clearing the export folder does not claim an autosave it never loaded: the first save there moves it
+/// aside; from then on the autosave is the session's (a later folder's first save removes it).
+#[test]
+fn clearing_the_folder_never_overwrites_an_unloaded_autosave() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    m.set_nif_export_root(None);
+    gloss(&mut m, 13.5);
+    let kept = kept_aside(&d);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(std::fs::read(&kept[0]).unwrap(), mine);
+    assert_eq!(load(&autosave(&d)).unwrap().unwrap().ops.len(), 2);
+    m.set_nif_export_root(Some(d.path().join(r"mods\MyOut")));
+    gloss(&mut m, 14.5);
+    assert!(
+        !autosave(&d).exists(),
+        "the session's own autosave moved into the folder"
+    );
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        mine,
+        "the one aside stays"
+    );
+}
+
 #[test]
 fn an_export_folder_outside_the_instance_is_not_checked_and_still_exports() {
     let o = tempfile::tempdir().unwrap();
@@ -9764,7 +9862,8 @@ fn sha(b: &[u8]) -> [u8; 32] {
 
 /// Note GD17: SHA-256 of `meshes\x.nif` as the footer's Export NIF (`export_edit`) wrote it at c42c2454, for
 /// `export_session` plus `add_then_remove_ctrl(.., true)` (log: `r1-golden-capture-c42c2454.txt` in the ledger).
-const EXPORT_GOLDEN_SHA256: &str = "30da078ae7184525c8427204a3e0bd133f86409533e1645329680a91032b89ac";
+const EXPORT_GOLDEN_SHA256: &str =
+    "30da078ae7184525c8427204a3e0bd133f86409533e1645329680a91032b89ac";
 
 #[test]
 fn nif_review_rows_list_the_pending_edit() {
