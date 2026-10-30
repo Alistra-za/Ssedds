@@ -797,25 +797,20 @@ fn rule_match_subtypes_is_optional() {
 
 const ULTRA_ALIASES: &str = "schema_version = 1\nid = \"ultra\"\nversion = \"2.0.0\"\nbase = \"cs-compact\"\n[subtypes.diffuse]\nalpha = { threshold = 100 }\n[suffix_aliases]\nrmaosultrahigh = \"rmaos\"\n";
 
-/// Spec §4 and Review Focus 4: an export keeps its `base` link and aliases, validates where the original's base is loaded,
-/// and resolves equal to the original for every sub-type.
+/// Spec §4 and Review Focus 4: an export keeps its `base` link, drops its aliases (Note FC10), validates beside the
+/// original and resolves equal to the original for every sub-type.
 #[test]
-fn export_round_trips_and_keeps_aliases() {
+fn export_round_trips_and_drops_aliases() {
     let mut r = PresetRegistry::builtin().unwrap();
     r.add_toml(ULTRA_ALIASES).unwrap();
     let text = r.export("ultra", "ultra-export").unwrap();
     let out: PresetFile = toml::from_str(&text).unwrap();
     assert_eq!(out.id, "ultra-export");
     assert_eq!(out.base.as_deref(), Some("cs-compact"));
-    assert_eq!(
-        out.suffix_aliases.get("rmaosultrahigh").map(String::as_str),
-        Some("rmaos")
-    );
-    // Validate beside the built-ins only: the original's alias would conflict (Note T8).
+    assert!(out.suffix_aliases.is_empty());
     let d = tempfile::tempdir().unwrap();
     let f = write(d.path(), "export.toml", &text);
-    let clean = PresetRegistry::builtin().unwrap();
-    assert_eq!(clean.validate_file(&f), Vec::<String>::new());
+    assert_eq!(r.validate_file(&f), Vec::<String>::new());
     let mut both = PresetRegistry::builtin().unwrap();
     let id = both.add_file(&f).unwrap();
     for st in Subtype::ALL {

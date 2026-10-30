@@ -39,7 +39,7 @@ fn bc7_chain_bytes(mut n: u32) -> u64 {
 
 #[test]
 fn cubemap_is_offered_in_the_subtype_dropdown() {
-    let groups = offered_groups(Target::Cs);
+    let groups = offered_groups(Target::Cs, false);
     let other = groups.iter().find(|(h, _)| *h == OTHER_HEADING).unwrap();
     assert!(other.1.contains(&Subtype::Cubemap), "{other:?}");
 }

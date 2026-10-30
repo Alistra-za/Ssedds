@@ -2,11 +2,12 @@
 use engine::config::{Subtype, Target};
 use sdc_gui::ui::settings_panel::{offered_groups, subtype_groups};
 
-/// DECISIONS X3 (2026-10-13): no picker offers complex grass on any target; it is grouped with the packed maps.
+/// DECISIONS X3 (2026-10-13): outside a grass context no picker offers complex grass on any target (Note FC10); it
+/// is grouped with the packed maps.
 #[test]
 fn pickers_never_offer_complex_grass() {
     for (t, want) in [(Target::Cs, false), (Target::Vanilla, false)] {
-        let listed = offered_groups(t)
+        let listed = offered_groups(t, false)
             .into_iter()
             .any(|(_, m)| m.contains(&Subtype::ComplexGrass));
         assert_eq!(listed, want, "{t:?}");
@@ -280,7 +281,7 @@ fn a_hand_tag_stays_editable_and_pickers_list_complex_grass_only_as_the_current_
         .unwrap();
     assert_eq!(v.lock, None);
     for t in [Target::Cs, Target::Vanilla] {
-        assert!(offered_groups(t)
+        assert!(offered_groups(t, false)
             .iter()
             .all(|(_, m)| !m.contains(&Subtype::ComplexGrass)));
     }

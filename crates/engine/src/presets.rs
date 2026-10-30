@@ -584,6 +584,9 @@ pub struct PresetRegistry {
     sources: BTreeMap<String, Source>,
     /// Id → the preset's TOML table as loaded (`presets export`, Note T8).
     tables: BTreeMap<String, toml::Table>,
+    /// Id → the preset's text as loaded, when the schema migration left it unchanged (`presets export` keeps
+    /// comments and order, Note FC10).
+    texts: BTreeMap<String, String>,
 }
 
 impl PresetRegistry {
@@ -608,6 +611,7 @@ impl PresetRegistry {
         let raw: toml::Table =
             toml::from_str(text).map_err(|e| PresetError::Parse(e.to_string()))?;
         // Spec §5: the migration hook runs before deserialising.
+        let unmigrated = toml::Value::Table(raw.clone());
         let migrated =
             crate::migrate::migrate_preset(toml::Value::Table(raw)).map_err(|e| match e {
                 crate::migrate::MigrateError::Newer { found, .. } => {
@@ -615,6 +619,7 @@ impl PresetRegistry {
                 }
                 e => PresetError::Parse(e.to_string()),
             })?;
+        let kept_text = (migrated == unmigrated).then(|| text.to_string());
         let toml::Value::Table(table) = migrated else {
             return Err(PresetError::Parse("a preset file is a TOML table".into()));
         };
@@ -643,6 +648,9 @@ impl PresetRegistry {
         }
         self.sources.insert(id.clone(), source);
         self.tables.insert(id.clone(), table);
+        if let Some(t) = kept_text {
+            self.texts.insert(id.clone(), t);
+        }
         self.presets.insert(id.clone(), p);
         Ok(id)
     }
@@ -891,9 +899,9 @@ impl PresetRegistry {
         }
     }
 
-    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded (`base` stays a link) under `new_id`,
-    /// re-serialised (comments dropped, keys may reorder). `suffix_aliases` are copied as they are, so a copy of a
-    /// preset with aliases does not load beside the original (the aliases conflict) until they are renamed or removed.
+    /// `sdc presets export` (spec §4, Note T8, Note FC10): `id`'s own text as loaded (`base` stays a link) under
+    /// `new_id`, with comments and order kept and only `[suffix_aliases]` removed, so the copy loads beside the
+    /// original. A preset the schema migration changed is re-serialised from its migrated table instead.
     pub fn export(&self, id: &str, new_id: &str) -> Result<String, PresetError> {
         let mut t = self
             .tables
@@ -905,6 +913,19 @@ impl PresetRegistry {
                 "CFG-INVALID: preset id '{new_id}' is already loaded from {src}"
             )));
         }
+        if let Some(text) = self.texts.get(id) {
+            let mut doc: toml_edit::DocumentMut = text
+                .parse()
+                .map_err(|e: toml_edit::TomlError| PresetError::Invalid(e.to_string()))?;
+            doc.remove("suffix_aliases");
+            let decor = doc["id"].as_value().map(|v| v.decor().clone());
+            doc["id"] = toml_edit::value(new_id);
+            if let (Some(d), Some(v)) = (decor, doc["id"].as_value_mut()) {
+                *v.decor_mut() = d;
+            }
+            return Ok(doc.to_string());
+        }
+        t.remove("suffix_aliases");
         t.insert("id".into(), toml::Value::String(new_id.to_string()));
         toml::to_string(&t).map_err(|e| PresetError::Invalid(e.to_string()))
     }

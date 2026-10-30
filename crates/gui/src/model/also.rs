@@ -294,9 +294,11 @@ impl AppModel {
         }
         // Note FC10 (CN43): the record is read here, once per export, as `run_also` read it (ALSO-OWNED-UNREADABLE
         // carries no job, so it reaches no row).
-        let rec = engine::also::OwnedFiles::load(&s.folders[0])
-            .err()
-            .map(|_| record_path(&s.folders[0]));
+        let rec = s.folders.first().and_then(|pbr| {
+            engine::also::OwnedFiles::load(pbr)
+                .err()
+                .map(|_| record_path(pbr))
+        });
         if rec != self.also_unreadable {
             self.also_unreadable = rec;
             self.invalidate_views();
@@ -307,8 +309,8 @@ impl AppModel {
     /// Note FC10 (CN43): `Reset also.json`. Deletes only this project's record, `<PBR folder>/_sdc/also.json` (the
     /// path comes from the model, never from the row). The next Also export starts a new record.
     pub fn reset_also_json(&mut self, path: &Path) -> Result<(), String> {
-        let ours = record_path(&self.also_folders()[0]);
-        if path != ours || self.also_unreadable.as_deref() != Some(path) {
+        let ours = self.also_folders().first().map(|p| record_path(p));
+        if ours.as_deref() != Some(path) || self.also_unreadable.as_deref() != Some(path) {
             return Err(format!(
                 "{} is not this project's unreadable record",
                 path.display()

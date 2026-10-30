@@ -84,7 +84,8 @@ pub fn undecided_row(
             egui::ComboBox::from_id_salt(id)
                 .selected_text(subtype_label(chosen))
                 .show_ui(ui, |ui| {
-                    for (heading, members) in offered_groups(model.target) {
+                    let grass = item.job.as_ref().is_some_and(engine::policy::grass_context);
+                    for (heading, members) in offered_groups(model.target, grass) {
                         ui.label(egui::RichText::new(heading).weak());
                         for st in members {
                             ui.selectable_value(&mut chosen, st, subtype_label(st))

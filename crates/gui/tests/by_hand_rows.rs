@@ -40,6 +40,42 @@ fn click(h: &mut Harness<'static, AppModel>, label: &str) {
     h.run();
 }
 
+/// Focuses the button and presses Enter, then Space (FC5: a button that writes to disk answers a pointer click only).
+fn press_keys_on(h: &mut Harness<'static, AppModel>, label: &str) {
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        h.get_by_role_and_label(Role::Button, label).focus();
+        h.run();
+        h.key_press(key);
+        h.run();
+    }
+}
+
+/// Clears a test file's read-only flag on drop, so a failed assert does not leave it set.
+#[cfg(windows)]
+struct ReadOnly(PathBuf);
+
+#[cfg(windows)]
+impl ReadOnly {
+    fn set(&self, on: bool) {
+        let mut p = std::fs::metadata(&self.0).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        p.set_readonly(on);
+        std::fs::set_permissions(&self.0, p).unwrap();
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ReadOnly {
+    fn drop(&mut self) {
+        if let Ok(m) = std::fs::metadata(&self.0) {
+            let mut p = m.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            p.set_readonly(false);
+            let _ = std::fs::set_permissions(&self.0, p);
+        }
+    }
+}
+
 /// Item 27 (Review Focus 3): a refused save leaves a row; drawing it changes nothing, its button clears the flag.
 #[cfg(windows)]
 #[test]
@@ -49,14 +85,9 @@ fn clear_read_only_writes_only_on_click() {
     decide_all(&mut m);
     m.save().unwrap();
     let file = m.root.clone().unwrap().join("sdc.toml");
-    let set_flag = |on: bool| {
-        let mut p = std::fs::metadata(&file).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        p.set_readonly(on);
-        std::fs::set_permissions(&file, p).unwrap();
-    };
+    let guard = ReadOnly(file.clone());
     let flagged = || std::fs::metadata(&file).unwrap().permissions().readonly();
-    set_flag(true);
+    guard.set(true);
     m.set_field(
         "landscape/rock01.png",
         "alpha.policy",
@@ -75,10 +106,14 @@ fn clear_read_only_writes_only_on_click() {
     h.run();
     h.run();
     assert!(flagged(), "drawing the row writes nothing");
+    press_keys_on(&mut h, "Clear read-only flag");
+    assert!(
+        flagged(),
+        "Enter and Space on the focused button write nothing"
+    );
     click(&mut h, "Clear read-only flag");
-    let cleared = !flagged();
-    set_flag(false);
-    assert!(cleared, "the click cleared the flag");
+    assert!(!flagged(), "the click cleared the flag");
+    drop(guard);
     assert!(
         h.state().is_dirty(),
         "the unsaved edit is kept, not reloaded away"
@@ -144,7 +179,7 @@ fn also_project(d: &Path) -> AppModel {
 /// CN43: an unreadable `also.json` is a row; `Reset also.json` deletes only the record under the PBR folder's `_sdc`,
 /// and the next export writes a new record.
 #[test]
-fn reset_also_json_only_under_sdc_and_rebuilds_from_manifest() {
+fn reset_also_json_only_under_sdc_and_writes_a_new_record() {
     let d = tempfile::tempdir().unwrap();
     let mut m = also_project(d.path());
     m.set_also_tick(engine::presets::AlsoTarget::Vanilla, true);
@@ -235,6 +270,49 @@ fn tag_as_grass_writes_the_subtype() {
             .map(|j| j.profile.subtype),
         Some(engine::config::Subtype::ComplexGrass)
     );
+}
+
+/// X3 everywhere (Note FC10): the sub-type combos (the Undecided box's, Review's, the confirm box's) offer
+/// `complex_grass` exactly where the type picker does: a grass-shader set, or a file with no `textures` ancestor;
+/// never a plain diffuse under `textures/`.
+#[test]
+fn every_subtype_combo_offers_complex_grass_only_in_a_grass_context() {
+    use engine::config::{Subtype, Target};
+    use engine::shader::{Shader, ShaderOrigin, ShaderPick};
+    use sdc_gui::ui::settings_panel::offered_groups;
+    let lists = |job: &engine::policy::ResolvedJob| {
+        offered_groups(Target::Cs, engine::policy::grass_context(job))
+            .iter()
+            .any(|(_, m)| m.contains(&Subtype::ComplexGrass))
+    };
+    let d = tempfile::tempdir().unwrap();
+    let m = opened(d.path());
+    let plain = m
+        .items
+        .iter()
+        .find_map(|i| {
+            i.job
+                .clone()
+                .filter(|j| j.game_path.starts_with("textures/"))
+        })
+        .expect("a texture under textures/");
+    assert!(!lists(&plain), "a plain texture under textures/");
+    let mut grass_set = plain.clone();
+    grass_set.shader = Some(ShaderPick {
+        shader: Shader::ComplexGrass,
+        provenance: ShaderOrigin::Set,
+        wanted: None,
+    });
+    assert!(lists(&grass_set), "a complex grass shader set");
+    let e = tempfile::tempdir().unwrap();
+    let root = e.path().join("grassmod");
+    grass_png(&root.join("plants").join("tundragrass.png"));
+    let m = opened_as_the_app(root, e.path().join("out"));
+    let job = m
+        .item("plants/tundragrass.png")
+        .and_then(|i| i.job.clone())
+        .expect("planned");
+    assert!(lists(&job), "no textures ancestor");
 }
 
 /// An OpenEXR with partial alpha: the colour is divided by alpha on load (BQ15).
@@ -332,6 +410,16 @@ fn an_alias_clash_row_removes_the_copys_aliases() {
     let mut h = harness(m);
     h.run();
     assert!(std::fs::read_to_string(&copy).unwrap().contains("zz9"));
+    press_keys_on(&mut h, "Remove aliases from mine-export");
+    assert!(
+        std::fs::read_to_string(&copy).unwrap().contains("zz9"),
+        "Enter and Space on the focused button write nothing"
+    );
+    // Item 6: refused while an export runs.
+    h.state_mut().export.running = Some(Default::default());
+    assert!(h.state_mut().remove_preset_aliases(&copy).is_err());
+    assert!(std::fs::read_to_string(&copy).unwrap().contains("zz9"));
+    h.state_mut().export.running = None;
     click(&mut h, "Remove aliases from mine-export");
     let after = std::fs::read_to_string(&copy).unwrap();
     assert!(

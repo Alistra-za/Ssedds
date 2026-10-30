@@ -13,6 +13,7 @@ serde.workspace = true
 # float_roundtrip: a cached Analysis must read back bit for bit (Note DZ).
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 toml.workspace = true
+toml_edit = "0.25"
 schemars.workspace = true
 thiserror.workspace = true
 image.workspace = true

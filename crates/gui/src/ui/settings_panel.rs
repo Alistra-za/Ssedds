@@ -110,10 +110,10 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
     groups
 }
 
-/// The sub-type groups a picker offers under `target` (`engine::policy::offered`: not `complex_grass` under vanilla,
-/// complex grass design §3.7).
-pub fn offered_groups(target: Target) -> Vec<(&'static str, Vec<Subtype>)> {
-    subtype_groups(|s| offered(target, s))
+/// The sub-type groups a picker offers under `target` (`engine::policy::offered_for`: `complex_grass` only in a
+/// grass context, complex grass design §3.7, Note FC10).
+pub fn offered_groups(target: Target, grass: bool) -> Vec<(&'static str, Vec<Subtype>)> {
+    subtype_groups(|s| engine::policy::offered_for(target, s, grass))
 }
 
 pub fn alpha_options() -> Options {
@@ -810,23 +810,20 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
                     if name == "Mipmaps" {
                         mipmaps_rows(ui, cx, actions);
                     }
-                    for mut f in field_views(cx.target, cx.job).into_iter().filter(|f| {
-                        group_of(f.field) == name && !field_hidden(&cx.job.profile, f.field)
-                    }) {
+                    // Note FC10 (BQ15): an EXR source's Straight alpha ends the Alpha group.
+                    let exr = (name == "Alpha")
+                        .then(|| crate::model::fields::exr_straight_view(cx.target, cx.job))
+                        .flatten();
+                    for mut f in field_views(cx.target, cx.job)
+                        .into_iter()
+                        .filter(|f| {
+                            group_of(f.field) == name && !field_hidden(&cx.job.profile, f.field)
+                        })
+                        .chain(exr)
+                    {
                         if f.field == "encoder.backend" && f.lock.is_none() {
                             f.lock = backend_lock(&cx.job.profile, cx.nvtt_found);
                         }
-                        match field_row(ui, cx, &f) {
-                            Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
-                            Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
-                            None => {}
-                        }
-                    }
-                    // Note FC10 (BQ15): an EXR source's Straight alpha.
-                    if let Some(f) = (name == "Alpha")
-                        .then(|| crate::model::fields::exr_straight_view(cx.target, cx.job))
-                        .flatten()
-                    {
                         match field_row(ui, cx, &f) {
                             Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
                             Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
@@ -951,7 +948,8 @@ fn subtype_decision(
         egui::ComboBox::from_id_salt(id)
             .selected_text(subtype_label(chosen))
             .show_ui(ui, |ui| {
-                for (heading, members) in offered_groups(cx.target) {
+                let grass = engine::policy::grass_context(cx.job);
+                for (heading, members) in offered_groups(cx.target, grass) {
                     ui.label(egui::RichText::new(heading).weak());
                     for st in members {
                         ui.selectable_value(&mut chosen, st, subtype_label(st))

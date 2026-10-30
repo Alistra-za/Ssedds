@@ -118,6 +118,11 @@ fn button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
 /// `button` for a fix that deletes a file (Note FC10): outlined red, and Enter or Space on it does nothing (FC5).
 fn destructive_button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
     let b = egui::Button::new(text).stroke(egui::Stroke::new(1.5, super::status::RED));
+    click_only_button(ui, b, tip, off)
+}
+
+/// A button that writes to disk: a pointer click only, never Enter or Space on focus (FC5, Note FC10).
+fn click_only_button(ui: &mut egui::Ui, b: egui::Button, tip: &str, off: Option<&str>) -> bool {
     let r = ui.add_enabled(off.is_none(), b);
     let by_key = r.has_focus()
         && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
@@ -243,9 +248,9 @@ fn fix_button(
         // Drawn above with Open in editor.
         Fix::OpenInEditor(_) => false,
         Fix::Reload => button(ui, "Reload", "Read the project files again", None),
-        Fix::ClearReadOnly(path) => button(
+        Fix::ClearReadOnly(path) => click_only_button(
             ui,
-            "Clear read-only flag",
+            egui::Button::new("Clear read-only flag"),
             &format!("Clear the read-only flag of {}", path.display()),
             None,
         ),
@@ -276,11 +281,14 @@ fn fix_button(
             &format!("Remove match{n} from the set's PGPatcher settings"),
             sets_off,
         ),
-        Fix::RemoveAliases(_, id) => button(
+        Fix::RemoveAliases(_, id) => click_only_button(
             ui,
-            &format!("Remove aliases from {id}"),
+            egui::Button::new(format!("Remove aliases from {id}")),
             "Remove the suffix_aliases table from this preset file; its comments and other keys stay",
-            None,
+            m.export
+                .running
+                .is_some()
+                .then_some(crate::model::also::EXPORT_RUNNING),
         ),
     };
     clicked.then(|| fix.clone())

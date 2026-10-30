@@ -736,9 +736,9 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
 
 /// The hover of `Reset also.json` (Note FC10, CN43, CN39).
 pub const RESET_ALSO_HOVER: &str = "Reset also.json deletes this record of the files an Also export wrote outside the \
-     manifests (report, zips, sums file). The next Also export writes a new record. A report, zip or sums file already \
-     there that the new record does not list is then not known as Tessalith's: the export keeps it and says so, as for \
-     any file it did not write.";
+     manifests (report, zips, sums file). The manifests do not list those files, so nothing rebuilds it: the next Also \
+     export writes a new record, and each report, zip or sums file already there counts as one Tessalith did not \
+     write. The export keeps each one and says so; delete them to have them written again.";
 /// The hover of a `Tag as grass` row (Note FC10).
 pub const TAG_AS_GRASS_HOVER: &str = "A 1:2 image whose bottom half is a normal map, as complex grass is. No grass record \
      (GRAS) of a scan names it, so it is converted as a diffuse until it is tagged. Tag as grass writes subtype = \

@@ -280,9 +280,9 @@ pub enum PresetsCmd {
     },
     /// Write a preset's own TOML (keeping its `base` link) under a new id (default `<id>-export`).
     ///
-    /// The table is re-serialised: comments are dropped and keys may reorder. Suffix aliases are copied as they are,
-    /// so a copy of a preset with suffix aliases does not load beside the original: rename or remove the aliases
-    /// before you put the copy in the user presets folder. `--out` refuses the source file of a loaded preset.
+    /// The preset's text is copied with its comments and key order. Its suffix aliases are removed, so the copy
+    /// loads beside the original (a preset an older schema migrated is re-serialised instead, dropping comments).
+    /// `--out` refuses the source file of a loaded preset.
     Export {
         id: String,
         #[arg(long)]

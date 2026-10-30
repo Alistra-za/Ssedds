@@ -976,9 +976,8 @@ pub fn finish_also(
     s
 }
 
-/// CN43: the tail of the note for an unreadable `also.json`. The GUI's row offers `Reset also.json` (Note FC10).
-const OWNED_UNREADABLE: &str =
-    "it is left as it is, and no report, zip or sums file is written until it is fixed or removed";
+/// CN43: the tail of the note for an unreadable `also.json`, pointing at the GUI row's button (Note FC10).
+const OWNED_UNREADABLE: &str = "it is left as it is, and no report, zip or sums file is written until it is reset: use Reset also.json on its row in Problems (or delete the file)";
 
 /// `run_also` without the zips and the report; `rep` is the PBR phase's reporter, `recorder` wraps each later
 /// phase's sink (P4). The report's set rows go into `rows`, read from the plans before they run.

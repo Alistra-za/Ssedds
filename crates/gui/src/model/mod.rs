@@ -3379,6 +3379,9 @@ impl AppModel {
                 file.display()
             ));
         }
+        if self.export.running.is_some() {
+            return Err(also::EXPORT_RUNNING.into());
+        }
         let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", file.display());
         let text = std::fs::read_to_string(file).map_err(|e| fail(&e))?;
         let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| fail(&e))?;
