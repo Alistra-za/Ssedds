@@ -1025,8 +1025,11 @@ mod tests {
         pm.select("cs-quality");
         pm.duplicate();
         let h = top_bar_of(pm);
-        for shown in ["Save preset", "Revert", "Reset preset"] {
-            h.get_by_label(shown);
-        }
+        h.get_by_label("Save preset");
+        h.get_by_label("Revert");
+        assert!(!h
+            .get_by_label("Reset preset")
+            .accesskit_node()
+            .is_disabled());
     }
 }

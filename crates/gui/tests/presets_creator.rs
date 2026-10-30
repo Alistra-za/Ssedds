@@ -585,3 +585,16 @@ fn viewing_a_built_in_preset_shows_no_error() {
         "a built-in is not checked as a new preset"
     );
 }
+
+#[test]
+fn a_built_in_preset_is_never_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pm = PresetsModel::new(Some(dir.path().to_path_buf()), Target::Cs);
+    pm.select("cs-quality");
+    assert!(pm.save().is_err());
+    assert!(pm.save_overwrite().is_err());
+    assert!(
+        files(dir.path()).is_empty(),
+        "nothing reaches the presets folder"
+    );
+}

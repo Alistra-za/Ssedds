@@ -951,6 +951,10 @@ impl PresetsModel {
     }
 
     fn save_with(&mut self, force: bool) -> Result<PathBuf, String> {
+        // Only a built-in is read-only; validate no longer refuses it, so the refusal is here (Note FB6).
+        if self.draft.as_ref().is_some_and(|d| d.read_only) {
+            return Err("A built-in preset is read-only: Duplicate it to save a copy".into());
+        }
         let dir = self
             .dir
             .clone()
