@@ -157,7 +157,10 @@ pub fn load_count() -> usize {
 pub fn load(path: &Path) -> Result<Option<EditDoc>, String> {
     LOADS.with(|n| n.set(n.get() + 1));
     match std::fs::read_to_string(path) {
-        Ok(t) => EditDoc::from_text(&t).map(Some),
+        // Note GD30: the file is named, as in the read error (an autosave's name alone is a hash)
+        Ok(t) => EditDoc::from_text(&t)
+            .map(Some)
+            .map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }

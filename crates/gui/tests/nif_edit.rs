@@ -10248,6 +10248,70 @@ fn nif_review_rows_list_the_pending_edit() {
         .any(|p| p.level == NifLevel::Warning && p.text == RERUN_PGPATCHER));
 }
 
+/// Note GD30 (final review M2): a malformed edit document's error names its file, as a read error does.
+#[test]
+fn a_malformed_edit_document_names_its_file() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("bad.toml");
+    std::fs::write(&p, b"not = [toml").unwrap();
+    let e = load(&p).unwrap_err();
+    assert!(e.starts_with(&format!("{}: ", p.display())), "{e}");
+}
+
+/// Note GD30 (final review M3): a block reason no row covers gets its row even when another row already blocks: a
+/// refused op and a failed folder change are two rows.
+#[test]
+fn a_failed_folder_change_is_a_row_beside_a_refused_op() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    let at =
+        nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetBits {
+            at,
+            field: Field::ShaderType,
+            mask: 1,
+            value: 1,
+            base: 0,
+        }],
+        None,
+    );
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad.clone()));
+    let rows = m.nif_problems();
+    let head = format!("could not open the edit document in {}: ", bad.display());
+    assert!(
+        rows.iter()
+            .any(|p| p.level == sdc_gui::model::meshes::NifLevel::Blocks
+                && p.text.contains("not a bit field")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|p| p.level == sdc_gui::model::meshes::NifLevel::Blocks
+                && p.text.starts_with(&head)),
+        "{rows:?}"
+    );
+}
+
+/// Note GD30 (final review M5): a folder change closes an open guard dialog (its diff was the old folder's file).
+#[test]
+fn a_folder_change_closes_the_guard_dialog() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"theirs").unwrap();
+    assert!(matches!(m.export_edit(None), ExportOutcome::Guard { .. }));
+    assert!(m.edit.as_ref().unwrap().guard.is_some());
+    m.set_nif_export_root(Some(d.path().join(r"mods\Good")));
+    assert_eq!(m.edit.as_ref().unwrap().guard, None);
+}
+
 /// Note GD29: a Review answer does not outlive its Review: a folder change, closing the edit or `clear_nif_answers`
 /// (Review closed, project changed) drops it, and the row asks again, even for the same bytes.
 #[test]

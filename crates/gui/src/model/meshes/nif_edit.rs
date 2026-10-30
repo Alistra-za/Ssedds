@@ -1184,6 +1184,7 @@ impl NifEdit {
         // first save there (Note GD19), not claimed here
         (self.edit_mod, self.doc_path, self.export_path) = (edit_mod, doc_path, export_path);
         self.drag = None;
+        self.guard = None; // Note GD30: its question was about the old folder's file
         self.history.break_merge();
         self.unsaved = true;
         self.up_to_date = !self.pending() && self.doc.export.sha256.is_some();

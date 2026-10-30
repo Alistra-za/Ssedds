@@ -147,13 +147,14 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
             None,
         );
     }
-    // A reason `export_block` found that no row above covers (bytes that do not read back).
+    // A reason `export_block` found that no row above covers (a failed folder change, an apply error, bytes that do
+    // not read back). Note GD30: matched by text, so another blocking row does not hide it.
     if let Some(why) = e
         .blocked
         .as_ref()
         .filter(|b| *b != NO_EDITS && *b != NO_EXPORT_FOLDER)
     {
-        if !out.iter().any(|p| p.level == NifLevel::Blocks) {
+        if !out.iter().any(|p| p.text == *why) {
             out.insert(
                 0,
                 NifProblem {
