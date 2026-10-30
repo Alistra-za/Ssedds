@@ -1740,7 +1740,8 @@ impl AppModel {
 
     /// Note FC1 R5: set `set`'s members whose recorded sub-type is untouched under the shader being left and whose
     /// pick under `shader` differs (`None`, Auto: the pick without a shader; the plan re-applies an automatic one);
-    /// not a member in a locked slot. Each with the value to write (`None` under Auto: cleared).
+    /// a locked slot's member too, as the engine's shader re-type ignored locks before FC1 (the lock guards its
+    /// encoding). Each with the value to write (`None` under Auto: cleared).
     fn untouched_for_shader(
         &self,
         set: &str,
@@ -1750,7 +1751,6 @@ impl AppModel {
         let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
             return vec![];
         };
-        let locked = locked_items(self);
         let now = v.shader.as_ref().map(|p| p.shader);
         let chosen = v
             .shader
@@ -1767,7 +1767,7 @@ impl AppModel {
         };
         v.members
             .iter()
-            .filter(|k| !locked.contains_key(*k) && self.untouched_subtype(k, now))
+            .filter(|k| self.untouched_subtype(k, now))
             .filter_map(|k| {
                 let new = self.auto_pick(k, shader).map(|st| serde_json::json!(st));
                 (new.is_some() && new != held(k))
