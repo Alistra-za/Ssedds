@@ -46,8 +46,14 @@ pub const KEYS: [CmKey; 6] = [
     ),
 ];
 
+/// PGPatcher 2.3.1's `disabled` (Note GE9): a known key, read and written when set by hand, with no card control
+/// (the card draws `KEYS`).
+static DISABLED: CmKey = k("disabled", CmKind::Bool, "PGPatcher: off");
+
 pub fn key(name: &str) -> Option<&'static CmKey> {
-    KEYS.iter().find(|k| k.name == name)
+    KEYS.iter()
+        .chain(std::iter::once(&DISABLED))
+        .find(|k| k.name == name)
 }
 
 /// Whether `v` has the type PGPatcher reads. A colour is exactly three numbers: 2.x ignores anything else (1.2.0

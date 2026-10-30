@@ -1021,3 +1021,26 @@ fn an_edited_complex_material_json_alone_does_not_open_review() {
     m.export_clicked();
     assert!(m.review.is_none(), "{:?}", m.review_gate());
 }
+
+/// Note GE9: PGPatcher 2.3.1's `disabled` key (the vendored 2.3.1 schema) is read, kept through an edit and written,
+/// as a known key; the card draws no control for it (it is not in `KEYS`).
+#[test]
+fn cm_json_keeps_disabled() {
+    let (d, mut s) = doc(
+        "[[sets]]\nid = \"a/one\"\n\n[sets.cm]\nexport = true\ndisabled = true\nglossiness = 80\n",
+    );
+    let b = s.entries()[0].cm.clone().unwrap();
+    assert_eq!(b.values["disabled"], json!(true));
+    assert!(b.bad.is_empty(), "{:?}", b.bad);
+    assert!(KEYS.iter().all(|k| k.name != "disabled"), "no card control");
+    s.set_cm_value("a/one", "glossiness", Some(json!(50.0)));
+    s.save(false).unwrap();
+    let b = SetsDoc::open(d.path()).entries()[0].cm.clone().unwrap();
+    assert_eq!(b.values["disabled"], json!(true), "kept through an edit");
+    let text = to_text(&b.values);
+    let doc: Json = serde_json::from_str(&text).unwrap();
+    assert_eq!(doc["disabled"], json!(true), "{text}");
+    assert_eq!(validate_cm(&doc), Ok(()));
+    assert_eq!(validate_cm(&json!({"disabled": true})), Ok(()));
+    assert!(validate_cm(&json!({"disabled": 1})).is_err());
+}

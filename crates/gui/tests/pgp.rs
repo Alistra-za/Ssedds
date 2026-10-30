@@ -956,12 +956,13 @@ fn the_validator_covers_every_keyword_the_schema_uses() {
     }
 }
 
-/// Complex material design section 7: both schema examples pass; an unknown key, a short colour and a non-number fail.
+/// Complex material design section 7: every schema example passes (2.3.1 adds `{"disabled": true}`, Note GE9); an
+/// unknown key, a short colour and a non-number fail.
 #[test]
 fn validate_cm_accepts_the_schema_examples_and_rejects_bad_documents() {
     let schema: Value = serde_json::from_str(CM_SCHEMA_JSON).unwrap();
     let examples = schema["examples"].as_array().unwrap();
-    assert_eq!(examples.len(), 2);
+    assert_eq!(examples.len(), 3);
     for ex in examples {
         assert_eq!(validate_cm(ex), Ok(()), "{ex}");
     }
