@@ -1984,6 +1984,7 @@ impl MeshesModel {
 
     /// Ends the session without touching the view's content.
     pub(super) fn drop_edit(&mut self) {
+        self.clear_nif_answers(); // Note GD29: `close_edit` too, which ends here
         if let Some(column) = self.shapes_col_before.take() {
             self.shapes_col = column;
         }
@@ -2253,6 +2254,12 @@ impl MeshesModel {
             .insert(path.to_ascii_lowercase(), (choice, sha256));
     }
 
+    /// Note GD29: drops every Review answer, so each foreign row asks again. Review calls it when it closes and when
+    /// the project changes (FC5); the edit's close and a folder change call it too.
+    pub fn clear_nif_answers(&mut self) {
+        self.nif_answers.clear();
+    }
+
     /// Note GD2: writes every Review row that is not blocked and, when Tessalith did not write its file, is answered
     /// Overwrite for the bytes on disk now (read again here). The answers are used up. Ok(written) when nothing was
     /// skipped, else Err listing each skipped NIF and why. Each write is a line in Messages, with its placement.
@@ -2436,12 +2443,14 @@ impl MeshesModel {
                 }
             }
             self.nif_export_root = root;
+            self.clear_nif_answers(); // Note GD29: they were given for the old folder's files
             self.refresh_doc_badges();
             self.refresh_placement();
             self.edit_checks();
             return;
         }
         self.nif_export_root = root;
+        self.clear_nif_answers();
         self.refresh_doc_badges();
         let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
             return;

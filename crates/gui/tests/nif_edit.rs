@@ -10248,6 +10248,34 @@ fn nif_review_rows_list_the_pending_edit() {
         .any(|p| p.level == NifLevel::Warning && p.text == RERUN_PGPATCHER));
 }
 
+/// Note GD29: a Review answer does not outlive its Review: a folder change, closing the edit or `clear_nif_answers`
+/// (Review closed, project changed) drops it, and the row asks again, even for the same bytes.
+#[test]
+fn a_review_answer_is_dropped_by_a_folder_change_or_a_close() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let junk = |p: &Path| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"junk").unwrap();
+    };
+    junk(&exported(&d));
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    assert_eq!(review_row(&m).answer, Some(GuardChoice::Overwrite));
+    let good = d.path().join(r"mods\Good");
+    junk(&good.join(r"meshes\x.nif"));
+    m.set_nif_export_root(Some(good.clone()));
+    assert_eq!(m.nif_export_root.as_deref(), Some(good.as_path()));
+    assert_eq!(review_row(&m).answer, None, "a folder change asks again");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(review_row(&m).answer, None, "closing the edit asks again");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    m.clear_nif_answers();
+    assert_eq!(review_row(&m).answer, None);
+}
+
 #[test]
 fn a_foreign_nif_waits_for_an_answer_on_its_row() {
     let (d, mut m) = export_session();
