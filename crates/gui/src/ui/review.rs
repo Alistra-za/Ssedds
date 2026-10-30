@@ -262,6 +262,9 @@ fn json_line_text(l: &JsonLine) -> String {
 
 /// A column: its heading, then `body` in a scroll area of its own.
 /// `key` names the scroll area, so a heading that carries a count keeps the column's scroll position.
+/// Note FB10: under this width the Review sections stack in one scroll area.
+const STACK_BELOW: f32 = 1200.0;
+
 fn column(ui: &mut egui::Ui, key: &str, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
     ui.strong(heading);
     // ui-rules 3.2: a bar drawn without hover, so a column that overflows says so.
@@ -608,16 +611,20 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 });
             });
         });
-    // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
-    ui.allocate_ui(ui.available_size(), |ui| {
-        ui.columns(if also_on { 4 } else { 3 }, |cols| {
-            // Note FB4: the missing export folder counts, because the gate enforces it.
-            let blockers = blocks.len() + usize::from(!folder_chosen);
-            column(
-                &mut cols[0],
-                "Blockers",
-                &format!("Blockers ({blockers})"),
-                |ui| {
+    // Note FB4: the missing export folder counts, because the gate enforces it.
+    let blockers = blocks.len() + usize::from(!folder_chosen);
+    let n_cols = if also_on { 4 } else { 3 };
+    let heading = |i: usize| match i {
+        0 => ("Blockers", format!("Blockers ({blockers})")),
+        1 => ("Undecided", format!("Undecided ({})", undecided.len())),
+        2 => ("Warnings", format!("Warnings ({})", asks.len())),
+        _ => ("Also export as", "Also export as".to_string()),
+    };
+    // One body per column, drawn side by side or stacked (Note FB10).
+    let mut body = |ui: &mut egui::Ui, i: usize| match i {
+        0 => {
+            {
+                {
                     if blockers == 0 {
                         ui.weak("None");
                     }
@@ -650,36 +657,34 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                             }
                         });
                     }
-                },
-            );
-            let heading = format!("Undecided ({})", undecided.len());
-            column(&mut cols[1], "Undecided", &heading, |ui| {
-                if undecided.is_empty() {
-                    ui.weak("None");
                 }
-                for k in &undecided {
-                    if let Some(p) = undecided_row(ui, m, k, off.as_deref()) {
-                        act = Some(Act::Row(p));
-                    }
+            }
+        }
+        1 => {
+            if undecided.is_empty() {
+                ui.weak("None");
+            }
+            for k in &undecided {
+                if let Some(p) = undecided_row(ui, m, k, off.as_deref()) {
+                    act = Some(Act::Row(p));
                 }
-                let accept = ui
-                    .add_enabled(
-                        any_suggestion && off.is_none(),
-                        egui::Button::new("Accept all suggestions"),
-                    )
-                    .on_hover_text(
-                        "Decide every texture that has a suggestion; the others stay listed",
-                    )
-                    .on_disabled_hover_text(
-                        off.as_deref()
-                            .unwrap_or("No undecided texture has a suggestion"),
-                    );
-                if accept.clicked() {
-                    act = Some(Act::AcceptAll);
-                }
-            });
-            let heading = format!("Warnings ({})", asks.len());
-            column(&mut cols[2], "Warnings", &heading, |ui| {
+            }
+            let accept = ui
+                .add_enabled(
+                    any_suggestion && off.is_none(),
+                    egui::Button::new("Accept all suggestions"),
+                )
+                .on_hover_text("Decide every texture that has a suggestion; the others stay listed")
+                .on_disabled_hover_text(
+                    off.as_deref()
+                        .unwrap_or("No undecided texture has a suggestion"),
+                );
+            if accept.clicked() {
+                act = Some(Act::AcceptAll);
+            }
+        }
+        2 => {
+            {
                 if asks.is_empty() {
                     ui.weak("None that block the export");
                 }
@@ -708,14 +713,34 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 {
                     act = Some(Act::Others);
                 }
-            });
-            if also_on {
-                column(&mut cols[3], "Also export as", "Also export as", |ui| {
-                    also_section(ui, m, also_err.as_deref(), &mut act)
-                });
             }
-        })
-    });
+        }
+        _ => also_section(ui, m, also_err.as_deref(), &mut act),
+    };
+    if ui.available_width() < STACK_BELOW {
+        // Note FB10: one scrolling column, the sections one under another.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+        egui::ScrollArea::vertical()
+            .id_salt(("review", "stacked"))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for i in 0..n_cols {
+                    ui.strong(heading(i).1);
+                    body(ui, i);
+                    ui.add_space(6.0);
+                }
+            });
+    } else {
+        // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
+        ui.allocate_ui(ui.available_size(), |ui| {
+            ui.columns(n_cols, |cols| {
+                for (i, c) in cols.iter_mut().enumerate() {
+                    let (key, text) = heading(i);
+                    column(c, key, &text, |ui| body(ui, i));
+                }
+            })
+        });
+    }
     match act {
         Some(Act::AlsoTick(t, on)) => model.set_also_tick(t, on),
         Some(Act::AlsoSet(f)) => model.set_also_settings(f),

@@ -503,3 +503,44 @@ fn the_review_export_works_on_the_frame_it_becomes_ready() {
     h.step();
     assert!(h.state().export.running.is_some() || h.state().export.summary.is_some());
 }
+
+fn review_at(dir: &std::path::Path, size: egui::Vec2) -> Harness<'static, AppModel> {
+    let mut m = opened(dir);
+    m.open_review();
+    let mut h = Harness::builder()
+        .with_size(size)
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(8);
+    h
+}
+
+/// Note FB10: Review opens at 40 % of the window's height while the user has not resized it.
+#[test]
+fn review_opens_at_least_40_percent_tall() {
+    let d = tempfile::tempdir().unwrap();
+    let h = review_at(d.path(), egui::vec2(1400.0, 864.0));
+    let p = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("bottom-review"))
+        .expect("the Review panel")
+        .outer_rect;
+    assert!(p.height() >= 0.4 * 864.0 - 1.0, "{p:?}");
+}
+
+/// Note FB10: under 1200 px the columns stack in one scroll area; wider, they sit side by side.
+#[test]
+fn review_columns_stack_under_1200() {
+    let d = tempfile::tempdir().unwrap();
+    let pos = |h: &Harness<'static, AppModel>, l: &str| h.get_by_label_contains(l).rect();
+    let h = review_at(d.path(), egui::vec2(1100.0, 864.0));
+    let (b, u) = (pos(&h, "Blockers ("), pos(&h, "Undecided ("));
+    assert!(
+        u.top() > b.bottom() - 1.0 && u.left() <= b.left() + 1.0,
+        "{b:?} {u:?}"
+    );
+    let h = review_at(d.path(), egui::vec2(1536.0, 864.0));
+    let (b, u) = (pos(&h, "Blockers ("), pos(&h, "Undecided ("));
+    assert!(
+        u.left() > b.right() && (u.top() - b.top()).abs() < 2.0,
+        "{b:?} {u:?}"
+    );
+}
