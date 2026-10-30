@@ -107,6 +107,8 @@ pub struct PlanView {
     pub output_root: PathBuf,
     /// FC7: what this plan re-encodes after an upgrade, and why.
     pub recode: Vec<engine::manifest::RecodeCause>,
+    /// FC11: the recorded files this plan no longer writes (Review's `Stale outputs`).
+    pub stale: Vec<engine::manifest::StaleOutput>,
 }
 
 /// The `[files]` key of a path under `root` (DECISIONS N2).
@@ -460,6 +462,12 @@ impl PlanView {
             recode: engine::manifest::recode_causes(
                 &engine::manifest::Manifest::at(out_root),
                 plan,
+            ),
+            // shortcut: the manifest is read a second time per plan; share one read with `recode` if a profile shows it.
+            stale: engine::manifest::stale_outputs(
+                &engine::manifest::Manifest::at(out_root),
+                plan,
+                out_root,
             ),
         }
     }

@@ -116,14 +116,30 @@ fn button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
 }
 
 /// `button` for a fix that deletes a file (Note FC10): outlined red, and Enter or Space on it does nothing (FC5).
-fn destructive_button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
+/// `name`: the accessible name when several buttons share `text` (rule 8.4; Note FC11's `Delete` rows).
+pub(super) fn destructive_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    name: Option<&str>,
+    tip: &str,
+    off: Option<&str>,
+) -> bool {
     let b = egui::Button::new(text).stroke(egui::Stroke::new(1.5, super::status::RED));
-    click_only_button(ui, b, tip, off)
+    click_only_button(ui, b, name, tip, off)
 }
 
 /// A button that writes to disk: a pointer click only, never Enter or Space on focus (FC5, Note FC10).
-fn click_only_button(ui: &mut egui::Ui, b: egui::Button, tip: &str, off: Option<&str>) -> bool {
+fn click_only_button(
+    ui: &mut egui::Ui,
+    b: egui::Button,
+    name: Option<&str>,
+    tip: &str,
+    off: Option<&str>,
+) -> bool {
     let r = ui.add_enabled(off.is_none(), b);
+    if let Some(name) = name {
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, r.enabled(), name));
+    }
     let by_key = r.has_focus()
         && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
     let r = match off {
@@ -251,12 +267,14 @@ fn fix_button(
         Fix::ClearReadOnly(path) => click_only_button(
             ui,
             egui::Button::new("Clear read-only flag"),
+            None,
             &format!("Clear the read-only flag of {}", path.display()),
             None,
         ),
         Fix::ResetAlsoJson(_) => destructive_button(
             ui,
             "Reset also.json",
+            None,
             RESET_ALSO_HOVER,
             m.export
                 .running
@@ -284,6 +302,7 @@ fn fix_button(
         Fix::RemoveAliases(_, id) => click_only_button(
             ui,
             egui::Button::new(format!("Remove aliases from {id}")),
+            None,
             "Remove the suffix_aliases table from this preset file; its comments and other keys stay",
             m.export
                 .running

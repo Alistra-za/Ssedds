@@ -108,7 +108,64 @@ fn plural(n: usize) -> &'static str {
     }
 }
 
+/// FC11 (Review Focus 4): a stale file whose stamp no longer matches its record, or that has none: no button.
+pub const STALE_NOT_OURS: &str = "edited since Tessalith wrote it: left alone";
+
 impl AppModel {
+    /// FC11: a `Stale outputs` row: the path under the export folder, and why it is listed.
+    pub fn stale_text(&self, s: &engine::manifest::StaleOutput) -> String {
+        let rel = self
+            .sets_root
+            .as_deref()
+            .and_then(|r| s.path.strip_prefix(r).ok())
+            .unwrap_or(&s.path);
+        let why = match (s.ours, s.reason) {
+            (false, _) => STALE_NOT_OURS,
+            (true, engine::manifest::StaleWhy::SourceGone) => "its source is gone",
+            (true, engine::manifest::StaleWhy::NotWritten) => "no longer written",
+        };
+        format!("{} · {why}", rel.display())
+    }
+
+    /// FC11 (Review Focus 3, 4): the `Delete` of a `Stale outputs` row, on its click only. Deletes only a path the
+    /// last plan listed as ours, never while an export runs, and only when the file still has the size and mtime its
+    /// manifest record holds (checked again now); otherwise the row reads "edited since…" and the file stays.
+    pub fn delete_stale_output(&mut self, path: &Path) -> Result<(), String> {
+        if !self.stale.iter().any(|s| s.ours && s.path == path) {
+            return Err(format!(
+                "{} is not a stale output Tessalith wrote",
+                path.display()
+            ));
+        }
+        if self.export.running.is_some() {
+            return Err(super::also::EXPORT_RUNNING.into());
+        }
+        let still_ours = self.sets_root.as_deref().is_some_and(|root| {
+            let key = engine::manifest::output_key(root, path);
+            engine::manifest::Manifest::at(root)
+                .read()
+                .ok()
+                .and_then(|r| r.get(&key)?.output_stamp)
+                .is_some_and(|s| Some(s) == engine::policy::SourceStamp::of(path))
+        });
+        if !still_ours {
+            for s in self.stale.iter_mut().filter(|s| s.path == path) {
+                s.ours = false;
+            }
+            let e = format!("{}: {STALE_NOT_OURS}", path.display());
+            self.status_line = e.clone();
+            return Err(e);
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+        self.stale.retain(|s| s.path != path);
+        self.status_line = format!("Deleted {}", path.display());
+        Ok(())
+    }
+
     /// Open Review (its ticks are kept when it is already open) and show its tab.
     pub fn open_review(&mut self) {
         let unwritable = self.also_toml_unwritable();

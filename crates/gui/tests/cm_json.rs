@@ -85,7 +85,10 @@ fn a_read_only_document_takes_no_cm_edit() {
     s.set_cm_export("a/one", true);
     s.set_cm_json_shas(&BTreeMap::from([("x.json".to_string(), "00".to_string())]));
     assert!(!s.is_dirty());
-    assert!(s.cm_json_shas().is_empty());
+    assert!(s.entries().is_empty() || s.entries()[0].cm.is_none());
+    // Note FC11: the hash record goes to `_sdc/generated.json`, not into the broken document.
+    assert_eq!(s.cm_json_shas().len(), 1);
+    assert!(s.sidecar_path().is_file());
 }
 
 /// Design §3: the hash record reads back, and an undo (restore) keeps the live record.
@@ -674,9 +677,10 @@ fn a_vanilla_complex_m_writes_its_json() {
     assert!(out(&m, "m/iron_m.json").is_file(), "{}", notes(&m));
 }
 
-/// Ruling C7: the files are written, but a read-only `sdc-project.toml` takes no hash record (a note says so).
+/// Ruling C7, amended by Note FC11 (supersedes P21): the files are written; a read-only `sdc-project.toml` takes no
+/// hash record, but `_sdc/generated.json` does (a note says so), so the next export does not ask.
 #[test]
-fn a_read_only_document_records_no_hash() {
+fn a_read_only_document_records_the_hash_in_the_sidecar() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path(), Target::Cs);
     let iron = set_id(&m, "m/iron");
@@ -684,16 +688,20 @@ fn a_read_only_document_records_no_hash() {
     export_and_wait(&mut m);
     let p = prepare(&m).unwrap();
     std::fs::remove_file(out(&m, "m/iron_m.json")).unwrap();
-    let (_b, broken) = doc("[[sets]\nbroken");
+    let (b, broken) = doc("[[sets]\nbroken");
     m.sets_doc = Some(broken);
     m.finish_cm_json(Some(p));
     assert!(out(&m, "m/iron_m.json").is_file(), "{}", notes(&m));
     assert!(
-        notes(&m).contains("hashes were not recorded: sdc-project.toml is read-only"),
+        notes(&m).contains(sdc_gui::model::SIDECAR_ONLY),
         "{}",
         notes(&m)
     );
-    assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
+    assert!(!m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
+    let text = std::fs::read_to_string(b.path().join("sdc-project.toml")).unwrap();
+    assert_eq!(text, "[[sets]\nbroken", "the broken file is not touched");
+    let reopened = SetsDoc::open(b.path());
+    assert!(!reopened.cm_json_shas().is_empty(), "the sidecar holds it");
 }
 
 /// Fix round 1 (1), amended by Note BV3: a file with exactly the bytes sdc would write is adopted and recorded, so

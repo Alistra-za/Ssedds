@@ -230,6 +230,10 @@ While it runs the Files tab shows done/total, elapsed time, files per second and
 
 If an export is blocked, Review's *Blockers* column lists what to fix; **Go to set** selects the set.
 
+Review's footer also lists **Stale outputs (n)**: files an earlier export wrote that the project no longer writes (a renamed set's old files, a skin set's old `_f.dds` or `textures\pbr\` files, the old `_rmaos.dds` after a recipe switch, the output of a deleted source). A file still exactly as Tessalith wrote it has **Delete**, which acts on a mouse click only; a file changed since reads "edited since Tessalith wrote it: left alone" and has no button. The rows never block Export. Old JSON files are not listed; the export notes name them.
+
+Generated maps' records and the hashes of the JSON files Tessalith writes are also saved at once in `_sdc/generated.json` beside `sdc-project.toml`, so closing without saving, discarding edits or a crash does not lose them.
+
 ### Also export as Vanilla and CM
 
 In the cs mode one export can also write a vanilla and a complex-material (CM) version of a PBR mod.

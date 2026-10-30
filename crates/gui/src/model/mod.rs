@@ -75,6 +75,10 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Note FC11 (supersedes P21's note): a hash recorded while `sdc-project.toml` is read-only.
+pub const SIDECAR_ONLY: &str =
+    "hash recorded in _sdc/generated.json only: sdc-project.toml is read-only";
+
 /// How long the "Undid/Redid" note stays in the status line (AG15).
 const UNDO_NOTE_FOR: Duration = Duration::from_secs(5);
 
@@ -314,6 +318,8 @@ pub struct AppModel {
     /// FC7: what the last plan re-encodes after an upgrade, one Review Warning row per cause (`FirstExport` a line).
     /// Emptied when an export starts.
     pub recode: Vec<engine::manifest::RecodeCause>,
+    /// FC11: the recorded files the last plan no longer writes, Review's `Stale outputs (n)`. Not a gate.
+    pub stale: Vec<engine::manifest::StaleOutput>,
     /// Note FC3: the last Also export's conversion report, the DERIVE rows' Open report.
     pub also_report: Option<PathBuf>,
     /// Note FC10 (CN43): the PBR folder's `_sdc/also.json` that the last Also export could not read.
@@ -650,6 +656,7 @@ impl AppModel {
             skipped_user_presets: vec![],
             unreadable: vec![],
             recode: vec![],
+            stale: vec![],
             also_report: None,
             also_unreadable: None,
             read_only_flags: vec![],
@@ -929,6 +936,8 @@ impl AppModel {
         self.also_written = None;
         self.also_report = None;
         self.also_unreadable = None;
+        // FC11: the previous folder's stale files never get a Delete here.
+        self.stale.clear();
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -2119,14 +2128,12 @@ impl AppModel {
         let Some(d) = self.sets_doc.as_mut() else {
             return;
         };
-        if d.read_only() {
-            self.export
-                .notes
-                .push("the copies' hashes were not recorded: sdc-project.toml is read-only".into());
-            return;
-        }
         let was_dirty = d.is_dirty();
         d.set_copy_shas(&shas);
+        if d.read_only() {
+            self.export.notes.push(SIDECAR_ONLY.into());
+            return;
+        }
         self.save_hash_record(was_dirty);
     }
 
@@ -2150,18 +2157,17 @@ impl AppModel {
         let Some(d) = self.sets_doc.as_mut() else {
             return;
         };
-        if d.read_only() {
-            self.export
-                .notes
-                .push("the JSON's hash was not recorded: sdc-project.toml is read-only".into());
-            return;
-        }
         let was_dirty = d.is_dirty();
         // #43: one record per name; audit 08c-1: keyed by `record_key`, and kept when its file is gone.
         let mut shas = history::records_at(&d.pgp_json_shas(), &root);
         shas.insert(key.to_string(), sha.to_string());
         d.set_last_json_sha256(sha);
         d.set_pgp_json_shas(&shas);
+        // Note FC11 (supersedes P21's next-export ask): a read-only document still gets the sidecar's record.
+        if d.read_only() {
+            self.export.notes.push(SIDECAR_ONLY.into());
+            return;
+        }
         self.save_hash_record(was_dirty);
     }
 
@@ -2304,6 +2310,7 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         self.unreadable = view.unreadable;
         self.recode = view.recode;
+        self.stale = view.stale;
         // The count of undecided textures is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // The undo note stays through the plan the undo started, and goes with the next one.

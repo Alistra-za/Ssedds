@@ -11,7 +11,7 @@ use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use toml_edit::{Array, ArrayOfTables, Item, Table, TableLike, Value};
@@ -99,7 +99,14 @@ pub(crate) fn next_rev() -> u64 {
 pub struct SetsDoc {
     f: TomlFile,
     entries_cache: RefCell<Option<(u64, Arc<Vec<SetEntry>>)>>,
+    /// Note FC11: `<project root>/_sdc/generated.json` as last read or written: the records kept outside the undo
+    /// history (`[generated]` and the JSON hash tables), under the same keys as in this document. Written when a
+    /// record is made, so it holds even when the document is never saved; a table it holds wins over the document's.
+    side: serde_json::Map<String, Json>,
 }
+
+/// Note FC11: the `[project]` key of the current PGPatcher JSON's hash (also a sidecar key).
+const LAST_SHA: &str = "last_json_sha256";
 
 /// Flatten a table into `prefix.key` paths; values only (nested tables recurse).
 fn flatten(t: &dyn TableLike, prefix: &str, out: &mut Settings) {
@@ -208,14 +215,64 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
 
 impl SetsDoc {
     pub fn open(root: &Path) -> SetsDoc {
-        SetsDoc {
+        let mut d = SetsDoc {
             f: TomlFile::open(root.join(FILE_NAME)),
             entries_cache: RefCell::default(),
-        }
+            side: Default::default(),
+        };
+        d.load_sidecar();
+        d
     }
 
     pub fn reload(&mut self) {
         self.f.reload();
+        self.load_sidecar();
+    }
+
+    /// Note FC11: `<project root>/_sdc/generated.json`, beside `sdc-project.toml`.
+    pub fn sidecar_path(&self) -> PathBuf {
+        self.f.path.with_file_name("_sdc").join("generated.json")
+    }
+
+    /// Note FC11: read the sidecar (missing or unreadable: nothing, as before it existed) and reconcile the document's
+    /// readable copy from it. A value that differs is an unsaved edit; an equal one changes nothing.
+    fn load_sidecar(&mut self) {
+        self.side = std::fs::read(self.sidecar_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Json>(&b).ok())
+            .and_then(|v| match v {
+                Json::Object(o) => Some(o),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if let Some(s) = self.side.get(LAST_SHA).and_then(Json::as_str) {
+            let v = Value::from(s);
+            self.set_project(LAST_SHA, Some(v));
+        }
+        for k in [PGP_SHA, CS_SHA, CM_SHA, COPY_SHA] {
+            if self.side.contains_key(k) {
+                let m = self.shas(k);
+                self.set_shas(k, &m);
+            }
+        }
+        if self.side.contains_key(GENERATED) {
+            let g = self.generated();
+            self.put_doc_generated(&g);
+        }
+    }
+
+    /// Note FC11: record `v` under `key` in the sidecar and write it. A failed write leaves the document's copy, which
+    /// the next Save writes, as before the sidecar.
+    fn put_side(&mut self, key: &str, v: Json) {
+        if self.side.get(key) == Some(&v) {
+            return;
+        }
+        self.side.insert(key.to_string(), v);
+        // The getters read the sidecar first: a cache keyed on `rev` must see the change, even in a read-only document.
+        self.f.rev = next_rev();
+        if let Ok(b) = serde_json::to_vec_pretty(&self.side) {
+            let _ = engine::dds::write_atomic(&self.sidecar_path(), &b);
+        }
     }
 
     /// Changes on every edit, restore and reload (the set-view cache key).
@@ -259,31 +316,30 @@ impl SetsDoc {
         if self.read_only() || self.text() == text {
             return;
         }
-        let (doc, dirty, sha) = (self.f.doc.clone(), self.f.dirty, self.last_json_sha256());
-        let cs = self.cs_pbr_shas();
-        let cm = self.cm_json_shas();
-        let pgp = self.pgp_json_shas();
-        let copies = self.copy_shas();
+        // Note FC11: the document's own copies (not the sidecar's), put back into the document only.
+        let (doc, dirty, sha) = (self.f.doc.clone(), self.f.dirty, self.project_str(LAST_SHA));
+        let cs = self.doc_shas(CS_SHA);
+        let cm = self.doc_shas(CM_SHA);
+        let pgp = self.doc_shas(PGP_SHA);
+        let copies = self.doc_shas(COPY_SHA);
         let folder = self.export_folder();
         let generated = self.f.doc.get(GENERATED).cloned();
-        let was_generated = self.generated();
+        let was_generated = self.doc_generated();
         let old = self.text();
         self.restore(text);
-        if self.last_json_sha256() != sha {
-            self.set_project("last_json_sha256", sha.map(Value::from));
+        if self.project_str(LAST_SHA) != sha {
+            self.set_project(LAST_SHA, sha.map(Value::from));
         }
         // In the order an export writes them, so a restore that only puts them back leaves the text as it was.
-        if self.pgp_json_shas() != pgp {
-            self.set_pgp_json_shas(&pgp);
-        }
-        if self.cs_pbr_shas() != cs {
-            self.set_cs_pbr_shas(&cs);
-        }
-        if self.cm_json_shas() != cm {
-            self.set_cm_json_shas(&cm);
-        }
-        if self.copy_shas() != copies {
-            self.set_copy_shas(&copies);
+        for (k, m) in [
+            (PGP_SHA, &pgp),
+            (CS_SHA, &cs),
+            (CM_SHA, &cm),
+            (COPY_SHA, &copies),
+        ] {
+            if self.doc_shas(k) != *m {
+                self.set_shas(k, m);
+            }
         }
         // Note BV6: the export folder is not an undoable edit either.
         if self.export_folder() != folder {
@@ -291,7 +347,7 @@ impl SetsDoc {
             self.set_project("export_folder", v);
         }
         // Note CO (P15): `[generated]` records generated files on disk, which undo does not change either.
-        if self.generated() != was_generated {
+        if self.doc_generated() != was_generated {
             match generated {
                 Some(t) => self.f.doc.insert(GENERATED, t),
                 None => self.f.doc.remove(GENERATED),
@@ -362,7 +418,16 @@ impl SetsDoc {
     }
 
     /// Note CO: the top-level `[generated]` table, item key → provenance record (`model::from_normal::Provenance`).
+    /// Note FC11: the sidecar's copy when it has one.
     pub fn generated(&self) -> BTreeMap<String, Json> {
+        match self.side.get(GENERATED) {
+            Some(Json::Object(o)) => o.clone().into_iter().collect(),
+            _ => self.doc_generated(),
+        }
+    }
+
+    /// `[generated]` as this document holds it.
+    fn doc_generated(&self) -> BTreeMap<String, Json> {
         self.f
             .doc
             .get(GENERATED)
@@ -379,7 +444,17 @@ impl SetsDoc {
     /// through `set_project`: `[generated]` is a table of its own (P15).
     pub fn set_generated(&mut self, key: &str, v: Option<&Json>) {
         let fold = key.to_lowercase();
-        let now = self.generated();
+        // Note FC11: the sidecar first, as the document would hold it (no `null` members), so a reopen compares equal.
+        let mut all = self.generated();
+        all.retain(|k, _| k.to_lowercase() != fold);
+        if let Some(x) = v
+            .and_then(json_to_toml_deep)
+            .and_then(|t| item_json(&Item::Value(t)))
+        {
+            all.insert(key.to_string(), x);
+        }
+        self.put_side(GENERATED, Json::Object(all.into_iter().collect()));
+        let now = self.doc_generated();
         let same: Vec<&String> = now.keys().filter(|k| k.to_lowercase() == fold).collect();
         let unchanged = match v {
             None => same.is_empty(),
@@ -406,6 +481,25 @@ impl SetsDoc {
         self.f.touch();
     }
 
+    /// Note FC11: make the document's `[generated]` equal `all` (reconcile on open); no edit when it already is.
+    fn put_doc_generated(&mut self, all: &BTreeMap<String, Json>) {
+        if self.read_only() || self.doc_generated() == *all {
+            return;
+        }
+        let mut t = Table::new();
+        for (k, v) in all {
+            if let Some(v) = json_to_toml_deep(v) {
+                t.insert(k, Item::Value(v));
+            }
+        }
+        if t.is_empty() {
+            self.f.doc.remove(GENERATED);
+        } else {
+            self.f.doc.insert(GENERATED, Item::Table(t));
+        }
+        self.f.touch();
+    }
+
     /// TA10: `[project] also_location`, where this project's Also export writes its three folders.
     pub fn also_location(&self) -> Option<std::path::PathBuf> {
         self.project_str("also_location")
@@ -424,14 +518,30 @@ impl SetsDoc {
     pub fn set_json_name(&mut self, name: Option<&str>) {
         self.set_project("json_name", name.map(Value::from));
     }
+    /// Note FC11: the sidecar's record first, then the document's.
     pub fn last_json_sha256(&self) -> Option<String> {
-        self.project_str("last_json_sha256")
+        match self.side.get(LAST_SHA).and_then(Json::as_str) {
+            Some(s) => Some(s.to_string()),
+            None => self.project_str(LAST_SHA),
+        }
     }
     pub fn set_last_json_sha256(&mut self, sha: &str) {
-        self.set_project("last_json_sha256", Some(Value::from(sha)));
+        self.set_project(LAST_SHA, Some(Value::from(sha)));
+        self.put_side(LAST_SHA, Json::from(sha));
     }
 
+    /// A hash table: the sidecar's copy when it has one (Note FC11), else the document's.
     fn shas(&self, key: &str) -> BTreeMap<String, String> {
+        match self.side.get(key) {
+            Some(Json::Object(o)) => o
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                .collect(),
+            _ => self.doc_shas(key),
+        }
+    }
+
+    fn doc_shas(&self, key: &str) -> BTreeMap<String, String> {
         self.f
             .doc
             .get("project")
@@ -453,12 +563,21 @@ impl SetsDoc {
         self.set_project(key, (!shas.is_empty()).then_some(Value::InlineTable(t)));
     }
 
+    /// A hash record made now: the document's copy (if writable) and the sidecar (Note FC11).
+    fn record_shas(&mut self, key: &str, shas: &BTreeMap<String, String>) {
+        self.set_shas(key, shas);
+        let m = shas
+            .iter()
+            .map(|(k, v)| (k.clone(), Json::from(v.as_str())));
+        self.put_side(key, Json::Object(m.collect()));
+    }
+
     pub fn cs_pbr_shas(&self) -> BTreeMap<String, String> {
         self.shas(CS_SHA)
     }
 
     pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
-        self.set_shas(CS_SHA, shas)
+        self.record_shas(CS_SHA, shas)
     }
 
     pub fn pgp_json_shas(&self) -> BTreeMap<String, String> {
@@ -466,7 +585,7 @@ impl SetsDoc {
     }
 
     pub fn set_pgp_json_shas(&mut self, shas: &BTreeMap<String, String>) {
-        self.set_shas(PGP_SHA, shas)
+        self.record_shas(PGP_SHA, shas)
     }
 
     pub fn cm_json_shas(&self) -> BTreeMap<String, String> {
@@ -474,7 +593,7 @@ impl SetsDoc {
     }
 
     pub fn set_cm_json_shas(&mut self, shas: &BTreeMap<String, String>) {
-        self.set_shas(CM_SHA, shas)
+        self.record_shas(CM_SHA, shas)
     }
 
     pub fn copy_shas(&self) -> BTreeMap<String, String> {
@@ -482,7 +601,7 @@ impl SetsDoc {
     }
 
     pub fn set_copy_shas(&mut self, shas: &BTreeMap<String, String>) {
-        self.set_shas(COPY_SHA, shas)
+        self.record_shas(COPY_SHA, shas)
     }
 
     pub fn order(&self) -> Vec<String> {

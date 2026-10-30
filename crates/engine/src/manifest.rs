@@ -660,6 +660,78 @@ pub fn recode_causes(recorded: &Manifest, plan: &crate::api::Plan) -> Vec<Recode
     out
 }
 
+/// Why a recorded output is stale (DECISIONS FC11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleWhy {
+    /// Its source is still in the project, but no job writes this file now: a renamed set (AA2), a recipe switch's old
+    /// `_rmaos` (DV7), a skin set's `_f` (DR9) or its old `textures\pbr\` path (AG90).
+    NotWritten,
+    /// Its source file is gone.
+    SourceGone,
+}
+
+/// A file the manifest records that the plan no longer writes (FC11). `ours` when the file's size and mtime still
+/// equal the recorded `output_stamp` (Review Focus 4); a record with no stamp is never ours.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleOutput {
+    pub path: PathBuf,
+    pub reason: StaleWhy,
+    pub ours: bool,
+}
+
+/// The files `recorded` lists under `root` that still exist and that no job, skipped file or failed file of `plan`
+/// claims, from sources under the plan's inputs (another project's records in a shared folder are left out). A
+/// reader like [`recode_causes`]: `read`, never `load`'s compaction; an unreadable manifest or a cancelled (partial)
+/// plan lists nothing.
+pub fn stale_outputs(
+    recorded: &Manifest,
+    plan: &crate::api::Plan,
+    root: &Path,
+) -> Vec<StaleOutput> {
+    if !plan.cancelled.is_empty() {
+        return vec![];
+    }
+    let Ok(records) = recorded.read() else {
+        return vec![];
+    };
+    let claimed: std::collections::BTreeSet<String> = plan
+        .jobs
+        .iter()
+        .map(|j| &j.output)
+        .chain(plan.skipped.iter().map(|s| &s.output))
+        .chain(plan.failed.iter().map(|f| &f.output))
+        .map(|o| output_key(root, o))
+        .collect();
+    let inputs: Vec<String> = plan
+        .request
+        .inputs
+        .iter()
+        .map(|p| format!("{}/", normalize_key(&p.to_string_lossy())))
+        .collect();
+    records
+        .values()
+        .filter(|e| !claimed.contains(&e.output))
+        .filter_map(|e| {
+            let source = e.raw.get("source")?.as_str()?;
+            let folded = normalize_key(source);
+            if !inputs.iter().any(|i| folded.starts_with(i.as_str())) {
+                return None;
+            }
+            let path = root.join(&e.output);
+            let now = crate::policy::SourceStamp::of(&path)?;
+            Some(StaleOutput {
+                ours: e.output_stamp == Some(now),
+                reason: if Path::new(source).exists() {
+                    StaleWhy::NotWritten
+                } else {
+                    StaleWhy::SourceGone
+                },
+                path,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

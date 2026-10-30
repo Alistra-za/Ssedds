@@ -271,6 +271,7 @@ enum Act {
     Others,
     Json(bool),
     Nif(String, bool, [u8; 32]),
+    DeleteStale(std::path::PathBuf),
     Export,
     Close,
 }
@@ -716,6 +717,45 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                         }
                     });
             }
+            // FC11: not a gate. A row Tessalith still owns (its stamp matches) has Delete, on a click only.
+            if !m.stale.is_empty() {
+                ui.strong(format!("Stale outputs ({})", m.stale.len()));
+                let off = m.export.running.is_some().then_some(also::EXPORT_RUNNING);
+                egui::ScrollArea::vertical()
+                    .id_salt("review-stale")
+                    .max_height(96.0)
+                    .show(ui, |ui| {
+                        for s in &m.stale {
+                            let t = m.stale_text(s);
+                            egui::Sides::new().shrink_left().truncate().show(
+                                ui,
+                                |ui| {
+                                    ui.add(egui::Label::new(&t).truncate())
+                                        .on_hover_text(s.path.display().to_string());
+                                },
+                                |ui| {
+                                    let tip = format!(
+                                        "Delete {}: Tessalith wrote it and no longer writes it",
+                                        s.path.display()
+                                    );
+                                    // Rule 8.4: every row's button is named for its file.
+                                    let name = format!("Delete {}", s.path.display());
+                                    if s.ours
+                                        && super::problems::destructive_button(
+                                            ui,
+                                            "Delete",
+                                            Some(&name),
+                                            &tip,
+                                            off,
+                                        )
+                                    {
+                                        act = Some(Act::DeleteStale(s.path.clone()));
+                                    }
+                                },
+                            );
+                        }
+                    });
+            }
             ui.horizontal(|ui| {
                 ui.strong("What will be written");
                 let files = m.export_files();
@@ -985,6 +1025,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::Others) => model.open_problems(None),
         Some(Act::Json(overwrite)) => model.answer_review_json(overwrite),
         Some(Act::Nif(path, overwrite, sha)) => model.answer_review_nif(&path, overwrite, sha),
+        Some(Act::DeleteStale(path)) => {
+            if let Err(e) = model.delete_stale_output(&path) {
+                model.status_line = e;
+            }
+        }
         // Export saves first: a focused field commits before it runs (Note FC8, supersedes CA14's refusal).
         Some(Act::Export) => super::after_commit(ui.ctx(), model, AppModel::export_from_review),
         Some(Act::Close) => model.dismiss_review(),

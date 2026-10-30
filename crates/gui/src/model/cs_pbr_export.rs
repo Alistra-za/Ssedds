@@ -276,14 +276,12 @@ impl AppModel {
         let Some(d) = self.sets_doc.as_mut() else {
             return;
         };
-        if d.read_only() {
-            self.export.notes.push(
-                "the CS PBR JSON hashes were not recorded: sdc-project.toml is read-only".into(),
-            );
-            return;
-        }
         let was_dirty = d.is_dirty();
         d.set_cs_pbr_shas(&shas);
+        if d.read_only() {
+            self.export.notes.push(super::SIDECAR_ONLY.into());
+            return;
+        }
         self.save_hash_record(was_dirty);
     }
 }
