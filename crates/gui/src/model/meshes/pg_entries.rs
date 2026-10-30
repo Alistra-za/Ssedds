@@ -12,13 +12,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
-/// The line under the toggle in In game (simulated).
-pub const IN_GAME_SCOPE: &str =
-    "Simulated from loose PGPatcher JSON, in MO2 mod order. JSON inside BSAs is not read.";
+/// The line under the toggle in In game (simulated): what pgpsim models, from its one const (Note GD7).
+pub const IN_GAME_SCOPE: &str = pgpsim::SIMULATED_AS;
 /// The same place for a folder scan (no MO2 instance).
 pub const NO_INSTANCE: &str = "In game needs an MO2 instance: no PGPatcher JSON was read.";
 pub const PG_IGNORED: &str = "In game: PGPatcher skips this shape (PG_IGNORE).";
 pub const NO_MATCH: &str = "In game: no PGPatcher JSON matches this shape.";
+/// GE6 (R3): PGPatcher 2.x's StockMarker reverts such a shape before matching [Src 2.2.0 SM:84-142]; not simulated.
+pub const PG_STOCK_REVERT: &str =
+    "In game: PGPatcher first reverts this shape to the stock state recorded in its \
+                                   PG_STOCK block; the preview shows it as loaded.";
 /// B-P41: a red In game line, and a Warning in the edit view, when the simulation makes a non-PBR shape with an
 /// LSCF var-8 controller PBR (B9: var 8 on PBR crashed the game). Export stays open: PGPatcher's output depends on
 /// the JSON at play time.
@@ -41,6 +44,8 @@ pub struct PgFile {
     pub entries: Vec<Value>,
     /// `entries` by the names they can match (fix round 2, B-P38): a shape tests only its candidates.
     pub index: MatchIndex,
+    /// The first entry's non-string match key, as its crash text (Note GE11): PGPatcher 2.3 stops the whole run.
+    pub crash: Option<String>,
 }
 
 /// Every loose `PBRNifPatcher\**\*.json` of Data, the enabled mods and overwrite (the VFS winning copy of each
@@ -105,10 +110,12 @@ pub fn pg_entries(inst: &Instance) -> Result<Vec<PgFile>, String> {
                 .map(|e| pgpsim::prepare(e, &default))
                 .collect();
             let index = MatchIndex::new(&entries);
+            let crash = entries.iter().find_map(pgpsim::crash_of);
             Some(PgFile {
                 file,
                 entries,
                 index,
+                crash,
             })
         })
         .collect())
@@ -117,6 +124,23 @@ pub fn pg_entries(inst: &Instance) -> Result<Vec<PgFile>, String> {
 /// PGPatcher's PG_IGNORE (01 §1.2 item 3): an `NiBooleanExtraData` "PG_IGNORE" with a true value on the shape or
 /// on its lighting shader.
 pub fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
+    any_extra(m, s, |x| {
+        &*x.kind == "NiBooleanExtraData"
+            && x.name.as_deref() == Some(b"PG_IGNORE")
+            && matches!(x.value, Some(ExtraValue::Bool(v)) if v != 0)
+    })
+}
+
+/// PGPatcher 2.x's stock marker (Note GE6): an `NiStringExtraData` "PG_STOCK" on the shape (or its shader, the same
+/// walk as `pg_ignore`).
+pub fn pg_stock(m: &NifModel, s: &ShapeModel) -> bool {
+    any_extra(m, s, |x| {
+        &*x.kind == "NiStringExtraData" && x.name.as_deref() == Some(b"PG_STOCK")
+    })
+}
+
+/// Does any extra data of the shape or of its lighting shader pass `f`?
+fn any_extra(m: &NifModel, s: &ShapeModel, f: impl Fn(&nif::extra::Extra) -> bool) -> bool {
     let shader = s
         .shader
         .and_then(|b| m.lighting.get(&b))
@@ -124,16 +148,17 @@ pub fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
     std::iter::once(&s.net)
         .chain(shader)
         .flat_map(|net| m.extras_of(net))
-        .any(|x| {
-            &*x.kind == "NiBooleanExtraData"
-                && x.name.as_deref() == Some(b"PG_IGNORE")
-                && matches!(x.value, Some(ExtraValue::Bool(v)) if v != 0)
-        })
+        .any(f)
 }
 
-/// Lines drawn amber (fix F4): a file PGPatcher rejects for the shape, and PG_IGNORE.
+/// Lines drawn amber (fix F4): a file PGPatcher rejects for the shape, PG_IGNORE and PG_STOCK.
 pub fn is_warning(note: &str) -> bool {
-    note == PG_IGNORED || note.contains(NOT_APPLIED)
+    note == PG_IGNORED || note == PG_STOCK_REVERT || note.contains(NOT_APPLIED)
+}
+
+/// Lines drawn red (Note GE5): a file PGPatcher 2.3 crashes on.
+pub fn is_error(note: &str) -> bool {
+    note.contains(pgpsim::CRASHES)
 }
 
 /// The JSON for `target`, as the worker reads it: an MO2 instance's files, nothing for a folder scan.
@@ -173,9 +198,18 @@ pub fn candidates(
     (out, tested)
 }
 
+/// One red line per file PGPatcher 2.3 crashes on (Note GE11): any of them stops the whole run.
+pub fn crash_lines(files: &[PgFile]) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|f| Some(format!("In game: {} ({}).", f.crash.as_ref()?, f.file)))
+        .collect()
+}
+
 /// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order, the `candidates`) that
-/// patches it wins; a file that would skip it (a missing texture, a wrong-typed key) is rejected for this shape and
-/// the next may win. Returns the material and its lines.
+/// patches it wins; a file that would skip it (a missing texture) is rejected for this shape and the next may win; a
+/// JSON PGPatcher crashes on leaves the shape unpatched: any file with a wrong-typed match key (Note GE11), or a
+/// matching `coat_color` object (GE5). Returns the material and its lines.
 pub fn simulate_shape(
     files: &[PgFile],
     cands: &[(usize, Vec<usize>)],
@@ -183,6 +217,11 @@ pub fn simulate_shape(
     source: &MaterialState,
     exists: &dyn Fn(&str) -> bool,
 ) -> (MaterialState, Vec<String>) {
+    // GE11: one crashing file anywhere stops PGPatcher's whole run (T1a, T1b), whatever this shape matches.
+    let crashes = crash_lines(files);
+    if !crashes.is_empty() {
+        return (source.clone(), crashes);
+    }
     let mut skip = None;
     for (i, hit) in cands {
         let f = &files[*i];
@@ -205,6 +244,13 @@ pub fn simulate_shape(
             }
             SimResult::Skip(why) => {
                 skip.get_or_insert_with(|| format!("In game: {}{NOT_APPLIED}{why}).", f.file));
+            }
+            // GE5: coat_color as an object throws only when a matching shape is patched, so it stays per shape (GE11).
+            SimResult::Error(why) => {
+                return (
+                    source.clone(),
+                    vec![format!("In game: {why} ({}).", f.file)],
+                );
             }
             SimResult::NoMatch => {}
         }
@@ -251,6 +297,16 @@ impl MeshesModel {
         match self.pg.as_ref().map(|p| &p.state) {
             Some(PgState::Done(Err(e))) => Some(e),
             _ => None,
+        }
+    }
+
+    /// The whole-run crash lines of the JSON on hand (Note GE14: the set preview shows them too); starts the read
+    /// when none is on hand for this scan target and scan. Empty while it reads or when it failed.
+    pub fn pg_crashes(&mut self) -> Vec<String> {
+        self.ensure_pg();
+        match self.pg.as_ref().map(|p| &p.state) {
+            Some(PgState::Done(Ok(files))) => crash_lines(files),
+            _ => vec![],
         }
     }
 

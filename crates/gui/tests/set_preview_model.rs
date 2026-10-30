@@ -676,13 +676,37 @@ fn rows_group_by_nif_and_keep_only_shapes_pgpatcher_matches() {
         assert!(nif.starts_with(r"meshes\"), "PGPatcher form: {nif}");
         block != 4 && copy != 5
     };
-    let c = group_rows(&rows, None, &check);
+    let c = group_rows(&rows, &check);
     assert_eq!(c.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [1, 9]);
     assert_eq!(c[0].nif_path, r"meshes\a\rock.nif");
     assert_eq!(c[0].shapes, vec![(3, Some("S3".into()))]);
     assert!(c[1].derived && c[1].copy_id == 2);
-    let f = group_rows(&rows, Some(r"ARMOR\"), &check);
-    assert_eq!(f.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [9]);
+}
+
+/// GE10: `nif_filter` is left to `pgpsim::shape_matches`, so a FaceGeom mesh stays a candidate (PGPatcher 2.3.1
+/// applies no filter there, GE2) and a normal mesh outside the filter is dropped.
+#[test]
+fn group_rows_leaves_nif_filter_to_the_shared_matcher() {
+    let rows = vec![
+        row(
+            1,
+            1,
+            "meshes/actors/character/facegendata/facegeom/skyrim.esm/00000801.nif",
+            0,
+            false,
+        ),
+        row(2, 2, "meshes/landscape/rock.nif", 0, false),
+        row(3, 3, "meshes/clutter/rock.nif", 0, false),
+    ];
+    let entry = pgpsim::prepare(
+        &json!({"match_diffuse": "white", "nif_filter": "clutter"}),
+        &Value::Null,
+    );
+    let mut m = pgpsim::MaterialState::builtin_default();
+    m.set_slot_raw(0, r"textures\white.dds");
+    let check = |_: i64, nif: &str, _: u32| pgpsim::shape_matches(&entry, nif, &m.slots);
+    let c = group_rows(&rows, &check);
+    assert_eq!(c.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [1, 3]);
 }
 
 /// Polls like the app does (panel drawn, input every frame) until nothing is in flight.
@@ -747,6 +771,31 @@ fn without_a_scan_db_the_set_shows_patched_on_the_sphere_and_json_edits_encode_n
     };
     assert_ne!(material, after, "the material follows the edit");
     assert_eq!(shown_ids(&s), ids, "a JSON-only edit encodes nothing");
+}
+
+/// GE14: the Meshes view's whole-run crash lines (`MeshesModel::pg_crashes`) make the set preview red and unpatched,
+/// whatever the edited entry matches; clearing them brings the patch back.
+#[test]
+fn a_crashing_json_makes_the_set_preview_red_and_unpatched() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = pbr_opened_plain(dir.path());
+    let key = rock(&m).0.key;
+    let mut m = m;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    let line = r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json).";
+    s.set_crashes(vec![line.to_string()]);
+    run(&mut s, &m);
+    let Some(Content::Builtin { material, .. }) = s.v3.content().cloned() else {
+        panic!("{:?}", s.v3.content())
+    };
+    assert!(!material.is_pbr(), "no patched material");
+    assert_eq!(s.rows[0].outcome, Outcome::Crash(line.to_string()));
+    assert!(s.rows[0].text().contains(line));
+    s.set_crashes(vec![]);
+    run(&mut s, &m);
+    assert!(matches!(s.rows[0].outcome, Outcome::Patched { .. }));
 }
 
 fn lighting_shape(block: u32, slots: &[&str]) -> nif::scan::ShapeRow {

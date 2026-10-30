@@ -299,7 +299,7 @@ fn shapes(ui: &mut egui::Ui, s: &SetPreview, attention: bool) {
         }
     }
     let needs = |o: &Outcome| match o {
-        Outcome::Skip(_) => true,
+        Outcome::Skip(_) | Outcome::Crash(_) => true,
         Outcome::Patched { badges } => !badges.is_empty(),
         Outcome::NoMatch | Outcome::Plain => false,
     };
@@ -314,7 +314,7 @@ fn shapes(ui: &mut egui::Ui, s: &SetPreview, attention: bool) {
     let list = |ui: &mut egui::Ui| {
         for r in rows {
             match &r.outcome {
-                Outcome::Skip(_) => {
+                Outcome::Skip(_) | Outcome::Crash(_) => {
                     ui.colored_label(RED, r.text());
                 }
                 Outcome::Patched { badges } => {

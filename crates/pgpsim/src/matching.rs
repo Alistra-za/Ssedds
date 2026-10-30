@@ -54,22 +54,31 @@ pub(crate) fn tex_name(e: &Map<String, Value>, slots: &[String; 9]) -> Option<St
     None
 }
 
+/// Mesh folders 2.x patches with no `nif_filter`: facegen and BodySlide ShapeData [Src 2.2.0 TP:354-358, 593-596;
+/// NU:866-880].
+const NO_FILTER: [&str; 2] = [
+    "meshes\\actors\\character\\facegendata\\facegeom\\",
+    "calientetools\\bodyslide\\shapedata\\",
+];
+
 /// Does the prepared entry (`prepare(entry, default)`) apply to this shape? `nif_path` is the mesh path
-/// relative to Data (`meshes\…`, any case), used for `nif_filter` (case-insensitive substring, TP:544-547).
-/// `slots` are the shape's texture-set paths (`MaterialState::slots`).
+/// relative to Data (`meshes\…`, any case), used for `nif_filter` (case-insensitive substring, TP:544-547),
+/// which facegen and BodySlide ShapeData meshes skip. `slots` are the shape's texture-set paths
+/// (`MaterialState::slots`).
 pub fn shape_matches(prepared: &Value, nif_path: &str, slots: &[TexPath]) -> bool {
     let Some(e) = prepared.as_object() else {
         return false;
     };
-    if str_of(e, "nif_filter").is_some_and(|f| !icontains(nif_path, f)) {
+    let folded = nif_path.replace('/', "\\").to_ascii_lowercase();
+    let filtered = !NO_FILTER.iter().any(|p| folded.starts_with(p));
+    if filtered && str_of(e, "nif_filter").is_some_and(|f| !icontains(nif_path, f)) {
         return false;
     }
     tex_name(e, &pg_slots(slots)).is_some()
 }
 
 /// PGPatcher's `matchedPath` for this entry, e.g. `textures\pbr\landscape\rocks01`, lower case.
-/// `None`: no rule hits. `Some("")`: a rule hits but PBR is off (`pbr:false`); scalars still apply.
-/// `nif_filter` is NOT checked (call `shape_matches` for that).
+/// `None`: no rule hits. `nif_filter` is NOT checked (call `shape_matches` for that).
 pub fn matched_path(prepared: &Value, slots: &[TexPath]) -> Option<String> {
     let e = prepared.as_object()?;
     let name = tex_name(e, &pg_slots(slots))?;
@@ -91,13 +100,8 @@ fn prefix(e: &Map<String, Value>, tex_name: &str) -> String {
             field = r.to_string();
         }
     }
-    let mp = format!("{tex_path}{field}").to_ascii_lowercase();
-    let pbr_on = e.get("pbr").is_none_or(|v| v.as_bool() == Some(true));
-    if pbr_on {
-        mp
-    } else {
-        String::new()
-    }
+    // 2.x ignores the legacy `pbr` key [Src 2.2.0 TP:623-627].
+    format!("{tex_path}{field}").to_ascii_lowercase()
 }
 
 /// Drops the last `n` bytes (C++ `erase(len - n, n)`); saturates instead of throwing, and backs up to a

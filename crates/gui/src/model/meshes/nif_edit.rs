@@ -1,8 +1,12 @@
 //! The NIF edit session (spec §3.4, §7, §8.1; plan A16): the source copy an edit applies to, its edit document and
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
-use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId, EDIT_MOD};
+use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
-use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED};
+use super::pg_entries::{
+    candidates, crash_lines, pg_ignore, pg_stock, simulate_shape, PgFile, PGP_ENV_SCALE,
+    PG_IGNORED, PG_STOCK_REVERT,
+};
+use super::worklist::{NifProblem, NifTab};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
 use engine::dds::Kept;
@@ -13,10 +17,13 @@ use nif::edit::validate::{
     demote_source, new_errors, validate, validate_ops, Level, Target, Warning,
 };
 use nif::edit::{Anchor, Op, Outcome};
+use nif::fields::{Field, Value};
 use nif::keys::KeyData;
 use nif::material::{MaterialState, SLSF2_TRUE_PBR};
 use nif::model::{read_model, NifModel, ShapeModel};
+use nif::props::LightingTrailer;
 use render3d::{ParsedNif, ShapeId};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,19 +62,42 @@ pub const GENERATED_HINTS: [&str; 7] = [
 pub struct NifEdit {
     pub doc: EditDoc,
     pub history: NifHistory,
-    /// All three empty without an MO2 instance: the session is read-only and nothing is saved.
+    /// Where the document is saved: the export folder's, else `autosave` (Note GD5). Empty with neither (a test's
+    /// read-only session): nothing is saved.
     pub doc_path: PathBuf,
+    /// Both empty without an export folder: export is blocked with `NO_EXPORT_FOLDER`.
     pub export_path: PathBuf,
     pub edit_mod: PathBuf,
+    /// Note GD5 (c): the app-folder document of this NIF used while no export folder is chosen; removed by the first
+    /// save into a folder, but only when this session's document holds it (`owns_autosave`, Note GD11).
+    pub autosave: Option<PathBuf>,
+    /// Note GD11: the autosave's content is part of this live document (saved there, or recovered from it).
+    owns_autosave: bool,
+    /// Note GD25: the file at `doc_path` (in a folder) holds edits this session never loaded: a newer autosave was
+    /// recovered over it, or a folder change replaced it. The next save moves it aside first (`free_unseen`).
+    doc_unseen: bool,
+    /// Note GD11: lines for Messages from `open` (an autosave recovered, or left because the folder's is newer) and,
+    /// Note GD19, from a save that moved an autosave aside; `MeshesModel` moves them to its `messages`.
+    pub open_lines: Vec<String>,
     pub source: Arc<Vec<u8>>,
     pub source_copy: PathCopy,
     pub data_path: String,
     pub patched: Arc<Vec<u8>>,
+    /// Note GD2 (CQ1-CQ4): what the export writes, `patched` without its orphan blocks; rebuilt by `reapply`.
+    pub out: Arc<Vec<u8>>,
+    /// How many blocks `out` dropped; None when the cleanup could not run (`cleanup_skip` says why).
+    pub compaction: Option<usize>,
+    pub cleanup_skip: Option<String>,
+    /// The source's block count: blocks past it are ones the edits appended.
+    source_blocks: u32,
     /// A process-unique id of the current edit state, new on every apply, undo, redo, revert and reload (Note CU2):
     /// the refusal lines key on it, not on the `Arc` address, which an allocation can reuse.
     pub rev: u64,
     pub model: NifModel,
     pub outcomes: Vec<Outcome>,
+    /// Note GD16: per op, the shader type in effect when it applies, for a trailer op (`Field::Trailer`); made by
+    /// `reapply`, so its row keeps naming the field it changed after a later type change.
+    trailer_types: Vec<Option<u32>>,
     pub warnings: Vec<Warning>,
     /// validate_ops over the document's ops (B4/B5 key errors), recomputed with the ops in `reapply`.
     pub op_warnings: Vec<Warning>,
@@ -99,6 +129,8 @@ pub struct NifEdit {
     pub placement: Option<Placement>,
     /// Why "Export NIF" is disabled, from the in-memory state (`export_block`), kept current by every change.
     pub blocked: Option<String>,
+    /// Note GD1: this edit's worklist rows, rebuilt with `blocked` (a new `Arc` only when they change, rule 9.1).
+    pub problems: Arc<Vec<NifProblem>>,
     /// Note CS: what a shader type change also did to the flags, until the next change.
     pub notice: Option<String>,
     /// The guard dialog's question, while it is open.
@@ -107,6 +139,14 @@ pub struct NifEdit {
     pub export_note: Option<(String, bool)>,
     /// Note CQ5: "Exported without cleanup: <reason>." after an export that wrote the patch uncompacted.
     pub cleanup_note: Option<String>,
+    /// Note GD12: the export folder changed but its edit document did not load: the session stays on its old paths,
+    /// writes nothing (no save, no export) and is blocked with this reason until a root change succeeds.
+    pub retarget_error: Option<String>,
+    /// Note GD20: the failed root change behind `retarget_error`: (root, its edit document, that file's length and
+    /// time). The same key is not tried again, so a bad folder is read once, not each frame.
+    retarget_fail: Option<RetargetKey>,
+    /// Note GD23: `doc.pending()` (it serialises and hashes the ops) keyed on (rev, op count, export record's hash).
+    pending_cache: std::cell::RefCell<Option<PendingKey>>,
     /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
     /// the ops per frame.
     pub up_to_date: bool,
@@ -176,15 +216,59 @@ pub struct GuardAsk {
 /// The idle reason Export NIF is off: drawn neutral, not as a block (review Minor 5).
 pub const NO_EDITS: &str = "No edits to export.";
 pub const RERUN_PGPATCHER: &str = "Re-run PGPatcher so its output includes this edit.";
-/// No Textures export folder and no MO2 instance: the session is read-only (Note CI29).
-pub const NO_EXPORT_FOLDER: &str =
-    "Export needs an export folder (Export to ▾) or an MO2 instance.";
+/// No export folder chosen: the edit works and autosaves, its export waits (Note GD5); FB1's reason, word for word.
+pub const NO_EXPORT_FOLDER: &str = crate::model::review::NO_EXPORT_FOLDER;
+/// Note GD2: why `export_nif_edits` skips a row with a file Tessalith did not write.
+pub const NIF_UNANSWERED: &str =
+    "the file on disk was not written by Tessalith: answer Keep or Overwrite on its row";
+pub const NIF_KEPT: &str = "you kept the file on disk";
+pub const NIF_CHANGED_SINCE: &str = "changed on disk since you answered";
+/// Note GD2 (was CQ5's under-button line): the export will write the patch without dropping orphan blocks.
+pub const NO_CLEANUP: &str =
+    "Exports without cleanup: the file has a block Tessalith does not understand";
 
-/// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
+/// Note GD2: one NIF with pending edits, as the Review lists it. `foreign`: SHA-256 of the file at the export path
+/// when Tessalith did not write it (the row waits for an answer); `answer`: the user's, while that file still has
+/// the hash it was given for; `compaction`: the orphan blocks the export drops (None when it cannot clean up).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NifReviewRow {
+    pub path: String,
+    pub mod_name: String,
+    pub blocked: Option<String>,
+    pub foreign: Option<[u8; 32]>,
+    pub answer: Option<GuardChoice>,
+    pub compaction: Option<usize>,
+}
+
+/// `foreign_cache`'s key: the export path, the last export's hash and the file's (length, modified time).
+pub(super) type ForeignKey = (
+    PathBuf,
+    Option<String>,
+    Option<(u64, Option<std::time::SystemTime>)>,
+);
+pub(super) type ForeignCache = Option<(ForeignKey, Result<Option<[u8; 32]>, String>)>;
+
+/// `NifEdit::pending_cache`: (rev, op count, the export record's ops hash) and the pending state for them.
+type PendingKey = (u64, usize, Option<String>, bool);
+
+/// `NifEdit::retarget_fail`'s key: the root, its edit document and the document's (length, modified time).
+type RetargetKey = (
+    PathBuf,
+    PathBuf,
+    Option<(u64, Option<std::time::SystemTime>)>,
+);
+
+/// The copy an edit applies to: the first that is neither PGPatcher output, our chosen edit mod, nor the 1.x default
+/// edit mod (spec §8.1; Note GD28: `mods\sdc NIF Edits` holds Tessalith's own earlier output).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
+    let legacy = |root: &str| {
+        Path::new(&root.replace('/', "\\"))
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(edit_doc::EDIT_MOD))
+    };
     copies
         .iter()
-        .find(|c| !c.derived && !same_dir(Path::new(&c.root), edit_mod))
+        .find(|c| !c.derived && !same_dir(Path::new(&c.root), edit_mod) && !legacy(&c.root))
 }
 
 pub fn generated_warning(origin: &str) -> Option<String> {
@@ -245,6 +329,188 @@ pub fn edit_slot_label(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) ->
     }
 }
 
+/// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
+pub fn field_label(f: Field) -> String {
+    let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
+    let rgb = |n: u8| ["R", "G", "B"].get(n as usize).copied().unwrap_or("?");
+    match f {
+        Field::ShaderType => "Shader type".into(),
+        Field::Slsf1 => "SLSF1 flags".into(),
+        Field::Slsf2 => "SLSF2 flags".into(),
+        Field::UvOffset(n) => format!("UV offset {}", axis(n)),
+        Field::UvScale(n) => format!("UV scale {}", axis(n)),
+        Field::EmissiveColor(n) => format!("Emissive colour {}", rgb(n)),
+        Field::EmissiveMultiple => "Emissive multiple".into(),
+        Field::ClampMode => "Clamp mode".into(),
+        Field::Alpha => "Shader alpha".into(),
+        Field::Refraction => "Refraction strength".into(),
+        Field::Glossiness => "Glossiness".into(),
+        Field::SpecularColor(n) => format!("Specular colour {}", rgb(n)),
+        Field::SpecularStrength => "Specular strength".into(),
+        Field::LightingEffect1 => "Lighting effect 1".into(),
+        Field::LightingEffect2 => "Lighting effect 2".into(),
+        // `field_name` names it from the shader type (Note GD1); this is the fallback for a type without names.
+        Field::Trailer(n) => format!("Shader type value {}", n + 1),
+        Field::AlphaFlags => "Alpha flags".into(),
+        Field::AlphaThreshold => "Alpha threshold".into(),
+        Field::CtrlFlags => "Controller flags".into(),
+        Field::Frequency => "Frequency".into(),
+        Field::Phase => "Phase".into(),
+        Field::StartTime => "Start".into(),
+        Field::StopTime => "Stop".into(),
+        Field::Variable => "Controlled variable".into(),
+        Field::InterpValue(n) => format!("Interpolator value {}", n + 1),
+    }
+}
+
+/// Field `f` of block `block` in words: a trailer value by its name for the block's shader type (Note GD1).
+pub fn field_name(m: &NifModel, block: u32, f: Field) -> String {
+    let trailer = |n: u8| {
+        let l = m.lighting.get(&block)?;
+        l.lighting.params.trailer.names().get(n as usize).copied()
+    };
+    match f {
+        Field::Trailer(n) => trailer(n).map_or_else(|| field_label(f), str::to_string),
+        _ => field_label(f),
+    }
+}
+
+/// A short name of what an op changes, for the pending list's and the worklist's rows. `m` is the model the op
+/// applied to (its anchor's block is current after `reapply`).
+pub fn op_label(op: &Op, m: &NifModel) -> String {
+    let (what, at) = match op {
+        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => {
+            (field_name(m, at.block, *field), at)
+        }
+        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
+        Op::SplitAlpha { at } => ("Split alpha".into(), at),
+        Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
+        Op::RemoveAlpha { at } => ("Remove alpha".into(), at),
+        Op::AddExtra { at, name, .. } => (format!("Add extra data {name}"), at),
+        Op::EditExtra { at, .. } => ("Edit extra data".into(), at),
+        Op::RemoveExtra { at } => ("Remove extra data".into(), at),
+        Op::SetKeys { at, .. } => ("Edit keys".into(), at),
+        Op::AddController { at, .. } => ("Add controller".into(), at),
+        Op::RemoveController { at } => ("Remove controller".into(), at),
+        Op::AddSequence { at, name, .. } => (format!("Add clip {name}"), at),
+        Op::RemoveSequence { at, name, .. } => (format!("Remove clip {name}"), at),
+        Op::RenameSequence {
+            at, name, new_name, ..
+        } => (format!("Rename clip {name} to {new_name}"), at),
+        Op::SetSequenceTiming { at, name, .. } => (format!("Set clip timing {name}"), at),
+        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
+    };
+    match &at.shape {
+        Some(s) => format!("{s}: {what}"),
+        None => what,
+    }
+}
+
+/// Note GD16: for each trailer op, the shader type of its block when it applies: the last type change before it on
+/// that block, else the type the first later change started from, else the block's type now. Note GD22: only changes
+/// that applied count (one applies only from its `base`), so a change that conflicted names nothing.
+fn trailer_types(ops: &[Op], outcomes: &[Outcome], m: &NifModel) -> Vec<Option<u32>> {
+    let type_change = |block: u32, (o, out): (&Op, &Outcome)| match (o, out) {
+        (_, Outcome::Conflict(_) | Outcome::Refused(_)) => None,
+        (
+            Op::SetField {
+                at,
+                field: Field::ShaderType,
+                value: Value::U32(v),
+                base: Value::U32(b),
+            },
+            _,
+        ) if at.block == block => Some((*v, *b)),
+        _ => None,
+    };
+    ops.iter()
+        .enumerate()
+        .map(|(i, op)| {
+            let Op::SetField {
+                at,
+                field: Field::Trailer(_),
+                ..
+            } = op
+            else {
+                return None;
+            };
+            let b = at.block;
+            ops[..i]
+                .iter()
+                .zip(outcomes)
+                .rev()
+                .find_map(|o| type_change(b, o).map(|(v, _)| v))
+                .or_else(|| {
+                    ops.iter()
+                        .zip(outcomes)
+                        .skip(i + 1)
+                        .find_map(|o| type_change(b, o).map(|(_, base)| base))
+                })
+                .or_else(|| m.lighting.get(&b).map(|l| l.lighting.shader_type))
+        })
+        .collect()
+}
+
+impl NifEdit {
+    /// [`op_label`] of op `i`, a trailer field named by the shader type in effect when it applied (Note GD16).
+    pub fn op_label_at(&self, i: usize) -> String {
+        let Some(d) = self.doc.ops.get(i) else {
+            return String::new();
+        };
+        match (&d.op, self.trailer_types.get(i).copied().flatten()) {
+            (
+                Op::SetField {
+                    at,
+                    field: Field::Trailer(n),
+                    ..
+                },
+                Some(t),
+            ) => {
+                let name = LightingTrailer::names_of_type(t)
+                    .get(*n as usize)
+                    .map_or_else(|| field_label(Field::Trailer(*n)), |s| s.to_string());
+                match &at.shape {
+                    Some(s) => format!("{s}: {name}"),
+                    None => name,
+                }
+            }
+            (op, _) => op_label(op, &self.model),
+        }
+    }
+}
+
+/// The undo step's name for an op (Note GD4): "Set shader type", "Remove controller".
+pub fn op_name(op: &Op) -> String {
+    match op {
+        Op::SetField { field, .. } | Op::SetBits { field, .. } => {
+            let f = field_label(*field);
+            // "Shader type" reads "Set shader type"; an initialism ("SLSF1 flags", "UV offset U") keeps its case.
+            let mut c = f.chars();
+            match (c.next(), c.next()) {
+                (Some(a), Some(b)) if b.is_lowercase() => {
+                    format!("Set {}{}", a.to_lowercase(), &f[a.len_utf8()..])
+                }
+                _ => format!("Set {f}"),
+            }
+        }
+        Op::SetTexturePath { .. } => "Set texture path".into(),
+        Op::SplitAlpha { .. } => "Split alpha".into(),
+        Op::AddAlpha { .. } => "Add alpha".into(),
+        Op::RemoveAlpha { .. } => "Remove alpha".into(),
+        Op::AddExtra { .. } => "Add extra data".into(),
+        Op::EditExtra { .. } => "Edit extra data".into(),
+        Op::RemoveExtra { .. } => "Remove extra data".into(),
+        Op::SetKeys { .. } => "Edit keys".into(),
+        Op::AddController { .. } => "Add controller".into(),
+        Op::RemoveController { .. } => "Remove controller".into(),
+        Op::AddSequence { .. } => "Add clip".into(),
+        Op::RemoveSequence { .. } => "Remove clip".into(),
+        Op::RenameSequence { .. } => "Rename clip".into(),
+        Op::SetSequenceTiming { .. } => "Set clip timing".into(),
+        Op::ConvertChainToClips { .. } => "Convert to clip".into(),
+    }
+}
+
 /// The shape's lighting shader's LSCF var-8 (Env map scale) controller, if its chain has one.
 fn env_scale_ctrl(m: &NifModel, sm: &ShapeModel) -> Option<u32> {
     let l = m.lighting.get(&sm.shader?)?;
@@ -271,6 +537,7 @@ fn anchor_mut(op: &mut Op) -> &mut Anchor {
         | Op::AddSequence { at, .. }
         | Op::RemoveSequence { at, .. }
         | Op::RenameSequence { at, .. }
+        | Op::SetSequenceTiming { at, .. }
         | Op::ConvertChainToClips { at, .. }
         | Op::SetKeys { at, .. } => at,
     }
@@ -288,15 +555,68 @@ fn keep_base(op: &mut Op, old: &Op) {
     }
 }
 
+/// Note GD11: with a folder chosen, an autosave of the NIF that is newer than the folder's document (or the folder has
+/// none) is offered the GD5 (b) way: it is the document, keeping the folder document's export record, and the session
+/// owns it (its first save in the folder removes it). An older one stays, named in Messages. Without a folder the
+/// document is the autosave. Returns (document, owns the autosave, Messages lines, recovered).
+fn recover_autosave(
+    saved: Option<EditDoc>,
+    doc_path: &Path,
+    edit_mod: &Path,
+    autosave: Option<&Path>,
+    data_path: &str,
+) -> (Option<EditDoc>, bool, Vec<String>, bool) {
+    if edit_mod.as_os_str().is_empty() {
+        return (saved, autosave.is_some(), vec![], false);
+    }
+    let Some(a) = autosave.filter(|a| a.is_file()) else {
+        return (saved, false, vec![], false);
+    };
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if saved.is_some() && mtime(a) <= mtime(doc_path) {
+        let line = format!(
+            "Older edits of {data_path} stay autosaved in {}.",
+            a.display()
+        );
+        return (saved, false, vec![line], false);
+    }
+    match edit_doc::load(a) {
+        Ok(Some(mut mine)) => {
+            let line = match &saved {
+                None => format!(
+                    "Recovered the edits of {data_path} autosaved in {}.",
+                    a.display()
+                ),
+                Some(_) => format!(
+                    "The newer edits of {data_path} autosaved in {} opened instead of {}'s saved edits; those are \
+                     kept aside at the next save.",
+                    a.display(),
+                    doc_path.display()
+                ),
+            };
+            mine.export = saved.map(|s| s.export).unwrap_or_default();
+            (Some(mine), true, vec![line], true)
+        }
+        Ok(None) => (saved, false, vec![], false),
+        // never deleted or overwritten: it stays for the user, and the folder's document opens
+        Err(e) => {
+            let line = format!("The autosave {} does not load and stays: {e}", a.display());
+            (saved, false, vec![line], false)
+        }
+    }
+}
+
 impl NifEdit {
-    /// Opens `source`, the bytes of `source_copy`, at `data_path`. `edit_mod` None: read-only with an in-memory
-    /// document. A saved document is loaded (Err when it is malformed or newer: it is never overwritten); when its
-    /// source hash differs, its ops are re-anchored on the new source and `source_changed` counts the outcomes.
+    /// Opens `source`, the bytes of `source_copy`, at `data_path`. `edit_mod` None: the document lives at `autosave`
+    /// (Note GD5) and export is blocked; neither: read-only with an in-memory document. A saved document is loaded
+    /// (Err when it is malformed or newer: it is never overwritten); when its source hash differs, its ops are
+    /// re-anchored on the new source and `source_changed` counts the outcomes.
     pub fn open(
         source: Vec<u8>,
         source_copy: PathCopy,
         data_path: &str,
         edit_mod: Option<&Path>,
+        autosave: Option<&Path>,
     ) -> Result<NifEdit, String> {
         edit_doc::win(data_path)?; // read-only too: the session never opens on such a path
         let (scan, model) = read_source(&source)?;
@@ -307,13 +627,20 @@ impl NifEdit {
                 edit_doc::doc_path(m, data_path)?,
                 edit_doc::export_path(m, data_path)?,
             ),
-            None => Default::default(),
+            None => (
+                PathBuf::new(),
+                autosave.map(Path::to_path_buf).unwrap_or_default(),
+                PathBuf::new(),
+            ),
         };
-        let mut doc = match edit_mod.as_os_str().is_empty() {
+        let saved = match doc_path.as_os_str().is_empty() {
             true => None,
             false => edit_doc::load(&doc_path)?,
-        }
-        .unwrap_or_else(|| EditDoc::new(id.clone()));
+        };
+        let had_doc = saved.is_some();
+        let (saved, owns_autosave, open_lines, recovered) =
+            recover_autosave(saved, &doc_path, &edit_mod, autosave, data_path);
+        let mut doc = saved.unwrap_or_else(|| EditDoc::new(id.clone()));
         let changed = doc.source.sha256 != id.sha256;
         if changed {
             doc.source = id; // saved with the next change; the statuses carry the conflicts
@@ -324,13 +651,23 @@ impl NifEdit {
             doc_path,
             export_path,
             edit_mod,
+            autosave: autosave.map(Path::to_path_buf),
+            owns_autosave,
+            // Note GD25: a recovered autosave replaced the folder's document, which this session never shows
+            doc_unseen: recovered && had_doc,
+            open_lines,
+            source_blocks: block_count(&source),
             source: Arc::new(source),
             data_path: data_path.into(),
             patched: Arc::new(vec![]),
+            out: Arc::new(vec![]),
+            compaction: None,
+            cleanup_skip: None,
             rev: 0,
             source_warnings: validate(&model, None),
             model,
             outcomes: vec![],
+            trailer_types: vec![],
             warnings: vec![],
             op_warnings: vec![],
             pg_warnings: vec![],
@@ -348,10 +685,14 @@ impl NifEdit {
             card_ctrls: HashMap::new(),
             placement: None,
             blocked: None,
+            problems: Arc::default(),
             notice: None,
             guard: None,
             export_note: None,
             cleanup_note: None,
+            retarget_error: None,
+            retarget_fail: None,
+            pending_cache: Default::default(),
             up_to_date: false,
             weight_sibling: None,
             session: next_key(),
@@ -366,7 +707,8 @@ impl NifEdit {
             sim_runs: 0,
             match_tests: 0,
             in_game: None,
-            unsaved: false,
+            // a recovered autosave is saved into the folder with the next save or close
+            unsaved: recovered,
             drag: None,
         };
         // Applying re-anchors each op on the current source: `nif::edit::rebase` and the patched bytes in one pass.
@@ -394,6 +736,7 @@ impl NifEdit {
         self.doc.source = source_id(&self.source_copy, &self.data_path, &source);
         self.source_warnings = validate(&model, None);
         self.le_mesh = scan.le_mesh;
+        self.source_blocks = block_count(&source);
         self.source = Arc::new(source);
         self.reapply();
         self.count_changed();
@@ -403,7 +746,36 @@ impl NifEdit {
 
     /// Why the current state cannot be exported, from memory alone (export steps 2-4): refused ops first (A16 keeps
     /// them as conflicts), then conflicts, new validation errors and bytes that do not read back.
+    /// Note GD13: the session holds live work: ops, an undo or redo step, or an export to put back (every edit undone
+    /// after an export) or, Note GD21, an unsaved state (a recovered autosave, even one with no ops). Only an
+    /// untouched session may be replaced by a folder's saved document.
+    pub fn touched(&self) -> bool {
+        self.unsaved
+            || !self.doc.ops.is_empty()
+            || self.history.can_undo()
+            || self.history.can_redo()
+            || self.pending()
+    }
+
+    /// `doc.pending()`, computed once per change (Note GD23): every op change makes a new `rev`, and an export or a
+    /// folder change a new export record.
+    pub fn pending(&self) -> bool {
+        let key = (self.rev, self.doc.ops.len());
+        let mut c = self.pending_cache.borrow_mut();
+        if let Some((rev, n, h, p)) = &*c {
+            if (*rev, *n) == key && *h == self.doc.export.ops_hash {
+                return *p;
+            }
+        }
+        let p = self.doc.pending();
+        *c = Some((key.0, key.1, self.doc.export.ops_hash.clone(), p));
+        p
+    }
+
     pub fn export_block(&self) -> Option<String> {
+        if let Some(why) = &self.retarget_error {
+            return Some(why.clone());
+        }
         if self.edit_mod.as_os_str().is_empty() {
             return Some(NO_EXPORT_FOLDER.into());
         }
@@ -433,15 +805,39 @@ impl NifEdit {
         if let Some(w) = new_errors(&self.source_warnings, &self.warnings).first() {
             return Some(w.text.clone());
         }
-        if let Some(w) = self.op_warnings.first() {
+        // Note GD8: a Warn (bad clip timing) holds back only what it names
+        if let Some(w) = self.op_warnings.iter().find(|w| w.level == Level::Error) {
             return Some(w.text.clone());
         }
         read_back(&self.patched).err()
     }
 
+    /// Note GD33: a reason the export is blocked that no worklist row says: a failed folder change, an apply error, or
+    /// bytes that do not read back. Refused ops, conflicts and errors have their own rows, so `export_block`'s
+    /// summaries of them are never a row. Unblocked, the bytes read back (`export_block` checked), so no second scan.
+    pub fn uncovered_block(&self) -> Option<String> {
+        self.retarget_error
+            .clone()
+            .or_else(|| self.apply_err.clone())
+            .or_else(|| {
+                self.blocked
+                    .as_ref()
+                    .and_then(|_| read_back(&self.patched).err())
+            })
+    }
+
     /// Recomputes `blocked` after the ops or the warnings changed.
     pub fn refresh_blocked(&mut self) {
         self.blocked = self.export_block();
+        self.refresh_problems();
+    }
+
+    /// The worklist rows (Note GD1), replaced only when they differ, so a cache keyed on the `Arc` holds.
+    fn refresh_problems(&mut self) {
+        let p = super::worklist::problems(self);
+        if *self.problems != p {
+            self.problems = Arc::new(p);
+        }
     }
 
     /// Export steps 1-6 (spec §8.3). Nothing is written when a check fails; a file sdc did not write is replaced
@@ -451,6 +847,16 @@ impl NifEdit {
         if choice == Some(GuardChoice::KeepTheirs) {
             return ExportOutcome::KeptTheirs; // whatever is on disk now stays
         }
+        let overwrite = match choice {
+            Some(GuardChoice::Overwrite) => asked.map(|a| a.sha256),
+            _ => None,
+        };
+        self.write_out(overwrite)
+    }
+
+    /// [`Self::export`]'s steps with the answer already given (Note GD2's Review path too): `overwrite` is the hash
+    /// (hex) of the file on disk the user answered Overwrite for; a foreign file with another hash is not written.
+    pub(super) fn write_out(&mut self, overwrite: Option<String>) -> ExportOutcome {
         if self.edit_mod.as_os_str().is_empty() {
             return ExportOutcome::Blocked(NO_EXPORT_FOLDER.into());
         }
@@ -469,11 +875,8 @@ impl NifEdit {
             return ExportOutcome::Blocked(why);
         }
         // Note CQ: the file drops the blocks our edits appended that nothing reaches; on any doubt it is the patch
-        let n = nif::header::Header::parse(&self.source).map_or(0, |h| h.sizes.len() as u32);
-        let (out, skipped) = match nif::edit::compact(&self.patched, n) {
-            Ok(out) => (out, None),
-            Err(why) => (self.patched.to_vec(), Some(why)),
-        };
+        // (`reapply` made both, Note GD2)
+        let (out, skipped) = (self.out.to_vec(), self.cleanup_skip.clone());
         let path = self.export_path.clone();
         let cannot_read = |e: std::io::Error| {
             ExportOutcome::Blocked(format!("Cannot read {}: {e}", path.display()))
@@ -489,8 +892,8 @@ impl NifEdit {
                     Err(e) => return cannot_read(e),
                 };
                 let sha256 = edit_doc::sha256_hex(&on_disk);
-                match choice {
-                    Some(GuardChoice::Overwrite) if asked.is_some_and(|a| a.sha256 == sha256) => {}
+                match overwrite {
+                    Some(h) if h == sha256 => {}
                     _ => {
                         let diff = nif::write::block_diff(&on_disk, &out).unwrap_or_else(|e| {
                             vec![format!("The file on disk does not read as a NIF: {e}")]
@@ -553,12 +956,27 @@ impl NifEdit {
             };
         }
         self.patched = Arc::new(a.bytes);
+        // Note GD2: the export's bytes once per change, so the Review row can count what the cleanup drops
+        match nif::edit::compact(&self.patched, self.source_blocks) {
+            Ok(out) => {
+                let n = block_count(&self.patched).saturating_sub(block_count(&out));
+                self.compaction = Some(n as usize);
+                self.out = Arc::new(out);
+                self.cleanup_skip = None;
+            }
+            Err(why) => {
+                self.out = self.patched.clone();
+                self.compaction = None;
+                self.cleanup_skip = Some(why);
+            }
+        }
         self.outcomes = a.outcomes;
-        self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
+        self.up_to_date = !self.pending() && self.doc.export.sha256.is_some();
         match read_model(&self.patched) {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.trailer_types = trailer_types(&self.doc.ops(), &self.outcomes, &self.model);
         self.cards = shape_cards(&self.patched); // once per change, never per frame (rule 9.1)
         self.card_ctrls = card_ctrls(&self.model);
         self.warnings = validate(&self.model, None);
@@ -635,13 +1053,161 @@ impl NifEdit {
     }
 
     fn save(&mut self) {
-        self.unsaved = false;
-        if self.edit_mod.as_os_str().is_empty() {
+        // Note GD12: the old folder is no longer the destination; the autosave keeps the work until a root change
+        // succeeds (that one saves in the new folder and removes it)
+        if self.retarget_error.is_some() {
+            self.unsaved = true;
+            if let Some(a) = self.autosave.clone() {
+                if self.free_unseen(&a) {
+                    match edit_doc::save(&a, &self.doc) {
+                        Ok(()) => self.owns_autosave = true,
+                        Err(e) => self.error = Some(e),
+                    }
+                }
+            }
             return;
         }
-        if let Err(e) = edit_doc::save(&self.doc_path, &self.doc) {
-            self.error = Some(e);
+        if self.doc_path.as_os_str().is_empty() {
+            self.unsaved = false;
+            return;
         }
+        let path = self.doc_path.clone();
+        if !self.free_unseen(&path) {
+            return;
+        }
+        // Note GD27: unsaved until the write succeeds, so a failed save keeps the session touched
+        if let Err(e) = edit_doc::save(&path, &self.doc) {
+            self.error = Some(e);
+            return;
+        }
+        self.unsaved = false;
+        if self.autosave.as_ref() == Some(&path) {
+            self.owns_autosave = true;
+        }
+        // Note GD5 (c), GD11: saved in a folder, an autosave this document holds has done its job; one it never
+        // loaded is not ours to delete
+        if let Some(a) = self
+            .autosave
+            .clone()
+            .filter(|_| self.owns_autosave && !self.edit_mod.as_os_str().is_empty())
+        {
+            self.owns_autosave = false;
+            if let Err(e) = std::fs::remove_file(&a) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    self.error = Some(format!("{}: {e}", a.display()));
+                }
+            }
+        }
+    }
+
+    /// Note GD19, GD25: before this session writes `path`, a file there with edits it never loaded (an autosave it
+    /// does not hold, or the folder document `doc_unseen` marks) is moved aside to `<stem>.<unix seconds>.toml`
+    /// (named in Messages), never overwritten. False (write nothing) when the move fails.
+    fn free_unseen(&mut self, path: &Path) -> bool {
+        let doc = self.autosave.as_deref() != Some(path);
+        if (doc && !(self.doc_unseen && path == self.doc_path)) || (!doc && self.owns_autosave) {
+            return true;
+        }
+        let what = if doc {
+            "The edit document"
+        } else {
+            "The autosave"
+        };
+        if !path.is_file() {
+            self.doc_unseen &= !doc;
+            return true;
+        }
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        // Note GD26: the name is reserved with create_new (another instance's create of it fails), then renamed over
+        let mut s = secs;
+        let to = loop {
+            let to = path.with_file_name(format!("{stem}.{s}.toml"));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&to)
+            {
+                Ok(_) => break to,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => s += 1,
+                Err(e) => {
+                    self.error = Some(format!("{}: {e}", to.display()));
+                    return false;
+                }
+            }
+        };
+        match std::fs::rename(path, &to) {
+            Ok(()) => {
+                self.doc_unseen &= !doc;
+                self.open_lines.push(format!(
+                    "{what} {} held edits of {} that this session did not open: kept as {}.",
+                    path.display(),
+                    self.data_path,
+                    to.display()
+                ));
+                true
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&to); // the empty reservation only
+                self.error = Some(format!("{}: {e}", path.display()));
+                false
+            }
+        }
+    }
+
+    /// Note GD5 (a), (b), (d): the export folder changed while this edit is touched (GD13). The document stays in
+    /// memory and moves to `root` (or to `autosave` with none) unsaved: the switch writes nothing, the next save writes there.
+    /// It takes the export record of `root`'s saved document (that record describes `root`'s file). Returns the
+    /// lines for Messages; Err (nothing moved) when `root`'s saved document does not load, so it is never overwritten.
+    pub fn retarget(&mut self, root: Option<&Path>) -> Result<Vec<String>, String> {
+        let (edit_mod, doc_path, export_path) = match root {
+            Some(r) => (
+                r.to_path_buf(),
+                edit_doc::doc_path(r, &self.data_path)?,
+                edit_doc::export_path(r, &self.data_path)?,
+            ),
+            None => (
+                PathBuf::new(),
+                self.autosave.clone().unwrap_or_default(),
+                PathBuf::new(),
+            ),
+        };
+        let theirs = match root {
+            Some(_) => edit_doc::load(&doc_path)?,
+            None => None,
+        };
+        let mut lines = vec![];
+        if theirs.is_some() {
+            lines.push(format!(
+                "Export folder changed: the open edit of {} goes to {}; the edits saved there are kept aside at the \
+                 next save.",
+                self.data_path,
+                doc_path.display()
+            ));
+        }
+        // (d): the old folder's document stays (FC11 lists it when its export hash is recorded); the autosave is ours
+        if !self.edit_mod.as_os_str().is_empty() && self.doc_path.is_file() {
+            lines.push(format!(
+                "Export folder changed: the edits saved before stay in {}.",
+                self.doc_path.display()
+            ));
+        }
+        // Note GD25: the destination's edits were never loaded: the first save moves them aside
+        self.doc_unseen = theirs.is_some();
+        self.doc.export = theirs.map(|t| t.export).unwrap_or_default();
+        // without a folder the document is the autosave; an autosave this session never loaded is moved aside by the
+        // first save there (Note GD19), not claimed here
+        (self.edit_mod, self.doc_path, self.export_path) = (edit_mod, doc_path, export_path);
+        self.drag = None;
+        self.guard = None; // Note GD30: its question was about the old folder's file
+        self.history.break_merge();
+        self.unsaved = true;
+        self.up_to_date = !self.pending() && self.doc.export.sha256.is_some();
+        self.export_note = None;
+        self.refresh_blocked();
+        Ok(lines)
     }
 
     /// Appends `ops` as one undo step. A push with the same merge key as the previous one (the next tick of a
@@ -662,7 +1228,8 @@ impl NifEdit {
             )
             && !matches!(ops.first(), Some(Op::SplitAlpha { .. }));
         self.drag = merge.clone().map(|k| (k, n + usize::from(lead)));
-        self.history.record(self.doc.to_text(), merge);
+        let label = ops.first().map(op_name).unwrap_or_default();
+        self.history.record(self.doc.to_text(), &label, merge);
         // Note CU1: a rename of the picked clip keeps it picked (the block stays; its name follows)
         if let Playing::Clip(seq) = self.playing {
             for op in &ops {
@@ -757,13 +1324,34 @@ impl NifEdit {
         self.restore(t)
     }
 
-    /// Drops op `i` (one undo step).
+    /// The later SetSequenceTiming ops on the clip op `i` adds (AddSequence, Convert): reverting `i` drops them too
+    /// (Note GD8, CR6). Clip names are unique on a manager ignoring ASCII case, so the name finds the clip.
+    // shortcut: a Rename between the two leaves the timing op to conflict after the revert; follow renames if users
+    // rename and retime a new clip and then revert it.
+    pub fn timing_dependents(&self, i: usize) -> Vec<usize> {
+        let added = match self.doc.ops.get(i).map(|d| &d.op) {
+            Some(Op::AddSequence { name, .. } | Op::ConvertChainToClips { name, .. }) => name,
+            _ => return vec![],
+        };
+        (i + 1..self.doc.ops.len())
+            .filter(|&k| {
+                matches!(&self.doc.ops[k].op, Op::SetSequenceTiming { name, .. }
+                    if name.eq_ignore_ascii_case(added))
+            })
+            .collect()
+    }
+
+    /// Drops op `i`, and the clip timing that goes with it (one undo step).
     pub fn revert(&mut self, i: usize) {
         if i >= self.doc.ops.len() {
             return;
         }
         self.drag = None;
-        self.history.record(self.doc.to_text(), None);
+        let label = format!("Revert: {}", op_name(&self.doc.ops[i].op));
+        self.history.record(self.doc.to_text(), &label, None);
+        for k in self.timing_dependents(i).into_iter().rev() {
+            self.doc.ops.remove(k);
+        }
         self.doc.ops.remove(i);
         self.reapply();
         self.save();
@@ -779,7 +1367,7 @@ impl NifEdit {
             }
         };
         self.drag = None;
-        self.history.record(self.doc.to_text(), None);
+        self.history.record(self.doc.to_text(), "Keep mine", None);
         for (d, op) in self.doc.ops.iter_mut().zip(ops) {
             d.op = op;
         }
@@ -815,7 +1403,7 @@ impl NifEdit {
 
     /// v2 B8 (closes R11): each shape's material as PGPatcher would leave the edited NIF (`pg_entries::simulate_shape`
     /// over `files`, the JSON of read `gen`), with its lines. Shapes without a texture set keep their material and get no
-    /// line; PG_IGNORE ones keep it with `PG_IGNORED`. Those two checks run every time; only the simulation is cached
+    /// line; PG_IGNORE ones keep it with `PG_IGNORED`; with a crashing JSON loaded both get its lines first (GE15). Those two checks run every time; only the simulation is cached
     /// (fix F1, keyed on the parsed material, `gen` and the scan `rev`). From the parsed edit (not `preview_nif`).
     pub fn in_game_materials(
         &mut self,
@@ -827,6 +1415,8 @@ impl NifEdit {
         let nif_path = self.data_path.replace('/', "\\");
         let parsed = self.parsed.clone();
         let mut rows = Vec::with_capacity(parsed.shapes.len());
+        // GE15: the whole run stops, so every shape gets the crash lines, ahead of the eligibility exits below.
+        let crashes = crash_lines(files);
         for s in &parsed.shapes {
             let shape = self.model.shape(s.id.0);
             let lit = shape
@@ -834,11 +1424,13 @@ impl NifEdit {
                 .and_then(|b| self.model.lighting.get(&b))
                 .is_some_and(|l| l.texture_set.is_some());
             if !lit {
-                rows.push((s.id, s.material.clone(), vec![]));
+                rows.push((s.id, s.material.clone(), crashes.clone()));
                 continue;
             }
             if shape.is_some_and(|sm| pg_ignore(&self.model, sm)) {
-                rows.push((s.id, s.material.clone(), vec![PG_IGNORED.to_string()]));
+                let mut notes = crashes.clone();
+                notes.push(PG_IGNORED.to_string());
+                rows.push((s.id, s.material.clone(), notes));
                 continue;
             }
             // B-P41: outside the cache, whose key (the material) does not change when a controller is added.
@@ -872,9 +1464,15 @@ impl NifEdit {
             if env && m.slsf2 & SLSF2_TRUE_PBR != 0 {
                 notes.push(PGP_ENV_SCALE.to_string());
             }
+            // GE6 (R3): badge only, outside the cache like the env check; the revert is not simulated.
+            // GE16: a crashing run never reverts.
+            if crashes.is_empty() && shape.is_some_and(|sm| pg_stock(&self.model, sm)) {
+                notes.insert(0, PG_STOCK_REVERT.to_string());
+            }
             rows.push((s.id, m, notes));
         }
         self.refresh_pg_warnings();
+        self.refresh_problems();
         rows
     }
 
@@ -1273,6 +1871,16 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+/// Lowercase hex of a SHA-256, as `edit_doc::sha256_hex` writes it.
+fn hex(h: [u8; 32]) -> String {
+    h.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The header's block count; 0 when it does not parse.
+fn block_count(b: &[u8]) -> u32 {
+    nif::header::Header::parse(b).map_or(0, |h| h.sizes.len() as u32)
+}
+
 /// A new `Content::Parsed` key: every load of edited bytes is a new load (R10).
 fn next_key() -> u64 {
     static KEY: AtomicU64 = AtomicU64::new(1);
@@ -1280,18 +1888,16 @@ fn next_key() -> u64 {
 }
 
 impl MeshesModel {
-    /// Where NIF edits go (Note CI29): the Textures export folder, else `<instance>\mods\sdc NIF Edits`; None for a
-    /// folder source without an export folder (or an instance that no longer loads).
+    /// Where NIF edits go: the chosen export folder, and nowhere without one (Note GD5 supersedes CI29's
+    /// `<instance>\mods\sdc NIF Edits` default).
     pub fn edit_mod(&self) -> Option<PathBuf> {
-        if self.nif_export_root.is_some() {
-            return self.nif_export_root.clone();
-        }
-        let Some(ScanTarget::Mo2 { root, profile }) = &self.target else {
-            return None;
-        };
-        Instance::load(root, Some(profile))
-            .ok()
-            .map(|i| i.mods.join(EDIT_MOD))
+        self.nif_export_root.clone()
+    }
+
+    /// Note GD5 (c): where an edit of `path` autosaves while no export folder is chosen (beside the scan store).
+    fn autosave_of(&self, path: &str) -> Option<PathBuf> {
+        let dir = self.store_path.as_ref()?.parent()?;
+        edit_doc::autosave_path(dir, path).ok()
     }
 
     /// Opens an edit session for the selected NIF and shows its patched bytes as `Content::Parsed` (an LE NIF
@@ -1304,12 +1910,10 @@ impl MeshesModel {
             return;
         };
         let edit_mod = self.edit_mod();
-        if edit_mod.is_none() {
-            self.error = Some(NO_EXPORT_FOLDER.into());
-        }
         match self.start_edit(&row.path, edit_mod.as_deref()) {
             Ok((mut e, content)) => {
                 e.selection = first_selection(&e.model, self.card_sel.as_ref());
+                self.messages.append(&mut e.open_lines);
                 self.edit = Some(e);
                 self.shapes_col_before = Some(column);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
@@ -1343,7 +1947,8 @@ impl MeshesModel {
             .ok_or_else(|| format!("No source copy of {path} to edit."))?
             .clone();
         let bytes = read_file(&FileSource::from_store(src.kind, &src.root, path))?;
-        let mut e = NifEdit::open(bytes, src, path, edit_mod)?;
+        let autosave = self.autosave_of(path);
+        let mut e = NifEdit::open(bytes, src, path, edit_mod, autosave.as_deref())?;
         e.copies = copies;
         e.weight_sibling = weight_sibling_of(path)
             .filter(|s| store.copies_of_path(s).is_ok_and(|c| !c.is_empty()));
@@ -1406,11 +2011,13 @@ impl MeshesModel {
 
     /// Ends the session without touching the view's content.
     pub(super) fn drop_edit(&mut self) {
+        self.clear_nif_answers(); // Note GD29: `close_edit` too, which ends here
         if let Some(column) = self.shapes_col_before.take() {
             self.shapes_col = column;
         }
         if let Some(mut e) = self.edit.take() {
             e.flush();
+            self.messages.append(&mut e.open_lines);
             if let Some(err) = e.error {
                 self.error = Some(err);
             }
@@ -1572,7 +2179,15 @@ impl MeshesModel {
         };
         let before = e.materials();
         let out = e.export(choice);
-        e.export_note = match &out {
+        self.after_export(before, &out);
+        out
+    }
+
+    /// The open session's result line after an export, and the preview (a changed source re-applied the ops).
+    fn after_export(&mut self, before: Vec<(ShapeId, MaterialState)>, out: &ExportOutcome) {
+        self.foreign_cache.take();
+        let Some(e) = &mut self.edit else { return };
+        e.export_note = match out {
             ExportOutcome::Written { rerun_pgpatcher } => Some((
                 match rerun_pgpatcher {
                     true => RERUN_PGPATCHER.into(),
@@ -1588,7 +2203,170 @@ impl MeshesModel {
         };
         // A changed source re-applied the ops: the preview follows.
         self.edit_changed(before);
-        out
+    }
+
+    /// Note GD2: one row per NIF with pending edits (today the open edit only), for the Review. Reads the export
+    /// path's state from the disk only when its length, time or the last export's hash changed.
+    pub fn nif_review_rows(&self) -> Vec<NifReviewRow> {
+        let Some(e) = self.edit.as_ref().filter(|e| e.pending()) else {
+            return vec![];
+        };
+        let mut blocked = e.blocked.clone();
+        let foreign = match e.export_path.as_os_str().is_empty() {
+            true => None,
+            false => self.disk_state(e).unwrap_or_else(|why| {
+                blocked.get_or_insert(why);
+                None
+            }),
+        };
+        let mut answer = None;
+        if let (Some(f), Some((c, h))) = (
+            foreign,
+            self.nif_answers.get(&e.data_path.to_ascii_lowercase()),
+        ) {
+            match *h == f {
+                true => answer = Some(*c),
+                false => {
+                    blocked.get_or_insert(NIF_CHANGED_SINCE.into());
+                }
+            }
+        }
+        vec![NifReviewRow {
+            path: e.data_path.clone(),
+            mod_name: e
+                .edit_mod
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            blocked,
+            foreign,
+            answer,
+            compaction: e.compaction,
+        }]
+    }
+
+    /// The export path of `e` as the export would find it: None when absent or Tessalith's own, Some(SHA-256) when
+    /// Tessalith did not write it, Err when it cannot be read.
+    // shortcut: the key leaves out the edit's bytes, so a file that equals them reads as foreign until it changes;
+    // add `e.rev` if that case shows up (it would re-read the file on every drag tick).
+    fn disk_state(&self, e: &NifEdit) -> Result<Option<[u8; 32]>, String> {
+        let meta = std::fs::metadata(&e.export_path)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()));
+        let key = (e.export_path.clone(), e.doc.export.sha256.clone(), meta);
+        if let Some((k, v)) = &*self.foreign_cache.borrow() {
+            if *k == key {
+                return v.clone();
+            }
+        }
+        let cannot =
+            |err: std::io::Error| format!("Cannot read {}: {err}", e.export_path.display());
+        let last = e.doc.export.sha256.clone();
+        let ours = |b: &[u8]| last.as_deref() == Some(edit_doc::sha256_hex(b).as_str());
+        let v = match engine::dds::may_replace(&e.export_path, &e.out, ours) {
+            Ok(()) => Ok(None),
+            Err(Kept::Unreadable(err)) => Err(cannot(err)),
+            Err(Kept::Foreign) => std::fs::read(&e.export_path)
+                .map(|b| Some(Sha256::digest(&b).into()))
+                .map_err(cannot),
+        };
+        *self.foreign_cache.borrow_mut() = Some((key, v.clone()));
+        v
+    }
+
+    /// Note GD2: Review's answer for the file at `path`'s export path, given for the file with hash `sha256`. It
+    /// counts only while the file still has that hash, and for one export.
+    pub fn set_nif_answer(&mut self, path: &str, choice: GuardChoice, sha256: [u8; 32]) {
+        self.nif_answers
+            .insert(path.to_ascii_lowercase(), (choice, sha256));
+    }
+
+    /// Note GD29: drops every Review answer, so each foreign row asks again. Review calls it when it closes and when
+    /// the project changes (FC5); the edit's close and a folder change call it too.
+    pub fn clear_nif_answers(&mut self) {
+        self.nif_answers.clear();
+    }
+
+    /// Note GD2: writes every Review row that is not blocked and, when Tessalith did not write its file, is answered
+    /// Overwrite for the bytes on disk now (read again here). The answers are used up. Ok(written) when nothing was
+    /// skipped, else Err listing each skipped NIF and why. Each write is a line in Messages, with its placement.
+    pub fn export_nif_edits(&mut self) -> Result<usize, String> {
+        self.foreign_cache.take(); // check again at write time
+        let rows = self.nif_review_rows();
+        self.nif_answers.clear();
+        let (mut written, mut skipped) = (0, vec![]);
+        for r in rows {
+            let why = match (&r.blocked, r.foreign, r.answer) {
+                (Some(b), _, _) => Some(b.clone()),
+                (None, Some(_), None) => Some(NIF_UNANSWERED.to_string()),
+                (None, Some(_), Some(GuardChoice::KeepTheirs)) => Some(NIF_KEPT.to_string()),
+                _ => None,
+            };
+            if let Some(why) = why {
+                skipped.push(format!("{}: {why}", r.path));
+                continue;
+            }
+            let Some(e) = self.edit.as_mut().filter(|e| e.data_path == r.path) else {
+                continue;
+            };
+            let before = e.materials();
+            let out = e.write_out(r.foreign.map(hex));
+            e.guard = None; // the Review answers on its row: no dialog
+            let placement = e.placement.clone();
+            self.after_export(before, &out);
+            match out {
+                ExportOutcome::Written { .. } => {
+                    written += 1;
+                    self.messages
+                        .push(format!("Exported {} to {}.", r.path, r.mod_name));
+                    if let Some(p) = placement.filter(|p| *p != Placement::Ok) {
+                        self.messages.push(p.text(&r.mod_name));
+                    }
+                }
+                ExportOutcome::Blocked(why) => skipped.push(format!("{}: {why}", r.path)),
+                ExportOutcome::Guard { .. } | ExportOutcome::KeptTheirs => {
+                    skipped.push(format!("{}: {NIF_CHANGED_SINCE}", r.path))
+                }
+            }
+        }
+        match skipped.is_empty() {
+            true => Ok(written),
+            false => Err(format!("NIF edits skipped: {}", skipped.join("; "))),
+        }
+    }
+
+    /// Note GD1: the open edit's worklist rows; the same `Arc` until they change (an empty one without an edit).
+    pub fn nif_problems(&self) -> Arc<Vec<NifProblem>> {
+        match &self.edit {
+            Some(e) => e.problems.clone(),
+            None => self.no_problems.clone(),
+        }
+    }
+
+    /// A worklist row's fix (Note GD1): opens the NIF at `path` when another one (or none) is open, then asks the edit
+    /// panel for `tab` and, when it draws it, focus on `field`.
+    pub fn show_nif_tab(&mut self, path: &str, tab: NifTab, field: Option<Field>) {
+        let open = self
+            .edit
+            .as_ref()
+            .is_some_and(|e| e.data_path.eq_ignore_ascii_case(path));
+        if !open {
+            let row = self
+                .winners
+                .iter()
+                .map(|(n, _)| n)
+                .find(|n| n.path.eq_ignore_ascii_case(path))
+                .map(|n| n.copy_id);
+            let Some(id) = row else {
+                self.error = Some(format!("{path} is not in the scanned meshes."));
+                return;
+            };
+            self.select_nif(id);
+            self.open_edit();
+        }
+        if self.edit.is_some() {
+            self.nif_tab = Some((tab, field));
+        }
     }
 
     /// The badge of every edit document in the edit mod, keyed by data path (walks `.sdc\nif-edits`).
@@ -1640,13 +2418,66 @@ impl MeshesModel {
     }
 
     /// The app sets the Textures export folder each frame (Note CI29). A change re-reads the chips. An open session
-    /// is saved to the old folder (an unsaved drag too), then the same NIF is reopened from the new folder: its edit
-    /// document there, or a fresh one. No document is ever replaced by the switch. The selected shape is kept.
+    /// that is touched (GD13) keeps its document in memory and moves to the new folder unsaved
+    /// (`NifEdit::retarget`, Note GD5); an untouched one has nothing live, so the same NIF is reopened from the new
+    /// folder: its edit document there, or a fresh one.
+    /// The selected shape is kept.
     pub fn set_nif_export_root(&mut self, root: Option<PathBuf>) {
+        // Note GD19: the session's lines (an autosave moved aside by a save) reach Messages on the next frame
+        if let Some(e) = &mut self.edit {
+            self.messages.append(&mut e.open_lines);
+        }
         if self.nif_export_root == root {
+            // Note GD12: back to the folder the edit never left: it is its destination again
+            if let Some(e) = self.edit.as_mut().filter(|e| e.retarget_error.is_some()) {
+                e.retarget_error = None;
+                e.retarget_fail = None;
+                e.refresh_blocked();
+                e.flush();
+            }
+            return;
+        }
+        // Note GD12: the root is taken only once the live edit has moved there; until then the edit is blocked.
+        if let Some(e) = self.edit.as_mut().filter(|e| e.touched()) {
+            // Note GD20: a failure is tried again only when the root or its document's length or time changed (a
+            // stat per frame, never a read)
+            let key = root.as_deref().map(|r| {
+                let p = edit_doc::doc_path(r, &e.data_path).unwrap_or_default();
+                let meta = std::fs::metadata(&p)
+                    .ok()
+                    .map(|m| (m.len(), m.modified().ok()));
+                (r.to_path_buf(), p, meta)
+            });
+            if key.is_some() && e.retarget_fail == key {
+                return;
+            }
+            match e.retarget(root.as_deref()) {
+                Ok(lines) => {
+                    self.messages.extend(lines);
+                    e.retarget_error = None;
+                    e.retarget_fail = None;
+                    e.refresh_blocked();
+                }
+                Err(err) => {
+                    e.retarget_fail = key;
+                    let folder = root.as_deref().unwrap_or(Path::new("")).display();
+                    let why = format!("could not open the edit document in {folder}: {err}");
+                    if e.retarget_error.as_ref() != Some(&why) {
+                        e.retarget_error = Some(why);
+                        e.refresh_blocked();
+                    }
+                    return;
+                }
+            }
+            self.nif_export_root = root;
+            self.clear_nif_answers(); // Note GD29: they were given for the old folder's files
+            self.refresh_doc_badges();
+            self.refresh_placement();
+            self.edit_checks();
             return;
         }
         self.nif_export_root = root;
+        self.clear_nif_answers();
         self.refresh_doc_badges();
         let Some(selection) = self.edit.as_ref().map(|e| e.selection) else {
             return;

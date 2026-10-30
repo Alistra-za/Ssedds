@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-/// Name of the mod that receives exported edits.
+/// The mod NIF edits went to without an export folder until Note GD5 (CI3's default); nothing uses it as a default now.
 pub const EDIT_MOD: &str = "sdc NIF Edits";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +79,7 @@ impl EditDoc {
         struct Ops<'a> {
             ops: &'a [DocOp],
         }
+        HASHES.with(|n| n.set(n.get() + 1));
         let t = toml::to_string_pretty(&Ops { ops: &self.ops }).expect("ops serialise");
         sha256_hex(t.as_bytes())
     }
@@ -117,6 +118,15 @@ pub fn doc_path(edit_mod: &Path, data_path: &str) -> Result<PathBuf, String> {
         .join(format!("{}.sdc-nifedit.toml", win(data_path)?)))
 }
 
+/// Where an edit without an export folder autosaves (Note GD5 (c)): `<dir>\nif-edits\<SHA-256 of the lowercase data
+/// path>.toml`; `dir` is the scan store's folder, `%LOCALAPPDATA%\sdc` in the app.
+pub fn autosave_path(dir: &Path, data_path: &str) -> Result<PathBuf, String> {
+    let key = win(data_path)?.to_ascii_lowercase();
+    Ok(dir
+        .join("nif-edits")
+        .join(format!("{}.toml", sha256_hex(key.as_bytes()))))
+}
+
 pub fn export_path(edit_mod: &Path, data_path: &str) -> Result<PathBuf, String> {
     Ok(edit_mod.join(win(data_path)?))
 }
@@ -129,9 +139,28 @@ pub fn save(path: &Path, doc: &EditDoc) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+thread_local! {
+    static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `EditDoc::ops_hash` this thread computed (Note GD23's test: idle frames hash nothing).
+pub fn ops_hash_count() -> usize {
+    HASHES.with(std::cell::Cell::get)
+}
+
+/// How many `load` calls this thread made (Note GD20's test: a failed folder change is not read each frame).
+pub fn load_count() -> usize {
+    LOADS.with(std::cell::Cell::get)
+}
+
 pub fn load(path: &Path) -> Result<Option<EditDoc>, String> {
+    LOADS.with(|n| n.set(n.get() + 1));
     match std::fs::read_to_string(path) {
-        Ok(t) => EditDoc::from_text(&t).map(Some),
+        // Note GD30: the file is named, as in the read error (an autosave's name alone is a hash)
+        Ok(t) => EditDoc::from_text(&t)
+            .map(Some)
+            .map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
@@ -141,25 +170,26 @@ pub fn sha256_hex(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
 
-/// Undo/redo over whole-document snapshots (TOML text). A record with the same merge key as the previous one
-/// (one drag) keeps only the first snapshot.
+/// Undo/redo over whole-document snapshots (TOML text), each with the short name of the step it undoes (Note GD4).
+/// A record with the same merge key as the previous one (one drag) keeps only the first snapshot and its name.
 #[derive(Debug, Default)]
 pub struct NifHistory {
-    undo: Vec<String>,
-    redo: Vec<String>,
+    undo: Vec<(String, String)>,
+    redo: Vec<(String, String)>,
     merge: Option<String>,
 }
 
 impl NifHistory {
     pub const LIMIT: usize = 200;
 
-    pub fn record(&mut self, before: String, merge: Option<String>) {
+    /// `before` is the document before the step named `label` ("Set shader type").
+    pub fn record(&mut self, before: String, label: &str, merge: Option<String>) {
         self.redo.clear();
         if merge.is_some() && merge == self.merge {
             return;
         }
         self.merge = merge;
-        self.undo.push(before);
+        self.undo.push((before, label.to_string()));
         if self.undo.len() > Self::LIMIT {
             self.undo.remove(0);
         }
@@ -170,17 +200,27 @@ impl NifHistory {
     }
 
     pub fn undo(&mut self, current: String) -> Option<String> {
-        let s = self.undo.pop()?;
-        self.redo.push(current);
+        let (s, label) = self.undo.pop()?;
+        self.redo.push((current, label));
         self.merge = None;
         Some(s)
     }
 
     pub fn redo(&mut self, current: String) -> Option<String> {
-        let s = self.redo.pop()?;
-        self.undo.push(current);
+        let (s, label) = self.redo.pop()?;
+        self.undo.push((current, label));
         self.merge = None;
         Some(s)
+    }
+
+    /// The name of the step Undo would undo.
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.last().map(|(_, l)| l.as_str())
+    }
+
+    /// The name of the step Redo would redo.
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo.last().map(|(_, l)| l.as_str())
     }
 
     pub fn can_undo(&self) -> bool {

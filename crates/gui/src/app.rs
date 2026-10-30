@@ -171,6 +171,15 @@ impl SdcApp {
             crate::ui::header::set_meshes_view(ctx, false);
             model.palette_pick(&crate::model::nav::Pick::Texture(k));
         }
+        if let Some(t) = model.show_in_meshes.take() {
+            crate::ui::header::set_meshes_view(ctx, true);
+            m.show_texture(t);
+        }
+        // Note GD1 (NIF team): a NIF worklist row's fix.
+        if let Some((path, tab, field)) = model.nif_tab_request.take() {
+            crate::ui::header::set_meshes_view(ctx, true);
+            m.show_nif_tab(&path, tab, field);
+        }
     }
 
     /// Creates the preview renderer in egui_wgpu's callback resources. Without a render state (no usable adapter) the
@@ -334,6 +343,12 @@ impl eframe::App for SdcApp {
         self.sync_renderer();
         self.meshes
             .set_nif_export_root(self.model.nif_export_root());
+        // Note GD5: an export folder change's lines about the open NIF edit go to Messages.
+        for line in self.meshes.messages.drain(..) {
+            self.model
+                .messages
+                .log(crate::model::messages::Severity::Info, line);
+        }
         let scanning = self.meshes.scanning();
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).
@@ -343,6 +358,11 @@ impl eframe::App for SdcApp {
             // Wave 2 #6: a cancelled or failed scan leaves every origin disabled, so plans keep the evidence too.
             self.model
                 .scan_finished(self.meshes.scan_completed, self.meshes.store_untouched);
+        }
+        // Note GE14: the set preview shows the Meshes view's whole-run crash lines (one JSON read for both).
+        if self.state.set3d.shown {
+            let crashes = self.meshes.pg_crashes();
+            self.state.set3d.set_crashes(crashes);
         }
         self.state.set3d.poll(&self.model);
         // Both views offer the scan (the Textures view has its row under the header).
@@ -418,6 +438,8 @@ impl eframe::App for SdcApp {
             || self.meshes.scanning()
             || self.meshes.v3.busy()
             || self.state.set3d.busy()
+            // GE16: the set preview's crash lines appear when the JSON read lands, even on an idle Textures view.
+            || self.meshes.pg_reading()
             || self.model.v2_jobs_pending();
         let background =
             self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;

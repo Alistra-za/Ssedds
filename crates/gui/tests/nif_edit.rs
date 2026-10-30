@@ -170,6 +170,7 @@ fn an_edit_on_an_escaping_path_does_not_open() {
             copy("A", 1, false),
             p,
             Some(&edit_mod),
+            None,
         );
         assert_eq!(
             r.err(),
@@ -203,26 +204,32 @@ fn save_and_load_use_a_temp_dir() {
 fn history_merges_drags_caps_at_200_and_redoes() {
     let mut h = NifHistory::default();
     assert!(!h.can_undo() && !h.can_redo());
-    h.record("a".into(), Some("drag".into()));
-    h.record("b".into(), Some("drag".into()));
+    h.record("a".into(), "Drag", Some("drag".into()));
+    h.record("b".into(), "Drag", Some("drag".into()));
+    assert_eq!(
+        h.undo_label(),
+        Some("Drag"),
+        "a merged drag is one named step"
+    );
     assert_eq!(h.undo("now".into()), Some("a".into()));
     assert!(!h.can_undo() && h.can_redo());
+    assert_eq!((h.undo_label(), h.redo_label()), (None, Some("Drag")));
     assert_eq!(h.redo("a".into()), Some("now".into()));
 
     let mut h = NifHistory::default();
-    h.record("a".into(), Some("drag".into()));
+    h.record("a".into(), "Drag", Some("drag".into()));
     h.break_merge();
-    h.record("b".into(), Some("drag".into()));
+    h.record("b".into(), "Drag", Some("drag".into()));
     assert_eq!(h.undo("c".into()), Some("b".into()));
     assert_eq!(h.undo("b".into()), Some("a".into()));
     assert_eq!(h.undo("a".into()), None);
 
-    h.record("x".into(), None);
+    h.record("x".into(), "X", None);
     assert!(!h.can_redo());
 
     let mut h = NifHistory::default();
     for i in 0..NifHistory::LIMIT + 5 {
-        h.record(i.to_string(), None);
+        h.record(i.to_string(), "Step", None);
     }
     let mut n = 0;
     let mut last = String::new();
@@ -325,6 +332,15 @@ fn clip_ops_survive_the_edit_document() {
             at: root.clone(),
             name: "Idle".into(),
             nth: 1,
+        },
+        Op::SetSequenceTiming {
+            at: root.clone(),
+            name: "Idle".into(),
+            nth: 0,
+            cycle: 1,
+            freq: 2.5,
+            start: -0.0,
+            stop: 3.0,
         },
         Op::RenameSequence {
             at: root,
@@ -586,6 +602,19 @@ fn pick_source_skips_the_edit_mod_and_pgpatcher_output() {
     assert!(pick_source(&c[..2], m).is_none());
 }
 
+/// Note GD28: the 1.x default edit mod (`mods\sdc NIF Edits`, CI3) holds Tessalith's own earlier output: it is never
+/// the edit source, with no folder chosen or another one.
+#[test]
+fn the_legacy_edit_mod_is_never_the_source() {
+    let c = [copy("SDC NIF Edits", 8, false), copy("A", 3, false)];
+    let src = |m: &str| pick_source(&c, Path::new(m)).map(|c| c.origin.clone());
+    assert_eq!(src(""), Some("A".into()), "no folder chosen");
+    assert_eq!(src(r"C:\I\mods\MyOut"), Some("A".into()), "another folder");
+    let mut slash = c[0].clone();
+    slash.root = r"C:\I/mods\sdc NIF Edits\".into();
+    assert!(pick_source(&[slash], Path::new("")).is_none());
+}
+
 /// Final review M2: Windows folder names ignore case, so `SDC NIF Edits` is still the edit mod.
 #[test]
 fn the_edit_mod_is_matched_ignoring_case() {
@@ -760,6 +789,8 @@ fn scan_and_select(m: &mut MeshesModel, root: &Path) {
     m.select_mod(a);
     let c = m.nifs[0].copy_id;
     m.select_nif(c);
+    // Note GD5: NIF edits have no default mod; the tests choose `<mods>\sdc NIF Edits`, CI3's old default.
+    m.set_nif_export_root(Some(root.join("mods").join(EDIT_MOD)));
 }
 
 fn session(le: bool) -> (tempfile::TempDir, MeshesModel) {
@@ -928,6 +959,9 @@ fn an_edited_nif_keeps_its_failed_shader_message_in_the_app() {
         None,
         support::session(),
     );
+    let mut model = model;
+    // Note GD5: the app hands the chosen export folder to the meshes each frame
+    model.set_export_folder(d.path().join("mods").join(EDIT_MOD));
     let mut app = SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
@@ -1130,7 +1164,7 @@ fn view(m: MeshesModel) -> Harness<'static, MeshesModel> {
 /// A read-only edit session on `bytes` without a scan (no store, no preview).
 fn direct(bytes: Vec<u8>) -> MeshesModel {
     let mut m = MeshesModel::empty();
-    m.edit = Some(NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap());
+    m.edit = Some(NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None, None).unwrap());
     m
 }
 
@@ -2051,6 +2085,9 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         None,
         support::session(),
     );
+    let mut model = model;
+    // Note GD5: the app hands the chosen export folder to the meshes each frame
+    model.set_export_folder(d.path().join("mods").join(EDIT_MOD));
     let mut app = SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
@@ -2171,6 +2208,7 @@ fn authored_key_errors_block_export() {
             copy("A", 1, false),
             "meshes/x.nif",
             Some(&edit_mod),
+            None,
         )
         .unwrap();
         let role = Role::Ctrl {
@@ -2444,6 +2482,7 @@ fn managed_variable_change_rewrites_clip_ids() {
             scenes::managed_clip(),
             copy("A", 1, false),
             "meshes/x.nif",
+            None,
             None,
         )
         .unwrap(),
@@ -2868,6 +2907,7 @@ fn mod_row(name: &str, prio: i32, derived: bool) -> modscan::store::ModRow {
         kind: modscan::store::KIND_MOD,
         priority: prio,
         derived,
+        nifs: 1,
     }
 }
 
@@ -3095,6 +3135,16 @@ fn export_without_cleanup_writes_the_patch_and_says_why() {
     m.open_edit();
     assert_eq!(m.error, None);
     add_then_remove_ctrl(&mut m, true);
+    // Note GD2: known before the export, an Info row in plain words; the Review row has no count
+    use sdc_gui::model::meshes::{NifLevel, NifTab};
+    let info: Vec<_> = m
+        .nif_problems()
+        .iter()
+        .filter(|p| p.level == NifLevel::Info)
+        .map(|p| (p.text.clone(), p.tab))
+        .collect();
+    assert_eq!(info, [(NO_CLEANUP.to_string(), NifTab::Controllers)]);
+    assert_eq!(review_row(&m).compaction, None);
     assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
     let e = m.edit.as_ref().unwrap();
     let why = nif::edit::compact(&e.patched, 5).unwrap_err();
@@ -3278,6 +3328,8 @@ fn pending_list_and_chips() {
     );
     fresh.procs = sdc_gui::model::meshes::no_procs;
     fresh.activate_with(None);
+    // the app sets the chosen export folder on its first frame (Note GD5)
+    fresh.set_nif_export_root(Some(d.path().join("mods").join(EDIT_MOD)));
     let chips = |k: &str| {
         fresh
             .doc_badges
@@ -3913,11 +3965,380 @@ fn placement_names_the_export_folder_mod() {
     );
 }
 
+/// Where a session without an export folder autosaves (Note GD5 (c)): `<scan.db's folder>\nif-edits\<hash>.toml`.
+fn autosave(d: &tempfile::TempDir) -> std::path::PathBuf {
+    d.path()
+        .join("nif-edits")
+        .join(format!("{}.toml", sha256_hex(b"meshes\\x.nif")))
+}
+
+/// Note GD5: no export folder, no default mod. The edit opens and works, autosaves to the app's folder, and its
+/// export is blocked with FB1's reason; choosing a folder later carries the edit there.
 #[test]
-fn without_an_export_folder_the_fallback_mod_is_used() {
-    let (d, m) = export_session();
-    assert_eq!(m.nif_export_root, None);
-    assert_eq!(m.edit_mod(), Some(d.path().join("mods").join(EDIT_MOD)));
+fn no_export_folder_blocks_the_nif_row() {
+    let (d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    assert_eq!(m.edit_mod(), None);
+    m.open_edit();
+    assert_eq!(m.error, None, "the edit opens");
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    assert_eq!(NO_EXPORT_FOLDER, "No export folder chosen");
+    gloss(&mut m, 12.5);
+    assert_eq!(m.edit.as_ref().unwrap().doc_path, autosave(&d));
+    assert_eq!(load(&autosave(&d)).unwrap().unwrap().ops.len(), 1);
+    assert!(
+        !nif_doc(&d.path().join("mods").join(EDIT_MOD)).exists(),
+        "no default mod"
+    );
+    assert_eq!(
+        m.export_edit(None),
+        ExportOutcome::Blocked(NO_EXPORT_FOLDER.into())
+    );
+    // a crash: the next session finds the autosave
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(op_values(&m).len(), 1, "recovered from the autosave");
+    // a folder is chosen: the edit goes with it, and its first save there drops the autosave
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(m.edit.as_ref().unwrap().doc_path, nif_doc(&out));
+    assert!(autosave(&d).is_file(), "(a): the switch writes nothing");
+    gloss(&mut m, 13.5);
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+    assert!(!autosave(&d).exists());
+    assert_eq!(m.edit.as_ref().unwrap().blocked, None);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+}
+
+/// Note GD11: an autosave this session never loaded is never deleted. Edit without a folder, close, choose a
+/// folder, reopen: the autosave (newer than the folder's none) is offered, and its first save there migrates it.
+#[test]
+fn an_autosave_is_recovered_when_a_folder_is_chosen_before_reopening() {
+    let (d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.close_edit();
+    assert!(autosave(&d).is_file());
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(m.error, None);
+    assert_eq!(op_values(&m).len(), 1, "the autosaved edit is offered");
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "Recovered the edits of meshes/x.nif autosaved in {}.",
+            autosave(&d).display()
+        )]
+    );
+    gloss(&mut m, 13.5);
+    assert_eq!(
+        load(&nif_doc(&out)).unwrap().unwrap().ops.len(),
+        2,
+        "the autosave is not lost"
+    );
+    assert!(
+        !autosave(&d).exists(),
+        "migrated into the folder, then removed"
+    );
+}
+
+/// Note GD11: a folder document newer than the autosave wins; the autosave stays, named in Messages, and a save in
+/// the folder leaves it alone.
+#[test]
+fn an_older_autosave_stays_when_the_folders_edit_is_newer() {
+    let (d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.close_edit();
+    let aside = d.path().join("autosave.aside");
+    std::fs::rename(autosave(&d), &aside).unwrap();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    std::fs::rename(&aside, autosave(&d)).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(&d))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(op_values(&m).len(), 1);
+    assert_eq!(op_values(&m)[0].1, 7.5, "the newer folder edit wins");
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "Older edits of meshes/x.nif stay autosaved in {}.",
+            autosave(&d).display()
+        )]
+    );
+    gloss(&mut m, 13.5);
+    assert!(autosave(&d).is_file(), "an autosave never loaded stays");
+}
+
+/// An autosave of one op (12.5) older than MyOut's document (one op, 7.5), and the session open on MyOut's: the
+/// autosave is not loaded (GD11). Returns the autosave's bytes.
+fn older_autosave_open_on_newer_folder(d: &tempfile::TempDir, m: &mut MeshesModel) -> Vec<u8> {
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(m, 12.5);
+    m.close_edit();
+    let mine = std::fs::read(autosave(d)).unwrap();
+    let aside = d.path().join("autosave.aside");
+    std::fs::rename(autosave(d), &aside).unwrap();
+    m.set_nif_export_root(Some(d.path().join(r"mods\MyOut")));
+    m.open_edit();
+    gloss(m, 7.5);
+    m.close_edit();
+    std::fs::rename(&aside, autosave(d)).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(d))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    m.open_edit();
+    assert_eq!(op_values(m)[0].1, 7.5, "the folder's document opens");
+    m.messages.clear();
+    mine
+}
+
+/// Note GD24: an autosave and a folder document with the same modified time: the folder's opens, the autosave stays
+/// (named in Messages) and a save in the folder leaves it.
+#[test]
+fn equal_times_keep_the_folder_document_and_the_autosave() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    m.close_edit();
+    let out = d.path().join(r"mods\MyOut");
+    let t = std::fs::metadata(nif_doc(&out))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(&d))
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(op_values(&m)[0].1, 7.5, "the folder's document opens");
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "Older edits of meshes/x.nif stay autosaved in {}.",
+            autosave(&d).display()
+        )]
+    );
+    gloss(&mut m, 13.5);
+    assert_eq!(
+        std::fs::read(autosave(&d)).unwrap(),
+        mine,
+        "the autosave stays as it was"
+    );
+}
+
+/// The files beside the autosave that a save moved aside (`<stem>.<seconds>.toml`).
+fn kept_aside(d: &tempfile::TempDir) -> Vec<std::path::PathBuf> {
+    kept_beside(&autosave(d))
+}
+
+/// The files a save moved aside from `a` (`<stem>.<seconds>.toml` in its folder), oldest name first.
+fn kept_beside(a: &Path) -> Vec<std::path::PathBuf> {
+    let stem = format!("{}.", a.file_stem().unwrap().to_string_lossy());
+    let mut v: Vec<_> = std::fs::read_dir(a.parent().unwrap())
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| p != a && p.file_name().unwrap().to_string_lossy().starts_with(&stem))
+        .collect();
+    v.sort();
+    v
+}
+
+/// Note GD26: a move-aside name already taken (this second's and the next two) is skipped: the move takes a free
+/// later name, and the files already there are unchanged.
+#[test]
+fn a_move_aside_skips_names_already_taken() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    let a = autosave(&d);
+    let stem = a.file_stem().unwrap().to_string_lossy().into_owned();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let taken: Vec<_> = (now..now + 3)
+        .map(|s| a.with_file_name(format!("{stem}.{s}.toml")))
+        .collect();
+    for t in &taken {
+        std::fs::write(t, b"another instance's").unwrap();
+    }
+    m.set_nif_export_root(None);
+    gloss(&mut m, 13.5);
+    for t in &taken {
+        assert_eq!(
+            std::fs::read(t).unwrap(),
+            b"another instance's",
+            "{t:?} unchanged"
+        );
+    }
+    let new: Vec<_> = kept_aside(&d)
+        .into_iter()
+        .filter(|p| !taken.contains(p))
+        .collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    assert_eq!(std::fs::read(&new[0]).unwrap(), mine);
+}
+
+/// Note GD25: a newer autosave recovered over a folder document with other edits never overwrites it: the first save
+/// moves the folder's document aside, and Messages names the kept file.
+#[test]
+fn a_recovered_autosave_keeps_the_folder_document_it_replaced() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.close_edit();
+    let aside = d.path().join("autosave.aside");
+    std::fs::rename(autosave(&d), &aside).unwrap();
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    let theirs = std::fs::read(nif_doc(&out)).unwrap();
+    std::fs::rename(&aside, autosave(&d)).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(&d))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(op_values(&m)[0].1, 12.5, "the newer autosave opens");
+    gloss(&mut m, 13.5);
+    let kept = kept_beside(&nif_doc(&out));
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        theirs,
+        "the folder's edits survive"
+    );
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(
+        m.messages.last(),
+        Some(&format!(
+            "The edit document {} held edits of meshes/x.nif that this session did not open: kept as {}.",
+            nif_doc(&out).display(),
+            kept[0].display()
+        ))
+    );
+}
+
+/// Note GD25: a touched session moved onto a folder with its own document of the NIF never overwrites it: the first
+/// save there moves that document aside.
+#[test]
+fn a_folder_change_keeps_the_destination_document_it_replaced() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    let theirs = std::fs::read(nif_doc(&out)).unwrap();
+    m.set_nif_export_root(Some(d.path().join("mods").join(EDIT_MOD)));
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(
+        std::fs::read(nif_doc(&out)).unwrap(),
+        theirs,
+        "the switch writes nothing"
+    );
+    gloss(&mut m, 13.5);
+    let kept = kept_beside(&nif_doc(&out));
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        theirs,
+        "the destination's edits survive"
+    );
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+    gloss(&mut m, 14.5);
+    assert_eq!(kept_beside(&nif_doc(&out)).len(), 1, "moved aside once");
+}
+
+/// Note GD19: the failed folder change's fallback never overwrites an autosave this session did not open: it is moved
+/// aside first, and Messages names both files.
+#[test]
+fn a_failed_folder_change_moves_an_unloaded_autosave_aside() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad.clone()));
+    gloss(&mut m, 13.5);
+    m.set_nif_export_root(Some(bad.clone())); // the next frame moves the session's lines to Messages
+    let kept = kept_aside(&d);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        mine,
+        "the unloaded autosave survives"
+    );
+    assert_eq!(
+        load(&autosave(&d)).unwrap().unwrap().ops.len(),
+        2,
+        "the live work"
+    );
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "The autosave {} held edits of meshes/x.nif that this session did not open: kept as {}.",
+            autosave(&d).display(),
+            kept[0].display()
+        )]
+    );
+}
+
+/// Note GD19: clearing the export folder does not claim an autosave it never loaded: the first save there moves it
+/// aside; from then on the autosave is the session's (a later folder's first save removes it).
+#[test]
+fn clearing_the_folder_never_overwrites_an_unloaded_autosave() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    m.set_nif_export_root(None);
+    gloss(&mut m, 13.5);
+    let kept = kept_aside(&d);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(std::fs::read(&kept[0]).unwrap(), mine);
+    assert_eq!(load(&autosave(&d)).unwrap().unwrap().ops.len(), 2);
+    m.set_nif_export_root(Some(d.path().join(r"mods\MyOut")));
+    gloss(&mut m, 14.5);
+    assert!(
+        !autosave(&d).exists(),
+        "the session's own autosave moved into the folder"
+    );
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        mine,
+        "the one aside stays"
+    );
 }
 
 #[test]
@@ -3938,8 +4359,10 @@ fn an_export_folder_outside_the_instance_is_not_checked_and_still_exports() {
     assert!(nif_doc(&out).is_file());
 }
 
+/// Note GD5 (a), (b), (d): a folder change keeps the live edit in memory and writes nothing; the new folder's saved
+/// edit of the NIF is replaced by it (said in Messages), and the old folder's stays there (named in Messages).
 #[test]
-fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
+fn changing_the_export_folder_keeps_the_edit_in_memory() {
     let (d, mut m) = export_session();
     let out = d.path().join(r"mods\MyOut");
     let old = d.path().join("mods").join(EDIT_MOD);
@@ -3949,20 +4372,21 @@ fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
     gloss(&mut m, 7.5);
     m.close_edit();
     let theirs = std::fs::read(nif_doc(&out)).unwrap();
-    // Back to the fallback: an edit there, a shape selected and a drag in progress (not saved yet).
-    m.set_nif_export_root(None);
+    // Back to the first folder: an edit there, a shape selected and a drag in progress (not saved yet).
+    m.set_nif_export_root(Some(old.clone()));
     m.open_edit();
     assert_eq!(m.edit.as_ref().unwrap().doc.ops.len(), 0);
     gloss(&mut m, 12.5);
     let shape = lit_shape(m.edit.as_ref().unwrap()).0;
     m.select_edit(Selection::Shape(shape));
     tick(&mut m, 40.5);
+    m.messages.clear();
     m.set_nif_export_root(Some(out.clone()));
     let e = m.edit.as_ref().unwrap();
     assert_eq!(e.doc_path, nif_doc(&out));
     assert_eq!(e.export_path, out.join(r"meshes\x.nif"));
-    assert_eq!(op_values(&m).len(), 1, "MyOut's edit is loaded");
-    assert_eq!(op_values(&m)[0].1, 7.5);
+    assert_eq!(op_values(&m).len(), 2, "(b): the live edit wins");
+    assert_eq!(op_values(&m)[0].1, 12.5);
     assert_eq!(
         e.selection,
         Selection::Shape(shape),
@@ -3971,15 +4395,263 @@ fn changing_the_export_folder_saves_the_edit_and_opens_that_folders_edit() {
     assert_eq!(
         std::fs::read(nif_doc(&out)).unwrap(),
         theirs,
-        "not overwritten"
+        "(a): the switch writes nothing"
     );
-    let saved = load(&nif_doc(&old)).unwrap().unwrap();
     assert_eq!(
-        saved.ops.len(),
-        2,
-        "the old folder keeps the session's edits and the drag"
+        load(&nif_doc(&old)).unwrap().unwrap().ops.len(),
+        1,
+        "(d): the old folder keeps what was saved there; the drag was not saved by the switch"
     );
-    assert_eq!(badge_of(&m, "x.nif"), Some(DocBadge::Pending));
+    assert_eq!(
+        m.messages,
+        vec![
+            format!(
+                "Export folder changed: the open edit of meshes/x.nif goes to {}; the edits saved there are kept aside at the next save.",
+                nif_doc(&out).display()
+            ),
+            format!(
+                "Export folder changed: the edits saved before stay in {}.",
+                nif_doc(&old).display()
+            ),
+        ]
+    );
+    // dirty: closing the edit saves it in the new folder
+    m.close_edit();
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+}
+
+/// Note GD12: a root change whose folder holds an edit document that does not load is not taken: the row is
+/// blocked with the reason, nothing is written to the old folder, and a later root that works clears it.
+#[test]
+fn a_malformed_document_in_the_new_folder_blocks_the_row() {
+    let (d, mut m) = export_session();
+    let old = d.path().join("mods").join(EDIT_MOD);
+    assert_eq!(m.nif_export_root.as_deref(), Some(old.as_path()));
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let before = std::fs::read(nif_doc(&old)).unwrap();
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad.clone()));
+    assert_eq!(
+        m.nif_export_root.as_deref(),
+        Some(old.as_path()),
+        "the new root is not taken"
+    );
+    let why = review_row(&m).blocked.expect("the row is blocked");
+    let head = format!("could not open the edit document in {}: ", bad.display());
+    assert!(why.starts_with(&head), "{why}");
+    gloss(&mut m, 13.5);
+    assert_eq!(
+        std::fs::read(nif_doc(&old)).unwrap(),
+        before,
+        "no write to the old folder"
+    );
+    assert!(matches!(m.export_edit(None), ExportOutcome::Blocked(_)));
+    assert!(!old.join(r"meshes\x.nif").exists());
+    assert_eq!(
+        load(&autosave(&d)).unwrap().unwrap().ops.len(),
+        2,
+        "the work is kept in the autosave meanwhile"
+    );
+    // asked again (the next frame): still blocked; a root that works clears it
+    m.set_nif_export_root(Some(bad.clone()));
+    assert!(review_row(&m).blocked.is_some());
+    let good = d.path().join(r"mods\Good");
+    m.set_nif_export_root(Some(good.clone()));
+    assert_eq!(m.nif_export_root.as_deref(), Some(good.as_path()));
+    assert_eq!(review_row(&m).blocked, None);
+    m.close_edit();
+    assert_eq!(load(&nif_doc(&good)).unwrap().unwrap().ops.len(), 2);
+    assert!(!autosave(&d).exists(), "moved into the folder that worked");
+    assert_eq!(std::fs::read(nif_doc(&old)).unwrap(), before);
+}
+
+/// Note GD20: a failed folder change reads the new folder's document once, not each frame; a change to the file (its
+/// length or time) reads it again.
+#[test]
+fn a_failed_folder_change_reads_the_document_once_until_it_changes() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    let n = load_count();
+    for _ in 0..5 {
+        m.set_nif_export_root(Some(bad.clone()));
+    }
+    assert_eq!(load_count() - n, 1, "one read over five frames");
+    assert!(review_row(&m).blocked.is_some());
+    std::fs::write(nif_doc(&bad), b"still = [not toml").unwrap();
+    for _ in 0..5 {
+        m.set_nif_export_root(Some(bad.clone()));
+    }
+    assert_eq!(load_count() - n, 2, "read again after the file changed");
+    assert!(review_row(&m).blocked.is_some());
+}
+
+/// Note GD23: after an export, idle frames hash nothing: the Review rows and the panel read the cached pending state.
+#[test]
+fn idle_frames_after_an_export_hash_nothing() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let root = m.nif_export_root.clone();
+    let mut h = view(m);
+    h.run_steps(2);
+    let _ = h.state().nif_review_rows();
+    let n = ops_hash_count();
+    for _ in 0..10 {
+        let _ = h.state().nif_review_rows();
+        h.state_mut().set_nif_export_root(root.clone());
+        h.run_steps(1);
+    }
+    assert_eq!(ops_hash_count() - n, 0, "no hash over ten idle frames");
+    gloss(h.state_mut(), 13.5);
+    assert_eq!(review_row(h.state()).blocked, None);
+    assert!(ops_hash_count() > n, "an edit is hashed again");
+}
+
+/// Note GD13: a session undone back to the source after an export is not idle: on a folder change it keeps its live
+/// document and its redo, and the folder's saved edit is replaced (said in Messages).
+#[test]
+fn an_undone_session_keeps_its_live_document_on_a_folder_change() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    let old = d.path().join("mods").join(EDIT_MOD);
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(Some(old.clone()));
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    assert!(m.undo_edit());
+    assert!(m.edit.as_ref().unwrap().doc.ops.is_empty());
+    m.messages.clear();
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert!(e.doc.ops.is_empty(), "the live (undone) document stays");
+    assert!(e.history.can_redo(), "its redo stays");
+    assert_eq!(
+        m.messages.first(),
+        Some(&format!(
+            "Export folder changed: the open edit of meshes/x.nif goes to {}; the edits saved there are kept aside at the next save.",
+            nif_doc(&out).display()
+        ))
+    );
+    assert!(m.redo_edit());
+    assert_eq!(op_values(&m)[0].1, 12.5);
+}
+
+/// Note GD21: a recovered autosave with no ops (every edit undone without a folder) is unsaved live state: a folder
+/// change before the next edit keeps it, and the new folder's saved edit is replaced (said in Messages).
+#[test]
+fn a_recovered_empty_autosave_stays_on_a_folder_change() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(m.undo_edit());
+    m.close_edit();
+    assert!(load(&autosave(&d)).unwrap().unwrap().ops.is_empty());
+    m.set_nif_export_root(Some(d.path().join(r"mods\Good")));
+    m.open_edit();
+    assert!(
+        m.edit.as_ref().unwrap().doc.ops.is_empty(),
+        "the empty autosave is recovered"
+    );
+    m.messages.clear();
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert!(e.doc.ops.is_empty(), "the recovered state stays");
+    assert_eq!(
+        m.messages.first(),
+        Some(&format!(
+            "Export folder changed: the open edit of meshes/x.nif goes to {}; the edits saved there are kept aside at the next save.",
+            nif_doc(&out).display()
+        ))
+    );
+}
+
+/// Note GD27: a save that fails leaves the session unsaved: a recovered empty autosave whose save into the folder
+/// fails is still touched, and a folder change keeps it.
+#[test]
+fn a_failed_save_keeps_a_recovered_empty_autosave_touched() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(m.undo_edit());
+    m.close_edit();
+    let good = d.path().join(r"mods\Good");
+    m.set_nif_export_root(Some(good.clone()));
+    m.open_edit();
+    assert!(
+        m.edit.as_ref().unwrap().doc.ops.is_empty(),
+        "the empty autosave is recovered"
+    );
+    std::fs::create_dir_all(nif_doc(&good)).unwrap(); // the save cannot write a directory
+    m.edit_with(|e| e.flush());
+    let e = m.edit.as_ref().unwrap();
+    assert!(e.error.is_some() || m.error.is_some(), "the save failed");
+    assert!(e.touched(), "still unsaved");
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert!(e.doc.ops.is_empty(), "the recovered state stays");
+}
+
+/// Note GD12: back to the folder the edit never left, the block clears and the edit saves there.
+#[test]
+fn going_back_from_a_failed_folder_change_clears_the_block() {
+    let (d, mut m) = export_session();
+    let old = d.path().join("mods").join(EDIT_MOD);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad));
+    gloss(&mut m, 13.5);
+    assert!(review_row(&m).blocked.is_some());
+    m.set_nif_export_root(Some(old.clone()));
+    assert_eq!(review_row(&m).blocked, None);
+    assert_eq!(load(&nif_doc(&old)).unwrap().unwrap().ops.len(), 2);
+}
+
+/// Note GD5: a session with no edits takes the new folder's saved edit (nothing live to keep).
+#[test]
+fn an_idle_session_takes_the_new_folders_edit() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(Some(d.path().join("mods").join(EDIT_MOD)));
+    m.open_edit();
+    m.messages.clear();
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(op_values(&m).len(), 1, "MyOut's edit is loaded");
+    assert_eq!(op_values(&m)[0].1, 7.5);
+    assert!(m.messages.is_empty());
 }
 
 #[test]
@@ -4007,7 +4679,7 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
         h.state().meshes.nif_export_root.as_deref(),
         Some(first.as_path())
     );
-    // Export to ▾ changes: the open edit is saved where it was and reopened from the new folder.
+    // Export to ▾ changes (Note GD5): the open edit moves to the new folder in memory; what was saved stays.
     let want = t.path().join("other");
     h.state_mut().model.set_export_folder(want.clone());
     assert_eq!(h.state().model.export_root(), want);
@@ -4016,11 +4688,19 @@ fn the_app_passes_the_textures_export_folder_to_the_meshes_view() {
     assert_eq!(m.nif_export_root.as_deref(), Some(want.as_path()));
     let e = m.edit.as_ref().unwrap();
     assert!(e.doc_path.starts_with(&want));
-    assert!(e.doc.ops.is_empty(), "the new folder has no edit of x.nif");
+    assert_eq!(e.doc.ops.len(), 1, "the live edit goes with it");
     assert_eq!(
         load(&nif_doc(&first)).unwrap().unwrap().ops.len(),
         1,
         "saved where it was"
+    );
+    let line = format!(
+        "Export folder changed: the edits saved before stay in {}.",
+        nif_doc(&first).display()
+    );
+    assert!(
+        h.state().model.messages.entries().any(|m| m.text == line),
+        "the app logs the meshes' lines in Messages"
     );
 }
 
@@ -6013,6 +6693,121 @@ fn a_skipped_file_lets_the_next_one_win() {
     }
 }
 
+/// GE5: a wrong-typed match key stops PGPatcher 2.3's whole run, so no lower file wins: the shape stays as edited and
+/// the line is red (`is_error`), not amber.
+#[test]
+fn wrong_typed_match_key_is_a_red_line() {
+    let d = pg_files();
+    put(
+        d.path(),
+        "mods/PGP/PBRNifPatcher/z.json",
+        Some(br#"[{"match_diffuse": "white", "nif_filter": 5}]"#),
+    );
+    let mut m = pg_session_in(d.path());
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    in_game(&mut m);
+    let line = r"In game: PGPatcher 2.3 crashes on this JSON: nif_filter is not a string (PBRNifPatcher\z.json).";
+    assert_eq!(notes(&m, shape), [line]);
+    assert!(is_error(line));
+    assert!(!is_warning(line));
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\white.dds");
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label(line);
+}
+
+/// GE11: a crashing JSON anywhere in the load order stops the whole run (T1a, T1b), so every lit shape is red and
+/// unpatched even when the file matches nothing or sits below the file that would patch it. One line per file.
+#[test]
+fn a_crashing_json_anywhere_makes_every_shape_red() {
+    for (file, json, key) in [
+        (
+            "mods/PGP/PBRNifPatcher/z.json",
+            &br#"[{"match_diffuse": 5}]"#[..],
+            "match_diffuse",
+        ),
+        (
+            "mods/Low/PBRNifPatcher/z.json",
+            &br#"[{"match_diffuse": "other", "path_contains": 5}]"#[..],
+            "path_contains",
+        ),
+    ] {
+        let d = pg_files();
+        put(d.path(), file, Some(json));
+        let mut m = pg_session_in(d.path());
+        let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+        in_game(&mut m);
+        let line = format!(
+            r"In game: PGPatcher 2.3 crashes on this JSON: {key} is not a string (PBRNifPatcher\z.json)."
+        );
+        assert_eq!(notes(&m, shape), std::slice::from_ref(&line), "{file}");
+        assert!(is_error(&line));
+        assert_eq!(
+            shown(&m, shape).slots[0].raw,
+            r"textures\white.dds",
+            "{file}"
+        );
+    }
+}
+
+/// One BSTriShape (0) whose BSLSP (1) has no texture set.
+fn shape_without_texture_set() -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", one_tri(s, 1));
+    n.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    n.bytes()
+}
+
+/// GE15: the crash lines come before the eligibility exits, so a shape with no texture set and a PG_IGNORE shape
+/// get them too (PG_IGNORE keeps its own line after them).
+#[test]
+fn a_crashing_json_reaches_shapes_pgpatcher_would_not_patch() {
+    let line = r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json).";
+    for (nif, want) in [
+        (shape_without_texture_set(), vec![line]),
+        (shader_pg_ignore(1), vec![line, PG_IGNORED]),
+    ] {
+        let d = pg_files();
+        put(d.path(), "mods/A/meshes/x.nif", Some(&nif));
+        put(
+            d.path(),
+            "mods/PGP/PBRNifPatcher/z.json",
+            Some(br#"[{"match_diffuse": 5}]"#),
+        );
+        let mut m = pg_session_in(d.path());
+        let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+        in_game(&mut m);
+        assert_eq!(notes(&m, shape), want);
+    }
+}
+
+/// GE14: the set preview reads the same whole-run crash lines: `pg_crashes` starts the JSON read and, once it
+/// lands, returns one line per crashing file (an unrelated `[{"match_diffuse": 5}]` included).
+#[test]
+fn pg_crashes_are_the_meshes_views_crash_lines() {
+    let d = pg_files();
+    let mut m = pg_session_in(d.path());
+    m.pg_crashes();
+    wait_pg(&mut m);
+    assert!(m.pg_crashes().is_empty(), "no crashing file");
+    put(
+        d.path(),
+        "mods/PGP/PBRNifPatcher/z.json",
+        Some(br#"[{"match_diffuse": 5}]"#),
+    );
+    let mut m = pg_session_in(d.path());
+    m.pg_crashes();
+    wait_pg(&mut m);
+    assert_eq!(
+        m.pg_crashes(),
+        [
+            r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json)."
+        ]
+    );
+}
+
 /// PG_IGNORE (value true) on the shape or its shader: In game keeps the edited material and says why; value 0
 /// does not count.
 #[test]
@@ -6070,6 +6865,68 @@ fn shader_pg_ignore(v: u8) -> Vec<u8> {
     );
     n.block("NiBooleanExtraData", W::default().i32(pg).u8(v).0);
     n.bytes()
+}
+
+/// One BSTriShape (0) carrying NiStringExtraData PG_STOCK (3), its BSLSP (1) and texture set (2) naming
+/// `textures\white.dds`.
+fn shape_pg_stock() -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let (s, pg, val) = (n.string("S"), n.string("PG_STOCK"), n.string("{}"));
+    let tri = one_tri(s, 1);
+    // name | extra count 1, the extra | the rest
+    let mut body = tri[..4].to_vec();
+    body.extend(W::default().u32(1).i32(3).0);
+    body.extend(&tri[8..]);
+    n.block("BSTriShape", body);
+    n.block("BSLightingShaderProperty", scenes::lsp(0, 2));
+    n.block(
+        "BSShaderTextureSet",
+        scenes::texset(&["textures\\white.dds"]),
+    );
+    n.block("NiStringExtraData", W::default().i32(pg).i32(val).0);
+    n.bytes()
+}
+
+/// GE6 (R3): a shape with a PG_STOCK block gets the amber revert line; the simulation still runs on it as loaded.
+#[test]
+fn pg_stock_shape_gets_the_revert_line() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&shape_pg_stock()));
+    let mut m = pg_session_in(d.path());
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    let n = notes(&m, shape);
+    assert_eq!(
+        n,
+        [
+            PG_STOCK_REVERT,
+            r"In game: PGPatcher applies PBRNIFPatcher\x.json.",
+            "Not previewed: smooth_angle."
+        ]
+    );
+    assert!(is_warning(PG_STOCK_REVERT), "the revert line is amber");
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
+}
+
+/// GE16 (final review M2): a crashing run never reverts, so a PG_STOCK shape shows the crash line and no revert line.
+#[test]
+fn a_crashing_json_drops_the_pg_stock_revert_line() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&shape_pg_stock()));
+    put(
+        d.path(),
+        "mods/PGP/PBRNifPatcher/z.json",
+        Some(br#"[{"match_diffuse": 5}]"#),
+    );
+    let mut m = pg_session_in(d.path());
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    assert_eq!(
+        notes(&m, shape),
+        [
+            r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json)."
+        ]
+    );
 }
 
 /// PG_IGNORE on the shader counts as on the shape (fix F6); value 0 does not.
@@ -6236,6 +7093,7 @@ fn in_game_cost_on_the_owner_json() {
         fixture("TestNifFile_Skinned_SE.nif"),
         copy("A", 1, false),
         "meshes/x.nif",
+        None,
         None,
     )
     .unwrap();
@@ -6405,7 +7263,14 @@ const ENV_PBR: &str = "Env map scale crashes the game on PBR materials.";
 fn exportable(b: Vec<u8>) -> (tempfile::TempDir, NifEdit) {
     let d = tempfile::tempdir().unwrap();
     let edit_mod = d.path().join("mods").join(EDIT_MOD);
-    let e = NifEdit::open(b, copy("A", 1, false), "meshes/x.nif", Some(&edit_mod)).unwrap();
+    let e = NifEdit::open(
+        b,
+        copy("A", 1, false),
+        "meshes/x.nif",
+        Some(&edit_mod),
+        None,
+    )
+    .unwrap();
     (d, e)
 }
 
@@ -6671,7 +7536,7 @@ fn key_drag_tick_cost_on_a_many_controller_owner_nif() {
             b.read(e).ok()
         })
         .expect("the NIF in the vanilla mesh BSAs");
-    let mut e = NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None).unwrap();
+    let mut e = NifEdit::open(bytes, copy("A", 1, false), "meshes/x.nif", None, None).unwrap();
     // The first controller (free or in a clip) with two float or colour keys or more, on a shape's shader or alpha.
     let (at, clip, keys) = e
         .keys
@@ -7444,6 +8309,7 @@ fn new_clip_ticks_clear_when_the_file_changes() {
             scenes::animated(Some(1), 2),
             copy("B", 2, false),
             "meshes/x.nif",
+            None,
             None,
         )
         .unwrap(),
@@ -8258,6 +9124,7 @@ fn heel_field_follows_undo_and_stays_in_its_session() {
             copy("A", 1, false),
             "meshes/y.nif",
             None,
+            None,
         )
         .unwrap(),
     );
@@ -8328,6 +9195,7 @@ fn heel_notes_for_no_geometry_and_a_negative_height() {
             scenes::heel_scene(),
             copy("A", 1, false),
             "meshes/y.nif",
+            None,
             None,
         )
         .unwrap(),
@@ -8476,6 +9344,9 @@ fn app_edit(w: f32, hgt: f32, gpu: bool) -> (tempfile::TempDir, AppH) {
         None,
         support::session(),
     );
+    let mut model = model;
+    // Note GD5: the app hands the chosen export folder to the meshes each frame
+    model.set_export_folder(d.path().join("mods").join(EDIT_MOD));
     let mut app = SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
     app.meshes.store_path = Some(d.path().join("scan.db"));
@@ -8761,8 +9632,16 @@ fn a_flag_warning_opens_its_list_in_the_next_session() {
     h.run_steps(2);
     assert!(h.query_by_label("Specular").is_none(), "closed, no warning");
     let m = h.state_mut();
-    m.edit =
-        Some(NifEdit::open(typed(0, 1 << 21), copy("A", 1, false), "meshes/y.nif", None).unwrap());
+    m.edit = Some(
+        NifEdit::open(
+            typed(0, 1 << 21),
+            copy("A", 1, false),
+            "meshes/y.nif",
+            None,
+            None,
+        )
+        .unwrap(),
+    );
     let s = shape_named(m.edit.as_ref().unwrap(), "S");
     m.select_edit(Selection::Shape(s));
     h.run_steps(3);
@@ -8855,4 +9734,849 @@ fn string_extra_value_keeps_its_document_shape() {
     assert!(t.contains("\nStr = \"[1, 2]\"\n"), "{t}");
     assert!(t.contains("\nStr = \"\"\n"), "{t}");
     assert_eq!(EditDoc::from_text(&t).unwrap(), d);
+}
+
+// ---- Note GD (DECISIONS review fixes, NIF team) ----
+
+/// GD7: "In game (simulated)" says what it simulates, from the one const: on hover and as the first line under it.
+#[test]
+fn in_game_label_reads_simulated_as() {
+    // GE7: the text names 2.3.1.
+    assert_eq!(
+        pgpsim::SIMULATED_AS,
+        "Simulated as PGPatcher 2.3.1: loose JSON only, no modrules priority, read at the last scan"
+    );
+    let (_d, mut m) = pg_session();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    m.select_edit(Selection::Shape(shape));
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("In game (simulated)").click();
+    h.run_steps(4);
+    wait_pg(h.state_mut());
+    h.run_steps(4);
+    h.get_by_label(pgpsim::SIMULATED_AS);
+    h.get_by_label("In game (simulated)").hover();
+    h.run_steps(30);
+    assert_eq!(
+        h.query_all_by_label(pgpsim::SIMULATED_AS).count(),
+        2,
+        "the line and the hover"
+    );
+}
+
+/// GD4: the shared Undo / Redo name the NIF step they act on (CI23's target, now visible).
+#[test]
+fn undo_target_carries_the_label() {
+    let (_d, mut m) = session(false);
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let t = e.model.lighting[&shader].lighting.shader_type;
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::ShaderType,
+            value: Value::U32(if t == 1 { 0 } else { 1 }),
+            base: Value::U32(t),
+        }],
+        None,
+    );
+    let mut h = view(m);
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(4);
+    let u = sdc_gui::ui::meshes::undo_target(&h.ctx).expect("the NIF history");
+    assert!(u.can_undo && !u.can_redo);
+    assert_eq!(u.undo_label.as_deref(), Some("Set shader type"));
+    assert_eq!(u.redo_label, None);
+    h.state_mut().undo_edit();
+    h.run_steps(4);
+    let u = sdc_gui::ui::meshes::undo_target(&h.ctx).unwrap();
+    assert!(!u.can_undo && u.can_redo);
+    assert_eq!(u.undo_label, None);
+    assert_eq!(u.redo_label.as_deref(), Some("Set shader type"));
+}
+
+/// GD6 (CM27): a PBR material whose slot 5 (RMAOS) is empty renders fully metallic in game: an amber slot warning
+/// (an item-1 row), never blocking.
+#[test]
+fn empty_rmaos_slot_is_a_row() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let a = select(&mut m, "A");
+    let rmaos = |m: &MeshesModel| {
+        m.edit
+            .as_ref()
+            .unwrap()
+            .warnings
+            .iter()
+            .filter(|w| w.text == nif::edit::validate::EMPTY_RMAOS)
+            .map(|w| (w.level, w.target.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert!(rmaos(&m).is_empty(), "not PBR: no warning");
+    let mut h = view(m);
+    h.run_steps(2);
+    set_slsf2(&mut h, a, 1 << 23);
+    // The set has one slot: the warning shows under the Shader tab's slot rows.
+    h.get_by_label(nif::edit::validate::EMPTY_RMAOS);
+    let e = h.state().edit.as_ref().unwrap();
+    let set = e.model.lighting[&e.model.shape(a).unwrap().shader.unwrap()]
+        .texture_set
+        .unwrap();
+    assert_eq!(
+        rmaos(h.state()),
+        [(
+            nif::edit::validate::Level::Warn,
+            Target::Slot { set, slot: 5 }
+        )]
+    );
+    assert_eq!(
+        nif::edit::validate::EMPTY_RMAOS,
+        "Slot 5 (RMAOS) is empty: in game the mesh renders fully metallic"
+    );
+    // GD1: the worklist row; the slot is not a `Field`, so the row names it and has no field.
+    use sdc_gui::model::meshes::{NifLevel, NifTab};
+    let rows: Vec<_> = h
+        .state()
+        .nif_problems()
+        .iter()
+        .filter(|p| p.text == nif::edit::validate::EMPTY_RMAOS)
+        .map(|p| (p.level, p.tab, p.field))
+        .collect();
+    assert_eq!(rows, [(NifLevel::Warning, NifTab::Shader, None)]);
+}
+
+/// Note GD16: a trailer op's row names the field of the shader type in effect when it applied: edit Env map scale,
+/// then change the type to Skin Tint, and the earlier op still reads "Env map scale".
+#[test]
+fn a_trailer_op_keeps_its_type_name_after_a_type_change() {
+    let mut t = direct(scenes::lsp_shape(1, &[1.0]));
+    let sh = select(&mut t, "S");
+    let at =
+        nif::edit::anchor_role(&t.edit.as_ref().unwrap().model, Some(sh), Role::Shader).unwrap();
+    t.edit_push(
+        vec![Op::SetField {
+            at: at.clone(),
+            field: Field::Trailer(0),
+            value: Value::F32(2f32.to_bits()),
+            base: Value::F32(1f32.to_bits()),
+        }],
+        None,
+    );
+    t.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::ShaderType,
+            value: Value::U32(5),
+            base: Value::U32(1),
+        }],
+        None,
+    );
+    let mut h = view(t);
+    h.run_steps(3);
+    h.get_by_label("Pending edits (2)").click();
+    h.run_steps(3);
+    h.get(row("S: Env map scale"));
+    assert!(h.query(row("S: Skin tint R")).is_none());
+}
+
+/// Note GD22: after a source update a type change can conflict and leave the type as it is; a later trailer op is
+/// named by the type really in effect, not by the failed change's.
+#[test]
+fn a_trailer_op_after_a_conflicting_type_change_is_named_by_the_real_type() {
+    let mut t = direct(scenes::lsp_shape(1, &[1.0]));
+    let sh = select(&mut t, "S");
+    let at =
+        nif::edit::anchor_role(&t.edit.as_ref().unwrap().model, Some(sh), Role::Shader).unwrap();
+    t.edit_push(
+        vec![Op::SetField {
+            at: at.clone(),
+            field: Field::ShaderType,
+            value: Value::U32(5),
+            base: Value::U32(1),
+        }],
+        None,
+    );
+    t.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::Trailer(0),
+            value: Value::F32(0.5f32.to_bits()),
+            base: Value::F32(0f32.to_bits()),
+        }],
+        None,
+    );
+    assert_eq!(t.edit.as_ref().unwrap().op_label_at(1), "S: Skin tint R");
+    // the source is now Hair tint: the change from Env map (base 1) conflicts and the type stays 6
+    t.edit_with(|e| {
+        e.reload_source(scenes::lsp_shape(6, &[0.1, 0.2, 0.3]))
+            .unwrap()
+    });
+    let e = t.edit.as_ref().unwrap();
+    assert!(
+        matches!(e.outcomes[0], nif::edit::Outcome::Conflict(_)),
+        "{:?}",
+        e.outcomes
+    );
+    assert_eq!(e.op_label_at(1), "S: Hair tint R");
+}
+
+/// Note GD15: two texture sets with an empty RMAOS are two worklist rows; only repeats of one target merge.
+#[test]
+fn two_sets_with_empty_rmaos_are_two_rows() {
+    let mut m = direct(scenes::shared_alpha_and_set());
+    let (a, b) = (select(&mut m, "A"), select(&mut m, "B"));
+    let set_of = |m: &MeshesModel, s: u32| {
+        let e = m.edit.as_ref().unwrap();
+        e.model.lighting[&e.model.shape(s).unwrap().shader.unwrap()]
+            .texture_set
+            .unwrap()
+    };
+    for s in [a, b] {
+        let e = m.edit.as_ref().unwrap();
+        let at = nif::edit::anchor_role(&e.model, Some(s), Role::Shader).unwrap();
+        let shader = e.model.shape(s).unwrap().shader.unwrap();
+        let base = e.model.lighting[&shader].lighting.slsf2;
+        let op = Op::SetBits {
+            at,
+            field: Field::Slsf2,
+            mask: 1 << 23,
+            value: 1 << 23,
+            base,
+        };
+        m.edit_push(vec![op], None);
+    }
+    let rows = |m: &MeshesModel| {
+        m.nif_problems()
+            .iter()
+            .filter(|p| p.text == nif::edit::validate::EMPTY_RMAOS)
+            .count()
+    };
+    assert_eq!(rows(&m), 1, "one shared set: one row");
+    // A path edit on B copies the shared set for B: two sets, each with its own empty slot 5.
+    let e = m.edit.as_ref().unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set_of(&m, b)].raw.slots[0]).into_owned();
+    let at = nif::edit::anchor_shape(&e.model, b);
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at,
+            slot: 0,
+            path: "textures\\b.dds".into(),
+            base,
+        }],
+        None,
+    );
+    assert_ne!(set_of(&m, a), set_of(&m, b), "B has its own set");
+    assert_eq!(rows(&m), 2);
+}
+
+/// GD1: every warning and blocker of the open NIF edit is one worklist entry; the idle and no-folder reasons are not.
+#[test]
+fn nif_warnings_are_problems() {
+    use nif::edit::Owner;
+    use sdc_gui::model::meshes::{NifLevel, NifProblem, NifTab};
+    // A read-only session (NO_EXPORT_FOLDER) and an untouched one (NO_EDITS) list nothing.
+    let mut m = direct(scenes::shader_ctrl(false));
+    assert!(m.nif_problems().is_empty(), "{:?}", m.nif_problems());
+    let (_d, mut s) = session(false);
+    s.open_edit();
+    assert_eq!(s.edit.as_ref().unwrap().blocked.as_deref(), Some(NO_EDITS));
+    assert!(s.nif_problems().iter().all(|p| p.level != NifLevel::Blocks));
+    let idle = s.nif_problems();
+    assert!(
+        std::sync::Arc::ptr_eq(&idle, &s.nif_problems()),
+        "cached on the edit's state (rule 9.1)"
+    );
+
+    // One controller warning (Warn) and one validation error that is also a blocker (Error, ALWAYS_BLOCK).
+    let sh = select(&mut m, "S");
+    let e = m.edit.as_ref().unwrap();
+    let shader = e.model.shape(sh).unwrap().shader.unwrap();
+    let lt = e.model.lighting[&shader].lighting.clone();
+    let ctrl_at = nif::edit::anchor_role(
+        &e.model,
+        Some(sh),
+        Role::Ctrl {
+            owner: Owner::Shader,
+            class: "BSLightingShaderPropertyFloatController".into(),
+            var: Some(11),
+            nth: 0,
+        },
+    )
+    .unwrap();
+    let freq = e.model.ctrls[&ctrl_at.block].frequency;
+    let shader_at = nif::edit::anchor_role(&e.model, Some(sh), Role::Shader).unwrap();
+    m.edit_push(
+        vec![
+            Op::SetField {
+                at: ctrl_at,
+                field: Field::Frequency,
+                value: Value::F32(0f32.to_bits()),
+                base: Value::F32(freq.to_bits()),
+            },
+            Op::SetBits {
+                at: shader_at,
+                field: Field::Slsf1,
+                mask: 1 << 21,
+                value: 1 << 21,
+                base: lt.slsf1,
+            },
+        ],
+        None,
+    );
+    let p = m.nif_problems();
+    let path = "meshes/x.nif".to_string();
+    assert_eq!(
+        *p,
+        [
+            NifProblem {
+                level: NifLevel::Blocks,
+                path: path.clone(),
+                text: nif::edit::validate::SKIN_TINT_TYPE.into(),
+                tab: NifTab::Shader,
+                field: Some(Field::Slsf1),
+            },
+            NifProblem {
+                level: NifLevel::Warning,
+                path,
+                text: "Frequency ≤ 0 freezes the controller".into(),
+                tab: NifTab::Controllers,
+                field: Some(Field::Frequency),
+            },
+        ],
+        "one row each, the blocker once"
+    );
+
+    // A trailer op's row names the field from the shader type it applies to.
+    let mut t = direct(scenes::lsp_shape(1, &[1.0]));
+    let sh = select(&mut t, "S");
+    let at =
+        nif::edit::anchor_role(&t.edit.as_ref().unwrap().model, Some(sh), Role::Shader).unwrap();
+    t.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::Trailer(0),
+            value: Value::F32(2f32.to_bits()),
+            base: Value::F32(5f32.to_bits()), // not the file's 1.0: a conflict
+        }],
+        None,
+    );
+    let p = t.nif_problems();
+    assert_eq!(p.len(), 1, "{p:?}");
+    assert_eq!(p[0].level, NifLevel::Blocks);
+    assert!(
+        p[0].text
+            .starts_with("S: Env map scale: changed in the source"),
+        "{}",
+        p[0].text
+    );
+    assert_eq!(
+        (p[0].tab, p[0].field),
+        (NifTab::Shader, Some(Field::Trailer(0)))
+    );
+
+    // The worklist's fix: the row's tab and field. A lit shape is selected, so the Shader tab would show "Shader type".
+    let (shape, _) = lit_shape(s.edit.as_ref().unwrap());
+    s.select_edit(Selection::Shape(shape));
+    s.show_nif_tab("meshes/x.nif", NifTab::Alpha, Some(Field::AlphaThreshold));
+    assert_eq!(
+        s.nif_tab,
+        Some((NifTab::Alpha, Some(Field::AlphaThreshold)))
+    );
+    let mut h = view(s);
+    h.run_steps(4);
+    assert!(h.state().nif_tab.is_none(), "the panel took the request");
+    assert!(
+        h.query_by_label("Texture slots").is_none() && h.query_by_label("Shader type").is_none(),
+        "the Alpha tab shows, not the Shader tab"
+    );
+}
+
+/// Note GD14: a worklist fix focuses its field whatever widget draws it: the Alpha threshold slider, the shader type
+/// combo, a flag list (opened for it) and a colour's first channel.
+#[test]
+fn show_nif_tab_focuses_each_field_kind() {
+    use sdc_gui::model::meshes::NifTab;
+    let mut s = direct(scenes::shared_alpha_and_set());
+    let (shape, _) = lit_shape(s.edit.as_ref().unwrap());
+    s.select_edit(Selection::Shape(shape));
+    let mut h = view(s);
+    h.run_steps(3);
+    for (tab, field, role, label) in [
+        (
+            NifTab::Alpha,
+            Field::AlphaThreshold,
+            AkRole::Slider,
+            "Threshold",
+        ),
+        (
+            NifTab::Shader,
+            Field::ShaderType,
+            AkRole::ComboBox,
+            "Shader type",
+        ),
+        (NifTab::Shader, Field::Slsf1, AkRole::CheckBox, "Specular"),
+        (
+            NifTab::Shader,
+            Field::EmissiveColor(0),
+            AkRole::SpinButton,
+            "Emissive colour R",
+        ),
+    ] {
+        h.state_mut().show_nif_tab("meshes/x.nif", tab, Some(field));
+        h.run_steps(4);
+        let n = h.get_by_role_and_label(role, label);
+        assert!(
+            n.accesskit_node().is_focused(),
+            "{field:?}: {label} has the focus"
+        );
+    }
+}
+
+/// GD1: the Problems list's fix sets `AppModel::nif_tab_request`; the app switches to the Meshes view and opens the tab.
+#[test]
+fn nif_tab_request_switches_to_the_meshes_view() {
+    use sdc_gui::model::meshes::NifTab;
+    let (_d, mut h) = app_edit(1400.0, 900.0, false);
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    h.state_mut().model.nif_tab_request = Some(("meshes/x.nif".into(), NifTab::Alpha, None));
+    h.run_steps(6);
+    assert!(sdc_gui::ui::header::meshes_view_active(&h.ctx));
+    assert!(h.state().model.nif_tab_request.is_none());
+    assert!(h.state().meshes.nif_tab.is_none(), "the panel took it");
+    assert!(
+        h.query_by_label("Texture slots").is_none() && h.query_by_label("Shader type").is_none()
+    );
+}
+
+// ---- Note GD8: clip timing ----
+
+/// An exportable session on `scenes::animated` (S's shader chain free), its edit open.
+fn timing_session() -> (tempfile::TempDir, MeshesModel) {
+    let d = instance("+sdc NIF Edits\n+A\n");
+    std::fs::create_dir_all(d.path().join("mods").join(EDIT_MOD)).unwrap();
+    put(
+        d.path(),
+        "mods/A/meshes/x.nif",
+        Some(&scenes::animated(Some(1), 2)),
+    );
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    m.open_edit();
+    assert_eq!(m.error, None);
+    (d, m)
+}
+
+/// A SetSequenceTiming on the converted clip SpecialIdle.
+fn timing(m: &MeshesModel, cycle: u32, freq: f32, start: f32, stop: f32) -> Op {
+    let e = m.edit.as_ref().unwrap();
+    Op::SetSequenceTiming {
+        at: nif::edit::anchor_role(&e.model, None, Role::Root).unwrap(),
+        name: nif::edit::CONVERT_NAME.into(),
+        nth: 0,
+        cycle,
+        freq,
+        start,
+        stop,
+    }
+}
+
+/// (cycle, frequency, start, stop) of the first clip in `b`, as a reload reads them.
+fn clip_timing(b: &[u8]) -> (u32, f32, f32, f32) {
+    let s = &nif::model::read_model(b).unwrap().sequences[0];
+    (s.cycle, s.frequency, s.start, s.stop)
+}
+
+#[test]
+fn set_sequence_timing_round_trips() {
+    let (d, mut m) = timing_session();
+    let seq = convert(&mut m);
+    m.edit_with(|e| e.set_playing(Playing::Clip(seq)));
+    let before = m.edit.as_ref().unwrap().patched.to_vec();
+    let op = timing(&m, 1, 2.0, 0.25, 0.75);
+    m.edit_push(vec![op.clone()], None);
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes.last(), Some(&nif::edit::Outcome::Applied));
+    assert_eq!(e.history.undo_label(), Some("Set clip timing"));
+    assert_eq!(clip_timing(&e.patched), (1, 2.0, 0.25, 0.75));
+    assert_eq!(
+        e.playing,
+        Playing::Clip(seq),
+        "the Preview stays on the clip"
+    );
+    assert_eq!(e.blocked, None);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let file = std::fs::read(exported(&d)).unwrap();
+    assert_eq!(clip_timing(&file), (1, 2.0, 0.25, 0.75));
+    let saved = load(&m.edit.as_ref().unwrap().doc_path).unwrap().unwrap();
+    assert_eq!(saved.ops.last().map(|d| &d.op), Some(&op));
+    m.edit_with(|e| {
+        e.undo();
+    });
+    assert_eq!(
+        *m.edit.as_ref().unwrap().patched,
+        before,
+        "Undo restores the bytes"
+    );
+}
+
+#[test]
+fn invalid_timing_is_a_warning_entry() {
+    use sdc_gui::model::meshes::{NifLevel, NifTab};
+    let (_d, mut m) = timing_session();
+    convert(&mut m);
+    let good = m.edit.as_ref().unwrap().patched.to_vec();
+    for (op, why) in [
+        (timing(&m, 0, 1.0, 0.75, 0.25), "start is after stop"),
+        (timing(&m, 0, 0.0, 0.0, 1.0), "frequency 0 freezes the clip"),
+        (
+            timing(&m, 0, f32::NAN, 0.0, 1.0),
+            "times must be finite numbers",
+        ),
+        (
+            timing(&m, 3, 1.0, 0.0, 1.0),
+            "the cycle must be Loop, Reverse or Clamp",
+        ),
+    ] {
+        m.edit_push(vec![op], None);
+        let e = m.edit.as_ref().unwrap();
+        let text = format!("Clip SpecialIdle timing: {why}; the clip keeps the timing it had");
+        let rows: Vec<_> = e
+            .problems
+            .iter()
+            .filter(|p| p.text == text)
+            .map(|p| (p.level, p.tab))
+            .collect();
+        assert_eq!(rows, [(NifLevel::Warning, NifTab::Controllers)], "{why}");
+        assert!(e.outcomes.iter().all(|o| *o == nif::edit::Outcome::Applied));
+        assert_eq!(*e.patched, good, "{why}: the clip keeps its timing");
+        assert_eq!(e.blocked, None, "{why}: the rest still exports");
+        m.edit_with(|e| {
+            e.undo();
+        });
+    }
+}
+
+/// CR6 as GD8 rules it: reverting the Convert takes the clip's later timing with it, and its row says so.
+#[test]
+fn reverting_a_convert_drops_its_clip_timing() {
+    let (_d, mut m) = timing_session();
+    convert(&mut m);
+    let op = timing(&m, 2, 1.0, 0.0, 0.5);
+    m.edit_push(vec![op], None);
+    assert_eq!(m.edit.as_ref().unwrap().timing_dependents(0), vec![1]);
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Pending edits (2)").click();
+    h.run_steps(3);
+    h.get_by_label("S: Convert to clip SpecialIdle (Revert also removes its clip timing)");
+    h.get_by_label_contains("Revert 1: ").click();
+    h.run_steps(3);
+    let e = h.state().edit.as_ref().unwrap();
+    assert!(e.doc.ops.is_empty(), "{:?}", e.doc.ops());
+    assert!(e.outcomes.is_empty());
+}
+
+/// The Clips section's timing fields: a typed frequency is one SetSequenceTiming with the clip's other values.
+#[test]
+fn clip_timing_fields_push_one_op() {
+    let mut m = direct(scenes::managed_clip());
+    let e = m.edit.as_ref().unwrap();
+    let b = e.model.shapes[0].block;
+    let s = e.model.sequences[0].clone();
+    let (name, nth) = nif::edit::clip_key(&e.patched, &e.model, s.block).unwrap();
+    let at = nif::edit::anchor_role(&e.model, None, Role::Root).unwrap();
+    m.select_edit(Selection::Shape(b));
+    m.edit_with(|e| e.set_playing(Playing::Clip(s.block)));
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_label("Controllers tab").click();
+    h.run_steps(3);
+    h.get_by_label_contains("Clips (2 · showing").click();
+    h.run_steps(3);
+    let id = h.get_by_label("Clip frequency").accesskit_node().id();
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get(egui_kittest::kittest::by().predicate(move |n| n.id() == id))
+        .type_text("2.5");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        ops(h.state()),
+        vec![Op::SetSequenceTiming {
+            at,
+            name,
+            nth,
+            cycle: s.cycle,
+            freq: 2.5,
+            start: s.start,
+            stop: s.stop,
+        }]
+    );
+    h.get_by_role_and_label(AkRole::ComboBox, "Clip cycle");
+}
+
+/// The Time slider's span follows a clip's new timing (`anim_end`'s math: a Reverse cycle counts both legs).
+#[test]
+fn clip_timing_moves_the_time_slider() {
+    let plain = with_uv_ctrl(&fixture("TestNifFile_Skinned_SE.nif"));
+    let (_d, mut m, _cmds) = session_on(&plain);
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    let at = nif::edit::anchor_role(&e.model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::ConvertChainToClips {
+            at,
+            name: nif::edit::CONVERT_NAME.into(),
+        }],
+        None,
+    );
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.outcomes, vec![nif::edit::Outcome::Applied]);
+    let s = e.model.sequences[0].clone();
+    m.edit_with(|e| e.set_playing(Playing::Clip(s.block)));
+    m.tick_anim(0.0);
+    let span = (s.stop - s.start) / s.frequency;
+    assert!(span > 0.0);
+    assert_eq!(m.v3.clock.unwrap().range, (0.0, span));
+    let op = timing(&m, 1, 4.0, s.start, s.stop);
+    m.edit_push(vec![op], None);
+    m.tick_anim(0.0);
+    assert_eq!(
+        m.v3.clock.unwrap().range,
+        (0.0, (s.stop - s.start) * 2.0 / 4.0)
+    );
+}
+
+// ---- Note GD2: Export NIF is a Review row ----
+
+/// The one Review row (today only the open edit has one).
+fn review_row(m: &MeshesModel) -> sdc_gui::model::meshes::NifReviewRow {
+    let rows = m.nif_review_rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows.into_iter().next().unwrap()
+}
+
+fn sha(b: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(b).into()
+}
+
+/// Note GD17: SHA-256 of `meshes\x.nif` as the footer's Export NIF (`export_edit`) wrote it at c42c2454, for
+/// `export_session` plus `add_then_remove_ctrl(.., true)` (log: `r1-golden-capture-c42c2454.txt` in the ledger).
+const EXPORT_GOLDEN_SHA256: &str =
+    "30da078ae7184525c8427204a3e0bd133f86409533e1645329680a91032b89ac";
+
+#[test]
+fn nif_review_rows_list_the_pending_edit() {
+    use sdc_gui::model::meshes::NifReviewRow;
+    let (d, mut m) = export_session();
+    m.open_edit();
+    assert!(m.nif_review_rows().is_empty(), "no edits, no row");
+    add_then_remove_ctrl(&mut m, true);
+    let e = m.edit.as_ref().unwrap();
+    let n = nif::header::Header::parse(&e.source).unwrap().sizes.len() as u32;
+    let blocks = |b: &[u8]| nif::header::Header::parse(b).unwrap().sizes.len();
+    let out = nif::edit::compact(&e.patched, n).unwrap();
+    let dropped = blocks(&e.patched) - blocks(&out);
+    assert!(dropped >= 2, "{dropped}");
+    assert_eq!(
+        review_row(&m),
+        NifReviewRow {
+            path: "meshes/x.nif".into(),
+            mod_name: EDIT_MOD.into(),
+            blocked: None,
+            foreign: None,
+            answer: None,
+            compaction: Some(dropped),
+        }
+    );
+    assert_eq!(m.export_nif_edits(), Ok(1));
+    assert_eq!(std::fs::read(exported(&d)).unwrap(), out);
+    // Note GD17: the fixed baseline, captured from the footer's export (`export_edit`) at c42c2454; a change in the
+    // shared writer or the compaction changes it, which the twin check below cannot see
+    assert_eq!(
+        sha256_hex(&std::fs::read(exported(&d)).unwrap()),
+        EXPORT_GOLDEN_SHA256,
+        "the Review export writes the footer's bytes"
+    );
+    // the NIF-side twin: the footer's path (export_edit) writes the same bytes for the same edits
+    let (d2, mut m2) = export_session();
+    m2.open_edit();
+    add_then_remove_ctrl(&mut m2, true);
+    assert!(matches!(
+        m2.export_edit(None),
+        ExportOutcome::Written { .. }
+    ));
+    assert_eq!(
+        std::fs::read(exported(&d2)).unwrap(),
+        out,
+        "the bytes the footer's export wrote"
+    );
+    assert!(m.nif_review_rows().is_empty(), "exported: nothing pending");
+    // after the write: Re-run PGPatcher is a worklist row
+    use sdc_gui::model::meshes::NifLevel;
+    assert!(m
+        .nif_problems()
+        .iter()
+        .any(|p| p.level == NifLevel::Warning && p.text == RERUN_PGPATCHER));
+}
+
+/// Note GD30 (final review M2): a malformed edit document's error names its file, as a read error does.
+#[test]
+fn a_malformed_edit_document_names_its_file() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("bad.toml");
+    std::fs::write(&p, b"not = [toml").unwrap();
+    let e = load(&p).unwrap_err();
+    assert!(e.starts_with(&format!("{}: ", p.display())), "{e}");
+}
+
+/// Note GD30 (final review M3): a block reason no row covers gets its row even when another row already blocks: a
+/// refused op and a failed folder change are two rows.
+#[test]
+fn a_failed_folder_change_is_a_row_beside_a_refused_op() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    let at =
+        nif::edit::anchor_role(&m.edit.as_ref().unwrap().model, Some(shape), Role::Shader).unwrap();
+    m.edit_push(
+        vec![Op::SetBits {
+            at,
+            field: Field::ShaderType,
+            mask: 1,
+            value: 1,
+            base: 0,
+        }],
+        None,
+    );
+    use sdc_gui::model::meshes::NifLevel;
+    // Note GD33: the refused op's own row, never export_block's "1 edit cannot be applied." summary beside it
+    let refused = |rows: &[sdc_gui::model::meshes::NifProblem]| {
+        rows.iter()
+            .filter(|p| p.level == NifLevel::Blocks && p.text.contains("not a bit field"))
+            .count()
+    };
+    let rows = m.nif_problems();
+    assert_eq!((rows.len(), refused(&rows)), (1, 1), "{rows:?}");
+    let old = d.path().join("mods").join(EDIT_MOD);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    m.set_nif_export_root(Some(bad.clone()));
+    let rows = m.nif_problems();
+    let head = format!("could not open the edit document in {}: ", bad.display());
+    assert_eq!((rows.len(), refused(&rows)), (2, 1), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|p| p.level == NifLevel::Blocks && p.text.starts_with(&head)),
+        "{rows:?}"
+    );
+    m.set_nif_export_root(Some(old));
+    let rows = m.nif_problems();
+    assert_eq!((rows.len(), refused(&rows)), (1, 1), "{rows:?}");
+}
+
+/// Note GD30 (final review M5): a folder change closes an open guard dialog (its diff was the old folder's file).
+#[test]
+fn a_folder_change_closes_the_guard_dialog() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"theirs").unwrap();
+    assert!(matches!(m.export_edit(None), ExportOutcome::Guard { .. }));
+    assert!(m.edit.as_ref().unwrap().guard.is_some());
+    m.set_nif_export_root(Some(d.path().join(r"mods\Good")));
+    assert_eq!(m.edit.as_ref().unwrap().guard, None);
+}
+
+/// Note GD29: a Review answer does not outlive its Review: a folder change, closing the edit or `clear_nif_answers`
+/// (Review closed, project changed) drops it, and the row asks again, even for the same bytes.
+#[test]
+fn a_review_answer_is_dropped_by_a_folder_change_or_a_close() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let junk = |p: &Path| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"junk").unwrap();
+    };
+    junk(&exported(&d));
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    assert_eq!(review_row(&m).answer, Some(GuardChoice::Overwrite));
+    let good = d.path().join(r"mods\Good");
+    junk(&good.join(r"meshes\x.nif"));
+    m.set_nif_export_root(Some(good.clone()));
+    assert_eq!(m.nif_export_root.as_deref(), Some(good.as_path()));
+    assert_eq!(review_row(&m).answer, None, "a folder change asks again");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    m.close_edit();
+    m.open_edit();
+    assert_eq!(review_row(&m).answer, None, "closing the edit asks again");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    m.clear_nif_answers();
+    assert_eq!(review_row(&m).answer, None);
+}
+
+#[test]
+fn a_foreign_nif_waits_for_an_answer_on_its_row() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"junk").unwrap();
+    let r = review_row(&m);
+    assert_eq!(
+        (r.foreign, r.answer, r.blocked),
+        (Some(sha(b"junk")), None, None)
+    );
+    let skipped = |why: &str| Err(format!("NIF edits skipped: meshes/x.nif: {why}"));
+    assert_eq!(m.export_nif_edits(), skipped(NIF_UNANSWERED));
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::KeepTheirs, sha(b"junk"));
+    assert_eq!(review_row(&m).answer, Some(GuardChoice::KeepTheirs));
+    assert_eq!(m.export_nif_edits(), skipped(NIF_KEPT));
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk");
+    assert_eq!(review_row(&m).answer, None, "an answer is used once");
+    // an Overwrite given for bytes that changed since is not applied
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk"));
+    std::fs::write(&p, b"junk2").unwrap();
+    let r = review_row(&m);
+    assert_eq!(r.blocked.as_deref(), Some(NIF_CHANGED_SINCE));
+    assert_eq!(r.answer, None);
+    assert_eq!(m.export_nif_edits(), skipped(NIF_CHANGED_SINCE));
+    assert_eq!(std::fs::read(&p).unwrap(), b"junk2");
+    m.set_nif_answer("meshes/x.nif", GuardChoice::Overwrite, sha(b"junk2"));
+    assert_eq!(m.export_nif_edits(), Ok(1));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), *e.patched);
+    assert_eq!(e.guard, None, "the Review path never opens the dialog");
+}
+
+#[test]
+fn a_blocked_nif_row_is_skipped_by_the_export() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let r = review_row(&m);
+    assert_eq!(r.blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    assert_eq!(r.mod_name, "");
+    assert_eq!(
+        m.export_nif_edits(),
+        Err(format!(
+            "NIF edits skipped: meshes/x.nif: {NO_EXPORT_FOLDER}"
+        ))
+    );
 }

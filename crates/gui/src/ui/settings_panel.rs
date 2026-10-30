@@ -1105,6 +1105,9 @@ fn used_by(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
             if u.more > 0 {
                 ui.weak(format!("and {} more", u.more));
             }
+            if !u.rows.is_empty() && ui.link("Show in Meshes").clicked() {
+                model.show_in_meshes = Some(u.tex.clone()); // Note GC: app.rs switches the view
+            }
         });
 }
 

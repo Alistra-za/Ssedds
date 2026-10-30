@@ -592,8 +592,8 @@ pub fn keys_text(id: &str) -> String {
 /// Whether action `a` can run now. A20: Undo / Redo follow the NIF history while a NIF edit is open.
 fn enabled(a: &Action, model: &AppModel, ctx: &egui::Context) -> bool {
     match (a.id, super::meshes::undo_target(ctx)) {
-        ("undo", Some((u, _))) => u,
-        ("redo", Some((_, r))) => r,
+        ("undo", Some(t)) => t.can_undo,
+        ("redo", Some(t)) => t.can_redo,
         _ => (a.enabled)(model),
     }
 }

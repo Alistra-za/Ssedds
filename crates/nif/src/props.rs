@@ -35,6 +35,65 @@ pub enum LightingTrailer {
     },
 }
 
+impl LightingTrailer {
+    /// [`names`](Self::names) for shader type `t` (the types `read_lighting` gives a trailer).
+    pub fn names_of_type(t: u32) -> &'static [&'static str] {
+        let trailer = match t {
+            1 => LightingTrailer::EnvMap { scale: 0.0 },
+            5 => LightingTrailer::SkinTint([0.0; 3]),
+            6 => LightingTrailer::HairTint([0.0; 3]),
+            7 => LightingTrailer::ParallaxOcc {
+                max_passes: 0.0,
+                scale: 0.0,
+            },
+            11 => LightingTrailer::MultiLayer {
+                inner_thickness: 0.0,
+                refraction_scale: 0.0,
+                inner_texture_scale: [0.0; 2],
+                envmap_strength: 0.0,
+            },
+            14 => LightingTrailer::SparkleSnow([0.0; 4]),
+            16 => LightingTrailer::Eye {
+                cubemap_scale: 0.0,
+                left_center: [0.0; 3],
+                right_center: [0.0; 3],
+            },
+            _ => LightingTrailer::None,
+        };
+        trailer.names()
+    }
+
+    /// The trailer floats' names in file order (`Field::Trailer(n)` is the n-th); empty for a type without a trailer.
+    pub fn names(&self) -> &'static [&'static str] {
+        match self {
+            LightingTrailer::None => &[],
+            LightingTrailer::EnvMap { .. } => &["Env map scale"],
+            LightingTrailer::SkinTint(_) => &["Skin tint R", "Skin tint G", "Skin tint B"],
+            LightingTrailer::HairTint(_) => &["Hair tint R", "Hair tint G", "Hair tint B"],
+            LightingTrailer::ParallaxOcc { .. } => &["POM max passes", "POM scale"],
+            LightingTrailer::MultiLayer { .. } => &[
+                "MLP inner thickness",
+                "MLP refraction scale",
+                "MLP inner scale U",
+                "MLP inner scale V",
+                "MLP env map strength",
+            ],
+            LightingTrailer::SparkleSnow(_) => {
+                &["Sparkle R", "Sparkle G", "Sparkle B", "Sparkle A"]
+            }
+            LightingTrailer::Eye { .. } => &[
+                "Eye cubemap scale",
+                "Left eye X",
+                "Left eye Y",
+                "Left eye Z",
+                "Right eye X",
+                "Right eye Y",
+                "Right eye Z",
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LightingParams {

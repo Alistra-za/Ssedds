@@ -1,4 +1,4 @@
-//! 01 §1.3 `matchedPath` (the PBR prefix), `rename`, and `pbr:false`.
+//! 01 §1.3 `matchedPath` (the PBR prefix), `rename`, and the ignored `pbr` key (Note GE3).
 mod common;
 use common::{shape, D, N};
 use pgpsim::{matched_path, prepare};
@@ -85,10 +85,10 @@ fn matched_path_table() {
         Some("textures\\pbr\\landscape\\rock01"),
     );
     case(
-        "pbr:false matches with an empty prefix",
+        "pbr:false is ignored since PGPatcher 2.0 (Note GE3)",
         json!({"match_diffuse": "rock01_d", "pbr": false}),
         &[D],
-        Some(""),
+        Some("textures\\pbr\\landscape\\rock01_d"),
     );
     case(
         "no rule hits",

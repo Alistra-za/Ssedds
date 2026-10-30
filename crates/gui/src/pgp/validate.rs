@@ -5,7 +5,7 @@ use super::schema::SCHEMA_JSON;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-/// PGPatcher's complex material schema (upstream `0176567`, identical at 2.2.0), vendored byte for byte.
+/// PGPatcher's complex material schema (tag 2.3.1, with the `disabled` key; Note GE9), vendored byte for byte.
 pub const CM_SCHEMA_JSON: &str = include_str!("../../assets/complex_material.schema.json");
 
 pub const KEYWORDS: &[&str] = &[

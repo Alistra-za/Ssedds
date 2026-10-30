@@ -1,5 +1,6 @@
-//! PGPatcher 1.2.0 TruePBR patch, simulated in memory for the 3D preview (P1 spec §2.1), plus the 2.2.0 `alphaprop_*` keys.
-//! Rules: the PGPatcher 1.2.0 TruePBR rule notes ("01", NIF team plan p1). Pure: no GPU, no egui, no IO.
+//! PGPatcher 2.3.1 TruePBR patch, simulated in memory for the 3D preview (P1 spec §2.1; Note GE).
+//! Rules: the PGPatcher 1.2.0 TruePBR rule notes ("01", NIF team plan p1) with the 2.x changes of the pgp22 research
+//! (`[Src 2.2.0 TP:<line>]`; that file is unchanged at 2.3.1). Pure: no GPU, no egui, no IO.
 //! It stops at "the NIF as PGPatcher leaves it", a `MaterialState`; CS's load-time remap belongs to render3d.
 mod check;
 mod index;
@@ -17,6 +18,10 @@ pub use nif::material::MaterialState;
 pub use prep::prepare;
 use serde_json::{Map, Value};
 
+/// What In game (simulated) models, said once (Note GD7): the edit panel's hover and first line read it.
+pub const SIMULATED_AS: &str =
+    "Simulated as PGPatcher 2.3.1: loose JSON only, no modrules priority, read at the last scan";
+
 pub struct SimInput<'a> {
     /// One PGPatcher entry exactly as sdc writes it (`pgp::writer::entry_node(..).to_value()`).
     pub entry: &'a Value,
@@ -33,14 +38,14 @@ pub struct SimInput<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Badge {
-    /// A key the preview does not show (geometry ops, 1.2.0-only keys); the value is the key name.
+    /// A key the preview does not show (geometry ops); the value is the key name.
     NotPreviewed(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimResult {
     NoMatch,
-    /// `matched_path` is "" for `pbr:false` (scalars only). `material.hidden` is set by `delete`.
+    /// `material.hidden` is set by `delete`.
     Patched {
         material: MaterialState,
         matched_path: String,
@@ -48,6 +53,18 @@ pub enum SimResult {
     },
     /// PGPatcher would skip this shape for this file; the shape keeps `source`.
     Skip(String),
+    /// PGPatcher 2.3 throws on this file and stops the whole run (`CRASHES: <key> is not a string`, or `an array`); the shape
+    /// keeps `source` (Note GE5).
+    Error(String),
+}
+
+/// The start of every `SimResult::Error` text (owner ruling R4, Note GE5).
+pub const CRASHES: &str = "PGPatcher 2.3 crashes on this JSON";
+
+/// The crash text of a prepared entry with a non-string match key, `None` otherwise (Note GE11). 2.3.1 reads these
+/// keys for every entry at load or on the first shape it checks, so one such entry stops the whole run.
+pub fn crash_of(prepared: &Value) -> Option<String> {
+    prepared.as_object().and_then(check::match_key_error)
 }
 
 /// One entry (sdc's case): prepare, match (with `nif_filter`), then patch.

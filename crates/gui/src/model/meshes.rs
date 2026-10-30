@@ -13,10 +13,7 @@ use modscan::pgp::DeriveCheck;
 use modscan::plugin_store::{MeshUse, MissingRef};
 use modscan::plugins::PluginStats;
 use modscan::scan::{Report, Source};
-use modscan::store::{
-    check_code, DerivedState, ModRow, NifRow, ShapeView, Store, TexResolution, KIND_MOD,
-    KIND_SEPARATOR,
-};
+use modscan::store::{check_code, DerivedState, ModRow, NifRow, ShapeView, Store, TexResolution};
 use modscan::ScanError;
 use render3d::perf_log;
 use rusqlite::OptionalExtension;
@@ -32,6 +29,9 @@ pub mod edit_doc;
 pub mod export;
 pub mod nif_edit;
 pub mod pg_entries;
+pub mod worklist;
+pub use nif_edit::NifReviewRow;
+pub use worklist::{NifLevel, NifProblem, NifTab};
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
@@ -150,7 +150,8 @@ impl NifFilter {
             NifFilter::Wins => n.wins,
             NifFilter::Overridden => !n.wins,
             NifFilter::Conflicted => n.n_copies > 1,
-            NifFilter::Problems => n.problem.is_some(),
+            // Note GC: an LE mesh is a problem too (it needs optimising for SSE).
+            NifFilter::Problems => n.problem.is_some() || n.le_mesh,
         }
     }
 }
@@ -165,24 +166,28 @@ pub fn display_path(p: &str) -> &str {
     }
 }
 
-/// Fewest typed characters before All meshes searches the store.
-pub const ALL_MIN_CHARS: usize = 3;
-/// Most rows All meshes shows; the store is asked for one more to tell that it was cut.
-pub const ALL_LIMIT: usize = 2000;
-/// How long the path filter must be left alone before All meshes queries the store.
-pub const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
+/// A list row as the store reads it: the copy and the name of the mod that holds it.
+pub type NifEntry = (NifRow, String);
+/// What the worker reads for the list (Note GC): every winner, and every losing copy.
+pub type RowsRead = Result<(Vec<NifEntry>, Vec<NifEntry>), String>;
 
-/// One line of the Mods panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModLine {
-    /// A separator (index into `mods`), its mod count, and whether its mods are listed below it.
-    Header {
-        idx: usize,
-        count: usize,
-        open: bool,
-    },
-    /// A mod, the game Data row, Overwrite or a BSA (index into `mods`).
-    Mod(usize),
+/// The row lists the visible list reads: the picked mod's copies, the winners, the losers, the texture's users.
+type RowLists = (
+    Arc<Vec<NifRow>>,
+    Arc<Vec<NifEntry>>,
+    Arc<Vec<NifEntry>>,
+    Option<Arc<HashSet<String>>>,
+);
+
+/// The visible list and every input it was built from (rule 9.1). The row lists are held, so a dropped list's address
+/// is never reused under the cache's nose.
+struct RowsCache {
+    lists: RowLists,
+    /// The picked mod's name (rows show it), the chip and the search needle.
+    key: (Option<String>, NifFilter, String),
+    list: Arc<Vec<usize>>,
+    /// `selection_hidden` for this list: the selected copy and whether the filters hide it.
+    hidden: Option<(i64, bool)>,
 }
 
 /// The MO2 first-run question.
@@ -447,17 +452,32 @@ pub struct MeshesModel {
     pub store_path: Option<PathBuf>,
     pub target: Option<ScanTarget>,
     pub mods: Vec<ModRow>,
+    /// The mod picker (Note GC): `None` is "Any mod" (the winners); `Some` lists that mod's copies (`nifs`).
     pub selected_mod: Option<i64>,
-    pub nifs: Vec<NifRow>,
+    /// The picked mod's NIF copies, winning or not.
+    pub nifs: Arc<Vec<NifRow>>,
     pub filter: NifFilter,
-    /// Mod list filter: case-insensitive substring of the mod name. Only changes which rows are listed.
-    pub mod_filter: String,
-    /// Ids of the separators whose mods are listed; empty = all collapsed. Not persisted.
-    pub expanded: HashSet<i64>,
-    /// NIF list filter: case-insensitive substring of the shown path (`\` or `/`).
-    pub path_filter: String,
-    /// "All meshes": search the game-winning copy of every path instead of the selected mod's NIFs.
-    pub all_meshes: bool,
+    /// The search box: ASCII case-insensitive substring of the shown path (`\` or `/`) or of the mod name.
+    pub search: String,
+    /// Every path's game-winning copy with its mod, read off the UI thread after each scan or reload (Note GC).
+    pub winners: Arc<Vec<NifEntry>>,
+    /// Every copy that loses its path, with its own mod, read with `winners`.
+    pub losers: Arc<Vec<NifEntry>>,
+    /// The read of `winners` and `losers` in flight.
+    rows_rx: Option<Receiver<RowsRead>>,
+    /// A NIF to select again once the rows a reload asked for land (it was selected in "Any mod").
+    reselect: Option<i64>,
+    /// The texture chip: a texture path and the NIF paths whose shapes use it (`Store::users_of_texture`). The users
+    /// are `None` while the store is unsettled (Note GC15): the chip waits for a completed scan and cuts nothing.
+    pub tex_filter: Option<(String, Option<Arc<HashSet<String>>>)>,
+    /// A scan runs, or the last one ended without completing: the store's origins may be disabled, so it reads empty
+    /// (as `AppModel::scan_store_unsettled`; Note GC15). `unsettled_before` is the value before the running scan.
+    store_unsettled: bool,
+    unsettled_before: bool,
+    /// How often the visible list was built (tests pin the cache with it, rule 9.2).
+    #[doc(hidden)]
+    pub row_builds: u64,
+    rows_cache: Option<RowsCache>,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
     /// The selected row itself, kept apart from the lists (a new search replaces them).
@@ -535,21 +555,21 @@ pub struct MeshesModel {
     /// The NIF list's edit chips, by data path: read from the edit mod after a scan, then kept current by the session.
     pub doc_badges: HashMap<String, export::DocBadge>,
     /// The Textures export folder (`AppModel::export_root`) when the Textures side has one, set by the app each frame
-    /// through `set_nif_export_root`; the NIF export goes there, else to `<mods>\sdc NIF Edits` (Note CI29).
+    /// through `set_nif_export_root`; the NIF export goes there. None: an edit autosaves to the app's folder and its
+    /// export is blocked (Note GD5; CI29's `<mods>\sdc NIF Edits` default is gone).
     pub nif_export_root: Option<PathBuf>,
+    /// Note GD5: lines for the app's Messages (an export folder change); the app moves them there each frame.
+    pub messages: Vec<String>,
+    /// Note GD2: Review's Keep / Overwrite answers by lowercase data path, with the hash each was given for.
+    nif_answers: HashMap<String, (export::GuardChoice, [u8; 32])>,
+    /// Note GD2: the export path's state for the Review row (it reads the disk), keyed on `nif_edit::ForeignKey`.
+    foreign_cache: std::cell::RefCell<nif_edit::ForeignCache>,
+    /// Note GD1: a worklist fix's tab and field for the edit panel, taken when it draws.
+    pub nif_tab: Option<(NifTab, Option<nif::fields::Field>)>,
+    /// `nif_problems` without an edit: one `Arc`, so a cache keyed on it holds.
+    no_problems: Arc<Vec<NifProblem>>,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
-    /// Result of the All meshes search for `all_query` (winners with their mod), at most `ALL_LIMIT`.
-    all_nifs: Vec<(NifRow, String)>,
-    all_truncated: bool,
-    /// Rows the search lists (`ALL_LIMIT`; tests lower it).
-    pub all_limit: usize,
-    /// Store searches made so far.
-    pub searches: u32,
-    /// The text `all_nifs` answers; `None` = nothing searched yet.
-    all_query: Option<String>,
-    /// Text waiting out the debounce, and since when.
-    all_pending: Option<(String, Instant)>,
     settings: MeshesSettings,
     settings_changed: bool,
     activated: bool,
@@ -584,18 +604,18 @@ impl MeshesModel {
             target: None,
             mods: vec![],
             selected_mod: None,
-            nifs: vec![],
+            nifs: Arc::default(),
             filter: NifFilter::All,
-            mod_filter: String::new(),
-            expanded: HashSet::new(),
-            path_filter: String::new(),
-            all_meshes: false,
-            all_nifs: vec![],
-            all_truncated: false,
-            all_limit: ALL_LIMIT,
-            searches: 0,
-            all_query: None,
-            all_pending: None,
+            search: String::new(),
+            winners: Arc::default(),
+            losers: Arc::default(),
+            rows_rx: None,
+            reselect: None,
+            tex_filter: None,
+            store_unsettled: false,
+            unsettled_before: false,
+            row_builds: 0,
+            rows_cache: None,
             selected_nif: None,
             selected_info: None,
             shapes: vec![],
@@ -636,6 +656,11 @@ impl MeshesModel {
             edit: None,
             doc_badges: HashMap::new(),
             nif_export_root: None,
+            messages: vec![],
+            nif_answers: HashMap::new(),
+            foreign_cache: Default::default(),
+            nif_tab: None,
+            no_problems: Arc::default(),
             procs: system_procs,
             settings,
             settings_changed: false,
@@ -851,6 +876,10 @@ impl MeshesModel {
         self.stale_list = None;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
+        (self.unsettled_before, self.store_unsettled) = (self.store_unsettled, true);
+        // Note GC14: a row read still out may read the origins this scan disables; its answer is dropped, and the
+        // lists on screen stay until the scan ends.
+        self.rows_rx = None;
         // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
         self.file_refs = None;
         self.refs_cache = None;
@@ -889,6 +918,9 @@ impl MeshesModel {
     pub fn poll(&mut self) -> bool {
         let mut changed = self.v3.poll();
         changed |= self.poll_pg();
+        if self.rows_loading() {
+            changed |= !self.poll_rows();
+        }
         for d in self.picker.take() {
             changed = true;
             if let Some(p) = d.path {
@@ -909,6 +941,7 @@ impl MeshesModel {
                 }
                 WorkerMsg::Scanned(r) => self.finished(r),
                 WorkerMsg::Panicked { message, .. } => {
+                    self.store_unsettled = true;
                     self.scan_completed = false;
                     self.store_untouched = false;
                     self.cancel = None;
@@ -923,6 +956,12 @@ impl MeshesModel {
     }
 
     fn finished(&mut self, r: Result<Report, ScanError>) {
+        // PGPatcher running stops the scan before `begin_scan`: the store is as it was (Note CW2).
+        self.store_unsettled = match &r {
+            Ok(_) => false,
+            Err(ScanError::PgpRunning) => self.unsettled_before,
+            Err(_) => true,
+        };
         self.cancel = None;
         self.progress = None;
         self.scan_completed = r.is_ok();
@@ -975,9 +1014,23 @@ impl MeshesModel {
                 self.error = Some(format!("Scan failed: {e}"));
             }
         }
+        // A settled store again without a completed scan (a PGPatcher pause): a chip that went pending reads its
+        // users now (Note GC20). After a completed scan the reload has read them.
+        if !self.store_unsettled {
+            if let Some((t, None)) = &self.tex_filter {
+                let t = t.clone();
+                self.set_tex_filter(Some(t));
+            }
+        }
+        // No new read (the scan did not complete): the NIF a reload held is looked for in the lists on screen, if the
+        // store is settled again (a PGPatcher pause); else it stays held.
+        if !self.rows_loading() {
+            self.apply_reselect();
+        }
     }
 
-    /// Reads the mod list again and keeps the selection when the mod is still there and not PGPatcher-derived.
+    /// Reads the mod list again and the list's rows (on a worker), and keeps the picked mod when it is still there,
+    /// holds NIFs and is not PGPatcher-derived. The selected NIF is selected again when it is still listed.
     pub fn reload(&mut self) {
         let Some(store) = &self.store else {
             return;
@@ -991,15 +1044,21 @@ impl MeshesModel {
         }
         self.refresh_doc_badges();
         self.refresh_placement();
-        // The winners may have changed: ask again.
-        self.all_nifs.clear();
         self.scan_ctrls.clear(); // the files may have changed too (T8)
-        self.all_query = None;
-        self.all_pending = None;
-        let keep = self
-            .selected_mod
-            .filter(|id| self.mods.iter().any(|m| m.id == *id && !m.derived));
-        let nif = self.selected_nif;
+        self.read_rows();
+        // The texture's users may have changed too.
+        let tex = self.tex_filter.as_ref().map(|(t, _)| t.clone());
+        if tex.is_some() {
+            self.set_tex_filter(tex);
+        }
+        let keep = self.selected_mod.filter(|id| {
+            self.mods
+                .iter()
+                .any(|m| m.id == *id && !m.derived && m.nifs > 0)
+        });
+        // A NIF an earlier reload still holds (its rows never landed) counts as the selection.
+        let nif = self.selected_nif.or(self.reselect.take());
+        self.clear_nif();
         match keep {
             Some(id) => {
                 self.select_mod(id);
@@ -1007,16 +1066,75 @@ impl MeshesModel {
                     self.select_nif(c);
                 }
             }
+            // Any mod, or a picked mod that is gone: the picker's own path back, then the NIF waits for the rows.
             None => {
-                self.selected_mod = None;
-                self.clear_nifs();
+                self.any_mod();
+                self.reselect = nif;
             }
         }
     }
 
-    fn clear_nifs(&mut self) {
-        self.nifs.clear();
-        self.clear_nif();
+    /// Reads every winner and losing copy on a worker thread, from a read-only connection (Note GC: about 100 ms
+    /// for 100k paths, too long for a frame). `poll_rows` takes the answer.
+    fn read_rows(&mut self) {
+        let Some(db) = self.store_path.clone() else {
+            return;
+        };
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let r = Store::open_read_only(&db)
+                .and_then(|s| Ok((s.winners()?, s.losers()?)))
+                .map_err(db_err);
+            let _ = tx.send(r); // a newer read replaced this one: nobody listens
+        });
+        self.rows_rx = Some(rx);
+    }
+
+    /// Takes a finished row read. True while one is still running, so the caller repaints.
+    pub fn poll_rows(&mut self) -> bool {
+        let Some(rx) = &self.rows_rx else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(Ok((winners, losers))) => {
+                self.winners = Arc::new(winners);
+                self.losers = Arc::new(losers);
+            }
+            Ok(Err(e)) => self.error = Some(e),
+            Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.error = Some(db_err("reading the mesh list stopped"));
+            }
+        }
+        self.rows_rx = None;
+        self.apply_reselect();
+        false
+    }
+
+    /// Selects again the NIF a reload held, once it is listed; never while a scan runs or the store is unsettled,
+    /// where its details would read disabled origins (Note GC14, GC19). The next completed scan's reload takes it.
+    fn apply_reselect(&mut self) {
+        if self.scanning() || self.store_unsettled {
+            return;
+        }
+        if let Some(c) = self.reselect.take() {
+            if self.selected_nif.is_none() && self.find_row(c).is_some() {
+                self.select_nif(c);
+            }
+        }
+    }
+
+    /// The rows a reload asked for have not landed yet ("Reading the scan…").
+    pub fn rows_loading(&self) -> bool {
+        self.rows_rx.is_some()
+    }
+
+    /// Tests: a row read in flight that answers when the test sends on the returned channel.
+    #[doc(hidden)]
+    pub fn hold_rows_read(&mut self) -> Sender<RowsRead> {
+        let (tx, rx) = channel();
+        self.rows_rx = Some(rx);
+        tx
     }
 
     fn clear_nif(&mut self) {
@@ -1035,194 +1153,227 @@ impl MeshesModel {
         self.v3.set_mesh(None);
     }
 
-    /// Opens a mod's NIF list. A PGPatcher-derived mod is never opened: its meshes show through their source mods.
+    /// Picks a mod: the list shows its NIF copies, winning or not. A PGPatcher-derived mod is never picked: its
+    /// meshes show through their source mods. The selected NIF stays (rule 6.1: the picker only hides rows).
     pub fn select_mod(&mut self, id: i64) {
         if self.mods.iter().any(|r| r.id == id && r.derived) {
             return;
         }
         self.selected_mod = Some(id);
-        self.clear_nif();
         if let Some(store) = &self.store {
             match store.nifs_of(id) {
-                Ok(n) => self.nifs = n,
+                Ok(n) => self.nifs = Arc::new(n),
                 Err(e) => {
-                    self.nifs.clear();
+                    self.nifs = Arc::default();
                     self.error = Some(db_err(e));
                 }
             }
         }
     }
 
-    /// Closes the open mod's NIF list (the selected NIF's details stay).
-    pub fn close_mod(&mut self) {
+    /// "Any mod": the list shows every path's winner again (the selected NIF's details stay).
+    pub fn any_mod(&mut self) {
         self.selected_mod = None;
-        self.nifs.clear();
+        self.nifs = Arc::default();
+        // Every row wins here, so the Wins chip is hidden: a hidden chip left on would only confuse.
+        if self.filter == NifFilter::Wins {
+            self.filter = NifFilter::All;
+        }
+    }
+
+    /// The texture chip: `Some(texture path)` cuts the list to the meshes whose shapes use it (one store read, on the
+    /// path index); `None` (its ✕) clears it. Hides rows only: the selection stays (rule 6.1). While the store is
+    /// unsettled the users are not read (they would read empty): the chip waits, and the reload of the next completed
+    /// scan reads them (Note GC15).
+    pub fn set_tex_filter(&mut self, tex: Option<String>) {
+        let Some(t) = tex else {
+            self.tex_filter = None;
+            return;
+        };
+        if self.store_unsettled {
+            self.tex_filter = Some((t, None));
+            return;
+        }
+        let users = match self.store.as_ref().map(|s| s.users_of_texture(&t)) {
+            Some(Ok(u)) => u.into_iter().map(|(nif, ..)| nif).collect(),
+            Some(Err(e)) => {
+                self.error = Some(db_err(e));
+                HashSet::new()
+            }
+            None => HashSet::new(),
+        };
+        self.tex_filter = Some((t, Some(Arc::new(users))));
+    }
+
+    /// "Show in Meshes" (texture settings panel): the list shows exactly the meshes that use `tex`. The picker goes back
+    /// to "Any mod", the search and the chips are cleared, and the list replaces the shapes unless Edit holds them.
+    /// The selection stays (rule 6.1).
+    pub fn show_texture(&mut self, tex: String) {
+        self.any_mod();
+        self.search.clear();
+        self.filter = NifFilter::All;
+        self.shapes_col &= self.edit.is_some();
+        self.set_tex_filter(Some(tex));
+    }
+
+    /// The rows of "Any mod": the losing copies under Overridden, else every path's winner.
+    fn any_rows(&self) -> &[NifEntry] {
+        match self.filter {
+            NifFilter::Overridden => &self.losers,
+            _ => &self.winners,
+        }
     }
 
     fn find_row(&self, id: i64) -> Option<&NifRow> {
         self.nifs
             .iter()
-            .chain(self.all_nifs.iter().map(|(n, _)| n))
+            .chain(
+                self.winners
+                    .iter()
+                    .chain(self.losers.iter())
+                    .map(|(n, _)| n),
+            )
             .find(|n| n.copy_id == id)
     }
 
     pub fn selected_row(&self) -> Option<&NifRow> {
         let id = self.selected_nif?;
-        self.find_row(id)
-            .or_else(|| self.selected_info.as_ref().filter(|n| n.copy_id == id))
+        // The kept copy first: a search through 100k rows every frame is what it saves.
+        self.selected_info
+            .as_ref()
+            .filter(|n| n.copy_id == id)
+            .or_else(|| self.find_row(id))
     }
 
-    /// The Mods panel, top to bottom. MO2 puts a separator above the mods it owns, which are the ones after it in
-    /// ascending priority; this list is highest priority first, so a separator owns the mods listed *before* it, up to
-    /// the previous separator. Its header is moved above them. Mods below the last separator, Data, Overwrite and BSAs
-    /// are not grouped. A group is collapsed unless in `expanded`. With a mod filter, only matching mods are listed
-    /// and every group with a match is open.
-    pub fn mod_lines(&self) -> Vec<ModLine> {
-        let needle = self.mod_filter.trim().to_lowercase();
-        let filtering = !needle.is_empty();
-        let hit = |i: usize| !filtering || self.mods[i].name.to_lowercase().contains(&needle);
-        let mut out = vec![];
-        let mut run: Vec<usize> = vec![];
-        for (i, r) in self.mods.iter().enumerate() {
-            match r.kind {
-                KIND_MOD => run.push(i),
-                KIND_SEPARATOR => {
-                    let total = run.len();
-                    let shown: Vec<usize> = run.drain(..).filter(|&j| hit(j)).collect();
-                    if filtering && shown.is_empty() {
-                        continue;
-                    }
-                    let open = filtering || self.expanded.contains(&r.id);
-                    out.push(ModLine::Header {
-                        idx: i,
-                        count: if filtering { shown.len() } else { total },
-                        open,
-                    });
-                    if open {
-                        out.extend(shown.into_iter().map(ModLine::Mod));
-                    }
-                }
-                _ => {
-                    out.extend(run.drain(..).filter(|&j| hit(j)).map(ModLine::Mod));
-                    if hit(i) {
-                        out.push(ModLine::Mod(i));
-                    }
-                }
-            }
-        }
-        out.extend(run.into_iter().filter(|&j| hit(j)).map(ModLine::Mod));
-        out
+    /// The mod picker's entries after "Any mod": the mods that hold NIFs, in `Store::mods` order. PGPatcher-derived
+    /// mods are left out (their meshes show through their source mods).
+    pub fn picker_mods(&self) -> impl Iterator<Item = &ModRow> {
+        self.mods.iter().filter(|r| r.nifs > 0 && !r.derived)
     }
 
-    /// Click on a separator header.
-    pub fn toggle_group(&mut self, separator_id: i64) {
-        if !self.expanded.remove(&separator_id) {
-            self.expanded.insert(separator_id);
-        }
+    /// A mod's name, or "" for an id not in `mods`.
+    pub fn mod_name(&self, id: i64) -> &str {
+        self.mods
+            .iter()
+            .find(|r| r.id == id)
+            .map_or("", |r| r.name.as_str())
     }
 
-    /// The path filter as compared with stored paths: `/` slashes, lower case, no `meshes/` prefix.
-    fn path_needle(&self) -> String {
-        let t = self
-            .path_filter
-            .trim()
-            .replace('\\', "/")
-            .to_ascii_lowercase();
+    /// The search as compared with stored paths: `/` slashes, ASCII lower case, no `meshes/` prefix.
+    fn needle(&self) -> String {
+        let t = self.search.trim().replace('\\', "/").to_ascii_lowercase();
         display_path(&t).to_string()
     }
 
-    /// All meshes is on but the filter is too short to search.
-    pub fn all_needs_text(&self) -> bool {
-        self.all_meshes && self.path_needle().chars().count() < ALL_MIN_CHARS
-    }
-
-    /// The All meshes search found more than `ALL_LIMIT` paths; the extra ones are not listed.
-    pub fn all_truncated(&self) -> bool {
-        self.all_meshes && self.all_truncated
-    }
-
-    /// Rows the list draws from, before the chips and the path filter: the selected mod's NIFs, or the search result.
+    /// Rows the list draws from, before the search and the chips: the picked mod's copies, else `any_rows`.
     pub fn listed(&self) -> usize {
-        if self.all_meshes {
-            self.all_nifs.len()
-        } else {
-            self.nifs.len()
+        match self.selected_mod {
+            Some(_) => self.nifs.len(),
+            None => self.any_rows().len(),
         }
     }
 
-    /// Row `i` of the list (an index from `visible_nifs`) and, in All meshes, the winning mod.
-    pub fn nif_at(&self, i: usize) -> (&NifRow, Option<&str>) {
-        if self.all_meshes {
-            let (n, o) = &self.all_nifs[i];
-            (n, Some(o))
-        } else {
-            (&self.nifs[i], None)
-        }
-    }
-
-    /// Indices into the list (`nif_at`) that pass the chips and the path filter.
-    pub fn visible_nifs(&self) -> Vec<usize> {
-        let needle = self.path_needle();
-        let n = needle.as_bytes();
-        (0..self.listed())
-            .filter(|&i| {
-                let row = self.nif_at(i).0;
-                self.filter.matches(row)
-                    && (self.all_meshes // the store already matched the text
-                        || n.is_empty()
-                        || display_path(&row.path)
-                            .as_bytes()
-                            .windows(n.len())
-                            .any(|w| w.eq_ignore_ascii_case(n)))
-            })
-            .collect()
-    }
-
-    /// Per frame while All meshes is on: asks the store for the winners matching the path filter, once the text has
-    /// been left alone for `SEARCH_DEBOUNCE` and only when it differs from the last answer. True while a search is
-    /// waiting (the caller repaints after the debounce). Nothing is read for fewer than `ALL_MIN_CHARS` characters.
-    pub fn update_search(&mut self, now: Instant) -> bool {
-        if !self.all_meshes {
-            return false;
-        }
-        let want = self.path_needle();
-        if want.chars().count() < ALL_MIN_CHARS {
-            self.all_nifs.clear();
-            self.all_truncated = false;
-            self.all_query = None;
-            self.all_pending = None;
-            return false;
-        }
-        if self.all_query.as_deref() == Some(&want) {
-            self.all_pending = None;
-            return false;
-        }
-        let since = match &self.all_pending {
-            Some((t, since)) if *t == want => *since,
-            _ => {
-                self.all_pending = Some((want, now));
-                return true;
+    /// Row `i` of the list (an index from `visible_nifs`) and the mod that holds it.
+    pub fn nif_at(&self, i: usize) -> (&NifRow, &str) {
+        match self.selected_mod {
+            Some(id) => (&self.nifs[i], self.mod_name(id)),
+            None => {
+                let (n, o) = &self.any_rows()[i];
+                (n, o.as_str())
             }
+        }
+    }
+
+    /// Indices into the list (`nif_at`) that pass the chips and the search: the path or the mod name holds the text.
+    /// Built again only when an input changes (rule 9.1): the row lists (by `Arc::ptr_eq`), the texture's users, the
+    /// picked mod and its name, the chip and the search.
+    pub fn visible_nifs(&mut self) -> Arc<Vec<usize>> {
+        let tex = self.tex_filter.as_ref().and_then(|(_, u)| u.clone());
+        let lists = (
+            self.nifs.clone(),
+            self.winners.clone(),
+            self.losers.clone(),
+            tex,
+        );
+        let picked = self.selected_mod.map(|id| self.mod_name(id).to_string());
+        let key = (picked, self.filter, self.needle());
+        if let Some(c) = &self.rows_cache {
+            let (a, b) = (&c.lists, &lists);
+            let same = Arc::ptr_eq(&a.0, &b.0)
+                && Arc::ptr_eq(&a.1, &b.1)
+                && Arc::ptr_eq(&a.2, &b.2)
+                && match (&a.3, &b.3) {
+                    (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+                    (x, y) => x.is_none() && y.is_none(),
+                };
+            if same && c.key == key {
+                return c.list.clone();
+            }
+        }
+        let list = Arc::new(self.build_visible());
+        self.rows_cache = Some(RowsCache {
+            lists,
+            key,
+            list: list.clone(),
+            hidden: None,
+        });
+        list
+    }
+
+    /// Whether the selected NIF is one the filters hide (rule 6.2), from the cached list; call after `visible_nifs`.
+    pub fn selection_hidden(&mut self) -> bool {
+        let Some(sel) = self.selected_nif else {
+            return false;
         };
-        if self.scanning() || now.duration_since(since) < SEARCH_DEBOUNCE {
-            return true;
-        }
-        self.all_pending = None;
-        self.all_query = Some(want.clone());
-        self.searches += 1;
-        self.all_nifs.clear();
-        self.all_truncated = false;
-        if let Some(store) = &self.store {
-            match store.winning_nifs(&want, self.all_limit) {
-                Ok(mut rows) => {
-                    self.all_truncated = rows.len() > self.all_limit;
-                    rows.truncate(self.all_limit);
-                    self.all_nifs = rows;
-                }
-                Err(e) => self.error = Some(db_err(e)),
+        let Some(c) = &self.rows_cache else {
+            return false;
+        };
+        if let Some((s, h)) = c.hidden {
+            if s == sel {
+                return h;
             }
         }
-        false
+        let list = c.list.clone();
+        let h = !list.iter().any(|&i| self.nif_at(i).0.copy_id == sel);
+        if let Some(c) = &mut self.rows_cache {
+            c.hidden = Some((sel, h));
+        }
+        h
+    }
+
+    fn build_visible(&mut self) -> Vec<usize> {
+        self.row_builds += 1;
+        let needle = self.needle();
+        let n = needle.as_bytes();
+        let has = |hay: &str| {
+            n.is_empty()
+                || hay
+                    .as_bytes()
+                    .windows(n.len())
+                    .any(|w| w.eq_ignore_ascii_case(n))
+        };
+        let tex = self
+            .tex_filter
+            .as_ref()
+            .and_then(|(_, users)| users.as_ref());
+        let keep = |row: &NifRow, origin: &str| {
+            self.filter.matches(row)
+                && tex.is_none_or(|u| u.contains(&row.path))
+                && (has(display_path(&row.path)) || has(origin))
+        };
+        match self.selected_mod {
+            Some(id) => {
+                let origin = self.mod_name(id);
+                (self.nifs.iter().enumerate())
+                    .filter(|(_, row)| keep(row, origin))
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+            None => (self.any_rows().iter().enumerate())
+                .filter(|(_, (row, origin))| keep(row, origin))
+                .map(|(i, _)| i)
+                .collect(),
+        }
     }
 
     pub fn select_nif(&mut self, copy_id: i64) {

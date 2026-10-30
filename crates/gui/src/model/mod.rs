@@ -518,6 +518,10 @@ pub struct AppModel {
     pub(crate) gen_opens: u64,
     /// A Save report write is on a worker (AG130); the app keeps frames coming until it lands.
     pub report_saving: bool,
+    /// "Show in Meshes" asked for this texture (normalised scan path); app.rs switches the view (Note GC).
+    pub show_in_meshes: Option<String>,
+    /// A NIF worklist row's fix: (NIF path, tab, field); app.rs switches to the Meshes view (NIF team, Note GD1).
+    pub nif_tab_request: Option<(String, meshes::NifTab, Option<nif::fields::Field>)>,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// Review's Export was clicked while a plan or scan read was in flight: the export continues when it lands.
@@ -748,6 +752,8 @@ impl AppModel {
             gen_ids: 0,
             gen_opens: 0,
             report_saving: false,
+            show_in_meshes: None,
+            nif_tab_request: None,
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,

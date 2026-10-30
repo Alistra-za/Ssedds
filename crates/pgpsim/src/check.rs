@@ -1,35 +1,10 @@
-//! PGPatcher 1.2.0 reads keys with nlohmann `get<T>()`, which throws on a wrong JSON type inside the per-shape
-//! patch (01 §2.4). The sim reports that as a `Skip` instead of guessing. Over-approximation: a wrong-typed
-//! known key is rejected even on a code path PGPatcher would not reach. A non-object `glint`/`fuzz` is NOT an
-//! error (the C++ only calls `contains` on it). A too-short `fuzz.color` is a Skip: PGPatcher 1.2.0 reads `fuzzColor[2]` without a length check, which is undefined behaviour.
-use crate::json::{num, GLINT_KEYS};
+//! PGPatcher 2.x reads a patch key only when it has its JSON type and ignores it otherwise [Src 2.2.0 TP:52-57,
+//! 744-1235]; the accessors in `json.rs` do that. The match keys are still read with nlohmann `get<std::string>()`,
+//! which throws [Src 2.2.0 TP:242, 256, 265, 280, 534, 594, 608-609, 618]: those are the only type failures left.
+use crate::json::{flag, GLINT_KEYS};
 use serde_json::{Map, Value};
 
-const BOOL_KEYS: &[&str] = &[
-    "delete",
-    "vertex_colors",
-    "zbuffer_write",
-    "emissive",
-    "parallax",
-    "subsurface",
-    "subsurface_foliage",
-    "hair",
-    "multilayer",
-    "coat_diffuse",
-    "coat_parallax",
-    "coat_normal",
-    "lock_diffuse",
-    "lock_normal",
-    "lock_emissive",
-    "lock_parallax",
-    "lock_cubemap",
-    "lock_rmaos",
-    "lock_cnr",
-    "lock_subsurface",
-    "pbr",
-    "env_mapping",
-];
-
+/// The number keys, for `range_warnings` only.
 const NUM_KEYS: &[&str] = &[
     "smooth_angle",
     "auto_uv",
@@ -39,8 +14,6 @@ const NUM_KEYS: &[&str] = &[
     "roughness_scale",
     "subsurface_opacity",
     "displacement_scale",
-    "env_map_scale",
-    "env_map_scale_mult",
     "emissive_scale",
     "uv_scale",
     "coat_specular_level",
@@ -49,14 +22,14 @@ const NUM_KEYS: &[&str] = &[
     "inner_uv_scale",
 ];
 
-const STR_KEYS: &[&str] = &[
+/// The match keys 2.x still reads without a type check.
+const MATCH_KEYS: &[&str] = &[
     "texture",
     "match_normal",
     "match_diffuse",
     "rename",
     "path_contains",
     "nif_filter",
-    "cubemap",
     "match1",
     "match2",
     "match3",
@@ -65,76 +38,29 @@ const STR_KEYS: &[&str] = &[
     "match6",
     "match7",
     "match8",
-    "slot1",
-    "slot2",
-    "slot3",
-    "slot4",
-    "slot5",
-    "slot6",
-    "slot7",
-    "slot8",
 ];
 
-/// Colour keys and the length from which PGPatcher reads them.
-const COLOUR_KEYS: &[(&str, usize)] = &[
-    ("subsurface_color", 3),
-    ("emissive_color", 4),
-    ("coat_color", 3),
-];
-
-fn bad(k: &str, want: &str) -> Result<(), String> {
-    Err(format!(
-        "PGPatcher 1.2.0 would fail on \"{k}\": expected {want}"
-    ))
+/// `t` carries its article ("a string", "an array").
+fn crashes(k: &str, t: &str) -> String {
+    format!("{}: {k} is not {t}", crate::CRASHES)
 }
 
-pub(crate) fn check_types(e: &Map<String, Value>) -> Result<(), String> {
-    for k in BOOL_KEYS {
-        if e.get(*k).is_some_and(|v| !v.is_boolean()) {
-            return bad(k, "true or false");
-        }
-    }
-    for k in NUM_KEYS {
-        if e.get(*k).is_some_and(|v| num(v).is_none()) {
-            return bad(k, "a number");
-        }
-    }
-    for k in STR_KEYS {
-        if e.get(*k).is_some_and(|v| !v.is_string()) {
-            return bad(k, "a string");
-        }
-    }
-    for (k, n) in COLOUR_KEYS {
-        let Some(a) = e.get(*k).and_then(Value::as_array) else {
-            continue;
-        };
-        if a.len() >= *n && a[..*n].iter().any(|v| num(v).is_none()) {
-            return bad(k, "numbers");
-        }
-    }
-    if let Some(g) = e.get("glint").and_then(Value::as_object) {
-        for k in GLINT_KEYS {
-            if g.get(k).is_some_and(|v| num(v).is_none()) {
-                return bad(&format!("glint.{k}"), "a number");
-            }
-        }
-    }
-    if let Some(z) = e.get("fuzz").and_then(Value::as_object) {
-        if z.get("texture").is_some_and(|v| !v.is_boolean()) {
-            return bad("fuzz.texture", "true or false");
-        }
-        if z.get("weight").is_some_and(|v| num(v).is_none()) {
-            return bad("fuzz.weight", "a number");
-        }
-        let colour_ok = |c: &Value| {
-            c.as_array()
-                .is_some_and(|a| a.len() >= 3 && a.iter().all(|v| num(v).is_some()))
-        };
-        if z.get("color").is_some_and(|c| !colour_ok(c)) {
-            return bad("fuzz.color", "3 or more numbers");
-        }
-    }
-    Ok(())
+/// The first match key that is not a string (a load or `shouldApply` throw).
+pub(crate) fn match_key_error(e: &Map<String, Value>) -> Option<String> {
+    MATCH_KEYS
+        .iter()
+        .find(|k| e.get(**k).is_some_and(|v| !v.is_string()))
+        .map(|k| crashes(k, "a string"))
+}
+
+/// A multilayer entry's `coat_color` that is an object of 3+ keys: `size() >= 3` passes, then `[0]` throws
+/// [Src 2.2.0 TP:1108-1110; measured T6].
+pub(crate) fn coat_error(e: &Map<String, Value>) -> Option<String> {
+    let throws = flag(e, "multilayer")
+        && e.get("coat_color")
+            .and_then(Value::as_object)
+            .is_some_and(|o| o.len() >= 3);
+    throws.then(|| crashes("coat_color", "an array"))
 }
 
 /// PGPatcher 2.2 `alphaprop_*` whole-number keys and their maxima. Never in `NUM_KEYS`: 2.2 ignores a bad value
@@ -165,7 +91,6 @@ pub fn range_warnings(entry: &Value) -> Vec<String> {
     };
     let mut nums: Vec<(String, f64)> = NUM_KEYS
         .iter()
-        .filter(|k| !k.starts_with("env_map"))
         .filter_map(|k| Some((k.to_string(), e.get(*k)?.as_f64()?)))
         .collect();
     for (obj, keys) in [("glint", &GLINT_KEYS[..]), ("fuzz", &["weight"][..])] {

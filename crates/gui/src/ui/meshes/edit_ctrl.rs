@@ -3,7 +3,8 @@
 //! Interpolation, Remove controller, and an Add controller row per property.
 use super::curve::{self, Part};
 use super::edit_fields::{
-    fit_width, float_named, from_picker, row_label, selected, set_name, warnings, Act, OUT_OF_RANGE,
+    fit_width, float_named, from_picker, row_label, selected, set_name, take_focus, warnings, Act,
+    OUT_OF_RANGE,
 };
 use crate::model::meshes::edit_doc::SourceId;
 use crate::model::meshes::nif_edit::{NifEdit, Playing};
@@ -309,16 +310,7 @@ fn clip_actions(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     let mut remove = false;
     egui::Sides::new().shrink_left().truncate().show(
         ui,
-        |ui| {
-            if let Some(s) = seq {
-                ui.weak(format!(
-                    "{} · {} to {} s",
-                    cycle_name(s.cycle),
-                    s.start,
-                    s.stop
-                ));
-            }
-        },
+        |_| {},
         |ui| {
             let r = ui.add_enabled(seq.is_some(), egui::Button::new("Remove clip"));
             let label = match seq {
@@ -366,9 +358,86 @@ fn clip_actions(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             });
             try_push(ui, e, act, err, inputs.clone(), ops);
         }
+        clip_timing(ui, e, act, s);
     }
     refused_line(ui, err, &inputs);
     ui.separator();
+}
+
+/// The clip's cycle, frequency, start and stop (Note GD8): each change is one SetSequenceTiming carrying all four, a
+/// drag one undo step. A bad value is pushed as typed; its Warn says the clip keeps the timing it had.
+fn clip_timing(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act, s: &Sequence) {
+    let cur = (s.cycle, s.frequency, s.start, s.stop);
+    let mut next = cur;
+    let mut drag_end = false;
+    ui.horizontal(|ui| {
+        row_label(ui, "Cycle");
+        let shown = cycle_name(s.cycle);
+        let r = egui::ComboBox::from_id_salt("meshes-edit-clip-cycle")
+            .width(120.0)
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                for (i, n) in CYCLES.iter().enumerate() {
+                    ui.selectable_value(&mut next.0, i as u32, *n);
+                }
+            })
+            .response;
+        set_name(
+            &r,
+            egui::WidgetType::ComboBox,
+            "Clip cycle",
+            None,
+            Some(shown),
+        );
+    });
+    let merging = next.0 == cur.0;
+    for (label, k) in [("Frequency", 1), ("Start", 2), ("Stop", 3)] {
+        ui.horizontal(|ui| {
+            row_label(ui, label);
+            let v = [cur.1, cur.2, cur.3][k - 1];
+            let mut x = v;
+            let speed = (v.abs() as f64 * 0.01).max(0.01);
+            let r = ui.add(egui::DragValue::new(&mut x).speed(speed));
+            let name = format!("Clip {}", label.to_lowercase());
+            set_name(&r, egui::WidgetType::DragValue, &name, Some(x as f64), None);
+            if r.changed() && x.to_bits() != v.to_bits() {
+                match k {
+                    1 => next.1 = x,
+                    2 => next.2 = x,
+                    _ => next.3 = x,
+                }
+            }
+            drag_end |= r.drag_stopped() || r.lost_focus();
+        });
+    }
+    if let Some(root) = e.model.root {
+        warnings(ui, e, &Target::Block { block: root }, act);
+    }
+    if drag_end {
+        act.flush = true;
+    }
+    let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
+    if next.0 == cur.0 && same(next.1, cur.1) && same(next.2, cur.2) && same(next.3, cur.3) {
+        return;
+    }
+    // the manager's list order, read on a change only (C5-D2)
+    let (Some(at), Some((name, nth))) = (
+        anchor_role(&e.model, None, Role::Root),
+        nif::edit::clip_key(&e.patched, &e.model, s.block),
+    ) else {
+        return;
+    };
+    let op = Op::SetSequenceTiming {
+        at,
+        name,
+        nth,
+        cycle: next.0,
+        freq: next.1,
+        start: next.2,
+        stop: next.3,
+    };
+    let key = merging.then(|| merge_key(&op));
+    act.push = Some((vec![op], key));
 }
 
 /// Convert to clips for one property chain (C5-D4): a name field and the button.
@@ -790,6 +859,7 @@ fn row(
             None,
             Some(shown),
         );
+        take_focus(ui, &r, Field::CtrlFlags);
         if pick != cycle {
             act.push = Some((vec![bits(at, c.flags, 0x6, (pick as u32) << 1)], None));
         }
@@ -1631,6 +1701,7 @@ fn variable(
             None,
             Some(shown),
         );
+        take_focus(ui, &r, Field::Variable);
         if managed {
             r.on_hover_text("Its clips follow the new variable.");
         }

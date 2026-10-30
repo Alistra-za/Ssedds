@@ -178,6 +178,41 @@ fn no_scan_database_hides_the_list_and_a_database_reads_it_off_the_ui_thread() {
     h.run();
     h.get_by_label_contains("meshes/tree.nif");
     h.get_by_label_contains("Trees · priority 7");
+    // Note GC test 6: the link asks the app for the Meshes view, cut to this texture's users.
+    // The link's node carries a label and an empty value, which `get_by_label` skips on a Label role.
+    h.get_by(|n| n.label().as_deref() == Some("Show in Meshes"))
+        .click();
+    h.run();
+    assert_eq!(h.state().show_in_meshes.as_deref(), Some(tex.as_str()));
+}
+
+/// Note GC test 6, the app's half: the request switches to the Meshes view and sets the texture chip, on a clean
+/// list ("Any mod", no search, All), and is taken once.
+#[test]
+fn show_in_meshes_switches_the_view_and_sets_the_texture_chip() {
+    use sdc_gui::model::meshes::NifFilter;
+    let d = tempfile::tempdir().unwrap();
+    let mut app = sdc_gui::app::SdcApp::new(opened(d.path()));
+    let ctx = eframe::egui::Context::default();
+    app.meshes.search = "rock".into();
+    app.meshes.filter = NifFilter::Problems;
+    app.meshes.selected_nif = Some(7);
+    app.route_3d(&ctx);
+    assert!(!sdc_gui::ui::header::meshes_view_active(&ctx));
+    app.model.show_in_meshes = Some("textures/a/wall.dds".into());
+    app.route_3d(&ctx);
+    assert!(sdc_gui::ui::header::meshes_view_active(&ctx));
+    let m = &app.meshes;
+    assert_eq!(
+        m.tex_filter.as_ref().map(|(t, _)| t.as_str()),
+        Some("textures/a/wall.dds")
+    );
+    assert_eq!(
+        (m.selected_mod, m.search.as_str(), m.filter),
+        (None, "", NifFilter::All)
+    );
+    assert_eq!(m.selected_nif, Some(7), "never deselects");
+    assert!(app.model.show_in_meshes.is_none());
 }
 
 #[test]

@@ -5,7 +5,7 @@ The GUI can edit a mesh (NIF file) in the Meshes view and write an edited copy. 
 ## Before you start
 
 - Scan your mods first, so the Meshes view lists your meshes. See [Mod scanning](Mod-Scanning.md).
-- Pick an export folder with **Export to ▾** in the header (**More ▾ → Choose export folder…** until a folder is chosen). Edited NIFs go there, next to your textures. Without one (a project never takes over the folder you picked for another mod) they go to a `sdc NIF Edits` mod in your MO2 instance.
+- Pick an export folder with **Export to ▾** in the header (**More ▾ → Choose export folder…** until a folder is chosen; a project never takes over the folder you picked for another mod). Edited NIFs go there, next to your textures. There is no default folder: until you pick one you can edit, but not export ("No export folder chosen"), and your edits are kept in `%LOCALAPPDATA%\sdc\nif-edits` so they survive a restart. Edits made with Tessalith 1.1 or earlier without an export folder are in `mods\sdc NIF Edits`: choose that folder in **Export to ▾** to reopen them.
 
 ## Open a mesh for editing
 
@@ -21,7 +21,7 @@ The 3D view shows your edits as you make them. **Show only this shape** hides th
 |---|---|
 | **Shader** | Texture paths, shader type, glossiness, specular, emissive, UV scale and offset, and the SLSF1 and SLSF2 flags. |
 | **Alpha** | Blending, the test and its threshold. **Add alpha** and **Remove alpha**. |
-| **Controllers** | Shader and alpha controllers: their timing and keys, on a curve graph or in a table. Add or remove controllers, and make, rename or remove animation clips. |
+| **Controllers** | Shader and alpha controllers: their timing and keys, on a curve graph or in a table. Add or remove controllers, and make, rename or remove animation clips or change their timing. |
 | **Extra data** | BSXFlags and other extra data on the root or a shape, with a **Known** list of common entries, and **Heel height (RaceMenu)**. |
 
 While a controller animates, **Play**, **Loop**, **Speed** and a **Time** slider sit under the 3D view, so you can watch it.
@@ -41,7 +41,7 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 
 - **Pending edits (N)** lists each edit in words. **Revert** removes one. A red row did not apply and says why.
 - **Undo** and **Redo** (header, panel, **Ctrl+Z** / **Ctrl+Y**) act on the NIF edit while it is open.
-- Edits are kept in a small file under `.sdc\nif-edits` in the export folder, so they survive a restart.
+- Edits are kept in a small file under `.sdc\nif-edits` in the export folder, so they survive a restart. If you change the export folder while editing, the open edit moves with you to the new folder; the edits saved in the old one stay there. If the new folder already has saved edits for that NIF, the first save there moves them aside to `<name>.<seconds>.toml` beside them, and Messages names the kept file.
 - If a mod update changes the source NIF, your edits are applied again by name. Any that clash offer **Take source** or **Keep mine**.
 
 ## Export NIF

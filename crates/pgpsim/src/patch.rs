@@ -1,6 +1,6 @@
 //! The patch itself, `applyOnePatch` + `enableTruePBROnShape` [Src 1.2.0 TP:662-1142; 01 §2.1-§2.3], on a
 //! `MaterialState`, plus the per-file checks of 01 §1.4.
-use crate::check::{check_types, uint_in};
+use crate::check::{coat_error, match_key_error, uint_in};
 use crate::json::{flag, get_bool, get_num, rgb, GLINT_KEYS};
 use crate::matching::pg_slots;
 use crate::slots::{apply_slots, first_missing};
@@ -29,19 +29,14 @@ const SLSF2_BACK: u32 = 27;
 const SLSF2_EFFECT_LIGHTING: u32 = 30;
 
 const TYPE_DEFAULT: u32 = 0;
-const TYPE_ENVMAP: u32 = 1;
 const TYPE_MLP: u32 = 11;
 
-/// Keys badged "not previewed" (spec §2.1), in display order.
-const BADGE_KEYS: [&str; 8] = [
+/// Keys badged "not previewed" (spec §2.1), in display order. 2.0's removed `pbr` / `env_*` keys get none (R2).
+const BADGE_KEYS: [&str; 4] = [
     "smooth_angle",
     "auto_uv",
     "vertex_color_lum_mult",
     "vertex_color_sat_mult",
-    "pbr",
-    "env_mapping",
-    "env_map_scale",
-    "env_map_scale_mult",
 ];
 
 fn set_bit(word: &mut u32, bit: u32, on: bool) {
@@ -61,8 +56,6 @@ struct Sim {
     /// whatever the type; the NIF gets them only for type 11 (01 §2.3 notes). Defaults: Shaders.hpp:699-702.
     mlp: [f32; 4],
     mlp_envmap: f32,
-    /// nifly `environmentMapScale` (default 1.0); the NIF gets it only for type 1.
-    env_scale: f32,
     src_type: u32,
     src_trailer: LightingTrailer,
     /// Some entry wrote the PBR slots, so PGPatcher writes back its (lower-cased) slot set.
@@ -89,16 +82,11 @@ impl Sim {
             ),
             _ => ([0.0, 1.0, 1.0, 1.0], 1.0),
         };
-        let env_scale = match &source.params.trailer {
-            LightingTrailer::EnvMap { scale } => *scale,
-            _ => 1.0,
-        };
         Sim {
             m: source.clone(),
             slots: pg_slots(&source.slots),
             mlp,
             mlp_envmap,
-            env_scale,
             src_type: source.shader_type,
             src_trailer: source.params.trailer.clone(),
             pbr_written: false,
@@ -114,9 +102,9 @@ impl Sim {
         set_bit(&mut self.m.slsf2, bit, on);
     }
 
-    /// One entry, `applyOnePatch` [TP:662-863]. Returns true when the entry deleted the shape.
+    /// One entry, `applyOnePatch` [TP:662-863]; 2.x dropped the `env_mapping` block [Src 2.2.0 TP:729-945].
+    /// Returns true when the entry deleted the shape.
     fn apply_one(&mut self, e: &Map<String, Value>, mp: &str) -> bool {
-        let pbr = !mp.is_empty();
         if flag(e, "delete") {
             self.m.hidden = true;
             return true;
@@ -124,12 +112,12 @@ impl Sim {
         // Vertex-colour multipliers run only on shapes that have vertex colours (after `vertex_colors`).
         let vc_after = get_bool(e, "vertex_colors").unwrap_or(self.m.has_vertex_colors);
         for k in BADGE_KEYS {
-            let Some(v) = e.get(k) else {
+            // 2.x skips a non-number value [Src 2.2.0 TP:756, 763, 787-788], so the preview misses nothing.
+            if !e.get(k).is_some_and(Value::is_number) {
                 continue;
-            };
+            }
             let shown = match k {
                 "vertex_color_lum_mult" | "vertex_color_sat_mult" => vc_after,
-                "pbr" => v.as_bool() != Some(true),
                 _ => true,
             };
             let b = Badge::NotPreviewed(k);
@@ -175,17 +163,6 @@ impl Sim {
         if let Some(v) = get_num(e, "displacement_scale") {
             self.m.params.lighting_effect_2 = v;
         }
-        if flag(e, "env_mapping") && !pbr {
-            self.m.shader_type = TYPE_ENVMAP;
-            self.f1(SLSF1_ENVMAP, true);
-            self.f2(SLSF2_BACK, true);
-            if let Some(v) = get_num(e, "env_map_scale") {
-                self.env_scale = v;
-            }
-            if let Some(v) = get_num(e, "env_map_scale_mult") {
-                self.env_scale *= v;
-            }
-        }
         if let Some(v) = get_num(e, "emissive_scale") {
             self.m.params.emissive_multiple = v;
         }
@@ -196,9 +173,8 @@ impl Sim {
         if let Some(v) = get_num(e, "uv_scale") {
             self.m.params.uv_scale = [v, v];
         }
-        if pbr {
-            self.enable_pbr(e, mp);
-        }
+        // 2.x: always on [Src 2.2.0 TP:941-942].
+        self.enable_pbr(e, mp);
         false
     }
 
@@ -214,6 +190,8 @@ impl Sim {
         self.f1(SLSF1_PARALLAX, false);
         self.f2(SLSF2_GLOW_MAP, false);
         self.f1(SLSF1_FACEGEN_DETAIL, false);
+        // [Src 2.2.0 TP:1080]
+        self.f1(SLSF1_FACEGEN_RGB_TINT, false);
         self.f2(SLSF2_PBR, true);
         self.f1(SLSF1_EYE_ENVMAP, false);
         if let Some(v) = get_bool(e, "subsurface") {
@@ -252,22 +230,25 @@ impl Sim {
                 self.mlp[2] = v;
                 self.mlp[3] = v;
             }
-        } else if let Some(glint) = e.get("glint") {
+        } else if let Some(g) = e.get("glint").and_then(Value::as_object) {
+            // [Src 2.2.0 TP:1162]: only an object picks the branch.
             self.m.shader_type = TYPE_MLP;
             self.f2(SLSF2_FIT_SLOPE, true);
-            if let Some(g) = glint.as_object() {
-                for (slot, k) in self.mlp.iter_mut().zip(GLINT_KEYS) {
-                    if let Some(v) = get_num(g, k) {
-                        *slot = v;
-                    }
+            for (slot, k) in self.mlp.iter_mut().zip(GLINT_KEYS) {
+                if let Some(v) = get_num(g, k) {
+                    *slot = v;
                 }
             }
-        } else if let Some(fuzz) = e.get("fuzz") {
+        } else if let Some(z) = e.get("fuzz").and_then(Value::as_object) {
+            // [Src 2.2.0 TP:1191, 1201-1206]: an object; `color` exactly three numbers, else black.
             self.m.shader_type = TYPE_MLP;
             self.f2(SLSF2_SOFT, true);
-            let z = fuzz.as_object();
-            let [r, g, b] = z.and_then(|z| rgb(z, "color", 3)).unwrap_or([0.0; 3]);
-            let w = z.and_then(|z| get_num(z, "weight")).unwrap_or(1.0);
+            let three = z
+                .get("color")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.len() == 3);
+            let [r, g, b] = rgb(z, "color", 3).filter(|_| three).unwrap_or([0.0; 3]);
+            let w = get_num(z, "weight").unwrap_or(1.0);
             self.mlp = [r, g, b, w];
         } else {
             self.m.shader_type = TYPE_DEFAULT;
@@ -277,7 +258,8 @@ impl Sim {
             if !hair {
                 self.f2(SLSF2_BACK, false);
             }
-            if !e.contains_key("fuzz") {
+            // [Src 2.2.0 TP:1230]: absent or not an object.
+            if !e.get("fuzz").is_some_and(Value::is_object) {
                 self.f2(SLSF2_SOFT, false);
             }
         }
@@ -290,9 +272,6 @@ impl Sim {
                 refraction_scale: self.mlp[1],
                 inner_texture_scale: [self.mlp[2], self.mlp[3]],
                 envmap_strength: self.mlp_envmap,
-            },
-            TYPE_ENVMAP => LightingTrailer::EnvMap {
-                scale: self.env_scale,
             },
             t if t == self.src_type => self.src_trailer.clone(),
             _ => LightingTrailer::None,
@@ -316,16 +295,10 @@ pub(crate) fn run(
     if matches.is_empty() {
         return SimResult::NoMatch;
     }
-    // 1.2.0 canApply [TP:230-243]; the GRASS-use half is plugin-side.
-    if source.slsf1 & (1 << SLSF1_FACEGEN_RGB_TINT) != 0 {
-        return SimResult::Skip(
-            "PGPatcher 1.2.0 skips shapes with SLSF1.21 (FaceGen RGB tint)".to_string(),
-        );
-    }
-    for (e, _) in matches {
-        if let Err(msg) = check_types(e) {
-            return SimResult::Skip(msg);
-        }
+    // 2.x canApply is always true [Src 2.2.0 TP:302-307]: SLSF1.21 shapes are patched (and the bit cleared).
+    // A non-string match key throws at load or in `shouldApply`, before any texture check (Note GE5).
+    if let Some(msg) = matches.iter().find_map(|(e, _)| match_key_error(e)) {
+        return SimResult::Error(msg);
     }
     let mut sim = Sim::new(source);
     // 01 §1.4: the slot pass of all entries, then every non-empty slot must exist; `delete` skips the check.
@@ -341,6 +314,10 @@ pub(crate) fn run(
     let mut matched_path = String::new();
     for (e, mp) in matches {
         matched_path.clone_from(mp);
+        // An apply-time throw; a `delete` entry returns before `coat_color` is read.
+        if let Some(msg) = coat_error(e).filter(|_| !flag(e, "delete")) {
+            return SimResult::Error(msg);
+        }
         if sim.apply_one(e, mp) {
             break;
         }

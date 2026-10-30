@@ -128,6 +128,7 @@ pub(super) fn float_named(
         let speed = (v.abs() as f64 * 0.01).max(0.01);
         let r = ui.add(egui::DragValue::new(&mut x).speed(speed));
         set_name(&r, egui::WidgetType::DragValue, name, Some(x as f64), None);
+        take_focus(ui, &r, field);
         if r.changed() && x.to_bits() != v.to_bits() {
             let op = Op::SetField {
                 at: at.clone(),
@@ -151,6 +152,26 @@ pub(super) fn float_named(
         },
         act,
     );
+}
+
+/// Where a worklist fix's field waits for its widget (Note GD1).
+pub(super) fn focus_id() -> egui::Id {
+    egui::Id::new("meshes-edit-focus")
+}
+
+/// A worklist fix asked for `field`, and no widget has taken the request yet.
+pub(super) fn wants_focus(ui: &egui::Ui, field: Field) -> bool {
+    ui.data(|d| d.get_temp::<Field>(focus_id())) == Some(field)
+}
+
+/// Focuses `r` and scrolls to it when it is the field a worklist fix asked for; the first match takes the request.
+/// Note GD14: every widget kind a worklist row can name calls it (drag values, slider, combos, flag toggles).
+pub(super) fn take_focus(ui: &egui::Ui, r: &egui::Response, field: Field) {
+    if wants_focus(ui, field) {
+        ui.data_mut(|d| d.remove::<Field>(focus_id()));
+        r.request_focus();
+        r.scroll_to_me(None);
+    }
 }
 
 /// Gives `r` (after `ui.add`) the role `typ` and the accessible name `name`, with its numeric or text value.
@@ -218,6 +239,7 @@ fn color(
             let r = ui.add(egui::DragValue::new(&mut f).speed(0.005));
             let n = format!("{name} {c}");
             set_name(&r, egui::WidgetType::DragValue, &n, Some(f as f64), None);
+            take_focus(ui, &r, field(i as u8));
             if r.changed() {
                 x[i] = f;
                 changed = true;
@@ -250,70 +272,32 @@ fn color(
 
 /// The trailer floats of a shader type, named, in file order (`Field::Trailer(n)`).
 fn trailer_fields(t: &LightingTrailer) -> Vec<(String, f32)> {
-    let named = |names: &[&str], v: &[f32]| -> Vec<(String, f32)> {
-        names
-            .iter()
-            .map(|n| n.to_string())
-            .zip(v.iter().copied())
-            .collect()
-    };
-    match t {
+    let v: Vec<f32> = match t {
         LightingTrailer::None => vec![],
-        LightingTrailer::EnvMap { scale } => named(&["Env map scale"], &[*scale]),
-        LightingTrailer::SkinTint(c) => named(&["Skin tint R", "Skin tint G", "Skin tint B"], c),
-        LightingTrailer::HairTint(c) => named(&["Hair tint R", "Hair tint G", "Hair tint B"], c),
-        LightingTrailer::ParallaxOcc { max_passes, scale } => {
-            named(&["POM max passes", "POM scale"], &[*max_passes, *scale])
-        }
+        LightingTrailer::EnvMap { scale } => vec![*scale],
+        LightingTrailer::SkinTint(c) | LightingTrailer::HairTint(c) => c.to_vec(),
+        LightingTrailer::ParallaxOcc { max_passes, scale } => vec![*max_passes, *scale],
         LightingTrailer::MultiLayer {
             inner_thickness,
             refraction_scale,
             inner_texture_scale,
             envmap_strength,
-        } => named(
-            &[
-                "MLP inner thickness",
-                "MLP refraction scale",
-                "MLP inner scale U",
-                "MLP inner scale V",
-                "MLP env map strength",
-            ],
-            &[
-                *inner_thickness,
-                *refraction_scale,
-                inner_texture_scale[0],
-                inner_texture_scale[1],
-                *envmap_strength,
-            ],
-        ),
-        LightingTrailer::SparkleSnow(s) => {
-            named(&["Sparkle R", "Sparkle G", "Sparkle B", "Sparkle A"], s)
-        }
+        } => vec![
+            *inner_thickness,
+            *refraction_scale,
+            inner_texture_scale[0],
+            inner_texture_scale[1],
+            *envmap_strength,
+        ],
+        LightingTrailer::SparkleSnow(s) => s.to_vec(),
         LightingTrailer::Eye {
             cubemap_scale,
             left_center,
             right_center,
-        } => named(
-            &[
-                "Eye cubemap scale",
-                "Left eye X",
-                "Left eye Y",
-                "Left eye Z",
-                "Right eye X",
-                "Right eye Y",
-                "Right eye Z",
-            ],
-            &[
-                *cubemap_scale,
-                left_center[0],
-                left_center[1],
-                left_center[2],
-                right_center[0],
-                right_center[1],
-                right_center[2],
-            ],
-        ),
-    }
+        } => [[*cubemap_scale].as_slice(), left_center, right_center].concat(),
+    };
+    // Note GD1: the names live in `nif`, so the worklist's rows name a trailer field the same way.
+    t.names().iter().map(|n| n.to_string()).zip(v).collect()
 }
 
 /// The selected shape, or a line saying why there is none.
@@ -381,6 +365,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             .response;
         let typ = egui::WidgetType::ComboBox;
         set_name(&r, typ, "Shader type", None, Some(shown));
+        take_focus(ui, &r, Field::ShaderType);
         r.on_hover_text(TYPE_HOVER);
         if t != lt.shader_type {
             let mut ops = vec![Op::SetField {
@@ -470,6 +455,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             Some(c as f64),
             None,
         );
+        take_focus(ui, &r, Field::ClampMode);
         if c != p.texture_clamp_mode {
             let op = Op::SetField {
                 at: at.clone(),
@@ -552,6 +538,8 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
             // that appears later on a closed list stays inside it (the Export footer still names a blocking one); open
             // it with `CollapsingState` on a new warning if users miss one.
             .default_open(has_warning(e, at.block, field))
+            // Note GD14: a worklist fix for this list opens it; its first editable flag takes the focus
+            .open(wants_focus(ui, field).then_some(true))
             .show(ui, |ui| {
                 warnings(
                     ui,
@@ -601,6 +589,9 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
                             ui.label(format!("With the PBR flag CS reads this bit as: {m}."));
                         });
                     }
+                    if locked.is_none() {
+                        take_focus(ui, &r, field);
+                    }
                     if let Some(h) = locked {
                         r.on_disabled_hover_text(h);
                     } else if r.changed() {
@@ -623,7 +614,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
 /// What a warning applies to, in words, for a fix button's accessible name.
 fn target_name(t: &Target) -> String {
     match t {
-        Target::Field { field, .. } => super::edit_panel::field_label(*field),
+        Target::Field { field, .. } => crate::model::meshes::nif_edit::field_label(*field),
         Target::Slot { slot, .. } => format!("slot {slot}"),
         Target::Extra { block } => format!("extra data block {block}"),
         Target::Block { block } => format!("block {block}"),
@@ -696,15 +687,27 @@ fn texture_slots(
         let text = nif::text::lossy(raw);
         let norm = nif::path::canon_texture(raw).norm;
         let mut commit = None;
-        ui.horizontal(|ui| {
-            ui.strong(name);
-            for w in e.warnings.iter().filter(|w| {
+        let slot_warnings = || {
+            e.warnings.iter().filter(move |w| {
                 w.target
                     == Target::Slot {
                         set,
                         slot: i as u32,
                     }
-            }) {
+            })
+        };
+        ui.horizontal(|ui| {
+            // Note GD6: a slot with a warning is named in the warning's colour.
+            let t = egui::RichText::new(name).strong();
+            match slot_warnings()
+                .map(|w| w.level)
+                .max_by_key(|l| *l == Level::Error)
+            {
+                Some(Level::Error) => ui.label(t.color(RED)),
+                Some(Level::Warn) => ui.label(t.color(AMBER)),
+                None => ui.label(t),
+            };
+            for w in slot_warnings() {
                 let color = if w.level == Level::Error { RED } else { AMBER };
                 ui.label(egui::RichText::new(&w.text).small().color(color))
                     .on_hover_text(&w.text);
@@ -757,6 +760,13 @@ fn texture_slots(
                 None,
             ));
         }
+    }
+    // Note GD6: a warning on a slot the set does not have (an empty RMAOS slot 5 past a short set) has no row above.
+    for w in e.warnings.iter().filter(|w| {
+        matches!(w.target, Target::Slot { set: s, slot } if s == set && slot as usize >= ts.raw.slots.len())
+    }) {
+        let color = if w.level == Level::Error { RED } else { AMBER };
+        ui.add(egui::Label::new(egui::RichText::new(&w.text).color(color)).wrap());
     }
 }
 
@@ -916,7 +926,9 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     };
     let check = |ui: &mut egui::Ui, act: &mut Act, name: &str, bit: u32| {
         let mut on = flags as u32 & (1 << bit) != 0;
-        if ui.checkbox(&mut on, name).changed() {
+        let r = ui.checkbox(&mut on, name);
+        take_focus(ui, &r, Field::AlphaFlags);
+        if r.changed() {
             edit(act, bits(1 << bit, if on { 1 << bit } else { 0 }), None);
         }
     };
@@ -941,6 +953,7 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                 })
                 .response;
             set_name(&r, egui::WidgetType::ComboBox, name, None, Some(label(cur)));
+            take_focus(ui, &r, Field::AlphaFlags);
             if v != cur {
                 let mask = ((1u32 << width) - 1) << shift;
                 edit(act, bits(mask, (v as u32) << shift), None);
@@ -976,6 +989,7 @@ pub(super) fn alpha_tab(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
             Some(t as f64),
             None,
         );
+        take_focus(ui, &r, Field::AlphaThreshold);
         if t != a.alpha.threshold {
             let op = Op::SetField {
                 at: at(),

@@ -10,7 +10,7 @@ use crate::ui::dialogs::{dialog, Role};
 use crate::ui::header::elide_middle;
 use crate::ui::status::{self, Status, AMBER, GREEN, RED};
 use eframe::egui;
-use nif::edit::{Op, Outcome};
+use nif::edit::Outcome;
 use nif::fields::Field;
 
 const TABS: [&str; 4] = ["Shader", "Alpha", "Controllers", "Extra data"];
@@ -18,6 +18,16 @@ const TABS: [&str; 4] = ["Shader", "Alpha", "Controllers", "Extra data"];
 pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
     let mut act = Act::default();
+    // Note GD1: a worklist fix opens its tab; its field takes focus when its widget is drawn.
+    if let Some((tab, field)) = m.nif_tab.take() {
+        ui.data_mut(|d| {
+            d.insert_temp(egui::Id::new("meshes-edit-tab"), tab.index());
+            d.remove::<Field>(edit_fields::focus_id());
+            if let Some(f) = field {
+                d.insert_temp(edit_fields::focus_id(), f);
+            }
+        });
+    }
     if let Some(e) = &m.edit {
         top(ui, e, &mut act);
         // Meshes UI T3: a footer drawn before the tabs (rule 2.1), so a long tab never pushes Export NIF away.
@@ -138,7 +148,12 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                     .show(ui, |ui| {
                         for (i, d) in e.doc.ops.iter().enumerate() {
                             let failed = d.status == OpStatus::Conflict;
-                            op_row(ui, e, i, &op_label(&d.op), failed, act);
+                            let mut label = e.op_label_at(i);
+                            // Note GD8: the row says that its Revert takes the clip's timing too
+                            if !e.timing_dependents(i).is_empty() {
+                                label.push_str(" (Revert also removes its clip timing)");
+                            }
+                            op_row(ui, e, i, &label, failed, act);
                         }
                     });
             });
@@ -361,68 +376,6 @@ fn guard_dialog(ctx: &egui::Context, e: &NifEdit, act: &mut Act) {
         None if k.enter => act.export = Some(Some(GuardChoice::KeepTheirs)),
         None if k.cancel => act.guard_close = true,
         None => {}
-    }
-}
-
-/// A short name of what an op changes, for the rows of ops that did not apply.
-fn op_label(op: &Op) -> String {
-    let (what, at) = match op {
-        Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => (field_label(*field), at),
-        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
-        Op::SplitAlpha { at } => ("Split alpha".into(), at),
-        Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
-        Op::RemoveAlpha { at } => ("Remove alpha".into(), at),
-        Op::AddExtra { at, name, .. } => (format!("Add extra data {name}"), at),
-        Op::EditExtra { at, .. } => ("Edit extra data".into(), at),
-        Op::RemoveExtra { at } => ("Remove extra data".into(), at),
-        Op::SetKeys { at, .. } => ("Edit keys".into(), at),
-        Op::AddController { at, .. } => ("Add controller".into(), at),
-        Op::RemoveController { at } => ("Remove controller".into(), at),
-        Op::AddSequence { at, name, .. } => (format!("Add clip {name}"), at),
-        Op::RemoveSequence { at, name, .. } => (format!("Remove clip {name}"), at),
-        Op::RenameSequence {
-            at, name, new_name, ..
-        } => (format!("Rename clip {name} to {new_name}"), at),
-        Op::ConvertChainToClips { at, name } => (format!("Convert to clip {name}"), at),
-    };
-    match &at.shape {
-        Some(s) => format!("{s}: {what}"),
-        None => what,
-    }
-}
-
-/// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
-pub(super) fn field_label(f: Field) -> String {
-    let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
-    let rgb = |n: u8| ["R", "G", "B"].get(n as usize).copied().unwrap_or("?");
-    match f {
-        Field::ShaderType => "Shader type".into(),
-        Field::Slsf1 => "SLSF1 flags".into(),
-        Field::Slsf2 => "SLSF2 flags".into(),
-        Field::UvOffset(n) => format!("UV offset {}", axis(n)),
-        Field::UvScale(n) => format!("UV scale {}", axis(n)),
-        Field::EmissiveColor(n) => format!("Emissive colour {}", rgb(n)),
-        Field::EmissiveMultiple => "Emissive multiple".into(),
-        Field::ClampMode => "Clamp mode".into(),
-        Field::Alpha => "Shader alpha".into(),
-        Field::Refraction => "Refraction strength".into(),
-        Field::Glossiness => "Glossiness".into(),
-        Field::SpecularColor(n) => format!("Specular colour {}", rgb(n)),
-        Field::SpecularStrength => "Specular strength".into(),
-        Field::LightingEffect1 => "Lighting effect 1".into(),
-        Field::LightingEffect2 => "Lighting effect 2".into(),
-        // shortcut: the trailer's names depend on the shader type, which an op does not carry; name them from the
-        // model if users ask.
-        Field::Trailer(n) => format!("Shader type value {}", n + 1),
-        Field::AlphaFlags => "Alpha flags".into(),
-        Field::AlphaThreshold => "Alpha threshold".into(),
-        Field::CtrlFlags => "Controller flags".into(),
-        Field::Frequency => "Frequency".into(),
-        Field::Phase => "Phase".into(),
-        Field::StartTime => "Start".into(),
-        Field::StopTime => "Stop".into(),
-        Field::Variable => "Controlled variable".into(),
-        Field::InterpValue(n) => format!("Interpolator value {}", n + 1),
     }
 }
 
