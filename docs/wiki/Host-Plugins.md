@@ -48,7 +48,7 @@ To uninstall, delete the `TessalithDDS` folder.
 3. In the unzipped folder, run `powershell -ExecutionPolicy Bypass -File install.ps1`. It copies the nodes and `psdds.dll` into chaiNNer's newest app folder under `%LOCALAPPDATA%\chaiNNer` and prints the version. Nothing is built.
 4. Start chaiNNer. The nodes are under **Image > Tessalith DDS**.
 
-**Run `install.ps1` again after every chaiNNer update.** An update puts chaiNNer in a new folder and deletes the old one, nodes included. `install.ps1 -Uninstall` removes the nodes.
+**Run `install.ps1` again after every chaiNNer update.** An update puts chaiNNer in a new folder and deletes the old one, nodes included. Nothing can warn you (chaiNNer loads nodes only from its own app folder): the **Tessalith DDS** group just disappears, and that is the sign to run it again. `install.ps1 -Uninstall` removes the nodes.
 
 ## The save options
 

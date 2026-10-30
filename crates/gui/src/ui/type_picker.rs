@@ -3,7 +3,7 @@
 use super::settings_panel::{subtype_groups, subtype_label};
 use eframe::egui;
 use engine::config::{Subtype, Target};
-use engine::policy::offered;
+use engine::policy::offered_for;
 
 /// Which control the picker serves. Not `PickerKind`: `model::picker` names its file pickers that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,9 @@ pub enum TypeKind {
 pub const LIST_HEIGHT: f32 = 320.0;
 
 /// The picker on `anchor`: a click on it opens or closes the popup `id`. Returns the type picked this frame. Esc, a
-/// click outside or a pick closes it; Esc does nothing else (owner amendment G).
+/// click outside or a pick closes it; Esc does nothing else (owner amendment G). `grass` also offers `complex_grass`
+/// (`engine::policy::grass_context`, Note FC10).
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -27,7 +29,9 @@ pub fn show(
     suggested: Option<Subtype>,
     kind: TypeKind,
     target: Target,
+    grass: bool,
 ) -> Option<Subtype> {
+    let offered = |t: Target, s: Subtype| offered_for(t, s, grass);
     let query_id = id.with("query");
     let was_open = egui::Popup::is_id_open(ui.ctx(), id);
     let mut picked = None;

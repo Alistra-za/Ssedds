@@ -366,6 +366,18 @@ pub fn filter_view(target: Target, job: &ResolvedJob) -> FieldView {
     views_of(&[FILTER_FIELD], target, job).remove(0)
 }
 
+/// Note FC10 (BQ15): the Alpha group's `alpha.exr_straight` row, shown only for an OpenEXR source (the one format
+/// it applies to), so it is not in `FIELDS` (bulk edits and the other panels never list it).
+pub const EXR_STRAIGHT_FIELD: (&str, &str) = ("alpha.exr_straight", "Straight alpha");
+
+/// [`EXR_STRAIGHT_FIELD`]'s view for an `.exr` input, else `None`.
+pub fn exr_straight_view(target: Target, job: &ResolvedJob) -> Option<FieldView> {
+    job.input
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("exr"))
+        .then(|| views_of(&[EXR_STRAIGHT_FIELD], target, job).remove(0))
+}
+
 /// The mip filter's edge handling view.
 pub fn edge_view(target: Target, job: &ResolvedJob) -> FieldView {
     views_of(&[EDGE_FIELD], target, job).remove(0)

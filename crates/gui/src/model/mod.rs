@@ -316,6 +316,10 @@ pub struct AppModel {
     pub recode: Vec<engine::manifest::RecodeCause>,
     /// Note FC3: the last Also export's conversion report, the DERIVE rows' Open report.
     pub also_report: Option<PathBuf>,
+    /// Note FC10 (CN43): the PBR folder's `_sdc/also.json` that the last Also export could not read.
+    pub also_unreadable: Option<PathBuf>,
+    /// Note FC10 (item 27): the project files with the read-only flag, as of the last open, reload or save.
+    pub read_only_flags: Vec<PathBuf>,
     /// Note FC3: the NIF edit's problems, handed over by `app.rs` each frame (`set_nif_problems`).
     pub nif_problems: Arc<Vec<meshes::NifProblem>>,
     /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
@@ -647,6 +651,8 @@ impl AppModel {
             unreadable: vec![],
             recode: vec![],
             also_report: None,
+            also_unreadable: None,
+            read_only_flags: vec![],
             nif_problems: Default::default(),
             scan_db: None,
             scan_store_unsettled: false,
@@ -922,6 +928,7 @@ impl AppModel {
         self.sets_root = None;
         self.also_written = None;
         self.also_report = None;
+        self.also_unreadable = None;
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -3303,12 +3310,82 @@ impl AppModel {
     fn save_failed(&mut self, kind: DocKind, e: &SaveError) {
         self.dialog = Some(match e {
             SaveError::ChangedOnDisk => Dialog::ExternalChange(kind),
-            SaveError::ReadOnlyFlag => Dialog::Error(format!(
-                "{} is read-only: clear the read-only flag to save",
-                kind.file()
-            )),
+            // Note FC10 (item 27): a Problems row with `Clear read-only flag`, not a dead-end dialog.
+            SaveError::ReadOnlyFlag => {
+                self.refresh_read_only_flags();
+                self.status_line = format!("{} is read-only: not saved", kind.file());
+                self.open_problems(None);
+                return;
+            }
             e => Dialog::Error(format!("{}: {e}", kind.file())),
         });
+    }
+
+    /// Note FC10 (item 27): which project files have the read-only flag; a change rebuilds Problems. Stats two files,
+    /// so it runs with the banner (open, reload, save), never per frame (ui-rules 9.4).
+    fn refresh_read_only_flags(&mut self) {
+        let now: Vec<PathBuf> = [
+            self.project.as_ref().map(|p| p.path()),
+            self.sets_doc.as_ref().map(|s| s.path()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.permissions().readonly()))
+        .map(|p| p.to_path_buf())
+        .collect();
+        if now != self.read_only_flags {
+            self.read_only_flags = now;
+            self.invalidate_views();
+        }
+    }
+
+    /// Note FC10 (item 27): `Clear read-only flag`. Only this project's `sdc.toml` or `sdc-project.toml`; then the
+    /// documents are reloaded when nothing is unsaved (unsaved edits are kept for the Save the flag refused).
+    pub fn clear_read_only_flag(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let ours = [
+            self.project.as_ref().map(|p| p.path()),
+            self.sets_doc.as_ref().map(|s| s.path()),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|p| p == path);
+        if !ours {
+            return Err(format!("{} is not this project's file", path.display()));
+        }
+        let fail = |e: std::io::Error| format!("{}: {e}", path.display());
+        let mut perm = std::fs::metadata(path).map_err(fail)?.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        std::fs::set_permissions(path, perm).map_err(fail)?;
+        if self.is_dirty() {
+            self.status_line = "Read-only flag cleared: Save to write your changes".into();
+            self.refresh_banner();
+        } else {
+            self.reload_documents();
+        }
+        Ok(())
+    }
+
+    /// Note FC10 (T8): `Remove aliases from {id}`. Drops the `suffix_aliases` table of the user preset file `file`
+    /// (comments and order kept), then plans again so the preset loads. Only a file in the user presets folder.
+    pub fn remove_preset_aliases(&mut self, file: &std::path::Path) -> Result<(), String> {
+        let inside = self
+            .user_presets
+            .as_deref()
+            .is_some_and(|d| file.parent() == Some(d));
+        if !inside {
+            return Err(format!(
+                "{} is not in the user presets folder",
+                file.display()
+            ));
+        }
+        let fail = |e: &dyn std::fmt::Display| format!("{}: {e}", file.display());
+        let text = std::fs::read_to_string(file).map_err(|e| fail(&e))?;
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| fail(&e))?;
+        doc.remove("suffix_aliases");
+        engine::dds::write_atomic(file, doc.to_string().as_bytes()).map_err(|e| fail(&e))?;
+        self.replan();
+        Ok(())
     }
 
     /// Show `text` as a banner that survives every rebuild until [`AppModel::dismiss_kept_banner`].
@@ -3324,6 +3401,7 @@ impl AppModel {
 
     /// Rebuild the banner from both files: `sdc.toml`'s read-only reason and `sdc-project.toml`'s (P8).
     pub fn refresh_banner(&mut self) {
+        self.refresh_read_only_flags();
         let mut lines = Vec::new();
         lines.extend(self.kept_banner.clone());
         // Note FC1 (AM14): a missing preset is a Problems row that blocks the export, not a banner.

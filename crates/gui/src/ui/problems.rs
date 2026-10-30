@@ -3,7 +3,9 @@
 //! is the row's button (`Problem::fix`).
 use super::review::{apply, fix_buttons, RowPick};
 use super::status::{dot, Status};
-use crate::model::bottom::{filtered, flagged, problems, At, Fix, Level, Problem, ProblemsFilter};
+use crate::model::bottom::{
+    filtered, flagged, problems, At, Fix, Level, Problem, ProblemsFilter, RESET_ALSO_HOVER,
+};
 use crate::model::meshes::NifTab;
 use crate::model::sets::Missing;
 use crate::model::shell::ShellRequest;
@@ -113,22 +115,48 @@ fn button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
     .clicked()
 }
 
-/// The fix button of a row (Note FC3), or nothing for a row whose fix is drawn from its level.
+/// `button` for a fix that deletes a file (Note FC10): outlined red, and Enter or Space on it does nothing (FC5).
+fn destructive_button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
+    let b = egui::Button::new(text).stroke(egui::Stroke::new(1.5, super::status::RED));
+    let r = ui.add_enabled(off.is_none(), b);
+    let by_key = r.has_focus()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+    let r = match off {
+        Some(why) => r.on_disabled_hover_text(why),
+        None => r.on_hover_text(tip),
+    };
+    r.clicked() && !by_key
+}
+
+/// The fix a row's button asks for this frame (Note FC3), or `None`; nothing for a row whose fix is drawn from its
+/// level. P8's row has two buttons (Note FC10), so the answer is the fix, not a click.
 fn fix_button(
     ui: &mut egui::Ui,
     m: &AppModel,
     p: &Problem,
     off: Option<&str>,
     sets_off: Option<&str>,
-) -> bool {
-    let Some(fix) = &p.fix else {
-        return false;
-    };
-    match fix {
+) -> Option<Fix> {
+    let fix = p.fix.as_ref()?;
+    // Right to left: Reload is the rightmost. Named for its file: the banner has a Reload of its own (rule 8.4).
+    if let Fix::OpenInEditor(path) = fix {
+        let r = ui.button("Reload");
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Reload sdc-project.toml")
+        });
+        if r.on_hover_text("Read sdc-project.toml again (asks first when something is unsaved)")
+            .clicked()
+        {
+            return Some(Fix::Reload);
+        }
+        let tip = format!("Open {} with its default program", path.display());
+        return button(ui, "Open in editor", &tip, None).then(|| fix.clone());
+    }
+    let clicked = match fix {
         // Note DU3: a set entry that matches no file is removed in place.
         Fix::RemoveMissing(miss) => {
             let At::Set { id, .. } = &p.at else {
-                return false;
+                return None;
             };
             let (label, name) = match miss {
                 Missing::NoFilesLeft => ("Delete set", format!("Delete set {id}")),
@@ -212,7 +240,50 @@ fn fix_button(
             "Open the Preset menu and pick an installed preset",
             None,
         ),
-    }
+        // Drawn above with Open in editor.
+        Fix::OpenInEditor(_) => false,
+        Fix::Reload => button(ui, "Reload", "Read the project files again", None),
+        Fix::ClearReadOnly(path) => button(
+            ui,
+            "Clear read-only flag",
+            &format!("Clear the read-only flag of {}", path.display()),
+            None,
+        ),
+        Fix::ResetAlsoJson(_) => destructive_button(
+            ui,
+            "Reset also.json",
+            RESET_ALSO_HOVER,
+            m.export
+                .running
+                .is_some()
+                .then_some(crate::model::also::EXPORT_RUNNING),
+        ),
+        Fix::TagAsGrass(_) => button(
+            ui,
+            "Tag as grass",
+            "Set its sub-type to Complex grass (subtype = \"complex_grass\" in sdc.toml)",
+            off,
+        ),
+        Fix::StraightAlpha(_) => button(
+            ui,
+            "Straight alpha",
+            "Read this EXR's colour as stored (alpha.exr_straight = true in sdc.toml)",
+            off,
+        ),
+        Fix::RemoveMatch(_, n) => button(
+            ui,
+            "Remove match",
+            &format!("Remove match{n} from the set's PGPatcher settings"),
+            sets_off,
+        ),
+        Fix::RemoveAliases(_, id) => button(
+            ui,
+            &format!("Remove aliases from {id}"),
+            "Remove the suffix_aliases table from this preset file; its comments and other keys stay",
+            None,
+        ),
+    };
+    clicked.then(|| fix.clone())
 }
 
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
@@ -386,8 +457,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     },
                     |ui| {
                         // Right to left: the last widget added is the leftmost.
-                        if fix_button(ui, m, p, off.as_deref(), sets_off.as_deref()) {
-                            return p.fix.clone().map(|f| Act::Apply(f, p.at.clone()));
+                        if let Some(f) = fix_button(ui, m, p, off.as_deref(), sets_off.as_deref()) {
+                            return Some(Act::Apply(f, p.at.clone()));
                         }
                         match &p.at {
                             At::Texture(k) if p.level == Level::Decide => {
@@ -511,6 +582,27 @@ fn apply_fix(ui: &egui::Ui, model: &mut AppModel, fix: Fix, at: At) {
         Fix::ChoosePreset => {
             to_textures(ui);
             model.choose_preset = Some(ui.ctx().cumulative_pass_nr());
+        }
+        // Note FC10: each writes from this click only (Review Focus 3); a refusal goes to the status line.
+        Fix::OpenInEditor(p) => model.shell.push(ShellRequest::Open(p)),
+        Fix::Reload => model.request_reload(),
+        Fix::ClearReadOnly(p) => {
+            if let Err(why) = model.clear_read_only_flag(&p) {
+                model.status_line = why;
+            }
+        }
+        Fix::ResetAlsoJson(p) => {
+            if let Err(why) = model.reset_also_json(&p) {
+                model.status_line = why;
+            }
+        }
+        Fix::TagAsGrass(k) => model.tag_as_grass(&k),
+        Fix::StraightAlpha(k) => model.set_field(&k, "alpha.exr_straight", json!(true)),
+        Fix::RemoveMatch(id, n) => model.set_json_value(&id, &format!("match{n}"), None),
+        Fix::RemoveAliases(file, _) => {
+            if let Err(why) = model.remove_preset_aliases(&file) {
+                model.status_line = why;
+            }
         }
     }
 }

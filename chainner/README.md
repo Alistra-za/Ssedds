@@ -15,7 +15,7 @@ From a repo checkout:
 2. Close chaiNNer, then run `chainner\install.ps1`. It first stops any chaiNNer Python backend left running after chaiNNer closed (it holds `psdds.dll` open), then copies the nodes, `psdds.dll`, `COPYING`, `LICENSE` and `THIRD_PARTY_NOTICES.md` into the newest `%LOCALAPPDATA%\chaiNNer\app-*` folder and prints the psdds version.
 3. `-Target <resources\src folder>` installs into a given folder instead; `-Uninstall` removes only the `tessalith_dds` folder.
 
-**Re-run after every chaiNNer update.** An update installs a new `app-<version>` folder and deletes the old one, taking the nodes with it.
+**Re-run after every chaiNNer update.** An update installs a new `app-<version>` folder and deletes the old one, taking the nodes with it. chaiNNer loads nodes only from inside that folder (it has no setting for another node folder), so after an update there is no Tessalith code left to say "Tessalith nodes need reinstalling after a chaiNNer update": the **Image > Tessalith DDS** group is simply gone. When it is, close chaiNNer and run `install.ps1` again.
 
 ## Nodes
 

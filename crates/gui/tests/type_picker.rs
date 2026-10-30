@@ -27,8 +27,9 @@ fn bare(top: f32) -> Harness<'static, State> {
                 let b = ui.button("Set type…");
                 let id = egui::Id::new(PICKER);
                 let suggested = Some(Subtype::SubsurfaceTint);
+                let kind = TypeKind::SetType;
                 if let Some(st) =
-                    type_picker::show(ui, id, &b, None, suggested, TypeKind::SetType, Target::Cs)
+                    type_picker::show(ui, id, &b, None, suggested, kind, Target::Cs, false)
                 {
                     s.picked = Some(st);
                 }

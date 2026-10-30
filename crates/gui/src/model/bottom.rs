@@ -121,6 +121,22 @@ pub enum Fix {
     ShowNifTab(String, NifTab, Option<Field>),
     /// Note FC1 (AM14): open the header's Preset menu.
     ChoosePreset,
+    /// Note FC10 (P8): open the unreadable `sdc-project.toml` with the OS default program; the row also has `Reload`.
+    OpenInEditor(PathBuf),
+    /// Note FC10 (P8): reload both documents (asks first when something is unsaved), as the banner's Reload.
+    Reload,
+    /// Note FC10 (item 27): clear the read-only flag of this project file.
+    ClearReadOnly(PathBuf),
+    /// Note FC10 (CN43): delete the unreadable `<PBR folder>/_sdc/also.json`.
+    ResetAlsoJson(PathBuf),
+    /// Note FC10 (X10, X3): write `subtype = "complex_grass"` for this item.
+    TagAsGrass(String),
+    /// Note FC10 (BQ15): write `alpha.exr_straight = true` for this item.
+    StraightAlpha(String),
+    /// Note FC10 (CV8): remove the stored empty `match{n}` of the set (by id).
+    RemoveMatch(String, u8),
+    /// Note FC10 (T8): drop the `suffix_aliases` table of a skipped user preset file (the file, the preset's id).
+    RemoveAliases(PathBuf, String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +346,29 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             )
         });
     }
+    // Note FC10 (P8): an unreadable `sdc-project.toml` is a red row with Open in editor and Reload; sets stay
+    // read-only until it is fixed. The row names the parser's first line; the hover has all of it.
+    if let Some((path, e)) = m
+        .sets_doc
+        .as_ref()
+        .filter(|s| s.read_only())
+        .and_then(|s| Some((s.path(), s.error()?)))
+    {
+        let e = e
+            .strip_prefix(&format!("{}: ", path.display()))
+            .unwrap_or(e);
+        let first = e.lines().next().unwrap_or(e);
+        out.push(Problem {
+            fix: Some(Fix::OpenInEditor(path.to_path_buf())),
+            detail: Some(e.to_string()),
+            ..row(
+                Level::Blocks,
+                At::Project,
+                format!("sdc-project.toml cannot be read: {first}"),
+                None,
+            )
+        });
+    }
     for b in pbr_export::export_blocks(m) {
         let at = if b.set_key.is_empty() {
             At::Project
@@ -481,6 +520,47 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             ..row(Level::Warning, At::Project, w.message.clone(), Some(w.code))
         });
     }
+    // Note FC10 (item 27): a project file with the read-only flag, which a save cannot replace.
+    for p in &m.read_only_flags {
+        let name = p.file_name().unwrap_or_default().to_string_lossy();
+        out.push(Problem {
+            fix: Some(Fix::ClearReadOnly(p.clone())),
+            ..row(
+                Level::Warning,
+                At::Project,
+                format!("{name} is read-only: changes cannot be saved"),
+                None,
+            )
+        });
+    }
+    // Note FC10 (CN43): the Also export's record cannot be read, so no report, zip or sums file is written.
+    if let Some(p) = &m.also_unreadable {
+        out.push(Problem {
+            fix: Some(Fix::ResetAlsoJson(p.clone())),
+            detail: Some(RESET_ALSO_HOVER.into()),
+            ..row(
+                Level::Warning,
+                At::Project,
+                format!("{} cannot be read", p.display()),
+                Some(Code::AlsoOwnedUnreadable),
+            )
+        });
+    }
+    // Note FC10 (T8): a user preset skipped because another preset already declares its suffix aliases (a copy).
+    for (file, reason) in &m.skipped_user_presets {
+        if let Some((id, other)) = alias_clash(reason) {
+            out.push(Problem {
+                fix: Some(Fix::RemoveAliases(PathBuf::from(file), id.to_string())),
+                detail: Some(format!("{file}: {reason}")),
+                ..row(
+                    Level::Warning,
+                    At::Project,
+                    format!("Preset {id} clashes with {other} on aliases"),
+                    None,
+                )
+            });
+        }
+    }
     out.extend(nif_rows(NifLevel::Warning, Level::Warning));
     // Artist checks (DECISIONS Note CL): listed, never "ready"-changing. CHK-GREEN-GUESS, the one Info result, is a
     // row too, since it has an action (Note FC3, CL5).
@@ -593,8 +673,93 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             ..row(Level::Info, At::Project, a.text.clone(), None)
         });
     }
+    // Note FC10: hand remedies with a button. X10/X3: a diffuse shaped like complex grass that nothing tags as grass
+    // (no GRAS record names it). BQ15: an OpenEXR whose varying alpha divided its colour on load.
+    for i in &m.items {
+        let (Some(j), Some(a)) = (&i.job, &i.analysis) else {
+            continue;
+        };
+        let at = || At::Texture(i.key.clone());
+        if j.profile.subtype == engine::config::Subtype::Diffuse
+            && engine::grass::looks_like_grass(a)
+        {
+            out.push(Problem {
+                fix: Some(Fix::TagAsGrass(i.key.clone())),
+                detail: Some(TAG_AS_GRASS_HOVER.into()),
+                ..row(
+                    Level::Info,
+                    at(),
+                    "Looks like complex grass, but is not tagged as grass".into(),
+                    None,
+                )
+            });
+        }
+        let exr = i
+            .input
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("exr"));
+        if exr && a.alpha == engine::presets::AlphaContent::Varying && !j.profile.alpha.exr_straight
+        {
+            out.push(Problem {
+                fix: Some(Fix::StraightAlpha(i.key.clone())),
+                detail: Some(STRAIGHT_ALPHA_HOVER.into()),
+                ..row(
+                    Level::Info,
+                    at(),
+                    "Colour divided by alpha on load (premultiplied EXR)".into(),
+                    None,
+                )
+            });
+        }
+    }
+    // Note FC10 (CV8): a stored empty `match{n}` (n >= 2; `match1 = ""` turns the diffuse match off) matches nothing.
+    for v in views.iter() {
+        for n in 2..=8u8 {
+            if v.settings.get(&format!("match{n}"))
+                == Some(&serde_json::Value::String(String::new()))
+            {
+                out.push(Problem {
+                    fix: Some(Fix::RemoveMatch(v.id.clone(), n)),
+                    ..row(
+                        Level::Info,
+                        set_at(&v.key, &v.id),
+                        format!("match{n} is empty and matches nothing"),
+                        None,
+                    )
+                });
+            }
+        }
+    }
     out.extend(nif_rows(NifLevel::Info, Level::Info));
     out
+}
+
+/// The hover of `Reset also.json` (Note FC10, CN43, CN39).
+pub const RESET_ALSO_HOVER: &str = "Reset also.json deletes this record of the files an Also export wrote outside the \
+     manifests (report, zips, sums file). The next Also export writes a new record. A report, zip or sums file already \
+     there that the new record does not list is then not known as Tessalith's: the export keeps it and says so, as for \
+     any file it did not write.";
+/// The hover of a `Tag as grass` row (Note FC10).
+pub const TAG_AS_GRASS_HOVER: &str = "A 1:2 image whose bottom half is a normal map, as complex grass is. No grass record \
+     (GRAS) of a scan names it, so it is converted as a diffuse until it is tagged. Tag as grass writes subtype = \
+     \"complex_grass\" for it in sdc.toml.";
+/// The hover of a `Straight alpha` row (Note FC10, BQ15).
+pub const STRAIGHT_ALPHA_HOVER: &str = "OpenEXR stores colour multiplied by alpha, so Tessalith divides it back on \
+     load. If this file's colour is not premultiplied (straight alpha), Straight alpha reads it as stored \
+     (alpha.exr_straight = true).";
+
+/// Note FC10 (T8): `(id, other)` of a CFG-PRESET-SKIPPED reason that is an alias clash.
+/// shortcut: parses the engine's message (`presets::check_aliases`); read a `data` field once the engine adds one.
+fn alias_clash(reason: &str) -> Option<(&str, &str)> {
+    let (id, rest) = reason
+        .split_once("preset '")?
+        .1
+        .split_once("': suffix alias '")?;
+    let other = rest
+        .split_once("is already declared by preset '")?
+        .1
+        .strip_suffix('\'')?;
+    Some((id, other))
 }
 
 /// The folder that holds an IN-UNREADABLE entry: the engine writes `skipped: <path>: <error>` (engine `api.rs`,
@@ -676,5 +841,21 @@ mod tests {
         let m = r"skipped: C:\mods\a\locked: Access is denied. (os error 5)";
         assert_eq!(unreadable_folder(m), Some(PathBuf::from(r"C:\mods\a")));
         assert_eq!(unreadable_folder("not the shape"), None);
+    }
+
+    /// Pins the engine's alias-clash refusal (`presets::check_aliases`) that `alias_clash` parses.
+    #[test]
+    fn alias_clash_reads_the_engine_reason() {
+        let mut r = engine::presets::PresetRegistry::builtin().unwrap();
+        let t = |id: &str| {
+            format!("schema_version = 1\nid = \"{id}\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[suffix_aliases]\nzz9 = \"n\"\n")
+        };
+        r.add_toml(&t("a")).unwrap();
+        let e = r.add_toml(&t("b-export")).unwrap_err().to_string();
+        assert_eq!(alias_clash(&e), Some(("b-export", "a")), "{e}");
+        assert_eq!(
+            alias_clash("CFG-INVALID: preset 'x': unknown preset 'nope'"),
+            None
+        );
     }
 }

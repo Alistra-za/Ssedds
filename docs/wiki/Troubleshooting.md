@@ -97,7 +97,7 @@ If the file is not listed as a helper at all, its name has no term Tessalith kno
 
 ### The GUI is read-only
 
-`sdc.toml` failed to load or was rejected. The banner names the problem. Fix the file in a text editor and press **Reload**. If `sdc-project.toml` failed to load, only sets and the JSON are read-only.
+`sdc.toml` failed to load or was rejected. The banner names the problem. Fix the file in a text editor and press **Reload**. If `sdc-project.toml` failed to load, only sets and the JSON are read-only; its red Problems row names the line and has **Open in editor** and **Reload**. A save refused because a file has Windows' read-only flag leaves a Problems row with **Clear read-only flag**.
 
 ### The GUI does not start
 
@@ -222,7 +222,7 @@ Every warning has a code and a severity:
 | `CFG-INVALID` | error | A value outside its range, or a combination that cannot be honoured (a backend that cannot write the format, `legacy` header on BC7 or `_SRGB`, a bad swizzle, `bc1_transparent_black` with BC1, a bad filter scope, and so on). In a config, preset, rule or `--set`, the run stops with exit 2; reached after layering, that file fails. | Fix the value. |
 | `CFG-FILE-UNMATCHED` | info | A `[files]` key matches no file. | Fix or remove the entry. |
 | `CFG-FILTER-IGNORED` | info | An unscoped non-box `mips.filter` that this texture cannot use; it uses box. Shown in the CLI log. | Scope the filter to colour maps, or ignore. |
-| `CFG-PRESET-SKIPPED` | warning | A file in the user presets folder failed to load and was skipped. | Fix the file (`sdc presets validate`). |
+| `CFG-PRESET-SKIPPED` | warning | A file in the user presets folder failed to load and was skipped. | Fix the file (`sdc presets validate`). When another preset already declares its suffix aliases, the GUI's Problems row has **Remove aliases from {id}**. |
 | `CFG-GREEN-CONFLICT` | warning | An explicit `channels.flip_green` contradicts `channels.green_convention`; `flip_green` wins. | Remove one. |
 
 ### Dimensions

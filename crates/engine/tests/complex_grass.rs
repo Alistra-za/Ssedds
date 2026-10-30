@@ -6,7 +6,7 @@ use engine::config::*;
 use engine::events::*;
 use engine::image::Rgba32F;
 use engine::policy::{
-    availability, offered, AcceptSuggestions, Availability, JobStatus, ResolvedJob,
+    availability, offered, offered_for, AcceptSuggestions, Availability, JobStatus, ResolvedJob,
 };
 use image::{DynamicImage, ImageBuffer, Rgba};
 use std::sync::Arc;
@@ -197,6 +197,12 @@ fn vanilla_tag_stays_complex_grass() {
     assert!(!offered(Target::Vanilla, Subtype::ComplexGrass));
     assert!(!offered(Target::Cs, Subtype::ComplexGrass));
     assert!(offered(Target::Vanilla, Subtype::Diffuse));
+    // Note FC10 (X3): offered where the set's shader is grass or no `textures` folder is above the file.
+    for t in [Target::Cs, Target::Vanilla] {
+        assert!(offered_for(t, Subtype::ComplexGrass, true));
+        assert!(!offered_for(t, Subtype::ComplexGrass, false));
+        assert!(offered_for(t, Subtype::Diffuse, false));
+    }
 }
 
 /// R4, R7: BC7 UNORM only, and no resize.

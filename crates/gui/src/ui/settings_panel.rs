@@ -545,6 +545,15 @@ pub(super) fn editor(
             let r = ui.add(egui::Checkbox::new(&mut b, "").indeterminate(mixed));
             (r.changed().then(|| json!(b)), r)
         }
+        "alpha.exr_straight" => {
+            let mut b = f.value.as_bool().unwrap_or(false);
+            let r = ui
+                .add(egui::Checkbox::new(&mut b, "").indeterminate(mixed))
+                .on_hover_text(
+                    "On: the colour is read as stored. Off: it is divided by alpha, as OpenEXR stores premultiplied colour",
+                );
+            (r.changed().then(|| json!(b)), r)
+        }
         "encoder.rgbcx_level" => {
             let cur = f
                 .value
@@ -677,8 +686,9 @@ fn subtype_field(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> (Option<Value>, 
     });
     let id = egui::Id::new(("sub-type-picker", cx.key));
     let suggested = cx.job.suggestions.first().map(|s| s.subtype);
-    let picked =
-        super::type_picker::show(ui, id, &r, current, suggested, TypeKind::SubType, cx.target);
+    let grass = engine::policy::grass_context(cx.job);
+    let kind = TypeKind::SubType;
+    let picked = super::type_picker::show(ui, id, &r, current, suggested, kind, cx.target, grass);
     (picked.filter(|s| Some(*s) != current).map(|s| json!(s)), r)
 }
 
@@ -806,6 +816,17 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
                         if f.field == "encoder.backend" && f.lock.is_none() {
                             f.lock = backend_lock(&cx.job.profile, cx.nvtt_found);
                         }
+                        match field_row(ui, cx, &f) {
+                            Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
+                            Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
+                            None => {}
+                        }
+                    }
+                    // Note FC10 (BQ15): an EXR source's Straight alpha.
+                    if let Some(f) = (name == "Alpha")
+                        .then(|| crate::model::fields::exr_straight_view(cx.target, cx.job))
+                        .flatten()
+                    {
                         match field_row(ui, cx, &f) {
                             Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
                             Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),

@@ -976,7 +976,7 @@ pub fn finish_also(
     s
 }
 
-/// CN43: the tail of the note for an unreadable `also.json`.
+/// CN43: the tail of the note for an unreadable `also.json`. The GUI's row offers `Reset also.json` (Note FC10).
 const OWNED_UNREADABLE: &str =
     "it is left as it is, and no report, zip or sums file is written until it is fixed or removed";
 

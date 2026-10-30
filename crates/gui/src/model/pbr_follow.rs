@@ -38,6 +38,11 @@ enum Follow {
 }
 
 impl AppModel {
+    /// Note FC10 (X10, X3): `Tag as grass` writes `subtype = "complex_grass"`, an explicit user value (one undo step).
+    pub fn tag_as_grass(&mut self, key: &str) {
+        self.edit_subtype("Tag as grass", key, Some(Subtype::ComplexGrass));
+    }
+
     /// Change (`Some`) or reset (`None`) `key`'s sub-type, with the PBR follow-on for its set, as one step.
     pub(super) fn edit_subtype(&mut self, label: &str, key: &str, new: Option<Subtype>) {
         // Owner 2026-10-27 (Note DQ): a diffuse made Advanced skin takes its set's packed `_rmaos` to `_rfaos`, and one

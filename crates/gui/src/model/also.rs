@@ -292,7 +292,40 @@ impl AppModel {
             self.export.notes.push(t.clone());
             self.also_error = Some(t);
         }
+        // Note FC10 (CN43): the record is read here, once per export, as `run_also` read it (ALSO-OWNED-UNREADABLE
+        // carries no job, so it reaches no row).
+        let rec = engine::also::OwnedFiles::load(&s.folders[0])
+            .err()
+            .map(|_| record_path(&s.folders[0]));
+        if rec != self.also_unreadable {
+            self.also_unreadable = rec;
+            self.invalidate_views();
+        }
         self.also_written = Some(s.folders);
+    }
+
+    /// Note FC10 (CN43): `Reset also.json`. Deletes only this project's record, `<PBR folder>/_sdc/also.json` (the
+    /// path comes from the model, never from the row). The next Also export starts a new record.
+    pub fn reset_also_json(&mut self, path: &Path) -> Result<(), String> {
+        let ours = record_path(&self.also_folders()[0]);
+        if path != ours || self.also_unreadable.as_deref() != Some(path) {
+            return Err(format!(
+                "{} is not this project's unreadable record",
+                path.display()
+            ));
+        }
+        if self.export.running.is_some() {
+            return Err(EXPORT_RUNNING.into());
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+        self.also_unreadable = None;
+        self.invalidate_views();
+        self.status_line = format!("Deleted {}", path.display());
+        Ok(())
     }
 
     /// Final review I2: the worker's `AlsoZipped`, after the JSON: the walk's, zips' and report's notes (only theirs),
@@ -323,6 +356,11 @@ impl AppModel {
         }
         self.after_export(failure);
     }
+}
+
+/// Where `engine::also::OwnedFiles` keeps the record of `pbr_folder` (CN39).
+fn record_path(pbr_folder: &Path) -> PathBuf {
+    pbr_folder.join("_sdc").join("also.json")
 }
 
 /// Final review I2: the files of `files` (`/`-separated paths under `root`, with their text) that now hold exactly

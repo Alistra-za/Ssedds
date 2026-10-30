@@ -7,7 +7,7 @@ Tessalith decides how to encode each file from its sub-type: what the texture is
 | Extension | Notes |
 |---|---|
 | `.png`, `.tga`, `.tif`, `.tiff`, `.bmp`, `.jpg`, `.jpeg`, `.webp` | Read as stored. |
-| `.exr`, `.hdr` | Float sources. A TruePBR emissive needs one (peaking above 1.0) to become BC6H. `hdr_sky` is BC6H whatever the source. An `.exr` with alpha is read as premultiplied; set `alpha.exr_straight = true` for one saved with straight alpha. |
+| `.exr`, `.hdr` | Float sources. A TruePBR emissive needs one (peaking above 1.0) to become BC6H. `hdr_sky` is BC6H whatever the source. An `.exr` with alpha is read as premultiplied; set `alpha.exr_straight = true` for one saved with straight alpha (in the GUI: the Problems row's **Straight alpha**, or the tick box in the texture's Alpha group). |
 | `.psd`, `.psb` | The merged composite image only; layers are never read. RGB and Grayscale documents, 8, 16 and 32 bits per channel. The file must be saved with Maximize Compatibility on; without it the file is refused. Colour that Photoshop matted against white is un-matted. |
 | `.kra`, `.ora` | Krita and OpenRaster: the `mergedimage.png` stored in the archive. Layers are never read. |
 | `.dds` | Skipped by default (`IN-DDS-SKIPPED`). Set `reencode = true` on the file to convert it anyway, at a quality cost (`LOSS-REENCODE`). |
@@ -387,7 +387,7 @@ The GUI can integrate a set's normal map into a height map (**Generate from norm
 
 A complex-grass texture is one image twice as tall as it is wide, with power-of-two sides (for example 1024x2048): diffuse and alpha in the top half, normal and specular in the bottom half. Community Shaders detects it from the bottom-left texel.
 
-- Set the set's shader to `complex_grass`, set `subtype = "complex_grass"` on the file's `[files]` entry, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half gets a High-confidence `complex_grass` suggestion, which the GUI accepts. The GUI's sub-type picker does not offer `complex_grass`.
+- Set the set's shader to `complex_grass`, set `subtype = "complex_grass"` on the file's `[files]` entry, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half gets a High-confidence `complex_grass` suggestion, which the GUI accepts (and records in `sdc.toml`). The GUI's sub-type picker offers **Complex grass** where the set's shader is a grass shader or no `textures` folder is above the file. A diffuse with the complex grass shape that nothing tags gets an info row in Problems with **Tag as grass**, which writes `subtype = "complex_grass"`.
 - The CLI never tags it automatically. If you convert the same folder with `sdc convert`, add `subtype = "complex_grass"` to the file's `[files]` entry, or it is converted as a diffuse.
 - Codes: `GRASS-SHAPE` (error: not 1:2 or not power of two), `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE` (the source corner already fails the CS test), and `VAL-GRASS-DETECT` (error: the encoded corner still fails after a slowest re-encode).
 

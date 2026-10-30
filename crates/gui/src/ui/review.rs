@@ -212,9 +212,9 @@ pub fn fix_buttons(
                     .on_disabled_hover_text(why);
                     let id = egui::Id::new(("set-type-picker", key));
                     let kind = TypeKind::SetType;
-                    if let Some(st) =
-                        type_picker::show(ui, id, &opener, None, *suggested, kind, model.target)
-                    {
+                    let grass = item.job.as_ref().is_some_and(engine::policy::grass_context);
+                    let (t, s) = (model.target, *suggested);
+                    if let Some(st) = type_picker::show(ui, id, &opener, None, s, kind, t, grass) {
                         pick = Some(RowPick::Decide(key.to_string(), st));
                     }
                 }

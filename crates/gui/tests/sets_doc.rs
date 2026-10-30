@@ -265,11 +265,11 @@ fn a_non_conflict_save_error_names_the_file() {
     perm.set_readonly(false);
     std::fs::set_permissions(&file, perm).unwrap();
     assert!(saved.is_err());
+    // Note FC10 (item 27): a Problems row with `Clear read-only flag`, not a dialog.
+    assert_eq!(m.dialog, None::<Dialog>);
     assert_eq!(
-        m.dialog,
-        Some(Dialog::Error(
-            "sdc-project.toml is read-only: clear the read-only flag to save".into()
-        ))
+        m.status_line, "sdc-project.toml is read-only: not saved",
+        "the refusal names the file"
     );
     assert_eq!(
         std::fs::read(&file).unwrap(),

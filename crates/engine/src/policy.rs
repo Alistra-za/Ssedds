@@ -1282,7 +1282,23 @@ pub fn availability(t: Target, s: Subtype) -> Availability {
 /// Whether the sub-type pickers offer `s` under `t`: available, and never `complex_grass`, which the set shader or the
 /// GRAS auto-detect chooses (DECISIONS X3). A file tagged `complex_grass` still encodes (`availability` is unchanged).
 pub fn offered(t: Target, s: Subtype) -> bool {
-    availability(t, s) == Availability::Available && s != Subtype::ComplexGrass
+    offered_for(t, s, false)
+}
+
+/// `offered`, with `complex_grass` offered too where `grass` holds ([`grass_context`]; Note FC10, supersedes X3's
+/// hidden picker).
+pub fn offered_for(t: Target, s: Subtype, grass: bool) -> bool {
+    availability(t, s) == Availability::Available && (s != Subtype::ComplexGrass || grass)
+}
+
+/// Where a picker offers `complex_grass` for `job` (Note FC10): its set's shader is a grass shader, or no `textures`
+/// folder is above the file, so the GRAS auto-detect (which reads the game path, X10) can never tag it.
+pub fn grass_context(job: &ResolvedJob) -> bool {
+    use crate::shader::Shader;
+    job.shader
+        .as_ref()
+        .is_some_and(|p| matches!(p.shader, Shader::ComplexGrass | Shader::PbrGrass))
+        || !job.game_path.starts_with("textures/")
 }
 
 /// What an unresolved job is waiting for (DECISIONS N9), so a GUI can offer the right control.
