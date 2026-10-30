@@ -97,7 +97,7 @@ Textures grouped into material sets, with the status of each packed output (run,
 
 ## Deciding
 
-A texture whose name follows the conventions decides itself: High-confidence suggestions are accepted, and the sub-type reads **(auto)**. Hover it to see why. See [Texture types](Texture-Types.md) for the naming rules.
+A texture whose name follows the conventions decides itself: High-confidence suggestions are accepted. When the plan settles, those sub-types (and any alpha meaning taken from scanned meshes) are written to `sdc.toml` as one undo step, shown as one Problems row, "{n} types set automatically (High confidence)", with **Undo this change** and the list on hover. Save keeps them, so the command line reads the same types. A file you already set is never touched. See [Texture types](Texture-Types.md) for the naming rules.
 
 A texture that still needs an answer has an amber border. The centre column then shows a *Needs a decision* box with the question:
 
@@ -458,7 +458,7 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
   - **Channel remap** (data sub-types): the channel swizzle, the source of R, G, B and A (r, g, b, a, 0 or 1), saved as `channels.swizzle`. A remap for an alias's files is the Channel remap of that alias's branch.
   - **Packing fills** (data sub-types): the values for packed channels without a source map (roughness, metallic, AO, specular, height, 0-255).
 - Each field shows the base's value as a hint (in a branch, the sub-type's). A field you changed has **↺**, which removes your change. A sub-type's category, colour space and the other built-in rules are never offered.
-- **Saving.** The preset is loaded through the same loader as the presets folder before the file is written; a preset that would not load is never written. Your preset goes back to its own file, edited in place so its comments and layout stay; a new one goes to `<name>.toml`. After a save the folder is read again, the preset is listed in the header's **Preset** menu and the folder is planned again, without a restart. If `sdc.toml` names a preset that has since been deleted, the folder is planned with the fallback (your config's preset, else the Mode's default) and a banner says "preset <id> not found: using <fallback>".
+- **Saving.** The preset is loaded through the same loader as the presets folder before the file is written; a preset that would not load is never written. Your preset goes back to its own file, edited in place so its comments and layout stay; a new one goes to `<name>.toml`. After a save the folder is read again, the preset is listed in the header's **Preset** menu and the folder is planned again, without a restart. If `sdc.toml` names a preset that has since been deleted, the folder is still planned with the fallback (your config's preset, else the Mode's default), but the export is blocked: Problems shows a red row "Preset <id> is not installed" with **Choose preset…**, which opens the **Preset** menu. `sdc convert` stops on the same file with exit code 2.
 
 ## Where settings live
 

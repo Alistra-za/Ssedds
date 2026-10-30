@@ -40,6 +40,8 @@ fn open(root: PathBuf) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    // These pin the recovery file's text; Note FC1's recording of the High types is pinned in auto_accept.rs.
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(
         m.wait_idle(Duration::from_secs(60)),

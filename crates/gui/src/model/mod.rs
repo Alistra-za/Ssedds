@@ -74,6 +74,11 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// A recorded value as the automatic row lists it: `normal`, `cutout`, `100`.
+fn show(v: &serde_json::Value) -> String {
+    v.as_str().map_or_else(|| v.to_string(), str::to_string)
+}
+
 /// How long the "Undid/Redid" note stays in the status line (AG15).
 const UNDO_NOTE_FOR: Duration = Duration::from_secs(5);
 
@@ -532,6 +537,18 @@ pub struct AppModel {
     pub show_in_meshes: Option<String>,
     /// A NIF worklist row's fix: (NIF path, tab, field); app.rs switches to the Meshes view (NIF team, Note GD1).
     pub nif_tab_request: Option<(String, meshes::NifTab, Option<nif::fields::Field>)>,
+    /// Note FC1 (AM14): `Choose preset…` was clicked; the header opens its Preset menu on the next frame.
+    pub choose_preset: bool,
+    /// Note FC1: the last automatic recording's lines (its row's hover) and the `history.pushes` it left.
+    pub(crate) auto_note: Option<(Vec<String>, u64)>,
+    /// Note FC1 (AM14): `preset` names no installed preset; computed once per plan request.
+    missing_preset_id: Option<String>,
+    /// Note FC1: the plan's own decisions are being written (they stay automatic, `unmark_auto` leaves them).
+    recording: bool,
+    /// Note FC1: re-recordings since the last user step; capped so alternating evidence cannot loop.
+    auto_rerecords: u8,
+    /// Note FC1: a user step started the plan chain in flight; its recording folds into that step.
+    auto_cause: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// Review's Export was clicked while a plan or scan read was in flight: the export continues when it lands.
@@ -769,6 +786,12 @@ impl AppModel {
             report_saving: false,
             show_in_meshes: None,
             nif_tab_request: None,
+            choose_preset: false,
+            auto_note: None,
+            missing_preset_id: None,
+            recording: false,
+            auto_rerecords: 0,
+            auto_cause: false,
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -890,6 +913,9 @@ impl AppModel {
         self.sets_doc = Some(crate::sets_doc::SetsDoc::open(&root));
         self.drop_undo_note();
         self.history.clear();
+        self.auto_note = None;
+        self.auto_rerecords = 0;
+        self.auto_cause = false;
         self.refresh_banner();
         let recent = self.settings.recent.clone();
         self.settings.push_recent(root.clone());
@@ -987,9 +1013,13 @@ impl AppModel {
         req.project_config_inline = Some(if project.read_only() {
             ConfigFile::default()
         } else {
-            let mut c = project.config().unwrap_or_default();
-            // AM14: a preset that no longer exists is left out, so the plan runs on the fallback (the banner says so).
-            if self.missing_preset().is_some() {
+            // Note FC1: what the plan recorded on its own stays automatic here, so new scan evidence can change it.
+            let mut c = project
+                .config_without(&self.auto_fields())
+                .unwrap_or_default();
+            // AM14: a preset that no longer exists is left out, so the plan runs on the fallback; Note FC1: the
+            // export is blocked by a row until another preset is chosen.
+            if self.missing_preset_id.is_some() {
                 c.preset = None;
             }
             c
@@ -1172,6 +1202,8 @@ impl AppModel {
 
     /// Plan again on a worker; a newer plan supersedes (cancels) an older one.
     pub fn replan(&mut self) {
+        // Note FC1: read the presets once per plan, not per frame (the export gate asks every frame).
+        self.missing_preset_id = self.missing_preset();
         self.refresh_banner();
         let (Some(session), Some(req), Some(root)) =
             (self.session.clone(), self.request(), self.root.clone())
@@ -1860,9 +1892,190 @@ impl AppModel {
         });
     }
 
+    /// Note FC1: the `(key, field)` values the plan recorded on its own that the document still holds unchanged: they
+    /// stay automatic, so the GUI's plan leaves them out of `sdc.toml` (`request`).
+    fn auto_fields(&self) -> Vec<(String, &'static str)> {
+        let Some(doc) = self.project.as_ref() else {
+            return vec![];
+        };
+        self.history
+            .auto_recorded
+            .iter()
+            .filter(|((k, f), v)| doc.file_value(k, f).as_ref() == Some(*v))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+    /// Note FC1: `key`'s `field` is a value the plan recorded on its own and nobody changed since.
+    pub(crate) fn is_auto_value(&self, key: &str, field: &'static str) -> bool {
+        let rec = self.history.auto_recorded.get(&(key.to_string(), field));
+        rec.is_some_and(|v| {
+            self.project
+                .as_ref()
+                .and_then(|d| d.file_value(key, field))
+                .as_ref()
+                == Some(v)
+        })
+    }
+
+    /// Note FC1: the user set `key`'s `field` themselves: it is no longer automatic.
+    fn unmark_auto(&mut self, key: &str, field: &str) {
+        if !self.recording {
+            // The alpha policy and its threshold go together.
+            let alpha = field.starts_with("alpha.");
+            let before = self.history.auto_recorded.len();
+            self.history.auto_recorded.retain(|(k, f), _| {
+                !(k == key && (*f == field || (alpha && f.starts_with("alpha."))))
+            });
+            // The same value as recorded is no text change, so no edit re-plans: the plan must see it as explicit.
+            if self.history.auto_recorded.len() != before && !self.batch {
+                self.replan();
+            }
+        }
+    }
+
+    /// Note FC1 (amends U3/U5): what the settled plan decided on its own is written into `sdc.toml`, so Save keeps it
+    /// and `sdc convert` plans the same: an accepted High suggestion (mesh-vote and GRAS sub-types are High
+    /// suggestions too) writes `subtype`, a mesh-alpha verdict writes `alpha.policy` and its threshold. One undo step,
+    /// one Problems row. A recorded value stays automatic in the GUI (`auto_fields`): when new evidence changes it,
+    /// it is written again (`key: old → new`). A field the user wrote, or one whose recorded entry is gone (an Undo,
+    /// a reset), is left alone. True when it recorded (and re-planned).
+    fn record_auto_decisions(&mut self) -> bool {
+        use engine::policy::Provenance;
+        // Never over a running export, nor over the crash restore its toast can still undo (Note FB5).
+        let restore_open =
+            self.crash_restore.is_some() && self.undo_label() == Some("Restore crash edits");
+        // Alternating evidence would re-record forever: two rounds, then wait for a user step.
+        if self.export.running.is_some() || restore_open || self.auto_rerecords >= 2 {
+            return false;
+        }
+        let Some(doc) = self.project.as_ref().filter(|p| !p.read_only()) else {
+            return false;
+        };
+        // (key, field, new value: `None` clears a recorded value the plan no longer decides on its own).
+        type Write = (String, &'static str, Option<serde_json::Value>);
+        let mut writes: Vec<Write> = vec![];
+        let mut lines = vec![];
+        for i in &self.items {
+            // What the plan decided on its own for each field; `None`: nothing (any more), as for a file that became
+            // a helper, so its recorded type is cleared. An image whose plan failed (no job) is left alone.
+            let image = matches!(i.kind, ItemKind::Image | ItemKind::Dds);
+            if image && i.job.is_none() {
+                continue;
+            }
+            let j = i.job.as_ref().filter(|_| {
+                image && !matches!(i.status, ItemStatus::PackedInto(_) | ItemStatus::Skipped(_))
+            });
+            let st = j
+                .filter(|j| fields::auto_subtype_reason(j).is_some())
+                .map(|j| json!(j.profile.subtype));
+            // shortcut: a mesh `remove` stays GUI-only. Written as an explicit policy it would stop cs-compact's
+            // opaque-colour rules (owner O1) and change the format; record it once the engine treats both alike.
+            let mesh = |j: &engine::policy::ResolvedJob, f: &str| {
+                j.provenance.get(f) == Some(&Provenance::MeshAlpha)
+            };
+            let mesh_j = j.filter(|j| {
+                mesh(j, "alpha.policy") && j.profile.alpha.policy != AlphaPolicy::Remove
+            });
+            let alpha = mesh_j.map(|j| json!(j.profile.alpha.policy));
+            let threshold = mesh_j
+                .filter(|j| mesh(j, "alpha.threshold"))
+                .map(|j| json!(j.profile.alpha.threshold));
+            for (f, auto) in [
+                ("subtype", st),
+                ("alpha.policy", alpha),
+                ("alpha.threshold", threshold),
+            ] {
+                let rec = self.history.auto_recorded.get(&(i.key.clone(), f));
+                let now = doc.file_value(&i.key, f);
+                let line = match (rec, now, &auto) {
+                    // New: nothing written by anyone yet.
+                    (None, None, Some(v)) => format!("{}: {}", i.key, show(v)),
+                    // Recorded and unchanged since: the plan saw it as automatic again, so a change is new evidence.
+                    (Some(r), Some(n), Some(v)) if *r == n && n != *v => {
+                        format!("{}: {} → {}", i.key, show(&n), show(v))
+                    }
+                    (Some(r), Some(n), None) if *r == n => {
+                        format!("{}: {} → not set", i.key, show(&n))
+                    }
+                    _ => continue,
+                };
+                if f != "alpha.threshold" {
+                    lines.push(line);
+                }
+                writes.push((i.key.clone(), f, auto));
+            }
+        }
+        if writes.is_empty() {
+            return false;
+        }
+        let rerecord = writes
+            .iter()
+            .any(|(k, f, _)| self.history.auto_recorded.contains_key(&(k.clone(), *f)));
+        let n = lines.len().max(1);
+        let label = format!(
+            "Set {n} type{} automatically",
+            if n == 1 { "" } else { "s" }
+        );
+        // Marked before the edit: the plan it starts already leaves them out (`auto_fields`). A cleared one keeps
+        // its entry, so undoing the clear brings the value back as automatic, not as the user's.
+        for (k, f, v) in &writes {
+            if let Some(v) = v {
+                self.history.auto_recorded.insert((k.clone(), f), v.clone());
+            }
+        }
+        // Caused by a user step (its plan chain): one undo takes both back, as the encoding cleanup does (Z11).
+        let cause = std::mem::take(&mut self.auto_cause);
+        let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        self.recording = true;
+        let fold = cause && self.history.undo.last().is_some_and(|c| c.after == before);
+        let write = |p: &mut ProjectDoc| {
+            for (k, f, v) in &writes {
+                match v {
+                    Some(v) => p.set_file_value(k, f, v),
+                    None => p.clear_file_value(k, f),
+                }
+            }
+        };
+        let recorded = if fold {
+            self.batch = true;
+            if let Some(p) = self.project.as_mut() {
+                write(p);
+            }
+            self.batch = false;
+            let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+            if let Some(last) = self.history.undo.last_mut() {
+                last.after = after.clone();
+            }
+            let changed = after != before;
+            if changed {
+                self.replan();
+            }
+            changed
+        } else {
+            self.batch_edit(&label, |m| m.edit("Set automatically", write))
+        };
+        self.recording = false;
+        if recorded {
+            self.auto_rerecords += u8::from(rerecord);
+            self.auto_note = Some((lines, self.history.pushes));
+            self.invalidate_views();
+        }
+        recorded
+    }
+
+    /// Note FC1 (X10/X11): `Tag as grass` writes the sub-type the CLI reads (the user's decision, one step).
+    pub fn tag_as_grass(&mut self, key: &str) {
+        self.edit_subtype("Tag as grass", key, Some(Subtype::ComplexGrass));
+    }
+
     /// A user edit recorded a step: re-plan as a change (`replan_changed`).
     fn replan_after_edit(&mut self) {
         self.type_edit_recorded();
+        if !self.recording {
+            self.auto_rerecords = 0;
+            self.auto_cause = true;
+        }
         self.replan_changed();
     }
 
@@ -2558,6 +2771,13 @@ impl AppModel {
         if self.settle_types() {
             return;
         }
+        // Note FC1: the settled plan's own decisions go into the project; its re-plan finds nothing new to record. A
+        // queued export waits for that plan (the flags below are taken then).
+        if self.record_auto_decisions() {
+            return;
+        }
+        // The chain has settled: a later recording (a scan landing) is no part of that step.
+        self.auto_cause = false;
         // Both flags are taken together so a leftover one cannot fire on a later, unrelated plan; the export the
         // user clicked wins.
         let (clicked, continued) = (
@@ -2813,6 +3033,10 @@ impl AppModel {
 
     fn apply_snapshot(&mut self, s: &history::Snapshot) {
         self.dropped_fills.clear();
+        // Note FC1: the row's Undo is for its own step; `pushes` does not move on an undo.
+        self.auto_note = None;
+        self.auto_rerecords = 0;
+        self.auto_cause = false;
         // Note FB3: the bulk result line describes the edit that is now taken back (or redone).
         self.bulk.report = None;
         // Task 9 (Z11): restoring a state as it was is no sub-type change to clean up after.
@@ -3072,6 +3296,8 @@ impl AppModel {
     }
 
     pub fn set_field(&mut self, item_key: &str, field: &str, value: serde_json::Value) {
+        // Note FC1: a value the user sets is theirs, not the plan's automatic one.
+        self.unmark_auto(item_key, field);
         if field == "subtype" {
             if let Ok(st) = serde_json::from_value::<Subtype>(value.clone()) {
                 return self.edit_subtype("Change subtype", item_key, Some(st));
@@ -3165,6 +3391,9 @@ impl AppModel {
     pub fn decide(&mut self, item_key: &str, answer: Answer) {
         if let Answer::Subtype(st) = answer {
             return self.edit_subtype("Decide", item_key, Some(st));
+        }
+        if matches!(answer, Answer::Alpha(_)) {
+            self.unmark_auto(item_key, "alpha.policy");
         }
         let k = item_key.to_string();
         self.edit("Decide", move |p| match answer {
@@ -3261,13 +3490,9 @@ impl AppModel {
         r.get(&id).is_none().then_some(id)
     }
 
-    /// The preset a plan uses without the project's: the user config's, else the target's default.
-    fn fallback_preset(&self) -> String {
-        self.user_config
-            .as_deref()
-            .and_then(|p| ConfigFile::load(p).ok())
-            .and_then(|c| c.preset)
-            .unwrap_or_else(|| engine::presets::default_preset_for(self.target).to_string())
+    /// Note FC1 (AM14): the project's `preset` when it names no installed preset, as the last plan request found it.
+    pub fn missing_preset_id(&self) -> Option<&str> {
+        self.missing_preset_id.as_deref()
     }
 
     /// Pick the project's preset (`None`: the target's default), one undo step, re-planned.
@@ -3473,12 +3698,7 @@ impl AppModel {
     pub fn refresh_banner(&mut self) {
         let mut lines = Vec::new();
         lines.extend(self.kept_banner.clone());
-        if let Some(id) = self.missing_preset() {
-            lines.push(format!(
-                "preset {id} not found: using {}",
-                self.fallback_preset()
-            ));
-        }
+        // Note FC1 (AM14): a missing preset is a Problems row that blocks the export, not a banner.
         // Note FB5: a crash's recovery file is restored on open and needs no banner, except beside a document that
         // is read-only (it cannot take the edits, so the file stays and the banner names it).
         if let Some(p) = self.project.as_ref().filter(|p| p.read_only()) {
@@ -3836,6 +4056,8 @@ mod tests {
         let session =
             Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
         let mut m = AppModel::new(settings, None, session);
+        // Note FC1: no High accept, so no recording adds its own plan to the count.
+        m.accept = AcceptSuggestions::None;
         m.scan_db = Some(db);
         let start = m.generation;
         m.open_folder(root);

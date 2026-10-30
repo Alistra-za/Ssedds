@@ -701,13 +701,22 @@ fn the_checks_pill_under_a_set_filter_keeps_the_set() {
     assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Set(wall)));
 }
 
+/// Every row but Note FC1's "types set automatically" Info row (`pbr_wall` opens as the app, which records them).
+fn not_auto(m: &sdc_gui::model::AppModel) -> Vec<bottom::Problem> {
+    bottom::problems(m)
+        .iter()
+        .filter(|p| !p.text.contains("set automatically"))
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn soft_check_rows_are_listed_but_leave_ready_alone() {
     let d = tempfile::tempdir().unwrap();
     let m = pbr_wall(d.path(), 20, false);
     assert!(sdc_gui::model::pbr_export::export_blocks(&m).is_empty());
     assert!(sdc_gui::model::pbr_export::export_asks(&m).is_empty());
-    let all = bottom::problems(&m);
+    let all = not_auto(&m);
     assert_eq!(all.len(), 1, "{all:?}");
     assert_eq!(all[0].level, Level::Check);
     assert!(!bottom::counts_as_ready_problem(&all[0]));
@@ -777,7 +786,7 @@ fn the_green_guess_is_a_check_row_with_treat_as_opengl() {
             .any(|w| w.code == Code::ChkGreenGuess && w.severity == Severity::Info),
         "{ws:?}"
     );
-    let all = bottom::problems(&m);
+    let all = not_auto(&m);
     assert_eq!(all.len(), 1, "{all:?}");
     assert_eq!(all[0].level, Level::Check);
     assert_eq!(all[0].code, Some(Code::ChkGreenGuess));

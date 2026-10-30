@@ -47,7 +47,9 @@ Tessalith works out each file's sub-type from its name. A known suffix such as `
 skip  C:/Work/rock/rock.png: SUG-LOW-CONFIDENCE sub-type 'diffuse' is a High-confidence suggestion (colour member, non-PBR set)
 ```
 
-Files decided by a rule, a `--set`, a `[files]` entry or a set shader are not affected. The GUI always accepts High-confidence suggestions, so use `--accept-suggestions high` to match it, or record each decision in `sdc.toml`.
+Files decided by a rule, a `--set`, a `[files]` entry or a set shader are not affected. The GUI accepts High-confidence suggestions and writes each one into `sdc.toml` as a `[files]` entry, so a project saved from the GUI converts the same way here without the flag. For a folder the GUI has not saved, use `--accept-suggestions high` to match it.
+
+What the GUI decides from a Meshes scan, `sdc` cannot: it never reads the scan database. The GUI writes those decisions into `sdc.toml` too (a sub-type the meshes' shader gives, grass found on a GRAS model, an alpha meaning from the meshes), so a saved project agrees. Two stay GUI-only: a mesh *Remove* on a texture whose alpha varies (`sdc` asks for its alpha meaning instead), and the environment-map `_m` the GUI's Also export derives from the meshes (`sdc convert` writes no `_m`).
 
 ### --set syntax
 

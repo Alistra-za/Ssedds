@@ -253,7 +253,8 @@ fn picker_is_one_undo_step() {
         fixture(d.path(), &TWO_AO, TWO_AO_TOML),
         egui::vec2(1400.0, 900.0),
     );
-    assert!(!h.state().can_undo());
+    // Steps before the pick: the opening's "Set n types automatically" (Note FC1), if any.
+    let steps = h.state().history.undo.len();
     pick(&mut h, AO_SOURCE, "x_cavity2.png");
     assert_eq!(
         value(&h, "x_cavity2.png", "helper.fills"),
@@ -266,7 +267,7 @@ fn picker_is_one_undo_step() {
         Some(json!(["rmaos.b"]))
     );
     assert_eq!(value(&h, "x_cavity2.png", "helper.fills"), None);
-    assert!(!h.state().can_undo(), "one step");
+    assert_eq!(h.state().history.undo.len(), steps, "one step");
 }
 
 /// The "Value" option of the open combo `name`: (enabled, its hover text after hovering it).
@@ -345,9 +346,10 @@ fn picking_the_current_source_writes_nothing() {
         fixture(d.path(), &["x.png", "x_roughness.png", "x_ao.png"], ""),
         egui::vec2(1400.0, 900.0),
     );
+    let steps = h.state().history.undo.len();
     pick(&mut h, AO_SOURCE, "x_ao.png");
     assert_eq!(value(&h, "x_ao.png", "helper.fills"), None);
-    assert!(!h.state().can_undo());
+    assert_eq!(h.state().history.undo.len(), steps);
 }
 
 #[test]

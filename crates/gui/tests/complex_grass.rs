@@ -306,11 +306,17 @@ fn a_scan_vote_retype_cleans_up_in_its_own_step() {
     let p = m.project.as_ref().unwrap();
     assert_eq!(p.file_value("plants/g.png", "format"), None);
     let n = m.history.undo.len();
-    assert_eq!(m.history.undo[n - 1].label, "Encoding follows type");
+    // Note FC1: the re-type is then recorded in the project as its own automatic step.
+    assert_eq!(m.history.undo[n - 1].label, "Set 1 type automatically");
     assert_eq!(
-        m.history.undo[n - 2],
+        p.file_value("plants/g.png", "subtype"),
+        Some(serde_json::json!("complex_grass"))
+    );
+    assert_eq!(m.history.undo[n - 2].label, "Encoding follows type");
+    assert_eq!(
+        m.history.undo[n - 3],
         last,
-        "the last user step is unchanged"
+        "the last step before the scan is unchanged"
     );
 }
 

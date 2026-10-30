@@ -207,6 +207,21 @@ pub(crate) fn dotted_table() -> Item {
 
 /// `t[name]` as a table or inline table, created with `make()` when missing. `None` when it exists but is a
 /// plain value. (`insert` rather than `entry`: inserting a `Table` item into an inline table converts it.)
+/// Remove the dotted field `parts` from `t`, and the sub-tables it leaves empty; true when the field existed.
+fn remove_path(t: &mut dyn TableLike, parts: &[&str]) -> bool {
+    if parts.len() == 1 {
+        return t.remove(parts[0]).is_some();
+    }
+    let Some(sub) = t.get_mut(parts[0]).and_then(Item::as_table_like_mut) else {
+        return false;
+    };
+    let hit = remove_path(sub, &parts[1..]);
+    if sub.is_empty() {
+        t.remove(parts[0]);
+    }
+    hit
+}
+
 pub(crate) fn sub_table<'a>(
     t: &'a mut dyn TableLike,
     name: &str,
@@ -353,6 +368,30 @@ impl ProjectDoc {
         ConfigFile::parse(&self.f.doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
     }
 
+    /// [`Self::config`] without the `[files]` fields `skip` names (Note FC1: the decisions the GUI recorded on its own
+    /// stay automatic in its own plans). The document itself is not changed.
+    pub fn config_without(&self, skip: &[(String, &str)]) -> Result<ConfigFile, String> {
+        if skip.is_empty() {
+            return self.config();
+        }
+        let mut doc = self.f.doc.clone();
+        if let Some(files) = doc.get_mut("files").and_then(Item::as_table_like_mut) {
+            for (key, field) in skip {
+                let Some(name) = find_key(files, key) else {
+                    continue;
+                };
+                if let Some(entry) = files.get_mut(&name).and_then(Item::as_table_like_mut) {
+                    let parts: Vec<&str> = field.split('.').collect();
+                    remove_path(entry, &parts);
+                    if entry.is_empty() {
+                        files.remove(&name);
+                    }
+                }
+            }
+        }
+        ConfigFile::parse(&doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
+    }
+
     pub fn target(&self) -> Option<Target> {
         self.config().ok()?.target
     }
@@ -400,6 +439,22 @@ impl ProjectDoc {
     /// The entry for `key`, created as `[files."<key>"]` when no spelling of it exists yet. `None` when `[files]`
     /// or the entry is not a table.
     fn entry_mut(&mut self, key: &str) -> Option<&mut dyn TableLike> {
+        // Note FC1: a file of comments only holds them as the document's trailing text, which toml_edit writes after
+        // a table added here; they go in front of the new entry instead, so the user's first line stays first.
+        let mut lead = None;
+        if self.f.doc.as_table().is_empty() {
+            let t = self
+                .f
+                .doc
+                .trailing()
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            if !t.trim().is_empty() {
+                self.f.doc.set_trailing("");
+                lead = Some(t);
+            }
+        }
         // `[files]` is created implicit (no bare `[files]` header).
         let files = sub_table(self.f.doc.as_table_mut(), "files", || {
             let mut t = Table::new();
@@ -407,7 +462,13 @@ impl ProjectDoc {
             Item::Table(t)
         })?;
         let name = find_key(files, key).unwrap_or_else(|| key.to_owned());
-        sub_table(files, &name, || Item::Table(Table::new()))
+        sub_table(files, &name, || {
+            let mut t = Table::new();
+            if let Some(l) = lead {
+                t.decor_mut().set_prefix(l);
+            }
+            Item::Table(t)
+        })
     }
 
     /// Remove the entry for `key` (any spelling of it); true when one existed.
@@ -423,7 +484,26 @@ impl ProjectDoc {
         let Some(name) = find_key(files, key) else {
             return false;
         };
-        files.remove(&name).is_some()
+        let Some(gone) = files.remove(&name) else {
+            return false;
+        };
+        // Note FC1: the comments `entry_mut` put in front of the only entry go back to the document's trailing text.
+        let lead = gone
+            .as_table()
+            .and_then(|t| t.decor().prefix()?.as_str().map(str::to_owned));
+        if let Some(lead) = lead.filter(|l| !l.trim().is_empty()) {
+            if files.is_empty() && self.f.doc.len() == 1 {
+                let rest = self
+                    .f
+                    .doc
+                    .trailing()
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                self.f.doc.set_trailing(lead + &rest);
+            }
+        }
+        true
     }
 
     pub fn file_value(&self, key: &str, field: &str) -> Option<Json> {
@@ -461,23 +541,10 @@ impl ProjectDoc {
         if self.read_only() || self.entry(key).is_none() {
             return;
         }
-        fn remove(t: &mut dyn TableLike, parts: &[&str]) -> bool {
-            if parts.len() == 1 {
-                return t.remove(parts[0]).is_some();
-            }
-            let Some(sub) = t.get_mut(parts[0]).and_then(Item::as_table_like_mut) else {
-                return false;
-            };
-            let hit = remove(sub, &parts[1..]);
-            if sub.is_empty() {
-                t.remove(parts[0]);
-            }
-            hit
-        }
         let parts: Vec<&str> = field.split('.').collect();
         if self
             .entry_mut(key)
-            .is_some_and(|entry| remove(entry, &parts))
+            .is_some_and(|entry| remove_path(entry, &parts))
         {
             self.touch();
         }

@@ -376,18 +376,25 @@ fn a_deleted_preset_named_in_sdc_toml_falls_back_with_a_banner() {
     m.presets_model().delete().unwrap();
     m.replan();
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
-    // The plan runs on the fallback instead of failing, and says so.
+    // The plan still runs on the fallback for the views, but the export is blocked by a red row, not a banner
+    // (Note FC1).
     assert!(m.dialog.is_none(), "no error dialog");
     assert_eq!(m.batch_preset, "cs-quality");
-    assert_eq!(
-        m.banner.as_deref(),
-        Some("preset gone not found: using cs-quality")
-    );
-    // sdc.toml keeps the name (the file may come back); picking another clears the banner.
+    assert_eq!(m.banner, None);
+    assert_eq!(m.missing_preset_id(), Some("gone"));
+    // The gate's own refusal is pinned in auto_accept.rs.
+    use sdc_gui::model::bottom::{problems, Fix, Level};
+    assert!(problems(&m).iter().any(|p| p.level == Level::Blocks
+        && p.text == "Preset gone is not installed"
+        && p.fix == Some(Fix::ChoosePreset)));
+    // sdc.toml keeps the name (the file may come back); picking another clears the block.
     assert_eq!(m.project_preset().as_deref(), Some("gone"));
     m.set_preset(None);
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
-    assert_eq!(m.banner, None);
+    assert_eq!(m.missing_preset_id(), None);
+    assert!(!problems(&m)
+        .iter()
+        .any(|p| p.fix == Some(Fix::ChoosePreset)));
 }
 
 #[test]
@@ -415,19 +422,15 @@ fn a_startup_banner_survives_a_replan_until_dismissed() {
         m.banner.as_deref(),
         Some("Settings were not read, defaults are used: bad")
     );
-    // It sits beside the banners refresh_banner builds.
+    // It survives the refresh a preset change makes (a missing preset is a Problems row since Note FC1).
     m.set_preset(Some("ghost".into()));
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
-    let b = m.banner.clone().unwrap();
-    assert!(
-        b.starts_with("Settings were not read") && b.contains("preset ghost not found"),
-        "{b}"
-    );
-    m.dismiss_kept_banner();
     assert_eq!(
         m.banner.as_deref(),
-        Some("preset ghost not found: using cs-quality")
+        Some("Settings were not read, defaults are used: bad")
     );
+    m.dismiss_kept_banner();
+    assert_eq!(m.banner, None);
 }
 
 #[test]

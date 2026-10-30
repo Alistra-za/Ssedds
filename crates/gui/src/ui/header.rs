@@ -618,7 +618,7 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut presets = false;
     let has_project = model.project.is_some();
     // K5: the popup always opens, so Presets… is reachable with no folder; only the presets need a project.
-    egui::ComboBox::from_id_salt("preset")
+    let combo = egui::ComboBox::from_id_salt("preset")
         .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
         .show_ui(ui, |ui| {
             ui.add_enabled_ui(has_project, |ui| {
@@ -647,6 +647,11 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         })
         .response
         .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
+    // Note FC1 (AM14): a Problems row's `Choose preset…` opens this menu. egui 0.36 keeps a combo's popup state
+    // under its button id `.with("popup")` (`ComboBox::widget_to_popup_id`, private).
+    if std::mem::take(&mut model.choose_preset) {
+        egui::Popup::open_id(ui.ctx(), combo.id.with("popup"));
+    }
     if presets {
         model.open_presets();
     }

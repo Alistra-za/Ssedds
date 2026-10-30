@@ -175,7 +175,19 @@ fn checks_are_not_amber_and_not_blocking() {
         .cloned()
         .collect();
     assert_eq!(checks.len(), 1, "{:?}", problems(&m));
-    assert_eq!(problems(&m).len(), 1, "the check is the only row");
+    // Note FC1's "types set automatically" Info row is no problem either: it is the only other row.
+    let others: Vec<_> = problems(&m)
+        .iter()
+        .filter(|p| p.level != Level::Check)
+        .cloned()
+        .collect();
+    assert!(
+        others
+            .iter()
+            .all(|p| p.level == Level::Info && p.text.contains("set automatically")),
+        "the check is the only problem row: {others:?}"
+    );
+    assert!(others.iter().all(|p| !bottom::counts_as_ready_problem(p)));
     assert!(!bottom::counts_as_ready_problem(&checks[0]));
     let status = sdc_gui::ui::problems::status_of(Level::Check);
     assert_eq!(status, Status::Check);

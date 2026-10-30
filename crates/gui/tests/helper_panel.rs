@@ -360,13 +360,14 @@ fn panel_controls_inside_panel_at_1100() {
 fn one_undo_step_per_edit() {
     let d = tempfile::tempdir().unwrap();
     let mut h = app(fixture(d.path(), &XSET, ""), "x_roughness.png");
-    assert!(!h.state().can_undo());
+    // Steps before the edit: the opening's "Set n types automatically" (Note FC1), if any.
+    let steps = h.state().history.undo.len();
     pick(&mut h, "Helper role", "Glossiness");
     assert!(value(&h, "x_roughness.png", "helper.role").is_some());
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
     settle(&mut h);
     assert_eq!(value(&h, "x_roughness.png", "helper.role"), None);
-    assert!(!h.state().can_undo(), "one step");
+    assert_eq!(h.state().history.undo.len(), steps, "one step");
 }
 
 /// Review pictures of the helper panel at 1100, 1280 and 1600 px (egui-ui-rules step 5). Needs a GPU and
@@ -517,6 +518,8 @@ fn ordinary_image_can_become_a_helper() {
     );
     let item = |h: &H| h.state().item("x_mask.png").unwrap().clone();
     assert_ne!(item(&h).kind, ItemKind::Helper, "a tile to start with");
+    let steps = h.state().history.undo.len();
+    let opened_type = value(&h, "x_mask.png", "subtype");
     let combo = h.get_by_role_and_label(Role::ComboBox, "Helper role");
     assert_eq!(
         combo.accesskit_node().value().as_deref(),
@@ -540,12 +543,13 @@ fn ordinary_image_can_become_a_helper() {
         .contains("fills to x alpha"));
     // The selection stays on the file, now the helper panel.
     h.get_by_role_and_label(Role::ComboBox, "Read from");
-    // One undo step, and the subtype key is never written.
+    // One undo step, and no subtype key is left: the type the opening recorded (Note FC1) goes with the role.
     assert_eq!(value(&h, "x_mask.png", "subtype"), None);
     h.state_mut().undo();
     settle(&mut h);
     assert_eq!(value(&h, "x_mask.png", "helper.role"), None);
-    assert!(!h.state().can_undo());
+    assert_eq!(value(&h, "x_mask.png", "subtype"), opened_type);
+    assert_eq!(h.state().history.undo.len(), steps);
 }
 
 #[test]

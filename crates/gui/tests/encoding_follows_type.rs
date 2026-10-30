@@ -314,9 +314,10 @@ fn a_cleared_format_is_an_info_row_with_undo() {
     let (mut m, set) = grass_with(d.path(), Some(LINEAR));
     m.set_shader(&set, Some(Shader::Pbr));
     idle(&mut m);
+    // Note FC1's "types set automatically" row is the opening's, not this edit's.
     let rows: Vec<_> = problems(&m)
         .iter()
-        .filter(|p| p.level == Level::Info)
+        .filter(|p| p.level == Level::Info && !p.text.contains("set automatically"))
         .cloned()
         .collect();
     assert_eq!(rows.len(), 1, "{rows:?}");
