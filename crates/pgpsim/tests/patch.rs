@@ -316,55 +316,44 @@ fn badges_for_geometry_keys() {
     );
 }
 
+/// GE3: 2.0 removed `pbr`; PBR is always on and the key is dropped silently (R2) [Src 2.2.0 TP:623-627].
 #[test]
-fn pbr_false_applies_scalars_only() {
-    let src = rock();
-    let (m, mp, badges) = patched(sim(
-        &with(json!({"pbr": false, "roughness_scale": 0.5})),
-        &sdc_default(),
-        &src,
-    ));
-    assert_eq!(mp, "");
-    assert_eq!(badges, vec![Badge::NotPreviewed("pbr")]);
-    assert!(!m.is_pbr());
-    assert_eq!(m.slots, src.slots);
-    assert_eq!(m.shader_type, 0);
-    assert_eq!(m.params.specular_strength, f(0.5));
-    assert_eq!(m.params.glossiness, f(0.04));
-}
-
-#[test]
-fn env_mapping_only_without_pbr() {
-    let e = with(
-        json!({"pbr": false, "env_mapping": true, "env_map_scale": 0.5, "env_map_scale_mult": 3.0}),
-    );
-    let (m, _, badges) = patched(sim(&e, &sdc_default(), &rock()));
-    assert_eq!(m.shader_type, 1);
-    assert!(bit(m.slsf1, 7));
-    assert!(bit(m.slsf2, 27));
-    assert_eq!(
-        m.params.trailer,
-        LightingTrailer::EnvMap {
-            scale: f(0.5) * f(3.0)
-        }
-    );
-    assert_eq!(
-        badges,
-        vec![
-            Badge::NotPreviewed("pbr"),
-            Badge::NotPreviewed("env_mapping"),
-            Badge::NotPreviewed("env_map_scale"),
-            Badge::NotPreviewed("env_map_scale_mult"),
-        ]
-    );
-    let (m, _, badges) = patched(sim(
-        &with(json!({"env_mapping": true})),
+fn pbr_false_is_ignored() {
+    let plain = patched(sim(
+        &with(json!({"roughness_scale": 0.5})),
         &sdc_default(),
         &rock(),
     ));
-    assert_eq!(m.shader_type, 0);
-    assert!(!bit(m.slsf1, 7));
-    assert_eq!(badges, vec![Badge::NotPreviewed("env_mapping")]);
+    for pbr in [json!(false), json!("false"), json!(0)] {
+        let (m, mp, badges) = patched(sim(
+            &with(json!({"pbr": pbr, "roughness_scale": 0.5})),
+            &sdc_default(),
+            &rock(),
+        ));
+        assert_eq!(mp, MP, "{pbr}");
+        assert!(badges.is_empty(), "{pbr}: {badges:?}");
+        assert!(m.is_pbr(), "{pbr}");
+        assert_eq!(m, plain.0, "{pbr}");
+    }
+}
+
+/// GE3: 2.0 removed `env_mapping` and `env_map_scale*`: no type 1, no badge (R2; measured T11).
+#[test]
+fn env_keys_are_ignored() {
+    let plain = patched(sim(&md(), &sdc_default(), &rock()));
+    for e in [
+        json!({"pbr": false, "env_mapping": true, "env_map_scale": 0.5, "env_map_scale_mult": 3.0}),
+        json!({"env_mapping": true}),
+        json!({"env_mapping": "yes", "env_map_scale": "x"}),
+    ] {
+        let (m, mp, badges) = patched(sim(&with(e.clone()), &sdc_default(), &rock()));
+        assert_eq!(mp, MP, "{e}");
+        assert!(badges.is_empty(), "{e}: {badges:?}");
+        assert_eq!(m.shader_type, 0, "{e}");
+        assert!(!bit(m.slsf1, 7), "{e}");
+        assert!(m.is_pbr(), "{e}");
+        assert_eq!(m, plain.0, "{e}");
+    }
 }
 
 #[test]

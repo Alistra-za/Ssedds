@@ -26,8 +26,6 @@ const BOOL_KEYS: &[&str] = &[
     "lock_rmaos",
     "lock_cnr",
     "lock_subsurface",
-    "pbr",
-    "env_mapping",
 ];
 
 const NUM_KEYS: &[&str] = &[
@@ -39,8 +37,6 @@ const NUM_KEYS: &[&str] = &[
     "roughness_scale",
     "subsurface_opacity",
     "displacement_scale",
-    "env_map_scale",
-    "env_map_scale_mult",
     "emissive_scale",
     "uv_scale",
     "coat_specular_level",
@@ -165,7 +161,6 @@ pub fn range_warnings(entry: &Value) -> Vec<String> {
     };
     let mut nums: Vec<(String, f64)> = NUM_KEYS
         .iter()
-        .filter(|k| !k.starts_with("env_map"))
         .filter_map(|k| Some((k.to_string(), e.get(*k)?.as_f64()?)))
         .collect();
     for (obj, keys) in [("glint", &GLINT_KEYS[..]), ("fuzz", &["weight"][..])] {

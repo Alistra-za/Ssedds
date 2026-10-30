@@ -29,19 +29,14 @@ const SLSF2_BACK: u32 = 27;
 const SLSF2_EFFECT_LIGHTING: u32 = 30;
 
 const TYPE_DEFAULT: u32 = 0;
-const TYPE_ENVMAP: u32 = 1;
 const TYPE_MLP: u32 = 11;
 
-/// Keys badged "not previewed" (spec §2.1), in display order.
-const BADGE_KEYS: [&str; 8] = [
+/// Keys badged "not previewed" (spec §2.1), in display order. 2.0's removed `pbr` / `env_*` keys get none (R2).
+const BADGE_KEYS: [&str; 4] = [
     "smooth_angle",
     "auto_uv",
     "vertex_color_lum_mult",
     "vertex_color_sat_mult",
-    "pbr",
-    "env_mapping",
-    "env_map_scale",
-    "env_map_scale_mult",
 ];
 
 fn set_bit(word: &mut u32, bit: u32, on: bool) {
@@ -61,8 +56,6 @@ struct Sim {
     /// whatever the type; the NIF gets them only for type 11 (01 §2.3 notes). Defaults: Shaders.hpp:699-702.
     mlp: [f32; 4],
     mlp_envmap: f32,
-    /// nifly `environmentMapScale` (default 1.0); the NIF gets it only for type 1.
-    env_scale: f32,
     src_type: u32,
     src_trailer: LightingTrailer,
     /// Some entry wrote the PBR slots, so PGPatcher writes back its (lower-cased) slot set.
@@ -89,16 +82,11 @@ impl Sim {
             ),
             _ => ([0.0, 1.0, 1.0, 1.0], 1.0),
         };
-        let env_scale = match &source.params.trailer {
-            LightingTrailer::EnvMap { scale } => *scale,
-            _ => 1.0,
-        };
         Sim {
             m: source.clone(),
             slots: pg_slots(&source.slots),
             mlp,
             mlp_envmap,
-            env_scale,
             src_type: source.shader_type,
             src_trailer: source.params.trailer.clone(),
             pbr_written: false,
@@ -114,9 +102,9 @@ impl Sim {
         set_bit(&mut self.m.slsf2, bit, on);
     }
 
-    /// One entry, `applyOnePatch` [TP:662-863]. Returns true when the entry deleted the shape.
+    /// One entry, `applyOnePatch` [TP:662-863]; 2.x dropped the `env_mapping` block [Src 2.2.0 TP:729-945].
+    /// Returns true when the entry deleted the shape.
     fn apply_one(&mut self, e: &Map<String, Value>, mp: &str) -> bool {
-        let pbr = !mp.is_empty();
         if flag(e, "delete") {
             self.m.hidden = true;
             return true;
@@ -124,12 +112,11 @@ impl Sim {
         // Vertex-colour multipliers run only on shapes that have vertex colours (after `vertex_colors`).
         let vc_after = get_bool(e, "vertex_colors").unwrap_or(self.m.has_vertex_colors);
         for k in BADGE_KEYS {
-            let Some(v) = e.get(k) else {
+            if !e.contains_key(k) {
                 continue;
-            };
+            }
             let shown = match k {
                 "vertex_color_lum_mult" | "vertex_color_sat_mult" => vc_after,
-                "pbr" => v.as_bool() != Some(true),
                 _ => true,
             };
             let b = Badge::NotPreviewed(k);
@@ -175,17 +162,6 @@ impl Sim {
         if let Some(v) = get_num(e, "displacement_scale") {
             self.m.params.lighting_effect_2 = v;
         }
-        if flag(e, "env_mapping") && !pbr {
-            self.m.shader_type = TYPE_ENVMAP;
-            self.f1(SLSF1_ENVMAP, true);
-            self.f2(SLSF2_BACK, true);
-            if let Some(v) = get_num(e, "env_map_scale") {
-                self.env_scale = v;
-            }
-            if let Some(v) = get_num(e, "env_map_scale_mult") {
-                self.env_scale *= v;
-            }
-        }
         if let Some(v) = get_num(e, "emissive_scale") {
             self.m.params.emissive_multiple = v;
         }
@@ -196,9 +172,8 @@ impl Sim {
         if let Some(v) = get_num(e, "uv_scale") {
             self.m.params.uv_scale = [v, v];
         }
-        if pbr {
-            self.enable_pbr(e, mp);
-        }
+        // 2.x: always on [Src 2.2.0 TP:941-942].
+        self.enable_pbr(e, mp);
         false
     }
 
@@ -292,9 +267,6 @@ impl Sim {
                 refraction_scale: self.mlp[1],
                 inner_texture_scale: [self.mlp[2], self.mlp[3]],
                 envmap_strength: self.mlp_envmap,
-            },
-            TYPE_ENVMAP => LightingTrailer::EnvMap {
-                scale: self.env_scale,
             },
             t if t == self.src_type => self.src_trailer.clone(),
             _ => LightingTrailer::None,

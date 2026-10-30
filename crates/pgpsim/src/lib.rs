@@ -36,14 +36,14 @@ pub struct SimInput<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Badge {
-    /// A key the preview does not show (geometry ops, 1.2.0-only keys); the value is the key name.
+    /// A key the preview does not show (geometry ops); the value is the key name.
     NotPreviewed(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimResult {
     NoMatch,
-    /// `matched_path` is "" for `pbr:false` (scalars only). `material.hidden` is set by `delete`.
+    /// `material.hidden` is set by `delete`.
     Patched {
         material: MaterialState,
         matched_path: String,
