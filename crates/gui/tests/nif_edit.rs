@@ -4138,13 +4138,100 @@ fn equal_times_keep_the_folder_document_and_the_autosave() {
 
 /// The files beside the autosave that a save moved aside (`<stem>.<seconds>.toml`).
 fn kept_aside(d: &tempfile::TempDir) -> Vec<std::path::PathBuf> {
-    let a = autosave(d);
-    let stem = a.file_stem().unwrap().to_string_lossy().into_owned();
-    std::fs::read_dir(a.parent().unwrap())
+    kept_beside(&autosave(d))
+}
+
+/// The files a save moved aside from `a` (`<stem>.<seconds>.toml` in its folder), oldest name first.
+fn kept_beside(a: &Path) -> Vec<std::path::PathBuf> {
+    let stem = format!("{}.", a.file_stem().unwrap().to_string_lossy());
+    let mut v: Vec<_> = std::fs::read_dir(a.parent().unwrap())
         .unwrap()
         .map(|f| f.unwrap().path())
-        .filter(|p| p != &a && p.file_name().unwrap().to_string_lossy().starts_with(&stem))
-        .collect()
+        .filter(|p| p != a && p.file_name().unwrap().to_string_lossy().starts_with(&stem))
+        .collect();
+    v.sort();
+    v
+}
+
+/// Note GD25: a newer autosave recovered over a folder document with other edits never overwrites it: the first save
+/// moves the folder's document aside, and Messages names the kept file.
+#[test]
+fn a_recovered_autosave_keeps_the_folder_document_it_replaced() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.close_edit();
+    let aside = d.path().join("autosave.aside");
+    std::fs::rename(autosave(&d), &aside).unwrap();
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    let theirs = std::fs::read(nif_doc(&out)).unwrap();
+    std::fs::rename(&aside, autosave(&d)).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(&d))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(op_values(&m)[0].1, 12.5, "the newer autosave opens");
+    gloss(&mut m, 13.5);
+    let kept = kept_beside(&nif_doc(&out));
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        theirs,
+        "the folder's edits survive"
+    );
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(
+        m.messages.last(),
+        Some(&format!(
+            "The edit document {} held edits of meshes/x.nif that this session did not open: kept as {}.",
+            nif_doc(&out).display(),
+            kept[0].display()
+        ))
+    );
+}
+
+/// Note GD25: a touched session moved onto a folder with its own document of the NIF never overwrites it: the first
+/// save there moves that document aside.
+#[test]
+fn a_folder_change_keeps_the_destination_document_it_replaced() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    let theirs = std::fs::read(nif_doc(&out)).unwrap();
+    m.set_nif_export_root(Some(d.path().join("mods").join(EDIT_MOD)));
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.set_nif_export_root(Some(out.clone()));
+    assert_eq!(
+        std::fs::read(nif_doc(&out)).unwrap(),
+        theirs,
+        "the switch writes nothing"
+    );
+    gloss(&mut m, 13.5);
+    let kept = kept_beside(&nif_doc(&out));
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read(&kept[0]).unwrap(),
+        theirs,
+        "the destination's edits survive"
+    );
+    assert_eq!(load(&nif_doc(&out)).unwrap().unwrap().ops.len(), 2);
+    gloss(&mut m, 14.5);
+    assert_eq!(kept_beside(&nif_doc(&out)).len(), 1, "moved aside once");
 }
 
 /// Note GD19: the failed folder change's fallback never overwrites an autosave this session did not open: it is moved
@@ -4271,7 +4358,7 @@ fn changing_the_export_folder_keeps_the_edit_in_memory() {
         m.messages,
         vec![
             format!(
-                "Export folder changed: the open edit of meshes/x.nif replaced {}'s saved edits.",
+                "Export folder changed: the open edit of meshes/x.nif goes to {}; the edits saved there are kept aside at the next save.",
                 nif_doc(&out).display()
             ),
             format!(
@@ -4406,7 +4493,7 @@ fn an_undone_session_keeps_its_live_document_on_a_folder_change() {
     assert_eq!(
         m.messages.first(),
         Some(&format!(
-            "Export folder changed: the open edit of meshes/x.nif replaced {}'s saved edits.",
+            "Export folder changed: the open edit of meshes/x.nif goes to {}; the edits saved there are kept aside at the next save.",
             nif_doc(&out).display()
         ))
     );
@@ -4444,7 +4531,7 @@ fn a_recovered_empty_autosave_stays_on_a_folder_change() {
     assert_eq!(
         m.messages.first(),
         Some(&format!(
-            "Export folder changed: the open edit of meshes/x.nif replaced {}'s saved edits.",
+            "Export folder changed: the open edit of meshes/x.nif goes to {}; the edits saved there are kept aside at the next save.",
             nif_doc(&out).display()
         ))
     );

@@ -70,6 +70,9 @@ pub struct NifEdit {
     pub autosave: Option<PathBuf>,
     /// Note GD11: the autosave's content is part of this live document (saved there, or recovered from it).
     owns_autosave: bool,
+    /// Note GD25: the file at `doc_path` (in a folder) holds edits this session never loaded: a newer autosave was
+    /// recovered over it, or a folder change replaced it. The next save moves it aside first (`free_unseen`).
+    doc_unseen: bool,
     /// Note GD11: lines for Messages from `open` (an autosave recovered, or left because the folder's is newer) and,
     /// Note GD19, from a save that moved an autosave aside; `MeshesModel` moves them to its `messages`.
     pub open_lines: Vec<String>,
@@ -576,7 +579,8 @@ fn recover_autosave(
                     a.display()
                 ),
                 Some(_) => format!(
-                    "The newer edits of {data_path} autosaved in {} replaced {}'s saved edits.",
+                    "The newer edits of {data_path} autosaved in {} opened instead of {}'s saved edits; those are \
+                     kept aside at the next save.",
                     a.display(),
                     doc_path.display()
                 ),
@@ -624,6 +628,7 @@ impl NifEdit {
             true => None,
             false => edit_doc::load(&doc_path)?,
         };
+        let had_doc = saved.is_some();
         let (saved, owns_autosave, open_lines, recovered) =
             recover_autosave(saved, &doc_path, &edit_mod, autosave, data_path);
         let mut doc = saved.unwrap_or_else(|| EditDoc::new(id.clone()));
@@ -639,6 +644,8 @@ impl NifEdit {
             edit_mod,
             autosave: autosave.map(Path::to_path_buf),
             owns_autosave,
+            // Note GD25: a recovered autosave replaced the folder's document, which this session never shows
+            doc_unseen: recovered && had_doc,
             open_lines,
             source_blocks: block_count(&source),
             source: Arc::new(source),
@@ -1028,7 +1035,7 @@ impl NifEdit {
         if self.retarget_error.is_some() {
             self.unsaved = true;
             if let Some(a) = self.autosave.clone() {
-                if self.free_autosave(&a) {
+                if self.free_unseen(&a) {
                     match edit_doc::save(&a, &self.doc) {
                         Ok(()) => self.owns_autosave = true,
                         Err(e) => self.error = Some(e),
@@ -1042,7 +1049,7 @@ impl NifEdit {
             return;
         }
         let path = self.doc_path.clone();
-        if !self.free_autosave(&path) {
+        if !self.free_unseen(&path) {
             return;
         }
         self.unsaved = false;
@@ -1069,10 +1076,21 @@ impl NifEdit {
         }
     }
 
-    /// Note GD19: before this session writes `path`, an autosave there that it never loaded is moved aside to
-    /// `<stem>.<unix seconds>.toml` (named in Messages), never overwritten. False (write nothing) when the move fails.
-    fn free_autosave(&mut self, path: &Path) -> bool {
-        if self.owns_autosave || self.autosave.as_deref() != Some(path) || !path.is_file() {
+    /// Note GD19, GD25: before this session writes `path`, a file there with edits it never loaded (an autosave it
+    /// does not hold, or the folder document `doc_unseen` marks) is moved aside to `<stem>.<unix seconds>.toml`
+    /// (named in Messages), never overwritten. False (write nothing) when the move fails.
+    fn free_unseen(&mut self, path: &Path) -> bool {
+        let doc = self.autosave.as_deref() != Some(path);
+        if (doc && !(self.doc_unseen && path == self.doc_path)) || (!doc && self.owns_autosave) {
+            return true;
+        }
+        let what = if doc {
+            "The edit document"
+        } else {
+            "The autosave"
+        };
+        if !path.is_file() {
+            self.doc_unseen &= !doc;
             return true;
         }
         let secs = std::time::SystemTime::now()
@@ -1087,8 +1105,9 @@ impl NifEdit {
         };
         match std::fs::rename(path, &to) {
             Ok(()) => {
+                self.doc_unseen &= !doc;
                 self.open_lines.push(format!(
-                    "The autosave {} held edits of {} that this session did not open: kept as {}.",
+                    "{what} {} held edits of {} that this session did not open: kept as {}.",
                     path.display(),
                     self.data_path,
                     to.display()
@@ -1126,7 +1145,8 @@ impl NifEdit {
         let mut lines = vec![];
         if theirs.is_some() {
             lines.push(format!(
-                "Export folder changed: the open edit of {} replaced {}'s saved edits.",
+                "Export folder changed: the open edit of {} goes to {}; the edits saved there are kept aside at the \
+                 next save.",
                 self.data_path,
                 doc_path.display()
             ));
@@ -1138,6 +1158,8 @@ impl NifEdit {
                 self.doc_path.display()
             ));
         }
+        // Note GD25: the destination's edits were never loaded: the first save moves them aside
+        self.doc_unseen = theirs.is_some();
         self.doc.export = theirs.map(|t| t.export).unwrap_or_default();
         // without a folder the document is the autosave; an autosave this session never loaded is moved aside by the
         // first save there (Note GD19), not claimed here
