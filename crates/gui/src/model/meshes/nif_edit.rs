@@ -136,6 +136,9 @@ pub struct NifEdit {
     /// Note GD12: the export folder changed but its edit document did not load: the session stays on its old paths,
     /// writes nothing (no save, no export) and is blocked with this reason until a root change succeeds.
     pub retarget_error: Option<String>,
+    /// Note GD20: the failed root change behind `retarget_error`: (root, its edit document, that file's length and
+    /// time). The same key is not tried again, so a bad folder is read once, not each frame.
+    retarget_fail: Option<RetargetKey>,
     /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
     /// the ops per frame.
     pub up_to_date: bool,
@@ -236,6 +239,13 @@ pub(super) type ForeignKey = (
     Option<(u64, Option<std::time::SystemTime>)>,
 );
 pub(super) type ForeignCache = Option<(ForeignKey, Result<Option<[u8; 32]>, String>)>;
+
+/// `NifEdit::retarget_fail`'s key: the root, its edit document and the document's (length, modified time).
+type RetargetKey = (
+    PathBuf,
+    PathBuf,
+    Option<(u64, Option<std::time::SystemTime>)>,
+);
 
 /// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
@@ -653,6 +663,7 @@ impl NifEdit {
             export_note: None,
             cleanup_note: None,
             retarget_error: None,
+            retarget_fail: None,
             up_to_date: false,
             weight_sibling: None,
             session: next_key(),
@@ -2315,22 +2326,35 @@ impl MeshesModel {
             // Note GD12: back to the folder the edit never left: it is its destination again
             if let Some(e) = self.edit.as_mut().filter(|e| e.retarget_error.is_some()) {
                 e.retarget_error = None;
+                e.retarget_fail = None;
                 e.refresh_blocked();
                 e.flush();
             }
             return;
         }
         // Note GD12: the root is taken only once the live edit has moved there; until then the edit is blocked.
-        // shortcut: a failed move is tried again each frame (one small file read); cache on the file's time if it
-        // ever shows in a profile.
         if let Some(e) = self.edit.as_mut().filter(|e| e.touched()) {
+            // Note GD20: a failure is tried again only when the root or its document's length or time changed (a
+            // stat per frame, never a read)
+            let key = root.as_deref().map(|r| {
+                let p = edit_doc::doc_path(r, &e.data_path).unwrap_or_default();
+                let meta = std::fs::metadata(&p)
+                    .ok()
+                    .map(|m| (m.len(), m.modified().ok()));
+                (r.to_path_buf(), p, meta)
+            });
+            if key.is_some() && e.retarget_fail == key {
+                return;
+            }
             match e.retarget(root.as_deref()) {
                 Ok(lines) => {
                     self.messages.extend(lines);
                     e.retarget_error = None;
+                    e.retarget_fail = None;
                     e.refresh_blocked();
                 }
                 Err(err) => {
+                    e.retarget_fail = key;
                     let folder = root.as_deref().unwrap_or(Path::new("")).display();
                     let why = format!("could not open the edit document in {folder}: {err}");
                     if e.retarget_error.as_ref() != Some(&why) {

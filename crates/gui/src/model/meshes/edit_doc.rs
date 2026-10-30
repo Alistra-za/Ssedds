@@ -138,7 +138,17 @@ pub fn save(path: &Path, doc: &EditDoc) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+thread_local! {
+    static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `load` calls this thread made (Note GD20's test: a failed folder change is not read each frame).
+pub fn load_count() -> usize {
+    LOADS.with(std::cell::Cell::get)
+}
+
 pub fn load(path: &Path) -> Result<Option<EditDoc>, String> {
+    LOADS.with(|n| n.set(n.get() + 1));
     match std::fs::read_to_string(path) {
         Ok(t) => EditDoc::from_text(&t).map(Some),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),

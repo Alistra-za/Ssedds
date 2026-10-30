@@ -4297,6 +4297,30 @@ fn a_malformed_document_in_the_new_folder_blocks_the_row() {
     assert_eq!(std::fs::read(nif_doc(&old)).unwrap(), before);
 }
 
+/// Note GD20: a failed folder change reads the new folder's document once, not each frame; a change to the file (its
+/// length or time) reads it again.
+#[test]
+fn a_failed_folder_change_reads_the_document_once_until_it_changes() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let bad = d.path().join(r"mods\Bad");
+    std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
+    std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
+    let n = load_count();
+    for _ in 0..5 {
+        m.set_nif_export_root(Some(bad.clone()));
+    }
+    assert_eq!(load_count() - n, 1, "one read over five frames");
+    assert!(review_row(&m).blocked.is_some());
+    std::fs::write(nif_doc(&bad), b"still = [not toml").unwrap();
+    for _ in 0..5 {
+        m.set_nif_export_root(Some(bad.clone()));
+    }
+    assert_eq!(load_count() - n, 2, "read again after the file changed");
+    assert!(review_row(&m).blocked.is_some());
+}
+
 /// Note GD13: a session undone back to the source after an export is not idle: on a folder change it keeps its live
 /// document and its redo, and the folder's saved edit is replaced (said in Messages).
 #[test]
