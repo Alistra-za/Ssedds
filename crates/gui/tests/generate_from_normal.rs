@@ -4137,3 +4137,25 @@ fn the_drawn_crop_follows_the_zoom_and_every_tile_shows_the_same_one() {
     assert!(near_uv(uv, zoom_uv(&zoom_of(&h))));
     assert!(uv.min.x < 1e-3, "pinned at the left edge: {uv:?}");
 }
+
+/// Review C19 (Note FB13): the greyed AO box says why on hover, with the real rule from the model.
+#[test]
+fn a_greyed_ao_box_says_why_on_hover() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    // The support fixture's rock01_ao.png is a real AO source, so the offer is off.
+    let why = "this set already has an AO source (rock01_ao.png)";
+    assert_eq!(m.gen_offer(ROCK_SET, GenMap::Ao), Err(why.into()));
+    m.open_gen(ROCK_SET, None);
+    let mut h = gen_harness(m, 1500.0, 900.0);
+    h.run_steps(4);
+    let b = h.get_by_role_and_label(eframe::egui::accesskit::Role::CheckBox, "AO");
+    assert!(b.accesskit_node().is_disabled());
+    h.hover_at(b.rect().center());
+    h.run_steps(30);
+    assert!(
+        h.query_by_label(why).is_some(),
+        "the rule is on the greyed box's hover"
+    );
+}

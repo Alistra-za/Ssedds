@@ -287,20 +287,30 @@ pub fn column_stats(ctx: &egui::Context, model: &AppModel) -> Arc<ColumnStats> {
 }
 
 pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
-    // Wrapped: the counts move under the heading in a narrow column instead of holding it wider.
-    ui.horizontal_wrapped(|ui| {
+    // Note FB13 (C23): one line however many are selected. The "need a decision" link keeps its place on the right;
+    // the selection count truncates, with the full text on hover.
+    let stats = column_stats(ui.ctx(), model);
+    let n = model.undecided();
+    let mut open_undecided = false;
+    ui.horizontal(|ui| {
         collapse_arrow(ui, model, crate::ui::Column::Textures);
-        ui.heading("Textures");
-        let stats = column_stats(ui.ctx(), model);
-        if let Some(s) = &stats.summary {
-            ui.label(egui::RichText::new(s).strong());
-        }
-        let n = model.undecided();
-        let link = egui::RichText::new(format!("{n} need a decision")).color(AMBER);
-        if n > 0 && ui.link(link).clicked() {
-            model.open_problems(Some(crate::model::bottom::ProblemsFilter::Undecided));
-        }
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                ui.heading("Textures");
+                if let Some(s) = &stats.summary {
+                    ui.add(egui::Label::new(egui::RichText::new(s).strong()).truncate());
+                }
+            },
+            |ui| {
+                let link = egui::RichText::new(format!("{n} need a decision")).color(AMBER);
+                open_undecided = n > 0 && ui.link(link).clicked();
+            },
+        );
     });
+    if open_undecided {
+        model.open_problems(Some(crate::model::bottom::ProblemsFilter::Undecided));
+    }
     let changed = model.items.iter().filter(|i| i.changed_on_disk).count();
     if changed > 0 {
         ui.horizontal_wrapped(|ui| {

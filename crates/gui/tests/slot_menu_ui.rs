@@ -67,7 +67,17 @@ fn path_from_the_card_menu_opens_the_slot_commands_window_and_it_toggles_the_loc
         h.query_all_by_label("Apply").count() >= 1,
         "slot 6 is in Path mode"
     );
-    h.get_by_label("Pin slot 6").click();
+    // Review C15 (Note FB13): eight boxes, each named for what it does; slot 6 is the sixth.
+    assert_eq!(
+        h.query_all_by_label("Pin this slot (always use this file)")
+            .count(),
+        8
+    );
+    assert_eq!(h.query_all_by_label("Pin slot 6").count(), 0);
+    h.query_all_by_label("Pin this slot (always use this file)")
+        .nth(5)
+        .unwrap()
+        .click();
     h.run();
     assert!(h.state().slot_locked(SET, 6));
 }

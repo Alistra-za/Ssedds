@@ -26,7 +26,7 @@ fn editor(m: AppModel) -> H {
 fn modes(h: &H) -> Vec<String> {
     h.query_all_by_role(Role::ComboBox)
         .filter_map(|n| n.accesskit_node().value())
-        .filter(|v| v.starts_with("exact · slot") || v == "path contains")
+        .filter(|v| v.starts_with("Match: exact, slot") || v == "path contains")
         .collect()
 }
 
@@ -73,7 +73,7 @@ fn exact_slot_without_a_path_shows_a_pill_and_writes_nothing() {
     m.open_json_editor();
     let mut h = editor(m);
     let before = modes(&h).len();
-    add_key(&mut h, 0, true, "exact · slot 2 normal");
+    add_key(&mut h, 0, true, "Match: exact, slot 2 (normal)");
     assert_eq!(modes(&h).len(), before + 1, "no pill for the new slot");
     assert!(!rock_has_match2(&h.state().0), "an empty match2 was stored");
 }
@@ -88,11 +88,12 @@ fn a_mode_change_moves_a_pending_pill() {
     // Section 0 is the second "+ key" (the set's is first).
     add_key(&mut h, 1, false, "path contains");
     assert!(modes(&h).iter().any(|v| v == "path contains"));
-    pick_mode(&mut h, "path contains", "exact · slot 2 normal");
+    pick_mode(&mut h, "path contains", "Match: exact, slot 2 (normal)");
     let now = modes(&h);
     assert!(!now.iter().any(|v| v == "path contains"), "{now:?}");
     assert!(
-        now.iter().any(|v| v.starts_with("exact · slot 2 normal")),
+        now.iter()
+            .any(|v| v.starts_with("Match: exact, slot 2 (normal)")),
         "the pill snapped back: {now:?}"
     );
 }
@@ -146,11 +147,45 @@ fn a_pending_pill_switched_to_slot_1_stays_visible() {
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     m.open_json_editor();
     let mut h = editor(m);
-    add_key(&mut h, 0, true, "exact · slot 2 normal");
-    pick_mode(&mut h, "exact · slot 2 normal", "exact · slot 1 diffuse");
+    add_key(&mut h, 0, true, "Match: exact, slot 2 (normal)");
+    pick_mode(
+        &mut h,
+        "Match: exact, slot 2 (normal)",
+        "Match: exact, slot 1 (diffuse)",
+    );
     let now = modes(&h);
     assert!(
-        now.iter().any(|v| v.starts_with("exact · slot 1")),
+        now.iter().any(|v| v.starts_with("Match: exact, slot 1")),
         "the pill vanished: {now:?}"
     );
+}
+
+/// Review C15 (Note FB13): plain words on the JSON editor's match and lock controls.
+#[test]
+fn plain_labels_name_the_match_the_derived_path_and_the_lock() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.open_json_editor();
+    let mut h = editor(m);
+    assert!(
+        modes(&h)
+            .iter()
+            .any(|v| v == "Match: exact, slot 1 (diffuse)"),
+        "{:?}",
+        modes(&h)
+    );
+    assert!(
+        h.query_all_by_label("derived from the set").count() >= 1,
+        "the set's own diffuse path says where it comes from"
+    );
+    assert_eq!(h.query_all_by_label("derived").count(), 0);
+    // A lock key reads as what it does; the raw key is on hover.
+    let lock = "Keep the original texture (PGPatcher won't replace it): diffuse";
+    add_key(&mut h, 0, false, lock);
+    assert!(
+        h.query_all_by_label_contains("Keep the original texture (PGPatcher won't replace it)")
+            .count()
+            >= 1
+    );
+    assert_eq!(h.query_all_by_label("Lock diffuse").count(), 0);
 }

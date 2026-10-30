@@ -72,7 +72,7 @@ impl Mode {
 
     fn label(self) -> String {
         match self {
-            Mode::Exact(n) => format!("exact · slot {n} {}", SLOT_NAMES[n as usize - 1]),
+            Mode::Exact(n) => format!("Match: exact, slot {n} ({})", SLOT_NAMES[n as usize - 1]),
             Mode::Contains => "path contains".into(),
         }
     }
@@ -454,8 +454,8 @@ fn match_pill(
             acts.push(Act::Edit(owner.clone(), k, v));
         }
         if matches!(owner, Owner::Set(_)) && mode == Mode::Exact(1) && path == derived {
-            ui.weak("derived")
-                .on_hover_text("The diffuse's own path; type another to change it");
+            ui.weak("derived from the set")
+                .on_hover_text("Derived: the diffuse's own path; type another to change it");
         }
         let hover = match mode {
             Mode::Exact(_) => "Pick an exact texture path the scan found in this slot",
@@ -524,6 +524,14 @@ fn nif_pill(ui: &mut egui::Ui, model: &AppModel, owner: &Owner, value: &str, act
     });
 }
 
+/// Review C15: a "Lock x" key says what it does; the schema's own label and the raw key are on hover.
+fn key_label(k: &KeySpec) -> String {
+    match k.label.strip_prefix("Lock ") {
+        Some(what) => format!("Keep the original texture (PGPatcher won't replace it): {what}"),
+        None => k.label.to_string(),
+    }
+}
+
 /// A schema key's pill on a set: the same control as the TruePBR box.
 fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<Act>) {
     let key = edit_key(k.key);
@@ -550,8 +558,8 @@ fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<A
             return;
         }
         if !matches!(k.kind, KeyKind::OnlyTrue | KeyKind::Object) {
-            ui.label(egui::RichText::new(k.label).small())
-                .on_hover_text(k.key);
+            ui.label(egui::RichText::new(key_label(k)).small())
+                .on_hover_text(format!("{} ({})", k.label, k.key));
         }
         let reason = disabled_reason(k, c);
         let mut edits = vec![];
@@ -868,8 +876,8 @@ fn add_set_key_menu(
             }
             let reason = disabled_reason(k, c);
             let r = ui
-                .add_enabled(reason.is_none(), egui::Button::new(k.label))
-                .on_hover_text(k.key);
+                .add_enabled(reason.is_none(), egui::Button::new(key_label(k)))
+                .on_hover_text(format!("{} ({})", k.label, k.key));
             let r = match reason {
                 Some(why) => r.on_disabled_hover_text(why),
                 None => r,

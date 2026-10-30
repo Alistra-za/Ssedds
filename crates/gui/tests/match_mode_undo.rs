@@ -29,7 +29,7 @@ fn to_contains(h: &mut H, last: bool) {
         let mut combos = h.query_all(
             egui_kittest::kittest::by()
                 .role(egui::accesskit::Role::ComboBox)
-                .value("exact · slot 1 diffuse"),
+                .value("Match: exact, slot 1 (diffuse)"),
         );
         let c = if last { combos.last() } else { combos.next() };
         c.expect("the mode drop-down").click();

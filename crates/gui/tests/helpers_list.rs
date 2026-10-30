@@ -423,6 +423,57 @@ fn shots() {
     }
 }
 
+/// Review C23 (Note FB13): with 10,000 selected the heading stays one line; the count truncates inside the column.
+#[test]
+fn textures_heading_stays_one_line_with_ten_thousand_selected() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET, "");
+    let base = m
+        .items
+        .iter()
+        .find(|i| i.kind != ItemKind::Helper)
+        .unwrap()
+        .clone();
+    m.items.retain(|i| i.kind == ItemKind::Helper);
+    m.items.extend((0..10_000).map(|n| {
+        let mut i = base.clone();
+        i.key = format!("t/t{n:05}.png");
+        i.name = format!("t{n:05}.png");
+        i
+    }));
+    m.invalidate_views();
+    m.select_all_visible();
+    assert_eq!(
+        m.selection_summary(false).as_deref(),
+        Some("10000 selected")
+    );
+    let mut h = harness(m, egui::vec2(1100.0, 800.0));
+    // The user dragged the Textures column narrow.
+    h.ctx.data_mut(|d| {
+        d.insert_persisted(egui::Id::new("textures").with("chosen"), 220.0f32);
+    });
+    h.run_steps(4);
+    let panel = textures_rect(&h);
+    let heading = h.get_by_label("Textures").rect();
+    let count = h.get_by_label_contains("10000 selected").rect();
+    assert!(
+        (heading.center().y - count.center().y).abs() < 2.0,
+        "heading {heading:?} and count {count:?} share a line"
+    );
+    assert!(
+        count.max.x <= panel.max.x,
+        "count {count:?} inside {panel:?}"
+    );
+    // The "need a decision" link, when shown, is on that line too.
+    for l in h.query_all_by_label_contains("need a decision") {
+        let r = l.rect();
+        assert!(
+            r.min.y >= heading.min.y - 2.0 && r.max.y <= heading.max.y + 2.0,
+            "link {r:?} within the heading's line {heading:?}"
+        );
+    }
+}
+
 #[test]
 fn hide_helpers_persists() {
     let d = tempfile::tempdir().unwrap();
