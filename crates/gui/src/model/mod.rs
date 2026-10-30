@@ -3764,6 +3764,14 @@ mod tests {
         m.end_export_with(Err("boom".into()));
         assert!(m.take_nif_export_due());
         assert!(!m.take_nif_export_due());
+        // A Review closed while its run still owes the NIF export keeps the NIF answers.
+        m.nif_clear_answers_request = false;
+        m.nif_export_queued = true;
+        m.close_review();
+        assert!(!m.nif_clear_answers_request);
+        m.nif_export_queued = false;
+        m.close_review();
+        assert!(m.nif_clear_answers_request);
     }
 
     /// Audit 08f-9: an export-thread panic sets the error dialog once (`export_ended`'s), not twice.

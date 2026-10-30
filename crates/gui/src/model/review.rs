@@ -199,8 +199,9 @@ impl AppModel {
     /// Close Review and its ticks; the panel collapses when it showed Review (R7: the tab is listed only while open).
     pub fn close_review(&mut self) {
         self.review = None;
-        // Note FC5 (GD29): the NIF answers go with Review; each foreign row asks again.
-        self.nif_clear_answers_request = true;
+        // Note FC5 (GD29): the NIF answers go with Review; each foreign row asks again. Not while a run Review started
+        // still owes the NIF export (a Reload mid-export): those answers are its own (rule 7.4).
+        self.nif_clear_answers_request |= !self.nif_export_queued;
         self.nif_answer_request = None;
         self.review_json_cache.take();
         // Its queued export goes with it (Task 1.4's Close).
