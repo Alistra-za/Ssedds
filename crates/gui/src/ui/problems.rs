@@ -309,6 +309,12 @@ fn fix_button(
                 .is_some()
                 .then_some(crate::model::also::EXPORT_RUNNING),
         ),
+        Fix::ReviewStale => button(
+            ui,
+            "Review…",
+            "Open Review, which lists these files with a Delete button each",
+            None,
+        ),
     };
     clicked.then(|| fix.clone())
 }
@@ -631,5 +637,7 @@ fn apply_fix(ui: &egui::Ui, model: &mut AppModel, fix: Fix, at: At) {
                 model.status_line = why;
             }
         }
+        // Note FC11: opens Review only; its Delete buttons write, each on its own click.
+        Fix::ReviewStale => model.open_review(),
     }
 }

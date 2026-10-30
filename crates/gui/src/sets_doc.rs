@@ -259,6 +259,12 @@ impl SetsDoc {
             let g = self.generated();
             self.put_doc_generated(&g);
         }
+        // Fix round 1 (controller ruling): applied quietly. The records are not the user's edits, so the document stays
+        // clean (Discard leaves it clean too); the readable copy reaches `sdc-project.toml` with the next real Save.
+        if self.f.dirty {
+            self.f.dirty = false;
+            self.f.saved_text = self.text();
+        }
     }
 
     /// Note FC11: record `v` under `key` in the sidecar and write it. A failed write leaves the document's copy, which

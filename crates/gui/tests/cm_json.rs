@@ -595,6 +595,15 @@ fn unticking_leaves_the_file_in_place_with_a_note() {
         .unwrap()
         .cm_json_shas()
         .contains_key(&record_key(&out(&m, "m/iron_m.json"))));
+    // Note FC11 (AT3): Review lists it as a stale output Tessalith wrote; nothing removes it until Delete is clicked.
+    let f = out(&m, "m/iron_m.json");
+    assert!(
+        m.stale.iter().any(|s| s.path == f && s.ours),
+        "{:?}",
+        m.stale
+    );
+    m.delete_stale_output(&f).unwrap();
+    assert!(!f.exists());
 }
 
 /// Review focus 3.

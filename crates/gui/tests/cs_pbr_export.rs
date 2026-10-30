@@ -230,6 +230,15 @@ fn an_unbound_file_is_reported_not_deleted() {
         .unwrap()
         .cs_pbr_shas()
         .contains_key(&record_key(&gone)));
+    // Note FC11 (AD5): Review lists it as a stale output Tessalith wrote (its hash matches the record); its Delete
+    // removes it.
+    assert!(
+        m.stale.iter().any(|s| s.path == gone && s.ours),
+        "{:?}",
+        m.stale
+    );
+    m.delete_stale_output(&gone).unwrap();
+    assert!(!gone.exists());
 }
 
 /// Review focus (O6): CS keys on the exact stem, so a corrected case renames sdc's own file.

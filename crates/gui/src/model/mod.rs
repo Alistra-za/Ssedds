@@ -320,6 +320,8 @@ pub struct AppModel {
     pub recode: Vec<engine::manifest::RecodeCause>,
     /// FC11: the recorded files the last plan no longer writes, Review's `Stale outputs (n)`. Not a gate.
     pub stale: Vec<engine::manifest::StaleOutput>,
+    /// FC11 (fix round 1): the JSON rows of `stale`, each with the SHA-256 its hash record holds (their baseline).
+    pub stale_json: std::collections::BTreeMap<PathBuf, String>,
     /// Note FC3: the last Also export's conversion report, the DERIVE rows' Open report.
     pub also_report: Option<PathBuf>,
     /// Note FC10 (CN43): the PBR folder's `_sdc/also.json` that the last Also export could not read.
@@ -657,6 +659,7 @@ impl AppModel {
             unreadable: vec![],
             recode: vec![],
             stale: vec![],
+            stale_json: Default::default(),
             also_report: None,
             also_unreadable: None,
             read_only_flags: vec![],
@@ -938,6 +941,7 @@ impl AppModel {
         self.also_unreadable = None;
         // FC11: the previous folder's stale files never get a Delete here.
         self.stale.clear();
+        self.stale_json.clear();
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -1547,6 +1551,8 @@ impl AppModel {
         self.finish_cs_pbr(cs);
         let cm = self.pending_cm.take();
         self.finish_cm_json(cm);
+        // FC11: the records just written decide which JSON files are stale.
+        self.refresh_stale_json();
         // Final review I2: an Also export's walk, zips and report run now, on its worker, so the PBR zip holds the
         // JSON above. The export stays running (Cancel reaches the zips); `also_zipped` does the rest.
         let json = std::mem::take(&mut self.also_json);
@@ -2311,6 +2317,8 @@ impl AppModel {
         self.unreadable = view.unreadable;
         self.recode = view.recode;
         self.stale = view.stale;
+        // The JSON rows are added once the plan settles (`finish_plan`): they read the settled sets.
+        self.stale_json.clear();
         // The count of undecided textures is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // The undo note stays through the plan the undo started, and goes with the next one.
@@ -2366,6 +2374,7 @@ impl AppModel {
             return;
         }
         self.auto_replans = 0;
+        self.refresh_stale_json();
         // Task 9 (Z11): the final pass; a cleanup re-plans once.
         if self.settle_types() {
             return;

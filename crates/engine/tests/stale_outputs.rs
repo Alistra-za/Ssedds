@@ -119,6 +119,34 @@ fn stale_outputs_lists_only_recorded_files() {
     assert!(s.iter().all(|s| s.path.is_file()));
 }
 
+/// DV7 / DR9: a recipe switch leaves the old packed `_rmaos.dds` (or a skin set's `_f.dds`) recorded and no longer
+/// planned: listed, spelled as on disk (the manifest key is case-folded).
+#[test]
+fn a_recipe_switch_lists_the_old_packed_output() {
+    let d = tempfile::tempdir().unwrap();
+    exported(d.path());
+    let t = d.path().join("out/textures/t");
+    for (key, on_disk) in [("x_rmaos.dds", "x_RMAOS.dds"), ("x_f.dds", "x_f.dds")] {
+        std::fs::copy(t.join("x.dds"), t.join(on_disk)).unwrap();
+        let stamp = engine::policy::SourceStamp::of(&t.join(on_disk)).unwrap();
+        append_copy(d.path(), "/x.dds", |v| {
+            v["output"] = format!("textures/t/{key}").into();
+            v["output_stamp"] = serde_json::to_value(stamp).unwrap();
+        });
+    }
+    let got: Vec<_> = stale(d.path())
+        .iter()
+        .map(|s| (name(s), s.reason, s.ours))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("x_RMAOS.dds".to_string(), StaleWhy::NotWritten, true),
+            ("x_f.dds".to_string(), StaleWhy::NotWritten, true),
+        ]
+    );
+}
+
 #[test]
 fn a_stamp_mismatch_or_no_stamp_is_not_ours() {
     let d = tempfile::tempdir().unwrap();

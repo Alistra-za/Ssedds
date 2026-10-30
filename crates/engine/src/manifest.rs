@@ -717,7 +717,7 @@ pub fn stale_outputs(
             if !inputs.iter().any(|i| folded.starts_with(i.as_str())) {
                 return None;
             }
-            let path = root.join(&e.output);
+            let path = on_disk_case(root.join(&e.output));
             let now = crate::policy::SourceStamp::of(&path)?;
             Some(StaleOutput {
                 ours: e.output_stamp == Some(now),
@@ -730,6 +730,21 @@ pub fn stale_outputs(
             })
         })
         .collect()
+}
+
+/// `p` as spelled on disk (manifest keys are case-folded), when the disk's path is `p` folded; a junction, a short
+/// name or a missing file keeps `p`.
+pub fn on_disk_case(p: PathBuf) -> PathBuf {
+    let Ok(c) = std::fs::canonicalize(&p) else {
+        return p;
+    };
+    let s = c.to_string_lossy();
+    let c = PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s));
+    if normalize_key(&c.to_string_lossy()) == normalize_key(&p.to_string_lossy()) {
+        c
+    } else {
+        p
+    }
 }
 
 #[cfg(test)]

@@ -127,6 +127,67 @@ impl AppModel {
         format!("{} · {why}", rel.display())
     }
 
+    /// FC11 (fix round 1): the JSON files with a hash record that this project no longer writes (AG90's PGPatcher JSON
+    /// under an earlier name or with no PBR set left, AD5's CS PBR JSON no block binds, AT3's complex-material JSON no
+    /// set writes), as `stale` rows. The recorded SHA-256 is their baseline: ours when the file still hashes to it.
+    /// Run when a plan settles and after an export's JSON step, never per frame (it hashes the files).
+    pub(crate) fn refresh_stale_json(&mut self) {
+        let old = std::mem::take(&mut self.stale_json);
+        self.stale.retain(|s| !old.contains_key(&s.path));
+        let Some(d) = self.sets_doc.as_ref() else {
+            return;
+        };
+        let root = self.export_root();
+        let rel = |root: &Path, p: &Path| {
+            p.strip_prefix(root)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let pgp = match pbr_export::prepare(self).filter(|p| !p.entries.is_empty()) {
+            Some(p) => (
+                d.pgp_json_shas(),
+                p.root.clone(),
+                vec![rel(&p.root, &p.path)],
+            ),
+            None => (d.pgp_json_shas(), root.clone(), vec![]),
+        };
+        let files = |p: Option<(PathBuf, Vec<(String, String)>)>| match p {
+            Some((r, f)) => (r, f.into_iter().map(|(r, _)| r).collect()),
+            None => (root.clone(), vec![]),
+        };
+        let (cs_root, cs_made) = files(cs_pbr_export::prepare(self).map(|p| (p.root, p.files)));
+        let (cm_root, cm_made) = files(cm_json::prepare(self).map(|p| (p.root, p.files)));
+        let kinds = [
+            pgp,
+            (d.cs_pbr_shas(), cs_root, cs_made),
+            (d.cm_json_shas(), cm_root, cm_made),
+        ];
+        for (shas, root, made) in kinds {
+            let shas = records_at(&shas, &root);
+            for path in super::history::orphans(&shas, &root, made.iter()) {
+                let Some(sha) = shas.get(&record_key(&path)) else {
+                    continue;
+                };
+                // `orphans` fixes the file name's case only; the folders keep the record's (folded) spelling.
+                let path = engine::manifest::on_disk_case(path);
+                if self.stale_json.contains_key(&path) {
+                    continue;
+                }
+                self.stale.push(engine::manifest::StaleOutput {
+                    ours: sha256_of(&path).as_deref() == Some(sha.as_str()),
+                    reason: engine::manifest::StaleWhy::NotWritten,
+                    path: path.clone(),
+                });
+                self.stale_json.insert(path, sha.clone());
+            }
+        }
+        // Problems' stale row reads `stale`; rebuild only when there were or are JSON rows (K9 build counters).
+        if !old.is_empty() || !self.stale_json.is_empty() {
+            self.invalidate_views();
+        }
+    }
+
     /// FC11 (Review Focus 3, 4): the `Delete` of a `Stale outputs` row, on its click only. Deletes only a path the
     /// last plan listed as ours, never while an export runs, and only when the file still has the size and mtime its
     /// manifest record holds (checked again now); otherwise the row reads "edited since…" and the file stays.
@@ -140,18 +201,16 @@ impl AppModel {
         if self.export.running.is_some() {
             return Err(super::also::EXPORT_RUNNING.into());
         }
-        let still_ours = self.sets_root.as_deref().is_some_and(|root| {
-            let key = engine::manifest::output_key(root, path);
-            engine::manifest::Manifest::at(root)
-                .read()
-                .ok()
-                .and_then(|r| r.get(&key)?.output_stamp)
-                .is_some_and(|s| Some(s) == engine::policy::SourceStamp::of(path))
-        });
+        let still_ours = match self.stale_json.get(path) {
+            // A JSON row: its recorded SHA-256 is the baseline.
+            Some(sha) => sha256_of(path).as_deref() == Some(sha.as_str()),
+            None => self.manifest_stamp_matches(path),
+        };
         if !still_ours {
             for s in self.stale.iter_mut().filter(|s| s.path == path) {
                 s.ours = false;
             }
+            self.invalidate_views();
             let e = format!("{}: {STALE_NOT_OURS}", path.display());
             self.status_line = e.clone();
             return Err(e);
@@ -162,8 +221,22 @@ impl AppModel {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         }
         self.stale.retain(|s| s.path != path);
+        self.stale_json.remove(path);
+        self.invalidate_views();
         self.status_line = format!("Deleted {}", path.display());
         Ok(())
+    }
+
+    /// FC11: the file still has the size and mtime its manifest record holds (read again now).
+    fn manifest_stamp_matches(&self, path: &Path) -> bool {
+        self.sets_root.as_deref().is_some_and(|root| {
+            let key = engine::manifest::output_key(root, path);
+            engine::manifest::Manifest::at(root)
+                .read()
+                .ok()
+                .and_then(|r| r.get(&key)?.output_stamp)
+                .is_some_and(|s| Some(s) == engine::policy::SourceStamp::of(path))
+        })
     }
 
     /// Open Review (its ticks are kept when it is already open) and show its tab.

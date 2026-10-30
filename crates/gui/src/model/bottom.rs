@@ -137,6 +137,17 @@ pub enum Fix {
     RemoveMatch(String, u8),
     /// Note FC10 (T8): drop the `suffix_aliases` table of a skipped user preset file (the file, the preset's id).
     RemoveAliases(PathBuf, String),
+    /// Note FC11: open Review on its `Stale outputs` group.
+    ReviewStale,
+}
+
+/// Note FC11: the Problems row of the stale outputs Tessalith wrote (`n` of them).
+pub fn stale_row_text(n: usize) -> String {
+    if n == 1 {
+        "1 old output Tessalith wrote is no longer exported".into()
+    } else {
+        format!("{n} old outputs Tessalith wrote are no longer exported")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -663,6 +674,14 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         out.push(Problem {
             fix: undo(m.encoding_note_step),
             ..row(Level::Info, At::Project, line.to_string(), None)
+        });
+    }
+    // Note FC11: the stale outputs Tessalith still owns; Review lists them, each with Delete. Not a gate.
+    let ours = m.stale.iter().filter(|s| s.ours).count();
+    if ours > 0 {
+        out.push(Problem {
+            fix: Some(Fix::ReviewStale),
+            ..row(Level::Info, At::Project, stale_row_text(ours), None)
         });
     }
     // Note FC1: what the plan decided on its own and the project now records, one row with every texture on hover.

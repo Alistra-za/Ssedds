@@ -94,8 +94,20 @@ fn review_delete_removes_only_on_click() {
     let mut h = harness(m);
     h.run();
     h.run();
-    assert!(h.query_all_by_label_contains("Stale outputs (2)").count() >= 1);
-    assert!(h.query_all_by_label_contains(STALE_NOT_OURS).count() >= 1);
+    // The refused delete's status line repeats STALE_NOT_OURS after the full path, so the row is matched by its own
+    // `rel · why` text (that status line was the second match the earlier `>= 1` hid).
+    let row = format!("leaf.dds · {STALE_NOT_OURS}");
+    for t in ["Stale outputs (2)", row.as_str()] {
+        let all: Vec<String> = h
+            .query_all_by_label_contains(t)
+            .map(|n| {
+                use egui_kittest::kittest::NodeT;
+                let a = n.accesskit_node();
+                format!("{:?} {:?} {:?}", a.role(), a.label(), a.value())
+            })
+            .collect();
+        assert_eq!(all.len(), 1, "{t}: {all:?}");
+    }
     // One button, named for its file (rule 8.4); the edited leaf.dds has none.
     let deletes = h
         .query_all_by_role(Role::Button)
@@ -124,6 +136,69 @@ fn review_delete_removes_only_on_click() {
     assert!(!rock.exists(), "the click deleted it");
     assert!(leaf.is_file(), "the edited file is left alone");
     assert_eq!(stale_names(h.state()), [("leaf.dds".to_string(), false)]);
+}
+
+/// Findings r1 item 1: an `ours` stale row puts one Info row in Problems whose `Review…` opens Review on the
+/// Stale outputs group; the row gates nothing and does not open Review by itself.
+#[test]
+fn a_stale_output_shows_a_problems_row_that_opens_review() {
+    use sdc_gui::model::bottom::{problems, stale_row_text, Fix, Level};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    decide_all(&mut m);
+    export_through(&mut m);
+    idle(&mut m);
+    assert!(!problems(&m).iter().any(|p| p.fix == Some(Fix::ReviewStale)));
+    std::fs::remove_file(d.path().join("textures/landscape/leaf.png")).unwrap();
+    m.replan();
+    idle(&mut m);
+    let rows: Vec<_> = problems(&m)
+        .iter()
+        .filter(|p| p.fix == Some(Fix::ReviewStale))
+        .cloned()
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].level, Level::Info);
+    assert_eq!(rows[0].text, stale_row_text(1));
+    assert!(m.review.is_none(), "the row does not open Review by itself");
+    m.open_problems(None);
+    let mut h = harness(m);
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "Review…").click();
+    h.run_steps(4);
+    assert!(h.state().review.is_some());
+    assert!(h.query_all_by_label_contains("Stale outputs (1)").count() >= 1);
+}
+
+/// Findings r1 item 2 (AG90): a PGPatcher JSON the plan no longer makes is a stale row; its recorded hash is the
+/// baseline, so an edited copy is left alone and Tessalith's own bytes get a Delete.
+#[test]
+fn a_pgpatcher_json_no_longer_made_is_listed_by_its_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    export_through(&mut m);
+    idle(&mut m);
+    let json = pgp_json_path(&m);
+    let bytes = std::fs::read(&json).unwrap();
+    assert!(m.stale.iter().all(|s| s.path != json), "{:?}", m.stale);
+    // A renamed JSON: the old name is no longer made.
+    m.set_json_name("renamed");
+    idle(&mut m);
+    assert_ne!(pgp_json_path(&m), json);
+    std::fs::write(&json, b"{}").unwrap();
+    m.replan();
+    idle(&mut m);
+    let row = |m: &AppModel| m.stale.iter().find(|s| s.path == json).cloned();
+    assert_eq!(row(&m).map(|s| s.ours), Some(false), "{:?}", m.stale);
+    assert!(m.delete_stale_output(&json).is_err());
+    assert!(json.is_file());
+    std::fs::write(&json, &bytes).unwrap();
+    m.replan();
+    idle(&mut m);
+    assert_eq!(row(&m).map(|s| s.ours), Some(true), "{:?}", m.stale);
+    m.delete_stale_output(&json).unwrap();
+    assert!(!json.exists());
+    assert!(row(&m).is_none());
 }
 
 /// `pbr_opened_plain` with a relief normal, so Generate makes a height map; the shader pick is unsaved.
@@ -176,21 +251,93 @@ fn json_hash_survives_a_discard() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened_plain(d.path());
     export_through(&mut m);
-    // BD2: an edit made while the export runs leaves the document dirty, so the hash record waits for a Save.
-    assert!(m.export.running.is_some());
-    let order: Vec<String> = vec![ROCK_SET.into()];
-    m.sets_doc.as_mut().unwrap().set_order(&order);
-    assert!(m.sets_doc.as_ref().unwrap().is_dirty());
     idle(&mut m);
     let json = pgp_json_path(&m);
     assert!(json.is_file());
-    // Discard: the documents are read again from disk; the unsaved hash record is gone from sdc-project.toml.
+    // BD2: the hash record lived only in the unsaved document; strip it from sdc-project.toml, which is what a
+    // discarded edit leaves on disk (deterministic: no race with the running export).
+    let toml = d.path().join("textures/sdc-project.toml");
+    let stripped: String = std::fs::read_to_string(&toml)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.contains("json_sha256"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&toml, stripped).unwrap();
+    let state = |m: &mut AppModel| {
+        m.reload_documents();
+        idle(m);
+        assert!(
+            !m.sets_doc.as_ref().unwrap().is_dirty(),
+            "reconciling the sidecar on open does not dirty the document"
+        );
+        m.review_json()
+            .into_iter()
+            .find(|l| l.kind == JsonKind::PgPatcher)
+            .expect("the PGPatcher JSON line")
+            .state
+    };
+    assert_eq!(
+        state(&mut m),
+        DiskState::Ours,
+        "the next export does not ask"
+    );
+    // Control: the quiet reload wrote nothing back to the toml, so without the sidecar the record is gone and the
+    // same JSON is no longer Tessalith's.
+    assert!(!std::fs::read_to_string(&toml)
+        .unwrap()
+        .contains("json_sha256"));
+    std::fs::remove_file(d.path().join("textures/_sdc/generated.json")).unwrap();
+    assert_ne!(state(&mut m), DiskState::Ours);
+}
+
+/// Note FC11 (owner): the sidecar wins over a hand edit of the same key in sdc-project.toml. Reconciling on open is
+/// quiet (no unsaved changes, Discard leaves a clean document); the next real Save writes the readable copy.
+#[test]
+fn the_sidecar_wins_and_reconcile_is_quiet() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    idle(&mut m);
+    m.save().unwrap();
+    idle(&mut m);
+    let root = d.path().join("textures");
+    let toml = root.join("sdc-project.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(
+        &toml,
+        format!("{text}\n[project.cs_pbr_sha256]\n\"a.json\" = \"hand\"\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("_sdc")).unwrap();
+    std::fs::write(
+        root.join("_sdc/generated.json"),
+        r#"{"cs_pbr_sha256":{"a.json":"side"}}"#,
+    )
+    .unwrap();
     m.reload_documents();
     idle(&mut m);
-    let line = m
-        .review_json()
-        .into_iter()
-        .find(|l| l.kind == JsonKind::PgPatcher)
-        .expect("the PGPatcher JSON line");
-    assert_eq!(line.state, DiskState::Ours, "the next export does not ask");
+    let doc = m.sets_doc.as_ref().unwrap();
+    assert_eq!(
+        doc.cs_pbr_shas().get("a.json").map(String::as_str),
+        Some("side")
+    );
+    assert!(!doc.is_dirty(), "open reconciles quietly");
+    m.reload_documents();
+    idle(&mut m);
+    assert!(
+        !m.sets_doc.as_ref().unwrap().is_dirty(),
+        "Discard leaves a clean document"
+    );
+    assert!(std::fs::read_to_string(&toml).unwrap().contains("hand"));
+    // A real edit, then Save: the readable copy follows the sidecar.
+    let order: Vec<String> = vec![ROCK_SET.into()];
+    m.sets_doc.as_mut().unwrap().set_order(&order);
+    assert!(m.sets_doc.as_ref().unwrap().is_dirty());
+    m.save().unwrap();
+    idle(&mut m);
+    let saved = std::fs::read_to_string(&toml).unwrap();
+    assert!(
+        saved.contains("\"side\"") && !saved.contains("\"hand\""),
+        "{saved}"
+    );
 }
